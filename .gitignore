@@ -30,3 +30,6 @@ htmlcov/
 
 # Claude / local permissions (optional: commit team settings.json, keep local only)
 .claude/settings.local.json
+
+# Cursor hook runtime state (e.g. continual-learning)
+.cursor/hooks/state/
