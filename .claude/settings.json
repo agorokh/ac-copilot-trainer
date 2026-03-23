@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "input=$(cat); file_path=$(echo \"$input\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))\" 2>/dev/null); if [ -n \"$file_path\" ] && echo \"$file_path\" | grep -q '\\.py$'; then cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && (ruff check --fix --quiet -- \"$file_path\" 2>/dev/null; ruff format --quiet -- \"$file_path\" 2>/dev/null); fi; exit 0",
+            "timeout": 120000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Sensitive file guard: BLOCK edits to .env (but allow .env.example), any path under archive/ if your team treats it as immutable, *.lock, poetry.lock, package-lock.json, pnpm-lock.yaml, or secrets directories. ALLOW normal source and docs. Reply BLOCK: <reason> or ALLOW."
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "If the edit touches src/**/*.py, scan the NEW text only for obvious secret patterns: AWS access keys, private keys (BEGIN PRIVATE KEY), and long base64 blobs labeled as tokens. BLOCK if a new secret is being inserted. ALLOW if only references to env vars or already-redacted examples."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "If the bash command would commit or push to protected branch main/master, BLOCK. Patterns: git commit on main/master, git push on main/master, git push origin HEAD:main or :master. Otherwise ALLOW."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Session end reminders (WARN only; always ALLOW stop):\n1) Update docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md with resume point and blockers.\n2) If you changed architecture or governance, update Architecture Invariants or add an ADR under docs/01_Vault/ProjectTemplate/01_Decisions/.\n3) If this was an investigation, add a note under docs/01_Vault/ProjectTemplate/06_Investigations/ using 99_Templates/Investigation.md."
+          }
+        ]
+      }
+    ]
+  }
+}

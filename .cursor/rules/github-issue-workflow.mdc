@@ -1,0 +1,12 @@
+---
+alwaysApply: true
+---
+
+# GitHub issue workflow
+
+1. **Tracked work** starts from an Issue (unless explicitly waived for trivial fixes).
+2. **Branch from `main`** using the team's naming convention documented in `AGENTS.md`.
+3. **Open a PR early** (Draft is fine unless your bot policy requires non-draft for reviews).
+4. **Link Issue** in PR body: `Fixes #123` or `Refs #123` as appropriate.
+5. **CI** must pass (`make ci-fast` locally first).
+6. **Scope proof** — when the Issue demands evidence, include commands, logs (redacted), or screenshots in the PR description.

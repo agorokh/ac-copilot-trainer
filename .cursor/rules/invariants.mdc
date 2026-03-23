@@ -1,0 +1,9 @@
+---
+alwaysApply: true
+---
+
+# Architecture invariants
+
+Canonical rules: `docs/01_Vault/ProjectTemplate/00_System/Architecture Invariants.md`
+
+Before merging structural changes, ensure that file is updated or an ADR is added under `docs/01_Vault/ProjectTemplate/01_Decisions/`.

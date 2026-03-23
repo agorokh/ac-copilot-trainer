@@ -1,0 +1,10 @@
+---
+alwaysApply: true
+---
+
+# Multi-agent awareness
+
+- **Repository docs win** over tool defaults.
+- **Another agent may continue** this branch — leave clear commit messages, PR description, and vault handoff.
+- **Do not revert** another agent's work without reading the Issue/PR context.
+- Prefer **small commits** with explanatory messages during multi-agent handoffs.

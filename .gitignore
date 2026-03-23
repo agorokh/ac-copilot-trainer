@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.python-version
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Tools
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Scratch / local experiments
+.scratch/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Claude / local permissions (optional: commit team settings.json, keep local only)
+.claude/settings.local.json

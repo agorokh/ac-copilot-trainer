@@ -1,0 +1,13 @@
+---
+alwaysApply: false
+globs: .github/**/*
+---
+
+# PR resolution
+
+When working on PR feedback or CI failures:
+
+- Iterate until checks are green.
+- Resolve or reply to every inline review thread.
+- Do not introduce secrets or unrelated refactors.
+- Follow `.claude/agents/pr-resolution-follow-up.md` for the full loop.
