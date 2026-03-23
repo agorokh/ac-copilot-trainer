@@ -2,6 +2,8 @@
 
 **Organization starter for issue-driven, agentic software development.** Copy this repository (or use GitHub **Use this template**) every time you spin up a new project so Cursor, Claude Code, Codex, and GitHub-native agents inherit the same workflow, memory model, and guardrails.
 
+**GitHub:** [github.com/agorokh/template-repo](https://github.com/agorokh/template-repo) (private). After the first push from your machine, enable **Settings → General → Template repository** so new projects start from a clean copy ([GitHub: Creating a template repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-template-repository)).
+
 ## What you get
 
 - **Canonical policy docs** enforced in CI: `AGENTS.md`, `CLAUDE.md`, `AGENT_CORE_PRINCIPLES.md`, `.cursorrules`
