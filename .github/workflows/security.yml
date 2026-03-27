@@ -27,5 +27,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]" pip-audit
 
+      # Pygments 2.19.2 (transitive via dev tools): CVE-2026-4539 — no fixed wheel on PyPI yet. Tracking removal: https://github.com/agorokh/template-repo/issues/6
       - name: Run pip-audit
-        run: pip-audit
+        run: pip-audit --ignore-vuln CVE-2026-4539
