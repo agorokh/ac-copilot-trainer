@@ -2,8 +2,8 @@
 
 **This file guides all AI agents and human operators working in this repository.**
 
-**Status:** Template — customize per project  
-**Version:** 1.0  
+**Status:** Template — customize per project
+**Version:** 1.1
 **Category:** Core
 
 ---
@@ -68,8 +68,23 @@ Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`)
 
 ---
 
-## Learned facts (Tier 1 changelog)
+## Learned User Preferences
+
+Stable operational principles derived from real usage across projects. Agents: read on session start; update when a durable preference is confirmed.
+
+- **Group issues by files touched.** Never create separate issues that modify overlapping source files. Consolidate into one issue with labeled Parts. See AGENT_CORE_PRINCIPLES.md "Issue design."
+- **Own every failure.** Never say "pre-existing." If it's broken, fix it now.
+- **Preserve manual work.** Bulk operations and pipeline rebuilds must never delete user-created content (workbenches, curated notes, manual configs). Verify guards before running.
+- **PR merge order matters.** Merge simpler PRs first, then rebase and merge complex ones. Check for CHANGELOG/docs overlaps.
+- **Propagate universal improvements upstream.** When a domain-agnostic workflow principle is improved in any child repo, propagate it back to template-repo so all future projects inherit it. See AGENT_CORE_PRINCIPLES.md "Upstream template sync."
+
+## Learned Workspace Facts
+
+<!-- Append project-specific operational facts here after bootstrap. -->
+<!-- Example: "Pipeline venv at .venv/bin/python", "Gmail expanded to N threads on DATE" -->
+
+## Changelog (Tier 1)
 
 <!-- CHANGELOG:START -->
-<!-- Append concise bullets when durable behavior or policy changes. -->
+- 2026-03-26: v1.1 — Added issue-grouping-by-file-overlap, own-every-failure, preserve-manual-work, upstream-sync. (Source: court-fillings-processing learnings)
 <!-- CHANGELOG:END -->

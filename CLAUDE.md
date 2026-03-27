@@ -2,8 +2,8 @@
 
 Guidance for **Claude Code** (claude.ai/code) in this repository.
 
-**Status:** Template  
-**Version:** 1.0  
+**Status:** Template
+**Version:** 1.1
 **Category:** Core
 
 ---
@@ -34,6 +34,14 @@ See `.claude/skills/vault-memory/SKILL.md` for the full protocol.
 All agents: **[AGENTS.md](AGENTS.md)** and **[AGENT_CORE_PRINCIPLES.md](AGENT_CORE_PRINCIPLES.md)**.
 
 Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Development/10_Agent_Protocol.md)**.
+
+### Key workflow reminders
+
+1. **Issue first.** No significant work without a GitHub Issue.
+2. **Group issues by files touched.** Never create separate issues for overlapping source files — consolidate with labeled Parts. See AGENT_CORE_PRINCIPLES.md.
+3. **Own every failure.** Never blame the past. Fix it now.
+4. **Preserve manual work.** Rebuilds must never delete user content. Verify guards first.
+5. **Upstream sync.** When you improve a domain-agnostic engineering principle in this repo, ask the user: _"This is universal — should I propagate to template-repo?"_ See AGENT_CORE_PRINCIPLES.md "Upstream template sync."
 
 ---
 

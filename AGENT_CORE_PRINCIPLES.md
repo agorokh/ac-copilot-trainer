@@ -1,7 +1,7 @@
 # Agent Core Principles
 
-**Status:** Template  
-**Version:** 1.0  
+**Status:** Template
+**Version:** 1.1
 **Category:** Core
 
 ---
@@ -29,12 +29,30 @@ Every AI assistant (Cursor, Claude Code, Codex, Warp, GitHub Copilot agents) wor
 
 ---
 
+## Issue design — group by file overlap (mandatory)
+
+**Rule:** When creating multiple issues for related work, **group by files touched**, not by feature concept.
+
+- **Before creating issues:** Map out which source files each planned change will modify. If two features touch overlapping modules, they belong in **one issue** with labeled Parts (Part 1, Part 2, …).
+- **Why:** Separate issues on overlapping files create merge conflicts, fragment code review context, and force coding agents to re-read the same modules. Code-review agents also lose the full picture when goals are split across PRs that touch the same code.
+- **Decision:** "Should this be a separate issue?" → Only if the files touched are **disjoint** from all other planned issues. If files overlap, consolidate.
+
+---
+
 ## Quality bar
 
 1. **CI parity** — Run `make ci-fast` (or the documented equivalent) before requesting review.
 2. **Tests follow behavior** — New logic in `src/` gets tests under `tests/` in the same PR when feasible.
 3. **Fail fast** — Prefer explicit errors over silent fallbacks that hide incomplete migrations.
 4. **Small, reviewable diffs** — One concern per PR when possible.
+
+---
+
+## Operational culture
+
+1. **Own every failure** — Never characterize a bug or gap as "pre-existing" or blame the past. If it's broken in this repo, own it and fix it in the current session.
+2. **Preserve manual work** — Pipeline rebuilds, code generation, and bulk operations must never delete or overwrite user-created content (workbenches, curated notes, manual configurations). Verify guards (e.g. `skip_if_unchanged`, protected directories) before bulk operations.
+3. **PR merge order** — When multiple PRs are open, merge the simpler/lower-risk one first, then rebase and merge the next. Check for file overlaps (CHANGELOG, docs/) that need trivial conflict resolution.
 
 ---
 
@@ -61,3 +79,14 @@ Promote stable facts from Tier 1 into the vault when they become architectural.
 - [ ] `make ci-fast` passes locally.
 - [ ] No new forbidden top-level dirs (see `scripts/check_agent_forbidden.py`).
 - [ ] Vault handoff updated if the session changed focus or left loose ends (`Next Session Handoff.md`).
+
+---
+
+## Upstream template sync
+
+This repo was bootstrapped from **`template-repo`**. When you improve a **domain-agnostic** engineering workflow principle here (new rule, better issue design, improved agent protocol), propagate it back:
+
+1. **Decide:** Is this principle domain-specific (only this project) or universal (any project)?
+2. **If universal:** After the PR merges, remind the user: _"This improvement to [principle] is domain-agnostic. Should I propagate it to template-repo?"_
+3. **If the user approves:** Open an issue/PR in `template-repo` with the generalized version.
+4. **Never propagate:** Domain data, secrets, project-specific configs, business logic.
