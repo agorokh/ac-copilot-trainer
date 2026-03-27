@@ -13,6 +13,7 @@
 - **GitHub**: PR + issue templates, policy workflow, CI (`make ci-fast`), optional security scanning, Dependabot
 - **Agent-proofing script** for top-level directory hygiene (customize allowlist for your layout)
 - **MCP**: checked-in `.mcp.json` with Context7 (Claude Code–oriented); mirror to Claude Desktop if needed — see [docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)
+- **Optional skills bundles:** Child repos may layer Anthropic’s published [agent skills](https://github.com/anthropics/skills) (or an org-maintained equivalent) as a baseline catalog; this template already includes curated skills under `.claude/skills/` and `.cursor/skills/`, so merge carefully and drop duplicates when combining sources.
 - **Multi-tool:** same workflow for **Cursor** and **Claude** (Code, Desktop chat, Cowork/Dispatch-style handoffs) — vault + `AGENTS.md` stay canonical
 
 ## First-time setup (after copying the template)

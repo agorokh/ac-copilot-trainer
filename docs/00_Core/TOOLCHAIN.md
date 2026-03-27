@@ -38,4 +38,8 @@ Desktop does **not** automatically load repo-root `.mcp.json` the same way Claud
 | Desktop config file | **Claude Desktop** MCP |
 | Cursor user/project MCP | Cursor’s MCP settings UI + optional project config |
 
+### When to add MCP
+
+Add a server when **agents or humans need live tool access** to a system (database, browser, ticketing) that is not already covered by the repo defaults. Prefer **repo `.mcp.json`** for team-shared, versioned wiring; document new env vars in **`.env.example`**. Skip redundant servers (same capability twice) and keep secrets out of git — see [OPTIONAL_CAPABILITIES.md](OPTIONAL_CAPABILITIES.md) for optional stacks (DB, browser, cloud).
+
 **Context7** and **GitHub** (official [GitHub MCP Server](https://github.com/github/github-mcp-server) via **Docker** in `.mcp.json`) are wired for Claude Code. Export **`GITHUB_PERSONAL_ACCESS_TOKEN`** before launch (never commit it) — see `.env.example`, [GITHUB_SETUP.md](GITHUB_SETUP.md), and skill **`new-project-setup`**. If you cannot use Docker, use the remote HTTP / `claude mcp add-json` options in GitHub’s [Claude install guide](https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md). Add DB/browser tools per project (see [OPTIONAL_CAPABILITIES.md](OPTIONAL_CAPABILITIES.md)).

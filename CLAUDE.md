@@ -69,6 +69,7 @@ Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Develop
 
 - **Issue-scoped delivery:** `.claude/agents/issue-driven-coding-orchestrator.md`
 - **PR resolution loop (CI + bots):** `.claude/agents/pr-resolution-follow-up.md`
+- **Dependency / Dependabot PRs:** `.claude/agents/dependency-review.md`
 
 ---
 
