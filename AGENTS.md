@@ -60,6 +60,8 @@ Treat automated review comments as blocking unless:
 
 Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`).
 
+**Bootstrap (new copy of this template):** `.claude/skills/new-project-setup/SKILL.md` (mirrored under `.cursor/skills/`) — `/new-project-setup`.
+
 ---
 
 ## Local development

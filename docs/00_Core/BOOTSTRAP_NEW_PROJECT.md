@@ -39,7 +39,8 @@ Complete these steps once per new repository.
 
 ## 6. MCP and local LLMs
 
-- [ ] Edit `.mcp.json`: add database or browser servers as needed; keep Context7 for library docs.
+- [ ] Confirm `.mcp.json`: **Context7** (library docs) and **GitHub** MCP are present; set **`GITHUB_PERSONAL_ACCESS_TOKEN`** for Claude Code (see `.env.example`, [TOOLCHAIN.md](TOOLCHAIN.md), skill **`new-project-setup`**).
+- [ ] Add database or browser servers only when the project needs them.
 - [ ] Document API keys and local inference (Ollama, OpenRouter, HF caches) in `.env.example` and `WARP.md` / `CLAUDE.md` — never commit secrets.
 
 ## 7. Verify
