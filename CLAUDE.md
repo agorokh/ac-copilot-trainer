@@ -3,8 +3,28 @@
 Guidance for **Claude Code** (claude.ai/code) in this repository.
 
 **Status:** Template
-**Version:** 1.1
+**Version:** 1.2
 **Category:** Core
+
+---
+
+## Quick start (copy-paste)
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+make ci-fast
+```
+
+Optional: `make hooks-install` once per clone. See [WARP.md](WARP.md) for operator detail.
+
+---
+
+## Tool surfaces (Cursor, Desktop, Code)
+
+**Read [docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)** — how Cursor, Claude Code, Claude Desktop (chat / team apps), and MCP configs relate. Repo `.mcp.json` is primarily for **Claude Code**; Desktop uses its own config file unless you mirror servers manually.
+
+Personal overrides: root **`.claude.local.md`** (gitignored) for preferences not shared with the team.
 
 ---
 
@@ -41,7 +61,7 @@ Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Develop
 2. **Group issues by files touched.** Never create separate issues for overlapping source files — consolidate with labeled Parts. See AGENT_CORE_PRINCIPLES.md.
 3. **Own every failure.** Never blame the past. Fix it now.
 4. **Preserve manual work.** Rebuilds must never delete user content. Verify guards first.
-5. **Upstream sync.** When you improve a domain-agnostic engineering principle in this repo, ask the user: _"This is universal — should I propagate to template-repo?"_ See AGENT_CORE_PRINCIPLES.md "Upstream template sync."
+5. **Upstream sync.** If this repo is a **child project** spawned from the org template, propose propagating universal improvements back to the template (see [AGENT_CORE_PRINCIPLES.md](AGENT_CORE_PRINCIPLES.md) — *Upstream template sync*). If you are editing **the template repository itself**, merge changes here and note them in [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md).
 
 ---
 

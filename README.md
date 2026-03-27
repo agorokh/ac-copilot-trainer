@@ -12,14 +12,19 @@
 - **Cursor rules** (`.cursor/rules/`) aligned with the same branch/PR/bot-review expectations
 - **GitHub**: PR + issue templates, policy workflow, CI (`make ci-fast`), optional security scanning, Dependabot
 - **Agent-proofing script** for top-level directory hygiene (customize allowlist for your layout)
-- **MCP**: checked-in `.mcp.json` with Context7; add SQLite, Postgres, or other servers per project
+- **MCP**: checked-in `.mcp.json` with Context7 (Claude Code–oriented); mirror to Claude Desktop if needed — see [docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)
+- **Multi-tool:** same workflow for **Cursor** and **Claude** (Code, Desktop chat, Cowork/Dispatch-style handoffs) — vault + `AGENTS.md` stay canonical
 
 ## First-time setup (after copying the template)
 
 1. Read [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md) and complete the checklist (rename vault folder, replace placeholders, set `pyproject` package name).
 2. Create a virtualenv (recommended): `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`.
 3. Run `make hooks-install` (pre-commit) and `make ci-fast` before the first PR.
-3. In GitHub: **Settings → General → Template repository** — enable so teammates can use **Use this template** ([GitHub docs](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-template-repository)).
+4. **If this repository will be used as a template for other repos:** in GitHub, enable **Settings → General → Template repository** so teammates can use **Use this template** ([GitHub docs](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-template-repository)).
+
+## Keeping the template (and children) current
+
+Template repos do **not** auto-update downstream copies. See [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) for a lightweight cadence (Dependabot, periodic doc skim, child→template PRs). GitHub settings checklist: [docs/00_Core/GITHUB_SETUP.md](docs/00_Core/GITHUB_SETUP.md).
 
 ## Provenance
 

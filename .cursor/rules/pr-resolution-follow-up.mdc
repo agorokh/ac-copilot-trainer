@@ -9,5 +9,7 @@ When working on PR feedback or CI failures:
 
 - Iterate until checks are green.
 - Resolve or reply to every inline review thread.
+- **After each push to the PR branch, run `sleep 600` (10 minutes) before polling checks and review threads again** so CodeRabbit/Bugbot/Copilot can finish — do not declare “done” immediately after push. See `.claude/agents/pr-resolution-follow-up.md`.
+- Use **GraphQL `reviewThreads`** (`isResolved`) to detect unresolved conversations; REST pull comments alone are insufficient.
 - Do not introduce secrets or unrelated refactors.
 - Follow `.claude/agents/pr-resolution-follow-up.md` for the full loop.

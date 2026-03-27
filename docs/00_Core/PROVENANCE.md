@@ -10,3 +10,5 @@ This template generalizes practices observed across:
 | `imessage-semantic-analysis` | `CLAUDE.md` session tail + `AGENTS.md` durable changelog blocks, `WARP.md`-style long-form operator guide |
 
 Domain-specific content (trading runtime, OCR pipelines, disclosure DB schemas, iMessage ML) was **not** copied. Replace `ProjectTemplate` vault folder names and edit invariants before serious use.
+
+**Evolving the template:** [MAINTAINING_THE_TEMPLATE.md](MAINTAINING_THE_TEMPLATE.md), [TOOLCHAIN.md](TOOLCHAIN.md), [GITHUB_SETUP.md](GITHUB_SETUP.md).

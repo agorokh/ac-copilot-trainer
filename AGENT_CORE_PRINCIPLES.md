@@ -1,7 +1,7 @@
 # Agent Core Principles
 
 **Status:** Template
-**Version:** 1.1
+**Version:** 1.2
 **Category:** Core
 
 ---
@@ -84,9 +84,11 @@ Promote stable facts from Tier 1 into the vault when they become architectural.
 
 ## Upstream template sync
 
-This repo was bootstrapped from **`template-repo`**. When you improve a **domain-agnostic** engineering workflow principle here (new rule, better issue design, improved agent protocol), propagate it back:
+**If you are working in a project created *from* the organization template:** when you improve a **domain-agnostic** workflow (issue design, hooks, skills, agent protocol, CI policy), propagate it back to the **canonical template** repository:
 
-1. **Decide:** Is this principle domain-specific (only this project) or universal (any project)?
-2. **If universal:** After the PR merges, remind the user: _"This improvement to [principle] is domain-agnostic. Should I propagate it to template-repo?"_
-3. **If the user approves:** Open an issue/PR in `template-repo` with the generalized version.
-4. **Never propagate:** Domain data, secrets, project-specific configs, business logic.
+1. **Decide:** Is this principle domain-specific (only this product) or universal (any new repo)?
+2. **If universal:** After merge, remind the maintainer: *"Should we propagate this to the template?"*
+3. **If yes:** Open an Issue/PR on the template with the generalized wording (no secrets, no product-only paths).
+4. **Never propagate:** Domain data, credentials, customer info, proprietary business logic.
+
+**If you are editing the template repository itself:** merge improvements directly here; record notable governance changes in [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) (optional tag, e.g. `template-YYYY.MM`).

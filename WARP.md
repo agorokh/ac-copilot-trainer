@@ -32,6 +32,7 @@ make hooks-install    # pre-commit install
 ## Branching and memory
 
 - Branch from `main`; open PRs early.
+- **Tooling:** [docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md) (Cursor, Claude Code, Desktop, MCP).
 - Update vault handoff notes when ending a session that will resume later.
 - Optional: maintain a short tail in `CLAUDE.md` between `SESSION` markers for Claude Code; keep detailed narrative in archived session files under `docs/90_Archive/sessions/` if you use that pattern.
 

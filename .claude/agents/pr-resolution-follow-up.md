@@ -9,13 +9,38 @@ color: green
 
 # PR Resolution Follow-Up
 
+## Mandatory wait after each push (non-optional)
+
+**After every `git push` that targets an open PR, wait ~10 minutes before the next poll.** Async bots (CodeRabbit, Cursor Bugbot, Copilot, etc.) routinely take several minutes; polling immediately causes false “done” reports and skipped work.
+
+```bash
+sleep 600   # 10 minutes — do not shorten for “speed”; this is the cooldown between bot runs
+```
+
+Only skip `sleep 600` if **every** third-party check on the PR is already `SUCCESS`/`COMPLETED` with **no** new inline threads expected (e.g. docs-only PR and bots already finished on the current SHA).
+
 ## Loop
 
-1. `gh pr view --json number,url,state,statusCheckRollup,reviewDecision`
-2. If CI failed — pull logs, fix, push.
-3. Fetch review comments (`gh api` GraphQL or `gh pr view --comments` as appropriate).
-4. Address each thread or reply with a justified won't-fix.
-5. Re-request review when required.
+1. `gh pr view <N> --repo <owner/repo> --json number,url,state,statusCheckRollup,reviewDecision`
+1. If CI failed — pull logs, fix, commit, push, then **`sleep 600`** before step 1 again.
+1. **Review threads (use GraphQL for resolution state).** REST `GET /repos/{owner}/{repo}/pulls/{N}/comments` does **not** expose whether a conversation is resolved. Query **`reviewThreads`** on the pull request and treat **`isResolved: false`** (and not outdated, when relevant) as blocking work. Example: use **`-F`** for the PR number so `gh` sends a JSON **integer** for `Int!` (plain `-f p=3` is a string and will fail).
+
+```bash
+# Minimal thread state (valid GraphQL; expand fields if you need comment bodies)
+gh api graphql \
+  -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviewThreads(first:50){nodes{isResolved isOutdated path line}}}}}' \
+  -f o=OWNER -f n=REPO -F p=3
+```
+
+Replace `OWNER`, `REPO`, and the integer `3` with the real owner, repository, and PR number. For **pagination** (`reviewThreads` has more than 50 threads), repeat with `after: $cursor` per GitHub GraphQL `PageInfo`.
+
+If you need **full comment text**, add a nested `comments { nodes { author { login } body } }` selection — keep braces balanced (or paste the query into [GitHub’s GraphQL Explorer](https://docs.github.com/en/graphql/overview/explorer) to validate).
+
+Use REST comments or `gh pr view --comments` only as **supplemental** context (e.g. quick scan); **do not** declare “all threads resolved” from REST alone.
+
+1. Address each **unresolved** thread (code/doc fix + push, or a factual reply). After **any** push: **`sleep 600`**, then re-check checks **and** GraphQL threads from step 3.
+1. Re-request human review when required (`gh pr edit --add-reviewer` or UI).
+1. Repeat until all **required** checks pass and **no blocking unresolved review threads** remain (per GraphQL). Do **not** tell the user the PR is “fully resolved” until you have completed at least one post-push **`sleep 600`** when bots were pending on the latest SHA.
 
 ## Bots
 
@@ -29,4 +54,4 @@ Treat CodeRabbit, Bugbot, Copilot, and similar bots like human reviewers unless 
 
 ## Exit
 
-Stop when checks are green and blocking conversations are resolved.
+Stop when checks are green and **GraphQL `reviewThreads` shows no unresolved blocking threads** (or each is explicitly handled with a reply in the UI).
