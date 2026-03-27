@@ -3,7 +3,7 @@
 **This file guides all AI agents and human operators working in this repository.**
 
 **Status:** Template — customize per project
-**Version:** 1.2
+**Version:** 1.3
 **Category:** Core
 
 ---
@@ -15,6 +15,12 @@
 3. **Vault (mandatory)** — `docs/01_Vault/ProjectTemplate/00_System/` (rename `ProjectTemplate` on bootstrap; see [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md)).
 4. **[docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)** — Cursor, Claude Code, Claude Desktop, MCP — same rules across tools.
 5. **Template maintainers:** [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) — how to keep the canonical template current.
+
+**Agent mesh (Claude Code):** [CLAUDE.md](CLAUDE.md) § Orchestration gives the overview. Key locations:
+
+- **Routing table:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing
+- **PR/bot loop:** `pr-resolution-follow-up` owns the `sleep 600` + GraphQL `reviewThreads` procedure (see `.claude/agents/pr-resolution-follow-up.md`)
+- **Dependency/tooling PRs:** `dependency-review` fronts, then hands off to `pr-resolution-follow-up` (see `.claude/agents/dependency-review.md`)
 
 ---
 
@@ -91,6 +97,7 @@ Stable operational principles derived from real usage across projects. Agents: r
 ## Changelog (Tier 1)
 
 <!-- CHANGELOG:START -->
+- 2026-03-27: v1.3 — Agent cohesion: orchestrator owns canonical Routing table; pr-resolution-follow-up fixed loop numbering + exit/escalation + cross-links; dependency-review handoff to Task/pr-resolution; CLAUDE.md orchestration + skills table + delegation/context discipline; AGENTS.md agent mesh pointer.
 - 2026-03-27: v1.2 — Multi-tool governance: TOOLCHAIN, OPTIONAL_CAPABILITIES, MAINTAINING_THE_TEMPLATE, GITHUB_SETUP; mandatory vault callout + maintainer link; CLAUDE.md quick start and Desktop/MCP/upstream-sync clarity; AGENT_CORE_PRINCIPLES child-vs-template upstream wording; README “keeping current”; Dependabot groups; gitignore `.claude.local.md`.
 - 2026-03-26: v1.1 — Added issue-grouping-by-file-overlap, own-every-failure, preserve-manual-work, upstream-sync. (Source: court-fillings-processing learnings)
 <!-- CHANGELOG:END -->

@@ -9,6 +9,8 @@ color: yellow
 
 # Dependency review
 
+**Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing.
+
 ## In scope
 
 - Version bumps in `pyproject.toml` / lockfiles (if present)
@@ -25,7 +27,12 @@ color: yellow
 
 1. **Risk summary** — supply chain, breaking majors, workflow permission changes
 2. **Merge order** — note if this PR should land before/after other open PRs (e.g. overlapping workflows)
-3. **Follow-up loop** — for CI + bot threads and the `sleep 600` / GraphQL `reviewThreads` workflow, use **`.claude/agents/pr-resolution-follow-up.md`** (do not duplicate that doc here)
+3. **Hand off** — for **`sleep 600`**, required checks, and GraphQL **`reviewThreads`**, run **`.claude/agents/pr-resolution-follow-up.md`** or **`Task(subagent_type="pr-resolution-follow-up", …)`**. Do **not** duplicate that loop here.
+
+## Context discipline
+
+- Read **only** touched manifest/workflow files plus the issue/PR body—no whole-repo grep for “all workflows.”
+- Prefer **Context7** when a bumped **action** or **npm/py** package behavior is unclear.
 
 ## Guardrails
 

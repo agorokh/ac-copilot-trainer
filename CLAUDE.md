@@ -3,7 +3,7 @@
 Guidance for **Claude Code** (claude.ai/code) in this repository.
 
 **Status:** Template
-**Version:** 1.2
+**Version:** 1.3
 **Category:** Core
 
 ---
@@ -67,9 +67,28 @@ Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Develop
 
 ## Orchestration
 
-- **Issue-scoped delivery:** `.claude/agents/issue-driven-coding-orchestrator.md`
-- **PR resolution loop (CI + bots):** `.claude/agents/pr-resolution-follow-up.md`
-- **Dependency / Dependabot PRs:** `.claude/agents/dependency-review.md`
+**Routing (canonical table):** `.claude/agents/issue-driven-coding-orchestrator.md` § **Routing** — issue type → primary agent → handoff → skills. Other agent files link there so the graph stays in one place.
+
+| Role | Agent file |
+|------|------------|
+| Issue → branch → Draft PR → implement → `make ci-fast` | `.claude/agents/issue-driven-coding-orchestrator.md` |
+| Green CI + GraphQL `reviewThreads` + `sleep 600` | `.claude/agents/pr-resolution-follow-up.md` |
+| Dependabot / workflows / `.mcp.json` risk + merge order | `.claude/agents/dependency-review.md` → then **pr-resolution-follow-up** for the bot loop |
+
+**Delegation:** Where the host supports it, use the **Task** tool with `subagent_type` set to the agent name (e.g. `pr-resolution-follow-up`, `dependency-review`). Prose “invoke X” in agent markdown is the same contract. **`@agent` mentions** (if your UI supports them) force a focused run. Agents do not hard-link at load time—descriptions drive matching.
+
+**Skills (when to load)** — see `.claude/skills/*/SKILL.md` (mirrored under `.cursor/skills/` where present).
+
+| Skill | Use |
+|-------|-----|
+| `vault-memory` | Session start/end, handoffs, ADRs |
+| `project-conventions` | Ambiguous style/workflow; pointers to `AGENTS.md` / protocol |
+| `ci-check` | Diagnosing CI / local check failures |
+| `github-issue-creator` | Creating issues from templates |
+| `new-project-setup` | After **Use this template** |
+| `release-notes` | Maintainer release blurbs (user-invoked) |
+
+**Context discipline:** Issue/PR **JSON from `gh` first**; then open only the files the task names. **Link** canonical docs instead of pasting them. Use **Context7** for third-party library facts; use the **vault** for *this* product’s decisions.
 
 ---
 

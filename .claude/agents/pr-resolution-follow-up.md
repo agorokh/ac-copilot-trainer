@@ -9,6 +9,20 @@ color: green
 
 # PR Resolution Follow-Up
 
+**Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing.
+
+**This agent owns** the only detailed procedure for **`sleep 600`**, **GraphQL `reviewThreads`**, and **check polling**. Other agents must **link here**, not copy those steps.
+
+## When to involve other agents
+
+- If the PR diff is **only** dependencies, GitHub Actions, `.mcp.json`, or `security.yml` CVE tooling, run **`dependency-review`** first (Task `subagent_type=dependency-review` or read `.claude/agents/dependency-review.md`) for **risk summary + merge order**, then return here for the CI/bot loop.
+- For **ambiguous repo policy** (branch naming, where files go), skim **`project-conventions`** or read **`AGENTS.md`** / **`10_Agent_Protocol.md`** before wide search.
+
+## Context discipline
+
+- Use **`gh pr view`** + **GraphQL** as the default control plane; avoid exploratory full-repo grep for “how we check PRs.”
+- CI failures on **third-party** or **action** behavior: use **Context7** or workflow logs, not assumptions.
+
 ## Mandatory wait after each push (non-optional)
 
 **After every `git push` that targets an open PR, wait ~10 minutes before the next poll.** Async bots (CodeRabbit, Cursor Bugbot, Copilot, etc.) routinely take several minutes; polling immediately causes false “done” reports and skipped work.
@@ -22,8 +36,8 @@ Only skip `sleep 600` if **every** third-party check on the PR is already `SUCCE
 ## Loop
 
 1. `gh pr view <N> --repo <owner/repo> --json number,url,state,statusCheckRollup,reviewDecision`
-1. If CI failed — pull logs, fix, commit, push, then **`sleep 600`** before step 1 again.
-1. **Review threads (use GraphQL for resolution state).** REST `GET /repos/{owner}/{repo}/pulls/{N}/comments` does **not** expose whether a conversation is resolved. Query **`reviewThreads`** on the pull request and treat **`isResolved: false`** (and not outdated, when relevant) as blocking work. Example: use **`-F`** for the PR number so `gh` sends a JSON **integer** for `Int!` (plain `-f p=3` is a string and will fail).
+2. If CI failed — pull logs, fix, commit, push, then **`sleep 600`** before returning to step 1.
+3. **Review threads (use GraphQL for resolution state).** REST `GET /repos/{owner}/{repo}/pulls/{N}/comments` does **not** expose whether a conversation is resolved. Query **`reviewThreads`** on the pull request and treat **`isResolved: false`** (and not outdated, when relevant) as blocking work. Example: use **`-F`** for the PR number so `gh` sends a JSON **integer** for `Int!` (plain `-f p=3` is a string and will fail).
 
 ```bash
 # Minimal thread state (valid GraphQL; expand fields if you need comment bodies)
@@ -38,9 +52,19 @@ If you need **full comment text**, add a nested `comments { nodes { author { log
 
 Use REST comments or `gh pr view --comments` only as **supplemental** context (e.g. quick scan); **do not** declare “all threads resolved” from REST alone.
 
-1. Address each **unresolved** thread (code/doc fix + push, or a factual reply). After **any** push: **`sleep 600`**, then re-check checks **and** GraphQL threads from step 3.
-1. Re-request human review when required (`gh pr edit --add-reviewer` or UI).
-1. Repeat until all **required** checks pass and **no blocking unresolved review threads** remain (per GraphQL). Do **not** tell the user the PR is “fully resolved” until you have completed at least one post-push **`sleep 600`** when bots were pending on the latest SHA.
+4. Address each **unresolved** thread (code/doc fix + push, or a factual reply). After **any** push: **`sleep 600`**, then re-check checks **and** GraphQL threads from step 3.
+5. Re-request human review when required (`gh pr edit --add-reviewer` or UI).
+6. Repeat until all **required** checks pass and **no blocking unresolved review threads** remain (per GraphQL). Do **not** tell the user the PR is “fully resolved” until you have completed at least one post-push **`sleep 600`** when bots were pending on the latest SHA.
+
+## Exit criteria (machine-checkable)
+
+- Required checks **green** on latest SHA.
+- GraphQL **`reviewThreads`**: no blocking **`isResolved: false`** (outdated-only threads may be non-blocking per team policy).
+- If bots were still pending after the last push, at least **one** full **`sleep 600`** cycle completed since that push.
+
+## Escalate to a human when
+
+- Same root-cause CI failure after several fix attempts; **or** security/CVE policy tradeoff needs a product decision; **or** force-push / branch-protection exception required; **or** checks flaky or queued beyond reasonable wall-clock. Post a short PR comment: summary, links, options.
 
 ## Bots
 
