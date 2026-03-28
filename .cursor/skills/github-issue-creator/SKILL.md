@@ -1,6 +1,7 @@
 ---
 name: github-issue-creator
 description: Create structured GitHub Issues with acceptance criteria aligned to repo workflow.
+allowed-tools: Read, Grep, Glob
 ---
 
 # GitHub Issue Creator

@@ -12,6 +12,7 @@ This template assumes **multiple surfaces** for the same repo. Policies in `AGEN
 
 - **Rules:** `.cursorrules` + `.cursor/rules/*.mdc`.
 - **Skills:** `.cursor/skills/` mirrors `.claude/skills/` for discoverability — **keep both copies in sync** when you edit a skill.
+- **MCP:** **`.cursor/mcp.json`** mirrors repo **`.mcp.json`** (same servers; GitHub image pinned by **digest** for reproducibility). Cursor may also use user-level MCP settings — prefer the project file for team parity with Claude Code.
 - **Bugbot:** `.cursor/BUGBOT.md` (if you use Cursor Bugbot).
 
 ## Claude Code (CLI / IDE extension)
@@ -33,10 +34,11 @@ Desktop does **not** automatically load repo-root `.mcp.json` the same way Claud
 
 | Location | Typical use |
 |----------|-------------|
-| Repo `.mcp.json` | **Claude Code** project-scoped MCP (versioned, team-shared) |
+| Repo `.mcp.json` | **Claude Code** project-scoped MCP (versioned, team-shared); GitHub server uses a **digest-pinned** Docker image |
+| `.cursor/mcp.json` | **Cursor** project-scoped MCP mirror (keep in sync with `.mcp.json`) |
 | `~/.claude.json` | User-level MCP for Claude Code |
 | Desktop config file | **Claude Desktop** MCP |
-| Cursor user/project MCP | Cursor’s MCP settings UI + optional project config |
+| Cursor user/project MCP | Cursor’s MCP settings UI (optional override of project file) |
 
 ### When to add MCP
 

@@ -15,8 +15,8 @@ _Describe what this software does after you specialize the template._
 ## Common commands
 
 ```bash
-make ci-fast          # format, lint, tests, policy checks
-make test             # pytest
+make ci-fast          # format, lint, tests (pytest + coverage floor), bandit, policy checks
+make test             # pytest (same as ci-test: includes coverage gate)
 make lint             # ruff check
 make format           # ruff format
 make hooks-install    # pre-commit install

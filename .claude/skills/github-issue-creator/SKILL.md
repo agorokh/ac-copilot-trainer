@@ -1,6 +1,7 @@
 ---
 name: github-issue-creator
 description: Create well-structured GitHub Issues aligned with this repository's architecture and branch/PR workflow. Use when the user asks to file an issue, split work, or capture acceptance criteria before coding.
+allowed-tools: Read, Grep, Glob
 ---
 
 # GitHub Issue Creator

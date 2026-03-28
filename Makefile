@@ -1,8 +1,14 @@
-.PHONY: ci-fast ci-format ci-lint ci-test ci-policy ci-agent-proof format lint test hooks-install
+.PHONY: all clean ci-fast ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof format lint test hooks-install hooks-run
 
 PYTHON ?= python3
 
-ci-fast: ci-format ci-lint ci-test ci-policy ci-agent-proof
+all: ci-fast
+
+clean:
+	@find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+	@find . -type f -name '*.pyc' -delete 2>/dev/null || true
+
+ci-fast: ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof
 	@echo "ci-fast: OK"
 
 ci-format:
@@ -12,7 +18,10 @@ ci-lint:
 	$(PYTHON) -m ruff check src tests
 
 ci-test:
-	$(PYTHON) -m pytest -q
+	$(PYTHON) -m pytest -q --cov=src --cov-fail-under=80
+
+ci-security:
+	$(PYTHON) -m bandit -r src -ll -ii
 
 ci-policy:
 	bash scripts/check_policy_docs.sh

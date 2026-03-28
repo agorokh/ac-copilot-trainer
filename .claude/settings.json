@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; cat \"$root/docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md\" 2>/dev/null || echo 'No handoff found'"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
@@ -13,6 +24,15 @@
             "type": "command",
             "command": "input=$(cat); file_path=$(echo \"$input\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))\" 2>/dev/null); root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); cd \"$root\" || exit 0; if [ ! -f .pre-commit-config.yaml ] || [ -z \"$file_path\" ]; then exit 0; fi; case \"$file_path\" in *.md|*.yml|*.yaml) ;; *) exit 0;; esac; pre-commit run --files \"$file_path\" 2>/dev/null; exit 0",
             "timeout": 180000
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "If this was a CI/test/lint/build failure, extract the ROOT CAUSE in one sentence and suggest a preventive rule. Reply with suggestion or PASS if not a failure."
           }
         ]
       }
@@ -59,8 +79,9 @@
       {
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "Session end checklist (non-blocking; reply ALLOW to stop). See docs/00_Core/SESSION_LIFECYCLE.md (SAVE must run even on failure).\n1) Next Session Handoff: Updated docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md with resume point, blockers, and any failure context?\n2) Vault graph: New learnings captured as small linked nodes (relates_to) rather than only appending to large files?\n3) Indexes: New nodes linked from relevant _index.md or existing nodes where appropriate?\n4) Architecture/governance: If changed, updated 00_System/invariants/ or added ADR under 01_Decisions/?\n5) Investigation: If debugging/incident, added 06_Investigations/ note via 99_Templates/Investigation.md?"
+            "type": "agent",
+            "prompt": "SAVE per docs/00_Core/SESSION_LIFECYCLE.md before stopping. Verify: (1) Next Session Handoff.md updated (resume, shipped, remains, blockers). (2) Vault: new/updated small linked nodes with valid relates_to where needed; not only monolithic edits. (3) Current Focus.md updated if branch, PR, or focus changed. (4) On failure: handoff records what failed and links. Then also: tests/CI adequate? shortcuts? patterns to remember? Rate session completeness 1-10; if <7, flag gaps.",
+            "timeout": 60000
           }
         ]
       }

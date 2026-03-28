@@ -5,6 +5,7 @@ description: |
   Triggers on "resolve PR", "fix review comments", "get PR green".
 model: inherit
 color: green
+memory: project
 ---
 
 # PR Resolution Follow-Up

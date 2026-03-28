@@ -2,6 +2,7 @@
 name: release-notes
 description: Maintainer workflow for template release blurbs (e.g. template-YYYY.MM). Run only when explicitly asked — gathers git history and groups changes for a GitHub Release or PR description.
 disable-model-invocation: true
+allowed-tools: Read, Grep, Glob, Bash
 ---
 
 # Release notes (template maintainers)

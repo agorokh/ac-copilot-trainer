@@ -6,6 +6,7 @@ description: |
   "orchestrate issue N", or a lone issue number after asking for the orchestrator.
 model: inherit
 color: blue
+memory: project
 ---
 
 # Issue-Driven Coding Orchestrator
@@ -23,12 +24,13 @@ color: blue
 | Dependabot / deps-only / workflows / `.mcp.json` / `security.yml` bumps | `dependency-review` | `pr-resolution-follow-up` for `sleep 600` + GraphQL `reviewThreads` loop | Read touched files only; do not duplicate the PR loop in `dependency-review` |
 | New repo from template | Human or `new-project-setup` skill | — | `new-project-setup` |
 | Maintainer release blurb / tag notes | Human | — | `release-notes` skill; see `docs/00_Core/MAINTAINING_THE_TEMPLATE.md` § Versioning |
+| Post-merge learnings extraction (optional) | `learner` | — | `vault-memory`; updates `AGENTS.md` tier-1 + small vault nodes |
 
 **Rules**
 
 - One **primary** owner per goal; secondaries are **handoffs**, not parallel owners of the same branch.
 - **Skills** are shortcuts—link `.claude/skills/<name>/SKILL.md` rather than pasting long procedures into chat.
-- **Delegate** explicitly: use the **Task** tool with `subagent_type` **`pr-resolution-follow-up`** or **`dependency-review`** when the host supports it; otherwise follow the linked agent markdown step-for-step.
+- **Delegate** explicitly: use the **Task** tool with `subagent_type` **`pr-resolution-follow-up`**, **`dependency-review`**, or **`learner`** when the host supports it; otherwise follow the linked agent markdown step-for-step.
 
 ## Context discipline (tokens)
 

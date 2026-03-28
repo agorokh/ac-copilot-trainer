@@ -1,6 +1,7 @@
 ---
 name: vault-memory
 description: Manage persistent memory for this repo — Obsidian vault at docs/01_Vault/ProjectTemplate/ plus AGENTS.md tier-1 facts. Use when starting/ending sessions, after architecture changes, investigations, or when the user says vault, handoff, ADR, or project state.
+allowed-tools: Read, Grep, Glob, Write, Edit
 ---
 
 # Vault Memory

@@ -5,6 +5,7 @@ description: |
   Triggers on "dependency PR", "Dependabot", "bump pyproject", "workflow-only change".
 model: inherit
 color: yellow
+memory: project
 ---
 
 # Dependency review

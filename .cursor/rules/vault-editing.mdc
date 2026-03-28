@@ -1,0 +1,14 @@
+---
+globs: docs/01_Vault/**/*.md
+---
+
+# Vault editing
+
+When editing these files:
+
+1. **Frontmatter** — Valid YAML per `docs/01_Vault/00_Graph_Schema.md`.
+2. **Size** — Prefer small linked nodes over long monoliths (aim under ~100 lines body).
+3. **Indexes** — Link new nodes from the appropriate `_index.md` or via `relates_to` from a hub file.
+4. **Anchors** — Keep `relates_to` paths consistent with the graph schema (vault root under `docs/01_Vault/`).
+
+See also `.claude/rules/vault-editing.md` and `.claude/skills/vault-memory/SKILL.md`.

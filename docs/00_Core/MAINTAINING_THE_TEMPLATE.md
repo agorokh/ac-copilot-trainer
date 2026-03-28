@@ -15,6 +15,7 @@ GitHub **does not** push template changes into existing repos created earlier. T
 Template maintainers: append one bullet per governance-facing change.
 
 - `YYYY-MM-DD` — Short description (optional PR link).
+- 2026-03-28 — Agent self-learning infra (#15): digest-pinned GitHub MCP in `.mcp.json` + `.cursor/mcp.json`; `make ci-fast` adds coverage floor + bandit.
 - 2026-03-27 — PR #3 follow-up: README template-setting gated; vault file links in OPTIONAL_CAPABILITIES; MAINTAINING changelog section; AGENT_CORE_PRINCIPLES MD049 emphasis.
 
 ## Cadence (lightweight)
@@ -22,7 +23,7 @@ Template maintainers: append one bullet per governance-facing change.
 | When | Do |
 |------|-----|
 | Weekly | Glance at Dependabot PRs; merge or batch. |
-| Monthly | Skim Anthropic / Cursor / GitHub docs for breaking changes to MCP, hooks, or Copilot agents; adjust `.mcp.json` / `.claude/settings.json` / `.github/agents` as needed. Run `docker pull ghcr.io/github/github-mcp-server` if you use the checked-in GitHub MCP Docker image. |
+| Monthly | Skim Anthropic / Cursor / GitHub docs for breaking changes to MCP, hooks, or Copilot agents; adjust `.mcp.json` / `.cursor/mcp.json` / `.claude/settings.json` / `.github/agents` as needed. Run `docker pull ghcr.io/github/github-mcp-server` and refresh the **digest pin** in both MCP JSON files when bumping the GitHub MCP image. |
 | Per real incident | Add an invariant or script check; promote to vault ADR if architectural. |
 
 ## Propagation rule (child → template)
