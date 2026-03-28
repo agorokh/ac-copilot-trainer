@@ -1,23 +1,17 @@
 ---
-type: architecture-invariants
+type: index
 status: active
+created: 2026-03-23
+updated: 2026-03-27
 memory_tier: canonical
-last_validated: 2026-03-23
+last_validated: 2026-03-27
+relates_to:
+  - ProjectTemplate/00_System/invariants/_index.md
+  - 00_Graph_Schema.md
 ---
 
 # Architecture invariants
 
-Replace this stub with **numbered, testable rules** for your project.
+Rules are split into **small, linked nodes** under [`invariants/`](invariants/_index.md). Open that index for summaries and traversal; load individual invariant files only when relevant.
 
-## Template examples (delete when real)
-
-1. **Single entrypoint** — Production behavior is invoked only through documented entrypoints (list them).
-2. **Secrets** — No credentials in source; use environment variables and secret managers.
-3. **Data immutability** — Raw evidence or regulated data paths are not agent-writable (list paths); enforce with hooks if needed.
-4. **Persistence** — Choose one primary store for authoritative state (database, object store, etc.) and forbid parallel ad-hoc files.
-
-## Enforcement
-
-- Claude Code: optional PreToolUse prompts in `.claude/settings.json`.
-- CI: custom scripts under `scripts/` + tests.
-- Review: `.cursor/BUGBOT.md` and GitHub bots.
+**Graph schema (survives vault rename):** [`docs/01_Vault/00_Graph_Schema.md`](../../00_Graph_Schema.md) — from this folder, `../../00_Graph_Schema.md`.

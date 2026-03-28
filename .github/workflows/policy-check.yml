@@ -15,17 +15,5 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Emit policy report
-        run: |
-          echo '{"canonical_docs":{"AGENTS.md":'"$(test -f AGENTS.md && echo true || echo false)"',"CLAUDE.md":'"$(test -f CLAUDE.md && echo true || echo false)"',".cursorrules":'"$(test -f .cursorrules && echo true || echo false)"',"AGENT_CORE_PRINCIPLES.md":'"$(test -f AGENT_CORE_PRINCIPLES.md && echo true || echo false)"'}}' | tee policy_report.json
-
-      - name: Verify canonical policy docs exist
-        run: |
-          missing=0
-          for f in AGENTS.md CLAUDE.md AGENT_CORE_PRINCIPLES.md .cursorrules; do
-            if [[ ! -f "$f" ]]; then
-              echo "::error::Missing $f"
-              missing=1
-            fi
-          done
-          exit "$missing"
+      - name: Verify canonical policy docs (script is source of truth)
+        run: bash scripts/check_policy_docs.sh

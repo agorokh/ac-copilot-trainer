@@ -23,5 +23,6 @@ Keep the template **lean**. Turn these on when the project actually needs them.
 
 When you add an optional stack, update these vault docs so agents do not guess:
 
-- [Architecture Invariants.md](../01_Vault/ProjectTemplate/00_System/Architecture%20Invariants.md)
+- [00_Graph_Schema.md](../01_Vault/00_Graph_Schema.md) (link new nodes per schema)
+- [Architecture Invariants.md](../01_Vault/ProjectTemplate/00_System/Architecture%20Invariants.md) / [invariants/_index.md](../01_Vault/ProjectTemplate/00_System/invariants/_index.md)
 - [Library Map.md](../01_Vault/ProjectTemplate/00_System/Library%20Map.md)

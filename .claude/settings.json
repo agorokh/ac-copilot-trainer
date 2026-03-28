@@ -23,6 +23,15 @@
         "hooks": [
           {
             "type": "prompt",
+            "prompt": "LOAD reminder (non-blocking; reply ALLOW): Per docs/00_Core/SESSION_LIFECYCLE.md, before substantive edits have you completed LOAD this session (Next Session Handoff, follow relates_to/indexes for needed subgraph, Current Focus)? If not, read those vault files first. Trivial typo-only edits may skip."
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
             "prompt": "Sensitive file guard: BLOCK edits to .env (but allow .env.example), any path under archive/ if your team treats it as immutable, *.lock, poetry.lock, package-lock.json, pnpm-lock.yaml, or secrets directories. ALLOW normal source and docs. Reply BLOCK: <reason> or ALLOW."
           }
         ]
@@ -51,7 +60,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "Session end reminders (WARN only; always ALLOW stop):\n1) Update docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md with resume point and blockers.\n2) If you changed architecture or governance, update Architecture Invariants or add an ADR under docs/01_Vault/ProjectTemplate/01_Decisions/.\n3) If this was an investigation, add a note under docs/01_Vault/ProjectTemplate/06_Investigations/ using 99_Templates/Investigation.md."
+            "prompt": "Session end checklist (non-blocking; reply ALLOW to stop). See docs/00_Core/SESSION_LIFECYCLE.md (SAVE must run even on failure).\n1) Next Session Handoff: Updated docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md with resume point, blockers, and any failure context?\n2) Vault graph: New learnings captured as small linked nodes (relates_to) rather than only appending to large files?\n3) Indexes: New nodes linked from relevant _index.md or existing nodes where appropriate?\n4) Architecture/governance: If changed, updated 00_System/invariants/ or added ADR under 01_Decisions/?\n5) Investigation: If debugging/incident, added 06_Investigations/ note via 99_Templates/Investigation.md?"
           }
         ]
       }

@@ -13,6 +13,11 @@ color: green
 
 **This agent owns** the only detailed procedure for **`sleep 600`**, **GraphQL `reviewThreads`**, and **check polling**. Other agents must **link here**, not copy those steps.
 
+## Session lifecycle
+
+- **LOAD:** Before entering the CI/review loop, complete vault LOAD per `docs/00_Core/SESSION_LIFECYCLE.md` (at minimum `Next Session Handoff.md`, `Current Focus.md`, and any `relates_to` subgraph needed for this PR).
+- **SAVE:** After exiting this loop — success, green-with-follow-ups, or abandoned PR — run SAVE: update `Next Session Handoff.md` and record any new learnings as small linked vault nodes (or hand off explicitly in the handoff if the session ends abruptly).
+
 ## When to involve other agents
 
 - If the PR diff is **only** dependencies, GitHub Actions, `.mcp.json`, or `security.yml` CVE tooling, run **`dependency-review`** first (Task `subagent_type=dependency-review` or read `.claude/agents/dependency-review.md`) for **risk summary + merge order**, then return here for the CI/bot loop.

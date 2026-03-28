@@ -10,8 +10,8 @@ assignees: ""
 
 <!-- Link to docs the implementer must read -->
 
-- [ ] Read `AGENTS.md` and `docs/10_Development/10_Agent_Protocol.md`
-- [ ] Read vault `Architecture Invariants.md`
+- [ ] Read `AGENTS.md`, `docs/00_Core/SESSION_LIFECYCLE.md`, and `docs/10_Development/10_Agent_Protocol.md`
+- [ ] Read vault `docs/01_Vault/ProjectTemplate/00_System/invariants/_index.md` (architecture invariants graph; update path after bootstrap)
 
 ## Problem
 

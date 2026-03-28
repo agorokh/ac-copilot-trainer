@@ -3,7 +3,7 @@
 **This file guides all AI agents and human operators working in this repository.**
 
 **Status:** Template — customize per project
-**Version:** 1.3
+**Version:** 1.4
 **Category:** Core
 
 ---
@@ -12,9 +12,10 @@
 
 1. **[AGENT_CORE_PRINCIPLES.md](AGENT_CORE_PRINCIPLES.md)** — Non-negotiable workflow and hygiene.
 2. **[docs/10_Development/10_Agent_Protocol.md](docs/10_Development/10_Agent_Protocol.md)** — Where files go and what is forbidden.
-3. **Vault (mandatory)** — `docs/01_Vault/ProjectTemplate/00_System/` (rename `ProjectTemplate` on bootstrap; see [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md)).
-4. **[docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)** — Cursor, Claude Code, Claude Desktop, MCP — same rules across tools.
-5. **Template maintainers:** [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) — how to keep the canonical template current.
+3. **[docs/00_Core/SESSION_LIFECYCLE.md](docs/00_Core/SESSION_LIFECYCLE.md)** — LOAD → OPERATE → SAVE; integrates with the vault graph.
+4. **Vault (mandatory)** — Graph schema: [docs/01_Vault/00_Graph_Schema.md](docs/01_Vault/00_Graph_Schema.md); session files under `docs/01_Vault/ProjectTemplate/00_System/` (rename `ProjectTemplate` on bootstrap; see [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md)).
+5. **[docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)** — Cursor, Claude Code, Claude Desktop, MCP — same rules across tools.
+6. **Template maintainers:** [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) — how to keep the canonical template current.
 
 **Agent mesh (Claude Code):** [CLAUDE.md](CLAUDE.md) § Orchestration gives the overview. Key locations:
 
@@ -62,9 +63,9 @@ Treat automated review comments as blocking unless:
 | Tier | Location | Use |
 |------|----------|-----|
 | 1 | `AGENTS.md` (bottom) | Short operational facts, policy updates |
-| 2 | `docs/01_Vault/ProjectTemplate/` | ADRs, invariants, investigations, session handoff |
+| 2 | `docs/01_Vault/ProjectTemplate/` (+ `docs/01_Vault/00_Graph_Schema.md`) | Linked graph: ADRs, invariants, glossary, investigations, session handoff |
 
-Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`).
+Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`). Session protocol: `docs/00_Core/SESSION_LIFECYCLE.md`.
 
 **Bootstrap (new copy of this template):** `.claude/skills/new-project-setup/SKILL.md` (mirrored under `.cursor/skills/`) — `/new-project-setup`.
 
@@ -97,6 +98,7 @@ Stable operational principles derived from real usage across projects. Agents: r
 ## Changelog (Tier 1)
 
 <!-- CHANGELOG:START -->
+- 2026-03-27: v1.4 — Vault knowledge graph (`00_Graph_Schema.md`, `invariants/`, `glossary/`), `SESSION_LIFECYCLE.md`, agent/hook lifecycle wiring, expanded policy checks + root file allowlist warnings, `check_bootstrap_complete.py`, bootstrap doc refresh.
 - 2026-03-27: v1.3 — Agent cohesion: orchestrator owns canonical Routing table; pr-resolution-follow-up fixed loop numbering + exit/escalation + cross-links; dependency-review handoff to Task/pr-resolution; CLAUDE.md orchestration + skills table + delegation/context discipline; AGENTS.md agent mesh pointer.
 - 2026-03-27: v1.2 — Multi-tool governance: TOOLCHAIN, OPTIONAL_CAPABILITIES, MAINTAINING_THE_TEMPLATE, GITHUB_SETUP; mandatory vault callout + maintainer link; CLAUDE.md quick start and Desktop/MCP/upstream-sync clarity; AGENT_CORE_PRINCIPLES child-vs-template upstream wording; README “keeping current”; Dependabot groups; gitignore `.claude.local.md`.
 - 2026-03-26: v1.1 — Added issue-grouping-by-file-overlap, own-every-failure, preserve-manual-work, upstream-sync. (Source: court-fillings-processing learnings)

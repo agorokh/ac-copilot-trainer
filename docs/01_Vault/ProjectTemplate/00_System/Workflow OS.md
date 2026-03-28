@@ -2,7 +2,11 @@
 type: workflow-os
 status: active
 memory_tier: canonical
-last_validated: 2026-03-23
+last_validated: 2026-03-27
+relates_to:
+  - ProjectTemplate/00_System/Next Session Handoff.md
+  - ProjectTemplate/00_System/glossary/ci-fast.md
+  - ProjectTemplate/00_System/invariants/_index.md
 ---
 
 # Workflow OS

@@ -7,7 +7,7 @@ description: Create well-structured GitHub Issues aligned with this repository's
 
 ## Before writing
 
-Read `AGENTS.md`, `docs/10_Development/10_Agent_Protocol.md`, and the vault `Architecture Invariants.md`.
+Read `AGENTS.md`, `docs/00_Core/SESSION_LIFECYCLE.md` (LOAD), `docs/10_Development/10_Agent_Protocol.md`, and vault `00_System/invariants/_index.md` (or `Architecture Invariants.md` entry).
 
 ## Issue body checklist
 

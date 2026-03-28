@@ -8,7 +8,7 @@
 
 ## Purpose
 
-Every AI assistant (Cursor, Claude Code, Codex, Warp, GitHub Copilot agents) working in this repository must follow these principles. They are intentionally **domain-agnostic** — extend them in `AGENTS.md` and in the vault `Architecture Invariants` note.
+Every AI assistant (Cursor, Claude Code, Codex, Warp, GitHub Copilot agents) working in this repository must follow these principles. They are intentionally **domain-agnostic** — extend them in `AGENTS.md` and in the vault **invariants** graph (`00_System/invariants/_index.md`, via `Architecture Invariants.md`).
 
 ---
 

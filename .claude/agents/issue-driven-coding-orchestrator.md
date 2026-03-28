@@ -39,15 +39,16 @@ color: blue
 
 ## Non-negotiables
 
-1. Load issue context: `gh issue view <N> --json title,body,state,labels,comments`.
-2. If closed or not found — stop.
-3. If the issue is **dependency/tooling-only** (Dependabot, “bump X”, workflow-only), prefer spawning **`dependency-review`** (Task or manual follow) before treating it as a feature build.
-4. Create a compliant branch (see `AGENTS.md`).
-5. Open a **Draft PR** early; push frequently.
-6. Follow `docs/10_Development/10_Agent_Protocol.md` for file placement.
-7. Read vault `Architecture Invariants.md` before touching core modules.
-8. Run `make ci-fast` before marking ready for review.
-9. Hand off to **PR resolution**: invoke **`Task(subagent_type="pr-resolution-follow-up", …)`** or execute `.claude/agents/pr-resolution-follow-up.md` until CI is green and bot threads are addressed.
+1. **Session lifecycle:** LOAD vault context per `docs/00_Core/SESSION_LIFECYCLE.md` before routing or implementation decisions; SAVE (update `Next Session Handoff.md`, add/update small linked vault nodes as needed) after completion **or failure**.
+2. Load issue context: `gh issue view <N> --json title,body,state,labels,comments`.
+3. If closed or not found — stop.
+4. If the issue is **dependency/tooling-only** (Dependabot, “bump X”, workflow-only), prefer spawning **`dependency-review`** (Task or manual follow) before treating it as a feature build.
+5. Create a compliant branch (see `AGENTS.md`).
+6. Open a **Draft PR** early; push frequently.
+7. Follow `docs/10_Development/10_Agent_Protocol.md` for file placement.
+8. Read vault `00_System/invariants/_index.md` and load targeted invariant nodes before touching core modules.
+9. Run `make ci-fast` before marking ready for review.
+10. Hand off to **PR resolution**: invoke **`Task(subagent_type="pr-resolution-follow-up", …)`** or execute `.claude/agents/pr-resolution-follow-up.md` until CI is green and bot threads are addressed.
 
 ## Planning
 

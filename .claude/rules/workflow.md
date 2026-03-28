@@ -1,5 +1,6 @@
 # Workflow
 
+- **Session lifecycle:** LOAD → OPERATE → SAVE per `docs/00_Core/SESSION_LIFECYCLE.md` (vault handoff, subgraph, focus; then save handoff + linked nodes even on failure).
 - **Issue → branch → PR → review → merge.** No direct commits to `main`.
 - **Group issues by files touched.** Never create separate issues that modify overlapping source files. Consolidate into one issue with labeled Parts.
 - Run **`make ci-fast`** before requesting human review.

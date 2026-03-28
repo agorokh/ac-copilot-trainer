@@ -2,7 +2,13 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-03-23
+last_updated: 2026-03-27
+relates_to:
+  - ProjectTemplate/00_System/Current Focus.md
+  - ProjectTemplate/00_System/Project State.md
+  - ProjectTemplate/00_System/invariants/_index.md
+  - ProjectTemplate/00_System/glossary/_index.md
+  - 00_Graph_Schema.md
 ---
 
 # Next session handoff

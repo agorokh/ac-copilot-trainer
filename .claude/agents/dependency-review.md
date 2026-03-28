@@ -34,6 +34,11 @@ color: yellow
 - Read **only** touched manifest/workflow files plus the issue/PR body—no whole-repo grep for “all workflows.”
 - Prefer **Context7** when a bumped **action** or **npm/py** package behavior is unclear.
 
+## Session lifecycle
+
+- **LOAD:** Before reviewing, LOAD relevant vault context per `docs/00_Core/SESSION_LIFECYCLE.md` — at minimum skim `00_System/invariants/_index.md` and open **no-secrets** / **data-immutability** (or successor) nodes when the change touches credentials, scanners, or data paths.
+- **SAVE:** After review, SAVE any merge-order decisions, risk assessments, or policy exceptions as small linked notes (vault graph or PR comment + handoff pointer per team practice).
+
 ## Guardrails
 
 - No secrets in commits or PR bodies; rely on `AGENTS.md` and vault for policy detail.

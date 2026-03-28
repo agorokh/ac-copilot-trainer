@@ -3,7 +3,7 @@
 Guidance for **Claude Code** (claude.ai/code) in this repository.
 
 **Status:** Template
-**Version:** 1.3
+**Version:** 1.4
 **Category:** Core
 
 ---
@@ -30,22 +30,26 @@ Personal overrides: root **`.claude.local.md`** (gitignored) for preferences not
 
 ## Persistent memory (two-tier)
 
-See `.claude/skills/vault-memory/SKILL.md` for the full protocol.
+See `.claude/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE.md`** for LOAD/SAVE.
 
 - **Tier 1** — `AGENTS.md` (quick facts, changelog block at bottom).
-- **Tier 2** — Obsidian vault: `docs/01_Vault/ProjectTemplate/` (rename on bootstrap).
+- **Tier 2** — Obsidian vault graph: `docs/01_Vault/ProjectTemplate/` (rename on bootstrap); schema at `docs/01_Vault/00_Graph_Schema.md` (outside the renamed folder).
 
-**Session start:** read `Next Session Handoff.md`, then `Current Focus.md`, then `Project State.md` under `00_System/`.
+**Session start (LOAD):** `Next Session Handoff.md` → follow `relates_to` / `_index.md` for needed subgraph → `Current Focus.md` → `Project State.md` as needed.
 
-**Session end:** update `Next Session Handoff.md` with resume instructions and open blockers.
+**Session end (SAVE):** update `Next Session Handoff.md`; add or update **small linked nodes** (not only monolithic edits). See `SESSION_LIFECYCLE.md`.
 
+@docs/00_Core/SESSION_LIFECYCLE.md
+@docs/01_Vault/00_Graph_Schema.md
 @docs/01_Vault/ProjectTemplate/00_System/Project State.md
 @docs/01_Vault/ProjectTemplate/00_System/Current Focus.md
 @docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md
 @docs/01_Vault/ProjectTemplate/00_System/Architecture Invariants.md
+@docs/01_Vault/ProjectTemplate/00_System/invariants/_index.md
 @docs/01_Vault/ProjectTemplate/00_System/Workflow OS.md
 @docs/01_Vault/ProjectTemplate/00_System/Library Map.md
 @docs/01_Vault/ProjectTemplate/00_System/Glossary.md
+@docs/01_Vault/ProjectTemplate/00_System/glossary/_index.md
 
 ---
 
@@ -81,7 +85,7 @@ Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Develop
 
 | Skill | Use |
 |-------|-----|
-| `vault-memory` | Session start/end, handoffs, ADRs |
+| `vault-memory` | Session start/end, handoffs, ADRs, vault graph traversal |
 | `project-conventions` | Ambiguous style/workflow; pointers to `AGENTS.md` / protocol |
 | `ci-check` | Diagnosing CI / local check failures |
 | `github-issue-creator` | Creating issues from templates |

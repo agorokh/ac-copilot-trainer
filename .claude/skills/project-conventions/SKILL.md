@@ -14,4 +14,4 @@ Do **not** duplicate long policy here. Read these paths as needed:
 - `Makefile` — targets; **`make ci-fast`** before claiming work is done
 - `docs/10_Development/10_Agent_Protocol.md` — where files belong, forbidden paths
 
-Vault and architecture: `docs/01_Vault/ProjectTemplate/00_System/` (see **`vault-memory`** skill).
+Vault and architecture: `docs/01_Vault/00_Graph_Schema.md` + `docs/01_Vault/ProjectTemplate/00_System/` (see **`vault-memory`** skill, **`SESSION_LIFECYCLE.md`**).
