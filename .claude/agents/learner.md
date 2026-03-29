@@ -24,6 +24,15 @@ color: purple
 2. **Tier 2** — Add or update **small vault nodes** with schema-valid frontmatter (`type`, `status`, `created`, `updated`; plus `relates_to` / `part_of` as appropriate per `docs/01_Vault/00_Graph_Schema.md`), and ensure discoverability via the relevant `_index.md` or explicit hub linkage (prefer new files over huge edits).
 3. **Template signal** — Note whether a pattern is **universal** (candidate for upstream template) vs **project-specific** (stay local or ADR).
 
+## Universal vs project-specific (upstream)
+
+When promoting learnings, tag each pattern explicitly:
+
+- **Universal** — Would help **any** repo using this template (hooks, CI policy, agent protocol, Copier sync). Prefer a short vault stub or ADR title referencing it; open or link a **template-repo** Issue/PR when ready to propagate.
+- **Project-specific** — Domain data paths, secrets layout, product invariants. Keep in the child vault only; do **not** paste into upstream PRs without redaction.
+
+Use `docs/00_Core/MAINTAINING_THE_TEMPLATE.md` for tagging cadence (`template-YYYY.MM`) and feedback channels.
+
 ## Constraints
 
 - **No secrets** in notes, Issues, or commits.

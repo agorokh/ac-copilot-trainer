@@ -2,7 +2,33 @@
 
 Complete these steps once per new repository.
 
-## 1. Identity
+## 0. Copier (recommended)
+
+This repository is a **[Copier](https://copier.readthedocs.io/)** template (`copier.yml` at the root). Prefer generating a new project from a **tag** (e.g. `template-2026.03`) or `main`:
+
+```bash
+pip install copier   # or: pip install -e ".[bootstrap]" from a clone
+copier copy gh:YOUR_ORG/template-repo path/to/new-repo
+cd path/to/new-repo
+# Answer prompts: project_name, project_key, package_name, github_org
+make ci-fast
+```
+
+Copier runs `scripts/copier_post_copy.py` after copy to rename `docs/01_Vault/ProjectTemplate` → `docs/01_Vault/<project_key>`, `src/project_template` → `src/<package_name>`, patch `pyproject.toml`, and replace canonical path strings across text files. Files matching `_skip_if_exists` in `copier.yml` are not overwritten on **update**.
+
+**Updates in an existing child repo** (after the first `copier copy`):
+
+```bash
+copier update --trust
+```
+
+Use the reference workflow `.github/workflows/template-sync.yml` (optional) for scheduled or manual sync PRs; see [MAINTAINING_THE_TEMPLATE.md](MAINTAINING_THE_TEMPLATE.md).
+
+**Canonical template identity:** To work in **this** template repository unchanged, use default answers `project_key=ProjectTemplate`, `package_name=project_template`, `project_name=project-template`.
+
+## 1. Identity (manual bootstrap)
+
+If you did not use Copier, complete these manually:
 
 - [ ] Choose a **project key** (short, filesystem-safe, e.g. `AcmePlatform`). You will rename the vault folder to match.
 - [ ] Update `pyproject.toml`: `name`, `description`, and `[tool.setuptools.packages.find]` / package layout if you change `src/project_template`.

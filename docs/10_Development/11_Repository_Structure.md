@@ -38,3 +38,4 @@ If you add a new tracked file at repository root, update **`ROOT_FILE_ALLOWLIST`
 
 - **Graph schema:** `docs/01_Vault/00_Graph_Schema.md` (outside the renamed project vault folder).
 - **Project vault:** `docs/01_Vault/<ProjectKey>/` (template: `ProjectTemplate/`).
+- **Copier template:** root `copier.yml` plus `scripts/copier_post_copy.py` (see `BOOTSTRAP_NEW_PROJECT.md`).

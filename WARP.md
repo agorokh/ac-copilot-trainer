@@ -11,6 +11,7 @@ _Describe what this software does after you specialize the template._
 - Python version: see `pyproject.toml` classifiers / CI.
 - Create venv or use `uv` per team preference.
 - Copy `.env.example` → `.env` for local secrets.
+- **Copier** (optional, for bootstrapping or updating from this template): `pip install copier` or `pip install -e ".[bootstrap]"` from a clone. See [BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md).
 
 ## Common commands
 

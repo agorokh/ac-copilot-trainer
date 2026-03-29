@@ -1,0 +1,59 @@
+# Copier template definition (see docs/00_Core/BOOTSTRAP_NEW_PROJECT.md).
+# Canonical template repo keeps on-disk names ProjectTemplate + project_template;
+# `scripts/copier_post_copy.py` (via _tasks) renames and rewrites content for child projects.
+# Note: `copier.yml` is intentionally NOT in _exclude so child repos can run `copier update`.
+
+_min_copier_version: "9.14.0"
+_subdirectory: "."
+
+project_name:
+  type: str
+  help: "Project name (e.g., alpaca-trading, PEP 503 style with hyphens)"
+
+project_key:
+  type: str
+  help: "Vault project key / Obsidian folder name (e.g., AlpacaTrading)"
+  default: >-
+    {% set body = project_name | title | replace('-', '') | replace('_', '') %}{% if body and body[0] in '0123456789' %}P{% endif %}{{ body }}
+  validator: >-
+    {% if not (project_key | regex_search('^[A-Za-z][A-Za-z0-9_]*$')) %}
+    project_key must be a single path segment: start with a letter, then letters, digits, or underscores only (no slashes or spaces).
+    {% endif %}
+
+package_name:
+  type: str
+  help: "Python import package name (underscores)"
+  default: "{{ project_name | replace('-', '_') }}"
+  validator: >-
+    {% if not (package_name | regex_search('^[A-Za-z_][A-Za-z0-9_]*$')) %}
+    package_name must be a valid Python identifier (letters, digits, underscores; cannot start with a digit).
+    {% endif %}
+
+github_org:
+  type: str
+  help: "GitHub org or user for this project (used in docs / URLs where applicable)"
+
+_skip_if_exists:
+  # Template on-disk layout uses ProjectTemplate; post-copy task renames to project_key.
+  # List both so Copier update skips whether matching template paths or the renamed tree.
+  - "docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md"
+  - "docs/01_Vault/ProjectTemplate/00_System/Current Focus.md"
+  - "docs/01_Vault/ProjectTemplate/00_System/Project State.md"
+  - "docs/01_Vault/{{ project_key }}/00_System/Next Session Handoff.md"
+  - "docs/01_Vault/{{ project_key }}/00_System/Current Focus.md"
+  - "docs/01_Vault/{{ project_key }}/00_System/Project State.md"
+  - "AGENTS.md"
+  - ".env"
+  - ".env.local"
+
+_exclude:
+  - ".git"
+  - ".cache"
+  - ".scratch"
+  - "reports/"
+  - "models/"
+  - ".copier-answers.yml"
+
+_tasks:
+  # Use python3 for POSIX child repos; Copier runs this from the destination project root.
+  - python3 scripts/copier_post_copy.py

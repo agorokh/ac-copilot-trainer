@@ -53,6 +53,7 @@ ROOT_FILE_ALLOWLIST = frozenset(
         ".mcp.json",
         ".env.example",
         ".markdownlint.json",
+        "copier.yml",
     }
 )
 
