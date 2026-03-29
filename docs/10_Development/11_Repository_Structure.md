@@ -15,6 +15,7 @@ These align with `scripts/check_agent_forbidden.py` for the unspecialized templa
 | `src/` | Application code |
 | `tests/` | Automated tests |
 | `scripts/` | Checked-in automation |
+| `tools/` | Optional Python tooling (e.g. `process_miner`, `repo_knowledge`); extras `[mining]` / `[knowledge]` |
 
 When you add top-level directories (`apps/`, `ops/`, `data/`, etc.), update **both** this document and `ALLOWED_TOPLEVEL_DIRS` in `scripts/check_agent_forbidden.py`.
 

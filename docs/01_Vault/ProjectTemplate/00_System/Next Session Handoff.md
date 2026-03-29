@@ -15,17 +15,20 @@ relates_to:
 
 ## Resume here
 
-- **PR #29** (`feat/issue-15-agent-self-learning`, **open**, not draft): confirm **`headRefOid`** on GitHub. As of last pr-resolution pass: required checks + CodeRabbit + Bugbot green; GraphQL **`reviewThreads`**: **0** blocking (`isResolved: false` ∧ `isOutdated: false`). **`learner`** agent uses **`model: inherit`** (Bugbot: shorthand `haiku` breaks spawned agents); CodeRabbit thread on pinning `haiku` **replied + resolved** with rationale. Next: human merge when satisfied; optional **`learner`** post-merge per #15.
-- Next parallel track per graph: **#21** (Tier 1+2), **#27** (template sync); **#26** after #21.
+- **#21 / Tier 1+2:** branch `feat/issue-21-repo-intelligence`, **PR:** https://github.com/agorokh/template-repo/pull/30 (draft). Hand off to **`pr-resolution-follow-up`** until checks + review threads are clean.
+- **PR #29** (#15): if still open, merge when maintainer is satisfied (separate line of work).
+- **#26** remains blocked on #21 training-data readiness; **#27** template sync is the parallel track if #21 is done.
 
 ## What was delivered
 
-- #15 scope: project memory on orchestration agents, `learner` agent, skill `allowed-tools`, SessionStart / Stop / PostToolUse Bash hooks, vault + orchestration rules, shorter `CLAUDE.md`, digest-pinned GitHub MCP (`.mcp.json` + `.cursor/mcp.json`), pytest-cov + bandit in `ci-fast`, docs (WARP, TOOLCHAIN, MAINTAINING, GITHUB_SETUP, glossary `ci-fast`). **PR:** https://github.com/agorokh/template-repo/pull/29
+- **#21 (in flight):** `tools/process_miner/` + `scripts/process_miner.py`, optional extras `[mining]` / `[knowledge]`, learned rules dirs, `.github/workflows/process-miner.yml`, `tools/repo_knowledge/` + MCP wiring in `.mcp.json` / `.cursor/mcp.json`, structure doc + `check_agent_forbidden` updates, CI installs `dev+mining+knowledge` for coverage.
+- #15 scope (prior): orchestration/`learner`/hooks/MCP pin/CI gates — **PR:** https://github.com/agorokh/template-repo/pull/29
 
 ## What remains
 
-- Merge **#29** for #15 when maintainer marks ready; optionally run **`learner`** post-merge for template-wide notes.
-- Continue #14 children (#21, #26, #27) as separate issues/branches.
+- Land **#21** PR (draft → review → merge) and sanity-check weekly miner workflow (`workflow_dispatch`) on GitHub.
+- Merge **#29** for #15 if still open when ready.
+- **#26** after stable miner outputs; **#27** Copier/template sync still separate.
 
 ## Blockers
 

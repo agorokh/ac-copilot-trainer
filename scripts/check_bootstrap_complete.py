@@ -36,7 +36,8 @@ def main() -> int:
     if pkg.is_dir():
         lines.append(
             f"- Python package still at `src/{TEMPLATE_PKG_DIR}/`. "
-            "Rename to your package layout and update pyproject `[tool.setuptools.packages.find]` if needed."
+            "Rename to your package layout and update pyproject "
+            "`[tool.setuptools.packages.find]` if needed."
         )
 
     pyproject = repo / "pyproject.toml"
@@ -59,7 +60,9 @@ def main() -> int:
                     )
 
     if lines:
-        print("Bootstrap checklist — still looks like the template in these areas:\n", file=sys.stderr)
+        print(
+            "Bootstrap checklist — still looks like the template in these areas:\n", file=sys.stderr
+        )
         for item in lines:
             print(item, file=sys.stderr)
         print(
@@ -67,7 +70,10 @@ def main() -> int:
             file=sys.stderr,
         )
     else:
-        print("Bootstrap check: no template-default vault path, package dir, or pyproject name detected.")
+        print(
+            "Bootstrap check: no template-default vault path, package dir, "
+            "or pyproject name detected."
+        )
     return 0
 
 

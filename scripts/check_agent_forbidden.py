@@ -21,6 +21,7 @@ ALLOWED_TOPLEVEL_DIRS = {
     "scripts",
     "src",
     "tests",
+    "tools",
     ".claude",
     # Common additions when you specialize (uncomment as needed):
     # "apps",

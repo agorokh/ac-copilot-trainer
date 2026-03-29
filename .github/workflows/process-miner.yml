@@ -1,0 +1,71 @@
+name: Weekly Process Miner
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Lookback days
+        default: "7"
+
+# GitHub REST check-runs endpoint requires checks: read (see collect_pr_data / get_pr_check_runs).
+# Keep checks: read in this block — omitting it silently drops CI rollup data (no check_runs).
+permissions:
+  checks: read
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  mine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[mining,knowledge]"
+
+      - name: Run process miner
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DAYS_INPUT: ${{ github.event.inputs.days }}
+        run: |
+          if [ -z "$DAYS_INPUT" ]; then DAYS=7; else DAYS="$DAYS_INPUT"; fi
+          python scripts/process_miner.py \
+            --repo "$REPO" \
+            --days "$DAYS" \
+            --emit-learned \
+            --ingest-knowledge \
+            --max-prs 40
+
+      - name: Configure git
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Open PR with learned rules
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="miner/weekly-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
+          git checkout -b "$BRANCH"
+          git add .claude/rules/learned .cursor/rules/learned reports/process_miner AGENTS.md || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: weekly process miner — learned rules"
+          git push --set-upstream origin "$BRANCH"
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "chore: weekly miner rules" \
+            --body "Auto-generated from process miner. Refs #14. Review learned rules before merging."

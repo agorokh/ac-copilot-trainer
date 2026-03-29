@@ -23,6 +23,9 @@ htmlcov/
 # Scratch / local experiments
 .scratch/
 
+# Process miner / knowledge (rebuild locally or in CI)
+.cache/
+
 # OS / editor
 .DS_Store
 .idea/

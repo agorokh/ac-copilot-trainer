@@ -12,16 +12,16 @@ ci-fast: ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof
 	@echo "ci-fast: OK"
 
 ci-format:
-	$(PYTHON) -m ruff format --check src tests
+	$(PYTHON) -m ruff format --check src tests tools scripts
 
 ci-lint:
-	$(PYTHON) -m ruff check src tests
+	$(PYTHON) -m ruff check src tests tools scripts
 
 ci-test:
-	$(PYTHON) -m pytest -q --cov=src --cov-fail-under=80
+	$(PYTHON) -m pytest -q --cov=project_template --cov=tools --cov-fail-under=80
 
 ci-security:
-	$(PYTHON) -m bandit -r src -ll -ii
+	$(PYTHON) -m bandit -r src tools -ll -ii
 
 ci-policy:
 	bash scripts/check_policy_docs.sh
@@ -30,10 +30,10 @@ ci-agent-proof:
 	$(PYTHON) scripts/check_agent_forbidden.py
 
 format:
-	$(PYTHON) -m ruff format src tests
+	$(PYTHON) -m ruff format src tests tools scripts
 
 lint:
-	$(PYTHON) -m ruff check --fix src tests
+	$(PYTHON) -m ruff check --fix src tests tools scripts
 
 test: ci-test
 
