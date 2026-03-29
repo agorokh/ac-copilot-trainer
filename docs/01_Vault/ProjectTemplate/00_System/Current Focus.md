@@ -2,20 +2,23 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-03-28
-issue: "https://github.com/agorokh/template-repo/issues/21"
-pr: "https://github.com/agorokh/template-repo/pull/30"
-branch: "feat/issue-21-repo-intelligence"
+last_updated: 2026-03-29
+issue: "https://github.com/agorokh/template-repo/issues/26"
+pr: "https://github.com/agorokh/template-repo/pull/31"
+branch: "feat/issue-26-model-training-phase1"
 relates_to:
   - ProjectTemplate/00_System/Next Session Handoff.md
   - ProjectTemplate/00_System/Project State.md
   - ProjectTemplate/00_System/invariants/_index.md
+  - ProjectTemplate/01_Decisions/local-reviewer-model.md
 ---
 
 # Current focus
 
-**Epic:** #14 (tracker). **Active child:** #21 — Repo Intelligence Tier 1+2 (process miner, learned rules, weekly workflow, SQLite + MCP).
+**Epic:** #14 (tracker). **Just shipped (PR open):** #26 Phase 1 — `tools/model_training/` data export scaffold (SFT JSONL, stats, DPO/CPT stubs, example configs).
 
-**Branch:** `feat/issue-21-repo-intelligence`. **PR:** open a draft PR linking `Refs #14` / `Fixes #21` after push; confirm the URL on GitHub (avoid stale `headRefOid` in vault).
+**Branch:** `feat/issue-26-model-training-phase1`. **PR:** https://github.com/agorokh/template-repo/pull/31 (`Refs #26`, draft).
 
-**Next:** run `pr-resolution-follow-up` until CI + bot threads are green.
+**Also in flight:** #21 Tier 1+2 — **PR** https://github.com/agorokh/template-repo/pull/30
+
+**Next:** merge **#31** when review is satisfied, or run `pr-resolution-follow-up` on **#30** using the same exit criteria.

@@ -1,0 +1,7 @@
+# Deferred — DPO needs chosen/rejected pairs from labeled review threads (issue #26).
+version: 1
+training:
+  objective: dpo
+dataset:
+  format: preference_jsonl
+  # train_file: .cache/training_data/dpo_pairs.jsonl

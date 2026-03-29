@@ -25,6 +25,8 @@ htmlcov/
 
 # Process miner / knowledge (rebuild locally or in CI)
 .cache/
+# Fine-tuned / exported model weights (issue #26; repo root only)
+/models/
 
 # OS / editor
 .DS_Store

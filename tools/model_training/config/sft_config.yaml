@@ -1,0 +1,16 @@
+# Phase 1 placeholder — no secrets. Point dataset paths at exporter output after Phase 1 runs.
+# Example: python -m tools.model_training.data_pipeline --source .cache/repo_knowledge/knowledge.db \
+#          --output .cache/training_data/
+version: 1
+training:
+  objective: sft
+  # base_model: "Qwen/Qwen2.5-Coder-3B-Instruct"  # set when Unsloth/TRL stack is added
+dataset:
+  format: messages_jsonl
+  # Filenames are fixed; the parent directory must match data_pipeline --output, e.g.:
+  #   python -m tools.model_training.data_pipeline --output .cache/training_data/
+  # so the paths below resolve to the files you just exported.
+  train_files:
+    - .cache/training_data/sft_pairs.jsonl
+  optional_decisions:
+    - .cache/training_data/sft_decisions.jsonl

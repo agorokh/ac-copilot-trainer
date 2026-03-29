@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-03-28
+last_updated: 2026-03-29
 relates_to:
   - ProjectTemplate/00_System/Current Focus.md
   - ProjectTemplate/00_System/Project State.md
@@ -15,20 +15,23 @@ relates_to:
 
 ## Resume here
 
+- **#26 Phase 1:** branch `feat/issue-26-model-training-phase1`, **PR:** https://github.com/agorokh/template-repo/pull/31 (draft). **`pr-resolution-follow-up` done (2026-03-29):** required checks green on latest SHA; GraphQL `reviewThreads` has **zero** unresolved threads. Next: human review / mark ready / merge when satisfied. Epic #26 stays open (Phases 2–4 deferred).
 - **#21 / Tier 1+2:** branch `feat/issue-21-repo-intelligence`, **PR:** https://github.com/agorokh/template-repo/pull/30 (draft). Hand off to **`pr-resolution-follow-up`** until checks + review threads are clean.
 - **PR #29** (#15): if still open, merge when maintainer is satisfied (separate line of work).
-- **#26** remains blocked on #21 training-data readiness; **#27** template sync is the parallel track if #21 is done.
+- **#27** template sync is the parallel track if #21 is done.
 
 ## What was delivered
 
+- **#26 Phase 1 (in PR):** `tools/model_training/` — `data_pipeline` + `format_sft` export to `sft_pairs.jsonl` / `sft_decisions.jsonl`, `dataset_stats.py`, stub `format_dpo` / `format_cpt`, `config/*.yaml`, tests, `models/` gitignore, vault `01_Decisions/local-reviewer-model.md`. **PR:** https://github.com/agorokh/template-repo/pull/31
 - **#21 (in flight):** `tools/process_miner/` + `scripts/process_miner.py`, optional extras `[mining]` / `[knowledge]`, learned rules dirs, `.github/workflows/process-miner.yml`, `tools/repo_knowledge/` + MCP wiring in `.mcp.json` / `.cursor/mcp.json`, structure doc + `check_agent_forbidden` updates, CI installs `dev+mining+knowledge` for coverage.
 - #15 scope (prior): orchestration/`learner`/hooks/MCP pin/CI gates — **PR:** https://github.com/agorokh/template-repo/pull/29
 
 ## What remains
 
+- Land **#31** for #26 Phase 1; epic #26 remains open for training loop (Phase 2), integration (Phase 3), continuous loop (Phase 4).
 - Land **#21** PR (draft → review → merge) and sanity-check weekly miner workflow (`workflow_dispatch`) on GitHub.
 - Merge **#29** for #15 if still open when ready.
-- **#26** after stable miner outputs; **#27** Copier/template sync still separate.
+- **#27** Copier/template sync still separate.
 
 ## Blockers
 

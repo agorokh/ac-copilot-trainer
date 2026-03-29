@@ -1,0 +1,7 @@
+# Deferred — continual pre-training corpus + general/domain mix TBD (vault ADR).
+version: 1
+training:
+  objective: cpt
+dataset:
+  format: text_chunks
+  # source_glob: "src/**/*.py"
