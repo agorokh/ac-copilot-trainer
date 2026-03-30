@@ -2,7 +2,7 @@
 
 **This file guides all AI agents and human operators working in this repository.**
 
-**Status:** Template — customize per project
+**Status:** AC Copilot Trainer
 **Version:** 1.4
 **Category:** Core
 
@@ -13,7 +13,7 @@
 1. **[AGENT_CORE_PRINCIPLES.md](AGENT_CORE_PRINCIPLES.md)** — Non-negotiable workflow and hygiene.
 2. **[docs/10_Development/10_Agent_Protocol.md](docs/10_Development/10_Agent_Protocol.md)** — Where files go and what is forbidden.
 3. **[docs/00_Core/SESSION_LIFECYCLE.md](docs/00_Core/SESSION_LIFECYCLE.md)** — LOAD → OPERATE → SAVE; integrates with the vault graph.
-4. **Vault (mandatory)** — Graph schema: [docs/01_Vault/00_Graph_Schema.md](docs/01_Vault/00_Graph_Schema.md); session files under `docs/01_Vault/ProjectTemplate/00_System/` (rename `ProjectTemplate` on bootstrap; see [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md)).
+4. **Vault (mandatory)** — Graph schema: [docs/01_Vault/00_Graph_Schema.md](docs/01_Vault/00_Graph_Schema.md); session files under `docs/01_Vault/AcCopilotTrainer/00_System/` (rename `AcCopilotTrainer` on bootstrap; see [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md)).
 5. **[docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)** — Cursor, Claude Code, Claude Desktop, MCP — same rules across tools.
 6. **Template maintainers:** [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) — how to keep the canonical template current.
 
@@ -37,7 +37,15 @@
 
 ### Domain extension area
 
-_Replace this subsection with your project’s real constraints (e.g. “all DB writes go through repository X”, “no writes under `data/raw/`”)._
+- **Runtime:** Assetto Corsa with Custom Shaders Patch (CSP) v0.2.11+
+- **Primary language:** Lua 5.1 / LuaJIT 2.1 (CSP Lua apps)
+- **Secondary:** Python 3 (AC Python apps for reference/porting)
+- **UI framework:** Dear ImGui (via CSP ui.* namespace)
+- **3D rendering:** CSP render.* API for track surface markers
+- **Data sources:** AC shared memory, telemetry APIs, AI spline files
+- **Target platform:** Windows (Assetto Corsa is Windows-only)
+- **Installation path:** assettocorsa/apps/lua/{app_name}/
+- **No writes outside** the app's own data folder and AC Documents folder
 
 ---
 
@@ -63,7 +71,7 @@ Treat automated review comments as blocking unless:
 | Tier | Location | Use |
 |------|----------|-----|
 | 1 | `AGENTS.md` (bottom) | Short operational facts, policy updates |
-| 2 | `docs/01_Vault/ProjectTemplate/` (+ `docs/01_Vault/00_Graph_Schema.md`) | Linked graph: ADRs, invariants, glossary, investigations, session handoff |
+| 2 | `docs/01_Vault/AcCopilotTrainer/` (+ `docs/01_Vault/00_Graph_Schema.md`) | Linked graph: ADRs, invariants, glossary, investigations, session handoff |
 
 Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`). Session protocol: `docs/00_Core/SESSION_LIFECYCLE.md`.
 
@@ -98,8 +106,9 @@ Stable operational principles derived from real usage across projects. Agents: r
 ## Changelog (Tier 1)
 
 <!-- CHANGELOG:START -->
+- 2026-03-30: Bootstrap ac-copilot-trainer from template-repo; domain extension for Assetto Corsa + CSP Lua runtime.
 - 2026-03-27: v1.4 — Vault knowledge graph (`00_Graph_Schema.md`, `invariants/`, `glossary/`), `SESSION_LIFECYCLE.md`, agent/hook lifecycle wiring, expanded policy checks + root file allowlist warnings, `check_bootstrap_complete.py`, bootstrap doc refresh.
 - 2026-03-27: v1.3 — Agent cohesion: orchestrator owns canonical Routing table; pr-resolution-follow-up fixed loop numbering + exit/escalation + cross-links; dependency-review handoff to Task/pr-resolution; CLAUDE.md orchestration + skills table + delegation/context discipline; AGENTS.md agent mesh pointer.
-- 2026-03-27: v1.2 — Multi-tool governance: TOOLCHAIN, OPTIONAL_CAPABILITIES, MAINTAINING_THE_TEMPLATE, GITHUB_SETUP; mandatory vault callout + maintainer link; CLAUDE.md quick start and Desktop/MCP/upstream-sync clarity; AGENT_CORE_PRINCIPLES child-vs-template upstream wording; README “keeping current”; Dependabot groups; gitignore `.claude.local.md`.
+- 2026-03-27: v1.2 — Multi-tool governance: TOOLCHAIN, OPTIONAL_CAPABILITIES, MAINTAINING_THE_TEMPLATE, GITHUB_SETUP; mandatory vault callout + maintainer link; CLAUDE.md quick start and Desktop/MCP/upstream-sync clarity; AGENT_CORE_PRINCIPLES child-vs-template upstream wording; README "keeping current"; Dependabot groups; gitignore `.claude.local.md`.
 - 2026-03-26: v1.1 — Added issue-grouping-by-file-overlap, own-every-failure, preserve-manual-work, upstream-sync. (Source: court-fillings-processing learnings)
 <!-- CHANGELOG:END -->

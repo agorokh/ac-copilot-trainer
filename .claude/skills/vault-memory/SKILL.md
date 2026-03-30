@@ -1,6 +1,6 @@
 ---
 name: vault-memory
-description: Manage persistent memory for this repo — Obsidian vault at docs/01_Vault/ProjectTemplate/ plus AGENTS.md tier-1 facts. Use when starting/ending sessions, after architecture changes, investigations, or when the user says vault, handoff, ADR, or project state.
+description: Manage persistent memory for this repo — Obsidian vault at docs/01_Vault/AcCopilotTrainer/ plus AGENTS.md tier-1 facts. Use when starting/ending sessions, after architecture changes, investigations, or when the user says vault, handoff, ADR, or project state.
 allowed-tools: Read, Grep, Glob, Write, Edit
 ---
 
@@ -13,17 +13,17 @@ Two-tier model:
 | Tier | Location | Purpose |
 |------|----------|---------|
 | 1 | `AGENTS.md` | Short operational facts |
-| 2 | `docs/01_Vault/ProjectTemplate/` | Structured graph of markdown nodes |
+| 2 | `docs/01_Vault/AcCopilotTrainer/` | Structured graph of markdown nodes |
 
-Rename `ProjectTemplate` during project bootstrap (see `docs/00_Core/BOOTSTRAP_NEW_PROJECT.md`).
+Rename `AcCopilotTrainer` during project bootstrap (see `docs/00_Core/BOOTSTRAP_NEW_PROJECT.md`).
 
 ## Graph traversal
 
 When loading context:
 
-1. Open **`docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md`** (after bootstrap, replace `ProjectTemplate` with your vault folder name).
+1. Open **`docs/01_Vault/AcCopilotTrainer/00_System/Next Session Handoff.md`** (after bootstrap, replace `AcCopilotTrainer` with your vault folder name).
 2. Start from **`_index.md`** files under `00_System/` (`invariants/`, `glossary/`, etc.) and follow **`relates_to`** in YAML frontmatter to pull in only the subgraph you need.
-3. Open **`docs/01_Vault/ProjectTemplate/00_System/Current Focus.md`**.
+3. Open **`docs/01_Vault/AcCopilotTrainer/00_System/Current Focus.md`**.
 4. Prefer the thin entry **`Architecture Invariants.md`** → **`invariants/_index.md`** over loading every invariant unless the task requires it.
 
 Agents should parse frontmatter (or read indexes) to build traversal paths. **`relates_to` / `part_of`** use the `docs/01_Vault/` anchor (no `..`); see `00_Graph_Schema.md`.
@@ -32,7 +32,7 @@ Agents should parse frontmatter (or read indexes) to build traversal paths. **`r
 
 - Prefer **3–5 focused nodes** over one large file or whole-directory slurp.
 - Use frontmatter **`type`** to filter (see `00_Graph_Schema.md`: e.g. `index`, `invariant`, `handoff`, `current-focus`, `entity`, `decision`, …).
-- Target **&lt; ~100 lines** per node body; split if a note grows.
+- Target **< ~100 lines** per node body; split if a note grows.
 
 ## Session start (LOAD)
 

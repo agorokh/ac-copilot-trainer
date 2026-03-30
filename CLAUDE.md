@@ -2,7 +2,7 @@
 
 Guidance for **Claude Code** (claude.ai/code) in this repository.
 
-**Status:** Template
+**Status:** AC Copilot Trainer
 **Version:** 1.4
 **Category:** Core
 
@@ -33,7 +33,7 @@ Personal overrides: root **`.claude.local.md`** (gitignored) for preferences not
 See `.claude/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE.md`** for LOAD/SAVE.
 
 - **Tier 1** — `AGENTS.md` (quick facts, changelog block at bottom).
-- **Tier 2** — Obsidian vault graph: `docs/01_Vault/ProjectTemplate/` (rename on bootstrap); schema at `docs/01_Vault/00_Graph_Schema.md` (outside the renamed folder).
+- **Tier 2** — Obsidian vault graph: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap); schema at `docs/01_Vault/00_Graph_Schema.md` (outside the renamed folder).
 
 **Session start (LOAD):** `Next Session Handoff.md` → follow `relates_to` / `_index.md` for needed subgraph → `Current Focus.md` → `Project State.md` as needed.
 
@@ -41,15 +41,15 @@ See `.claude/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE
 
 @docs/00_Core/SESSION_LIFECYCLE.md
 @docs/01_Vault/00_Graph_Schema.md
-@docs/01_Vault/ProjectTemplate/00_System/Project State.md
-@docs/01_Vault/ProjectTemplate/00_System/Current Focus.md
-@docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md
-@docs/01_Vault/ProjectTemplate/00_System/Architecture Invariants.md
-@docs/01_Vault/ProjectTemplate/00_System/invariants/_index.md
-@docs/01_Vault/ProjectTemplate/00_System/Workflow OS.md
-@docs/01_Vault/ProjectTemplate/00_System/Library Map.md
-@docs/01_Vault/ProjectTemplate/00_System/Glossary.md
-@docs/01_Vault/ProjectTemplate/00_System/glossary/_index.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Project State.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Current Focus.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Next Session Handoff.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Architecture Invariants.md
+@docs/01_Vault/AcCopilotTrainer/00_System/invariants/_index.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Workflow OS.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Library Map.md
+@docs/01_Vault/AcCopilotTrainer/00_System/Glossary.md
+@docs/01_Vault/AcCopilotTrainer/00_System/glossary/_index.md
 
 ---
 

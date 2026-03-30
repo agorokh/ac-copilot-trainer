@@ -4,7 +4,7 @@ You are working in a repository governed by **AGENTS.md**, **AGENT_CORE_PRINCIPL
 
 1. Prefer **issue-driven** work: branch + PR; never commit directly to `main`.
 2. Run **`make ci-fast`** before claiming a task is done (or document why a subset is N/A).
-3. **Vault** is canonical architecture memory: `docs/01_Vault/ProjectTemplate/` (rename on bootstrap); graph schema `docs/01_Vault/00_Graph_Schema.md`. Follow `docs/00_Core/SESSION_LIFECYCLE.md` (LOAD → OPERATE → SAVE). Update `Next Session Handoff.md` when leaving work incomplete.
+3. **Vault** is canonical architecture memory: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap); graph schema `docs/01_Vault/00_Graph_Schema.md`. Follow `docs/00_Core/SESSION_LIFECYCLE.md` (LOAD → OPERATE → SAVE). Update `Next Session Handoff.md` when leaving work incomplete.
 4. No secrets in files, Issues, or PRs. Use `.env` locally only.
 5. Put throwaway experiments in **`.scratch/`** (gitignored), not in `src/` or the vault.
 6. For third-party API details, prefer **Context7** via MCP over guessing (see `.mcp.json`).

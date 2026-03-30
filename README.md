@@ -1,36 +1,52 @@
-# template-repo
+# AC Copilot Trainer
 
-**Organization starter for issue-driven, agentic software development.** Copy this repository (or use GitHub **Use this template**) every time you spin up a new project so Cursor, Claude Code, Codex, and GitHub-native agents inherit the same workflow, memory model, and guardrails.
+AI-powered driving trainer for Assetto Corsa — a CSP Lua app that provides real-time coaching through brake point detection, lap comparison, 3D track markers, and driving analysis.
 
-**GitHub:** [github.com/agorokh/template-repo](https://github.com/agorokh/template-repo) (private). After the first push from your machine, enable **Settings → General → Template repository** so new projects start from a clean copy ([GitHub: Creating a template repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-template-repository)).
+## Features (Planned)
 
-## What you get
+### Phase 1 — Foundation
+- 3D brake point markers on track surface (best lap vs last lap)
+- Real-time brake zone approach HUD with speed reference
+- Per-corner brake point comparison after each lap
+- Continuous telemetry recording per corner
 
-- **Canonical policy docs** enforced in CI: `AGENTS.md`, `CLAUDE.md`, `AGENT_CORE_PRINCIPLES.md`, `.cursorrules`
-- **Two-tier memory**: durable bullets in `AGENTS.md` + **Obsidian vault** under `docs/01_Vault/ProjectTemplate/` (rename the folder to your project key on bootstrap)
-- **Claude Code hooks** (`.claude/settings.json`): format-on-edit for Python, sensitive-file blocks, protected-branch bash checks, session-end reminders tied to the vault
-- **Cursor rules** (`.cursor/rules/`) aligned with the same branch/PR/bot-review expectations
-- **GitHub**: PR + issue templates, policy workflow, CI (`make ci-fast`), optional security scanning, Dependabot
-- **Agent-proofing script** for top-level directory hygiene (customize allowlist for your layout)
-- **MCP**: checked-in `.mcp.json` with Context7 (Claude Code–oriented); mirror to Claude Desktop if needed — see [docs/00_Core/TOOLCHAIN.md](docs/00_Core/TOOLCHAIN.md)
-- **Optional skills bundles:** Child repos may layer Anthropic’s published [agent skills](https://github.com/anthropics/skills) (or an org-maintained equivalent) as a baseline catalog; this template already includes curated skills under `.claude/skills/` and `.cursor/skills/`, so merge carefully and drop duplicates when combining sources.
-- **Multi-tool:** same workflow for **Cursor** and **Claude** (Code, Desktop chat, Cowork/Dispatch-style handoffs) — vault + `AGENTS.md` stay canonical
+### Phase 2 — Analysis
+- Automatic corner classification and labeling
+- Consistency scoring per corner across laps
+- Driving style fingerprint (steering, braking, throttle patterns)
 
-## First-time setup (after copying the template)
+### Phase 3 — Coaching
+- Corner-specific coaching prompts based on telemetry analysis
+- Focus practice mode (highlight weakest corners)
+- Session journal with training log
 
-1. Read [docs/00_Core/BOOTSTRAP_NEW_PROJECT.md](docs/00_Core/BOOTSTRAP_NEW_PROJECT.md) and complete the checklist (rename vault folder, replace placeholders, set `pyproject` package name).
-2. Create a virtualenv (recommended): `python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"`.
-3. Run `make hooks-install` (pre-commit) and `make ci-fast` before the first PR.
-4. **If this repository will be used as a template for other repos:** in GitHub, enable **Settings → General → Template repository** so teammates can use **Use this template** ([GitHub docs](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-template-repository)).
+## Requirements
 
-## Keeping the template (and children) current
+- Assetto Corsa (Steam)
+- Custom Shaders Patch (CSP) v0.2.11+
+- Content Manager (recommended)
 
-Template repos do **not** auto-update downstream copies. See [docs/00_Core/MAINTAINING_THE_TEMPLATE.md](docs/00_Core/MAINTAINING_THE_TEMPLATE.md) for a lightweight cadence (Dependabot, periodic doc skim, child→template PRs). GitHub settings checklist: [docs/00_Core/GITHUB_SETUP.md](docs/00_Core/GITHUB_SETUP.md).
+## Installation
 
-## Provenance
+Copy `src/ac_copilot_trainer/` to:
+```
+{AC Install}/apps/lua/ac_copilot_trainer/
+```
 
-Patterns here were synthesized from internal projects that emphasized issue-driven delivery, vault-backed architecture memory, invariant hooks, and GitHub-centric review loops. See [docs/00_Core/PROVENANCE.md](docs/00_Core/PROVENANCE.md) for the source repository list and notes on what was generalized.
+Enable in Content Manager → Settings → Apps.
+
+## Development
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+make ci-fast
+```
+
+## Architecture
+
+See [docs/01_Vault/AcCopilotTrainer/00_System/Architecture Invariants.md](docs/01_Vault/AcCopilotTrainer/00_System/Architecture%20Invariants.md)
 
 ## License
 
-Use and adapt internally as needed; set `LICENSE` when you publish a derived project.
+MIT

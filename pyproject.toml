@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "project-template"
+name = "ac-copilot-trainer"
 version = "0.1.0"
-description = "Replace with your project description"
+description = "AI-powered driving trainer for Assetto Corsa — CSP Lua app with brake point detection, lap comparison, 3D track markers, and real-time coaching"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -33,7 +33,7 @@ bootstrap = [
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["project_template*", "tools*"]
+include = ["ac_copilot_trainer*", "tools*"]
 
 [tool.ruff]
 line-length = 100
@@ -47,7 +47,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.coverage.run]
-source = ["src/project_template", "tools"]
+source = ["src/ac_copilot_trainer", "tools"]
 omit = [
   "tools/process_miner/run.py",
   "tools/repo_knowledge/mcp_server.py",

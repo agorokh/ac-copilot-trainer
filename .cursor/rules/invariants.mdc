@@ -4,6 +4,6 @@ alwaysApply: true
 
 # Architecture invariants
 
-Canonical rules: `docs/01_Vault/ProjectTemplate/00_System/Architecture Invariants.md` (entry) and `docs/01_Vault/ProjectTemplate/00_System/invariants/_index.md` (graph index). Schema: `docs/01_Vault/00_Graph_Schema.md`.
+Canonical rules: `docs/01_Vault/AcCopilotTrainer/00_System/Architecture Invariants.md` (entry) and `docs/01_Vault/AcCopilotTrainer/00_System/invariants/_index.md` (graph index). Schema: `docs/01_Vault/00_Graph_Schema.md`.
 
-Before merging structural changes, ensure the relevant **invariant nodes** or index are updated, or add an ADR under `docs/01_Vault/ProjectTemplate/01_Decisions/`.
+Before merging structural changes, ensure the relevant **invariant nodes** or index are updated, or add an ADR under `docs/01_Vault/AcCopilotTrainer/01_Decisions/`.
