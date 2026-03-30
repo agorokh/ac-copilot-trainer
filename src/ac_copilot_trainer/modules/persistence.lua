@@ -36,9 +36,12 @@ end
 
 local function jsonEncode(t)
   if JSON and type(JSON.stringify) == "function" then
-    return JSON.stringify(t, true)
+    local ok, out = pcall(JSON.stringify, t, true)
+    if ok and type(out) == "string" then
+      return out
+    end
   end
-  return "{}"
+  return nil
 end
 
 local function jsonDecode(s)
@@ -46,7 +49,10 @@ local function jsonDecode(s)
     return nil
   end
   if JSON and type(JSON.parse) == "function" then
-    return JSON.parse(s)
+    local ok, out = pcall(JSON.parse, s)
+    if ok and type(out) == "table" then
+      return out
+    end
   end
   return nil
 end
@@ -80,11 +86,15 @@ function M.save(car, sim, data)
   data.version = DATA_VERSION
   local path = M.dataPath(car, sim)
   ensureDir(path)
+  local raw = jsonEncode(data)
+  if not raw then
+    return false
+  end
   local f = io.open(path, "w")
   if not f then
     return false
   end
-  f:write(jsonEncode(data))
+  f:write(raw)
   f:close()
   return true
 end

@@ -2,6 +2,9 @@
 
 local M = {}
 
+--- Hard cap so a broken sim clock cannot grow memory without bound.
+local MAX_SAMPLES_SAFETY = 50000
+
 ---@class TelemetryConfig
 ---@field bufferSeconds number|nil
 
@@ -24,10 +27,8 @@ Telemetry.__index = Telemetry
 function M.new(cfg)
   cfg = cfg or {}
   local bufferSeconds = cfg.bufferSeconds or 30
-  local maxSamples = math.max(240, math.floor(bufferSeconds * 120))
   return setmetatable({
     bufferSeconds = bufferSeconds,
-    maxSamples = maxSamples,
     samples = {},
     n = 0,
     recording = true,
@@ -40,6 +41,24 @@ end
 
 function Telemetry:isRecording()
   return self.recording
+end
+
+--- Drop samples older than (now - bufferSeconds).
+function Telemetry:evictOlderThan(tCutoff)
+  local i = 1
+  while i <= self.n and self.samples[i] and self.samples[i].t < tCutoff do
+    i = i + 1
+  end
+  if i > 1 then
+    local newN = self.n - i + 1
+    for j = 1, newN do
+      self.samples[j] = self.samples[j + i - 1]
+    end
+    for j = newN + 1, self.n do
+      self.samples[j] = nil
+    end
+    self.n = newN
+  end
 end
 
 ---@param car ac.StateCar
@@ -78,15 +97,13 @@ function Telemetry:update(dt, car, sim)
   }
   self.n = self.n + 1
   self.samples[self.n] = s
-  if self.n > self.maxSamples then
-    local drop = self.n - self.maxSamples
-    for i = 1, self.n - drop do
-      self.samples[i] = self.samples[i + drop]
+  self:evictOlderThan(t - self.bufferSeconds)
+  while self.n > MAX_SAMPLES_SAFETY do
+    for j = 1, self.n - 1 do
+      self.samples[j] = self.samples[j + 1]
     end
-    for j = self.n - drop + 1, self.n do
-      self.samples[j] = nil
-    end
-    self.n = self.n - drop
+    self.samples[self.n] = nil
+    self.n = self.n - 1
   end
 end
 

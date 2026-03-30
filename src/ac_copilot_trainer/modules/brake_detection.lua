@@ -49,6 +49,7 @@ end
 ---@param dt number
 ---@return BrakeEvent|nil
 function Detector:update(car, dt)
+  local d = dt or 0
   local b = car.brake or 0
   if b > self.brakeThreshold then
     if not self.braking then
@@ -65,11 +66,10 @@ function Detector:update(car, dt)
       end
       self.startHeading = flatHeading(car)
       self.qualified = false
-    else
-      self.holdT = self.holdT + dt
-      if not self.qualified and self.holdT >= self.brakeDurationMin then
-        self.qualified = true
-      end
+    end
+    self.holdT = self.holdT + d
+    if not self.qualified and self.holdT >= self.brakeDurationMin then
+      self.qualified = true
     end
     return nil
   end

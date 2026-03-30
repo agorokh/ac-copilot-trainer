@@ -24,11 +24,23 @@ local config = {
   hudEnabled = true,
 }
 
-local tel = telemetryMod.new({ bufferSeconds = config.bufferSeconds })
-local brakes = brakeMod.new({
-  brakeThreshold = config.brakeThreshold,
-  brakeDurationMin = config.brakeDurationMin,
-})
+local function newTelemetry()
+  return telemetryMod.new({ bufferSeconds = config.bufferSeconds })
+end
+
+local function newBrakes()
+  return brakeMod.new({
+    brakeThreshold = config.brakeThreshold,
+    brakeDurationMin = config.brakeDurationMin,
+  })
+end
+
+local tel = newTelemetry()
+local brakes = newBrakes()
+
+--- Last valid driving-frame refs for persistence when sim is already on main menu.
+local lastDriveCar ---@type ac.StateCar|nil
+local lastDriveSim ---@type ac.StateSim|nil
 
 local function copyBpList(list)
   local out = {}
@@ -72,16 +84,46 @@ local function applyLoaded(data)
   end
 end
 
-local function persistSnapshot()
+local function persistPayload()
+  return {
+    bestLapMs = state.bestLapMs,
+    bestBrakePoints = state.brakingPoints.best,
+  }
+end
+
+--- Save while still in-session (live car/sim).
+local function persistSnapshotLive()
   car = ac.getCar(0)
   sim = ac.getSim()
   if sim.isInMainMenu or not car then
     return
   end
-  persistence.save(car, sim, {
-    bestLapMs = state.bestLapMs,
-    bestBrakePoints = state.brakingPoints.best,
-  })
+  persistence.save(car, sim, persistPayload())
+end
+
+--- Save using last driving frame (exit to menu / window hide).
+local function persistSnapshotCached()
+  local c, s = lastDriveCar, lastDriveSim
+  if not c or not s then
+    return
+  end
+  persistence.save(c, s, persistPayload())
+end
+
+local function resetRuntimeAfterLeavingTrack()
+  state.initialized = false
+  state.bestLapMs = nil
+  state.lastLapMs = nil
+  state.lastLapCount = -1
+  state.brakingPoints = {
+    best = {},
+    last = {},
+    session = {},
+  }
+  tel = newTelemetry()
+  brakes = newBrakes()
+  lastDriveCar = nil
+  lastDriveSim = nil
 end
 
 local function tryLoadDisk()
@@ -106,6 +148,12 @@ function script.windowMain(dt)
     ui.text("Waiting for session...")
     return
   end
+  if not car then
+    ui.text("AC Copilot Trainer v0.1.0")
+    ui.separator()
+    ui.text("Waiting for car data...")
+    return
+  end
   hud.draw({
     recording = state.recording,
     speed = car.speedKmh or 0,
@@ -125,13 +173,20 @@ function script.update(dt)
 
   if sim.isInMainMenu then
     if state.wasDriving then
-      persistSnapshot()
+      persistSnapshotCached()
+      resetRuntimeAfterLeavingTrack()
     end
     state.wasDriving = false
     state.lastLapCount = -1
     return
   end
 
+  if not car then
+    return
+  end
+
+  lastDriveCar = car
+  lastDriveSim = sim
   state.wasDriving = true
 
   if not state.initialized then
@@ -153,7 +208,7 @@ function script.update(dt)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      persistSnapshot()
+      persistSnapshotLive()
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)
     state.brakingPoints.session = {}
@@ -162,7 +217,7 @@ function script.update(dt)
 end
 
 function script.onWindowHide()
-  persistSnapshot()
+  persistSnapshotCached()
 end
 
 function script.draw3D(dt)
