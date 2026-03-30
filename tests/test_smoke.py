@@ -1,2 +1,2 @@
 def test_importable():
-    import project_template  # noqa: F401
+    import ac_copilot_trainer  # noqa: F401

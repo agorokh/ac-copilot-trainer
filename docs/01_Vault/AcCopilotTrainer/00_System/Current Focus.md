@@ -2,10 +2,10 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-03-29
-issue: "https://github.com/agorokh/template-repo/issues/26"
-pr: "https://github.com/agorokh/template-repo/pull/31"
-branch: "feat/issue-26-model-training-phase1"
+last_updated: 2026-03-30
+issue: "https://github.com/agorokh/ac-copilot-trainer/issues/6"
+pr: ""
+branch: "feat/issue-6-telemetry-brake-persistence"
 relates_to:
   - ProjectTemplate/00_System/Next Session Handoff.md
   - ProjectTemplate/00_System/Project State.md
@@ -15,10 +15,8 @@ relates_to:
 
 # Current focus
 
-**Epic:** #14 (tracker). **Just shipped (PR open):** #26 Phase 1 — `tools/model_training/` data export scaffold (SFT JSONL, stats, DPO/CPT stubs, example configs).
+**Repo:** ac-copilot-trainer. **Issue #6:** telemetry engine, brake point detection, JSON persistence, lap promotion of brake sets, ImGui HUD — implemented under `src/ac_copilot_trainer/` (pending PR).
 
-**Branch:** `feat/issue-26-model-training-phase1`. **PR:** https://github.com/agorokh/template-repo/pull/31 (`Refs #26`, draft).
+**Branch:** `feat/issue-6-telemetry-brake-persistence` (create from `main`, open Draft PR with `Fixes #6`).
 
-**Also in flight:** #21 Tier 1+2 — **PR** https://github.com/agorokh/template-repo/pull/30
-
-**Next:** merge **#31** when review is satisfied, or run `pr-resolution-follow-up` on **#30** using the same exit criteria.
+**Next:** `make ci-fast` on Linux/macOS or GitHub Actions; in-game smoke test after copying the app folder into `assettocorsa/apps/lua/ac_copilot_trainer/`.
