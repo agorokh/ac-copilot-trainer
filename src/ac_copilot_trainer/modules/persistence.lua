@@ -3,7 +3,7 @@
 local M = {}
 
 local APP_SUBDIR = "ac_copilot_trainer"
-local DATA_VERSION = 1
+local DATA_VERSION = 2
 
 local function safeName(s)
   s = tostring(s or "unknown"):gsub("[^%w%.%-_]+", "_")
