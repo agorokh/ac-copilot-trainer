@@ -57,7 +57,8 @@ function M.draw(vm)
     ui.textColored(col, string.format("%+.2f s", d))
     local width = 21
     local mid = math.floor(width / 2) + 1
-    local off = math.floor((d or 0) / 0.04 + (d >= 0 and 0.5 or -0.5))
+    local ad = math.abs(d or 0)
+    local off = math.floor(ad / 0.04 + 0.5) * (d >= 0 and 1 or -1)
     local pos = math.max(1, math.min(width, mid + off))
     local parts = {}
     for i = 1, width do
