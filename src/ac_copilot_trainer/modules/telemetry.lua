@@ -193,34 +193,6 @@ function Telemetry:update(dt, car, sim)
   end
 end
 
---- In-progress lap snapshots (shallow copy of indices; inner fields are numbers — treat as read-only).
----@return LapTraceSample[]
-function Telemetry:getTrace()
-  local out = {}
-  for i = 1, self.lapN do
-    local s = self.lapBuf[i]
-    if s then
-      out[i] = {
-        spline = s.spline,
-        eMs = s.eMs,
-        speed = s.speed,
-        brake = s.brake,
-        throttle = s.throttle,
-        gear = s.gear,
-        px = s.px,
-        py = s.py,
-        pz = s.pz,
-      }
-    end
-  end
-  return out
-end
-
---- Number of samples in the current lap trace.
-function Telemetry:lapTraceCount()
-  return self.lapN
-end
-
 --- Finalize the just-finished lap: downsample to MAX_LAP_TRACE, clear lap buffer, return trace.
 --- Caller should call beginLapClock(simTime) for the next lap immediately after.
 ---@return LapTraceSample[]

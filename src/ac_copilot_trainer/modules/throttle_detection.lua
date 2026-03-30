@@ -4,14 +4,8 @@ local M = {}
 
 ---@class ThrottleDetectState
 ---@field wasBraking boolean
----@field coastAccum number
 ---@field inCoast boolean
----@field lastThrottle number
----@field derivSum number
----@field derivCount number
----@field reversals integer
----@field ftSamples integer
----@field totalSamples integer
+---@field coastStreak number
 
 local Detector = {}
 Detector.__index = Detector
@@ -19,17 +13,7 @@ Detector.__index = Detector
 function M.new()
   return setmetatable({
     wasBraking = false,
-    coastAccum = 0,
     inCoast = false,
-    lastThrottle = 0,
-    -- lap aggregates (reset per lap)
-    derivSum = 0,
-    derivCount = 0,
-    reversals = 0,
-    ftSamples = 0,
-    totalSamples = 0,
-    applyEvents = 0,
-    maxCoastStreak = 0,
     coastStreak = 0,
   }, Detector)
 end
@@ -49,47 +33,24 @@ function Detector:update(car, dt)
   local coast = br < 0.05 and th < 0.1
   if coast then
     self.coastStreak = self.coastStreak + d
-    self.coastAccum = self.coastAccum + d
     self.inCoast = true
-    if self.coastStreak > self.maxCoastStreak then
-      self.maxCoastStreak = self.coastStreak
-    end
   else
     self.coastStreak = 0
     self.inCoast = false
   end
-  -- throttle apply after braking
+  -- throttle apply after braking (state only; lap-level metrics use analyzeTrace)
   if self.wasBraking and not braking and th > 0.25 then
-    self.applyEvents = self.applyEvents + 1
     self.wasBraking = false
   end
   if not braking and th > 0.25 then
     self.wasBraking = false
   end
-  -- derivative / reversal on throttle (lap totals)
-  self.totalSamples = self.totalSamples + 1
-  if th > 0.9 then
-    self.ftSamples = self.ftSamples + 1
-  end
-  if self.lastThrottle ~= nil and d > 1e-6 then
-    local deriv = (th - self.lastThrottle) / d
-    self.derivSum = self.derivSum + math.abs(deriv)
-    self.derivCount = self.derivCount + 1
-  end
-  self.lastThrottle = th
   return coast, self.coastStreak
 end
 
 function Detector:resetLapAggregates()
-  self.derivSum = 0
-  self.derivCount = 0
-  self.reversals = 0
-  self.ftSamples = 0
-  self.totalSamples = 0
-  self.applyEvents = 0
-  self.maxCoastStreak = 0
   self.coastStreak = 0
-  self.lastThrottle = 0
+  self.inCoast = false
 end
 
 ---@param trace { throttle: number, brake: number }[]|nil

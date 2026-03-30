@@ -23,7 +23,7 @@ relates_to:
 
 ## What was delivered this session
 
-- **Part A:** `telemetry.lua` — per-lap trace buffer, `getTrace()`, `finalizeLapTrace()` with ≤2000 samples; raw cap + intermediate downsample.
+- **Part A:** `telemetry.lua` — per-lap trace buffer, `finalizeLapTrace()` with ≤2000 samples; raw cap + intermediate downsample.
 - **Part B:** `delta.lua` — sorted-spline interpolation, live delta + ~30-sample smoothing; HUD bar (ASCII) + numeric.
 - **Part C:** Three spline sectors; messages at boundaries vs reference lap sector times.
 - **Part D:** `track_markers.lua` — best=green, last=yellow, ≤50 primitives, 200m fade; `render.debugSphere` / `drawSphere` in `pcall`; optional `physics.raycastTrack` for Y snap (API varies).
@@ -34,7 +34,7 @@ relates_to:
 
 ## What remains
 
-- Human/agent: **push branch**, **open PR**, **`make ci-fast`** (or Windows Python equivalents) on CI runner.
+- Human/agent: **await approval** on PR `#20`; **address review threads** as they appear (`pr-resolution-follow-up`); **merge** when approved and CI is green.
 - In-game: confirm CSP **Draw3D** + **`render.debugSphere`** on your CSP build; if markers invisible, adjust API per acc-lua-sdk and follow up.
 - Optional: per-sector PB coloring (purple) if we persist best sector splits separately.
 
