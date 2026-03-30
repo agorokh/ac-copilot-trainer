@@ -89,4 +89,36 @@ function Detector:update(car, dt)
   return nil
 end
 
+--- If the driver is still holding brake but the hold already qualified, emit the
+--- brake point now (e.g. lap boundary) and re-seed the start snapshot for the
+--- continued press so the next lap does not lose the event.
+---@param car ac.StateCar
+---@return BrakeEvent|nil
+function Detector:finalizeQualifiedWhileHolding(car)
+  if not (self.braking and self.qualified) then
+    return nil
+  end
+  local ev = {
+    spline = self.startSpline,
+    px = self.startPx,
+    py = self.startPy,
+    pz = self.startPz,
+    entrySpeed = self.startSpeed,
+    heading = self.startHeading,
+  }
+  self.holdT = 0
+  self.qualified = false
+  self.startSpeed = car.speedKmh or 0
+  self.startSpline = car.splinePosition or 0
+  if car.position then
+    self.startPx = car.position.x
+    self.startPy = car.position.y
+    self.startPz = car.position.z
+  else
+    self.startPx, self.startPy, self.startPz = 0, 0, 0
+  end
+  self.startHeading = flatHeading(car)
+  return ev
+end
+
 return M

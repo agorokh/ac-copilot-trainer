@@ -202,7 +202,17 @@ function script.update(dt)
   end
 
   local lc = car.lapCount or 0
+  if state.lastLapCount >= 0 and lc < state.lastLapCount then
+    state.brakingPoints.session = {}
+    tel = newTelemetry()
+    brakes = newBrakes()
+  end
+
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
+    local evLap = brakes:finalizeQualifiedWhileHolding(car)
+    if evLap then
+      state.brakingPoints.session[#state.brakingPoints.session + 1] = evLap
+    end
     local lastMs = car.previousLapTimeMs or car.lastLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
