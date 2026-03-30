@@ -38,10 +38,7 @@ function Detector:update(car, dt)
     self.coastStreak = 0
     self.inCoast = false
   end
-  -- throttle apply after braking (state only; lap-level metrics use analyzeTrace)
-  if self.wasBraking and not braking and th > 0.25 then
-    self.wasBraking = false
-  end
+  -- Clear braking latch once throttle is applied (lap-level apply counts use analyzeTrace).
   if not braking and th > 0.25 then
     self.wasBraking = false
   end
