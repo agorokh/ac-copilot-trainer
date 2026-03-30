@@ -4,7 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-03-30
 issue: "https://github.com/agorokh/ac-copilot-trainer/issues/6"
-pr: ""
+pr: "https://github.com/agorokh/ac-copilot-trainer/pull/10"
 branch: "feat/issue-6-telemetry-brake-persistence"
 relates_to:
   - ProjectTemplate/00_System/Next Session Handoff.md
@@ -17,6 +17,6 @@ relates_to:
 
 **Repo:** ac-copilot-trainer. **Issue #6:** telemetry engine, brake point detection, JSON persistence, lap promotion of brake sets, ImGui HUD — implemented under `src/ac_copilot_trainer/` (pending PR).
 
-**Branch:** `feat/issue-6-telemetry-brake-persistence` (create from `main`, open Draft PR with `Fixes #6`).
+**Branch:** `feat/issue-6-telemetry-brake-persistence`. **PR:** https://github.com/agorokh/ac-copilot-trainer/pull/10 (draft, `Fixes #6`).
 
-**Next:** `make ci-fast` on Linux/macOS or GitHub Actions; in-game smoke test after copying the app folder into `assettocorsa/apps/lua/ac_copilot_trainer/`.
+**Next:** wait for Actions + bots (`sleep 600` after pushes), GraphQL `reviewThreads`; then `gh pr ready 10` when you want full review signal; in-game smoke test after copying the app folder into `assettocorsa/apps/lua/ac_copilot_trainer/`.
