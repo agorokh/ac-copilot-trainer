@@ -353,7 +353,8 @@ local function splineForwardDelta(carSpline, ptSpline)
   return d
 end
 
-local function approachHudLines(car0, sortedTrace)
+---@param sim0 ac.StateSim|nil
+local function approachHudLines(car0, sortedTrace, sim0)
   local best = state.brakingPoints.best
   if not car0 or not car0.position or #best == 0 then
     return nil
@@ -375,10 +376,14 @@ local function approachHudLines(car0, sortedTrace)
       bestDistSq = distSq
     end
   end
-  if not bestI or not bestDistSq then
+  if not bestI or not bestDistSq or not bestSplineD then
     return nil
   end
   local dM = math.sqrt(bestDistSq)
+  local tlM = trackLengthMeters(sim0)
+  if tlM and tlM > 0 then
+    dM = bestSplineD * tlM
+  end
   if dM > config.approachMeters then
     return nil
   end
@@ -457,7 +462,7 @@ function script.windowMain(_dt)
     brakeSession = #state.brakingPoints.session,
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
-    approachLines = approachHudLines(car, state.bestSortedTrace),
+    approachLines = approachHudLines(car, state.bestSortedTrace, sim),
     postLapLines = postLines,
     coastWarn = coastWarn,
     throttleLapHint = state.lastThrottleSummary,
@@ -532,8 +537,10 @@ function script.update(dt)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      state.bestLapTrace = copyTrace(completedTrace)
-      rebuildBestReference()
+      if #completedTrace > 0 then
+        state.bestLapTrace = copyTrace(completedTrace)
+        rebuildBestReference()
+      end
       persistSnapshotLive()
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)

@@ -51,9 +51,10 @@ local function snapToTrack(px, py, pz)
   if ok and hit and type(hit) == "table" and hit.position and hit.position.y then
     y = hit.position.y + 0.15
   elseif ok and hit and type(hit) == "userdata" then
-    -- Some builds return vec3
-    local yy = hit.y
-    if yy then
+    local okY, yy = pcall(function()
+      return hit.y
+    end)
+    if okY and type(yy) == "number" then
       y = yy + 0.15
     end
   end

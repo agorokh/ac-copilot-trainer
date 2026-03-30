@@ -66,7 +66,7 @@ function M.analyzeTrace(trace)
   local prevRate = nil ---@type number|nil
   local derivSum = 0
   local rateSegs = 0
-  local ft = 0
+  local ftMs = 0
   local n = #trace
   local dtEst = (trace[n].eMs - trace[1].eMs) / math.max(1, n - 1) / 1000
   --- ~0.05 throttle delta per ~16.7 ms ≈ 3/s; scale reversals with sample spacing.
@@ -75,9 +75,6 @@ function M.analyzeTrace(trace)
     local s = trace[i]
     local th = s.throttle or 0
     local br = s.brake or 0
-    if th > 0.9 then
-      ft = ft + 1
-    end
     local braking = br > 0.15
     if braking then
       wasBraking = true
@@ -104,6 +101,9 @@ function M.analyzeTrace(trace)
     if i > 1 then
       local prev = trace[i - 1]
       local dtMs = (s.eMs - prev.eMs)
+      if dtMs > 0 and th > 0.9 then
+        ftMs = ftMs + dtMs
+      end
       local dtSec = dtMs / 1000
       if dtSec > 1e-9 then
         local dth = th - lastTh
@@ -121,7 +121,8 @@ function M.analyzeTrace(trace)
   if inCoast then
     coastMs = coastMs + (trace[n].eMs - coastStart)
   end
-  local ftPct = n > 0 and (100 * ft / n) or 0
+  local lapMs = math.max(1, trace[n].eMs - trace[1].eMs)
+  local ftPct = 100 * ftMs / lapMs
   local smooth = derivSum / math.max(1, rateSegs)
   return {
     applyEvents = applyEvents,
