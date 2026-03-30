@@ -17,7 +17,7 @@ relates_to:
 ## Resume here
 
 - **Branch:** `feat/issue-7-track-markers-delta` — implements GitHub **#7** (traces, delta, sectors, 3D markers, throttle, post-lap HUD).
-- **Open PR (Draft → Ready):** use GitHub UI or `gh pr create` with body mapping Parts A–G (see commit message / parent agent notes). Link **`Fixes #7`**. Parent agent: run **`gh pr ready`** then **`sleep 600`**, then **pr-resolution-follow-up** (review threads, CI).
+- **PR #20:** https://github.com/agorokh/ac-copilot-trainer/pull/20 — **Fixes #7**, marked ready; **600s wait** done; **CI green** (build + canonical docs). Follow **pr-resolution-follow-up** if new review threads appear (Bugbot/CodeRabbit).
 - **`gh` CLI** was not on PATH in the subagent shell; verify issue **#7** is **OPEN** before merge (`gh issue view 7 --repo agorokh/ac-copilot-trainer`).
 - **#6:** assumed merged on `main` before this branch (telemetry/brake/HUD foundation).
 

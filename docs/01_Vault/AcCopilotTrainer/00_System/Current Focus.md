@@ -14,6 +14,6 @@ relates_to:
 
 **Repo:** ac-copilot-trainer. **Issue #7:** 3D track markers + approach HUD + post-lap comparison (Phase 1).
 
-**Branch:** `feat/issue-7-track-markers-delta`. **Next:** push, open Draft PR with `Fixes #7`, CI green, mark ready, wait for checks, resolve review threads.
+**Branch:** `feat/issue-7-track-markers-delta`. **PR #20** (ready, CI green). **Next:** address any review threads; merge when approved.
 
 **After merge:** #8 (corner analysis / fingerprint), then #9, #19 per epic.
