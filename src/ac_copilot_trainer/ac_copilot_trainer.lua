@@ -51,6 +51,11 @@ local function smoothDelta(x)
   return c > 0 and (sum / c) or x
 end
 
+local function resetDeltaSmoother()
+  deltaBuf = {}
+  deltaBufN = 0
+end
+
 local function newTelemetry()
   return telemetryMod.new({ bufferSeconds = config.bufferSeconds })
 end
@@ -163,6 +168,7 @@ local function rebuildBestReference()
   else
     state.bestSectorMs = { 0, 0, 0 }
   end
+  resetDeltaSmoother()
 end
 
 local function applyLoaded(data)
@@ -235,8 +241,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.postLapLines = {}
   state.postLapUntil = 0
   state.lastThrottleSummary = ""
-  deltaBuf = {}
-  deltaBufN = 0
+  resetDeltaSmoother()
 end
 
 local function resetRollingDrivingState()
@@ -249,6 +254,7 @@ local function resetRollingDrivingState()
   state.lastSplineSector = nil
   state.sectorHudMsg = ""
   state.sectorHudUntil = 0
+  resetDeltaSmoother()
 end
 
 local function tryLoadDisk()
@@ -277,8 +283,22 @@ local function sectorMessage(refMs, actualMs, simTime)
   state.sectorHudUntil = simTime + config.sectorMessageSeconds
 end
 
-local function buildPostLapLines(bestBps, lastBps, coastMs)
+---@param sim0 ac.StateSim|nil
+local function trackLengthMeters(sim0)
+  if not sim0 then
+    return nil
+  end
+  local tl = tonumber(sim0.trackLengthMeters) or tonumber(sim0.trackLength) or tonumber(sim0.trackLengthMeter)
+  if tl and tl > 50 then
+    return tl
+  end
+  return nil
+end
+
+---@param sim0 ac.StateSim|nil
+local function buildPostLapLines(bestBps, lastBps, coastMs, sim0)
   local lines = {}
+  local tlM = trackLengthMeters(sim0)
   if #bestBps == 0 then
     if coastMs and coastMs > 200 then
       lines[1] = string.format("Coasting (lap): %.1f s", coastMs / 1000)
@@ -306,9 +326,13 @@ local function buildPostLapLines(bestBps, lastBps, coastMs)
       elseif wrap < -0.5 then
         wrap = wrap + 1
       end
-      local estM = wrap * 400
       local dv = (L.entrySpeed or 0) - (B.entrySpeed or 0)
-      lines[#lines + 1] = string.format("Brake %d: dSpline %+.3f (~%+.0f m) dV %+.0f km/h", i, wrap, estM, dv)
+      if tlM then
+        local estM = wrap * tlM
+        lines[#lines + 1] = string.format("Brake %d: dSpline %+.3f (~%+.0f m) dV %+.0f km/h", i, wrap, estM, dv)
+      else
+        lines[#lines + 1] = string.format("Brake %d: dSpline %+.3f  dV %+.0f km/h", i, wrap, dv)
+      end
     end
   end
   if coastMs and coastMs > 200 then
@@ -356,7 +380,7 @@ local function approachHudLines(car0, sortedTrace)
   }
 end
 
-function script.windowMain(dt)
+function script.windowMain(_dt)
   if not config.hudEnabled then
     return
   end
@@ -455,6 +479,7 @@ function script.update(dt)
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(sim.time or 0)
+    resetDeltaSmoother()
     state.lastLapTrace = copyTrace(completedTrace)
     local lastMs = car.previousLapTimeMs or car.lastLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
@@ -495,7 +520,7 @@ function script.update(dt)
     td:resetLapAggregates()
 
     local coastMs = thA and thA.coastingMs or 0
-    state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs)
+    state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
     state.postLapUntil = (sim.time or 0) + config.postLapHoldSeconds
 
     state.sectorIndex = 1
@@ -505,6 +530,7 @@ function script.update(dt)
 
   if tel:lapStartTime() == nil and not sim.isInMainMenu then
     tel:beginLapClock(sim.time or 0)
+    resetDeltaSmoother()
     state.sectorStartSimT = sim.time or 0
     state.sectorIndex = 1
     state.lastSplineSector = sp
@@ -553,10 +579,10 @@ function script.update(dt)
 end
 
 function script.onWindowHide()
-  local _persistHide = persistSnapshotCached() or persistSnapshotCached()
+  persistSnapshotCached()
 end
 
-function script.Draw3D(dt)
+function script.Draw3D(_dt)
   local s = ac.getSim()
   if not s or s.isInMainMenu then
     return

@@ -47,16 +47,21 @@ local function downsampleUniform(buf, n, maxOut)
     return out, n
   end
   local out = {}
-  local m = 0
-  local step = n / maxOut
-  local pos = 1
-  for _ = 1, maxOut do
-    local idx = math.min(n, math.max(1, math.floor(pos + 0.5)))
-    m = m + 1
-    out[m] = buf[idx]
-    pos = pos + step
+  out[1] = buf[1]
+  if maxOut == 1 then
+    return out, 1
   end
-  return out, m
+  out[maxOut] = buf[n]
+  if maxOut == 2 then
+    return out, 2
+  end
+  local step = (n - 1) / (maxOut - 1)
+  for k = 2, maxOut - 1 do
+    local pos = 1 + (k - 1) * step
+    local idx = math.min(n, math.max(1, math.floor(pos + 0.5)))
+    out[k] = buf[idx]
+  end
+  return out, maxOut
 end
 
 ---@param cfg TelemetryConfig|nil
@@ -188,10 +193,27 @@ function Telemetry:update(dt, car, sim)
   end
 end
 
---- In-progress lap snapshots (may be large before finalize). Read-only: do not mutate.
+--- In-progress lap snapshots (shallow copy of indices; inner fields are numbers — treat as read-only).
 ---@return LapTraceSample[]
 function Telemetry:getTrace()
-  return self.lapBuf
+  local out = {}
+  for i = 1, self.lapN do
+    local s = self.lapBuf[i]
+    if s then
+      out[i] = {
+        spline = s.spline,
+        eMs = s.eMs,
+        speed = s.speed,
+        brake = s.brake,
+        throttle = s.throttle,
+        gear = s.gear,
+        px = s.px,
+        py = s.py,
+        pz = s.pz,
+      }
+    end
+  end
+  return out
 end
 
 --- Number of samples in the current lap trace.

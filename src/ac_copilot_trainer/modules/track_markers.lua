@@ -91,26 +91,30 @@ function M.draw(car, best, last)
     end
     local r = 0.65
     local col ---@type any
-    if rgbm then
+    if type(rgbm) == "function" then
       if it.kind == "best" then
         col = rgbm(0.2, 0.95, 0.25, alpha)
       else
         col = rgbm(0.95, 0.9, 0.15, alpha)
       end
     end
-    local sy = snapToTrack(it.x, it.y, it.z)
-    pcall(function()
-      -- CSP: prefer debugSphere (documented for transparent render pass). Fallbacks for older builds.
-      local c ---@type any
-      if vec3 then
-        c = vec3(it.x, sy, it.z)
-      end
-      if c and render.debugSphere then
-        render.debugSphere(c, r, col)
-      elseif c and render.drawSphere then
-        render.drawSphere(c, r, col)
-      end
-    end)
+    if not col then
+      -- Without rgbm we cannot supply a valid color to render.* — skip this primitive.
+    else
+      local sy = snapToTrack(it.x, it.y, it.z)
+      pcall(function()
+        -- CSP: prefer debugSphere (documented for transparent render pass). Fallbacks for older builds.
+        local c ---@type any
+        if vec3 then
+          c = vec3(it.x, sy, it.z)
+        end
+        if c and render.debugSphere then
+          render.debugSphere(c, r, col)
+        elseif c and render.drawSphere then
+          render.drawSphere(c, r, col)
+        end
+      end)
+    end
   end
 end
 

@@ -105,7 +105,7 @@ function M.analyzeTrace(trace)
   local coastStart = 0
   local reversals = 0
   local lastTh = trace[1].throttle or 0
-  local prevTh = lastTh
+  local prevDth = nil
   local derivSum = 0
   local ft = 0
   local n = #trace
@@ -143,11 +143,11 @@ function M.analyzeTrace(trace)
     if i > 1 then
       local dth = th - lastTh
       derivSum = derivSum + math.abs(dth)
-      if dth * (lastTh - prevTh) < 0 and math.abs(dth) > 0.05 then
+      if prevDth ~= nil and dth * prevDth < 0 and math.abs(dth) > 0.05 then
         reversals = reversals + 1
       end
+      prevDth = dth
     end
-    prevTh = lastTh
     lastTh = th
   end
   if inCoast then
