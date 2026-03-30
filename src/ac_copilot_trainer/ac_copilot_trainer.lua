@@ -70,6 +70,8 @@ local state = {
     session = {},
   },
   recording = true,
+  ---@type number|nil
+  lastSplinePos = nil,
 }
 
 local function applyLoaded(data)
@@ -92,20 +94,22 @@ local function persistPayload()
 end
 
 --- Save while still in-session (uses car/sim from current frame; no re-fetch).
+---@return boolean
 local function persistSnapshotLive()
   if not sim or sim.isInMainMenu or not car then
-    return
+    return false
   end
-  persistence.save(car, sim, persistPayload())
+  return persistence.save(car, sim, persistPayload()) == true
 end
 
 --- Save using last driving frame (exit to menu / window hide).
+---@return boolean
 local function persistSnapshotCached()
   local c, s = lastDriveCar, lastDriveSim
   if not c or not s then
-    return
+    return false
   end
-  persistence.save(c, s, persistPayload())
+  return persistence.save(c, s, persistPayload()) == true
 end
 
 local function resetRuntimeAfterLeavingTrack()
@@ -122,6 +126,13 @@ local function resetRuntimeAfterLeavingTrack()
   brakes = newBrakes()
   lastDriveCar = nil
   lastDriveSim = nil
+  state.lastSplinePos = nil
+end
+
+local function resetRollingDrivingState()
+  state.brakingPoints.session = {}
+  tel = newTelemetry()
+  brakes = newBrakes()
 end
 
 local function tryLoadDisk()
@@ -172,10 +183,13 @@ function script.update(dt)
 
   if sim.isInMainMenu then
     if state.wasDriving then
-      persistSnapshotCached()
-      resetRuntimeAfterLeavingTrack()
+      if persistSnapshotCached() then
+        resetRuntimeAfterLeavingTrack()
+        state.wasDriving = false
+      end
+    else
+      state.wasDriving = false
     end
-    state.wasDriving = false
     state.lastLapCount = -1
     return
   end
@@ -201,10 +215,16 @@ function script.update(dt)
   end
 
   local lc = car.lapCount or 0
+  local sp = car.splinePosition or 0
   if state.lastLapCount >= 0 and lc < state.lastLapCount then
-    state.brakingPoints.session = {}
-    tel = newTelemetry()
-    brakes = newBrakes()
+    resetRollingDrivingState()
+  elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
+    local lastSp = state.lastSplinePos
+    local d = sp - lastSp
+    local likelyWrap = lastSp > 0.8 and sp < 0.25
+    if d < -0.2 and not likelyWrap then
+      resetRollingDrivingState()
+    end
   end
 
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
@@ -217,16 +237,21 @@ function script.update(dt)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      persistSnapshotLive()
+      if not persistSnapshotLive() then
+        persistSnapshotLive()
+      end
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)
     state.brakingPoints.session = {}
   end
   state.lastLapCount = lc
+  state.lastSplinePos = sp
 end
 
 function script.onWindowHide()
-  persistSnapshotCached()
+  if not persistSnapshotCached() then
+    persistSnapshotCached()
+  end
 end
 
 function script.draw3D(dt)

@@ -66,7 +66,7 @@ local function pathSafeForShell(p)
   if p:find("[\1-\31\"]") then
     return false
   end
-  if p:find("[&|<>%%^!`]") then
+  if p:find("[&|<>%%^!`']") then
     return false
   end
   return true
