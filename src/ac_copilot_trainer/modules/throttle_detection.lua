@@ -3,7 +3,6 @@
 local M = {}
 
 ---@class ThrottleDetectState
----@field wasBraking boolean
 ---@field inCoast boolean
 ---@field coastStreak number
 
@@ -12,7 +11,6 @@ Detector.__index = Detector
 
 function M.new()
   return setmetatable({
-    wasBraking = false,
     inCoast = false,
     coastStreak = 0,
   }, Detector)
@@ -26,10 +24,6 @@ function Detector:update(car, dt)
   local d = dt or 0
   local br = car.brake or 0
   local th = car.gas or 0
-  local braking = br > 0.15
-  if braking then
-    self.wasBraking = true
-  end
   local coast = br < 0.05 and th < 0.1
   if coast then
     self.coastStreak = self.coastStreak + d
@@ -37,10 +31,6 @@ function Detector:update(car, dt)
   else
     self.coastStreak = 0
     self.inCoast = false
-  end
-  -- Clear braking latch once throttle is applied (lap-level apply counts use analyzeTrace).
-  if not braking and th > 0.25 then
-    self.wasBraking = false
   end
   return coast, self.coastStreak
 end
