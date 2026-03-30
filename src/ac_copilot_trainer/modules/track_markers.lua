@@ -6,6 +6,21 @@ local MAX_PRIMITIVES = 50
 local FADE_NEAR = 40
 local FADE_FAR = 200
 
+local snapSig = ""
+local snapY = {} ---@type table<string, number>
+
+local function brakeListSig(list)
+  if not list or #list == 0 then
+    return "0"
+  end
+  local a, z = list[1], list[#list]
+  return string.format("%d:%g,%g,%g|%g,%g,%g", #list, a.px, a.py, a.pz, z.px, z.py, z.pz)
+end
+
+local function markerCacheKey(x, y, z)
+  return string.format("%g|%g|%g", x, y, z)
+end
+
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
   return dx * dx + dy * dy + dz * dz
@@ -60,6 +75,11 @@ function M.draw(car, best, last)
   if not render then
     return
   end
+  local sig = brakeListSig(best) .. ";" .. brakeListSig(last)
+  if sig ~= snapSig then
+    snapSig = sig
+    snapY = {}
+  end
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
   local items = {}
   local function addList(list, kind)
@@ -101,7 +121,12 @@ function M.draw(car, best, last)
     if not col then
       -- Without rgbm we cannot supply a valid color to render.* — skip this primitive.
     else
-      local sy = snapToTrack(it.x, it.y, it.z)
+      local ck = markerCacheKey(it.x, it.y, it.z)
+      local sy = snapY[ck]
+      if sy == nil then
+        sy = snapToTrack(it.x, it.y, it.z)
+        snapY[ck] = sy
+      end
       pcall(function()
         -- CSP: prefer debugSphere (documented for transparent render pass). Fallbacks for older builds.
         local c ---@type any

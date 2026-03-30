@@ -341,23 +341,44 @@ local function buildPostLapLines(bestBps, lastBps, coastMs, sim0)
   return lines
 end
 
+--- Forward spline distance from car to point along lap, in [0, 1).
+local function splineForwardDelta(carSpline, ptSpline)
+  local d = (ptSpline or 0) - (carSpline or 0)
+  if d < 0 then
+    d = d + 1
+  end
+  if d >= 1 then
+    d = d - 1
+  end
+  return d
+end
+
 local function approachHudLines(car0, sortedTrace)
   local best = state.brakingPoints.best
   if not car0 or not car0.position or #best == 0 then
     return nil
   end
+  local carSp = car0.splinePosition or 0
   local cx, cy, cz = car0.position.x, car0.position.y, car0.position.z
-  local bestI, bestDist = 1, 1e12
+  local bestI, bestSplineD, bestDistSq ---@type integer|nil, number|nil, number|nil
   for i = 1, #best do
     local p = best[i]
     local dx, dy, dz = cx - p.px, cy - p.py, cz - p.pz
-    local d = dx * dx + dy * dy + dz * dz
-    if d < bestDist then
-      bestDist = d
+    local distSq = dx * dx + dy * dy + dz * dz
+    local dS = splineForwardDelta(carSp, p.spline or 0)
+    if dS < 1e-9 then
+      dS = 1e-9
+    end
+    if bestI == nil or dS < bestSplineD - 1e-12 or (math.abs(dS - bestSplineD) <= 1e-12 and distSq < bestDistSq) then
       bestI = i
+      bestSplineD = dS
+      bestDistSq = distSq
     end
   end
-  local dM = math.sqrt(bestDist)
+  if not bestI or not bestDistSq then
+    return nil
+  end
+  local dM = math.sqrt(bestDistSq)
   if dM > config.approachMeters then
     return nil
   end
@@ -528,13 +549,7 @@ function script.update(dt)
     state.lastSplineSector = sp
   end
 
-  if tel:lapStartTime() == nil and not sim.isInMainMenu then
-    tel:beginLapClock(sim.time or 0)
-    resetDeltaSmoother()
-    state.sectorStartSimT = sim.time or 0
-    state.sectorIndex = 1
-    state.lastSplineSector = sp
-  end
+  -- Lap trace clock starts only at start/finish (see lap boundary block above), not mid-lap after resets.
 
   tel:setRecording(state.recording)
   tel:update(dt, car, sim)
