@@ -30,7 +30,7 @@ memory: project
 
 - One **primary** owner per goal; secondaries are **handoffs**, not parallel owners of the same branch.
 - **Skills** are shortcuts—link `.claude/skills/<name>/SKILL.md` rather than pasting long procedures into chat.
-- **Delegate** explicitly: use the **Task** tool with `subagent_type` **`pr-resolution-follow-up`**, **`dependency-review`**, or **`learner`** when the host supports it; otherwise follow the linked agent markdown step-for-step.
+- **Delegate** explicitly: in **Claude Code**, use the **Task** tool with `subagent_type` **`pr-resolution-follow-up`**, **`dependency-review`**, or **`learner`** when the host supports it. **In Cursor**, Task only accepts **`generalPurpose`**, **`explore`**, **`shell`**, **`best-of-n-runner`** — use **`generalPurpose`** with the same checklist embedded from the linked `.claude/agents/*.md`, or follow that markdown step-for-step inline (see `.cursor/rules/cursor-task-delegation.mdc`).
 
 ## Context discipline (tokens)
 
@@ -52,7 +52,7 @@ memory: project
 9. Run `make ci-fast` before marking ready for review.
 10. **Mark the PR ready for review:** use pull request number **P** (from the PR you opened; it can differ from issue **N**): `gh pr ready <P> --repo <owner/repo>` (exits draft state so reviewers and bots are notified).
 11. **Wait for async bots before handoff:** follow **§ Mandatory wait after each push** in `.claude/agents/pr-resolution-follow-up.md`—use the same **`sleep 600`** cooldown after `gh pr ready` as after a `git push` (that section owns the normative wait; do not skip it).
-12. Hand off to **PR resolution** using the same pull request number **P** as in step 10: invoke **`Task(subagent_type="pr-resolution-follow-up", …)`** or execute `.claude/agents/pr-resolution-follow-up.md` until CI is green and bot threads are addressed.
+12. Hand off to **PR resolution** using the same pull request number **P** as in step 10: in Claude Code invoke **`Task(subagent_type="pr-resolution-follow-up", …)`**; in Cursor use **`Task(subagent_type="generalPurpose", …)`** with the **pr-resolution-follow-up** checklist from `.claude/agents/pr-resolution-follow-up.md`, or execute that file’s steps inline until CI is green and bot threads are addressed.
 
 ## Planning
 

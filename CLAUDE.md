@@ -73,6 +73,10 @@ Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Develop
 
 Routing tables, agent roles, skills map, and delegation patterns live in **`.claude/rules/orchestration.md`** (loaded when working under `.claude/agents/` or agent docs). The canonical matrix remains **`.claude/agents/issue-driven-coding-orchestrator.md`**.
 
+### Delegation (Cursor)
+
+In **Cursor**, the **Task** tool only allows `subagent_type` values **`generalPurpose`**, **`explore`**, **`shell`**, and **`best-of-n-runner`**. Handoffs that name Claude Code agents (`pr-resolution-follow-up`, `dependency-review`, `learner`, etc.) should be executed by calling **`Task` with `generalPurpose`** and embedding the checklist from the linked **`.claude/agents/*.md`** file in the prompt, or by running those steps **inline** in the current session. Full detail: **`.cursor/rules/cursor-task-delegation.mdc`**.
+
 ---
 
 ## Hooks

@@ -1,0 +1,27 @@
+---
+alwaysApply: true
+---
+
+# Cursor Task tool delegation
+
+In **Cursor**, the **Task** tool only accepts these `subagent_type` values: **`generalPurpose`**, **`explore`**, **`shell`**, **`best-of-n-runner`**.
+
+Prose in `.claude/agents/*.md` that tells you to set `subagent_type` to Claude Code agent names (`issue-driven-coding-orchestrator`, `pr-resolution-follow-up`, `dependency-review`, `learner`, …) describes the **Claude Code** host. Those strings **fail validation** in Cursor if passed as Task types.
+
+## Supported workaround in Cursor
+
+1. **`Task(subagent_type="generalPurpose", prompt="…")`** — Put the **checklist and context** from the relevant `.claude/agents/<name>.md` into the prompt (issue/PR numbers, repo, branch, links to skills). The subagent then executes that procedure; or
+2. **Run the same steps inline** in the current session without delegating via Task.
+
+Do **not** rely on unknown `subagent_type` values — the host rejects them before the subagent runs.
+
+## Where procedures live
+
+| Intent | Agent markdown |
+|--------|----------------|
+| Issue → branch → Draft PR → implement → `make ci-fast` → handoff | `.claude/agents/issue-driven-coding-orchestrator.md` |
+| Green CI, GraphQL `reviewThreads`, `sleep 600` | `.claude/agents/pr-resolution-follow-up.md` |
+| Dependabot / deps / workflow risk, then PR loop | `.claude/agents/dependency-review.md` |
+| Post-merge learnings (optional) | `.claude/agents/learner.md` |
+
+Optional product follow-up: request that Cursor extend Task `subagent_type` to project-defined names; until then, the pattern above is the supported path.

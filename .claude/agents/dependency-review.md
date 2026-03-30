@@ -28,7 +28,7 @@ memory: project
 
 1. **Risk summary** — supply chain, breaking majors, workflow permission changes
 2. **Merge order** — note if this PR should land before/after other open PRs (e.g. overlapping workflows)
-3. **Hand off** — for **`sleep 600`**, required checks, and GraphQL **`reviewThreads`**, run **`.claude/agents/pr-resolution-follow-up.md`** or **`Task(subagent_type="pr-resolution-follow-up", …)`**. Do **not** duplicate that loop here.
+3. **Hand off** — for **`sleep 600`**, required checks, and GraphQL **`reviewThreads`**, run **`.claude/agents/pr-resolution-follow-up.md`** or **`Task(subagent_type="pr-resolution-follow-up", …)`** (Claude Code); in Cursor use **`generalPurpose`** + that file’s checklist (`.cursor/rules/cursor-task-delegation.mdc`). Do **not** duplicate that loop here.
 
 ## Context discipline
 

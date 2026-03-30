@@ -8,5 +8,6 @@ You are working in a repository governed by **AGENTS.md**, **AGENT_CORE_PRINCIPL
 4. No secrets in files, Issues, or PRs. Use `.env` locally only.
 5. Put throwaway experiments in **`.scratch/`** (gitignored), not in `src/` or the vault.
 6. For third-party API details, prefer **Context7** via MCP over guessing (see `.mcp.json`).
+7. **Cursor Task** — valid `subagent_type` values are only **`generalPurpose`**, **`explore`**, **`shell`**, **`best-of-n-runner`**. For procedures that name Claude Code agents (e.g. `pr-resolution-follow-up`), use **`generalPurpose`** plus the checklist from **`.claude/agents/*.md`**, or run those steps inline. See **`.cursor/rules/cursor-task-delegation.mdc`**.
 
 Project-specific rules live under `.cursor/rules/*.mdc` and override this file where they conflict.

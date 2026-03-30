@@ -21,7 +21,7 @@ memory: project
 
 ## When to involve other agents
 
-- If the PR diff is **only** dependencies, GitHub Actions, `.mcp.json`, or `security.yml` CVE tooling, run **`dependency-review`** first (Task `subagent_type=dependency-review` or read `.claude/agents/dependency-review.md`) for **risk summary + merge order**, then return here for the CI/bot loop.
+- If the PR diff is **only** dependencies, GitHub Actions, `.mcp.json`, or `security.yml` CVE tooling, run **`dependency-review`** first (Task `subagent_type=dependency-review` in Claude Code, or **`generalPurpose`** + `.claude/agents/dependency-review.md` in Cursor — see `.cursor/rules/cursor-task-delegation.mdc`) for **risk summary + merge order**, then return here for the CI/bot loop.
 - For **ambiguous repo policy** (branch naming, where files go), skim **`project-conventions`** or read **`AGENTS.md`** / **`10_Agent_Protocol.md`** before wide search.
 
 ## Context discipline
