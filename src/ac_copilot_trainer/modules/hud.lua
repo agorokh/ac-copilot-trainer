@@ -12,6 +12,7 @@ local M = {}
 ---@field brakeBest integer
 ---@field brakeLast integer
 ---@field brakeSession integer
+---@field telemetrySamples integer|nil
 
 function M.draw(vm)
   ui.text("AC Copilot Trainer v0.1.0")
@@ -36,6 +37,9 @@ function M.draw(vm)
     ui.text("Last: —")
   end
   ui.separator()
+  if vm.telemetrySamples ~= nil then
+    ui.text(string.format("Telemetry buffer: %d samples", vm.telemetrySamples))
+  end
   ui.text(string.format("Brake points — best: %d  last lap: %d  session: %d", vm.brakeBest or 0, vm.brakeLast or 0, vm.brakeSession or 0))
 end
 

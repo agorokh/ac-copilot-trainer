@@ -20,7 +20,8 @@ function M.sessionKey(car, sim)
   end
   local carKey = "unknown_car"
   if car then
-    carKey = car.carID or car.carModel or car.driverName or carKey
+    -- CSP ac.StateCar: prefer stable id/name over driver display name.
+    carKey = car.id or car.name or car.driverName or carKey
   end
   return safeName(carKey) .. "__" .. safeName(track)
 end
@@ -57,17 +58,36 @@ local function jsonDecode(s)
   return nil
 end
 
+--- Reject paths that could break out of a quoted shell argument.
+local function pathSafeForShell(p)
+  if not p or p == "" then
+    return false
+  end
+  if p:find("[\1-\31\"]") then
+    return false
+  end
+  if p:find("[&|<>%%^!`]") then
+    return false
+  end
+  return true
+end
+
 local function ensureDir(path)
   local dir = path:match("^(.*)/[^/]+$")
   if not dir or dir == "" then
     return
   end
-  local sep = package.config:sub(1, 1)
-  if sep == "\\" then
-    os.execute('mkdir "' .. dir:gsub("/", "\\") .. '" 2>nul')
-  else
-    os.execute('mkdir -p "' .. dir .. '"')
+  if not pathSafeForShell(dir) then
+    return
   end
+  local sep = package.config:sub(1, 1)
+  local cmd
+  if sep == "\\" then
+    cmd = 'mkdir "' .. dir:gsub("/", "\\") .. '" 2>nul'
+  else
+    cmd = 'mkdir -p "' .. dir .. '"'
+  end
+  pcall(os.execute, cmd)
 end
 
 ---@return table|nil

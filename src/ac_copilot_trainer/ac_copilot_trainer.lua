@@ -91,11 +91,9 @@ local function persistPayload()
   }
 end
 
---- Save while still in-session (live car/sim).
+--- Save while still in-session (uses car/sim from current frame; no re-fetch).
 local function persistSnapshotLive()
-  car = ac.getCar(0)
-  sim = ac.getSim()
-  if sim.isInMainMenu or not car then
+  if not sim or sim.isInMainMenu or not car then
     return
   end
   persistence.save(car, sim, persistPayload())
@@ -155,7 +153,8 @@ function script.windowMain(dt)
     return
   end
   hud.draw({
-    recording = state.recording,
+    recording = tel:isRecording(),
+    telemetrySamples = #tel:getRecent(sim),
     speed = car.speedKmh or 0,
     brake = car.brake or 0,
     lapCount = car.lapCount or 0,
