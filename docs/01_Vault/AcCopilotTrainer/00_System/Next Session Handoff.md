@@ -15,6 +15,7 @@ relates_to:
 
 ## Resume here
 
+- **#6 (ac-copilot-trainer):** Telemetry + brake detection + JSON persistence + lap-aware best/last brake sets + ImGui HUD. **Branch:** `feat/issue-6-telemetry-brake-persistence`. **PR:** https://github.com/agorokh/ac-copilot-trainer/pull/10 (draft, `Fixes #6`). Next: wait for CI; **`sleep 600`** after any push; GraphQL `reviewThreads`; `gh pr ready 10` when you want reviewers/bots notified; then merge when green.
 - **#11 Cursor Task delegation:** branch `feat/issue-11-cursor-task-delegation`, **PR:** https://github.com/agorokh/template-repo/pull/34 (`Fixes #11`, ready). **pr-resolution-follow-up (2026-03-30):** required checks green on the **current PR HEAD** (re-check in GitHub before merge); GraphQL `reviewThreads`: no blocking unresolved threads (full pagination audit). Next: human approval / merge if branch rules require it.
 - **#27 template sync:** branch `feat/issue-27-template-sync`, **PR:** https://github.com/agorokh/template-repo/pull/32 (draft, `Refs #27`). **`pr-resolution-follow-up` done (2026-03-29):** required checks green on latest SHA; Cursor Bugbot **SUCCESS**; GraphQL `reviewThreads` has **zero** unresolved threads. Next: human review / mark ready / merge when satisfied. Epic #14 stays open until tracker closed.
 - **#26 Phase 1:** branch `feat/issue-26-model-training-phase1`, **PR:** https://github.com/agorokh/template-repo/pull/31 (draft). **`pr-resolution-follow-up` done (2026-03-29):** required checks green on latest SHA; GraphQL `reviewThreads` has **zero** unresolved threads. Next: human review / mark ready / merge when satisfied. Epic #26 stays open (Phases 2–4 deferred).
@@ -23,6 +24,7 @@ relates_to:
 
 ## What was delivered
 
+- **#6 (repo workspace, pending PR):** `src/ac_copilot_trainer/modules/{telemetry,brake_detection,persistence,hud}.lua`, rewired `ac_copilot_trainer.lua`, `manifest.ini` (`LAZY=PARTIAL`, `FUNCTION_MAIN` / `FUNCTION_ON_HIDE`). CI hygiene: `Makefile` pytest `--cov=ac_copilot_trainer`, `tests/test_smoke.py` import fix, `pyproject.toml` dev extra includes `requests`. **Issue:** https://github.com/agorokh/ac-copilot-trainer/issues/6
 - **#11 (in PR):** `.cursor/rules/cursor-task-delegation.mdc`, `CLAUDE.md` / `.cursorrules` / `AGENTS.md` / `.claude/rules/orchestration.md` + agent markdown alignment for Cursor `Task` enum. **PR:** https://github.com/agorokh/template-repo/pull/34
 - **#27 (in PR):** `copier.yml`, `scripts/copier_post_copy.py`, reference workflows `template-sync.yml` / `template-feedback.yml` / `cross-repo-mining.yml`, `tools/process_miner/aggregate.py` + tests, `[bootstrap]` optional extra, docs (BOOTSTRAP, MAINTAINING, WARP, `.env.example`), learner upstream subsection. **PR:** https://github.com/agorokh/template-repo/pull/32
 - **#26 Phase 1 (in PR):** `tools/model_training/` — `data_pipeline` + `format_sft` export to `sft_pairs.jsonl` / `sft_decisions.jsonl`, `dataset_stats.py`, stub `format_dpo` / `format_cpt`, `config/*.yaml`, tests, `models/` gitignore, vault `01_Decisions/local-reviewer-model.md`. **PR:** https://github.com/agorokh/template-repo/pull/31

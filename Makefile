@@ -18,7 +18,7 @@ ci-lint:
 	$(PYTHON) -m ruff check src tests tools scripts
 
 ci-test:
-	$(PYTHON) -m pytest -q --cov=project_template --cov=tools --cov-fail-under=80
+	$(PYTHON) -m pytest -q --cov=ac_copilot_trainer --cov=tools --cov-fail-under=80
 
 ci-security:
 	$(PYTHON) -m bandit -r src tools -ll -ii
