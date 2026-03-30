@@ -43,6 +43,11 @@ function Telemetry:isRecording()
   return self.recording
 end
 
+--- Current number of retained samples (post-eviction), O(1).
+function Telemetry:sampleCount()
+  return self.n
+end
+
 --- Drop samples older than (now - bufferSeconds).
 function Telemetry:evictOlderThan(tCutoff)
   local i = 1

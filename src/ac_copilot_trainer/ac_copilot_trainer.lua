@@ -165,7 +165,7 @@ function script.windowMain(dt)
   end
   hud.draw({
     recording = tel:isRecording(),
-    telemetrySamples = #tel:getRecent(sim),
+    telemetrySamples = tel:sampleCount(),
     speed = car.speedKmh or 0,
     brake = car.brake or 0,
     lapCount = car.lapCount or 0,
