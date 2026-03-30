@@ -50,7 +50,9 @@ memory: project
 7. Follow `docs/10_Development/10_Agent_Protocol.md` for file placement.
 8. Read vault `00_System/invariants/_index.md` and load targeted invariant nodes before touching core modules.
 9. Run `make ci-fast` before marking ready for review.
-10. Hand off to **PR resolution**: invoke **`Task(subagent_type="pr-resolution-follow-up", …)`** or execute `.claude/agents/pr-resolution-follow-up.md` until CI is green and bot threads are addressed.
+10. **Mark the PR ready for review:** use pull request number **P** (from the PR you opened; it can differ from issue **N**): `gh pr ready <P> --repo <owner/repo>` (exits draft state so reviewers and bots are notified).
+11. **Wait for async bots before handoff:** follow **§ Mandatory wait after each push** in `.claude/agents/pr-resolution-follow-up.md`—use the same **`sleep 600`** cooldown after `gh pr ready` as after a `git push` (that section owns the normative wait; do not skip it).
+12. Hand off to **PR resolution** using the same pull request number **P** as in step 10: invoke **`Task(subagent_type="pr-resolution-follow-up", …)`** or execute `.claude/agents/pr-resolution-follow-up.md` until CI is green and bot threads are addressed.
 
 ## Planning
 
@@ -62,6 +64,7 @@ Use repository exploration or specialized reviewers when the change crosses arch
 
 ## Done when
 
+- PR is **not** in draft state (marked ready via `gh pr ready <P> --repo <owner/repo>`)
 - CI passes on the PR
 - Acceptance criteria in the Issue are met or explicitly deferred with a new Issue
 - Vault handoff updated if work continues next session

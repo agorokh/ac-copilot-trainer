@@ -41,9 +41,12 @@ Only skip `sleep 600` if **every** third-party check on the PR is already `SUCCE
 
 ## Loop
 
-1. `gh pr view <N> --repo <owner/repo> --json number,url,state,statusCheckRollup,reviewDecision`
+**`<P>`** is the **pull request** number (the **#** on the PR). It can differ from a GitHub **issue** number when you started from the issue-driven orchestrator.
+
+1. `gh pr view <P> --repo <owner/repo> --json number,url,state,isDraft,statusCheckRollup,reviewDecision`
+1a. If the PR is still **draft** (`isDraft: true`), mark it ready first: `gh pr ready <P> --repo <owner/repo>`. Draft PRs suppress CODEOWNERS-requested reviewer notifications and block merging until marked ready; status checks (CI/Actions) still run for drafts. Then **`sleep 600`** before continuing to steps 2–3 (same async-bot cooldown as after a `git push`).
 2. If CI failed — pull logs, fix, commit, push, then **`sleep 600`** before returning to step 1.
-3. **Review threads (use GraphQL for resolution state).** REST `GET /repos/{owner}/{repo}/pulls/{N}/comments` does **not** expose whether a conversation is resolved. Query **`reviewThreads`** on the pull request and treat **`isResolved: false`** (and not outdated, when relevant) as blocking work. Example: use **`-F`** for the PR number so `gh` sends a JSON **integer** for `Int!` (plain `-f p=3` is a string and will fail).
+3. **Review threads (use GraphQL for resolution state).** REST `GET /repos/{owner}/{repo}/pulls/{P}/comments` does **not** expose whether a conversation is resolved. Query **`reviewThreads`** on the pull request and treat **`isResolved: false`** (and not outdated, when relevant) as blocking work. Example: use **`-F`** for the PR number so `gh` sends a JSON **integer** for `Int!` (plain `-f p=3` is a string and will fail).
 
 ```bash
 # Minimal thread state (valid GraphQL; expand fields if you need comment bodies)
