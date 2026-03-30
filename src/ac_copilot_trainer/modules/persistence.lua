@@ -114,7 +114,10 @@ function M.save(car, sim, data)
   if not f then
     return false
   end
-  f:write(raw)
+  if not f:write(raw) then
+    f:close()
+    return false
+  end
   f:close()
   return true
 end

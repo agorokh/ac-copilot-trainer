@@ -78,8 +78,9 @@ local function applyLoaded(data)
   if not data or type(data) ~= "table" then
     return
   end
-  if data.bestLapMs and tonumber(data.bestLapMs) then
-    state.bestLapMs = tonumber(data.bestLapMs)
+  local bestMs = tonumber(data.bestLapMs)
+  if bestMs and bestMs > 0 then
+    state.bestLapMs = bestMs
   end
   if data.bestBrakePoints and type(data.bestBrakePoints) == "table" then
     state.brakingPoints.best = data.bestBrakePoints
@@ -237,9 +238,7 @@ function script.update(dt)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      if not persistSnapshotLive() then
-        persistSnapshotLive()
-      end
+      local _persistPb = persistSnapshotLive() or persistSnapshotLive()
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)
     state.brakingPoints.session = {}
@@ -249,9 +248,7 @@ function script.update(dt)
 end
 
 function script.onWindowHide()
-  if not persistSnapshotCached() then
-    persistSnapshotCached()
-  end
+  local _persistHide = persistSnapshotCached() or persistSnapshotCached()
 end
 
 function script.draw3D(dt)
