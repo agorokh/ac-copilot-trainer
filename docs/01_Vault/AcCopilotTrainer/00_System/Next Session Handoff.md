@@ -30,11 +30,15 @@ relates_to:
 
 Canonical rules (C-struct throws, valid fields, render API, globals) live in **[`01_Decisions/csp-api-field-safety.md`](../01_Decisions/csp-api-field-safety.md)** — read that ADR before changing `sim`/`car`/`render` usage; avoid duplicating the field lists here.
 
-## What remains
+## What remains (issue #24 acceptance — in-game)
 
-- Merge PR #27, deploy, test in-game: confirm brake markers visible, line ribbon visible, coaching text showing.
-- If `render.debugSphere`/`render.debugCross` still invisible, investigate CSP version or switch to `render.debugText` as label-based markers.
-- Epic issues #7, #8, #9 have merged foundational code; next phases per Project State.
+- **Visuals (PR #27):** brake markers visible; racing-line ribbon visible; coaching HUD lines show as expected.
+- **Render fallback:** if `render.debugSphere` / `render.debugCross` are invisible on your CSP build, try `render.debugText` labels or confirm CSP version.
+- **Best-lap / reference:** completing a faster lap updates best reference trace and related HUD where applicable; values survive a session as designed.
+- **Brake points:** recording during laps; HUD counts for best/last/session look sane after several laps.
+- **Persistence:** save/load (disk snapshot) restores expected state after restart or rejoin (no silent data loss).
+- **Sidecar:** with `config.wsSidecarUrl` set and sidecar running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`), WebSocket connects and errors are visible if misconfigured.
+- **Epic follow-up:** issues #7, #8, #9 — next phases per Project State.
 
 ## Blockers / dependencies
 
