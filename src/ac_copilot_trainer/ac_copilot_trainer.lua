@@ -281,6 +281,11 @@ local function applyLoaded(data)
     state.bestReferenceLapMs = nil
   end
   rebuildBestReference()
+  if state.bestLapTrace and #state.bestLapTrace >= 2 then
+    state.racingBestLine = racingLine.traceToLine(state.bestLapTrace)
+  else
+    state.racingBestLine = {}
+  end
   if data.trackSegments and type(data.trackSegments) == "table" then
     state.trackSegments = data.trackSegments
   end
@@ -707,32 +712,44 @@ function script.update(dt)
       segBrakes = state.brakingPoints.best
     end
     state.lapsCompleted = (state.lapsCompleted or 0) + 1
-    if state.lapsCompleted >= 2 then
-      local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
-      if #ns > 0 then
-        state.trackSegments = ns
+    local spanForAnalytics = 0
+    if #completedTrace >= 2 then
+      spanForAnalytics = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
+    end
+    local traceAnalyticsOk = lastMs > 0 and #completedTrace > 0 and spanForAnalytics >= lastMs * 0.45 and traceHasPbSplineCoverage(completedTrace)
+
+    local feats = {}
+    if traceAnalyticsOk then
+      if state.lapsCompleted >= 2 then
+        local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
+        if #ns > 0 then
+          state.trackSegments = ns
+        end
       end
-    end
-    if #state.trackSegments == 0 then
-      local ns = cornerAnalysis.buildSegments(completedTrace, segBrakes)
-      if #ns > 0 then
-        state.trackSegments = ns
+      if #state.trackSegments == 0 then
+        local ns = cornerAnalysis.buildSegments(completedTrace, segBrakes)
+        if #ns > 0 then
+          state.trackSegments = ns
+        end
       end
-    end
-    local feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
-    cornerAnalysis.appendHistory(state.lapFeatureHistory, { lapMs = lastMs, corners = feats })
-    local cons = cornerAnalysis.consistencySummary(state.lapFeatureHistory)
-    state.consistencyHud = ""
-    if cons and cons.worstThree and #cons.worstThree > 0 then
-      state.consistencyHud = "Least consistent: " .. table.concat(cons.worstThree, ", ")
-    end
-    state.styleHud = ""
-    local div = cornerAnalysis.styleDivergence(feats, state.bestCornerFeatures)
-    if div ~= nil then
-      state.styleHud = string.format(
-        "Style vs ref: %.0f%% match",
-        math.max(0, math.min(100, (1 - div) * 100))
-      )
+      feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
+      cornerAnalysis.appendHistory(state.lapFeatureHistory, { lapMs = lastMs, corners = feats })
+      local cons = cornerAnalysis.consistencySummary(state.lapFeatureHistory)
+      state.consistencyHud = ""
+      if cons and cons.worstThree and #cons.worstThree > 0 then
+        state.consistencyHud = "Least consistent: " .. table.concat(cons.worstThree, ", ")
+      end
+      state.styleHud = ""
+      local div = cornerAnalysis.styleDivergence(feats, state.bestCornerFeatures)
+      if div ~= nil then
+        state.styleHud = string.format(
+          "Style vs ref: %.0f%% match",
+          math.max(0, math.min(100, (1 - div) * 100))
+        )
+      end
+    else
+      state.consistencyHud = state.consistencyHud or ""
+      state.styleHud = state.styleHud or ""
     end
 
     local _snap, hnew = setupReader.snapshotActive(car, sim)
@@ -753,7 +770,9 @@ function script.update(dt)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      state.bestCornerFeatures = cloneCornerFeats(feats)
+      if traceAnalyticsOk and #feats > 0 then
+        state.bestCornerFeatures = cloneCornerFeats(feats)
+      end
       local spanMs = 0
       if #completedTrace >= 2 then
         spanMs = completedTrace[#completedTrace].eMs - completedTrace[1].eMs

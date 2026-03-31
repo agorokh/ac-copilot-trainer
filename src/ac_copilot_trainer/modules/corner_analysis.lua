@@ -213,6 +213,8 @@ function M.buildSegments(trace, brakePoints)
         s0 = sStart,
         s1 = sEnd,
         label = (kind == "corner") and ("T" .. tostring(i)) or ("S" .. tostring(i)),
+        -- Raw brake spline for this sector (corner s0 is already offset by SPLINE_NEAR).
+        brakeSpline = wrap01(brakes[i]),
       }
     end
   end
@@ -251,6 +253,14 @@ function M.cornerFeaturesForLap(trace, segments)
         end
         -- Traction circle utilization proxy: use speed delta in sector (Phase 3 can add G-load).
         local tcUtil = math.min(1, (st.avgAbsSteer * 2.2 + st.avgBrake * 1.4 + st.avgThrottle * 0.6) / 3)
+        local brg = 0
+        if st.maxBrake > 1e-6 then
+          brg = math.min(1, (st.maxBrake - st.avgBrake) / st.maxBrake)
+        end
+        local bps = seg.brakeSpline
+        if type(bps) ~= "number" then
+          bps = s0
+        end
         out[#out + 1] = {
           label = seg.label,
           s0 = s0,
@@ -258,12 +268,12 @@ function M.cornerFeaturesForLap(trace, segments)
           entrySpeed = st.entrySpeed,
           minSpeed = st.minSpeed,
           exitSpeed = st.exitSpeed,
-          brakePointSpline = s0,
+          brakePointSpline = wrap01(bps),
           trailBrakeRatio = trailBrakeRatio,
           steerReversals = st.steerReversals,
           tractionCircleProxy = tcUtil,
           throttleAvg = st.avgThrottle,
-          brakeReleaseGradient = nil,
+          brakeReleaseGradient = brg,
         }
       end
     end
@@ -319,8 +329,9 @@ function M.consistencySummary(history)
     local se = stddev(bucket.entry)
     local sm = stddev(bucket.minS)
     local sx = stddev(bucket.exit)
-    -- Omit brake spline stddev: wrap-around can inflate spread on short tracks.
-    local spread = se * 0.35 + sm * 0.4 + sx * 0.35
+    local sb = stddev(bucket.brakeS)
+    -- Weights sum to 1.0; brake spline spread is down-weighted (wrap risk on short tracks).
+    local spread = se * 0.35 + sm * 0.30 + sx * 0.30 + sb * 0.05
     local score = math.max(0, math.min(100, 100 - spread * 0.45))
     scores[#scores + 1] = { label = lab, score = score, spread = spread }
   end
@@ -346,23 +357,40 @@ function M.styleDivergence(sessionCorners, bestCorners)
     return nil
   end
   local function pack(c)
+    local rev = math.min(1, (tonumber(c.steerReversals) or 0) / 8)
     return {
       tonumber(c.trailBrakeRatio) or 0,
-      tonumber(c.steerReversals) or 0,
+      rev,
       tonumber(c.tractionCircleProxy) or 0,
       tonumber(c.throttleAvg) or 0,
     }
   end
-  local n = math.min(#sessionCorners, #bestCorners)
-  local sum = 0
-  for i = 1, n do
-    local a, b = pack(sessionCorners[i]), pack(bestCorners[i])
-    for k = 1, #a do
-      local d = a[k] - b[k]
-      sum = sum + d * d
+  local bestByLabel = {}
+  for i = 1, #bestCorners do
+    local c = bestCorners[i]
+    local lab = c.label
+    if type(lab) == "string" and lab ~= "" then
+      bestByLabel[lab] = c
     end
   end
-  return math.min(1, math.sqrt(sum / (n * 4)) / 1.25)
+  local sum, ncmp = 0, 0
+  for i = 1, #sessionCorners do
+    local sc = sessionCorners[i]
+    local lab = sc.label
+    local bc = type(lab) == "string" and bestByLabel[lab] or nil
+    if bc then
+      local a, b = pack(sc), pack(bc)
+      for k = 1, #a do
+        local d = a[k] - b[k]
+        sum = sum + d * d
+      end
+      ncmp = ncmp + 1
+    end
+  end
+  if ncmp <= 0 then
+    return nil
+  end
+  return math.min(1, math.sqrt(sum / (ncmp * 4)) / 1.25)
 end
 
 function M.maxHistoryLaps()

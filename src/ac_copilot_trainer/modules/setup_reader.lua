@@ -72,7 +72,8 @@ function M.readIniSnapshot(path)
       end
     end
   end
-  return { path = path, keys = keys }
+  local base = path:match("[^/\\]+$") or path
+  return { path = base, keys = keys }
 end
 
 local function canonicalSetupString(snap)

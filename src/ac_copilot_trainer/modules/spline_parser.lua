@@ -106,7 +106,26 @@ function M.loadForTrack(sim)
   return M.loadFastLane(p)
 end
 
---- Nearest XZ ground distance to reference polyline (windowed scan from last index; squared dist inside loop).
+--- Squared XZ distance from point to segment AB (ground plane).
+local function distSqPointSegXZ(px, pz, ax, az, bx, bz)
+  local dx, dz = bx - ax, bz - az
+  local l2 = dx * dx + dz * dz
+  if l2 < 1e-12 then
+    local ex, ez = px - ax, pz - az
+    return ex * ex + ez * ez
+  end
+  local t = ((px - ax) * dx + (pz - az) * dz) / l2
+  if t < 0 then
+    t = 0
+  elseif t > 1 then
+    t = 1
+  end
+  local qx, qz = ax + t * dx, az + t * dz
+  local ex, ez = px - qx, pz - qz
+  return ex * ex + ez * ez
+end
+
+--- Nearest XZ distance to reference polyline (true segment distance; windowed scan from last segment index).
 ---@param ref table|nil
 ---@param px number
 ---@param py number
@@ -118,52 +137,56 @@ function M.lateralDistanceMeters(ref, px, py, pz)
   end
   local pts = ref.points
   local n = #pts
+  local nSeg = n - 1
   local WINDOW = 400
 
-  local function distSqAt(i)
-    local q = pts[i]
-    local dx, dz = px - q.x, pz - q.z
-    return dx * dx + dz * dz
+  local function distSqSeg(j)
+    local a, b = pts[j], pts[j + 1]
+    return distSqPointSegXZ(px, pz, a.x, a.z, b.x, b.z)
   end
 
-  local center = ref._latScanIdx or 1
-  if center < 1 or center > n then
+  local center = ref._latScanSegIdx
+  if center == nil and ref._latScanIdx ~= nil then
+    center = math.max(1, math.min(nSeg, ref._latScanIdx))
+  end
+  if center == nil or center < 1 or center > nSeg then
     center = 1
   end
 
   local bestD2 = math.huge
-  local bestI = center
-  local i0 = math.max(1, center - WINDOW)
-  local i1 = math.min(n, center + WINDOW)
-  for i = i0, i1 do
-    local d2 = distSqAt(i)
+  local bestJ = center
+  local j0 = math.max(1, center - WINDOW)
+  local j1 = math.min(nSeg, center + WINDOW)
+  for j = j0, j1 do
+    local d2 = distSqSeg(j)
     if d2 < bestD2 then
       bestD2 = d2
-      bestI = i
+      bestJ = j
     end
   end
 
-  if bestI <= i0 + 8 or bestI >= i1 - 8 then
-    local stride = math.max(1, math.floor(n / 2048))
-    for i = 1, n, stride do
-      local d2 = distSqAt(i)
+  if bestJ <= j0 + 8 or bestJ >= j1 - 8 then
+    local stride = math.max(1, math.floor(nSeg / 2048))
+    for j = 1, nSeg, stride do
+      local d2 = distSqSeg(j)
       if d2 < bestD2 then
         bestD2 = d2
-        bestI = i
+        bestJ = j
       end
     end
-    local lo = math.max(1, bestI - WINDOW)
-    local hi = math.min(n, bestI + WINDOW)
-    for i = lo, hi do
-      local d2 = distSqAt(i)
+    local lo = math.max(1, bestJ - WINDOW)
+    local hi = math.min(nSeg, bestJ + WINDOW)
+    for j = lo, hi do
+      local d2 = distSqSeg(j)
       if d2 < bestD2 then
         bestD2 = d2
-        bestI = i
+        bestJ = j
       end
     end
   end
 
-  ref._latScanIdx = bestI
+  ref._latScanSegIdx = bestJ
+  ref._latScanIdx = nil
   return math.sqrt(bestD2)
 end
 

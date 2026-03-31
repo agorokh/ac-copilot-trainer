@@ -113,6 +113,10 @@ function M.draw(vm)
     ui.textWrapped(vm.consistencyHud)
   end
   if vm.styleHud and vm.styleHud ~= "" then
+    if not vm.consistencyHud or vm.consistencyHud == "" then
+      ui.separator()
+      ui.text("Style vs reference")
+    end
     ui.textWrapped(vm.styleHud)
   end
 
@@ -130,6 +134,10 @@ function M.draw(vm)
     ui.textColored(rgbm(0.95, 0.75, 0.35, 1), vm.setupChangeMsg)
   end
   if vm.autoSetupLine and vm.autoSetupLine ~= "" then
+    if not vm.setupChangeMsg or vm.setupChangeMsg == "" then
+      ui.separator()
+      ui.text("Setup")
+    end
     ui.textWrapped(vm.autoSetupLine)
   end
 
