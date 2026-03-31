@@ -59,7 +59,7 @@ function M.drawLineStrip(car, line, color)
   local col = color or rgbm(0.2, 0.85, 0.95, 0.55)
   local cullSq = CULL_M * CULL_M
   pcall(function()
-    -- CSP SDK: render.debugLine(from, to, color, colorEnd) — NOT render.line
+    -- CSP SDK: render.debugLine(from, to, color, colorEnd); same rgbm at both ends for a solid segment.
     if not render.debugLine then
       return
     end
@@ -69,7 +69,7 @@ function M.drawLineStrip(car, line, color)
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-        render.debugLine(vec3(a.x, a.y + 0.05, a.z), vec3(b.x, b.y + 0.05, b.z), col)
+        render.debugLine(vec3(a.x, a.y + 0.05, a.z), vec3(b.x, b.y + 0.05, b.z), col, col)
       end
     end
   end)
