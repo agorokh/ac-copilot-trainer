@@ -13,3 +13,4 @@ relates_to:
 Architecture Decision Records for this vault.
 
 - [local-reviewer-model](local-reviewer-model.md) — Tier 3 local reviewer model scope and phases (epic #26).
+- [csp-api-field-safety](csp-api-field-safety.md) — CSP C-struct field access rules, valid/invalid fields, render API (issue #24).

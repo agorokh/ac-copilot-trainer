@@ -26,9 +26,10 @@ end
 ---@param lastFeats table[]|nil
 ---@param bestFeats table[]|nil
 ---@param cons table|nil consistencySummary()
----@param throttleHint string|nil
+---@param throttleAnalysis table|nil from throttle_detection.analyzeTrace (fullThrottlePct, coastingMs, reversals, …)
+---@param lapAnalysisOk boolean|nil true when this lap had analyzable trace data for corner-vs-ref hints
 ---@return string[] up to 3 lines
-function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
+function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis, lapAnalysisOk)
   local out = {}
   local worst = cons and cons.worstThree
   if type(worst) == "table" then
@@ -64,10 +65,28 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
       end
     end
   end
-  if #out < 3 and throttleHint and throttleHint ~= "" then
-    local coast = throttleHint:match("coast ([%d%.]+)s")
-    if coast and tonumber(coast) and tonumber(coast) >= 1.2 then
-      out[#out + 1] = string.format("Coasting %.1fs last lap — shorten gaps to throttle", tonumber(coast))
+  if #out < 3 and throttleAnalysis and type(throttleAnalysis) == "table" then
+    local coastSec = (tonumber(throttleAnalysis.coastingMs) or 0) / 1000
+    if coastSec >= 1.2 then
+      out[#out + 1] = string.format("Coasting %.1fs last lap — shorten gaps to throttle", coastSec)
+    end
+    local ft = tonumber(throttleAnalysis.fullThrottlePct)
+    if #out < 3 and ft and ft < 40 then
+      out[#out + 1] = string.format("Full throttle only %d%% of lap — focus on earlier power application", math.floor(ft + 0.5))
+    end
+    local rev = tonumber(throttleAnalysis.reversals)
+    if #out < 3 and rev and rev > 8 then
+      out[#out + 1] = string.format("Throttle reversals: %d — try smoother inputs", rev)
+    end
+  end
+  -- Fallback: when no corner-vs-reference hints and no throttle hints generated, give a status line
+  if #out == 0 then
+    if not bestFeats or #bestFeats == 0 then
+      out[#out + 1] = "Building reference — complete more laps for corner-by-corner coaching"
+    elseif lapAnalysisOk then
+      out[#out + 1] = "Lap matched reference well — keep it consistent"
+    else
+      out[#out + 1] = "Lap recorded — need a full telemetry lap for corner-by-corner coaching"
     end
   end
   while #out > 3 do

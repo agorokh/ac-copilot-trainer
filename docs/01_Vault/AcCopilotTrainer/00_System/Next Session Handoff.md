@@ -16,23 +16,30 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-8-corner-analysis-phase2` — GitHub **#8** (corner segmentation, ML-oriented features, consistency, style divergence stub, `fast_lane.ai` reader, racing line strip, tires, setup snapshot).
-- **PR #21:** https://github.com/agorokh/ac-copilot-trainer/pull/21 — **Fixes #8**, **ready**; confirm CI + GraphQL `reviewThreads` after cooldown.
-- **Follow-up:** run **pr-resolution-follow-up** (GraphQL `reviewThreads` full pagination, **600s** bot cooldown); merge when CI green and threads resolved.
-- **Persistence:** JSON **v3** (`persistence.lua`): `trackSegments`, `lapFeatureHistory`, `setupHash`, `setupSnapshot`, `bestCornerFeatures` (plus existing v2 fields).
-- **Deferred (issue #8):** in-app K-means/DBSCAN; confirmed CSP setup auto-apply API for Part I; tune `spline_parser` stride/XYZ offset per real `fast_lane.ai` variants.
-- **Windows:** `C:\Program Files\GitHub CLI\gh.exe`, `C:\Program Files\Git\bin\git.exe`; local **ci-fast** without bash: `ruff` + `pytest` + `bandit` + `check_agent_forbidden.py` (policy script needs bash/Git Bash).
+- **Branch:** `fix/issue-24-visuals-coaching` — **PR #27** open: https://github.com/agorokh/ac-copilot-trainer/pull/27
+- **Issue #24:** CSP struct fixes (PR #25 merged), render fixes (PR #26 merged), visual+coaching improvements (PR #27 open — needs merge + in-game test).
+- **In-game status:** App runs without crashes. Racing line visible (faint). Brake markers not yet confirmed visible. Coaching hints not yet confirmed showing.
 
 ## What was delivered this session
 
-- New modules: `corner_analysis.lua`, `spline_parser.lua`, `racing_line.lua`, `tire_monitor.lua`, `setup_reader.lua`; wired in `ac_copilot_trainer.lua`; HUD + `Draw3D` overlays; telemetry lap trace includes **steer** for corner features.
-- App **0.3.0** (`manifest.ini` + HUD banner).
+- **PR #25** (merged): Fixed root crash — CSP C-struct field access (`sim.trackName`, `car.id`, etc.) replaced with `ac.getTrackID()` etc. via `csp_helpers.lua` module.
+- **PR #26** (merged): Fixed `sim.trackLengthMeters` → `sim.trackLengthM`, `render.line` → `render.debugLine`, pcall-wrapped `car.velocity`, removed dead `car.steering`, added Draw3D diagnostics.
+- **PR #27** (open): Brake markers now use cross+sphere+vertical pillar (red/orange, radius 1.2, 300m range). Racing line draws 5-layer ribbon. Coaching hints have fallback messages + throttle analysis + 15s hold. Brighter colors throughout.
 
-## What remains
+## CSP API learnings
 
-- Mark PR **ready**, wait for CI, resolve review threads.
-- In-game: validate `render.line` / `vec3` on target CSP; validate `fast_lane.ai` parse layout for your tracks.
+Canonical rules (C-struct throws, valid fields, render API, globals) live in **[`01_Decisions/csp-api-field-safety.md`](../01_Decisions/csp-api-field-safety.md)** — read that ADR before changing `sim`/`car`/`render` usage; avoid duplicating the field lists here.
 
-## Blockers
+## What remains (issue #24 acceptance — in-game)
 
-- None in repo; runtime verification needs Assetto Corsa + CSP.
+- **Visuals (PR #27):** brake markers visible; racing-line ribbon visible; coaching HUD lines show as expected.
+- **Render fallback:** if `render.debugSphere` / `render.debugCross` are invisible on your CSP build, try `render.debugText` labels or confirm CSP version.
+- **Best-lap / reference:** completing a faster lap updates best reference trace and related HUD where applicable; values survive a session as designed.
+- **Brake points:** recording during laps; HUD counts for best/last/session look sane after several laps.
+- **Persistence:** save/load (disk snapshot) restores expected state after restart or rejoin (no silent data loss).
+- **Sidecar:** with `config.wsSidecarUrl` set and sidecar running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`), WebSocket connects and errors are visible if misconfigured.
+- **Epic follow-up:** issues #7, #8, #9 — next phases per Project State.
+
+## Blockers / dependencies
+
+- **Assetto Corsa + CSP runtime** is required for in-game validation (markers, ribbon, coaching HUD); this cannot run in CI and blocks confirming PR #27 behavior until tested locally.

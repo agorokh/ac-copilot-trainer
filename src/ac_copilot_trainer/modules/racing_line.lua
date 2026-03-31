@@ -1,4 +1,5 @@
 -- Subsampled driven racing line + optional 3D strip (issue #8 Part F).
+-- Debug draw budget is not coordinated with track_markers; cost is bounded mainly by distance culling (CULL_M).
 
 local M = {}
 
@@ -45,22 +46,25 @@ function M.traceToLine(trace)
   return out
 end
 
+--- Height offsets for "thicker" multi-line rendering (debug lines are 1px; stacking
+--- at different Y levels makes the strip visible from cockpit/chase cam).
+local LINE_Y_OFFSETS = { 0.04, 0.10, 0.16, 0.22, 0.28 }
+
 ---@param car ac.StateCar|nil
 ---@param line table[]|nil
----@param color rgbm|nil
+---@param color rgbm segment color (required; callers must pass explicit rgbm)
 function M.drawLineStrip(car, line, color)
-  if not car or not car.position or not line or #line < 2 then
+  if not car or not car.position or not line or #line < 2 or not color then
     return
   end
   if not render then
     return
   end
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
-  local col = color or rgbm(0.2, 0.85, 0.95, 0.55)
+  local col = color
   local cullSq = CULL_M * CULL_M
   pcall(function()
-    -- CSP SDK: render.debugLine(from, to, color, colorEnd); same rgbm at both ends for a solid segment.
-    if not render.debugLine then
+    if not render.debugLine or not vec3 then
       return
     end
     for i = 1, #line - 1 do
@@ -69,7 +73,15 @@ function M.drawLineStrip(car, line, color)
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-        render.debugLine(vec3(a.x, a.y + 0.05, a.z), vec3(b.x, b.y + 0.05, b.z), col, col)
+        -- Fresh vec3 per segment/offset so the renderer cannot retain stale references (mutable reuse broke layering).
+        for j = 1, #LINE_Y_OFFSETS do
+          local yOff = LINE_Y_OFFSETS[j]
+          render.debugLine(
+            vec3(a.x, a.y + yOff, a.z),
+            vec3(b.x, b.y + yOff, b.z),
+            col, col
+          )
+        end
       end
     end
   end)

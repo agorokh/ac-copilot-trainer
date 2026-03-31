@@ -40,7 +40,7 @@ local config = {
   racingLineMode = "best",
   --- Verbose: log Draw3D/data counts every ~2s to `ac.log` (troubleshooting only).
   enableDraw3DDiagnostics = false,
-  coachingHoldSeconds = 8,
+  coachingHoldSeconds = 15,
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
 }
@@ -778,7 +778,7 @@ function script.update(dt)
       state.styleHud = state.styleHud or ""
     end
 
-    state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, state.lastThrottleSummary)
+    state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
     state.coachingUntil = (sim.time or 0) + config.coachingHoldSeconds
 
     local _snap, hnew = setupReader.snapshotActive(car, sim)
@@ -941,9 +941,9 @@ function script.Draw3D(_dt)
   trackMarkers.draw(c, state.brakingPoints.best, state.brakingPoints.last)
   local mode = config.racingLineMode or "best"
   if mode == "best" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.15, 0.92, 0.45, 0.5))
+    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.1, 1.0, 0.4, 0.85))
   end
   if mode == "last" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.95, 0.82, 0.15, 0.45))
+    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(1.0, 0.85, 0.1, 0.75))
   end
 end
