@@ -2,28 +2,59 @@
 
 local M = {}
 
+local ch = require("csp_helpers")
+
 local APP_SUBDIR = "ac_copilot_trainer"
 local DATA_VERSION = 3
 
-local function safeName(s)
-  s = tostring(s or "unknown"):gsub("[^%w%.%-_]+", "_")
-  if s == "" then
-    s = "unknown"
+--- Best-effort track/car labels from structs when globals are missing (e.g. menu save); one pcall per field (C-structs throw per-field).
+local function tryTrackFromSim(sim)
+  if not sim then
+    return nil
   end
-  return s
+  for _, key in ipairs({ "trackName", "track", "trackConfiguration" }) do
+    local ok, v = pcall(function()
+      return sim[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return tostring(v)
+    end
+  end
+  return nil
 end
 
+local function tryCarFromCar(car)
+  if not car then
+    return nil
+  end
+  for _, key in ipairs({ "id", "name", "driverName" }) do
+    local ok, v = pcall(function()
+      return car[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return tostring(v)
+    end
+  end
+  return nil
+end
+
+--- Session filename key: car id + track id. Prefer `ac.get*` globals; fall back to `car`/`sim` when globals yield unknown (menu / edge cases).
 function M.sessionKey(car, sim)
-  local track = "unknown_track"
-  if sim then
-    track = sim.trackName or sim.track or sim.trackConfiguration or track
+  local track = ch.trackIdRawFromGlobals() or "unknown_track"
+  local carKey = ch.carIdRawFromGlobals() or "unknown_car"
+  if track == "unknown_track" then
+    local t2 = tryTrackFromSim(sim)
+    if t2 then
+      track = t2
+    end
   end
-  local carKey = "unknown_car"
-  if car then
-    -- CSP ac.StateCar: prefer stable id/name over driver display name.
-    carKey = car.id or car.name or car.driverName or carKey
+  if carKey == "unknown_car" then
+    local c2 = tryCarFromCar(car)
+    if c2 then
+      carKey = c2
+    end
   end
-  return safeName(carKey) .. "__" .. safeName(track)
+  return ch.sanitizeId(carKey, "unknown") .. "__" .. ch.sanitizeId(track, "unknown")
 end
 
 function M.dataDir()

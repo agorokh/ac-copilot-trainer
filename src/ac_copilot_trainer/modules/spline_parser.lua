@@ -3,6 +3,8 @@
 
 local M = {}
 
+local ch = require("csp_helpers")
+
 local HEADER = 16
 local STRIDE = 92
 local XYZ_OFF_IN_RECORD = 0 -- try XYZ at start of payload; override if your files differ
@@ -48,28 +50,18 @@ local function readPointAt(s, base1)
 end
 
 --- Ordered candidates: layout-specific first, then track root (parse may still fail per file).
----@param sim ac.StateSim|nil
+---@param _sim ac.StateSim|nil unused (paths use global CSP APIs + Content folder)
 ---@return string[]
-local function fastLaneCandidatePaths(sim)
-  if not sim then
-    return {}
-  end
+local function fastLaneCandidatePaths(_sim)
   local ok, folder = pcall(function()
     return ac.getFolder(ac.FolderID.Content)
   end)
   if not ok or not folder or folder == "" then
     return {}
   end
-  local function sanitizeId(s, fallback)
-    s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
-    if s == "" then
-      s = fallback or "unknown"
-    end
-    return s
-  end
-  local trackId = sanitizeId(sim.track, "unknown")
-  local layoutRaw = sim.trackConfiguration
-  local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
+  local trackId = ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local layoutRaw = ch.safeTrackLayoutRaw()
+  local layoutId = layoutRaw ~= nil and ch.sanitizeId(layoutRaw, "") or ""
   local root = folder .. "/tracks/" .. trackId .. "/ai/fast_lane.ai"
   local paths = {}
   if layoutId ~= "" and layoutId ~= "unknown" then
