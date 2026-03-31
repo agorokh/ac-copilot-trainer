@@ -39,7 +39,7 @@ local function brakeListSig(list)
 end
 
 local function markerCacheKey(x, y, z)
-  return string.format("%g|%g|%g", x, y, z)
+  return string.format("%.3f|%.3f|%.3f", x, y, z)
 end
 
 local function distSq(ax, ay, az, bx, by, bz)
@@ -69,8 +69,14 @@ local function snapToTrack(px, py, pz)
     end
     return physics.raycastTrack(o, d)
   end)
-  if ok and hit and type(hit) == "table" and hit.position and hit.position.y then
-    y = hit.position.y + 0.15
+  if ok and hit and type(hit) == "table" and hit.position then
+    local okPosY, posY = pcall(function()
+      local pos = hit.position ---@type any
+      return pos.y
+    end)
+    if okPosY and type(posY) == "number" then
+      y = posY + 0.15
+    end
   elseif ok and hit and type(hit) == "userdata" then
     local okY, yy = pcall(function()
       return hit.y
@@ -111,7 +117,7 @@ function M.draw(car, best, last)
     end
     for i = 1, #list do
       local p = list[i]
-      if p and p.px and p.py and p.pz then
+      if p and type(p.px) == "number" and type(p.py) == "number" and type(p.pz) == "number" then
         local dsq = distSq(cx, cy, cz, p.px, p.py, p.pz)
         local d = math.sqrt(dsq)
         if d <= FADE_FAR + 1 then
