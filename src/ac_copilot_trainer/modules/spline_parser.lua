@@ -24,13 +24,12 @@ local function readF32LE(s, i)
   if exp == 255 then
     return mant == 0 and sign * math.huge or 0 / 0
   end
-  local e = exp - 127
-  local m
   if exp == 0 then
-    m = mant / 8388608
-  else
-    m = mant / 8388608 + 1
+    -- Subnormal: exponent is fixed at -126, implicit leading 0.
+    return sign * math.ldexp(mant / 8388608, -126)
   end
+  local e = exp - 127
+  local m = mant / 8388608 + 1
   return sign * math.ldexp(m, e)
 end
 
@@ -78,14 +77,15 @@ local function guessFastLanePath(sim)
   end
 
   local root = folder .. "/tracks/" .. trackId .. "/ai/fast_lane.ai"
-  if existsReadable(root) then
-    return root
-  end
+  -- When a layout is active, prefer layout-specific AI line so we do not load a stale root fast_lane.
   if layoutId ~= "" and layoutId ~= "unknown" then
     local laid = folder .. "/tracks/" .. trackId .. "/" .. layoutId .. "/ai/fast_lane.ai"
     if existsReadable(laid) then
       return laid
     end
+  end
+  if existsReadable(root) then
+    return root
   end
   return nil
 end

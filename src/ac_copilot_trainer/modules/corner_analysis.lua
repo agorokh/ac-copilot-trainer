@@ -72,9 +72,8 @@ end
 ---@param wrap boolean
 ---@return table|nil stats
 local function statsInSplineRange(trace, s0, s1, wrap)
-  local n, sumSpd, minSpd, maxBrk, sumBrk, sumThr, sumAbsSteer = 0, 0, math.huge, 0, 0, 0, 0
-  local revs = 0
-  local lastSteer = nil
+  s0, s1 = wrap01(s0), wrap01(s1)
+  local samples = {}
   for i = 1, #trace do
     local p = trace[i]
     local sp = p.spline
@@ -87,57 +86,60 @@ local function statsInSplineRange(trace, s0, s1, wrap)
         inside = sp >= s0 and sp < s1
       end
       if inside then
-        n = n + 1
-        local v = tonumber(p.speed) or 0
-        sumSpd = sumSpd + v
-        if v < minSpd then
-          minSpd = v
+        local ord
+        if wrap then
+          if sp >= s0 then
+            ord = sp - s0
+          else
+            ord = (1 - s0) + sp
+          end
+        else
+          ord = sp - s0
         end
-        local b = tonumber(p.brake) or 0
-        if b > maxBrk then
-          maxBrk = b
-        end
-        sumBrk = sumBrk + b
-        sumThr = sumThr + (tonumber(p.throttle) or 0)
-        local st = tonumber(p.steer)
-        if st == nil then
-          st = 0
-        end
-        sumAbsSteer = sumAbsSteer + math.abs(st)
-        if lastSteer ~= nil and (st * lastSteer < 0) and (math.abs(st - lastSteer) > 0.08) then
-          revs = revs + 1
-        end
-        lastSteer = st
+        samples[#samples + 1] = { ord = ord, p = p }
       end
     end
   end
-  if n <= 0 then
+  if #samples == 0 then
     return nil
+  end
+  table.sort(samples, function(a, b)
+    return a.ord < b.ord
+  end)
+
+  local n, sumSpd, minSpd, maxBrk, sumBrk, sumThr, sumAbsSteer = 0, 0, math.huge, 0, 0, 0, 0
+  local revs = 0
+  local lastSteer = nil
+  for i = 1, #samples do
+    local p = samples[i].p
+    n = n + 1
+    local v = tonumber(p.speed) or 0
+    sumSpd = sumSpd + v
+    if v < minSpd then
+      minSpd = v
+    end
+    local b = tonumber(p.brake) or 0
+    if b > maxBrk then
+      maxBrk = b
+    end
+    sumBrk = sumBrk + b
+    sumThr = sumThr + (tonumber(p.throttle) or 0)
+    local st = tonumber(p.steer)
+    if st == nil then
+      st = 0
+    end
+    sumAbsSteer = sumAbsSteer + math.abs(st)
+    if lastSteer ~= nil and (st * lastSteer < 0) and (math.abs(st - lastSteer) > 0.08) then
+      revs = revs + 1
+    end
+    lastSteer = st
   end
   if minSpd == math.huge then
     minSpd = 0
   end
-  local entrySpd, exitSpd = nil, nil
-  for i = 1, #trace do
-    local p = trace[i]
-    local sp = p.spline
-    if type(sp) == "number" then
-      sp = wrap01(sp)
-      local inside
-      if wrap then
-        inside = sp >= s0 or sp < s1
-      else
-        inside = sp >= s0 and sp < s1
-      end
-      if inside then
-        local v = tonumber(p.speed) or 0
-        if entrySpd == nil then
-          entrySpd = v
-        end
-        exitSpd = v
-      end
-    end
-  end
+  local firstP, lastP = samples[1].p, samples[#samples].p
+  local entrySpd = tonumber(firstP.speed) or 0
+  local exitSpd = tonumber(lastP.speed) or 0
   return {
     n = n,
     avgSpeed = sumSpd / n,
@@ -147,8 +149,8 @@ local function statsInSplineRange(trace, s0, s1, wrap)
     avgThrottle = sumThr / n,
     avgAbsSteer = sumAbsSteer / n,
     steerReversals = revs,
-    entrySpeed = entrySpd or (sumSpd / n),
-    exitSpeed = exitSpd or (sumSpd / n),
+    entrySpeed = entrySpd,
+    exitSpeed = exitSpd,
   }
 end
 
@@ -325,14 +327,16 @@ function M.consistencySummary(history)
     return math.sqrt(v / (n - 1))
   end
   local scores = {}
+  -- Dimensionless spread: speed stddevs scaled to ~O(1); brake spline stddev in [0,~0.5].
+  local speedScale = 120
   for lab, bucket in pairs(byLabel) do
     local se = stddev(bucket.entry)
     local sm = stddev(bucket.minS)
     local sx = stddev(bucket.exit)
     local sb = stddev(bucket.brakeS)
     -- Weights sum to 1.0; brake spline spread is down-weighted (wrap risk on short tracks).
-    local spread = se * 0.35 + sm * 0.30 + sx * 0.30 + sb * 0.05
-    local score = math.max(0, math.min(100, 100 - spread * 0.45))
+    local spread = (se / speedScale) * 0.35 + (sm / speedScale) * 0.30 + (sx / speedScale) * 0.30 + sb * 0.05
+    local score = math.max(0, math.min(100, 100 - spread * 45))
     scores[#scores + 1] = { label = lab, score = score, spread = spread }
   end
   table.sort(scores, function(a, b)
