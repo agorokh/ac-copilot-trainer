@@ -50,10 +50,10 @@ local function guessSetupIniPath(car, sim)
     end
     return s
   end
-  local carId = sanitizeId(car.id or car.name, "unknown")
-  -- Folder layout matches content: track id from sim.track; optional layout subfolder from sim.trackConfiguration.
-  local trackId = sanitizeId(sim.track, "unknown")
-  local layoutRaw = sim.trackConfiguration
+  local carId = sanitizeId(ac.getCarID(0), "unknown")
+  -- Use CSP global API (C-structs throw on invalid field access, not nil).
+  local trackId = sanitizeId(ac.getTrackID(), "unknown")
+  local layoutRaw = ac.getTrackLayout and ac.getTrackLayout() or nil
   local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
   local trackRoot = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
   local bases = {}
@@ -168,8 +168,8 @@ function M.tryAutoLoadCopilotSetup(car, sim, autoLoad)
   if not okDoc or not doc then
     return nil
   end
-  local carId = tostring(car.id or car.name or "unknown"):gsub("[^%w%.%-_]+", "_")
-  local trackId = tostring(sim.track or sim.trackName or "unknown"):gsub("[^%w%.%-_]+", "_")
+  local carId = tostring(ac.getCarID(0) or "unknown"):gsub("[^%w%.%-_]+", "_")
+  local trackId = tostring(ac.getTrackID() or "unknown"):gsub("[^%w%.%-_]+", "_")
   local dir = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
   -- Without a portable directory list in Lua 5.1, surface intent for operators.
   return string.format("Copilot setup dir: %s (%s*.ini)", dir, COPILOT_GLOB)

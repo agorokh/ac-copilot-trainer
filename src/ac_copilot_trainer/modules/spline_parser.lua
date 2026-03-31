@@ -67,8 +67,8 @@ local function fastLaneCandidatePaths(sim)
     end
     return s
   end
-  local trackId = sanitizeId(sim.track, "unknown")
-  local layoutRaw = sim.trackConfiguration
+  local trackId = sanitizeId(ac.getTrackID(), "unknown")
+  local layoutRaw = ac.getTrackLayout and ac.getTrackLayout() or nil
   local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
   local root = folder .. "/tracks/" .. trackId .. "/ai/fast_lane.ai"
   local paths = {}

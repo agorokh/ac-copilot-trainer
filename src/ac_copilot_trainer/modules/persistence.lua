@@ -14,15 +14,10 @@ local function safeName(s)
 end
 
 function M.sessionKey(car, sim)
-  local track = "unknown_track"
-  if sim then
-    track = sim.trackName or sim.track or sim.trackConfiguration or track
-  end
-  local carKey = "unknown_car"
-  if car then
-    -- CSP ac.StateCar: prefer stable id/name over driver display name.
-    carKey = car.id or car.name or car.driverName or carKey
-  end
+  -- CSP C-structs throw on invalid field access (not nil like Lua tables).
+  -- Use the global CSP API functions (verified from PocketTechnician, CMRT-Essential-HUD).
+  local track = ac.getTrackFullID("/") or ac.getTrackID() or "unknown_track"
+  local carKey = ac.getCarID(0) or "unknown_car"
   return safeName(carKey) .. "__" .. safeName(track)
 end
 
