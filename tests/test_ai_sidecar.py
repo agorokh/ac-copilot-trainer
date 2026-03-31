@@ -9,6 +9,6 @@ def test_ai_sidecar_subpackage_importable() -> None:
     importlib.import_module("tools.ai_sidecar")
 
 
-def test_ai_sidecar_server_import_requires_websockets() -> None:
+def test_ai_sidecar_server_importable_when_websockets_installed() -> None:
     pytest.importorskip("websockets")
     importlib.import_module("tools.ai_sidecar.server")

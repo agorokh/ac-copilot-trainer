@@ -39,7 +39,7 @@ local config = {
   autoLoadSetup = true,
   racingLineMode = "best",
   coachingHoldSeconds = 8,
-  --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`).
+  --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
 }
 
@@ -817,12 +817,14 @@ function script.update(dt)
     state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
     state.postLapUntil = (sim.time or 0) + config.postLapHoldSeconds
 
-    wsBridge.sendJson({
-      event = "lap_complete",
-      lap = state.lapsCompleted,
-      lapTimeMs = lastMs,
-      coachingHints = state.coachingLines,
-    })
+    if lastMs > 0 then
+      wsBridge.sendJson({
+        event = "lap_complete",
+        lap = state.lapsCompleted,
+        lapTimeMs = lastMs,
+        coachingHints = state.coachingLines,
+      })
+    end
 
     state.sectorIndex = 1
     state.sectorStartSimT = sim.time or 0

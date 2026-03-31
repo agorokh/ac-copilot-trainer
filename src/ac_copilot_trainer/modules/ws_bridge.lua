@@ -4,13 +4,14 @@ local M = {}
 
 local sock ---@type any
 local url ---@type string|nil
-local lastTry = 0
 local RECONNECT_SEC = 5
+local lastTry = -RECONNECT_SEC
 
 ---@param u string|nil full ws URL, e.g. ws://127.0.0.1:8765
 function M.configure(u)
   url = u
   sock = nil
+  lastTry = -RECONNECT_SEC
 end
 
 local function jsonEncode(t)
@@ -66,13 +67,17 @@ function M.sendJson(payload)
   if not js or not sock then
     return
   end
-  pcall(function()
+  local sendOk = pcall(function()
     if sock.send then
       sock:send(js)
     elseif sock.write then
       sock:write(js)
     end
   end)
+  if not sendOk then
+    sock = nil
+    lastTry = -RECONNECT_SEC
+  end
 end
 
 return M

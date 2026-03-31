@@ -44,7 +44,7 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
           local en, bn = tonumber(c.entrySpeed), tonumber(b.entrySpeed)
           local mn, mb = tonumber(c.minSpeed), tonumber(b.minSpeed)
           if en and bn and en > bn + 5 then
-            out[#out + 1] = string.format("%s: entry %.0f vs ref %.0f km/h — try braking slightly later", lab, en, bn)
+            out[#out + 1] = string.format("%s: entry %.0f vs ref %.0f km/h — try braking slightly earlier", lab, en, bn)
           elseif mn and mb and mn + 4 < mb then
             out[#out + 1] = string.format("%s: min speed %.0f vs ref %.0f — carry more mid-corner", lab, mn, mb)
           elseif mn and mb and mn > mb + 6 then
