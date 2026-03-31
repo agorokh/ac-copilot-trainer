@@ -135,17 +135,37 @@ function M.draw(car, best, last)
   table.sort(items, function(a, b)
     return a.d < b.d
   end)
-  local hasDebugLine = render.debugLine ~= nil
-  -- Some CSP builds lack debug* helpers but still expose drawSphere.
-  local useLegacyDrawSphere = not hasDebugLine and type(render.drawSphere) == "function"
-  if not hasDebugLine and not useLegacyDrawSphere then
+  local hasDebugLine = type(render.debugLine) == "function"
+  local hasDebugSphere = type(render.debugSphere) == "function"
+  local hasDebugCross = type(render.debugCross) == "function"
+  local hasLegacyDrawSphere = type(render.drawSphere) == "function"
+  local hasAnyPrimitive = hasDebugLine or hasDebugSphere or hasDebugCross or hasLegacyDrawSphere
+  if not hasAnyPrimitive then
     return
   end
-  -- Each marker uses up to ~7 debug calls (5 lines + sphere + cross); budget accordingly.
-  local primitivesPerMarker = 5
-  if render.debugSphere then primitivesPerMarker = primitivesPerMarker + 1 end
-  if render.debugCross then primitivesPerMarker = primitivesPerMarker + 1 end
-  if useLegacyDrawSphere then primitivesPerMarker = 1 end
+  -- Prefer debug* over legacy drawSphere when both exist; legacy-only when no debug* APIs.
+  local legacySphereOnly = hasLegacyDrawSphere and not hasDebugLine and not hasDebugSphere and not hasDebugCross
+  local primitivesPerMarker
+  if legacySphereOnly then
+    primitivesPerMarker = 1
+  elseif hasDebugLine then
+    primitivesPerMarker = 5
+    if hasDebugSphere or (hasLegacyDrawSphere and not hasDebugSphere) then
+      primitivesPerMarker = primitivesPerMarker + 1
+    end
+    if hasDebugCross then
+      primitivesPerMarker = primitivesPerMarker + 1
+    end
+  else
+    primitivesPerMarker = 0
+    if hasDebugSphere or (hasLegacyDrawSphere and not hasDebugSphere) then
+      primitivesPerMarker = primitivesPerMarker + 1
+    end
+    if hasDebugCross then
+      primitivesPerMarker = primitivesPerMarker + 1
+    end
+    primitivesPerMarker = math.max(1, primitivesPerMarker)
+  end
   local markerBudget = math.max(1, math.floor(MAX_DEBUG_PRIMITIVES / primitivesPerMarker))
   local nDraw = math.min(#items, MAX_MARKERS, markerBudget)
   for i = 1, nDraw do
@@ -179,44 +199,43 @@ function M.draw(car, best, last)
         sy = snapToTrack(it.x, it.y, it.z)
         snapY[ck] = sy
       end
-      -- Each render call gets its own pcall: if debugCross throws (arg mismatch
-      -- on some CSP builds), debugLine must still execute — it is proven to work.
-      if not vec3 then
-        -- skip
-      else
-        local c = vec3(it.x, sy, it.z)
-        if useLegacyDrawSphere and render.drawSphere then
-          pcall(render.drawSphere, c, r, col)
-        else
-          -- PRIMARY: line-based marker (debugLine is confirmed working).
-          -- Vertical pillar (3 m tall)
-          if render.debugLine then
-            pcall(render.debugLine, c, vec3(it.x, sy + 3.5, it.z), col, col)
-            -- X-cross at marker height via two diagonal lines
-            local arm = r * 0.7
-            pcall(render.debugLine,
-              vec3(it.x - arm, sy + 0.3, it.z - arm),
-              vec3(it.x + arm, sy + 0.3, it.z + arm), col, col)
-            pcall(render.debugLine,
-              vec3(it.x - arm, sy + 0.3, it.z + arm),
-              vec3(it.x + arm, sy + 0.3, it.z - arm), col, col)
-            -- Second X-cross higher up for visibility
-            pcall(render.debugLine,
-              vec3(it.x - arm, sy + 1.5, it.z - arm),
-              vec3(it.x + arm, sy + 1.5, it.z + arm), col, col)
-            pcall(render.debugLine,
-              vec3(it.x - arm, sy + 1.5, it.z + arm),
-              vec3(it.x + arm, sy + 1.5, it.z - arm), col, col)
-          end
-          -- BONUS: sphere + cross if available (each individually pcall-guarded)
-          if render.debugSphere then
-            pcall(render.debugSphere, c, r * 0.8, col)
-          end
-          if render.debugCross then
-            pcall(render.debugCross, c, r, col)
-          end
+      -- Whole marker block in one pcall so vec3/render API mismatches on odd CSP builds do not abort M.draw.
+      pcall(function()
+        if not vec3 then
+          return
         end
-      end
+        local c = vec3(it.x, sy, it.z)
+        if legacySphereOnly then
+          pcall(render.drawSphere, c, r, col)
+          return
+        end
+        if hasDebugLine then
+          -- PRIMARY: line-based marker when debugLine exists.
+          -- Vertical pillar (3.5 m tall)
+          pcall(render.debugLine, c, vec3(it.x, sy + 3.5, it.z), col, col)
+          local arm = r * 0.7
+          pcall(render.debugLine,
+            vec3(it.x - arm, sy + 0.3, it.z - arm),
+            vec3(it.x + arm, sy + 0.3, it.z + arm), col, col)
+          pcall(render.debugLine,
+            vec3(it.x - arm, sy + 0.3, it.z + arm),
+            vec3(it.x + arm, sy + 0.3, it.z - arm), col, col)
+          pcall(render.debugLine,
+            vec3(it.x - arm, sy + 1.5, it.z - arm),
+            vec3(it.x + arm, sy + 1.5, it.z + arm), col, col)
+          pcall(render.debugLine,
+            vec3(it.x - arm, sy + 1.5, it.z + arm),
+            vec3(it.x + arm, sy + 1.5, it.z - arm), col, col)
+        end
+        if hasDebugSphere then
+          pcall(render.debugSphere, c, r * 0.8, col)
+        elseif hasLegacyDrawSphere then
+          pcall(render.drawSphere, c, r, col)
+        end
+        if hasDebugCross then
+          pcall(render.debugCross, c, r, col)
+        end
+      end)
     end
   end
 end
