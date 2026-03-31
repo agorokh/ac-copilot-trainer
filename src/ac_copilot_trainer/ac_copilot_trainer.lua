@@ -38,6 +38,8 @@ local config = {
   sectorMessageSeconds = 3,
   autoLoadSetup = true,
   racingLineMode = "best",
+  --- Verbose: log Draw3D/data counts every ~2s to `ac.log` (troubleshooting only).
+  enableDraw3DDiagnostics = false,
   coachingHoldSeconds = 8,
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
@@ -445,7 +447,9 @@ local function trackLengthMeters(sim0)
   if not sim0 then
     return nil
   end
-  local tl = tonumber(sim0.trackLengthMeters) or tonumber(sim0.trackLength) or tonumber(sim0.trackLengthMeter)
+  -- CSP ac.StateSim uses trackLengthM (confirmed from CMRT-Essential-HUD).
+  -- C-structs throw on invalid fields, so only access the known-valid one.
+  local tl = tonumber(sim0.trackLengthM)
   if tl and tl > 50 then
     return tl
   end
@@ -701,7 +705,8 @@ function script.update(dt)
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(sim.time or 0)
     resetDeltaSmoother()
-    local lastMs = car.previousLapTimeMs or car.lastLapTimeMs or 0
+    -- car.previousLapTimeMs is valid; car.lastLapTimeMs may not exist on the C-struct (throws, not nil).
+    local lastMs = car.previousLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
 
     local s3 = (state.sectorIndex == 3 and state.sectorStartSimT) and ((sim.time - state.sectorStartSimT) * 1000) or nil
@@ -908,6 +913,31 @@ function script.Draw3D(_dt)
     return
   end
   local c = ac.getCar(0)
+
+  if config.enableDraw3DDiagnostics then
+    if not state._draw3dLogT then state._draw3dLogT = 0 end
+    state._draw3dLogT = state._draw3dLogT + (_dt or 0)
+    if state._draw3dLogT > 2.0 then
+      state._draw3dLogT = 0
+      local bestN = state.brakingPoints and state.brakingPoints.best and #state.brakingPoints.best or -1
+      local lastN = state.brakingPoints and state.brakingPoints.last and #state.brakingPoints.last or -1
+      local bestLineN = state.racingBestLine and #state.racingBestLine or -1
+      local lastLineN = state.racingLastLine and #state.racingLastLine or -1
+      local hasVec3 = vec3 ~= nil
+      local hasDbgSphere = render and render.debugSphere ~= nil
+      local hasDbgLine = render and render.debugLine ~= nil
+      local mode0 = config.racingLineMode or "best"
+      ac.log("[COPILOT] Draw3D: best_bp=" .. tostring(bestN)
+        .. " last_bp=" .. tostring(lastN)
+        .. " bestLine=" .. tostring(bestLineN)
+        .. " lastLine=" .. tostring(lastLineN)
+        .. " mode=" .. mode0
+        .. " vec3=" .. tostring(hasVec3)
+        .. " debugSphere=" .. tostring(hasDbgSphere)
+        .. " debugLine=" .. tostring(hasDbgLine))
+    end
+  end
+
   trackMarkers.draw(c, state.brakingPoints.best, state.brakingPoints.last)
   local mode = config.racingLineMode or "best"
   if mode == "best" or mode == "both" then
