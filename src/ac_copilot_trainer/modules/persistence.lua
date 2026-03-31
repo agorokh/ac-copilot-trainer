@@ -13,16 +13,18 @@ local function safeName(s)
   return s
 end
 
---- Best-effort track/car labels from structs when globals are missing (e.g. menu save); each field read wrapped in pcall.
+--- Best-effort track/car labels from structs when globals are missing (e.g. menu save); one pcall per field (C-structs throw per-field).
 local function tryTrackFromSim(sim)
   if not sim then
     return nil
   end
-  local ok, v = pcall(function()
-    return sim.trackName or sim.track or sim.trackConfiguration
-  end)
-  if ok and v ~= nil and tostring(v) ~= "" then
-    return tostring(v)
+  for _, key in ipairs({ "trackName", "track", "trackConfiguration" }) do
+    local ok, v = pcall(function()
+      return sim[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return tostring(v)
+    end
   end
   return nil
 end
@@ -31,17 +33,19 @@ local function tryCarFromCar(car)
   if not car then
     return nil
   end
-  local ok, v = pcall(function()
-    return car.id or car.name or car.driverName
-  end)
-  if ok and v ~= nil and tostring(v) ~= "" then
-    return tostring(v)
+  for _, key in ipairs({ "id", "name", "driverName" }) do
+    local ok, v = pcall(function()
+      return car[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return tostring(v)
+    end
   end
   return nil
 end
 
---- Session filename key: car id + track id. Prefer `ac.get*` globals; fall back to `_car`/`_sim` when globals yield unknown (menu / edge cases).
-function M.sessionKey(_car, _sim)
+--- Session filename key: car id + track id. Prefer `ac.get*` globals; fall back to `car`/`sim` when globals yield unknown (menu / edge cases).
+function M.sessionKey(car, sim)
   -- CSP C-structs throw on invalid field access (not nil like Lua tables).
   -- Guard global API calls — missing functions or runtime errors must not crash startup.
   local track = "unknown_track"
@@ -69,13 +73,13 @@ function M.sessionKey(_car, _sim)
     end
   end
   if track == "unknown_track" then
-    local t2 = tryTrackFromSim(_sim)
+    local t2 = tryTrackFromSim(sim)
     if t2 then
       track = t2
     end
   end
   if carKey == "unknown_car" then
-    local c2 = tryCarFromCar(_car)
+    local c2 = tryCarFromCar(car)
     if c2 then
       carKey = c2
     end
