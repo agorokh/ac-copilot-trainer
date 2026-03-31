@@ -21,8 +21,10 @@ local function flatHeading(car)
   if car.look then
     return math.atan2(car.look.x, car.look.z)
   end
-  if car.velocity and (car.velocity.x ~= 0 or car.velocity.z ~= 0) then
-    return math.atan2(car.velocity.x, car.velocity.z)
+  -- car.velocity may not exist on the C-struct (throws, not nil); car.look is always valid so this is a safety fallback only.
+  local ok, vel = pcall(function() return car.velocity end)
+  if ok and vel and (vel.x ~= 0 or vel.z ~= 0) then
+    return math.atan2(vel.x, vel.z)
   end
   return 0
 end

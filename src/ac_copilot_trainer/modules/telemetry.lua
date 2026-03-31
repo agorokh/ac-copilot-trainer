@@ -131,12 +131,9 @@ function Telemetry:update(dt, car, sim)
     return
   end
   local t = sim.time or 0
-  local steer = 0
-  if car.steer ~= nil then
-    steer = car.steer
-  elseif car.steering ~= nil then
-    steer = car.steering
-  end
+  -- car.steer is a valid ac.StateCar field (confirmed from CMRT-Essential-HUD).
+  -- car.steering does NOT exist on the C-struct and would throw — removed.
+  local steer = car.steer or 0
   local px, py, pz = 0, 0, 0
   if car.position then
     px, py, pz = car.position.x, car.position.y, car.position.z
