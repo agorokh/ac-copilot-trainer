@@ -13,7 +13,34 @@ local function safeName(s)
   return s
 end
 
---- Session filename key: car id + track id. `_car` / `_sim` kept for call-site compatibility (unused; IDs come from `ac.*` globals).
+--- Best-effort track/car labels from structs when globals are missing (e.g. menu save); each field read wrapped in pcall.
+local function tryTrackFromSim(sim)
+  if not sim then
+    return nil
+  end
+  local ok, v = pcall(function()
+    return sim.trackName or sim.track or sim.trackConfiguration
+  end)
+  if ok and v ~= nil and tostring(v) ~= "" then
+    return tostring(v)
+  end
+  return nil
+end
+
+local function tryCarFromCar(car)
+  if not car then
+    return nil
+  end
+  local ok, v = pcall(function()
+    return car.id or car.name or car.driverName
+  end)
+  if ok and v ~= nil and tostring(v) ~= "" then
+    return tostring(v)
+  end
+  return nil
+end
+
+--- Session filename key: car id + track id. Prefer `ac.get*` globals; fall back to `_car`/`_sim` when globals yield unknown (menu / edge cases).
 function M.sessionKey(_car, _sim)
   -- CSP C-structs throw on invalid field access (not nil like Lua tables).
   -- Guard global API calls — missing functions or runtime errors must not crash startup.
@@ -22,7 +49,7 @@ function M.sessionKey(_car, _sim)
     local ok, full = pcall(ac.getTrackFullID, "/")
     if ok and type(full) == "string" and full ~= "" then
       track = full
-    elseif ac and type(ac.getTrackID) == "function" then
+    elseif type(ac.getTrackID) == "function" then
       local ok2, tid = pcall(ac.getTrackID)
       if ok2 and type(tid) == "string" and tid ~= "" then
         track = tid
@@ -39,6 +66,18 @@ function M.sessionKey(_car, _sim)
     local ok, cid = pcall(ac.getCarID, 0)
     if ok and cid ~= nil and tostring(cid) ~= "" then
       carKey = tostring(cid)
+    end
+  end
+  if track == "unknown_track" then
+    local t2 = tryTrackFromSim(_sim)
+    if t2 then
+      track = t2
+    end
+  end
+  if carKey == "unknown_car" then
+    local c2 = tryCarFromCar(_car)
+    if c2 then
+      carKey = c2
     end
   end
   return safeName(carKey) .. "__" .. safeName(track)

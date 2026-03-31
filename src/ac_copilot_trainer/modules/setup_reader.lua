@@ -2,38 +2,9 @@
 
 local M = {}
 
+local ch = require("csp_helpers")
+
 local COPILOT_GLOB = "copilot_"
-
---- Shared with path guessing and operator messages (empty string → fallback).
-local function sanitizeId(s, fallback)
-  s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
-  if s == "" then
-    s = fallback or "unknown"
-  end
-  return s
-end
-
-local function safeCarIdRaw()
-  if not ac or type(ac.getCarID) ~= "function" then
-    return nil
-  end
-  local ok, v = pcall(ac.getCarID, 0)
-  if not ok then
-    return nil
-  end
-  return v
-end
-
-local function safeTrackIdRaw()
-  if not ac or type(ac.getTrackID) ~= "function" then
-    return nil
-  end
-  local ok, v = pcall(ac.getTrackID)
-  if not ok then
-    return nil
-  end
-  return v
-end
 
 --- Prefer CSP-reported active setup path when the runtime exposes it (varies by CSP build).
 ---@param car ac.StateCar|nil
@@ -60,8 +31,8 @@ end
 ---@param car ac.StateCar|nil
 ---@param sim ac.StateSim|nil
 ---@return string|nil
-local function guessSetupIniPath(car, sim)
-  if not car or not sim then
+local function guessSetupIniPath(car, _sim)
+  if not car then
     return nil
   end
   local fromCar = activeSetupPathFromCar(car)
@@ -74,11 +45,11 @@ local function guessSetupIniPath(car, sim)
   if not okDoc or not doc or doc == "" then
     return nil
   end
-  local carId = sanitizeId(safeCarIdRaw(), "unknown")
+  local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
   -- Use CSP global API (C-structs throw on invalid field access, not nil).
-  local trackId = sanitizeId(safeTrackIdRaw(), "unknown")
-  local layoutRaw = ac.getTrackLayout and ac.getTrackLayout() or nil
-  local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
+  local trackId = ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local layoutRaw = ch.safeTrackLayoutRaw()
+  local layoutId = layoutRaw ~= nil and ch.sanitizeId(layoutRaw, "") or ""
   local trackRoot = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
   local bases = {}
   if layoutId ~= "" and layoutId ~= "unknown" then
@@ -178,11 +149,8 @@ end
 ---@param sim ac.StateSim|nil
 ---@param autoLoad boolean|nil
 ---@return string|nil message
-function M.tryAutoLoadCopilotSetup(car, sim, autoLoad)
+function M.tryAutoLoadCopilotSetup(_car, _sim, autoLoad)
   if autoLoad == false then
-    return nil
-  end
-  if not car or not sim then
     return nil
   end
   -- Defer to future CSP API: physics.loadSetup, car.applySetup, etc.
@@ -192,8 +160,8 @@ function M.tryAutoLoadCopilotSetup(car, sim, autoLoad)
   if not okDoc or not doc then
     return nil
   end
-  local carId = sanitizeId(safeCarIdRaw(), "unknown")
-  local trackId = sanitizeId(safeTrackIdRaw(), "unknown")
+  local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
   local dir = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
   -- Without a portable directory list in Lua 5.1, surface intent for operators.
   return string.format("Copilot setup dir: %s (%s*.ini)", dir, COPILOT_GLOB)
