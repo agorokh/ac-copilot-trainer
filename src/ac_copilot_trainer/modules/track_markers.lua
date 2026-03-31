@@ -1,4 +1,5 @@
 -- 3D brake markers: distance culling, primitive budget (see MAX_*), optional track raycast (CSP API varies by version).
+-- Budget is local to this module; racing_line applies its own culling — no shared CSP-wide primitive cap in code.
 
 local M = {}
 
@@ -134,6 +135,9 @@ function M.draw(car, best, last)
   table.sort(items, function(a, b)
     return a.d < b.d
   end)
+  local hasDebugPrimitive = render.debugCross or render.debugSphere or render.debugLine
+  -- Some CSP builds lack debug* helpers but still expose drawSphere; keep markers visible there (prefer debug* when present).
+  local useLegacyDrawSphere = not hasDebugPrimitive and type(render.drawSphere) == "function"
   local primitivesPerMarker = 0
   if render.debugCross then
     primitivesPerMarker = primitivesPerMarker + 1
@@ -143,6 +147,9 @@ function M.draw(car, best, last)
   end
   if render.debugLine then
     primitivesPerMarker = primitivesPerMarker + 1
+  end
+  if useLegacyDrawSphere then
+    primitivesPerMarker = 1
   end
   if primitivesPerMarker == 0 then
     return
@@ -183,14 +190,16 @@ function M.draw(car, best, last)
       pcall(function()
         if not vec3 then return end
         local c = vec3(it.x, sy, it.z)
-        -- Draw cross + sphere + vertical pillar for maximum visibility
+        if useLegacyDrawSphere and render.drawSphere then
+          render.drawSphere(c, r, col)
+          return
+        end
         if render.debugCross then
           render.debugCross(c, r, col)
         end
         if render.debugSphere then
           render.debugSphere(c, r * 0.8, col)
         end
-        -- Vertical pillar so marker is visible from distance
         if render.debugLine then
           render.debugLine(c, vec3(it.x, sy + 3.0, it.z), col, col)
         end

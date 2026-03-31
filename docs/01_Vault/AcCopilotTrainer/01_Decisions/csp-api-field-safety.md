@@ -16,8 +16,8 @@ CSP `ac.StateSim` and `ac.StateCar` are C-structs. Accessing a non-existent fiel
 
 ## Decision
 
-1. Never access unknown fields directly on `sim` or `car` objects.
-2. Use `csp_helpers.lua` module for safe API calls (`pcall`-wrapped).
+1. Never access unknown or unconfirmed fields directly on `sim` or `car` objects.
+2. Use `csp_helpers.lua` for `pcall`-guarded reads of risky fields and for identity helpers; direct `sim`/`car` reads are allowed only for fields listed below as confirmed valid.
 3. Use global functions (`ac.getTrackID()`, `ac.getCarID(0)`) instead of struct fields for identity data.
 
 ## Confirmed valid fields
@@ -36,9 +36,11 @@ CSP `ac.StateSim` and `ac.StateCar` are C-structs. Accessing a non-existent fiel
 
 ## Render API
 
-Use: `render.debugLine`, `render.debugSphere`, `render.debugCross`, `render.debugArrow`, `render.debugText`
+**Prefer:** `render.debugLine`, `render.debugSphere`, `render.debugCross`, `render.debugArrow`, `render.debugText`
 
-Do NOT use: `render.line`, `render.drawSphere` (do not exist)
+**Avoid:** `render.line` (not present on target CSP).
+
+**Legacy:** On builds where all `debug*` helpers are missing, `track_markers` may fall back to `render.drawSphere` so markers still appear; prefer `debugSphere` when available.
 
 ## Global functions
 

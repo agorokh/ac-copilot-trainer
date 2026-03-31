@@ -1,4 +1,5 @@
 -- Subsampled driven racing line + optional 3D strip (issue #8 Part F).
+-- Debug draw budget is not coordinated with track_markers; cost is bounded mainly by distance culling (CULL_M).
 
 local M = {}
 
@@ -72,14 +73,14 @@ function M.drawLineStrip(car, line, color)
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-        -- Reuse endpoints to avoid allocating fresh vec3 per offset per segment.
-        local va = vec3(a.x, a.y, a.z)
-        local vb = vec3(b.x, b.y, b.z)
+        -- Fresh vec3 per segment/offset so the renderer cannot retain stale references (mutable reuse broke layering).
         for j = 1, #LINE_Y_OFFSETS do
           local yOff = LINE_Y_OFFSETS[j]
-          va.y = a.y + yOff
-          vb.y = b.y + yOff
-          render.debugLine(va, vb, col, col)
+          render.debugLine(
+            vec3(a.x, a.y + yOff, a.z),
+            vec3(b.x, b.y + yOff, b.z),
+            col, col
+          )
         end
       end
     end

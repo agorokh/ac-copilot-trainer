@@ -26,9 +26,9 @@ end
 ---@param lastFeats table[]|nil
 ---@param bestFeats table[]|nil
 ---@param cons table|nil consistencySummary()
----@param throttleHint string|nil
+---@param throttleAnalysis table|nil from throttle_detection.analyzeTrace (fullThrottlePct, coastingMs, reversals, …)
 ---@return string[] up to 3 lines
-function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
+function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis)
   local out = {}
   local worst = cons and cons.worstThree
   if type(worst) == "table" then
@@ -64,21 +64,18 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
       end
     end
   end
-  if #out < 3 and throttleHint and throttleHint ~= "" then
-    local coast = throttleHint:match("coast ([%d%.]+)s")
-    if coast and tonumber(coast) and tonumber(coast) >= 1.2 then
-      out[#out + 1] = string.format("Coasting %.1fs last lap — shorten gaps to throttle", tonumber(coast))
+  if #out < 3 and throttleAnalysis and type(throttleAnalysis) == "table" then
+    local coastSec = (tonumber(throttleAnalysis.coastingMs) or 0) / 1000
+    if coastSec >= 1.2 then
+      out[#out + 1] = string.format("Coasting %.1fs last lap — shorten gaps to throttle", coastSec)
     end
-    local ftPct = throttleHint:match("FT%% (%d+)")
-    if #out < 3 and ftPct and tonumber(ftPct) then
-      local ft = tonumber(ftPct)
-      if ft < 40 then
-        out[#out + 1] = string.format("Full throttle only %d%% of lap — focus on earlier power application", ft)
-      end
+    local ft = tonumber(throttleAnalysis.fullThrottlePct)
+    if #out < 3 and ft and ft < 40 then
+      out[#out + 1] = string.format("Full throttle only %d%% of lap — focus on earlier power application", math.floor(ft + 0.5))
     end
-    local sawtooth = throttleHint:match("sawtooth~ (%d+)")
-    if #out < 3 and sawtooth and tonumber(sawtooth) and tonumber(sawtooth) > 8 then
-      out[#out + 1] = string.format("Throttle reversals: %d — try smoother inputs", tonumber(sawtooth))
+    local rev = tonumber(throttleAnalysis.reversals)
+    if #out < 3 and rev and rev > 8 then
+      out[#out + 1] = string.format("Throttle reversals: %d — try smoother inputs", rev)
     end
   end
   -- Fallback: when no corner-vs-reference hints and no throttle hints generated, give a status line

@@ -778,7 +778,7 @@ function script.update(dt)
       state.styleHud = state.styleHud or ""
     end
 
-    state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, state.lastThrottleSummary)
+    state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA)
     state.coachingUntil = (sim.time or 0) + config.coachingHoldSeconds
 
     local _snap, hnew = setupReader.snapshotActive(car, sim)

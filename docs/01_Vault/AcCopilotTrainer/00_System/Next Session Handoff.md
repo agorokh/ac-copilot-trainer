@@ -32,7 +32,7 @@ relates_to:
 - **Valid sim fields:** `isInMainMenu`, `time`, `trackLengthM`
 - **Valid car fields:** `speedKmh`, `brake`, `gas`, `steer`, `gear`, `look`, `position`, `splinePosition`, `lapCount`, `bestLapTimeMs`, `previousLapTimeMs`, `wheels`
 - **INVALID (throw):** `sim.trackName`, `sim.track`, `sim.trackConfiguration`, `sim.trackLengthMeters`, `car.id`, `car.name`, `car.driverName`, `car.lastLapTimeMs`, `car.steering`
-- **Render API:** `render.debugLine`, `render.debugSphere`, `render.debugCross`, `render.debugArrow`, `render.debugText` — NOT `render.line`, `render.drawSphere`
+- **Render API:** prefer `render.debugLine`, `render.debugSphere`, `render.debugCross`, … — NOT `render.line`. Legacy `render.drawSphere` only when no `debug*` helpers exist.
 - **Global functions:** `ac.getTrackID()`, `ac.getTrackFullID("/")`, `ac.getCarID(0)`, `ac.getTrackLayout()`
 
 ## What remains
@@ -41,6 +41,6 @@ relates_to:
 - If `render.debugSphere`/`render.debugCross` still invisible, investigate CSP version or switch to `render.debugText` as label-based markers.
 - Epic issues #7, #8, #9 have merged foundational code; next phases per Project State.
 
-## Blockers
+## Blockers / dependencies
 
-- None in repo; all validation requires Assetto Corsa + CSP runtime.
+- **Assetto Corsa + CSP runtime** is required for in-game validation (markers, ribbon, coaching HUD); this cannot run in CI and blocks confirming PR #27 behavior until tested locally.
