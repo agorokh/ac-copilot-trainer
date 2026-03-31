@@ -11,7 +11,7 @@ Mon.__index = Mon
 
 function M.new()
   return setmetatable({
-    slipT = 0,
+    slipHoldPerWheel = { 0, 0, 0, 0 },
     lockupRearm = true,
     lockupFlashT = 0,
     lockups = {},
@@ -23,7 +23,7 @@ end
 function Mon:resetLap()
   self.lapTemps = { fl = {}, fr = {}, rl = {}, rr = {} }
   self.lapPeakSlip = { 0, 0, 0, 0 }
-  self.slipT = 0
+  self.slipHoldPerWheel = { 0, 0, 0, 0 }
   self.lockupRearm = true
   self.lockupFlashT = 0
 end
@@ -99,6 +99,8 @@ function Mon:update(car, dt, spline)
     n = math.min(nn, 4)
   end
   local anySlip = false
+  local maxHold = 0
+  local hold = self.slipHoldPerWheel
   for i = 1, n do
     local oki, one = pcall(function()
       return wheels[i]
@@ -120,21 +122,30 @@ function Mon:update(car, dt, spline)
       end
       if math.abs(slip) >= LOCKUP_SLIP then
         anySlip = true
+        hold[i] = hold[i] + d
+        if hold[i] > maxHold then
+          maxHold = hold[i]
+        end
+      else
+        hold[i] = 0
       end
     end
   end
-  if anySlip then
-    self.slipT = self.slipT + d
-  else
-    self.slipT = 0
+  for i = n + 1, 4 do
+    hold[i] = 0
+  end
+  if not anySlip then
     self.lockupRearm = true
   end
   if self.lockupFlashT > 0 then
     self.lockupFlashT = math.max(0, self.lockupFlashT - d)
   end
-  if self.slipT >= LOCKUP_HOLD and spline and self.lockupRearm then
+  -- One log per slip episode: lockupRearm false until all wheels drop below threshold. HUD uses lockupFlashT, not hold timers.
+  if maxHold >= LOCKUP_HOLD and spline and self.lockupRearm then
     self.lockups[#self.lockups + 1] = { spline = spline }
-    self.slipT = 0
+    for j = 1, 4 do
+      hold[j] = 0
+    end
     self.lockupRearm = false
     self.lockupFlashT = LOCKUP_FLASH
     if #self.lockups > 32 then

@@ -123,6 +123,7 @@ local function normalizeLoaded(data)
   if data.setupHash ~= nil and type(data.setupHash) ~= "string" then
     data.setupHash = nil
   end
+  -- v3: array of corner feature tables; reject wrong type, densify sparse JSON arrays.
   if data.bestCornerFeatures ~= nil then
     if type(data.bestCornerFeatures) ~= "table" then
       data.bestCornerFeatures = nil

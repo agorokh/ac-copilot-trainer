@@ -43,19 +43,34 @@ local function guessSetupIniPath(car, sim)
   if not okDoc or not doc or doc == "" then
     return nil
   end
-  local carId = tostring(car.id or car.name or "unknown"):gsub("[^%w%.%-_]+", "_")
-  local trackId = tostring(sim.track or sim.trackName or sim.trackConfiguration or "unknown"):gsub("[^%w%.%-_]+", "_")
-  -- AC default: Documents/Assetto Corsa/setups/<car>/<track>/*.ini
-  local base = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
-  for _, name in ipairs({ "race.ini", "default.ini" }) do
-    local p = base .. "/" .. name
-    local f = io.open(p, "r")
-    if f then
-      f:close()
-      return p
+  local function sanitizeId(s, fallback)
+    s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
+    if s == "" then
+      s = fallback or "unknown"
+    end
+    return s
+  end
+  local carId = sanitizeId(car.id or car.name, "unknown")
+  -- Folder layout matches content: track id from sim.track; optional layout subfolder from sim.trackConfiguration.
+  local trackId = sanitizeId(sim.track, "unknown")
+  local layoutRaw = sim.trackConfiguration
+  local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
+  local bases = { doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId }
+  if layoutId ~= "" and layoutId ~= "unknown" then
+    bases[#bases + 1] = bases[1] .. "/" .. layoutId
+  end
+  for b = 1, #bases do
+    local base = bases[b]
+    for _, name in ipairs({ "race.ini", "default.ini" }) do
+      local p = base .. "/" .. name
+      local f = io.open(p, "r")
+      if f then
+        f:close()
+        return p
+      end
     end
   end
-  return base .. "/race.ini"
+  return bases[1] .. "/race.ini"
 end
 
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.
