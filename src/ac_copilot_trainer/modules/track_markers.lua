@@ -14,7 +14,14 @@ local function brakeListSig(list)
     return "0"
   end
   local a, z = list[1], list[#list]
-  return string.format("%d:%g,%g,%g|%g,%g,%g", #list, a.px, a.py, a.pz, z.px, z.py, z.pz)
+  if not a or not z then
+    return string.format("%d:?", #list)
+  end
+  local ax, ay, az, zx, zy, zz = a.px, a.py, a.pz, z.px, z.py, z.pz
+  if type(ax) ~= "number" or type(ay) ~= "number" or type(az) ~= "number" or type(zx) ~= "number" or type(zy) ~= "number" or type(zz) ~= "number" then
+    return string.format("%d:?", #list)
+  end
+  return string.format("%d:%g,%g,%g|%g,%g,%g", #list, ax, ay, az, zx, zy, zz)
 end
 
 local function markerCacheKey(x, y, z)

@@ -546,8 +546,11 @@ function script.update(dt)
       -- Ignore reference trace when coverage is far below lap time (mid-lap clock or telemetry gap).
       if #completedTrace > 0 and spanMs >= lastMs * 0.45 then
         state.bestLapTrace = copyTrace(completedTrace)
-        rebuildBestReference()
+      else
+        -- PB time/brakes already updated above; drop stale trace so delta/sectors cannot reference an old lap.
+        state.bestLapTrace = {}
       end
+      rebuildBestReference()
       persistSnapshotLive()
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)
