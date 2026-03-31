@@ -13,11 +13,34 @@ local function safeName(s)
   return s
 end
 
-function M.sessionKey(car, sim)
+--- Session filename key: car id + track id. `_car` / `_sim` kept for call-site compatibility (unused; IDs come from `ac.*` globals).
+function M.sessionKey(_car, _sim)
   -- CSP C-structs throw on invalid field access (not nil like Lua tables).
-  -- Use the global CSP API functions (verified from PocketTechnician, CMRT-Essential-HUD).
-  local track = ac.getTrackFullID("/") or ac.getTrackID() or "unknown_track"
-  local carKey = ac.getCarID(0) or "unknown_car"
+  -- Guard global API calls — missing functions or runtime errors must not crash startup.
+  local track = "unknown_track"
+  if ac and type(ac.getTrackFullID) == "function" then
+    local ok, full = pcall(ac.getTrackFullID, "/")
+    if ok and type(full) == "string" and full ~= "" then
+      track = full
+    elseif ac and type(ac.getTrackID) == "function" then
+      local ok2, tid = pcall(ac.getTrackID)
+      if ok2 and type(tid) == "string" and tid ~= "" then
+        track = tid
+      end
+    end
+  elseif ac and type(ac.getTrackID) == "function" then
+    local ok, tid = pcall(ac.getTrackID)
+    if ok and type(tid) == "string" and tid ~= "" then
+      track = tid
+    end
+  end
+  local carKey = "unknown_car"
+  if ac and type(ac.getCarID) == "function" then
+    local ok, cid = pcall(ac.getCarID, 0)
+    if ok and cid ~= nil and tostring(cid) ~= "" then
+      carKey = tostring(cid)
+    end
+  end
   return safeName(carKey) .. "__" .. safeName(track)
 end
 

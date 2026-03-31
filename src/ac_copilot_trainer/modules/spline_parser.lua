@@ -3,6 +3,25 @@
 
 local M = {}
 
+local function sanitizeId(s, fallback)
+  s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
+  if s == "" then
+    s = fallback or "unknown"
+  end
+  return s
+end
+
+local function safeTrackIdRaw()
+  if not ac or type(ac.getTrackID) ~= "function" then
+    return nil
+  end
+  local ok, v = pcall(ac.getTrackID)
+  if not ok then
+    return nil
+  end
+  return v
+end
+
 local HEADER = 16
 local STRIDE = 92
 local XYZ_OFF_IN_RECORD = 0 -- try XYZ at start of payload; override if your files differ
@@ -60,14 +79,7 @@ local function fastLaneCandidatePaths(sim)
   if not ok or not folder or folder == "" then
     return {}
   end
-  local function sanitizeId(s, fallback)
-    s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
-    if s == "" then
-      s = fallback or "unknown"
-    end
-    return s
-  end
-  local trackId = sanitizeId(ac.getTrackID(), "unknown")
+  local trackId = sanitizeId(safeTrackIdRaw(), "unknown")
   local layoutRaw = ac.getTrackLayout and ac.getTrackLayout() or nil
   local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
   local root = folder .. "/tracks/" .. trackId .. "/ai/fast_lane.ai"

@@ -4,6 +4,37 @@ local M = {}
 
 local COPILOT_GLOB = "copilot_"
 
+--- Shared with path guessing and operator messages (empty string → fallback).
+local function sanitizeId(s, fallback)
+  s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
+  if s == "" then
+    s = fallback or "unknown"
+  end
+  return s
+end
+
+local function safeCarIdRaw()
+  if not ac or type(ac.getCarID) ~= "function" then
+    return nil
+  end
+  local ok, v = pcall(ac.getCarID, 0)
+  if not ok then
+    return nil
+  end
+  return v
+end
+
+local function safeTrackIdRaw()
+  if not ac or type(ac.getTrackID) ~= "function" then
+    return nil
+  end
+  local ok, v = pcall(ac.getTrackID)
+  if not ok then
+    return nil
+  end
+  return v
+end
+
 --- Prefer CSP-reported active setup path when the runtime exposes it (varies by CSP build).
 ---@param car ac.StateCar|nil
 ---@return string|nil
@@ -43,16 +74,9 @@ local function guessSetupIniPath(car, sim)
   if not okDoc or not doc or doc == "" then
     return nil
   end
-  local function sanitizeId(s, fallback)
-    s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
-    if s == "" then
-      s = fallback or "unknown"
-    end
-    return s
-  end
-  local carId = sanitizeId(ac.getCarID(0), "unknown")
+  local carId = sanitizeId(safeCarIdRaw(), "unknown")
   -- Use CSP global API (C-structs throw on invalid field access, not nil).
-  local trackId = sanitizeId(ac.getTrackID(), "unknown")
+  local trackId = sanitizeId(safeTrackIdRaw(), "unknown")
   local layoutRaw = ac.getTrackLayout and ac.getTrackLayout() or nil
   local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
   local trackRoot = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
@@ -168,8 +192,8 @@ function M.tryAutoLoadCopilotSetup(car, sim, autoLoad)
   if not okDoc or not doc then
     return nil
   end
-  local carId = tostring(ac.getCarID(0) or "unknown"):gsub("[^%w%.%-_]+", "_")
-  local trackId = tostring(ac.getTrackID() or "unknown"):gsub("[^%w%.%-_]+", "_")
+  local carId = sanitizeId(safeCarIdRaw(), "unknown")
+  local trackId = sanitizeId(safeTrackIdRaw(), "unknown")
   local dir = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
   -- Without a portable directory list in Lua 5.1, surface intent for operators.
   return string.format("Copilot setup dir: %s (%s*.ini)", dir, COPILOT_GLOB)
