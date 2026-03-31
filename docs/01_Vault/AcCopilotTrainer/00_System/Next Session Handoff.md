@@ -26,14 +26,9 @@ relates_to:
 - **PR #26** (merged): Fixed `sim.trackLengthMeters` → `sim.trackLengthM`, `render.line` → `render.debugLine`, pcall-wrapped `car.velocity`, removed dead `car.steering`, added Draw3D diagnostics.
 - **PR #27** (open): Brake markers now use cross+sphere+vertical pillar (red/orange, radius 1.2, 300m range). Racing line draws 5-layer ribbon. Coaching hints have fallback messages + throttle analysis + 15s hold. Brighter colors throughout.
 
-## CSP API learnings (critical for future work)
+## CSP API learnings
 
-- `ac.StateSim` and `ac.StateCar` are **C-structs that THROW** on invalid field access — always pcall or use known-good fields.
-- **Valid sim fields:** `isInMainMenu`, `time`, `trackLengthM`
-- **Valid car fields:** `speedKmh`, `brake`, `gas`, `steer`, `gear`, `look`, `position`, `splinePosition`, `lapCount`, `bestLapTimeMs`, `previousLapTimeMs`, `wheels`
-- **INVALID (throw):** `sim.trackName`, `sim.track`, `sim.trackConfiguration`, `sim.trackLengthMeters`, `car.id`, `car.name`, `car.driverName`, `car.lastLapTimeMs`, `car.steering`
-- **Render API:** prefer `render.debugLine`, `render.debugSphere`, `render.debugCross`, … — NOT `render.line`. Legacy `render.drawSphere` only when no `debug*` helpers exist.
-- **Global functions:** `ac.getTrackID()`, `ac.getTrackFullID("/")`, `ac.getCarID(0)`, `ac.getTrackLayout()`
+Canonical rules (C-struct throws, valid fields, render API, globals) live in **[`01_Decisions/csp-api-field-safety.md`](../01_Decisions/csp-api-field-safety.md)** — read that ADR before changing `sim`/`car`/`render` usage; avoid duplicating the field lists here.
 
 ## What remains
 

@@ -27,8 +27,9 @@ end
 ---@param bestFeats table[]|nil
 ---@param cons table|nil consistencySummary()
 ---@param throttleAnalysis table|nil from throttle_detection.analyzeTrace (fullThrottlePct, coastingMs, reversals, …)
+---@param lapAnalysisOk boolean|nil true when this lap had analyzable trace data for corner-vs-ref hints
 ---@return string[] up to 3 lines
-function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis)
+function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis, lapAnalysisOk)
   local out = {}
   local worst = cons and cons.worstThree
   if type(worst) == "table" then
@@ -80,10 +81,12 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis)
   end
   -- Fallback: when no corner-vs-reference hints and no throttle hints generated, give a status line
   if #out == 0 then
-    if not bestFeats or #(bestFeats or {}) == 0 then
+    if not bestFeats or #bestFeats == 0 then
       out[#out + 1] = "Building reference — complete more laps for corner-by-corner coaching"
-    else
+    elseif lapAnalysisOk then
       out[#out + 1] = "Lap matched reference well — keep it consistent"
+    else
+      out[#out + 1] = "Lap recorded — need a full telemetry lap for corner-by-corner coaching"
     end
   end
   while #out > 3 do
