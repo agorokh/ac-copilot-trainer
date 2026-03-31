@@ -43,4 +43,28 @@ function M.safeTrackLayoutRaw()
   return v
 end
 
+--- Best-effort track label from globals: `getTrackFullID("/")` then `getTrackID()`; returns string or nil.
+function M.trackIdRawFromGlobals()
+  if ac and type(ac.getTrackFullID) == "function" then
+    local ok, full = pcall(ac.getTrackFullID, "/")
+    if ok and type(full) == "string" and full ~= "" then
+      return full
+    end
+  end
+  local tid = M.safeTrackIdRaw()
+  if tid ~= nil and tostring(tid) ~= "" then
+    return tostring(tid)
+  end
+  return nil
+end
+
+--- Best-effort player car id from `ac.getCarID(0)`; returns string or nil.
+function M.carIdRawFromGlobals()
+  local cid = M.safeCarIdRaw()
+  if cid ~= nil and tostring(cid) ~= "" then
+    return tostring(cid)
+  end
+  return nil
+end
+
 return M
