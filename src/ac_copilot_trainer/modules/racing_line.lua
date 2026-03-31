@@ -51,19 +51,19 @@ local LINE_Y_OFFSETS = { 0.04, 0.10, 0.16, 0.22, 0.28 }
 
 ---@param car ac.StateCar|nil
 ---@param line table[]|nil
----@param color rgbm|nil
+---@param color rgbm segment color (required; callers must pass explicit rgbm)
 function M.drawLineStrip(car, line, color)
-  if not car or not car.position or not line or #line < 2 then
+  if not car or not car.position or not line or #line < 2 or not color then
     return
   end
   if not render then
     return
   end
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
-  local col = color or rgbm(0.2, 0.85, 0.95, 0.75)
+  local col = color
   local cullSq = CULL_M * CULL_M
   pcall(function()
-    if not render.debugLine then
+    if not render.debugLine or not vec3 then
       return
     end
     for i = 1, #line - 1 do
@@ -72,14 +72,14 @@ function M.drawLineStrip(car, line, color)
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-        -- Draw multiple lines at different Y offsets to create a visible "ribbon"
+        -- Reuse endpoints to avoid allocating fresh vec3 per offset per segment.
+        local va = vec3(a.x, a.y, a.z)
+        local vb = vec3(b.x, b.y, b.z)
         for j = 1, #LINE_Y_OFFSETS do
           local yOff = LINE_Y_OFFSETS[j]
-          render.debugLine(
-            vec3(a.x, a.y + yOff, a.z),
-            vec3(b.x, b.y + yOff, b.z),
-            col, col
-          )
+          va.y = a.y + yOff
+          vb.y = b.y + yOff
+          render.debugLine(va, vb, col, col)
         end
       end
     end

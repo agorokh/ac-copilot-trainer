@@ -28,7 +28,11 @@ CSP `ac.StateSim` and `ac.StateCar` are C-structs. Accessing a non-existent fiel
 
 ## Confirmed invalid (throw)
 
-`sim.trackName`, `sim.track`, `sim.trackConfiguration`, `sim.trackLengthMeters`, `sim.trackLength`, `car.id`, `car.name`, `car.driverName`, `car.lastLapTimeMs`, `car.steering`, `car.velocity` (unconfirmed — pcall-wrapped as precaution)
+`sim.trackName`, `sim.track`, `sim.trackConfiguration`, `sim.trackLengthMeters`, `sim.trackLength`, `car.id`, `car.name`, `car.driverName`, `car.lastLapTimeMs`, `car.steering`
+
+## Unconfirmed / keep pcall-guarded
+
+`car.velocity` — treat as unsafe in some CSP builds; keep `pcall`-wrapped reads where used.
 
 ## Render API
 

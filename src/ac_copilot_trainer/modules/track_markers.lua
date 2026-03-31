@@ -1,8 +1,11 @@
--- 3D brake markers: distance culling, max ~50 draw calls, optional track raycast (CSP API varies by version).
+-- 3D brake markers: distance culling, primitive budget (see MAX_*), optional track raycast (CSP API varies by version).
 
 local M = {}
 
-local MAX_PRIMITIVES = 50
+-- Max markers considered per frame; each marker may use up to three debug primitives (cross/sphere/pillar).
+local MAX_MARKERS = 50
+-- Total debug draw calls budget (~50 markers × 3 primitives, when all APIs exist).
+local MAX_DEBUG_PRIMITIVES = 150
 local FADE_NEAR = 60
 local FADE_FAR = 300
 -- Cap snap cache entries so long sessions cannot grow `snapY` without bound if marker keys drift.
@@ -131,7 +134,21 @@ function M.draw(car, best, last)
   table.sort(items, function(a, b)
     return a.d < b.d
   end)
-  local nDraw = math.min(#items, MAX_PRIMITIVES)
+  local primitivesPerMarker = 0
+  if render.debugCross then
+    primitivesPerMarker = primitivesPerMarker + 1
+  end
+  if render.debugSphere then
+    primitivesPerMarker = primitivesPerMarker + 1
+  end
+  if render.debugLine then
+    primitivesPerMarker = primitivesPerMarker + 1
+  end
+  if primitivesPerMarker == 0 then
+    return
+  end
+  local markerBudget = math.max(1, math.floor(MAX_DEBUG_PRIMITIVES / primitivesPerMarker))
+  local nDraw = math.min(#items, MAX_MARKERS, markerBudget)
   for i = 1, nDraw do
     local it = items[i]
     local alpha = 1
