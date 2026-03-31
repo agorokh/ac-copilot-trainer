@@ -19,6 +19,7 @@ local snapY = {} ---@type table<string, number>
 local debugLineUsable = true
 local debugSphereUsable = true
 local debugCrossUsable = true
+local drawSphereUsable = true
 
 --- Fingerprint all brake points (coords + spline when present) so any edit invalidates snap cache.
 local function brakeListHash(list)
@@ -149,7 +150,7 @@ function M.draw(car, best, last)
     return
   end
   -- Prefer debug* over legacy drawSphere when both exist; legacy-only when no debug* APIs.
-  local legacySphereOnly = hasLegacyDrawSphere and not hasDebugLine and not hasDebugSphere and not hasDebugCross
+  local legacySphereOnly = hasLegacyDrawSphere and drawSphereUsable and not hasDebugLine and not hasDebugSphere and not hasDebugCross
   local useLinePrimary = hasDebugLine and debugLineUsable
   -- nDraw from primary visuals only so optional sphere/cross do not shrink how many brake markers appear.
   local primaryPerMarker ---@type number
@@ -166,7 +167,7 @@ function M.draw(car, best, last)
     primaryPerMarker = 0
     -- Match draw path: legacy sphere when debugSphere is missing or marked unusable.
     if (debugSphereUsable and hasDebugSphere)
-      or (hasLegacyDrawSphere and (not hasDebugSphere or not debugSphereUsable)) then
+      or (hasLegacyDrawSphere and drawSphereUsable and (not hasDebugSphere or not debugSphereUsable)) then
       primaryPerMarker = primaryPerMarker + 1
     end
     if debugCrossUsable and hasDebugCross then
@@ -214,7 +215,12 @@ function M.draw(car, best, last)
         end
         local c = vec3(it.x, sy, it.z)
         if legacySphereOnly then
-          pcall(render.drawSphere, c, r, col)
+          if drawSphereUsable then
+            local okL = pcall(render.drawSphere, c, r, col)
+            if not okL then
+              drawSphereUsable = false
+            end
+          end
           return
         end
 
@@ -254,10 +260,16 @@ function M.draw(car, best, last)
               if not okS then
                 debugSphereUsable = false
               end
-            elseif hasLegacyDrawSphere and not hasDebugSphere then
+            elseif hasLegacyDrawSphere and drawSphereUsable and not hasDebugSphere then
               okS = pcall(render.drawSphere, c, r, col)
-            elseif not debugSphereUsable and hasLegacyDrawSphere and hasDebugSphere then
+              if not okS then
+                drawSphereUsable = false
+              end
+            elseif not debugSphereUsable and hasLegacyDrawSphere and drawSphereUsable and hasDebugSphere then
               okS = pcall(render.drawSphere, c, r, col)
+              if not okS then
+                drawSphereUsable = false
+              end
             end
             if okS then
               overlayRemaining = overlayRemaining - 1
@@ -279,8 +291,11 @@ function M.draw(car, best, last)
             if not okSphere then
               debugSphereUsable = false
             end
-          elseif hasLegacyDrawSphere then
-            pcall(render.drawSphere, c, r, col)
+          elseif hasLegacyDrawSphere and drawSphereUsable then
+            local okLeg = pcall(render.drawSphere, c, r, col)
+            if not okLeg then
+              drawSphereUsable = false
+            end
           end
           if debugCrossUsable and hasDebugCross then
             local okCr = pcall(render.debugCross, c, r, col)
