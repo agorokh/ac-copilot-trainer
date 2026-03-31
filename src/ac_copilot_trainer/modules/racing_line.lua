@@ -1,10 +1,12 @@
 -- Subsampled driven racing line + optional 3D strip (issue #8 Part F).
--- Debug draw budget is not coordinated with track_markers; cost is bounded mainly by distance culling (CULL_M).
+-- Cost is bounded by distance culling (CULL_M) and a per-strip cap on debugLine calls so track_markers (drawn first) keeps headroom.
 
 local M = {}
 
 local MAX_POINTS = 500
 local CULL_M = 200
+-- Default max render.debugLine invocations per strip per frame (see ac_copilot_trainer draw order vs track_markers).
+M.MAX_DEBUG_LINE_CALLS = 220
 
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
@@ -53,11 +55,16 @@ local LINE_Y_OFFSETS = { 0.04, 0.10, 0.16, 0.22, 0.28 }
 ---@param car ac.StateCar|nil
 ---@param line table[]|nil
 ---@param color rgbm segment color (required; callers must pass explicit rgbm)
-function M.drawLineStrip(car, line, color)
+---@param maxCalls number|nil cap on render.debugLine calls (default M.MAX_DEBUG_LINE_CALLS)
+function M.drawLineStrip(car, line, color, maxCalls)
   if not car or not car.position or not line or #line < 2 or not color then
     return
   end
   if not render then
+    return
+  end
+  local cap = maxCalls or M.MAX_DEBUG_LINE_CALLS
+  if cap < 1 then
     return
   end
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
@@ -67,7 +74,11 @@ function M.drawLineStrip(car, line, color)
     if not render.debugLine or not vec3 then
       return
     end
+    local remaining = cap
     for i = 1, #line - 1 do
+      if remaining < 1 then
+        return
+      end
       local a, b = line[i], line[i + 1]
       local mx = (a.x + b.x) * 0.5
       local my = (a.y + b.y) * 0.5
@@ -75,12 +86,16 @@ function M.drawLineStrip(car, line, color)
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
         -- Fresh vec3 per segment/offset so the renderer cannot retain stale references (mutable reuse broke layering).
         for j = 1, #LINE_Y_OFFSETS do
+          if remaining < 1 then
+            return
+          end
           local yOff = LINE_Y_OFFSETS[j]
           render.debugLine(
             vec3(a.x, a.y + yOff, a.z),
             vec3(b.x, b.y + yOff, b.z),
             col, col
           )
+          remaining = remaining - 1
         end
       end
     end
