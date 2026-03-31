@@ -6,6 +6,8 @@ local M = {}
 local MAX_HISTORY_LAPS = 12
 local MIN_TRACE_FOR_SEGMENTS = 24
 local SPLINE_NEAR = 0.012
+-- When no brake points: offset speed minima backward so sectors anchor before apex, not apex-to-apex.
+local PRE_APEX_SPLINE = 0.045
 
 local function wrap01(x)
   local s = x % 1
@@ -64,6 +66,43 @@ local function brakeSplinesSorted(brakes)
     end
   end
   return out
+end
+
+local function dedupSortedSplines(xs)
+  local out = {}
+  local last = nil
+  for i = 1, #xs do
+    local v = xs[i]
+    if last == nil or math.abs(v - last) > 1e-6 then
+      out[#out + 1] = v
+      last = v
+    end
+  end
+  return out
+end
+
+---@param c table|nil
+---@return boolean
+local function consistencyCornerOk(c)
+  if type(c) ~= "table" then
+    return false
+  end
+  return tonumber(c.entrySpeed) ~= nil
+    and tonumber(c.brakePointSpline) ~= nil
+    and tonumber(c.minSpeed) ~= nil
+    and tonumber(c.exitSpeed) ~= nil
+end
+
+---@param c table|nil
+---@return boolean
+local function styleCornerOk(c)
+  if not consistencyCornerOk(c) then
+    return false
+  end
+  return tonumber(c.trailBrakeRatio) ~= nil
+    and tonumber(c.tractionCircleProxy) ~= nil
+    and tonumber(c.throttleAvg) ~= nil
+    and tonumber(c.steerReversals) ~= nil
 end
 
 ---@param trace table[]
@@ -175,7 +214,12 @@ function M.buildSegments(trace, brakePoints)
       end
     end
     table.sort(mins)
-    brakes = mins
+    local pseudo = {}
+    for j = 1, #mins do
+      pseudo[#pseudo + 1] = wrap01(mins[j] - PRE_APEX_SPLINE)
+    end
+    table.sort(pseudo)
+    brakes = dedupSortedSplines(pseudo)
   end
   if #brakes == 0 then
     return {
@@ -201,23 +245,33 @@ function M.buildSegments(trace, brakePoints)
     }
   end
   for i = 1, m do
-    local sStart = wrap01(brakes[i] + SPLINE_NEAR)
-    local sEnd = wrap01(brakes[(i % m) + 1] - SPLINE_NEAR)
-    local wrap = sEnd <= sStart and sEnd + 1 > sStart
-    local st = statsInSplineRange(trace, sStart, sEnd, wrap)
-    if st then
-      local kind = "straight"
-      if st.avgAbsSteer > 0.12 or st.maxBrake > 0.08 or (st.avgSpeed < 120 and st.minSpeed + 25 < st.avgSpeed) then
-        kind = "corner"
+    local bi = brakes[i]
+    local bj = brakes[(i % m) + 1]
+    local rawGap
+    if i < m then
+      rawGap = bj - bi
+    else
+      rawGap = (1 - bi) + bj
+    end
+    if rawGap > 2 * SPLINE_NEAR + 1e-9 then
+      local wrap = i == m
+      local pad = math.min(SPLINE_NEAR, math.max(1e-4, rawGap * 0.45))
+      local sStart = wrap01(bi + pad)
+      local sEnd = wrap01(bj - pad)
+      local st = statsInSplineRange(trace, sStart, sEnd, wrap)
+      if st then
+        local kind = "straight"
+        if st.avgAbsSteer > 0.12 or st.maxBrake > 0.08 or (st.avgSpeed < 120 and st.minSpeed + 25 < st.avgSpeed) then
+          kind = "corner"
+        end
+        segs[#segs + 1] = {
+          kind = kind,
+          s0 = sStart,
+          s1 = sEnd,
+          label = (kind == "corner") and ("T" .. tostring(i)) or ("S" .. tostring(i)),
+          brakeSpline = wrap01(bi),
+        }
       end
-      segs[#segs + 1] = {
-        kind = kind,
-        s0 = sStart,
-        s1 = sEnd,
-        label = (kind == "corner") and ("T" .. tostring(i)) or ("S" .. tostring(i)),
-        -- Raw brake spline for this sector (corner s0 is already offset by SPLINE_NEAR).
-        brakeSpline = wrap01(brakes[i]),
-      }
     end
   end
   table.sort(segs, function(a, b)
@@ -296,16 +350,20 @@ function M.consistencySummary(history)
     if type(cf) == "table" then
       for j = 1, #cf do
         local c = cf[j]
+        if not consistencyCornerOk(c) then
+          -- Skip malformed persisted rows — do not score as synthetic zeros.
+        else
         local lab = c.label or ("T" .. tostring(j))
         local bucket = byLabel[lab]
         if not bucket then
           bucket = { entry = {}, brakeS = {}, minS = {}, exit = {} }
           byLabel[lab] = bucket
         end
-        bucket.entry[#bucket.entry + 1] = tonumber(c.entrySpeed) or 0
-        bucket.brakeS[#bucket.brakeS + 1] = tonumber(c.brakePointSpline) or 0
-        bucket.minS[#bucket.minS + 1] = tonumber(c.minSpeed) or 0
-        bucket.exit[#bucket.exit + 1] = tonumber(c.exitSpeed) or 0
+        bucket.entry[#bucket.entry + 1] = tonumber(c.entrySpeed)
+        bucket.brakeS[#bucket.brakeS + 1] = tonumber(c.brakePointSpline)
+        bucket.minS[#bucket.minS + 1] = tonumber(c.minSpeed)
+        bucket.exit[#bucket.exit + 1] = tonumber(c.exitSpeed)
+        end
       end
     end
   end
@@ -372,14 +430,17 @@ function M.styleDivergence(sessionCorners, bestCorners)
   local bestByLabel = {}
   for i = 1, #bestCorners do
     local c = bestCorners[i]
-    local lab = c.label
-    if type(lab) == "string" and lab ~= "" then
+    local lab = type(c) == "table" and c.label or nil
+    if type(lab) == "string" and lab ~= "" and styleCornerOk(c) then
       bestByLabel[lab] = c
     end
   end
   local sum, ncmp = 0, 0
   for i = 1, #sessionCorners do
     local sc = sessionCorners[i]
+    if not styleCornerOk(sc) then
+      -- skip incomplete vectors
+    else
     local lab = sc.label
     local bc = type(lab) == "string" and bestByLabel[lab] or nil
     if bc then
@@ -389,6 +450,7 @@ function M.styleDivergence(sessionCorners, bestCorners)
         sum = sum + d * d
       end
       ncmp = ncmp + 1
+    end
     end
   end
   if ncmp <= 0 then

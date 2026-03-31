@@ -33,27 +33,32 @@ local function readF32LE(s, i)
   return sign * math.ldexp(m, e)
 end
 
+local function isFiniteF32(v)
+  return v == v and v ~= math.huge and v ~= -math.huge
+end
+
 local function readPointAt(s, base1)
   local x = readF32LE(s, base1 + XYZ_OFF_IN_RECORD)
   local y = readF32LE(s, base1 + XYZ_OFF_IN_RECORD + 4)
   local z = readF32LE(s, base1 + XYZ_OFF_IN_RECORD + 8)
-  if x ~= x or y ~= y or z ~= z then
+  if not isFiniteF32(x) or not isFiniteF32(y) or not isFiniteF32(z) then
     return nil
   end
   return { x = x, y = y, z = z }
 end
 
+--- Ordered candidates: layout-specific first, then track root (parse may still fail per file).
 ---@param sim ac.StateSim|nil
----@return string|nil
-local function guessFastLanePath(sim)
+---@return string[]
+local function fastLaneCandidatePaths(sim)
   if not sim then
-    return nil
+    return {}
   end
   local ok, folder = pcall(function()
     return ac.getFolder(ac.FolderID.Content)
   end)
   if not ok or not folder or folder == "" then
-    return nil
+    return {}
   end
   local function sanitizeId(s, fallback)
     s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
@@ -62,32 +67,16 @@ local function guessFastLanePath(sim)
     end
     return s
   end
-  -- Folder id is `sim.track`; `trackName` is display-only. Layout lives under `trackConfiguration`.
   local trackId = sanitizeId(sim.track, "unknown")
   local layoutRaw = sim.trackConfiguration
   local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
-
-  local function existsReadable(p)
-    local f = io.open(p, "rb")
-    if f then
-      f:close()
-      return true
-    end
-    return false
-  end
-
   local root = folder .. "/tracks/" .. trackId .. "/ai/fast_lane.ai"
-  -- When a layout is active, prefer layout-specific AI line so we do not load a stale root fast_lane.
+  local paths = {}
   if layoutId ~= "" and layoutId ~= "unknown" then
-    local laid = folder .. "/tracks/" .. trackId .. "/" .. layoutId .. "/ai/fast_lane.ai"
-    if existsReadable(laid) then
-      return laid
-    end
+    paths[#paths + 1] = folder .. "/tracks/" .. trackId .. "/" .. layoutId .. "/ai/fast_lane.ai"
   end
-  if existsReadable(root) then
-    return root
-  end
-  return nil
+  paths[#paths + 1] = root
+  return paths
 end
 
 ---@param path string
@@ -127,11 +116,13 @@ end
 ---@param sim ac.StateSim|nil
 ---@return table|nil
 function M.loadForTrack(sim)
-  local p = guessFastLanePath(sim)
-  if not p then
-    return nil
+  for _, p in ipairs(fastLaneCandidatePaths(sim)) do
+    local ref = M.loadFastLane(p)
+    if ref and ref.points and #ref.points >= 2 then
+      return ref
+    end
   end
-  return M.loadFastLane(p)
+  return nil
 end
 
 --- Squared XZ distance from point to segment AB (ground plane).
