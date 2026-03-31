@@ -260,12 +260,7 @@ function M.draw(car, best, last)
               if not okS then
                 debugSphereUsable = false
               end
-            elseif hasLegacyDrawSphere and drawSphereUsable and not hasDebugSphere then
-              okS = pcall(render.drawSphere, c, r, col)
-              if not okS then
-                drawSphereUsable = false
-              end
-            elseif not debugSphereUsable and hasLegacyDrawSphere and drawSphereUsable and hasDebugSphere then
+            elseif hasLegacyDrawSphere and drawSphereUsable then
               okS = pcall(render.drawSphere, c, r, col)
               if not okS then
                 drawSphereUsable = false
