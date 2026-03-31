@@ -40,11 +40,21 @@ function Detector:resetLapAggregates()
   self.inCoast = false
 end
 
----@param trace { throttle: number, brake: number }[]|nil
+---@param trace { throttle: number, brake: number, eMs: number }[]|nil
 ---@return table|nil
 function M.analyzeTrace(trace)
   if not trace or #trace < 2 then
     return nil
+  end
+  local n0 = #trace
+  for i = 1, n0 do
+    local row = trace[i]
+    if type(row) ~= "table" or type(row.eMs) ~= "number" then
+      return nil
+    end
+    if i > 1 and row.eMs < trace[i - 1].eMs then
+      return nil
+    end
   end
   local wasBraking = false
   local applyEvents = 0

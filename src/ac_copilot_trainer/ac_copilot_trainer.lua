@@ -537,7 +537,12 @@ function script.update(dt)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      if #completedTrace > 0 then
+      local spanMs = 0
+      if #completedTrace >= 2 then
+        spanMs = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
+      end
+      -- Ignore reference trace when coverage is far below lap time (mid-lap clock or telemetry gap).
+      if #completedTrace > 0 and spanMs >= lastMs * 0.45 then
         state.bestLapTrace = copyTrace(completedTrace)
         rebuildBestReference()
       end
@@ -556,7 +561,14 @@ function script.update(dt)
     state.lastSplineSector = sp
   end
 
-  -- Lap trace clock starts only at start/finish (see lap boundary block above), not mid-lap after resets.
+  -- Start collecting after lap counter is synced; span guard above avoids saving a partial trace as PB reference.
+  if tel:lapStartTime() == nil and not sim.isInMainMenu and state.lastLapCount >= 0 then
+    tel:beginLapClock(sim.time or 0)
+    resetDeltaSmoother()
+    state.sectorStartSimT = sim.time or 0
+    state.sectorIndex = 1
+    state.lastSplineSector = sp
+  end
 
   tel:setRecording(state.recording)
   tel:update(dt, car, sim)
