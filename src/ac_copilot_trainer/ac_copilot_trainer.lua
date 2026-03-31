@@ -501,6 +501,11 @@ function script.update(dt)
   local lc = car.lapCount or 0
   local sp = car.splinePosition or 0
 
+  -- After menu, lastLapCount is -1 until end-of-frame; prime now so lap clock can arm on the first driving frame.
+  if state.lastLapCount < 0 then
+    state.lastLapCount = lc
+  end
+
   -- Lap boundary: finalize trace before appending this frame's sample.
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
     local completedTrace = tel:finalizeLapTrace()

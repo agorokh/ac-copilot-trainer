@@ -58,6 +58,23 @@ local function jsonDecode(s)
   return nil
 end
 
+--- Normalize decoded JSON: enforce known version range and v1→v2 field shape.
+---@param data table|nil
+---@return table|nil
+local function normalizeLoaded(data)
+  if not data or type(data) ~= "table" then
+    return nil
+  end
+  local v = tonumber(data.version)
+  if v and v > DATA_VERSION then
+    return nil
+  end
+  if data.bestLapTrace ~= nil and type(data.bestLapTrace) ~= "table" then
+    data.bestLapTrace = nil
+  end
+  return data
+end
+
 --- Reject paths that could break out of a quoted shell argument.
 local function pathSafeForShell(p)
   if not p or p == "" then
@@ -99,7 +116,7 @@ function M.load(car, sim)
   end
   local raw = f:read("*a")
   f:close()
-  return jsonDecode(raw)
+  return normalizeLoaded(jsonDecode(raw))
 end
 
 function M.save(car, sim, data)

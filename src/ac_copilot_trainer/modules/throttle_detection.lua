@@ -40,7 +40,12 @@ function Detector:resetLapAggregates()
   self.inCoast = false
 end
 
----@param trace { throttle: number, brake: number, eMs: number }[]|nil
+---@class ThrottleTraceSample
+---@field throttle number|nil
+---@field brake number|nil
+---@field eMs number
+
+---@param trace ThrottleTraceSample[]|nil  -- eMs required, monotonic non-decreasing
 ---@return table|nil
 function M.analyzeTrace(trace)
   if not trace or #trace < 2 then
