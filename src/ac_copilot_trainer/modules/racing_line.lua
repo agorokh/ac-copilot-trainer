@@ -58,19 +58,20 @@ function M.drawLineStrip(car, line, color)
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
   local col = color or rgbm(0.2, 0.85, 0.95, 0.55)
   local cullSq = CULL_M * CULL_M
-  for i = 1, #line - 1 do
-    local a, b = line[i], line[i + 1]
-    local mx = (a.x + b.x) * 0.5
-    local my = (a.y + b.y) * 0.5
-    local mz = (a.z + b.z) * 0.5
-    if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-      pcall(function()
-        if render.line then
-          render.line(vec3(a.x, a.y + 0.05, a.z), vec3(b.x, b.y + 0.05, b.z), col)
-        end
-      end)
+  pcall(function()
+    if not render.line then
+      return
     end
-  end
+    for i = 1, #line - 1 do
+      local a, b = line[i], line[i + 1]
+      local mx = (a.x + b.x) * 0.5
+      local my = (a.y + b.y) * 0.5
+      local mz = (a.z + b.z) * 0.5
+      if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
+        render.line(vec3(a.x, a.y + 0.05, a.z), vec3(b.x, b.y + 0.05, b.z), col)
+      end
+    end
+  end)
 end
 
 return M

@@ -75,7 +75,7 @@ function M.readIniSnapshot(path)
   return { path = path, keys = keys }
 end
 
-local function hashSnapshot(snap)
+local function canonicalSetupString(snap)
   if not snap or not snap.keys then
     return ""
   end
@@ -88,17 +88,29 @@ local function hashSnapshot(snap)
   return table.concat(parts, ";")
 end
 
+--- Short stable digest (djb2) of canonical setup string — not the raw concatenation.
+local function digestSetup(canonical)
+  if not canonical or canonical == "" then
+    return ""
+  end
+  local h = 5381
+  for i = 1, #canonical do
+    h = (h * 33 + string.byte(canonical, i)) % 4294967296
+  end
+  return string.format("%08x", h)
+end
+
 ---@param car ac.StateCar|nil
 ---@param sim ac.StateSim|nil
 ---@return table|nil snap
----@return string hash
+---@return string digest compact hex signature for persistence/compare
 function M.snapshotActive(car, sim)
   local path = guessSetupIniPath(car, sim)
   local snap = M.readIniSnapshot(path)
   if not snap then
     return nil, ""
   end
-  return snap, hashSnapshot(snap)
+  return snap, digestSetup(canonicalSetupString(snap))
 end
 
 --- Part I: auto-load `copilot_*.ini` — CSP setup application APIs differ by build; try pcall hooks only.
@@ -137,7 +149,7 @@ function M.describeChange(prevHash, newHash)
   if prevHash == newHash then
     return nil
   end
-  return "Setup hash changed vs prior lap"
+  return "Setup signature changed vs prior lap"
 end
 
 return M

@@ -135,7 +135,7 @@ function M.draw(vm)
 
   if vm.refAiDistanceM ~= nil and vm.refAiDistanceM == vm.refAiDistanceM then
     ui.separator()
-    ui.text(string.format("AI line lateral (XY): ~%.1f m", vm.refAiDistanceM))
+    ui.text(string.format("AI line lateral (XZ, ground): ~%.1f m", vm.refAiDistanceM))
   end
   if vm.segmentCount ~= nil and vm.segmentCount > 0 then
     ui.text(string.format("Track segments: %d", vm.segmentCount))

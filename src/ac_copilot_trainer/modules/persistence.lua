@@ -84,6 +84,9 @@ local function normalizeLoaded(data)
   if data.setupHash ~= nil and type(data.setupHash) ~= "string" then
     data.setupHash = nil
   end
+  if data.bestCornerFeatures ~= nil and type(data.bestCornerFeatures) ~= "table" then
+    data.bestCornerFeatures = nil
+  end
   return data
 end
 

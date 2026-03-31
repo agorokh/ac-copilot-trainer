@@ -106,7 +106,7 @@ function M.loadForTrack(sim)
   return M.loadFastLane(p)
 end
 
---- Nearest XY distance to reference polyline (cheap scan; Phase 3: spatial index).
+--- Nearest XZ ground distance to reference polyline (windowed scan from last index; squared dist inside loop).
 ---@param ref table|nil
 ---@param px number
 ---@param py number
@@ -116,16 +116,55 @@ function M.lateralDistanceMeters(ref, px, py, pz)
   if not ref or not ref.points or #ref.points < 2 then
     return nil
   end
-  local best = math.huge
-  for i = 1, #ref.points do
-    local q = ref.points[i]
+  local pts = ref.points
+  local n = #pts
+  local WINDOW = 400
+
+  local function distSqAt(i)
+    local q = pts[i]
     local dx, dz = px - q.x, pz - q.z
-    local d = math.sqrt(dx * dx + dz * dz)
-    if d < best then
-      best = d
+    return dx * dx + dz * dz
+  end
+
+  local center = ref._latScanIdx or 1
+  if center < 1 or center > n then
+    center = 1
+  end
+
+  local bestD2 = math.huge
+  local bestI = center
+  local i0 = math.max(1, center - WINDOW)
+  local i1 = math.min(n, center + WINDOW)
+  for i = i0, i1 do
+    local d2 = distSqAt(i)
+    if d2 < bestD2 then
+      bestD2 = d2
+      bestI = i
     end
   end
-  return best
+
+  if bestI <= i0 + 8 or bestI >= i1 - 8 then
+    local stride = math.max(1, math.floor(n / 2048))
+    for i = 1, n, stride do
+      local d2 = distSqAt(i)
+      if d2 < bestD2 then
+        bestD2 = d2
+        bestI = i
+      end
+    end
+    local lo = math.max(1, bestI - WINDOW)
+    local hi = math.min(n, bestI + WINDOW)
+    for i = lo, hi do
+      local d2 = distSqAt(i)
+      if d2 < bestD2 then
+        bestD2 = d2
+        bestI = i
+      end
+    end
+  end
+
+  ref._latScanIdx = bestI
+  return math.sqrt(bestD2)
 end
 
 return M

@@ -817,7 +817,7 @@ function script.update(dt)
     end
   end
 
-  tires:update(dt, car, sp)
+  tires:update(car, dt, sp)
 
   if car.position and state.splineRef then
     state.refLatDistance = splineParser.lateralDistanceMeters(
