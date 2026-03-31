@@ -1,12 +1,13 @@
 -- 3D brake markers: distance culling, primitive budget (see MAX_*), optional track raycast (CSP API varies by version).
--- Budget is local to this module; racing_line applies its own culling — no shared CSP-wide primitive cap in code.
+-- Draw order (ac_copilot_trainer): trackMarkers.draw runs before racingLine.drawLineStrip so markers get first use of
+-- the frame's debug primitives; racing_line caps its debugLine count (see racing_line.MAX_DEBUG_LINE_CALLS).
 
 local M = {}
 
--- Max markers considered per frame; each marker may use up to three debug primitives (cross/sphere/pillar).
+-- Max markers considered per frame; line-based primaries are 5 calls/marker (pillar + X crosses).
 local MAX_MARKERS = 50
--- Total debug draw calls budget (~50 markers × 3 primitives, when all APIs exist).
-local MAX_DEBUG_PRIMITIVES = 150
+-- Frame budget for debug draws: must allow 50 × 5 line primaries (250) plus headroom for optional overlays.
+local MAX_DEBUG_PRIMITIVES = 320
 local FADE_NEAR = 60
 local FADE_FAR = 300
 -- Cap snap cache entries so long sessions cannot grow `snapY` without bound if marker keys drift.
@@ -14,6 +15,11 @@ local MAX_SNAPY_KEYS = 256
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
+-- Disable render.* helpers after first failing pcall (some CSP builds expose but throw — issue #24).
+local debugLineUsable = true
+local debugSphereUsable = true
+local debugCrossUsable = true
+local drawSphereUsable = true
 
 --- Fingerprint all brake points (coords + spline when present) so any edit invalidates snap cache.
 local function brakeListHash(list)
@@ -135,27 +141,42 @@ function M.draw(car, best, last)
   table.sort(items, function(a, b)
     return a.d < b.d
   end)
-  local hasDebugPrimitive = render.debugCross or render.debugSphere or render.debugLine
-  -- Some CSP builds lack debug* helpers but still expose drawSphere; keep markers visible there (prefer debug* when present).
-  local useLegacyDrawSphere = not hasDebugPrimitive and type(render.drawSphere) == "function"
-  local primitivesPerMarker = 0
-  if render.debugCross then
-    primitivesPerMarker = primitivesPerMarker + 1
-  end
-  if render.debugSphere then
-    primitivesPerMarker = primitivesPerMarker + 1
-  end
-  if render.debugLine then
-    primitivesPerMarker = primitivesPerMarker + 1
-  end
-  if useLegacyDrawSphere then
-    primitivesPerMarker = 1
-  end
-  if primitivesPerMarker == 0 then
+  local hasDebugLine = type(render.debugLine) == "function"
+  local hasDebugSphere = type(render.debugSphere) == "function"
+  local hasDebugCross = type(render.debugCross) == "function"
+  local hasLegacyDrawSphere = type(render.drawSphere) == "function"
+  local hasAnyPrimitive = hasDebugLine or hasDebugSphere or hasDebugCross or hasLegacyDrawSphere
+  if not hasAnyPrimitive then
     return
   end
-  local markerBudget = math.max(1, math.floor(MAX_DEBUG_PRIMITIVES / primitivesPerMarker))
-  local nDraw = math.min(#items, MAX_MARKERS, markerBudget)
+  -- Prefer debug* over legacy drawSphere when both exist; legacy-only when no debug* APIs.
+  local legacySphereOnly = hasLegacyDrawSphere and drawSphereUsable and not hasDebugLine and not hasDebugSphere and not hasDebugCross
+  local useLinePrimary = hasDebugLine and debugLineUsable
+  -- nDraw from primary visuals only so optional sphere/cross do not shrink how many brake markers appear.
+  local primaryPerMarker ---@type number
+  local nDraw ---@type number
+  local overlayRemaining = 0
+  if legacySphereOnly then
+    primaryPerMarker = 1
+    nDraw = math.min(#items, MAX_MARKERS, math.max(1, math.floor(MAX_DEBUG_PRIMITIVES / primaryPerMarker)))
+  elseif useLinePrimary then
+    primaryPerMarker = 5
+    nDraw = math.min(#items, MAX_MARKERS, math.max(1, math.floor(MAX_DEBUG_PRIMITIVES / primaryPerMarker)))
+    overlayRemaining = MAX_DEBUG_PRIMITIVES - nDraw * primaryPerMarker
+  else
+    primaryPerMarker = 0
+    -- Match draw path: legacy sphere when debugSphere is missing or marked unusable.
+    if (debugSphereUsable and hasDebugSphere)
+      or (hasLegacyDrawSphere and drawSphereUsable and (not hasDebugSphere or not debugSphereUsable)) then
+      primaryPerMarker = primaryPerMarker + 1
+    end
+    if debugCrossUsable and hasDebugCross then
+      primaryPerMarker = primaryPerMarker + 1
+    end
+    primaryPerMarker = math.max(1, primaryPerMarker)
+    local markerBudget = math.max(1, math.floor(MAX_DEBUG_PRIMITIVES / primaryPerMarker))
+    nDraw = math.min(#items, MAX_MARKERS, markerBudget)
+  end
   for i = 1, nDraw do
     local it = items[i]
     local alpha = 1
@@ -187,21 +208,96 @@ function M.draw(car, best, last)
         sy = snapToTrack(it.x, it.y, it.z)
         snapY[ck] = sy
       end
+      -- Whole marker block in one pcall so vec3/render API mismatches on odd CSP builds do not abort M.draw.
       pcall(function()
-        if not vec3 then return end
-        local c = vec3(it.x, sy, it.z)
-        if useLegacyDrawSphere and render.drawSphere then
-          render.drawSphere(c, r, col)
+        if not vec3 then
           return
         end
-        if render.debugCross then
-          render.debugCross(c, r, col)
+        local c = vec3(it.x, sy, it.z)
+        if legacySphereOnly then
+          if drawSphereUsable then
+            local okL = pcall(render.drawSphere, c, r, col)
+            if not okL then
+              drawSphereUsable = false
+            end
+          end
+          return
         end
-        if render.debugSphere then
-          render.debugSphere(c, r * 0.8, col)
+
+        local lineSession = hasDebugLine and debugLineUsable
+        local drewFullLines = false
+        if lineSession then
+          local top = vec3(it.x, sy + 3.5, it.z)
+          if not pcall(render.debugLine, c, top, col, col) then
+            debugLineUsable = false
+          else
+            local arm = r * 0.7
+            local ok2 = pcall(render.debugLine,
+              vec3(it.x - arm, sy + 0.3, it.z - arm),
+              vec3(it.x + arm, sy + 0.3, it.z + arm), col, col)
+            local ok3 = pcall(render.debugLine,
+              vec3(it.x - arm, sy + 0.3, it.z + arm),
+              vec3(it.x + arm, sy + 0.3, it.z - arm), col, col)
+            local ok4 = pcall(render.debugLine,
+              vec3(it.x - arm, sy + 1.5, it.z - arm),
+              vec3(it.x + arm, sy + 1.5, it.z + arm), col, col)
+            local ok5 = pcall(render.debugLine,
+              vec3(it.x - arm, sy + 1.5, it.z + arm),
+              vec3(it.x + arm, sy + 1.5, it.z - arm), col, col)
+            if ok2 and ok3 and ok4 and ok5 then
+              drewFullLines = true
+            else
+              debugLineUsable = false
+            end
+          end
         end
-        if render.debugLine then
-          render.debugLine(c, vec3(it.x, sy + 3.0, it.z), col, col)
+
+        if drewFullLines then
+          if overlayRemaining > 0 then
+            local okS = false
+            if debugSphereUsable and hasDebugSphere then
+              okS = pcall(render.debugSphere, c, r * 0.8, col)
+              if not okS then
+                debugSphereUsable = false
+              end
+            elseif hasLegacyDrawSphere and drawSphereUsable then
+              okS = pcall(render.drawSphere, c, r, col)
+              if not okS then
+                drawSphereUsable = false
+              end
+            end
+            if okS then
+              overlayRemaining = overlayRemaining - 1
+            end
+          end
+          if overlayRemaining > 0 and debugCrossUsable and hasDebugCross then
+            local okC = pcall(render.debugCross, c, r, col)
+            if not okC then
+              debugCrossUsable = false
+            else
+              overlayRemaining = overlayRemaining - 1
+            end
+          end
+        else
+          -- No full line pillar+X (API missing, disabled, or pcall failed): sphere/cross as primary.
+          -- Fresh vec3 per endpoint here and above — same rationale as racing_line (mutable vec3 reuse broke layering).
+          if debugSphereUsable and hasDebugSphere then
+            local okSphere = pcall(render.debugSphere, c, r * 0.8, col)
+            if not okSphere then
+              debugSphereUsable = false
+            end
+          elseif hasLegacyDrawSphere and drawSphereUsable then
+            local okLeg = pcall(render.drawSphere, c, r, col)
+            if not okLeg then
+              drawSphereUsable = false
+            end
+          end
+          if debugCrossUsable and hasDebugCross then
+            local okCr = pcall(render.debugCross, c, r, col)
+            if not okCr then
+              debugCrossUsable = false
+            end
+          end
         end
       end)
     end
