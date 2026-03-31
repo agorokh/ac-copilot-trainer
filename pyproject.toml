@@ -55,6 +55,4 @@ source = ["src/ac_copilot_trainer", "tools"]
 omit = [
   "tools/process_miner/run.py",
   "tools/repo_knowledge/mcp_server.py",
-  # Optional [coaching] dep; default CI does not install websockets — omit avoids coverage noise.
-  "tools/ai_sidecar/server.py",
 ]
