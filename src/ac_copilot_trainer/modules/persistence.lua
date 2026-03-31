@@ -3,7 +3,7 @@
 local M = {}
 
 local APP_SUBDIR = "ac_copilot_trainer"
-local DATA_VERSION = 2
+local DATA_VERSION = 3
 
 local function safeName(s)
   s = tostring(s or "unknown"):gsub("[^%w%.%-_]+", "_")
@@ -58,6 +58,28 @@ local function jsonDecode(s)
   return nil
 end
 
+--- Rebuild a 1..n dense array from possibly sparse / string-keyed decoded JSON.
+local function denseArray(t)
+  if type(t) ~= "table" then
+    return nil
+  end
+  local keys = {}
+  for k in pairs(t) do
+    if type(k) == "number" and k == math.floor(k) and k >= 1 then
+      keys[#keys + 1] = k
+    end
+  end
+  if #keys == 0 then
+    return {}
+  end
+  table.sort(keys)
+  local out = {}
+  for i = 1, #keys do
+    out[i] = t[keys[i]]
+  end
+  return out
+end
+
 --- Normalize decoded JSON: reject future `version`, coerce bad `bestLapTrace` (v1 omits version and trace).
 ---@param data table|nil
 ---@return table|nil
@@ -71,6 +93,47 @@ local function normalizeLoaded(data)
   end
   if data.bestLapTrace ~= nil and type(data.bestLapTrace) ~= "table" then
     data.bestLapTrace = nil
+  end
+  if data.trackSegments ~= nil then
+    if type(data.trackSegments) ~= "table" then
+      data.trackSegments = nil
+    else
+      data.trackSegments = denseArray(data.trackSegments)
+    end
+  end
+  if data.lapFeatureHistory ~= nil then
+    if type(data.lapFeatureHistory) ~= "table" then
+      data.lapFeatureHistory = nil
+    else
+      local hist = denseArray(data.lapFeatureHistory)
+      if hist then
+        for i = 1, #hist do
+          local lap = hist[i]
+          if type(lap) == "table" then
+            if type(lap.corners) == "table" then
+              lap.corners = denseArray(lap.corners) or {}
+            else
+              lap.corners = {}
+            end
+          end
+        end
+      end
+      data.lapFeatureHistory = hist
+    end
+  end
+  if data.setupSnapshot ~= nil and type(data.setupSnapshot) ~= "table" then
+    data.setupSnapshot = nil
+  end
+  if data.setupHash ~= nil and type(data.setupHash) ~= "string" then
+    data.setupHash = nil
+  end
+  -- v3: array of corner feature tables; reject wrong type, densify sparse JSON arrays.
+  if data.bestCornerFeatures ~= nil then
+    if type(data.bestCornerFeatures) ~= "table" then
+      data.bestCornerFeatures = nil
+    else
+      data.bestCornerFeatures = denseArray(data.bestCornerFeatures)
+    end
   end
   return data
 end

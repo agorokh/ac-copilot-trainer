@@ -19,9 +19,17 @@ local M = {}
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field throttleLapHint string|nil
+---@field consistencyHud string|nil
+---@field styleHud string|nil
+---@field tireHud string|nil
+---@field tireLockupFlash boolean|nil
+---@field setupChangeMsg string|nil
+---@field autoSetupLine string|nil
+---@field refAiDistanceM number|nil
+---@field segmentCount integer|nil
 
 function M.draw(vm)
-  ui.text("AC Copilot Trainer v0.2.0")
+  ui.text("AC Copilot Trainer v0.3.0")
   ui.separator()
   if vm.recording then
     ui.textColored(rgbm(0, 1, 0, 1), "REC")
@@ -97,6 +105,48 @@ function M.draw(vm)
     for i = 1, #vm.postLapLines do
       ui.text(vm.postLapLines[i])
     end
+  end
+
+  if vm.consistencyHud and vm.consistencyHud ~= "" then
+    ui.separator()
+    ui.text("Consistency (last laps)")
+    ui.textWrapped(vm.consistencyHud)
+  end
+  if vm.styleHud and vm.styleHud ~= "" then
+    if not vm.consistencyHud or vm.consistencyHud == "" then
+      ui.separator()
+      ui.text("Style vs reference")
+    end
+    ui.textWrapped(vm.styleHud)
+  end
+
+  if vm.tireHud and vm.tireHud ~= "" then
+    ui.separator()
+    ui.text("Tires (last lap)")
+    ui.textWrapped(vm.tireHud)
+  end
+  if vm.tireLockupFlash then
+    ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
+  end
+
+  if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then
+    ui.separator()
+    ui.textColored(rgbm(0.95, 0.75, 0.35, 1), vm.setupChangeMsg)
+  end
+  if vm.autoSetupLine and vm.autoSetupLine ~= "" then
+    if not vm.setupChangeMsg or vm.setupChangeMsg == "" then
+      ui.separator()
+      ui.text("Setup")
+    end
+    ui.textWrapped(vm.autoSetupLine)
+  end
+
+  if vm.refAiDistanceM ~= nil and vm.refAiDistanceM == vm.refAiDistanceM then
+    ui.separator()
+    ui.text(string.format("AI line lateral (XZ, ground): ~%.1f m", vm.refAiDistanceM))
+  end
+  if vm.segmentCount ~= nil and vm.segmentCount > 0 then
+    ui.text(string.format("Track segments: %d", vm.segmentCount))
   end
 
   ui.separator()

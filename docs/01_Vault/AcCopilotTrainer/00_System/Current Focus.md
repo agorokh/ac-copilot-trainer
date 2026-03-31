@@ -3,7 +3,7 @@ type: current-focus
 status: active
 memory_tier: canonical
 last_updated: 2026-03-31
-issue: "https://github.com/agorokh/ac-copilot-trainer/issues/7"
+issue: "https://github.com/agorokh/ac-copilot-trainer/issues/8"
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -12,8 +12,8 @@ relates_to:
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Issue #7:** 3D track markers + approach HUD + post-lap comparison (Phase 1).
+**Repo:** ac-copilot-trainer. **Issue #8:** Corner analysis, consistency, fingerprint / Phase 2 modules.
 
-**Branch:** `feat/issue-7-track-markers-delta`. **PR #20** (ready; CI + Bugbot green on latest tip; GraphQL review threads all resolved, 2026-03-31). **Next:** merge when approved.
+**Branch:** `feat/issue-8-corner-analysis-phase2`. **PR #21** is open and ready; **Next:** **pr-resolution-follow-up** until CI green, then merge.
 
-**After merge:** #8 (corner analysis / fingerprint), then #9, #19 per epic.
+**After merge:** follow epic (#9, #19, etc.) per Project State.

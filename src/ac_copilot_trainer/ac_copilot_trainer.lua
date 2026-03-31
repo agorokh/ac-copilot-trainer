@@ -1,6 +1,6 @@
--- AC Copilot Trainer v0.2.0
+-- AC Copilot Trainer v0.3.0
 -- https://github.com/agorokh/ac-copilot-trainer
--- Issues #6–#7: telemetry, traces, delta, sectors, 3D markers, throttle, post-lap.
+-- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
 do
   local origin = ac.getFolder(ac.FolderID.ScriptOrigin)
@@ -16,6 +16,11 @@ local hud = require("hud")
 local delta = require("delta")
 local trackMarkers = require("track_markers")
 local throttleDet = require("throttle_detection")
+local cornerAnalysis = require("corner_analysis")
+local splineParser = require("spline_parser")
+local racingLine = require("racing_line")
+local tireMonitor = require("tire_monitor")
+local setupReader = require("setup_reader")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -29,6 +34,8 @@ local config = {
   coastWarnSeconds = 1.0,
   postLapHoldSeconds = 5,
   sectorMessageSeconds = 3,
+  autoLoadSetup = true,
+  racingLineMode = "best",
 }
 
 local SMOOTH_N = 30
@@ -70,6 +77,7 @@ end
 local tel = newTelemetry()
 local brakes = newBrakes()
 local td = throttleDet.new()
+local tires = tireMonitor.new()
 
 local lastDriveCar ---@type ac.StateCar|nil
 local lastDriveSim ---@type ac.StateSim|nil
@@ -100,6 +108,7 @@ local function copyTrace(list)
       speed = e.speed,
       brake = e.brake,
       throttle = e.throttle,
+      steer = e.steer,
       gear = e.gear,
       px = e.px,
       py = e.py,
@@ -123,10 +132,37 @@ local function normalizeTrace(t)
         speed = tonumber(r.speed) or 0,
         brake = tonumber(r.brake) or 0,
         throttle = tonumber(r.throttle) or 0,
+        steer = tonumber(r.steer) or 0,
         gear = math.floor(tonumber(r.gear) or 0),
         px = tonumber(r.px) or 0,
         py = tonumber(r.py) or 0,
         pz = tonumber(r.pz) or 0,
+      }
+    end
+  end
+  return out
+end
+
+local function cloneCornerFeats(f)
+  if not f or type(f) ~= "table" then
+    return {}
+  end
+  local out = {}
+  for i = 1, #f do
+    local c = f[i]
+    if type(c) == "table" then
+      out[#out + 1] = {
+        label = c.label,
+        s0 = c.s0,
+        s1 = c.s1,
+        entrySpeed = c.entrySpeed,
+        minSpeed = c.minSpeed,
+        exitSpeed = c.exitSpeed,
+        brakePointSpline = c.brakePointSpline,
+        trailBrakeRatio = c.trailBrakeRatio,
+        steerReversals = c.steerReversals,
+        tractionCircleProxy = c.tractionCircleProxy,
+        throttleAvg = c.throttleAvg,
       }
     end
   end
@@ -192,6 +228,23 @@ local state = {
   postLapLines = {},
   postLapUntil = 0,
   lastThrottleSummary = "",
+  trackSegments = {},
+  lapFeatureHistory = {},
+  bestCornerFeatures = {},
+  lapsCompleted = 0,
+  splineRef = nil,
+  splineSessionPrimed = false,
+  refLatDistance = nil,
+  racingBestLine = {},
+  racingLastLine = {},
+  setupHash = "",
+  lastSetupSnap = nil,
+  setupChangeMsg = "",
+  autoSetupMsg = "",
+  consistencyHud = "",
+  styleHud = "",
+  tireHud = "",
+  autoSetupUntil = 0,
 }
 
 local function rebuildBestReference()
@@ -228,6 +281,29 @@ local function applyLoaded(data)
     state.bestReferenceLapMs = nil
   end
   rebuildBestReference()
+  if state.bestLapTrace and #state.bestLapTrace >= 2 then
+    state.racingBestLine = racingLine.traceToLine(state.bestLapTrace)
+  else
+    state.racingBestLine = {}
+  end
+  if data.trackSegments and type(data.trackSegments) == "table" then
+    state.trackSegments = data.trackSegments
+  end
+  if data.lapFeatureHistory and type(data.lapFeatureHistory) == "table" then
+    state.lapFeatureHistory = data.lapFeatureHistory
+    while #state.lapFeatureHistory > cornerAnalysis.maxHistoryLaps() do
+      table.remove(state.lapFeatureHistory, 1)
+    end
+  end
+  if data.setupHash and type(data.setupHash) == "string" then
+    state.setupHash = data.setupHash
+  end
+  if data.setupSnapshot and type(data.setupSnapshot) == "table" then
+    state.lastSetupSnap = data.setupSnapshot
+  end
+  if data.bestCornerFeatures and type(data.bestCornerFeatures) == "table" then
+    state.bestCornerFeatures = data.bestCornerFeatures
+  end
 end
 
 local function persistPayload()
@@ -238,6 +314,11 @@ local function persistPayload()
     bestBrakePoints = state.brakingPoints.best,
     bestLapTrace = state.bestLapTrace,
     bestReferenceLapMs = state.bestReferenceLapMs,
+    trackSegments = state.trackSegments,
+    lapFeatureHistory = state.lapFeatureHistory,
+    setupHash = state.setupHash,
+    setupSnapshot = state.lastSetupSnap,
+    bestCornerFeatures = state.bestCornerFeatures,
   }
 end
 
@@ -271,6 +352,7 @@ local function resetRuntimeAfterLeavingTrack()
   tel = newTelemetry()
   brakes = newBrakes()
   td = throttleDet.new()
+  tires = tireMonitor.new()
   lastDriveCar = nil
   lastDriveSim = nil
   state.lastSplinePos = nil
@@ -286,6 +368,23 @@ local function resetRuntimeAfterLeavingTrack()
   state.postLapLines = {}
   state.postLapUntil = 0
   state.lastThrottleSummary = ""
+  state.trackSegments = {}
+  state.lapFeatureHistory = {}
+  state.bestCornerFeatures = {}
+  state.lapsCompleted = 0
+  state.splineRef = nil
+  state.splineSessionPrimed = false
+  state.refLatDistance = nil
+  state.racingBestLine = {}
+  state.racingLastLine = {}
+  state.setupHash = ""
+  state.lastSetupSnap = nil
+  state.setupChangeMsg = ""
+  state.autoSetupMsg = ""
+  state.consistencyHud = ""
+  state.styleHud = ""
+  state.tireHud = ""
+  state.autoSetupUntil = 0
   resetDeltaSmoother()
 end
 
@@ -294,6 +393,7 @@ local function resetRollingDrivingState()
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
+  tires:resetLap()
   state.sectorIndex = 1
   state.sectorStartSimT = nil
   state.lastSplineSector = nil
@@ -458,13 +558,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.2.0")
+    ui.text("AC Copilot Trainer v0.3.0")
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.2.0")
+    ui.text("AC Copilot Trainer v0.3.0")
     ui.separator()
     ui.text("Waiting for car data...")
     return
@@ -494,6 +594,11 @@ function script.windowMain(_dt)
     coastWarn = true
   end
 
+  local autoSetupLine = nil
+  if state.autoSetupMsg ~= "" and now < (state.autoSetupUntil or 0) then
+    autoSetupLine = state.autoSetupMsg
+  end
+
   hud.draw({
     recording = tel:isRecording(),
     telemetrySamples = tel:sampleCount(),
@@ -511,6 +616,14 @@ function script.windowMain(_dt)
     postLapLines = postLines,
     coastWarn = coastWarn,
     throttleLapHint = state.lastThrottleSummary,
+    consistencyHud = state.consistencyHud,
+    styleHud = state.styleHud,
+    tireHud = state.tireHud,
+    tireLockupFlash = tires:lockupFlash(),
+    setupChangeMsg = state.setupChangeMsg,
+    autoSetupLine = autoSetupLine,
+    refAiDistanceM = state.refLatDistance,
+    segmentCount = #(state.trackSegments or {}),
   })
 end
 
@@ -541,6 +654,18 @@ function script.update(dt)
 
   if not state.initialized then
     tryLoadDisk()
+  end
+
+  if state.initialized and not state.splineSessionPrimed then
+    state.splineSessionPrimed = true
+    state.splineRef = splineParser.loadForTrack(sim)
+    if config.autoLoadSetup then
+      local msg = setupReader.tryAutoLoadCopilotSetup(car, sim, true)
+      if msg and msg ~= "" then
+        state.autoSetupMsg = msg
+        state.autoSetupUntil = (sim.time or 0) + 8
+      end
+    end
   end
 
   local lc = car.lapCount or 0
@@ -582,10 +707,72 @@ function script.update(dt)
       state.lastThrottleSummary = ""
     end
 
+    local segBrakes = state.brakingPoints.session
+    if #segBrakes == 0 then
+      segBrakes = state.brakingPoints.best
+    end
+    state.lapsCompleted = (state.lapsCompleted or 0) + 1
+    local spanForAnalytics = 0
+    if #completedTrace >= 2 then
+      spanForAnalytics = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
+    end
+    local traceAnalyticsOk = lastMs > 0 and #completedTrace > 0 and spanForAnalytics >= lastMs * 0.45 and traceHasPbSplineCoverage(completedTrace)
+
+    local feats = {}
+    if traceAnalyticsOk then
+      if state.lapsCompleted >= 2 then
+        local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
+        if #ns > 0 then
+          state.trackSegments = ns
+        end
+      end
+      if #state.trackSegments == 0 then
+        local ns = cornerAnalysis.buildSegments(completedTrace, segBrakes)
+        if #ns > 0 then
+          state.trackSegments = ns
+        end
+      end
+      feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
+      cornerAnalysis.appendHistory(state.lapFeatureHistory, { lapMs = lastMs, corners = feats })
+      local cons = cornerAnalysis.consistencySummary(state.lapFeatureHistory)
+      state.consistencyHud = ""
+      if cons and cons.worstThree and #cons.worstThree > 0 then
+        state.consistencyHud = "Least consistent: " .. table.concat(cons.worstThree, ", ")
+      end
+      state.styleHud = ""
+      local div = cornerAnalysis.styleDivergence(feats, state.bestCornerFeatures)
+      if div ~= nil then
+        state.styleHud = string.format(
+          "Style vs ref: %.0f%% match",
+          math.max(0, math.min(100, (1 - div) * 100))
+        )
+      end
+    else
+      state.consistencyHud = state.consistencyHud or ""
+      state.styleHud = state.styleHud or ""
+    end
+
+    local _snap, hnew = setupReader.snapshotActive(car, sim)
+    state.setupChangeMsg = setupReader.describeChange(state.setupHash, hnew) or ""
+    if hnew and hnew ~= "" then
+      state.setupHash = hnew
+    end
+    if _snap then
+      state.lastSetupSnap = _snap
+    end
+
+    state.tireHud = tires:lapSummaryLine() or ""
+    tires:resetLap()
+
+    state.racingLastLine = racingLine.traceToLine(completedTrace)
+
     local prevBestBp = copyBpList(state.brakingPoints.best)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
+      if traceAnalyticsOk and #feats > 0 then
+        state.bestCornerFeatures = cloneCornerFeats(feats)
+      end
       local spanMs = 0
       if #completedTrace >= 2 then
         spanMs = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
@@ -594,10 +781,10 @@ function script.update(dt)
       if #completedTrace > 0 and spanMs >= lastMs * 0.45 and traceHasPbSplineCoverage(completedTrace) then
         state.bestLapTrace = copyTrace(completedTrace)
         state.bestReferenceLapMs = lastMs
+        state.racingBestLine = racingLine.traceToLine(completedTrace)
       end
       -- Guards failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; persist still saves both with `bestReferenceLapMs`.
       rebuildBestReference()
-      persistSnapshotLive()
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)
     state.brakingPoints.session = {}
@@ -610,6 +797,8 @@ function script.update(dt)
     state.sectorIndex = 1
     state.sectorStartSimT = sim.time or 0
     state.lastSplineSector = sp
+
+    persistSnapshotLive()
   end
 
   -- Start collecting after lap counter is synced; span guard above avoids saving a partial trace as PB reference.
@@ -647,6 +836,19 @@ function script.update(dt)
     end
   end
 
+  tires:update(car, dt, sp)
+
+  if car.position and state.splineRef then
+    state.refLatDistance = splineParser.lateralDistanceMeters(
+      state.splineRef,
+      car.position.x,
+      car.position.y,
+      car.position.z
+    )
+  else
+    state.refLatDistance = nil
+  end
+
   if state.lastLapCount >= 0 and lc < state.lastLapCount then
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
@@ -674,4 +876,11 @@ function script.Draw3D(_dt)
   end
   local c = ac.getCar(0)
   trackMarkers.draw(c, state.brakingPoints.best, state.brakingPoints.last)
+  local mode = config.racingLineMode or "best"
+  if mode == "best" or mode == "both" then
+    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.15, 0.92, 0.45, 0.5))
+  end
+  if mode == "last" or mode == "both" then
+    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.95, 0.82, 0.15, 0.45))
+  end
 end
