@@ -39,7 +39,7 @@ local config = {
   autoLoadSetup = true,
   racingLineMode = "best",
   --- Verbose: log Draw3D/data counts every ~2s to `ac.log` (troubleshooting only).
-  enableDraw3DDiagnostics = true,
+  enableDraw3DDiagnostics = false,
   coachingHoldSeconds = 15,
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
@@ -951,9 +951,10 @@ function script.Draw3D(_dt)
         if lp then
           ac.log("[COPILOT] line[1] x=" .. tostring(lp.x) .. " y=" .. tostring(lp.y) .. " z=" .. tostring(lp.z))
         end
-        local mid = state.racingBestLine[math.floor(bestLineN / 2)]
+        local midIdx = math.max(1, math.floor((bestLineN + 1) / 2))
+        local mid = state.racingBestLine[midIdx]
         if mid then
-          ac.log("[COPILOT] line[mid] x=" .. tostring(mid.x) .. " y=" .. tostring(mid.y) .. " z=" .. tostring(mid.z))
+          ac.log("[COPILOT] line[mid i=" .. tostring(midIdx) .. "] x=" .. tostring(mid.x) .. " y=" .. tostring(mid.y) .. " z=" .. tostring(mid.z))
         end
       end
     end
