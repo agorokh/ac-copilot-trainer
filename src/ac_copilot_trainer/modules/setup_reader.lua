@@ -4,12 +4,38 @@ local M = {}
 
 local COPILOT_GLOB = "copilot_"
 
+--- Prefer CSP-reported active setup path when the runtime exposes it (varies by CSP build).
+---@param car ac.StateCar|nil
+---@return string|nil
+local function activeSetupPathFromCar(car)
+  if not car then
+    return nil
+  end
+  for _, key in ipairs({ "setupFilename", "currentSetupFilename", "setupFile", "setupINI" }) do
+    local ok, p = pcall(function()
+      return car[key]
+    end)
+    if ok and type(p) == "string" and p ~= "" then
+      local f = io.open(p, "r")
+      if f then
+        f:close()
+        return p
+      end
+    end
+  end
+  return nil
+end
+
 ---@param car ac.StateCar|nil
 ---@param sim ac.StateSim|nil
 ---@return string|nil
 local function guessSetupIniPath(car, sim)
   if not car or not sim then
     return nil
+  end
+  local fromCar = activeSetupPathFromCar(car)
+  if fromCar then
+    return fromCar
   end
   local okDoc, doc = pcall(function()
     return ac.getFolder(ac.FolderID.Documents)

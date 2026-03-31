@@ -56,10 +56,38 @@ local function guessFastLanePath(sim)
   if not ok or not folder or folder == "" then
     return nil
   end
-  local track = sim.track or sim.trackName or sim.trackConfiguration or "unknown"
-  track = tostring(track):gsub("[^%w%.%-_]+", "_")
-  -- Common AC layout: content/tracks/<track>/ai/fast_lane.ai
-  return folder .. "/tracks/" .. track .. "/ai/fast_lane.ai"
+  local function sanitizeId(s, fallback)
+    s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
+    if s == "" then
+      s = fallback or "unknown"
+    end
+    return s
+  end
+  -- Folder id is `sim.track`; `trackName` is display-only. Layout lives under `trackConfiguration`.
+  local trackId = sanitizeId(sim.track, "unknown")
+  local layoutRaw = sim.trackConfiguration
+  local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
+
+  local function existsReadable(p)
+    local f = io.open(p, "rb")
+    if f then
+      f:close()
+      return true
+    end
+    return false
+  end
+
+  local root = folder .. "/tracks/" .. trackId .. "/ai/fast_lane.ai"
+  if existsReadable(root) then
+    return root
+  end
+  if layoutId ~= "" and layoutId ~= "unknown" then
+    local laid = folder .. "/tracks/" .. trackId .. "/" .. layoutId .. "/ai/fast_lane.ai"
+    if existsReadable(laid) then
+      return laid
+    end
+  end
+  return nil
 end
 
 ---@param path string

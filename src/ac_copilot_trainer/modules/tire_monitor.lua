@@ -23,6 +23,9 @@ end
 function Mon:resetLap()
   self.lapTemps = { fl = {}, fr = {}, rl = {}, rr = {} }
   self.lapPeakSlip = { 0, 0, 0, 0 }
+  self.slipT = 0
+  self.lockupRearm = true
+  self.lockupFlashT = 0
 end
 
 local function pushTemp(bucket, v)
