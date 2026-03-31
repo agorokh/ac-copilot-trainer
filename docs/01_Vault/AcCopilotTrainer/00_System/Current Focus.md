@@ -14,6 +14,6 @@ relates_to:
 
 **Repo:** ac-copilot-trainer. **Issue #8:** Corner analysis, consistency, fingerprint / Phase 2 modules.
 
-**Branch:** `feat/issue-8-corner-analysis-phase2`. **Next:** push PR, **pr-resolution-follow-up** after **ready**, merge when green.
+**Branch:** `feat/issue-8-corner-analysis-phase2`. **PR #21** is open and ready; **Next:** **pr-resolution-follow-up** until CI green, then merge.
 
 **After merge:** follow epic (#9, #19, etc.) per Project State.

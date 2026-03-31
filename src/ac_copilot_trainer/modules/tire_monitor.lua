@@ -141,16 +141,18 @@ function Mon:update(car, dt, spline)
     self.lockupFlashT = math.max(0, self.lockupFlashT - d)
   end
   -- One log per slip episode: lockupRearm false until all wheels drop below threshold. HUD uses lockupFlashT, not hold timers.
-  if maxHold >= LOCKUP_HOLD and spline and self.lockupRearm then
-    self.lockups[#self.lockups + 1] = { spline = spline }
+  if maxHold >= LOCKUP_HOLD and self.lockupRearm then
+    if spline then
+      self.lockups[#self.lockups + 1] = { spline = spline }
+      if #self.lockups > 32 then
+        table.remove(self.lockups, 1)
+      end
+    end
     for j = 1, 4 do
       hold[j] = 0
     end
     self.lockupRearm = false
     self.lockupFlashT = LOCKUP_FLASH
-    if #self.lockups > 32 then
-      table.remove(self.lockups, 1)
-    end
   end
 end
 

@@ -55,9 +55,13 @@ local function guessSetupIniPath(car, sim)
   local trackId = sanitizeId(sim.track, "unknown")
   local layoutRaw = sim.trackConfiguration
   local layoutId = layoutRaw ~= nil and sanitizeId(layoutRaw, "") or ""
-  local bases = { doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId }
+  local trackRoot = doc .. "/Assetto Corsa/setups/" .. carId .. "/" .. trackId
+  local bases = {}
   if layoutId ~= "" and layoutId ~= "unknown" then
-    bases[#bases + 1] = bases[1] .. "/" .. layoutId
+    bases[1] = trackRoot .. "/" .. layoutId
+    bases[2] = trackRoot
+  else
+    bases[1] = trackRoot
   end
   for b = 1, #bases do
     local base = bases[b]
@@ -70,7 +74,7 @@ local function guessSetupIniPath(car, sim)
       end
     end
   end
-  return bases[1] .. "/race.ini"
+  return trackRoot .. "/race.ini"
 end
 
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.
@@ -98,18 +102,8 @@ function M.readIniSnapshot(path)
     else
       local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
       if k and v then
-        local lk = string.lower(k)
-        if
-          lk:find("spring", 1, true)
-          or lk:find("arb", 1, true)
-          or lk:find("camber", 1, true)
-          or lk:find("toe", 1, true)
-          or lk:find("diff", 1, true)
-          or lk:find("wing", 1, true)
-          or lk:find("brake", 1, true)
-        then
-          keys[#keys + 1] = { section = section, key = k, value = v }
-        end
+        -- Full harvest for digest: pressures, dampers, gearing, aero, etc. (bounded by file read).
+        keys[#keys + 1] = { section = section, key = k, value = v }
       end
     end
   end

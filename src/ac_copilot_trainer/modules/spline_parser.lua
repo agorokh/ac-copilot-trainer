@@ -156,10 +156,10 @@ end
 --- Nearest XZ distance to reference polyline (true segment distance; windowed scan from last segment index).
 ---@param ref table|nil
 ---@param px number
----@param py number
+---@param _py number|nil unused (API symmetry; lateral is XZ / ground)
 ---@param pz number
 ---@return number|nil dist
-function M.lateralDistanceMeters(ref, px, py, pz)
+function M.lateralDistanceMeters(ref, px, _py, pz)
   if not ref or not ref.points or #ref.points < 2 then
     return nil
   end

@@ -109,8 +109,12 @@ local function normalizeLoaded(data)
       if hist then
         for i = 1, #hist do
           local lap = hist[i]
-          if type(lap) == "table" and lap.corners ~= nil and type(lap.corners) == "table" then
-            lap.corners = denseArray(lap.corners) or {}
+          if type(lap) == "table" then
+            if type(lap.corners) == "table" then
+              lap.corners = denseArray(lap.corners) or {}
+            else
+              lap.corners = {}
+            end
           end
         end
       end
