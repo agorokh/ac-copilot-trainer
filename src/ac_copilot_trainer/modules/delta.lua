@@ -44,10 +44,12 @@ local function interpAtSpline(sortedTrace, splinePos, fieldA, fieldB)
   local n = #sortedTrace
   local sp = splinePos
   if sp <= sortedTrace[1].spline then
-    return sortedTrace[1][fieldA]
+    local v = sortedTrace[1][fieldA]
+    return type(v) == "number" and v or nil
   end
   if sp >= sortedTrace[n].spline then
-    return sortedTrace[n][fieldA]
+    local v = sortedTrace[n][fieldA]
+    return type(v) == "number" and v or nil
   end
   local lo, hi = 1, n
   while hi - lo > 1 do
@@ -61,10 +63,14 @@ local function interpAtSpline(sortedTrace, splinePos, fieldA, fieldB)
   local a, b = sortedTrace[lo], sortedTrace[hi]
   local ds = b.spline - a.spline
   if ds <= 1e-9 then
-    return a[fieldA]
+    local v = a[fieldA]
+    return type(v) == "number" and v or nil
   end
   local t = (sp - a.spline) / ds
   local va, vb = a[fieldA], b[fieldB or fieldA]
+  if type(va) ~= "number" or type(vb) ~= "number" then
+    return nil
+  end
   return va + t * (vb - va)
 end
 

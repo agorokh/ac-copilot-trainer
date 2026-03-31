@@ -133,6 +133,39 @@ local function normalizeTrace(t)
   return out
 end
 
+--- Reject traces that never saw most of the lap spline (e.g. telemetry started mid-lap).
+local function traceHasPbSplineCoverage(trace)
+  if not trace or #trace < 2 then
+    return false
+  end
+  local lo, hi = math.huge, -math.huge
+  for i = 1, #trace do
+    local s = trace[i].spline
+    if type(s) == "number" then
+      if s < lo then
+        lo = s
+      end
+      if s > hi then
+        hi = s
+      end
+    end
+  end
+  if lo == math.huge or hi == -math.huge then
+    return false
+  end
+  local span = hi - lo
+  if lo <= 0.06 and hi >= 0.94 then
+    return true
+  end
+  if span < 0.78 then
+    return false
+  end
+  if lo > 0.10 or hi < 0.90 then
+    return false
+  end
+  return true
+end
+
 local state = {
   initialized = false,
   bestLapMs = nil,
@@ -557,12 +590,12 @@ function script.update(dt)
       if #completedTrace >= 2 then
         spanMs = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
       end
-      -- Ignore reference trace when coverage is far below lap time (mid-lap clock or telemetry gap).
-      if #completedTrace > 0 and spanMs >= lastMs * 0.45 then
+      -- Ignore reference trace when time span is short (mid-lap clock / gaps) or spline range is too narrow.
+      if #completedTrace > 0 and spanMs >= lastMs * 0.45 and traceHasPbSplineCoverage(completedTrace) then
         state.bestLapTrace = copyTrace(completedTrace)
         state.bestReferenceLapMs = lastMs
       end
-      -- Span guard failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; persist still saves both with `bestReferenceLapMs`.
+      -- Guards failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; persist still saves both with `bestReferenceLapMs`.
       rebuildBestReference()
       persistSnapshotLive()
     end
