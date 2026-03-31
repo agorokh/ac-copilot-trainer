@@ -3,7 +3,7 @@
 local M = {}
 
 local APP_SUBDIR = "ac_copilot_trainer"
-local DATA_VERSION = 2
+local DATA_VERSION = 3
 
 local function safeName(s)
   s = tostring(s or "unknown"):gsub("[^%w%.%-_]+", "_")
@@ -71,6 +71,18 @@ local function normalizeLoaded(data)
   end
   if data.bestLapTrace ~= nil and type(data.bestLapTrace) ~= "table" then
     data.bestLapTrace = nil
+  end
+  if data.trackSegments ~= nil and type(data.trackSegments) ~= "table" then
+    data.trackSegments = nil
+  end
+  if data.lapFeatureHistory ~= nil and type(data.lapFeatureHistory) ~= "table" then
+    data.lapFeatureHistory = nil
+  end
+  if data.setupSnapshot ~= nil and type(data.setupSnapshot) ~= "table" then
+    data.setupSnapshot = nil
+  end
+  if data.setupHash ~= nil and type(data.setupHash) ~= "string" then
+    data.setupHash = nil
   end
   return data
 end

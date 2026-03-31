@@ -30,6 +30,7 @@ local MAX_LAP_TRACE = 2000
 ---@field speed number
 ---@field brake number
 ---@field throttle number
+---@field steer number
 ---@field gear integer
 ---@field px number
 ---@field py number
@@ -179,6 +180,7 @@ function Telemetry:update(dt, car, sim)
       speed = s.speed,
       brake = s.brake,
       throttle = s.throttle,
+      steer = steer,
       gear = s.gear,
       px = px,
       py = py,
