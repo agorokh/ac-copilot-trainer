@@ -147,6 +147,8 @@ local state = {
   recording = true,
   lastSplinePos = nil,
   bestLapTrace = {},
+  --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
+  bestReferenceLapMs = nil,
   bestSortedTrace = nil,
   bestSectorMs = { 0, 0, 0 },
   sectorIndex = 1,
@@ -184,14 +186,23 @@ local function applyLoaded(data)
   if data.bestLapTrace and type(data.bestLapTrace) == "table" then
     state.bestLapTrace = normalizeTrace(data.bestLapTrace)
   end
+  if state.bestLapTrace and #state.bestLapTrace >= 2 and state.bestLapMs and state.bestLapMs > 0 then
+    state.bestReferenceLapMs = state.bestLapMs
+  else
+    state.bestReferenceLapMs = nil
+  end
   rebuildBestReference()
 end
 
 local function persistPayload()
+  local traceOut = state.bestLapTrace
+  if state.bestReferenceLapMs and state.bestLapMs and state.bestReferenceLapMs ~= state.bestLapMs then
+    traceOut = {}
+  end
   return {
     bestLapMs = state.bestLapMs,
     bestBrakePoints = state.brakingPoints.best,
-    bestLapTrace = state.bestLapTrace,
+    bestLapTrace = traceOut,
   }
 end
 
@@ -229,6 +240,7 @@ local function resetRuntimeAfterLeavingTrack()
   lastDriveSim = nil
   state.lastSplinePos = nil
   state.bestLapTrace = {}
+  state.bestReferenceLapMs = nil
   state.bestSortedTrace = nil
   state.bestSectorMs = { 0, 0, 0 }
   state.sectorIndex = 1
@@ -546,10 +558,9 @@ function script.update(dt)
       -- Ignore reference trace when coverage is far below lap time (mid-lap clock or telemetry gap).
       if #completedTrace > 0 and spanMs >= lastMs * 0.45 then
         state.bestLapTrace = copyTrace(completedTrace)
-      else
-        -- PB time/brakes already updated above; drop stale trace so delta/sectors cannot reference an old lap.
-        state.bestLapTrace = {}
+        state.bestReferenceLapMs = lastMs
       end
+      -- Span guard failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; `persistPayload` omits mismatched trace on save.
       rebuildBestReference()
       persistSnapshotLive()
     end

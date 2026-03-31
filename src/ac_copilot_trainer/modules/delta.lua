@@ -5,6 +5,7 @@ local M = {}
 ---@class LapTraceSample
 ---@field spline number
 ---@field eMs number
+---@field speed number|nil  -- km/h; used by `bestSpeedKmhAtSpline`
 
 local function sortBySpline(trace)
   local idx = {}

@@ -9,19 +9,28 @@ local FADE_FAR = 200
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 
+--- Fingerprint all brake points so internal edits invalidate snap cache (endpoints alone are insufficient).
+local function brakeListHash(list)
+  if not list or #list == 0 then
+    return 0
+  end
+  local acc = #list * 73856093
+  for i = 1, #list do
+    local p = list[i]
+    if p and type(p.px) == "number" and type(p.py) == "number" and type(p.pz) == "number" then
+      acc = (acc * 31 + math.floor(p.px * 1000 + 0.5)) % 2147483647
+      acc = (acc * 31 + math.floor(p.py * 1000 + 0.5)) % 2147483647
+      acc = (acc * 31 + math.floor(p.pz * 1000 + 0.5)) % 2147483647
+    end
+  end
+  return acc
+end
+
 local function brakeListSig(list)
   if not list or #list == 0 then
     return "0"
   end
-  local a, z = list[1], list[#list]
-  if not a or not z then
-    return string.format("%d:?", #list)
-  end
-  local ax, ay, az, zx, zy, zz = a.px, a.py, a.pz, z.px, z.py, z.pz
-  if type(ax) ~= "number" or type(ay) ~= "number" or type(az) ~= "number" or type(zx) ~= "number" or type(zy) ~= "number" or type(zz) ~= "number" then
-    return string.format("%d:?", #list)
-  end
-  return string.format("%d:%g,%g,%g|%g,%g,%g", #list, ax, ay, az, zx, zy, zz)
+  return string.format("%d:%d", #list, brakeListHash(list))
 end
 
 local function markerCacheKey(x, y, z)
