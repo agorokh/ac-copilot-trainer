@@ -27,9 +27,10 @@ local M = {}
 ---@field autoSetupLine string|nil
 ---@field refAiDistanceM number|nil
 ---@field segmentCount integer|nil
+---@field coachingLines string[]|nil
 
 function M.draw(vm)
-  ui.text("AC Copilot Trainer v0.3.0")
+  ui.text("AC Copilot Trainer v0.4.0")
   ui.separator()
   if vm.recording then
     ui.textColored(rgbm(0, 1, 0, 1), "REC")
@@ -104,6 +105,14 @@ function M.draw(vm)
     ui.text("Post-lap")
     for i = 1, #vm.postLapLines do
       ui.text(vm.postLapLines[i])
+    end
+  end
+
+  if vm.coachingLines and #vm.coachingLines > 0 then
+    ui.separator()
+    ui.textColored(rgbm(0.35, 0.82, 0.95, 1), "Coaching")
+    for i = 1, #vm.coachingLines do
+      ui.textWrapped(vm.coachingLines[i])
     end
   end
 

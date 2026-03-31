@@ -1,4 +1,4 @@
--- AC Copilot Trainer v0.3.0
+-- AC Copilot Trainer v0.4.0
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -21,6 +21,8 @@ local splineParser = require("spline_parser")
 local racingLine = require("racing_line")
 local tireMonitor = require("tire_monitor")
 local setupReader = require("setup_reader")
+local coachingHints = require("coaching_hints")
+local wsBridge = require("ws_bridge")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -36,6 +38,9 @@ local config = {
   sectorMessageSeconds = 3,
   autoLoadSetup = true,
   racingLineMode = "best",
+  coachingHoldSeconds = 8,
+  --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`).
+  wsSidecarUrl = "",
 }
 
 local SMOOTH_N = 30
@@ -78,6 +83,8 @@ local tel = newTelemetry()
 local brakes = newBrakes()
 local td = throttleDet.new()
 local tires = tireMonitor.new()
+
+wsBridge.configure(config.wsSidecarUrl or "")
 
 local lastDriveCar ---@type ac.StateCar|nil
 local lastDriveSim ---@type ac.StateSim|nil
@@ -245,6 +252,8 @@ local state = {
   styleHud = "",
   tireHud = "",
   autoSetupUntil = 0,
+  coachingLines = {},
+  coachingUntil = 0,
 }
 
 local function rebuildBestReference()
@@ -385,6 +394,8 @@ local function resetRuntimeAfterLeavingTrack()
   state.styleHud = ""
   state.tireHud = ""
   state.autoSetupUntil = 0
+  state.coachingLines = {}
+  state.coachingUntil = 0
   resetDeltaSmoother()
 end
 
@@ -558,13 +569,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.3.0")
+    ui.text("AC Copilot Trainer v0.4.0")
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.3.0")
+    ui.text("AC Copilot Trainer v0.4.0")
     ui.separator()
     ui.text("Waiting for car data...")
     return
@@ -599,6 +610,11 @@ function script.windowMain(_dt)
     autoSetupLine = state.autoSetupMsg
   end
 
+  local coachingHudLines = nil
+  if state.coachingLines and #state.coachingLines > 0 and now < (state.coachingUntil or 0) then
+    coachingHudLines = state.coachingLines
+  end
+
   hud.draw({
     recording = tel:isRecording(),
     telemetrySamples = tel:sampleCount(),
@@ -624,6 +640,7 @@ function script.windowMain(_dt)
     autoSetupLine = autoSetupLine,
     refAiDistanceM = state.refLatDistance,
     segmentCount = #(state.trackSegments or {}),
+    coachingLines = coachingHudLines,
   })
 end
 
@@ -655,6 +672,8 @@ function script.update(dt)
   if not state.initialized then
     tryLoadDisk()
   end
+
+  wsBridge.tick(sim.time or 0)
 
   if state.initialized and not state.splineSessionPrimed then
     state.splineSessionPrimed = true
@@ -719,6 +738,7 @@ function script.update(dt)
     local traceAnalyticsOk = lastMs > 0 and #completedTrace > 0 and spanForAnalytics >= lastMs * 0.45 and traceHasPbSplineCoverage(completedTrace)
 
     local feats = {}
+    local consForHints = nil
     if traceAnalyticsOk then
       if state.lapsCompleted >= 2 then
         local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
@@ -734,10 +754,10 @@ function script.update(dt)
       end
       feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
       cornerAnalysis.appendHistory(state.lapFeatureHistory, { lapMs = lastMs, corners = feats })
-      local cons = cornerAnalysis.consistencySummary(state.lapFeatureHistory)
+      consForHints = cornerAnalysis.consistencySummary(state.lapFeatureHistory)
       state.consistencyHud = ""
-      if cons and cons.worstThree and #cons.worstThree > 0 then
-        state.consistencyHud = "Least consistent: " .. table.concat(cons.worstThree, ", ")
+      if consForHints and consForHints.worstThree and #consForHints.worstThree > 0 then
+        state.consistencyHud = "Least consistent: " .. table.concat(consForHints.worstThree, ", ")
       end
       state.styleHud = ""
       local div = cornerAnalysis.styleDivergence(feats, state.bestCornerFeatures)
@@ -751,6 +771,9 @@ function script.update(dt)
       state.consistencyHud = state.consistencyHud or ""
       state.styleHud = state.styleHud or ""
     end
+
+    state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, state.lastThrottleSummary)
+    state.coachingUntil = (sim.time or 0) + config.coachingHoldSeconds
 
     local _snap, hnew = setupReader.snapshotActive(car, sim)
     state.setupChangeMsg = setupReader.describeChange(state.setupHash, hnew) or ""
@@ -793,6 +816,13 @@ function script.update(dt)
     local coastMs = thA and thA.coastingMs or 0
     state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
     state.postLapUntil = (sim.time or 0) + config.postLapHoldSeconds
+
+    wsBridge.sendJson({
+      event = "lap_complete",
+      lap = state.lapsCompleted,
+      lapTimeMs = lastMs,
+      coachingHints = state.coachingLines,
+    })
 
     state.sectorIndex = 1
     state.sectorStartSimT = sim.time or 0
