@@ -46,17 +46,17 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
           if en and bn and en > bn + 5 then
             out[#out + 1] = string.format("%s: entry %.0f vs ref %.0f km/h — try braking slightly earlier", lab, en, bn)
           elseif mn and mb and mn + 4 < mb then
-            out[#out + 1] = string.format("%s: min speed %.0f vs ref %.0f — carry more mid-corner", lab, mn, mb)
+            out[#out + 1] = string.format("%s: min speed %.0f vs ref %.0f km/h — carry more mid-corner", lab, mn, mb)
           elseif mn and mb and mn > mb + 6 then
-            out[#out + 1] = string.format("%s: min speed %.0f vs ref %.0f — you may be overdriving", lab, mn, mb)
+            out[#out + 1] = string.format("%s: min speed %.0f vs ref %.0f km/h — you may be overdriving", lab, mn, mb)
           end
         end
         if #out < 3 and c and b then
           local tb, tt = tonumber(c.trailBrakeRatio), tonumber(b.trailBrakeRatio)
-          if tb and tt and math.abs(tb - tt) > 0.18 then
-            if tb < tt - 0.12 then
+          if tb and tt and math.abs(tb - tt) > 0.15 then
+            if tb < tt - 0.15 then
               out[#out + 1] = string.format("%s: less trail braking than ref — try easing off brakes more gradually", lab)
-            elseif tb > tt + 0.12 then
+            elseif tb > tt + 0.15 then
               out[#out + 1] = string.format("%s: more trail braking than ref — try releasing brakes earlier into turn-in", lab)
             end
           end

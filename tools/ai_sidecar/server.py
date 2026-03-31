@@ -1,4 +1,4 @@
-"""Async WebSocket echo server for lap_complete JSON from the Lua app.
+"""Async WebSocket receiver for lap_complete JSON from the Lua app (logs events; no echo).
 
 Run: python -m tools.ai_sidecar
 Requires optional extra: pip install -e ".[coaching]"

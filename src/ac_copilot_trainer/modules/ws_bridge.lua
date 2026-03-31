@@ -14,6 +14,12 @@ function M.configure(u)
   lastTry = -RECONNECT_SEC
 end
 
+--- Clear socket state (e.g. leaving track / new session). URL unchanged.
+function M.reset()
+  sock = nil
+  lastTry = -RECONNECT_SEC
+end
+
 local function jsonEncode(t)
   if JSON and type(JSON.stringify) == "function" then
     local ok, s = pcall(JSON.stringify, t, false)

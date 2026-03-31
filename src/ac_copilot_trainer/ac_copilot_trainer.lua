@@ -40,7 +40,7 @@ local config = {
   racingLineMode = "best",
   coachingHoldSeconds = 8,
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
-  wsSidecarUrl = "",
+  wsSidecarUrl = "ws://127.0.0.1:8765",
 }
 
 local SMOOTH_N = 30
@@ -396,6 +396,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.autoSetupUntil = 0
   state.coachingLines = {}
   state.coachingUntil = 0
+  wsBridge.reset()
   resetDeltaSmoother()
 end
 
