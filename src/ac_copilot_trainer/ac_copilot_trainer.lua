@@ -147,7 +147,6 @@ local state = {
   recording = true,
   lastSplinePos = nil,
   bestLapTrace = {},
-  lastLapTrace = {},
   bestSortedTrace = nil,
   bestSectorMs = { 0, 0, 0 },
   sectorIndex = 1,
@@ -230,7 +229,6 @@ local function resetRuntimeAfterLeavingTrack()
   lastDriveSim = nil
   state.lastSplinePos = nil
   state.bestLapTrace = {}
-  state.lastLapTrace = {}
   state.bestSortedTrace = nil
   state.bestSectorMs = { 0, 0, 0 }
   state.sectorIndex = 1
@@ -511,7 +509,6 @@ function script.update(dt)
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(sim.time or 0)
     resetDeltaSmoother()
-    state.lastLapTrace = copyTrace(completedTrace)
     local lastMs = car.previousLapTimeMs or car.lastLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
 

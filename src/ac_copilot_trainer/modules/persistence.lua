@@ -58,7 +58,7 @@ local function jsonDecode(s)
   return nil
 end
 
---- Normalize decoded JSON: enforce known version range and v1→v2 field shape.
+--- Normalize decoded JSON: reject future `version`, coerce bad `bestLapTrace` (v1 omits version and trace).
 ---@param data table|nil
 ---@return table|nil
 local function normalizeLoaded(data)
@@ -66,7 +66,7 @@ local function normalizeLoaded(data)
     return nil
   end
   local v = tonumber(data.version)
-  if v and v > DATA_VERSION then
+  if v ~= nil and v > DATA_VERSION then
     return nil
   end
   if data.bestLapTrace ~= nil and type(data.bestLapTrace) ~= "table" then
@@ -116,6 +116,7 @@ function M.load(car, sim)
   end
   local raw = f:read("*a")
   f:close()
+  -- All loads go through normalizeLoaded so DATA_VERSION and schema stay centralized.
   return normalizeLoaded(jsonDecode(raw))
 end
 
