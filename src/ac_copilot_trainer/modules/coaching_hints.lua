@@ -69,6 +69,25 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleHint)
     if coast and tonumber(coast) and tonumber(coast) >= 1.2 then
       out[#out + 1] = string.format("Coasting %.1fs last lap — shorten gaps to throttle", tonumber(coast))
     end
+    local ftPct = throttleHint:match("FT%% (%d+)")
+    if #out < 3 and ftPct and tonumber(ftPct) then
+      local ft = tonumber(ftPct)
+      if ft < 40 then
+        out[#out + 1] = string.format("Full throttle only %d%% of lap — focus on earlier power application", ft)
+      end
+    end
+    local sawtooth = throttleHint:match("sawtooth~ (%d+)")
+    if #out < 3 and sawtooth and tonumber(sawtooth) and tonumber(sawtooth) > 8 then
+      out[#out + 1] = string.format("Throttle reversals: %d — try smoother inputs", tonumber(sawtooth))
+    end
+  end
+  -- Fallback: when no corner-vs-reference hints and no throttle hints generated, give a status line
+  if #out == 0 then
+    if not bestFeats or #(bestFeats or {}) == 0 then
+      out[#out + 1] = "Building reference — complete more laps for corner-by-corner coaching"
+    else
+      out[#out + 1] = "Lap matched reference well — keep it consistent"
+    end
   end
   while #out > 3 do
     table.remove(out)

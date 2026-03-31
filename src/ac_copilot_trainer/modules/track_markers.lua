@@ -3,8 +3,8 @@
 local M = {}
 
 local MAX_PRIMITIVES = 50
-local FADE_NEAR = 40
-local FADE_FAR = 200
+local FADE_NEAR = 60
+local FADE_FAR = 300
 -- Cap snap cache entries so long sessions cannot grow `snapY` without bound if marker keys drift.
 local MAX_SNAPY_KEYS = 256
 
@@ -138,13 +138,13 @@ function M.draw(car, best, last)
     if it.d > FADE_NEAR then
       alpha = math.max(0.15, 1 - (it.d - FADE_NEAR) / (FADE_FAR - FADE_NEAR))
     end
-    local r = 0.65
+    local r = 1.2
     local col ---@type any
     if type(rgbm) == "function" then
       if it.kind == "best" then
-        col = rgbm(0.2, 0.95, 0.25, alpha)
+        col = rgbm(1.0, 0.15, 0.15, alpha)    -- bright red for best brake points
       else
-        col = rgbm(0.95, 0.9, 0.15, alpha)
+        col = rgbm(0.95, 0.65, 0.1, alpha)     -- orange for last-lap brake points
       end
     end
     if not col then
@@ -164,15 +164,18 @@ function M.draw(car, best, last)
         snapY[ck] = sy
       end
       pcall(function()
-        -- CSP: prefer debugSphere (documented for transparent render pass). Fallbacks for older builds.
-        local c ---@type any
-        if vec3 then
-          c = vec3(it.x, sy, it.z)
+        if not vec3 then return end
+        local c = vec3(it.x, sy, it.z)
+        -- Draw cross + sphere + vertical pillar for maximum visibility
+        if render.debugCross then
+          render.debugCross(c, r, col)
         end
-        if c and render.debugSphere then
-          render.debugSphere(c, r, col)
-        elseif c and render.drawSphere then
-          render.drawSphere(c, r, col)
+        if render.debugSphere then
+          render.debugSphere(c, r * 0.8, col)
+        end
+        -- Vertical pillar so marker is visible from distance
+        if render.debugLine then
+          render.debugLine(c, vec3(it.x, sy + 3.0, it.z), col, col)
         end
       end)
     end

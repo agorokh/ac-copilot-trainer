@@ -45,6 +45,10 @@ function M.traceToLine(trace)
   return out
 end
 
+--- Height offsets for "thicker" multi-line rendering (debug lines are 1px; stacking
+--- at different Y levels makes the strip visible from cockpit/chase cam).
+local LINE_Y_OFFSETS = { 0.04, 0.10, 0.16, 0.22, 0.28 }
+
 ---@param car ac.StateCar|nil
 ---@param line table[]|nil
 ---@param color rgbm|nil
@@ -56,10 +60,9 @@ function M.drawLineStrip(car, line, color)
     return
   end
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
-  local col = color or rgbm(0.2, 0.85, 0.95, 0.55)
+  local col = color or rgbm(0.2, 0.85, 0.95, 0.75)
   local cullSq = CULL_M * CULL_M
   pcall(function()
-    -- CSP SDK: render.debugLine(from, to, color, colorEnd); same rgbm at both ends for a solid segment.
     if not render.debugLine then
       return
     end
@@ -69,7 +72,15 @@ function M.drawLineStrip(car, line, color)
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-        render.debugLine(vec3(a.x, a.y + 0.05, a.z), vec3(b.x, b.y + 0.05, b.z), col, col)
+        -- Draw multiple lines at different Y offsets to create a visible "ribbon"
+        for j = 1, #LINE_Y_OFFSETS do
+          local yOff = LINE_Y_OFFSETS[j]
+          render.debugLine(
+            vec3(a.x, a.y + yOff, a.z),
+            vec3(b.x, b.y + yOff, b.z),
+            col, col
+          )
+        end
       end
     end
   end)
