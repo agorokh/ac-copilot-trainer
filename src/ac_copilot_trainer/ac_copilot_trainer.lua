@@ -186,7 +186,10 @@ local function applyLoaded(data)
   if data.bestLapTrace and type(data.bestLapTrace) == "table" then
     state.bestLapTrace = normalizeTrace(data.bestLapTrace)
   end
-  if state.bestLapTrace and #state.bestLapTrace >= 2 and state.bestLapMs and state.bestLapMs > 0 then
+  local refMs = tonumber(data.bestReferenceLapMs)
+  if refMs and refMs > 0 then
+    state.bestReferenceLapMs = refMs
+  elseif state.bestLapTrace and #state.bestLapTrace >= 2 and state.bestLapMs and state.bestLapMs > 0 then
     state.bestReferenceLapMs = state.bestLapMs
   else
     state.bestReferenceLapMs = nil
@@ -195,14 +198,13 @@ local function applyLoaded(data)
 end
 
 local function persistPayload()
-  local traceOut = state.bestLapTrace
-  if state.bestReferenceLapMs and state.bestLapMs and state.bestReferenceLapMs ~= state.bestLapMs then
-    traceOut = {}
-  end
+  -- Always persist non-empty `bestLapTrace` together with `bestReferenceLapMs` so a new PB time
+  -- does not erase a still-valid reference trace when the span guard rejected the new lap's trace.
   return {
     bestLapMs = state.bestLapMs,
     bestBrakePoints = state.brakingPoints.best,
-    bestLapTrace = traceOut,
+    bestLapTrace = state.bestLapTrace,
+    bestReferenceLapMs = state.bestReferenceLapMs,
   }
 end
 
@@ -560,7 +562,7 @@ function script.update(dt)
         state.bestLapTrace = copyTrace(completedTrace)
         state.bestReferenceLapMs = lastMs
       end
-      -- Span guard failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; `persistPayload` omits mismatched trace on save.
+      -- Span guard failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; persist still saves both with `bestReferenceLapMs`.
       rebuildBestReference()
       persistSnapshotLive()
     end

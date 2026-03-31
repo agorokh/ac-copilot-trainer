@@ -2,10 +2,11 @@
 
 local M = {}
 
+--- Telemetry row used for delta / sector math after `prepareTrace`.
 ---@class LapTraceSample
 ---@field spline number
 ---@field eMs number
----@field speed number|nil  -- km/h; used by `bestSpeedKmhAtSpline`
+---@field speed number|nil
 
 local function sortBySpline(trace)
   local idx = {}

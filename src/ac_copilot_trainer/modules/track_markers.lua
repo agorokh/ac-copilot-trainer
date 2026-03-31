@@ -5,11 +5,13 @@ local M = {}
 local MAX_PRIMITIVES = 50
 local FADE_NEAR = 40
 local FADE_FAR = 200
+-- Cap snap cache entries so long sessions cannot grow `snapY` without bound if marker keys drift.
+local MAX_SNAPY_KEYS = 256
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 
---- Fingerprint all brake points so internal edits invalidate snap cache (endpoints alone are insufficient).
+--- Fingerprint all brake points (coords + spline when present) so any edit invalidates snap cache.
 local function brakeListHash(list)
   if not list or #list == 0 then
     return 0
@@ -21,6 +23,9 @@ local function brakeListHash(list)
       acc = (acc * 31 + math.floor(p.px * 1000 + 0.5)) % 2147483647
       acc = (acc * 31 + math.floor(p.py * 1000 + 0.5)) % 2147483647
       acc = (acc * 31 + math.floor(p.pz * 1000 + 0.5)) % 2147483647
+      if type(p.spline) == "number" then
+        acc = (acc * 31 + math.floor(p.spline * 1e6 + 0.5)) % 2147483647
+      end
     end
   end
   return acc
@@ -78,6 +83,7 @@ local function snapToTrack(px, py, pz)
 end
 
 ---@class BrakePt
+---@field spline number|nil
 ---@field px number
 ---@field py number
 ---@field pz number
@@ -141,6 +147,13 @@ function M.draw(car, best, last)
       local ck = markerCacheKey(it.x, it.y, it.z)
       local sy = snapY[ck]
       if sy == nil then
+        local nKeys = 0
+        for _ in pairs(snapY) do
+          nKeys = nKeys + 1
+        end
+        if nKeys >= MAX_SNAPY_KEYS then
+          snapY = {}
+        end
         sy = snapToTrack(it.x, it.y, it.z)
         snapY[ck] = sy
       end
