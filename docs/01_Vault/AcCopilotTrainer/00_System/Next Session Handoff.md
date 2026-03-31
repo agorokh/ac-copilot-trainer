@@ -17,7 +17,7 @@ relates_to:
 ## Resume here
 
 - **Branch:** `feat/issue-8-corner-analysis-phase2` — GitHub **#8** (corner segmentation, ML-oriented features, consistency, style divergence stub, `fast_lane.ai` reader, racing line strip, tires, setup snapshot).
-- **PR:** open with **`Fixes #8`**; after push use `gh pr view --repo agorokh/ac-copilot-trainer --json number,url,headRefOid`.
+- **PR #21:** https://github.com/agorokh/ac-copilot-trainer/pull/21 — **Fixes #8**, **ready**; confirm CI + GraphQL `reviewThreads` after cooldown.
 - **Follow-up:** run **pr-resolution-follow-up** (GraphQL `reviewThreads` full pagination, **600s** bot cooldown); merge when CI green and threads resolved.
 - **Persistence:** JSON **v3** (`persistence.lua`): `trackSegments`, `lapFeatureHistory`, `setupHash`, `setupSnapshot`, `bestCornerFeatures` (plus existing v2 fields).
 - **Deferred (issue #8):** in-app K-means/DBSCAN; confirmed CSP setup auto-apply API for Part I; tune `spline_parser` stride/XYZ offset per real `fast_lane.ai` variants.
