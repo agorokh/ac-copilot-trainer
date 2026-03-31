@@ -1,9 +1,13 @@
--- Rolling telemetry buffer (speed, inputs, spline, world position).
+-- Rolling telemetry buffer plus per-lap trace (downsampled on finalize, max ~2000 samples).
 
 local M = {}
 
 --- Hard cap so a broken sim clock cannot grow memory without bound.
 local MAX_SAMPLES_SAFETY = 50000
+--- Raw lap samples cap before finalize downsample (long hotlaps at high FPS).
+local MAX_LAP_RAW = 24000
+--- Stored / comparison trace length (issue #7 guardrail).
+local MAX_LAP_TRACE = 2000
 
 ---@class TelemetryConfig
 ---@field bufferSeconds number|nil
@@ -20,8 +24,45 @@ local MAX_SAMPLES_SAFETY = 50000
 ---@field py number
 ---@field pz number
 
+---@class LapTraceSample
+---@field spline number
+---@field eMs number
+---@field speed number
+---@field brake number
+---@field throttle number
+---@field gear integer
+---@field px number
+---@field py number
+---@field pz number
+
 local Telemetry = {}
 Telemetry.__index = Telemetry
+
+local function downsampleUniform(buf, n, maxOut)
+  if n <= maxOut then
+    local out = {}
+    for i = 1, n do
+      out[i] = buf[i]
+    end
+    return out, n
+  end
+  local out = {}
+  out[1] = buf[1]
+  if maxOut == 1 then
+    return out, 1
+  end
+  out[maxOut] = buf[n]
+  if maxOut == 2 then
+    return out, 2
+  end
+  local step = (n - 1) / (maxOut - 1)
+  for k = 2, maxOut - 1 do
+    local pos = 1 + (k - 1) * step
+    local idx = math.min(n, math.max(1, math.floor(pos + 0.5)))
+    out[k] = buf[idx]
+  end
+  return out, maxOut
+end
 
 ---@param cfg TelemetryConfig|nil
 function M.new(cfg)
@@ -32,6 +73,9 @@ function M.new(cfg)
     samples = {},
     n = 0,
     recording = true,
+    lapBuf = {},
+    lapN = 0,
+    lapT0 = nil,
   }, Telemetry)
 end
 
@@ -43,9 +87,22 @@ function Telemetry:isRecording()
   return self.recording
 end
 
---- Current number of retained samples (post-eviction), O(1).
+--- Current number of retained rolling-buffer samples (post-eviction), O(1).
 function Telemetry:sampleCount()
   return self.n
+end
+
+--- Sim time (seconds) when the current lap trace started; nil until first lap clock set.
+function Telemetry:lapStartTime()
+  return self.lapT0
+end
+
+--- Begin a new lap trace clock (call on lap boundary or session start).
+---@param simTime number
+function Telemetry:beginLapClock(simTime)
+  self.lapT0 = simTime
+  self.lapBuf = {}
+  self.lapN = 0
 end
 
 --- Drop samples older than (now - bufferSeconds).
@@ -110,6 +167,45 @@ function Telemetry:update(dt, car, sim)
     self.samples[self.n] = nil
     self.n = self.n - 1
   end
+
+  -- Lap trace (separate from rolling window)
+  if self.lapT0 ~= nil then
+    local eMs = (t - self.lapT0) * 1000
+    self.lapN = self.lapN + 1
+    ---@type LapTraceSample
+    local lp = {
+      spline = car.splinePosition or 0,
+      eMs = eMs,
+      speed = s.speed,
+      brake = s.brake,
+      throttle = s.throttle,
+      gear = s.gear,
+      px = px,
+      py = py,
+      pz = pz,
+    }
+    self.lapBuf[self.lapN] = lp
+    if self.lapN > MAX_LAP_RAW then
+      local tmp, newN = downsampleUniform(self.lapBuf, self.lapN, math.floor(MAX_LAP_RAW / 2))
+      self.lapBuf = tmp
+      self.lapN = newN
+    end
+  end
+end
+
+--- Finalize the just-finished lap: downsample to MAX_LAP_TRACE, clear lap buffer, return trace.
+--- Caller should call beginLapClock(simTime) for the next lap immediately after.
+---@return LapTraceSample[]
+function Telemetry:finalizeLapTrace()
+  if self.lapN <= 0 then
+    self.lapBuf = {}
+    self.lapN = 0
+    return {}
+  end
+  local out = downsampleUniform(self.lapBuf, self.lapN, MAX_LAP_TRACE)
+  self.lapBuf = {}
+  self.lapN = 0
+  return out
 end
 
 ---@param sim ac.StateSim

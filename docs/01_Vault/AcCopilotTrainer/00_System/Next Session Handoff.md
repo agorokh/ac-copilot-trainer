@@ -2,12 +2,13 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-03-30
+last_updated: 2026-03-31
 relates_to:
-  - ProjectTemplate/00_System/Current Focus.md
-  - ProjectTemplate/00_System/Project State.md
-  - ProjectTemplate/00_System/invariants/_index.md
-  - ProjectTemplate/00_System/glossary/_index.md
+  - AcCopilotTrainer/00_System/Current Focus.md
+  - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/01_Decisions/deep-research-synthesis.md
+  - AcCopilotTrainer/00_System/invariants/_index.md
+  - AcCopilotTrainer/00_System/glossary/_index.md
   - 00_Graph_Schema.md
 ---
 
@@ -15,29 +16,30 @@ relates_to:
 
 ## Resume here
 
-- **#6 (ac-copilot-trainer):** Telemetry + brake detection + JSON persistence + lap-aware best/last brake sets + ImGui HUD. **Branch:** `feat/issue-6-telemetry-brake-persistence`. **PR:** https://github.com/agorokh/ac-copilot-trainer/pull/10 (draft, `Fixes #6`). Next: wait for CI; **`sleep 600`** after any push; GraphQL `reviewThreads`; `gh pr ready 10` when you want reviewers/bots notified; then merge when green.
-- **#11 Cursor Task delegation:** branch `feat/issue-11-cursor-task-delegation`, **PR:** https://github.com/agorokh/template-repo/pull/34 (`Fixes #11`, ready). **pr-resolution-follow-up (2026-03-30):** required checks green on the **current PR HEAD** (re-check in GitHub before merge); GraphQL `reviewThreads`: no blocking unresolved threads (full pagination audit). Next: human approval / merge if branch rules require it.
-- **#27 template sync:** branch `feat/issue-27-template-sync`, **PR:** https://github.com/agorokh/template-repo/pull/32 (draft, `Refs #27`). **`pr-resolution-follow-up` done (2026-03-29):** required checks green on latest SHA; Cursor Bugbot **SUCCESS**; GraphQL `reviewThreads` has **zero** unresolved threads. Next: human review / mark ready / merge when satisfied. Epic #14 stays open until tracker closed.
-- **#26 Phase 1:** branch `feat/issue-26-model-training-phase1`, **PR:** https://github.com/agorokh/template-repo/pull/31 (draft). **`pr-resolution-follow-up` done (2026-03-29):** required checks green on latest SHA; GraphQL `reviewThreads` has **zero** unresolved threads. Next: human review / mark ready / merge when satisfied. Epic #26 stays open (Phases 2–4 deferred).
-- **#21 / Tier 1+2:** branch `feat/issue-21-repo-intelligence`, **PR:** https://github.com/agorokh/template-repo/pull/30 (draft). Hand off to **`pr-resolution-follow-up`** until checks + review threads are clean.
-- **PR #29** (#15): if still open, merge when maintainer is satisfied (separate line of work).
+- **Branch:** `feat/issue-7-track-markers-delta` — implements GitHub **#7** (traces, delta, sectors, 3D markers, throttle, post-lap HUD).
+- **PR #20:** https://github.com/agorokh/ac-copilot-trainer/pull/20 — **Fixes #7**, ready; **required CI** (build + Canonical docs + **Cursor Bugbot**) **green** on latest SHA; **GraphQL `reviewThreads`**: **zero unresolved** after full pagination + **600s** bot cooldowns (2026-03-31 resolution pass). Stale inline threads were **`resolveReviewThread`**-cleared when the tip already contained the fix; mid-loop pushes landed **`b6351bc` / `75ab14a` / `bc8707e`** (PB trace, markers, prior handoff). **Tip SHA:** use `gh pr view 20 --repo agorokh/ac-copilot-trainer --json headRefOid`.
+- **PR-resolution fixes shipped (this pass):** persist **`bestReferenceLapMs`** with **`bestLapTrace`** (no blanking trace on disk when PB improves but span guard kept prior trace); load **`bestReferenceLapMs`** in **`applyLoaded`**; **`traceHasPbSplineCoverage`** before promoting PB reference trace; **`interpAtSpline`** nil-safe numeric endpoints; **track_markers**: spline in **brakeListHash**, **snapY** max keys, **%.3f** cache keys, **pcall** for **hit.position.y**, numeric guards in **addList**.
+- **Earlier PR #20 fixes (still relevant):** prime **lastLapCount** / **beginLapClock**; span guard for **bestLapTrace**; persistence **version** + **bestLapTrace** coerce; **analyzeTrace** + **eMs**; approach HUD spline + track length; **FT%** time-based; delta bar symmetric rounding.
+- **Windows tools:** if `gh` / `git` are missing from PATH, use `C:\Program Files\GitHub CLI\gh.exe` and `C:\Program Files\Git\bin\git.exe`. Verify issue **#7** is **OPEN** before merge (`gh issue view 7 --repo agorokh/ac-copilot-trainer`).
+- **#6:** assumed merged on `main` before this branch (telemetry/brake/HUD foundation).
 
-## What was delivered
+## What was delivered this session
 
-- **#6 (repo workspace, pending PR):** `src/ac_copilot_trainer/modules/{telemetry,brake_detection,persistence,hud}.lua`, rewired `ac_copilot_trainer.lua`, `manifest.ini` (`LAZY=PARTIAL`, `FUNCTION_MAIN` / `FUNCTION_ON_HIDE`). CI hygiene: `Makefile` pytest `--cov=ac_copilot_trainer`, `tests/test_smoke.py` import fix, `pyproject.toml` dev extra includes `requests`. **Issue:** https://github.com/agorokh/ac-copilot-trainer/issues/6
-- **#11 (in PR):** `.cursor/rules/cursor-task-delegation.mdc`, `CLAUDE.md` / `.cursorrules` / `AGENTS.md` / `.claude/rules/orchestration.md` + agent markdown alignment for Cursor `Task` enum. **PR:** https://github.com/agorokh/template-repo/pull/34
-- **#27 (in PR):** `copier.yml`, `scripts/copier_post_copy.py`, reference workflows `template-sync.yml` / `template-feedback.yml` / `cross-repo-mining.yml`, `tools/process_miner/aggregate.py` + tests, `[bootstrap]` optional extra, docs (BOOTSTRAP, MAINTAINING, WARP, `.env.example`), learner upstream subsection. **PR:** https://github.com/agorokh/template-repo/pull/32
-- **#26 Phase 1 (in PR):** `tools/model_training/` — `data_pipeline` + `format_sft` export to `sft_pairs.jsonl` / `sft_decisions.jsonl`, `dataset_stats.py`, stub `format_dpo` / `format_cpt`, `config/*.yaml`, tests, `models/` gitignore, vault `01_Decisions/local-reviewer-model.md`. **PR:** https://github.com/agorokh/template-repo/pull/31
-- **#21 (in flight):** `tools/process_miner/` + `scripts/process_miner.py`, optional extras `[mining]` / `[knowledge]`, learned rules dirs, `.github/workflows/process-miner.yml`, `tools/repo_knowledge/` + MCP wiring in `.mcp.json` / `.cursor/mcp.json`, structure doc + `check_agent_forbidden` updates, CI installs `dev+mining+knowledge` for coverage.
-- #15 scope (prior): orchestration/`learner`/hooks/MCP pin/CI gates — **PR:** https://github.com/agorokh/template-repo/pull/29
+- **Part A:** `telemetry.lua` — per-lap trace buffer, `finalizeLapTrace()` with ≤2000 samples; raw cap + intermediate downsample.
+- **Part B:** `delta.lua` — sorted-spline interpolation, live delta + ~30-sample smoothing; HUD bar (ASCII) + numeric.
+- **Part C:** Three spline sectors; messages at boundaries vs reference lap sector times.
+- **Part D:** `track_markers.lua` — best=green, last=yellow, ≤50 primitives, 200m fade; `render.debugSphere` / `drawSphere` in `pcall`; optional `physics.raycastTrack` for Y snap (API varies).
+- **Part E:** Approach panel when within 200m of nearest **best** brake (distance, ref speed from trace, current speed).
+- **Part F:** `throttle_detection.lua` — live coast streak + warning; post-lap trace analysis (FT%, coasting ms, throttle-on count, sawtooth reversals).
+- **Part G:** Post-lap panel ~5s — brake deltas vs previous best + coasting line from throttle analysis.
+- **Persistence v2:** `bestLapTrace` JSON alongside brakes; `manifest.ini` **RENDER_CALLBACKS TRANSPARENT=Draw3D**, app **0.2.0**.
 
 ## What remains
 
-- Land **#32** for #27 (review/merge when satisfied); epic #14 remains until closed.
-- Land **#31** for #26 Phase 1; epic #26 remains open for training loop (Phase 2), integration (Phase 3), continuous loop (Phase 4).
-- Land **#21** PR (draft → review → merge) and sanity-check weekly miner workflow (`workflow_dispatch`) on GitHub.
-- Merge **#29** for #15 if still open when ready.
+- Human/agent: **await approval** on PR `#20`; **merge** when approved (re-run **pr-resolution-follow-up** if new inline threads appear after push).
+- In-game: confirm CSP **Draw3D** + **`render.debugSphere`** on your CSP build; if markers invisible, adjust API per acc-lua-sdk and follow up.
+- Optional: per-sector PB coloring (purple) if we persist best sector splits separately.
 
 ## Blockers
 
-- None. If Stop hook `timeout: 60000` behaves incorrectly in Claude Code (seconds vs ms), confirm against upstream hook docs and adjust.
+- None in repo; runtime verification needs Assetto Corsa + CSP.

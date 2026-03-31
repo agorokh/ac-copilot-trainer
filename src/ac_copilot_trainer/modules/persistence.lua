@@ -3,7 +3,7 @@
 local M = {}
 
 local APP_SUBDIR = "ac_copilot_trainer"
-local DATA_VERSION = 1
+local DATA_VERSION = 2
 
 local function safeName(s)
   s = tostring(s or "unknown"):gsub("[^%w%.%-_]+", "_")
@@ -58,6 +58,23 @@ local function jsonDecode(s)
   return nil
 end
 
+--- Normalize decoded JSON: reject future `version`, coerce bad `bestLapTrace` (v1 omits version and trace).
+---@param data table|nil
+---@return table|nil
+local function normalizeLoaded(data)
+  if not data or type(data) ~= "table" then
+    return nil
+  end
+  local v = tonumber(data.version)
+  if v ~= nil and v > DATA_VERSION then
+    return nil
+  end
+  if data.bestLapTrace ~= nil and type(data.bestLapTrace) ~= "table" then
+    data.bestLapTrace = nil
+  end
+  return data
+end
+
 --- Reject paths that could break out of a quoted shell argument.
 local function pathSafeForShell(p)
   if not p or p == "" then
@@ -99,7 +116,8 @@ function M.load(car, sim)
   end
   local raw = f:read("*a")
   f:close()
-  return jsonDecode(raw)
+  -- All loads go through normalizeLoaded so DATA_VERSION and schema stay centralized.
+  return normalizeLoaded(jsonDecode(raw))
 end
 
 function M.save(car, sim, data)

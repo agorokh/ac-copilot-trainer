@@ -2,21 +2,18 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-03-30
-issue: "https://github.com/agorokh/ac-copilot-trainer/issues/6"
-pr: "https://github.com/agorokh/ac-copilot-trainer/pull/10"
-branch: "feat/issue-6-telemetry-brake-persistence"
+last_updated: 2026-03-31
+issue: "https://github.com/agorokh/ac-copilot-trainer/issues/7"
 relates_to:
-  - ProjectTemplate/00_System/Next Session Handoff.md
-  - ProjectTemplate/00_System/Project State.md
-  - ProjectTemplate/00_System/invariants/_index.md
-  - ProjectTemplate/01_Decisions/local-reviewer-model.md
+  - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/01_Decisions/deep-research-synthesis.md
 ---
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Issue #6:** telemetry engine, brake point detection, JSON persistence, lap promotion of brake sets, ImGui HUD — implemented under `src/ac_copilot_trainer/` (pending PR).
+**Repo:** ac-copilot-trainer. **Issue #7:** 3D track markers + approach HUD + post-lap comparison (Phase 1).
 
-**Branch:** `feat/issue-6-telemetry-brake-persistence`. **PR:** https://github.com/agorokh/ac-copilot-trainer/pull/10 (draft, `Fixes #6`).
+**Branch:** `feat/issue-7-track-markers-delta`. **PR #20** (ready; CI + Bugbot green on latest tip; GraphQL review threads all resolved, 2026-03-31). **Next:** merge when approved.
 
-**Next:** wait for Actions + bots (`sleep 600` after pushes), GraphQL `reviewThreads`; then `gh pr ready 10` when you want full review signal; in-game smoke test after copying the app folder into `assettocorsa/apps/lua/ac_copilot_trainer/`.
+**After merge:** #8 (corner analysis / fingerprint), then #9, #19 per epic.

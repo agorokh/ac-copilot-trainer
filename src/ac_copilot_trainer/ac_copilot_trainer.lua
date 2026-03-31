@@ -1,6 +1,6 @@
--- AC Copilot Trainer v0.1.0
+-- AC Copilot Trainer v0.2.0
 -- https://github.com/agorokh/ac-copilot-trainer
--- Issue #6: telemetry, brake detection, persistence, lap-aware brake sets.
+-- Issues #6–#7: telemetry, traces, delta, sectors, 3D markers, throttle, post-lap.
 
 do
   local origin = ac.getFolder(ac.FolderID.ScriptOrigin)
@@ -13,6 +13,9 @@ local telemetryMod = require("telemetry")
 local brakeMod = require("brake_detection")
 local persistence = require("persistence")
 local hud = require("hud")
+local delta = require("delta")
+local trackMarkers = require("track_markers")
+local throttleDet = require("throttle_detection")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -22,7 +25,36 @@ local config = {
   brakeDurationMin = 0.5,
   bufferSeconds = 30,
   hudEnabled = true,
+  approachMeters = 200,
+  coastWarnSeconds = 1.0,
+  postLapHoldSeconds = 5,
+  sectorMessageSeconds = 3,
 }
+
+local SMOOTH_N = 30
+local deltaBuf = {}
+local deltaBufN = 0
+
+local function smoothDelta(x)
+  if x == nil then
+    return nil
+  end
+  deltaBufN = deltaBufN + 1
+  deltaBuf[((deltaBufN - 1) % SMOOTH_N) + 1] = x
+  local sum, c = 0, 0
+  for i = 1, SMOOTH_N do
+    if deltaBuf[i] ~= nil then
+      sum = sum + deltaBuf[i]
+      c = c + 1
+    end
+  end
+  return c > 0 and (sum / c) or x
+end
+
+local function resetDeltaSmoother()
+  deltaBuf = {}
+  deltaBufN = 0
+end
 
 local function newTelemetry()
   return telemetryMod.new({ bufferSeconds = config.bufferSeconds })
@@ -37,8 +69,8 @@ end
 
 local tel = newTelemetry()
 local brakes = newBrakes()
+local td = throttleDet.new()
 
---- Last valid driving-frame refs for persistence when sim is already on main menu.
 local lastDriveCar ---@type ac.StateCar|nil
 local lastDriveSim ---@type ac.StateSim|nil
 
@@ -58,6 +90,82 @@ local function copyBpList(list)
   return out
 end
 
+local function copyTrace(list)
+  local out = {}
+  for i = 1, #list do
+    local e = list[i]
+    out[i] = {
+      spline = e.spline,
+      eMs = e.eMs,
+      speed = e.speed,
+      brake = e.brake,
+      throttle = e.throttle,
+      gear = e.gear,
+      px = e.px,
+      py = e.py,
+      pz = e.pz,
+    }
+  end
+  return out
+end
+
+local function normalizeTrace(t)
+  if not t or type(t) ~= "table" then
+    return {}
+  end
+  local out = {}
+  for i = 1, #t do
+    local r = t[i]
+    if type(r) == "table" then
+      out[#out + 1] = {
+        spline = tonumber(r.spline) or 0,
+        eMs = tonumber(r.eMs) or 0,
+        speed = tonumber(r.speed) or 0,
+        brake = tonumber(r.brake) or 0,
+        throttle = tonumber(r.throttle) or 0,
+        gear = math.floor(tonumber(r.gear) or 0),
+        px = tonumber(r.px) or 0,
+        py = tonumber(r.py) or 0,
+        pz = tonumber(r.pz) or 0,
+      }
+    end
+  end
+  return out
+end
+
+--- Reject traces that never saw most of the lap spline (e.g. telemetry started mid-lap).
+local function traceHasPbSplineCoverage(trace)
+  if not trace or #trace < 2 then
+    return false
+  end
+  local lo, hi = math.huge, -math.huge
+  for i = 1, #trace do
+    local s = trace[i].spline
+    if type(s) == "number" then
+      if s < lo then
+        lo = s
+      end
+      if s > hi then
+        hi = s
+      end
+    end
+  end
+  if lo == math.huge or hi == -math.huge then
+    return false
+  end
+  local span = hi - lo
+  if lo <= 0.06 and hi >= 0.94 then
+    return true
+  end
+  if span < 0.78 then
+    return false
+  end
+  if lo > 0.10 or hi < 0.90 then
+    return false
+  end
+  return true
+end
+
 local state = {
   initialized = false,
   bestLapMs = nil,
@@ -70,9 +178,32 @@ local state = {
     session = {},
   },
   recording = true,
-  ---@type number|nil
   lastSplinePos = nil,
+  bestLapTrace = {},
+  --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
+  bestReferenceLapMs = nil,
+  bestSortedTrace = nil,
+  bestSectorMs = { 0, 0, 0 },
+  sectorIndex = 1,
+  sectorStartSimT = nil,
+  lastSplineSector = nil,
+  sectorHudMsg = "",
+  sectorHudUntil = 0,
+  postLapLines = {},
+  postLapUntil = 0,
+  lastThrottleSummary = "",
 }
+
+local function rebuildBestReference()
+  state.bestSortedTrace = delta.prepareTrace(state.bestLapTrace)
+  local b = delta.sectorBoundariesMs(state.bestSortedTrace)
+  if b then
+    state.bestSectorMs = { b[1], b[2] - b[1], b[3] - b[2] }
+  else
+    state.bestSectorMs = { 0, 0, 0 }
+  end
+  resetDeltaSmoother()
+end
 
 local function applyLoaded(data)
   if not data or type(data) ~= "table" then
@@ -85,16 +216,31 @@ local function applyLoaded(data)
   if data.bestBrakePoints and type(data.bestBrakePoints) == "table" then
     state.brakingPoints.best = data.bestBrakePoints
   end
+  if data.bestLapTrace and type(data.bestLapTrace) == "table" then
+    state.bestLapTrace = normalizeTrace(data.bestLapTrace)
+  end
+  local refMs = tonumber(data.bestReferenceLapMs)
+  if refMs and refMs > 0 then
+    state.bestReferenceLapMs = refMs
+  elseif state.bestLapTrace and #state.bestLapTrace >= 2 and state.bestLapMs and state.bestLapMs > 0 then
+    state.bestReferenceLapMs = state.bestLapMs
+  else
+    state.bestReferenceLapMs = nil
+  end
+  rebuildBestReference()
 end
 
 local function persistPayload()
+  -- Always persist non-empty `bestLapTrace` together with `bestReferenceLapMs` so a new PB time
+  -- does not erase a still-valid reference trace when the span guard rejected the new lap's trace.
   return {
     bestLapMs = state.bestLapMs,
     bestBrakePoints = state.brakingPoints.best,
+    bestLapTrace = state.bestLapTrace,
+    bestReferenceLapMs = state.bestReferenceLapMs,
   }
 end
 
---- Save while still in-session (uses car/sim from current frame; no re-fetch).
 ---@return boolean
 local function persistSnapshotLive()
   if not sim or sim.isInMainMenu or not car then
@@ -103,7 +249,6 @@ local function persistSnapshotLive()
   return persistence.save(car, sim, persistPayload()) == true
 end
 
---- Save using last driving frame (exit to menu / window hide).
 ---@return boolean
 local function persistSnapshotCached()
   local c, s = lastDriveCar, lastDriveSim
@@ -125,15 +270,36 @@ local function resetRuntimeAfterLeavingTrack()
   }
   tel = newTelemetry()
   brakes = newBrakes()
+  td = throttleDet.new()
   lastDriveCar = nil
   lastDriveSim = nil
   state.lastSplinePos = nil
+  state.bestLapTrace = {}
+  state.bestReferenceLapMs = nil
+  state.bestSortedTrace = nil
+  state.bestSectorMs = { 0, 0, 0 }
+  state.sectorIndex = 1
+  state.sectorStartSimT = nil
+  state.lastSplineSector = nil
+  state.sectorHudMsg = ""
+  state.sectorHudUntil = 0
+  state.postLapLines = {}
+  state.postLapUntil = 0
+  state.lastThrottleSummary = ""
+  resetDeltaSmoother()
 end
 
 local function resetRollingDrivingState()
   state.brakingPoints.session = {}
   tel = newTelemetry()
   brakes = newBrakes()
+  td:resetLapAggregates()
+  state.sectorIndex = 1
+  state.sectorStartSimT = nil
+  state.lastSplineSector = nil
+  state.sectorHudMsg = ""
+  state.sectorHudUntil = 0
+  resetDeltaSmoother()
 end
 
 local function tryLoadDisk()
@@ -146,24 +312,188 @@ local function tryLoadDisk()
   state.initialized = true
 end
 
-function script.windowMain(dt)
+---@param simTime number
+local function sectorMessage(refMs, actualMs, simTime)
+  if not refMs or refMs <= 0 or not actualMs then
+    return
+  end
+  local d = actualMs - refMs
+  if d < -5 then
+    state.sectorHudMsg = string.format("Sector: %.2f s faster than ref lap", -d / 1000)
+  elseif d > 5 then
+    state.sectorHudMsg = string.format("Sector: %.2f s slower than ref lap", d / 1000)
+  else
+    state.sectorHudMsg = string.format("Sector: on pace (Δ %+d ms)", math.floor(d + 0.5))
+  end
+  state.sectorHudUntil = simTime + config.sectorMessageSeconds
+end
+
+---@param sim0 ac.StateSim|nil
+local function trackLengthMeters(sim0)
+  if not sim0 then
+    return nil
+  end
+  local tl = tonumber(sim0.trackLengthMeters) or tonumber(sim0.trackLength) or tonumber(sim0.trackLengthMeter)
+  if tl and tl > 50 then
+    return tl
+  end
+  return nil
+end
+
+---@param sim0 ac.StateSim|nil
+local function buildPostLapLines(bestBps, lastBps, coastMs, sim0)
+  local lines = {}
+  local tlM = trackLengthMeters(sim0)
+  if #bestBps == 0 then
+    if coastMs and coastMs > 200 then
+      lines[1] = string.format("Coasting (lap): %.1f s", coastMs / 1000)
+    end
+    return lines
+  end
+  local n = math.min(#lastBps, 8)
+  for i = 1, n do
+    local L = lastBps[i]
+    local bestJ, bestD = 1, 99.0
+    for j = 1, #bestBps do
+      local B = bestBps[j]
+      local ds = math.abs((L.spline or 0) - (B.spline or 0))
+      ds = math.min(ds, 1 - ds)
+      if ds < bestD then
+        bestD = ds
+        bestJ = j
+      end
+    end
+    local B = bestBps[bestJ]
+    if B then
+      local wrap = (L.spline or 0) - (B.spline or 0)
+      if wrap > 0.5 then
+        wrap = wrap - 1
+      elseif wrap < -0.5 then
+        wrap = wrap + 1
+      end
+      local dv = (L.entrySpeed or 0) - (B.entrySpeed or 0)
+      if tlM then
+        local estM = wrap * tlM
+        lines[#lines + 1] = string.format("Brake %d: dSpline %+.3f (~%+.0f m) dV %+.0f km/h", i, wrap, estM, dv)
+      else
+        lines[#lines + 1] = string.format("Brake %d: dSpline %+.3f  dV %+.0f km/h", i, wrap, dv)
+      end
+    end
+  end
+  if coastMs and coastMs > 200 then
+    lines[#lines + 1] = string.format("Coasting (lap): %.1f s", coastMs / 1000)
+  end
+  return lines
+end
+
+--- Forward spline distance from car to point along lap, in [0, 1).
+local function splineForwardDelta(carSpline, ptSpline)
+  local d = (ptSpline or 0) - (carSpline or 0)
+  if d < 0 then
+    d = d + 1
+  end
+  if d >= 1 then
+    d = d - 1
+  end
+  return d
+end
+
+---@param sim0 ac.StateSim|nil
+local function approachHudLines(car0, sortedTrace, sim0)
+  local best = state.brakingPoints.best
+  if not car0 or not car0.position or #best == 0 then
+    return nil
+  end
+  local carSp = car0.splinePosition or 0
+  local cx, cy, cz = car0.position.x, car0.position.y, car0.position.z
+  local bestI, bestSplineD, bestDistSq ---@type integer|nil, number|nil, number|nil
+  for i = 1, #best do
+    local p = best[i]
+    local dx, dy, dz = cx - p.px, cy - p.py, cz - p.pz
+    local distSq = dx * dx + dy * dy + dz * dz
+    local dS = splineForwardDelta(carSp, p.spline or 0)
+    if dS < 1e-9 then
+      dS = 1e-9
+    end
+    if bestI == nil or dS < bestSplineD - 1e-12 or (math.abs(dS - bestSplineD) <= 1e-12 and distSq < bestDistSq) then
+      bestI = i
+      bestSplineD = dS
+      bestDistSq = distSq
+    end
+  end
+  if not bestI or not bestDistSq or not bestSplineD then
+    return nil
+  end
+  local dM = math.sqrt(bestDistSq)
+  local tlM = trackLengthMeters(sim0)
+  if tlM and tlM > 0 then
+    dM = bestSplineD * tlM
+  end
+  if dM > config.approachMeters then
+    return nil
+  end
+  local bp = best[bestI]
+  local refSpd = bp.entrySpeed or 0
+  if sortedTrace then
+    refSpd = delta.bestSpeedKmhAtSpline(sortedTrace, bp.spline or 0) or refSpd
+  end
+  local cur = car0.speedKmh or 0
+  local dv = cur - refSpd
+  local tag = "match"
+  if dv > 8 then
+    tag = "too fast"
+  elseif dv < -8 then
+    tag = "too slow"
+  end
+  return {
+    string.format("Dist brake #%d: %.0f m", bestI, dM),
+    string.format("Ref speed: %.0f  Current: %.0f (%s)", refSpd, cur, tag),
+  }
+end
+
+function script.windowMain(_dt)
   if not config.hudEnabled then
     return
   end
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.1.0")
+    ui.text("AC Copilot Trainer v0.2.0")
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.1.0")
+    ui.text("AC Copilot Trainer v0.2.0")
     ui.separator()
     ui.text("Waiting for car data...")
     return
   end
+
+  local now = sim.time or 0
+  local dSmooth = nil
+  if state.bestSortedTrace and tel:lapStartTime() then
+    local eMs = (now - tel:lapStartTime()) * 1000
+    local sp = car.splinePosition or 0
+    local raw = delta.deltaSecondsAtSpline(state.bestSortedTrace, sp, eMs)
+    dSmooth = smoothDelta(raw)
+  end
+
+  local secMsg = ""
+  if state.sectorHudMsg ~= "" and now < state.sectorHudUntil then
+    secMsg = state.sectorHudMsg
+  end
+
+  local postLines = {}
+  if now < state.postLapUntil then
+    postLines = state.postLapLines
+  end
+
+  local coastWarn = false
+  if td.coastStreak and td.coastStreak >= config.coastWarnSeconds then
+    coastWarn = true
+  end
+
   hud.draw({
     recording = tel:isRecording(),
     telemetrySamples = tel:sampleCount(),
@@ -175,6 +505,12 @@ function script.windowMain(dt)
     brakeBest = #state.brakingPoints.best,
     brakeLast = #state.brakingPoints.last,
     brakeSession = #state.brakingPoints.session,
+    deltaSmoothedSec = dSmooth,
+    sectorMessage = secMsg,
+    approachLines = approachHudLines(car, state.bestSortedTrace, sim),
+    postLapLines = postLines,
+    coastWarn = coastWarn,
+    throttleLapHint = state.lastThrottleSummary,
   })
 end
 
@@ -207,6 +543,84 @@ function script.update(dt)
     tryLoadDisk()
   end
 
+  local lc = car.lapCount or 0
+  local sp = car.splinePosition or 0
+
+  -- After menu, lastLapCount is -1 until end-of-frame; prime now so lap clock can arm on the first driving frame.
+  if state.lastLapCount < 0 then
+    state.lastLapCount = lc
+  end
+
+  -- Lap boundary: finalize trace before appending this frame's sample.
+  if state.lastLapCount >= 0 and lc > state.lastLapCount then
+    local completedTrace = tel:finalizeLapTrace()
+    tel:beginLapClock(sim.time or 0)
+    resetDeltaSmoother()
+    local lastMs = car.previousLapTimeMs or car.lastLapTimeMs or 0
+    state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
+
+    local s3 = (state.sectorIndex == 3 and state.sectorStartSimT) and ((sim.time - state.sectorStartSimT) * 1000) or nil
+    if s3 and state.bestSectorMs[3] and state.bestSectorMs[3] > 0 then
+      sectorMessage(state.bestSectorMs[3], s3, sim.time or 0)
+    end
+
+    local evLap = brakes:finalizeQualifiedWhileHolding(car)
+    if evLap then
+      state.brakingPoints.session[#state.brakingPoints.session + 1] = evLap
+    end
+
+    local thA = throttleDet.analyzeTrace(completedTrace)
+    if thA then
+      state.lastThrottleSummary = string.format(
+        "FT%% %.0f  coast %.1fs  throttle-on %d  sawtooth~ %d",
+        thA.fullThrottlePct or 0,
+        (thA.coastingMs or 0) / 1000,
+        thA.applyEvents or 0,
+        thA.reversals or 0
+      )
+    else
+      state.lastThrottleSummary = ""
+    end
+
+    local prevBestBp = copyBpList(state.brakingPoints.best)
+    if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
+      state.bestLapMs = lastMs
+      state.brakingPoints.best = copyBpList(state.brakingPoints.session)
+      local spanMs = 0
+      if #completedTrace >= 2 then
+        spanMs = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
+      end
+      -- Ignore reference trace when time span is short (mid-lap clock / gaps) or spline range is too narrow.
+      if #completedTrace > 0 and spanMs >= lastMs * 0.45 and traceHasPbSplineCoverage(completedTrace) then
+        state.bestLapTrace = copyTrace(completedTrace)
+        state.bestReferenceLapMs = lastMs
+      end
+      -- Guards failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; persist still saves both with `bestReferenceLapMs`.
+      rebuildBestReference()
+      persistSnapshotLive()
+    end
+    state.brakingPoints.last = copyBpList(state.brakingPoints.session)
+    state.brakingPoints.session = {}
+    td:resetLapAggregates()
+
+    local coastMs = thA and thA.coastingMs or 0
+    state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
+    state.postLapUntil = (sim.time or 0) + config.postLapHoldSeconds
+
+    state.sectorIndex = 1
+    state.sectorStartSimT = sim.time or 0
+    state.lastSplineSector = sp
+  end
+
+  -- Start collecting after lap counter is synced; span guard above avoids saving a partial trace as PB reference.
+  if tel:lapStartTime() == nil and not sim.isInMainMenu and state.lastLapCount >= 0 then
+    tel:beginLapClock(sim.time or 0)
+    resetDeltaSmoother()
+    state.sectorStartSimT = sim.time or 0
+    state.sectorIndex = 1
+    state.lastSplineSector = sp
+  end
+
   tel:setRecording(state.recording)
   tel:update(dt, car, sim)
 
@@ -214,9 +628,25 @@ function script.update(dt)
   if ev then
     state.brakingPoints.session[#state.brakingPoints.session + 1] = ev
   end
+  td:update(car, dt)
 
-  local lc = car.lapCount or 0
-  local sp = car.splinePosition or 0
+  -- Sector boundaries (spline thirds)
+  if state.lastLapCount >= 0 and lc == state.lastLapCount and state.sectorStartSimT and state.lastSplineSector ~= nil then
+    local lsp = state.lastSplineSector
+    local b1, b2 = 1 / 3, 2 / 3
+    if state.sectorIndex == 1 and lsp < b1 and sp >= b1 then
+      local aMs = (sim.time - state.sectorStartSimT) * 1000
+      sectorMessage(state.bestSectorMs[1], aMs, sim.time or 0)
+      state.sectorIndex = 2
+      state.sectorStartSimT = sim.time or 0
+    elseif state.sectorIndex == 2 and lsp < b2 and sp >= b2 then
+      local aMs = (sim.time - state.sectorStartSimT) * 1000
+      sectorMessage(state.bestSectorMs[2], aMs, sim.time or 0)
+      state.sectorIndex = 3
+      state.sectorStartSimT = sim.time or 0
+    end
+  end
+
   if state.lastLapCount >= 0 and lc < state.lastLapCount then
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
@@ -228,33 +658,20 @@ function script.update(dt)
     end
   end
 
-  if state.lastLapCount >= 0 and lc > state.lastLapCount then
-    local evLap = brakes:finalizeQualifiedWhileHolding(car)
-    if evLap then
-      state.brakingPoints.session[#state.brakingPoints.session + 1] = evLap
-    end
-    local lastMs = car.previousLapTimeMs or car.lastLapTimeMs or 0
-    state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
-    if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
-      state.bestLapMs = lastMs
-      state.brakingPoints.best = copyBpList(state.brakingPoints.session)
-      local _persistPb = persistSnapshotLive() or persistSnapshotLive()
-    end
-    state.brakingPoints.last = copyBpList(state.brakingPoints.session)
-    state.brakingPoints.session = {}
-  end
   state.lastLapCount = lc
   state.lastSplinePos = sp
+  state.lastSplineSector = sp
 end
 
 function script.onWindowHide()
-  local _persistHide = persistSnapshotCached() or persistSnapshotCached()
+  persistSnapshotCached()
 end
 
-function script.draw3D(dt)
+function script.Draw3D(_dt)
   local s = ac.getSim()
   if not s or s.isInMainMenu then
     return
   end
-  -- Phase 1 follow-up: render brake markers from state.brakingPoints
+  local c = ac.getCar(0)
+  trackMarkers.draw(c, state.brakingPoints.best, state.brakingPoints.last)
 end
