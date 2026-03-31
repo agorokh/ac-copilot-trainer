@@ -164,7 +164,9 @@ function M.draw(car, best, last)
     overlayRemaining = MAX_DEBUG_PRIMITIVES - nDraw * primaryPerMarker
   else
     primaryPerMarker = 0
-    if (debugSphereUsable and hasDebugSphere) or (hasLegacyDrawSphere and not hasDebugSphere) then
+    -- Match draw path: legacy sphere when debugSphere is missing or marked unusable.
+    if (debugSphereUsable and hasDebugSphere)
+      or (hasLegacyDrawSphere and (not hasDebugSphere or not debugSphereUsable)) then
       primaryPerMarker = primaryPerMarker + 1
     end
     if debugCrossUsable and hasDebugCross then
