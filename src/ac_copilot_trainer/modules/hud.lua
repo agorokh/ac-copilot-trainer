@@ -33,7 +33,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingLines string[]|nil
 
 local function formatLapMs(ms)
-  if not ms or ms <= 0 then
+  if not ms or ms ~= ms or ms <= 0 then
     return "—"
   end
   return string.format("%.3f s", ms / 1000)
