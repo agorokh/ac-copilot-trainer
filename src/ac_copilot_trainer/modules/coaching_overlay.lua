@@ -20,12 +20,9 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     alpha = math.max(0, timeRemaining / fadeStart)
   end
 
-  -- Set transparent window background (Dear ImGui style push)
-  local stylePushed = false
-  if type(ui.pushStyleColor) == "function" then
-    local ok = pcall(ui.pushStyleColor, ui.StyleColor.WindowBg, rgbm(0.05, 0.05, 0.08, 0.65 * alpha))
-    stylePushed = ok
-  end
+  -- Window background is handled by manifest.ini FLAGS=NO_BACKGROUND.
+  -- CSP calls Begin() before this function, so pushStyleColor(WindowBg)
+  -- would be ineffective here (Bugbot #30). Text floats over the scene.
 
   -- Title bar
   local titleColor = rgbm(0.35, 0.82, 0.95, alpha)
@@ -47,10 +44,6 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     ui.textColored(dimColor, string.format("(%.0fs)", timeRemaining))
   end
 
-  -- Pop style only if push succeeded
-  if stylePushed and type(ui.popStyleColor) == "function" then
-    pcall(ui.popStyleColor)
-  end
 end
 
 return M
