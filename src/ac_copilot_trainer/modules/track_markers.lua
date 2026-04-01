@@ -61,9 +61,10 @@ local function snapToTrack(px, py, pz)
 end
 
 ---@param car ac.StateCar|nil
+---@param sim ac.StateSim|nil
 ---@param best table[]|nil
 ---@param last table[]|nil
-function M.draw(car, best, last)
+function M.draw(car, sim, best, last)
   if not car or not car.position then return end
   if not render or not vec3 then return end
 
@@ -82,6 +83,16 @@ function M.draw(car, best, last)
   end
 
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
+  -- Billboard rectangles face the viewer; CSP exposes current camera via sim.cameraPosition (acc-lua-sdk ac_scene).
+  local billX, billZ = cx, cz
+  if sim and sim.cameraPosition then
+    local cp = sim.cameraPosition
+    local okx, px = pcall(function() return cp.x end)
+    local okz, pz = pcall(function() return cp.z end)
+    if okx and okz and type(px) == "number" and type(pz) == "number" then
+      billX, billZ = px, pz
+    end
+  end
   local items = {}
   local function addList(list, kind)
     if not list then return end
@@ -145,7 +156,7 @@ function M.draw(car, best, last)
         end
 
         if hasRect then
-          local dx, dz = cx - it.x, cz - it.z
+          local dx, dz = billX - it.x, billZ - it.z
           local len = math.sqrt(dx * dx + dz * dz)
           local fwd
           if len > 0.01 then
