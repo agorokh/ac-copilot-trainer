@@ -165,6 +165,7 @@ function M.draw(car, _sim, best, last)
       pcall(render.setCullMode, render.CullMode.None)
     end
 
+    local up = vec3(0, 1, 0)
     for i = 1, nDraw do
       local it = items[i]
       local fade = 1
@@ -186,7 +187,6 @@ function M.draw(car, _sim, best, last)
 
       pcall(function()
         local pos = vec3(it.x, sy, it.z)
-        local up = vec3(0, 1, 0)
         if it.kind == "best" then
           local baseCol = { r = 1.0, g = 0.05, b = 0.05 }
           drawGradientDisc(pos, up, DISC_RADIUS, baseCol, fade)

@@ -147,6 +147,9 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
       local mx = (a.x + b.x) * 0.5
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
+      -- Reset tilt state when segments are culled so stale tilt
+      -- does not leak across large gaps (Bugbot #18).
+      local segDrawn = false
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
         local dx, dz = b.x - a.x, b.z - a.z
         local len = math.sqrt(dx * dx + dz * dz)
@@ -167,6 +170,7 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
             frontTiltH = prevTiltH
           end
           prevTiltH = backTiltH
+          segDrawn = true
 
           local v1 = vec3(a.x - nx, ay_off + frontTiltH, a.z - nz)
           local v2 = vec3(a.x + nx, ay_off + frontTiltH, a.z + nz)
@@ -174,9 +178,11 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
           local v4 = vec3(b.x - nx, by_off + backTiltH, b.z - nz)
 
           -- Per-segment speed color (use average of a and b speeds)
-          local segSpeed = ((a.speed or 0) + (b.speed or 0)) * 0.5
+          -- Use speed-based color when either point has speed data;
+          -- 0 km/h is valid (stationary) and maps to red via speedColor.
           local color
-          if segSpeed > 0 then
+          if a.speed ~= nil or b.speed ~= nil then
+            local segSpeed = ((a.speed or 0) + (b.speed or 0)) * 0.5
             color = speedColor(segSpeed)
           else
             color = fallbackColor
@@ -217,6 +223,9 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
             remaining = remaining - 1
           end
         end
+      end
+      if not segDrawn then
+        prevTiltH = 0
       end
     end
   end)
