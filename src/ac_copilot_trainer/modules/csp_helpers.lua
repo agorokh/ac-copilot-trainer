@@ -67,7 +67,9 @@ function M.carIdRawFromGlobals()
   return nil
 end
 
---- Reset CSP render blend/depth to typical defaults after temporary AlphaBlend/ReadOnly (Draw3D).
+--- Reset CSP render state after each Draw3D overlay module (issue #33).
+--- Overlay draws set ReadOnlyLessEqual at their start; restore depth to Normal so we do not
+--- leave the same mode as the draw (no-op) or leak overlay state to other Draw3D users.
 --- Match caller guards (`if not render`): render may be userdata with __index, not a plain table.
 function M.restoreRenderDefaults()
   if not render then
@@ -83,6 +85,12 @@ function M.restoreRenderDefaults()
     local o = render.BlendMode.Opaque
     if o ~= nil then
       pcall(render.setBlendMode, o)
+    end
+  end
+  if type(render.setCullMode) == "function" and render.CullMode then
+    local b = render.CullMode.Back
+    if b ~= nil then
+      pcall(render.setCullMode, b)
     end
   end
 end
