@@ -1,5 +1,5 @@
 -- Racing line rendered as filled quad strip on track surface.
--- render.debugLine is 1px wireframe (invisible from cockpit); render.quad draws filled geometry.
+-- render.quad draws filled geometry visible from cockpit at driving distance.
 
 local ch = require("csp_helpers")
 
@@ -8,12 +8,11 @@ local M = {}
 local MAX_POINTS = 500
 local CULL_M = 250
 --- Half-width of the quad strip in meters.
-local STRIP_HALF_W = 0.6
+local STRIP_HALF_W = 0.5
 --- Y offset above track to avoid z-fighting.
-local Y_OFFSET = 0.08
+local Y_OFFSET = 0.06
 --- Max quads per frame per strip call.
-M.MAX_QUADS = 120
---- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
+M.MAX_QUADS = 150
 local debugLineFallbackLogged = false
 
 local function distSq(ax, ay, az, bx, by, bz)
@@ -73,23 +72,26 @@ function M.drawLineStrip(car, line, color, maxQuads)
   local hasDebugLine = type(render.debugLine) == "function"
   local glQuadEnum = render.GLPrimitiveType and render.GLPrimitiveType.Quads
 
-  if not hasQuad and not (hasGl and glQuadEnum) and not hasDebugLine then
-    return
-  end
+  if not hasQuad and not (hasGl and glQuadEnum) and not hasDebugLine then return end
 
   pcall(function()
+    -- Alpha blending for transparent line
     if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
       pcall(render.setBlendMode, render.BlendMode.AlphaBlend)
     end
-    if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnly then
-      pcall(render.setDepthMode, render.DepthMode.ReadOnly)
+    -- Normal depth so line is hidden behind hills/objects
+    if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.Normal then
+      pcall(render.setDepthMode, render.DepthMode.Normal)
+    end
+    -- Disable backface culling — quads must be visible from both sides
+    -- (winding order flips depending on driving direction)
+    if type(render.setCullMode) == "function" and render.CullMode and render.CullMode.None then
+      pcall(render.setCullMode, render.CullMode.None)
     end
 
     local remaining = cap
     for i = 1, #line - 1 do
-      if remaining < 1 then
-        break
-      end
+      if remaining < 1 then break end
       local a, b = line[i], line[i + 1]
       local mx = (a.x + b.x) * 0.5
       local my = (a.y + b.y) * 0.5
@@ -124,22 +126,12 @@ function M.drawLineStrip(car, line, color, maxQuads)
           if not okDraw and hasDebugLine then
             if not debugLineFallbackLogged and ac and type(ac.log) == "function" then
               debugLineFallbackLogged = true
-              ac.log(
-                "[COPILOT] racing_line: render.debugLine fallback (quad/GL missing or failed); "
-                  .. "1px line may be invisible from cockpit — see #24."
-              )
+              ac.log("[COPILOT] racing_line: render.debugLine fallback — 1px line, see #24")
             end
-            okDraw = pcall(
-              render.debugLine,
-              vec3(a.x, ay_off, a.z),
-              vec3(b.x, by_off, b.z),
-              color,
-              color
-            )
+            okDraw = pcall(render.debugLine,
+              vec3(a.x, ay_off, a.z), vec3(b.x, by_off, b.z), color, color)
           end
-          if okDraw then
-            remaining = remaining - 1
-          end
+          if okDraw then remaining = remaining - 1 end
         end
       end
     end

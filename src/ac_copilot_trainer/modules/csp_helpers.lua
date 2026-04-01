@@ -85,6 +85,12 @@ function M.restoreRenderDefaults()
       pcall(render.setBlendMode, o)
     end
   end
+  if type(render.setCullMode) == "function" and render.CullMode then
+    local b = render.CullMode.Back
+    if b ~= nil then
+      pcall(render.setCullMode, b)
+    end
+  end
 end
 
 return M

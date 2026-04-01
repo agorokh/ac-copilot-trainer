@@ -1,6 +1,5 @@
--- 3D brake markers using render.circle + render.debugText for visibility.
--- render.debug* line/sphere/cross are 1px wireframes invisible from driving distance.
--- render.circle draws filled geometry; render.debugText draws scaled 3D labels.
+-- 3D brake markers: flat transparent discs on track surface.
+-- Red = best-lap brake points, orange = last-lap brake points.
 
 local ch = require("csp_helpers")
 
@@ -12,7 +11,7 @@ local FADE_FAR = 350
 local MAX_SNAPY_KEYS = 256
 
 local snapSig = ""
-local snapY = {} ---@type table<string, number>
+local snapY = {}
 local snapYCount = 0
 
 local function brakeListHash(list)
@@ -69,11 +68,7 @@ function M.draw(car, sim, best, last)
   if not render or not vec3 then return end
 
   local hasCircle = type(render.circle) == "function"
-  local hasDbgText = type(render.debugText) == "function"
-  local hasRect = type(render.rectangle) == "function"
-  if not hasCircle and not hasDbgText and not hasRect then
-    return
-  end
+  if not hasCircle then return end
 
   local sig = brakeListSig(best) .. ";" .. brakeListSig(last)
   if sig ~= snapSig then
@@ -83,16 +78,6 @@ function M.draw(car, sim, best, last)
   end
 
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
-  -- Billboard rectangles face the viewer; CSP exposes current camera via sim.cameraPosition (acc-lua-sdk ac_scene).
-  local billX, billZ = cx, cz
-  if sim and sim.cameraPosition then
-    local cp = sim.cameraPosition
-    local okx, px = pcall(function() return cp.x end)
-    local okz, pz = pcall(function() return cp.z end)
-    if okx and okz and type(px) == "number" and type(pz) == "number" then
-      billX, billZ = px, pz
-    end
-  end
   local items = {}
   local function addList(list, kind)
     if not list then return end
@@ -113,15 +98,21 @@ function M.draw(car, sim, best, last)
   local nDraw = math.min(#items, MAX_MARKERS)
 
   pcall(function()
+    -- Normal depth: markers hidden behind track geometry and objects
+    if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.Normal then
+      pcall(render.setDepthMode, render.DepthMode.Normal)
+    end
     if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
       pcall(render.setBlendMode, render.BlendMode.AlphaBlend)
     end
 
+    local upDir = vec3(0, 1, 0)
+
     for i = 1, nDraw do
       local it = items[i]
-      local alpha = 1
+      local alpha = 0.45
       if it.d > FADE_NEAR then
-        alpha = math.max(0.15, 1 - (it.d - FADE_NEAR) / (FADE_FAR - FADE_NEAR))
+        alpha = math.max(0.08, 0.45 * (1 - (it.d - FADE_NEAR) / (FADE_FAR - FADE_NEAR)))
       end
 
       local ck = markerCacheKey(it.x, it.y, it.z)
@@ -140,32 +131,14 @@ function M.draw(car, sim, best, last)
         local pos = vec3(it.x, sy, it.z)
         local col
         if it.kind == "best" then
-          col = rgbm(1.0, 0.1, 0.1, alpha)
+          -- Red transparent disc for best-lap brake points
+          col = rgbm(1.0, 0.15, 0.1, alpha)
         else
-          col = rgbm(1.0, 0.7, 0.0, alpha)
+          -- Orange transparent disc for last-lap brake points
+          col = rgbm(1.0, 0.6, 0.0, alpha * 0.7)
         end
-
-        if hasCircle then
-          -- Fresh vec3 for up-axis; CSP may retain/mutate direction refs (see racing_line note).
-          pcall(render.circle, pos, vec3(0, 1, 0), 2.5, col)
-        end
-
-        if hasDbgText then
-          local label = it.kind == "best" and "BRAKE" or "brake"
-          pcall(render.debugText, vec3(it.x, sy + 2.5, it.z), label, col, 1.5)
-        end
-
-        if hasRect then
-          local dx, dz = billX - it.x, billZ - it.z
-          local len = math.sqrt(dx * dx + dz * dz)
-          local fwd
-          if len > 0.01 then
-            fwd = vec3(dx / len, 0, dz / len)
-          else
-            fwd = vec3(1, 0, 0)
-          end
-          pcall(render.rectangle, vec3(it.x, sy + 1.5, it.z), fwd, 1.5, 3.0, col)
-        end
+        -- Flat disc on track surface — like a flag/zone you drive through
+        pcall(render.circle, pos, upDir, 3.0, col)
       end)
     end
   end)
