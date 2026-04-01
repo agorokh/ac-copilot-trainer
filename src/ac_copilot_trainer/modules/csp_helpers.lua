@@ -67,17 +67,18 @@ function M.carIdRawFromGlobals()
   return nil
 end
 
---- Reset CSP render state after Draw3D overlay draws (issue #33).
---- Depth: ReadOnlyLessEqual (AC::DepthMode = 4, acc-lua-sdk common/ac_render_enums.lua).
+--- Reset CSP render state after each Draw3D overlay module (issue #33).
+--- Overlay draws set ReadOnlyLessEqual at their start; restore depth to Normal so we do not
+--- leave the same mode as the draw (no-op) or leak overlay state to other Draw3D users.
 --- Match caller guards (`if not render`): render may be userdata with __index, not a plain table.
 function M.restoreRenderDefaults()
   if not render then
     return
   end
   if type(render.setDepthMode) == "function" and render.DepthMode then
-    local dm = render.DepthMode.ReadOnlyLessEqual
-    if dm ~= nil then
-      pcall(render.setDepthMode, dm)
+    local n = render.DepthMode.Normal
+    if n ~= nil then
+      pcall(render.setDepthMode, n)
     end
   end
   if type(render.setBlendMode) == "function" and render.BlendMode then

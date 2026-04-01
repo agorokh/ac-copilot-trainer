@@ -14,6 +14,7 @@ local DISC_RADIUS = 4.0
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 local snapYCount = 0
+local circleMissingLogged = false
 
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
@@ -69,7 +70,13 @@ function M.draw(car, _sim, best, last)
   if not render or not vec3 then return end
 
   local hasCircle = type(render.circle) == "function"
-  if not hasCircle then return end
+  if not hasCircle then
+    if not circleMissingLogged and ac and type(ac.log) == "function" then
+      circleMissingLogged = true
+      ac.log("[COPILOT] track_markers: render.circle missing — brake discs disabled (#33)")
+    end
+    return
+  end
 
   local sig = brakeListSig(best) .. ";" .. brakeListSig(last)
   if sig ~= snapSig then

@@ -114,10 +114,11 @@ function M.draw(vm)
   end
 
   ui.textColored(rgbm(0.7, 0.72, 0.78, 1), "Delta vs best")
-  if vm.deltaSmoothedSec == nil then
+  local dSmooth = vm.deltaSmoothedSec
+  if dSmooth == nil or dSmooth ~= dSmooth then
     ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "No reference")
   else
-    local d = vm.deltaSmoothedSec
+    local d = dSmooth
     local col = rgbm(0.25, 0.9, 0.35, 1)
     if d > 0.02 then
       col = rgbm(0.92, 0.28, 0.25, 1)
