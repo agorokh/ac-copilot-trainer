@@ -40,6 +40,25 @@ local function speedColor(speed)
   return rgbm(1.0, 0.15 + t * 0.6, 0.05, 0.8 + (1 - t) * 0.05)
 end
 
+
+--- Pre-computed color cache to avoid per-segment rgbm allocation (#22).
+--- Buckets at 5 km/h resolution (0-200 km/h = 41 entries).
+local speedColorCache = {}
+for s = 0, 200, 5 do
+  speedColorCache[s] = speedColor(s)
+end
+
+--- Cached speed color lookup: snaps to nearest 5 km/h bucket.
+---@param speed number km/h
+---@return rgbm
+local function speedColorCached(speed)
+  local bucket = math.max(0, math.min(200, math.floor(speed / 5 + 0.5) * 5))
+  local cached = speedColorCache[bucket]
+  if cached then return cached end
+  -- Fallback for edge cases
+  return speedColor(speed)
+end
+
 --- Calculate tilt height from deceleration between consecutive points.
 --- Higher deceleration = more tilt (trailing edge rises under braking).
 ---@param speedA number speed at point A (km/h)
@@ -82,7 +101,7 @@ function M.traceToLine(trace)
       x = tonumber(p.px) or 0,
       y = tonumber(p.py) or 0,
       z = tonumber(p.pz) or 0,
-      speed = tonumber(p.speed) or 0,
+      speed = tonumber(p.speed),  -- nil preserved: "no data" vs 0 km/h
     }
   end
   return out
@@ -158,9 +177,9 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
           local ay_off = a.y + Y_OFFSET
           local by_off = b.y + Y_OFFSET
 
-          -- Deceleration-based tilt: trailing edge (a, behind car) rises
-          -- under braking. Front edge (a) inherits tilt from previous
-          -- segment's back edge so consecutive quads connect without gaps.
+          -- Deceleration-based tilt: forward edge (b, ahead of car) rises
+          -- under braking like a domino. Point a's tilt inherits from the
+          -- previous segment's b-edge so consecutive quads connect seamlessly.
           local frontTiltH = 0
           local backTiltH = 0
           if useTilt then
@@ -170,7 +189,6 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
             frontTiltH = prevTiltH
           end
           prevTiltH = backTiltH
-          segDrawn = true
 
           local v1 = vec3(a.x - nx, ay_off + frontTiltH, a.z - nz)
           local v2 = vec3(a.x + nx, ay_off + frontTiltH, a.z + nz)
@@ -182,8 +200,14 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
           -- 0 km/h is valid (stationary) and maps to red via speedColor.
           local color
           if a.speed ~= nil or b.speed ~= nil then
-            local segSpeed = ((a.speed or 0) + (b.speed or 0)) * 0.5
-            color = speedColor(segSpeed)
+            -- Average only available speeds; don't drag average toward 0 with nil
+            local segSpeed
+            if a.speed ~= nil and b.speed ~= nil then
+              segSpeed = (a.speed + b.speed) * 0.5
+            else
+              segSpeed = a.speed or b.speed
+            end
+            color = speedColorCached(segSpeed)
           else
             color = fallbackColor
           end
@@ -221,6 +245,7 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
           end
           if okDraw then
             remaining = remaining - 1
+            segDrawn = true
           end
         end
       end

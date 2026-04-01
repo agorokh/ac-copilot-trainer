@@ -20,6 +20,10 @@ local circleMissingLogged = false
 --- nil = not yet probed, true/false = probed result.
 local circleSupportsBorder = nil
 
+--- Module-level base colors: avoid per-marker allocation (#23/#25).
+local BEST_BASE_COL = { r = 1.0, g = 0.05, b = 0.05 }
+local LAST_BASE_COL = { r = 0.4, g = 0.6, b = 1.0 }
+
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
   local acc = #list * 73856093
@@ -188,12 +192,10 @@ function M.draw(car, _sim, best, last)
       pcall(function()
         local pos = vec3(it.x, sy, it.z)
         if it.kind == "best" then
-          local baseCol = { r = 1.0, g = 0.05, b = 0.05 }
-          drawGradientDisc(pos, up, DISC_RADIUS, baseCol, fade)
+          drawGradientDisc(pos, up, DISC_RADIUS, BEST_BASE_COL, fade)
         else
-          -- Brightened last-lap color: was rgbm(0.3,0.4,0.7,0.35), now much brighter
-          local baseCol = { r = 0.4, g = 0.6, b = 1.0 }
-          drawGradientDisc(pos, up, DISC_RADIUS, baseCol, fade)
+          -- Brightened last-lap color (#35 Part B)
+          drawGradientDisc(pos, up, DISC_RADIUS, LAST_BASE_COL, fade)
         end
       end)
     end
