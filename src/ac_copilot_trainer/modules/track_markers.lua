@@ -61,10 +61,10 @@ local function snapToTrack(px, py, pz)
 end
 
 ---@param car ac.StateCar|nil
----@param sim ac.StateSim|nil
+---@param _sim ac.StateSim|nil kept for call-site stability (Draw3D passes sim)
 ---@param best table[]|nil
 ---@param last table[]|nil
-function M.draw(car, sim, best, last)
+function M.draw(car, _sim, best, last)
   if not car or not car.position then return end
   if not render or not vec3 then return end
 
@@ -99,6 +99,7 @@ function M.draw(car, sim, best, last)
   local nDraw = math.min(#items, MAX_MARKERS)
 
   pcall(function()
+    -- ReadOnlyLessEqual is AC::DepthMode in CSP (acc-lua-sdk common/ac_render_enums.lua).
     if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnlyLessEqual ~= nil then
       pcall(render.setDepthMode, render.DepthMode.ReadOnlyLessEqual)
     end
@@ -111,9 +112,9 @@ function M.draw(car, sim, best, last)
 
     for i = 1, nDraw do
       local it = items[i]
-      local alpha = 1
+      local fade = 1
       if it.d > FADE_NEAR then
-        alpha = math.max(0.15, 1 - (it.d - FADE_NEAR) / (FADE_FAR - FADE_NEAR))
+        fade = math.max(0, 1 - (it.d - FADE_NEAR) / (FADE_FAR - FADE_NEAR))
       end
 
       local ck = markerCacheKey(it.x, it.y, it.z)
@@ -132,10 +133,11 @@ function M.draw(car, sim, best, last)
         local pos = vec3(it.x, sy, it.z)
         local col, border
         if it.kind == "best" then
-          col = rgbm(1.0, 0.05, 0.05, 0.55 * alpha)
+          -- Min 0.15 applies to final rgbm alpha (fade * base), not fade alone.
+          col = rgbm(1.0, 0.05, 0.05, math.max(0.15, 0.55 * fade))
           border = rgbm(0.5, 0, 0, 0)
         else
-          col = rgbm(0.3, 0.4, 0.7, 0.35 * alpha)
+          col = rgbm(0.3, 0.4, 0.7, math.max(0.15, 0.35 * fade))
           border = rgbm(0.15, 0.2, 0.35, 0)
         end
         local up = vec3(0, 1, 0)

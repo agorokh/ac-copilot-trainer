@@ -61,6 +61,41 @@ local function drawDeltaBar(d)
   end
 end
 
+--- Throttle / consistency / tires / buffer / brake counts (tier 3).
+local function drawTelemetryDetail(vm)
+  if vm.throttleLapHint and vm.throttleLapHint ~= "" then
+    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Throttle (last lap)")
+    ui.textWrapped(vm.throttleLapHint)
+  end
+  if vm.consistencyHud and vm.consistencyHud ~= "" then
+    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Consistency")
+    ui.textWrapped(vm.consistencyHud)
+  end
+  if vm.styleHud and vm.styleHud ~= "" then
+    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Style vs reference")
+    ui.textWrapped(vm.styleHud)
+  end
+  if vm.tireHud and vm.tireHud ~= "" then
+    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Tires (last lap)")
+    ui.textWrapped(vm.tireHud)
+  end
+  if vm.refAiDistanceM ~= nil and vm.refAiDistanceM == vm.refAiDistanceM then
+    ui.text(string.format("AI line lateral (XZ): ~%.1f m", vm.refAiDistanceM))
+  end
+  if vm.segmentCount ~= nil and vm.segmentCount > 0 then
+    ui.text(string.format("Track segments: %d", vm.segmentCount))
+  end
+  if vm.telemetrySamples ~= nil then
+    ui.text(string.format("Telemetry buffer: %d samples", vm.telemetrySamples))
+  end
+  ui.text(string.format(
+    "Brake points — best: %d  last lap: %d  session: %d",
+    vm.brakeBest or 0,
+    vm.brakeLast or 0,
+    vm.brakeSession or 0
+  ))
+end
+
 function M.draw(vm)
   -- Tier 1 — always visible, top
   ui.textColored(rgbm(0.5, 0.55, 0.62, 1), "AC Copilot Trainer v0.4.0")
@@ -153,55 +188,17 @@ function M.draw(vm)
     ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
   end
 
-  -- Tier 3 — detail (collapsed by default)
+  -- Tier 3 — detail (tree when supported; same fields flat on older CSP)
   local flags = ui.TreeNodeFlags
   local framed = flags and flags.Framed or nil
   ui.separator()
   if framed ~= nil then
     ui.treeNode("Telemetry & stats", framed, function()
-      if vm.throttleLapHint and vm.throttleLapHint ~= "" then
-        ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Throttle (last lap)")
-        ui.textWrapped(vm.throttleLapHint)
-      end
-      if vm.consistencyHud and vm.consistencyHud ~= "" then
-        ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Consistency")
-        ui.textWrapped(vm.consistencyHud)
-      end
-      if vm.styleHud and vm.styleHud ~= "" then
-        ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Style vs reference")
-        ui.textWrapped(vm.styleHud)
-      end
-      if vm.tireHud and vm.tireHud ~= "" then
-        ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Tires (last lap)")
-        ui.textWrapped(vm.tireHud)
-      end
-      if vm.refAiDistanceM ~= nil and vm.refAiDistanceM == vm.refAiDistanceM then
-        ui.text(string.format("AI line lateral (XZ): ~%.1f m", vm.refAiDistanceM))
-      end
-      if vm.segmentCount ~= nil and vm.segmentCount > 0 then
-        ui.text(string.format("Track segments: %d", vm.segmentCount))
-      end
-      if vm.telemetrySamples ~= nil then
-        ui.text(string.format("Telemetry buffer: %d samples", vm.telemetrySamples))
-      end
-      ui.text(string.format(
-        "Brake points — best: %d  last lap: %d  session: %d",
-        vm.brakeBest or 0,
-        vm.brakeLast or 0,
-        vm.brakeSession or 0
-      ))
+      drawTelemetryDetail(vm)
     end)
   else
-    ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "— Telemetry & stats (expand not available) —")
-    if vm.telemetrySamples ~= nil then
-      ui.text(string.format("Telemetry buffer: %d samples", vm.telemetrySamples))
-    end
-    ui.text(string.format(
-      "Brake points — best: %d  last lap: %d  session: %d",
-      vm.brakeBest or 0,
-      vm.brakeLast or 0,
-      vm.brakeSession or 0
-    ))
+    ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "Telemetry & stats (no collapsible UI — showing flat)")
+    drawTelemetryDetail(vm)
   end
 end
 

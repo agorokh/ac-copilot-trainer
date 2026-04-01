@@ -81,6 +81,7 @@ function M.drawLineStrip(car, line, color, maxQuads)
     if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
       pcall(render.setBlendMode, render.BlendMode.AlphaBlend)
     end
+    -- ReadOnlyLessEqual: acc-lua-sdk render.DepthMode (AC::DepthMode), value 4.
     if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnlyLessEqual ~= nil then
       pcall(render.setDepthMode, render.DepthMode.ReadOnlyLessEqual)
     end

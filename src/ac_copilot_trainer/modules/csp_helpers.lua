@@ -68,7 +68,7 @@ function M.carIdRawFromGlobals()
 end
 
 --- Reset CSP render state after Draw3D overlay draws (issue #33).
---- Depth: ReadOnlyLessEqual matches transparent track overlays (depth test on, no z-fight writes).
+--- Depth: ReadOnlyLessEqual (AC::DepthMode = 4, acc-lua-sdk common/ac_render_enums.lua).
 --- Match caller guards (`if not render`): render may be userdata with __index, not a plain table.
 function M.restoreRenderDefaults()
   if not render then
@@ -84,6 +84,12 @@ function M.restoreRenderDefaults()
     local o = render.BlendMode.Opaque
     if o ~= nil then
       pcall(render.setBlendMode, o)
+    end
+  end
+  if type(render.setCullMode) == "function" and render.CullMode then
+    local b = render.CullMode.Back
+    if b ~= nil then
+      pcall(render.setCullMode, b)
     end
   end
 end
