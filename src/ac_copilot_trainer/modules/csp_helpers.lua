@@ -67,4 +67,23 @@ function M.carIdRawFromGlobals()
   return nil
 end
 
+--- Reset CSP render blend/depth to typical defaults after temporary AlphaBlend/ReadOnly (Draw3D).
+function M.restoreRenderDefaults()
+  if type(render) ~= "table" then
+    return
+  end
+  if type(render.setDepthMode) == "function" and render.DepthMode then
+    local n = render.DepthMode.Normal
+    if n ~= nil then
+      pcall(render.setDepthMode, n)
+    end
+  end
+  if type(render.setBlendMode) == "function" and render.BlendMode then
+    local o = render.BlendMode.Opaque
+    if o ~= nil then
+      pcall(render.setBlendMode, o)
+    end
+  end
+end
+
 return M

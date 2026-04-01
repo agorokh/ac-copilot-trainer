@@ -1,6 +1,8 @@
 -- Racing line rendered as filled quad strip on track surface.
 -- render.debugLine is 1px wireframe (invisible from cockpit); render.quad draws filled geometry.
 
+local ch = require("csp_helpers")
+
 local M = {}
 
 local MAX_POINTS = 500
@@ -75,21 +77,6 @@ function M.drawLineStrip(car, line, color, maxQuads)
     return
   end
 
-  local function restoreRenderState()
-    if type(render.setDepthMode) == "function" and render.DepthMode then
-      local n = render.DepthMode.Normal
-      if n ~= nil then
-        pcall(render.setDepthMode, n)
-      end
-    end
-    if type(render.setBlendMode) == "function" and render.BlendMode then
-      local o = render.BlendMode.Opaque
-      if o ~= nil then
-        pcall(render.setBlendMode, o)
-      end
-    end
-  end
-
   pcall(function()
     if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
       pcall(render.setBlendMode, render.BlendMode.AlphaBlend)
@@ -157,7 +144,7 @@ function M.drawLineStrip(car, line, color, maxQuads)
       end
     end
   end)
-  restoreRenderState()
+  ch.restoreRenderDefaults()
 end
 
 return M

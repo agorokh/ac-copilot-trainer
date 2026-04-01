@@ -2,6 +2,8 @@
 -- render.debug* line/sphere/cross are 1px wireframes invisible from driving distance.
 -- render.circle draws filled geometry; render.debugText draws scaled 3D labels.
 
+local ch = require("csp_helpers")
+
 local M = {}
 
 local MAX_MARKERS = 30
@@ -12,8 +14,6 @@ local MAX_SNAPY_KEYS = 256
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 local snapYCount = 0
---- Lazily built once vec3 is available (see M.draw guard).
-local markerUpDir ---@type any
 
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
@@ -100,25 +100,6 @@ function M.draw(car, best, last)
   table.sort(items, function(a, b) return a.d < b.d end)
 
   local nDraw = math.min(#items, MAX_MARKERS)
-  if markerUpDir == nil then
-    markerUpDir = vec3(0, 1, 0)
-  end
-  local upDir = markerUpDir
-
-  local function restoreMarkerRenderState()
-    if type(render.setDepthMode) == "function" and render.DepthMode then
-      local n = render.DepthMode.Normal
-      if n ~= nil then
-        pcall(render.setDepthMode, n)
-      end
-    end
-    if type(render.setBlendMode) == "function" and render.BlendMode then
-      local o = render.BlendMode.Opaque
-      if o ~= nil then
-        pcall(render.setBlendMode, o)
-      end
-    end
-  end
 
   pcall(function()
     if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
@@ -154,7 +135,8 @@ function M.draw(car, best, last)
         end
 
         if hasCircle then
-          pcall(render.circle, pos, upDir, 2.5, col)
+          -- Fresh vec3 for up-axis; CSP may retain/mutate direction refs (see racing_line note).
+          pcall(render.circle, pos, vec3(0, 1, 0), 2.5, col)
         end
 
         if hasDbgText then
@@ -176,7 +158,7 @@ function M.draw(car, best, last)
       end)
     end
   end)
-  restoreMarkerRenderState()
+  ch.restoreRenderDefaults()
 end
 
 return M
