@@ -6,13 +6,13 @@ local ch = require("csp_helpers")
 local M = {}
 
 local MAX_POINTS = 500
-local CULL_M = 250
+local CULL_M = 300
 --- Half-width of the quad strip in meters.
-local STRIP_HALF_W = 0.6
+local STRIP_HALF_W = 0.8
 --- Y offset above track to avoid z-fighting.
-local Y_OFFSET = 0.08
+local Y_OFFSET = 0.12
 --- Max quads per frame per strip call.
-M.MAX_QUADS = 120
+M.MAX_QUADS = 250
 --- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
 local debugLineFallbackLogged = false
 
@@ -81,8 +81,11 @@ function M.drawLineStrip(car, line, color, maxQuads)
     if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
       pcall(render.setBlendMode, render.BlendMode.AlphaBlend)
     end
-    if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnly then
-      pcall(render.setDepthMode, render.DepthMode.ReadOnly)
+    if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnlyLessEqual ~= nil then
+      pcall(render.setDepthMode, render.DepthMode.ReadOnlyLessEqual)
+    end
+    if type(render.setCullMode) == "function" and render.CullMode and render.CullMode.None then
+      pcall(render.setCullMode, render.CullMode.None)
     end
 
     local remaining = cap

@@ -67,16 +67,17 @@ function M.carIdRawFromGlobals()
   return nil
 end
 
---- Reset CSP render blend/depth to typical defaults after temporary AlphaBlend/ReadOnly (Draw3D).
+--- Reset CSP render state after Draw3D overlay draws (issue #33).
+--- Depth: ReadOnlyLessEqual matches transparent track overlays (depth test on, no z-fight writes).
 --- Match caller guards (`if not render`): render may be userdata with __index, not a plain table.
 function M.restoreRenderDefaults()
   if not render then
     return
   end
   if type(render.setDepthMode) == "function" and render.DepthMode then
-    local n = render.DepthMode.Normal
-    if n ~= nil then
-      pcall(render.setDepthMode, n)
+    local dm = render.DepthMode.ReadOnlyLessEqual
+    if dm ~= nil then
+      pcall(render.setDepthMode, dm)
     end
   end
   if type(render.setBlendMode) == "function" and render.BlendMode then

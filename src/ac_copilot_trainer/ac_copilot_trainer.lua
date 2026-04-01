@@ -963,9 +963,9 @@ function script.Draw3D(_dt)
   trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last)
   local mode = config.racingLineMode or "best"
   if mode == "best" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.1, 1.0, 0.4, 0.85))
+    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80))
   end
   if mode == "last" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(1.0, 0.85, 0.1, 0.75))
+    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55))
   end
 end
