@@ -1,24 +1,54 @@
 -- Racing line rendered as filled quad strip on track surface.
 -- render.debugLine is 1px wireframe (invisible from cockpit); render.quad draws filled geometry.
+-- Issue #35: speed-based coloring, deceleration tilt, increased caps.
 
 local ch = require("csp_helpers")
 
 local M = {}
 
-local MAX_POINTS = 500
+local MAX_POINTS = 1000
 local CULL_M = 300
 --- Half-width of the quad strip in meters.
 local STRIP_HALF_W = 0.8
---- Y offset above track to avoid z-fighting.
-local Y_OFFSET = 0.12
+--- Y offset above track to avoid z-fighting (match Mavil ~40-50mm).
+local Y_OFFSET = 0.05
 --- Max quads per frame per strip call.
-M.MAX_QUADS = 250
+M.MAX_QUADS = 800
 --- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
 local debugLineFallbackLogged = false
 
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
   return dx * dx + dy * dy + dz * dz
+end
+
+--- Speed-based color: green (>150 km/h) -> yellow (80-150) -> red (<80).
+---@param speed number km/h
+---@return table rgbm color
+local function speedColor(speed)
+  if speed > 150 then
+    return rgbm(0.1, 0.95, 0.2, 0.8)
+  end
+  if speed > 80 then
+    local t = (speed - 80) / 70
+    return rgbm(1.0 - t * 0.9, 0.8 + t * 0.15, 0.1, 0.8)
+  end
+  return rgbm(1.0, 0.15, 0.05, 0.85)
+end
+
+--- Calculate tilt height from deceleration between consecutive points.
+--- Higher deceleration = more tilt (back edge rises).
+---@param speedA number speed at point A (km/h)
+---@param speedB number speed at point B (km/h)
+---@param segLen number segment length (meters)
+---@return number tiltHeight 0 to 0.5m
+local function calcTiltHeight(speedA, speedB, segLen)
+  if segLen < 0.01 then return 0 end
+  -- decel in km/h per meter (positive when slowing down)
+  local decel = (speedA - speedB) / segLen
+  if decel <= 0 then return 0 end
+  -- Map decel to 0-0.5m: 15 km/h/m is full tilt
+  return math.min(0.5, math.max(0, decel / 15.0) * 0.5)
 end
 
 ---@param trace table[]|nil
@@ -54,18 +84,21 @@ function M.traceToLine(trace)
   return out
 end
 
+--- Draw the racing line with per-segment speed coloring and optional tilt.
 ---@param car ac.StateCar|nil
----@param line table[]|nil
----@param color rgbm
+---@param line table[]|nil  Array of {x,y,z,speed}
+---@param fallbackColor rgbm  Used only when speed data is unavailable
 ---@param maxQuads number|nil
-function M.drawLineStrip(car, line, color, maxQuads)
-  if not car or not car.position or not line or #line < 2 or not color then return end
+---@param lineStyle string|nil  "flat" or "tilt" (default "tilt")
+function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
+  if not car or not car.position or not line or #line < 2 or not fallbackColor then return end
   if not render or not vec3 then return end
 
   local cap = maxQuads or M.MAX_QUADS
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
   local cullSq = CULL_M * CULL_M
   local hw = STRIP_HALF_W
+  local useTilt = (lineStyle or "tilt") == "tilt"
 
   local hasQuad = type(render.quad) == "function"
   local hasGl = type(render.glBegin) == "function" and type(render.glVertex) == "function"
@@ -105,10 +138,28 @@ function M.drawLineStrip(car, line, color, maxQuads)
           local nx, nz = -dz / len * hw, dx / len * hw
           local ay_off = a.y + Y_OFFSET
           local by_off = b.y + Y_OFFSET
+
+          -- Deceleration-based tilt: back edge (b) rises under braking
+          local tiltH = 0
+          if useTilt then
+            local sA = a.speed or 0
+            local sB = b.speed or 0
+            tiltH = calcTiltHeight(sA, sB, len)
+          end
+
           local v1 = vec3(a.x - nx, ay_off, a.z - nz)
           local v2 = vec3(a.x + nx, ay_off, a.z + nz)
-          local v3 = vec3(b.x + nx, by_off, b.z + nz)
-          local v4 = vec3(b.x - nx, by_off, b.z - nz)
+          local v3 = vec3(b.x + nx, by_off + tiltH, b.z + nz)
+          local v4 = vec3(b.x - nx, by_off + tiltH, b.z - nz)
+
+          -- Per-segment speed color (use average of a and b speeds)
+          local segSpeed = ((a.speed or 0) + (b.speed or 0)) * 0.5
+          local color
+          if segSpeed > 0 then
+            color = speedColor(segSpeed)
+          else
+            color = fallbackColor
+          end
 
           local okDraw = false
           if hasQuad then

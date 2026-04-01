@@ -1,5 +1,6 @@
 -- 3D brake markers: gradient discs on track (render.circle center + borderColor fade).
--- Best = crimson, last = blue-gray; ReadOnlyLessEqual depth for occlusion without z-fight.
+-- Best = crimson, last = bright blue; ReadOnlyLessEqual depth for occlusion without z-fight.
+-- Issue #35: brighter last-lap color, larger radius, concentric gradient circles.
 
 local ch = require("csp_helpers")
 
@@ -9,7 +10,7 @@ local MAX_MARKERS = 30
 local FADE_NEAR = 80
 local FADE_FAR = 400
 local MAX_SNAPY_KEYS = 256
-local DISC_RADIUS = 4.0
+local DISC_RADIUS = 6.0
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
@@ -59,6 +60,34 @@ local function snapToTrack(px, py, pz)
     if okY and type(yy) == "number" then y = yy + 0.05 end
   end
   return y
+end
+
+--- Draw concentric gradient circles for a single marker.
+--- Renders 3 circles from large to small with increasing alpha for gradient effect.
+local function drawGradientDisc(pos, up, radius, baseCol, fade)
+  -- Outer ring: large, faint
+  local outerAlpha = math.max(0.08, 0.20 * fade)
+  local outerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, outerAlpha)
+  local outerBorder = rgbm(baseCol.r * 0.5, baseCol.g * 0.5, baseCol.b * 0.5, 0)
+  local ok = pcall(render.circle, pos, up, radius, outerCol, outerBorder)
+  if not ok then
+    pcall(render.circle, pos, up, radius, outerCol)
+  end
+
+  -- Middle ring
+  local midAlpha = math.max(0.12, 0.40 * fade)
+  local midCol = rgbm(baseCol.r, baseCol.g, baseCol.b, midAlpha)
+  local midBorder = rgbm(baseCol.r * 0.4, baseCol.g * 0.4, baseCol.b * 0.4, 0)
+  ok = pcall(render.circle, pos, up, radius * 0.6, midCol, midBorder)
+  if not ok then
+    pcall(render.circle, pos, up, radius * 0.6, midCol)
+  end
+
+  -- Inner core: small, bright
+  local innerAlpha = math.max(0.15, 0.65 * fade)
+  local innerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, innerAlpha)
+  ok = pcall(render.circle, pos, up, radius * 0.3, innerCol)
+  if not ok then return end
 end
 
 ---@param car ac.StateCar|nil
@@ -138,19 +167,14 @@ function M.draw(car, _sim, best, last)
 
       pcall(function()
         local pos = vec3(it.x, sy, it.z)
-        local col, border
-        if it.kind == "best" then
-          -- Min 0.15 applies to final rgbm alpha (fade * base), not fade alone.
-          col = rgbm(1.0, 0.05, 0.05, math.max(0.15, 0.55 * fade))
-          border = rgbm(0.5, 0, 0, 0)
-        else
-          col = rgbm(0.3, 0.4, 0.7, math.max(0.15, 0.35 * fade))
-          border = rgbm(0.15, 0.2, 0.35, 0)
-        end
         local up = vec3(0, 1, 0)
-        local ok = pcall(render.circle, pos, up, DISC_RADIUS, col, border)
-        if not ok then
-          pcall(render.circle, pos, up, DISC_RADIUS, col)
+        if it.kind == "best" then
+          local baseCol = { r = 1.0, g = 0.05, b = 0.05 }
+          drawGradientDisc(pos, up, DISC_RADIUS, baseCol, fade)
+        else
+          -- Brightened last-lap color: was rgbm(0.3,0.4,0.7,0.35), now much brighter
+          local baseCol = { r = 0.4, g = 0.6, b = 1.0 }
+          drawGradientDisc(pos, up, DISC_RADIUS, baseCol, fade)
         end
       end)
     end

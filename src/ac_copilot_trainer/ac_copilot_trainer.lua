@@ -22,6 +22,7 @@ local racingLine = require("racing_line")
 local tireMonitor = require("tire_monitor")
 local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
+local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
 
 local sim ---@type ac.StateSim
@@ -40,7 +41,9 @@ local config = {
   racingLineMode = "best",
   --- Verbose: log Draw3D/data counts every ~2s to `ac.log` (troubleshooting only).
   enableDraw3DDiagnostics = false,
-  coachingHoldSeconds = 15,
+  coachingHoldSeconds = 30,
+  --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
+  lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
 }
@@ -649,6 +652,21 @@ function script.windowMain(_dt)
   })
 end
 
+--- Separate coaching overlay window (issue #35 Part C).
+--- Registered as a second CSP app window; transparent background, top-right.
+function script.windowCoaching(_dt)
+  sim = sim or ac.getSim()
+  if not sim or sim.isInMainMenu then return end
+  local now = sim.time or 0
+  local remaining = (state.coachingUntil or 0) - now
+  if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
+    -- Nothing to show; draw minimal placeholder so CSP keeps window alive
+    ui.textColored(rgbm(0.4, 0.4, 0.45, 0.3), "Coaching: waiting for lap...")
+    return
+  end
+  coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)
+end
+
 function script.update(dt)
   sim = ac.getSim()
   car = ac.getCar(0)
@@ -780,6 +798,17 @@ function script.update(dt)
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
     state.coachingUntil = (sim.time or 0) + config.coachingHoldSeconds
+
+    -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
+    if ac and type(ac.log) == "function" then
+      if state.coachingLines and #state.coachingLines > 0 then
+        ac.log("[COPILOT] coaching: " .. tostring(#state.coachingLines) .. " hints generated, hold=" .. tostring(config.coachingHoldSeconds) .. "s")
+      else
+        ac.log("[COPILOT] coaching: buildAfterLap returned empty — feats=" .. tostring(#feats)
+          .. " bestCorner=" .. tostring(#state.bestCornerFeatures)
+          .. " traceOk=" .. tostring(traceAnalyticsOk))
+      end
+    end
 
     local _snap, hnew = setupReader.snapshotActive(car, sim)
     state.setupChangeMsg = setupReader.describeChange(state.setupHash, hnew) or ""
@@ -962,10 +991,11 @@ function script.Draw3D(_dt)
 
   trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last)
   local mode = config.racingLineMode or "best"
+  local style = config.lineStyle or "tilt"
   if mode == "best" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80))
+    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80), nil, style)
   end
   if mode == "last" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55))
+    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55), nil, style)
   end
 end
