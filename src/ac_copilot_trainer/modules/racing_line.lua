@@ -68,7 +68,7 @@ function M.traceToLine(trace)
         x = tonumber(p.px) or 0,
         y = tonumber(p.py) or 0,
         z = tonumber(p.pz) or 0,
-        speed = tonumber(p.speed) or 0,
+        speed = tonumber(p.speed),  -- nil preserved: "no data" vs 0 km/h
       }
     end
     return out
