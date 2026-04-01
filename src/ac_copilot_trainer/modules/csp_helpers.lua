@@ -68,8 +68,9 @@ function M.carIdRawFromGlobals()
 end
 
 --- Reset CSP render blend/depth to typical defaults after temporary AlphaBlend/ReadOnly (Draw3D).
+--- Match caller guards (`if not render`): render may be userdata with __index, not a plain table.
 function M.restoreRenderDefaults()
-  if type(render) ~= "table" then
+  if not render then
     return
   end
   if type(render.setDepthMode) == "function" and render.DepthMode then
