@@ -11,6 +11,7 @@ local MAX_SNAPY_KEYS = 256
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
+local snapYCount = 0
 
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
@@ -64,10 +65,18 @@ function M.draw(car, best, last)
   if not car or not car.position then return end
   if not render or not vec3 then return end
 
+  local hasCircle = type(render.circle) == "function"
+  local hasDbgText = type(render.debugText) == "function"
+  local hasRect = type(render.rectangle) == "function"
+  if not hasCircle and not hasDbgText and not hasRect then
+    return
+  end
+
   local sig = brakeListSig(best) .. ";" .. brakeListSig(last)
   if sig ~= snapSig then
     snapSig = sig
     snapY = {}
+    snapYCount = 0
   end
 
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
@@ -101,11 +110,13 @@ function M.draw(car, best, last)
     local ck = markerCacheKey(it.x, it.y, it.z)
     local sy = snapY[ck]
     if sy == nil then
-      local nKeys = 0
-      for _ in pairs(snapY) do nKeys = nKeys + 1 end
-      if nKeys >= MAX_SNAPY_KEYS then snapY = {} end
+      if snapYCount >= MAX_SNAPY_KEYS then
+        snapY = {}
+        snapYCount = 0
+      end
       sy = snapToTrack(it.x, it.y, it.z)
       snapY[ck] = sy
+      snapYCount = snapYCount + 1
     end
 
     pcall(function()
@@ -117,19 +128,16 @@ function M.draw(car, best, last)
         col = rgbm(1.0, 0.7, 0.0, alpha)
       end
 
-      -- Primary: render.circle — filled disc flat on track surface (VISIBLE from distance)
-      if type(render.circle) == "function" then
+      if hasCircle then
         pcall(render.circle, pos, upDir, 2.5, col)
       end
 
-      -- Secondary: render.debugText — 3D label visible from distance
-      if type(render.debugText) == "function" then
+      if hasDbgText then
         local label = it.kind == "best" and "BRAKE" or "brake"
         pcall(render.debugText, vec3(it.x, sy + 2.5, it.z), label, col, 1.5)
       end
 
-      -- Tertiary: render.rectangle — vertical billboard facing camera
-      if type(render.rectangle) == "function" then
+      if hasRect then
         local dx, dz = cx - it.x, cz - it.z
         local len = math.sqrt(dx * dx + dz * dz)
         local fwd

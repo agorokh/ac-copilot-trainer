@@ -67,61 +67,88 @@ function M.drawLineStrip(car, line, color, maxQuads)
   local hasGl = type(render.glBegin) == "function" and type(render.glVertex) == "function"
     and type(render.glEnd) == "function" and type(render.glSetColor) == "function"
   local hasDebugLine = type(render.debugLine) == "function"
+  local glQuadEnum = render.GLPrimitiveType and render.GLPrimitiveType.Quads
 
-  if not hasQuad and not hasGl and not hasDebugLine then return end
+  if not hasQuad and not (hasGl and glQuadEnum) and not hasDebugLine then
+    return
+  end
+
+  local function restoreRenderState()
+    if type(render.setDepthMode) == "function" and render.DepthMode then
+      local n = render.DepthMode.Normal
+      if n ~= nil then
+        pcall(render.setDepthMode, n)
+      end
+    end
+    if type(render.setBlendMode) == "function" and render.BlendMode then
+      local o = render.BlendMode.Opaque
+      if o ~= nil then
+        pcall(render.setBlendMode, o)
+      end
+    end
+  end
 
   pcall(function()
-    -- Set up alpha blending + depth read-only so line sits on top of track
-    if type(render.setBlendMode) == "function" then
+    if type(render.setBlendMode) == "function" and render.BlendMode and render.BlendMode.AlphaBlend then
       pcall(render.setBlendMode, render.BlendMode.AlphaBlend)
     end
-    if type(render.setDepthMode) == "function" then
+    if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnly then
       pcall(render.setDepthMode, render.DepthMode.ReadOnly)
     end
 
     local remaining = cap
     for i = 1, #line - 1 do
-      if remaining < 1 then break end
+      if remaining < 1 then
+        break
+      end
       local a, b = line[i], line[i + 1]
       local mx = (a.x + b.x) * 0.5
       local my = (a.y + b.y) * 0.5
       local mz = (a.z + b.z) * 0.5
       if distSq(cx, cy, cz, mx, my, mz) <= cullSq then
-        -- Direction vector and perpendicular for strip width
         local dx, dz = b.x - a.x, b.z - a.z
         local len = math.sqrt(dx * dx + dz * dz)
         if len > 0.01 then
           local nx, nz = -dz / len * hw, dx / len * hw
           local ay_off = a.y + Y_OFFSET
           local by_off = b.y + Y_OFFSET
+          local v1 = vec3(a.x - nx, ay_off, a.z - nz)
+          local v2 = vec3(a.x + nx, ay_off, a.z + nz)
+          local v3 = vec3(b.x + nx, by_off, b.z + nz)
+          local v4 = vec3(b.x - nx, by_off, b.z - nz)
 
+          local okDraw = false
           if hasQuad then
-            pcall(render.quad,
-              vec3(a.x - nx, ay_off, a.z - nz),
-              vec3(a.x + nx, ay_off, a.z + nz),
-              vec3(b.x + nx, by_off, b.z + nz),
-              vec3(b.x - nx, by_off, b.z - nz),
-              color)
-          elseif hasGl then
-            render.glSetColor(color)
-            render.glBegin(render.GLPrimitiveType.Quads)
-            render.glVertex(vec3(a.x - nx, ay_off, a.z - nz))
-            render.glVertex(vec3(a.x + nx, ay_off, a.z + nz))
-            render.glVertex(vec3(b.x + nx, by_off, b.z + nz))
-            render.glVertex(vec3(b.x - nx, by_off, b.z - nz))
-            render.glEnd()
-          else
-            -- Fallback: debugLine (1px, barely visible but better than nothing)
-            render.debugLine(
+            okDraw = pcall(render.quad, v1, v2, v3, v4, color)
+          end
+          if not okDraw and hasGl and glQuadEnum then
+            okDraw = pcall(function()
+              render.glSetColor(color)
+              render.glBegin(glQuadEnum)
+              render.glVertex(v1)
+              render.glVertex(v2)
+              render.glVertex(v3)
+              render.glVertex(v4)
+              render.glEnd()
+            end)
+          end
+          if not okDraw and hasDebugLine then
+            okDraw = pcall(
+              render.debugLine,
               vec3(a.x, ay_off, a.z),
               vec3(b.x, by_off, b.z),
-              color, color)
+              color,
+              color
+            )
           end
-          remaining = remaining - 1
+          if okDraw then
+            remaining = remaining - 1
+          end
         end
       end
     end
   end)
+  restoreRenderState()
 end
 
 return M
