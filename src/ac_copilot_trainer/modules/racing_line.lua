@@ -49,13 +49,15 @@ for s = 0, 200, 5 do
 end
 
 --- Cached speed color lookup: snaps to nearest 5 km/h bucket.
+--- Returns a fresh rgbm copy so callers cannot corrupt the cache (#31).
 ---@param speed number km/h
 ---@return rgbm
 local function speedColorCached(speed)
   local bucket = math.max(0, math.min(200, math.floor(speed / 5 + 0.5) * 5))
   local cached = speedColorCache[bucket]
-  if cached then return cached end
-  -- Fallback for edge cases
+  if cached then
+    return rgbm(cached.r, cached.g, cached.b, cached.mult)
+  end
   return speedColor(speed)
 end
 
