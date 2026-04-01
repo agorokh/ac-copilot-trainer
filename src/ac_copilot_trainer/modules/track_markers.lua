@@ -16,6 +16,9 @@ local snapSig = ""
 local snapY = {} ---@type table<string, number>
 local snapYCount = 0
 local circleMissingLogged = false
+--- Cached flag: does render.circle accept borderColor (5-arg form)?
+--- nil = not yet probed, true/false = probed result.
+local circleSupportsBorder = nil
 
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
@@ -62,32 +65,48 @@ local function snapToTrack(px, py, pz)
   return y
 end
 
+--- Probe once whether render.circle accepts the 5-arg borderColor form.
+--- Result cached in circleSupportsBorder; hot path then calls directly.
+local function probeBorderSupport(pos, up, radius, col, borderCol)
+  if circleSupportsBorder ~= nil then return end
+  local ok = pcall(render.circle, pos, up, radius, col, borderCol)
+  circleSupportsBorder = ok
+end
+
 --- Draw concentric gradient circles for a single marker.
 --- Renders 3 circles from large to small with increasing alpha for gradient effect.
+--- Uses cached border-support probe to avoid repeated pcall in hot path.
 local function drawGradientDisc(pos, up, radius, baseCol, fade)
   -- Outer ring: large, faint
   local outerAlpha = math.max(0.08, 0.20 * fade)
   local outerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, outerAlpha)
   local outerBorder = rgbm(baseCol.r * 0.5, baseCol.g * 0.5, baseCol.b * 0.5, 0)
-  local ok = pcall(render.circle, pos, up, radius, outerCol, outerBorder)
-  if not ok then
-    pcall(render.circle, pos, up, radius, outerCol)
+  -- First call probes border support; subsequent calls skip pcall.
+  if circleSupportsBorder == nil then
+    probeBorderSupport(pos, up, radius, outerCol, outerBorder)
+    if not circleSupportsBorder then
+      render.circle(pos, up, radius, outerCol)
+    end
+  elseif circleSupportsBorder then
+    render.circle(pos, up, radius, outerCol, outerBorder)
+  else
+    render.circle(pos, up, radius, outerCol)
   end
 
   -- Middle ring
   local midAlpha = math.max(0.12, 0.40 * fade)
   local midCol = rgbm(baseCol.r, baseCol.g, baseCol.b, midAlpha)
   local midBorder = rgbm(baseCol.r * 0.4, baseCol.g * 0.4, baseCol.b * 0.4, 0)
-  ok = pcall(render.circle, pos, up, radius * 0.6, midCol, midBorder)
-  if not ok then
-    pcall(render.circle, pos, up, radius * 0.6, midCol)
+  if circleSupportsBorder then
+    render.circle(pos, up, radius * 0.6, midCol, midBorder)
+  else
+    render.circle(pos, up, radius * 0.6, midCol)
   end
 
   -- Inner core: small, bright
   local innerAlpha = math.max(0.15, 0.65 * fade)
   local innerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, innerAlpha)
-  ok = pcall(render.circle, pos, up, radius * 0.3, innerCol)
-  if not ok then return end
+  render.circle(pos, up, radius * 0.3, innerCol)
 end
 
 ---@param car ac.StateCar|nil

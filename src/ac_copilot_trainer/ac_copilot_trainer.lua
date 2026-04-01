@@ -661,8 +661,6 @@ function script.windowCoaching(_dt)
   local now = sim.time or 0
   local remaining = (state.coachingUntil or 0) - now
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
-    -- Nothing to show; draw minimal placeholder so CSP keeps window alive
-    ui.textColored(rgbm(0.4, 0.4, 0.45, 0.3), "Coaching: waiting for lap...")
     return
   end
   coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)

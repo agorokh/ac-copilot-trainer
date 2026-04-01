@@ -1,4 +1,4 @@
--- Separate coaching overlay window — transparent, top-right, large readable text.
+-- Separate coaching overlay window -- transparent, top-right, large readable text.
 -- Issue #35 Part C: coaching hints in their own Dear ImGui window, not buried in telemetry.
 -- Auto-shows for configurable duration after lap completion, fades out.
 
@@ -21,8 +21,10 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
   end
 
   -- Set transparent window background (Dear ImGui style push)
+  local stylePushed = false
   if type(ui.pushStyleColor) == "function" then
-    pcall(ui.pushStyleColor, ui.StyleColor.WindowBg, rgbm(0.05, 0.05, 0.08, 0.65 * alpha))
+    local ok = pcall(ui.pushStyleColor, ui.StyleColor.WindowBg, rgbm(0.05, 0.05, 0.08, 0.65 * alpha))
+    stylePushed = ok
   end
 
   -- Title bar
@@ -45,8 +47,8 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     ui.textColored(dimColor, string.format("(%.0fs)", timeRemaining))
   end
 
-  -- Pop style if pushed
-  if type(ui.popStyleColor) == "function" then
+  -- Pop style only if push succeeded
+  if stylePushed and type(ui.popStyleColor) == "function" then
     pcall(ui.popStyleColor)
   end
 end

@@ -30,7 +30,7 @@ local function speedColor(speed)
   if speed > 150 then
     return rgbm(0.1, 0.95, 0.2, 0.8)
   end
-  if speed > 80 then
+  if speed >= 80 then
     -- Yellow-to-green blend: t=0 at 80km/h (yellow), t=1 at 150km/h (green)
     local t = (speed - 80) / 70
     return rgbm(1.0 - t * 0.9, 0.75 + t * 0.2, 0.05 + t * 0.15, 0.8)
@@ -41,7 +41,7 @@ local function speedColor(speed)
 end
 
 --- Calculate tilt height from deceleration between consecutive points.
---- Higher deceleration = more tilt (back edge rises).
+--- Higher deceleration = more tilt (trailing edge rises under braking).
 ---@param speedA number speed at point A (km/h)
 ---@param speedB number speed at point B (km/h)
 ---@param segLen number segment length (meters)
@@ -102,7 +102,15 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
   local cullSq = CULL_M * CULL_M
   local hw = STRIP_HALF_W
-  local useTilt = (lineStyle or "tilt") == "tilt"
+  local style = lineStyle or "tilt"
+  if style ~= "tilt" and style ~= "flat" then
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT] racing_line: unsupported lineStyle '"
+        .. tostring(style) .. "', falling back to flat")
+    end
+    style = "flat"
+  end
+  local useTilt = style == "tilt"
 
   local hasQuad = type(render.quad) == "function"
   local hasGl = type(render.glBegin) == "function" and type(render.glVertex) == "function"
@@ -127,6 +135,10 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
     end
 
     local remaining = cap
+    -- Track tilt from previous segment so consecutive quads share edge heights.
+    -- prevTiltH is the tilt applied to point b of the previous quad (which is
+    -- point a of the current quad), so the front edge matches seamlessly.
+    local prevTiltH = 0
     for i = 1, #line - 1 do
       if remaining < 1 then
         break
@@ -143,18 +155,23 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
           local ay_off = a.y + Y_OFFSET
           local by_off = b.y + Y_OFFSET
 
-          -- Deceleration-based tilt: back edge (b) rises under braking
-          local tiltH = 0
+          -- Deceleration-based tilt: trailing edge (a, behind car) rises
+          -- under braking. Front edge (a) inherits tilt from previous
+          -- segment's back edge so consecutive quads connect without gaps.
+          local frontTiltH = 0
+          local backTiltH = 0
           if useTilt then
             local sA = a.speed or 0
             local sB = b.speed or 0
-            tiltH = calcTiltHeight(sA, sB, len)
+            backTiltH = calcTiltHeight(sA, sB, len)
+            frontTiltH = prevTiltH
           end
+          prevTiltH = backTiltH
 
-          local v1 = vec3(a.x - nx, ay_off, a.z - nz)
-          local v2 = vec3(a.x + nx, ay_off, a.z + nz)
-          local v3 = vec3(b.x + nx, by_off + tiltH, b.z + nz)
-          local v4 = vec3(b.x - nx, by_off + tiltH, b.z - nz)
+          local v1 = vec3(a.x - nx, ay_off + frontTiltH, a.z - nz)
+          local v2 = vec3(a.x + nx, ay_off + frontTiltH, a.z + nz)
+          local v3 = vec3(b.x + nx, by_off + backTiltH, b.z + nz)
+          local v4 = vec3(b.x - nx, by_off + backTiltH, b.z - nz)
 
           -- Per-segment speed color (use average of a and b speeds)
           local segSpeed = ((a.speed or 0) + (b.speed or 0)) * 0.5
