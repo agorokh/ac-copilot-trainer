@@ -11,6 +11,8 @@ local STRIP_HALF_W = 0.6
 local Y_OFFSET = 0.08
 --- Max quads per frame per strip call.
 M.MAX_QUADS = 120
+--- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
+local debugLineFallbackLogged = false
 
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
@@ -133,6 +135,13 @@ function M.drawLineStrip(car, line, color, maxQuads)
             end)
           end
           if not okDraw and hasDebugLine then
+            if not debugLineFallbackLogged and ac and type(ac.log) == "function" then
+              debugLineFallbackLogged = true
+              ac.log(
+                "[COPILOT] racing_line: render.debugLine fallback (quad/GL missing or failed); "
+                  .. "1px line may be invisible from cockpit — see #24."
+              )
+            end
             okDraw = pcall(
               render.debugLine,
               vec3(a.x, ay_off, a.z),
