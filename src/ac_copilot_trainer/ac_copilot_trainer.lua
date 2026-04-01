@@ -935,6 +935,28 @@ function script.Draw3D(_dt)
         .. " vec3=" .. tostring(hasVec3)
         .. " debugSphere=" .. tostring(hasDbgSphere)
         .. " debugLine=" .. tostring(hasDbgLine))
+      -- Log car position and first brake point/line point coords to check if world coords are valid
+      if c and c.position then
+        ac.log("[COPILOT] carPos=" .. string.format("%.1f,%.1f,%.1f", c.position.x, c.position.y, c.position.z))
+      end
+      if bestN > 0 then
+        local bp = state.brakingPoints.best[1]
+        if bp then
+          ac.log("[COPILOT] bp[1] px=" .. tostring(bp.px) .. " py=" .. tostring(bp.py) .. " pz=" .. tostring(bp.pz)
+            .. " spline=" .. tostring(bp.spline))
+        end
+      end
+      if bestLineN > 0 then
+        local lp = state.racingBestLine[1]
+        if lp then
+          ac.log("[COPILOT] line[1] x=" .. tostring(lp.x) .. " y=" .. tostring(lp.y) .. " z=" .. tostring(lp.z))
+        end
+        local midIdx = math.max(1, math.floor((bestLineN + 1) / 2))
+        local mid = state.racingBestLine[midIdx]
+        if mid then
+          ac.log("[COPILOT] line[mid i=" .. tostring(midIdx) .. "] x=" .. tostring(mid.x) .. " y=" .. tostring(mid.y) .. " z=" .. tostring(mid.z))
+        end
+      end
     end
   end
 
