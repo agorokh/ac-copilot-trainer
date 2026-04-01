@@ -20,6 +20,11 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     alpha = math.max(0, timeRemaining / fadeStart)
   end
 
+  -- Set transparent window background (Dear ImGui style push)
+  if type(ui.pushStyleColor) == "function" then
+    pcall(ui.pushStyleColor, ui.StyleColor.WindowBg, rgbm(0.05, 0.05, 0.08, 0.65 * alpha))
+  end
+
   -- Title bar
   local titleColor = rgbm(0.35, 0.82, 0.95, alpha)
   ui.textColored(titleColor, "COACHING")
@@ -38,6 +43,11 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
   if timeRemaining < holdSeconds * 0.5 then
     local dimColor = rgbm(0.4, 0.4, 0.45, alpha * 0.5)
     ui.textColored(dimColor, string.format("(%.0fs)", timeRemaining))
+  end
+
+  -- Pop style if pushed
+  if type(ui.popStyleColor) == "function" then
+    pcall(ui.popStyleColor)
   end
 end
 

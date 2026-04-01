@@ -23,17 +23,21 @@ local function distSq(ax, ay, az, bx, by, bz)
 end
 
 --- Speed-based color: green (>150 km/h) -> yellow (80-150) -> red (<80).
+--- Smooth interpolation at boundaries to avoid color discontinuities.
 ---@param speed number km/h
----@return table rgbm color
+---@return rgbm color
 local function speedColor(speed)
   if speed > 150 then
     return rgbm(0.1, 0.95, 0.2, 0.8)
   end
   if speed > 80 then
+    -- Yellow-to-green blend: t=0 at 80km/h (yellow), t=1 at 150km/h (green)
     local t = (speed - 80) / 70
-    return rgbm(1.0 - t * 0.9, 0.8 + t * 0.15, 0.1, 0.8)
+    return rgbm(1.0 - t * 0.9, 0.75 + t * 0.2, 0.05 + t * 0.15, 0.8)
   end
-  return rgbm(1.0, 0.15, 0.05, 0.85)
+  -- Red-to-yellow blend: t=0 at 0km/h (deep red), t=1 at 80km/h (orange-yellow)
+  local t = math.max(0, speed / 80)
+  return rgbm(1.0, 0.15 + t * 0.6, 0.05, 0.8 + (1 - t) * 0.05)
 end
 
 --- Calculate tilt height from deceleration between consecutive points.

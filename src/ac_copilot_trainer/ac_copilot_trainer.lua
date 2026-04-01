@@ -655,6 +655,7 @@ end
 --- Separate coaching overlay window (issue #35 Part C).
 --- Registered as a second CSP app window; transparent background, top-right.
 function script.windowCoaching(_dt)
+  if not config.hudEnabled then return end
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
   local now = sim.time or 0
