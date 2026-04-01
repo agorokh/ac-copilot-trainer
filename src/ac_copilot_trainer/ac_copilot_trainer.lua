@@ -39,7 +39,7 @@ local config = {
   autoLoadSetup = true,
   racingLineMode = "best",
   --- Verbose: log Draw3D/data counts every ~2s to `ac.log` (troubleshooting only).
-  enableDraw3DDiagnostics = true,
+  enableDraw3DDiagnostics = false,
   coachingHoldSeconds = 15,
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
