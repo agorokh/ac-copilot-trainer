@@ -663,18 +663,23 @@ function script.windowCoaching(_dt)
   local now = sim.time or 0
   local remaining = (state.coachingUntil or 0) - now
 
-  -- Issue #37 Part C: diagnostic trace for coaching timing
-  if not coachingDiagLogged and ac and type(ac.log) == "function" then
-    coachingDiagLogged = true
+  -- #5: Periodic coaching diag (every 5s, not one-shot consumed before data exists)
+  if not state._coachDiagT then state._coachDiagT = 0 end
+  state._coachDiagT = state._coachDiagT + (_dt or 0)
+  if state._coachDiagT > 5.0 and ac and type(ac.log) == "function" then
+    state._coachDiagT = 0
     ac.log(string.format(
-      "[COPILOT] windowCoaching diag: now=%.1f coachingUntil=%.1f remaining=%.1f lines=%d",
+      "[COPILOT] coaching: now=%.1f until=%.1f rem=%.1f lines=%d laps=%d",
       now, state.coachingUntil or 0, remaining,
-      state.coachingLines and #state.coachingLines or 0))
+      state.coachingLines and #state.coachingLines or 0,
+      state.lapsCompleted or 0))
   end
 
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
-    -- Issue #37 Part C: show fallback message instead of empty window
-    coachingOverlay.drawFallback()
+    -- #4/#9: Fallback only before first coaching; hide after coaching expires
+    if (state.lapsCompleted or 0) < 2 then
+      coachingOverlay.drawFallback()
+    end
     return
   end
   coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)

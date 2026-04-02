@@ -18,7 +18,7 @@ M.MAX_QUADS = 800
 --- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
 local debugLineFallbackLogged = false
 --- One-time speed diagnostic logged per strip (issue #37 Part B).
-local speedDiagLogged = false
+local speedDiagLineId = nil
 
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
@@ -125,8 +125,9 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
   -- Issue #37 Part B: one-time speed data diagnostic.
   -- Logs how many points have non-nil speed vs total so we can trace
   -- whether the color pipeline receives actual speed values.
-  if not speedDiagLogged and ac and type(ac.log) == "function" then
-    speedDiagLogged = true
+  local lineId = tostring(line)
+  if lineId ~= speedDiagLineId and ac and type(ac.log) == "function" then
+    speedDiagLineId = lineId
     local withSpeed = 0
     for si = 1, #line do
       if line[si].speed ~= nil then withSpeed = withSpeed + 1 end
@@ -135,7 +136,7 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
       "[COPILOT] racing_line speed diag: %d/%d points have speed data",
       withSpeed, #line))
     -- Verify calcTiltHeight produces non-zero for a sample deceleration pair
-    if #line >= 2 and line[1].speed and line[2].speed then
+    if #line >= 2 and line[1].speed ~= nil and line[2].speed ~= nil then
       local sampleLen = math.sqrt(
         (line[2].x - line[1].x) ^ 2 + (line[2].z - line[1].z) ^ 2)
       local sampleTilt = calcTiltHeight(line[1].speed, line[2].speed, sampleLen)

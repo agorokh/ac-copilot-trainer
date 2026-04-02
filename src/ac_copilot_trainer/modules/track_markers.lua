@@ -80,20 +80,8 @@ end
 ---@param car ac.StateCar|nil
 ---@return number nx perpendicular X component (unit)
 ---@return number nz perpendicular Z component (unit)
-local function wallPerpendicular(list, idx, car)
-  -- Try to derive track direction from neighboring brake points
-  local prev = list[math.max(1, idx - 1)]
-  local nxt = list[math.min(#list, idx + 1)]
-  if prev and nxt and prev ~= nxt then
-    local dx = (tonumber(nxt.px) or 0) - (tonumber(prev.px) or 0)
-    local dz = (tonumber(nxt.pz) or 0) - (tonumber(prev.pz) or 0)
-    local len = math.sqrt(dx * dx + dz * dz)
-    if len > 0.1 then
-      -- Perpendicular: rotate 90 degrees
-      return -dz / len, dx / len
-    end
-  end
-  -- Fallback: use car.look if available
+local function wallPerpendicular(_list, _idx, car)
+  -- #7: Prefer car.look -- brake event neighbors are sparse and produce wrong angles.
   if car and car.look then
     local okLook, lx, lz = pcall(function() return car.look.x, car.look.z end)
     if okLook and type(lx) == "number" and type(lz) == "number" then
@@ -118,15 +106,16 @@ end
 ---@param fade number 0-1 distance fade
 local function drawWallQuad(groundLeft, groundRight, topLeft, topRight, baseColor, bottomAlpha, fade)
   local ba = bottomAlpha * fade
-  -- Bottom vertices: opaque (faded by distance)
-  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, ba))
+  -- #1: Pre-compute colors once per wall (not 4 separate rgbm allocations)
+  local bottomCol = rgbm(baseColor.r, baseColor.g, baseColor.b, ba)
+  local topCol = rgbm(baseColor.r, baseColor.g, baseColor.b, 0)
+  render.glSetColor(bottomCol)
   render.glVertex(groundLeft)
-  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, ba))
+  render.glSetColor(bottomCol)
   render.glVertex(groundRight)
-  -- Top vertices: fully transparent
-  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, 0))
+  render.glSetColor(topCol)
   render.glVertex(topRight)
-  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, 0))
+  render.glSetColor(topCol)
   render.glVertex(topLeft)
 end
 
@@ -190,7 +179,6 @@ function M.draw(car, _sim, best, last)
       pcall(render.setCullMode, render.CullMode.None)
     end
 
-    render.glBegin(glQuadEnum)
     for i = 1, nDraw do
       local it = items[i]
       local fade = 1
@@ -211,7 +199,7 @@ function M.draw(car, _sim, best, last)
       end
 
       -- Compute wall perpendicular direction from brake point neighbors
-      local nx, nz = wallPerpendicular(it.list, it.listIdx, car)
+      local nx, nz = wallPerpendicular(nil, 0, car)
       local hw = WALL_HALF_WIDTH
 
       local groundLeft = vec3(it.x - nx * hw, sy, it.z - nz * hw)
@@ -219,6 +207,7 @@ function M.draw(car, _sim, best, last)
       local topLeft = vec3(it.x - nx * hw, sy + WALL_HEIGHT, it.z - nz * hw)
       local topRight = vec3(it.x + nx * hw, sy + WALL_HEIGHT, it.z + nz * hw)
 
+      render.glBegin(glQuadEnum)
       if it.kind == "best" then
         drawWallQuad(groundLeft, groundRight, topLeft, topRight,
           BEST_COLOR_BASE, BEST_ALPHA_BOTTOM, fade)
@@ -226,8 +215,8 @@ function M.draw(car, _sim, best, last)
         drawWallQuad(groundLeft, groundRight, topLeft, topRight,
           LAST_COLOR_BASE, LAST_ALPHA_BOTTOM, fade)
       end
+      render.glEnd()
     end
-    render.glEnd()
   end)
   ch.restoreRenderDefaults()
 end
