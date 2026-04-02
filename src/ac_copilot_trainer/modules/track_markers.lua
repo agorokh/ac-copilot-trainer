@@ -1,6 +1,7 @@
--- 3D brake markers: gradient discs on track (render.circle center + borderColor fade).
--- Best = crimson, last = bright blue; ReadOnlyLessEqual depth for occlusion without z-fight.
--- Issue #35: brighter last-lap color, larger radius, concentric gradient circles.
+-- 3D brake markers: vertical gradient walls perpendicular to track direction.
+-- Opaque at ground -> transparent at top (0.6m). Visible from cockpit at 100m+.
+-- Issue #37 Part A: full rewrite from flat circles to vertical walls.
+-- Issue #37 Part D: last-lap color changed from blue to orange.
 
 local ch = require("csp_helpers")
 
@@ -10,19 +11,21 @@ local MAX_MARKERS = 30
 local FADE_NEAR = 80
 local FADE_FAR = 400
 local MAX_SNAPY_KEYS = 256
-local DISC_RADIUS = 6.0
+
+--- Wall dimensions
+local WALL_HEIGHT = 0.6     -- meters above track surface
+local WALL_HALF_WIDTH = 4.0 -- half of 8m total width
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 local snapYCount = 0
-local circleMissingLogged = false
---- Cached flag: does render.circle accept borderColor (5-arg form)?
---- nil = not yet probed, true/false = probed result.
-local circleSupportsBorder = nil
+local glMissingLogged = false
 
---- Module-level base colors: avoid per-marker allocation (#23/#25).
-local BEST_BASE_COL = { r = 1.0, g = 0.05, b = 0.05 }
-local LAST_BASE_COL = { r = 0.4, g = 0.6, b = 1.0 }
+--- Base colors (issue #37 Part D: last changed from blue to orange).
+local BEST_COLOR_BASE = { r = 1.0, g = 0.1, b = 0.05 }
+local BEST_ALPHA_BOTTOM = 0.65
+local LAST_COLOR_BASE = { r = 1.0, g = 0.6, b = 0.0 }
+local LAST_ALPHA_BOTTOM = 0.4
 
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
@@ -61,56 +64,70 @@ local function snapToTrack(px, py, pz)
   end)
   if ok and hit and type(hit) == "table" and hit.position then
     local okY, posY = pcall(function() return hit.position.y end)
-    if okY and type(posY) == "number" then y = posY + 0.05 end
+    if okY and type(posY) == "number" then y = posY + 0.02 end
   elseif ok and hit and type(hit) == "userdata" then
     local okY, yy = pcall(function() return hit.y end)
-    if okY and type(yy) == "number" then y = yy + 0.05 end
+    if okY and type(yy) == "number" then y = yy + 0.02 end
   end
   return y
 end
 
---- Probe once whether render.circle accepts the 5-arg borderColor form.
---- Result cached in circleSupportsBorder; hot path then calls directly.
-local function probeBorderSupport(pos, up, radius, col, borderCol)
-  if circleSupportsBorder ~= nil then return end
-  local ok = pcall(render.circle, pos, up, radius, col, borderCol)
-  circleSupportsBorder = ok
+--- Compute a perpendicular direction for the wall at a given brake point.
+--- Uses the direction from the previous brake point to the next in the list,
+--- or car.look if available and the list has only one point.
+---@param list table[] brake point list
+---@param idx number index of current point in list
+---@param car ac.StateCar|nil
+---@return number nx perpendicular X component (unit)
+---@return number nz perpendicular Z component (unit)
+local function wallPerpendicular(list, idx, car)
+  -- Try to derive track direction from neighboring brake points
+  local prev = list[math.max(1, idx - 1)]
+  local nxt = list[math.min(#list, idx + 1)]
+  if prev and nxt and prev ~= nxt then
+    local dx = (tonumber(nxt.px) or 0) - (tonumber(prev.px) or 0)
+    local dz = (tonumber(nxt.pz) or 0) - (tonumber(prev.pz) or 0)
+    local len = math.sqrt(dx * dx + dz * dz)
+    if len > 0.1 then
+      -- Perpendicular: rotate 90 degrees
+      return -dz / len, dx / len
+    end
+  end
+  -- Fallback: use car.look if available
+  if car and car.look then
+    local okLook, lx, lz = pcall(function() return car.look.x, car.look.z end)
+    if okLook and type(lx) == "number" and type(lz) == "number" then
+      local len = math.sqrt(lx * lx + lz * lz)
+      if len > 0.01 then
+        return -lz / len, lx / len
+      end
+    end
+  end
+  -- Last resort: wall along X axis
+  return 1, 0
 end
 
---- Draw concentric gradient circles for a single marker.
---- Renders 3 circles from large to small with increasing alpha for gradient effect.
---- Uses cached border-support probe to avoid repeated pcall in hot path.
-local function drawGradientDisc(pos, up, radius, baseCol, fade)
-  -- Outer ring: large, faint
-  local outerAlpha = math.max(0.08, 0.20 * fade)
-  local outerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, outerAlpha)
-  local outerBorder = rgbm(baseCol.r * 0.5, baseCol.g * 0.5, baseCol.b * 0.5, 0)
-  -- First call probes border support; subsequent calls skip pcall.
-  if circleSupportsBorder == nil then
-    probeBorderSupport(pos, up, radius, outerCol, outerBorder)
-    if not circleSupportsBorder then
-      render.circle(pos, up, radius, outerCol)
-    end
-  elseif circleSupportsBorder then
-    render.circle(pos, up, radius, outerCol, outerBorder)
-  else
-    render.circle(pos, up, radius, outerCol)
-  end
-
-  -- Middle ring
-  local midAlpha = math.max(0.12, 0.40 * fade)
-  local midCol = rgbm(baseCol.r, baseCol.g, baseCol.b, midAlpha)
-  local midBorder = rgbm(baseCol.r * 0.4, baseCol.g * 0.4, baseCol.b * 0.4, 0)
-  if circleSupportsBorder then
-    render.circle(pos, up, radius * 0.6, midCol, midBorder)
-  else
-    render.circle(pos, up, radius * 0.6, midCol)
-  end
-
-  -- Inner core: small, bright
-  local innerAlpha = math.max(0.15, 0.65 * fade)
-  local innerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, innerAlpha)
-  render.circle(pos, up, radius * 0.3, innerCol)
+--- Draw a single vertical gradient wall quad.
+--- Bottom edge is opaque, top edge is transparent.
+---@param groundLeft vec3
+---@param groundRight vec3
+---@param topLeft vec3
+---@param topRight vec3
+---@param baseColor table {r, g, b}
+---@param bottomAlpha number
+---@param fade number 0-1 distance fade
+local function drawWallQuad(groundLeft, groundRight, topLeft, topRight, baseColor, bottomAlpha, fade)
+  local ba = bottomAlpha * fade
+  -- Bottom vertices: opaque (faded by distance)
+  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, ba))
+  render.glVertex(groundLeft)
+  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, ba))
+  render.glVertex(groundRight)
+  -- Top vertices: fully transparent
+  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, 0))
+  render.glVertex(topRight)
+  render.glSetColor(rgbm(baseColor.r, baseColor.g, baseColor.b, 0))
+  render.glVertex(topLeft)
 end
 
 ---@param car ac.StateCar|nil
@@ -121,11 +138,16 @@ function M.draw(car, _sim, best, last)
   if not car or not car.position then return end
   if not render or not vec3 then return end
 
-  local hasCircle = type(render.circle) == "function"
-  if not hasCircle then
-    if not circleMissingLogged and ac and type(ac.log) == "function" then
-      circleMissingLogged = true
-      ac.log("[COPILOT] track_markers: render.circle missing — brake discs disabled (#33)")
+  local hasGl = type(render.glBegin) == "function"
+    and type(render.glVertex) == "function"
+    and type(render.glEnd) == "function"
+    and type(render.glSetColor) == "function"
+  local glQuadEnum = render.GLPrimitiveType and render.GLPrimitiveType.Quads
+
+  if not hasGl or not glQuadEnum then
+    if not glMissingLogged and ac and type(ac.log) == "function" then
+      glMissingLogged = true
+      ac.log("[COPILOT] track_markers: render.glBegin/Quads missing — brake walls disabled (#37)")
     end
     return
   end
@@ -146,7 +168,7 @@ function M.draw(car, _sim, best, last)
       if p and type(p.px) == "number" and type(p.py) == "number" and type(p.pz) == "number" then
         local d = math.sqrt(distSq(cx, cy, cz, p.px, p.py, p.pz))
         if d <= FADE_FAR + 1 then
-          items[#items + 1] = { d = d, x = p.px, y = p.py, z = p.pz, kind = kind }
+          items[#items + 1] = { d = d, x = p.px, y = p.py, z = p.pz, kind = kind, listIdx = i, list = list }
         end
       end
     end
@@ -158,7 +180,6 @@ function M.draw(car, _sim, best, last)
   local nDraw = math.min(#items, MAX_MARKERS)
 
   pcall(function()
-    -- ReadOnlyLessEqual is AC::DepthMode in CSP (acc-lua-sdk common/ac_render_enums.lua).
     if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnlyLessEqual ~= nil then
       pcall(render.setDepthMode, render.DepthMode.ReadOnlyLessEqual)
     end
@@ -169,7 +190,7 @@ function M.draw(car, _sim, best, last)
       pcall(render.setCullMode, render.CullMode.None)
     end
 
-    local up = vec3(0, 1, 0)
+    render.glBegin(glQuadEnum)
     for i = 1, nDraw do
       local it = items[i]
       local fade = 1
@@ -189,16 +210,24 @@ function M.draw(car, _sim, best, last)
         snapYCount = snapYCount + 1
       end
 
-      pcall(function()
-        local pos = vec3(it.x, sy, it.z)
-        if it.kind == "best" then
-          drawGradientDisc(pos, up, DISC_RADIUS, BEST_BASE_COL, fade)
-        else
-          -- Brightened last-lap color (#35 Part B)
-          drawGradientDisc(pos, up, DISC_RADIUS, LAST_BASE_COL, fade)
-        end
-      end)
+      -- Compute wall perpendicular direction from brake point neighbors
+      local nx, nz = wallPerpendicular(it.list, it.listIdx, car)
+      local hw = WALL_HALF_WIDTH
+
+      local groundLeft = vec3(it.x - nx * hw, sy, it.z - nz * hw)
+      local groundRight = vec3(it.x + nx * hw, sy, it.z + nz * hw)
+      local topLeft = vec3(it.x - nx * hw, sy + WALL_HEIGHT, it.z - nz * hw)
+      local topRight = vec3(it.x + nx * hw, sy + WALL_HEIGHT, it.z + nz * hw)
+
+      if it.kind == "best" then
+        drawWallQuad(groundLeft, groundRight, topLeft, topRight,
+          BEST_COLOR_BASE, BEST_ALPHA_BOTTOM, fade)
+      else
+        drawWallQuad(groundLeft, groundRight, topLeft, topRight,
+          LAST_COLOR_BASE, LAST_ALPHA_BOTTOM, fade)
+      end
     end
+    render.glEnd()
   end)
   ch.restoreRenderDefaults()
 end

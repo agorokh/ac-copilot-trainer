@@ -1,6 +1,7 @@
 -- Racing line rendered as filled quad strip on track surface.
 -- render.debugLine is 1px wireframe (invisible from cockpit); render.quad draws filled geometry.
 -- Issue #35: speed-based coloring, deceleration tilt, increased caps.
+-- Issue #37 Part B: one-time speed diagnostic log added.
 
 local ch = require("csp_helpers")
 
@@ -16,6 +17,8 @@ local Y_OFFSET = 0.05
 M.MAX_QUADS = 800
 --- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
 local debugLineFallbackLogged = false
+--- One-time speed diagnostic logged per strip (issue #37 Part B).
+local speedDiagLogged = false
 
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
@@ -118,6 +121,29 @@ end
 function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
   if not car or not car.position or not line or #line < 2 or not fallbackColor then return end
   if not render or not vec3 then return end
+
+  -- Issue #37 Part B: one-time speed data diagnostic.
+  -- Logs how many points have non-nil speed vs total so we can trace
+  -- whether the color pipeline receives actual speed values.
+  if not speedDiagLogged and ac and type(ac.log) == "function" then
+    speedDiagLogged = true
+    local withSpeed = 0
+    for si = 1, #line do
+      if line[si].speed ~= nil then withSpeed = withSpeed + 1 end
+    end
+    ac.log(string.format(
+      "[COPILOT] racing_line speed diag: %d/%d points have speed data",
+      withSpeed, #line))
+    -- Verify calcTiltHeight produces non-zero for a sample deceleration pair
+    if #line >= 2 and line[1].speed and line[2].speed then
+      local sampleLen = math.sqrt(
+        (line[2].x - line[1].x) ^ 2 + (line[2].z - line[1].z) ^ 2)
+      local sampleTilt = calcTiltHeight(line[1].speed, line[2].speed, sampleLen)
+      ac.log(string.format(
+        "[COPILOT] racing_line tilt diag: sample tiltH=%.4f (spd %.1f->%.1f, len=%.1f)",
+        sampleTilt, line[1].speed, line[2].speed, sampleLen))
+    end
+  end
 
   local cap = maxQuads or M.MAX_QUADS
   local cx, cy, cz = car.position.x, car.position.y, car.position.z

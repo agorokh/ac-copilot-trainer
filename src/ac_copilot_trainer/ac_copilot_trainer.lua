@@ -652,15 +652,29 @@ function script.windowMain(_dt)
   })
 end
 
---- Separate coaching overlay window (issue #35 Part C).
+--- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
 --- Registered as a second CSP app window; transparent background, top-right.
+--- Issue #37: added diagnostic logging and fallback message for empty state.
+local coachingDiagLogged = false
 function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
   local now = sim.time or 0
   local remaining = (state.coachingUntil or 0) - now
+
+  -- Issue #37 Part C: diagnostic trace for coaching timing
+  if not coachingDiagLogged and ac and type(ac.log) == "function" then
+    coachingDiagLogged = true
+    ac.log(string.format(
+      "[COPILOT] windowCoaching diag: now=%.1f coachingUntil=%.1f remaining=%.1f lines=%d",
+      now, state.coachingUntil or 0, remaining,
+      state.coachingLines and #state.coachingLines or 0))
+  end
+
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
+    -- Issue #37 Part C: show fallback message instead of empty window
+    coachingOverlay.drawFallback()
     return
   end
   coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)
