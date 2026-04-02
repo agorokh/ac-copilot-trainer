@@ -164,12 +164,11 @@ function M.draw(vm)
     end
   end
 
+  -- Coaching lines now shown in separate overlay (coaching_overlay.lua, issue #35).
+  -- Keep a minimal indicator here so telemetry panel shows coaching state.
   if vm.coachingLines and #vm.coachingLines > 0 then
     ui.separator()
-    ui.textColored(rgbm(0.35, 0.82, 0.95, 1), "Coaching")
-    for i = 1, #vm.coachingLines do
-      ui.textWrapped(vm.coachingLines[i])
-    end
+    ui.textColored(rgbm(0.35, 0.82, 0.95, 0.7), string.format("Coaching active (%d hints)", #vm.coachingLines))
   end
 
   if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then

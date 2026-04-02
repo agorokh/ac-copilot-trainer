@@ -1,5 +1,6 @@
 -- 3D brake markers: gradient discs on track (render.circle center + borderColor fade).
--- Best = crimson, last = blue-gray; ReadOnlyLessEqual depth for occlusion without z-fight.
+-- Best = crimson, last = bright blue; ReadOnlyLessEqual depth for occlusion without z-fight.
+-- Issue #35: brighter last-lap color, larger radius, concentric gradient circles.
 
 local ch = require("csp_helpers")
 
@@ -9,12 +10,19 @@ local MAX_MARKERS = 30
 local FADE_NEAR = 80
 local FADE_FAR = 400
 local MAX_SNAPY_KEYS = 256
-local DISC_RADIUS = 4.0
+local DISC_RADIUS = 6.0
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 local snapYCount = 0
 local circleMissingLogged = false
+--- Cached flag: does render.circle accept borderColor (5-arg form)?
+--- nil = not yet probed, true/false = probed result.
+local circleSupportsBorder = nil
+
+--- Module-level base colors: avoid per-marker allocation (#23/#25).
+local BEST_BASE_COL = { r = 1.0, g = 0.05, b = 0.05 }
+local LAST_BASE_COL = { r = 0.4, g = 0.6, b = 1.0 }
 
 local function brakeListHash(list)
   if not list or #list == 0 then return 0 end
@@ -59,6 +67,50 @@ local function snapToTrack(px, py, pz)
     if okY and type(yy) == "number" then y = yy + 0.05 end
   end
   return y
+end
+
+--- Probe once whether render.circle accepts the 5-arg borderColor form.
+--- Result cached in circleSupportsBorder; hot path then calls directly.
+local function probeBorderSupport(pos, up, radius, col, borderCol)
+  if circleSupportsBorder ~= nil then return end
+  local ok = pcall(render.circle, pos, up, radius, col, borderCol)
+  circleSupportsBorder = ok
+end
+
+--- Draw concentric gradient circles for a single marker.
+--- Renders 3 circles from large to small with increasing alpha for gradient effect.
+--- Uses cached border-support probe to avoid repeated pcall in hot path.
+local function drawGradientDisc(pos, up, radius, baseCol, fade)
+  -- Outer ring: large, faint
+  local outerAlpha = math.max(0.08, 0.20 * fade)
+  local outerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, outerAlpha)
+  local outerBorder = rgbm(baseCol.r * 0.5, baseCol.g * 0.5, baseCol.b * 0.5, 0)
+  -- First call probes border support; subsequent calls skip pcall.
+  if circleSupportsBorder == nil then
+    probeBorderSupport(pos, up, radius, outerCol, outerBorder)
+    if not circleSupportsBorder then
+      render.circle(pos, up, radius, outerCol)
+    end
+  elseif circleSupportsBorder then
+    render.circle(pos, up, radius, outerCol, outerBorder)
+  else
+    render.circle(pos, up, radius, outerCol)
+  end
+
+  -- Middle ring
+  local midAlpha = math.max(0.12, 0.40 * fade)
+  local midCol = rgbm(baseCol.r, baseCol.g, baseCol.b, midAlpha)
+  local midBorder = rgbm(baseCol.r * 0.4, baseCol.g * 0.4, baseCol.b * 0.4, 0)
+  if circleSupportsBorder then
+    render.circle(pos, up, radius * 0.6, midCol, midBorder)
+  else
+    render.circle(pos, up, radius * 0.6, midCol)
+  end
+
+  -- Inner core: small, bright
+  local innerAlpha = math.max(0.15, 0.65 * fade)
+  local innerCol = rgbm(baseCol.r, baseCol.g, baseCol.b, innerAlpha)
+  render.circle(pos, up, radius * 0.3, innerCol)
 end
 
 ---@param car ac.StateCar|nil
@@ -117,6 +169,7 @@ function M.draw(car, _sim, best, last)
       pcall(render.setCullMode, render.CullMode.None)
     end
 
+    local up = vec3(0, 1, 0)
     for i = 1, nDraw do
       local it = items[i]
       local fade = 1
@@ -138,19 +191,11 @@ function M.draw(car, _sim, best, last)
 
       pcall(function()
         local pos = vec3(it.x, sy, it.z)
-        local col, border
         if it.kind == "best" then
-          -- Min 0.15 applies to final rgbm alpha (fade * base), not fade alone.
-          col = rgbm(1.0, 0.05, 0.05, math.max(0.15, 0.55 * fade))
-          border = rgbm(0.5, 0, 0, 0)
+          drawGradientDisc(pos, up, DISC_RADIUS, BEST_BASE_COL, fade)
         else
-          col = rgbm(0.3, 0.4, 0.7, math.max(0.15, 0.35 * fade))
-          border = rgbm(0.15, 0.2, 0.35, 0)
-        end
-        local up = vec3(0, 1, 0)
-        local ok = pcall(render.circle, pos, up, DISC_RADIUS, col, border)
-        if not ok then
-          pcall(render.circle, pos, up, DISC_RADIUS, col)
+          -- Brightened last-lap color (#35 Part B)
+          drawGradientDisc(pos, up, DISC_RADIUS, LAST_BASE_COL, fade)
         end
       end)
     end
