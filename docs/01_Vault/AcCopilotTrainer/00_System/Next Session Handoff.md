@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-03-31
+last_updated: 2026-04-01
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -16,30 +16,24 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `fix/issue-24-visuals-coaching` — **PR #27** open: https://github.com/agorokh/ac-copilot-trainer/pull/27
-- **Issue #24:** CSP struct fixes (PR #25 merged), render fixes (PR #26 merged), visual+coaching improvements (PR #27 open — needs merge + in-game test).
-- **In-game status:** App runs without crashes. Racing line visible (faint). Brake markers not yet confirmed visible. Coaching hints not yet confirmed showing.
+- **Branch:** `feat/issue-37-visual-overhaul-v3` -- **PR #38** open (ready for review): https://github.com/agorokh/ac-copilot-trainer/pull/38
+- **Issue #37:** Visual overhaul v3 -- 3D brake walls, speed diagnostics, coaching overlay fix.
+- **Status:** PR #38 ready for review. CI passes. Awaiting bot reviews and in-game testing.
 
 ## What was delivered this session
 
-- **PR #25** (merged): Fixed root crash — CSP C-struct field access (`sim.trackName`, `car.id`, etc.) replaced with `ac.getTrackID()` etc. via `csp_helpers.lua` module.
-- **PR #26** (merged): Fixed `sim.trackLengthMeters` → `sim.trackLengthM`, `render.line` → `render.debugLine`, pcall-wrapped `car.velocity`, removed dead `car.steering`, added Draw3D diagnostics.
-- **PR #27** (open): Brake markers now use cross+sphere+vertical pillar (red/orange, radius 1.2, 300m range). Racing line draws 5-layer ribbon. Coaching hints have fallback messages + throttle analysis + 15s hold. Brighter colors throughout.
+- **PR #38** (ready for review): All 4 parts of issue #37 implemented:
+  - **Part A:** track_markers.lua fully rewritten -- flat circles replaced with vertical gradient walls (render.glBegin Quads), 0.6m tall, 8m wide, perpendicular to track direction.
+  - **Part B:** racing_line.lua -- one-time speed diagnostic log added to drawLineStrip (counts points with speed data, verifies calcTiltHeight output).
+  - **Part C:** windowCoaching fixed -- diagnostic logging for timing values, fallback message "Complete a lap for coaching hints" via new coachingOverlay.drawFallback().
+  - **Part D:** Last-lap brake color changed from blue rgbm(0.4,0.6,1.0,0.5) to orange rgbm(1.0,0.6,0.0,0.4).
 
-## CSP API learnings
+## What remains
 
-Canonical rules (C-struct throws, valid fields, render API, globals) live in **[`01_Decisions/csp-api-field-safety.md`](../01_Decisions/csp-api-field-safety.md)** — read that ADR before changing `sim`/`car`/`render` usage; avoid duplicating the field lists here.
-
-## What remains (issue #24 acceptance — in-game)
-
-- **Visuals (PR #27):** brake markers visible; racing-line ribbon visible; coaching HUD lines show as expected.
-- **Render fallback:** if `render.debugSphere` / `render.debugCross` are invisible on your CSP build, try `render.debugText` labels or confirm CSP version.
-- **Best-lap / reference:** completing a faster lap updates best reference trace and related HUD where applicable; values survive a session as designed.
-- **Brake points:** recording during laps; HUD counts for best/last/session look sane after several laps.
-- **Persistence:** save/load (disk snapshot) restores expected state after restart or rejoin (no silent data loss).
-- **Sidecar:** with `config.wsSidecarUrl` set and sidecar running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`), WebSocket connects and errors are visible if misconfigured.
-- **Epic follow-up:** issues #7, #8, #9 — next phases per Project State.
+- **In-game testing:** Brake walls visibility from cockpit, speed coloring confirmation, coaching overlay content after lap completion. Requires Assetto Corsa + CSP runtime.
+- **Bot review threads:** PR #38 may receive automated review comments -- address or respond as needed.
+- **Epic follow-up:** Issues #7, #8, #9 -- next phases per Project State.
 
 ## Blockers / dependencies
 
-- **Assetto Corsa + CSP runtime** is required for in-game validation (markers, ribbon, coaching HUD); this cannot run in CI and blocks confirming PR #27 behavior until tested locally.
+- **Assetto Corsa + CSP runtime** is required for in-game validation (walls, speed colors, coaching HUD); this cannot run in CI.
