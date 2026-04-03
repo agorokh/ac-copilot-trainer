@@ -49,3 +49,7 @@ _If applicable: document HF cache dirs, GPU/MPS usage, air-gapped constraints._
 ## Troubleshooting
 
 _Add project-specific debugging tips as you learn them._
+
+### AC Copilot Trainer (CSP Lua app)
+
+- **Render API diagnostics:** In `src/ac_copilot_trainer/ac_copilot_trainer.lua`, set `config.enableRenderDiagnostics = true` and reload the app to restore the 60s `render_diag` run (API probe logs, red/green/blue debug shapes, `[DIAG]` UI). Default is `false` so normal driving sessions stay clean (issue #41).

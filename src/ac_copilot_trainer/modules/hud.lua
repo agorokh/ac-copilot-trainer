@@ -1,5 +1,7 @@
 -- Dear ImGui HUD: tiered layout (glance / context / collapsible detail) — issue #33.
 
+local coachingOverlay = require("coaching_overlay")
+
 local M = {}
 
 --- UTF-8 FULL BLOCK (U+2588) for delta bar segments.
@@ -31,6 +33,9 @@ local BLK = string.char(226, 150, 136)
 ---@field refAiDistanceM number|nil
 ---@field segmentCount integer|nil
 ---@field coachingLines (string|{ kind: string, text: string })[]|nil
+---@field coachingRemaining number|nil
+---@field coachingHoldSeconds number|nil
+---@field coachingShowPrimer boolean|nil
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
@@ -98,7 +103,7 @@ end
 
 function M.draw(vm)
   -- Tier 1 — always visible, top
-  ui.textColored(rgbm(0.5, 0.55, 0.62, 1), "AC Copilot Trainer v0.4.0")
+  ui.textColored(rgbm(0.5, 0.55, 0.62, 1), "AC Copilot Trainer v0.4.1")
   if vm.recording then
     ui.sameLine(0, 12)
     ui.textColored(rgbm(0, 1, 0, 1), "REC")
@@ -136,6 +141,8 @@ function M.draw(vm)
     formatLapMs(vm.lastLapMs)
   ))
 
+  coachingOverlay.drawMainWindowStrip(vm)
+
   -- Tier 2 — context-sensitive
   if vm.sectorMessage and vm.sectorMessage ~= "" then
     ui.separator()
@@ -162,13 +169,6 @@ function M.draw(vm)
     for i = 1, #vm.postLapLines do
       ui.text(vm.postLapLines[i])
     end
-  end
-
-  -- Coaching lines now shown in separate overlay (coaching_overlay.lua, issue #35).
-  -- Keep a minimal indicator here so telemetry panel shows coaching state.
-  if vm.coachingLines and #vm.coachingLines > 0 then
-    ui.separator()
-    ui.textColored(rgbm(0.35, 0.82, 0.95, 0.7), string.format("Coaching active (%d hints)", #vm.coachingLines))
   end
 
   if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then

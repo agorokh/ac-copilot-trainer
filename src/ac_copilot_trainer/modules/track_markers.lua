@@ -9,7 +9,7 @@ local FADE_NEAR = 80
 local FADE_FAR = 400
 local MAX_SNAPY_KEYS = 256
 
-local WALL_HEIGHT = 0.6
+local WALL_HEIGHT = 0.9
 local WALL_HALF_WIDTH = 4.0
 
 local snapSig = ""

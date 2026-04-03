@@ -1,4 +1,6 @@
--- Coaching overlay: panel + per-hint colors (issue #39 Part F).
+-- Coaching overlay: panel + per-hint colors (issue #39 Part F); font + HUD strip (issue #41).
+
+local fontMod = require("coaching_font")
 
 local M = {}
 
@@ -36,6 +38,17 @@ local function hintKind(entry)
   return "general"
 end
 
+local function computeAlpha(timeRemaining, holdSeconds)
+  local fadeStart = 5.0
+  local alpha = 1.0
+  if timeRemaining < fadeStart then
+    alpha = math.max(0, timeRemaining / fadeStart)
+  end
+  local hold = holdSeconds or 30
+  local fadeIn = math.min(1, math.max(0, (hold - timeRemaining) / 0.5))
+  return alpha * fadeIn
+end
+
 ---@param coachingLines table[]|string[]|nil
 ---@param timeRemaining number
 ---@param holdSeconds number
@@ -47,14 +60,8 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     return
   end
 
-  local fadeStart = 5.0
-  local alpha = 1.0
-  if timeRemaining < fadeStart then
-    alpha = math.max(0, timeRemaining / fadeStart)
-  end
+  local alpha = computeAlpha(timeRemaining, holdSeconds)
   local hold = holdSeconds or 30
-  local fadeIn = math.min(1, math.max(0, (hold - timeRemaining) / 0.5))
-  alpha = alpha * fadeIn
 
   local w, h = 400, 300
   if ui.windowSize then
@@ -64,12 +71,13 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     end
   end
   if ui.drawRectFilled and vec2 then
-    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.05, 0.05, 0.08, 0.75 * alpha), 12)
+    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.05, 0.05, 0.08, 0.82 * alpha), 12)
   end
   if ui.drawRect and vec2 then
-    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.3, 0.3, 0.4, 0.5 * alpha), 12, nil, 1)
+    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.45, 0.48, 0.55, 0.55 * alpha), 12, nil, 1)
   end
 
+  local fk = fontMod.push()
   local titleColor = rgbm(0.35, 0.82, 0.95, alpha)
   ui.textColored(titleColor, "COACHING")
   if ui.separator then
@@ -80,12 +88,21 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     local body = hintText(coachingLines[i])
     if body ~= "" then
       local a = accentForKind(hintKind(coachingLines[i]))
-      ui.textColored(rgbm(a.r, a.g, a.b, a.mult * alpha * 0.95), body)
+      local col = rgbm(a.r, a.g, a.b, a.mult * alpha * 0.98)
+      if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+        ui.pushStyleColor(ui.StyleColor.Text, col)
+        ui.textWrapped(body)
+        ui.popStyleColor()
+      else
+        ui.textColored(col, body)
+      end
     end
   end
 
+  fontMod.pop(fk)
+
   if timeRemaining < hold * 0.5 then
-    ui.textColored(rgbm(0.4, 0.4, 0.45, alpha * 0.5), string.format("(%.0fs)", timeRemaining))
+    ui.textColored(rgbm(0.55, 0.58, 0.62, alpha * 0.65), string.format("(%.0fs)", timeRemaining))
   end
 end
 
@@ -93,13 +110,107 @@ function M.drawFallback()
   if not ui or type(ui.textColored) ~= "function" then
     return
   end
-  if ui.drawRectFilled and vec2 and ui.windowSize then
+  local w, h = 400, 120
+  if ui.windowSize then
     local sz = ui.windowSize()
     if sz and sz.x and sz.y then
-      ui.drawRectFilled(vec2(0, 0), vec2(sz.x, sz.y), rgbm(0.05, 0.05, 0.08, 0.5), 12)
+      w, h = sz.x, sz.y
     end
   end
-  ui.textColored(rgbm(0.5, 0.5, 0.55, 0.6), "Complete a lap for coaching hints")
+  if ui.drawRectFilled and vec2 then
+    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
+  end
+  if ui.drawRect and vec2 then
+    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.5), 12, nil, 1)
+  end
+  local fk = fontMod.push()
+  ui.textColored(rgbm(0.92, 0.93, 0.95, 0.95), "Complete a lap for coaching hints")
+  fontMod.pop(fk)
+  if ui.textWrapped then
+    ui.textColored(rgbm(0.65, 0.68, 0.74, 0.85), "Open the Coaching window (second app icon) for the full overlay after your first lap.")
+  end
+end
+
+--- Main telemetry window: primer or primary coaching line (issue #41).
+---@class CoachingHudStrip
+---@field coachingLines (string|{ kind: string, text: string })[]|nil
+---@field coachingRemaining number|nil
+---@field coachingHoldSeconds number|nil
+---@field coachingShowPrimer boolean|nil
+
+---@param vm CoachingHudStrip
+function M.drawMainWindowStrip(vm)
+  if not ui or type(ui.textColored) ~= "function" or not vec2 then
+    return
+  end
+  local lines = vm.coachingLines
+  local rem = vm.coachingRemaining
+  local hold = vm.coachingHoldSeconds or 30
+  local primer = vm.coachingShowPrimer
+
+  local showActive = lines and #lines > 0 and rem and rem > 0
+  local showPrimerBand = primer and not showActive
+  if not showActive and not showPrimerBand then
+    return
+  end
+
+  local alpha = 1.0
+  local title = "COACHING"
+  local body = ""
+  local detail = ""
+  local accent = rgbm(0.35, 0.82, 0.95, 1)
+
+  if showActive then
+    alpha = computeAlpha(rem, hold)
+    body = hintText(lines[1])
+    accent = accentForKind(hintKind(lines[1]))
+    if #lines > 1 then
+      detail = string.format("+%d more in Coaching window", #lines - 1)
+    end
+  else
+    title = "COACHING"
+    body = "Complete a lap for coaching hints"
+    detail = "Full hints appear here and in the Coaching window."
+    accent = rgbm(0.88, 0.9, 0.94, 1)
+  end
+
+  local pad = vec2(10, 8)
+  local region = ui.getCursor()
+  local rw = 360
+  if type(ui.availableSpaceX) == "function" then
+    rw = ui.availableSpaceX() or rw
+  end
+  local boxH = showPrimerBand and 72 or 86
+  local p0 = vec2(region.x, region.y)
+  local p1 = vec2(region.x + rw, region.y + boxH)
+  if ui.drawRectFilled then
+    ui.drawRectFilled(p0, p1, rgbm(0.04, 0.04, 0.07, 0.78 * alpha), 8)
+  end
+  if ui.drawRect then
+    ui.drawRect(p0, p1, rgbm(0.42, 0.45, 0.52, 0.5 * alpha), 8, nil, 1)
+  end
+
+  if ui.setCursor then
+    ui.setCursor(vec2(region.x + pad.x, region.y + pad.y))
+  end
+
+  local fk = fontMod.push()
+  ui.textColored(rgbm(0.35, 0.82, 0.95, alpha), title)
+  if ui.spacing then
+    ui.spacing()
+  end
+  ui.textColored(rgbm(accent.r, accent.g, accent.b, accent.mult * alpha * 0.98), body)
+  if detail ~= "" then
+    if ui.spacing then
+      ui.spacing()
+    end
+    ui.textColored(rgbm(0.62, 0.65, 0.7, alpha * 0.85), detail)
+  end
+  fontMod.pop(fk)
+
+  if ui.dummy then
+    ui.dummy(vec2(rw, boxH + 6))
+  end
 end
 
 return M
