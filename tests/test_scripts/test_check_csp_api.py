@@ -27,6 +27,17 @@ def test_scan_file_flags_blocklisted_api(tmp_path: Path) -> None:
     assert not warns
 
 
+def test_scan_file_detects_blocklist_after_string_with_double_hyphen(tmp_path: Path) -> None:
+    """`--` inside a string must not truncate the line before scanning."""
+    mod = _load_check_csp_api()
+    f = tmp_path / "x.lua"
+    f.write_text('ac.log("see -- not a comment"); render.glBegin()\n', encoding="utf-8")
+    errs, warns = mod.scan_file(f, strict=False)
+    assert errs
+    assert any("glBegin" in e for e in errs)
+    assert not warns
+
+
 def test_scan_file_ignores_blocklisted_name_inside_string_literal(tmp_path: Path) -> None:
     mod = _load_check_csp_api()
     f = tmp_path / "x.lua"

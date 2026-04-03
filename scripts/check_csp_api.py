@@ -115,13 +115,12 @@ def scan_file(path: Path, strict: bool) -> tuple[list[str], list[str]]:
         if stripped.startswith("--"):
             continue
 
-        # Strip trailing comment for analysis
-        code = line.split("--")[0] if "--" in line else line
-
-        # Strip Lua string literals so references inside log messages
-        # like ac.log("render.glBegin missing") are not flagged.
+        # Strip string literals first so `--` inside quotes does not truncate the line.
+        code = line
         code = re.sub(r'"[^"]*"', '""', code)
         code = re.sub(r"'[^']*'", "''", code)
+        # Strip trailing Lua comment (approximation; long strings [[ ]] still not handled).
+        code = code.split("--")[0] if "--" in code else code
 
         # ── Blocklist check ──
         for pattern, message in BLOCKLISTED_APIS:
