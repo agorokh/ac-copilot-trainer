@@ -672,6 +672,7 @@ function script.windowMain(_dt)
     coachingRemaining = coachRem,
     coachingHoldSeconds = config.coachingHoldSeconds,
     coachingShowPrimer = coachPrimer,
+    appVersionUi = APP_VERSION_UI,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()

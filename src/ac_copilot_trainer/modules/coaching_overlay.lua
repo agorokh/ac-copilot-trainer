@@ -38,15 +38,22 @@ local function hintKind(entry)
   return "general"
 end
 
---- Fade out only in the last few seconds. No fade-in tied to `(hold - rem)` — that made
---- `rem == hold` => alpha 0, so coaching was invisible at the start of every hold (issue #9).
-local function computeAlpha(timeRemaining, _holdSeconds)
-  local fadeStart = 5.0
+--- Fade out in the last min(5s, hold) seconds so short `coachingHoldSeconds` stays at full opacity
+--- until its own tail (CodeRabbit PR #50).
+local function computeAlpha(timeRemaining, holdSeconds)
   local rem = math.max(0, timeRemaining or 0)
-  if rem >= fadeStart then
+  local hold = tonumber(holdSeconds)
+  if not hold or hold ~= hold or hold <= 0 then
+    hold = 30
+  end
+  local fadeWindow = math.min(5.0, hold)
+  if fadeWindow < 0.001 then
+    fadeWindow = 0.001
+  end
+  if rem >= fadeWindow then
     return 1.0
   end
-  return math.max(0, rem / fadeStart)
+  return math.max(0, rem / fadeWindow)
 end
 
 --- Shared panel chrome for Coaching window idle / fallback states (PR #50 review).

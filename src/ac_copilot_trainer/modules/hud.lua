@@ -36,6 +36,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingRemaining number|nil
 ---@field coachingHoldSeconds number|nil
 ---@field coachingShowPrimer boolean|nil
+---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
@@ -103,7 +104,10 @@ end
 
 function M.draw(vm)
   -- Tier 1 — always visible, top
-  ui.textColored(rgbm(0.5, 0.55, 0.62, 1), "AC Copilot Trainer v0.4.2")
+  ui.textColored(
+    rgbm(0.5, 0.55, 0.62, 1),
+    "AC Copilot Trainer " .. (type(vm.appVersionUi) == "string" and vm.appVersionUi ~= "" and vm.appVersionUi or "v?.?.?")
+  )
   if vm.recording then
     ui.sameLine(0, 12)
     ui.textColored(rgbm(0, 1, 0, 1), "REC")
