@@ -54,7 +54,10 @@ end
 
 local function setRgbm(qa0, c, r, g, b, a)
   if c.set then
-    pcall(c.set, c, r, g, b, a)
+    local ok = pcall(c.set, c, r, g, b, a)
+    if not ok then
+      qa0.values.gColor = rgbm(r, g, b, a)
+    end
   else
     qa0.values.gColor = rgbm(r, g, b, a)
   end

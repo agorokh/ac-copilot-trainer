@@ -26,7 +26,10 @@ function M.setV3(v, x, y, z)
     return
   end
   if v.set then
-    pcall(v.set, v, x, y, z)
+    local ok = pcall(v.set, v, x, y, z)
+    if not ok then
+      v.x, v.y, v.z = x, y, z
+    end
   else
     v.x, v.y, v.z = x, y, z
   end

@@ -125,11 +125,13 @@ local function drawVisualIndicators(car)
       local okL, llx, llz = pcall(function() return car.look.x, car.look.z end)
       if okL then lx, lz = llx, llz end
     end
+    -- Right vector in XZ plane (90° CCW from forward) so "green = right" matches car heading.
+    local rx, rz = lz, -lx
     cp1 = M.trackedDraw("diag_sphere_ahead", function()
       render.debugSphere(vec3(cx + lx * 5, cy + 1, cz + lz * 5), 0.3, rgbm(1, 0, 0, 0.9))
     end)
     cp2 = M.trackedDraw("diag_sphere_right", function()
-      render.debugSphere(vec3(cx + 5, cy + 1.5, cz), 0.3, rgbm(0, 1, 0, 0.9))
+      render.debugSphere(vec3(cx + rx * 5, cy + 1.5, cz + rz * 5), 0.3, rgbm(0, 1, 0, 0.9))
     end)
   end
 
@@ -215,13 +217,6 @@ function M.reset()
   lastLogT = 0
   diagActive = true
   visualCheckpoints = {}
-end
-
-function M.setEnabled(e) diagActive = e and true or false end
-function M.isActive() return diagActive end
-function M.getProbeResults() return apiProbeResults end
-function M.getDrawStats()
-  return { total = drawCallCount, ok = drawCallSuccess, fail = drawCallFail }
 end
 
 return M

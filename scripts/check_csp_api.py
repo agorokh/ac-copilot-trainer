@@ -10,6 +10,10 @@ found while --strict is set. Unknown render.* calls are warnings by default
 (exit 0).
 
 Also checks for common unit-confusion bugs (seconds vs milliseconds).
+
+String literals are stripped with simple regexes before scanning; Lua long
+strings ([[...]]) and escaped quotes inside strings are not fully removed and
+could theoretically cause false positives — acceptable for this lint.
 """
 
 from __future__ import annotations
@@ -102,7 +106,7 @@ def scan_file(path: Path, strict: bool) -> tuple[list[str], list[str]]:
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        warnings.append(f"{path}: could not read: {exc}")
+        errors.append(f"{path}: could not read: {exc}")
         return errors, warnings
 
     lines = text.splitlines()

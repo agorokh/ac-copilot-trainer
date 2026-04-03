@@ -59,7 +59,10 @@ end
 local function setWallColor(wq, r, g, b, a)
   local c = wq.values.gCol
   if c.set then
-    pcall(c.set, c, r, g, b, a)
+    local ok = pcall(c.set, c, r, g, b, a)
+    if not ok then
+      wq.values.gCol = rgbm(r, g, b, a)
+    end
   else
     wq.values.gCol = rgbm(r, g, b, a)
   end
