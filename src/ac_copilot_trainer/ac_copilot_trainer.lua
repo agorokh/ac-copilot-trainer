@@ -45,6 +45,8 @@ local config = {
   enableDraw3DDiagnostics = false,
   --- When true, runs `render_diag` (60s API probe, debug spheres/lines, [DIAG] UI). Default off (issue #41).
   enableRenderDiagnostics = false,
+  --- After each lap; issue #9 Part A mentioned ~8s for minimal HUD intrusion — default 30 keeps the
+  --- Coaching window readable; tune down if you want shorter toasts (milestone #43 may split strip vs window).
   coachingHoldSeconds = 30,
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
@@ -262,9 +264,8 @@ local state = {
   tireHud = "",
   autoSetupUntil = 0,
   coachingLines = {},
-  --- Wall-clock style countdown (updated with `script.update(dt)`), avoids sim time ms vs s ambiguity (#9).
+  --- Wall-clock style countdown (`script.update(dt)`); avoids sim clock ms vs s ambiguity (#9).
   coachingRemainSec = 0,
-  coachingUntil = 0,
 }
 
 local function rebuildBestReference()
@@ -409,7 +410,6 @@ local function resetRuntimeAfterLeavingTrack()
   state.autoSetupUntil = 0
   state.coachingLines = {}
   state.coachingRemainSec = 0
-  state.coachingUntil = 0
   wsBridge.reset()
   renderDiag.reset()
   resetDeltaSmoother()
@@ -730,6 +730,12 @@ function script.update(dt)
     return
   end
 
+  -- Tick coaching hold even when `car` is briefly nil so the countdown does not freeze (review #50).
+  local dtf = (type(dt) == "number" and dt == dt and dt >= 0) and dt or 0
+  if (state.coachingRemainSec or 0) > 0 then
+    state.coachingRemainSec = math.max(0, (state.coachingRemainSec or 0) - dtf)
+  end
+
   if not car then
     return
   end
@@ -737,10 +743,6 @@ function script.update(dt)
   lastDriveCar = car
   lastDriveSim = sim
   state.wasDriving = true
-
-  if (state.coachingRemainSec or 0) > 0 then
-    state.coachingRemainSec = math.max(0, (state.coachingRemainSec or 0) - dt)
-  end
 
   if not state.initialized then
     tryLoadDisk()
@@ -849,7 +851,6 @@ function script.update(dt)
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
     state.coachingRemainSec = config.coachingHoldSeconds
-    state.coachingUntil = ch.simSeconds(sim) + config.coachingHoldSeconds
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
     if ac and type(ac.log) == "function" then

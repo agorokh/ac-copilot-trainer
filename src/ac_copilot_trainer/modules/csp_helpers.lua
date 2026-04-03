@@ -2,10 +2,11 @@
 
 local M = {}
 
---- Monotonic sim clock for HUD timers that compare absolute deadlines (sector, post-lap).
---- Prefer `sim.gameTime`; fallback `sim.time`. **Units vary by CSP build** (see vault ADR);
---- coaching **display duration** uses `state.coachingRemainSec` decremented by `script.update(dt)`
---- instead of this clock — issue #9.
+--- Best-effort **session sim time in seconds** for legacy HUD deadlines (sector, post-lap, `autoSetupUntil`).
+--- Reads `sim.gameTime` then `sim.time` with `pcall` (CSP `ac.StateSim`). Call sites treat the result as
+--- **seconds** per CSP docs; if a build misreports units, fix normalization **here** (single place) rather
+--- than in each caller. **Coaching tip duration** does not use this — it uses `state.coachingRemainSec` and
+--- `script.update(dt)` (issue #9) to avoid sim-clock unit ambiguity.
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)
