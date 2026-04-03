@@ -191,7 +191,8 @@ function M.drawMainWindowStrip(vm)
   if type(ui.availableSpaceX) == "function" then
     rw = ui.availableSpaceX() or rw
   end
-  local boxH = showPrimerBand and 72 or 86
+  -- Taller band so wrapped coaching lines do not clip the panel edges.
+  local boxH = showPrimerBand and 92 or 118
   local p0 = vec2(region.x, region.y)
   local p1 = vec2(region.x + rw, region.y + boxH)
   if ui.drawRectFilled then
@@ -210,12 +211,26 @@ function M.drawMainWindowStrip(vm)
   if ui.spacing then
     ui.spacing()
   end
-  ui.textColored(rgbm(accent.r, accent.g, accent.b, accent.mult * alpha * 0.98), body)
+  local colBody = rgbm(accent.r, accent.g, accent.b, accent.mult * alpha * 0.98)
+  if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+    ui.pushStyleColor(ui.StyleColor.Text, colBody)
+    ui.textWrapped(body)
+    ui.popStyleColor()
+  else
+    ui.textColored(colBody, body)
+  end
   if detail ~= "" then
     if ui.spacing then
       ui.spacing()
     end
-    ui.textColored(rgbm(0.62, 0.65, 0.7, alpha * 0.85), detail)
+    local colDet = rgbm(0.62, 0.65, 0.7, alpha * 0.85)
+    if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+      ui.pushStyleColor(ui.StyleColor.Text, colDet)
+      ui.textWrapped(detail)
+      ui.popStyleColor()
+    else
+      ui.textColored(colDet, detail)
+    end
   end
   fontMod.pop(fk)
 

@@ -1,4 +1,4 @@
--- AC Copilot Trainer v0.4.0
+-- AC Copilot Trainer v0.4.1
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -586,13 +586,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.4.0")
+    ui.text("AC Copilot Trainer v0.4.1")
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.4.0")
+    ui.text("AC Copilot Trainer v0.4.1")
     ui.separator()
     ui.text("Waiting for car data...")
     return
