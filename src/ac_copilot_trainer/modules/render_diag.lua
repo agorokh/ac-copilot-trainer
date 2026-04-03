@@ -124,15 +124,27 @@ local function drawVisualIndicators(car)
       local okL, llx, llz = pcall(function() return car.look.x, car.look.z end)
       if okL then lx, lz = llx, llz end
     end
-    cp1 = pcall(render.debugSphere, vec3(cx + lx * 5, cy + 1, cz + lz * 5),
-      0.3, rgbm(1, 0, 0, 0.9)) == true
-    cp2 = pcall(render.debugSphere, vec3(cx + 5, cy + 1.5, cz),
-      0.3, rgbm(0, 1, 0, 0.9)) == true
+    M.trackedDraw("diag_sphere_ahead", function()
+      local ok = pcall(render.debugSphere, vec3(cx + lx * 5, cy + 1, cz + lz * 5),
+        0.3, rgbm(1, 0, 0, 0.9))
+      cp1 = ok
+      if not ok then error("debugSphere ahead") end
+    end)
+    M.trackedDraw("diag_sphere_right", function()
+      local ok = pcall(render.debugSphere, vec3(cx + 5, cy + 1.5, cz),
+        0.3, rgbm(0, 1, 0, 0.9))
+      cp2 = ok
+      if not ok then error("debugSphere right") end
+    end)
   end
 
   if type(render.debugLine) == "function" then
-    cp3 = pcall(render.debugLine, vec3(cx, cy, cz), vec3(cx, cy + 3, cz),
-      rgbm(0, 0, 1, 1), rgbm(0, 0, 1, 1)) == true
+    M.trackedDraw("diag_debug_line", function()
+      local ok = pcall(render.debugLine, vec3(cx, cy, cz), vec3(cx, cy + 3, cz),
+        rgbm(0, 0, 1, 1), rgbm(0, 0, 1, 1))
+      cp3 = ok
+      if not ok then error("debugLine vertical") end
+    end)
   end
 
   visualCheckpoints = {
@@ -170,8 +182,10 @@ function M.tick(dt)
     logSummary()
     if ac and type(ac.log) == "function" then
       ac.log("[DIAG] Diagnostic period ended (60s).")
-      if drawCallSuccess == 0 then
-        ac.log("[DIAG] *** CRITICAL: ZERO successful draw calls in 60s ***")
+      if drawCallSuccess == 0 and drawCallCount > 0 then
+        ac.log("[DIAG] *** CRITICAL: ZERO successful tracked draws in 60s ***")
+      elseif drawCallCount == 0 then
+        ac.log("[DIAG] No tracked draw attempts (debugSphere/debugLine missing?)")
       end
     end
     diagActive = false
@@ -196,7 +210,22 @@ function M.drawUI()
   end
 end
 
-function M.setEnabled(e) diagActive = e end
+--- Reset all diagnostic state (e.g. after leaving track / new session without Lua reload).
+function M.reset()
+  elapsed = 0
+  probeRan = false
+  apiProbeResults = {}
+  drawCallLog = {}
+  drawCallCount = 0
+  drawCallSuccess = 0
+  drawCallFail = 0
+  uiDrawCount = 0
+  lastLogT = 0
+  diagActive = true
+  visualCheckpoints = {}
+end
+
+function M.setEnabled(e) diagActive = e and true or false end
 function M.isActive() return diagActive end
 function M.getProbeResults() return apiProbeResults end
 function M.getDrawStats()

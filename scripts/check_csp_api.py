@@ -5,8 +5,9 @@ Static analysis: detect usage of non-existent CSP Lua APIs in .lua source files.
 Maintains an explicit BLOCKLIST of APIs that are known NOT to exist in the
 production CSP SDK, and an ALLOWLIST of confirmed-working render/physics/ui calls.
 
-Exit 1 if any blocklisted symbol is found. Exit 2 if an unknown render.* call
-is found (warning-level by default, hard fail with --strict).
+Exit 1 if any blocklisted symbol is found, or if an unknown render.* call is
+found while --strict is set. Unknown render.* calls are warnings by default
+(exit 0).
 
 Also checks for common unit-confusion bugs (seconds vs milliseconds).
 """
@@ -124,8 +125,9 @@ def scan_file(path: Path, strict: bool) -> tuple[list[str], list[str]]:
         for pattern, message in BLOCKLISTED_APIS:
             # Check in code portion AND in type-checking guards like `type(render.glBegin)`
             if re.search(pattern, code):
-                errors.append(f"{path}:{line_no}: BLOCKED — {message}")
-                errors.append(f"  {stripped}")
+                errors.append(
+                    f"{path}:{line_no}: BLOCKED — {message}\n  {stripped}"
+                )
 
         # ── Unknown render.* check ──
         for match in RENDER_CALL_RE.finditer(code):
@@ -139,16 +141,16 @@ def scan_file(path: Path, strict: bool) -> tuple[list[str], list[str]]:
                         f"'{full_name}' is not in the confirmed CSP allowlist"
                     )
                     if strict:
-                        errors.append(msg)
+                        errors.append(f"{msg}\n  {stripped}")
                     else:
-                        warnings.append(msg)
-                    warnings.append(f"  {stripped}")
+                        warnings.append(f"{msg}\n  {stripped}")
 
         # ── Unit confusion check ──
         for pattern, message in UNIT_CONFUSION_PATTERNS:
             if re.search(pattern, code):
-                warnings.append(f"{path}:{line_no}: UNIT WARNING — {message}")
-                warnings.append(f"  {stripped}")
+                warnings.append(
+                    f"{path}:{line_no}: UNIT WARNING — {message}\n  {stripped}"
+                )
 
     return errors, warnings
 

@@ -406,6 +406,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.coachingLines = {}
   state.coachingUntil = 0
   wsBridge.reset()
+  renderDiag.reset()
   resetDeltaSmoother()
 end
 

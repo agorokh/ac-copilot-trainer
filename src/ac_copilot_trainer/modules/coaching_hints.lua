@@ -44,7 +44,8 @@ local function kindForText(s)
   if lower:find("speed", 1, true) or lower:find("corner", 1, true) or lower:find("entry", 1, true) or lower:find("overdriving", 1, true) then
     return "line"
   end
-  if lower:find("matched reference", 1, true) or lower:find("well", 1, true) and lower:find("consistent", 1, true) then
+  if lower:find("matched reference", 1, true)
+      or (lower:find("well", 1, true) and lower:find("consistent", 1, true)) then
     return "positive"
   end
   return "general"
