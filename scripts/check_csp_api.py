@@ -125,9 +125,7 @@ def scan_file(path: Path, strict: bool) -> tuple[list[str], list[str]]:
         for pattern, message in BLOCKLISTED_APIS:
             # Check in code portion AND in type-checking guards like `type(render.glBegin)`
             if re.search(pattern, code):
-                errors.append(
-                    f"{path}:{line_no}: BLOCKED — {message}\n  {stripped}"
-                )
+                errors.append(f"{path}:{line_no}: BLOCKED — {message}\n  {stripped}")
 
         # ── Unknown render.* check ──
         for match in RENDER_CALL_RE.finditer(code):
@@ -148,9 +146,7 @@ def scan_file(path: Path, strict: bool) -> tuple[list[str], list[str]]:
         # ── Unit confusion check ──
         for pattern, message in UNIT_CONFUSION_PATTERNS:
             if re.search(pattern, code):
-                warnings.append(
-                    f"{path}:{line_no}: UNIT WARNING — {message}\n  {stripped}"
-                )
+                warnings.append(f"{path}:{line_no}: UNIT WARNING — {message}\n  {stripped}")
 
     return errors, warnings
 
