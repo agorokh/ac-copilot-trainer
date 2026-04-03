@@ -1,4 +1,4 @@
--- AC Copilot Trainer v0.4.0
+-- AC Copilot Trainer v0.4.1
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -43,6 +43,8 @@ local config = {
   racingLineMode = "best",
   --- Verbose: log Draw3D/data counts every ~2s to `ac.log` (troubleshooting only).
   enableDraw3DDiagnostics = false,
+  --- When true, runs `render_diag` (60s API probe, debug spheres/lines, [DIAG] UI). Default off (issue #41).
+  enableRenderDiagnostics = false,
   coachingHoldSeconds = 30,
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
@@ -584,13 +586,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.4.0")
+    ui.text("AC Copilot Trainer v0.4.1")
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.4.0")
+    ui.text("AC Copilot Trainer v0.4.1")
     ui.separator()
     ui.text("Waiting for car data...")
     return
@@ -626,9 +628,12 @@ function script.windowMain(_dt)
   end
 
   local coachingHudLines = nil
+  local coachRem = nil
   if state.coachingLines and #state.coachingLines > 0 and now < (state.coachingUntil or 0) then
     coachingHudLines = state.coachingLines
+    coachRem = (state.coachingUntil or 0) - now
   end
+  local coachPrimer = (state.lapsCompleted or 0) == 0
 
   hud.draw({
     recording = tel:isRecording(),
@@ -656,8 +661,13 @@ function script.windowMain(_dt)
     refAiDistanceM = state.refLatDistance,
     segmentCount = #(state.trackSegments or {}),
     coachingLines = coachingHudLines,
+    coachingRemaining = coachRem,
+    coachingHoldSeconds = config.coachingHoldSeconds,
+    coachingShowPrimer = coachPrimer,
   })
-  renderDiag.drawUI()
+  if config.enableRenderDiagnostics then
+    renderDiag.drawUI()
+  end
 end
 
 --- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
@@ -944,7 +954,9 @@ function script.update(dt)
 
   tires:update(car, dt, sp)
 
-  renderDiag.tick(dt)
+  if config.enableRenderDiagnostics then
+    renderDiag.tick(dt)
+  end
 
   if car.position and state.splineRef then
     state.refLatDistance = splineParser.lateralDistanceMeters(
@@ -984,7 +996,9 @@ function script.Draw3D(_dt)
   end
   local c = ac.getCar(0)
 
-  renderDiag.draw3D(c)
+  if config.enableRenderDiagnostics then
+    renderDiag.draw3D(c)
+  end
 
   if config.enableDraw3DDiagnostics then
     if not state._draw3dLogT then state._draw3dLogT = 0 end
