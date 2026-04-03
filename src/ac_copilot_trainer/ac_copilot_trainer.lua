@@ -420,6 +420,10 @@ local function resetRollingDrivingState()
   state.brakingPoints.session = {}
   state._coachDiagT = nil
   state._coachDiagCount = nil
+  -- New session / lap counter rolled back (Gemini #50): do not carry coaching UI across sessions.
+  state.coachingLines = {}
+  state.coachingRemainSec = 0
+  state.lapsCompleted = 0
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
