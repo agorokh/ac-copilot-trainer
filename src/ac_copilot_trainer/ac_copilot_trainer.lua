@@ -363,6 +363,8 @@ local function resetRuntimeAfterLeavingTrack()
     last = {},
     session = {},
   }
+  state._coachDiagT = nil
+  state._coachDiagCount = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td = throttleDet.new()
@@ -407,6 +409,8 @@ end
 
 local function resetRollingDrivingState()
   state.brakingPoints.session = {}
+  state._coachDiagT = nil
+  state._coachDiagCount = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
