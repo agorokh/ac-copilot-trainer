@@ -47,17 +47,12 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
 
 end
 
---- Fallback message when no coaching data is available yet.
---- Shows context-appropriate hint based on lap progress.
----@param lapsCompleted number|nil  Number of laps completed so far
-function M.drawFallback(lapsCompleted)
+--- Fallback message shown before any lap is completed.
+--- Only called when lapsCompleted == 0 (gated at the call site).
+function M.drawFallback()
   if not ui or type(ui.textColored) ~= "function" then return end
   local dimColor = rgbm(0.5, 0.5, 0.55, 0.6)
-  if (lapsCompleted or 0) >= 1 then
-    ui.textColored(dimColor, "Analyzing lap data...")
-  else
-    ui.textColored(dimColor, "Complete a lap for coaching hints")
-  end
+  ui.textColored(dimColor, "Complete a lap for coaching hints")
 end
 
 return M

@@ -683,7 +683,7 @@ function script.windowCoaching(_dt)
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
     -- Show fallback only before any lap is completed; hide once coaching has fired
     if (state.lapsCompleted or 0) == 0 then
-      coachingOverlay.drawFallback(0)
+      coachingOverlay.drawFallback()
     end
     return
   end
