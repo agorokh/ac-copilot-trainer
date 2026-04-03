@@ -90,6 +90,7 @@ end
 
 -- ── 2. Draw Call Tracking ──
 
+---@return boolean ok Lua pcall success for fn
 function M.trackedDraw(name, fn)
   drawCallCount = drawCallCount + 1
   local ok, err = pcall(fn)
@@ -113,7 +114,7 @@ end
 -- ── 3. Visual Verification Indicators ──
 
 local function drawVisualIndicators(car)
-  if not car or not car.position or not vec3 or not render then return end
+  if not car or not car.position or not vec3 or not rgbm or not render then return end
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
 
   local cp1, cp2, cp3 = false, false, false
@@ -124,26 +125,17 @@ local function drawVisualIndicators(car)
       local okL, llx, llz = pcall(function() return car.look.x, car.look.z end)
       if okL then lx, lz = llx, llz end
     end
-    M.trackedDraw("diag_sphere_ahead", function()
-      local ok = pcall(render.debugSphere, vec3(cx + lx * 5, cy + 1, cz + lz * 5),
-        0.3, rgbm(1, 0, 0, 0.9))
-      cp1 = ok
-      if not ok then error("debugSphere ahead") end
+    cp1 = M.trackedDraw("diag_sphere_ahead", function()
+      render.debugSphere(vec3(cx + lx * 5, cy + 1, cz + lz * 5), 0.3, rgbm(1, 0, 0, 0.9))
     end)
-    M.trackedDraw("diag_sphere_right", function()
-      local ok = pcall(render.debugSphere, vec3(cx + 5, cy + 1.5, cz),
-        0.3, rgbm(0, 1, 0, 0.9))
-      cp2 = ok
-      if not ok then error("debugSphere right") end
+    cp2 = M.trackedDraw("diag_sphere_right", function()
+      render.debugSphere(vec3(cx + 5, cy + 1.5, cz), 0.3, rgbm(0, 1, 0, 0.9))
     end)
   end
 
   if type(render.debugLine) == "function" then
-    M.trackedDraw("diag_debug_line", function()
-      local ok = pcall(render.debugLine, vec3(cx, cy, cz), vec3(cx, cy + 3, cz),
-        rgbm(0, 0, 1, 1), rgbm(0, 0, 1, 1))
-      cp3 = ok
-      if not ok then error("debugLine vertical") end
+    cp3 = M.trackedDraw("diag_debug_line", function()
+      render.debugLine(vec3(cx, cy, cz), vec3(cx, cy + 3, cz), rgbm(0, 0, 1, 1), rgbm(0, 0, 1, 1))
     end)
   end
 
@@ -200,7 +192,7 @@ end
 function M.drawUI()
   if not diagActive then return end
   uiDrawCount = uiDrawCount + 1
-  if not ui or type(ui.textColored) ~= "function" then return end
+  if not ui or type(ui.textColored) ~= "function" or not rgbm then return end
   local h = rgbm(1, 0.8, 0, 1)
   ui.textColored(h, string.format("[DIAG] %.0fs/%ds", elapsed, DIAG_DURATION))
   ui.textColored(h, string.format("Draw: %d ok / %d fail", drawCallSuccess, drawCallFail))

@@ -65,14 +65,6 @@ local function setWallColor(wq, r, g, b, a)
   end
 end
 
-local function setV3(v, x, y, z)
-  if v.set then
-    pcall(v.set, v, x, y, z)
-  else
-    v.x, v.y, v.z = x, y, z
-  end
-end
-
 local function brakeListHash(list)
   if not list or #list == 0 then
     return 0
@@ -255,10 +247,10 @@ function M.draw(car, _sim, best, last)
       local tlx, tly, tlz = it.x - nx * hw, sy + WALL_HEIGHT, it.z - nz * hw
       local trx, try_, trz = it.x + nx * hw, sy + WALL_HEIGHT, it.z + nz * hw
 
-      setV3(wq.p1, glx, gly, glz)
-      setV3(wq.p2, grx, gry, grz)
-      setV3(wq.p3, trx, try_, trz)
-      setV3(wq.p4, tlx, tly, tlz)
+      ch.setV3(wq.p1, glx, gly, glz)
+      ch.setV3(wq.p2, grx, gry, grz)
+      ch.setV3(wq.p3, trx, try_, trz)
+      ch.setV3(wq.p4, tlx, tly, tlz)
 
       if it.kind == "best" then
         setWallColor(wq, BEST_RGB.r, BEST_RGB.g, BEST_RGB.b, BEST_ALPHA_BOTTOM * fade)

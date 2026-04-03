@@ -30,7 +30,7 @@ local BLK = string.char(226, 150, 136)
 ---@field autoSetupLine string|nil
 ---@field refAiDistanceM number|nil
 ---@field segmentCount integer|nil
----@field coachingLines string[]|nil
+---@field coachingLines (string|{ kind: string, text: string })[]|nil
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then

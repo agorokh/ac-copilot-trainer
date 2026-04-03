@@ -3,7 +3,9 @@
 local M = {}
 
 --- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
---- `sim.gameTime` is seconds; `sim.time` is ms on many builds — normalize so +30 means 30s hold.
+--- Prefer `sim.gameTime` (seconds). If absent, use `sim.time` as-is — historically this
+--- repo treated `sim.time` like seconds for deltas and holds; dividing by 1000 breaks
+--- those builds when `gameTime` is missing.
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)
@@ -14,7 +16,20 @@ function M.simSeconds(sim)
   if type(g) == "number" then
     return g
   end
-  return (sim.time or 0) / 1000
+  return sim.time or 0
+end
+
+--- Mutate a CSP vec3 in place (supports :set or .x/.y/.z).
+---@param v userdata|table|nil
+function M.setV3(v, x, y, z)
+  if not v then
+    return
+  end
+  if v.set then
+    pcall(v.set, v, x, y, z)
+  else
+    v.x, v.y, v.z = x, y, z
+  end
 end
 
 function M.sanitizeId(s, fallback)

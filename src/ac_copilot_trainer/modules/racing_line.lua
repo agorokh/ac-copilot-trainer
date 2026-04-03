@@ -60,14 +60,6 @@ local function setRgbm(qa0, c, r, g, b, a)
   end
 end
 
-local function setV3(v, x, y, z)
-  if v.set then
-    pcall(v.set, v, x, y, z)
-  else
-    v.x, v.y, v.z = x, y, z
-  end
-end
-
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
   return dx * dx + dy * dy + dz * dz
@@ -289,10 +281,10 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
             color = fallbackColor
           end
 
-          setV3(qa.p1, v1x, v1y, v1z)
-          setV3(qa.p2, v2x, v2y, v2z)
-          setV3(qa.p3, v3x, v3y, v3z)
-          setV3(qa.p4, v4x, v4y, v4z)
+          ch.setV3(qa.p1, v1x, v1y, v1z)
+          ch.setV3(qa.p2, v2x, v2y, v2z)
+          ch.setV3(qa.p3, v3x, v3y, v3z)
+          ch.setV3(qa.p4, v4x, v4y, v4z)
           setRgbm(qa, qa.values.gColor, color.r, color.g, color.b, color.mult)
 
           local okDraw = pcall(render.shaderedQuad, qa)

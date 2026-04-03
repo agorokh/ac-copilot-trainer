@@ -177,8 +177,11 @@ def main() -> int:
             lua_files.extend(sorted(target.rglob("*.lua")))
 
     if not lua_files:
-        print("No .lua files found to scan.", file=sys.stderr)
-        return 0
+        print(
+            "No .lua files found to scan (check paths / working directory).",
+            file=sys.stderr,
+        )
+        return 1
 
     all_errors: list[str] = []
     all_warnings: list[str] = []
