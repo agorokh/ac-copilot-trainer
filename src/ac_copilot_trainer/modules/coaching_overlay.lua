@@ -126,8 +126,13 @@ function M.drawFallback()
   local fk = fontMod.push()
   ui.textColored(rgbm(0.92, 0.93, 0.95, 0.95), "Complete a lap for coaching hints")
   fontMod.pop(fk)
-  if ui.textWrapped then
-    ui.textColored(rgbm(0.65, 0.68, 0.74, 0.85), "Open the Coaching window (second app icon) for the full overlay after your first lap.")
+  local sub = "Open the Coaching window (second app icon) for the full overlay after your first lap."
+  if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.65, 0.68, 0.74, 0.85))
+    ui.textWrapped(sub)
+    ui.popStyleColor()
+  else
+    ui.textColored(rgbm(0.65, 0.68, 0.74, 0.85), sub)
   end
 end
 
@@ -156,9 +161,9 @@ function M.drawMainWindowStrip(vm)
 
   local alpha = 1.0
   local title = "COACHING"
-  local body = ""
+  local body
   local detail = ""
-  local accent = rgbm(0.35, 0.82, 0.95, 1)
+  local accent
 
   if showActive then
     alpha = computeAlpha(rem, hold)
@@ -175,7 +180,13 @@ function M.drawMainWindowStrip(vm)
   end
 
   local pad = vec2(10, 8)
-  local region = ui.getCursor()
+  local region = vec2(0, 0)
+  if type(ui.getCursor) == "function" then
+    local ok, cur = pcall(ui.getCursor)
+    if ok and cur and type(cur.x) == "number" and type(cur.y) == "number" then
+      region = cur
+    end
+  end
   local rw = 360
   if type(ui.availableSpaceX) == "function" then
     rw = ui.availableSpaceX() or rw
@@ -208,8 +219,10 @@ function M.drawMainWindowStrip(vm)
   end
   fontMod.pop(fk)
 
-  if ui.dummy then
-    ui.dummy(vec2(rw, boxH + 6))
+  if ui.setCursor then
+    ui.setCursor(vec2(region.x, region.y + boxH + 6))
+  elseif ui.dummy then
+    ui.dummy(vec2(1, 6))
   end
 end
 

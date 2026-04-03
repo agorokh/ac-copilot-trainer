@@ -19,13 +19,18 @@ local function extractFontFilename(body)
     if low ~= "" and not low:match("^;") and not low:match("^#") then
       local eq = trimmed:match("=%s*(.+)$")
       local seg = eq or trimmed
-      local fn = seg:match("([%w_%-]+%.[tT][tT][fF])") or seg:match("([%w_%-]+%.[oO][tT][fF])")
+      local fn = seg:match("([%w%s_%-%.]+%.[tT][tT][fF])")
+        or seg:match("([%w%s_%-%.]+%.[oO][tT][fF])")
       if fn then
-        return fn
+        return fn:match("^%s*(.-)%s*$") or fn
       end
     end
   end
-  return body:match("([%w_%-]+%.[tT][tT][fF])") or body:match("([%w_%-]+%.[oO][tT][fF])")
+  local fb = body:match("([%w%s_%-%.]+%.[tT][tT][fF])") or body:match("([%w%s_%-%.]+%.[oO][tT][fF])")
+  if fb then
+    return fb:match("^%s*(.-)%s*$") or fb
+  end
+  return nil
 end
 
 ---@return string|nil @Descriptor string for ui.pushDWriteFont, or nil
@@ -43,11 +48,12 @@ function M.dwriteDescriptor()
   if not okRoot or not root or root == "" then
     return nil
   end
-  local sep = root:match("[\\/]$") and "" or (root:find("\\") and "\\" or "/")
-  local path = root .. sep .. "content" .. sep .. "fonts" .. sep .. "bmw.txt"
+  local dirSep = root:find("\\", 1, true) and "\\" or "/"
+  local baseRoot = root:gsub("[\\/]+$", "")
+  local path = baseRoot .. dirSep .. "content" .. dirSep .. "fonts" .. dirSep .. "bmw.txt"
   local f = io.open(path, "r")
   if not f then
-    path = root .. sep .. "content" .. sep .. "fonts" .. sep .. "BMW.txt"
+    path = baseRoot .. dirSep .. "content" .. dirSep .. "fonts" .. dirSep .. "BMW.txt"
     f = io.open(path, "r")
   end
   if not f then
@@ -73,7 +79,7 @@ function M.dwriteDescriptor()
   return nil
 end
 
----@return string|nil kind: "dwrite" | "builtin"
+---@return "dwrite"|"builtin"|nil
 function M.push()
   local fs = M.dwriteDescriptor()
   if fs and type(ui.pushDWriteFont) == "function" then
@@ -101,7 +107,7 @@ function M.push()
   return nil
 end
 
----@param kind string|nil
+---@param kind "dwrite"|"builtin"|nil
 function M.pop(kind)
   if kind == "dwrite" and type(ui.popDWriteFont) == "function" then
     pcall(ui.popDWriteFont)
