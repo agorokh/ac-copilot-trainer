@@ -1,6 +1,7 @@
 -- Separate coaching overlay window -- transparent, top-right, large readable text.
 -- Issue #35 Part C: coaching hints in their own Dear ImGui window, not buried in telemetry.
 -- Auto-shows for configurable duration after lap completion, fades out.
+-- Issue #37 Part C: added drawFallback for empty state.
 
 local M = {}
 
@@ -44,6 +45,14 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     ui.textColored(dimColor, string.format("(%.0fs)", timeRemaining))
   end
 
+end
+
+--- Fallback message shown before any lap is completed.
+--- Only called when lapsCompleted == 0 (gated at the call site).
+function M.drawFallback()
+  if not ui or type(ui.textColored) ~= "function" then return end
+  local dimColor = rgbm(0.5, 0.5, 0.55, 0.6)
+  ui.textColored(dimColor, "Complete a lap for coaching hints")
 end
 
 return M

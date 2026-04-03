@@ -363,6 +363,8 @@ local function resetRuntimeAfterLeavingTrack()
     last = {},
     session = {},
   }
+  state._coachDiagT = nil
+  state._coachDiagCount = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td = throttleDet.new()
@@ -407,6 +409,8 @@ end
 
 local function resetRollingDrivingState()
   state.brakingPoints.session = {}
+  state._coachDiagT = nil
+  state._coachDiagCount = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -652,15 +656,35 @@ function script.windowMain(_dt)
   })
 end
 
---- Separate coaching overlay window (issue #35 Part C).
+--- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
 --- Registered as a second CSP app window; transparent background, top-right.
+--- Issue #37: added diagnostic logging and fallback message for empty state.
 function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
   local now = sim.time or 0
   local remaining = (state.coachingUntil or 0) - now
+
+  -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
+  if not state._coachDiagT then state._coachDiagT = 0 end
+  if not state._coachDiagCount then state._coachDiagCount = 0 end
+  state._coachDiagT = state._coachDiagT + (_dt or 0)
+  if state._coachDiagCount < 12 and state._coachDiagT > 5.0 and ac and type(ac.log) == "function" then
+    state._coachDiagT = 0
+    state._coachDiagCount = state._coachDiagCount + 1
+    ac.log(string.format(
+      "[COPILOT] coaching: now=%.1f until=%.1f rem=%.1f lines=%d laps=%d",
+      now, state.coachingUntil or 0, remaining,
+      state.coachingLines and #state.coachingLines or 0,
+      state.lapsCompleted or 0))
+  end
+
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
+    -- Show fallback only before any lap is completed; hide once coaching has fired
+    if (state.lapsCompleted or 0) == 0 then
+      coachingOverlay.drawFallback()
+    end
     return
   end
   coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)

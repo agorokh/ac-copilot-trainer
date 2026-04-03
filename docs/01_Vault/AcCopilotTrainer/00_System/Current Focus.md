@@ -2,8 +2,8 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-03-31
-issue: "https://github.com/agorokh/ac-copilot-trainer/issues/24"
+last_updated: 2026-04-01
+issue: "https://github.com/agorokh/ac-copilot-trainer/issues/37"
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -12,8 +12,8 @@ relates_to:
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Issue #24:** CSP struct crashes + 3D visual rendering + coaching hints.
+**Repo:** ac-copilot-trainer. **Issue #37:** Visual overhaul v3 -- 3D brake walls, speed diagnostics, coaching overlay fix.
 
-**Branch:** `fix/issue-24-visuals-coaching`. **PR #27** open — visual improvements (brake markers, racing line ribbon, coaching fallbacks).
+**Branch:** `feat/issue-37-visual-overhaul-v3`. **PR #38** ready for review -- all 4 parts implemented, CI green.
 
-**Next:** Merge PR #27, in-game test to confirm 3D visuals + coaching. Then resume epic work (#7/#8/#9).
+**Next:** Address bot review comments on PR #38, in-game test to confirm 3D brake walls + speed colors + coaching. Then resume epic work (#7/#8/#9).
