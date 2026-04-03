@@ -51,9 +51,11 @@ def test_scan_file_unknown_render_warning_or_strict_error(tmp_path: Path) -> Non
     f.write_text("function f() render.totallyFakeThing() end\n", encoding="utf-8")
     e0, w0 = mod.scan_file(f, strict=False)
     assert not e0
-    assert w0 and any("UNKNOWN render API" in w for w in w0)
-    e1, w1 = mod.scan_file(f, strict=True)
-    assert e1 and any("UNKNOWN render API" in e for e in e1)
+    assert w0
+    assert any("UNKNOWN render API" in w for w in w0)
+    e1, _w1 = mod.scan_file(f, strict=True)
+    assert e1
+    assert any("UNKNOWN render API" in e for e in e1)
 
 
 def test_scan_file_unit_confusion_warning(tmp_path: Path) -> None:
@@ -62,12 +64,14 @@ def test_scan_file_unit_confusion_warning(tmp_path: Path) -> None:
     f.write_text("if sim.time > 50 then end\n", encoding="utf-8")
     errs, warns = mod.scan_file(f, strict=False)
     assert not errs
-    assert warns and any("UNIT WARNING" in w for w in warns)
+    assert warns
+    assert any("UNIT WARNING" in w for w in warns)
 
 
 def test_scan_file_missing_path_is_error(tmp_path: Path) -> None:
     mod = _load_check_csp_api()
     missing = tmp_path / "nope.lua"
     errs, warns = mod.scan_file(missing, strict=False)
-    assert errs and any("could not read" in e for e in errs)
+    assert errs
+    assert any("could not read" in e for e in errs)
     assert not warns

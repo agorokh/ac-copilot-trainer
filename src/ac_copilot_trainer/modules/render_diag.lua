@@ -122,6 +122,12 @@ local function drawVisualIndicators(car)
       local okL, llx, llz = pcall(function() return car.look.x, car.look.z end)
       if okL then lx, lz = llx, llz end
     end
+    local mag = math.sqrt(lx * lx + lz * lz)
+    if mag > 1e-6 then
+      lx, lz = lx / mag, lz / mag
+    else
+      lx, lz = 0, 1
+    end
     -- Right vector in XZ plane (90° CCW from forward) so "green = right" matches car heading.
     local rx, rz = lz, -lx
     cp1 = M.trackedDraw("diag_sphere_ahead", function()

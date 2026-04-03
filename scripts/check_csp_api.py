@@ -85,13 +85,11 @@ ALLOWED_RENDER_CALLS: set[str] = {
 # Timer / unit confusion checks
 # ──────────────────────────────────────────────────────────────────────
 UNIT_CONFUSION_PATTERNS: list[tuple[str, str]] = [
-    # sim.time compared against small numbers (likely seconds, but sim.time is ms)
+    # Heuristic: tiny literals often mean "seconds" while author assumed ms (or vice versa).
     (
         r"\bsim\.time\s*[<>]=?\s*\d{1,3}(?:\.\d+)?\s*(?:--.*seconds)?",
-        "sim.time is in MILLISECONDS — comparison against small number may be a unit bug",
+        "sim.time compared to a small literal — confirm units match CSP ac.StateSim (seconds)",
     ),
-    # sim.time divided by 1000 then compared — probably correct, but flag for review
-    # (intentionally not flagged — that's the correct conversion)
 ]
 
 # Pattern to extract render.XXXX calls from Lua

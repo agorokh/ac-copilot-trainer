@@ -3,8 +3,8 @@
 local M = {}
 
 --- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
---- Prefer `sim.gameTime` (seconds). If absent, treat `sim.time` as **milliseconds** and
---- convert to seconds (`/ 1000`), matching typical CSP `ac.StateSim` semantics.
+--- Prefer `sim.gameTime`. If absent, use `sim.time` — both are **seconds** in CSP
+--- `ac.StateSim` (same unit as legacy call sites in this app).
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)
@@ -17,7 +17,7 @@ function M.simSeconds(sim)
   end
   local t = sim.time
   if type(t) == "number" then
-    return t / 1000
+    return t
   end
   return 0
 end
