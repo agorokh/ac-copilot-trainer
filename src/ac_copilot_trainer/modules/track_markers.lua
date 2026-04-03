@@ -1,7 +1,4 @@
--- 3D brake markers: vertical gradient walls perpendicular to track direction.
--- Opaque at ground -> transparent at top (0.6m). Visible from cockpit at 100m+.
--- Issue #37 Part A: full rewrite from flat circles to vertical walls.
--- Issue #37 Part D: last-lap color changed from blue to orange.
+-- 3D brake markers: vertical gradient walls via render.shaderedQuad (issue #39).
 
 local ch = require("csp_helpers")
 
@@ -12,23 +9,57 @@ local FADE_NEAR = 80
 local FADE_FAR = 400
 local MAX_SNAPY_KEYS = 256
 
---- Wall dimensions
-local WALL_HEIGHT = 0.6     -- meters above track surface
-local WALL_HALF_WIDTH = 4.0 -- half of 8m total width
+local WALL_HEIGHT = 0.6
+local WALL_HALF_WIDTH = 4.0
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
 local snapYCount = 0
-local glMissingLogged = false
+local noMarkersLogged = false
+local sqMissingLogged = false
 
---- Base colors (issue #37 Part D: last changed from blue to orange).
-local BEST_COLOR_BASE = { r = 1.0, g = 0.1, b = 0.05 }
-local BEST_ALPHA_BOTTOM = 0.65
-local LAST_COLOR_BASE = { r = 1.0, g = 0.6, b = 0.0 }
-local LAST_ALPHA_BOTTOM = 0.4
+local BRAKE_WALL_SHADER = [[
+float4 main(PS_IN pin) {
+  float vertGrad = 1.0 - pin.Tex.y;
+  float alpha = gCol.a * vertGrad;
+  return pin.ApplyFog(float4(gCol.rgb * 1.5, alpha));
+}
+]]
+
+local wallQuad ---@type table|nil
+
+local function ensureWallQuad()
+  if wallQuad then
+    return wallQuad
+  end
+  if not vec3 or not rgbm or not render then
+    return nil
+  end
+  wallQuad = {
+    async = true,
+    p1 = vec3(),
+    p2 = vec3(),
+    p3 = vec3(),
+    p4 = vec3(),
+    values = { gCol = rgbm(1, 0.1, 0.05, 0.65) },
+    shader = BRAKE_WALL_SHADER,
+  }
+  if render.BlendMode and render.BlendMode.AlphaBlend then
+    wallQuad.blendMode = render.BlendMode.AlphaBlend
+  end
+  if render.DepthMode and render.DepthMode.ReadOnlyLessEqual ~= nil then
+    wallQuad.depthMode = render.DepthMode.ReadOnlyLessEqual
+  end
+  if render.CullMode and render.CullMode.None then
+    wallQuad.cullMode = render.CullMode.None
+  end
+  return wallQuad
+end
 
 local function brakeListHash(list)
-  if not list or #list == 0 then return 0 end
+  if not list or #list == 0 then
+    return 0
+  end
   local acc = #list * 73856093
   for i = 1, #list do
     local p = list[i]
@@ -42,7 +73,9 @@ local function brakeListHash(list)
 end
 
 local function brakeListSig(list)
-  if not list or #list == 0 then return "0" end
+  if not list or #list == 0 then
+    return "0"
+  end
   return string.format("%d:%d", #list, brakeListHash(list))
 end
 
@@ -57,34 +90,41 @@ end
 
 local function snapToTrack(px, py, pz)
   local y = py
-  if not physics or type(physics.raycastTrack) ~= "function" then return y end
+  if not physics or type(physics.raycastTrack) ~= "function" then
+    return y
+  end
   local ok, hit = pcall(function()
-    if not vec3 then return nil end
+    if not vec3 then
+      return nil
+    end
     return physics.raycastTrack(vec3(px, py + 80, pz), vec3(0, -1, 0))
   end)
   if ok and hit and type(hit) == "table" and hit.position then
-    local okY, posY = pcall(function() return hit.position.y end)
-    if okY and type(posY) == "number" then y = posY + 0.02 end
+    local okY, posY = pcall(function()
+      return hit.position.y
+    end)
+    if okY and type(posY) == "number" then
+      y = posY + 0.05
+    end
   elseif ok and hit and type(hit) == "userdata" then
-    local okY, yy = pcall(function() return hit.y end)
-    if okY and type(yy) == "number" then y = yy + 0.02 end
+    local okY, yy = pcall(function()
+      return hit.y
+    end)
+    if okY and type(yy) == "number" then
+      y = yy + 0.05
+    end
   end
   return y
 end
 
---- Compute a perpendicular direction for the wall at a given brake point.
---- Uses car.look (current heading) since brake events are sparse point samples
---- without stored heading data. All visible walls share the camera-facing
---- perpendicular -- acceptable because only nearby walls are rendered and
---- the driver is typically heading the same direction. Storing per-event
---- heading would require telemetry schema changes (future improvement).
+---@param _list table|nil
+---@param _idx number
 ---@param car ac.StateCar|nil
----@return number nx perpendicular X component (unit)
----@return number nz perpendicular Z component (unit)
 local function wallPerpendicular(_list, _idx, car)
-  -- Prefer car.look -- brake event neighbors are sparse and produce wrong angles.
   if car and car.look then
-    local okLook, lx, lz = pcall(function() return car.look.x, car.look.z end)
+    local okLook, lx, lz = pcall(function()
+      return car.look.x, car.look.z
+    end)
     if okLook and type(lx) == "number" and type(lz) == "number" then
       local len = math.sqrt(lx * lx + lz * lz)
       if len > 0.01 then
@@ -92,52 +132,32 @@ local function wallPerpendicular(_list, _idx, car)
       end
     end
   end
-  -- Last resort: wall along X axis
   return 1, 0
 end
 
---- Draw a single vertical gradient wall quad.
---- Bottom edge is opaque, top edge is transparent.
----@param groundLeft vec3
----@param groundRight vec3
----@param topLeft vec3
----@param topRight vec3
----@param baseColor table {r, g, b}
----@param bottomAlpha number
----@param fade number 0-1 distance fade
-local function drawWallQuad(groundLeft, groundRight, topLeft, topRight, baseColor, bottomAlpha, fade)
-  local ba = bottomAlpha * fade
-  -- #1: Pre-compute colors once per wall (not 4 separate rgbm allocations)
-  local bottomCol = rgbm(baseColor.r, baseColor.g, baseColor.b, ba)
-  local topCol = rgbm(baseColor.r, baseColor.g, baseColor.b, 0)
-  render.glSetColor(bottomCol)
-  render.glVertex(groundLeft)
-  render.glSetColor(bottomCol)
-  render.glVertex(groundRight)
-  render.glSetColor(topCol)
-  render.glVertex(topRight)
-  render.glSetColor(topCol)
-  render.glVertex(topLeft)
-end
+local BEST_RGB = { r = 1.0, g = 0.1, b = 0.05 }
+local BEST_ALPHA_BOTTOM = 0.65
+local LAST_RGB = { r = 1.0, g = 0.6, b = 0.0 }
+local LAST_ALPHA_BOTTOM = 0.4
 
 ---@param car ac.StateCar|nil
----@param _sim ac.StateSim|nil kept for call-site stability (Draw3D passes sim)
+---@param _sim ac.StateSim|nil
 ---@param best table[]|nil
 ---@param last table[]|nil
 function M.draw(car, _sim, best, last)
-  if not car or not car.position then return end
-  if not render or not vec3 then return end
+  if not car or not car.position then
+    return
+  end
+  if not render or not vec3 then
+    return
+  end
 
-  local hasGl = type(render.glBegin) == "function"
-    and type(render.glVertex) == "function"
-    and type(render.glEnd) == "function"
-    and type(render.glSetColor) == "function"
-  local glQuadEnum = render.GLPrimitiveType and render.GLPrimitiveType.Quads
-
-  if not hasGl or not glQuadEnum then
-    if not glMissingLogged and ac and type(ac.log) == "function" then
-      glMissingLogged = true
-      ac.log("[COPILOT] track_markers: render.glBegin/Quads missing — brake walls disabled (#37)")
+  local hasSq = type(render.shaderedQuad) == "function"
+  local wq = ensureWallQuad()
+  if not hasSq or not wq then
+    if not sqMissingLogged and ac and type(ac.log) == "function" then
+      sqMissingLogged = true
+      ac.log("[COPILOT] track_markers: render.shaderedQuad missing — brake walls off (#39)")
     end
     return
   end
@@ -152,7 +172,9 @@ function M.draw(car, _sim, best, last)
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
   local items = {}
   local function addList(list, kind)
-    if not list then return end
+    if not list then
+      return
+    end
     for i = 1, #list do
       local p = list[i]
       if p and type(p.px) == "number" and type(p.py) == "number" and type(p.pz) == "number" then
@@ -165,9 +187,18 @@ function M.draw(car, _sim, best, last)
   end
   addList(best, "best")
   addList(last, "last")
-  table.sort(items, function(a, b) return a.d < b.d end)
+  table.sort(items, function(a, b)
+    return a.d < b.d
+  end)
 
   local nDraw = math.min(#items, MAX_MARKERS)
+  if nDraw < 1 then
+    if not noMarkersLogged and ac and type(ac.log) == "function" then
+      noMarkersLogged = true
+      ac.log("[COPILOT] track_markers: no markers in draw range (nDraw=0)")
+    end
+    return
+  end
 
   pcall(function()
     if type(render.setDepthMode) == "function" and render.DepthMode and render.DepthMode.ReadOnlyLessEqual ~= nil then
@@ -199,24 +230,26 @@ function M.draw(car, _sim, best, last)
         snapYCount = snapYCount + 1
       end
 
-      -- Compute wall perpendicular direction from brake point neighbors
       local nx, nz = wallPerpendicular(nil, 0, car)
       local hw = WALL_HALF_WIDTH
 
-      local groundLeft = vec3(it.x - nx * hw, sy, it.z - nz * hw)
-      local groundRight = vec3(it.x + nx * hw, sy, it.z + nz * hw)
-      local topLeft = vec3(it.x - nx * hw, sy + WALL_HEIGHT, it.z - nz * hw)
-      local topRight = vec3(it.x + nx * hw, sy + WALL_HEIGHT, it.z + nz * hw)
+      local glx, gly, glz = it.x - nx * hw, sy, it.z - nz * hw
+      local grx, gry, grz = it.x + nx * hw, sy, it.z + nz * hw
+      local tlx, tly, tlz = it.x - nx * hw, sy + WALL_HEIGHT, it.z - nz * hw
+      local trx, try_, trz = it.x + nx * hw, sy + WALL_HEIGHT, it.z + nz * hw
 
-      render.glBegin(glQuadEnum)
+      ch.setV3(wq.p1, glx, gly, glz)
+      ch.setV3(wq.p2, grx, gry, grz)
+      ch.setV3(wq.p3, trx, try_, trz)
+      ch.setV3(wq.p4, tlx, tly, tlz)
+
       if it.kind == "best" then
-        drawWallQuad(groundLeft, groundRight, topLeft, topRight,
-          BEST_COLOR_BASE, BEST_ALPHA_BOTTOM, fade)
+        ch.setRgbmField(wq.values, "gCol", BEST_RGB.r, BEST_RGB.g, BEST_RGB.b, BEST_ALPHA_BOTTOM * fade)
       else
-        drawWallQuad(groundLeft, groundRight, topLeft, topRight,
-          LAST_COLOR_BASE, LAST_ALPHA_BOTTOM, fade)
+        ch.setRgbmField(wq.values, "gCol", LAST_RGB.r, LAST_RGB.g, LAST_RGB.b, LAST_ALPHA_BOTTOM * fade)
       end
-      render.glEnd()
+
+      pcall(render.shaderedQuad, wq)
     end
   end)
   ch.restoreRenderDefaults()

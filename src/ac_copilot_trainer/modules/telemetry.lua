@@ -1,5 +1,7 @@
 -- Rolling telemetry buffer plus per-lap trace (downsampled on finalize, max ~2000 samples).
 
+local ch = require("csp_helpers")
+
 local M = {}
 
 --- Hard cap so a broken sim clock cannot grow memory without bound.
@@ -130,7 +132,7 @@ function Telemetry:update(dt, car, sim)
   if not self.recording or sim.isInMainMenu then
     return
   end
-  local t = sim.time or 0
+  local t = ch.simSeconds(sim)
   -- car.steer is a valid ac.StateCar field (confirmed from CMRT-Essential-HUD).
   -- car.steering does NOT exist on the C-struct and would throw — removed.
   local steer = car.steer or 0
@@ -210,7 +212,7 @@ end
 ---@param sim ac.StateSim
 ---@return TelemetrySample[]
 function Telemetry:getRecent(sim)
-  local now = (sim and sim.time) or 0
+  local now = ch.simSeconds(sim)
   local t0 = now - self.bufferSeconds
   local out = {}
   local k = 0

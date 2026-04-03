@@ -2,6 +2,64 @@
 
 local M = {}
 
+--- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
+--- Prefer `sim.gameTime`. If absent, use `sim.time` — both are **seconds** in CSP
+--- `ac.StateSim` (same unit as legacy call sites in this app). Field reads are
+--- wrapped in `pcall` because some builds throw when a struct field is missing.
+---@param sim ac.StateSim|nil
+---@return number
+function M.simSeconds(sim)
+  if not sim then
+    return 0
+  end
+  local okg, g = pcall(function()
+    return sim.gameTime
+  end)
+  if okg and type(g) == "number" then
+    return g
+  end
+  local okt, t = pcall(function()
+    return sim.time
+  end)
+  if okt and type(t) == "number" then
+    return t
+  end
+  return 0
+end
+
+--- Mutate a CSP vec3 in place (supports :set or .x/.y/.z).
+---@param v userdata|table|nil
+function M.setV3(v, x, y, z)
+  if not v then
+    return
+  end
+  if v.set then
+    local ok = pcall(v.set, v, x, y, z)
+    if not ok then
+      v.x, v.y, v.z = x, y, z
+    end
+  else
+    v.x, v.y, v.z = x, y, z
+  end
+end
+
+--- Set shader quad rgbm field (`values.gColor`, `values.gCol`, …): try `:set` then replace.
+---@param values table|nil
+---@param key string|number
+function M.setRgbmField(values, key, r, g, b, a)
+  if not values or not rgbm then
+    return
+  end
+  local c = values[key]
+  if c and c.set then
+    local ok = pcall(c.set, c, r, g, b, a)
+    if ok then
+      return
+    end
+  end
+  values[key] = rgbm(r, g, b, a)
+end
+
 function M.sanitizeId(s, fallback)
   s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
   if s == "" then
