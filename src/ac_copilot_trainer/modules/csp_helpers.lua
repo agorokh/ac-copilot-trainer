@@ -4,19 +4,24 @@ local M = {}
 
 --- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
 --- Prefer `sim.gameTime`. If absent, use `sim.time` — both are **seconds** in CSP
---- `ac.StateSim` (same unit as legacy call sites in this app).
+--- `ac.StateSim` (same unit as legacy call sites in this app). Field reads are
+--- wrapped in `pcall` because some builds throw when a struct field is missing.
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)
   if not sim then
     return 0
   end
-  local g = sim.gameTime
-  if type(g) == "number" then
+  local okg, g = pcall(function()
+    return sim.gameTime
+  end)
+  if okg and type(g) == "number" then
     return g
   end
-  local t = sim.time
-  if type(t) == "number" then
+  local okt, t = pcall(function()
+    return sim.time
+  end)
+  if okt and type(t) == "number" then
     return t
   end
   return 0

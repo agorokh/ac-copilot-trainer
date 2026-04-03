@@ -123,9 +123,6 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis, lapAnalys
       push("Lap recorded — need a full telemetry lap for corner-by-corner coaching", "general")
     end
   end
-  while #out > 3 do
-    table.remove(out)
-  end
   return out
 end
 
