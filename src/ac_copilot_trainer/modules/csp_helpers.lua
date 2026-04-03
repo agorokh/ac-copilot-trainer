@@ -2,6 +2,21 @@
 
 local M = {}
 
+--- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
+--- `sim.gameTime` is seconds; `sim.time` is ms on many builds — normalize so +30 means 30s hold.
+---@param sim ac.StateSim|nil
+---@return number
+function M.simSeconds(sim)
+  if not sim then
+    return 0
+  end
+  local g = sim.gameTime
+  if type(g) == "number" then
+    return g
+  end
+  return (sim.time or 0) / 1000
+end
+
 function M.sanitizeId(s, fallback)
   s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
   if s == "" then

@@ -24,6 +24,8 @@ local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
+local ch = require("csp_helpers")
+local renderDiag = require("render_diag")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -593,7 +595,7 @@ function script.windowMain(_dt)
     return
   end
 
-  local now = sim.time or 0
+  local now = ch.simSeconds(sim)
   local dSmooth = nil
   if state.bestSortedTrace and tel:lapStartTime() then
     local eMs = (now - tel:lapStartTime()) * 1000
@@ -654,6 +656,7 @@ function script.windowMain(_dt)
     segmentCount = #(state.trackSegments or {}),
     coachingLines = coachingHudLines,
   })
+  renderDiag.drawUI()
 end
 
 --- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
@@ -663,7 +666,7 @@ function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
-  local now = sim.time or 0
+  local now = ch.simSeconds(sim)
   local remaining = (state.coachingUntil or 0) - now
 
   -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
@@ -719,7 +722,7 @@ function script.update(dt)
     tryLoadDisk()
   end
 
-  wsBridge.tick(sim.time or 0)
+  wsBridge.tick(ch.simSeconds(sim))
 
   if state.initialized and not state.splineSessionPrimed then
     state.splineSessionPrimed = true
@@ -728,7 +731,7 @@ function script.update(dt)
       local msg = setupReader.tryAutoLoadCopilotSetup(car, sim, true)
       if msg and msg ~= "" then
         state.autoSetupMsg = msg
-        state.autoSetupUntil = (sim.time or 0) + 8
+        state.autoSetupUntil = ch.simSeconds(sim) + 8
       end
     end
   end
@@ -744,15 +747,16 @@ function script.update(dt)
   -- Lap boundary: finalize trace before appending this frame's sample.
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
     local completedTrace = tel:finalizeLapTrace()
-    tel:beginLapClock(sim.time or 0)
+    tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
     -- car.previousLapTimeMs is valid; car.lastLapTimeMs may not exist on the C-struct (throws, not nil).
     local lastMs = car.previousLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
 
-    local s3 = (state.sectorIndex == 3 and state.sectorStartSimT) and ((sim.time - state.sectorStartSimT) * 1000) or nil
+    local s3 = (state.sectorIndex == 3 and state.sectorStartSimT)
+        and ((ch.simSeconds(sim) - state.sectorStartSimT) * 1000) or nil
     if s3 and state.bestSectorMs[3] and state.bestSectorMs[3] > 0 then
-      sectorMessage(state.bestSectorMs[3], s3, sim.time or 0)
+      sectorMessage(state.bestSectorMs[3], s3, ch.simSeconds(sim))
     end
 
     local evLap = brakes:finalizeQualifiedWhileHolding(car)
@@ -820,7 +824,7 @@ function script.update(dt)
     end
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
-    state.coachingUntil = (sim.time or 0) + config.coachingHoldSeconds
+    state.coachingUntil = ch.simSeconds(sim) + config.coachingHoldSeconds
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
     if ac and type(ac.log) == "function" then
@@ -873,19 +877,30 @@ function script.update(dt)
 
     local coastMs = thA and thA.coastingMs or 0
     state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
-    state.postLapUntil = (sim.time or 0) + config.postLapHoldSeconds
+    state.postLapUntil = ch.simSeconds(sim) + config.postLapHoldSeconds
 
     if lastMs > 0 then
+      local hintsJson = {}
+      if state.coachingLines then
+        for i = 1, #state.coachingLines do
+          local e = state.coachingLines[i]
+          if type(e) == "table" and type(e.text) == "string" then
+            hintsJson[i] = e.text
+          else
+            hintsJson[i] = tostring(e)
+          end
+        end
+      end
       wsBridge.sendJson({
         event = "lap_complete",
         lap = state.lapsCompleted,
         lapTimeMs = lastMs,
-        coachingHints = state.coachingLines,
+        coachingHints = hintsJson,
       })
     end
 
     state.sectorIndex = 1
-    state.sectorStartSimT = sim.time or 0
+    state.sectorStartSimT = ch.simSeconds(sim)
     state.lastSplineSector = sp
 
     persistSnapshotLive()
@@ -893,9 +908,9 @@ function script.update(dt)
 
   -- Start collecting after lap counter is synced; span guard above avoids saving a partial trace as PB reference.
   if tel:lapStartTime() == nil and not sim.isInMainMenu and state.lastLapCount >= 0 then
-    tel:beginLapClock(sim.time or 0)
+    tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
-    state.sectorStartSimT = sim.time or 0
+    state.sectorStartSimT = ch.simSeconds(sim)
     state.sectorIndex = 1
     state.lastSplineSector = sp
   end
@@ -914,19 +929,21 @@ function script.update(dt)
     local lsp = state.lastSplineSector
     local b1, b2 = 1 / 3, 2 / 3
     if state.sectorIndex == 1 and lsp < b1 and sp >= b1 then
-      local aMs = (sim.time - state.sectorStartSimT) * 1000
-      sectorMessage(state.bestSectorMs[1], aMs, sim.time or 0)
+      local aMs = (ch.simSeconds(sim) - state.sectorStartSimT) * 1000
+      sectorMessage(state.bestSectorMs[1], aMs, ch.simSeconds(sim))
       state.sectorIndex = 2
-      state.sectorStartSimT = sim.time or 0
+      state.sectorStartSimT = ch.simSeconds(sim)
     elseif state.sectorIndex == 2 and lsp < b2 and sp >= b2 then
-      local aMs = (sim.time - state.sectorStartSimT) * 1000
-      sectorMessage(state.bestSectorMs[2], aMs, sim.time or 0)
+      local aMs = (ch.simSeconds(sim) - state.sectorStartSimT) * 1000
+      sectorMessage(state.bestSectorMs[2], aMs, ch.simSeconds(sim))
       state.sectorIndex = 3
-      state.sectorStartSimT = sim.time or 0
+      state.sectorStartSimT = ch.simSeconds(sim)
     end
   end
 
   tires:update(car, dt, sp)
+
+  renderDiag.tick(dt)
 
   if car.position and state.splineRef then
     state.refLatDistance = splineParser.lateralDistanceMeters(
@@ -965,6 +982,8 @@ function script.Draw3D(_dt)
     return
   end
   local c = ac.getCar(0)
+
+  renderDiag.draw3D(c)
 
   if config.enableDraw3DDiagnostics then
     if not state._draw3dLogT then state._draw3dLogT = 0 end
