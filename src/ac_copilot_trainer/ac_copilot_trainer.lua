@@ -1,4 +1,5 @@
 -- AC Copilot Trainer v0.4.2
+local APP_VERSION_UI = "v0.4.2"
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -589,13 +590,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.4.2")
+    ui.text("AC Copilot Trainer " .. APP_VERSION_UI)
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.4.2")
+    ui.text("AC Copilot Trainer " .. APP_VERSION_UI)
     ui.separator()
     ui.text("Waiting for car data...")
     return
@@ -850,7 +851,11 @@ function script.update(dt)
     end
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
-    state.coachingRemainSec = config.coachingHoldSeconds
+    local holdSec = tonumber(config.coachingHoldSeconds)
+    if not holdSec or holdSec ~= holdSec or holdSec < 0 then
+      holdSec = 30
+    end
+    state.coachingRemainSec = holdSec
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
     if ac and type(ac.log) == "function" then

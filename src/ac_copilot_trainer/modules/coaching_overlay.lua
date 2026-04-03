@@ -49,6 +49,24 @@ local function computeAlpha(timeRemaining, _holdSeconds)
   return math.max(0, rem / fadeStart)
 end
 
+--- Shared panel chrome for Coaching window idle / fallback states (PR #50 review).
+local function drawStandardCoachingPanel(defaultW, defaultH, minH)
+  local w, h = defaultW or 400, defaultH or 140
+  local minHeight = minH or 100
+  if ui.windowSize then
+    local sz = ui.windowSize()
+    if sz and sz.x and sz.y then
+      w, h = sz.x, math.max(minHeight, sz.y)
+    end
+  end
+  if ui.drawRectFilled and vec2 then
+    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
+  end
+  if ui.drawRect and vec2 then
+    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.45), 12, nil, 1)
+  end
+end
+
 ---@param coachingLines table[]|string[]|nil
 ---@param timeRemaining number
 ---@param holdSeconds number
@@ -110,19 +128,7 @@ function M.drawFallback()
   if not ui or type(ui.textColored) ~= "function" then
     return
   end
-  local w, h = 400, 120
-  if ui.windowSize then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.y then
-      w, h = sz.x, sz.y
-    end
-  end
-  if ui.drawRectFilled and vec2 then
-    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
-  end
-  if ui.drawRect and vec2 then
-    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.5), 12, nil, 1)
-  end
+  drawStandardCoachingPanel(400, 120, 100)
   local fk = fontMod.push()
   ui.textColored(rgbm(0.92, 0.93, 0.95, 0.95), "Complete a lap for coaching hints")
   fontMod.pop(fk)
@@ -141,19 +147,7 @@ function M.drawBetweenLapsIdle(holdSeconds)
   if not ui or type(ui.textColored) ~= "function" then
     return
   end
-  local w, h = 400, 140
-  if ui.windowSize then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.y then
-      w, h = sz.x, math.max(120, sz.y)
-    end
-  end
-  if ui.drawRectFilled and vec2 then
-    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
-  end
-  if ui.drawRect and vec2 then
-    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.45), 12, nil, 1)
-  end
+  drawStandardCoachingPanel(400, 140, 120)
   local fk = fontMod.push()
   ui.textColored(rgbm(0.35, 0.82, 0.95, 0.95), "COACHING")
   if ui.separator then
@@ -180,19 +174,7 @@ function M.drawHoldNoHints(remainingSec)
   if not ui or type(ui.textColored) ~= "function" then
     return
   end
-  local w, h = 400, 120
-  if ui.windowSize then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.y then
-      w, h = sz.x, math.max(100, sz.y)
-    end
-  end
-  if ui.drawRectFilled and vec2 then
-    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
-  end
-  if ui.drawRect and vec2 then
-    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.45), 12, nil, 1)
-  end
+  drawStandardCoachingPanel(400, 120, 100)
   local fk = fontMod.push()
   ui.textColored(rgbm(0.35, 0.82, 0.95, 0.95), "COACHING")
   if ui.separator then

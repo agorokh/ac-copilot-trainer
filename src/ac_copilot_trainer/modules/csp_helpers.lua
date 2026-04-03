@@ -2,11 +2,12 @@
 
 local M = {}
 
---- Best-effort **session sim time in seconds** for legacy HUD deadlines (sector, post-lap, `autoSetupUntil`).
---- Reads `sim.gameTime` then `sim.time` with `pcall` (CSP `ac.StateSim`). Call sites treat the result as
---- **seconds** per CSP docs; if a build misreports units, fix normalization **here** (single place) rather
---- than in each caller. **Coaching tip duration** does not use this — it uses `state.coachingRemainSec` and
---- `script.update(dt)` (issue #9) to avoid sim-clock unit ambiguity.
+--- Best-effort session sim time for legacy HUD deadlines (sector, post-lap, `autoSetupUntil`).
+--- Returns `sim.gameTime` first, then `sim.time`, using `pcall` for CSP `ac.StateSim` compatibility.
+--- The value is returned unchanged; if neither field is available, returns `0`. Call sites assume **seconds**
+--- (normalize here if a CSP build misreports units). Sim time notes: vault
+--- `docs/01_Vault/AcCopilotTrainer/01_Decisions/csp-render-api-migration.md`.
+--- **Coaching tip duration** does not use this helper — it uses `state.coachingRemainSec` and `script.update(dt)` (#9).
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)
