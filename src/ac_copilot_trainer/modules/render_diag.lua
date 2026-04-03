@@ -15,7 +15,6 @@ local LOG_INTERVAL = 5.0
 
 local elapsed = 0
 local probeRan = false
-local apiProbeResults = {}
 local drawCallLog = {}
 local drawCallCount = 0
 local drawCallSuccess = 0
@@ -60,7 +59,6 @@ local function probeRenderAPI()
       local ok, val = pcall(function() return render[key] end)
       if ok and val ~= nil then exists = true; kind = type(val) end
     end
-    apiProbeResults["render." .. key] = { exists = exists, kind = kind }
     ac.log(string.format("[DIAG] render.%s: %s (%s)",
       key, exists and "EXISTS" or "MISSING", kind))
   end
@@ -76,7 +74,6 @@ local function probeRenderAPI()
         end
       end
     end
-    apiProbeResults["render." .. key] = { exists = exists, kind = "enum" }
     ac.log(string.format("[DIAG] render.%s: %s [%s]",
       key, exists and "EXISTS" or "MISSING", table.concat(values, ", ")))
   end
@@ -208,7 +205,6 @@ end
 function M.reset()
   elapsed = 0
   probeRan = false
-  apiProbeResults = {}
   drawCallLog = {}
   drawCallCount = 0
   drawCallSuccess = 0
