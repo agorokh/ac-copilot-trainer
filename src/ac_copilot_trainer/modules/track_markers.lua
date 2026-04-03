@@ -73,15 +73,16 @@ local function snapToTrack(px, py, pz)
 end
 
 --- Compute a perpendicular direction for the wall at a given brake point.
---- Uses the direction from the previous brake point to the next in the list,
---- or car.look if available and the list has only one point.
----@param list table[] brake point list
----@param idx number index of current point in list
+--- Uses car.look (current heading) since brake events are sparse point samples
+--- without stored heading data. All visible walls share the camera-facing
+--- perpendicular -- acceptable because only nearby walls are rendered and
+--- the driver is typically heading the same direction. Storing per-event
+--- heading would require telemetry schema changes (future improvement).
 ---@param car ac.StateCar|nil
 ---@return number nx perpendicular X component (unit)
 ---@return number nz perpendicular Z component (unit)
 local function wallPerpendicular(_list, _idx, car)
-  -- #7: Prefer car.look -- brake event neighbors are sparse and produce wrong angles.
+  -- Prefer car.look -- brake event neighbors are sparse and produce wrong angles.
   if car and car.look then
     local okLook, lx, lz = pcall(function() return car.look.x, car.look.z end)
     if okLook and type(lx) == "number" and type(lz) == "number" then

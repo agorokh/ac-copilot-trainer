@@ -662,11 +662,13 @@ function script.windowCoaching(_dt)
   local now = sim.time or 0
   local remaining = (state.coachingUntil or 0) - now
 
-  -- #5: Periodic coaching diag (every 5s, not one-shot consumed before data exists)
+  -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
   if not state._coachDiagT then state._coachDiagT = 0 end
+  if not state._coachDiagCount then state._coachDiagCount = 0 end
   state._coachDiagT = state._coachDiagT + (_dt or 0)
-  if state._coachDiagT > 5.0 and ac and type(ac.log) == "function" then
+  if state._coachDiagCount < 12 and state._coachDiagT > 5.0 and ac and type(ac.log) == "function" then
     state._coachDiagT = 0
+    state._coachDiagCount = state._coachDiagCount + 1
     ac.log(string.format(
       "[COPILOT] coaching: now=%.1f until=%.1f rem=%.1f lines=%d laps=%d",
       now, state.coachingUntil or 0, remaining,
@@ -675,9 +677,9 @@ function script.windowCoaching(_dt)
   end
 
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
-    -- #4/#9: Fallback only before first coaching; hide after coaching expires
-    if (state.lapsCompleted or 0) < 2 then
-      coachingOverlay.drawFallback(state.lapsCompleted or 0)
+    -- Show fallback only before any lap is completed; hide once coaching has fired
+    if (state.lapsCompleted or 0) == 0 then
+      coachingOverlay.drawFallback(0)
     end
     return
   end
