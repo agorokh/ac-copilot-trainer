@@ -56,18 +56,6 @@ local function ensureWallQuad()
   return wallQuad
 end
 
-local function setWallColor(wq, r, g, b, a)
-  local c = wq.values.gCol
-  if c.set then
-    local ok = pcall(c.set, c, r, g, b, a)
-    if not ok then
-      wq.values.gCol = rgbm(r, g, b, a)
-    end
-  else
-    wq.values.gCol = rgbm(r, g, b, a)
-  end
-end
-
 local function brakeListHash(list)
   if not list or #list == 0 then
     return 0
@@ -256,9 +244,9 @@ function M.draw(car, _sim, best, last)
       ch.setV3(wq.p4, tlx, tly, tlz)
 
       if it.kind == "best" then
-        setWallColor(wq, BEST_RGB.r, BEST_RGB.g, BEST_RGB.b, BEST_ALPHA_BOTTOM * fade)
+        ch.setRgbmField(wq.values, "gCol", BEST_RGB.r, BEST_RGB.g, BEST_RGB.b, BEST_ALPHA_BOTTOM * fade)
       else
-        setWallColor(wq, LAST_RGB.r, LAST_RGB.g, LAST_RGB.b, LAST_ALPHA_BOTTOM * fade)
+        ch.setRgbmField(wq.values, "gCol", LAST_RGB.r, LAST_RGB.g, LAST_RGB.b, LAST_ALPHA_BOTTOM * fade)
       end
 
       pcall(render.shaderedQuad, wq)

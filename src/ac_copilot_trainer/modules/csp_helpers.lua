@@ -38,6 +38,23 @@ function M.setV3(v, x, y, z)
   end
 end
 
+--- Set shader quad rgbm field (`values.gColor`, `values.gCol`, …): try `:set` then replace.
+---@param values table|nil
+---@param key string|number
+function M.setRgbmField(values, key, r, g, b, a)
+  if not values or not rgbm then
+    return
+  end
+  local c = values[key]
+  if c and c.set then
+    local ok = pcall(c.set, c, r, g, b, a)
+    if ok then
+      return
+    end
+  end
+  values[key] = rgbm(r, g, b, a)
+end
+
 function M.sanitizeId(s, fallback)
   s = tostring(s or fallback or "unknown"):gsub("[^%w%.%-_]+", "_")
   if s == "" then

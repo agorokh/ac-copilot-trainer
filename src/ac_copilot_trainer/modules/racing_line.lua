@@ -52,17 +52,6 @@ local function ensureQuadArgs()
   return quadArgs
 end
 
-local function setRgbm(qa0, c, r, g, b, a)
-  if c.set then
-    local ok = pcall(c.set, c, r, g, b, a)
-    if not ok then
-      qa0.values.gColor = rgbm(r, g, b, a)
-    end
-  else
-    qa0.values.gColor = rgbm(r, g, b, a)
-  end
-end
-
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
   return dx * dx + dy * dy + dz * dz
@@ -290,7 +279,7 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
           ch.setV3(qa.p2, v2x, v2y, v2z)
           ch.setV3(qa.p3, v3x, v3y, v3z)
           ch.setV3(qa.p4, v4x, v4y, v4z)
-          setRgbm(qa, qa.values.gColor, color.r, color.g, color.b, color.mult)
+          ch.setRgbmField(qa.values, "gColor", color.r, color.g, color.b, color.mult)
 
           local okDraw = pcall(render.shaderedQuad, qa)
           if okDraw then
