@@ -1,0 +1,7 @@
+milestone_key,title_one_line,repo_context
+3a,Coaching UX dismiss and HUD parity,AC CSP Lua ImGui coaching_hints.lua coaching_overlay.lua issue 9
+3b,WebSocket bidirectional lap protocol,web.socket ws_bridge.lua tools/ai_sidecar server.py issue 9
+3c,Python SHAP feature ranking pipeline,scikit-learn shap optional extras issue 9
+3d,Ollama post-session debrief UI,Ollama HTTP localhost tools/ai_sidecar issue 9
+3e,Focus practice mode mesh markers,render.mesh track_markers corner_analysis issue 9
+3f,Session journal JSON ScriptConfig,persistence.lua JSON schema issue 9

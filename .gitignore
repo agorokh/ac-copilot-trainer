@@ -22,6 +22,7 @@ htmlcov/
 
 # Scratch / local experiments
 .scratch/
+tools/_scratch/
 
 # Local Windows AC install symlink (machine-specific Steam path); keep out of git
 scripts/create_symlink.ps1
