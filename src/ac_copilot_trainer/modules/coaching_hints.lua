@@ -23,7 +23,7 @@ local function labelFromConsistencyEntry(s)
 end
 
 ---@param text string
----@param kind string|nil brake|throttle|line|positive|general
+---@param kind "brake"|"throttle"|"line"|"positive"|"general"|nil
 ---@return table
 local function hint(text, kind)
   return { kind = kind or "general", text = text }
