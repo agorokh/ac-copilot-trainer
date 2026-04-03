@@ -221,7 +221,9 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
   local hw = STRIP_HALF_W
   local style = lineStyle or "tilt"
   if style ~= "tilt" and style ~= "flat" then
-    if ac and type(ac.log) == "function" then
+    local badStyleKey = "lineStyle:" .. tostring(style)
+    if ac and type(ac.log) == "function" and not earlyReturnLogged[badStyleKey] then
+      earlyReturnLogged[badStyleKey] = true
       ac.log("[COPILOT] racing_line: unsupported lineStyle '" .. tostring(style) .. "', flat")
     end
     style = "flat"
