@@ -157,7 +157,7 @@ function M.draw(car, _sim, best, last)
       if p and type(p.px) == "number" and type(p.py) == "number" and type(p.pz) == "number" then
         local d = math.sqrt(distSq(cx, cy, cz, p.px, p.py, p.pz))
         if d <= FADE_FAR + 1 then
-          items[#items + 1] = { d = d, x = p.px, y = p.py, z = p.pz, kind = kind, listIdx = i, list = list }
+          items[#items + 1] = { d = d, x = p.px, y = p.py, z = p.pz, kind = kind }
         end
       end
     end

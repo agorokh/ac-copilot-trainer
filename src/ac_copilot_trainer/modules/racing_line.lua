@@ -17,8 +17,9 @@ local Y_OFFSET = 0.05
 M.MAX_QUADS = 800
 --- Log once if we fall back to 1px debugLine (issue #24 visibility caveat).
 local debugLineFallbackLogged = false
---- One-time speed diagnostic logged per strip (issue #37 Part B).
-local speedDiagLineId = nil
+--- Speed diagnostic logged per unique line identity (issue #37 Part B).
+--- Uses a set so "both" mode logs once per line source, not every frame.
+local speedDiagSeen = {}
 
 local function distSq(ax, ay, az, bx, by, bz)
   local dx, dy, dz = ax - bx, ay - by, az - bz
@@ -126,8 +127,8 @@ function M.drawLineStrip(car, line, fallbackColor, maxQuads, lineStyle)
   -- Logs how many points have non-nil speed vs total so we can trace
   -- whether the color pipeline receives actual speed values.
   local lineId = tostring(line)
-  if lineId ~= speedDiagLineId and ac and type(ac.log) == "function" then
-    speedDiagLineId = lineId
+  if not speedDiagSeen[lineId] and ac and type(ac.log) == "function" then
+    speedDiagSeen[lineId] = true
     local withSpeed = 0
     for si = 1, #line do
       if line[si].speed ~= nil then withSpeed = withSpeed + 1 end

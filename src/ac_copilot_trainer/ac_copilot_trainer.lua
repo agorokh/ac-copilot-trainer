@@ -655,7 +655,6 @@ end
 --- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
 --- Registered as a second CSP app window; transparent background, top-right.
 --- Issue #37: added diagnostic logging and fallback message for empty state.
-local coachingDiagLogged = false
 function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
@@ -678,7 +677,7 @@ function script.windowCoaching(_dt)
   if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
     -- #4/#9: Fallback only before first coaching; hide after coaching expires
     if (state.lapsCompleted or 0) < 2 then
-      coachingOverlay.drawFallback()
+      coachingOverlay.drawFallback(state.lapsCompleted or 0)
     end
     return
   end
