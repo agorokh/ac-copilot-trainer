@@ -103,7 +103,7 @@ end
 
 function M.draw(vm)
   -- Tier 1 — always visible, top
-  ui.textColored(rgbm(0.5, 0.55, 0.62, 1), "AC Copilot Trainer v0.4.1")
+  ui.textColored(rgbm(0.5, 0.55, 0.62, 1), "AC Copilot Trainer v0.4.2")
   if vm.recording then
     ui.sameLine(0, 12)
     ui.textColored(rgbm(0, 1, 0, 1), "REC")
@@ -140,8 +140,6 @@ function M.draw(vm)
     formatLapMs(vm.bestLapMs),
     formatLapMs(vm.lastLapMs)
   ))
-
-  coachingOverlay.drawMainWindowStrip(vm)
 
   -- Tier 2 — context-sensitive
   if vm.sectorMessage and vm.sectorMessage ~= "" then
@@ -200,6 +198,9 @@ function M.draw(vm)
     ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "Telemetry & stats (no collapsible UI — showing flat)")
     drawTelemetryDetail(vm)
   end
+
+  -- Coaching strip after telemetry (issue #9 UX); separator only when strip draws.
+  coachingOverlay.drawMainWindowStrip(vm)
 end
 
 return M

@@ -1,4 +1,4 @@
--- AC Copilot Trainer v0.4.1
+-- AC Copilot Trainer v0.4.2
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -262,6 +262,8 @@ local state = {
   tireHud = "",
   autoSetupUntil = 0,
   coachingLines = {},
+  --- Wall-clock style countdown (updated with `script.update(dt)`), avoids sim time ms vs s ambiguity (#9).
+  coachingRemainSec = 0,
   coachingUntil = 0,
 }
 
@@ -406,6 +408,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.tireHud = ""
   state.autoSetupUntil = 0
   state.coachingLines = {}
+  state.coachingRemainSec = 0
   state.coachingUntil = 0
   wsBridge.reset()
   renderDiag.reset()
@@ -586,13 +589,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.4.1")
+    ui.text("AC Copilot Trainer v0.4.2")
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.4.1")
+    ui.text("AC Copilot Trainer v0.4.2")
     ui.separator()
     ui.text("Waiting for car data...")
     return
@@ -629,9 +632,9 @@ function script.windowMain(_dt)
 
   local coachingHudLines = nil
   local coachRem = nil
-  if state.coachingLines and #state.coachingLines > 0 and now < (state.coachingUntil or 0) then
+  if state.coachingLines and #state.coachingLines > 0 and (state.coachingRemainSec or 0) > 0 then
     coachingHudLines = state.coachingLines
-    coachRem = (state.coachingUntil or 0) - now
+    coachRem = state.coachingRemainSec
   end
   local coachPrimer = (state.lapsCompleted or 0) == 0
 
@@ -678,7 +681,8 @@ function script.windowCoaching(_dt)
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
   local now = ch.simSeconds(sim)
-  local remaining = (state.coachingUntil or 0) - now
+  local remaining = state.coachingRemainSec or 0
+  local laps = state.lapsCompleted or 0
 
   -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
   if not state._coachDiagT then state._coachDiagT = 0 end
@@ -688,20 +692,25 @@ function script.windowCoaching(_dt)
     state._coachDiagT = 0
     state._coachDiagCount = state._coachDiagCount + 1
     ac.log(string.format(
-      "[COPILOT] coaching: now=%.1f until=%.1f rem=%.1f lines=%d laps=%d",
-      now, state.coachingUntil or 0, remaining,
-      state.coachingLines and #state.coachingLines or 0,
-      state.lapsCompleted or 0))
+      "[COPILOT] coaching: simT=%.1f remainSec=%.2f lines=%d laps=%d (timer=dt not sim clock)",
+      now, remaining, state.coachingLines and #state.coachingLines or 0, laps))
   end
 
-  if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
-    -- Show fallback only before any lap is completed; hide once coaching has fired
-    if (state.lapsCompleted or 0) == 0 then
-      coachingOverlay.drawFallback()
+  if laps == 0 then
+    coachingOverlay.drawFallback()
+    return
+  end
+
+  if remaining > 0 then
+    if state.coachingLines and #state.coachingLines > 0 then
+      coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)
+    else
+      coachingOverlay.drawHoldNoHints(remaining)
     end
     return
   end
-  coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)
+
+  coachingOverlay.drawBetweenLapsIdle(config.coachingHoldSeconds)
 end
 
 function script.update(dt)
@@ -728,6 +737,10 @@ function script.update(dt)
   lastDriveCar = car
   lastDriveSim = sim
   state.wasDriving = true
+
+  if (state.coachingRemainSec or 0) > 0 then
+    state.coachingRemainSec = math.max(0, (state.coachingRemainSec or 0) - dt)
+  end
 
   if not state.initialized then
     tryLoadDisk()
@@ -835,6 +848,7 @@ function script.update(dt)
     end
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
+    state.coachingRemainSec = config.coachingHoldSeconds
     state.coachingUntil = ch.simSeconds(sim) + config.coachingHoldSeconds
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)

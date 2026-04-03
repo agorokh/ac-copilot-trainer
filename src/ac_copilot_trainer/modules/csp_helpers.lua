@@ -2,10 +2,10 @@
 
 local M = {}
 
---- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
---- Prefer `sim.gameTime`. If absent, use `sim.time` — both are **seconds** in CSP
---- `ac.StateSim` (same unit as legacy call sites in this app). Field reads are
---- wrapped in `pcall` because some builds throw when a struct field is missing.
+--- Monotonic sim clock for HUD timers that compare absolute deadlines (sector, post-lap).
+--- Prefer `sim.gameTime`; fallback `sim.time`. **Units vary by CSP build** (see vault ADR);
+--- coaching **display duration** uses `state.coachingRemainSec` decremented by `script.update(dt)`
+--- instead of this clock — issue #9.
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)
