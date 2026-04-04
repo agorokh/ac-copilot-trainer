@@ -35,6 +35,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingLines (string|{ kind: string, text: string })[]|nil
 ---@field coachingRemaining number|nil
 ---@field coachingHoldSeconds number|nil
+---@field coachingMaxVisibleHints integer|nil
 ---@field coachingShowPrimer boolean|nil
 ---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
 

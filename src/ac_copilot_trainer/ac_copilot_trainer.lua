@@ -48,8 +48,11 @@ local config = {
   --- When true, runs `render_diag` (60s API probe, debug spheres/lines, [DIAG] UI). Default off (issue #41).
   enableRenderDiagnostics = false,
   --- After each lap; issue #9 Part A mentioned ~8s for minimal HUD intrusion — default 30 keeps the
-  --- Coaching window readable; tune down if you want shorter toasts (milestone #43 may split strip vs window).
+  --- Coaching window readable; tune down if you want shorter toasts (issue #43).
   coachingHoldSeconds = 30,
+  --- Max coaching lines shown in the Coaching window and reflected in the main-window strip (1–3).
+  --- `coaching_hints.buildAfterLap` still ranks weakest corners first; this only caps display density.
+  coachingMaxVisibleHints = 3,
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
@@ -63,6 +66,11 @@ local function normalizedCoachingHoldSeconds()
     return 30
   end
   return holdSec
+end
+
+--- Integer in [1, 3] for how many `buildAfterLap` hints to show (invalid → 3). Logic lives in `coaching_overlay`.
+local function normalizedCoachingMaxVisibleHints()
+  return coachingOverlay.normalizedCoachingMaxVisibleHints(config.coachingMaxVisibleHints)
 end
 
 local SMOOTH_N = 30
@@ -681,6 +689,7 @@ function script.windowMain(_dt)
     coachingLines = coachingHudLines,
     coachingRemaining = coachRem,
     coachingHoldSeconds = normalizedCoachingHoldSeconds(),
+    coachingMaxVisibleHints = normalizedCoachingMaxVisibleHints(),
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
   })
@@ -719,7 +728,12 @@ function script.windowCoaching(_dt)
 
   if remaining > 0 then
     if state.coachingLines and #state.coachingLines > 0 then
-      coachingOverlay.draw(state.coachingLines, remaining, normalizedCoachingHoldSeconds())
+      coachingOverlay.draw(
+        state.coachingLines,
+        remaining,
+        normalizedCoachingHoldSeconds(),
+        normalizedCoachingMaxVisibleHints()
+      )
     else
       coachingOverlay.drawHoldNoHints(remaining)
     end
@@ -890,7 +904,12 @@ function script.update(dt)
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
     if ac and type(ac.log) == "function" then
       if state.coachingLines and #state.coachingLines > 0 then
-        ac.log("[COPILOT] coaching: " .. tostring(#state.coachingLines) .. " hints generated, hold=" .. tostring(config.coachingHoldSeconds) .. "s")
+        ac.log(string.format(
+          "[COPILOT] coaching: %d hints generated, hold=%.1fs, maxVisible=%d",
+          #state.coachingLines,
+          normalizedCoachingHoldSeconds(),
+          normalizedCoachingMaxVisibleHints()
+        ))
       else
         ac.log("[COPILOT] coaching: buildAfterLap returned empty — feats=" .. tostring(#feats)
           .. " bestCorner=" .. tostring(#state.bestCornerFeatures)
