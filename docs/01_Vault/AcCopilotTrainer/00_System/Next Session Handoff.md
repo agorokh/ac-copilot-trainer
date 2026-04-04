@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-01
+last_updated: 2026-04-03
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -16,24 +16,19 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-37-visual-overhaul-v3` -- **PR #38** open (ready for review): https://github.com/agorokh/ac-copilot-trainer/pull/38
-- **Issue #37:** Visual overhaul v3 -- 3D brake walls, speed diagnostics, coaching overlay fix.
-- **Status:** PR #38 ready for review. CI passes. Awaiting bot reviews and in-game testing.
+- **Branch:** `feat/issue-9-session-journal` merged or closed after review — **PR #51** (ready for review): https://github.com/agorokh/ac-copilot-trainer/pull/51
+- **Issues:** **#47** (session journal) addressed by PR #51; parent **#9** remains open (other milestones: #43–#46, #44, #49).
+- **Follow-up:** After merge, run orchestrator **PR resolution** loop: wait ~10m after last push (`sleep 600`), then resolve `reviewThreads` / bot comments per `.claude/agents/pr-resolution-follow-up.md`.
 
 ## What was delivered this session
 
-- **PR #38** (ready for review): All 4 parts of issue #37 implemented:
-  - **Part A:** track_markers.lua fully rewritten -- flat circles replaced with vertical gradient walls (render.glBegin Quads), 0.6m tall, 8m wide, perpendicular to track direction.
-  - **Part B:** racing_line.lua -- one-time speed diagnostic log added to drawLineStrip (counts points with speed data, verifies calcTiltHeight output).
-  - **Part C:** windowCoaching fixed -- diagnostic logging for timing values, fallback message "Complete a lap for coaching hints" via new coachingOverlay.drawFallback().
-  - **Part D:** Last-lap brake color changed from blue rgbm(0.4,0.6,1.0,0.5) to orange rgbm(1.0,0.6,0.0,0.4).
+- **PR #51:** Phase 3 journal slice for epic #9 — `session_journal.lua` writes schema v1 JSON under `ScriptConfig/ac_copilot_trainer/journal/` when returning to AC main menu after ≥1 lap and successful persist; append-only `journal_index.jsonl`. `persistence.encodeJson` / `ensureParentDirForFile` exposed. Doc `docs/10_Development/11_Session_Journal_Schema.md`; Python `tools/session_journal.py` + tests.
 
 ## What remains
 
-- **In-game testing:** Brake walls visibility from cockpit, speed coloring confirmation, coaching overlay content after lap completion. Requires Assetto Corsa + CSP runtime.
-- **Bot review threads:** PR #38 may receive automated review comments -- address or respond as needed.
-- **Epic follow-up:** Issues #7, #8, #9 -- next phases per Project State.
+- **#9 epic:** WebSocket sidecar (#45), ML/SHAP (#49), Ollama debrief (#46), focus practice (#44), coaching UX (#43) as ordered in issue #9 comments.
+- **In-game check:** Confirm journal files appear on disk after menu exit (AC + CSP).
 
 ## Blockers / dependencies
 
-- **Assetto Corsa + CSP runtime** is required for in-game validation (walls, speed colors, coaching HUD); this cannot run in CI.
+- **Assetto Corsa + CSP runtime** for end-to-end journal verification; CI covers Python schema + repo checks only.
