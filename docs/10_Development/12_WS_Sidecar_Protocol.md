@@ -21,8 +21,23 @@ Sent after each completed lap when `config.wsSidecarUrl` is set and the socket i
 | `lap`           | int         | yes      | App lap counter (`lapsCompleted`)    |
 | `lapTimeMs`     | int         | yes      | Previous lap time in ms              |
 | `coachingHints` | string[]    | no       | Rules-based hint strings (same lap)  |
+| `telemetry`     | object      | no       | Optional structured lap data for sidecar analysis (issue **#49**); see below |
 
 \*Missing `protocol` on `lap_complete` is accepted with a server warning (legacy); new clients should always send `protocol: 1`.
+
+#### Optional `telemetry` (issue **#49**)
+
+When present, `telemetry.corners` is an array of per-corner objects used for **improvement ranking** in the Python sidecar (Python computes deltas vs the fastest lap seen on that WebSocket connection). Lua **3b** may omit this until telemetry export exists; the field is forward-compatible.
+
+Each corner object:
+
+| Field           | Type   | Notes                                      |
+| --------------- | ------ | ------------------------------------------ |
+| `id`            | int    | Corner identifier                          |
+| `minSpeedKmh`   | number | Optional; higher is better for ranking     |
+| `apexSpeedKmh`  | number | Optional; higher is better for ranking     |
+
+Snake_case variants (`min_speed_kmh`, …) are also accepted.
 
 ### `coaching_response` (Python → Lua)
 
@@ -32,6 +47,7 @@ Sent after each completed lap when `config.wsSidecarUrl` is set and the socket i
 | `event`    | string | yes      | `"coaching_response"`                                |
 | `lap`      | int    | yes      | Must match the `lap` from the triggering `lap_complete` |
 | `hints`    | array  | yes      | Up to 3 items: `{ "kind", "text" }` or plain strings |
+| `improvementRanking` | array | no | Issue **#49**: ordered corner-level suggestions vs session PB (ignored by current Lua until **3b** consumes it) |
 
 When received while the coaching hold timer is active for the same `lap`, Lua **replaces** `state.coachingLines` with these hints (rules-based hints are overridden).
 
@@ -48,6 +64,8 @@ Lua currently ignores this event (logging only in Python); future versions may s
 ## Python entrypoint
 
 `python -m tools.ai_sidecar` — see `WARP.md` for operator flags (`--no-reply`, host/port).
+
+**Fixture ranking (issue #49):** `python -m tools.ai_sidecar --compare-laps slower.json reference.json` prints JSON for corner-level improvement suggestions (requires `telemetry.corners` in both files).
 
 ## Tests
 

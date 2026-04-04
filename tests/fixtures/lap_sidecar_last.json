@@ -1,0 +1,21 @@
+{
+  "protocol": 1,
+  "event": "lap_complete",
+  "lap": 2,
+  "lapTimeMs": 94000,
+  "coachingHints": [],
+  "telemetry": {
+    "corners": [
+      {
+        "id": 1,
+        "minSpeedKmh": 48,
+        "apexSpeedKmh": 88
+      },
+      {
+        "id": 2,
+        "minSpeedKmh": 58,
+        "apexSpeedKmh": 99
+      }
+    ]
+  }
+}
