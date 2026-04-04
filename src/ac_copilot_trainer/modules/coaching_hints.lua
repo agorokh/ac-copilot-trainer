@@ -1,4 +1,6 @@
 -- Rules-based coaching strings (issue #9 Part A). Structured kinds for overlay (issue #39 Part F).
+-- Hint order: weakest corners first (`consistencySummary().worstThree`), then throttle/coast fillers
+-- up to three lines total. Display cap `config.coachingMaxVisibleHints` trims the UI only (issue #43).
 
 local M = {}
 

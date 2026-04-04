@@ -74,10 +74,22 @@ local function drawStandardCoachingPanel(defaultW, defaultH, minH)
   end
 end
 
+---@param maxVisible integer|nil 1–3; extra hints from `buildAfterLap` stay in data but are not drawn
+local function visibleHintCount(lineCount, maxVisible)
+  local n = tonumber(maxVisible)
+  if not n or n ~= n then
+    n = 3
+  end
+  n = math.floor(n + 0.5)
+  n = math.max(1, math.min(3, n))
+  return math.min(n, lineCount)
+end
+
 ---@param coachingLines table[]|string[]|nil
 ---@param timeRemaining number
 ---@param holdSeconds number
-function M.draw(coachingLines, timeRemaining, holdSeconds)
+---@param maxVisibleHints integer|nil
+function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
   if not coachingLines or #coachingLines == 0 or timeRemaining <= 0 then
     return
   end
@@ -109,7 +121,8 @@ function M.draw(coachingLines, timeRemaining, holdSeconds)
     ui.separator()
   end
 
-  for i = 1, math.min(3, #coachingLines) do
+  local showN = visibleHintCount(#coachingLines, maxVisibleHints)
+  for i = 1, showN do
     local body = hintText(coachingLines[i])
     if body ~= "" then
       local a = accentForKind(hintKind(coachingLines[i]))
@@ -207,6 +220,7 @@ end
 ---@field coachingLines (string|{ kind: string, text: string })[]|nil
 ---@field coachingRemaining number|nil
 ---@field coachingHoldSeconds number|nil
+---@field coachingMaxVisibleHints integer|nil
 ---@field coachingShowPrimer boolean|nil
 
 ---@param vm CoachingHudStrip
@@ -218,6 +232,7 @@ function M.drawMainWindowStrip(vm)
   local lines = vm.coachingLines
   local rem = vm.coachingRemaining
   local hold = vm.coachingHoldSeconds or 30
+  local maxVis = vm.coachingMaxVisibleHints or 3
   local primer = vm.coachingShowPrimer
 
   local showActive = lines and #lines > 0 and rem and rem > 0
@@ -238,10 +253,11 @@ function M.drawMainWindowStrip(vm)
 
   if showActive then
     alpha = computeAlpha(rem, hold)
+    local vis = visibleHintCount(#lines, maxVis)
     body = hintText(lines[1])
     accent = accentForKind(hintKind(lines[1]))
-    if #lines > 1 then
-      detail = string.format("+%d more in Coaching window", #lines - 1)
+    if vis > 1 then
+      detail = string.format("+%d more in Coaching window", vis - 1)
     end
   else
     title = "COACHING"
