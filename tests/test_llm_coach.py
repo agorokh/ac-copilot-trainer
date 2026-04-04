@@ -61,6 +61,36 @@ def test_compose_debrief_prefers_llm_when_ollama_returns_text(
     assert "Post-lap debrief" not in text
 
 
+def test_call_ollama_generate_non_object_json_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = json.dumps(["not", "an", "object"]).encode("utf-8")
+
+    class _Resp:
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *a: object) -> None:
+            return None
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return payload
+
+    monkeypatch.setattr(llm_coach.urllib.request, "urlopen", lambda *a, **k: _Resp())
+    assert (
+        llm_coach.call_ollama_generate(
+            "p",
+            base_url="http://127.0.0.1:11434",
+            model="m",
+            temperature=0.2,
+            num_predict=100,
+            timeout_sec=10.0,
+        )
+        is None
+    )
+
+
 def test_call_ollama_generate_parses_response(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = json.dumps({"response": "  First paragraph.\n\nSecond line.  "}).encode("utf-8")
 

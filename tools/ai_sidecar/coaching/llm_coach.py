@@ -264,12 +264,18 @@ def call_ollama_generate(
             prefix,
         )
         return None
+    if not isinstance(data, dict):
+        logger.info(
+            "ollama generate: expected JSON object, got %s",
+            type(data).__name__,
+        )
+        return None
     text = data.get("response")
     if not isinstance(text, str) or not text.strip():
         logger.info(
             "ollama generate: missing/empty response field (status=%s keys=%s)",
             status,
-            list(data.keys())[:8] if isinstance(data, dict) else type(data).__name__,
+            list(data.keys())[:8],
         )
         return None
     return _sanitize_debrief(text)
