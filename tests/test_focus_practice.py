@@ -24,12 +24,17 @@ def corner_labels_map_from_string(s: str | None) -> dict[str, bool]:
 def label_from_worst_row(row: str | None) -> str | None:
     if not row or not isinstance(row, str):
         return None
-    return row.split()[0] if row.split() else None
+    parts = row.split()
+    return parts[0] if parts else None
 
 
-def corner_labels_map_from_worst(worst_three: list[str] | None, max_n: int) -> dict[str, bool]:
+def corner_labels_map_from_worst(
+    worst_three: list[str] | None,
+    max_n: int | None,
+) -> dict[str, bool]:
     out: dict[str, bool] = {}
-    nmax = max(1, min(3, int(max_n) if max_n else 3))
+    raw_nmax = 3 if max_n is None else int(max_n)
+    nmax = max(1, min(3, raw_nmax))
     if not worst_three:
         return out
     for row in worst_three:
@@ -61,7 +66,7 @@ def brake_spline_matches_focus(
     brake_spline: float | None,
     focus_map: dict[str, bool] | None,
     corners: list[dict] | None,
-    tol: float = 0.042,
+    tol: float = 0.012,
 ) -> bool:
     if brake_spline is None or not isinstance(brake_spline, (int, float)):
         return False
@@ -83,12 +88,12 @@ def brake_spline_matches_focus(
 
 
 def filter_coaching_hints(
-    hints: list[dict],
+    hints: list[dict] | None,
     focus_active: bool,
     focus_map: dict[str, bool] | None,
 ) -> list[dict]:
-    if not hints:
-        return hints
+    if hints is None or not isinstance(hints, list) or len(hints) == 0:
+        return []
     if not focus_active or not focus_map or not any(focus_map.values()):
         return hints
 
@@ -116,6 +121,19 @@ def test_corner_labels_map_from_worst() -> None:
     w = ["T2 40%", "T1 55%", "T3 70%"]
     assert corner_labels_map_from_worst(w, 2) == {"T2": True, "T1": True}
     assert corner_labels_map_from_worst(w, 5) == {"T2": True, "T1": True, "T3": True}
+    assert corner_labels_map_from_worst(w, 0) == {"T2": True}  # Lua clamps 0 -> 1 slot
+
+
+def test_wrap01() -> None:
+    assert abs(wrap01(-0.3) - 0.7) < 1e-9
+    assert abs(wrap01(1.7) - 0.7) < 1e-9
+    assert abs(wrap01(5.3) - 0.3) < 1e-9
+
+
+def test_spline_dist_wrap() -> None:
+    assert abs(spline_dist_wrap(0.95, 0.05) - 0.1) < 1e-9
+    assert abs(spline_dist_wrap(0.0, 0.5) - 0.5) < 1e-9
+    assert abs(spline_dist_wrap(0.99, 0.01) - 0.02) < 1e-9
 
 
 def test_brake_spline_matches_focus() -> None:
@@ -145,3 +163,31 @@ def test_filter_fallback_single_hint() -> None:
     fm = {"T1": True}
     out = filter_coaching_hints(hints, True, fm)
     assert len(out) == 1
+
+
+def test_filter_empty_and_inactive() -> None:
+    assert filter_coaching_hints([], True, {"T1": True}) == []
+    assert filter_coaching_hints(None, True, {"T1": True}) == []
+    hints = [{"kind": "line", "text": "T1: ok"}]
+    assert filter_coaching_hints(hints, True, {}) == hints
+    assert filter_coaching_hints(hints, True, None) == hints
+
+
+def test_filter_no_corner_match_takes_first() -> None:
+    hints = [
+        {"kind": "throttle", "text": "Coasting 2.0s"},
+        {"kind": "throttle", "text": "Full throttle low"},
+    ]
+    fm = {"T1": True}
+    out = filter_coaching_hints(hints, True, fm)
+    assert len(out) == 1 and out[0]["text"] == "Coasting 2.0s"
+
+
+def test_filter_skips_non_matching_then_first() -> None:
+    hints = [
+        {"kind": "throttle", "text": "Generic filler"},
+        {"kind": "line", "text": "T2: brake earlier"},
+    ]
+    fm = {"T2": True}
+    out = filter_coaching_hints(hints, True, fm)
+    assert len(out) == 1 and "T2" in out[0]["text"]

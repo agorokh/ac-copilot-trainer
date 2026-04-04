@@ -318,7 +318,7 @@ local state = {
   coachingRemainSec = 0,
   --- Last sidecar ``debrief`` paragraph (issue #46); persists until replaced or session reset.
   sidecarDebriefText = "",
-  --- Issue #44: runtime toggle (HUD checkbox); persists until track exit / rolling session reset.
+  --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
   --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
   focusWorstThree = {},
@@ -725,9 +725,11 @@ function script.windowMain(_dt)
   end
   local coachPrimer = (state.lapsCompleted or 0) == 0
 
-  do
+  if state.focusPracticeActive then
     local flm, man = focusLabelMap()
     state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
+  else
+    state.focusPracticeHudSummary = ""
   end
 
   hud.draw({
@@ -996,15 +998,7 @@ function script.update(dt)
     end
 
     local rawCoaching = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
-    local fmForFilter = nil
-    if state.focusPracticeActive then
-      local manual = config.focusPracticeCornerLabels
-      if type(manual) == "string" and manual:match("%S") then
-        fmForFilter = focusPractice.cornerLabelsMapFromString(manual)
-      else
-        fmForFilter = focusPractice.cornerLabelsMapFromWorst(state.focusWorstThree, config.focusPracticeAutoCount)
-      end
-    end
+    local fmForFilter = select(1, focusLabelMap())
     state.coachingLines = focusPractice.filterCoachingHints(rawCoaching, state.focusPracticeActive, fmForFilter)
     state.coachingRemainSec = normalizedCoachingHoldSeconds()
 

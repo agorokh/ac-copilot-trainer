@@ -86,7 +86,7 @@ end
 ---@param brakeSpline number|nil
 ---@param focusMap table<string, boolean>|nil
 ---@param corners table[]|nil corner feature rows with .label and .brakePointSpline
----@param tol number|nil default 0.042 (~15m on many tracks)
+---@param tol number|nil default 0.012 (normalized spline delta; order of percent-of-lap, e.g. ~60 m on a 5 km lap)
 ---@return boolean
 function M.brakeSplineMatchesFocus(brakeSpline, focusMap, corners, tol)
   if brakeSpline == nil or type(brakeSpline) ~= "number" then
@@ -98,7 +98,7 @@ function M.brakeSplineMatchesFocus(brakeSpline, focusMap, corners, tol)
   if type(corners) ~= "table" then
     return false
   end
-  local t = tonumber(tol) or 0.042
+  local t = tonumber(tol) or 0.012
   for i = 1, #corners do
     local c = corners[i]
     if type(c) == "table" then
