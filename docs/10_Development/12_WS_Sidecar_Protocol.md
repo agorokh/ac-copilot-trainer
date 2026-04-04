@@ -27,7 +27,7 @@ Sent after each completed lap when `config.wsSidecarUrl` is set and the socket i
 
 #### Optional `telemetry` (issue **#49**)
 
-When present, `telemetry.corners` is an array of per-corner objects used for **improvement ranking** in the Python sidecar (Python computes deltas vs the fastest lap seen on that WebSocket connection). Lua **3b** may omit this until telemetry export exists; the field is forward-compatible.
+When present, `telemetry.corners` is an array of per-corner objects used for **improvement ranking** in the Python sidecar. The sidecar ranks against the **fastest lap seen on that WebSocket connection that included `telemetry.corners`** (overall `lapTimeMs` PB may be updated from laps without corners; see issue **#49**). Lua **3b** may omit this until telemetry export exists; the field is forward-compatible.
 
 Each corner object:
 
@@ -47,9 +47,24 @@ Snake_case variants (`min_speed_kmh`, …) are also accepted.
 | `event`    | string | yes      | `"coaching_response"`                                |
 | `lap`      | int    | yes      | Must match the `lap` from the triggering `lap_complete` |
 | `hints`    | array  | yes      | Up to 3 items: `{ "kind", "text" }` or plain strings |
-| `improvementRanking` | array | no | Issue **#49**: ordered corner-level suggestions vs session PB (ignored by current Lua until **3b** consumes it) |
+| `improvementRanking` | array | no | Issue **#49**: ordered corner-level suggestions vs best lap-with-corners reference (ignored by current Lua until **3b** consumes it) |
 
 When received while the coaching hold timer is active for the same `lap`, Lua **replaces** `state.coachingLines` with these hints (rules-based hints are overridden).
+
+#### `improvementRanking` items (issue **#49**)
+
+When present, `improvementRanking` is a JSON array of objects, **highest priority first** (Python sorts by normalized speed regret). Keys are snake_case as emitted today:
+
+| Field         | Type   | Required | Meaning |
+| ------------- | ------ | -------- | ------- |
+| `corner`      | int    | yes      | Corner id (same notion as `telemetry.corners[].id`). |
+| `metric`      | string | yes      | Internal key: `min_speed_kmh` or `apex_speed_kmh` (aliases accepted on *inbound* telemetry only). |
+| `last`        | number | yes      | Value on the lap that triggered this message. |
+| `reference`   | number | yes      | Value from the session reference lap-with-corners for the same corner and metric. |
+| `priority`    | number | yes      | Normalized regret `(reference - last) / max(|reference|, ε)`; higher = larger gap vs reference on that metric. |
+| `suggestion`  | string | yes      | Human-readable line for UI or logging. |
+
+For the current speed metrics, **higher** telemetry is better; an item usually indicates a possible gain when `reference > last`. Consumers may ignore unknown fields for forward compatibility.
 
 ### `analysis_error` (Python → Lua)
 

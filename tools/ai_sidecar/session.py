@@ -20,23 +20,33 @@ def _positive_lap_time_ms(raw: Any) -> int | None:
 
 
 class LapComparisonState:
-    """Tracks best-seen lap (by ``lapTimeMs``) and emits ranking vs that reference."""
+    """Tracks fastest ``lapTimeMs`` seen and the fastest lap that included corner telemetry.
 
-    __slots__ = ("_best_corners", "_best_time_ms")
+    Overall PB can be updated on laps without ``telemetry.corners``; ranking compares
+    against the best corner table seen (fastest lap among those that had corners).
+    """
+
+    __slots__ = ("_best_corners", "_best_corners_time_ms", "_best_time_ms")
 
     def __init__(self) -> None:
         self._best_corners: dict[int, dict[str, float]] | None = None
+        self._best_corners_time_ms: int | None = None
         self._best_time_ms: int | None = None
 
     def improvement_ranking_for(self, inbound: Mapping[str, Any]) -> list[dict[str, Any]]:
+        lap_time = _positive_lap_time_ms(inbound.get("lapTimeMs"))
+        if lap_time is not None and (self._best_time_ms is None or lap_time < self._best_time_ms):
+            self._best_time_ms = lap_time
+
         corners = extract_corner_table(inbound)
         if not corners:
             return []
-        lap_time = _positive_lap_time_ms(inbound.get("lapTimeMs"))
 
-        if lap_time is not None and (self._best_time_ms is None or lap_time < self._best_time_ms):
+        if lap_time is not None and (
+            self._best_corners_time_ms is None or lap_time < self._best_corners_time_ms
+        ):
             self._best_corners = corners
-            self._best_time_ms = lap_time
+            self._best_corners_time_ms = lap_time
             return []
 
         if self._best_corners is not None:

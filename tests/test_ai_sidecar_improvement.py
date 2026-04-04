@@ -116,6 +116,32 @@ def test_lap_time_infinity_does_not_crash_lap_state() -> None:
     assert state.improvement_ranking_for(payload) == []
 
 
+def test_overall_pb_without_corners_then_ranking_vs_best_corners_lap() -> None:
+    """Faster cornerless lap must update overall PB without blocking corner reference."""
+    state = LapComparisonState()
+    assert state.improvement_ranking_for({"lapTimeMs": 90000}) == []
+    assert (
+        state.improvement_ranking_for(
+            {
+                "lapTimeMs": 100000,
+                "telemetry": {"corners": [{"id": 1, "minSpeedKmh": 60}]},
+            }
+        )
+        == []
+    )
+    imp = state.improvement_ranking_for(
+        {
+            "lapTimeMs": 105000,
+            "telemetry": {"corners": [{"id": 1, "minSpeedKmh": 55}]},
+        }
+    )
+    assert imp
+    assert imp[0]["corner"] == 1
+    assert imp[0]["metric"] == "min_speed_kmh"
+    assert imp[0]["reference"] == 60.0
+    assert imp[0]["last"] == 55.0
+
+
 def test_as_float_rejects_non_finite() -> None:
     assert _as_float(float("nan")) is None
     assert _as_float(float("inf")) is None
