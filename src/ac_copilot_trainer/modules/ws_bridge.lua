@@ -128,16 +128,15 @@ function M.pollInbound(maxPerTick)
       break
     end
     local data = jsonDecode(raw)
-    if type(data) ~= "table" then
-      break
-    end
-    local ev = data.event
-    local pv = tonumber(data.protocol)
-    if ev == "coaching_response" and pv == 1 then
-      local lap = tonumber(data.lap)
-      local hints = data.hints
-      if lap and type(hints) == "table" then
-        pendingCoaching = { lap = lap, hints = normalizeSidecarHints(hints) }
+    if type(data) == "table" then
+      local ev = data.event
+      local pv = tonumber(data.protocol)
+      if ev == "coaching_response" and pv == 1 then
+        local lap = tonumber(data.lap)
+        local hints = data.hints
+        if lap and type(hints) == "table" then
+          pendingCoaching = { lap = lap, hints = normalizeSidecarHints(hints) }
+        end
       end
     end
   end
