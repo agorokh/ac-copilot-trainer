@@ -17,7 +17,7 @@ relates_to:
 ## Resume here
 
 - **Branch:** `feat/issue-9-session-journal` — **PR #51** (open, merge-ready after review): https://github.com/agorokh/ac-copilot-trainer/pull/51 — tip includes code fixes through `e5946e8` plus this handoff doc (2026-04-04).
-- **Issues:** **#47** (session journal) addressed by PR #51; parent **#9** remains open (other milestones: #43–#46, #44, #49).
+- **Issues:** **#47** (session journal) addressed by PR #51; parent **#9** remains open (other milestones: #43–#46, #49).
 - **PR #51 resolution (2026-04-04):** Addressed Gemini / Sourcery / Copilot / CodeRabbit threads (car/track id fallbacks, optional `llm_debrief` in Python validator, stricter `exported_at`, expanded tests, `ac.log` on I/O failure, `encodeJsonCompact` for JSONL index, log when `writeSessionEnd` fails). Ran `sleep 600` after each push; CI green on latest SHA; GraphQL `reviewThreads` all resolved.
 
 ## What was delivered this session

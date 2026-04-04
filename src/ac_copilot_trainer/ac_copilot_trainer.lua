@@ -737,6 +737,7 @@ function script.update(dt)
     if state.wasDriving then
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
+        local journalLaps = state.lapsCompleted or 0
         local journalOk = sessionJournal.writeSessionEnd(lastDriveCar, lastDriveSim, {
           lapsCompleted = state.lapsCompleted,
           bestLapMs = state.bestLapMs,
@@ -745,8 +746,9 @@ function script.update(dt)
           coachingLines = state.coachingLines,
           appVersionUi = APP_VERSION_UI,
         })
-        if not journalOk and ac and type(ac.log) == "function" then
-          ac.log("[COPILOT] session_journal: export failed after persist (no laps or I/O error; see session_journal logs)")
+        -- writeSessionEnd returns false for intentional no-op (0 laps); log only real failures.
+        if journalLaps >= 1 and not journalOk and ac and type(ac.log) == "function" then
+          ac.log("[COPILOT] session_journal: export failed after persist (I/O or encode error; see session_journal logs)")
         end
         resetRuntimeAfterLeavingTrack()
         state.wasDriving = false
