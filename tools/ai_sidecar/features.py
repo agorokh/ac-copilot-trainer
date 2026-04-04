@@ -6,6 +6,7 @@ Optional telemetry lives under ``telemetry.corners`` on ``lap_complete``-shaped 
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -26,9 +27,10 @@ def _as_float(v: Any) -> float | None:
     if v is None:
         return None
     try:
-        return float(v)
+        f = float(v)
     except (TypeError, ValueError):
         return None
+    return f if math.isfinite(f) else None
 
 
 def _normalize_metric_key(name: str) -> str | None:

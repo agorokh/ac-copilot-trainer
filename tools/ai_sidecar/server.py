@@ -25,8 +25,15 @@ logger = logging.getLogger(__name__)
 
 def _run_compare_laps(last_path: str, ref_path: str) -> None:
     """CLI harness: two lap JSON files → improvement ranking on stdout (issue #49)."""
-    last = json.loads(Path(last_path).read_text(encoding="utf-8"))
-    ref = json.loads(Path(ref_path).read_text(encoding="utf-8"))
+    try:
+        last = json.loads(Path(last_path).read_text(encoding="utf-8"))
+        ref = json.loads(Path(ref_path).read_text(encoding="utf-8"))
+    except FileNotFoundError as e:
+        raise SystemExit(f"compare-laps: file not found: {e.filename!r}") from e
+    except PermissionError as e:
+        raise SystemExit(f"compare-laps: cannot read file: {e}") from e
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"compare-laps: invalid JSON ({e.msg} at char {e.pos})") from e
     from tools.ai_sidecar.features import extract_corner_table
     from tools.ai_sidecar.improvement_ranking import rank_corner_improvements
 

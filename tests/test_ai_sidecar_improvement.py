@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.ai_sidecar.features import extract_corner_table
+from tools.ai_sidecar.features import _as_float, extract_corner_table
 from tools.ai_sidecar.improvement_ranking import rank_corner_improvements
 from tools.ai_sidecar.protocol import EVENT_COACHING_RESPONSE, prepare_outbound_message
 from tools.ai_sidecar.server import _run_compare_laps
@@ -62,6 +62,7 @@ def test_compare_laps_cli_smoke(capsys: pytest.CaptureFixture[str]) -> None:
     out = capsys.readouterr().out
     data = json.loads(out)
     assert isinstance(data, list)
+    assert data
     assert data[0]["corner"] in (1, 2)
 
 
@@ -80,6 +81,35 @@ def test_rank_corner_improvements_empty_when_no_regressions() -> None:
     ref = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
     t = extract_corner_table(ref)
     assert rank_corner_improvements(t, t) == []
+
+
+def test_new_pb_lap_emits_no_improvement_ranking() -> None:
+    state = LapComparisonState()
+    slow = json.loads((_FIXTURES / "lap_sidecar_last.json").read_text(encoding="utf-8"))
+    fast = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
+    assert state.improvement_ranking_for(slow) == []
+    assert state.improvement_ranking_for(fast) == []
+
+
+def test_lap_time_true_is_ignored_for_pb() -> None:
+    state = LapComparisonState()
+    payload = {
+        "lapTimeMs": True,
+        "telemetry": {"corners": [{"id": 1, "minSpeedKmh": 50}]},
+    }
+    assert state.improvement_ranking_for(payload) == []
+
+
+def test_as_float_rejects_non_finite() -> None:
+    assert _as_float(float("nan")) is None
+    assert _as_float(float("inf")) is None
+
+
+def test_compare_laps_invalid_json_exits(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{", encoding="utf-8")
+    with pytest.raises(SystemExit, match="compare-laps: invalid JSON"):
+        _run_compare_laps(str(bad), str(bad))
 
 
 def test_lap_comparison_state_skips_pb_without_lap_time() -> None:
@@ -104,4 +134,7 @@ def test_server_main_compare_laps(
 
     server.main()
     out = capsys.readouterr().out
-    assert json.loads(out)[0]["suggestion"]
+    ranking = json.loads(out)
+    assert isinstance(ranking, list)
+    assert ranking
+    assert ranking[0]["suggestion"]

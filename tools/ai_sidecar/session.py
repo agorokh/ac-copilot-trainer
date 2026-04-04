@@ -10,6 +10,8 @@ from tools.ai_sidecar.improvement_ranking import rank_corner_improvements
 
 
 def _positive_lap_time_ms(raw: Any) -> int | None:
+    if isinstance(raw, bool):
+        return None
     try:
         v = int(raw)
     except (TypeError, ValueError):
@@ -32,12 +34,11 @@ class LapComparisonState:
             return []
         lap_time = _positive_lap_time_ms(inbound.get("lapTimeMs"))
 
-        ranking: list[dict[str, Any]] = []
-        if self._best_corners is not None:
-            ranking = rank_corner_improvements(corners, self._best_corners)
-
         if lap_time is not None and (self._best_time_ms is None or lap_time < self._best_time_ms):
             self._best_corners = corners
             self._best_time_ms = lap_time
+            return []
 
-        return ranking
+        if self._best_corners is not None:
+            return rank_corner_improvements(corners, self._best_corners)
+        return []
