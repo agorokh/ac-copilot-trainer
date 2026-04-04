@@ -338,4 +338,34 @@ function M.drawMainWindowStrip(vm)
   return true
 end
 
+--- Wrapped debrief text from Python sidecar when ``AC_COPILOT_OLLAMA_ENABLE=1`` (issue #46).
+--- Long text relies on the parent ImGui region for scrolling unless we add a child window later.
+---@param text string|nil
+function M.drawSidecarDebrief(text)
+  if not text or text == "" or not ui or type(ui.textColored) ~= "function" then
+    return
+  end
+  if ui.separator then
+    ui.separator()
+  end
+  local fk = fontMod.push()
+  ui.textColored(rgbm(0.55, 0.82, 0.95, 0.95), "SESSION DEBRIEF (sidecar)")
+  if ui.separator then
+    ui.separator()
+  end
+  local col = rgbm(0.78, 0.80, 0.86, 0.92)
+  if ui.textWrapped then
+    if ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+      ui.pushStyleColor(ui.StyleColor.Text, col)
+      ui.textWrapped(text)
+      ui.popStyleColor()
+    else
+      ui.textWrapped(text)
+    end
+  else
+    ui.textColored(col, text)
+  end
+  fontMod.pop(fk)
+end
+
 return M

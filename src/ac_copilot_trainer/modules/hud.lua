@@ -38,6 +38,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingMaxVisibleHints integer|nil
 ---@field coachingShowPrimer boolean|nil
 ---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
+---@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
@@ -189,6 +190,16 @@ function M.draw(vm)
   if vm.tireLockupFlash then
     ui.separator()
     ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
+  end
+
+  if vm.debriefText and vm.debriefText ~= "" then
+    ui.separator()
+    ui.textColored(rgbm(0.55, 0.82, 0.95, 1), "Session debrief (sidecar)")
+    if ui.textWrapped then
+      ui.textWrapped(vm.debriefText)
+    else
+      ui.text(vm.debriefText)
+    end
   end
 
   -- Tier 3 — detail (tree when supported; same fields flat on older CSP)

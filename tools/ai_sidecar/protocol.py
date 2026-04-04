@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from tools.ai_sidecar.coaching.llm_coach import compose_debrief
+
 if TYPE_CHECKING:
     from tools.ai_sidecar.session import LapComparisonState
 
@@ -73,8 +75,15 @@ def prepare_outbound_message(
             },
         ],
     }
+    imp: list[dict[str, Any]] = []
     if lap_state is not None:
         imp = lap_state.improvement_ranking_for(inbound)
         if imp:
             out["improvementRanking"] = imp
+
+    # Debrief may call Ollama with a short timeout (see AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC);
+    # server.py runs prepare_outbound_message in asyncio.to_thread so the WS loop stays responsive.
+    debrief = compose_debrief(inbound, imp)
+    if debrief:
+        out["debrief"] = debrief
     return out

@@ -16,12 +16,14 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (open): https://github.com/agorokh/ac-copilot-trainer/pull/54 — issue **#49** lap features + improvement ranking; run pr-resolution-follow-up after CI/bots (~10 min between polls).
+- **Branch:** `feat/issue-46-ollama-debrief` — **PR #55** (draft): https://github.com/agorokh/ac-copilot-trainer/pull/55 — issue **#46** Ollama debrief + HUD; mark ready when green, then pr-resolution-follow-up (~10 min between polls).
+- **Also open:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (issue **#49** ranking / SHAP).
 - **Merged:** **#45** / PR #53 (WebSocket v1); **#43** / PR #52 (coaching UX); **#47** journal — confirm PR #51 status on GitHub.
-- **Parent #9:** remaining milestones **#44** (focus practice), **#46** (Ollama debrief), **#49** (PR #54), **#51** (journal slice — confirm merge on GitHub), **#19** (Phase 4 RL / training — later epic scope).
+- **Parent #9:** remaining **#44** (focus practice), **#49** (PR #54), **#51** (journal slice — confirm merge), **#19** (Phase 4 — later).
 
 ## What was delivered this session
 
+- **Issue #46 (PR #55):** `tools/ai_sidecar/coaching/llm_coach.py`; optional `debrief` on `coaching_response`; `AC_COPILOT_OLLAMA_*` env (see WARP / `.env.example`); Lua `telemetry.corners` on `lap_complete`, HUD + Coaching debrief UI, `sidecar_debrief_last` in journal; `tests/test_llm_coach.py` (mocked HTTP).
 - **Issue #49 (PR #54):** `features.py` / `improvement_ranking.py` / `session.py`; optional `improvementRanking` on `coaching_response`; `--compare-laps`; `[coaching]` adds numpy/sklearn/shap; tests + fixtures + protocol doc.
 - **Issue #45 (merged):** `tools/ai_sidecar/protocol.py` + extended `server.py` (`--no-reply`, `analysis_error` on bad JSON); `ws_bridge.lua` inbound queue + `takeCoachingForLap`; `ac_copilot_trainer.lua` `protocol:1` on `lap_complete` and sidecar override; `tests/test_ai_sidecar_protocol.py`; `12_WS_Sidecar_Protocol.md` + WARP; `websockets` added to `dev` optional deps for CI.
 - **PR #52 (merged):** Issue #43 — coaching max visible hints + contract tests + WARP.
@@ -29,7 +31,7 @@ relates_to:
 
 ## What remains
 
-- **#9 epic:** ML ranking (#49 in PR #54), Ollama debrief (#46), focus practice (#44); WebSocket (#45) merged; coaching UX (#43) merged.
+- **#9 epic:** ML ranking (#49 in PR #54), focus practice (#44); Ollama debrief (#46) in PR #55; WebSocket (#45) merged; coaching UX (#43) merged.
 - **In-game check:** Confirm journal files appear on disk after menu exit (AC + CSP).
 
 ## Blockers / dependencies

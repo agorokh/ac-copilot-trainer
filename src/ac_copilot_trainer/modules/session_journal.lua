@@ -207,6 +207,10 @@ function M.buildRecord(car, sim, state)
     lap_history = lap_history,
     corners_last_lap = lastCorners,
     coaching_hints_last = serializeCoaching(state.coachingLines),
+    --- Issue #46: optional sidecar LLM/rules debrief (journal milestone may extend this field).
+    sidecar_debrief_last = (type(state.sidecarDebriefText) == "string" and state.sidecarDebriefText ~= "")
+        and state.sidecarDebriefText
+        or nil,
   }
 end
 

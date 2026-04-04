@@ -13,7 +13,7 @@ local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
 
 --- Latest coaching_response waiting for application (lap index matches lapsCompleted).
-local pendingCoaching ---@type { lap: number, hints: table[] }|nil
+local pendingCoaching ---@type { lap: number, hints: table[], debrief: string|nil }|nil
 
 ---@param u string|nil full ws URL, e.g. ws://127.0.0.1:8765
 function M.configure(u)
@@ -148,34 +148,40 @@ function M.pollInbound(maxPerTick)
         local lap = tonumber(data.lap)
         local hints = data.hints
         if lap and type(hints) == "table" then
-          pendingCoaching = { lap = lap, hints = normalizeSidecarHints(hints) }
+          local debrief ---@type string|nil
+          if type(data.debrief) == "string" and data.debrief ~= "" then
+            debrief = data.debrief
+          end
+          pendingCoaching = { lap = lap, hints = normalizeSidecarHints(hints), debrief = debrief }
         end
       end
     end
   end
 end
 
---- If a sidecar response for `currentLapCompleted` is queued, consume and return hint list.
+--- If a sidecar response for `currentLapCompleted` is queued, consume and return hint list
+--- and optional LLM/rules ``debrief`` paragraph (issue #46).
 ---@param currentLapCompleted number|nil
----@return table[]|nil
+---@return table[]|nil, string|nil
 function M.takeCoachingForLap(currentLapCompleted)
   local cur = tonumber(currentLapCompleted) or 0
   if not pendingCoaching then
-    return nil
+    return nil, nil
   end
   if pendingCoaching.lap < cur then
     pendingCoaching = nil
-    return nil
+    return nil, nil
   end
   if pendingCoaching.lap ~= cur then
-    return nil
+    return nil, nil
   end
   local h = pendingCoaching.hints
+  local d = pendingCoaching.debrief
   pendingCoaching = nil
   if h and #h > 0 then
-    return h
+    return h, d
   end
-  return nil
+  return nil, d
 end
 
 ---@param simTime number|nil
