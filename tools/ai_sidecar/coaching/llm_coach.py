@@ -23,6 +23,7 @@ _ENV_MODEL = "AC_COPILOT_OLLAMA_MODEL"
 _ENV_TEMP = "AC_COPILOT_OLLAMA_TEMPERATURE"
 _ENV_TOKENS = "AC_COPILOT_OLLAMA_NUM_PREDICT"
 _ENV_TIMEOUT = "AC_COPILOT_OLLAMA_TIMEOUT_SEC"
+_ENV_DEBRIEF_TIMEOUT = "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC"
 
 # Documented in WARP.md — tested against Ollama 0.5.x API; pin locally for support.
 _DEFAULT_MODEL = "llama3.2"
@@ -30,6 +31,7 @@ _DEFAULT_HOST = "http://127.0.0.1:11434"
 _DEFAULT_TEMPERATURE = 0.35
 _DEFAULT_NUM_PREDICT = 320
 _DEFAULT_TIMEOUT_SEC = 45.0
+_DEFAULT_DEBRIEF_TIMEOUT_SEC = 12.0
 
 
 def debrief_feature_enabled() -> bool:
@@ -66,7 +68,7 @@ def ollama_model() -> str:
 
 
 def read_generation_options() -> tuple[float, int, float]:
-    """temperature, num_predict, timeout_sec."""
+    """temperature, num_predict, timeout_sec (generic upper bound)."""
     t = _float_env(_ENV_TEMP, _DEFAULT_TEMPERATURE)
     n = _int_env(_ENV_TOKENS, _DEFAULT_NUM_PREDICT)
     timeout = _float_env(_ENV_TIMEOUT, _DEFAULT_TIMEOUT_SEC)
@@ -74,6 +76,12 @@ def read_generation_options() -> tuple[float, int, float]:
     n = max(64, min(4096, n))
     timeout = max(5.0, min(300.0, timeout))
     return t, n, timeout
+
+
+def read_debrief_ollama_timeout_sec() -> float:
+    """Shorter cap for post-lap debrief so the sidecar answers before CSP coaching hold expires."""
+    t = _float_env(_ENV_DEBRIEF_TIMEOUT, _DEFAULT_DEBRIEF_TIMEOUT_SEC)
+    return max(2.0, min(45.0, t))
 
 
 def _lap_time_s(lap_time_ms: Any) -> str | None:
@@ -151,10 +159,15 @@ def rules_fallback_debrief(
 
 
 _WS_RE = re.compile(r"\s+")
+# Strip C0 controls except newline/tab (Lua ImGui text is sensitive to garbage bytes).
+_CTRL_EXCEPT_NL_TAB = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_MD_FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*$", re.MULTILINE)
 
 
 def _sanitize_debrief(text: str) -> str:
     t = text.strip().replace("\r\n", "\n").replace("\r", "\n")
+    t = _CTRL_EXCEPT_NL_TAB.sub("", t)
+    t = _MD_FENCE.sub("", t)
     lines: list[str] = []
     for line in t.split("\n"):
         lines.append(_WS_RE.sub(" ", line.strip()))
@@ -218,20 +231,35 @@ def call_ollama_generate(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    raw = ""
+    status: int | None = None
     try:
-        # Local Ollama only; URL from AC_COPILOT_OLLAMA_HOST (default 127.0.0.1:11434).
+        # Local Ollama only; synchronous urllib (server runs this in asyncio.to_thread).
+        # For heavy multi-client workloads, consider aiohttp/httpx async clients later.
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
+            status = resp.getcode()
             raw = resp.read().decode("utf-8", errors="replace")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         logger.info("ollama generate failed: %s", e)
         return None
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.info("ollama generate: invalid JSON response")
+    except json.JSONDecodeError as e:
+        prefix = raw[:400].replace("\n", " ")
+        logger.info(
+            "ollama generate: invalid JSON (status=%s err=%s) body_prefix=%r",
+            status,
+            e,
+            prefix,
+        )
         return None
     text = data.get("response")
     if not isinstance(text, str) or not text.strip():
+        logger.info(
+            "ollama generate: missing/empty response field (status=%s keys=%s)",
+            status,
+            list(data.keys())[:8] if isinstance(data, dict) else type(data).__name__,
+        )
         return None
     return _sanitize_debrief(text)
 
@@ -246,7 +274,8 @@ def compose_debrief(
     rules = rules_fallback_debrief(inbound, improvement_ranking)
     base = ollama_base_url()
     model = ollama_model()
-    temp, n_pred, timeout = read_generation_options()
+    temp, n_pred, _ = read_generation_options()
+    debrief_timeout = read_debrief_ollama_timeout_sec()
     prompt = build_llm_prompt(inbound, improvement_ranking)
     llm = call_ollama_generate(
         prompt,
@@ -254,7 +283,7 @@ def compose_debrief(
         model=model,
         temperature=temp,
         num_predict=n_pred,
-        timeout_sec=timeout,
+        timeout_sec=debrief_timeout,
     )
     if llm:
         return llm

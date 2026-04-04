@@ -338,7 +338,8 @@ function M.drawMainWindowStrip(vm)
   return true
 end
 
---- Scrollable debrief from Python sidecar when ``AC_COPILOT_OLLAMA_ENABLE=1`` (issue #46).
+--- Wrapped debrief text from Python sidecar when ``AC_COPILOT_OLLAMA_ENABLE=1`` (issue #46).
+--- Long text relies on the parent ImGui region for scrolling unless we add a child window later.
 ---@param text string|nil
 function M.drawSidecarDebrief(text)
   if not text or text == "" or not ui or type(ui.textColored) ~= "function" then

@@ -216,16 +216,9 @@ local function buildSidecarTelemetryCorners(feats)
     local c = feats[i]
     local minS = tonumber(c.minSpeed)
     if minS then
-      local ent = tonumber(c.entrySpeed)
-      local ex = tonumber(c.exitSpeed)
+      -- Apex / minimum speed through the corner: use min speed only (entry/exit average
+      -- inflates vs true apex and breaks ranking vs reference laps — PR #55 review).
       local apex = minS
-      if ent and ex then
-        apex = (ent + ex) / 2
-      elseif ent then
-        apex = ent
-      elseif ex then
-        apex = ex
-      end
       corners[#corners + 1] = {
         id = i,
         minSpeedKmh = math.floor(minS + 0.5),
@@ -800,6 +793,7 @@ function script.update(dt)
           lapFeatureHistory = state.lapFeatureHistory,
           coachingLines = state.coachingLines,
           appVersionUi = APP_VERSION_UI,
+          sidecarDebriefText = state.sidecarDebriefText,
         })
         local journalOk = callOk and journalOkOrErr == true
         -- writeSessionEnd returns false for intentional no-op (0 laps); log only real failures / throws.
@@ -844,8 +838,12 @@ function script.update(dt)
   if type(sidecarDebrief) == "string" and sidecarDebrief ~= "" then
     state.sidecarDebriefText = sidecarDebrief
   end
-  if sidecarHints and #sidecarHints > 0 and (state.coachingRemainSec or 0) > 0 then
+  if sidecarHints and #sidecarHints > 0 then
     state.coachingLines = sidecarHints
+    -- Late sidecar (e.g. slow Ollama): still show hints; refresh hold if it already expired.
+    if (state.coachingRemainSec or 0) <= 0 then
+      state.coachingRemainSec = normalizedCoachingHoldSeconds()
+    end
   end
 
   if state.initialized and not state.splineSessionPrimed then

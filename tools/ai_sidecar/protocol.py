@@ -81,6 +81,8 @@ def prepare_outbound_message(
         if imp:
             out["improvementRanking"] = imp
 
+    # Debrief may call Ollama with a short timeout (see AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC);
+    # server.py runs prepare_outbound_message in asyncio.to_thread so the WS loop stays responsive.
     debrief = compose_debrief(inbound, imp)
     if debrief:
         out["debrief"] = debrief

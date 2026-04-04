@@ -47,6 +47,20 @@ def test_compose_debrief_rules_when_ollama_fails(monkeypatch: pytest.MonkeyPatch
     assert "hint" in text
 
 
+def test_compose_debrief_prefers_llm_when_ollama_returns_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AC_COPILOT_OLLAMA_ENABLE", "1")
+
+    def _stub_llm(*_a: object, **_k: object) -> str:
+        return "UNIQUE_LLM_DEBRIEF_BODY"
+
+    monkeypatch.setattr(llm_coach, "call_ollama_generate", _stub_llm)
+    text = llm_coach.compose_debrief({"lap": 1, "lapTimeMs": 88000}, [])
+    assert text == "UNIQUE_LLM_DEBRIEF_BODY"
+    assert "Post-lap debrief" not in text
+
+
 def test_call_ollama_generate_parses_response(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = json.dumps({"response": "  First paragraph.\n\nSecond line.  "}).encode("utf-8")
 
@@ -56,6 +70,9 @@ def test_call_ollama_generate_parses_response(monkeypatch: pytest.MonkeyPatch) -
 
         def __exit__(self, *a: object) -> None:
             return None
+
+        def getcode(self) -> int:
+            return 200
 
         def read(self) -> bytes:
             return payload
