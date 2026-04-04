@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-03
+last_updated: 2026-04-04
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -16,13 +16,13 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-9-session-journal` merged or closed after review — **PR #51** (ready for review): https://github.com/agorokh/ac-copilot-trainer/pull/51
+- **Branch:** `feat/issue-9-session-journal` — **PR #51** (open, merge-ready after review): https://github.com/agorokh/ac-copilot-trainer/pull/51 — tip includes code fixes through `e5946e8` plus this handoff doc (2026-04-04).
 - **Issues:** **#47** (session journal) addressed by PR #51; parent **#9** remains open (other milestones: #43–#46, #44, #49).
-- **Follow-up:** After merge, run orchestrator **PR resolution** loop: wait ~10m after last push (`sleep 600`), then resolve `reviewThreads` / bot comments per `.claude/agents/pr-resolution-follow-up.md`.
+- **PR #51 resolution (2026-04-04):** Addressed Gemini / Sourcery / Copilot / CodeRabbit threads (car/track id fallbacks, optional `llm_debrief` in Python validator, stricter `exported_at`, expanded tests, `ac.log` on I/O failure, `encodeJsonCompact` for JSONL index, log when `writeSessionEnd` fails). Ran `sleep 600` after each push; CI green on latest SHA; GraphQL `reviewThreads` all resolved.
 
 ## What was delivered this session
 
-- **PR #51:** Phase 3 journal slice for epic #9 — `session_journal.lua` writes schema v1 JSON under `ScriptConfig/ac_copilot_trainer/journal/` when returning to AC main menu after ≥1 lap and successful persist; append-only `journal_index.jsonl`. `persistence.encodeJson` / `ensureParentDirForFile` exposed. Doc `docs/10_Development/11_Session_Journal_Schema.md`; Python `tools/session_journal.py` + tests.
+- **PR #51:** Phase 3 journal slice for epic #9 — `session_journal.lua` writes schema v1 JSON under `ScriptConfig/ac_copilot_trainer/journal/` when returning to AC main menu after ≥1 lap and successful persist; append-only `journal_index.jsonl` via `persistence.encodeJsonCompact`. `persistence.encodeJson` / `ensureParentDirForFile` exposed. Doc `docs/10_Development/11_Session_Journal_Schema.md`; Python `tools/session_journal.py` + tests.
 
 ## What remains
 
