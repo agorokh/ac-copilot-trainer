@@ -59,7 +59,7 @@ def test_sidecar_websocket_lap_complete_roundtrip() -> None:
 
     async def _go() -> None:
         async with websockets.serve(
-            lambda w: _handler(w, True),
+            lambda w: _handler(w, reply_coaching=True),
             "127.0.0.1",
             0,
         ) as server:
@@ -94,7 +94,7 @@ def test_sidecar_invalid_json_gets_analysis_error() -> None:
 
     async def _go() -> None:
         async with websockets.serve(
-            lambda w: _handler(w, True),
+            lambda w: _handler(w, reply_coaching=True),
             "127.0.0.1",
             0,
         ) as server:
