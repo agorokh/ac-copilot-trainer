@@ -90,7 +90,7 @@ async def _run(host: str, port: int, reply_coaching: bool) -> None:
         port,
     ):
         logger.info(
-            "AI sidecar listening ws://%s:%s protocol=%s reply_coaching=%s",
+            "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s",
             host,
             port,
             PROTOCOL_VERSION,
