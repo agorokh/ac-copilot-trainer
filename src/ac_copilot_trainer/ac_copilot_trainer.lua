@@ -1,4 +1,5 @@
--- AC Copilot Trainer v0.4.1
+-- AC Copilot Trainer v0.4.2
+local APP_VERSION_UI = "v0.4.2"
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -45,12 +46,23 @@ local config = {
   enableDraw3DDiagnostics = false,
   --- When true, runs `render_diag` (60s API probe, debug spheres/lines, [DIAG] UI). Default off (issue #41).
   enableRenderDiagnostics = false,
+  --- After each lap; issue #9 Part A mentioned ~8s for minimal HUD intrusion — default 30 keeps the
+  --- Coaching window readable; tune down if you want shorter toasts (milestone #43 may split strip vs window).
   coachingHoldSeconds = 30,
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
   wsSidecarUrl = "",
 }
+
+--- Non-negative numeric hold for UI and countdown (invalid config → 30).
+local function normalizedCoachingHoldSeconds()
+  local holdSec = tonumber(config.coachingHoldSeconds)
+  if not holdSec or holdSec ~= holdSec or holdSec < 0 then
+    return 30
+  end
+  return holdSec
+end
 
 local SMOOTH_N = 30
 local deltaBuf = {}
@@ -262,7 +274,8 @@ local state = {
   tireHud = "",
   autoSetupUntil = 0,
   coachingLines = {},
-  coachingUntil = 0,
+  --- Wall-clock style countdown (`script.update(dt)`); avoids sim clock ms vs s ambiguity (#9).
+  coachingRemainSec = 0,
 }
 
 local function rebuildBestReference()
@@ -406,7 +419,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.tireHud = ""
   state.autoSetupUntil = 0
   state.coachingLines = {}
-  state.coachingUntil = 0
+  state.coachingRemainSec = 0
   wsBridge.reset()
   renderDiag.reset()
   resetDeltaSmoother()
@@ -416,6 +429,10 @@ local function resetRollingDrivingState()
   state.brakingPoints.session = {}
   state._coachDiagT = nil
   state._coachDiagCount = nil
+  -- New session / lap counter rolled back (Gemini #50): do not carry coaching UI across sessions.
+  state.coachingLines = {}
+  state.coachingRemainSec = 0
+  state.lapsCompleted = 0
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -586,13 +603,13 @@ function script.windowMain(_dt)
   sim = ac.getSim()
   car = ac.getCar(0)
   if sim.isInMainMenu then
-    ui.text("AC Copilot Trainer v0.4.1")
+    ui.text("AC Copilot Trainer " .. APP_VERSION_UI)
     ui.separator()
     ui.text("Waiting for session...")
     return
   end
   if not car then
-    ui.text("AC Copilot Trainer v0.4.1")
+    ui.text("AC Copilot Trainer " .. APP_VERSION_UI)
     ui.separator()
     ui.text("Waiting for car data...")
     return
@@ -629,9 +646,9 @@ function script.windowMain(_dt)
 
   local coachingHudLines = nil
   local coachRem = nil
-  if state.coachingLines and #state.coachingLines > 0 and now < (state.coachingUntil or 0) then
+  if state.coachingLines and #state.coachingLines > 0 and (state.coachingRemainSec or 0) > 0 then
     coachingHudLines = state.coachingLines
-    coachRem = (state.coachingUntil or 0) - now
+    coachRem = state.coachingRemainSec
   end
   local coachPrimer = (state.lapsCompleted or 0) == 0
 
@@ -662,8 +679,9 @@ function script.windowMain(_dt)
     segmentCount = #(state.trackSegments or {}),
     coachingLines = coachingHudLines,
     coachingRemaining = coachRem,
-    coachingHoldSeconds = config.coachingHoldSeconds,
+    coachingHoldSeconds = normalizedCoachingHoldSeconds(),
     coachingShowPrimer = coachPrimer,
+    appVersionUi = APP_VERSION_UI,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
@@ -678,7 +696,8 @@ function script.windowCoaching(_dt)
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
   local now = ch.simSeconds(sim)
-  local remaining = (state.coachingUntil or 0) - now
+  local remaining = state.coachingRemainSec or 0
+  local laps = state.lapsCompleted or 0
 
   -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
   if not state._coachDiagT then state._coachDiagT = 0 end
@@ -688,20 +707,25 @@ function script.windowCoaching(_dt)
     state._coachDiagT = 0
     state._coachDiagCount = state._coachDiagCount + 1
     ac.log(string.format(
-      "[COPILOT] coaching: now=%.1f until=%.1f rem=%.1f lines=%d laps=%d",
-      now, state.coachingUntil or 0, remaining,
-      state.coachingLines and #state.coachingLines or 0,
-      state.lapsCompleted or 0))
+      "[COPILOT] coaching: simT=%.1f remainSec=%.2f lines=%d laps=%d (timer=dt not sim clock)",
+      now, remaining, state.coachingLines and #state.coachingLines or 0, laps))
   end
 
-  if remaining <= 0 or not state.coachingLines or #state.coachingLines == 0 then
-    -- Show fallback only before any lap is completed; hide once coaching has fired
-    if (state.lapsCompleted or 0) == 0 then
-      coachingOverlay.drawFallback()
+  if laps == 0 then
+    coachingOverlay.drawFallback()
+    return
+  end
+
+  if remaining > 0 then
+    if state.coachingLines and #state.coachingLines > 0 then
+      coachingOverlay.draw(state.coachingLines, remaining, normalizedCoachingHoldSeconds())
+    else
+      coachingOverlay.drawHoldNoHints(remaining)
     end
     return
   end
-  coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)
+
+  coachingOverlay.drawBetweenLapsIdle(normalizedCoachingHoldSeconds())
 end
 
 function script.update(dt)
@@ -719,6 +743,12 @@ function script.update(dt)
     end
     state.lastLapCount = -1
     return
+  end
+
+  -- Tick coaching hold even when `car` is briefly nil so the countdown does not freeze (review #50).
+  local dtf = (type(dt) == "number" and dt == dt and dt >= 0) and dt or 0
+  if (state.coachingRemainSec or 0) > 0 then
+    state.coachingRemainSec = math.max(0, (state.coachingRemainSec or 0) - dtf)
   end
 
   if not car then
@@ -835,7 +865,7 @@ function script.update(dt)
     end
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
-    state.coachingUntil = ch.simSeconds(sim) + config.coachingHoldSeconds
+    state.coachingRemainSec = normalizedCoachingHoldSeconds()
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
     if ac and type(ac.log) == "function" then

@@ -2,10 +2,12 @@
 
 local M = {}
 
---- Monotonic sim clock in **seconds** for HUD/coaching/sector timers (issue #39).
---- Prefer `sim.gameTime`. If absent, use `sim.time` — both are **seconds** in CSP
---- `ac.StateSim` (same unit as legacy call sites in this app). Field reads are
---- wrapped in `pcall` because some builds throw when a struct field is missing.
+--- Best-effort session sim time for legacy HUD deadlines (sector, post-lap, `autoSetupUntil`).
+--- Returns `sim.gameTime` first, then `sim.time`, using `pcall` for CSP `ac.StateSim` compatibility.
+--- The value is returned unchanged; if neither field is available, returns `0`. Call sites assume **seconds**
+--- (normalize here if a CSP build misreports units). Sim time notes: vault
+--- `docs/01_Vault/AcCopilotTrainer/01_Decisions/csp-render-api-migration.md`.
+--- **Coaching tip duration** does not use this helper — it uses `state.coachingRemainSec` and `script.update(dt)` (#9).
 ---@param sim ac.StateSim|nil
 ---@return number
 function M.simSeconds(sim)

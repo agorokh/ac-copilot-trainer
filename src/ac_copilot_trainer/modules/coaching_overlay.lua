@@ -38,15 +38,40 @@ local function hintKind(entry)
   return "general"
 end
 
+--- Fade out in the last min(5s, hold) seconds so short `coachingHoldSeconds` stays at full opacity
+--- until its own tail (CodeRabbit PR #50).
 local function computeAlpha(timeRemaining, holdSeconds)
-  local fadeStart = 5.0
-  local alpha = 1.0
-  if timeRemaining < fadeStart then
-    alpha = math.max(0, timeRemaining / fadeStart)
+  local rem = math.max(0, timeRemaining or 0)
+  local hold = tonumber(holdSeconds)
+  if not hold or hold ~= hold or hold <= 0 then
+    hold = 30
   end
-  local hold = holdSeconds or 30
-  local fadeIn = math.min(1, math.max(0, (hold - timeRemaining) / 0.5))
-  return alpha * fadeIn
+  local fadeWindow = math.min(5.0, hold)
+  if fadeWindow < 0.001 then
+    fadeWindow = 0.001
+  end
+  if rem >= fadeWindow then
+    return 1.0
+  end
+  return math.max(0, rem / fadeWindow)
+end
+
+--- Shared panel chrome for Coaching window idle / fallback states (PR #50 review).
+local function drawStandardCoachingPanel(defaultW, defaultH, minH)
+  local w, h = defaultW or 400, defaultH or 140
+  local minHeight = minH or 100
+  if ui.windowSize then
+    local sz = ui.windowSize()
+    if sz and sz.x and sz.y then
+      w, h = sz.x, math.max(minHeight, sz.y)
+    end
+  end
+  if ui.drawRectFilled and vec2 then
+    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
+  end
+  if ui.drawRect and vec2 then
+    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.45), 12, nil, 1)
+  end
 end
 
 ---@param coachingLines table[]|string[]|nil
@@ -110,19 +135,7 @@ function M.drawFallback()
   if not ui or type(ui.textColored) ~= "function" then
     return
   end
-  local w, h = 400, 120
-  if ui.windowSize then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.y then
-      w, h = sz.x, sz.y
-    end
-  end
-  if ui.drawRectFilled and vec2 then
-    ui.drawRectFilled(vec2(0, 0), vec2(w, h), rgbm(0.04, 0.04, 0.07, 0.78), 12)
-  end
-  if ui.drawRect and vec2 then
-    ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.5), 12, nil, 1)
-  end
+  drawStandardCoachingPanel(400, 120, 100)
   local fk = fontMod.push()
   ui.textColored(rgbm(0.92, 0.93, 0.95, 0.95), "Complete a lap for coaching hints")
   fontMod.pop(fk)
@@ -136,6 +149,59 @@ function M.drawFallback()
   end
 end
 
+--- Coaching window when session has started but no tip is active (timer expired or empty hints).
+function M.drawBetweenLapsIdle(holdSeconds)
+  if not ui or type(ui.textColored) ~= "function" then
+    return
+  end
+  drawStandardCoachingPanel(400, 140, 120)
+  local fk = fontMod.push()
+  ui.textColored(rgbm(0.35, 0.82, 0.95, 0.95), "COACHING")
+  if ui.separator then
+    ui.separator()
+  end
+  local hs = holdSeconds or 30
+  local body = string.format(
+    "No active tip right now. After each completed lap, hints show here for ~%ds. "
+      .. "Complete another lap for fresh coaching, or check the main app window for telemetry.",
+    math.floor(hs + 0.5)
+  )
+  if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.72, 0.74, 0.78, 0.9))
+    ui.textWrapped(body)
+    ui.popStyleColor()
+  else
+    ui.textColored(rgbm(0.72, 0.74, 0.78, 0.9), body)
+  end
+  fontMod.pop(fk)
+end
+
+--- Lap completed and hold timer running, but `buildAfterLap` produced no lines (trace quality / first lap).
+function M.drawHoldNoHints(remainingSec)
+  if not ui or type(ui.textColored) ~= "function" then
+    return
+  end
+  drawStandardCoachingPanel(400, 120, 100)
+  local fk = fontMod.push()
+  ui.textColored(rgbm(0.35, 0.82, 0.95, 0.95), "COACHING")
+  if ui.separator then
+    ui.separator()
+  end
+  local r = math.max(0, remainingSec or 0)
+  local body = string.format(
+    "No hints for the last lap (needs a cleaner full lap or more data). Timer ~%.0fs — complete another lap to try again.",
+    r
+  )
+  if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.78, 0.72, 0.55, 0.92))
+    ui.textWrapped(body)
+    ui.popStyleColor()
+  else
+    ui.textColored(rgbm(0.78, 0.72, 0.55, 0.92), body)
+  end
+  fontMod.pop(fk)
+end
+
 --- Main telemetry window: primer or primary coaching line (issue #41).
 ---@class CoachingHudStrip
 ---@field coachingLines (string|{ kind: string, text: string })[]|nil
@@ -144,9 +210,10 @@ end
 ---@field coachingShowPrimer boolean|nil
 
 ---@param vm CoachingHudStrip
+---@return boolean @true if anything was drawn (caller may add spacing only then)
 function M.drawMainWindowStrip(vm)
   if not ui or type(ui.textColored) ~= "function" or not vec2 then
-    return
+    return false
   end
   local lines = vm.coachingLines
   local rem = vm.coachingRemaining
@@ -156,7 +223,11 @@ function M.drawMainWindowStrip(vm)
   local showActive = lines and #lines > 0 and rem and rem > 0
   local showPrimerBand = primer and not showActive
   if not showActive and not showPrimerBand then
-    return
+    return false
+  end
+
+  if ui.separator then
+    ui.separator()
   end
 
   local alpha = 1.0
@@ -239,6 +310,7 @@ function M.drawMainWindowStrip(vm)
   elseif ui.dummy then
     ui.dummy(vec2(1, 6))
   end
+  return true
 end
 
 return M
