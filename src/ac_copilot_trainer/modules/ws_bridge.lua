@@ -13,7 +13,7 @@ local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
 
 --- Latest coaching_response waiting for application (lap index matches lapsCompleted).
-local pendingCoaching ---@type { lap: number, hints: table[] }|nil
+local pendingCoaching ---@type { lap: number, hints: table[], debrief: string|nil }|nil
 
 ---@param u string|nil full ws URL, e.g. ws://127.0.0.1:8765
 function M.configure(u)

@@ -7,6 +7,7 @@ Opt-in via ``AC_COPILOT_OLLAMA_ENABLE=1``. Default is off: no ``debrief`` field 
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -60,7 +61,8 @@ def _int_env(name: str, default: int) -> int:
 
 
 def ollama_base_url() -> str:
-    return (os.environ.get(_ENV_HOST) or _DEFAULT_HOST).strip().rstrip("/")
+    raw = (os.environ.get(_ENV_HOST) or "").strip()
+    return (raw or _DEFAULT_HOST).rstrip("/")
 
 
 def ollama_model() -> str:
@@ -212,34 +214,43 @@ def call_ollama_generate(
     timeout_sec: float,
 ) -> str | None:
     """POST /api/generate; returns assistant text or None on failure."""
-    url = f"{base_url}/api/generate"
-    body = json.dumps(
-        {
-            "model": model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": num_predict,
-            },
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     raw = ""
     status: int | None = None
     try:
+        base = base_url.rstrip("/")
+        url = f"{base}/api/generate"
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(f"unsupported Ollama URL: {url!r}")
+        body = json.dumps(
+            {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": num_predict,
+                },
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         # Local Ollama only; synchronous urllib (server runs this in asyncio.to_thread).
         # For heavy multi-client workloads, consider aiohttp/httpx async clients later.
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:  # nosec B310
             status = resp.getcode()
             raw = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
+    except (
+        ValueError,
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        http.client.HTTPException,
+    ) as e:
         logger.info("ollama generate failed: %s", e)
         return None
     try:

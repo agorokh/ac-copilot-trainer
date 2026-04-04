@@ -353,12 +353,17 @@ function M.drawSidecarDebrief(text)
   if ui.separator then
     ui.separator()
   end
-  if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
-    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.78, 0.80, 0.86, 0.92))
-    ui.textWrapped(text)
-    ui.popStyleColor()
+  local col = rgbm(0.78, 0.80, 0.86, 0.92)
+  if ui.textWrapped then
+    if ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+      ui.pushStyleColor(ui.StyleColor.Text, col)
+      ui.textWrapped(text)
+      ui.popStyleColor()
+    else
+      ui.textWrapped(text)
+    end
   else
-    ui.textColored(rgbm(0.78, 0.80, 0.86, 0.92), text)
+    ui.textColored(col, text)
   end
   fontMod.pop(fk)
 end
