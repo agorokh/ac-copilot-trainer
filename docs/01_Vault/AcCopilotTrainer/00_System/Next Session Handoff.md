@@ -16,7 +16,7 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-9-session-journal` — **PR #51** (open): https://github.com/agorokh/ac-copilot-trainer/pull/51 — tip `67b7702`: pr-resolution-follow-up (journal log gating, `pcall` export, encode/index I/O logging + failure returns); CI + GraphQL threads green (2026-04-04).
+- **Branch:** `feat/issue-9-session-journal` — **PR #51** (open): https://github.com/agorokh/ac-copilot-trainer/pull/51 — tip `fdee7aa`: pr-resolution-follow-up (journal log gating, `pcall` export, encode/index I/O logging + failure returns); CI + GraphQL threads green (2026-04-04).
 - **Issues:** **#47** (session journal) addressed by PR #51; parent **#9** remains open (other milestones: #43–#46, #49).
 - **PR #51 resolution (2026-04-04):** Follow-up pass: gated failure log on `lapsCompleted >= 1`, wrapped `writeSessionEnd` in `pcall`, `logJournal` on `encodeJson`/`encodeJsonCompact` nil, index append open+write failures return `false`. Multiple `sleep 600` after pushes; required checks + Bugbot pass; GraphQL `reviewThreads` unresolved count 0 on tip.
 
