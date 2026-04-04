@@ -97,7 +97,8 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 hints,
             )
 
-        out = prepare_outbound_message(
+        out = await asyncio.to_thread(
+            prepare_outbound_message,
             data,
             reply_coaching=reply_coaching,
             lap_state=lap_state,

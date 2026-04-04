@@ -48,6 +48,7 @@ Snake_case variants (`min_speed_kmh`, …) are also accepted.
 | `lap`      | int    | yes      | Must match the `lap` from the triggering `lap_complete` |
 | `hints`    | array  | yes      | Up to 3 items: `{ "kind", "text" }` or plain strings |
 | `improvementRanking` | array | no | Issue **#49**: ordered corner-level suggestions vs best lap-with-corners reference (ignored by current Lua until **3b** consumes it) |
+| `debrief`  | string | no       | Issue **#46**: one or two paragraphs when `AC_COPILOT_OLLAMA_ENABLE=1` (local Ollama + rules fallback); omitted when debrief feature is off |
 
 When received while the coaching hold timer is active for the same `lap`, Lua **replaces** `state.coachingLines` with these hints (rules-based hints are overridden).
 
@@ -84,4 +85,4 @@ Lua currently ignores this event (logging only in Python); future versions may s
 
 ## Tests
 
-`tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`).
+`tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`). `tests/test_llm_coach.py` — Ollama debrief helpers with mocked HTTP (issue **#46**).

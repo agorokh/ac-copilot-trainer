@@ -206,6 +206,39 @@ local function cloneCornerFeats(f)
   return out
 end
 
+--- Build ``telemetry.corners`` for sidecar ranking / debrief (issues #49, #46).
+local function buildSidecarTelemetryCorners(feats)
+  if not feats or type(feats) ~= "table" or #feats == 0 then
+    return nil
+  end
+  local corners = {}
+  for i = 1, #feats do
+    local c = feats[i]
+    local minS = tonumber(c.minSpeed)
+    if minS then
+      local ent = tonumber(c.entrySpeed)
+      local ex = tonumber(c.exitSpeed)
+      local apex = minS
+      if ent and ex then
+        apex = (ent + ex) / 2
+      elseif ent then
+        apex = ent
+      elseif ex then
+        apex = ex
+      end
+      corners[#corners + 1] = {
+        id = i,
+        minSpeedKmh = math.floor(minS + 0.5),
+        apexSpeedKmh = math.floor(apex + 0.5),
+      }
+    end
+  end
+  if #corners == 0 then
+    return nil
+  end
+  return { corners = corners }
+end
+
 --- Reject traces that never saw most of the lap spline (e.g. telemetry started mid-lap).
 local function traceHasPbSplineCoverage(trace)
   if not trace or #trace < 2 then
@@ -285,6 +318,8 @@ local state = {
   coachingLines = {},
   --- Wall-clock style countdown (`script.update(dt)`); avoids sim clock ms vs s ambiguity (#9).
   coachingRemainSec = 0,
+  --- Last sidecar ``debrief`` paragraph (issue #46); persists until replaced or session reset.
+  sidecarDebriefText = "",
 }
 
 local function rebuildBestReference()
@@ -429,6 +464,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.autoSetupUntil = 0
   state.coachingLines = {}
   state.coachingRemainSec = 0
+  state.sidecarDebriefText = ""
   wsBridge.reset()
   renderDiag.reset()
   resetDeltaSmoother()
@@ -441,6 +477,7 @@ local function resetRollingDrivingState()
   -- New session / lap counter rolled back (Gemini #50): do not carry coaching UI across sessions.
   state.coachingLines = {}
   state.coachingRemainSec = 0
+  state.sidecarDebriefText = ""
   state.lapsCompleted = 0
   tel = newTelemetry()
   brakes = newBrakes()
@@ -693,6 +730,7 @@ function script.windowMain(_dt)
     coachingMaxVisibleHints = normalizedCoachingMaxVisibleHints(),
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
+    debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
@@ -738,10 +776,12 @@ function script.windowCoaching(_dt)
     else
       coachingOverlay.drawHoldNoHints(remaining)
     end
+    coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
     return
   end
 
   coachingOverlay.drawBetweenLapsIdle(normalizedCoachingHoldSeconds())
+  coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
 end
 
 function script.update(dt)
@@ -800,7 +840,10 @@ function script.update(dt)
 
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
-  local sidecarHints = wsBridge.takeCoachingForLap(state.lapsCompleted or 0)
+  local sidecarHints, sidecarDebrief = wsBridge.takeCoachingForLap(state.lapsCompleted or 0)
+  if type(sidecarDebrief) == "string" and sidecarDebrief ~= "" then
+    state.sidecarDebriefText = sidecarDebrief
+  end
   if sidecarHints and #sidecarHints > 0 and (state.coachingRemainSec or 0) > 0 then
     state.coachingLines = sidecarHints
   end
@@ -977,13 +1020,20 @@ function script.update(dt)
           end
         end
       end
-      wsBridge.sendJson({
+      local lapPayload = {
         protocol = wsBridge.PROTOCOL_VERSION,
         event = "lap_complete",
         lap = state.lapsCompleted,
         lapTimeMs = lastMs,
         coachingHints = hintsJson,
-      })
+      }
+      if traceAnalyticsOk and #feats > 0 then
+        local telc = buildSidecarTelemetryCorners(feats)
+        if telc then
+          lapPayload.telemetry = telc
+        end
+      end
+      wsBridge.sendJson(lapPayload)
     end
 
     state.sectorIndex = 1

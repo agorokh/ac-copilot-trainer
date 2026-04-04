@@ -338,4 +338,28 @@ function M.drawMainWindowStrip(vm)
   return true
 end
 
+--- Scrollable debrief from Python sidecar when ``AC_COPILOT_OLLAMA_ENABLE=1`` (issue #46).
+---@param text string|nil
+function M.drawSidecarDebrief(text)
+  if not text or text == "" or not ui or type(ui.textColored) ~= "function" then
+    return
+  end
+  if ui.separator then
+    ui.separator()
+  end
+  local fk = fontMod.push()
+  ui.textColored(rgbm(0.55, 0.82, 0.95, 0.95), "SESSION DEBRIEF (sidecar)")
+  if ui.separator then
+    ui.separator()
+  end
+  if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
+    ui.pushStyleColor(ui.StyleColor.Text, rgbm(0.78, 0.80, 0.86, 0.92))
+    ui.textWrapped(text)
+    ui.popStyleColor()
+  else
+    ui.textColored(rgbm(0.78, 0.80, 0.86, 0.92), text)
+  end
+  fontMod.pop(fk)
+end
+
 return M
