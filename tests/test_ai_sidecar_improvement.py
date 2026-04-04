@@ -66,6 +66,15 @@ def test_compare_laps_cli_smoke(capsys: pytest.CaptureFixture[str]) -> None:
     assert data[0]["corner"] in (1, 2)
 
 
+def test_extract_corner_table_skips_bool_corner_id() -> None:
+    assert (
+        extract_corner_table(
+            {"telemetry": {"corners": [{"id": True, "minSpeedKmh": 50}]}}
+        )
+        == {}
+    )
+
+
 def test_extract_corner_table_ignores_unknown_and_malformed() -> None:
     assert extract_corner_table({}) == {}
     assert extract_corner_table({"telemetry": "bad"}) == {}

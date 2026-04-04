@@ -59,6 +59,8 @@ def extract_corner_table(lap: Mapping[str, Any]) -> dict[int, dict[str, float]]:
         if not isinstance(item, dict):
             continue
         cid_raw = item.get("id")
+        if isinstance(cid_raw, bool):
+            continue
         try:
             cid = int(cid_raw)
         except (TypeError, ValueError):
