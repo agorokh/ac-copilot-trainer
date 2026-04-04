@@ -16,9 +16,9 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-9-session-journal` — **PR #51** (open, merge-ready after review): https://github.com/agorokh/ac-copilot-trainer/pull/51 — tip includes code fixes through `e5946e8` plus this handoff doc (2026-04-04).
+- **Branch:** `feat/issue-9-session-journal` — **PR #51** (open): https://github.com/agorokh/ac-copilot-trainer/pull/51 — tip `67b7702`: pr-resolution-follow-up (journal log gating, `pcall` export, encode/index I/O logging + failure returns); CI + GraphQL threads green (2026-04-04).
 - **Issues:** **#47** (session journal) addressed by PR #51; parent **#9** remains open (other milestones: #43–#46, #49).
-- **PR #51 resolution (2026-04-04):** Addressed Gemini / Sourcery / Copilot / CodeRabbit threads (car/track id fallbacks, optional `llm_debrief` in Python validator, stricter `exported_at`, expanded tests, `ac.log` on I/O failure, `encodeJsonCompact` for JSONL index, log when `writeSessionEnd` fails). Ran `sleep 600` after each push; CI green on latest SHA; GraphQL `reviewThreads` all resolved.
+- **PR #51 resolution (2026-04-04):** Follow-up pass: gated failure log on `lapsCompleted >= 1`, wrapped `writeSessionEnd` in `pcall`, `logJournal` on `encodeJson`/`encodeJsonCompact` nil, index append open+write failures return `false`. Multiple `sleep 600` after pushes; required checks + Bugbot pass; GraphQL `reviewThreads` unresolved count 0 on tip.
 
 ## What was delivered this session
 
