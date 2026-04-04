@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.protocol import (
@@ -17,8 +18,30 @@ from tools.ai_sidecar.protocol import (
     PROTOCOL_VERSION,
     prepare_outbound_message,
 )
+from tools.ai_sidecar.session import LapComparisonState
 
 logger = logging.getLogger(__name__)
+
+
+def _run_compare_laps(last_path: str, ref_path: str) -> None:
+    """CLI harness: two lap JSON files → improvement ranking on stdout (issue #49)."""
+    try:
+        last = json.loads(Path(last_path).read_text(encoding="utf-8"))
+        ref = json.loads(Path(ref_path).read_text(encoding="utf-8"))
+    except FileNotFoundError as e:
+        raise SystemExit(f"compare-laps: file not found: {e.filename!r}") from e
+    except PermissionError as e:
+        raise SystemExit(f"compare-laps: cannot read file: {e}") from e
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"compare-laps: invalid JSON ({e.msg} at char {e.pos})") from e
+    from tools.ai_sidecar.features import extract_corner_table
+    from tools.ai_sidecar.improvement_ranking import rank_corner_improvements
+
+    ranked = rank_corner_improvements(
+        extract_corner_table(last),
+        extract_corner_table(ref),
+    )
+    print(json.dumps(ranked, indent=2))
 
 
 async def _safe_send(websocket: Any, payload: dict[str, Any]) -> None:
@@ -35,6 +58,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         PROTOCOL_VERSION,
         peer,
     )
+    lap_state = LapComparisonState()
     async for message in websocket:
         if not isinstance(message, str):
             logger.warning("non-text frame ignored type=%s", type(message).__name__)
@@ -73,7 +97,11 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 hints,
             )
 
-        out = prepare_outbound_message(data, reply_coaching=reply_coaching)
+        out = prepare_outbound_message(
+            data,
+            reply_coaching=reply_coaching,
+            lap_state=lap_state,
+        )
         if out is not None:
             await _safe_send(websocket, out)
 
@@ -105,6 +133,15 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument(
+        "--compare-laps",
+        nargs=2,
+        metavar=("LAST_JSON", "REF_JSON"),
+        help=(
+            "Print corner improvement ranking JSON from two lap_complete-style fixtures "
+            "(telemetry.corners) and exit."
+        ),
+    )
+    p.add_argument(
         "--no-reply",
         action="store_true",
         help=(
@@ -113,6 +150,9 @@ def main() -> None:
         ),
     )
     args = p.parse_args()
+    if args.compare_laps:
+        _run_compare_laps(args.compare_laps[0], args.compare_laps[1])
+        return
     reply = not args.no_reply
     try:
         asyncio.run(_run(args.host, args.port, reply))

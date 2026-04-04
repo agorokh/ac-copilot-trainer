@@ -34,6 +34,9 @@ bootstrap = [
 ]
 coaching = [
     "websockets>=12",
+    "numpy>=1.24.0",
+    "scikit-learn>=1.3.0",
+    "shap>=0.44.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -56,4 +59,5 @@ source = ["src/ac_copilot_trainer", "tools"]
 omit = [
   "tools/process_miner/run.py",
   "tools/repo_knowledge/mcp_server.py",
+  "tools/ai_sidecar/__main__.py",
 ]

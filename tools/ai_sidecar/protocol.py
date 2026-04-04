@@ -7,7 +7,10 @@ All frames are JSON objects. ``protocol`` is required on new messages; missing
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tools.ai_sidecar.session import LapComparisonState
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,7 @@ def prepare_outbound_message(
     inbound: dict[str, Any],
     *,
     reply_coaching: bool,
+    lap_state: LapComparisonState | None = None,
 ) -> dict[str, Any] | None:
     """Validate ``inbound`` and build one outbound message, or ``None`` to stay silent.
 
@@ -58,7 +62,7 @@ def prepare_outbound_message(
         return None
 
     lap = inbound.get("lap")
-    return {
+    out: dict[str, Any] = {
         "protocol": PROTOCOL_VERSION,
         "event": EVENT_COACHING_RESPONSE,
         "lap": lap,
@@ -69,3 +73,8 @@ def prepare_outbound_message(
             },
         ],
     }
+    if lap_state is not None:
+        imp = lap_state.improvement_ranking_for(inbound)
+        if imp:
+            out["improvementRanking"] = imp
+    return out

@@ -16,19 +16,20 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-45-ws-sidecar-protocol` — **PR #53** (open): https://github.com/agorokh/ac-copilot-trainer/pull/53 — issue **#45** WebSocket v1 protocol; pr-resolution-follow-up after bots (~10 min between polls).
-- **Merged:** **#43** / PR #52 (coaching UX cap); **#47** journal — confirm PR #51 status on GitHub.
-- **Parent #9:** remaining milestones #44, #46, #49, etc.
+- **Branch:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (open): https://github.com/agorokh/ac-copilot-trainer/pull/54 — issue **#49** lap features + improvement ranking; run pr-resolution-follow-up after CI/bots (~10 min between polls).
+- **Merged:** **#45** / PR #53 (WebSocket v1); **#43** / PR #52 (coaching UX); **#47** journal — confirm PR #51 status on GitHub.
+- **Parent #9:** remaining milestones **#44** (focus practice), **#46** (Ollama debrief), **#49** (PR #54), **#51** (journal slice — confirm merge on GitHub), **#19** (Phase 4 RL / training — later epic scope).
 
 ## What was delivered this session
 
-- **Issue #45 (in progress):** `tools/ai_sidecar/protocol.py` + extended `server.py` (`--no-reply`, `analysis_error` on bad JSON); `ws_bridge.lua` inbound queue + `takeCoachingForLap`; `ac_copilot_trainer.lua` `protocol:1` on `lap_complete` and sidecar override; `tests/test_ai_sidecar_protocol.py`; `12_WS_Sidecar_Protocol.md` + WARP; `websockets` added to `dev` optional deps for CI.
+- **Issue #49 (PR #54):** `features.py` / `improvement_ranking.py` / `session.py`; optional `improvementRanking` on `coaching_response`; `--compare-laps`; `[coaching]` adds numpy/sklearn/shap; tests + fixtures + protocol doc.
+- **Issue #45 (merged):** `tools/ai_sidecar/protocol.py` + extended `server.py` (`--no-reply`, `analysis_error` on bad JSON); `ws_bridge.lua` inbound queue + `takeCoachingForLap`; `ac_copilot_trainer.lua` `protocol:1` on `lap_complete` and sidecar override; `tests/test_ai_sidecar_protocol.py`; `12_WS_Sidecar_Protocol.md` + WARP; `websockets` added to `dev` optional deps for CI.
 - **PR #52 (merged):** Issue #43 — coaching max visible hints + contract tests + WARP.
 - **PR #51:** Phase 3 journal slice for epic #9 — `session_journal.lua` writes schema v1 JSON under `ScriptConfig/ac_copilot_trainer/journal/` when returning to AC main menu after ≥1 lap and successful persist; append-only `journal_index.jsonl` via `persistence.encodeJsonCompact`. `persistence.encodeJson` / `ensureParentDirForFile` exposed. Doc `docs/10_Development/11_Session_Journal_Schema.md`; Python `tools/session_journal.py` + tests.
 
 ## What remains
 
-- **#9 epic:** WebSocket protocol (#45 in flight), ML/SHAP (#49), Ollama debrief (#46), focus practice (#44); coaching UX (#43) merged.
+- **#9 epic:** ML ranking (#49 in PR #54), Ollama debrief (#46), focus practice (#44); WebSocket (#45) merged; coaching UX (#43) merged.
 - **In-game check:** Confirm journal files appear on disk after menu exit (AC + CSP).
 
 ## Blockers / dependencies
