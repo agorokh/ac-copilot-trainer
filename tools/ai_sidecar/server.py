@@ -107,7 +107,10 @@ def main() -> None:
     p.add_argument(
         "--no-reply",
         action="store_true",
-        help="Log lap_complete only; do not send coaching_response (half-duplex / passive mode).",
+        help=(
+            "Log lap_complete only; do not send coaching_response. "
+            "analysis_error frames may still be sent for invalid JSON or non-object payloads."
+        ),
     )
     args = p.parse_args()
     reply = not args.no_reply
