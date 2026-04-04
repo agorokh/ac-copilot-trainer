@@ -20,6 +20,51 @@ local function safeSimField(sim, key)
   return nil
 end
 
+--- Match `persistence.sessionKey` fallbacks: globals first, then `car` / `sim` (pcall per field; C-structs throw).
+local function resolveCarId(car)
+  local g = ch.carIdRawFromGlobals()
+  if g and g ~= "" then
+    return g
+  end
+  if not car then
+    return "unknown"
+  end
+  for _, key in ipairs({ "id", "name", "driverName" }) do
+    local ok, v = pcall(function()
+      return car[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return tostring(v)
+    end
+  end
+  return "unknown"
+end
+
+local function resolveTrackId(sim)
+  local g = ch.trackIdRawFromGlobals()
+  if g and g ~= "" then
+    return g
+  end
+  if not sim then
+    return "unknown"
+  end
+  for _, key in ipairs({ "trackName", "track", "trackConfiguration" }) do
+    local ok, v = pcall(function()
+      return sim[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return tostring(v)
+    end
+  end
+  return "unknown"
+end
+
+local function logJournal(msg)
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT] session_journal: " .. msg)
+  end
+end
+
 local function isoUtcNow()
   return os.date("!%Y-%m-%dT%H:%M:%SZ")
 end
@@ -145,10 +190,10 @@ function M.buildRecord(car, sim, state)
     app_version_ui = state.appVersionUi or "",
     session_key = sk,
     car = {
-      id = ch.carIdRawFromGlobals() or "unknown",
+      id = resolveCarId(car),
     },
     track = {
-      id = ch.trackIdRawFromGlobals() or "unknown",
+      id = resolveTrackId(sim),
     },
     conditions = {
       track_grip = grip,
@@ -162,7 +207,6 @@ function M.buildRecord(car, sim, state)
     lap_history = lap_history,
     corners_last_lap = lastCorners,
     coaching_hints_last = serializeCoaching(state.coachingLines),
-    llm_debrief = nil,
   }
 end
 
@@ -186,9 +230,11 @@ function M.writeSessionEnd(car, sim, state)
   end
   local f = io.open(path, "w")
   if not f then
+    logJournal("failed to open journal file for write: " .. tostring(path))
     return false
   end
   if not f:write(raw) then
+    logJournal("failed to write journal file: " .. tostring(path))
     f:close()
     return false
   end
@@ -201,10 +247,13 @@ function M.writeSessionEnd(car, sim, state)
   })
   if idxLine then
     persistence.ensureParentDirForFile(indexPath())
-    local af = io.open(indexPath(), "a")
+    local ip = indexPath()
+    local af = io.open(ip, "a")
     if af then
       af:write(idxLine .. "\n")
       af:close()
+    else
+      logJournal("failed to open journal index for append: " .. tostring(ip))
     end
   end
   return true

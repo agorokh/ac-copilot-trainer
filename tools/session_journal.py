@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 JOURNAL_SCHEMA_VERSION = 1
 
+# Lua `JSON.stringify` omits keys with nil values; `llm_debrief` is reserved (milestone 3d).
 REQUIRED_TOP_LEVEL_KEYS = frozenset(
     {
         "schema_version",
@@ -19,9 +21,21 @@ REQUIRED_TOP_LEVEL_KEYS = frozenset(
         "lap_history",
         "corners_last_lap",
         "coaching_hints_last",
-        "llm_debrief",
     }
 )
+
+OPTIONAL_TOP_LEVEL_KEYS = frozenset({"llm_debrief"})
+ALLOWED_TOP_LEVEL_KEYS = REQUIRED_TOP_LEVEL_KEYS | OPTIONAL_TOP_LEVEL_KEYS
+
+
+def _is_valid_exported_at(value: object) -> bool:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def validate_session_journal(obj: Any) -> list[str]:
@@ -32,7 +46,7 @@ def validate_session_journal(obj: Any) -> list[str]:
     missing = REQUIRED_TOP_LEVEL_KEYS - obj.keys()
     if missing:
         errors.append(f"missing keys: {sorted(missing)}")
-    extra = obj.keys() - REQUIRED_TOP_LEVEL_KEYS
+    extra = obj.keys() - ALLOWED_TOP_LEVEL_KEYS
     if extra:
         errors.append(f"unknown keys: {sorted(extra)}")
 
@@ -42,12 +56,17 @@ def validate_session_journal(obj: Any) -> list[str]:
 
     exported = obj.get("exported_at")
     if exported is not None:
-        if not isinstance(exported, str) or "T" not in exported or not exported.endswith("Z"):
-            errors.append("exported_at must be an ISO-8601 UTC string ending with Z")
+        if not _is_valid_exported_at(exported):
+            errors.append(
+                "exported_at must be ISO-8601 UTC with Z suffix, e.g. 2024-01-02T03:04:05Z"
+            )
 
     sk = obj.get("session_key")
     if sk is not None and (not isinstance(sk, str) or not sk):
         errors.append("session_key must be a non-empty string")
+
+    if "llm_debrief" in obj and obj["llm_debrief"] is not None:
+        errors.append("llm_debrief must be null or omitted (reserved for future debrief)")
 
     for label, key in (("car", "car"), ("track", "track")):
         sub = obj.get(key)
