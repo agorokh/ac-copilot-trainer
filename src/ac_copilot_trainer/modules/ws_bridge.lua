@@ -1,4 +1,5 @@
--- Optional WebSocket to Python AI sidecar (issue #9 Part B). Safe no-op if CSP `web.socket` unavailable.
+-- Optional WebSocket to Python AI sidecar (issue #9 Part B, #45 protocol + inbound).
+-- Safe no-op if CSP `web.socket` unavailable or socket has no receive API.
 
 local M = {}
 
@@ -6,18 +7,32 @@ local sock ---@type any
 local url ---@type string|nil
 local RECONNECT_SEC = 5
 local lastTry = -RECONNECT_SEC
+local MAX_RECV_PER_TICK = 8
+--- Sidecar WebSocket protocol version (must match Python `tools/ai_sidecar` v1 schema).
+local PROTOCOL_VERSION = 1
+M.PROTOCOL_VERSION = PROTOCOL_VERSION
+
+--- Latest coaching_response waiting for application (lap index matches lapsCompleted).
+local pendingCoaching ---@type { lap: number, hints: table[] }|nil
 
 ---@param u string|nil full ws URL, e.g. ws://127.0.0.1:8765
 function M.configure(u)
   url = u
   sock = nil
   lastTry = -RECONNECT_SEC
+  pendingCoaching = nil
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
 function M.reset()
   sock = nil
   lastTry = -RECONNECT_SEC
+  pendingCoaching = nil
+end
+
+--- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
+function M.clearPendingCoaching()
+  pendingCoaching = nil
 end
 
 local function jsonEncode(t)
@@ -28,6 +43,42 @@ local function jsonEncode(t)
     end
   end
   return nil
+end
+
+local function jsonDecode(s)
+  if type(s) ~= "string" or s == "" then
+    return nil
+  end
+  if JSON and type(JSON.parse) == "function" then
+    local ok, t = pcall(JSON.parse, s)
+    if ok and type(t) == "table" then
+      return t
+    end
+  end
+  return nil
+end
+
+local function normalizeSidecarHints(hints)
+  local out = {}
+  if type(hints) ~= "table" then
+    return out
+  end
+  for i = 1, #hints do
+    if #out >= 3 then
+      break
+    end
+    local h = hints[i]
+    if type(h) == "string" and h ~= "" then
+      out[#out + 1] = { kind = "general", text = h }
+    elseif type(h) == "table" and type(h.text) == "string" and h.text ~= "" then
+      local k = "general"
+      if type(h.kind) == "string" and h.kind ~= "" then
+        k = h.kind
+      end
+      out[#out + 1] = { kind = k, text = h.text }
+    end
+  end
+  return out
 end
 
 local function tryOpen()
@@ -46,6 +97,85 @@ local function tryOpen()
   end
   sock = nil
   return false
+end
+
+--- Try to read one text frame; nil if none / unsupported / error (socket cleared on hard error).
+local function tryRecvOne()
+  if not sock then
+    return nil
+  end
+  if type(sock.receive) ~= "function" and type(sock.read) ~= "function" and type(sock.recv) ~= "function" then
+    return nil
+  end
+  local ok, res = pcall(function()
+    if type(sock.receive) == "function" then
+      return sock:receive()
+    end
+    if type(sock.read) == "function" then
+      return sock:read()
+    end
+    return sock:recv()
+  end)
+  if not ok then
+    sock = nil
+    lastTry = -RECONNECT_SEC
+    return nil
+  end
+  if type(res) == "string" and res ~= "" then
+    return res
+  end
+  return nil
+end
+
+--- Drain up to `maxPerTick` inbound messages; queues `coaching_response` for `takeCoachingForLap`.
+---@param maxPerTick number|nil
+function M.pollInbound(maxPerTick)
+  if not sock then
+    return
+  end
+  local cap = tonumber(maxPerTick) or MAX_RECV_PER_TICK
+  cap = math.max(1, math.min(32, math.floor(cap + 0.5)))
+  for _ = 1, cap do
+    local raw = tryRecvOne()
+    if not raw then
+      break
+    end
+    local data = jsonDecode(raw)
+    if type(data) == "table" then
+      local ev = data.event
+      local pv = tonumber(data.protocol)
+      if ev == "coaching_response" and pv == PROTOCOL_VERSION then
+        local lap = tonumber(data.lap)
+        local hints = data.hints
+        if lap and type(hints) == "table" then
+          pendingCoaching = { lap = lap, hints = normalizeSidecarHints(hints) }
+        end
+      end
+    end
+  end
+end
+
+--- If a sidecar response for `currentLapCompleted` is queued, consume and return hint list.
+---@param currentLapCompleted number|nil
+---@return table[]|nil
+function M.takeCoachingForLap(currentLapCompleted)
+  local cur = tonumber(currentLapCompleted) or 0
+  if not pendingCoaching then
+    return nil
+  end
+  if pendingCoaching.lap < cur then
+    pendingCoaching = nil
+    return nil
+  end
+  if pendingCoaching.lap ~= cur then
+    return nil
+  end
+  local h = pendingCoaching.hints
+  pendingCoaching = nil
+  if h and #h > 0 then
+    return h
+  end
+  return nil
 end
 
 ---@param simTime number|nil

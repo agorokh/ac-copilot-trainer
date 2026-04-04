@@ -55,7 +55,7 @@ local config = {
   coachingMaxVisibleHints = 3,
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
-  --- Optional `ws://127.0.0.1:8765` when Python sidecar is running (`pip install -e ".[coaching]"` then `python -m tools.ai_sidecar`). Applied once at script load; reload the app to change.
+  --- Optional `ws://127.0.0.1:8765` when Python sidecar is running — see `WARP.md` § WebSocket sidecar (issue #45).
   wsSidecarUrl = "",
 }
 
@@ -451,6 +451,7 @@ local function resetRollingDrivingState()
   state.lastSplineSector = nil
   state.sectorHudMsg = ""
   state.sectorHudUntil = 0
+  wsBridge.clearPendingCoaching()
   resetDeltaSmoother()
 end
 
@@ -798,6 +799,11 @@ function script.update(dt)
   end
 
   wsBridge.tick(ch.simSeconds(sim))
+  wsBridge.pollInbound(8)
+  local sidecarHints = wsBridge.takeCoachingForLap(state.lapsCompleted or 0)
+  if sidecarHints and #sidecarHints > 0 and (state.coachingRemainSec or 0) > 0 then
+    state.coachingLines = sidecarHints
+  end
 
   if state.initialized and not state.splineSessionPrimed then
     state.splineSessionPrimed = true
@@ -972,6 +978,7 @@ function script.update(dt)
         end
       end
       wsBridge.sendJson({
+        protocol = wsBridge.PROTOCOL_VERSION,
         event = "lap_complete",
         lap = state.lapsCompleted,
         lapTimeMs = lastMs,
