@@ -67,8 +67,6 @@ def test_compare_laps_cli_smoke(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_extract_corner_table_ignores_unknown_and_malformed() -> None:
-    from tools.ai_sidecar.features import extract_corner_table
-
     assert extract_corner_table({}) == {}
     assert extract_corner_table({"telemetry": "bad"}) == {}
     assert extract_corner_table({"telemetry": {"corners": [{"id": 1, "brakeDistanceM": 10}]}}) == {}
@@ -103,6 +101,11 @@ def test_lap_time_true_is_ignored_for_pb() -> None:
 def test_as_float_rejects_non_finite() -> None:
     assert _as_float(float("nan")) is None
     assert _as_float(float("inf")) is None
+
+
+def test_as_float_rejects_bool() -> None:
+    assert _as_float(True) is None
+    assert _as_float(False) is None
 
 
 def test_compare_laps_invalid_json_exits(tmp_path: Path) -> None:

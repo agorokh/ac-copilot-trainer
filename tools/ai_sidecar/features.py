@@ -16,15 +16,15 @@ CORNER_SPEED_METRICS: frozenset[str] = frozenset({"min_speed_kmh", "apex_speed_k
 _METRIC_ALIASES: dict[str, str] = {
     "minspeedkmh": "min_speed_kmh",
     "apexspeedkmh": "apex_speed_kmh",
-    "brakedistancem": "brake_distance_m",
     "min_speed_kmh": "min_speed_kmh",
     "apex_speed_kmh": "apex_speed_kmh",
-    "brake_distance_m": "brake_distance_m",
 }
 
 
 def _as_float(v: Any) -> float | None:
     if v is None:
+        return None
+    if isinstance(v, bool):
         return None
     try:
         f = float(v)
