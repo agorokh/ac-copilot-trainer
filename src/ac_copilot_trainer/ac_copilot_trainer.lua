@@ -25,6 +25,7 @@ local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
+local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
 
@@ -735,6 +736,15 @@ function script.update(dt)
   if sim.isInMainMenu then
     if state.wasDriving then
       if persistSnapshotCached() then
+        -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
+        sessionJournal.writeSessionEnd(lastDriveCar, lastDriveSim, {
+          lapsCompleted = state.lapsCompleted,
+          bestLapMs = state.bestLapMs,
+          lastLapMs = state.lastLapMs,
+          lapFeatureHistory = state.lapFeatureHistory,
+          coachingLines = state.coachingLines,
+          appVersionUi = APP_VERSION_UI,
+        })
         resetRuntimeAfterLeavingTrack()
         state.wasDriving = false
       end

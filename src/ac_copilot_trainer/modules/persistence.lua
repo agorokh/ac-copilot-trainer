@@ -201,6 +201,25 @@ local function ensureDir(path)
   pcall(os.execute, cmd)
 end
 
+--- Create parent directories for a file path (same safety rules as save()).
+function M.ensureParentDirForFile(path)
+  ensureDir(path)
+end
+
+--- Serialize a table to JSON when CSP `JSON.stringify` is available.
+---@param t table
+---@return string|nil
+function M.encodeJson(t)
+  return jsonEncode(t)
+end
+
+--- Parse JSON to table when CSP `JSON.parse` is available.
+---@param s string|nil
+---@return table|nil
+function M.decodeJson(s)
+  return jsonDecode(s)
+end
+
 ---@return table|nil
 function M.load(car, sim)
   local path = M.dataPath(car, sim)
