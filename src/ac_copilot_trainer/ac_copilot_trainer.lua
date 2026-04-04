@@ -55,6 +55,15 @@ local config = {
   wsSidecarUrl = "",
 }
 
+--- Non-negative numeric hold for UI and countdown (invalid config → 30).
+local function normalizedCoachingHoldSeconds()
+  local holdSec = tonumber(config.coachingHoldSeconds)
+  if not holdSec or holdSec ~= holdSec or holdSec < 0 then
+    return 30
+  end
+  return holdSec
+end
+
 local SMOOTH_N = 30
 local deltaBuf = {}
 local deltaBufN = 0
@@ -670,7 +679,7 @@ function script.windowMain(_dt)
     segmentCount = #(state.trackSegments or {}),
     coachingLines = coachingHudLines,
     coachingRemaining = coachRem,
-    coachingHoldSeconds = config.coachingHoldSeconds,
+    coachingHoldSeconds = normalizedCoachingHoldSeconds(),
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
   })
@@ -709,14 +718,14 @@ function script.windowCoaching(_dt)
 
   if remaining > 0 then
     if state.coachingLines and #state.coachingLines > 0 then
-      coachingOverlay.draw(state.coachingLines, remaining, config.coachingHoldSeconds)
+      coachingOverlay.draw(state.coachingLines, remaining, normalizedCoachingHoldSeconds())
     else
       coachingOverlay.drawHoldNoHints(remaining)
     end
     return
   end
 
-  coachingOverlay.drawBetweenLapsIdle(config.coachingHoldSeconds)
+  coachingOverlay.drawBetweenLapsIdle(normalizedCoachingHoldSeconds())
 end
 
 function script.update(dt)
@@ -856,11 +865,7 @@ function script.update(dt)
     end
 
     state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
-    local holdSec = tonumber(config.coachingHoldSeconds)
-    if not holdSec or holdSec ~= holdSec or holdSec < 0 then
-      holdSec = 30
-    end
-    state.coachingRemainSec = holdSec
+    state.coachingRemainSec = normalizedCoachingHoldSeconds()
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
     if ac and type(ac.log) == "function" then
