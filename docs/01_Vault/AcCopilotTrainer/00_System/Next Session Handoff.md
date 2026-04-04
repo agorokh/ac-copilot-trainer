@@ -16,7 +16,7 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-45-ws-sidecar-protocol` — open **PR** for issue **#45** (WebSocket v1 protocol, sidecar replies, Lua `pollInbound`, `docs/10_Development/12_WS_Sidecar_Protocol.md`, WARP); run `gh pr view` / CI after push.
+- **Branch:** `feat/issue-45-ws-sidecar-protocol` — **PR #53** (open): https://github.com/agorokh/ac-copilot-trainer/pull/53 — issue **#45** WebSocket v1 protocol; pr-resolution-follow-up after bots (~10 min between polls).
 - **Merged:** **#43** / PR #52 (coaching UX cap); **#47** journal — confirm PR #51 status on GitHub.
 - **Parent #9:** remaining milestones #44, #46, #49, etc.
 
