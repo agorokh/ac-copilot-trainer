@@ -246,17 +246,24 @@ function M.writeSessionEnd(car, sim, state)
     exported_at = rec.exported_at,
     session_key = rec.session_key,
   })
-  if idxLine then
-    persistence.ensureParentDirForFile(indexPath())
-    local ip = indexPath()
-    local af = io.open(ip, "a")
-    if af then
-      af:write(idxLine .. "\n")
-      af:close()
-    else
-      logJournal("failed to open journal index for append: " .. tostring(ip))
-    end
+  if not idxLine then
+    logJournal("encodeJsonCompact returned nil for journal index line")
+    return false
   end
+  persistence.ensureParentDirForFile(indexPath())
+  local ip = indexPath()
+  local af = io.open(ip, "a")
+  if not af then
+    logJournal("failed to open journal index for append: " .. tostring(ip))
+    return false
+  end
+  local idxPayload = idxLine .. "\n"
+  if not af:write(idxPayload) then
+    logJournal("failed to write journal index: " .. tostring(ip))
+    af:close()
+    return false
+  end
+  af:close()
   return true
 end
 
