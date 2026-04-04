@@ -1,6 +1,8 @@
 -- Focus practice mode (issue #44): corner label selection + coaching filter helpers.
 -- Pure logic here is mirrored by tests/test_focus_practice.py for CI.
 
+local coachingHints = require("coaching_hints")
+
 local M = {}
 
 local function wrap01(x)
@@ -31,16 +33,6 @@ function M.cornerLabelsMapFromString(s)
   return out
 end
 
---- First token of a consistency row e.g. "T1 45%%" -> "T1".
----@param row string|nil
----@return string|nil
-function M.labelFromWorstRow(row)
-  if type(row) ~= "string" then
-    return nil
-  end
-  return row:match("^(%S+)")
-end
-
 --- Build focus map from `consistencySummary().worstThree` rows (up to maxN labels).
 ---@param worstThree string[]|nil
 ---@param maxN number|nil
@@ -61,7 +53,7 @@ function M.cornerLabelsMapFromWorst(worstThree, maxN)
     if nmax <= 0 then
       break
     end
-    local lab = M.labelFromWorstRow(worstThree[i])
+    local lab = coachingHints.labelFromConsistencyEntry(worstThree[i])
     if lab and not out[lab] then
       out[lab] = true
       nmax = nmax - 1

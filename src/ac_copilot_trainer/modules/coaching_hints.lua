@@ -24,6 +24,9 @@ local function labelFromConsistencyEntry(s)
   return s:match("^(%S+)")
 end
 
+--- Exported for `focus_practice` (issue #44) — first token of a `worstThree` row.
+M.labelFromConsistencyEntry = labelFromConsistencyEntry
+
 ---@param text string
 ---@param kind "brake"|"throttle"|"line"|"positive"|"general"|nil
 ---@return table
