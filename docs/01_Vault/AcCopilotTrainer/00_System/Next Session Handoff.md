@@ -16,7 +16,7 @@ relates_to:
 
 ## Resume here
 
-- **Branch:** `feat/issue-43-coaching-ux-dismiss` — **PR #52** (open): https://github.com/agorokh/ac-copilot-trainer/pull/52 — issue **#43** coaching HUD config (`coachingMaxVisibleHints`, WARP docs, overlay/strip parity); wait for CI / review threads after push.
+- **Branch:** `feat/issue-43-coaching-ux-dismiss` — **PR #52** (open): https://github.com/agorokh/ac-copilot-trainer/pull/52 — issue **#43** coaching HUD; follow-up commits: single `normalizedCoachingMaxVisibleHints` in `coaching_overlay`, contract tests, review threads resolved; CI green on latest SHA (re-check before merge).
 - **Also:** `feat/issue-9-session-journal` — **PR #51** (open): https://github.com/agorokh/ac-copilot-trainer/pull/51 — journal follow-up if still active.
 - **Issues:** **#47** session journal ↔ PR #51; **#43** ↔ PR #52; parent **#9** remains open (#44–#46, #49, etc.).
 - **PR #51 resolution (2026-04-04):** Follow-up pass: gated failure log on `lapsCompleted >= 1`, wrapped `writeSessionEnd` in `pcall`, `logJournal` on `encodeJson`/`encodeJsonCompact` nil, index append open+write failures return `false`. Multiple `sleep 600` after pushes; required checks + Bugbot pass; GraphQL `reviewThreads` unresolved count 0 on tip.
