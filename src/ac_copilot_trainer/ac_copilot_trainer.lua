@@ -25,6 +25,7 @@ local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
+local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
 
@@ -735,6 +736,25 @@ function script.update(dt)
   if sim.isInMainMenu then
     if state.wasDriving then
       if persistSnapshotCached() then
+        -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
+        local journalLaps = state.lapsCompleted or 0
+        local callOk, journalOkOrErr = pcall(sessionJournal.writeSessionEnd, lastDriveCar, lastDriveSim, {
+          lapsCompleted = state.lapsCompleted,
+          bestLapMs = state.bestLapMs,
+          lastLapMs = state.lastLapMs,
+          lapFeatureHistory = state.lapFeatureHistory,
+          coachingLines = state.coachingLines,
+          appVersionUi = APP_VERSION_UI,
+        })
+        local journalOk = callOk and journalOkOrErr == true
+        -- writeSessionEnd returns false for intentional no-op (0 laps); log only real failures / throws.
+        if journalLaps >= 1 and ac and type(ac.log) == "function" then
+          if not callOk then
+            ac.log("[COPILOT] session_journal: export raised error after persist: " .. tostring(journalOkOrErr))
+          elseif not journalOk then
+            ac.log("[COPILOT] session_journal: export failed after persist (I/O or encode error; see session_journal logs)")
+          end
+        end
         resetRuntimeAfterLeavingTrack()
         state.wasDriving = false
       end
