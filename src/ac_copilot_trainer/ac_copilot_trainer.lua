@@ -216,13 +216,11 @@ local function buildSidecarTelemetryCorners(feats)
     local c = feats[i]
     local minS = tonumber(c.minSpeed)
     if minS then
-      -- Apex / minimum speed through the corner: use min speed only (entry/exit average
-      -- inflates vs true apex and breaks ranking vs reference laps — PR #55 review).
-      local apex = minS
+      -- Only emit min speed: we do not have a distinct apex sample yet; duplicating the
+      -- same value as both min and apex would double-count metrics in sidecar ranking (#55).
       corners[#corners + 1] = {
         id = i,
         minSpeedKmh = math.floor(minS + 0.5),
-        apexSpeedKmh = math.floor(apex + 0.5),
       }
     end
   end
