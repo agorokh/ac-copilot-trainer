@@ -226,6 +226,7 @@ function M.writeSessionEnd(car, sim, state)
   persistence.ensureParentDirForFile(path)
   local raw = persistence.encodeJson(rec)
   if not raw then
+    logJournal("encodeJson returned nil for journal record")
     return false
   end
   local f = io.open(path, "w")
