@@ -978,7 +978,7 @@ function script.update(dt)
         end
       end
       wsBridge.sendJson({
-        protocol = 1,
+        protocol = wsBridge.PROTOCOL_VERSION,
         event = "lap_complete",
         lap = state.lapsCompleted,
         lapTimeMs = lastMs,

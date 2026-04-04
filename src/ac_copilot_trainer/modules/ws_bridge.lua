@@ -8,6 +8,9 @@ local url ---@type string|nil
 local RECONNECT_SEC = 5
 local lastTry = -RECONNECT_SEC
 local MAX_RECV_PER_TICK = 8
+--- Sidecar WebSocket protocol version (must match Python `tools/ai_sidecar` v1 schema).
+local PROTOCOL_VERSION = 1
+M.PROTOCOL_VERSION = PROTOCOL_VERSION
 
 --- Latest coaching_response waiting for application (lap index matches lapsCompleted).
 local pendingCoaching ---@type { lap: number, hints: table[] }|nil
@@ -141,7 +144,7 @@ function M.pollInbound(maxPerTick)
     if type(data) == "table" then
       local ev = data.event
       local pv = tonumber(data.protocol)
-      if ev == "coaching_response" and pv == 1 then
+      if ev == "coaching_response" and pv == PROTOCOL_VERSION then
         local lap = tonumber(data.lap)
         local hints = data.hints
         if lap and type(hints) == "table" then
