@@ -18,7 +18,7 @@ def _norm_coaching_max_visible(raw: object) -> int:
         return 3
     if math.isnan(n):
         return 3
-    n = int(round(n))
+    n = int(math.floor(n + 0.5))  # match Lua math.floor(n + 0.5), not Python banker's round
     if n < 1:
         return 1
     if n > 3:
@@ -33,6 +33,7 @@ def test_normalization_bounds_match_lua_contract() -> None:
     assert _norm_coaching_max_visible(0) == 1
     assert _norm_coaching_max_visible(-5) == 1
     assert _norm_coaching_max_visible(2.4) == 2
+    assert _norm_coaching_max_visible(2.5) == 3
     assert _norm_coaching_max_visible(4) == 3
     assert _norm_coaching_max_visible(3) == 3
 
