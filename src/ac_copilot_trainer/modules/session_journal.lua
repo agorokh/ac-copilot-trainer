@@ -240,7 +240,7 @@ function M.writeSessionEnd(car, sim, state)
   end
   f:close()
 
-  local idxLine = persistence.encodeJson({
+  local idxLine = persistence.encodeJsonCompact({
     journal_file = fname,
     exported_at = rec.exported_at,
     session_key = rec.session_key,

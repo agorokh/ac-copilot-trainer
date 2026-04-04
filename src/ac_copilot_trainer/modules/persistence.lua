@@ -76,6 +76,21 @@ local function jsonEncode(t)
   return nil
 end
 
+--- One-line JSON for JSONL append (no pretty-print newlines).
+local function jsonEncodeCompact(t)
+  if JSON and type(JSON.stringify) == "function" then
+    local ok, out = pcall(JSON.stringify, t, false)
+    if ok and type(out) == "string" then
+      return out
+    end
+    ok, out = pcall(JSON.stringify, t)
+    if ok and type(out) == "string" then
+      return out
+    end
+  end
+  return nil
+end
+
 local function jsonDecode(s)
   if not s or s == "" then
     return nil
@@ -211,6 +226,13 @@ end
 ---@return string|nil
 function M.encodeJson(t)
   return jsonEncode(t)
+end
+
+--- Compact JSON (single line) for JSONL streams; see `session_journal` index append.
+---@param t table
+---@return string|nil
+function M.encodeJsonCompact(t)
+  return jsonEncodeCompact(t)
 end
 
 --- Parse JSON to table when CSP `JSON.parse` is available.
