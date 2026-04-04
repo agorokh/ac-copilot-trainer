@@ -94,7 +94,9 @@ def test_lap_comparison_state_skips_pb_without_lap_time() -> None:
     assert state.improvement_ranking_for(payload) == []
 
 
-def test_server_main_compare_laps(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_server_main_compare_laps(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     last = _FIXTURES / "lap_sidecar_last.json"
     ref = _FIXTURES / "lap_sidecar_ref.json"
     monkeypatch.setattr("sys.argv", ["x", "--compare-laps", str(last), str(ref)])
