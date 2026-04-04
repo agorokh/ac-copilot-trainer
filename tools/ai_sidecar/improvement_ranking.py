@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from tools.ai_sidecar.features import CORNER_SPEED_METRICS
+
 
 def _suggestion(corner_id: int, metric: str, last: float, best: float) -> str:
     if metric == "min_speed_kmh":
@@ -36,7 +38,7 @@ def rank_corner_improvements(
         rmet = ref_corners.get(cid)
         if not rmet:
             continue
-        for metric in ("min_speed_kmh", "apex_speed_kmh"):
+        for metric in sorted(CORNER_SPEED_METRICS):
             lv = lmet.get(metric)
             bv = rmet.get(metric)
             if lv is None or bv is None:
@@ -55,7 +57,7 @@ def rank_corner_improvements(
                 "metric": metric,
                 "last": round(lv, 4),
                 "reference": round(bv, 4),
-                "priority": round(float(regret), 4),
+                "priority": round(regret, 4),
                 "suggestion": _suggestion(cid, metric, lv, bv),
             }
         )

@@ -9,7 +9,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-_SPEED_METRICS = frozenset({"min_speed_kmh", "apex_speed_kmh"})
+# Metrics extracted from corner telemetry and used for improvement ranking (issue #49).
+CORNER_SPEED_METRICS: frozenset[str] = frozenset({"min_speed_kmh", "apex_speed_kmh"})
+
+_METRIC_ALIASES: dict[str, str] = {
+    "minspeedkmh": "min_speed_kmh",
+    "apexspeedkmh": "apex_speed_kmh",
+    "brakedistancem": "brake_distance_m",
+    "min_speed_kmh": "min_speed_kmh",
+    "apex_speed_kmh": "apex_speed_kmh",
+    "brake_distance_m": "brake_distance_m",
+}
 
 
 def _as_float(v: Any) -> float | None:
@@ -25,17 +35,9 @@ def _normalize_metric_key(name: str) -> str | None:
     """Map JSON camelCase or snake_case to internal keys."""
     if not name:
         return None
-    key = str(name).strip()
-    aliases = {
-        "minspeedkmh": "min_speed_kmh",
-        "apexspeedkmh": "apex_speed_kmh",
-        "brakedistancem": "brake_distance_m",
-        "min_speed_kmh": "min_speed_kmh",
-        "apex_speed_kmh": "apex_speed_kmh",
-        "brake_distance_m": "brake_distance_m",
-    }
+    key = name.strip()
     compact = key.replace("_", "").lower()
-    return aliases.get(compact) or aliases.get(key.lower())
+    return _METRIC_ALIASES.get(compact) or _METRIC_ALIASES.get(key.lower())
 
 
 def extract_corner_table(lap: Mapping[str, Any]) -> dict[int, dict[str, float]]:
@@ -61,10 +63,12 @@ def extract_corner_table(lap: Mapping[str, Any]) -> dict[int, dict[str, float]]:
             continue
         bucket: dict[str, float] = {}
         for k, v in item.items():
+            if not isinstance(k, str):
+                continue
             if k == "id":
                 continue
-            nk = _normalize_metric_key(str(k))
-            if nk is None or nk not in _SPEED_METRICS:
+            nk = _normalize_metric_key(k)
+            if nk is None or nk not in CORNER_SPEED_METRICS:
                 continue
             fv = _as_float(v)
             if fv is not None:
