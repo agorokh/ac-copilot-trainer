@@ -39,7 +39,7 @@ end
 ---@return table<string, boolean>
 function M.cornerLabelsMapFromWorst(worstThree, maxN)
   local out = {}
-  local nmax = tonumber(maxN) or 3
+  local nmax = math.floor(tonumber(maxN) or 3)
   if nmax < 1 then
     nmax = 1
   end

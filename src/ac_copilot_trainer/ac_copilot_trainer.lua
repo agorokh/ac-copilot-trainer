@@ -328,6 +328,29 @@ local state = {
   focusPracticeHudSummary = "",
 }
 
+-- HUD sees only focus-practice fields (checkbox + summary), not the full `state` table.
+local focusPracticeUiProxy = setmetatable({}, {
+  __index = function(_, k)
+    if k == "focusPracticeActive" then
+      return state.focusPracticeActive
+    end
+    if k == "focusPracticeHudSummary" then
+      return state.focusPracticeHudSummary
+    end
+    return nil
+  end,
+  __newindex = function(_, k, v)
+    if k == "focusPracticeActive" then
+      state.focusPracticeActive = v
+      return
+    end
+    if k == "focusPracticeHudSummary" then
+      state.focusPracticeHudSummary = v
+      return
+    end
+  end,
+})
+
 --- Issue #44: map of corner labels -> true for marker emphasis + coaching filter.
 ---@return table<string, boolean>|nil, boolean manualUsed
 local function focusLabelMap()
@@ -764,7 +787,7 @@ function script.windowMain(_dt)
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
-    focusPracticeUi = state,
+    focusPracticeUi = focusPracticeUiProxy,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()

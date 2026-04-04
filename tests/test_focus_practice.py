@@ -33,6 +33,7 @@ def corner_labels_map_from_worst(
     max_n: int | None,
 ) -> dict[str, bool]:
     out: dict[str, bool] = {}
+    # int() truncates toward zero; matches Lua math.floor for non-negative max_n.
     raw_nmax = 3 if max_n is None else int(max_n)
     nmax = max(1, min(3, raw_nmax))
     if not worst_three:
@@ -122,6 +123,7 @@ def test_corner_labels_map_from_worst() -> None:
     assert corner_labels_map_from_worst(w, 2) == {"T2": True, "T1": True}
     assert corner_labels_map_from_worst(w, 5) == {"T2": True, "T1": True, "T3": True}
     assert corner_labels_map_from_worst(w, 0) == {"T2": True}  # Lua clamps 0 -> 1 slot
+    assert corner_labels_map_from_worst(w, 2.5) == {"T2": True, "T1": True}  # Lua math.floor
 
 
 def test_wrap01() -> None:

@@ -39,7 +39,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingShowPrimer boolean|nil
 ---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
 ---@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
----@field focusPracticeUi table|nil @mutable: `focusPracticeActive`, `focusPracticeHudSummary` (issue #44)
+---@field focusPracticeUi table|nil @proxy: only `focusPracticeActive` + `focusPracticeHudSummary` (issue #44)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
