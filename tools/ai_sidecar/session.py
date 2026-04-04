@@ -14,7 +14,7 @@ def _positive_lap_time_ms(raw: Any) -> int | None:
         return None
     try:
         v = int(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return v if v > 0 else None
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,16 +17,20 @@ from tools.ai_sidecar.session import LapComparisonState
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def _load_fixture(name: str) -> dict[str, Any]:
+    return json.loads((_FIXTURES / name).read_text(encoding="utf-8"))
+
+
 def test_extract_corner_table_fixture() -> None:
-    raw = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
+    raw = _load_fixture("lap_sidecar_ref.json")
     t = extract_corner_table(raw)
     assert t[1]["min_speed_kmh"] == 55.0
     assert t[2]["apex_speed_kmh"] == 102.0
 
 
 def test_rank_corner_improvements_orders_by_regret() -> None:
-    last = json.loads((_FIXTURES / "lap_sidecar_last.json").read_text(encoding="utf-8"))
-    ref = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
+    last = _load_fixture("lap_sidecar_last.json")
+    ref = _load_fixture("lap_sidecar_ref.json")
     ranked = rank_corner_improvements(
         extract_corner_table(last),
         extract_corner_table(ref),
@@ -39,8 +44,8 @@ def test_rank_corner_improvements_orders_by_regret() -> None:
 
 def test_prepare_outbound_attaches_improvement_ranking_after_slower_lap() -> None:
     state = LapComparisonState()
-    ref = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
-    last = json.loads((_FIXTURES / "lap_sidecar_last.json").read_text(encoding="utf-8"))
+    ref = _load_fixture("lap_sidecar_ref.json")
+    last = _load_fixture("lap_sidecar_last.json")
 
     first = prepare_outbound_message(ref, reply_coaching=True, lap_state=state)
     assert first is not None
@@ -80,15 +85,15 @@ def test_extract_corner_table_ignores_unknown_and_malformed() -> None:
 
 
 def test_rank_corner_improvements_empty_when_no_regressions() -> None:
-    ref = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
+    ref = _load_fixture("lap_sidecar_ref.json")
     t = extract_corner_table(ref)
     assert rank_corner_improvements(t, t) == []
 
 
 def test_new_pb_lap_emits_no_improvement_ranking() -> None:
     state = LapComparisonState()
-    slow = json.loads((_FIXTURES / "lap_sidecar_last.json").read_text(encoding="utf-8"))
-    fast = json.loads((_FIXTURES / "lap_sidecar_ref.json").read_text(encoding="utf-8"))
+    slow = _load_fixture("lap_sidecar_last.json")
+    fast = _load_fixture("lap_sidecar_ref.json")
     assert state.improvement_ranking_for(slow) == []
     assert state.improvement_ranking_for(fast) == []
 
@@ -97,6 +102,15 @@ def test_lap_time_true_is_ignored_for_pb() -> None:
     state = LapComparisonState()
     payload = {
         "lapTimeMs": True,
+        "telemetry": {"corners": [{"id": 1, "minSpeedKmh": 50}]},
+    }
+    assert state.improvement_ranking_for(payload) == []
+
+
+def test_lap_time_infinity_does_not_crash_lap_state() -> None:
+    state = LapComparisonState()
+    payload = {
+        "lapTimeMs": float("inf"),
         "telemetry": {"corners": [{"id": 1, "minSpeedKmh": 50}]},
     }
     assert state.improvement_ranking_for(payload) == []
