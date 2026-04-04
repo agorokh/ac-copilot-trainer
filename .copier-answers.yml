@@ -1,0 +1,7 @@
+# Changes here will be overwritten by Copier
+_src_path: https://github.com/agorokh/template-repo.git
+_commit: 76e62d2
+project_name: ac-copilot-trainer
+project_key: AcCopilotTrainer
+package_name: ac_copilot_trainer
+github_org: agorokh
