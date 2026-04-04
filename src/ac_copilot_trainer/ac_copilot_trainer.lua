@@ -68,20 +68,9 @@ local function normalizedCoachingHoldSeconds()
   return holdSec
 end
 
---- Integer in [1, 3] for how many `buildAfterLap` hints to show (invalid → 3).
+--- Integer in [1, 3] for how many `buildAfterLap` hints to show (invalid → 3). Logic lives in `coaching_overlay`.
 local function normalizedCoachingMaxVisibleHints()
-  local n = tonumber(config.coachingMaxVisibleHints)
-  if not n or n ~= n then
-    return 3
-  end
-  n = math.floor(n + 0.5)
-  if n < 1 then
-    return 1
-  end
-  if n > 3 then
-    return 3
-  end
-  return n
+  return coachingOverlay.normalizedCoachingMaxVisibleHints(config.coachingMaxVisibleHints)
 end
 
 local SMOOTH_N = 30

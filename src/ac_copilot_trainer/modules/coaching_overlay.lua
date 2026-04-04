@@ -38,6 +38,24 @@ local function hintKind(entry)
   return "general"
 end
 
+--- Single clamp for `config.coachingMaxVisibleHints` (issue #43). Used by the entry script and both draw paths.
+---@param raw any
+---@return integer
+function M.normalizedCoachingMaxVisibleHints(raw)
+  local n = tonumber(raw)
+  if not n or n ~= n then
+    return 3
+  end
+  n = math.floor(n + 0.5)
+  if n < 1 then
+    return 1
+  end
+  if n > 3 then
+    return 3
+  end
+  return n
+end
+
 --- Fade out in the last min(5s, hold) seconds so short `coachingHoldSeconds` stays at full opacity
 --- until its own tail (CodeRabbit PR #50).
 local function computeAlpha(timeRemaining, holdSeconds)
@@ -72,17 +90,6 @@ local function drawStandardCoachingPanel(defaultW, defaultH, minH)
   if ui.drawRect and vec2 then
     ui.drawRect(vec2(0, 0), vec2(w, h), rgbm(0.4, 0.43, 0.5, 0.45), 12, nil, 1)
   end
-end
-
----@param maxVisible integer|nil 1–3; extra hints from `buildAfterLap` stay in data but are not drawn
-local function visibleHintCount(lineCount, maxVisible)
-  local n = tonumber(maxVisible)
-  if not n or n ~= n then
-    n = 3
-  end
-  n = math.floor(n + 0.5)
-  n = math.max(1, math.min(3, n))
-  return math.min(n, lineCount)
 end
 
 ---@param coachingLines table[]|string[]|nil
@@ -121,7 +128,8 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
     ui.separator()
   end
 
-  local showN = visibleHintCount(#coachingLines, maxVisibleHints)
+  local cap = M.normalizedCoachingMaxVisibleHints(maxVisibleHints)
+  local showN = math.min(cap, #coachingLines)
   for i = 1, showN do
     local body = hintText(coachingLines[i])
     if body ~= "" then
@@ -232,7 +240,7 @@ function M.drawMainWindowStrip(vm)
   local lines = vm.coachingLines
   local rem = vm.coachingRemaining
   local hold = vm.coachingHoldSeconds or 30
-  local maxVis = vm.coachingMaxVisibleHints or 3
+  local maxVis = vm.coachingMaxVisibleHints
   local primer = vm.coachingShowPrimer
 
   local showActive = lines and #lines > 0 and rem and rem > 0
@@ -253,7 +261,8 @@ function M.drawMainWindowStrip(vm)
 
   if showActive then
     alpha = computeAlpha(rem, hold)
-    local vis = visibleHintCount(#lines, maxVis)
+    local cap = M.normalizedCoachingMaxVisibleHints(maxVis)
+    local vis = math.min(#lines, cap)
     body = hintText(lines[1])
     accent = accentForKind(hintKind(lines[1]))
     if vis > 1 then
