@@ -27,6 +27,11 @@ function M.reset()
   pendingCoaching = nil
 end
 
+--- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
+function M.clearPendingCoaching()
+  pendingCoaching = nil
+end
+
 local function jsonEncode(t)
   if JSON and type(JSON.stringify) == "function" then
     local ok, s = pcall(JSON.stringify, t, false)
@@ -55,13 +60,18 @@ local function normalizeSidecarHints(hints)
   if type(hints) ~= "table" then
     return out
   end
-  local lim = math.min(3, #hints)
-  for i = 1, lim do
+  for i = 1, #hints do
+    if #out >= 3 then
+      break
+    end
     local h = hints[i]
     if type(h) == "string" and h ~= "" then
       out[#out + 1] = { kind = "general", text = h }
     elseif type(h) == "table" and type(h.text) == "string" and h.text ~= "" then
-      local k = type(h.kind) == "string" and h.kind or "general"
+      local k = "general"
+      if type(h.kind) == "string" and h.kind ~= "" then
+        k = h.kind
+      end
       out[#out + 1] = { kind = k, text = h.text }
     end
   end

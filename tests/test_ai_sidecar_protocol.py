@@ -54,7 +54,7 @@ def test_prepare_no_reply_mode() -> None:
 
 
 def test_sidecar_websocket_lap_complete_roundtrip() -> None:
-    websockets = pytest.importorskip("websockets")
+    websockets = pytest.importorskip("websockets", minversion="12")
     from tools.ai_sidecar.server import _handler
 
     async def _go() -> None:
@@ -88,8 +88,30 @@ def test_sidecar_websocket_lap_complete_roundtrip() -> None:
     asyncio.run(_go())
 
 
+def test_sidecar_non_object_json_gets_analysis_error() -> None:
+    websockets = pytest.importorskip("websockets", minversion="12")
+    from tools.ai_sidecar.server import _handler
+
+    async def _go() -> None:
+        async with websockets.serve(
+            lambda w: _handler(w, reply_coaching=True),
+            "127.0.0.1",
+            0,
+        ) as server:
+            port = server.sockets[0].getsockname()[1]
+            uri = f"ws://127.0.0.1:{port}"
+            async with websockets.connect(uri) as ws:
+                await ws.send("[]")
+                raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                out = json.loads(raw)
+                assert out["event"] == EVENT_ANALYSIS_ERROR
+                assert out["message"] == "root must be a JSON object"
+
+    asyncio.run(_go())
+
+
 def test_sidecar_invalid_json_gets_analysis_error() -> None:
-    websockets = pytest.importorskip("websockets")
+    websockets = pytest.importorskip("websockets", minversion="12")
     from tools.ai_sidecar.server import _handler
 
     async def _go() -> None:

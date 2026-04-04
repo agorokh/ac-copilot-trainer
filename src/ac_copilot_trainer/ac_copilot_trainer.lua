@@ -451,6 +451,7 @@ local function resetRollingDrivingState()
   state.lastSplineSector = nil
   state.sectorHudMsg = ""
   state.sectorHudUntil = 0
+  wsBridge.clearPendingCoaching()
   resetDeltaSmoother()
 end
 
