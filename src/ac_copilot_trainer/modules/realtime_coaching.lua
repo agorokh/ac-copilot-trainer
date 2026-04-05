@@ -252,8 +252,9 @@ function M.tick(opts)
   local seg = findSegment(sp)
   local segKind = seg and seg.kind or nil
 
-  -- Detect approaching: on a straight (or gap), check if next brake/corner is within approachMeters
-  if (segKind == "straight" or segKind == nil) and trackLenM and trackLenM > 0 then
+  -- Detect approaching: on a straight (or gap), check if next brake/corner is within approachMeters.
+  -- Skip when exiting a corner so the exit window can complete before approach begins.
+  if phase ~= "corner" and phase ~= "exiting" and (segKind == "straight" or segKind == nil) and trackLenM and trackLenM > 0 then
     local nextSeg, nextDist = findNextBrakeOrCorner(sp)
     if nextSeg and nextDist then
       local distM = nextDist * trackLenM
