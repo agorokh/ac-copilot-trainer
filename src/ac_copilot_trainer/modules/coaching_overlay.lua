@@ -1,8 +1,222 @@
 -- Coaching overlay: panel + per-hint colors (issue #39 Part F); font + HUD strip (issue #41).
+-- Approach telemetry panel: polished structured data display (issue #57 Part C).
 
 local fontMod = require("coaching_font")
 
 local M = {}
+
+-- ---------------------------------------------------------------------------
+-- Design tokens (Figma design brief, issue #57 Part C)
+-- ---------------------------------------------------------------------------
+
+local COLOR_BG           = rgbm(0.067, 0.067, 0.067, 0.60)   -- rgba(17,17,17,0.6)
+local COLOR_BG_BORDER    = rgbm(0.30, 0.32, 0.38, 0.40)
+local COLOR_LABEL        = rgbm(0.55, 0.58, 0.65, 1.0)       -- muted labels
+local COLOR_TITLE        = rgbm(0.35, 0.82, 0.95, 1.0)       -- accent cyan
+local COLOR_WHITE        = rgbm(0.95, 0.95, 0.97, 1.0)       -- primary text
+local COLOR_GREEN        = rgbm(0.20, 0.85, 0.35, 1.0)       -- speed OK
+local COLOR_RED          = rgbm(0.94, 0.27, 0.27, 1.0)       -- #EF4444 warning
+local COLOR_BAR_BG       = rgbm(0.15, 0.15, 0.18, 0.80)      -- progress bar background
+local COLOR_BAR_FILL     = rgbm(0.35, 0.82, 0.95, 0.90)      -- progress bar fill
+local COLOR_BAR_GLOW     = rgbm(0.35, 0.82, 0.95, 0.35)      -- progress bar glow
+local COLOR_BRAND        = rgbm(0.45, 0.48, 0.52, 1.0)       -- footer branding (text opaque per brief)
+
+local PANEL_ROUNDING = 12
+local PANEL_PAD_X    = 20
+local PANEL_PAD_Y    = 16
+
+-- ---------------------------------------------------------------------------
+-- Speed color logic: green <= target, red > target+8, white in between
+-- ---------------------------------------------------------------------------
+
+---@param currentSpd number
+---@param targetSpd number
+---@return table @rgbm color
+local function speedColor(currentSpd, targetSpd)
+  local delta = currentSpd - targetSpd
+  if delta > 8 then
+    return COLOR_RED
+  elseif delta <= 0 then
+    return COLOR_GREEN
+  end
+  return COLOR_WHITE
+end
+
+-- ---------------------------------------------------------------------------
+-- Progress bar widget
+-- ---------------------------------------------------------------------------
+
+---@param x number    left edge
+---@param y number    top edge
+---@param w number    total width
+---@param h number    bar height
+---@param pct number  0..1 fill percentage
+local function drawProgressBar(x, y, w, h, pct)
+  if not ui or type(ui.drawRectFilled) ~= "function" or type(vec2) ~= "function" then return end
+  local p0 = vec2(x, y)
+  local p1 = vec2(x + w, y + h)
+  -- Background
+  ui.drawRectFilled(p0, p1, COLOR_BAR_BG, h / 2)
+  -- Fill
+  local fillW = math.max(0, math.min(1, pct)) * w
+  if fillW > 1 then
+    -- Glow layer behind fill (subtle wider bar for bloom effect)
+    if fillW > 4 then
+      ui.drawRectFilled(vec2(x, y - 1), vec2(x + fillW, y + h + 1), COLOR_BAR_GLOW, h / 2)
+    end
+    -- Fill layer on top
+    ui.drawRectFilled(p0, vec2(x + fillW, y + h), COLOR_BAR_FILL, h / 2)
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Approach telemetry panel (issue #57 Part C)
+-- ---------------------------------------------------------------------------
+
+--- Polished approach telemetry panel for WINDOW_1.
+--- Renders structured ApproachHudPayload data with designed layout.
+--- Returns true if panel was drawn (caller can skip fallback).
+---@param approachData table|nil  ApproachHudPayload from approachHudData()
+---@return boolean @true if panel was drawn
+function M.drawApproachPanel(approachData)
+  if not approachData or type(approachData) ~= "table" then
+    return false
+  end
+  if not ui or type(ui.textColored) ~= "function" or not vec2 then
+    return false
+  end
+
+  local turnLabel     = tostring(approachData.turnLabel or "?")
+  local targetSpd     = tonumber(approachData.targetSpeedKmh) or 0
+  local currentSpd    = tonumber(approachData.currentSpeedKmh) or 0
+  local distanceM     = tonumber(approachData.distanceToBrakeM) or 0
+  local progressPct   = tonumber(approachData.progressPct) or 0
+
+  -- Panel dimensions — use actual window size so nothing draws outside clip region.
+  -- Defaults (420x220) only used when ui.windowSize is unavailable.
+  local w, h = 420, 220
+  if ui.windowSize then
+    local sz = ui.windowSize()
+    if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
+      w = sz.x
+      h = sz.y
+    end
+  end
+
+  -- Dark semi-transparent background with rounded corners
+  if ui.drawRectFilled then
+    ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG, PANEL_ROUNDING)
+  end
+  if ui.drawRect then
+    ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
+  end
+
+  -- Row 1: "APPROACHING" label + corner name
+  local row1Y = PANEL_PAD_Y
+  if ui.setCursor then
+    ui.setCursor(vec2(PANEL_PAD_X, row1Y))
+  end
+  local fkLabel = fontMod.pushNamed("labels", 12)
+  ui.textColored(COLOR_TITLE, "APPROACHING")
+  fontMod.pop(fkLabel)
+
+  local row1bY = row1Y + 18
+  if ui.setCursor then
+    ui.setCursor(vec2(PANEL_PAD_X, row1bY))
+  end
+  local fkCorner = fontMod.pushNamed("numbers", 26)
+  ui.textColored(COLOR_WHITE, turnLabel)
+  fontMod.pop(fkCorner)
+
+  -- Row 2: Speed comparison — left: TARGET, right: CURRENT
+  local row2Y = row1bY + 40
+  local colLeftX = PANEL_PAD_X
+  local colRightX = w / 2 + 10
+
+  -- Target speed
+  if ui.setCursor then
+    ui.setCursor(vec2(colLeftX, row2Y))
+  end
+  local fkL2 = fontMod.pushNamed("labels", 10)
+  ui.textColored(COLOR_LABEL, "TARGET ENTRY")
+  fontMod.pop(fkL2)
+
+  local tgtStr = string.format("%.0f", targetSpd)
+  if ui.setCursor then
+    ui.setCursor(vec2(colLeftX, row2Y + 16))
+  end
+  local fkTgt = fontMod.pushNamed("numbers", 32)
+  ui.textColored(COLOR_WHITE, tgtStr)
+  fontMod.pop(fkTgt)
+
+  -- Dynamic unit offset: ~20px per digit at 32pt to avoid overlap on 3-digit speeds
+  local tgtUnitX = colLeftX + #tgtStr * 20 + 6
+  if ui.setCursor then
+    ui.setCursor(vec2(tgtUnitX, row2Y + 28))
+  end
+  local fkUnit1 = fontMod.pushNamed("labels", 11)
+  ui.textColored(COLOR_LABEL, "km/h")
+  fontMod.pop(fkUnit1)
+
+  -- Current speed
+  if ui.setCursor then
+    ui.setCursor(vec2(colRightX, row2Y))
+  end
+  local fkL3 = fontMod.pushNamed("labels", 10)
+  ui.textColored(COLOR_LABEL, "CURRENT")
+  fontMod.pop(fkL3)
+
+  local curStr = string.format("%.0f", currentSpd)
+  local spdCol = speedColor(currentSpd, targetSpd)
+  if ui.setCursor then
+    ui.setCursor(vec2(colRightX, row2Y + 16))
+  end
+  local fkCur = fontMod.pushNamed("numbers", 32)
+  ui.textColored(spdCol, curStr)
+  fontMod.pop(fkCur)
+
+  local curUnitX = colRightX + #curStr * 20 + 6
+  if ui.setCursor then
+    ui.setCursor(vec2(curUnitX, row2Y + 28))
+  end
+  local fkUnit2 = fontMod.pushNamed("labels", 11)
+  ui.textColored(COLOR_LABEL, "km/h")
+  fontMod.pop(fkUnit2)
+
+  -- Row 3: Distance to braking point + progress bar
+  local row3Y = row2Y + 60
+  if ui.setCursor then
+    ui.setCursor(vec2(PANEL_PAD_X, row3Y))
+  end
+  local fkL4 = fontMod.pushNamed("labels", 10)
+  ui.textColored(COLOR_LABEL, "DISTANCE TO BRAKING POINT")
+  fontMod.pop(fkL4)
+
+  -- Distance value
+  if ui.setCursor then
+    ui.setCursor(vec2(w - PANEL_PAD_X - 80, row3Y))
+  end
+  local fkDist = fontMod.pushNamed("numbers", 14)
+  ui.textColored(COLOR_WHITE, string.format("%.0f m", distanceM))
+  fontMod.pop(fkDist)
+
+  -- Progress bar
+  local barY = row3Y + 18
+  local barW = w - PANEL_PAD_X * 2
+  local barH = 8
+  drawProgressBar(PANEL_PAD_X, barY, barW, barH, progressPct)
+
+  -- Footer: branding
+  local footerY = h - PANEL_PAD_Y - 12
+  if ui.setCursor then
+    ui.setCursor(vec2(PANEL_PAD_X, footerY))
+  end
+  local fkBrand = fontMod.pushNamed("brand", 9)
+  ui.textColored(COLOR_BRAND, "AC COPILOT TRAINER")
+  fontMod.pop(fkBrand)
+
+  return true
+end
 
 local function accentForKind(kind)
   local k = type(kind) == "string" and kind or "general"

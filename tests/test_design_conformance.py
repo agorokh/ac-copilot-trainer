@@ -177,9 +177,8 @@ class TestTypography:
         assert "bmw.txt" in src.lower() or "BMW.txt" in src
 
     def test_coaching_overlay_font_brackets(self) -> None:
-        """TY-02: Each ``M.draw*`` function balances fontMod.push/pop within its body."""
+        """TY-02: Each ``M.draw*`` function balances fontMod push/pop within its body."""
         src = _lua_text("coaching_overlay.lua")
-        # ``draw\w*`` matches ``M.draw`` (``draw\w+`` skipped the primary entry).
         draw_funcs = list(re.finditer(r"^function\s+M\.(draw\w*)\s*\(", src, flags=re.MULTILINE))
         assert draw_funcs, "No M.draw* functions found in coaching_overlay.lua"
 
@@ -187,9 +186,10 @@ class TestTypography:
         for i, match in enumerate(draw_funcs):
             name = match.group(1)
             start = match.start()
-            end = draw_funcs[i + 1].start() if i + 1 < len(draw_funcs) else len(src)
-            body = src[start:end]
-            pushes = len(re.findall(r"fontMod\.push\(", body))
+            end_pos = draw_funcs[i + 1].start() if i + 1 < len(draw_funcs) else len(src)
+            body = src[start:end_pos]
+            # Count both push() and pushNamed() as font pushes
+            pushes = len(re.findall(r"fontMod\.push(?:Named)?\(", body))
             pops = len(re.findall(r"fontMod\.pop\(", body))
             total_pushes += pushes
             assert pushes == pops, (
@@ -197,7 +197,7 @@ class TestTypography:
             )
             assert pushes > 0, f"M.{name} must call fontMod.push at least once"
 
-        assert total_pushes >= 3, f"Expected at least 3 font pushes, got {total_pushes}"
+        assert total_pushes >= 3, f"Expected at least 3 font pushes total, got {total_pushes}"
 
 
 # ---------------------------------------------------------------------------
@@ -344,3 +344,103 @@ class TestCornerNames:
         assert "function M.resolveApproachLabel" in src
         # Must also be returned (module table pattern).
         assert "return M" in src
+
+
+# ---------------------------------------------------------------------------
+# Part C: Approach telemetry panel (issue #57)
+# ---------------------------------------------------------------------------
+
+
+class TestApproachPanel:
+    """Issue #57 Part C: polished approach telemetry panel in WINDOW_1."""
+
+    def test_draw_approach_panel_exists(self) -> None:
+        """PC-01: coaching_overlay exports drawApproachPanel."""
+        src = _lua_text("coaching_overlay.lua")
+        assert "function M.drawApproachPanel" in src
+
+    def test_approach_panel_speed_color_logic(self) -> None:
+        """PC-02: speedColor maps delta > 8 to red, delta <= 0 to green, else white."""
+        src = _lua_text("coaching_overlay.lua")
+        # Find the full speedColor function (greedy to last 'end')
+        m = re.search(
+            r"(function\s+speedColor\s*\([^)]*\).*?\nend)",
+            src,
+            flags=re.DOTALL,
+        )
+        assert m, "speedColor function must exist in coaching_overlay.lua"
+        body = m.group(1)
+        assert re.search(r"delta\s*>\s*8", body), "speedColor must use 8 km/h threshold"
+        assert "COLOR_RED" in body, "delta > 8 must map to COLOR_RED"
+        assert "COLOR_GREEN" in body, "delta <= 0 must map to COLOR_GREEN"
+        assert "COLOR_WHITE" in body, "within-band delta must map to COLOR_WHITE"
+
+    def test_approach_panel_progress_bar(self) -> None:
+        """PC-03: drawProgressBar renders fill based on pct with clamping."""
+        src = _lua_text("coaching_overlay.lua")
+        assert re.search(r"function\s+drawProgressBar\s*\(", src), (
+            "drawProgressBar function must exist"
+        )
+        assert "COLOR_BAR_FILL" in src, "Progress bar must use COLOR_BAR_FILL"
+        assert "COLOR_BAR_BG" in src, "Progress bar must use COLOR_BAR_BG"
+        # pct must scale fill width
+        assert re.search(r"pct\).*?\*\s*w", src), "drawProgressBar must scale fill width by pct"
+        # pct must be clamped
+        assert re.search(r"math\.(?:max|min)\s*\([^)]*pct[^)]*\)", src), (
+            "drawProgressBar must clamp pct via math.max/min"
+        )
+
+    def test_approach_panel_design_tokens(self) -> None:
+        """PC-04: design tokens match Figma brief."""
+        src = _lua_text("coaching_overlay.lua")
+        assert "COLOR_RED" in src, "Must define COLOR_RED design token"
+        assert re.search(r"COLOR_BG\s*=\s*rgbm\([^)]+0\.60\)", src), (
+            "COLOR_BG must use 0.60 alpha (Figma: rgba(17,17,17,0.6))"
+        )
+
+    def test_approach_panel_font_roles(self) -> None:
+        """PC-05: approach panel uses named font roles for numbers and labels."""
+        src = _lua_text("coaching_overlay.lua")
+        assert 'pushNamed("numbers"' in src, (
+            "Approach panel must use 'numbers' font role for speed values"
+        )
+        assert 'pushNamed("labels"' in src, (
+            "Approach panel must use 'labels' font role for section labels"
+        )
+        assert 'pushNamed("brand"' in src, "Approach panel must use 'brand' font role for footer"
+
+    def test_coaching_font_multi_font_support(self) -> None:
+        """PC-06: coaching_font.lua supports named font roles with fallbacks."""
+        src = _lua_text("coaching_font.lua")
+        assert "function M.namedDescriptor" in src
+        assert "function M.pushNamed" in src
+        # Primary role fonts
+        assert '"Michroma"' in src, "Must try Michroma for numbers font"
+        assert '"Montserrat"' in src, "Must try Montserrat for labels font"
+        assert '"Syncopate"' in src, "Must try Syncopate for brand font"
+        # Windows-safe fallbacks
+        assert '"Consolas"' in src, "Must include Windows-safe fallback for numbers"
+        assert '"Segoe UI"' in src, "Must include Windows-safe fallback for labels/brand"
+
+    def test_window_coaching_calls_approach_panel(self) -> None:
+        """PC-07: windowCoaching in entry script calls drawApproachPanel."""
+        src = ENTRY.read_text(encoding="utf-8")
+        assert "drawApproachPanel" in src
+        assert "approachHudData" in src
+
+    def test_approach_panel_font_push_pop_balance(self) -> None:
+        """PC-08: drawApproachPanel balances all font push/pop calls."""
+        src = _lua_text("coaching_overlay.lua")
+        m = re.search(
+            r"function\s+M\.drawApproachPanel\s*\(.*?\)\s*\n(.*?)^end",
+            src,
+            re.MULTILINE | re.DOTALL,
+        )
+        assert m, "drawApproachPanel function not found"
+        body = m.group(1)
+        pushes = len(re.findall(r"fontMod\.push(?:Named)?\(", body))
+        pops = len(re.findall(r"fontMod\.pop\(", body))
+        assert pushes == pops, (
+            f"drawApproachPanel font push/pop imbalance: {pushes} pushes vs {pops} pops"
+        )
+        assert pushes >= 5, f"drawApproachPanel should push at least 5 font roles, got {pushes}"
