@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-04
+last_updated: 2026-04-05
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -16,6 +16,7 @@ relates_to:
 
 ## Resume here
 
+- **Issue #57 Phase 5 Part B:** branch `feat/issue-57-phase5-part-b` — **PR #60** (open as of 2026-04-05): https://github.com/agorokh/ac-copilot-trainer/pull/60 — Settings window (WINDOW_2) delivered; Parts C–E still on #57.
 - **Branch:** `feat/issue-46-ollama-debrief` — **PR #55** (draft): https://github.com/agorokh/ac-copilot-trainer/pull/55 — issue **#46** Ollama debrief + HUD; mark ready when green, then pr-resolution-follow-up (~10 min between polls).
 - **Also open:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (issue **#49** ranking / SHAP).
 - **Merged:** **#45** / PR #53 (WebSocket v1); **#43** / PR #52 (coaching UX); **#47** journal — confirm PR #51 status on GitHub.
@@ -23,6 +24,7 @@ relates_to:
 
 ## What was delivered this session
 
+- **Issue #57 Part B (PR #60):** `manifest.ini` WINDOW_2 Settings; `hud_settings.lua`; main HUD slimmed; `Draw3D` gated by `racingLineEnabled` / `brakeMarkersEnabled`; `tests/test_manifest_phase5.py` (section-scoped). Follow-up commits: focus HUD summary sig cache + Bugbot sig reset; checkbox `strictTrue` / `notFalse`; slider/combo read-only fallbacks.
 - **Issue #46 (PR #55):** `tools/ai_sidecar/coaching/llm_coach.py`; optional `debrief` on `coaching_response`; `AC_COPILOT_OLLAMA_*` env (see WARP / `.env.example`); Lua `telemetry.corners` on `lap_complete`, HUD + Coaching debrief UI, `sidecar_debrief_last` in journal; `tests/test_llm_coach.py` (mocked HTTP).
 - **Issue #49 (PR #54):** `features.py` / `improvement_ranking.py` / `session.py`; optional `improvementRanking` on `coaching_response`; `--compare-laps`; `[coaching]` adds numpy/sklearn/shap; tests + fixtures + protocol doc.
 - **Issue #45 (merged):** `tools/ai_sidecar/protocol.py` + extended `server.py` (`--no-reply`, `analysis_error` on bad JSON); `ws_bridge.lua` inbound queue + `takeCoachingForLap`; `ac_copilot_trainer.lua` `protocol:1` on `lap_complete` and sidecar override; `tests/test_ai_sidecar_protocol.py`; `12_WS_Sidecar_Protocol.md` + WARP; `websockets` added to `dev` optional deps for CI.
