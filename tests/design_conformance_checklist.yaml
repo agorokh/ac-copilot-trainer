@@ -1,0 +1,210 @@
+# Design Conformance Checklist - AC Copilot Trainer
+# Maps each Figma design requirement to code artifact, test, and status.
+# Machine-readable; consumed by CI or manual audit.
+# Generated: 2026-04-04
+
+categories:
+
+  # --- Information Architecture ---
+  - name: Information Architecture
+    description: LLM text vs structured data separation
+    items:
+      - id: IA-01
+        requirement: LLM/sidecar free-text goes through debriefText field only
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud.lua
+          symbol: HudViewModel.debriefText
+        test: tests/test_design_conformance.py::test_hud_viewmodel_has_debrief_text
+        status: implemented
+
+      - id: IA-02
+        requirement: Coaching hints are structured kind+text not raw strings
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_hints.lua
+          symbol: hint(text, kind)
+        test: tests/test_design_conformance.py::test_coaching_hints_returns_structured_kind_text
+        status: implemented
+
+      - id: IA-03
+        requirement: Coaching overlay accent color driven by kind field
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_overlay.lua
+          symbol: accentForKind(kind)
+        test: tests/test_design_conformance.py::test_coaching_overlay_uses_kind_for_accent
+        status: implemented
+
+  # --- Structured Data Points ---
+  - name: Structured Data Points
+    description: Each telemetry field rendered in polished panel
+    items:
+      - id: SD-01
+        requirement: HudViewModel exposes speed, brake, lapCount, bestLapMs, lastLapMs
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud.lua
+          symbol: HudViewModel
+        test: tests/test_design_conformance.py::test_hud_viewmodel_core_telemetry_fields
+        status: implemented
+
+      - id: SD-02
+        requirement: HudViewModel exposes deltaSmoothedSec for delta bar
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud.lua
+          symbol: HudViewModel.deltaSmoothedSec
+        test: tests/test_design_conformance.py::test_hud_viewmodel_core_telemetry_fields
+        status: implemented
+
+      - id: SD-03
+        requirement: ApproachHudPayload has turnLabel, targetSpeedKmh, currentSpeedKmh, distanceToBrakeM, status, progressPct, brakeIndex
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud.lua
+          symbol: ApproachHudPayload
+        test: tests/test_design_conformance.py::test_approach_hud_payload_fields
+        status: implemented
+
+      - id: SD-04
+        requirement: Settings window shows telemetry stats
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud_settings.lua
+          symbol: HudSettingsStats
+        test: tests/test_design_conformance.py::test_settings_stats_fields
+        status: implemented
+
+  # --- Real-Time Coaching ---
+  - name: Real-Time Coaching
+    description: Per-corner active suggestions
+    items:
+      - id: RC-01
+        requirement: buildAfterLap produces up to 3 structured hints
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_hints.lua
+          symbol: M.buildAfterLap
+        test: tests/test_design_conformance.py::test_coaching_hints_max_three
+        status: implemented
+
+      - id: RC-02
+        requirement: Coaching overlay normalizes max visible hints 1-3
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_overlay.lua
+          symbol: M.normalizedCoachingMaxVisibleHints
+        test: tests/test_coaching_max_visible_contract.py::test_normalization_bounds_match_lua_contract
+        status: implemented
+
+      - id: RC-03
+        requirement: Main window strip shows first hint plus overflow pointer
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_overlay.lua
+          symbol: M.drawMainWindowStrip
+        test: tests/test_design_conformance.py::test_main_window_strip_function_exists
+        status: implemented
+
+  # --- Typography ---
+  - name: Typography
+    description: Font usage via CSP DWriteFont pipeline
+    items:
+      - id: TY-01
+        requirement: coaching_font resolves DWriteFont from AC content/fonts
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_font.lua
+          symbol: M.dwriteDescriptor
+        test: tests/test_design_conformance.py::test_coaching_font_dwrite_pipeline
+        status: implemented
+
+      - id: TY-02
+        requirement: Font push/pop bracket all coaching overlay draws
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_overlay.lua
+          symbol: fontMod.push and fontMod.pop
+        test: tests/test_design_conformance.py::test_coaching_overlay_font_brackets
+        status: implemented
+
+  # --- Transparency ---
+  - name: Transparency
+    description: Text opaque, backgrounds-only transparent
+    items:
+      - id: TR-01
+        requirement: Coaching window background uses alpha less than 1
+        artifact:
+          file: src/ac_copilot_trainer/modules/coaching_overlay.lua
+          symbol: M.draw
+        test: tests/test_design_conformance.py::test_coaching_overlay_bg_transparency
+        status: implemented
+
+      - id: TR-02
+        requirement: WINDOW_1 Coaching has NO_BACKGROUND flag
+        artifact:
+          file: src/ac_copilot_trainer/manifest.ini
+          symbol: WINDOW_1 FLAGS
+        test: tests/test_design_conformance.py::test_manifest_coaching_window_flags
+        status: implemented
+
+  # --- 3-Window Layout ---
+  - name: 3-Window Layout
+    description: Main, Coaching, Settings
+    items:
+      - id: WL-01
+        requirement: manifest defines WINDOW_0 main, WINDOW_1 coaching, WINDOW_2 settings
+        artifact:
+          file: src/ac_copilot_trainer/manifest.ini
+          symbol: WINDOW_0 WINDOW_1 WINDOW_2
+        test: tests/test_design_conformance.py::test_manifest_three_windows
+        status: implemented
+
+      - id: WL-02
+        requirement: Each window maps to correct FUNCTION_MAIN
+        artifact:
+          file: src/ac_copilot_trainer/manifest.ini
+          symbol: FUNCTION_MAIN
+        test: tests/test_design_conformance.py::test_manifest_window_functions
+        status: implemented
+
+      - id: WL-03
+        requirement: WINDOW_1 default position top-right
+        artifact:
+          file: src/ac_copilot_trainer/manifest.ini
+          symbol: WINDOW_1 DEFAULT_POSITION
+        test: tests/test_design_conformance.py::test_manifest_coaching_window_flags
+        status: implemented
+
+  # --- Settings Migration ---
+  - name: Settings Migration
+    description: All config in ac.storage with UI in Settings window
+    items:
+      - id: SM-01
+        requirement: CONFIG_DEFAULTS defines all runtime config keys
+        artifact:
+          file: src/ac_copilot_trainer/ac_copilot_trainer.lua
+          symbol: CONFIG_DEFAULTS
+        test: tests/test_design_conformance.py::test_config_defaults_keys
+        status: implemented
+
+      - id: SM-02
+        requirement: Settings window exposes checkboxes for display toggles
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud_settings.lua
+          symbol: checkbox
+        test: tests/test_design_conformance.py::test_settings_ui_controls
+        status: implemented
+
+      - id: SM-03
+        requirement: Settings window exposes sliders for numeric configs
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud_settings.lua
+          symbol: ui.slider
+        test: tests/test_design_conformance.py::test_settings_ui_controls
+        status: implemented
+
+      - id: SM-04
+        requirement: Settings window exposes combos for enum configs
+        artifact:
+          file: src/ac_copilot_trainer/modules/hud_settings.lua
+          symbol: ui.combo
+        test: tests/test_design_conformance.py::test_settings_ui_controls
+        status: implemented
+
+      - id: SM-05
+        requirement: corner_names exports resolveApproachLabel
+        artifact:
+          file: src/ac_copilot_trainer/modules/corner_names.lua
+          symbol: M.resolveApproachLabel
+        test: tests/test_design_conformance.py::test_corner_names_exports_resolve_approach_label
+        status: implemented
