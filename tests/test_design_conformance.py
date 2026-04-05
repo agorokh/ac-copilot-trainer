@@ -488,8 +488,8 @@ class TestRealTimeCoachingEngine:
         assert "function M.buildRealTime" in src
         assert "cornerLabel" in src
         # Verify it reuses the same comparison thresholds as buildAfterLap
-        assert "bn + 5" in src or "> bn + 5" in src, (
-            "Entry speed threshold missing in buildRealTime"
+        assert "ENTRY_SPEED_DELTA" in src, (
+            "Entry speed threshold constant missing in coaching_hints.lua"
         )
 
     def test_entry_script_requires_realtime_coaching(self):
