@@ -154,7 +154,7 @@ function M.buildRealTime(cornerLabel, lastFeats, bestFeats)
   -- Entry speed comparison
   if en and bn and en > bn + 5 then
     return hint(
-      string.format("%s: entry %.0f vs ref %.0f km/h -- brake earlier", cornerLabel, en, bn),
+      string.format("%s: entry %.0f vs ref %.0f km/h — brake earlier", cornerLabel, en, bn),
       "brake"
     )
   end
@@ -177,7 +177,7 @@ function M.buildRealTime(cornerLabel, lastFeats, bestFeats)
 
   -- Trail braking
   local tb, tt = tonumber(c.trailBrakeRatio), tonumber(b.trailBrakeRatio)
-  if tb and tt and math.abs(tb - tt) > 0.15 then
+  if tb and tt then
     if tb < tt - 0.15 then
       return hint(
         string.format("%s: try more trail braking into the turn", cornerLabel),

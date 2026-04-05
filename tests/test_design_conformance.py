@@ -455,7 +455,7 @@ class TestRealTimeCoachingEngine:
     """PD-01..PD-08: Real-time coaching engine structural conformance."""
 
     def test_realtime_coaching_module_exists(self):
-        """PD-01: realtime_coaching.lua exists and exports M.tick, M.reset, M.phase, M.activeHint."""
+        """PD-01: realtime_coaching.lua exists and exports core functions."""
         src = _lua_text("realtime_coaching.lua")
         assert "function M.tick" in src
         assert "function M.reset" in src
@@ -464,7 +464,7 @@ class TestRealTimeCoachingEngine:
         assert "function M.rebuildSegmentIndex" in src
 
     def test_realtime_coaching_six_phases(self):
-        """PD-02: State machine has all 6 phase string literals."""
+        """PD-02: State machine has all 5 phase string literals."""
         src = _lua_text("realtime_coaching.lua")
         for p in ["straight", "approaching", "braking", "corner", "exiting"]:
             assert (chr(34) + p + chr(34)) in src, f"Phase {p!r} not found in realtime_coaching.lua"
