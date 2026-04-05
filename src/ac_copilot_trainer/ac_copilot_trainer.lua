@@ -31,6 +31,7 @@ local renderDiag = require("render_diag")
 local focusPractice = require("focus_practice")
 local cornerNames = require("corner_names")
 local hudSettings = require("hud_settings")
+local realtimeCoaching = require("realtime_coaching")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -580,6 +581,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.focusPracticeHudSummarySig = nil
   wsBridge.reset()
   renderDiag.reset()
+  realtimeCoaching.reset()
   resetDeltaSmoother()
 end
 
@@ -920,6 +922,7 @@ function script.windowMain(_dt)
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
     approachData = state._cachedApproachData,
+    realtimeHint = state.realtimeActiveHint,
     postLapLines = postLines,
     coastWarn = coastWarn,
     tireLockupFlash = tires:lockupFlash(),
@@ -1028,6 +1031,27 @@ function script.update(dt)
 
   -- Cache approach HUD data once per frame for both windowMain and windowCoaching
   state._cachedApproachData = approachHudData(car, state.bestSortedTrace, sim)
+
+  -- Real-time coaching state machine tick (issue #57 Part D)
+  if car and #(state.trackSegments or {}) > 0 then
+    local sp = car.splinePosition or 0
+    local lc = state.lapsCompleted or 0
+    local tlM = sim and sim.trackLengthM or nil
+    local rtHint = realtimeCoaching.tick({
+      splinePos = sp,
+      lapCount = lc,
+      segments = state.trackSegments,
+      bestCornerFeatures = state.bestCornerFeatures,
+      lastLapCornerFeats = state.lastLapCornerFeats,
+      trackLengthM = tlM,
+      approachMeters = tonumber(config.approachMeters) or 200,
+    })
+    state.realtimeActiveHint = rtHint
+    state.realtimeCoachingPhase = realtimeCoaching.phase()
+  else
+    state.realtimeActiveHint = nil
+    state.realtimeCoachingPhase = "straight"
+  end
 
   if sim.isInMainMenu then
     if state.wasDriving then
@@ -1171,6 +1195,7 @@ function script.update(dt)
         if #ns > 0 then
           state.trackSegments = ns
           state.cornerSteerSideCacheKey = nil
+          realtimeCoaching.rebuildSegmentIndex(ns)
         end
       end
       if #state.trackSegments == 0 then
@@ -1178,6 +1203,7 @@ function script.update(dt)
         if #ns > 0 then
           state.trackSegments = ns
           state.cornerSteerSideCacheKey = nil
+          realtimeCoaching.rebuildSegmentIndex(ns)
         end
       end
       feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)

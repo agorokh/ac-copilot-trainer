@@ -131,4 +131,75 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis, lapAnalys
   return out
 end
 
+--- Real-time per-corner hint for a single corner (issue #57 Part D).
+--- Compares last-lap features to best-lap features for the given corner label.
+--- Returns a single {text, kind} hint or nil.
+---@param cornerLabel string  e.g. "T5"
+---@param lastFeats table[]|nil  last-lap corner features
+---@param bestFeats table[]|nil  best-lap corner features
+---@return table|nil  {text, kind}
+function M.buildRealTime(cornerLabel, lastFeats, bestFeats)
+  if type(cornerLabel) ~= "string" or cornerLabel == "" then
+    return nil
+  end
+  local c = cornerByLabel(lastFeats, cornerLabel)
+  local b = cornerByLabel(bestFeats, cornerLabel)
+  if not c or not b then
+    return nil
+  end
+
+  local en, bn = tonumber(c.entrySpeed), tonumber(b.entrySpeed)
+  local mn, mb = tonumber(c.minSpeed), tonumber(b.minSpeed)
+
+  -- Entry speed comparison
+  if en and bn and en > bn + 5 then
+    return hint(
+      string.format("%s: entry %.0f vs ref %.0f km/h -- brake earlier", cornerLabel, en, bn),
+      "brake"
+    )
+  end
+
+  -- Mid-corner: too slow
+  if mn and mb and mn + 4 < mb then
+    return hint(
+      string.format("%s: carry more speed (%.0f vs ref %.0f km/h)", cornerLabel, mn, mb),
+      "line"
+    )
+  end
+
+  -- Mid-corner: overdriving
+  if mn and mb and mn > mb + 6 then
+    return hint(
+      string.format("%s: you may be overdriving (%.0f vs ref %.0f km/h)", cornerLabel, mn, mb),
+      "line"
+    )
+  end
+
+  -- Trail braking
+  local tb, tt = tonumber(c.trailBrakeRatio), tonumber(b.trailBrakeRatio)
+  if tb and tt and math.abs(tb - tt) > 0.15 then
+    if tb < tt - 0.15 then
+      return hint(
+        string.format("%s: try more trail braking into the turn", cornerLabel),
+        "brake"
+      )
+    elseif tb > tt + 0.15 then
+      return hint(
+        string.format("%s: release brakes earlier into turn-in", cornerLabel),
+        "brake"
+      )
+    end
+  end
+
+  -- Good approach
+  if en and bn and math.abs(en - bn) <= 3 then
+    return hint(
+      string.format("%s: good approach speed", cornerLabel),
+      "positive"
+    )
+  end
+
+  return nil
+end
+
 return M
