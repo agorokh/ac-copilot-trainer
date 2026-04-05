@@ -92,13 +92,14 @@ function M.drawApproachPanel(approachData)
   local distanceM     = tonumber(approachData.distanceToBrakeM) or 0
   local progressPct   = tonumber(approachData.progressPct) or 0
 
-  -- Panel dimensions
+  -- Panel dimensions — use actual window size so nothing draws outside clip region.
+  -- Defaults (420x220) only used when ui.windowSize is unavailable.
   local w, h = 420, 220
   if ui.windowSize then
     local sz = ui.windowSize()
-    if sz and sz.x and sz.y then
-      w = math.max(360, sz.x)
-      h = math.max(210, sz.y)
+    if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
+      w = sz.x
+      h = sz.y
     end
   end
 

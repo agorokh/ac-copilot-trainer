@@ -129,7 +129,7 @@ function M.namedDescriptor(role)
     return v ~= false and v or nil
   end
 
-  local desc = nil
+  local desc
   if role == "numbers" then
     -- Michroma (Google Font, motorsport display) -> Consolas -> BMW legacy
     desc = trySystemFont("Michroma")

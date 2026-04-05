@@ -919,7 +919,7 @@ function script.windowMain(_dt)
     lastLapMs = state.lastLapMs or (car.previousLapTimeMs or nil),
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
-    approachData = approachHudData(car, state.bestSortedTrace, sim),
+    approachData = state._cachedApproachData,
     postLapLines = postLines,
     coastWarn = coastWarn,
     tireLockupFlash = tires:lockupFlash(),
@@ -992,7 +992,7 @@ function script.windowCoaching(_dt)
   end
 
   -- Priority 1: approach telemetry panel (Part C) — shows when approaching a corner
-  local aData = approachHudData(car, state.bestSortedTrace, sim)
+  local aData = state._cachedApproachData
   if coachingOverlay.drawApproachPanel(aData) then
     return  -- panel drawn, skip post-lap coaching in this window
   end
@@ -1025,6 +1025,9 @@ end
 function script.update(dt)
   sim = ac.getSim()
   car = ac.getCar(0)
+
+  -- Cache approach HUD data once per frame for both windowMain and windowCoaching
+  state._cachedApproachData = approachHudData(car, state.bestSortedTrace, sim)
 
   if sim.isInMainMenu then
     if state.wasDriving then
