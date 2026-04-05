@@ -55,8 +55,9 @@ def _extract_emmy_class_fields(text: str, class_name: str) -> list[str]:
     """Extract ``@field`` names from an EmmyLua ``---@class`` block."""
     fields: list[str] = []
     in_class = False
+    class_decl = re.compile(rf"^---@class\s+{re.escape(class_name)}\b")
     for line in text.splitlines():
-        if f"---@class {class_name}" in line:
+        if class_decl.match(line.lstrip()):
             in_class = True
             continue
         if in_class:
@@ -178,7 +179,8 @@ class TestTypography:
     def test_coaching_overlay_font_brackets(self) -> None:
         """TY-02: Each ``M.draw*`` function balances fontMod.push/pop within its body."""
         src = _lua_text("coaching_overlay.lua")
-        draw_funcs = list(re.finditer(r"^function\s+M\.(draw\w+)\s*\(", src, flags=re.MULTILINE))
+        # ``draw\w*`` matches ``M.draw`` (``draw\w+`` skipped the primary entry).
+        draw_funcs = list(re.finditer(r"^function\s+M\.(draw\w*)\s*\(", src, flags=re.MULTILINE))
         assert draw_funcs, "No M.draw* functions found in coaching_overlay.lua"
 
         total_pushes = 0
@@ -229,6 +231,11 @@ class TestTransparency:
         assert "NO_BACKGROUND" in flags_line[0]
         pos_line = [ln for ln in lines if ln.startswith("DEFAULT_POSITION=")]
         assert pos_line, "WINDOW_1 missing DEFAULT_POSITION"
+        _, pos_val = pos_line[0].split("=", 1)
+        px, py = (float(x.strip()) for x in pos_val.split(",", 1))
+        assert px > 0.5 and py < 0.25, (
+            f"WINDOW_1 DEFAULT_POSITION should be top-right-ish, got {px},{py}"
+        )
 
 
 # ---------------------------------------------------------------------------
