@@ -600,6 +600,7 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
+  realtimeCoaching.reset()
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -1037,7 +1038,7 @@ function script.update(dt)
   -- Real-time coaching state machine tick (issue #57 Part D)
   if car and #(state.trackSegments or {}) > 0 then
     local sp = car.splinePosition or 0
-    local lc = state.lapsCompleted or 0
+    local lc = car.lapCount or 0
     local tlM = sim and sim.trackLengthM or nil
     local approachM = tonumber(config.approachMeters)
     if not approachM or approachM ~= approachM or approachM <= 0 then

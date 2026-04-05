@@ -71,7 +71,7 @@ function M.rebuildSegmentIndex(segments)
     local seg = segments[i]
     local s0 = seg.s0 or 0
     local s1 = seg.s1 or 0
-    local isWrap = s1 <= s0
+    local isWrap = s1 < s0
     local b0 = math.floor(s0 * NUM_BUCKETS) + 1
     local b1 = math.floor(s1 * NUM_BUCKETS) + 1
     if b0 > NUM_BUCKETS then b0 = NUM_BUCKETS end
@@ -249,7 +249,7 @@ function M.tick(opts)
     return nil
   end
 
-  local seg, segIdx = findSegment(sp)
+  local seg = findSegment(sp)
   local segKind = seg and seg.kind or nil
 
   -- Detect approaching: on a straight (or gap), check if next brake/corner is within approachMeters
