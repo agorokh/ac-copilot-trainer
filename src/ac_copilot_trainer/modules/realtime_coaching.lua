@@ -161,10 +161,10 @@ end
 --- Find the next brake or corner segment ahead of the current spline position.
 --- Uses the precomputed sorted brakeCornerStarts list for efficient lookup.
 ---@param splinePos number
----@return table|nil nextSeg, number|nil splineDist
+---@return table|nil nextSeg, number|nil splineDist, integer|nil segIdx
 local function findNextBrakeOrCorner(splinePos)
   if #brakeCornerStarts == 0 then
-    return nil, nil
+    return nil, nil, nil
   end
   local sp = wrap01(splinePos)
   -- Binary search: find the first entry with s0 > sp
@@ -187,7 +187,7 @@ local function findNextBrakeOrCorner(splinePos)
   local seg = indexedSegments[entry.idx]
   local d = (entry.s0 - sp) % 1
   if d < 1e-9 then d = 0 end
-  return seg, d
+  return seg, d, entry.idx
 end
 
 --- Resolve the corner label for a brake segment.
@@ -275,12 +275,12 @@ function M.tick(opts)
   -- Detect approaching: on a straight (or gap), check if next brake/corner is within approachMeters.
   -- Skip when exiting a corner so the exit window can complete before approach begins.
   if phase ~= "corner" and phase ~= "exiting" and (segKind == "straight" or segKind == nil) and trackLenM and trackLenM > 0 then
-    local nextSeg, nextDist = findNextBrakeOrCorner(sp)
+    local nextSeg, nextDist, nextIdx = findNextBrakeOrCorner(sp)
     if nextSeg and nextDist then
       local distM = nextDist * trackLenM
       if distM <= approachM then
         local label = nextSeg.kind == "brake"
-          and cornerLabelForBrake(nextSeg, nil)
+          and cornerLabelForBrake(nextSeg, nextIdx)
           or nextSeg.label
         if currentCornerLabel ~= label then
           currentCornerLabel = label
