@@ -1037,6 +1037,10 @@ function script.update(dt)
     local sp = car.splinePosition or 0
     local lc = state.lapsCompleted or 0
     local tlM = sim and sim.trackLengthM or nil
+    local approachM = tonumber(config.approachMeters)
+    if not approachM or approachM ~= approachM or approachM <= 0 then
+      approachM = 200
+    end
     local rtHint = realtimeCoaching.tick({
       splinePos = sp,
       lapCount = lc,
@@ -1044,7 +1048,7 @@ function script.update(dt)
       bestCornerFeatures = state.bestCornerFeatures,
       lastLapCornerFeats = state.lastLapCornerFeats,
       trackLengthM = tlM,
-      approachMeters = tonumber(config.approachMeters) or 200,
+      approachMeters = approachM,
     })
     state.realtimeActiveHint = rtHint
     state.realtimeCoachingPhase = realtimeCoaching.phase()
