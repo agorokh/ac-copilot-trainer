@@ -1036,6 +1036,10 @@ function script.update(dt)
   state._cachedApproachData = approachHudData(car, state.bestSortedTrace, sim)
 
   -- Real-time coaching state machine tick (issue #57 Part D)
+  -- Note: lastLapCornerFeats is updated later in the frame (at lap completion);
+  -- on the exact lap-boundary frame, hints use the prior lap's features.
+  -- This one-frame lag is imperceptible at 60 FPS and avoids reordering
+  -- the update pipeline.
   if car and #(state.trackSegments or {}) > 0 then
     local sp = car.splinePosition or 0
     local lc = car.lapCount or 0
