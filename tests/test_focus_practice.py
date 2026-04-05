@@ -50,6 +50,7 @@ def corner_labels_map_from_worst(
 
 def wrap01(x: float) -> float:
     s = x % 1.0
+    # Unreachable in Python (non-negative modulus); mirrors Lua for parity.
     if s < 0:
         s += 1.0
     return s
@@ -156,7 +157,8 @@ def test_filter_coaching_hints() -> None:
     ]
     fm = {"T1": True}
     out = filter_coaching_hints(hints, True, fm)
-    assert len(out) == 1 and "T1" in out[0]["text"]
+    assert len(out) == 1
+    assert "T1" in out[0]["text"]
     assert filter_coaching_hints(hints, False, fm) == hints
 
 
@@ -182,7 +184,8 @@ def test_filter_no_corner_match_takes_first() -> None:
     ]
     fm = {"T1": True}
     out = filter_coaching_hints(hints, True, fm)
-    assert len(out) == 1 and out[0]["text"] == "Coasting 2.0s"
+    assert len(out) == 1
+    assert out[0]["text"] == "Coasting 2.0s"
 
 
 def test_filter_skips_non_matching_then_first() -> None:
@@ -192,4 +195,5 @@ def test_filter_skips_non_matching_then_first() -> None:
     ]
     fm = {"T2": True}
     out = filter_coaching_hints(hints, True, fm)
-    assert len(out) == 1 and "T2" in out[0]["text"]
+    assert len(out) == 1
+    assert "T2" in out[0]["text"]

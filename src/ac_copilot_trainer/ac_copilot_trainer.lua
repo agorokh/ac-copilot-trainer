@@ -1013,7 +1013,8 @@ function script.update(dt)
     else
       state.consistencyHud = state.consistencyHud or ""
       state.styleHud = state.styleHud or ""
-      state.focusWorstThree = {}
+      -- Keep prior `focusWorstThree` (like consistency HUD text): lap history still
+      -- holds usable worst-corner rows; clearing here dropped auto-focus after one bad lap (#44).
     end
 
     if traceAnalyticsOk and #feats > 0 then
