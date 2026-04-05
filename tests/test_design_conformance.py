@@ -129,9 +129,7 @@ class TestStructuredDataPoints:
 
     def test_settings_stats_fields(self) -> None:
         """SD-04: HudSettingsStats exposes telemetry counters."""
-        fields = _extract_emmy_class_fields(
-            _lua_text("hud_settings.lua"), "HudSettingsStats"
-        )
+        fields = _extract_emmy_class_fields(_lua_text("hud_settings.lua"), "HudSettingsStats")
         for f in (
             "telemetrySamples",
             "brakeBest",
@@ -180,9 +178,7 @@ class TestTypography:
     def test_coaching_overlay_font_brackets(self) -> None:
         """TY-02: Each ``M.draw*`` function balances fontMod.push/pop within its body."""
         src = _lua_text("coaching_overlay.lua")
-        draw_funcs = list(
-            re.finditer(r"^function\s+M\.(draw\w+)\s*\(", src, flags=re.MULTILINE)
-        )
+        draw_funcs = list(re.finditer(r"^function\s+M\.(draw\w+)\s*\(", src, flags=re.MULTILINE))
         assert draw_funcs, "No M.draw* functions found in coaching_overlay.lua"
 
         total_pushes = 0
@@ -246,12 +242,10 @@ class TestThreeWindowLayout:
         text = _manifest_text()
         expected_sections = {f"WINDOW_{i}" for i in range(3)}
         actual_sections = {
-            m.group(1)
-            for m in re.finditer(r"^\[(WINDOW_\d+)\]\s*$", text, re.MULTILINE)
+            m.group(1) for m in re.finditer(r"^\[(WINDOW_\d+)\]\s*$", text, re.MULTILINE)
         }
         assert actual_sections == expected_sections, (
-            f"Expected window sections {sorted(expected_sections)}, "
-            f"got {sorted(actual_sections)}"
+            f"Expected window sections {sorted(expected_sections)}, got {sorted(actual_sections)}"
         )
         for section_name in expected_sections:
             section = _get_manifest_section(text, section_name)
