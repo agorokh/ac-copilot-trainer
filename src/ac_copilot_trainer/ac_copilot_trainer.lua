@@ -30,6 +30,7 @@ local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
 local focusPractice = require("focus_practice")
 local cornerNames = require("corner_names")
+local hudSettings = require("hud_settings")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -66,6 +67,9 @@ local CONFIG_DEFAULTS = {
   focusPracticeAutoCount = 3,
   --- When focus mode is on and corner geometry exists, dim brake walls outside the focus set.
   focusPracticeDimNonFocus = true,
+  --- 3D overlays (issue #57 Part B); default on — toggles in Settings window.
+  racingLineEnabled = true,
+  brakeMarkersEnabled = true,
 }
 
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
@@ -878,38 +882,21 @@ function script.windowMain(_dt)
   end
   local coachPrimer = (state.lapsCompleted or 0) == 0
 
-  if state.focusPracticeActive then
-    local flm, man = focusLabelMap()
-    state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
-  else
-    state.focusPracticeHudSummary = ""
-  end
-
   hud.draw({
     recording = tel:isRecording(),
-    telemetrySamples = tel:sampleCount(),
     speed = car.speedKmh or 0,
     brake = car.brake or 0,
     lapCount = car.lapCount or 0,
     bestLapMs = state.bestLapMs or (car.bestLapTimeMs or nil),
     lastLapMs = state.lastLapMs or (car.previousLapTimeMs or nil),
-    brakeBest = #state.brakingPoints.best,
-    brakeLast = #state.brakingPoints.last,
-    brakeSession = #state.brakingPoints.session,
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
     approachData = approachHudData(car, state.bestSortedTrace, sim),
     postLapLines = postLines,
     coastWarn = coastWarn,
-    throttleLapHint = state.lastThrottleSummary,
-    consistencyHud = state.consistencyHud,
-    styleHud = state.styleHud,
-    tireHud = state.tireHud,
     tireLockupFlash = tires:lockupFlash(),
     setupChangeMsg = state.setupChangeMsg,
     autoSetupLine = autoSetupLine,
-    refAiDistanceM = state.refLatDistance,
-    segmentCount = #(state.trackSegments or {}),
     coachingLines = coachingHudLines,
     coachingRemaining = coachRem,
     coachingHoldSeconds = normalizedCoachingHoldSeconds(),
@@ -917,6 +904,34 @@ function script.windowMain(_dt)
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
+  })
+end
+
+function script.windowSettings(_dt)
+  sim = ac.getSim()
+  if not sim or sim.isInMainMenu then
+    ui.text("Open Settings after loading a session (not from the main menu).")
+    return
+  end
+  car = ac.getCar(0)
+  if not car then
+    ui.text("Waiting for car data…")
+    return
+  end
+  hudSettings.draw({
+    config = config,
+    stats = {
+      telemetrySamples = tel:sampleCount(),
+      brakeBest = #state.brakingPoints.best,
+      brakeLast = #state.brakingPoints.last,
+      brakeSession = #state.brakingPoints.session,
+      refAiDistanceM = state.refLatDistance,
+      segmentCount = #(state.trackSegments or {}),
+      throttleLapHint = state.lastThrottleSummary,
+      consistencyHud = state.consistencyHud,
+      styleHud = state.styleHud,
+      tireHud = state.tireHud,
+    },
     focusPracticeUi = focusPracticeUiProxy,
   })
   if config.enableRenderDiagnostics then
@@ -1308,6 +1323,15 @@ function script.update(dt)
     state.refLatDistance = nil
   end
 
+  if not sim.isInMainMenu then
+    if state.focusPracticeActive then
+      local flm, man = focusLabelMap()
+      state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
+    else
+      state.focusPracticeHudSummary = ""
+    end
+  end
+
   if state.lastLapCount >= 0 and lc < state.lastLapCount then
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
@@ -1385,19 +1409,23 @@ function script.Draw3D(_dt)
     end
   end
 
-  local flMap = select(1, focusLabelMap())
-  trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last, {
-    active = state.focusPracticeActive == true,
-    labels = flMap,
-    corners = state.lastLapCornerFeats,
-    dimNonFocus = config.focusPracticeDimNonFocus ~= false,
-  })
-  local mode = config.racingLineMode or "best"
-  local style = config.lineStyle or "tilt"
-  if mode == "best" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80), nil, style)
+  if config.brakeMarkersEnabled ~= false then
+    local flMap = select(1, focusLabelMap())
+    trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last, {
+      active = state.focusPracticeActive == true,
+      labels = flMap,
+      corners = state.lastLapCornerFeats,
+      dimNonFocus = config.focusPracticeDimNonFocus ~= false,
+    })
   end
-  if mode == "last" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55), nil, style)
+  if config.racingLineEnabled ~= false then
+    local mode = config.racingLineMode or "best"
+    local style = config.lineStyle or "tilt"
+    if mode == "best" or mode == "both" then
+      racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80), nil, style)
+    end
+    if mode == "last" or mode == "both" then
+      racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55), nil, style)
+    end
   end
 end

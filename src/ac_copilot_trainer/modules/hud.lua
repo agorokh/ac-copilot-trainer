@@ -1,4 +1,4 @@
--- Dear ImGui HUD: tiered layout (glance / context / collapsible detail) — issue #33.
+-- Dear ImGui HUD: main driving window (issue #33). Tier-3 stats + focus toggle → Settings window (#57 Part B).
 
 local coachingOverlay = require("coaching_overlay")
 
@@ -23,24 +23,14 @@ local BLK = string.char(226, 150, 136)
 ---@field lapCount integer
 ---@field bestLapMs number|nil
 ---@field lastLapMs number|nil
----@field brakeBest integer
----@field brakeLast integer
----@field brakeSession integer
----@field telemetrySamples integer|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
 ---@field approachData ApproachHudPayload|nil @Producer `approachHudData`; fields match `ApproachHudPayload` (incl. brakeIndex).
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
----@field throttleLapHint string|nil
----@field consistencyHud string|nil
----@field styleHud string|nil
----@field tireHud string|nil
 ---@field tireLockupFlash boolean|nil
 ---@field setupChangeMsg string|nil
 ---@field autoSetupLine string|nil
----@field refAiDistanceM number|nil
----@field segmentCount integer|nil
 ---@field coachingLines (string|{ kind: string, text: string })[]|nil
 ---@field coachingRemaining number|nil
 ---@field coachingHoldSeconds number|nil
@@ -48,7 +38,6 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingShowPrimer boolean|nil
 ---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
 ---@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
----@field focusPracticeUi table|nil @proxy: only `focusPracticeActive` + `focusPracticeHudSummary` (issue #44)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
@@ -77,41 +66,6 @@ local function drawDeltaBar(d)
     end
     ui.textColored(c, BLK)
   end
-end
-
---- Throttle / consistency / tires / buffer / brake counts (tier 3).
-local function drawTelemetryDetail(vm)
-  if vm.throttleLapHint and vm.throttleLapHint ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Throttle (last lap)")
-    ui.textWrapped(vm.throttleLapHint)
-  end
-  if vm.consistencyHud and vm.consistencyHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Consistency")
-    ui.textWrapped(vm.consistencyHud)
-  end
-  if vm.styleHud and vm.styleHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Style vs reference")
-    ui.textWrapped(vm.styleHud)
-  end
-  if vm.tireHud and vm.tireHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Tires (last lap)")
-    ui.textWrapped(vm.tireHud)
-  end
-  if vm.refAiDistanceM ~= nil and vm.refAiDistanceM == vm.refAiDistanceM then
-    ui.text(string.format("AI line lateral (XZ): ~%.1f m", vm.refAiDistanceM))
-  end
-  if vm.segmentCount ~= nil and vm.segmentCount > 0 then
-    ui.text(string.format("Track segments: %d", vm.segmentCount))
-  end
-  if vm.telemetrySamples ~= nil then
-    ui.text(string.format("Telemetry buffer: %d samples", vm.telemetrySamples))
-  end
-  ui.text(string.format(
-    "Brake points — best: %d  last lap: %d  session: %d",
-    vm.brakeBest or 0,
-    vm.brakeLast or 0,
-    vm.brakeSession or 0
-  ))
 end
 
 function M.draw(vm)
@@ -217,41 +171,10 @@ function M.draw(vm)
     end
   end
 
-  if vm.focusPracticeUi and type(vm.focusPracticeUi) == "table" then
-    ui.separator()
-    ui.textColored(rgbm(0.55, 0.85, 0.95, 1), "Focus practice (#44)")
-    local st = vm.focusPracticeUi
-    local cur = st.focusPracticeActive == true
-    if type(ui.checkbox) == "function" then
-      pcall(function()
-        -- CSP/ImGui: checkbox returns the new bool each frame (stateful widget).
-        local nv = ui.checkbox("Enable (this session)", cur)
-        if type(nv) == "boolean" then
-          st.focusPracticeActive = nv
-        end
-      end)
-    else
-      ui.textColored(rgbm(0.65, 0.65, 0.68, 1), cur and "Enabled (no checkbox API)" or "Disabled")
-    end
-    if st.focusPracticeHudSummary and st.focusPracticeHudSummary ~= "" then
-      ui.textWrapped(st.focusPracticeHudSummary)
-    end
-  end
-
-  -- Tier 3 — detail (tree when supported; same fields flat on older CSP)
-  local flags = ui.TreeNodeFlags
-  local framed = flags and flags.Framed or nil
   ui.separator()
-  if framed ~= nil then
-    ui.treeNode("Telemetry & stats", framed, function()
-      drawTelemetryDetail(vm)
-    end)
-  else
-    ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "Telemetry & stats (no collapsible UI — showing flat)")
-    drawTelemetryDetail(vm)
-  end
+  ui.textColored(rgbm(0.45, 0.48, 0.52, 1), "Telemetry & stats → Settings window")
 
-  -- Coaching strip after telemetry (issue #9 UX); separator only when strip draws.
+  -- Coaching strip (issue #9 UX); separator only when strip draws.
   coachingOverlay.drawMainWindowStrip(vm)
 end
 
