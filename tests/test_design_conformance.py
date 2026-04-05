@@ -39,7 +39,7 @@ def _get_manifest_section(text: str, section_name: str) -> list[str]:
     in_section = False
     lines: list[str] = []
     for raw in text.splitlines():
-        stripped = raw.strip()
+        stripped = raw.split(";", 1)[0].split("#", 1)[0].strip()
         if stripped.startswith("[") and stripped.endswith("]"):
             if in_section:
                 break
@@ -60,7 +60,7 @@ def _extract_emmy_class_fields(text: str, class_name: str) -> list[str]:
             in_class = True
             continue
         if in_class:
-            m = re.match(r"^---@field\s+(\w+)", line)
+            m = re.search(r"---@field\s+(\w+)", line)
             if m:
                 fields.append(m.group(1))
             elif not line.startswith("---"):
@@ -83,8 +83,8 @@ class TestInformationArchitecture:
         """IA-02: hint() returns {kind, text} tables."""
         src = _lua_text("coaching_hints.lua")
         # The local function ``hint`` must produce a table with both keys.
-        assert 'kind = kind or "general"' in src
-        assert "text = text" in src
+        assert re.search(r'kind\s*=\s*kind\s*or\s*"general"', src)
+        assert re.search(r"text\s*=\s*text", src)
 
     def test_coaching_overlay_uses_kind_for_accent(self) -> None:
         """IA-03: accentForKind dispatches on the kind string."""
@@ -155,7 +155,7 @@ class TestRealTimeCoaching:
         src = _lua_text("coaching_hints.lua")
         assert "function M.buildAfterLap" in src
         # The guard ``#out >= 3`` ensures at most 3 hints.
-        assert "#out >= 3" in src
+        assert re.search(r"#out\s*>=\s*3", src)
 
     def test_main_window_strip_function_exists(self) -> None:
         """RC-03: coaching_overlay exports drawMainWindowStrip."""
@@ -178,15 +178,28 @@ class TestTypography:
         assert "bmw.txt" in src.lower() or "BMW.txt" in src
 
     def test_coaching_overlay_font_brackets(self) -> None:
-        """TY-02: Every draw function in coaching_overlay brackets font push/pop."""
+        """TY-02: Each ``M.draw*`` function balances fontMod.push/pop within its body."""
         src = _lua_text("coaching_overlay.lua")
-        # Count fontMod.push() and fontMod.pop() -- they must be balanced.
-        pushes = len(re.findall(r"fontMod\.push\(\)", src))
-        pops = len(re.findall(r"fontMod\.pop\(", src))
-        assert pushes >= 3, f"Expected at least 3 font pushes, got {pushes}"
-        assert pushes == pops, (
-            f"Font push/pop imbalance: {pushes} pushes vs {pops} pops"
+        draw_funcs = list(
+            re.finditer(r"^function\s+M\.(draw\w+)\s*\(", src, flags=re.MULTILINE)
         )
+        assert draw_funcs, "No M.draw* functions found in coaching_overlay.lua"
+
+        total_pushes = 0
+        for i, match in enumerate(draw_funcs):
+            name = match.group(1)
+            start = match.start()
+            end = draw_funcs[i + 1].start() if i + 1 < len(draw_funcs) else len(src)
+            body = src[start:end]
+            pushes = len(re.findall(r"fontMod\.push\(", body))
+            pops = len(re.findall(r"fontMod\.pop\(", body))
+            total_pushes += pushes
+            assert pushes == pops, (
+                f"M.{name} font push/pop imbalance: {pushes} pushes vs {pops} pops"
+            )
+            assert pushes > 0, f"M.{name} must call fontMod.push at least once"
+
+        assert total_pushes >= 3, f"Expected at least 3 font pushes, got {total_pushes}"
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +209,12 @@ class TestTypography:
 
 class TestTransparency:
     def test_coaching_overlay_bg_transparency(self) -> None:
-        """TR-01/TR-02: Background rgbm alpha < 1; title text alpha == 1 before fade."""
+        """TR-01: Panel fill alphas stay below 1; title uses ``computeAlpha`` (1.0 until fade)."""
         src = _lua_text("coaching_overlay.lua")
+        assert re.search(
+            r"if\s+rem\s*>=\s*fadeWindow\s+then\s*\n\s*return\s+1\.0",
+            src,
+        ), "computeAlpha should return 1.0 before fade window"
         # Background: drawRectFilled with alpha 0.82 (M.draw) or 0.78 (strip).
         bg_matches = re.findall(r"drawRectFilled\(.*?rgbm\([^)]+\)", src)
         assert bg_matches, "No drawRectFilled calls found"
@@ -225,11 +242,20 @@ class TestTransparency:
 
 class TestThreeWindowLayout:
     def test_manifest_three_windows(self) -> None:
-        """WL-01: manifest.ini defines exactly WINDOW_0, WINDOW_1, WINDOW_2."""
+        """WL-01: manifest.ini defines exactly WINDOW_0..WINDOW_2 (no other WINDOW_*)."""
         text = _manifest_text()
-        for i in range(3):
-            section = _get_manifest_section(text, f"WINDOW_{i}")
-            assert section, f"[WINDOW_{i}] section missing or empty"
+        expected_sections = {f"WINDOW_{i}" for i in range(3)}
+        actual_sections = {
+            m.group(1)
+            for m in re.finditer(r"^\[(WINDOW_\d+)\]\s*$", text, re.MULTILINE)
+        }
+        assert actual_sections == expected_sections, (
+            f"Expected window sections {sorted(expected_sections)}, "
+            f"got {sorted(actual_sections)}"
+        )
+        for section_name in expected_sections:
+            section = _get_manifest_section(text, section_name)
+            assert section, f"[{section_name}] section missing or empty"
 
     def test_manifest_window_functions(self) -> None:
         """WL-02: Each window routes to its correct FUNCTION_MAIN."""

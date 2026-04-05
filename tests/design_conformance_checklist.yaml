@@ -14,7 +14,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud.lua
           symbol: HudViewModel.debriefText
-        test: tests/test_design_conformance.py::test_hud_viewmodel_has_debrief_text
+        test: tests/test_design_conformance.py::TestInformationArchitecture::test_hud_viewmodel_has_debrief_text
         status: implemented
 
       - id: IA-02
@@ -22,7 +22,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_hints.lua
           symbol: hint(text, kind)
-        test: tests/test_design_conformance.py::test_coaching_hints_returns_structured_kind_text
+        test: tests/test_design_conformance.py::TestInformationArchitecture::test_coaching_hints_returns_structured_kind_text
         status: implemented
 
       - id: IA-03
@@ -30,7 +30,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_overlay.lua
           symbol: accentForKind(kind)
-        test: tests/test_design_conformance.py::test_coaching_overlay_uses_kind_for_accent
+        test: tests/test_design_conformance.py::TestInformationArchitecture::test_coaching_overlay_uses_kind_for_accent
         status: implemented
 
   # --- Structured Data Points ---
@@ -42,7 +42,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud.lua
           symbol: HudViewModel
-        test: tests/test_design_conformance.py::test_hud_viewmodel_core_telemetry_fields
+        test: tests/test_design_conformance.py::TestStructuredDataPoints::test_hud_viewmodel_core_telemetry_fields
         status: implemented
 
       - id: SD-02
@@ -50,7 +50,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud.lua
           symbol: HudViewModel.deltaSmoothedSec
-        test: tests/test_design_conformance.py::test_hud_viewmodel_core_telemetry_fields
+        test: tests/test_design_conformance.py::TestStructuredDataPoints::test_hud_viewmodel_core_telemetry_fields
         status: implemented
 
       - id: SD-03
@@ -58,7 +58,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud.lua
           symbol: ApproachHudPayload
-        test: tests/test_design_conformance.py::test_approach_hud_payload_fields
+        test: tests/test_design_conformance.py::TestStructuredDataPoints::test_approach_hud_payload_fields
         status: implemented
 
       - id: SD-04
@@ -66,7 +66,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud_settings.lua
           symbol: HudSettingsStats
-        test: tests/test_design_conformance.py::test_settings_stats_fields
+        test: tests/test_design_conformance.py::TestStructuredDataPoints::test_settings_stats_fields
         status: implemented
 
   # --- Real-Time Coaching ---
@@ -78,7 +78,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_hints.lua
           symbol: M.buildAfterLap
-        test: tests/test_design_conformance.py::test_coaching_hints_max_three
+        test: tests/test_design_conformance.py::TestRealTimeCoaching::test_coaching_hints_max_three
         status: implemented
 
       - id: RC-02
@@ -94,7 +94,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_overlay.lua
           symbol: M.drawMainWindowStrip
-        test: tests/test_design_conformance.py::test_main_window_strip_function_exists
+        test: tests/test_design_conformance.py::TestRealTimeCoaching::test_main_window_strip_function_exists
         status: implemented
 
   # --- Typography ---
@@ -106,7 +106,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_font.lua
           symbol: M.dwriteDescriptor
-        test: tests/test_design_conformance.py::test_coaching_font_dwrite_pipeline
+        test: tests/test_design_conformance.py::TestTypography::test_coaching_font_dwrite_pipeline
         status: implemented
 
       - id: TY-02
@@ -114,7 +114,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_overlay.lua
           symbol: fontMod.push and fontMod.pop
-        test: tests/test_design_conformance.py::test_coaching_overlay_font_brackets
+        test: tests/test_design_conformance.py::TestTypography::test_coaching_overlay_font_brackets
         status: implemented
 
   # --- Transparency ---
@@ -126,7 +126,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/coaching_overlay.lua
           symbol: M.draw
-        test: tests/test_design_conformance.py::test_coaching_overlay_bg_transparency
+        test: tests/test_design_conformance.py::TestTransparency::test_coaching_overlay_bg_transparency
         status: implemented
 
       - id: TR-02
@@ -134,7 +134,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/manifest.ini
           symbol: WINDOW_1 FLAGS
-        test: tests/test_design_conformance.py::test_manifest_coaching_window_flags
+        test: tests/test_design_conformance.py::TestTransparency::test_manifest_coaching_window_flags
         status: implemented
 
   # --- 3-Window Layout ---
@@ -146,7 +146,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/manifest.ini
           symbol: WINDOW_0 WINDOW_1 WINDOW_2
-        test: tests/test_design_conformance.py::test_manifest_three_windows
+        test: tests/test_design_conformance.py::TestThreeWindowLayout::test_manifest_three_windows
         status: implemented
 
       - id: WL-02
@@ -154,7 +154,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/manifest.ini
           symbol: FUNCTION_MAIN
-        test: tests/test_design_conformance.py::test_manifest_window_functions
+        test: tests/test_design_conformance.py::TestThreeWindowLayout::test_manifest_window_functions
         status: implemented
 
       - id: WL-03
@@ -162,7 +162,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/manifest.ini
           symbol: WINDOW_1 DEFAULT_POSITION
-        test: tests/test_design_conformance.py::test_manifest_coaching_window_flags
+        test: tests/test_design_conformance.py::TestTransparency::test_manifest_coaching_window_flags
         status: implemented
 
   # --- Settings Migration ---
@@ -174,7 +174,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/ac_copilot_trainer.lua
           symbol: CONFIG_DEFAULTS
-        test: tests/test_design_conformance.py::test_config_defaults_keys
+        test: tests/test_design_conformance.py::TestSettingsMigration::test_config_defaults_keys
         status: implemented
 
       - id: SM-02
@@ -182,7 +182,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud_settings.lua
           symbol: checkbox
-        test: tests/test_design_conformance.py::test_settings_ui_controls
+        test: tests/test_design_conformance.py::TestSettingsMigration::test_settings_ui_controls
         status: implemented
 
       - id: SM-03
@@ -190,7 +190,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud_settings.lua
           symbol: ui.slider
-        test: tests/test_design_conformance.py::test_settings_ui_controls
+        test: tests/test_design_conformance.py::TestSettingsMigration::test_settings_ui_controls
         status: implemented
 
       - id: SM-04
@@ -198,7 +198,7 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/hud_settings.lua
           symbol: ui.combo
-        test: tests/test_design_conformance.py::test_settings_ui_controls
+        test: tests/test_design_conformance.py::TestSettingsMigration::test_settings_ui_controls
         status: implemented
 
       - id: SM-05
@@ -206,5 +206,5 @@ categories:
         artifact:
           file: src/ac_copilot_trainer/modules/corner_names.lua
           symbol: M.resolveApproachLabel
-        test: tests/test_design_conformance.py::test_corner_names_exports_resolve_approach_label
+        test: tests/test_design_conformance.py::TestCornerNames::test_corner_names_exports_resolve_approach_label
         status: implemented
