@@ -4,6 +4,15 @@ local coachingOverlay = require("coaching_overlay")
 
 local M = {}
 
+---@class ApproachHudPayload
+---@field turnLabel string
+---@field targetSpeedKmh number
+---@field currentSpeedKmh number
+---@field distanceToBrakeM number
+---@field status string
+---@field progressPct number
+---@field brakeIndex integer
+
 --- UTF-8 FULL BLOCK (U+2588) for delta bar segments.
 local BLK = string.char(226, 150, 136)
 
@@ -20,7 +29,7 @@ local BLK = string.char(226, 150, 136)
 ---@field telemetrySamples integer|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
----@field approachData { turnLabel: string, targetSpeedKmh: number, currentSpeedKmh: number, distanceToBrakeM: number, status: string, progressPct: number }|nil
+---@field approachData ApproachHudPayload|nil
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field throttleLapHint string|nil

@@ -127,6 +127,7 @@ def resolve_approach_label(
     trace: list[dict] | None,
     corner_feats: list[dict] | None,
     tol: float = 0.012,
+    steer_side_by_label: dict[str, str] | None = None,
 ) -> str:
     seg = corner_segment_for_brake_spline(segments or [], brake_spline, tol)
     base = "Brake"
@@ -142,14 +143,16 @@ def resolve_approach_label(
             m2 = re.match(r"^T(\d+)$", lab)
             turn_num = int(m2.group(1)) if m2 else None
         else:
-            base = f"T{int(brake_index)}"
-            turn_num = int(brake_index)
+            base = f"Brake {int(brake_index)}"
+            turn_num = None
 
     ini_name = ini_name_for_turn_index(ini_by_id, turn_num) if turn_num else None
     head = ini_name or base
 
     side: str | None = None
-    if seg and trace and len(trace) >= 2:
+    if steer_side_by_label and seg and isinstance(seg.get("label"), str):
+        side = steer_side_by_label.get(str(seg["label"]))
+    if side is None and seg and trace and len(trace) >= 2:
         s0 = seg.get("s0")
         s1 = seg.get("s1")
         if isinstance(s0, (int, float)) and isinstance(s1, (int, float)):
@@ -198,11 +201,20 @@ def test_resolve_uses_ini_and_side() -> None:
         }
     ]
     trace = [{"spline": 0.2, "steer": -0.15}, {"spline": 0.22, "steer": -0.18}]
-    lab = resolve_approach_label(0.2, 1, segments, ini, trace, None)
+    lab = resolve_approach_label(
+        0.2, 1, segments, ini, trace, None, steer_side_by_label={"T1": "Left"}
+    )
     assert "Variante" in lab
     assert "Left" in lab
 
 
-def test_fallback_t_label_without_ini() -> None:
+def test_fallback_brake_index_not_turn_number() -> None:
     lab = resolve_approach_label(0.9, 3, [], {}, [], [])
-    assert lab == "T3"
+    assert lab == "Brake 3"
+
+
+def test_brake_fallback_does_not_use_ini_turn_index() -> None:
+    ini = parse_corners_ini("[CORNER_2]\nNAME=WrongName\n")
+    lab = resolve_approach_label(0.9, 3, [], ini, [], [])
+    assert lab == "Brake 3"
+    assert "WrongName" not in lab

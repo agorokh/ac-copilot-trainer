@@ -168,7 +168,7 @@ function M.cornerLabelFromFeatures(corners, brakeSpline, tol)
   return nil
 end
 
---- Human-readable label: ini name or Tn, plus Left/Right when trace supports it.
+--- Human-readable label: ini name or Tn, plus Left/Right from precomputed map or trace fallback.
 ---@param opts table
 ---@return string
 function M.resolveApproachLabel(opts)
@@ -178,6 +178,7 @@ function M.resolveApproachLabel(opts)
   local iniById = opts.iniById
   local trace = opts.trace
   local cornerFeats = opts.cornerFeats
+  local steerMap = opts.steerSideByLabel
 
   local base = "Brake"
   local turnNum ---@type integer|nil
@@ -191,8 +192,9 @@ function M.resolveApproachLabel(opts)
       base = lab
       turnNum = tonumber(lab:match("^T(%d+)$"))
     elseif type(brakeIndex) == "number" then
-      base = "T" .. tostring(math.floor(brakeIndex))
-      turnNum = math.floor(brakeIndex)
+      -- Brake list index is not the same as turn number; do not drive corners.ini lookup (Bugbot #58).
+      base = "Brake " .. tostring(math.floor(brakeIndex))
+      turnNum = nil
     end
   end
 
@@ -203,9 +205,15 @@ function M.resolveApproachLabel(opts)
   local head = iniName or base
 
   local side ---@type string|nil
-  if seg and trace and #trace >= 2 and type(seg.s0) == "number" and type(seg.s1) == "number" then
-    local wrap = seg.s1 <= seg.s0
-    side = M.steerSideForRange(trace, seg.s0, seg.s1, wrap)
+  if type(steerMap) == "table" and seg and type(seg.label) == "string" then
+    side = steerMap[seg.label]
+  end
+  if side == nil and seg and type(seg.s0) == "number" and type(seg.s1) == "number" then
+    local tr = trace
+    if tr and #tr >= 2 then
+      local wrap = seg.s1 <= seg.s0
+      side = M.steerSideForRange(tr, seg.s0, seg.s1, wrap)
+    end
   end
 
   if side then

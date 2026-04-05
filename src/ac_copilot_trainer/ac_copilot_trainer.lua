@@ -68,19 +68,24 @@ local CONFIG_DEFAULTS = {
   focusPracticeDimNonFocus = true,
 }
 
---- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
-local function loadConfig()
-  if ac and type(ac.storage) == "function" then
-    local ok, st = pcall(ac.storage, CONFIG_DEFAULTS)
-    if ok and type(st) == "table" then
-      return st
-    end
-  end
+--- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
+local function shallowCopyDefaults()
   local c = {}
   for k, v in pairs(CONFIG_DEFAULTS) do
     c[k] = v
   end
   return c
+end
+
+--- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
+local function loadConfig()
+  if ac and type(ac.storage) == "function" then
+    local ok, st = pcall(ac.storage, shallowCopyDefaults())
+    if ok and type(st) == "table" then
+      return st
+    end
+  end
+  return shallowCopyDefaults()
 end
 
 local config = loadConfig()
@@ -348,6 +353,9 @@ local state = {
   --- Parsed `corners.ini` by section id; invalidated when `cornerIniTrackKey` changes (issue #57).
   cornerIniById = {},
   cornerIniTrackKey = nil,
+  --- Precomputed `T1` -> "Left"|"Right" from best reference trace (invalidated with segments/trace).
+  cornerSteerSideByLabel = {},
+  cornerSteerSideCacheKey = nil,
 }
 
 -- HUD sees only focus-practice fields (checkbox + summary), not the full `state` table.
@@ -395,6 +403,7 @@ local function rebuildBestReference()
     state.bestSectorMs = { 0, 0, 0 }
   end
   resetDeltaSmoother()
+  state.cornerSteerSideCacheKey = nil
 end
 
 local function applyLoaded(data)
@@ -427,6 +436,7 @@ local function applyLoaded(data)
   end
   if data.trackSegments and type(data.trackSegments) == "table" then
     state.trackSegments = data.trackSegments
+    state.cornerSteerSideCacheKey = nil
   end
   if data.lapFeatureHistory and type(data.lapFeatureHistory) == "table" then
     state.lapFeatureHistory = data.lapFeatureHistory
@@ -510,6 +520,10 @@ local function resetRuntimeAfterLeavingTrack()
   state.postLapUntil = 0
   state.lastThrottleSummary = ""
   state.trackSegments = {}
+  state.cornerIniById = {}
+  state.cornerIniTrackKey = nil
+  state.cornerSteerSideByLabel = {}
+  state.cornerSteerSideCacheKey = nil
   state.lapFeatureHistory = {}
   state.bestCornerFeatures = {}
   state.lapsCompleted = 0
@@ -661,7 +675,50 @@ local function splineForwardDelta(carSpline, ptSpline)
   return d
 end
 
-local function ensureCornerIniLoaded(sim0)
+--- Key changes when track, segment layout, or reference trace length changes.
+local function cornerSteerSidesCacheKey()
+  local segs = state.trackSegments
+  local tr = state.bestSortedTrace
+  local n = type(segs) == "table" and #segs or 0
+  local t = type(tr) == "table" and #tr or 0
+  local tk = ch.trackIdRawFromGlobals() or ""
+  local h = 0.0
+  if n > 0 and type(segs[1]) == "table" then
+    h = (tonumber(segs[1].s0) or 0) * 1e6 + (tonumber(segs[1].s1) or 0)
+  end
+  return string.format("%s|%d|%d|%.6f", tk, n, t, h)
+end
+
+--- One full trace scan per (segments × reference trace) change; HUD reads O(1) map (PR #58).
+local function rebuildCornerSteerSideCache()
+  state.cornerSteerSideByLabel = {}
+  local segs = state.trackSegments
+  local tr = state.bestSortedTrace
+  if type(segs) ~= "table" or type(tr) ~= "table" or #tr < 2 then
+    return
+  end
+  for i = 1, #segs do
+    local seg = segs[i]
+    if type(seg) == "table" and seg.kind == "corner" and type(seg.label) == "string" then
+      local s0, s1 = seg.s0, seg.s1
+      if type(s0) == "number" and type(s1) == "number" then
+        local wrap = s1 <= s0
+        state.cornerSteerSideByLabel[seg.label] = cornerNames.steerSideForRange(tr, s0, s1, wrap)
+      end
+    end
+  end
+end
+
+local function ensureCornerSteerSides()
+  local key = cornerSteerSidesCacheKey()
+  if state.cornerSteerSideCacheKey == key then
+    return
+  end
+  rebuildCornerSteerSideCache()
+  state.cornerSteerSideCacheKey = key
+end
+
+local function ensureCornerIniLoaded()
   local tk = ch.trackIdRawFromGlobals() or "unknown"
   if state.cornerIniTrackKey == tk and type(state.cornerIniById) == "table" then
     return
@@ -688,7 +745,8 @@ end
 ---@param sim0 ac.StateSim|nil
 ---@return table|nil
 local function approachHudData(car0, sortedTrace, sim0)
-  ensureCornerIniLoaded(sim0)
+  ensureCornerSteerSides()
+  ensureCornerIniLoaded()
   local best = state.brakingPoints.best
   if not car0 or not car0.position or #best == 0 then
     return nil
@@ -749,8 +807,8 @@ local function approachHudData(car0, sortedTrace, sim0)
     brakeIndex = bestI,
     segments = state.trackSegments,
     iniById = state.cornerIniById,
-    trace = sortedTrace,
     cornerFeats = state.bestCornerFeatures,
+    steerSideByLabel = state.cornerSteerSideByLabel,
   })
   return {
     turnLabel = turnLabel,
@@ -1057,12 +1115,14 @@ function script.update(dt)
         local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
         if #ns > 0 then
           state.trackSegments = ns
+          state.cornerSteerSideCacheKey = nil
         end
       end
       if #state.trackSegments == 0 then
         local ns = cornerAnalysis.buildSegments(completedTrace, segBrakes)
         if #ns > 0 then
           state.trackSegments = ns
+          state.cornerSteerSideCacheKey = nil
         end
       end
       feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
