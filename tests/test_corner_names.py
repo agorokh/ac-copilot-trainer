@@ -21,7 +21,7 @@ def parse_corners_ini(content: str | None) -> dict[int, dict]:
     current_id: int | None = None
     for raw in content.splitlines():
         line = raw.strip()
-        if not line or line.startswith(";") or line.startswith("#"):
+        if not line or line.startswith((";", "#")):
             continue
         if line.startswith("["):
             m = re.match(r"^\[CORNER_(\d+)\]", line)

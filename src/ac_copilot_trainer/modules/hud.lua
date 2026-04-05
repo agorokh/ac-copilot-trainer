@@ -29,7 +29,7 @@ local BLK = string.char(226, 150, 136)
 ---@field telemetrySamples integer|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
----@field approachData ApproachHudPayload|nil
+---@field approachData ApproachHudPayload|nil @Producer `approachHudData`; fields match `ApproachHudPayload` (incl. brakeIndex).
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field throttleLapHint string|nil
