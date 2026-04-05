@@ -354,6 +354,8 @@ local state = {
   lastLapCornerFeats = {},
   --- One-line HUD summary for focus targets.
   focusPracticeHudSummary = "",
+  --- Invalidation key for `focusPracticeHudSummary` (avoid rebuilding every frame).
+  focusPracticeHudSummarySig = nil,
   --- Parsed `corners.ini` by section id; invalidated when `cornerIniTrackKey` changes (issue #57).
   cornerIniById = {},
   cornerIniTrackKey = nil,
@@ -396,6 +398,30 @@ local function focusLabelMap()
     return focusPractice.cornerLabelsMapFromString(manual), true
   end
   return focusPractice.cornerLabelsMapFromWorst(state.focusWorstThree, config.focusPracticeAutoCount), false
+end
+
+--- Stable string for when `describeFocusMap` output can change (lap / worst corners / manual labels / toggle).
+local function focusHudSummarySig()
+  if not state.focusPracticeActive then
+    return "off"
+  end
+  local manual = config.focusPracticeCornerLabels
+  if type(manual) == "string" and manual:match("%S") then
+    return "m:" .. manual
+  end
+  local w = state.focusWorstThree
+  local wstr = ""
+  if type(w) == "table" then
+    for i = 1, #w do
+      wstr = wstr .. tostring(w[i]) .. "|"
+    end
+  end
+  return "a:"
+    .. tostring(config.focusPracticeAutoCount or 0)
+    .. ":"
+    .. wstr
+    .. ":"
+    .. tostring(state.lapsCompleted or -1)
 end
 
 local function rebuildBestReference()
@@ -1323,13 +1349,17 @@ function script.update(dt)
     state.refLatDistance = nil
   end
 
-  if not sim.isInMainMenu then
-    if state.focusPracticeActive then
+  -- `script.update` already returns while `sim.isInMainMenu`; only recompute summary when inputs change.
+  if state.focusPracticeActive then
+    local sig = focusHudSummarySig()
+    if sig ~= state.focusPracticeHudSummarySig then
+      state.focusPracticeHudSummarySig = sig
       local flm, man = focusLabelMap()
       state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
-    else
-      state.focusPracticeHudSummary = ""
     end
+  else
+    state.focusPracticeHudSummary = ""
+    state.focusPracticeHudSummarySig = nil
   end
 
   if state.lastLapCount >= 0 and lc < state.lastLapCount then

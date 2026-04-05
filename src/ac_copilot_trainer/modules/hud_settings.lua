@@ -19,8 +19,13 @@ local M = {}
 ---@field stats HudSettingsStats
 ---@field focusPracticeUi table|nil
 
+-- Booleans use explicit `true`/`false`; keys are filled from `CONFIG_DEFAULTS` + `ac.storage` merge before UI (issue #57).
 local function checkbox(config, key, label)
   local cur = config[key] == true
+  if type(ui.checkbox) ~= "function" then
+    ui.text(string.format("%s: %s", label, cur and "on" or "off"))
+    return
+  end
   pcall(function()
     local nv = ui.checkbox(label, cur)
     if type(nv) == "boolean" then
@@ -29,22 +34,33 @@ local function checkbox(config, key, label)
   end)
 end
 
+local function textWrappedMaybe(s)
+  if type(s) ~= "string" or s == "" then
+    return
+  end
+  if type(ui.textWrapped) == "function" then
+    ui.textWrapped(s)
+  else
+    ui.text(s)
+  end
+end
+
 local function drawStats(st)
   if st.throttleLapHint and st.throttleLapHint ~= "" then
     ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Throttle (last lap)")
-    ui.textWrapped(st.throttleLapHint)
+    textWrappedMaybe(st.throttleLapHint)
   end
   if st.consistencyHud and st.consistencyHud ~= "" then
     ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Consistency")
-    ui.textWrapped(st.consistencyHud)
+    textWrappedMaybe(st.consistencyHud)
   end
   if st.styleHud and st.styleHud ~= "" then
     ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Style vs reference")
-    ui.textWrapped(st.styleHud)
+    textWrappedMaybe(st.styleHud)
   end
   if st.tireHud and st.tireHud ~= "" then
     ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Tires (last lap)")
-    ui.textWrapped(st.tireHud)
+    textWrappedMaybe(st.tireHud)
   end
   if st.refAiDistanceM ~= nil and st.refAiDistanceM == st.refAiDistanceM then
     ui.text(string.format("AI line lateral (XZ): ~%.1f m", st.refAiDistanceM))
@@ -74,7 +90,7 @@ function M.draw(vm)
   ui.separator()
 
   ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Display")
-  checkbox(cfg, "hudEnabled", "Show main HUD window")
+  checkbox(cfg, "hudEnabled", "Show HUD/coaching windows")
   checkbox(cfg, "racingLineEnabled", "Show racing line (3D)")
   checkbox(cfg, "brakeMarkersEnabled", "Show brake markers (3D)")
 
@@ -135,15 +151,17 @@ function M.draw(vm)
   local stf = vm.focusPracticeUi
   if stf and type(stf) == "table" then
     local cur = stf.focusPracticeActive == true
-    pcall(function()
-      local nv = ui.checkbox("Enable focus practice (this session)", cur)
-      if type(nv) == "boolean" then
-        stf.focusPracticeActive = nv
-      end
-    end)
-    if stf.focusPracticeHudSummary and stf.focusPracticeHudSummary ~= "" then
-      ui.textWrapped(stf.focusPracticeHudSummary)
+    if type(ui.checkbox) == "function" then
+      pcall(function()
+        local nv = ui.checkbox("Enable focus practice (this session)", cur)
+        if type(nv) == "boolean" then
+          stf.focusPracticeActive = nv
+        end
+      end)
+    else
+      ui.text("Enable focus practice (this session): " .. (cur and "on" or "off"))
     end
+    textWrappedMaybe(stf.focusPracticeHudSummary)
   end
 
   ui.separator()
