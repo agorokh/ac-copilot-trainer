@@ -463,7 +463,7 @@ class TestRealTimeCoachingEngine:
         assert "function M.activeHint" in src
         assert "function M.rebuildSegmentIndex" in src
 
-    def test_realtime_coaching_six_phases(self):
+    def test_realtime_coaching_five_phases(self):
         """PD-02: State machine has all 5 phase string literals."""
         src = _lua_text("realtime_coaching.lua")
         for p in ["straight", "approaching", "braking", "corner", "exiting"]:

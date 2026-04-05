@@ -1051,10 +1051,8 @@ function script.update(dt)
       approachMeters = approachM,
     })
     state.realtimeActiveHint = rtHint
-    state.realtimeCoachingPhase = realtimeCoaching.phase()
   else
     state.realtimeActiveHint = nil
-    state.realtimeCoachingPhase = "straight"
   end
 
   if sim.isInMainMenu then

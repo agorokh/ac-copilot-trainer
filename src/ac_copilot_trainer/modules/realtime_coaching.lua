@@ -248,7 +248,7 @@ function M.tick(opts)
           or nextSeg.label
         if phase ~= "approaching" or currentCornerLabel ~= label then
           currentCornerLabel = label
-          activeHint = selectHint(label, lc, lastFeats, bestFeats)
+          activeHint = selectHint(label, lc, lastFeats, bestFeats) or activeHint
         end
         phase = "approaching"
         currentSegIdx = segIdx
@@ -262,14 +262,14 @@ function M.tick(opts)
     local label = cornerLabelForBrake(seg, indexedSegments)
     if phase ~= "braking" or currentCornerLabel ~= label then
       currentCornerLabel = label
-      activeHint = selectHint(label, lc, lastFeats, bestFeats)
+      activeHint = selectHint(label, lc, lastFeats, bestFeats) or activeHint
     end
     phase = "braking"
 
   elseif segKind == "corner" then
     if phase ~= "corner" or currentCornerLabel ~= seg.label then
       currentCornerLabel = seg.label
-      activeHint = selectHint(seg.label, lc, lastFeats, bestFeats)
+      activeHint = selectHint(seg.label, lc, lastFeats, bestFeats) or activeHint
     end
     phase = "corner"
 
@@ -280,7 +280,7 @@ function M.tick(opts)
       exitSplineTarget = wrap01(sp + EXIT_WINDOW_SPLINE)
     elseif phase == "exiting" then
       -- Check if we have passed the exit window
-      local pastExit = false
+      local pastExit
       if exitSplineTarget then
         local d = (sp - exitSplineTarget) % 1
         pastExit = d < 0.5
