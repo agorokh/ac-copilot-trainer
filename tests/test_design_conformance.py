@@ -454,27 +454,27 @@ class TestApproachPanel:
 class TestRealTimeCoachingEngine:
     """PD-01..PD-08: Real-time coaching engine structural conformance."""
 
-    def test_realtime_coaching_module_exists(self):
+    def test_realtime_coaching_module_exists(self) -> None:
         """PD-01: realtime_coaching.lua exists and exports core functions."""
         src = _lua_text("realtime_coaching.lua")
         assert "function M.tick" in src
         assert "function M.reset" in src
         assert "function M.rebuildSegmentIndex" in src
 
-    def test_realtime_coaching_five_phases(self):
+    def test_realtime_coaching_five_phases(self) -> None:
         """PD-02: State machine has all 5 phase string literals."""
         src = _lua_text("realtime_coaching.lua")
         for p in ["straight", "approaching", "braking", "corner", "exiting"]:
             assert (chr(34) + p + chr(34)) in src, f"Phase {p!r} not found in realtime_coaching.lua"
 
-    def test_realtime_coaching_bucket_index(self):
+    def test_realtime_coaching_bucket_index(self) -> None:
         """PD-03: O(1) spline lookup via quantized buckets."""
         src = _lua_text("realtime_coaching.lua")
         assert "NUM_BUCKETS" in src, "Bucket constant missing"
         assert "buckets" in src, "Bucket array missing"
         assert re.search(r"math\.floor.*NUM_BUCKETS", src), "Bucket quantization formula missing"
 
-    def test_realtime_coaching_dedup(self):
+    def test_realtime_coaching_dedup(self) -> None:
         """PD-04: Dedup per corner per lap (key = label_lapCount)."""
         src = _lua_text("realtime_coaching.lua")
         assert "hintShownThisLap" in src, "Dedup map missing"
@@ -482,7 +482,7 @@ class TestRealTimeCoachingEngine:
             "Dedup key pattern (label + lap) missing"
         )
 
-    def test_coaching_hints_build_realtime(self):
+    def test_coaching_hints_build_realtime(self) -> None:
         """PD-05: coaching_hints.lua exports M.buildRealTime."""
         src = _lua_text("coaching_hints.lua")
         assert "function M.buildRealTime" in src
@@ -492,7 +492,7 @@ class TestRealTimeCoachingEngine:
             "Entry speed threshold constant missing in coaching_hints.lua"
         )
 
-    def test_entry_script_requires_realtime_coaching(self):
+    def test_entry_script_requires_realtime_coaching(self) -> None:
         """PD-06: Entry script requires and wires realtime_coaching."""
         src = ENTRY.read_text(encoding="utf-8")
         assert 'require("realtime_coaching")' in src
@@ -500,13 +500,13 @@ class TestRealTimeCoachingEngine:
         assert "realtimeCoaching.reset" in src
         assert "realtimeCoaching.rebuildSegmentIndex" in src
 
-    def test_hud_viewmodel_realtime_hint_field(self):
+    def test_hud_viewmodel_realtime_hint_field(self) -> None:
         """PD-07: HudViewModel has realtimeHint field and hud.lua renders it."""
         hud_src = _lua_text("hud.lua")
         assert "realtimeHint" in hud_src, "realtimeHint field missing from HudViewModel"
         assert "vm.realtimeHint" in hud_src, "hud.lua does not render realtimeHint"
 
-    def test_realtime_coaching_hint_cleared_on_exit(self):
+    def test_realtime_coaching_hint_cleared_on_exit(self) -> None:
         """PD-08: activeHint is cleared when phase transitions to straight."""
         src = _lua_text("realtime_coaching.lua")
         # After exiting or braking->straight, activeHint should be set to nil

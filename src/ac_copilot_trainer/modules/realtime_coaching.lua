@@ -33,6 +33,9 @@ local indexBuilt = false
 -- Precomputed sorted list of brake/corner segment spline starts for O(1) approach scan.
 local brakeCornerStarts = {}       ---@type {s0: number, idx: integer}[]
 
+-- Precomputed brake segment index -> corner label map for O(1) label lookup.
+local brakeToCornerLabel = {}      ---@type table<integer, string>
+
 -- ---------------------------------------------------------------------------
 -- Bucket-based O(1) segment index
 -- ---------------------------------------------------------------------------
@@ -61,6 +64,7 @@ function M.rebuildSegmentIndex(segments)
   indexedSegments = segments or {}
   indexBuilt = false
   brakeCornerStarts = {}
+  brakeToCornerLabel = {}
   if not segments or #segments == 0 then
     return
   end
@@ -95,6 +99,26 @@ function M.rebuildSegmentIndex(segments)
   end
   -- Sort by s0 for binary search
   table.sort(brakeCornerStarts, function(a, b) return a.s0 < b.s0 end)
+  -- Precompute brake -> corner label map
+  brakeToCornerLabel = {}
+  for i = 1, #segments do
+    local seg = segments[i]
+    if seg.kind == "brake" then
+      local bestLabel = seg.label or "?"
+      local bestDist = math.huge
+      for j = 1, #segments do
+        local cs = segments[j]
+        if cs.kind == "corner" and cs.brakeSpline then
+          local d = splineDist(cs.brakeSpline, seg.s0 or 0)
+          if d < bestDist then
+            bestDist = d
+            bestLabel = cs.label
+          end
+        end
+      end
+      brakeToCornerLabel[i] = bestLabel
+    end
+  end
   indexBuilt = true
 end
 
@@ -162,25 +186,21 @@ local function findNextBrakeOrCorner(splinePos)
   local entry = brakeCornerStarts[bestIdx]
   local seg = indexedSegments[entry.idx]
   local d = (entry.s0 - sp) % 1
-  if d < 1e-9 then d = 1 end
+  if d < 1e-9 then d = 0 end
   return seg, d
 end
 
---- Resolve the corner label for a brake segment by finding the adjacent corner.
+--- Resolve the corner label for a brake segment.
+--- Uses the precomputed brakeToCornerLabel map for O(1) lookup;
+--- falls back to segment label if not indexed (e.g. dynamic segment).
 ---@param brakeSeg table
----@param segments table[]
+---@param segIdx integer|nil
 ---@return string
-local function cornerLabelForBrake(brakeSeg, segments)
-  local label = brakeSeg.label or "?"
-  for i = 1, #segments do
-    local s = segments[i]
-    if s.kind == "corner" and s.brakeSpline then
-      if splineDist(s.brakeSpline, brakeSeg.s0 or 0) < 0.03 then
-        return s.label
-      end
-    end
+local function cornerLabelForBrake(brakeSeg, segIdx)
+  if segIdx and brakeToCornerLabel[segIdx] then
+    return brakeToCornerLabel[segIdx]
   end
-  return label
+  return brakeSeg.label or "?"
 end
 
 -- ---------------------------------------------------------------------------
@@ -249,7 +269,7 @@ function M.tick(opts)
     return nil
   end
 
-  local seg = findSegment(sp)
+  local seg, segIdx = findSegment(sp)
   local segKind = seg and seg.kind or nil
 
   -- Detect approaching: on a straight (or gap), check if next brake/corner is within approachMeters.
@@ -260,7 +280,7 @@ function M.tick(opts)
       local distM = nextDist * trackLenM
       if distM <= approachM then
         local label = nextSeg.kind == "brake"
-          and cornerLabelForBrake(nextSeg, indexedSegments)
+          and cornerLabelForBrake(nextSeg, nil)
           or nextSeg.label
         if currentCornerLabel ~= label then
           currentCornerLabel = label
@@ -274,7 +294,7 @@ function M.tick(opts)
 
   -- Transition based on current segment kind
   if segKind == "brake" then
-    local label = cornerLabelForBrake(seg, indexedSegments)
+    local label = cornerLabelForBrake(seg, segIdx)
     if currentCornerLabel ~= label then
       currentCornerLabel = label
       activeHint = selectHint(label, lc, lastFeats, bestFeats)
@@ -334,6 +354,7 @@ function M.reset()
   indexedSegments = {}
   indexBuilt = false
   brakeCornerStarts = {}
+  brakeToCornerLabel = {}
 end
 
 return M
