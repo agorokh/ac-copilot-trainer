@@ -16,7 +16,7 @@ relates_to:
 
 ## Resume here
 
-- **Issue #57 Phase 5 Part B:** branch `feat/issue-57-phase5-part-b` — **PR #60** (ready): https://github.com/agorokh/ac-copilot-trainer/pull/60 — Settings window (WINDOW_2); CI green; GraphQL review threads resolved (2026-04-05); Parts C–E still on #57.
+- **Issue #57 Phase 5 Part B:** branch `feat/issue-57-phase5-part-b` — **PR #60** (open as of 2026-04-05): https://github.com/agorokh/ac-copilot-trainer/pull/60 — Settings window (WINDOW_2) delivered; Parts C–E still on #57.
 - **Branch:** `feat/issue-46-ollama-debrief` — **PR #55** (draft): https://github.com/agorokh/ac-copilot-trainer/pull/55 — issue **#46** Ollama debrief + HUD; mark ready when green, then pr-resolution-follow-up (~10 min between polls).
 - **Also open:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (issue **#49** ranking / SHAP).
 - **Merged:** **#45** / PR #53 (WebSocket v1); **#43** / PR #52 (coaching UX); **#47** journal — confirm PR #51 status on GitHub.
