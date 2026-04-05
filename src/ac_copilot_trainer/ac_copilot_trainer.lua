@@ -903,7 +903,12 @@ function script.update(dt)
     state.sidecarDebriefText = sidecarDebrief
   end
   if sidecarHints and #sidecarHints > 0 then
-    state.coachingLines = sidecarHints
+    local fmSide = select(1, focusLabelMap())
+    state.coachingLines = focusPractice.filterCoachingHints(
+      sidecarHints,
+      state.focusPracticeActive,
+      fmSide
+    )
     -- Late sidecar (e.g. slow Ollama): still show hints; refresh hold if it already expired.
     if (state.coachingRemainSec or 0) <= 0 then
       state.coachingRemainSec = normalizedCoachingHoldSeconds()
