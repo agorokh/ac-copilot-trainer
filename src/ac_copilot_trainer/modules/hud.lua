@@ -20,7 +20,7 @@ local BLK = string.char(226, 150, 136)
 ---@field telemetrySamples integer|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
----@field approachLines string[]|nil
+---@field approachData { turnLabel: string, targetSpeedKmh: number, currentSpeedKmh: number, distanceToBrakeM: number, status: string, progressPct: number }|nil
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field throttleLapHint string|nil
@@ -155,12 +155,17 @@ function M.draw(vm)
     ui.textWrapped(vm.sectorMessage)
   end
 
-  if vm.approachLines and #vm.approachLines > 0 then
+  if vm.approachData and type(vm.approachData) == "table" then
+    local a = vm.approachData
     ui.separator()
     ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Approach (brake)")
-    for i = 1, #vm.approachLines do
-      ui.text(vm.approachLines[i])
-    end
+    ui.text(string.format("%s  ·  %.0f m", tostring(a.turnLabel or "?"), tonumber(a.distanceToBrakeM) or 0))
+    ui.text(string.format(
+      "Ref speed: %.0f  Current: %.0f (%s)",
+      tonumber(a.targetSpeedKmh) or 0,
+      tonumber(a.currentSpeedKmh) or 0,
+      tostring(a.status or "")
+    ))
   end
 
   if vm.coastWarn then
