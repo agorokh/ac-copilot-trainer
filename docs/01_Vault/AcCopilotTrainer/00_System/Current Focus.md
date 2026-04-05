@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-04
+last_updated: 2026-04-05
 issue: "https://github.com/agorokh/ac-copilot-trainer/issues/57"
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -13,8 +13,8 @@ relates_to:
 
 **Repo:** ac-copilot-trainer. **Issue #57:** Phase 5 - 3-window architecture + Figma design implementation.
 
-**Branch:** `feat/issue-57-phase5-part-c`. **PR #62** open - Part C polished approach telemetry panel. 164 tests pass.
+**Branch:** `feat/issue-57-phase5-part-d`. **PR #63** open - Part D real-time coaching engine. 172 tests pass.
 
-**Parts A+B:** merged (PRs #58, #60). **Part C:** PR #62 open. **Parts D+E:** not started.
+**Parts A-C:** merged (PRs #58, #60, #62). **Part D:** PR #63 open. **Part E:** not started.
 
-**Next:** Merge PR #62 after review, then Part D (real-time coaching engine), then Part E (active suggestion panel, depends on D). Part D is the harder one - new subsystem with per-corner coaching logic.
+**Next:** Merge PR #63 after review, then Part E (active suggestion panel - rewrite hud.lua as clean coaching display).

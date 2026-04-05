@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-04
+last_updated: 2026-04-05
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -15,25 +15,22 @@ relates_to:
 
 ## Resume here
 
-- **Issue #57 Phase 5:** Parts A+B merged. **Part C** in **PR #62** (branch `feat/issue-57-phase5-part-c`): polished approach telemetry panel for WINDOW_1. 164 tests pass. Needs review + merge.
-- **Parts D+E** not started. D = real-time coaching engine (the hard part). E = active suggestion panel (depends on D).
-- **PR #61** (design conformance tests) merged.
-- **Python sidecar architecture reviewed:** AC native Python apps are Python 3.3, no pip, no async - dead end. Current sidecar architecture is correct.
+- **Issue #57 Phase 5:** Parts A-C merged. **Part D** in **PR #63** (branch `feat/issue-57-phase5-part-d`): real-time per-corner coaching engine. 172 tests pass. Needs review + merge.
+- **Part E** not started. E = active suggestion panel (rewrite hud.lua as clean coaching display, depends on D).
+- **Stale remote branches cleaned up** — only main remains.
 
 ## What was delivered this session
 
-- **PR #62 (Part C):** `coaching_overlay.lua` rewritten with `drawApproachPanel()` - dark semi-transparent bg, absolute-positioned layout, speed color logic (green/red/white at 8 km/h threshold), progress bar widget, multi-font system (Michroma/Montserrat/Syncopate with fallbacks). `coaching_font.lua` extended with `namedDescriptor()` and `pushNamed()`. `windowCoaching` rewired to prioritize approach panel. 8 new design conformance tests (PC-01 through PC-08).
-- **PR #61 (merged):** Design conformance test suite - 17 tests verifying Figma design requirements structurally present in Lua source. Machine-readable YAML checklist.
-- **Structured verification:** Full Parts A+B delivery verified against issue #57 acceptance criteria. Real-time coaching architecture gap analysis completed. Automated test methodology established.
+- **PR #62 (Part C) merged:** 3 rounds of bot review fixes (glow draw order, COLOR_BRAND alpha, panel sizing, cached approachHudData, EmmyLua annotations, test hardening). All 164 tests green.
+- **PR #63 (Part D) opened:** New `realtime_coaching.lua` — 5-phase state machine (straight/approaching/braking/corner/exiting) with O(1) bucket-based spline lookup (1000 buckets, handles Nordschleife 170+ segments). `coaching_hints.buildRealTime()` for single-corner comparison. Wired into `script.update()` with segment index rebuild at lap boundary. `realtimeHint` in HudViewModel rendered in hud.lua. 8 new tests (PD-01 through PD-08).
 
 ## What remains
 
-- **Part C:** Merge PR #62 after review. In-game verification needed (panel appearance, font resolution, speed colors).
-- **Part D (real-time coaching engine):** New `realtime_coaching.lua` module. Bridge function `coaching_hints.buildApproachTip()` connecting existing approach data pipeline to historical corner performance. Per-corner state machine. ~50-80 lines for MVP.
-- **Part E (active suggestion panel):** Rewrite `hud.lua` (WINDOW_0) as clean coaching display. Depends on Part D output.
-- **Issue #57 sequencing:** C (merge) -> D (real-time engine) -> E (active suggestion).
+- **Part D:** Merge PR #63 after review. In-game verification needed (hint timing, thresholds, Nordschleife perf).
+- **Part E (active suggestion panel):** Rewrite `hud.lua` (WINDOW_0) as clean coaching display matching Figma design. Dark semi-transparent panel, large coaching text, fade behavior. Depends on Part D output.
+- **Issue #57 sequencing:** D (merge) -> E (active suggestion).
 
 ## Blockers / dependencies
 
-- **In-game testing** required for Part C visual verification (fonts, colors, panel layout).
-- **Part D** is the risk item - tuning-sensitive logic requires driving on multiple tracks.
+- **In-game testing** required for Part D tuning (hint thresholds are sensitive to track/car combinations).
+- **Part E** depends on Part D merge (needs `realtimeHint` data flowing).
