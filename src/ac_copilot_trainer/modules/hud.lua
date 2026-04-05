@@ -4,6 +4,15 @@ local coachingOverlay = require("coaching_overlay")
 
 local M = {}
 
+---@class ApproachHudPayload
+---@field turnLabel string @always set by `approachHudData` (`corner_names.resolveApproachLabel`)
+---@field targetSpeedKmh number
+---@field currentSpeedKmh number
+---@field distanceToBrakeM number
+---@field status string
+---@field progressPct number
+---@field brakeIndex integer
+
 --- UTF-8 FULL BLOCK (U+2588) for delta bar segments.
 local BLK = string.char(226, 150, 136)
 
@@ -20,7 +29,7 @@ local BLK = string.char(226, 150, 136)
 ---@field telemetrySamples integer|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
----@field approachLines string[]|nil
+---@field approachData ApproachHudPayload|nil @Producer `approachHudData`; fields match `ApproachHudPayload` (incl. brakeIndex).
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field throttleLapHint string|nil
@@ -155,12 +164,17 @@ function M.draw(vm)
     ui.textWrapped(vm.sectorMessage)
   end
 
-  if vm.approachLines and #vm.approachLines > 0 then
+  if vm.approachData and type(vm.approachData) == "table" then
+    local a = vm.approachData
     ui.separator()
     ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Approach (brake)")
-    for i = 1, #vm.approachLines do
-      ui.text(vm.approachLines[i])
-    end
+    ui.text(string.format("%s  ·  %.0f m", tostring(a.turnLabel or "?"), tonumber(a.distanceToBrakeM) or 0))
+    ui.text(string.format(
+      "Ref speed: %.0f  Current: %.0f (%s)",
+      tonumber(a.targetSpeedKmh) or 0,
+      tonumber(a.currentSpeedKmh) or 0,
+      tostring(a.status or "")
+    ))
   end
 
   if vm.coastWarn then

@@ -29,11 +29,13 @@ local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
 local focusPractice = require("focus_practice")
+local cornerNames = require("corner_names")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
 
-local config = {
+--- Defaults for `ac.storage` (issue #57 Part A). Keys must stay stable across versions.
+local CONFIG_DEFAULTS = {
   brakeThreshold = 0.3,
   brakeDurationMin = 0.5,
   bufferSeconds = 30,
@@ -65,6 +67,28 @@ local config = {
   --- When focus mode is on and corner geometry exists, dim brake walls outside the focus set.
   focusPracticeDimNonFocus = true,
 }
+
+--- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
+local function shallowCopyDefaults()
+  local c = {}
+  for k, v in pairs(CONFIG_DEFAULTS) do
+    c[k] = v
+  end
+  return c
+end
+
+--- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
+local function loadConfig()
+  if ac and type(ac.storage) == "function" then
+    local ok, st = pcall(ac.storage, shallowCopyDefaults())
+    if ok and type(st) == "table" then
+      return st
+    end
+  end
+  return shallowCopyDefaults()
+end
+
+local config = loadConfig()
 
 --- Non-negative numeric hold for UI and countdown (invalid config → 30).
 local function normalizedCoachingHoldSeconds()
@@ -326,6 +350,12 @@ local state = {
   lastLapCornerFeats = {},
   --- One-line HUD summary for focus targets.
   focusPracticeHudSummary = "",
+  --- Parsed `corners.ini` by section id; invalidated when `cornerIniTrackKey` changes (issue #57).
+  cornerIniById = {},
+  cornerIniTrackKey = nil,
+  --- Precomputed `T1` -> "Left"|"Right" from best reference trace (invalidated with segments/trace).
+  cornerSteerSideByLabel = {},
+  cornerSteerSideCacheKey = nil,
 }
 
 -- HUD sees only focus-practice fields (checkbox + summary), not the full `state` table.
@@ -373,6 +403,7 @@ local function rebuildBestReference()
     state.bestSectorMs = { 0, 0, 0 }
   end
   resetDeltaSmoother()
+  state.cornerSteerSideCacheKey = nil
 end
 
 local function applyLoaded(data)
@@ -405,6 +436,7 @@ local function applyLoaded(data)
   end
   if data.trackSegments and type(data.trackSegments) == "table" then
     state.trackSegments = data.trackSegments
+    state.cornerSteerSideCacheKey = nil
   end
   if data.lapFeatureHistory and type(data.lapFeatureHistory) == "table" then
     state.lapFeatureHistory = data.lapFeatureHistory
@@ -488,6 +520,10 @@ local function resetRuntimeAfterLeavingTrack()
   state.postLapUntil = 0
   state.lastThrottleSummary = ""
   state.trackSegments = {}
+  state.cornerIniById = {}
+  state.cornerIniTrackKey = nil
+  state.cornerSteerSideByLabel = {}
+  state.cornerSteerSideCacheKey = nil
   state.lapFeatureHistory = {}
   state.bestCornerFeatures = {}
   state.lapsCompleted = 0
@@ -639,8 +675,78 @@ local function splineForwardDelta(carSpline, ptSpline)
   return d
 end
 
+--- Key changes when track, segment layout, or reference trace length changes.
+local function cornerSteerSidesCacheKey()
+  local segs = state.trackSegments
+  local tr = state.bestSortedTrace
+  local n = type(segs) == "table" and #segs or 0
+  local t = type(tr) == "table" and #tr or 0
+  local tk = ch.trackIdRawFromGlobals() or ""
+  local h = 0.0
+  if n > 0 and type(segs[1]) == "table" then
+    h = (tonumber(segs[1].s0) or 0) * 1e6 + (tonumber(segs[1].s1) or 0)
+  end
+  return string.format("%s|%d|%d|%.6f", tk, n, t, h)
+end
+
+--- One full trace scan per (segments × reference trace) change; HUD reads O(1) map (PR #58).
+local function rebuildCornerSteerSideCache()
+  state.cornerSteerSideByLabel = {}
+  local segs = state.trackSegments
+  local tr = state.bestSortedTrace
+  if type(segs) ~= "table" or type(tr) ~= "table" or #tr < 2 then
+    return
+  end
+  for i = 1, #segs do
+    local seg = segs[i]
+    if type(seg) == "table" and seg.kind == "corner" and type(seg.label) == "string" then
+      local s0, s1 = seg.s0, seg.s1
+      if type(s0) == "number" and type(s1) == "number" then
+        local wrap = s1 <= s0
+        state.cornerSteerSideByLabel[seg.label] = cornerNames.steerSideForRange(tr, s0, s1, wrap)
+      end
+    end
+  end
+end
+
+local function ensureCornerSteerSides()
+  local key = cornerSteerSidesCacheKey()
+  if state.cornerSteerSideCacheKey == key then
+    return
+  end
+  rebuildCornerSteerSideCache()
+  state.cornerSteerSideCacheKey = key
+end
+
+local function ensureCornerIniLoaded()
+  local tk = ch.trackIdRawFromGlobals() or "unknown"
+  if state.cornerIniTrackKey == tk and type(state.cornerIniById) == "table" then
+    return
+  end
+  state.cornerIniTrackKey = tk
+  state.cornerIniById = {}
+  if not ac or type(ac.getTrackDataFilename) ~= "function" then
+    return
+  end
+  local okPath, path = pcall(ac.getTrackDataFilename, "corners.ini")
+  if not okPath or type(path) ~= "string" or path == "" then
+    return
+  end
+  local f = io.open(path, "r")
+  if not f then
+    return
+  end
+  local body = f:read("*a")
+  f:close()
+  state.cornerIniById = cornerNames.parseCornersIni(body)
+end
+
+--- Structured approach telemetry for HUD + coaching panel (issue #57 Part A).
 ---@param sim0 ac.StateSim|nil
-local function approachHudLines(car0, sortedTrace, sim0)
+---@return table|nil
+local function approachHudData(car0, sortedTrace, sim0)
+  ensureCornerSteerSides()
+  ensureCornerIniLoaded()
   local best = state.brakingPoints.best
   if not car0 or not car0.position or #best == 0 then
     return nil
@@ -670,7 +776,11 @@ local function approachHudLines(car0, sortedTrace, sim0)
   if tlM and tlM > 0 then
     dM = bestSplineD * tlM
   end
-  if dM > config.approachMeters then
+  local approachM = tonumber(config.approachMeters)
+  if not approachM or approachM ~= approachM or approachM <= 0 then
+    approachM = 200
+  end
+  if dM > approachM then
     return nil
   end
   local bp = best[bestI]
@@ -680,15 +790,35 @@ local function approachHudLines(car0, sortedTrace, sim0)
   end
   local cur = car0.speedKmh or 0
   local dv = cur - refSpd
-  local tag = "match"
+  local status = "match"
   if dv > 8 then
-    tag = "too fast"
+    status = "too fast"
   elseif dv < -8 then
-    tag = "too slow"
+    status = "too slow"
   end
+  local progressPct = 1 - (dM / approachM)
+  if progressPct < 0 then
+    progressPct = 0
+  elseif progressPct > 1 then
+    progressPct = 1
+  end
+  local turnLabel = cornerNames.resolveApproachLabel({
+    brakeSpline = bp.spline or 0,
+    brakeIndex = bestI,
+    segments = state.trackSegments,
+    iniById = state.cornerIniById,
+    cornerFeats = state.bestCornerFeatures,
+    steerSideByLabel = state.cornerSteerSideByLabel,
+    trace = sortedTrace,
+  })
   return {
-    string.format("Dist brake #%d: %.0f m", bestI, dM),
-    string.format("Ref speed: %.0f  Current: %.0f (%s)", refSpd, cur, tag),
+    turnLabel = turnLabel,
+    targetSpeedKmh = refSpd,
+    currentSpeedKmh = cur,
+    distanceToBrakeM = dM,
+    status = status,
+    progressPct = progressPct,
+    brakeIndex = bestI,
   }
 end
 
@@ -768,7 +898,7 @@ function script.windowMain(_dt)
     brakeSession = #state.brakingPoints.session,
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
-    approachLines = approachHudLines(car, state.bestSortedTrace, sim),
+    approachData = approachHudData(car, state.bestSortedTrace, sim),
     postLapLines = postLines,
     coastWarn = coastWarn,
     throttleLapHint = state.lastThrottleSummary,
@@ -986,12 +1116,14 @@ function script.update(dt)
         local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
         if #ns > 0 then
           state.trackSegments = ns
+          state.cornerSteerSideCacheKey = nil
         end
       end
       if #state.trackSegments == 0 then
         local ns = cornerAnalysis.buildSegments(completedTrace, segBrakes)
         if #ns > 0 then
           state.trackSegments = ns
+          state.cornerSteerSideCacheKey = nil
         end
       end
       feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
