@@ -28,6 +28,7 @@ local wsBridge = require("ws_bridge")
 local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
+local focusPractice = require("focus_practice")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -57,6 +58,12 @@ local config = {
   lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running — see `WARP.md` § WebSocket sidecar (issue #45).
   wsSidecarUrl = "",
+  --- Focus practice (issue #44): comma-separated corner labels `T1,T2`; empty = auto from worst consistency rows.
+  focusPracticeCornerLabels = "",
+  --- Auto-pick up to this many worst corners when `focusPracticeCornerLabels` is empty (1–3).
+  focusPracticeAutoCount = 3,
+  --- When focus mode is on and corner geometry exists, dim brake walls outside the focus set.
+  focusPracticeDimNonFocus = true,
 }
 
 --- Non-negative numeric hold for UI and countdown (invalid config → 30).
@@ -311,7 +318,51 @@ local state = {
   coachingRemainSec = 0,
   --- Last sidecar ``debrief`` paragraph (issue #46); persists until replaced or session reset.
   sidecarDebriefText = "",
+  --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
+  focusPracticeActive = false,
+  --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
+  focusWorstThree = {},
+  --- Last lap corner features for spline matching (clone).
+  lastLapCornerFeats = {},
+  --- One-line HUD summary for focus targets.
+  focusPracticeHudSummary = "",
 }
+
+-- HUD sees only focus-practice fields (checkbox + summary), not the full `state` table.
+local focusPracticeUiProxy = setmetatable({}, {
+  __index = function(_, k)
+    if k == "focusPracticeActive" then
+      return state.focusPracticeActive
+    end
+    if k == "focusPracticeHudSummary" then
+      return state.focusPracticeHudSummary
+    end
+    return nil
+  end,
+  __newindex = function(_, k, v)
+    if k == "focusPracticeActive" then
+      state.focusPracticeActive = v
+      return
+    end
+    if k == "focusPracticeHudSummary" then
+      state.focusPracticeHudSummary = v
+      return
+    end
+  end,
+})
+
+--- Issue #44: map of corner labels -> true for marker emphasis + coaching filter.
+---@return table<string, boolean>|nil, boolean manualUsed
+local function focusLabelMap()
+  if not state.focusPracticeActive then
+    return nil, false
+  end
+  local manual = config.focusPracticeCornerLabels
+  if type(manual) == "string" and manual:match("%S") then
+    return focusPractice.cornerLabelsMapFromString(manual), true
+  end
+  return focusPractice.cornerLabelsMapFromWorst(state.focusWorstThree, config.focusPracticeAutoCount), false
+end
 
 local function rebuildBestReference()
   state.bestSortedTrace = delta.prepareTrace(state.bestLapTrace)
@@ -456,6 +507,10 @@ local function resetRuntimeAfterLeavingTrack()
   state.coachingLines = {}
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
+  state.focusPracticeActive = false
+  state.focusWorstThree = {}
+  state.lastLapCornerFeats = {}
+  state.focusPracticeHudSummary = ""
   wsBridge.reset()
   renderDiag.reset()
   resetDeltaSmoother()
@@ -470,6 +525,9 @@ local function resetRollingDrivingState()
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
   state.lapsCompleted = 0
+  state.focusWorstThree = {}
+  state.lastLapCornerFeats = {}
+  state.focusPracticeHudSummary = ""
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -690,6 +748,13 @@ function script.windowMain(_dt)
   end
   local coachPrimer = (state.lapsCompleted or 0) == 0
 
+  if state.focusPracticeActive then
+    local flm, man = focusLabelMap()
+    state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
+  else
+    state.focusPracticeHudSummary = ""
+  end
+
   hud.draw({
     recording = tel:isRecording(),
     telemetrySamples = tel:sampleCount(),
@@ -722,6 +787,7 @@ function script.windowMain(_dt)
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
+    focusPracticeUi = focusPracticeUiProxy,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
@@ -837,7 +903,12 @@ function script.update(dt)
     state.sidecarDebriefText = sidecarDebrief
   end
   if sidecarHints and #sidecarHints > 0 then
-    state.coachingLines = sidecarHints
+    local fmSide = select(1, focusLabelMap())
+    state.coachingLines = focusPractice.filterCoachingHints(
+      sidecarHints,
+      state.focusPracticeActive,
+      fmSide
+    )
     -- Late sidecar (e.g. slow Ollama): still show hints; refresh hold if it already expired.
     if (state.coachingRemainSec or 0) <= 0 then
       state.coachingRemainSec = normalizedCoachingHoldSeconds()
@@ -930,6 +1001,12 @@ function script.update(dt)
       if consForHints and consForHints.worstThree and #consForHints.worstThree > 0 then
         state.consistencyHud = "Least consistent: " .. table.concat(consForHints.worstThree, ", ")
       end
+      state.focusWorstThree = {}
+      if consForHints and type(consForHints.worstThree) == "table" then
+        for wi = 1, #consForHints.worstThree do
+          state.focusWorstThree[wi] = consForHints.worstThree[wi]
+        end
+      end
       state.styleHud = ""
       local div = cornerAnalysis.styleDivergence(feats, state.bestCornerFeatures)
       if div ~= nil then
@@ -941,9 +1018,17 @@ function script.update(dt)
     else
       state.consistencyHud = state.consistencyHud or ""
       state.styleHud = state.styleHud or ""
+      -- Keep prior `focusWorstThree` (like consistency HUD text): lap history still
+      -- holds usable worst-corner rows; clearing here dropped auto-focus after one bad lap (#44).
     end
 
-    state.coachingLines = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
+    if traceAnalyticsOk and #feats > 0 then
+      state.lastLapCornerFeats = cloneCornerFeats(feats)
+    end
+
+    local rawCoaching = coachingHints.buildAfterLap(feats, state.bestCornerFeatures, consForHints, thA, traceAnalyticsOk)
+    local fmForFilter = select(1, focusLabelMap())
+    state.coachingLines = focusPractice.filterCoachingHints(rawCoaching, state.focusPracticeActive, fmForFilter)
     state.coachingRemainSec = normalizedCoachingHoldSeconds()
 
     -- Diagnostic: log if coaching lines were generated but empty (#35 Part E)
@@ -1168,7 +1253,13 @@ function script.Draw3D(_dt)
     end
   end
 
-  trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last)
+  local flMap = select(1, focusLabelMap())
+  trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last, {
+    active = state.focusPracticeActive == true,
+    labels = flMap,
+    corners = state.lastLapCornerFeats,
+    dimNonFocus = config.focusPracticeDimNonFocus ~= false,
+  })
   local mode = config.racingLineMode or "best"
   local style = config.lineStyle or "tilt"
   if mode == "best" or mode == "both" then

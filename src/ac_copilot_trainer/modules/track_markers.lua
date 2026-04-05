@@ -1,6 +1,8 @@
 -- 3D brake markers: vertical gradient walls via render.shaderedQuad (issue #39).
+-- Focus practice emphasis (issue #44): larger/brighter walls on selected corners.
 
 local ch = require("csp_helpers")
+local focusPractice = require("focus_practice")
 
 local M = {}
 
@@ -11,6 +13,9 @@ local MAX_SNAPY_KEYS = 256
 
 local WALL_HEIGHT = 0.9
 local WALL_HALF_WIDTH = 4.0
+local FOCUS_HW_SCALE = 1.35
+local FOCUS_H_SCALE = 1.12
+local DIM_NON_FOCUS_ALPHA = 0.22
 
 local snapSig = ""
 local snapY = {} ---@type table<string, number>
@@ -140,11 +145,18 @@ local BEST_ALPHA_BOTTOM = 0.65
 local LAST_RGB = { r = 1.0, g = 0.6, b = 0.0 }
 local LAST_ALPHA_BOTTOM = 0.4
 
+---@class TrackMarkerFocusOpts
+---@field active boolean|nil
+---@field labels table<string, boolean>|nil
+---@field corners table[]|nil last-lap corner features
+---@field dimNonFocus boolean|nil
+
 ---@param car ac.StateCar|nil
 ---@param _sim ac.StateSim|nil
 ---@param best table[]|nil
 ---@param last table[]|nil
-function M.draw(car, _sim, best, last)
+---@param focusOpts TrackMarkerFocusOpts|nil issue #44
+function M.draw(car, _sim, best, last, focusOpts)
   if not car or not car.position then
     return
   end
@@ -170,6 +182,13 @@ function M.draw(car, _sim, best, last)
   end
 
   local cx, cy, cz = car.position.x, car.position.y, car.position.z
+  local fo = focusOpts
+  local focusOn = fo and fo.active == true
+  local fmap = focusOn and fo.labels or nil
+  local fcorners = focusOn and fo.corners or nil
+  local dimOthers = focusOn and (fo.dimNonFocus ~= false)
+  local canClassify = focusOn and fmap and next(fmap) ~= nil and type(fcorners) == "table" and #fcorners > 0
+
   local items = {}
   local function addList(list, kind)
     if not list then
@@ -180,7 +199,12 @@ function M.draw(car, _sim, best, last)
       if p and type(p.px) == "number" and type(p.py) == "number" and type(p.pz) == "number" then
         local d = math.sqrt(distSq(cx, cy, cz, p.px, p.py, p.pz))
         if d <= FADE_FAR + 1 then
-          items[#items + 1] = { d = d, x = p.px, y = p.py, z = p.pz, kind = kind }
+          local sp = tonumber(p.spline)
+          local isF = false
+          if canClassify and sp then
+            isF = focusPractice.brakeSplineMatchesFocus(sp, fmap, fcorners, nil)
+          end
+          items[#items + 1] = { d = d, x = p.px, y = p.py, z = p.pz, kind = kind, spline = sp, focus = isF }
         end
       end
     end
@@ -231,22 +255,41 @@ function M.draw(car, _sim, best, last)
       end
 
       local nx, nz = wallPerpendicular(nil, 0, car)
-      local hw = WALL_HALF_WIDTH
+      local isFocus = it.focus == true
+      local hw = WALL_HALF_WIDTH * (isFocus and FOCUS_HW_SCALE or 1)
+      local wallH = WALL_HEIGHT * (isFocus and FOCUS_H_SCALE or 1)
 
       local glx, gly, glz = it.x - nx * hw, sy, it.z - nz * hw
       local grx, gry, grz = it.x + nx * hw, sy, it.z + nz * hw
-      local tlx, tly, tlz = it.x - nx * hw, sy + WALL_HEIGHT, it.z - nz * hw
-      local trx, try_, trz = it.x + nx * hw, sy + WALL_HEIGHT, it.z + nz * hw
+      local tlx, tly, tlz = it.x - nx * hw, sy + wallH, it.z - nz * hw
+      local trx, try_, trz = it.x + nx * hw, sy + wallH, it.z + nz * hw
 
       ch.setV3(wq.p1, glx, gly, glz)
       ch.setV3(wq.p2, grx, gry, grz)
       ch.setV3(wq.p3, trx, try_, trz)
       ch.setV3(wq.p4, tlx, tly, tlz)
 
+      local alphaMul = fade
+      if dimOthers and canClassify then
+        if not isFocus then
+          alphaMul = alphaMul * DIM_NON_FOCUS_ALPHA
+        else
+          alphaMul = math.min(1, alphaMul * 1.08)
+        end
+      end
+
       if it.kind == "best" then
-        ch.setRgbmField(wq.values, "gCol", BEST_RGB.r, BEST_RGB.g, BEST_RGB.b, BEST_ALPHA_BOTTOM * fade)
+        if isFocus then
+          ch.setRgbmField(wq.values, "gCol", 0.25, 0.95, 1.0, math.min(0.95, BEST_ALPHA_BOTTOM * alphaMul * 1.15))
+        else
+          ch.setRgbmField(wq.values, "gCol", BEST_RGB.r, BEST_RGB.g, BEST_RGB.b, BEST_ALPHA_BOTTOM * alphaMul)
+        end
       else
-        ch.setRgbmField(wq.values, "gCol", LAST_RGB.r, LAST_RGB.g, LAST_RGB.b, LAST_ALPHA_BOTTOM * fade)
+        if isFocus then
+          ch.setRgbmField(wq.values, "gCol", 1.0, 0.92, 0.2, math.min(0.9, LAST_ALPHA_BOTTOM * alphaMul * 1.2))
+        else
+          ch.setRgbmField(wq.values, "gCol", LAST_RGB.r, LAST_RGB.g, LAST_RGB.b, LAST_ALPHA_BOTTOM * alphaMul)
+        end
       end
 
       pcall(render.shaderedQuad, wq)

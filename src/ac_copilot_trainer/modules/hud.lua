@@ -39,6 +39,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingShowPrimer boolean|nil
 ---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
 ---@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
+---@field focusPracticeUi table|nil @proxy: only `focusPracticeActive` + `focusPracticeHudSummary` (issue #44)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
@@ -199,6 +200,27 @@ function M.draw(vm)
       ui.textWrapped(vm.debriefText)
     else
       ui.text(vm.debriefText)
+    end
+  end
+
+  if vm.focusPracticeUi and type(vm.focusPracticeUi) == "table" then
+    ui.separator()
+    ui.textColored(rgbm(0.55, 0.85, 0.95, 1), "Focus practice (#44)")
+    local st = vm.focusPracticeUi
+    local cur = st.focusPracticeActive == true
+    if type(ui.checkbox) == "function" then
+      pcall(function()
+        -- CSP/ImGui: checkbox returns the new bool each frame (stateful widget).
+        local nv = ui.checkbox("Enable (this session)", cur)
+        if type(nv) == "boolean" then
+          st.focusPracticeActive = nv
+        end
+      end)
+    else
+      ui.textColored(rgbm(0.65, 0.65, 0.68, 1), cur and "Enabled (no checkbox API)" or "Disabled")
+    end
+    if st.focusPracticeHudSummary and st.focusPracticeHudSummary ~= "" then
+      ui.textWrapped(st.focusPracticeHudSummary)
     end
   end
 
