@@ -2,18 +2,19 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-01
-issue: "https://github.com/agorokh/ac-copilot-trainer/issues/37"
+last_updated: 2026-04-04
+issue: "https://github.com/agorokh/ac-copilot-trainer/issues/57"
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
-  - AcCopilotTrainer/01_Decisions/deep-research-synthesis.md
 ---
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Issue #37:** Visual overhaul v3 -- 3D brake walls, speed diagnostics, coaching overlay fix.
+**Repo:** ac-copilot-trainer. **Issue #57:** Phase 5 - 3-window architecture + Figma design implementation.
 
-**Branch:** `feat/issue-37-visual-overhaul-v3`. **PR #38** ready for review -- all 4 parts implemented, CI green.
+**Branch:** `feat/issue-57-phase5-part-c`. **PR #62** open - Part C polished approach telemetry panel. 164 tests pass.
 
-**Next:** Address bot review comments on PR #38, in-game test to confirm 3D brake walls + speed colors + coaching. Then resume epic work (#7/#8/#9).
+**Parts A+B:** merged (PRs #58, #60). **Part C:** PR #62 open. **Parts D+E:** not started.
+
+**Next:** Merge PR #62 after review, then Part D (real-time coaching engine) or Part E (active suggestion panel). Part D is the harder one - new subsystem with per-corner coaching logic.
