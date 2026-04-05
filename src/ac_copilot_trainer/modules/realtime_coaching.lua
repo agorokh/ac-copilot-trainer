@@ -19,7 +19,6 @@ local APPROACH_DEFAULT_M = 200    -- fallback approach distance in meters
 -- ---------------------------------------------------------------------------
 
 local phase = "straight"           ---@type string
-local currentSegIdx = nil          ---@type integer|nil
 local currentCornerLabel = nil     ---@type string|nil
 local activeHint = nil             ---@type table|nil  {text, kind, cornerLabel}
 local hintShownThisLap = {}        ---@type table<string, boolean>  "T5_3" -> true
@@ -110,7 +109,23 @@ local function findSegment(splinePos)
   if b > NUM_BUCKETS then b = NUM_BUCKETS end
   local idx = buckets[b]
   if idx then
-    return indexedSegments[idx], idx
+    local seg = indexedSegments[idx]
+    -- Validate position is within segment range (handles quantization boundary)
+    if seg then
+      local s0 = seg.s0 or 0
+      local s1 = seg.s1 or 0
+      local sp = wrap01(splinePos)
+      local inRange
+      if s1 > s0 then
+        inRange = sp >= s0 and sp <= s1
+      else
+        -- Wrap-around segment (crosses start/finish)
+        inRange = sp >= s0 or sp <= s1
+      end
+      if inRange then
+        return seg, idx
+      end
+    end
   end
   return nil, nil
 end
@@ -246,12 +261,11 @@ function M.tick(opts)
         local label = nextSeg.kind == "brake"
           and cornerLabelForBrake(nextSeg, indexedSegments)
           or nextSeg.label
-        if phase ~= "approaching" or currentCornerLabel ~= label then
+        if currentCornerLabel ~= label then
           currentCornerLabel = label
-          activeHint = selectHint(label, lc, lastFeats, bestFeats) or activeHint
+          activeHint = selectHint(label, lc, lastFeats, bestFeats)
         end
         phase = "approaching"
-        currentSegIdx = segIdx
         return activeHint
       end
     end
@@ -260,16 +274,16 @@ function M.tick(opts)
   -- Transition based on current segment kind
   if segKind == "brake" then
     local label = cornerLabelForBrake(seg, indexedSegments)
-    if phase ~= "braking" or currentCornerLabel ~= label then
+    if currentCornerLabel ~= label then
       currentCornerLabel = label
-      activeHint = selectHint(label, lc, lastFeats, bestFeats) or activeHint
+      activeHint = selectHint(label, lc, lastFeats, bestFeats)
     end
     phase = "braking"
 
   elseif segKind == "corner" then
-    if phase ~= "corner" or currentCornerLabel ~= seg.label then
+    if currentCornerLabel ~= seg.label then
       currentCornerLabel = seg.label
-      activeHint = selectHint(seg.label, lc, lastFeats, bestFeats) or activeHint
+      activeHint = selectHint(seg.label, lc, lastFeats, bestFeats)
     end
     phase = "corner"
 
@@ -301,7 +315,6 @@ function M.tick(opts)
     end
   end
 
-  currentSegIdx = segIdx
   return activeHint
 end
 
@@ -314,18 +327,12 @@ function M.phase()
   return phase
 end
 
----@return table|nil  {text, kind, cornerLabel}
-function M.activeHint()
-  return activeHint
-end
-
 -- ---------------------------------------------------------------------------
 -- Reset
 -- ---------------------------------------------------------------------------
 
 function M.reset()
   phase = "straight"
-  currentSegIdx = nil
   currentCornerLabel = nil
   activeHint = nil
   hintShownThisLap = {}

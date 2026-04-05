@@ -582,6 +582,7 @@ local function resetRuntimeAfterLeavingTrack()
   wsBridge.reset()
   renderDiag.reset()
   realtimeCoaching.reset()
+  state.realtimeActiveHint = nil
   resetDeltaSmoother()
 end
 
@@ -598,6 +599,7 @@ local function resetRollingDrivingState()
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
+  state.realtimeActiveHint = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()

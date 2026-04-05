@@ -132,7 +132,7 @@ function M.draw(vm)
     ))
   end
 
-  if vm.realtimeHint and type(vm.realtimeHint) == "table" and vm.realtimeHint.text then
+  if vm.realtimeHint and type(vm.realtimeHint) == "table" and type(vm.realtimeHint.text) == "string" and vm.realtimeHint.text ~= "" then
     ui.separator()
     local hintCol = rgbm(0.35, 0.82, 0.95, 1)
     local k = vm.realtimeHint.kind

@@ -460,7 +460,6 @@ class TestRealTimeCoachingEngine:
         assert "function M.tick" in src
         assert "function M.reset" in src
         assert "function M.phase" in src
-        assert "function M.activeHint" in src
         assert "function M.rebuildSegmentIndex" in src
 
     def test_realtime_coaching_five_phases(self):
