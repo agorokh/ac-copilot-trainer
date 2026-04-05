@@ -14,7 +14,7 @@ local FONT_PT = 22                            -- legacy default point size
 
 --- Named font descriptors resolved lazily.
 --- Keys: "numbers" (Michroma / Consolas), "labels" (Montserrat / Segoe UI),
----        "brand" (Syncopate / Segoe UI Light), "legacy" (BMW.txt).
+---        "brand" (Syncopate / Segoe UI), "legacy" (BMW.txt).
 ---@type table<string, string|false>
 local namedCache = {}
 

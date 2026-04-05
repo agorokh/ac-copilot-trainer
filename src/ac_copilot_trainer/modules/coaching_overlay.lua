@@ -19,7 +19,7 @@ local COLOR_RED          = rgbm(0.94, 0.27, 0.27, 1.0)       -- #EF4444 warning
 local COLOR_BAR_BG       = rgbm(0.15, 0.15, 0.18, 0.80)      -- progress bar background
 local COLOR_BAR_FILL     = rgbm(0.35, 0.82, 0.95, 0.90)      -- progress bar fill
 local COLOR_BAR_GLOW     = rgbm(0.35, 0.82, 0.95, 0.35)      -- progress bar glow
-local COLOR_BRAND        = rgbm(0.45, 0.48, 0.52, 0.70)      -- footer branding
+local COLOR_BRAND        = rgbm(0.45, 0.48, 0.52, 1.0)       -- footer branding (text opaque per brief)
 
 local PANEL_ROUNDING = 12
 local PANEL_PAD_X    = 20
@@ -60,11 +60,12 @@ local function drawProgressBar(x, y, w, h, pct)
   -- Fill
   local fillW = math.max(0, math.min(1, pct)) * w
   if fillW > 1 then
-    ui.drawRectFilled(p0, vec2(x + fillW, y + h), COLOR_BAR_FILL, h / 2)
-    -- Glow overlay (subtle wider bar behind fill for glow effect)
+    -- Glow layer behind fill (subtle wider bar for bloom effect)
     if fillW > 4 then
       ui.drawRectFilled(vec2(x, y - 1), vec2(x + fillW, y + h + 1), COLOR_BAR_GLOW, h / 2)
     end
+    -- Fill layer on top
+    ui.drawRectFilled(p0, vec2(x + fillW, y + h), COLOR_BAR_FILL, h / 2)
   end
 end
 

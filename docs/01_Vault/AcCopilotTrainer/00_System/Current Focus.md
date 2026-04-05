@@ -17,4 +17,4 @@ relates_to:
 
 **Parts A+B:** merged (PRs #58, #60). **Part C:** PR #62 open. **Parts D+E:** not started.
 
-**Next:** Merge PR #62 after review, then Part D (real-time coaching engine) or Part E (active suggestion panel). Part D is the harder one - new subsystem with per-corner coaching logic.
+**Next:** Merge PR #62 after review, then Part D (real-time coaching engine), then Part E (active suggestion panel, depends on D). Part D is the harder one - new subsystem with per-corner coaching logic.
