@@ -5,7 +5,7 @@ local coachingOverlay = require("coaching_overlay")
 local M = {}
 
 ---@class ApproachHudPayload
----@field turnLabel string
+---@field turnLabel string @always set by `approachHudData` (`corner_names.resolveApproachLabel`)
 ---@field targetSpeedKmh number
 ---@field currentSpeedKmh number
 ---@field distanceToBrakeM number

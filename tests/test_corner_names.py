@@ -189,6 +189,16 @@ def test_steer_side_left_right() -> None:
     assert steer_side_for_range(trace_r, 0.499, 0.506, False) == "Right"
 
 
+def test_steer_side_wrap_around() -> None:
+    trace = [
+        {"spline": 0.97, "steer": 0.25},
+        {"spline": 0.99, "steer": 0.22},
+        {"spline": 0.02, "steer": 0.28},
+        {"spline": 0.04, "steer": 0.24},
+    ]
+    assert steer_side_for_range(trace, 0.95, 0.06, True) == "Right"
+
+
 def test_resolve_uses_ini_and_side() -> None:
     ini = parse_corners_ini("[CORNER_0]\nNAME=Variante\n")
     segments = [

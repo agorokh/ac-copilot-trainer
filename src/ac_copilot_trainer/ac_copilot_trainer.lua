@@ -809,6 +809,7 @@ local function approachHudData(car0, sortedTrace, sim0)
     iniById = state.cornerIniById,
     cornerFeats = state.bestCornerFeatures,
     steerSideByLabel = state.cornerSteerSideByLabel,
+    trace = sortedTrace,
   })
   return {
     turnLabel = turnLabel,

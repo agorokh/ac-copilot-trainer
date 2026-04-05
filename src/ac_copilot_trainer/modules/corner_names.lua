@@ -73,6 +73,7 @@ function M.iniNameForTurnIndex(byId, turnIndex)
 end
 
 --- Average steering sign in spline range (same wrap semantics as `corner_analysis.statsInSplineRange`).
+--- **Hot path:** do not call each frame — use `ac_copilot_trainer` `cornerSteerSideByLabel` cache (rebuilt when segments/trace change).
 ---@param trace table[]|nil
 ---@param s0 number
 ---@param s1 number
@@ -142,6 +143,7 @@ function M.cornerSegmentForBrakeSpline(segments, brakeSpline, tol)
       end
     end
   end
+  -- Widen match to 2.5× tol: brake spline vs segment `brakeSpline` can differ slightly lap-to-lap.
   if best and bestD <= (t * 2.5) then
     return best
   end
