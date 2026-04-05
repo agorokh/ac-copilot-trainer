@@ -577,6 +577,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
+  state.focusPracticeHudSummarySig = nil
   wsBridge.reset()
   renderDiag.reset()
   resetDeltaSmoother()
@@ -594,6 +595,7 @@ local function resetRollingDrivingState()
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
+  state.focusPracticeHudSummarySig = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()

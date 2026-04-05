@@ -19,9 +19,12 @@ local M = {}
 ---@field stats HudSettingsStats
 ---@field focusPracticeUi table|nil
 
--- Booleans use explicit `true`/`false`; keys are filled from `CONFIG_DEFAULTS` + `ac.storage` merge before UI (issue #57).
-local function checkbox(config, key, label)
-  local cur = config[key] == true
+---@param mode "strictTrue"|"notFalse"
+--- `strictTrue`: matches `if not config.k` / `if config.k then` (only explicit `true` is on).
+--- `notFalse`: matches `config.k ~= false` (nil/missing counts as on).
+local function checkbox(config, key, label, mode)
+  mode = mode or "strictTrue"
+  local cur = (mode == "notFalse") and (config[key] ~= false) or (config[key] == true)
   if type(ui.checkbox) ~= "function" then
     ui.text(string.format("%s: %s", label, cur and "on" or "off"))
     return
@@ -90,9 +93,9 @@ function M.draw(vm)
   ui.separator()
 
   ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Display")
-  checkbox(cfg, "hudEnabled", "Show HUD/coaching windows")
-  checkbox(cfg, "racingLineEnabled", "Show racing line (3D)")
-  checkbox(cfg, "brakeMarkersEnabled", "Show brake markers (3D)")
+  checkbox(cfg, "hudEnabled", "Show HUD/coaching windows", "strictTrue")
+  checkbox(cfg, "racingLineEnabled", "Show racing line (3D)", "notFalse")
+  checkbox(cfg, "brakeMarkersEnabled", "Show brake markers (3D)", "notFalse")
 
   ui.separator()
   ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Coaching")
@@ -111,12 +114,18 @@ function M.draw(vm)
         cfg.coachingHoldSeconds = nvH
       end
     end)
+  else
+    local curA = math.max(50, math.min(500, tonumber(cfg.approachMeters) or 200))
+    local curH = math.max(5, math.min(120, tonumber(cfg.coachingHoldSeconds) or 30))
+    ui.text(string.format("Approach distance (m): %.0f", curA))
+    ui.text(string.format("Post-lap coaching hold (s): %.0f", curH))
+    ui.textColored(rgbm(0.65, 0.65, 0.7, 1), "Sliders not available in this CSP build.")
   end
 
   local mode = tostring(cfg.racingLineMode or "best")
   local modePreview = (mode == "last" and "Last lap") or (mode == "both" and "Both") or "Best lap"
-  pcall(function()
-    if type(ui.combo) == "function" then
+  if type(ui.combo) == "function" then
+    pcall(function()
       ui.combo("Racing line source###cpt_rlmode", modePreview, nil, function()
         if ui.selectable("Best lap", mode == "best") then
           cfg.racingLineMode = "best"
@@ -128,13 +137,16 @@ function M.draw(vm)
           cfg.racingLineMode = "both"
         end
       end)
-    end
-  end)
+    end)
+  else
+    ui.text("Racing line source: " .. modePreview)
+    ui.textColored(rgbm(0.65, 0.65, 0.7, 1), "Combo not available — edit racingLineMode in storage if needed.")
+  end
 
   local style = tostring(cfg.lineStyle or "tilt")
   local stylePreview = (style == "flat" and "Flat") or "Tilt"
-  pcall(function()
-    if type(ui.combo) == "function" then
+  if type(ui.combo) == "function" then
+    pcall(function()
       ui.combo("Racing line style###cpt_rlstyle", stylePreview, nil, function()
         if ui.selectable("Flat", style == "flat") then
           cfg.lineStyle = "flat"
@@ -143,8 +155,10 @@ function M.draw(vm)
           cfg.lineStyle = "tilt"
         end
       end)
-    end
-  end)
+    end)
+  else
+    ui.text("Racing line style: " .. stylePreview)
+  end
 
   ui.separator()
   ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Focus practice (#44)")
@@ -166,8 +180,8 @@ function M.draw(vm)
 
   ui.separator()
   ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Diagnostics")
-  checkbox(cfg, "enableRenderDiagnostics", "Render diagnostics ([DIAG] UI + 3D probes)")
-  checkbox(cfg, "enableDraw3DDiagnostics", "Verbose Draw3D logging (~2s interval)")
+  checkbox(cfg, "enableRenderDiagnostics", "Render diagnostics ([DIAG] UI + 3D probes)", "strictTrue")
+  checkbox(cfg, "enableDraw3DDiagnostics", "Verbose Draw3D logging (~2s interval)", "strictTrue")
 
   ui.separator()
   ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Telemetry & stats")
