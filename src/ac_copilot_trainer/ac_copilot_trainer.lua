@@ -967,13 +967,14 @@ function script.windowSettings(_dt)
   end
 end
 
---- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
---- Registered as a second CSP app window; transparent background, top-right.
---- Issue #37: added diagnostic logging and fallback message for empty state.
+--- Coaching / approach telemetry window (WINDOW_1).
+--- Issue #57 Part C: when approaching a corner, show polished structured data panel.
+--- Falls back to post-lap coaching hints when not approaching.
 function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
+  car = car or ac.getCar(0)
   local now = ch.simSeconds(sim)
   local remaining = state.coachingRemainSec or 0
   local laps = state.lapsCompleted or 0
@@ -990,6 +991,13 @@ function script.windowCoaching(_dt)
       now, remaining, state.coachingLines and #state.coachingLines or 0, laps))
   end
 
+  -- Priority 1: approach telemetry panel (Part C) — shows when approaching a corner
+  local aData = approachHudData(car, state.bestSortedTrace, sim)
+  if coachingOverlay.drawApproachPanel(aData) then
+    return  -- panel drawn, skip post-lap coaching in this window
+  end
+
+  -- Priority 2: post-lap coaching (legacy) — shows between approaches
   if laps == 0 then
     coachingOverlay.drawFallback()
     return

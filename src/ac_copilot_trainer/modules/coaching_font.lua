@@ -1,11 +1,26 @@
--- Resolve BMW (or other) font from AC `content/fonts/*.txt` + DWriteFont (issue #41).
+-- Font system: multi-font DWriteFont support for polished panels (issue #57 Part C).
+-- Extends the original single-font BMW resolver with named font roles.
 
 local M = {}
 
-local dwriteStr ---@type string|nil
+-- ---------------------------------------------------------------------------
+-- Cache / state
+-- ---------------------------------------------------------------------------
+
+local dwriteStr ---@type string|nil          -- legacy BMW fallback descriptor
 local dwriteTried = false
 
-local FONT_PT = 22
+local FONT_PT = 22                            -- legacy default point size
+
+--- Named font descriptors resolved lazily.
+--- Keys: "numbers" (Michroma / Consolas), "labels" (Montserrat / Segoe UI),
+---        "brand" (Syncopate / Segoe UI Light), "legacy" (BMW.txt).
+---@type table<string, string|false>
+local namedCache = {}
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
 
 ---@param body string
 ---@return string|nil filename with extension
@@ -32,6 +47,10 @@ local function extractFontFilename(body)
   end
   return nil
 end
+
+-- ---------------------------------------------------------------------------
+-- Legacy BMW descriptor (backward compat)
+-- ---------------------------------------------------------------------------
 
 ---@return string|nil @Descriptor string for ui.pushDWriteFont, or nil
 function M.dwriteDescriptor()
@@ -79,18 +98,81 @@ function M.dwriteDescriptor()
   return nil
 end
 
+-- ---------------------------------------------------------------------------
+-- Named font resolution (Part C)
+-- ---------------------------------------------------------------------------
+
+--- Try to create a DWriteFont descriptor for a system-installed font.
+--- Returns the descriptor string or nil.
+---@param familyName string   e.g. "Michroma", "Montserrat", "Consolas"
+---@return string|nil
+local function trySystemFont(familyName)
+  if not ui or not ui.DWriteFont then
+    return nil
+  end
+  local ok, desc = pcall(function()
+    return tostring(ui.DWriteFont(familyName):allowRealSizes(true))
+  end)
+  if ok and type(desc) == "string" and desc ~= "" then
+    return desc
+  end
+  return nil
+end
+
+--- Resolve a named font role. Tries preferred fonts in order, falls back.
+--- Results are cached per role name.
+---@param role string "numbers"|"labels"|"brand"|"legacy"
+---@return string|nil @DWriteFont descriptor or nil (use builtin fallback)
+function M.namedDescriptor(role)
+  if namedCache[role] ~= nil then
+    local v = namedCache[role]
+    return v ~= false and v or nil
+  end
+
+  local desc = nil
+  if role == "numbers" then
+    -- Michroma (Google Font, motorsport display) -> Consolas -> BMW legacy
+    desc = trySystemFont("Michroma")
+      or trySystemFont("Consolas")
+      or M.dwriteDescriptor()
+  elseif role == "labels" then
+    -- Montserrat (Google Font, clean labels) -> Segoe UI -> BMW legacy
+    desc = trySystemFont("Montserrat")
+      or trySystemFont("Segoe UI")
+      or M.dwriteDescriptor()
+  elseif role == "brand" then
+    -- Syncopate (Google Font, branding) -> Segoe UI -> BMW legacy
+    desc = trySystemFont("Syncopate")
+      or trySystemFont("Segoe UI")
+      or M.dwriteDescriptor()
+  else
+    desc = M.dwriteDescriptor()
+  end
+
+  namedCache[role] = desc or false
+  return desc
+end
+
+-- ---------------------------------------------------------------------------
+-- Push / pop (named)
+-- ---------------------------------------------------------------------------
+
+--- Push a named font at a given size. Returns a kind token for pop().
+---@param role string|nil  "numbers"|"labels"|"brand"|nil (nil = legacy)
+---@param size number|nil  point size (default 22)
 ---@return "dwrite"|"builtin"|nil
-function M.push()
-  local fs = M.dwriteDescriptor()
-  if fs and type(ui.pushDWriteFont) == "function" then
+function M.pushNamed(role, size)
+  local pt = size or FONT_PT
+  local desc = M.namedDescriptor(role or "legacy")
+  if desc and type(ui.pushDWriteFont) == "function" then
     local ok = pcall(function()
-      ui.pushDWriteFont(fs, FONT_PT)
+      ui.pushDWriteFont(desc, pt)
     end)
     if ok then
       return "dwrite"
     end
     ok = pcall(function()
-      ui.pushDWriteFont(fs)
+      ui.pushDWriteFont(desc)
     end)
     if ok then
       return "dwrite"
@@ -105,6 +187,15 @@ function M.push()
     end
   end
   return nil
+end
+
+-- ---------------------------------------------------------------------------
+-- Legacy push / pop (backward compat)
+-- ---------------------------------------------------------------------------
+
+---@return "dwrite"|"builtin"|nil
+function M.push()
+  return M.pushNamed(nil, FONT_PT)
 end
 
 ---@param kind "dwrite"|"builtin"|nil
