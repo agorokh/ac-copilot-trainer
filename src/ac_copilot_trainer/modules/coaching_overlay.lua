@@ -52,7 +52,7 @@ end
 ---@param h number    bar height
 ---@param pct number  0..1 fill percentage
 local function drawProgressBar(x, y, w, h, pct)
-  if not ui.drawRectFilled or not vec2 then return end
+  if not ui or type(ui.drawRectFilled) ~= "function" or type(vec2) ~= "function" then return end
   local p0 = vec2(x, y)
   local p1 = vec2(x + w, y + h)
   -- Background
@@ -97,7 +97,7 @@ function M.drawApproachPanel(approachData)
     local sz = ui.windowSize()
     if sz and sz.x and sz.y then
       w = math.max(360, sz.x)
-      h = math.max(180, sz.y)
+      h = math.max(210, sz.y)
     end
   end
 
@@ -139,15 +139,18 @@ function M.drawApproachPanel(approachData)
   ui.textColored(COLOR_LABEL, "TARGET ENTRY")
   fontMod.pop(fkL2)
 
+  local tgtStr = string.format("%.0f", targetSpd)
   if ui.setCursor then
     ui.setCursor(vec2(colLeftX, row2Y + 16))
   end
   local fkTgt = fontMod.pushNamed("numbers", 32)
-  ui.textColored(COLOR_WHITE, string.format("%.0f", targetSpd))
+  ui.textColored(COLOR_WHITE, tgtStr)
   fontMod.pop(fkTgt)
 
+  -- Dynamic unit offset: ~20px per digit at 32pt to avoid overlap on 3-digit speeds
+  local tgtUnitX = colLeftX + #tgtStr * 20 + 6
   if ui.setCursor then
-    ui.setCursor(vec2(colLeftX + 70, row2Y + 28))
+    ui.setCursor(vec2(tgtUnitX, row2Y + 28))
   end
   local fkUnit1 = fontMod.pushNamed("labels", 11)
   ui.textColored(COLOR_LABEL, "km/h")
@@ -161,16 +164,18 @@ function M.drawApproachPanel(approachData)
   ui.textColored(COLOR_LABEL, "CURRENT")
   fontMod.pop(fkL3)
 
+  local curStr = string.format("%.0f", currentSpd)
   local spdCol = speedColor(currentSpd, targetSpd)
   if ui.setCursor then
     ui.setCursor(vec2(colRightX, row2Y + 16))
   end
   local fkCur = fontMod.pushNamed("numbers", 32)
-  ui.textColored(spdCol, string.format("%.0f", currentSpd))
+  ui.textColored(spdCol, curStr)
   fontMod.pop(fkCur)
 
+  local curUnitX = colRightX + #curStr * 20 + 6
   if ui.setCursor then
-    ui.setCursor(vec2(colRightX + 70, row2Y + 28))
+    ui.setCursor(vec2(curUnitX, row2Y + 28))
   end
   local fkUnit2 = fontMod.pushNamed("labels", 11)
   ui.textColored(COLOR_LABEL, "km/h")

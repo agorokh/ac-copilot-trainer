@@ -121,7 +121,7 @@ end
 
 --- Resolve a named font role. Tries preferred fonts in order, falls back.
 --- Results are cached per role name.
----@param role string "numbers"|"labels"|"brand"|"legacy"
+---@param role 'numbers'|'labels'|'brand'|'legacy'
 ---@return string|nil @DWriteFont descriptor or nil (use builtin fallback)
 function M.namedDescriptor(role)
   if namedCache[role] ~= nil then
@@ -158,7 +158,7 @@ end
 -- ---------------------------------------------------------------------------
 
 --- Push a named font at a given size. Returns a kind token for pop().
----@param role string|nil  "numbers"|"labels"|"brand"|nil (nil = legacy)
+---@param role 'numbers'|'labels'|'brand'|nil  (nil = legacy)
 ---@param size number|nil  point size (default 22)
 ---@return "dwrite"|"builtin"|nil
 function M.pushNamed(role, size)

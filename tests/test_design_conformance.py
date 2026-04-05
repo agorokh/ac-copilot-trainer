@@ -179,18 +179,14 @@ class TestTypography:
     def test_coaching_overlay_font_brackets(self) -> None:
         """TY-02: Each ``M.draw*`` function balances fontMod push/pop within its body."""
         src = _lua_text("coaching_overlay.lua")
-        draw_funcs = list(
-            re.finditer(r"^function\s+M\.(draw\w*)\s*\(", src, flags=re.MULTILINE)
-        )
+        draw_funcs = list(re.finditer(r"^function\s+M\.(draw\w*)\s*\(", src, flags=re.MULTILINE))
         assert draw_funcs, "No M.draw* functions found in coaching_overlay.lua"
 
         total_pushes = 0
         for i, match in enumerate(draw_funcs):
             name = match.group(1)
             start = match.start()
-            end_pos = (
-                draw_funcs[i + 1].start() if i + 1 < len(draw_funcs) else len(src)
-            )
+            end_pos = draw_funcs[i + 1].start() if i + 1 < len(draw_funcs) else len(src)
             body = src[start:end_pos]
             # Count both push() and pushNamed() as font pushes
             pushes = len(re.findall(r"fontMod\.push(?:Named)?\(", body))
@@ -201,9 +197,7 @@ class TestTypography:
             )
             assert pushes > 0, f"M.{name} must call fontMod.push at least once"
 
-        assert total_pushes >= 3, (
-            f"Expected at least 3 font pushes total, got {total_pushes}"
-        )
+        assert total_pushes >= 3, f"Expected at least 3 font pushes total, got {total_pushes}"
 
 
 # ---------------------------------------------------------------------------
@@ -366,23 +360,35 @@ class TestApproachPanel:
         assert "function M.drawApproachPanel" in src
 
     def test_approach_panel_speed_color_logic(self) -> None:
-        """PC-02: speedColor uses green/red/white based on target delta."""
+        """PC-02: speedColor maps delta > 8 to red, delta <= 0 to green, else white."""
         src = _lua_text("coaching_overlay.lua")
-        assert re.search(r"function\s+speedColor\s*\(", src), (
-            "speedColor function must exist in coaching_overlay.lua"
+        # Find the full speedColor function (greedy to last 'end')
+        m = re.search(
+            r"(function\s+speedColor\s*\([^)]*\).*?\nend)",
+            src,
+            flags=re.DOTALL,
         )
-        assert re.search(r"delta\s*>\s*8", src), (
-            "speedColor must use 8 km/h threshold for red"
-        )
+        assert m, "speedColor function must exist in coaching_overlay.lua"
+        body = m.group(1)
+        assert re.search(r"delta\s*>\s*8", body), "speedColor must use 8 km/h threshold"
+        assert "COLOR_RED" in body, "delta > 8 must map to COLOR_RED"
+        assert "COLOR_GREEN" in body, "delta <= 0 must map to COLOR_GREEN"
+        assert "COLOR_WHITE" in body, "within-band delta must map to COLOR_WHITE"
 
     def test_approach_panel_progress_bar(self) -> None:
-        """PC-03: drawProgressBar renders fill based on pct."""
+        """PC-03: drawProgressBar renders fill based on pct with clamping."""
         src = _lua_text("coaching_overlay.lua")
         assert re.search(r"function\s+drawProgressBar\s*\(", src), (
             "drawProgressBar function must exist"
         )
         assert "COLOR_BAR_FILL" in src, "Progress bar must use COLOR_BAR_FILL"
         assert "COLOR_BAR_BG" in src, "Progress bar must use COLOR_BAR_BG"
+        # pct must scale fill width
+        assert re.search(r"pct\).*?\*\s*w", src), "drawProgressBar must scale fill width by pct"
+        # pct must be clamped
+        assert re.search(r"math\.(?:max|min)\s*\([^)]*pct[^)]*\)", src), (
+            "drawProgressBar must clamp pct via math.max/min"
+        )
 
     def test_approach_panel_design_tokens(self) -> None:
         """PC-04: design tokens match Figma brief."""
@@ -401,17 +407,20 @@ class TestApproachPanel:
         assert 'pushNamed("labels"' in src, (
             "Approach panel must use 'labels' font role for section labels"
         )
-        assert 'pushNamed("brand"' in src, (
-            "Approach panel must use 'brand' font role for footer"
-        )
+        assert 'pushNamed("brand"' in src, "Approach panel must use 'brand' font role for footer"
 
     def test_coaching_font_multi_font_support(self) -> None:
-        """PC-06: coaching_font.lua supports named font roles."""
+        """PC-06: coaching_font.lua supports named font roles with fallbacks."""
         src = _lua_text("coaching_font.lua")
         assert "function M.namedDescriptor" in src
         assert "function M.pushNamed" in src
+        # Primary role fonts
         assert '"Michroma"' in src, "Must try Michroma for numbers font"
         assert '"Montserrat"' in src, "Must try Montserrat for labels font"
+        assert '"Syncopate"' in src, "Must try Syncopate for brand font"
+        # Windows-safe fallbacks
+        assert '"Consolas"' in src, "Must include Windows-safe fallback for numbers"
+        assert '"Segoe UI"' in src, "Must include Windows-safe fallback for labels/brand"
 
     def test_window_coaching_calls_approach_panel(self) -> None:
         """PC-07: windowCoaching in entry script calls drawApproachPanel."""
@@ -429,12 +438,9 @@ class TestApproachPanel:
         )
         assert m, "drawApproachPanel function not found"
         body = m.group(1)
-        pushes = len(re.findall(r"fontMod\.pushNamed\(", body))
+        pushes = len(re.findall(r"fontMod\.push(?:Named)?\(", body))
         pops = len(re.findall(r"fontMod\.pop\(", body))
         assert pushes == pops, (
-            f"drawApproachPanel font push/pop imbalance: "
-            f"{pushes} pushes vs {pops} pops"
+            f"drawApproachPanel font push/pop imbalance: {pushes} pushes vs {pops} pops"
         )
-        assert pushes >= 5, (
-            f"drawApproachPanel should push at least 5 font roles, got {pushes}"
-        )
+        assert pushes >= 5, f"drawApproachPanel should push at least 5 font roles, got {pushes}"
