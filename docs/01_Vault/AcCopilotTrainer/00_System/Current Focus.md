@@ -13,8 +13,8 @@ relates_to:
 
 **Repo:** ac-copilot-trainer. **Issue #57:** Phase 5 - 3-window architecture + Figma design implementation.
 
-**Branch:** `feat/issue-57-phase5-part-d`. **PR #63** open - Part D real-time coaching engine. 172 tests pass.
+**Branch:** `feat/issue-57-phase5-part-e`. **PR #64** open - Part E active suggestion panel. 178 tests pass.
 
-**Parts A-C:** merged (PRs #58, #60, #62). **Part D:** PR #63 open. **Part E:** not started.
+**Parts A–D:** merged (PRs #58, #60, #62, #63). **Part E:** PR #64 open.
 
-**Next:** Merge PR #63 after review, then Part E (active suggestion panel - rewrite hud.lua as clean coaching display).
+**Next:** Merge PR #64 after review, then close issue #57.

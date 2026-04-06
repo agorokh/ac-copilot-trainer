@@ -583,6 +583,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   state.realtimeActiveHint = nil
+  hud.reset()
   resetDeltaSmoother()
 end
 
@@ -600,6 +601,7 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
+  hud.reset()
   realtimeCoaching.reset()
   tel = newTelemetry()
   brakes = newBrakes()
@@ -924,7 +926,6 @@ function script.windowMain(_dt)
     lastLapMs = state.lastLapMs or (car.previousLapTimeMs or nil),
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
-    approachData = state._cachedApproachData,
     realtimeHint = state.realtimeActiveHint,
     postLapLines = postLines,
     coastWarn = coastWarn,
@@ -938,6 +939,8 @@ function script.windowMain(_dt)
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
+    focusPracticeActive = state.focusPracticeActive or false,
+    focusPracticeLabel = (state.focusPracticeHudSummary ~= "") and state.focusPracticeHudSummary or nil,
   })
 end
 

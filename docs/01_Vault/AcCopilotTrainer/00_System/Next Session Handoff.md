@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-05
+last_updated: 2026-04-06
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -15,22 +15,21 @@ relates_to:
 
 ## Resume here
 
-- **Issue #57 Phase 5:** Parts A-C merged. **Part D** in **PR #63** (branch `feat/issue-57-phase5-part-d`): real-time per-corner coaching engine. 172 tests pass. Needs review + merge.
-- **Part E** not started. E = active suggestion panel (rewrite hud.lua as clean coaching display, depends on D).
-- **Stale remote branches cleaned up** — only main remains.
+- **Issue #57 Phase 5:** Parts A–D merged; Part E code complete. **Part E** in **PR #64** (branch `feat/issue-57-phase5-part-e`): active suggestion panel. 178 tests pass. Needs review + merge.
+- After PR #64 merges, **issue #57 is fully complete** and can be closed.
 
 ## What was delivered this session
 
-- **PR #62 (Part C) merged:** 3 rounds of bot review fixes (glow draw order, COLOR_BRAND alpha, panel sizing, cached approachHudData, EmmyLua annotations, test hardening). All 164 tests green.
-- **PR #63 (Part D) opened:** New `realtime_coaching.lua` — 5-phase state machine (straight/approaching/braking/corner/exiting) with O(1) bucket-based spline lookup (1000 buckets, handles Nordschleife 170+ segments). `coaching_hints.buildRealTime()` for single-corner comparison. Wired into `script.update()` with segment index rebuild at lap boundary. `realtimeHint` in HudViewModel rendered in hud.lua. 8 new tests (PD-01 through PD-08).
+- **PR #63 (Part D) review resolution:** 8 rounds of bot review fixes across 45 inline comments from 6 bots (Sourcery, Codex, Copilot, Gemini, CodeRabbit, Cursor BugBot). Key fixes: circular spline distance, O(1) binary search for approach detection, proper exit window, dedup hint preservation, precomputed brake→corner label map, shared coaching threshold constants. All checks green including Cursor BugBot pass.
+- **PR #64 (Part E) opened:** Rewrote `hud.lua` (WINDOW_0) from debug dump to polished active suggestion panel. Dark semi-transparent rounded panel with accent cyan title, kind-colored hint text, smooth fade transitions (fadeAlpha/FADE_SPEED), hidden on straights, focus practice integration, named font roles. 6 new tests (PE-01 through PE-06). 178 total tests pass.
 
 ## What remains
 
-- **Part D:** Merge PR #63 after review. In-game verification needed (hint timing, thresholds, Nordschleife perf).
-- **Part E (active suggestion panel):** Rewrite `hud.lua` (WINDOW_0) as clean coaching display matching Figma design. Dark semi-transparent panel, large coaching text, fade behavior. Depends on Part D output.
-- **Issue #57 sequencing:** D (merge) -> E (active suggestion).
+- **Part E:** Merge PR #64 after review. In-game verification needed (fade timing, panel layout, focus indicator).
+- **Issue #57 closure:** After PR #64 merges, close issue #57 (all 5 Parts complete).
+- **In-game testing:** Hint timing/thresholds, Nordschleife performance, fade behavior all need driving verification.
 
 ## Blockers / dependencies
 
-- **In-game testing** required for Part D tuning (hint thresholds are sensitive to track/car combinations).
-- **Part E** depends on Part D merge (needs `realtimeHint` data flowing).
+- **In-game testing** required for Part D tuning + Part E visual verification.
+- No code blockers. CI green.

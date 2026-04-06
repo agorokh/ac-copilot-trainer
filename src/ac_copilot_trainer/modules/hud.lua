@@ -1,8 +1,43 @@
--- Dear ImGui HUD: main driving window (issue #33). Tier-3 stats + focus toggle → Settings window (#57 Part B).
+-- Active Suggestion window (WINDOW_0) — issue #57 Part E.
+-- Clean coaching display replacing legacy debug dump.
+-- Dark semi-transparent panel; text 100% opaque; hidden on straights.
 
+local fontMod = require("coaching_font")
 local coachingOverlay = require("coaching_overlay")
 
 local M = {}
+
+-- Design tokens (match coaching_overlay.lua for visual consistency)
+local COLOR_BG        = rgbm(0.067, 0.067, 0.067, 0.60)
+local COLOR_BG_BORDER = rgbm(0.30, 0.32, 0.38, 0.40)
+local COLOR_TITLE     = rgbm(0.35, 0.82, 0.95, 1.0)  -- accent cyan
+local COLOR_WHITE     = rgbm(0.95, 0.95, 0.97, 1.0)
+local COLOR_BRAND     = rgbm(0.45, 0.48, 0.52, 1.0)
+local COLOR_POSITIVE  = rgbm(0.20, 0.85, 0.35, 1.0)
+local COLOR_BRAKE     = rgbm(0.95, 0.55, 0.20, 1.0)
+local COLOR_LINE      = rgbm(0.85, 0.75, 0.30, 1.0)
+
+local PANEL_ROUNDING = 12
+local PANEL_PAD_X    = 20
+local PANEL_PAD_Y    = 16
+
+-- Fade state for smooth hint transitions
+local fadeAlpha = 0
+local fadeTarget = 0
+local FADE_SPEED = 4.0  -- alpha units per second
+local lastHintText = nil
+local lastHintKind = nil
+local lastCornerLabel = nil
+
+--- Map hint kind to accent color.
+---@param kind string|nil
+---@return userdata rgbm
+local function colorForKind(kind)
+  if kind == "brake"    then return COLOR_BRAKE end
+  if kind == "line"     then return COLOR_LINE end
+  if kind == "positive" then return COLOR_POSITIVE end
+  return COLOR_TITLE
+end
 
 ---@class ApproachHudPayload
 ---@field turnLabel string @always set by `approachHudData` (`corner_names.resolveApproachLabel`)
@@ -13,9 +48,6 @@ local M = {}
 ---@field progressPct number
 ---@field brakeIndex integer
 
---- UTF-8 FULL BLOCK (U+2588) for delta bar segments.
-local BLK = string.char(226, 150, 136)
-
 ---@class HudViewModel
 ---@field recording boolean
 ---@field speed number
@@ -25,7 +57,6 @@ local BLK = string.char(226, 150, 136)
 ---@field lastLapMs number|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
----@field approachData ApproachHudPayload|nil @Producer `approachHudData`; fields match `ApproachHudPayload` (incl. brakeIndex).
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field tireLockupFlash boolean|nil
@@ -36,13 +67,18 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingHoldSeconds number|nil
 ---@field coachingMaxVisibleHints integer|nil
 ---@field coachingShowPrimer boolean|nil
----@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
----@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
+---@field appVersionUi string|nil @e.g. "v0.4.2"
+---@field debriefText string|nil @sidecar post-lap paragraph (issue #46)
 ---@field realtimeHint table|nil @{text, kind, cornerLabel} from realtime_coaching (issue #57 Part D)
+---@field focusPracticeActive boolean|nil
+---@field focusPracticeLabel string|nil
+
+--- UTF-8 FULL BLOCK (U+2588) for delta bar segments.
+local BLK = string.char(226, 150, 136)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
-    return "—"
+    return "â"  -- em dash (U+2014)
   end
   return string.format("%.3f s", ms / 1000)
 end
@@ -69,8 +105,106 @@ local function drawDeltaBar(d)
   end
 end
 
+--- Draw the active suggestion panel (Part E design spec).
+--- Shows real-time hint in a polished panel; hidden when no active coaching.
+---@param vm HudViewModel
+local function drawActiveSuggestion(vm)
+  local hint = vm.realtimeHint
+  local hasHint = hint and type(hint) == "table" and type(hint.text) == "string" and hint.text ~= ""
+
+  -- Fade target: 1 when hint active, 0 when not
+  fadeTarget = hasHint and 1 or 0
+  local dt = (type(ui.deltaTime) == "function" and ui.deltaTime()) or 0.016
+  if fadeAlpha < fadeTarget then
+    fadeAlpha = math.min(fadeAlpha + FADE_SPEED * dt, fadeTarget)
+  elseif fadeAlpha > fadeTarget then
+    fadeAlpha = math.max(fadeAlpha - FADE_SPEED * dt, fadeTarget)
+  end
+
+  -- Track hint text and kind for smooth transitions
+  if hasHint then
+    lastHintText = hint.text
+    lastHintKind = hint.kind
+    lastCornerLabel = hint.cornerLabel
+  end
+
+  if fadeAlpha < 0.01 then
+    lastHintText = nil
+    lastHintKind = nil
+    lastCornerLabel = nil
+    return
+  end
+
+  ui.separator()
+
+  local sz = ui.windowSize()
+  local w = sz.x
+  local cur = ui.getCursor()
+  local curY = cur and cur.y or 0
+
+  -- Panel background
+  local panelH = 120
+  local bgAlpha = 0.60 * fadeAlpha
+  ui.drawRectFilled(vec2(0, curY), vec2(w, curY + panelH), rgbm(COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, bgAlpha), PANEL_ROUNDING)
+  if fadeAlpha > 0.5 then
+    ui.drawRect(vec2(0, curY), vec2(w, curY + panelH), rgbm(COLOR_BG_BORDER.r, COLOR_BG_BORDER.g, COLOR_BG_BORDER.b, 0.40 * fadeAlpha), PANEL_ROUNDING, nil, 1)
+  end
+
+  local textAlpha = 1.0  -- text 100% opaque per design brief; only background fades
+  local y = curY + PANEL_PAD_Y
+
+  -- Title: "ACTIVE SUGGESTION"
+  ui.setCursor(vec2(PANEL_PAD_X, y))
+  local titleK = fontMod.pushNamed("labels", 14)
+  ui.textColored(rgbm(COLOR_TITLE.r, COLOR_TITLE.g, COLOR_TITLE.b, textAlpha), "ACTIVE SUGGESTION")
+  fontMod.pop(titleK)
+  y = y + 22
+
+  -- Corner label (preserved through fade-out)
+  local cLabel = lastCornerLabel or (hasHint and hint.cornerLabel or nil)
+  if cLabel and cLabel ~= "" then
+    ui.setCursor(vec2(PANEL_PAD_X, y))
+    local numK = fontMod.pushNamed("numbers", 22)
+    ui.textColored(rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha), cLabel)
+    fontMod.pop(numK)
+    y = y + 30
+  end
+
+  -- Main hint text (large)
+  if lastHintText then
+    ui.setCursor(vec2(PANEL_PAD_X, y))
+    local hintK = fontMod.pushNamed("labels", 16)
+    local hintColor = colorForKind(lastHintKind)
+    ui.textColored(rgbm(hintColor.r, hintColor.g, hintColor.b, textAlpha), lastHintText)
+    fontMod.pop(hintK)
+    y = y + 24
+  end
+
+  -- Focus practice indicator
+  if vm.focusPracticeActive and vm.focusPracticeLabel then
+    ui.setCursor(vec2(PANEL_PAD_X, y))
+    local brandK = fontMod.pushNamed("brand", 11)
+    ui.textColored(rgbm(COLOR_BRAND.r, COLOR_BRAND.g, COLOR_BRAND.b, textAlpha), "Focus: " .. vm.focusPracticeLabel)
+    fontMod.pop(brandK)
+  end
+
+  -- Advance cursor past panel so subsequent widgets render below
+  ui.setCursor(vec2(0, curY + panelH))
+end
+
+--- Reset fade state (call on session/track exit).
+function M.reset()
+  fadeAlpha = 0
+  fadeTarget = 0
+  lastHintText = nil
+  lastHintKind = nil
+  lastCornerLabel = nil
+end
+
+--- Main draw entry point for WINDOW_0.
+---@param vm HudViewModel
 function M.draw(vm)
-  -- Tier 1 — always visible, top
+  -- Compact telemetry strip (always visible at top)
   ui.textColored(
     rgbm(0.5, 0.55, 0.62, 1),
     "AC Copilot Trainer " .. (type(vm.appVersionUi) == "string" and vm.appVersionUi ~= "" and vm.appVersionUi or "v?.?.?")
@@ -89,6 +223,7 @@ function M.draw(vm)
     ui.text(string.format("Brake %.0f%%", (vm.brake or 0) * 100))
   end
 
+  -- Delta vs best
   ui.textColored(rgbm(0.7, 0.72, 0.78, 1), "Delta vs best")
   local dSmooth = vm.deltaSmoothedSec
   if dSmooth == nil or dSmooth ~= dSmooth then
@@ -112,42 +247,20 @@ function M.draw(vm)
     formatLapMs(vm.lastLapMs)
   ))
 
-  -- Tier 2 — context-sensitive
+  -- Sector message (transient)
   if vm.sectorMessage and vm.sectorMessage ~= "" then
     ui.separator()
     ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Sector")
     ui.textWrapped(vm.sectorMessage)
   end
 
-  if vm.approachData and type(vm.approachData) == "table" then
-    local a = vm.approachData
-    ui.separator()
-    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Approach (brake)")
-    ui.text(string.format("%s  ·  %.0f m", tostring(a.turnLabel or "?"), tonumber(a.distanceToBrakeM) or 0))
-    ui.text(string.format(
-      "Ref speed: %.0f  Current: %.0f (%s)",
-      tonumber(a.targetSpeedKmh) or 0,
-      tonumber(a.currentSpeedKmh) or 0,
-      tostring(a.status or "")
-    ))
-  end
-
-  if vm.realtimeHint and type(vm.realtimeHint) == "table" and type(vm.realtimeHint.text) == "string" and vm.realtimeHint.text ~= "" then
-    ui.separator()
-    local hintCol = rgbm(0.35, 0.82, 0.95, 1)
-    local k = vm.realtimeHint.kind
-    if k == "brake" then hintCol = rgbm(0.95, 0.55, 0.2, 1)
-    elseif k == "line" then hintCol = rgbm(0.85, 0.75, 0.3, 1)
-    elseif k == "positive" then hintCol = rgbm(0.2, 0.85, 0.35, 1)
-    end
-    ui.textColored(hintCol, vm.realtimeHint.text)
-  end
-
+  -- Coast warning
   if vm.coastWarn then
     ui.separator()
-    ui.textColored(rgbm(0.95, 0.75, 0.2, 1), "Coasting — roll to throttle")
+    ui.textColored(rgbm(0.95, 0.75, 0.2, 1), "Coasting â roll to throttle")
   end
 
+  -- Post-lap lines (legacy summary, kept for fallback)
   if vm.postLapLines and #vm.postLapLines > 0 then
     ui.separator()
     ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Post-lap")
@@ -156,10 +269,13 @@ function M.draw(vm)
     end
   end
 
+  -- Setup change message
   if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then
     ui.separator()
     ui.textColored(rgbm(0.95, 0.75, 0.35, 1), vm.setupChangeMsg)
   end
+
+  -- Auto-setup line
   if vm.autoSetupLine and vm.autoSetupLine ~= "" then
     if not vm.setupChangeMsg or vm.setupChangeMsg == "" then
       ui.separator()
@@ -168,11 +284,13 @@ function M.draw(vm)
     ui.textWrapped(vm.autoSetupLine)
   end
 
+  -- Tire lockup flash
   if vm.tireLockupFlash then
     ui.separator()
     ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
   end
 
+  -- Post-lap debrief (sidecar paragraph from Ollama/rules debrief)
   if vm.debriefText and vm.debriefText ~= "" then
     ui.separator()
     ui.textColored(rgbm(0.55, 0.82, 0.95, 1), "Session debrief (sidecar)")
@@ -183,10 +301,10 @@ function M.draw(vm)
     end
   end
 
-  ui.separator()
-  ui.textColored(rgbm(0.45, 0.48, 0.52, 1), "Telemetry & stats → Settings window")
+  -- Active suggestion panel (Part E)
+  drawActiveSuggestion(vm)
 
-  -- Coaching strip (issue #9 UX); separator only when strip draws.
+  -- Coaching strip (post-lap coaching hints, issue #9 UX)
   coachingOverlay.drawMainWindowStrip(vm)
 end
 

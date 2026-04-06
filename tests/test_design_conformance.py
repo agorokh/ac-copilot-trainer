@@ -511,3 +511,80 @@ class TestRealTimeCoachingEngine:
         src = _lua_text("realtime_coaching.lua")
         # After exiting or braking->straight, activeHint should be set to nil
         assert re.search(r"activeHint\s*=\s*nil", src), "activeHint not cleared on phase transition"
+
+
+# ---------------------------------------------------------------------------
+# Part E: Active suggestion window (PE-01 through PE-06)
+# ---------------------------------------------------------------------------
+
+
+class TestActiveSuggestionWindow:
+    """PE-01..PE-06: Active suggestion panel structural conformance."""
+
+    def test_hud_uses_coaching_font(self) -> None:
+        """PE-01: hud.lua requires coaching_font with balanced push/pop."""
+        src = _lua_text("hud.lua")
+        assert 'require("coaching_font")' in src
+        assert "fontMod.pushNamed" in src
+        assert "fontMod.pop" in src
+        # Verify pushNamed return value is captured (not discarded)
+        assert re.search(r"local\s+\w+K?\s*=\s*fontMod\.pushNamed", src), (
+            "pushNamed return value must be captured for pop(kind)"
+        )
+        # Verify pop receives an argument (not bare pop())
+        assert re.search(r"fontMod\.pop\(\w+", src), (
+            "fontMod.pop must receive kind argument from pushNamed"
+        )
+
+    def test_active_suggestion_panel_exists(self) -> None:
+        """PE-02: drawActiveSuggestion function renders the panel."""
+        src = _lua_text("hud.lua")
+        assert "drawActiveSuggestion" in src
+        assert '"ACTIVE SUGGESTION"' in src
+
+    def test_panel_design_tokens(self) -> None:
+        """PE-03: Panel uses design tokens matching Figma spec; text 100% opaque."""
+        src = _lua_text("hud.lua")
+        assert re.search(r"COLOR_BG\s*=\s*rgbm\([^)]+0\.60\)", src), (
+            "COLOR_BG must use 0.60 alpha (Figma: rgba(17,17,17,0.6))"
+        )
+        assert "PANEL_ROUNDING" in src
+        assert "COLOR_TITLE" in src
+        # Text must be 100% opaque (only background fades)
+        assert re.search(r"textAlpha\s*=\s*1\.0", src), (
+            "textAlpha must be 1.0 (text 100% opaque per design brief)"
+        )
+
+    def test_fade_behavior(self) -> None:
+        """PE-04: Hint fades smoothly using fadeAlpha and FADE_SPEED."""
+        src = _lua_text("hud.lua")
+        assert "fadeAlpha" in src, "Fade alpha state missing"
+        assert "FADE_SPEED" in src, "Fade speed constant missing"
+        assert re.search(r"fadeAlpha.*fadeTarget", src), "Fade interpolation logic missing"
+
+    def test_focus_practice_integration(self) -> None:
+        """PE-05: Focus practice indicator integrated in panel."""
+        src = _lua_text("hud.lua")
+        assert "focusPracticeActive" in src
+        assert "focusPracticeLabel" in src
+        assert '"Focus: "' in src
+
+    def test_panel_hidden_when_no_hint(self) -> None:
+        """PE-06: Panel returns early when fadeAlpha is near zero."""
+        src = _lua_text("hud.lua")
+        assert re.search(r"fadeAlpha\s*<\s*0\.01", src), (
+            "Panel must exit early when fade alpha is near zero"
+        )
+
+    def test_debrief_text_rendered(self) -> None:
+        """PE-07: HudViewModel.debriefText is actually rendered (not just declared)."""
+        src = _lua_text("hud.lua")
+        # Field is declared in EmmyLua class
+        fields = _extract_emmy_class_fields(src, "HudViewModel")
+        assert "debriefText" in fields, "debriefText field missing from HudViewModel"
+        # Field is actually consumed (rendered) in M.draw or helpers
+        assert "vm.debriefText" in src, "vm.debriefText not consumed in hud.lua"
+        # Specifically, must be passed to a render call (textWrapped or text)
+        assert re.search(r"(?:textWrapped|ui\.text)\s*\(\s*vm\.debriefText\s*\)", src), (
+            "debriefText must be passed to ui.text or ui.textWrapped"
+        )
