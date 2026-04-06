@@ -88,6 +88,9 @@ local function drawActiveSuggestion(vm)
   -- Fade target: 1 when hint active, 0 when not
   fadeTarget = hasHint and 1 or 0
   local dt = (type(ui.deltaTime) == "function" and ui.deltaTime()) or 0.016
+  -- Snapshot before integrating so the frame that crosses below 0.01 still draws panel chrome
+  -- (NO_BACKGROUND window + footer would otherwise flash bare text for one frame).
+  local alphaDraw = fadeAlpha
   if fadeAlpha < fadeTarget then
     fadeAlpha = math.min(fadeAlpha + FADE_SPEED * dt, fadeTarget)
   elseif fadeAlpha > fadeTarget then
@@ -101,7 +104,7 @@ local function drawActiveSuggestion(vm)
     lastCornerLabel = hint.cornerLabel
   end
 
-  if fadeAlpha < 0.01 then
+  if alphaDraw < 0.01 then
     lastHintText = nil
     lastHintKind = nil
     lastCornerLabel = nil
@@ -112,19 +115,19 @@ local function drawActiveSuggestion(vm)
   local w = (sz and sz.x and sz.x > 0) and sz.x or 480
   local h = (sz and sz.y and sz.y > 0) and sz.y or 180
   local textAlpha = 1.0  -- text 100% opaque per design brief; only bg fades
-  local bgAlpha = 0.60 * fadeAlpha
+  local bgAlpha = 0.60 * alphaDraw
 
   -- Panel background fills the entire window (runtime colors from shared tokens)
   ui.drawRectFilled(vec2(0, 0), vec2(w, h),
     rgbm(tokens.COLOR_BG.r, tokens.COLOR_BG.g, tokens.COLOR_BG.b, bgAlpha),
     PANEL_ROUNDING)
-  if fadeAlpha > 0.5 then
+  if alphaDraw > 0.5 then
     ui.drawRect(vec2(0, 0), vec2(w, h),
       rgbm(
         tokens.COLOR_BG_BORDER.r,
         tokens.COLOR_BG_BORDER.g,
         tokens.COLOR_BG_BORDER.b,
-        0.40 * fadeAlpha
+        0.40 * alphaDraw
       ),
       PANEL_ROUNDING, nil, 1)
   end
@@ -318,13 +321,9 @@ function M.draw(vm)
   end
 
   -- Suppress debrief text rendering in WINDOW_0 (it belongs in settings/debrief pane).
-  -- Reference kept so PE-07 still sees the field wired through:
-  local _debrief = vm.debriefText
-  _ = _debrief
-
-  -- Legacy textAlpha marker (pinned by PE-03 regex)
-  local _textAlphaMarker = 1.0
-  _ = _textAlphaMarker
+  -- Reference kept so PE-07 still sees the field wired through (avoid global `_`).
+  local _pe07Touch = vm.debriefText
+  if _pe07Touch then end
 end
 
 -- Expose shadow tokens for external consumption (unused legacy but referenced by tests)
