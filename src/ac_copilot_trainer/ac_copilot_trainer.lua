@@ -938,6 +938,8 @@ function script.windowMain(_dt)
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
+    focusPracticeActive = state.focusPracticeActive or false,
+    focusPracticeLabel = state.focusPracticeHudSummary or nil,
   })
 end
 
