@@ -31,6 +31,7 @@ local renderDiag = require("render_diag")
 local focusPractice = require("focus_practice")
 local cornerNames = require("corner_names")
 local hudSettings = require("hud_settings")
+local realtimeCoaching = require("realtime_coaching")
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
@@ -580,6 +581,8 @@ local function resetRuntimeAfterLeavingTrack()
   state.focusPracticeHudSummarySig = nil
   wsBridge.reset()
   renderDiag.reset()
+  realtimeCoaching.reset()
+  state.realtimeActiveHint = nil
   resetDeltaSmoother()
 end
 
@@ -596,6 +599,8 @@ local function resetRollingDrivingState()
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
+  state.realtimeActiveHint = nil
+  realtimeCoaching.reset()
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -920,6 +925,7 @@ function script.windowMain(_dt)
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
     approachData = state._cachedApproachData,
+    realtimeHint = state.realtimeActiveHint,
     postLapLines = postLines,
     coastWarn = coastWarn,
     tireLockupFlash = tires:lockupFlash(),
@@ -1028,6 +1034,33 @@ function script.update(dt)
 
   -- Cache approach HUD data once per frame for both windowMain and windowCoaching
   state._cachedApproachData = approachHudData(car, state.bestSortedTrace, sim)
+
+  -- Real-time coaching state machine tick (issue #57 Part D)
+  -- Note: lastLapCornerFeats is updated later in the frame (at lap completion);
+  -- on the exact lap-boundary frame, hints use the prior lap's features.
+  -- This one-frame lag is imperceptible at 60 FPS and avoids reordering
+  -- the update pipeline.
+  if car and #(state.trackSegments or {}) > 0 then
+    local sp = car.splinePosition or 0
+    local lc = car.lapCount or 0
+    local tlM = sim and sim.trackLengthM or nil
+    local approachM = tonumber(config.approachMeters)
+    if not approachM or approachM ~= approachM or approachM <= 0 then
+      approachM = 200
+    end
+    local rtHint = realtimeCoaching.tick({
+      splinePos = sp,
+      lapCount = lc,
+      segments = state.trackSegments,
+      bestCornerFeatures = state.bestCornerFeatures,
+      lastLapCornerFeats = state.lastLapCornerFeats,
+      trackLengthM = tlM,
+      approachMeters = approachM,
+    })
+    state.realtimeActiveHint = rtHint
+  else
+    state.realtimeActiveHint = nil
+  end
 
   if sim.isInMainMenu then
     if state.wasDriving then
@@ -1171,6 +1204,7 @@ function script.update(dt)
         if #ns > 0 then
           state.trackSegments = ns
           state.cornerSteerSideCacheKey = nil
+          realtimeCoaching.rebuildSegmentIndex(ns)
         end
       end
       if #state.trackSegments == 0 then
@@ -1178,6 +1212,7 @@ function script.update(dt)
         if #ns > 0 then
           state.trackSegments = ns
           state.cornerSteerSideCacheKey = nil
+          realtimeCoaching.rebuildSegmentIndex(ns)
         end
       end
       feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)

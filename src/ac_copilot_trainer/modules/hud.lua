@@ -38,6 +38,7 @@ local BLK = string.char(226, 150, 136)
 ---@field coachingShowPrimer boolean|nil
 ---@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
 ---@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
+---@field realtimeHint table|nil @{text, kind, cornerLabel} from realtime_coaching (issue #57 Part D)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
@@ -129,6 +130,17 @@ function M.draw(vm)
       tonumber(a.currentSpeedKmh) or 0,
       tostring(a.status or "")
     ))
+  end
+
+  if vm.realtimeHint and type(vm.realtimeHint) == "table" and type(vm.realtimeHint.text) == "string" and vm.realtimeHint.text ~= "" then
+    ui.separator()
+    local hintCol = rgbm(0.35, 0.82, 0.95, 1)
+    local k = vm.realtimeHint.kind
+    if k == "brake" then hintCol = rgbm(0.95, 0.55, 0.2, 1)
+    elseif k == "line" then hintCol = rgbm(0.85, 0.75, 0.3, 1)
+    elseif k == "positive" then hintCol = rgbm(0.2, 0.85, 0.35, 1)
+    end
+    ui.textColored(hintCol, vm.realtimeHint.text)
   end
 
   if vm.coastWarn then
