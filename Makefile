@@ -1,4 +1,4 @@
-.PHONY: all clean ci-fast ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof ci-csp-api format lint test hooks-install hooks-run
+.PHONY: all clean ci-fast ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety format lint test hooks-install hooks-run
 
 PYTHON ?= python3
 
@@ -8,7 +8,7 @@ clean:
 	@find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
 	@find . -type f -name '*.pyc' -delete 2>/dev/null || true
 
-ci-fast: ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof ci-csp-api
+ci-fast: ci-format ci-lint ci-test ci-security ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety
 	@echo "ci-fast: OK"
 
 ci-format:
@@ -45,3 +45,6 @@ hooks-run:
 
 ci-csp-api:
 	$(PYTHON) scripts/check_csp_api.py src
+
+ci-csp-ui-safety:
+	$(PYTHON) scripts/check_csp_ui_safety.py

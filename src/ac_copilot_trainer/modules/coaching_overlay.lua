@@ -117,7 +117,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(PANEL_PAD_X, row1Y))
   end
   local fkLabel = fontMod.pushNamed("labels", 12)
-  ui.textColored(COLOR_TITLE, "APPROACHING")
+  ui.textColored("APPROACHING", COLOR_TITLE)
   fontMod.pop(fkLabel)
 
   local row1bY = row1Y + 18
@@ -125,7 +125,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(PANEL_PAD_X, row1bY))
   end
   local fkCorner = fontMod.pushNamed("numbers", 26)
-  ui.textColored(COLOR_WHITE, turnLabel)
+  ui.textColored(turnLabel, COLOR_WHITE)
   fontMod.pop(fkCorner)
 
   -- Row 2: Speed comparison — left: TARGET, right: CURRENT
@@ -138,7 +138,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(colLeftX, row2Y))
   end
   local fkL2 = fontMod.pushNamed("labels", 10)
-  ui.textColored(COLOR_LABEL, "TARGET ENTRY")
+  ui.textColored("TARGET ENTRY", COLOR_LABEL)
   fontMod.pop(fkL2)
 
   local tgtStr = string.format("%.0f", targetSpd)
@@ -146,7 +146,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(colLeftX, row2Y + 16))
   end
   local fkTgt = fontMod.pushNamed("numbers", 32)
-  ui.textColored(COLOR_WHITE, tgtStr)
+  ui.textColored(tgtStr, COLOR_WHITE)
   fontMod.pop(fkTgt)
 
   -- Dynamic unit offset: ~20px per digit at 32pt to avoid overlap on 3-digit speeds
@@ -155,7 +155,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(tgtUnitX, row2Y + 28))
   end
   local fkUnit1 = fontMod.pushNamed("labels", 11)
-  ui.textColored(COLOR_LABEL, "km/h")
+  ui.textColored("km/h", COLOR_LABEL)
   fontMod.pop(fkUnit1)
 
   -- Current speed
@@ -163,7 +163,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(colRightX, row2Y))
   end
   local fkL3 = fontMod.pushNamed("labels", 10)
-  ui.textColored(COLOR_LABEL, "CURRENT")
+  ui.textColored("CURRENT", COLOR_LABEL)
   fontMod.pop(fkL3)
 
   local curStr = string.format("%.0f", currentSpd)
@@ -172,7 +172,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(colRightX, row2Y + 16))
   end
   local fkCur = fontMod.pushNamed("numbers", 32)
-  ui.textColored(spdCol, curStr)
+  ui.textColored(curStr, spdCol)
   fontMod.pop(fkCur)
 
   local curUnitX = colRightX + #curStr * 20 + 6
@@ -180,7 +180,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(curUnitX, row2Y + 28))
   end
   local fkUnit2 = fontMod.pushNamed("labels", 11)
-  ui.textColored(COLOR_LABEL, "km/h")
+  ui.textColored("km/h", COLOR_LABEL)
   fontMod.pop(fkUnit2)
 
   -- Row 3: Distance to braking point + progress bar
@@ -189,7 +189,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(PANEL_PAD_X, row3Y))
   end
   local fkL4 = fontMod.pushNamed("labels", 10)
-  ui.textColored(COLOR_LABEL, "DISTANCE TO BRAKING POINT")
+  ui.textColored("DISTANCE TO BRAKING POINT", COLOR_LABEL)
   fontMod.pop(fkL4)
 
   -- Distance value
@@ -197,7 +197,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(w - PANEL_PAD_X - 80, row3Y))
   end
   local fkDist = fontMod.pushNamed("numbers", 14)
-  ui.textColored(COLOR_WHITE, string.format("%.0f m", distanceM))
+  ui.textColored(string.format("%.0f m", distanceM), COLOR_WHITE)
   fontMod.pop(fkDist)
 
   -- Progress bar
@@ -212,7 +212,7 @@ function M.drawApproachPanel(approachData)
     ui.setCursor(vec2(PANEL_PAD_X, footerY))
   end
   local fkBrand = fontMod.pushNamed("brand", 9)
-  ui.textColored(COLOR_BRAND, "AC COPILOT TRAINER")
+  ui.textColored("AC COPILOT TRAINER", COLOR_BRAND)
   fontMod.pop(fkBrand)
 
   return true
@@ -337,7 +337,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
 
   local fk = fontMod.push()
   local titleColor = rgbm(0.35, 0.82, 0.95, alpha)
-  ui.textColored(titleColor, "COACHING")
+  ui.textColored("COACHING", titleColor)
   if ui.separator then
     ui.separator()
   end
@@ -354,7 +354,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
         ui.textWrapped(body)
         ui.popStyleColor()
       else
-        ui.textColored(col, body)
+        ui.textColored(body, col)
       end
     end
   end
@@ -362,7 +362,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
   fontMod.pop(fk)
 
   if timeRemaining < hold * 0.5 then
-    ui.textColored(rgbm(0.55, 0.58, 0.62, alpha * 0.65), string.format("(%.0fs)", timeRemaining))
+    ui.textColored(string.format("(%.0fs)", timeRemaining), rgbm(0.55, 0.58, 0.62, alpha * 0.65))
   end
 end
 
@@ -372,7 +372,7 @@ function M.drawFallback()
   end
   drawStandardCoachingPanel(400, 120, 100)
   local fk = fontMod.push()
-  ui.textColored(rgbm(0.92, 0.93, 0.95, 0.95), "Complete a lap for coaching hints")
+  ui.textColored("Complete a lap for coaching hints", rgbm(0.92, 0.93, 0.95, 0.95))
   fontMod.pop(fk)
   local sub = "Open the Coaching window (second app icon) for the full overlay after your first lap."
   if ui.textWrapped and ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
@@ -380,7 +380,7 @@ function M.drawFallback()
     ui.textWrapped(sub)
     ui.popStyleColor()
   else
-    ui.textColored(rgbm(0.65, 0.68, 0.74, 0.85), sub)
+    ui.textColored(sub, rgbm(0.65, 0.68, 0.74, 0.85))
   end
 end
 
@@ -391,7 +391,7 @@ function M.drawBetweenLapsIdle(holdSeconds)
   end
   drawStandardCoachingPanel(400, 140, 120)
   local fk = fontMod.push()
-  ui.textColored(rgbm(0.35, 0.82, 0.95, 0.95), "COACHING")
+  ui.textColored("COACHING", rgbm(0.35, 0.82, 0.95, 0.95))
   if ui.separator then
     ui.separator()
   end
@@ -406,7 +406,7 @@ function M.drawBetweenLapsIdle(holdSeconds)
     ui.textWrapped(body)
     ui.popStyleColor()
   else
-    ui.textColored(rgbm(0.72, 0.74, 0.78, 0.9), body)
+    ui.textColored(body, rgbm(0.72, 0.74, 0.78, 0.9))
   end
   fontMod.pop(fk)
 end
@@ -418,7 +418,7 @@ function M.drawHoldNoHints(remainingSec)
   end
   drawStandardCoachingPanel(400, 120, 100)
   local fk = fontMod.push()
-  ui.textColored(rgbm(0.35, 0.82, 0.95, 0.95), "COACHING")
+  ui.textColored("COACHING", rgbm(0.35, 0.82, 0.95, 0.95))
   if ui.separator then
     ui.separator()
   end
@@ -432,7 +432,7 @@ function M.drawHoldNoHints(remainingSec)
     ui.textWrapped(body)
     ui.popStyleColor()
   else
-    ui.textColored(rgbm(0.78, 0.72, 0.55, 0.92), body)
+    ui.textColored(body, rgbm(0.78, 0.72, 0.55, 0.92))
   end
   fontMod.pop(fk)
 end
@@ -517,7 +517,7 @@ function M.drawMainWindowStrip(vm)
   end
 
   local fk = fontMod.push()
-  ui.textColored(rgbm(0.35, 0.82, 0.95, alpha), title)
+  ui.textColored(title, rgbm(0.35, 0.82, 0.95, alpha))
   if ui.spacing then
     ui.spacing()
   end
@@ -563,7 +563,7 @@ function M.drawSidecarDebrief(text)
     ui.separator()
   end
   local fk = fontMod.push()
-  ui.textColored(rgbm(0.55, 0.82, 0.95, 0.95), "SESSION DEBRIEF (sidecar)")
+  ui.textColored("SESSION DEBRIEF (sidecar)", rgbm(0.55, 0.82, 0.95, 0.95))
   if ui.separator then
     ui.separator()
   end
@@ -577,7 +577,7 @@ function M.drawSidecarDebrief(text)
       ui.textWrapped(text)
     end
   else
-    ui.textColored(col, text)
+    ui.textColored(text, col)
   end
   fontMod.pop(fk)
 end

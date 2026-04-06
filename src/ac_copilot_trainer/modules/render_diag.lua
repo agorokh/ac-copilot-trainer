@@ -199,11 +199,11 @@ function M.drawUI()
   uiDrawCount = uiDrawCount + 1
   if not ui or type(ui.textColored) ~= "function" or not rgbm then return end
   local h = rgbm(1, 0.8, 0, 1)
-  ui.textColored(h, string.format("[DIAG] %.0fs/%ds", elapsed, DIAG_DURATION))
-  ui.textColored(h, string.format("Draw: %d ok / %d fail", drawCallSuccess, drawCallFail))
+  ui.textColored(string.format("[DIAG] %.0fs/%ds", elapsed, DIAG_DURATION), h)
+  ui.textColored(string.format("Draw: %d ok / %d fail", drawCallSuccess, drawCallFail), h)
   for _, cp in ipairs(visualCheckpoints) do
     local col = cp.ok and rgbm(0, 1, 0, 1) or rgbm(1, 0, 0, 1)
-    ui.textColored(col, string.format("  %s: %s", cp.name, cp.ok and "OK" or "FAIL"))
+    ui.textColored(string.format("  %s: %s", cp.name, cp.ok and "OK" or "FAIL"), col)
   end
 end
 
