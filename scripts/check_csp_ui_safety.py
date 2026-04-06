@@ -22,8 +22,10 @@ COLOR_IDENT = (
     r"("
     r"rgbm\("  # inline rgbm() literal
     r"|COLOR_[A-Z_]+"  # COLOR_TITLE etc
+    r"|[Cc]ol\b"  # bare col / Col
+    r"|[Cc]olor\b"  # bare color / Color
     r"|[Cc]ol[A-Z]\w*"  # colBody, colDet, ColX
-    r"|[Cc]olor[A-Z]?\w*"  # color, colorX, ColorBody
+    r"|[Cc]olor[A-Z]\w*"  # colorBody, ColorX
     r"|\w+[Cc]ol\b"  # spdCol, hintCol
     r"|\w+[Cc]olor\b"  # hintColor, titleColor
     r")"
