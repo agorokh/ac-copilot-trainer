@@ -12,7 +12,6 @@ local COLOR_BG        = rgbm(0.067, 0.067, 0.067, 0.60)
 local COLOR_BG_BORDER = rgbm(0.30, 0.32, 0.38, 0.40)
 local COLOR_TITLE     = rgbm(0.35, 0.82, 0.95, 1.0)  -- accent cyan
 local COLOR_WHITE     = rgbm(0.95, 0.95, 0.97, 1.0)
-local COLOR_LABEL     = rgbm(0.55, 0.58, 0.65, 1.0)
 local COLOR_BRAND     = rgbm(0.45, 0.48, 0.52, 1.0)
 local COLOR_POSITIVE  = rgbm(0.20, 0.85, 0.35, 1.0)
 local COLOR_BRAKE     = rgbm(0.95, 0.55, 0.20, 1.0)
@@ -28,6 +27,7 @@ local fadeTarget = 0
 local FADE_SPEED = 4.0  -- alpha units per second
 local lastHintText = nil
 local lastHintKind = nil
+local lastCornerLabel = nil
 
 --- Map hint kind to accent color.
 ---@param kind string|nil
@@ -126,11 +126,13 @@ local function drawActiveSuggestion(vm)
   if hasHint then
     lastHintText = hint.text
     lastHintKind = hint.kind
+    lastCornerLabel = hint.cornerLabel
   end
 
   if fadeAlpha < 0.01 then
     lastHintText = nil
     lastHintKind = nil
+    lastCornerLabel = nil
     return
   end
 
@@ -159,11 +161,12 @@ local function drawActiveSuggestion(vm)
   fontMod.pop(titleK)
   y = y + 22
 
-  -- Corner label (if available)
-  if hasHint and hint.cornerLabel and hint.cornerLabel ~= "" then
+  -- Corner label (preserved through fade-out)
+  local cLabel = lastCornerLabel or (hasHint and hint.cornerLabel or nil)
+  if cLabel and cLabel ~= "" then
     ui.setCursor(vec2(PANEL_PAD_X, y))
     local numK = fontMod.pushNamed("numbers", 22)
-    ui.textColored(rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha), hint.cornerLabel)
+    ui.textColored(rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha), cLabel)
     fontMod.pop(numK)
     y = y + 30
   end
@@ -196,6 +199,7 @@ function M.reset()
   fadeTarget = 0
   lastHintText = nil
   lastHintKind = nil
+  lastCornerLabel = nil
 end
 
 --- Main draw entry point for WINDOW_0.
