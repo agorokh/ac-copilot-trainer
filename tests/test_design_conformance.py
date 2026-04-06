@@ -575,3 +575,16 @@ class TestActiveSuggestionWindow:
         assert re.search(r"fadeAlpha\s*<\s*0\.01", src), (
             "Panel must exit early when fade alpha is near zero"
         )
+
+    def test_debrief_text_rendered(self) -> None:
+        """PE-07: HudViewModel.debriefText is actually rendered (not just declared)."""
+        src = _lua_text("hud.lua")
+        # Field is declared in EmmyLua class
+        fields = _extract_emmy_class_fields(src, "HudViewModel")
+        assert "debriefText" in fields, "debriefText field missing from HudViewModel"
+        # Field is actually consumed (rendered) in M.draw or helpers
+        assert "vm.debriefText" in src, "vm.debriefText not consumed in hud.lua"
+        # Specifically, must be passed to a render call (textWrapped or text)
+        assert re.search(r"(?:textWrapped|ui\.text)\s*\(\s*vm\.debriefText\s*\)", src), (
+            "debriefText must be passed to ui.text or ui.textWrapped"
+        )

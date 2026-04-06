@@ -248,6 +248,17 @@ function M.draw(vm)
     formatLapMs(vm.lastLapMs)
   ))
 
+  -- Post-lap debrief (sidecar paragraph from Ollama/rules debrief)
+  if vm.debriefText and vm.debriefText ~= "" then
+    ui.separator()
+    ui.textColored(rgbm(0.55, 0.82, 0.95, 1), "Session debrief (sidecar)")
+    if ui.textWrapped then
+      ui.textWrapped(vm.debriefText)
+    else
+      ui.text(vm.debriefText)
+    end
+  end
+
   -- Active suggestion panel (Part E)
   drawActiveSuggestion(vm)
 
