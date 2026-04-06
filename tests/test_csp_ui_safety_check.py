@@ -6,12 +6,13 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "check_csp_ui_safety.py"
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("check_csp_ui_safety", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["check_csp_ui_safety"] = mod
