@@ -576,15 +576,194 @@ class TestActiveSuggestionWindow:
             "Panel must exit early when fade alpha is near zero"
         )
 
-    def test_debrief_text_rendered(self) -> None:
-        """PE-07: HudViewModel.debriefText is actually rendered (not just declared)."""
+    def test_debrief_text_field_wired(self) -> None:
+        """PE-07 (issue #69): HudViewModel.debriefText is declared and referenced.
+
+        Per issue #69 user feedback, the debrief paragraph must NOT be rendered
+        inside WINDOW_0 (it was stomping on the Active Suggestion panel). The
+        field stays in the viewmodel contract and is read (so the entry script
+        can continue passing it) but rendering happens in the coaching window
+        sidecar instead (see `coachingOverlay.drawSidecarDebrief`).
+        """
         src = _lua_text("hud.lua")
-        # Field is declared in EmmyLua class
         fields = _extract_emmy_class_fields(src, "HudViewModel")
         assert "debriefText" in fields, "debriefText field missing from HudViewModel"
-        # Field is actually consumed (rendered) in M.draw or helpers
+        # Field is still referenced so the entry-script handoff stays valid
         assert "vm.debriefText" in src, "vm.debriefText not consumed in hud.lua"
-        # Specifically, must be passed to a render call (textWrapped or text)
-        assert re.search(r"(?:textWrapped|ui\.text)\s*\(\s*vm\.debriefText\s*\)", src), (
-            "debriefText must be passed to ui.text or ui.textWrapped"
+
+
+# ---------------------------------------------------------------------------
+# Issue #69: visual design match (PE-08..PE-11, PC-09..PC-13)
+# ---------------------------------------------------------------------------
+
+
+class TestIssue69VisualDesignMatch:
+    """Pin the Figma visual spec that the in-game screenshots violated.
+
+    User feedback that drove these tests:
+      - TARGET ENTRY and CURRENT must share a single box (not two columns)
+      - Active Suggestion must own WINDOW_0 (no delta bar / lap summary / coaching strip pile-up)
+      - Progress bar must be visible (taller, red fill against dark bg)
+      - Post-lap coaching strip must not cover the Active Suggestion panel
+      - Panel must use Syncopate/Michroma/Montserrat + AG PORSCHE ACADEMY footer
+    """
+
+    # ------- Top tile (hud.lua Active Suggestion) --------------------------
+
+    def test_pe08_top_tile_full_window_panel(self) -> None:
+        """PE-08: Top tile draws across the full window (not cramped mid-column)."""
+        src = _lua_text("hud.lua")
+        # Panel fills the full window: drawRectFilled(vec2(0, 0), vec2(w, h), ...)
+        assert re.search(
+            r"drawRectFilled\(\s*vec2\(0,\s*0\),\s*vec2\(w,\s*h\)",
+            src,
+        ), "top tile must fill the entire window"
+
+    def test_pe09_top_tile_no_legacy_stackup(self) -> None:
+        """PE-09: Top tile must not render legacy delta bar / post-lap strip / coaching."""
+        src = _lua_text("hud.lua")
+        # The stacked blocks from pre-#69 must be gone:
+        assert "drawDeltaBar" not in src, "legacy delta bar must be removed from WINDOW_0"
+        assert "drawMainWindowStrip" not in src, (
+            "legacy coaching strip must NOT be called from hud.lua (belongs in WINDOW_1)"
         )
+        assert "vm.postLapLines" not in src, (
+            "post-lap lines must not be rendered in WINDOW_0 (they stomp on Active Suggestion)"
+        )
+        assert "vm.setupChangeMsg" not in src, "setup change msg removed from WINDOW_0"
+        assert "vm.tireLockupFlash" not in src, "tire lockup flash removed from WINDOW_0"
+        assert "vm.autoSetupLine" not in src, "auto setup line removed from WINDOW_0"
+
+    def test_pe10_top_tile_uses_shared_tokens(self) -> None:
+        """PE-10: Top tile imports shared design tokens from coaching_overlay."""
+        src = _lua_text("hud.lua")
+        assert re.search(r"coachingOverlay\.tokens", src), (
+            "hud.lua must consume coachingOverlay.tokens for shared design tokens"
+        )
+
+    def test_pe11_top_tile_red_title_and_amber_secondary(self) -> None:
+        """PE-11: Title is red (#EF4444) and the amber token is defined for secondary hints."""
+        src = _lua_text("hud.lua")
+        # Red title: rgbm matching #EF4444 (0.937, 0.267, 0.267)
+        assert re.search(
+            r"COLOR_RED\s*=\s*rgbm\(0\.93[0-9]*,\s*0\.26[0-9]*,\s*0\.26[0-9]*",
+            src,
+        ), "COLOR_RED must be #EF4444"
+        assert re.search(
+            r"COLOR_AMBER\s*=\s*rgbm\(1\.00[0-9]*,\s*0\.76[0-9]*",
+            src,
+        ), "COLOR_AMBER must be #FFC43D"
+
+    # ------- Bottom tile (coaching_overlay.drawApproachPanel) --------------
+
+    def test_pc09_bottom_tile_status_gate(self) -> None:
+        """PC-09: Bottom tile only renders when approachData.status == 'approaching'."""
+        src = _lua_text("coaching_overlay.lua")
+        assert re.search(
+            r'status\s+or\s+""\)\s*~=\s*"approaching"',
+            src,
+        ), "drawApproachPanel must gate on status == 'approaching'"
+
+    def test_pc10_bottom_tile_shared_target_current_box(self) -> None:
+        """PC-10: TARGET ENTRY and CURRENT share a single visual box (per user feedback)."""
+        src = _lua_text("coaching_overlay.lua")
+        # Find the drawApproachPanel body
+        m = re.search(
+            r"function M\.drawApproachPanel.*?return true",
+            src,
+            flags=re.DOTALL,
+        )
+        assert m, "drawApproachPanel body not found"
+        body = m.group(0)
+        # Must have a rightBoxX / rightBoxW / rightBoxH frame
+        assert "rightBoxX" in body and "rightBoxW" in body and "rightBoxH" in body, (
+            "shared right-hand box must be explicitly framed"
+        )
+        # Both TARGET ENTRY and CURRENT must be positioned INSIDE that box
+        assert re.search(r'"TARGET ENTRY"', body) and re.search(r'"CURRENT"', body)
+        # A vertical divider between the two sub-columns
+        assert re.search(
+            r"rightBoxX\s*\+\s*subColW",
+            body,
+        ), "vertical divider between TARGET ENTRY and CURRENT must exist"
+
+    def test_pc11_bottom_tile_red_progress_bar(self) -> None:
+        """PC-11: Progress bar fill is red #EF4444, not cyan."""
+        src = _lua_text("coaching_overlay.lua")
+        assert re.search(
+            r"COLOR_BAR_FILL\s*=\s*rgbm\(0\.93[0-9]*,\s*0\.26[0-9]*,\s*0\.26[0-9]*",
+            src,
+        ), "COLOR_BAR_FILL must be red (#EF4444)"
+
+    def test_pc12_bottom_tile_tall_progress_bar(self) -> None:
+        """PC-12: Progress bar is at least 12 px tall (was 8 px, invisible)."""
+        src = _lua_text("coaching_overlay.lua")
+        m = re.search(r"function M\.drawApproachPanel.*?return true", src, flags=re.DOTALL)
+        assert m
+        body = m.group(0)
+        bar_h_match = re.search(r"local\s+barH\s*=\s*(\d+)", body)
+        assert bar_h_match, "barH not assigned in drawApproachPanel"
+        assert int(bar_h_match.group(1)) >= 12, (
+            f"progress bar must be >= 12 px tall, got {bar_h_match.group(1)}"
+        )
+
+    def test_pc13_bottom_tile_footer_text(self) -> None:
+        """PC-13: Footer reads 'AG PORSCHE ACADEMY' (not 'AC COPILOT TRAINER')."""
+        src = _lua_text("coaching_overlay.lua")
+        m = re.search(r"function M\.drawApproachPanel.*?return true", src, flags=re.DOTALL)
+        assert m
+        body = m.group(0)
+        assert '"AG PORSCHE ACADEMY"' in body, "footer must read AG PORSCHE ACADEMY"
+        assert '"AC COPILOT TRAINER"' not in body, "legacy 'AC COPILOT TRAINER' footer must be gone"
+
+    def test_pc14_bottom_tile_tokens_exported(self) -> None:
+        """PC-14: coaching_overlay exports M.tokens table for shared consumption."""
+        src = _lua_text("coaching_overlay.lua")
+        assert re.search(
+            r"M\.tokens\s*=\s*\{",
+            src,
+        ), "coaching_overlay must export M.tokens table"
+        # Must include the keys that hud.lua consumes
+        for key in ("COLOR_BG", "COLOR_RED", "COLOR_AMBER", "COLOR_LABEL_GREY", "PANEL_ROUNDING"):
+            assert re.search(
+                rf"{key}\s*=\s*{key}",
+                src,
+            ), f"M.tokens missing key {key}"
+
+
+# ---------------------------------------------------------------------------
+# Issue #69: manifest window flags
+# ---------------------------------------------------------------------------
+
+
+class TestIssue69ManifestFlags:
+    """WINDOW_0 must be transparent and WINDOW_1 must NOT auto-resize."""
+
+    def test_mf01_window0_no_background(self) -> None:
+        """MF-01: WINDOW_0 has NO_BACKGROUND so custom panel owns the chrome."""
+        lines = _get_manifest_section(_manifest_text(), "WINDOW_0")
+        flags_line = [ln for ln in lines if ln.startswith("FLAGS=")]
+        assert flags_line, "WINDOW_0 missing FLAGS"
+        assert "NO_BACKGROUND" in flags_line[0], (
+            "WINDOW_0 must use NO_BACKGROUND so custom panel is not double-tinted"
+        )
+
+    def test_mf02_window1_no_auto_resize(self) -> None:
+        """MF-02: WINDOW_1 must NOT use AUTO_RESIZE (caused the cramped panel)."""
+        lines = _get_manifest_section(_manifest_text(), "WINDOW_1")
+        flags_line = [ln for ln in lines if ln.startswith("FLAGS=")]
+        assert flags_line, "WINDOW_1 missing FLAGS"
+        assert "AUTO_RESIZE" not in flags_line[0], (
+            "WINDOW_1 must NOT use AUTO_RESIZE (it squeezed the panel into a tiny box)"
+        )
+        assert "NO_BACKGROUND" in flags_line[0], "WINDOW_1 must use NO_BACKGROUND"
+
+    def test_mf03_window_sizes_match_spec(self) -> None:
+        """MF-03: Main + coaching window sizes match Figma layout (issue #69)."""
+        text = _manifest_text()
+        w0 = _get_manifest_section(text, "WINDOW_0")
+        w1 = _get_manifest_section(text, "WINDOW_1")
+        size0 = next(ln for ln in w0 if ln.startswith("SIZE="))
+        size1 = next(ln for ln in w1 if ln.startswith("SIZE="))
+        assert size0 == "SIZE=480,180", f"WINDOW_0 SIZE expected 480,180, got {size0!r}"
+        assert size1 == "SIZE=520,280", f"WINDOW_1 SIZE expected 520,280, got {size1!r}"

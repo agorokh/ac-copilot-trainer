@@ -13,8 +13,9 @@ MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
 
 STUB_UI_LUA = r"""
 ui = {}
-local _calls = {}
-local _text_colored_calls = {}
+_calls = {}
+_text_colored_calls = {}
+_draw_rect_filled_calls = {}
 
 function ui.text(s)
     _calls[#_calls + 1] = { name = "text", arg = s }
@@ -33,7 +34,9 @@ function ui.sameLine(a, b) end
 function ui.windowSize() return _vec2(360, 220) end
 function ui.getCursor() return _vec2(0, 0) end
 function ui.setCursor(v) end
-function ui.drawRectFilled() end
+function ui.drawRectFilled(p0, p1, color, rounding)
+    _draw_rect_filled_calls[#_draw_rect_filled_calls + 1] = true
+end
 function ui.drawRect() end
 function ui.deltaTime() return 0.016 end
 function ui.checkbox(label, current) return false end
@@ -322,3 +325,258 @@ def test_realtime_coaching_tick(lua):
     """)
     rtc["tick"](opts)
     rtc["reset"]()
+
+
+# --------------------------------------------------------------------------
+# Issue #69: visual rewrite smoke tests (RT12..RT17)
+# --------------------------------------------------------------------------
+
+
+def _count_text_calls(lua, literal: str) -> int:
+    """Count how many textColored calls contain the given literal."""
+    code = f"""
+    local n = 0
+    for i = 1, #_text_colored_calls do
+        local c = _text_colored_calls[i]
+        if type(c.text) == "string" and c.text:find({literal!r}, 1, true) then
+            n = n + 1
+        end
+    end
+    return n
+    """
+    return lua.execute(code)
+
+
+def _count_draw_rects(lua) -> int:
+    return lua.execute("return #_draw_rect_filled_calls")
+
+
+def test_rt12_top_tile_renders_full_window_bg(lua):
+    """RT-12: hud.draw with a hint renders drawRectFilled at (0,0) -> (w,h)."""
+    hud = lua.execute('local m = require("hud"); return m')
+    vm = lua.eval("""
+        {
+            recording = true,
+            speed = 142,
+            brake = 0.4,
+            lapCount = 3,
+            bestLapMs = 59918,
+            lastLapMs = 61200,
+            deltaSmoothedSec = 0.15,
+            appVersionUi = "v0.4.2",
+            realtimeHint = {
+                text = "LESS COASTING ON THROTTLE",
+                kind = "brake",
+                cornerLabel = "T4 LEFT",
+            },
+        }
+    """)
+    hud["draw"](vm)
+    violations, _ = lua.execute("return _get_text_colored_violations()")
+    vl = list(violations.values()) if violations else []
+    assert not vl, f"top tile hint path made reversed textColored calls: {vl}"
+    # Must draw the panel background
+    assert _count_draw_rects(lua) >= 1, "top tile must drawRectFilled for panel bg"
+    # Must contain the title literal
+    assert _count_text_calls(lua, "ACTIVE SUGGESTION") >= 1, (
+        "top tile must render 'ACTIVE SUGGESTION' title"
+    )
+    # Must contain the uppercase hint text
+    assert _count_text_calls(lua, "LESS COASTING") >= 1, "hint text must be rendered"
+
+
+def test_rt13_top_tile_idle_state_visible(lua):
+    """RT-13: hud.draw with NO hint still renders the idle panel (not blank)."""
+    hud = lua.execute('local m = require("hud"); return m')
+    vm = lua.eval("""
+        {
+            recording = false,
+            speed = 0,
+            brake = 0,
+            lapCount = 0,
+            bestLapMs = nil,
+            lastLapMs = nil,
+            deltaSmoothedSec = nil,
+            appVersionUi = "v0.4.2",
+            realtimeHint = nil,
+        }
+    """)
+    hud["draw"](vm)
+    # Idle state must still draw something (panel chrome + title)
+    assert _count_draw_rects(lua) >= 1, "idle state must draw panel chrome"
+    assert _count_text_calls(lua, "ACTIVE SUGGESTION") >= 1
+    assert _count_text_calls(lua, "Complete a lap for coaching hints") >= 1, (
+        "idle state must render placeholder guidance copy"
+    )
+
+
+def test_rt14_bottom_tile_renders_when_approaching(lua):
+    """RT-14: drawApproachPanel renders all expected literals when status='approaching'."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    approach = lua.eval("""
+        {
+            turnLabel = "T4 LEFT",
+            targetSpeedKmh = 125,
+            currentSpeedKmh = 142,
+            distanceToBrakeM = 150,
+            status = "approaching",
+            progressPct = 0.6,
+            brakeIndex = 1,
+        }
+    """)
+    result = overlay["drawApproachPanel"](approach)
+    assert result, "drawApproachPanel should return true when status=approaching"
+    violations, _ = lua.execute("return _get_text_colored_violations()")
+    vl = list(violations.values()) if violations else []
+    assert not vl, f"drawApproachPanel made reversed textColored calls: {vl}"
+    # Must contain all the design-brief literals
+    assert _count_text_calls(lua, "APPROACHING") >= 1
+    assert _count_text_calls(lua, "T4 LEFT") >= 1
+    assert _count_text_calls(lua, "TARGET ENTRY") >= 1
+    assert _count_text_calls(lua, "CURRENT") >= 1
+    assert _count_text_calls(lua, "DISTANCE TO BRAKING POINT") >= 1
+    assert _count_text_calls(lua, "AG PORSCHE ACADEMY") >= 1
+    # Must NOT contain the legacy footer
+    assert _count_text_calls(lua, "AC COPILOT TRAINER") == 0
+    # Must draw panel background + shared right box + dividers + progress bar
+    assert _count_draw_rects(lua) >= 4
+
+
+def test_rt15_bottom_tile_hidden_when_not_approaching(lua):
+    """RT-15: drawApproachPanel returns false when status != 'approaching'."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    approach = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 125,
+            currentSpeedKmh = 90,
+            distanceToBrakeM = 999,
+            status = "match",
+            progressPct = 0.0,
+        }
+    """)
+    result = overlay["drawApproachPanel"](approach)
+    assert not result, "drawApproachPanel must return false when status != approaching"
+    # No textColored literals for the panel should have been rendered
+    assert _count_text_calls(lua, "TARGET ENTRY") == 0
+    assert _count_text_calls(lua, "AG PORSCHE ACADEMY") == 0
+
+
+def test_rt16_bottom_tile_hidden_when_nil(lua):
+    """RT-16: drawApproachPanel returns false when approachData is nil."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    result = overlay["drawApproachPanel"](None)
+    assert not result, "drawApproachPanel must return false for nil data"
+
+
+def test_rt17_bottom_tile_speed_color_delta(lua):
+    """RT-17: CURRENT number is red when > target+8, green when <= target."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    # Case 1: too fast -> red
+    approach_fast = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 100,
+            currentSpeedKmh = 120,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.5,
+        }
+    """)
+    lua.execute("_text_colored_calls = {}")
+    overlay["drawApproachPanel"](approach_fast)
+    # Find the "120" call and check its color.r > 0.8 (red)
+    red_ok = lua.execute("""
+        for i = 1, #_text_colored_calls do
+            local c = _text_colored_calls[i]
+            if type(c.text) == "string" and c.text == "120" then
+                if c.color and c.color.r and c.color.r > 0.8 and c.color.g < 0.4 then
+                    return true
+                end
+                return false
+            end
+        end
+        return false
+    """)
+    assert red_ok, "CURRENT=120 with target=100 must render red"
+
+    # Case 2: under target -> green
+    approach_slow = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 100,
+            currentSpeedKmh = 90,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.5,
+        }
+    """)
+    lua.execute("_text_colored_calls = {}")
+    overlay["drawApproachPanel"](approach_slow)
+    green_ok = lua.execute("""
+        for i = 1, #_text_colored_calls do
+            local c = _text_colored_calls[i]
+            if type(c.text) == "string" and c.text == "90" then
+                if c.color and c.color.g and c.color.g > 0.7 and c.color.r < 0.4 then
+                    return true
+                end
+                return false
+            end
+        end
+        return false
+    """)
+    assert green_ok, "CURRENT=90 with target=100 must render green"
+
+    # Case 3: exactly at target -> green (delta <= 0)
+    approach_match = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 100,
+            currentSpeedKmh = 100,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.5,
+        }
+    """)
+    lua.execute("_text_colored_calls = {}")
+    overlay["drawApproachPanel"](approach_match)
+    green100_ok = lua.execute("""
+        for i = 1, #_text_colored_calls do
+            local c = _text_colored_calls[i]
+            if type(c.text) == "string" and c.text == "100" then
+                if c.color and c.color.g and c.color.g > 0.7 and c.color.r < 0.4 then
+                    return true
+                end
+            end
+        end
+        return false
+    """)
+    assert green100_ok, "CURRENT=100 with target=100 must render green at boundary"
+
+    # Case 4: exactly target+8 -> white band (not red; delta > 8 is strict)
+    approach_edge = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 100,
+            currentSpeedKmh = 108,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.5,
+        }
+    """)
+    lua.execute("_text_colored_calls = {}")
+    overlay["drawApproachPanel"](approach_edge)
+    white108_ok = lua.execute("""
+        for i = 1, #_text_colored_calls do
+            local c = _text_colored_calls[i]
+            if type(c.text) == "string" and c.text == "108" then
+                local col = c.color
+                if col and col.r > 0.85 and col.g > 0.85 then
+                    return true
+                end
+                return false
+            end
+        end
+        return false
+    """)
+    assert white108_ok, "CURRENT=108 with target=100 must render white (threshold, not red)"

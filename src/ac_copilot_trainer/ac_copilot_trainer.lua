@@ -829,12 +829,15 @@ local function approachHudData(car0, sortedTrace, sim0)
   end
   local cur = car0.speedKmh or 0
   local dv = cur - refSpd
-  local status = "match"
+  -- Speed bucket for payload consumers (telemetry / sidecar / future UI). Not shown in HUD copy yet.
+  local speedDelta = "match"
   if dv > 8 then
-    status = "too fast"
+    speedDelta = "too fast"
   elseif dv < -8 then
-    status = "too slow"
+    speedDelta = "too slow"
   end
+  -- Function only returns when dM <= approachM, so status is always "approaching"
+  local status = "approaching"
   local progressPct = 1 - (dM / approachM)
   if progressPct < 0 then
     progressPct = 0
@@ -856,6 +859,7 @@ local function approachHudData(car0, sortedTrace, sim0)
     currentSpeedKmh = cur,
     distanceToBrakeM = dM,
     status = status,
+    speedDelta = speedDelta,
     progressPct = progressPct,
     brakeIndex = bestI,
   }
