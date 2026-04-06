@@ -757,3 +757,13 @@ class TestIssue69ManifestFlags:
             "WINDOW_1 must NOT use AUTO_RESIZE (it squeezed the panel into a tiny box)"
         )
         assert "NO_BACKGROUND" in flags_line[0], "WINDOW_1 must use NO_BACKGROUND"
+
+    def test_mf03_window_sizes_match_spec(self) -> None:
+        """MF-03: Main + coaching window sizes match Figma layout (issue #69)."""
+        text = _manifest_text()
+        w0 = _get_manifest_section(text, "WINDOW_0")
+        w1 = _get_manifest_section(text, "WINDOW_1")
+        size0 = next(ln for ln in w0 if ln.startswith("SIZE="))
+        size1 = next(ln for ln in w1 if ln.startswith("SIZE="))
+        assert size0 == "SIZE=480,180", f"WINDOW_0 SIZE expected 480,180, got {size0!r}"
+        assert size1 == "SIZE=520,280", f"WINDOW_1 SIZE expected 520,280, got {size1!r}"

@@ -59,10 +59,10 @@ local lastCornerLabel = nil
 ---@field focusPracticeLabel string|nil
 
 local function hintAccentColor(kind)
-  if kind == "brake" then return COLOR_RED end
-  if kind == "line" then return COLOR_AMBER end
-  if kind == "positive" then return rgbm(0.20, 0.85, 0.35, 1.0) end
-  return COLOR_WHITE
+  if kind == "brake" then return tokens.COLOR_RED end
+  if kind == "line" then return tokens.COLOR_AMBER end
+  if kind == "positive" then return tokens.COLOR_GREEN end
+  return tokens.COLOR_WHITE
 end
 
 --- Approx text width in pixels per character for a given font size.
@@ -114,13 +114,18 @@ local function drawActiveSuggestion(vm)
   local textAlpha = 1.0  -- text 100% opaque per design brief; only bg fades
   local bgAlpha = 0.60 * fadeAlpha
 
-  -- Panel background fills the entire window
+  -- Panel background fills the entire window (runtime colors from shared tokens)
   ui.drawRectFilled(vec2(0, 0), vec2(w, h),
-    rgbm(COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, bgAlpha),
+    rgbm(tokens.COLOR_BG.r, tokens.COLOR_BG.g, tokens.COLOR_BG.b, bgAlpha),
     PANEL_ROUNDING)
   if fadeAlpha > 0.5 then
     ui.drawRect(vec2(0, 0), vec2(w, h),
-      rgbm(COLOR_BG_BORDER.r, COLOR_BG_BORDER.g, COLOR_BG_BORDER.b, 0.40 * fadeAlpha),
+      rgbm(
+        tokens.COLOR_BG_BORDER.r,
+        tokens.COLOR_BG_BORDER.g,
+        tokens.COLOR_BG_BORDER.b,
+        0.40 * fadeAlpha
+      ),
       PANEL_ROUNDING, nil, 1)
   end
 
@@ -133,7 +138,7 @@ local function drawActiveSuggestion(vm)
     local labelW = approxTextWidth(label, 11)
     ui.setCursor(vec2(math.max(0, centerX - labelW / 2), y))
     local k = fontMod.pushNamed("labels", 11)
-    ui.textColored(label, rgbm(COLOR_RED.r, COLOR_RED.g, COLOR_RED.b, textAlpha))
+    ui.textColored(label, rgbm(tokens.COLOR_RED.r, tokens.COLOR_RED.g, tokens.COLOR_RED.b, textAlpha))
     fontMod.pop(k)
   end
   y = y + 18
@@ -144,7 +149,7 @@ local function drawActiveSuggestion(vm)
     local clW = approxTextWidth(cl, 20)
     ui.setCursor(vec2(math.max(0, centerX - clW / 2), y))
     local k = fontMod.pushNamed("numbers", 20)
-    ui.textColored(cl, rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha))
+    ui.textColored(cl, rgbm(tokens.COLOR_WHITE.r, tokens.COLOR_WHITE.g, tokens.COLOR_WHITE.b, textAlpha))
     fontMod.pop(k)
     y = y + 26
   end
@@ -167,7 +172,12 @@ local function drawActiveSuggestion(vm)
     local fpW = approxTextWidth(fp, 10)
     ui.setCursor(vec2(math.max(0, centerX - fpW / 2), y))
     local k = fontMod.pushNamed("brand", 10)
-    ui.textColored(fp, rgbm(COLOR_BRAND_GREY.r, COLOR_BRAND_GREY.g, COLOR_BRAND_GREY.b, textAlpha))
+    ui.textColored(fp, rgbm(
+      tokens.COLOR_BRAND_GREY.r,
+      tokens.COLOR_BRAND_GREY.g,
+      tokens.COLOR_BRAND_GREY.b,
+      textAlpha
+    ))
     fontMod.pop(k)
   end
 
@@ -178,7 +188,8 @@ end
 --- Runs at the bottom of the panel so the suggestion text stays prominent.
 ---@param vm HudViewModel
 local function drawTelemetryFooter(vm)
-  if fadeAlpha < 0.01 then return end
+  -- Idle path keeps fadeAlpha at 0; still show speed / REC / delta (issue #69 review).
+  local mix = fadeAlpha < 0.01 and 1.0 or fadeAlpha
   local sz = ui.windowSize()
   local w = (sz and sz.x and sz.x > 0) and sz.x or 480
   local h = (sz and sz.y and sz.y > 0) and sz.y or 180
@@ -190,7 +201,12 @@ local function drawTelemetryFooter(vm)
   ui.drawRectFilled(
     vec2(PANEL_PAD_X, footerY - 8),
     vec2(w - PANEL_PAD_X, footerY - 7),
-    rgbm(COLOR_BG_BORDER.r, COLOR_BG_BORDER.g, COLOR_BG_BORDER.b, 0.50 * fadeAlpha),
+    rgbm(
+      tokens.COLOR_BG_BORDER.r,
+      tokens.COLOR_BG_BORDER.g,
+      tokens.COLOR_BG_BORDER.b,
+      0.50 * mix
+    ),
     0
   )
 
@@ -198,14 +214,14 @@ local function drawTelemetryFooter(vm)
   local speedStr = string.format("%.0f KM/H", vm.speed or 0)
   ui.setCursor(vec2(PANEL_PAD_X, footerY))
   local k1 = fontMod.pushNamed("numbers", 12)
-  ui.textColored(speedStr, rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha))
+  ui.textColored(speedStr, rgbm(tokens.COLOR_WHITE.r, tokens.COLOR_WHITE.g, tokens.COLOR_WHITE.b, textAlpha))
   fontMod.pop(k1)
 
   -- Center: REC / PAUSED badge
   local badge = vm.recording and "REC" or "PAUSED"
   local badgeCol = vm.recording
-    and rgbm(0.20, 0.85, 0.35, textAlpha)
-    or rgbm(COLOR_LABEL_GREY.r, COLOR_LABEL_GREY.g, COLOR_LABEL_GREY.b, textAlpha)
+    and rgbm(tokens.COLOR_GREEN.r, tokens.COLOR_GREEN.g, tokens.COLOR_GREEN.b, textAlpha)
+    or rgbm(tokens.COLOR_LABEL_GREY.r, tokens.COLOR_LABEL_GREY.g, tokens.COLOR_LABEL_GREY.b, textAlpha)
   local badgeW = approxTextWidth(badge, 10)
   ui.setCursor(vec2(w / 2 - badgeW / 2, footerY + 2))
   local k2 = fontMod.pushNamed("labels", 10)
@@ -218,7 +234,7 @@ local function drawTelemetryFooter(vm)
     local deltaStr = string.format("%+.2f S", dSmooth)
     local deltaCol = rgbm(0.20, 0.85, 0.35, textAlpha)
     if dSmooth > 0.02 then
-      deltaCol = rgbm(COLOR_RED.r, COLOR_RED.g, COLOR_RED.b, textAlpha)
+      deltaCol = rgbm(tokens.COLOR_RED.r, tokens.COLOR_RED.g, tokens.COLOR_RED.b, textAlpha)
     elseif dSmooth < -0.02 then
       deltaCol = rgbm(0.35, 0.60, 0.95, textAlpha)
     end
@@ -239,10 +255,15 @@ local function drawIdleState(vm)
 
   -- Always draw the panel chrome so the window is visible even in idle
   ui.drawRectFilled(vec2(0, 0), vec2(w, h),
-    rgbm(COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, 0.60),
+    rgbm(tokens.COLOR_BG.r, tokens.COLOR_BG.g, tokens.COLOR_BG.b, 0.60),
     PANEL_ROUNDING)
   ui.drawRect(vec2(0, 0), vec2(w, h),
-    rgbm(COLOR_BG_BORDER.r, COLOR_BG_BORDER.g, COLOR_BG_BORDER.b, 0.40),
+    rgbm(
+      tokens.COLOR_BG_BORDER.r,
+      tokens.COLOR_BG_BORDER.g,
+      tokens.COLOR_BG_BORDER.b,
+      0.40
+    ),
     PANEL_ROUNDING, nil, 1)
 
   local centerX = w / 2
@@ -253,7 +274,7 @@ local function drawIdleState(vm)
   local labelW = approxTextWidth(label, 11)
   ui.setCursor(vec2(math.max(0, centerX - labelW / 2), y))
   local k = fontMod.pushNamed("labels", 11)
-  ui.textColored(label, COLOR_LABEL_GREY)
+  ui.textColored(label, rgbm(tokens.COLOR_RED.r, tokens.COLOR_RED.g, tokens.COLOR_RED.b, 1.0))
   fontMod.pop(k)
   y = y + 20
 
@@ -262,7 +283,12 @@ local function drawIdleState(vm)
   local msgW = approxTextWidth(msg, 13)
   ui.setCursor(vec2(math.max(0, centerX - msgW / 2), y + 10))
   local k2 = fontMod.pushNamed("labels", 13)
-  ui.textColored(msg, COLOR_BRAND_GREY)
+  ui.textColored(msg, rgbm(
+    tokens.COLOR_BRAND_GREY.r,
+    tokens.COLOR_BRAND_GREY.g,
+    tokens.COLOR_BRAND_GREY.b,
+    1.0
+  ))
   fontMod.pop(k2)
 end
 

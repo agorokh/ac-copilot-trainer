@@ -155,10 +155,15 @@ function M.drawApproachPanel(approachData)
       rgbm(0.04, 0.04, 0.05, 0.55),
       8
     )
+  end
+  if ui.drawRect then
     ui.drawRect(
       vec2(rightBoxX, rightBoxY),
       vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
-      COLOR_BG_BORDER, 8, nil, 1
+      COLOR_BG_BORDER,
+      8,
+      nil,
+      1
     )
   end
 

@@ -405,6 +405,9 @@ def test_rt13_top_tile_idle_state_visible(lua):
     # Idle state must still draw something (panel chrome + title)
     assert _count_draw_rects(lua) >= 1, "idle state must draw panel chrome"
     assert _count_text_calls(lua, "ACTIVE SUGGESTION") >= 1
+    assert _count_text_calls(lua, "Complete a lap for coaching hints") >= 1, (
+        "idle state must render placeholder guidance copy"
+    )
 
 
 def test_rt14_bottom_tile_renders_when_approaching(lua):
@@ -523,3 +526,57 @@ def test_rt17_bottom_tile_speed_color_delta(lua):
         return false
     """)
     assert green_ok, "CURRENT=90 with target=100 must render green"
+
+    # Case 3: exactly at target -> green (delta <= 0)
+    approach_match = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 100,
+            currentSpeedKmh = 100,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.5,
+        }
+    """)
+    lua.execute("_text_colored_calls = {}")
+    overlay["drawApproachPanel"](approach_match)
+    green100_ok = lua.execute("""
+        for i = 1, #_text_colored_calls do
+            local c = _text_colored_calls[i]
+            if type(c.text) == "string" and c.text == "100" then
+                if c.color and c.color.g and c.color.g > 0.7 and c.color.r < 0.4 then
+                    return true
+                end
+            end
+        end
+        return false
+    """)
+    assert green100_ok, "CURRENT=100 with target=100 must render green at boundary"
+
+    # Case 4: exactly target+8 -> white band (not red; delta > 8 is strict)
+    approach_edge = lua.eval("""
+        {
+            turnLabel = "T4",
+            targetSpeedKmh = 100,
+            currentSpeedKmh = 108,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.5,
+        }
+    """)
+    lua.execute("_text_colored_calls = {}")
+    overlay["drawApproachPanel"](approach_edge)
+    white108_ok = lua.execute("""
+        for i = 1, #_text_colored_calls do
+            local c = _text_colored_calls[i]
+            if type(c.text) == "string" and c.text == "108" then
+                local col = c.color
+                if col and col.r > 0.85 and col.g > 0.85 then
+                    return true
+                end
+                return false
+            end
+        end
+        return false
+    """)
+    assert white108_ok, "CURRENT=108 with target=100 must render white (threshold, not red)"

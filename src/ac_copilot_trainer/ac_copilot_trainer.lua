@@ -829,7 +829,7 @@ local function approachHudData(car0, sortedTrace, sim0)
   end
   local cur = car0.speedKmh or 0
   local dv = cur - refSpd
-  -- Speed comparison bucket (informational only; panel always shows "approaching")
+  -- Speed bucket for payload consumers (telemetry / sidecar / future UI). Not shown in HUD copy yet.
   local speedDelta = "match"
   if dv > 8 then
     speedDelta = "too fast"
