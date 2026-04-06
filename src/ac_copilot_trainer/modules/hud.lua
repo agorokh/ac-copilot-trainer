@@ -104,30 +104,36 @@ local function drawActiveSuggestion(vm)
     lastCornerLabel = hint.cornerLabel
   end
 
-  if alphaDraw < 0.01 then
+  -- Fade-out only: first fade-in frame has alphaDraw==0 but hasHint — still draw using post-integrate alpha.
+  if not hasHint and alphaDraw < 0.01 then
     lastHintText = nil
     lastHintKind = nil
     lastCornerLabel = nil
     return false
   end
 
+  local visAlpha = alphaDraw
+  if hasHint and alphaDraw < 0.01 then
+    visAlpha = fadeAlpha
+  end
+
   local sz = ui.windowSize()
   local w = (sz and sz.x and sz.x > 0) and sz.x or 480
   local h = (sz and sz.y and sz.y > 0) and sz.y or 180
   local textAlpha = 1.0  -- text 100% opaque per design brief; only bg fades
-  local bgAlpha = 0.60 * alphaDraw
+  local bgAlpha = 0.60 * visAlpha
 
   -- Panel background fills the entire window (runtime colors from shared tokens)
   ui.drawRectFilled(vec2(0, 0), vec2(w, h),
     rgbm(tokens.COLOR_BG.r, tokens.COLOR_BG.g, tokens.COLOR_BG.b, bgAlpha),
     PANEL_ROUNDING)
-  if alphaDraw > 0.5 then
+  if visAlpha > 0.5 then
     ui.drawRect(vec2(0, 0), vec2(w, h),
       rgbm(
         tokens.COLOR_BG_BORDER.r,
         tokens.COLOR_BG_BORDER.g,
         tokens.COLOR_BG_BORDER.b,
-        0.40 * alphaDraw
+        0.40 * visAlpha
       ),
       PANEL_ROUNDING, nil, 1)
   end
