@@ -15,21 +15,23 @@ relates_to:
 
 ## Resume here
 
-- **Issue #57 Phase 5:** Parts A–D merged; Part E code complete. **Part E** in **PR #64** (branch `feat/issue-57-phase5-part-e`): active suggestion panel. 178 tests pass. Needs review + merge.
-- After PR #64 merges, **issue #57 is fully complete** and can be closed.
+- **Issue #57 CLOSED.** All 5 Parts (A–E) delivered and merged. Phase 5 HUD architecture redesign complete.
+- **Local + remote synced** to `main` (097f595). All `feat/issue-57-*` branches deleted locally and on origin.
+- **Next priorities:** in-game tuning of Part D thresholds, then pick the next epic from the backlog (Phase 6 or Phase 4 depending on user direction).
 
 ## What was delivered this session
 
-- **PR #63 (Part D) review resolution:** 8 rounds of bot review fixes across 45 inline comments from 6 bots (Sourcery, Codex, Copilot, Gemini, CodeRabbit, Cursor BugBot). Key fixes: circular spline distance, O(1) binary search for approach detection, proper exit window, dedup hint preservation, precomputed brake→corner label map, shared coaching threshold constants. All checks green including Cursor BugBot pass.
-- **PR #64 (Part E) opened:** Rewrote `hud.lua` (WINDOW_0) from debug dump to polished active suggestion panel. Dark semi-transparent rounded panel with accent cyan title, kind-colored hint text, smooth fade transitions (fadeAlpha/FADE_SPEED), hidden on straights, focus practice integration, named font roles. 6 new tests (PE-01 through PE-06). 178 total tests pass.
+- **PR #64 (Part E) merged:** Rewrote `hud.lua` as polished active suggestion panel with dark semi-transparent background, 100% opaque text, smooth fade transitions (fadeAlpha/FADE_SPEED), corner-label persistence through fade, focus practice integration, debriefText restoration. 6 rounds of bot review fixes resolving 38 inline comments. PE-01..PE-07 tests added (179 tests total).
+- **Issue #57 closed** with completion summary covering all 5 Parts.
 
 ## What remains
 
-- **Part E:** Merge PR #64 after review. In-game verification needed (fade timing, panel layout, focus indicator).
-- **Issue #57 closure:** After PR #64 merges, close issue #57 (all 5 Parts complete).
-- **In-game testing:** Hint timing/thresholds, Nordschleife performance, fade behavior all need driving verification.
+- **In-game testing & tuning** (out of CI scope):
+  - Part D hint thresholds (entry speed +5, min speed +4/+6, trail brake ±0.15) need driving verification across multiple cars/tracks.
+  - Part D Nordschleife performance verification (170+ segments, O(1) bucket lookup should hold).
+  - Part E visual verification (panel layout, fade timing, focus indicator legibility).
+- **Next epic selection:** Awaiting user direction on Phase 6 vs Phase 4 (#19) vs other backlog work.
 
 ## Blockers / dependencies
 
-- **In-game testing** required for Part D tuning + Part E visual verification.
-- No code blockers. CI green.
+- None. All code blockers resolved. CI fully green.

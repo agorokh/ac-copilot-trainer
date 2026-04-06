@@ -78,7 +78,7 @@ local BLK = string.char(226, 150, 136)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
-    return "â"  -- em dash (U+2014)
+    return "—"  -- em dash (U+2014)
   end
   return string.format("%.3f s", ms / 1000)
 end
@@ -101,7 +101,7 @@ local function drawDeltaBar(d)
     elseif d < -0.015 and i < center and i >= center - spread then
       c = rgbm(0.2, 0.78, 0.3, 1)
     end
-    ui.textColored(c, BLK)
+    ui.textColored(BLK, c)
   end
 end
 
@@ -156,7 +156,7 @@ local function drawActiveSuggestion(vm)
   -- Title: "ACTIVE SUGGESTION"
   ui.setCursor(vec2(PANEL_PAD_X, y))
   local titleK = fontMod.pushNamed("labels", 14)
-  ui.textColored(rgbm(COLOR_TITLE.r, COLOR_TITLE.g, COLOR_TITLE.b, textAlpha), "ACTIVE SUGGESTION")
+  ui.textColored("ACTIVE SUGGESTION", rgbm(COLOR_TITLE.r, COLOR_TITLE.g, COLOR_TITLE.b, textAlpha))
   fontMod.pop(titleK)
   y = y + 22
 
@@ -165,7 +165,7 @@ local function drawActiveSuggestion(vm)
   if cLabel and cLabel ~= "" then
     ui.setCursor(vec2(PANEL_PAD_X, y))
     local numK = fontMod.pushNamed("numbers", 22)
-    ui.textColored(rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha), cLabel)
+    ui.textColored(cLabel, rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha))
     fontMod.pop(numK)
     y = y + 30
   end
@@ -175,7 +175,7 @@ local function drawActiveSuggestion(vm)
     ui.setCursor(vec2(PANEL_PAD_X, y))
     local hintK = fontMod.pushNamed("labels", 16)
     local hintColor = colorForKind(lastHintKind)
-    ui.textColored(rgbm(hintColor.r, hintColor.g, hintColor.b, textAlpha), lastHintText)
+    ui.textColored(lastHintText, rgbm(hintColor.r, hintColor.g, hintColor.b, textAlpha))
     fontMod.pop(hintK)
     y = y + 24
   end
@@ -184,7 +184,7 @@ local function drawActiveSuggestion(vm)
   if vm.focusPracticeActive and vm.focusPracticeLabel then
     ui.setCursor(vec2(PANEL_PAD_X, y))
     local brandK = fontMod.pushNamed("brand", 11)
-    ui.textColored(rgbm(COLOR_BRAND.r, COLOR_BRAND.g, COLOR_BRAND.b, textAlpha), "Focus: " .. vm.focusPracticeLabel)
+    ui.textColored("Focus: " .. vm.focusPracticeLabel, rgbm(COLOR_BRAND.r, COLOR_BRAND.g, COLOR_BRAND.b, textAlpha))
     fontMod.pop(brandK)
   end
 
@@ -205,16 +205,13 @@ end
 ---@param vm HudViewModel
 function M.draw(vm)
   -- Compact telemetry strip (always visible at top)
-  ui.textColored(
-    rgbm(0.5, 0.55, 0.62, 1),
-    "AC Copilot Trainer " .. (type(vm.appVersionUi) == "string" and vm.appVersionUi ~= "" and vm.appVersionUi or "v?.?.?")
-  )
+  ui.textColored("AC Copilot Trainer " .. (type(vm.appVersionUi) == "string" and vm.appVersionUi ~= "" and vm.appVersionUi or "v?.?.?"), rgbm(0.5, 0.55, 0.62, 1))
   if vm.recording then
     ui.sameLine(0, 12)
-    ui.textColored(rgbm(0, 1, 0, 1), "REC")
+    ui.textColored("REC", rgbm(0, 1, 0, 1))
   else
     ui.sameLine(0, 12)
-    ui.textColored(rgbm(0.65, 0.65, 0.65, 1), "PAUSED")
+    ui.textColored("PAUSED", rgbm(0.65, 0.65, 0.65, 1))
   end
 
   ui.separator()
@@ -224,10 +221,10 @@ function M.draw(vm)
   end
 
   -- Delta vs best
-  ui.textColored(rgbm(0.7, 0.72, 0.78, 1), "Delta vs best")
+  ui.textColored("Delta vs best", rgbm(0.7, 0.72, 0.78, 1))
   local dSmooth = vm.deltaSmoothedSec
   if dSmooth == nil or dSmooth ~= dSmooth then
-    ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "No reference")
+    ui.textColored("No reference", rgbm(0.55, 0.55, 0.58, 1))
   else
     local d = dSmooth
     local col = rgbm(0.25, 0.9, 0.35, 1)
@@ -236,7 +233,7 @@ function M.draw(vm)
     elseif d < -0.02 then
       col = rgbm(0.35, 0.6, 0.95, 1)
     end
-    ui.textColored(col, string.format("%+.2f s", d))
+    ui.textColored(string.format("%+.2f s", d), col)
     drawDeltaBar(d)
   end
 
@@ -250,20 +247,20 @@ function M.draw(vm)
   -- Sector message (transient)
   if vm.sectorMessage and vm.sectorMessage ~= "" then
     ui.separator()
-    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Sector")
+    ui.textColored("Sector", rgbm(0.85, 0.88, 0.95, 1))
     ui.textWrapped(vm.sectorMessage)
   end
 
   -- Coast warning
   if vm.coastWarn then
     ui.separator()
-    ui.textColored(rgbm(0.95, 0.75, 0.2, 1), "Coasting â roll to throttle")
+    ui.textColored("Coasting — roll to throttle", rgbm(0.95, 0.75, 0.2, 1))
   end
 
   -- Post-lap lines (legacy summary, kept for fallback)
   if vm.postLapLines and #vm.postLapLines > 0 then
     ui.separator()
-    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Post-lap")
+    ui.textColored("Post-lap", rgbm(0.85, 0.88, 0.95, 1))
     for i = 1, #vm.postLapLines do
       ui.text(vm.postLapLines[i])
     end
@@ -272,7 +269,7 @@ function M.draw(vm)
   -- Setup change message
   if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then
     ui.separator()
-    ui.textColored(rgbm(0.95, 0.75, 0.35, 1), vm.setupChangeMsg)
+    ui.textColored(vm.setupChangeMsg, rgbm(0.95, 0.75, 0.35, 1))
   end
 
   -- Auto-setup line
@@ -280,20 +277,20 @@ function M.draw(vm)
     if not vm.setupChangeMsg or vm.setupChangeMsg == "" then
       ui.separator()
     end
-    ui.textColored(rgbm(0.85, 0.82, 0.7, 1), "Setup")
+    ui.textColored("Setup", rgbm(0.85, 0.82, 0.7, 1))
     ui.textWrapped(vm.autoSetupLine)
   end
 
   -- Tire lockup flash
   if vm.tireLockupFlash then
     ui.separator()
-    ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
+    ui.textColored("Wheel slip spike", rgbm(0.95, 0.35, 0.2, 1))
   end
 
   -- Post-lap debrief (sidecar paragraph from Ollama/rules debrief)
   if vm.debriefText and vm.debriefText ~= "" then
     ui.separator()
-    ui.textColored(rgbm(0.55, 0.82, 0.95, 1), "Session debrief (sidecar)")
+    ui.textColored("Session debrief (sidecar)", rgbm(0.55, 0.82, 0.95, 1))
     if ui.textWrapped then
       ui.textWrapped(vm.debriefText)
     else

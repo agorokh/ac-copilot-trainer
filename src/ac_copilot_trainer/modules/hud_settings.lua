@@ -30,9 +30,10 @@ local function checkbox(config, key, label, mode)
     return
   end
   pcall(function()
-    local nv = ui.checkbox(label, cur)
-    if type(nv) == "boolean" then
-      config[key] = nv
+    -- CSP ui.checkbox(label, currentValue) returns true when CLICKED (changed),
+    -- not the new value. Flip cur on click.
+    if ui.checkbox(label, cur) then
+      config[key] = not cur
     end
   end)
 end
@@ -50,19 +51,19 @@ end
 
 local function drawStats(st)
   if st.throttleLapHint and st.throttleLapHint ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Throttle (last lap)")
+    ui.textColored("Throttle (last lap)", rgbm(0.75, 0.78, 0.85, 1))
     textWrappedMaybe(st.throttleLapHint)
   end
   if st.consistencyHud and st.consistencyHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Consistency")
+    ui.textColored("Consistency", rgbm(0.75, 0.78, 0.85, 1))
     textWrappedMaybe(st.consistencyHud)
   end
   if st.styleHud and st.styleHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Style vs reference")
+    ui.textColored("Style vs reference", rgbm(0.75, 0.78, 0.85, 1))
     textWrappedMaybe(st.styleHud)
   end
   if st.tireHud and st.tireHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Tires (last lap)")
+    ui.textColored("Tires (last lap)", rgbm(0.75, 0.78, 0.85, 1))
     textWrappedMaybe(st.tireHud)
   end
   if st.refAiDistanceM ~= nil and st.refAiDistanceM == st.refAiDistanceM then
@@ -89,16 +90,16 @@ function M.draw(vm)
     return
   end
 
-  ui.textColored(rgbm(0.55, 0.6, 0.68, 1), "AC Copilot Trainer — Settings")
+  ui.textColored("AC Copilot Trainer — Settings", rgbm(0.55, 0.6, 0.68, 1))
   ui.separator()
 
-  ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Display")
+  ui.textColored("Display", rgbm(0.78, 0.8, 0.88, 1))
   checkbox(cfg, "hudEnabled", "Show HUD/coaching windows", "strictTrue")
   checkbox(cfg, "racingLineEnabled", "Show racing line (3D)", "notFalse")
   checkbox(cfg, "brakeMarkersEnabled", "Show brake markers (3D)", "notFalse")
 
   ui.separator()
-  ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Coaching")
+  ui.textColored("Coaching", rgbm(0.78, 0.8, 0.88, 1))
   if type(ui.slider) == "function" then
     pcall(function()
       local curA = math.max(50, math.min(500, tonumber(cfg.approachMeters) or 200))
@@ -119,7 +120,7 @@ function M.draw(vm)
     local curH = math.max(5, math.min(120, tonumber(cfg.coachingHoldSeconds) or 30))
     ui.text(string.format("Approach distance (m): %.0f", curA))
     ui.text(string.format("Post-lap coaching hold (s): %.0f", curH))
-    ui.textColored(rgbm(0.65, 0.65, 0.7, 1), "Sliders not available in this CSP build.")
+    ui.textColored("Sliders not available in this CSP build.", rgbm(0.65, 0.65, 0.7, 1))
   end
 
   local mode = tostring(cfg.racingLineMode or "best")
@@ -140,7 +141,7 @@ function M.draw(vm)
     end)
   else
     ui.text("Racing line source: " .. modePreview)
-    ui.textColored(rgbm(0.65, 0.65, 0.7, 1), "Combo not available — edit racingLineMode in storage if needed.")
+    ui.textColored("Combo not available — edit racingLineMode in storage if needed.", rgbm(0.65, 0.65, 0.7, 1))
   end
 
   local style = tostring(cfg.lineStyle or "tilt")
@@ -161,15 +162,15 @@ function M.draw(vm)
   end
 
   ui.separator()
-  ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Focus practice (#44)")
+  ui.textColored("Focus practice (#44)", rgbm(0.78, 0.8, 0.88, 1))
   local stf = vm.focusPracticeUi
   if stf and type(stf) == "table" then
     local cur = stf.focusPracticeActive == true
     if type(ui.checkbox) == "function" then
       pcall(function()
-        local nv = ui.checkbox("Enable focus practice (this session)", cur)
-        if type(nv) == "boolean" then
-          stf.focusPracticeActive = nv
+        -- CSP ui.checkbox returns true on click (changed), not the new value
+        if ui.checkbox("Enable focus practice (this session)", cur) then
+          stf.focusPracticeActive = not cur
         end
       end)
     else
@@ -179,12 +180,12 @@ function M.draw(vm)
   end
 
   ui.separator()
-  ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Diagnostics")
+  ui.textColored("Diagnostics", rgbm(0.78, 0.8, 0.88, 1))
   checkbox(cfg, "enableRenderDiagnostics", "Render diagnostics ([DIAG] UI + 3D probes)", "strictTrue")
   checkbox(cfg, "enableDraw3DDiagnostics", "Verbose Draw3D logging (~2s interval)", "strictTrue")
 
   ui.separator()
-  ui.textColored(rgbm(0.78, 0.8, 0.88, 1), "Telemetry & stats")
+  ui.textColored("Telemetry & stats", rgbm(0.78, 0.8, 0.88, 1))
   if vm.stats and type(vm.stats) == "table" then
     drawStats(vm.stats)
   end
