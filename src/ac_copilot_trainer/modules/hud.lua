@@ -115,7 +115,7 @@ local function drawActiveSuggestion(vm)
 
   -- Fade target: 1 when hint active, 0 when not
   fadeTarget = hasHint and 1 or 0
-  local dt = ui.deltaTime() or 0.016
+  local dt = (type(ui.deltaTime) == "function" and ui.deltaTime()) or 0.016
   if fadeAlpha < fadeTarget then
     fadeAlpha = math.min(fadeAlpha + FADE_SPEED * dt, fadeTarget)
   elseif fadeAlpha > fadeTarget then
@@ -247,6 +247,49 @@ function M.draw(vm)
     formatLapMs(vm.bestLapMs),
     formatLapMs(vm.lastLapMs)
   ))
+
+  -- Sector message (transient)
+  if vm.sectorMessage and vm.sectorMessage ~= "" then
+    ui.separator()
+    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Sector")
+    ui.textWrapped(vm.sectorMessage)
+  end
+
+  -- Coast warning
+  if vm.coastWarn then
+    ui.separator()
+    ui.textColored(rgbm(0.95, 0.75, 0.2, 1), "Coasting â roll to throttle")
+  end
+
+  -- Post-lap lines (legacy summary, kept for fallback)
+  if vm.postLapLines and #vm.postLapLines > 0 then
+    ui.separator()
+    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Post-lap")
+    for i = 1, #vm.postLapLines do
+      ui.text(vm.postLapLines[i])
+    end
+  end
+
+  -- Setup change message
+  if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then
+    ui.separator()
+    ui.textColored(rgbm(0.95, 0.75, 0.35, 1), vm.setupChangeMsg)
+  end
+
+  -- Auto-setup line
+  if vm.autoSetupLine and vm.autoSetupLine ~= "" then
+    if not vm.setupChangeMsg or vm.setupChangeMsg == "" then
+      ui.separator()
+    end
+    ui.textColored(rgbm(0.85, 0.82, 0.7, 1), "Setup")
+    ui.textWrapped(vm.autoSetupLine)
+  end
+
+  -- Tire lockup flash
+  if vm.tireLockupFlash then
+    ui.separator()
+    ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
+  end
 
   -- Post-lap debrief (sidecar paragraph from Ollama/rules debrief)
   if vm.debriefText and vm.debriefText ~= "" then
