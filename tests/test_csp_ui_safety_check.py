@@ -20,7 +20,7 @@ def _load_module() -> ModuleType:
     return mod
 
 
-def test_regex_catches_known_violation_patterns():
+def test_regex_catches_known_violation_patterns() -> None:
     """The COLOR_FIRST_PATTERN regex must match every known reversed pattern."""
     mod = _load_module()
     pattern = mod.COLOR_FIRST_PATTERN
@@ -41,7 +41,7 @@ def test_regex_catches_known_violation_patterns():
         assert pattern.search(line), f"regex MISSED: {line}"
 
 
-def test_regex_does_not_match_correct_patterns():
+def test_regex_does_not_match_correct_patterns() -> None:
     """Correct text-first calls should NOT match the violation pattern."""
     mod = _load_module()
     pattern = mod.COLOR_FIRST_PATTERN
@@ -60,7 +60,7 @@ def test_regex_does_not_match_correct_patterns():
         assert not pattern.search(line), f"regex falsely matched: {line}"
 
 
-def test_strip_lua_comment_removes_inline_comment():
+def test_strip_lua_comment_removes_inline_comment() -> None:
     mod = _load_module()
     assert (
         mod.strip_lua_comment('ui.textColored("x", col) -- this is a comment')
@@ -68,7 +68,7 @@ def test_strip_lua_comment_removes_inline_comment():
     )
 
 
-def test_strip_lua_comment_preserves_strings_with_dashes():
+def test_strip_lua_comment_preserves_strings_with_dashes() -> None:
     mod = _load_module()
     # Em dash inside a string should not be treated as a comment
     line = 'ui.textColored("Coasting -- roll to throttle", col)'
@@ -77,10 +77,11 @@ def test_strip_lua_comment_preserves_strings_with_dashes():
     assert "roll to throttle" in stripped
 
 
-def test_actual_repo_has_zero_violations():
+def test_actual_repo_has_zero_violations() -> None:
     """Smoke: running the checker on the repo finds 0 violations."""
     mod = _load_module()
     files = sorted(mod.LUA_DIR.rglob("*.lua"))
+    assert files, f"No Lua files found under {mod.LUA_DIR}"
     total = 0
     for f in files:
         for _ in mod.scan_file(f):
