@@ -10,15 +10,13 @@ relates_to:
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Issue #66 (P0 hotfix):** CSP textColored signature reversal + checkbox semantics + double-encoded em dash. Phase 5 was non-functional in-game until this fix.
+**Repo:** ac-copilot-trainer. **Branch:** `main` (`a1b2126`). Working tree clean, all feature branches deleted locally and on origin.
 
-**Branch:** `fix/issue-66-phase5-runtime-failures`. **PR #67** open.
+**Status:** Issue #57 (Phase 5 HUD redesign, Parts A-E) and Issue #66 (P0 CSP runtime hotfix) both **CLOSED and merged**. 195 tests pass. CI fully green (build, ruff, csp-api, csp-ui-safety, Sourcery, CodeRabbit, Cursor Bugbot).
 
-**What this PR fixes:**
-- All 66 `ui.textColored` calls reversed to text-first per CSP API
-- `ui.checkbox` semantics fixed (returns CHANGED, not new value)
-- Double-encoded UTF-8 em dash bytes corrected
-- New `scripts/check_csp_ui_safety.py` static lint
-- New `tests/test_lua_runtime_smoke.py` (11 lupa-based runtime tests)
+**Next:** Awaiting user direction. Candidates:
 
-**Issue #57 (Phase 5):** All 5 Parts merged but had this critical runtime bug. PR #67 will restore actual functionality.
+- **In-game verification** of PR #67 hotfix - confirm Settings window renders readable labels (not raw rgb text), main HUD shows telemetry + active suggestion, checkboxes toggle correctly, em dash renders properly.
+- **Part D tuning** across multiple cars/tracks (thresholds +5 / +4 / +6 / +/-0.15).
+- **Part D Nordschleife** O(1) bucket-lookup performance verification (170+ segments).
+- **Next epic** - Phase 6 (scope TBD) or Phase 4 (#19, deferred).
