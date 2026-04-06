@@ -20,7 +20,7 @@ relates_to:
 
 ## What was delivered this session
 
-- **PR #63 (Part D) review resolution:** 8 rounds of bot review fixes across 45 inline comments from 5 bots (Sourcery, Codex, Copilot, Gemini, CodeRabbit, Cursor BugBot). Key fixes: circular spline distance, O(1) binary search for approach detection, proper exit window, dedup hint preservation, precomputed brake→corner label map, shared coaching threshold constants. All checks green including Cursor BugBot pass.
+- **PR #63 (Part D) review resolution:** 8 rounds of bot review fixes across 45 inline comments from 6 bots (Sourcery, Codex, Copilot, Gemini, CodeRabbit, Cursor BugBot). Key fixes: circular spline distance, O(1) binary search for approach detection, proper exit window, dedup hint preservation, precomputed brake→corner label map, shared coaching threshold constants. All checks green including Cursor BugBot pass.
 - **PR #64 (Part E) opened:** Rewrote `hud.lua` (WINDOW_0) from debug dump to polished active suggestion panel. Dark semi-transparent rounded panel with accent cyan title, kind-colored hint text, smooth fade transitions (fadeAlpha/FADE_SPEED), hidden on straights, focus practice integration, named font roles. 6 new tests (PE-01 through PE-06). 178 total tests pass.
 
 ## What remains

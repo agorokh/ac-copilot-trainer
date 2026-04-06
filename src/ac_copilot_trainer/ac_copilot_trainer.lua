@@ -583,6 +583,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   state.realtimeActiveHint = nil
+  hud.reset()
   resetDeltaSmoother()
 end
 
@@ -600,6 +601,7 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
+  hud.reset()
   realtimeCoaching.reset()
   tel = newTelemetry()
   brakes = newBrakes()

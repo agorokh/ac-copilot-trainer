@@ -27,6 +27,7 @@ local fadeAlpha = 0
 local fadeTarget = 0
 local FADE_SPEED = 4.0  -- alpha units per second
 local lastHintText = nil
+local lastHintKind = nil
 
 --- Map hint kind to accent color.
 ---@param kind string|nil
@@ -121,13 +122,15 @@ local function drawActiveSuggestion(vm)
     fadeAlpha = math.max(fadeAlpha - FADE_SPEED * dt, fadeTarget)
   end
 
-  -- Track hint text for smooth transitions
+  -- Track hint text and kind for smooth transitions
   if hasHint then
     lastHintText = hint.text
+    lastHintKind = hint.kind
   end
 
   if fadeAlpha < 0.01 then
     lastHintText = nil
+    lastHintKind = nil
     return
   end
 
@@ -169,7 +172,7 @@ local function drawActiveSuggestion(vm)
   if lastHintText then
     ui.setCursor(vec2(PANEL_PAD_X, y))
     local hintK = fontMod.pushNamed("labels", 16)
-    local hintColor = hasHint and colorForKind(hint.kind) or COLOR_LABEL
+    local hintColor = colorForKind(lastHintKind)
     ui.textColored(rgbm(hintColor.r, hintColor.g, hintColor.b, textAlpha), lastHintText)
     fontMod.pop(hintK)
     y = y + 24
@@ -182,6 +185,17 @@ local function drawActiveSuggestion(vm)
     ui.textColored(rgbm(COLOR_BRAND.r, COLOR_BRAND.g, COLOR_BRAND.b, textAlpha), "Focus: " .. vm.focusPracticeLabel)
     fontMod.pop(brandK)
   end
+
+  -- Advance cursor past panel so subsequent widgets render below
+  ui.setCursor(vec2(0, curY + panelH))
+end
+
+--- Reset fade state (call on session/track exit).
+function M.reset()
+  fadeAlpha = 0
+  fadeTarget = 0
+  lastHintText = nil
+  lastHintKind = nil
 end
 
 --- Main draw entry point for WINDOW_0.
