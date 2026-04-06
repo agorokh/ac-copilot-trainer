@@ -168,9 +168,9 @@ function M.draw(vm)
     local cur = stf.focusPracticeActive == true
     if type(ui.checkbox) == "function" then
       pcall(function()
-        local nv = ui.checkbox("Enable focus practice (this session)", cur)
-        if type(nv) == "boolean" then
-          stf.focusPracticeActive = nv
+        -- CSP ui.checkbox returns true on click (changed), not the new value
+        if ui.checkbox("Enable focus practice (this session)", cur) then
+          stf.focusPracticeActive = not cur
         end
       end)
     else

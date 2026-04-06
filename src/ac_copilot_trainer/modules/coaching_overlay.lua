@@ -527,7 +527,7 @@ function M.drawMainWindowStrip(vm)
     ui.textWrapped(body)
     ui.popStyleColor()
   else
-    ui.textColored(colBody, body)
+    ui.textColored(body, colBody)
   end
   if detail ~= "" then
     if ui.spacing then
@@ -539,7 +539,7 @@ function M.drawMainWindowStrip(vm)
       ui.textWrapped(detail)
       ui.popStyleColor()
     else
-      ui.textColored(colDet, detail)
+      ui.textColored(detail, colDet)
     end
   end
   fontMod.pop(fk)

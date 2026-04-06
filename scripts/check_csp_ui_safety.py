@@ -16,25 +16,66 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LUA_DIR = REPO_ROOT / "src" / "ac_copilot_trainer"
 
-COLOR_FIRST_PATTERN = re.compile(
-    r"ui\.textColored\(\s*("
-    r"rgbm\b"
-    r"|COLOR_[A-Z_]+"
-    r"|[a-z][a-zA-Z]*[Cc]ol\b"
-    r"|[a-z][a-zA-Z]*[Cc]olor\b"
+# Match identifiers that look like a color (rgbm() literal, COLOR_*, names
+# starting/ending with col/color, hintCol, brandK, etc).
+COLOR_IDENT = (
+    r"("
+    r"rgbm\("  # inline rgbm() literal
+    r"|COLOR_[A-Z_]+"  # COLOR_TITLE etc
+    r"|[Cc]ol[A-Z]\w*"  # colBody, colDet, ColX
+    r"|[Cc]olor[A-Z]?\w*"  # color, colorX, ColorBody
+    r"|\w+[Cc]ol\b"  # spdCol, hintCol
+    r"|\w+[Cc]olor\b"  # hintColor, titleColor
     r")"
 )
+COLOR_FIRST_PATTERN = re.compile(r"ui\.textColored\(\s*" + COLOR_IDENT)
+
+
+def strip_lua_comment(line: str) -> str:
+    """Strip everything after `--` outside of string literals."""
+    out = []
+    i = 0
+    in_str = False
+    str_char = None
+    while i < len(line):
+        ch = line[i]
+        if in_str:
+            if ch == "\\" and i + 1 < len(line):
+                out.append(ch)
+                out.append(line[i + 1])
+                i += 2
+                continue
+            out.append(ch)
+            if ch == str_char:
+                in_str = False
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_str = True
+            str_char = ch
+            out.append(ch)
+            i += 1
+            continue
+        # Single-line comment marker
+        if ch == "-" and i + 1 < len(line) and line[i + 1] == "-":
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def scan_file(path: Path):
     violations = []
     text = path.read_text(encoding="utf-8")
-    for lineno, line in enumerate(text.splitlines(), start=1):
+    # Strip multi-line comments --[[ ... ]]
+    text = re.sub(r"--\[\[.*?\]\]", "", text, flags=re.DOTALL)
+    for lineno, raw_line in enumerate(text.splitlines(), start=1):
+        line = strip_lua_comment(raw_line)
         if "type(ui.textColored)" in line:
             continue
         m = COLOR_FIRST_PATTERN.search(line)
         if m:
-            violations.append((lineno, line.strip()))
+            violations.append((lineno, raw_line.strip()))
     return violations
 
 

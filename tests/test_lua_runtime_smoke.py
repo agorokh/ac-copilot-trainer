@@ -164,7 +164,7 @@ def test_hud_draw_with_realtime_hint(lua):
         }
     """)
     hud["draw"](vm)
-    violations, total = lua.execute("return _get_text_colored_violations()")
+    violations, _total = lua.execute("return _get_text_colored_violations()")
     violation_list = list(violations.values()) if violations else []
     assert not violation_list, f"realtime hint draw made violations: {violation_list}"
 
@@ -187,3 +187,138 @@ def test_realtime_coaching_module_loads(lua):
     rtc = lua.execute('local m = require("realtime_coaching"); return m')
     assert rtc is not None
     assert rtc["tick"] is not None
+
+
+def test_hud_draw_exercises_coaching_strip(lua):
+    """RT-07: hud.draw() with active coaching lines exercises drawMainWindowStrip."""
+    hud = lua.execute('local m = require("hud"); return m')
+    vm = lua.eval("""
+        {
+            recording = true,
+            speed = 80,
+            brake = 0.3,
+            lapCount = 3,
+            bestLapMs = 60000,
+            lastLapMs = 61500,
+            deltaSmoothedSec = 0.05,
+            appVersionUi = "v0.5.0",
+            coachingLines = {
+                { kind = "brake", text = "T5: brake earlier" },
+                { kind = "line", text = "T8: smoother turn-in" },
+            },
+            coachingRemaining = 5.0,
+            coachingHoldSeconds = 30,
+            coachingMaxVisibleHints = 3,
+            coachingShowPrimer = false,
+        }
+    """)
+    hud["draw"](vm)
+    violations, _total = lua.execute("return _get_text_colored_violations()")
+    violation_list = list(violations.values()) if violations else []
+    assert not violation_list, f"coaching strip path made {len(violation_list)} reversed call(s)"
+
+
+def test_coaching_overlay_draw_approach_panel(lua):
+    """RT-08: coaching_overlay.drawApproachPanel() exercises Part C panel."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    approach = lua.eval("""
+        {
+            turnLabel = "T5",
+            targetSpeedKmh = 95,
+            currentSpeedKmh = 110,
+            distanceToBrakeM = 80,
+            status = "approaching",
+            progressPct = 0.6,
+            brakeIndex = 1,
+        }
+    """)
+    overlay["drawApproachPanel"](approach)
+    violations, _total = lua.execute("return _get_text_colored_violations()")
+    violation_list = list(violations.values()) if violations else []
+    assert not violation_list, f"drawApproachPanel made {len(violation_list)} reversed call(s)"
+
+
+def test_coaching_overlay_main_window_strip(lua):
+    """RT-09: coaching_overlay.drawMainWindowStrip() exercises strip rendering."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    vm = lua.eval("""
+        {
+            coachingLines = {
+                { kind = "brake", text = "T5: brake earlier" },
+                { kind = "line", text = "T8: smoother turn-in" },
+                { kind = "positive", text = "T9: matched reference" },
+            },
+            coachingRemaining = 10.0,
+            coachingHoldSeconds = 30,
+            coachingMaxVisibleHints = 3,
+            coachingShowPrimer = false,
+        }
+    """)
+    overlay["drawMainWindowStrip"](vm)
+    violations, _total = lua.execute("return _get_text_colored_violations()")
+    violation_list = list(violations.values()) if violations else []
+    assert not violation_list, f"drawMainWindowStrip made {len(violation_list)} reversed call(s)"
+
+
+def test_hud_settings_draw_full_path(lua):
+    """RT-10: hud_settings.draw() with full viewmodel exercises all settings paths."""
+    settings = lua.execute('local m = require("hud_settings"); return m')
+    if settings["draw"] is None:
+        pytest.skip("hud_settings.draw not exported")
+    vm = lua.eval("""
+        {
+            config = {
+                hudEnabled = true,
+                approachMeters = 200,
+                coachingHoldSeconds = 30,
+                racingLineMode = "best",
+                lineStyle = "tilt",
+                racingLineEnabled = true,
+                brakeMarkersEnabled = true,
+                enableRenderDiagnostics = false,
+                enableDraw3DDiagnostics = false,
+            },
+            stats = {
+                telemetrySamples = 1234,
+                brakeBest = 5,
+                brakeLast = 4,
+                brakeSession = 12,
+                segmentCount = 17,
+            },
+            focusPracticeUi = {
+                focusPracticeActive = false,
+                focusPracticeHudSummary = "",
+            },
+        }
+    """)
+    settings["draw"](vm)
+    violations, _total = lua.execute("return _get_text_colored_violations()")
+    violation_list = list(violations.values()) if violations else []
+    assert not violation_list, f"hud_settings.draw made {len(violation_list)} reversed call(s)"
+
+
+def test_realtime_coaching_tick(lua):
+    """RT-11: realtime_coaching.tick() executes without errors."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    segments = lua.eval("""
+        {
+            { kind = "straight", s0 = 0.0, s1 = 0.3, label = "S1" },
+            { kind = "brake", s0 = 0.3, s1 = 0.35, label = "B1" },
+            { kind = "corner", s0 = 0.35, s1 = 0.45, label = "T5", brakeSpline = 0.3 },
+            { kind = "straight", s0 = 0.45, s1 = 1.0, label = "S2" },
+        }
+    """)
+    rtc["rebuildSegmentIndex"](segments)
+    opts = lua.eval("""
+        {
+            splinePos = 0.25,
+            lapCount = 1,
+            segments = nil,
+            bestCornerFeatures = {},
+            lastLapCornerFeats = {},
+            trackLengthM = 5000,
+            approachMeters = 200,
+        }
+    """)
+    rtc["tick"](opts)
+    rtc["reset"]()
