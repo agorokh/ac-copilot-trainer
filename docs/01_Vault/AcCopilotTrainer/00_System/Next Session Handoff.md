@@ -15,23 +15,24 @@ relates_to:
 
 ## Resume here
 
-- **Issue #57 CLOSED.** All 5 Parts (A–E) delivered and merged. Phase 5 HUD architecture redesign complete.
-- **Local + remote synced** to `main` (097f595). All `feat/issue-57-*` branches deleted locally and on origin.
-- **Next priorities:** in-game tuning of Part D thresholds, then pick the next epic from the backlog (Phase 6 or Phase 4 depending on user direction).
+- **On `main` (`a1b2126`), working tree clean.** Both Issue #57 (Phase 5) and Issue #66 (P0 CSP hotfix) closed and merged. All stale branches deleted locally and on origin.
+- **Top priority next session:** in-game verification of PR #67 hotfix. The user has not yet confirmed the runtime bug fixes actually render correctly in AC. Screenshots or a clean Settings/main-HUD window would close the loop on #66.
+- **Second priority:** pick the next epic (Phase 6 TBD or Phase 4 #19) after in-game confirmation.
 
 ## What was delivered this session
 
-- **PR #64 (Part E) merged:** Rewrote `hud.lua` as polished active suggestion panel with dark semi-transparent background, 100% opaque text, smooth fade transitions (fadeAlpha/FADE_SPEED), corner-label persistence through fade, focus practice integration, debriefText restoration. 6 rounds of bot review fixes resolving 38 inline comments. PE-01..PE-07 tests added (179 tests total).
-- **Issue #57 closed** with completion summary covering all 5 Parts.
+- **PR #67 merged (Issue #66 P0 hotfix):** CSP `ui.textColored(text, color)` signature fix across all 66 call sites (coaching_overlay, hud, hud_settings, render_diag). `ui.checkbox` semantics corrected (treat return as click/changed, not new value). Double-encoded UTF-8 em dash bytes fixed. New `scripts/check_csp_ui_safety.py` static lint (wired into `make ci-fast` as `ci-csp-ui-safety`). New `tests/test_lua_runtime_smoke.py` with 11 lupa-based runtime smoke tests that actually load and exercise `hud.draw`, `coaching_overlay.drawApproachPanel`/`drawMainWindowStrip`, `hud_settings.draw`, and `realtime_coaching.tick`. New `tests/test_csp_ui_safety_check.py` pinning regex patterns. Five review rounds addressed 38 bot comments across Sourcery, Copilot, CodeRabbit, Cursor Bugbot, Gemini.
+- **Sync + cleanup.** Pulled main, deleted stale `fix/issue-66-phase5-runtime-failures` and `docs/issue-57-closure-vault-save` branches on both local and origin.
 
 ## What remains
 
-- **In-game testing & tuning** (out of CI scope):
-  - Part D hint thresholds (entry speed +5, min speed +4/+6, trail brake ±0.15) need driving verification across multiple cars/tracks.
-  - Part D Nordschleife performance verification (170+ segments, O(1) bucket lookup should hold).
-  - Part E visual verification (panel layout, fade timing, focus indicator legibility).
-- **Next epic selection:** Awaiting user direction on Phase 6 vs Phase 4 (#19) vs other backlog work.
+- **In-game testing (out of CI scope):**
+  - PR #67 hotfix verification - actual visible rendering of Settings + main HUD.
+  - Part D hint thresholds need driving verification across multiple cars/tracks.
+  - Part D Nordschleife O(1) bucket perf verification (170+ segments).
+  - Part E visual verification (panel layout, fade timing, focus indicator).
+- **Next epic selection** - Phase 6 vs Phase 4 (#19) vs other backlog.
 
 ## Blockers / dependencies
 
-- None. All code blockers resolved. CI fully green.
+- None. CI fully green (build, ruff, csp-api, csp-ui-safety, Sourcery, CodeRabbit, Cursor Bugbot all pass). 195 tests.
