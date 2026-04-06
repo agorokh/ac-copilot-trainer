@@ -11,19 +11,37 @@ local M = {}
 
 local COLOR_BG           = rgbm(0.067, 0.067, 0.067, 0.60)   -- rgba(17,17,17,0.6)
 local COLOR_BG_BORDER    = rgbm(0.30, 0.32, 0.38, 0.40)
-local COLOR_LABEL        = rgbm(0.55, 0.58, 0.65, 1.0)       -- muted labels
-local COLOR_TITLE        = rgbm(0.35, 0.82, 0.95, 1.0)       -- accent cyan
-local COLOR_WHITE        = rgbm(0.95, 0.95, 0.97, 1.0)       -- primary text
+local COLOR_LABEL        = rgbm(0.55, 0.58, 0.65, 1.0)       -- muted labels (legacy)
+local COLOR_LABEL_GREY   = rgbm(0.549, 0.565, 0.612, 1.0)    -- #8C909C small caps labels
+local COLOR_BRAND_GREY   = rgbm(0.435, 0.459, 0.522, 1.0)    -- #6F7585 footer branding
+local COLOR_TITLE        = rgbm(0.35, 0.82, 0.95, 1.0)       -- accent cyan (legacy)
+local COLOR_WHITE        = rgbm(0.949, 0.949, 0.960, 1.0)    -- #F2F2F5 primary text
 local COLOR_GREEN        = rgbm(0.20, 0.85, 0.35, 1.0)       -- speed OK
-local COLOR_RED          = rgbm(0.94, 0.27, 0.27, 1.0)       -- #EF4444 warning
-local COLOR_BAR_BG       = rgbm(0.15, 0.15, 0.18, 0.80)      -- progress bar background
-local COLOR_BAR_FILL     = rgbm(0.35, 0.82, 0.95, 0.90)      -- progress bar fill
-local COLOR_BAR_GLOW     = rgbm(0.35, 0.82, 0.95, 0.35)      -- progress bar glow
-local COLOR_BRAND        = rgbm(0.45, 0.48, 0.52, 1.0)       -- footer branding (text opaque per brief)
+local COLOR_RED          = rgbm(0.937, 0.267, 0.267, 1.0)    -- #EF4444 warning
+local COLOR_AMBER        = rgbm(1.000, 0.769, 0.239, 1.0)    -- #FFC43D secondary hint
+local COLOR_BAR_BG       = rgbm(0.15, 0.15, 0.18, 0.85)      -- progress bar background
+local COLOR_BAR_FILL     = rgbm(0.937, 0.267, 0.267, 0.95)   -- #EF4444 red progress fill
+local COLOR_BAR_GLOW     = rgbm(0.937, 0.267, 0.267, 0.35)   -- red glow
+local COLOR_BRAND        = rgbm(0.45, 0.48, 0.52, 1.0)       -- legacy branding
 
 local PANEL_ROUNDING = 12
-local PANEL_PAD_X    = 20
-local PANEL_PAD_Y    = 16
+local PANEL_PAD_X    = 24
+local PANEL_PAD_Y    = 20
+
+-- Shared token table consumed by hud.lua (single source of truth)
+M.tokens = {
+  COLOR_BG         = COLOR_BG,
+  COLOR_BG_BORDER  = COLOR_BG_BORDER,
+  COLOR_LABEL_GREY = COLOR_LABEL_GREY,
+  COLOR_BRAND_GREY = COLOR_BRAND_GREY,
+  COLOR_WHITE      = COLOR_WHITE,
+  COLOR_RED        = COLOR_RED,
+  COLOR_AMBER      = COLOR_AMBER,
+  COLOR_GREEN      = COLOR_GREEN,
+  PANEL_ROUNDING   = PANEL_ROUNDING,
+  PANEL_PAD_X      = PANEL_PAD_X,
+  PANEL_PAD_Y      = PANEL_PAD_Y,
+}
 
 -- ---------------------------------------------------------------------------
 -- Speed color logic: green <= target, red > target+8, white in between
@@ -82,6 +100,10 @@ function M.drawApproachPanel(approachData)
   if not approachData or type(approachData) ~= "table" then
     return false
   end
+  -- Gate: only render when actively approaching a corner
+  if tostring(approachData.status or "") ~= "approaching" then
+    return false
+  end
   if not ui or type(ui.textColored) ~= "function" or not vec2 then
     return false
   end
@@ -92,9 +114,8 @@ function M.drawApproachPanel(approachData)
   local distanceM     = tonumber(approachData.distanceToBrakeM) or 0
   local progressPct   = tonumber(approachData.progressPct) or 0
 
-  -- Panel dimensions — use actual window size so nothing draws outside clip region.
-  -- Defaults (420x220) only used when ui.windowSize is unavailable.
-  local w, h = 420, 220
+  -- Panel dimensions from actual window (manifest: 520x280, NO_BACKGROUND)
+  local w, h = 520, 280
   if ui.windowSize then
     local sz = ui.windowSize()
     if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
@@ -103,7 +124,7 @@ function M.drawApproachPanel(approachData)
     end
   end
 
-  -- Dark semi-transparent background with rounded corners
+  -- Panel chrome: dark bg + subtle border
   if ui.drawRectFilled then
     ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG, PANEL_ROUNDING)
   end
@@ -111,109 +132,156 @@ function M.drawApproachPanel(approachData)
     ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
   end
 
-  -- Row 1: "APPROACHING" label + corner name
-  local row1Y = PANEL_PAD_Y
-  if ui.setCursor then
-    ui.setCursor(vec2(PANEL_PAD_X, row1Y))
-  end
-  local fkLabel = fontMod.pushNamed("labels", 12)
-  ui.textColored("APPROACHING", COLOR_TITLE)
-  fontMod.pop(fkLabel)
+  local padX = PANEL_PAD_X
+  local padY = PANEL_PAD_Y
 
-  local row1bY = row1Y + 18
-  if ui.setCursor then
-    ui.setCursor(vec2(PANEL_PAD_X, row1bY))
+  ------------------------------------------------------------------
+  -- ROW 1: two columns
+  --   LEFT  : APPROACHING / TURN 4 LEFT (Michroma)
+  --   RIGHT : shared box with TARGET ENTRY + CURRENT side-by-side
+  ------------------------------------------------------------------
+  local row1Y      = padY
+  local leftX      = padX
+  local rightBoxX  = math.floor(w * 0.48)
+  local rightBoxW  = w - rightBoxX - padX
+  local rightBoxH  = 78
+  local rightBoxY  = row1Y - 4
+
+  -- Shared right-side box frame (TARGET and CURRENT share one box per user feedback)
+  if ui.drawRectFilled then
+    ui.drawRectFilled(
+      vec2(rightBoxX, rightBoxY),
+      vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
+      rgbm(0.04, 0.04, 0.05, 0.55),
+      8
+    )
+    ui.drawRect(
+      vec2(rightBoxX, rightBoxY),
+      vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
+      COLOR_BG_BORDER, 8, nil, 1
+    )
   end
-  local fkCorner = fontMod.pushNamed("numbers", 26)
+
+  -- LEFT column: "APPROACHING" small caps + large corner label
+  if ui.setCursor then ui.setCursor(vec2(leftX, row1Y)) end
+  local k1 = fontMod.pushNamed("labels", 12)
+  ui.textColored("APPROACHING", COLOR_LABEL_GREY)
+  fontMod.pop(k1)
+
+  if ui.setCursor then ui.setCursor(vec2(leftX, row1Y + 20)) end
+  local k2 = fontMod.pushNamed("numbers", 28)
   ui.textColored(turnLabel, COLOR_WHITE)
-  fontMod.pop(fkCorner)
+  fontMod.pop(k2)
 
-  -- Row 2: Speed comparison — left: TARGET, right: CURRENT
-  local row2Y = row1bY + 40
-  local colLeftX = PANEL_PAD_X
-  local colRightX = w / 2 + 10
+  -- RIGHT column: shared box with vertical split into TARGET ENTRY | CURRENT
+  local subColW = math.floor(rightBoxW / 2)
+  local subPad  = 14
+  local tgtX    = rightBoxX + subPad
+  local curX    = rightBoxX + subColW + subPad
 
-  -- Target speed
-  if ui.setCursor then
-    ui.setCursor(vec2(colLeftX, row2Y))
+  -- Vertical divider between the two sub-columns
+  if ui.drawRectFilled then
+    ui.drawRectFilled(
+      vec2(rightBoxX + subColW, rightBoxY + 10),
+      vec2(rightBoxX + subColW + 1, rightBoxY + rightBoxH - 10),
+      COLOR_BG_BORDER, 0
+    )
   end
-  local fkL2 = fontMod.pushNamed("labels", 10)
-  ui.textColored("TARGET ENTRY", COLOR_LABEL)
-  fontMod.pop(fkL2)
+
+  -- TARGET ENTRY label + number + unit
+  if ui.setCursor then ui.setCursor(vec2(tgtX, rightBoxY + 10)) end
+  local k3 = fontMod.pushNamed("labels", 10)
+  ui.textColored("TARGET ENTRY", COLOR_LABEL_GREY)
+  fontMod.pop(k3)
 
   local tgtStr = string.format("%.0f", targetSpd)
-  if ui.setCursor then
-    ui.setCursor(vec2(colLeftX, row2Y + 16))
-  end
-  local fkTgt = fontMod.pushNamed("numbers", 32)
+  if ui.setCursor then ui.setCursor(vec2(tgtX, rightBoxY + 26)) end
+  local k4 = fontMod.pushNamed("numbers", 26)
   ui.textColored(tgtStr, COLOR_WHITE)
-  fontMod.pop(fkTgt)
+  fontMod.pop(k4)
 
-  -- Dynamic unit offset: ~20px per digit at 32pt to avoid overlap on 3-digit speeds
-  local tgtUnitX = colLeftX + #tgtStr * 20 + 6
-  if ui.setCursor then
-    ui.setCursor(vec2(tgtUnitX, row2Y + 28))
-  end
-  local fkUnit1 = fontMod.pushNamed("labels", 11)
-  ui.textColored("km/h", COLOR_LABEL)
-  fontMod.pop(fkUnit1)
+  if ui.setCursor then ui.setCursor(vec2(tgtX + #tgtStr * 16 + 4, rightBoxY + 42)) end
+  local k5 = fontMod.pushNamed("labels", 10)
+  ui.textColored("KM/H", COLOR_LABEL_GREY)
+  fontMod.pop(k5)
 
-  -- Current speed
-  if ui.setCursor then
-    ui.setCursor(vec2(colRightX, row2Y))
-  end
-  local fkL3 = fontMod.pushNamed("labels", 10)
-  ui.textColored("CURRENT", COLOR_LABEL)
-  fontMod.pop(fkL3)
+  -- CURRENT label + number + unit (red when > target+8, green <= target)
+  if ui.setCursor then ui.setCursor(vec2(curX, rightBoxY + 10)) end
+  local k6 = fontMod.pushNamed("labels", 10)
+  ui.textColored("CURRENT", COLOR_LABEL_GREY)
+  fontMod.pop(k6)
 
   local curStr = string.format("%.0f", currentSpd)
   local spdCol = speedColor(currentSpd, targetSpd)
-  if ui.setCursor then
-    ui.setCursor(vec2(colRightX, row2Y + 16))
-  end
-  local fkCur = fontMod.pushNamed("numbers", 32)
+  if ui.setCursor then ui.setCursor(vec2(curX, rightBoxY + 26)) end
+  local k7 = fontMod.pushNamed("numbers", 26)
   ui.textColored(curStr, spdCol)
-  fontMod.pop(fkCur)
+  fontMod.pop(k7)
 
-  local curUnitX = colRightX + #curStr * 20 + 6
-  if ui.setCursor then
-    ui.setCursor(vec2(curUnitX, row2Y + 28))
+  if ui.setCursor then ui.setCursor(vec2(curX + #curStr * 16 + 4, rightBoxY + 42)) end
+  local k8 = fontMod.pushNamed("labels", 10)
+  ui.textColored("KM/H", COLOR_LABEL_GREY)
+  fontMod.pop(k8)
+
+  ------------------------------------------------------------------
+  -- Horizontal divider
+  ------------------------------------------------------------------
+  local div1Y = rightBoxY + rightBoxH + 16
+  if ui.drawRectFilled then
+    ui.drawRectFilled(
+      vec2(padX, div1Y),
+      vec2(w - padX, div1Y + 1),
+      COLOR_BG_BORDER, 0
+    )
   end
-  local fkUnit2 = fontMod.pushNamed("labels", 11)
-  ui.textColored("km/h", COLOR_LABEL)
-  fontMod.pop(fkUnit2)
 
-  -- Row 3: Distance to braking point + progress bar
-  local row3Y = row2Y + 60
-  if ui.setCursor then
-    ui.setCursor(vec2(PANEL_PAD_X, row3Y))
+  ------------------------------------------------------------------
+  -- ROW 2: DISTANCE TO BRAKING POINT label + big number + progress bar
+  ------------------------------------------------------------------
+  local row2Y = div1Y + 14
+  if ui.setCursor then ui.setCursor(vec2(padX, row2Y)) end
+  local k9 = fontMod.pushNamed("labels", 11)
+  ui.textColored("DISTANCE TO BRAKING POINT", COLOR_LABEL_GREY)
+  fontMod.pop(k9)
+
+  -- Big distance number, right-aligned
+  local distStr = string.format("%d M", math.floor(distanceM + 0.5))
+  local distApproxW = #distStr * 14
+  if ui.setCursor then ui.setCursor(vec2(w - padX - distApproxW, row2Y - 2)) end
+  local k10 = fontMod.pushNamed("numbers", 22)
+  ui.textColored(distStr, COLOR_WHITE)
+  fontMod.pop(k10)
+
+  -- Progress bar: taller (14px) and red fill per Figma
+  local barY = row2Y + 28
+  local barW = w - padX * 2
+  local barH = 14
+  drawProgressBar(padX, barY, barW, barH, progressPct)
+
+  ------------------------------------------------------------------
+  -- Horizontal divider
+  ------------------------------------------------------------------
+  local div2Y = barY + barH + 14
+  if ui.drawRectFilled then
+    ui.drawRectFilled(
+      vec2(padX, div2Y),
+      vec2(w - padX, div2Y + 1),
+      COLOR_BG_BORDER, 0
+    )
   end
-  local fkL4 = fontMod.pushNamed("labels", 10)
-  ui.textColored("DISTANCE TO BRAKING POINT", COLOR_LABEL)
-  fontMod.pop(fkL4)
 
-  -- Distance value
+  ------------------------------------------------------------------
+  -- Footer: AG PORSCHE ACADEMY (Syncopate, centered)
+  ------------------------------------------------------------------
+  local footerStr = "AG PORSCHE ACADEMY"
+  local footerApproxW = #footerStr * 8
+  local footerY = div2Y + 10
   if ui.setCursor then
-    ui.setCursor(vec2(w - PANEL_PAD_X - 80, row3Y))
+    ui.setCursor(vec2(math.floor(w / 2 - footerApproxW / 2), footerY))
   end
-  local fkDist = fontMod.pushNamed("numbers", 14)
-  ui.textColored(string.format("%.0f m", distanceM), COLOR_WHITE)
-  fontMod.pop(fkDist)
-
-  -- Progress bar
-  local barY = row3Y + 18
-  local barW = w - PANEL_PAD_X * 2
-  local barH = 8
-  drawProgressBar(PANEL_PAD_X, barY, barW, barH, progressPct)
-
-  -- Footer: branding
-  local footerY = h - PANEL_PAD_Y - 12
-  if ui.setCursor then
-    ui.setCursor(vec2(PANEL_PAD_X, footerY))
-  end
-  local fkBrand = fontMod.pushNamed("brand", 9)
-  ui.textColored("AC COPILOT TRAINER", COLOR_BRAND)
-  fontMod.pop(fkBrand)
+  local k11 = fontMod.pushNamed("brand", 11)
+  ui.textColored(footerStr, COLOR_BRAND_GREY)
+  fontMod.pop(k11)
 
   return true
 end
