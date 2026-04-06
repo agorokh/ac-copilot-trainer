@@ -1,0 +1,45 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 58655b13c8d05f7f
+mined_from: 12 review comments across 11 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: bug
+preventability: guideline
+---
+
+# Code Summary Details (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- `setBlendMode`/`setDepthMode` are set but never restored. Render state may persist across frames, so this can inadvertently affect `trackMarkers.draw` in the next frame (markers are drawn before the l...
+- <!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- This is an auto-generated comment: review paused by coderabbit.ai -->
+
+> [!NOTE]
+> ## Reviews paused
+> 
+> It looks like this...
+- <!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- This is an auto-generated comment: review paused by coderabbit.ai -->
+
+> [!NOTE]
+> ## Reviews paused
+> 
+> It looks like this...
+- <!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- This is an auto-generated comment: review paused by coderabbit.ai -->
+
+> [!NOTE]
+> ## Reviews paused
+> 
+> It looks like this...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

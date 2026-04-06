@@ -1,0 +1,27 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 2ead46f9738cb684
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code Flag Still (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- `script.windowCoaching()` ignores `config.hudEnabled` (unlike `script.windowMain()`), so disabling the HUD will still render the coaching overlay (and its placeholder text). Consider honoring the same...
+- `ui.popStyleColor()` is executed whenever it exists, even if `ui.pushStyleColor()` wasn’t called (missing) or its pcall failed. This can underflow the style stack. Gate the pop on a local `pushed` fla...
+- `--no-reply` help text says “Log lap_complete only; do not send coaching_response”, but the handler still sends `analysis_error` frames on invalid JSON / non-object root even when `--no-reply` is set....
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

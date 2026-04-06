@@ -1,0 +1,30 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 0178d5bf8af09c62
+mined_from: 10 review comments across 7 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: architecture
+---
+
+# Code Summary Details (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- `lockupFlash()` is unlikely to ever return true for a real lockup: in `update()` the moment `slipT` reaches `LOCKUP_HOLD` it is immediately reset to 0 after logging, so the HUD will never see `slipT` ...
+- `math.floor(bestLineN / 2)` can produce index `0` when `bestLineN == 1` (Lua arrays are 1-based), and for odd lengths it doesn’t select the true midpoint (e.g., N=3 gives 1). Use a 1-based midpoint ca...
+- LuaDoc type annotation for `speedColor()` says `---@return table`, but it returns an `rgbm(...)` color object. Updating the return type improves editor/tooling accuracy and matches how the value is us...
+- > Guard telemetry floats against NaN/inf in `_as_float`.
+
+Addressed: `_as_float` returns `None` when `not math.isfinite(f)`; added `test_as_float_rejects_non_finite`. `17b1241`.
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

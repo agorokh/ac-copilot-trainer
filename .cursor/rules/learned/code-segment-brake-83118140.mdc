@@ -1,0 +1,29 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 83118140ac5914ba
+mined_from: 8 review comments across 1 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code Segment Brake (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Refresh hint on corner-to-brake transitions**
+
+In `realtime_coaching.tick`, the brake-phase branch only calls `s...
+- `findNextBrakeOrCorner()` linearly scans all segments every frame while on straights (`for i = 1, #segments do ...`). That makes the “approaching” detection O(n) per tick and undermines the stated O(1...
+- `cornerLabelForBrake()` uses `math.abs(s.brakeSpline - brakeSeg.s0)` to match a brake segment to its corner. This breaks for wrap-around near spline 0/1 (e.g., brakeSpline=0.001, s0=0.989 → abs≈0.988)...
+- `EXIT_WINDOW_SPLINE` is defined but never used, and the “exiting” phase currently lasts at most one tick (corner→straight sets exiting, next straight tick sets straight+clears hint). If exit-phase coa...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

@@ -1,0 +1,50 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: d1b4e45ceaf4b848
+mined_from: 4 review comments across 4 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: security
+preventability: architecture
+---
+
+# Code Details Summary (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- Hey - I've found 1 security issue, and left some high level feedback:
+
+**Security issues**:
+- Insecure WebSocket Detected. WebSocket Secure (wss) should be used for all WebSocket connections. ([link](...
+- Hey - I've found 1 issue, and left some high level feedback:
+
+- `ensureCornerIniLoaded` takes a `sim0` parameter that is never used; consider removing the argument (and corresponding call-site paramet...
+- Hey - I've found 1 issue
+
+<details>
+<summary>Prompt for AI Agents</summary>
+
+~~~markdown
+Please address the comments from this code review:
+
+## Individual Comments
+
+### Comment 1
+<location path="src/a...
+- Hey - I've reviewed your changes and they look great!
+
+***
+
+<details>
+<summary>Sourcery is free for open source - if you like our reviews please consider sharing them ✨</summary>
+
+- [X](https://twitte...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

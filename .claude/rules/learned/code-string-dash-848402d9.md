@@ -1,0 +1,26 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 848402d986921b8c
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: typecheck
+---
+
+# Code String Dash (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- The EmmyLua/LuaLS type annotation syntax here isn’t valid: `---@param role string "numbers"|"labels"|...` will be parsed as a description, not a string-literal union. Use a proper string-literal union...
+- `formatLapMs()` is returning a mojibake string ("â") instead of an actual em dash. This will render incorrectly in-game; use a proper UTF-8 em dash ("—") or construct it via `utf8.char`/byte sequenc...
+- `formatLapMs()` returns a mojibake string ("â") instead of an actual em dash. This will render incorrectly in-game and in screenshots; use a real em dash ("—") or construct it via UTF-8 bytes (e.g.,...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

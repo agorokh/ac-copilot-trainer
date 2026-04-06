@@ -1,0 +1,59 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 95a635ed2e83eeb3
+mined_from: 67 review comments across 30 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: typecheck
+---
+
+# Code Copilot Instructions (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ## Pull request overview
+
+Implements Issue #7 feature set for the AC Copilot Trainer Lua app: full-lap telemetry traces, live delta + sector splits, on-track 3D brake markers, approach HUD, and thrott...
+- ## Pull request overview
+
+Copilot reviewed 10 out of 10 changed files in this pull request and generated 2 comments.
+
+
+
+
+
+---
+
+💡 <a href="/agorokh/ac-copilot-trainer/new/main?filename=.github/instruct...
+- ## Pull request overview
+
+Copilot reviewed 10 out of 10 changed files in this pull request and generated no new comments.
+
+
+
+
+
+---
+
+💡 <a href="/agorokh/ac-copilot-trainer/new/main?filename=.github/ins...
+- ## Pull request overview
+
+Copilot reviewed 10 out of 10 changed files in this pull request and generated no new comments.
+
+
+
+
+
+---
+
+💡 <a href="/agorokh/ac-copilot-trainer/new/main?filename=.github/ins...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

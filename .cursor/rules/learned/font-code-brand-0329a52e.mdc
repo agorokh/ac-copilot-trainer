@@ -1,0 +1,36 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tests/**/*"
+source: process-miner
+rule_fingerprint: 0329a52e390713b8
+mined_from: 4 review comments across 3 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Font Code Brand (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+The current regex `[%w_%-]+` used to extract the font filename does not support spaces, which are common in Assetto Corsa font f...
+- **suggestion (testing):** Add assertions for the brand font (Syncopate) and Windows fallbacks to match the multi-font system described in the PR.
+
+PC-06 already validates `Michroma` and `Montserrat`, ...
+- Same font-stack issue here: `pushNamed()` result isn’t captured, and `fontMod.pop()` is called without the required kind token, so the font won’t be popped.
+```suggestion
+  local titleFont = fontMod.p...
+- Same font-stack issue here: capture the return value of `pushNamed("brand", ...)` and pass it into `fontMod.pop(kind)`; otherwise the font stack will grow each draw.
+```suggestion
+    local brandFontK...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

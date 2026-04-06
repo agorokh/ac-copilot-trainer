@@ -1,0 +1,28 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 043bb05a21f29509
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code Coaching Logic (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- Fixed: fallback now gates on `lapsCompleted == 0` so it only shows before the first lap. Once coaching fires and expires, the window returns empty (hides).
+- **suggestion:** Focus label derivation logic is duplicated instead of reusing `focusLabelMap`.
+
+In `script.update`, the focus filter map is rebuilt with the same manual/auto logic already encapsulated...
+- The `hudEnabled` toggle here is labeled as controlling only the “main HUD window”, but `config.hudEnabled` is also used to early-return from `script.windowCoaching` (and likely other UI paths). This m...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

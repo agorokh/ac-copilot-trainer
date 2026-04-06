@@ -1,0 +1,29 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 7e1de7458a57b283
+mined_from: 6 review comments across 4 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Speed Code When (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- This condition fires when the *current* entry speed is higher than the reference (`en > bn + 5`), but the hint tells the driver to brake later—which would typically increase entry speed further. The c...
+- The min-speed coaching lines omit units (“km/h”), while the entry-speed line includes them. For readability/consistency in the HUD, include units in these formatted strings too.
+```suggestion
+        ...
+- `traceToLine()` now preserves `speed=nil` (line 71) to distinguish “no data” from 0 km/h, but the downsampling branch in the same function still coerces missing speed to `0` (via `or 0`). This makes b...
+- Per-segment speed coloring treats a missing speed value as `0` when only one of `a.speed`/`b.speed` is available (`(a.speed or 0) + (b.speed or 0)`), which will skew the average toward red even if the...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

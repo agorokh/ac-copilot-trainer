@@ -1,0 +1,34 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tests/**/*"
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: c73bc36832937a78
+mined_from: 14 review comments across 4 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: maintainability
+preventability: typecheck
+---
+
+# Code That Alpha (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **suggestion:** Function name/doc suggests scrollable content but implementation is only wrapped text with no scroll region.
+
+The docstring promises a "Scrollable debrief", but this only renders wrapp...
+- **issue (testing):** Docstring mentions title text alpha, but the test currently only verifies background alpha
+
+The assertions only check the background rgbm alpha, so the title text alpha requiremen...
+- This docstring claims the test checks both (1) background alpha < 1 and (2) title text alpha == 1 “before fade”, but the assertions only validate the background alpha. Either add an assertion that the...
+- **suggestion (testing):** Extend speedColor test to validate actual color branching (green/red/white) and edge thresholds, not just the presence of the threshold constant.
+
+PC-02 currently only verifi...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

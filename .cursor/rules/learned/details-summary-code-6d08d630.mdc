@@ -1,0 +1,44 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "docs/**/*"
+source: process-miner
+rule_fingerprint: 6d08d6305e92aa7d
+mined_from: 195 review comments across 28 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: reliability
+preventability: guideline
+---
+
+# Details Summary Code (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Session-exit persistence never runs, and the next session reuses stale state.**
+
+On the first main-menu frame, `script.update()` calls `persistSnapshot()`, but `per...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Guard no-car frames before touching HUD, telemetry, or lap state.**
+
+`tryLoadDisk()` and `persistSnapshot()` already treat `not car` as a valid runtime state, but `...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Duration tracking misses first-frame time, causing false negatives.**
+
+Current logic starts timing at `0` and only accumulates on later frames, so brake holds can b...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Don't cap a time-based buffer by an assumed 120 Hz sample rate.**
+
+`bufferSeconds` is part of the module contract, but `maxSamples = bufferSeconds * 120` drops data...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

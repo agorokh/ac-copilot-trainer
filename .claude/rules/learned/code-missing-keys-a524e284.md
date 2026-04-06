@@ -1,0 +1,32 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tests/**/*"
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: a524e2846776683c
+mined_from: 7 review comments across 5 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: maintainability
+preventability: typecheck
+---
+
+# Code Missing Keys (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- `analyzeTrace()` assumes each sample has `eMs` (used for `dtEst`, `dtMs`, lap duration, etc.), but the parameter annotation only mentions `{ throttle, brake }[]` and there’s no guard for missing/inval...
+- `denseArray()` claims to rebuild from “sparse / string-keyed” decoded JSON arrays, but it only considers numeric keys. If `JSON.parse` yields string keys like "1", "2" (common in some Lua JSON libs / ...
+- **suggestion (testing):** Add companion tests for extra/unknown keys and for missing required nested keys like `car.id` and `track.id`
+
+This currently only asserts behavior for missing top-level keys....
+- **suggestion (testing):** Extend coverage to numeric fields (`conditions.track_grip`, `summary.*`, `lap_history[*].lap_ms`) and ensure invalid types are rejected while `None` is allowed
+
+The numeric-t...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

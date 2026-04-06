@@ -1,0 +1,33 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tools/**/*"
+  - "src/**/*"
+  - "docs/**/*"
+source: process-miner
+rule_fingerprint: aaf0aedb888e7e68
+mined_from: 6 review comments across 2 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: architecture
+---
+
+# Code Ranking Fastest (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- The fallback is shown whenever `remaining <= 0`, which means after coaching hints expire the coaching window will continuously show “Complete a lap…” for the rest of the session (until next lap), rath...
+- LapComparisonState computes and returns an improvement ranking *before* updating the PB when the current lap is faster than the stored best. That means a new PB lap can still return regressions vs the...
+- > Ranking on new pb — computes improvement ranking against the previous PB before updating PB, so a new fastest lap could still get improvementRanking.
+
+Addressed: `improvement_ranking_for` now treats...
+- > LapComparisonState computes ranking before updating PB when the current lap is faster than the stored best.
+
+Addressed: Same as Qodo thread — new PB path updates reference first and returns an empty...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

@@ -1,0 +1,71 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 7676434f82bfe9f7
+mined_from: 27 review comments across 15 PRs
+last_updated: 2026-04-06
+repository: agorokh/ac-copilot-trainer
+severity: bug
+preventability: typecheck
+---
+
+# Code_Block Code Script (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+cat -n src/ac_copilot_trainer/modules/persistence.lua | head -100
+```
+
+Repository: agorokh...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+# First, let's understand the file structure and the sessionKey usage
+fd -t f "persistence...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+# First, let's check the file exists and examine the context around lines 204-209
+fd ac_co...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+python - <<'PY'
+import re
+import urllib.request
+
+html = url...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.
