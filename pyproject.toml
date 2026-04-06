@@ -20,6 +20,7 @@ dev = [
   "pre-commit>=4.0",
   "requests>=2.31.0",
   "websockets>=12",
+  "lupa>=2.0",  # Lua runtime for HUD smoke tests (issue #66)
 ]
 mining = [
   "requests>=2.31.0",

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pathlib
 
-import lupa
 import pytest
+
+lupa = pytest.importorskip("lupa", reason="lupa Lua runtime not installed (pip install lupa)")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
