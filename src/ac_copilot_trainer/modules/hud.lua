@@ -45,6 +45,8 @@ local FADE_SPEED = 4.0  -- alpha units per second
 local lastHintText = nil
 local lastHintKind = nil
 local lastCornerLabel = nil
+--- Panel chrome alpha from the last drawn suggestion frame (footer divider uses this when fadeAlpha lags alphaDraw).
+local suggestionFooterMix = nil
 
 ---@class ApproachHudPayload
 ---@field turnLabel string
@@ -113,13 +115,14 @@ local function drawActiveSuggestion(vm)
     lastHintText = hint.text
     lastHintKind = hint.kind
     lastCornerLabel = hint.cornerLabel
-  elseif fadeAlpha < 0.01 then
+  elseif not hasHint and alphaDraw < 0.01 then
     lastHintText = nil
     lastHintKind = nil
     lastCornerLabel = nil
   end
 
   if alphaDraw < 0.01 then
+    suggestionFooterMix = nil
     return false
   end
 
@@ -130,6 +133,7 @@ local function drawActiveSuggestion(vm)
   -- Panel chrome stays at full opacity while a hint is active (matches idle tile);
   -- alphaDraw still fades chrome out after the hint clears.
   local chromeAlpha = hasHint and 1.0 or alphaDraw
+  suggestionFooterMix = chromeAlpha
   local bgAlpha = 0.60 * chromeAlpha
 
   -- Panel background fills the entire window (runtime colors from shared tokens)
@@ -206,8 +210,10 @@ end
 --- Runs at the bottom of the panel so the suggestion text stays prominent.
 ---@param vm HudViewModel
 local function drawTelemetryFooter(vm)
-  -- Idle path keeps fadeAlpha at 0; still show speed / REC / delta (issue #69 review).
-  local mix = fadeAlpha < 0.01 and 1.0 or fadeAlpha
+  -- Idle: fadeAlpha is 0 → full-strength footer. Active fade-out: use chrome alpha when fadeAlpha crosses ε first.
+  local mix = fadeAlpha < 0.01
+    and ((suggestionFooterMix and suggestionFooterMix > 0.001) and suggestionFooterMix or 1.0)
+    or fadeAlpha
   local sz = ui.windowSize()
   local w = (sz and sz.x and sz.x > 0) and sz.x or 480
   local h = (sz and sz.y and sz.y > 0) and sz.y or 180
@@ -318,6 +324,7 @@ function M.reset()
   lastHintText = nil
   lastHintKind = nil
   lastCornerLabel = nil
+  suggestionFooterMix = nil
 end
 
 --- Main draw entry point for WINDOW_0.
@@ -335,6 +342,7 @@ function M.draw(vm)
     drawActiveSuggestion(vm)
     drawTelemetryFooter(vm)
   else
+    suggestionFooterMix = nil
     -- Idle state: panel visible but with placeholder message
     drawIdleState(vm)
     drawTelemetryFooter(vm)
