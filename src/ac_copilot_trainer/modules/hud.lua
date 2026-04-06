@@ -78,7 +78,7 @@ local BLK = string.char(226, 150, 136)
 
 local function formatLapMs(ms)
   if not ms or ms ~= ms or ms <= 0 then
-    return "â"  -- em dash
+    return "â"  -- em dash (U+2014)
   end
   return string.format("%.3f s", ms / 1000)
 end
@@ -135,51 +135,52 @@ local function drawActiveSuggestion(vm)
 
   local sz = ui.windowSize()
   local w = sz.x
-  local curY = ui.getCursorY and ui.getCursorY() or 0
+  local cur = ui.getCursor()
+  local curY = cur and cur.y or 0
 
   -- Panel background
-  local panelH = math.max(80, 120)
+  local panelH = 120
   local bgAlpha = 0.60 * fadeAlpha
-  ui.drawRectFilled(vec2(0, curY), vec2(w, curY + panelH), rgbm(0.067, 0.067, 0.067, bgAlpha), PANEL_ROUNDING)
+  ui.drawRectFilled(vec2(0, curY), vec2(w, curY + panelH), rgbm(COLOR_BG.r, COLOR_BG.g, COLOR_BG.b, bgAlpha), PANEL_ROUNDING)
   if fadeAlpha > 0.5 then
-    ui.drawRect(vec2(0, curY), vec2(w, curY + panelH), rgbm(0.30, 0.32, 0.38, 0.40 * fadeAlpha), PANEL_ROUNDING, nil, 1)
+    ui.drawRect(vec2(0, curY), vec2(w, curY + panelH), rgbm(COLOR_BG_BORDER.r, COLOR_BG_BORDER.g, COLOR_BG_BORDER.b, 0.40 * fadeAlpha), PANEL_ROUNDING, nil, 1)
   end
 
-  local textAlpha = fadeAlpha
+  local textAlpha = 1.0  -- text 100% opaque per design brief; only background fades
   local y = curY + PANEL_PAD_Y
 
   -- Title: "ACTIVE SUGGESTION"
   ui.setCursor(vec2(PANEL_PAD_X, y))
-  fontMod.pushNamed("labels", 14)
+  local titleK = fontMod.pushNamed("labels", 14)
   ui.textColored(rgbm(COLOR_TITLE.r, COLOR_TITLE.g, COLOR_TITLE.b, textAlpha), "ACTIVE SUGGESTION")
-  fontMod.pop()
+  fontMod.pop(titleK)
   y = y + 22
 
   -- Corner label (if available)
   if hasHint and hint.cornerLabel and hint.cornerLabel ~= "" then
     ui.setCursor(vec2(PANEL_PAD_X, y))
-    fontMod.pushNamed("numbers", 22)
+    local numK = fontMod.pushNamed("numbers", 22)
     ui.textColored(rgbm(COLOR_WHITE.r, COLOR_WHITE.g, COLOR_WHITE.b, textAlpha), hint.cornerLabel)
-    fontMod.pop()
+    fontMod.pop(numK)
     y = y + 30
   end
 
   -- Main hint text (large)
   if lastHintText then
     ui.setCursor(vec2(PANEL_PAD_X, y))
-    fontMod.pushNamed("labels", 16)
+    local hintK = fontMod.pushNamed("labels", 16)
     local hintColor = hasHint and colorForKind(hint.kind) or COLOR_LABEL
     ui.textColored(rgbm(hintColor.r, hintColor.g, hintColor.b, textAlpha), lastHintText)
-    fontMod.pop()
+    fontMod.pop(hintK)
     y = y + 24
   end
 
   -- Focus practice indicator
   if vm.focusPracticeActive and vm.focusPracticeLabel then
     ui.setCursor(vec2(PANEL_PAD_X, y))
-    fontMod.pushNamed("brand", 11)
+    local brandK = fontMod.pushNamed("brand", 11)
     ui.textColored(rgbm(COLOR_BRAND.r, COLOR_BRAND.g, COLOR_BRAND.b, textAlpha), "Focus: " .. vm.focusPracticeLabel)
-    fontMod.pop()
+    fontMod.pop(brandK)
   end
 end
 

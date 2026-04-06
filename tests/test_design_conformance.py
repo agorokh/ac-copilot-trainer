@@ -522,11 +522,19 @@ class TestActiveSuggestionWindow:
     """PE-01..PE-06: Active suggestion panel structural conformance."""
 
     def test_hud_uses_coaching_font(self) -> None:
-        """PE-01: hud.lua requires coaching_font for named font roles."""
+        """PE-01: hud.lua requires coaching_font with balanced push/pop."""
         src = _lua_text("hud.lua")
         assert 'require("coaching_font")' in src
         assert "fontMod.pushNamed" in src
         assert "fontMod.pop" in src
+        # Verify pushNamed return value is captured (not discarded)
+        assert re.search(r"local\s+\w+K?\s*=\s*fontMod\.pushNamed", src), (
+            "pushNamed return value must be captured for pop(kind)"
+        )
+        # Verify pop receives an argument (not bare pop())
+        assert re.search(r"fontMod\.pop\(\w+", src), (
+            "fontMod.pop must receive kind argument from pushNamed"
+        )
 
     def test_active_suggestion_panel_exists(self) -> None:
         """PE-02: drawActiveSuggestion function renders the panel."""
@@ -535,13 +543,17 @@ class TestActiveSuggestionWindow:
         assert '"ACTIVE SUGGESTION"' in src
 
     def test_panel_design_tokens(self) -> None:
-        """PE-03: Panel uses design tokens matching Figma spec."""
+        """PE-03: Panel uses design tokens matching Figma spec; text 100% opaque."""
         src = _lua_text("hud.lua")
         assert re.search(r"COLOR_BG\s*=\s*rgbm\([^)]+0\.60\)", src), (
             "COLOR_BG must use 0.60 alpha (Figma: rgba(17,17,17,0.6))"
         )
         assert "PANEL_ROUNDING" in src
         assert "COLOR_TITLE" in src
+        # Text must be 100% opaque (only background fades)
+        assert re.search(r"textAlpha\s*=\s*1\.0", src), (
+            "textAlpha must be 1.0 (text 100% opaque per design brief)"
+        )
 
     def test_fade_behavior(self) -> None:
         """PE-04: Hint fades smoothly using fadeAlpha and FADE_SPEED."""

@@ -15,7 +15,7 @@ relates_to:
 
 ## Resume here
 
-- **Issue #57 Phase 5:** All 5 Parts delivered. Parts A–D merged. **Part E** in **PR #64** (branch `feat/issue-57-phase5-part-e`): active suggestion panel. 178 tests pass. Needs review + merge.
+- **Issue #57 Phase 5:** Parts A–D merged; Part E code complete. **Part E** in **PR #64** (branch `feat/issue-57-phase5-part-e`): active suggestion panel. 178 tests pass. Needs review + merge.
 - After PR #64 merges, **issue #57 is fully complete** and can be closed.
 
 ## What was delivered this session

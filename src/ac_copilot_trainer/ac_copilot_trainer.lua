@@ -939,7 +939,7 @@ function script.windowMain(_dt)
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
     focusPracticeActive = state.focusPracticeActive or false,
-    focusPracticeLabel = state.focusPracticeHudSummary or nil,
+    focusPracticeLabel = (state.focusPracticeHudSummary ~= "") and state.focusPracticeHudSummary or nil,
   })
 end
 
