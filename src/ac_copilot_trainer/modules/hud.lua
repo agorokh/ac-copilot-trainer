@@ -88,52 +88,46 @@ local function drawActiveSuggestion(vm)
   -- Fade target: 1 when hint active, 0 when not
   fadeTarget = hasHint and 1 or 0
   local dt = (type(ui.deltaTime) == "function" and ui.deltaTime()) or 0.016
-  -- Snapshot before integrating so the frame that crosses below 0.01 still draws panel chrome
-  -- (NO_BACKGROUND window + footer would otherwise flash bare text for one frame).
-  local alphaDraw = fadeAlpha
+  -- Pre-integration alpha for fade-out (last visible frame); post-integration for fade-in (immediate paint).
+  local alphaBefore = fadeAlpha
   if fadeAlpha < fadeTarget then
     fadeAlpha = math.min(fadeAlpha + FADE_SPEED * dt, fadeTarget)
   elseif fadeAlpha > fadeTarget then
     fadeAlpha = math.max(fadeAlpha - FADE_SPEED * dt, fadeTarget)
   end
+  local alphaDraw = hasHint and fadeAlpha or alphaBefore
 
-  -- Track hint text and kind through fade-out so last hint stays visible
   if hasHint then
     lastHintText = hint.text
     lastHintKind = hint.kind
     lastCornerLabel = hint.cornerLabel
-  end
-
-  -- Fade-out only: first fade-in frame has alphaDraw==0 but hasHint — still draw using post-integrate alpha.
-  if not hasHint and alphaDraw < 0.01 then
+  elseif fadeAlpha < 0.01 then
     lastHintText = nil
     lastHintKind = nil
     lastCornerLabel = nil
-    return false
   end
 
-  local visAlpha = alphaDraw
-  if hasHint and alphaDraw < 0.01 then
-    visAlpha = fadeAlpha
+  if alphaDraw < 0.01 then
+    return false
   end
 
   local sz = ui.windowSize()
   local w = (sz and sz.x and sz.x > 0) and sz.x or 480
   local h = (sz and sz.y and sz.y > 0) and sz.y or 180
   local textAlpha = 1.0  -- text 100% opaque per design brief; only bg fades
-  local bgAlpha = 0.60 * visAlpha
+  local bgAlpha = 0.60 * alphaDraw
 
   -- Panel background fills the entire window (runtime colors from shared tokens)
   ui.drawRectFilled(vec2(0, 0), vec2(w, h),
     rgbm(tokens.COLOR_BG.r, tokens.COLOR_BG.g, tokens.COLOR_BG.b, bgAlpha),
     PANEL_ROUNDING)
-  if visAlpha > 0.5 then
+  if alphaDraw > 0.5 then
     ui.drawRect(vec2(0, 0), vec2(w, h),
       rgbm(
         tokens.COLOR_BG_BORDER.r,
         tokens.COLOR_BG_BORDER.g,
         tokens.COLOR_BG_BORDER.b,
-        0.40 * visAlpha
+        0.40 * alphaDraw
       ),
       PANEL_ROUNDING, nil, 1)
   end
@@ -180,7 +174,7 @@ local function drawActiveSuggestion(vm)
     local fp = "Focus: " .. tostring(vm.focusPracticeLabel)
     local fpW = approxTextWidth(fp, 10)
     ui.setCursor(vec2(math.max(0, centerX - fpW / 2), y))
-    local k = fontMod.pushNamed("brand", 10)
+    local k = fontMod.pushNamed("labels", 10)
     ui.textColored(fp, rgbm(
       tokens.COLOR_BRAND_GREY.r,
       tokens.COLOR_BRAND_GREY.g,
