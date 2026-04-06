@@ -115,19 +115,22 @@ local function drawActiveSuggestion(vm)
   local w = (sz and sz.x and sz.x > 0) and sz.x or 480
   local h = (sz and sz.y and sz.y > 0) and sz.y or 180
   local textAlpha = 1.0  -- text 100% opaque per design brief; only bg fades
-  local bgAlpha = 0.60 * alphaDraw
+  -- Panel chrome stays at full opacity while a hint is active (matches idle tile);
+  -- alphaDraw still fades chrome out after the hint clears.
+  local chromeAlpha = hasHint and 1.0 or alphaDraw
+  local bgAlpha = 0.60 * chromeAlpha
 
   -- Panel background fills the entire window (runtime colors from shared tokens)
   ui.drawRectFilled(vec2(0, 0), vec2(w, h),
     rgbm(tokens.COLOR_BG.r, tokens.COLOR_BG.g, tokens.COLOR_BG.b, bgAlpha),
     PANEL_ROUNDING)
-  if alphaDraw > 0.5 then
+  if chromeAlpha > 0.5 then
     ui.drawRect(vec2(0, 0), vec2(w, h),
       rgbm(
         tokens.COLOR_BG_BORDER.r,
         tokens.COLOR_BG_BORDER.g,
         tokens.COLOR_BG_BORDER.b,
-        0.40 * alphaDraw
+        0.40 * chromeAlpha
       ),
       PANEL_ROUNDING, nil, 1)
   end
@@ -235,10 +238,11 @@ local function drawTelemetryFooter(vm)
   local dSmooth = vm.deltaSmoothedSec
   if dSmooth and dSmooth == dSmooth then
     local deltaStr = string.format("%+.2f S", dSmooth)
-    local deltaCol = rgbm(0.20, 0.85, 0.35, textAlpha)
+    local deltaCol = rgbm(tokens.COLOR_GREEN.r, tokens.COLOR_GREEN.g, tokens.COLOR_GREEN.b, textAlpha)
     if dSmooth > 0.02 then
       deltaCol = rgbm(tokens.COLOR_RED.r, tokens.COLOR_RED.g, tokens.COLOR_RED.b, textAlpha)
     elseif dSmooth < -0.02 then
+      -- Ahead of best lap: blue accent (not in shared tokens; distinct from overlay palette)
       deltaCol = rgbm(0.35, 0.60, 0.95, textAlpha)
     end
     local deltaW = approxTextWidth(deltaStr, 12)
@@ -321,9 +325,8 @@ function M.draw(vm)
   end
 
   -- Suppress debrief text rendering in WINDOW_0 (it belongs in settings/debrief pane).
-  -- Reference kept so PE-07 still sees the field wired through (avoid global `_`).
-  local _pe07Touch = vm.debriefText
-  if _pe07Touch then end
+  -- Reference kept so PE-07 still sees the field wired through.
+  local _ = vm.debriefText -- luacheck: ignore 211
 end
 
 -- Expose shadow tokens for external consumption (unused legacy but referenced by tests)
