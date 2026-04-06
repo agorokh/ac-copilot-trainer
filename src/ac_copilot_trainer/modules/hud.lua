@@ -22,9 +22,21 @@ local COLOR_LABEL_GREY = rgbm(0.549, 0.565, 0.612, 1.0)  -- #8C909C
 local COLOR_BRAND_GREY = rgbm(0.435, 0.459, 0.522, 1.0)  -- #6F7585
 local COLOR_TITLE     = rgbm(0.35, 0.82, 0.95, 1.0)      -- cyan (legacy path)
 
-local PANEL_ROUNDING = 12
-local PANEL_PAD_X    = 24
-local PANEL_PAD_Y    = 18
+-- Layout metrics from shared tokens (same values as coaching_overlay; no silent drift)
+local PANEL_ROUNDING = tokens.PANEL_ROUNDING
+local PANEL_PAD_X    = tokens.PANEL_PAD_X
+local PANEL_PAD_Y    = tokens.PANEL_PAD_Y
+
+--- CSP builds vary; skip draw if core ui.* APIs are missing (see coaching_overlay pattern).
+local function hudUiReady()
+  return ui
+    and type(vec2) == "function"
+    and type(ui.drawRectFilled) == "function"
+    and type(ui.drawRect) == "function"
+    and type(ui.setCursor) == "function"
+    and type(ui.textColored) == "function"
+    and type(ui.windowSize) == "function"
+end
 
 -- Fade state for smooth hint transitions
 local fadeAlpha = 0
@@ -311,6 +323,10 @@ end
 --- Main draw entry point for WINDOW_0.
 ---@param vm HudViewModel
 function M.draw(vm)
+  if not hudUiReady() then
+    return
+  end
+
   local hasHint = vm.realtimeHint and type(vm.realtimeHint) == "table"
     and type(vm.realtimeHint.text) == "string" and vm.realtimeHint.text ~= ""
 
