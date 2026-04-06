@@ -70,11 +70,11 @@ def test_strip_lua_comment_removes_inline_comment() -> None:
 
 def test_strip_lua_comment_preserves_strings_with_dashes() -> None:
     mod = _load_module()
-    # Em dash inside a string should not be treated as a comment
+    # Double hyphen inside a quoted string must NOT be treated as a Lua comment
     line = 'ui.textColored("Coasting -- roll to throttle", col)'
     stripped = mod.strip_lua_comment(line)
-    assert "Coasting" in stripped
-    assert "roll to throttle" in stripped
+    # Full-equality assertion catches any unintended mutation
+    assert stripped == line
 
 
 def test_actual_repo_has_zero_violations() -> None:
