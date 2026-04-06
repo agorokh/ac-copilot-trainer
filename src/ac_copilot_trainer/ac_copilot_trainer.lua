@@ -926,7 +926,6 @@ function script.windowMain(_dt)
     lastLapMs = state.lastLapMs or (car.previousLapTimeMs or nil),
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
-    approachData = state._cachedApproachData,
     realtimeHint = state.realtimeActiveHint,
     postLapLines = postLines,
     coastWarn = coastWarn,

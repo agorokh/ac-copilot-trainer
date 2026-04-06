@@ -57,7 +57,6 @@ end
 ---@field lastLapMs number|nil
 ---@field deltaSmoothedSec number|nil
 ---@field sectorMessage string|nil
----@field approachData ApproachHudPayload|nil @Producer `approachHudData`; fields match `ApproachHudPayload` (incl. brakeIndex).
 ---@field postLapLines string[]|nil
 ---@field coastWarn boolean|nil
 ---@field tireLockupFlash boolean|nil
