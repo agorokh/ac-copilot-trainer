@@ -15,7 +15,6 @@ local M = {}
 local COLOR_BG_DARK   = rgbm(17 / 255, 17 / 255, 17 / 255, 0.60)
 local COLOR_BG_BORDER = rgbm(239 / 255, 68 / 255, 68 / 255, 0.40)  -- red-500/40
 local COLOR_RED       = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- #EF4444 (per spec)
-local COLOR_RED_LIGHT = rgbm(248 / 255, 113 / 255, 113 / 255, 1.0) -- red-400 (alt title)
 local COLOR_RED_HARD  = COLOR_RED                                  -- back-compat alias
 local COLOR_AMBER     = rgbm(251 / 255, 191 / 255, 36 / 255, 1.0)  -- amber-400
 local COLOR_GREEN     = rgbm(74 / 255, 222 / 255, 128 / 255, 1.0)
@@ -23,7 +22,6 @@ local COLOR_WHITE     = rgbm(255 / 255, 255 / 255, 255 / 255, 1.0)
 local COLOR_TEXT_GREY = rgbm(212 / 255, 212 / 255, 212 / 255, 1.0) -- neutral-300
 
 local PANEL_ROUNDING = 8
-local PANEL_PAD_X    = 32
 local PANEL_PAD_Y    = 14
 
 -- ---------------------------------------------------------------------------
@@ -132,6 +130,16 @@ end
 ---@param vm HudViewModel
 function M.draw(vm)
   vm = vm or {}
+  -- UI readiness guard: bail out cleanly on early frames or unusual CSP
+  -- builds where the imgui APIs are not yet available. Mirrors the same
+  -- defensive pattern in coaching_overlay.drawApproachPanel.
+  if type(ui) ~= "table"
+      or type(vec2) ~= "function"
+      or type(ui.drawRectFilled) ~= "function"
+      or type(ui.drawRect) ~= "function"
+      or type(ui.windowSize) ~= "function" then
+    return
+  end
   local view = resolveView(vm)
 
   local sz = safeWindowSize()

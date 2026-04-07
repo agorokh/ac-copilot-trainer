@@ -574,7 +574,7 @@ def test_ete04d_dedupe_allows_prepare_to_brake_escalation(lua):
     opts2["segments"] = segments
     view2 = rtc["tick"](opts2)
     primary2 = (view2["primaryLine"] or "").upper()
-    assert "BRAKE NOW" in primary2 or "BRAKE" == primary2.split()[0], (
+    assert "BRAKE NOW" in primary2 or primary2.split()[0] == "BRAKE", (
         f"escalation PREPARE→BRAKE NOW must not be dedupe-collapsed, got: {primary2!r}"
     )
 

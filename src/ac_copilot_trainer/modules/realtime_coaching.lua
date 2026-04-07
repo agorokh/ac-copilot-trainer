@@ -178,7 +178,7 @@ end
 
 --- Place-holder viewmodel for the empty state. Returned when the app has zero
 --- reference data — keeps both tiles painted with sensible copy.
-local function placeholderView(carSp, curSpeed)
+local function placeholderView(curSpeed)
   return {
     primaryLine = "DRIVE A LAP",
     secondaryLine = "REFERENCE WILL APPEAR",
@@ -216,7 +216,7 @@ function M.tick(opts)
   local hasBrakes   = type(brakes) == "table" and #brakes > 0
   local hasSegments = type(segments) == "table" and #segments > 0
   if not hasTrace and not hasBrakes and not hasSegments then
-    lastView = placeholderView(sp, cur)
+    lastView = placeholderView(cur)
     return lastView
   end
 
@@ -304,23 +304,22 @@ function M.tick(opts)
     view.subState = "cruising"
   end
 
-  -- Dedupe: hold the last hint for ~600 ms before re-emitting an identical
-  -- (kind, subState, cornerLabel, primaryLine) tuple so the UI doesn't flicker
-  -- on threshold edges. Including subState + primaryLine ensures escalations
+  -- Change detection key. Includes subState + primaryLine so escalations
   -- like PREPARE TO BRAKE → BRAKE NOW (same kind, same corner) are NOT
   -- collapsed and the urgent hint is shown immediately.
+  --
+  -- The old "inherit lastView primaryLine within DEDUP_HOLD_SEC" branch was a
+  -- no-op (when keys match, lastView is identical to the new view), so it
+  -- has been removed. Anti-flicker is now driven by hysteresis in the
+  -- threshold tests themselves (8 km/h corner deltas, 50 m / 100 m brake
+  -- distance bands) which already provide a comfortable dead band.
   local key = table.concat({
     tostring(view.kind or "?"),
     tostring(view.subState or "?"),
     tostring(view.cornerLabel or "?"),
     tostring(view.primaryLine or "?"),
   }, ":")
-  if key == lastEmittedKey and (monoClock - lastEmittedAt) < DEDUP_HOLD_SEC and lastView then
-    -- Inherit primary/secondary from the previous frame to avoid flicker
-    view.primaryLine = lastView.primaryLine or view.primaryLine
-    view.secondaryLine = lastView.secondaryLine or view.secondaryLine
-    view.kind = lastView.kind or view.kind
-  else
+  if key ~= lastEmittedKey then
     lastEmittedKey = key
     lastEmittedAt = monoClock
   end
