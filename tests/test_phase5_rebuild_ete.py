@@ -192,6 +192,8 @@ ac = {
     getUI = function() return { uiScale = 1.0 } end,
 }
 
+-- Suppress legacy BMW.txt font lookup so coaching_font cache initialisation
+-- never tries to open a non-existent file in this stub environment.
 local _real_open = io.open
 io.open = function(path, mode)
     if path and (string.find(path, "bmw") or string.find(path, "BMW")) then return nil end
@@ -426,7 +428,9 @@ def test_ete03_persisted_state_straight_returns_on_pace(lua):
     assert "PACE" in primary or "NEXT" in primary or "FREE" in primary, (
         f"long-straight viewmodel should be informational, got: {primary!r}"
     )
-    assert view["kind"] in ("info", "placeholder"), f"kind must be info, got {view['kind']}"
+    assert view["kind"] == "info", (
+        f"kind must be 'info' on a long straight with valid persisted data, got {view['kind']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -464,10 +468,143 @@ def test_ete04_in_corner_slower_than_reference_says_carry_more_speed(lua):
     view = rtc["tick"](opts)
     assert view is not None
     primary = (view["primaryLine"] or "").upper()
-    assert "CARRY" in primary or "SPEED" in primary, (
-        f"in-corner-slow viewmodel must say 'CARRY MORE SPEED' or similar, got: {primary!r}"
+    assert "CARRY" in primary and "SPEED" in primary, (
+        f"in-corner-slow viewmodel must say 'CARRY MORE SPEED', got: {primary!r}"
     )
     assert view["kind"] == "line", f"in-corner kind must be 'line', got {view['kind']}"
+
+
+# ---------------------------------------------------------------------------
+# ETE-04b: PREPARE TO BRAKE in the 50-100 m window with mild over-speed
+# ---------------------------------------------------------------------------
+
+
+def test_ete04b_prepare_to_brake_mid_distance(lua):
+    """ETE-04b: At ~80 m before T4 with target 95, current 105 (over+10) the
+    engine fires PREPARE TO BRAKE — neither too far for any hint nor close
+    enough for the urgent BRAKE NOW threshold."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+    # T4 brake spline 0.45; ~80 m before at 4500 m → splinePos 0.4322
+    opts = lua.eval(
+        "{ splinePos = 0.4322, currentSpeedKmh = 105, "
+        "  bestSortedTrace = nil, brakingPoints = nil, segments = nil, trackLengthM = 4500 }"
+    )
+    opts["bestSortedTrace"] = trace
+    opts["brakingPoints"] = brakes
+    opts["segments"] = segments
+    view = rtc["tick"](opts)
+    assert view is not None
+    primary = (view["primaryLine"] or "").upper()
+    assert "PREPARE" in primary, (
+        f"~80 m before T4 (target 95) at 105 km/h must say 'PREPARE TO BRAKE', got: {primary!r}"
+    )
+    assert view["kind"] == "brake", f"kind must be 'brake', got {view['kind']}"
+
+
+# ---------------------------------------------------------------------------
+# ETE-04c: EASE OFF when in-corner and faster than reference
+# ---------------------------------------------------------------------------
+
+
+def test_ete04c_ease_off_in_corner_faster_than_reference(lua):
+    """ETE-04c: In a corner segment, current speed 12 km/h faster than the
+    reference at the same spline → EASE OFF."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+    sp = 0.48  # inside T4 (s0=0.45, s1=0.52)
+    import math
+
+    ref_speed = 100 + 60 * math.sin(sp * 6.28)
+    cur_speed = ref_speed + 12
+    opts = lua.eval(
+        f"{{ splinePos = {sp}, currentSpeedKmh = {cur_speed}, "
+        "  bestSortedTrace = nil, brakingPoints = nil, segments = nil, trackLengthM = 4500 }"
+    )
+    opts["bestSortedTrace"] = trace
+    opts["brakingPoints"] = brakes
+    opts["segments"] = segments
+    view = rtc["tick"](opts)
+    assert view is not None
+    primary = (view["primaryLine"] or "").upper()
+    assert "EASE" in primary, f"in-corner-fast viewmodel must say 'EASE OFF', got: {primary!r}"
+    assert view["kind"] == "line"
+
+
+# ---------------------------------------------------------------------------
+# ETE-04d: dedupe must NOT collapse PREPARE TO BRAKE → BRAKE NOW
+# ---------------------------------------------------------------------------
+
+
+def test_ete04d_dedupe_allows_prepare_to_brake_escalation(lua):
+    """ETE-04d: Within 600 ms, escalating from PREPARE TO BRAKE to BRAKE NOW
+    must NOT be collapsed by the dedupe key. The dedupe key must include
+    primaryLine or subState so the urgent message is shown immediately."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+
+    # Frame 1: ~80 m before T4 at 105 km/h → PREPARE TO BRAKE
+    opts1 = lua.eval(
+        "{ splinePos = 0.4322, currentSpeedKmh = 105, dt = 0.016, "
+        "  bestSortedTrace = nil, brakingPoints = nil, segments = nil, trackLengthM = 4500 }"
+    )
+    opts1["bestSortedTrace"] = trace
+    opts1["brakingPoints"] = brakes
+    opts1["segments"] = segments
+    view1 = rtc["tick"](opts1)
+    assert "PREPARE" in (view1["primaryLine"] or "").upper()
+
+    # Frame 2 (50 ms later): ~31 m before T4 at 142 km/h → BRAKE NOW
+    # This MUST NOT be collapsed by the (kind=brake, cornerLabel=T4) key
+    opts2 = lua.eval(
+        "{ splinePos = 0.443, currentSpeedKmh = 142, dt = 0.05, "
+        "  bestSortedTrace = nil, brakingPoints = nil, segments = nil, trackLengthM = 4500 }"
+    )
+    opts2["bestSortedTrace"] = trace
+    opts2["brakingPoints"] = brakes
+    opts2["segments"] = segments
+    view2 = rtc["tick"](opts2)
+    primary2 = (view2["primaryLine"] or "").upper()
+    assert "BRAKE NOW" in primary2 or "BRAKE" == primary2.split()[0], (
+        f"escalation PREPARE→BRAKE NOW must not be dedupe-collapsed, got: {primary2!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ETE-04e: in-corner cornerLabel must be the CURRENT corner, not the next
+# ---------------------------------------------------------------------------
+
+
+def test_ete04e_in_corner_label_overrides_next_corner(lua):
+    """ETE-04e: When the car is INSIDE T4, the viewmodel.cornerLabel must be
+    'T4', not the label of the next brake point ahead."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+    # Inside T4 (s0=0.45, s1=0.52)
+    opts = lua.eval(
+        "{ splinePos = 0.49, currentSpeedKmh = 60, "
+        "  bestSortedTrace = nil, brakingPoints = nil, segments = nil, trackLengthM = 4500 }"
+    )
+    opts["bestSortedTrace"] = trace
+    opts["brakingPoints"] = brakes
+    opts["segments"] = segments
+    view = rtc["tick"](opts)
+    assert view is not None
+    assert view["cornerLabel"] == "T4", (
+        f"in-corner cornerLabel must be the current corner T4, got {view['cornerLabel']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +614,7 @@ def test_ete04_in_corner_slower_than_reference_says_carry_more_speed(lua):
 
 def test_ete05_manifest_contract():
     """ETE-05: manifest.ini WINDOW_0 and WINDOW_1 have FIXED_SIZE + PADDING=0,0
-    + reasonable defaults. The user's 132×456 saved geometry is recovered by
+    + reasonable defaults. The user's 132x456 saved geometry is recovered by
     FIXED_SIZE."""
     text = MANIFEST.read_text(encoding="utf-8")
     # Extract WINDOW_0 block
@@ -550,7 +687,7 @@ def test_ete06b_bloom_asset_bundled():
 # ---------------------------------------------------------------------------
 
 
-def test_ete07_auto_place_once_runs_once_then_skips(lua):
+def test_ete07_auto_place_once_runs_once_then_skips() -> None:
     """ETE-07: autoPlaceOnce moves windows once, sets the storage flag, and
     on the second call does nothing. Position is then user-controlled."""
     entry_src = ENTRY.read_text(encoding="utf-8")
@@ -573,7 +710,7 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua):
 # ---------------------------------------------------------------------------
 
 
-def test_ete08_hud_uses_absolute_positioned_drawing(lua):
+def test_ete08_hud_uses_absolute_positioned_drawing() -> None:
     """ETE-08: hud.lua renders the panel via dwriteDrawText + drawRectFilled
     (gearbox-style absolute positioning), NOT via ui.text/ui.textColored."""
     src = MODULES.joinpath("hud.lua").read_text(encoding="utf-8")

@@ -1,5 +1,5 @@
 -- AC Copilot Trainer v0.4.2
-local APP_VERSION_UI = "v0.4.2"
+local APP_VERSION_UI = "v0.5.0"
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -1021,6 +1021,12 @@ function script.windowCoaching(_dt)
     }
   end
   coachingOverlay.drawApproachPanel(payload)
+
+  -- Sidecar debrief (Ollama / rules-based) still draws below the panel
+  -- so the post-lap debrief paragraph is not silently dropped.
+  if type(state.sidecarDebriefText) == "string" and state.sidecarDebriefText ~= "" then
+    coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
+  end
 end
 
 -- Issue #72: place each window once on first install (persisted via ac.storage),
@@ -1028,11 +1034,15 @@ end
 -- Window SIZE is locked by the FIXED_SIZE manifest flag (not by this function).
 local function autoPlaceOnce()
   if state._autoPlaceChecked then return end
-  state._autoPlaceChecked = true
   if type(ac) ~= "table" or type(ac.storage) ~= "function" then return end
   local placedFlag = ac.storage("hud_auto_placed_v1", false)
-  if placedFlag and placedFlag.get and placedFlag:get() then return end
+  if placedFlag and placedFlag.get and placedFlag:get() then
+    state._autoPlaceChecked = true
+    return
+  end
   if type(ac.getAppWindows) ~= "function" or type(ac.accessAppWindow) ~= "function" then
+    -- API not available yet — try again next frame instead of permanently
+    -- skipping the recovery path on a cold start.
     return
   end
 
@@ -1044,20 +1054,35 @@ local function autoPlaceOnce()
     ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
     ["Settings"]           = vec2(math.floor(screenW * 0.05),     math.floor(screenH * 0.10)),
   }
+  local required = 0
+  for _ in pairs(targets) do required = required + 1 end
 
   local windows = ac.getAppWindows() or {}
+  if #windows == 0 then
+    -- Window list still empty (e.g. very early frame). Try again next frame.
+    return
+  end
+
+  local moved = 0
   for i = 1, #windows do
     local entry = windows[i]
     local target = entry and entry.title and targets[entry.title] or nil
     if target then
       local ok, win = pcall(ac.accessAppWindow, entry.name)
       if ok and win and win:valid() then
-        pcall(function() win:move(target) end)
+        local moveOk = pcall(function() win:move(target) end)
+        if moveOk then moved = moved + 1 end
       end
     end
   end
-  if placedFlag and placedFlag.set then
-    pcall(function() placedFlag:set(true) end)
+
+  -- Only mark as done (and persist the flag) if we actually moved every
+  -- target window. Otherwise leave the flag unset so the next frame retries.
+  if moved >= required then
+    state._autoPlaceChecked = true
+    if placedFlag and placedFlag.set then
+      pcall(function() placedFlag:set(true) end)
+    end
   end
 end
 
@@ -1066,9 +1091,6 @@ function script.update(dt)
   car = ac.getCar(0)
 
   autoPlaceOnce()
-
-  -- Cache approach HUD data once per frame for both windowMain and windowCoaching
-  state._cachedApproachData = approachHudData(car, state.bestSortedTrace, sim)
 
   -- Live-frame coaching tick (issue #72 rebuild).
   -- Inputs are LIVE FRAME values and persisted reference data, NOT lap aggregates.

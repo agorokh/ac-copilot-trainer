@@ -230,9 +230,13 @@ function M.tick(opts)
   local targetSpeed = nextBrake and tonumber(nextBrake.entrySpeed) or nil
 
   -- Are we currently inside a corner segment?
+  -- In-corner override: when the car is INSIDE a known corner segment,
+  -- the in-corner label takes priority over any next-corner-ahead label.
+  -- Otherwise the HUD would say "CARRY MORE SPEED" while showing the next
+  -- corner's label, which is misleading mid-turn.
   local inCorner, cornerSeg = inCornerSegment(sp, segments)
   if inCorner and cornerSeg and cornerSeg.label then
-    cornerLabel = cornerLabel or cornerSeg.label
+    cornerLabel = cornerSeg.label
   end
 
   -- Reference speed at this exact spline position
@@ -301,8 +305,16 @@ function M.tick(opts)
   end
 
   -- Dedupe: hold the last hint for ~600 ms before re-emitting an identical
-  -- (kind, cornerLabel) pair so the UI doesn't flicker on threshold edges.
-  local key = (view.kind or "?") .. ":" .. tostring(view.cornerLabel or "?")
+  -- (kind, subState, cornerLabel, primaryLine) tuple so the UI doesn't flicker
+  -- on threshold edges. Including subState + primaryLine ensures escalations
+  -- like PREPARE TO BRAKE → BRAKE NOW (same kind, same corner) are NOT
+  -- collapsed and the urgent hint is shown immediately.
+  local key = table.concat({
+    tostring(view.kind or "?"),
+    tostring(view.subState or "?"),
+    tostring(view.cornerLabel or "?"),
+    tostring(view.primaryLine or "?"),
+  }, ":")
   if key == lastEmittedKey and (monoClock - lastEmittedAt) < DEDUP_HOLD_SEC and lastView then
     -- Inherit primary/secondary from the previous frame to avoid flicker
     view.primaryLine = lastView.primaryLine or view.primaryLine
@@ -326,9 +338,11 @@ function M.reset()
   monoClock = 0
 end
 
---- No-op for backward compatibility — the live-frame engine doesn't need a
---- precomputed segment index because it never scans segments per frame in
---- O(n) loops where it matters.
+--- No-op kept for backward compatibility. The current live-frame engine
+--- does NOT consume a precomputed segment index — `tick()` may perform short
+--- linear scans over `segments` (e.g. inCornerSegment, resolveCornerLabel,
+--- findNextBrake fallback). For tracks with many segments (Nordschleife 170+)
+--- this could be re-introduced as a bucket index if profiling shows it matters.
 ---@diagnostic disable-next-line: unused-local
 function M.rebuildSegmentIndex(_segments)
   -- intentionally empty (kept so existing call sites in the entry script work)

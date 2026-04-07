@@ -14,8 +14,9 @@ local M = {}
 
 local COLOR_BG_DARK   = rgbm(17 / 255, 17 / 255, 17 / 255, 0.60)
 local COLOR_BG_BORDER = rgbm(239 / 255, 68 / 255, 68 / 255, 0.40)  -- red-500/40
-local COLOR_RED       = rgbm(248 / 255, 113 / 255, 113 / 255, 1.0) -- red-400 (title)
-local COLOR_RED_HARD  = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- red-500
+local COLOR_RED       = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- #EF4444 (per spec)
+local COLOR_RED_LIGHT = rgbm(248 / 255, 113 / 255, 113 / 255, 1.0) -- red-400 (alt title)
+local COLOR_RED_HARD  = COLOR_RED                                  -- back-compat alias
 local COLOR_AMBER     = rgbm(251 / 255, 191 / 255, 36 / 255, 1.0)  -- amber-400
 local COLOR_GREEN     = rgbm(74 / 255, 222 / 255, 128 / 255, 1.0)
 local COLOR_WHITE     = rgbm(255 / 255, 255 / 255, 255 / 255, 1.0)
@@ -107,6 +108,21 @@ local function resolveView(vm)
     kind = "placeholder",
     subState = "no_reference",
   }
+end
+
+-- ---------------------------------------------------------------------------
+-- Lifecycle
+-- ---------------------------------------------------------------------------
+
+--- Reset HUD module state.
+---
+--- The Phase 5 live-frame rewrite (issue #72) holds no persistent module state
+--- — the renderer derives everything from the per-frame view model. Exported
+--- as a no-op so the entry script's session/driving reset paths can keep
+--- calling `hud.reset()` without crashing the runtime.
+function M.reset()
+  -- Intentionally empty: no module-level state to clear in the live-frame
+  -- rewrite. Kept exported for entry-script reset symmetry.
 end
 
 -- ---------------------------------------------------------------------------
