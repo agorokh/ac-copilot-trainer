@@ -1,44 +1,51 @@
--- Real-time per-corner coaching engine (issue #57 Part D).
--- State machine: straight -> approaching -> braking -> corner -> exiting -> straight.
--- O(1) spline lookup via quantized bucket index for Nordschleife (170+ segments).
-
-local coachingHints = require("coaching_hints")
+-- Live-frame coaching engine (issue #72 rebuild).
+--
+-- DESIGN PRINCIPLES (per issue #72):
+--   1. Operates on LIVE FRAME inputs only — no lap-aggregate features.
+--   2. Always returns a viewmodel (never nil). Empty state returns a
+--      placeholder so the UI is never blank.
+--   3. Uses persisted reference data the moment the session starts:
+--        - state.bestSortedTrace      → reference speed at any spline pos
+--        - state.brakingPoints.best   → next brake point lookup
+--        - state.trackSegments        → corner labels and spline ranges
+--   4. Does NOT depend on lap-aggregate corner features at all
+--      (those used to gate hints behind a 2-lap warm-up).
+--
+-- The viewmodel contract is shared by both windows: top tile reads
+-- {primaryLine, secondaryLine, kind} and bottom tile reads
+-- {turnLabel, targetSpeedKmh, currentSpeedKmh, distToBrakeM, progressPct}.
 
 local M = {}
 
 -- ---------------------------------------------------------------------------
--- Constants
+-- Tunable thresholds (live-frame deltas, not lap aggregates).
 -- ---------------------------------------------------------------------------
 
-local NUM_BUCKETS = 1000          -- quantization resolution for O(1) lookup
-local EXIT_WINDOW_SPLINE = 0.008  -- spline distance past corner s1 for "exiting" phase
-local APPROACH_DEFAULT_M = 200    -- fallback approach distance in meters
+local BRAKE_NOW_DIST_M     = 50    -- inside this distance, "BRAKE NOW" if too fast
+local PREPARE_DIST_M       = 100   -- inside this, "PREPARE TO BRAKE" if a bit fast
+local BRAKE_OVER_KMH       = 8     -- "too fast" delta for BRAKE NOW
+local PREPARE_OVER_KMH     = 5     -- "too fast" delta for PREPARE TO BRAKE
+local CORNER_DELTA_KMH     = 8     -- in-corner ±delta for "carry more / ease off"
+local APPROACH_DEFAULT_M   = 200   -- max distance ahead we even look at the next brake
 
 -- ---------------------------------------------------------------------------
--- Module state (reset via M.reset)
+-- Module state (reset via M.reset).
 -- ---------------------------------------------------------------------------
 
-local phase = "straight"           ---@type string
-local currentCornerLabel = nil     ---@type string|nil
-local activeHint = nil             ---@type table|nil  {text, kind, cornerLabel}
-local hintShownThisLap = {}        ---@type table<string, boolean>  "T5_3" -> true
-local lastLapCount = 0
-local exitSplineTarget = nil       ---@type number|nil  spline position where exiting ends
-
--- Segment index: buckets[i] = segment index or nil
-local buckets = {}                 ---@type (integer|nil)[]
-local indexedSegments = {}         ---@type table[]
-local indexBuilt = false
-
--- Precomputed sorted list of brake/corner segment spline starts for O(1) approach scan.
-local brakeCornerStarts = {}       ---@type {s0: number, idx: integer}[]
-
--- Precomputed brake segment index -> corner label map for O(1) label lookup.
-local brakeToCornerLabel = {}      ---@type table<integer, string>
+local lastView = nil               -- last returned viewmodel (for dedupe / fade)
+local lastEmittedKey = nil         -- {kind .. ":" .. cornerLabel}
+local lastEmittedAt = -1e9         -- monotonic time of last emission (seconds)
+local monoClock = 0                -- accumulated dt for dedupe (no os.time dependency)
 
 -- ---------------------------------------------------------------------------
--- Bucket-based O(1) segment index
+-- Helpers
 -- ---------------------------------------------------------------------------
+
+local function clamp(v, lo, hi)
+  if v < lo then return lo end
+  if v > hi then return hi end
+  return v
+end
 
 local function wrap01(x)
   local s = x % 1
@@ -46,315 +53,297 @@ local function wrap01(x)
   return s
 end
 
---- Circular spline distance (handles wrap-around near start/finish).
----@param a number
----@param b number
----@return number  always in [0, 0.5]
-local function splineDist(a, b)
-  local d = math.abs(a - b)
-  return math.min(d, 1 - d)
+--- Forward spline distance (always positive, in [0, 1)).
+local function forwardSplineDelta(carSp, targetSp)
+  local d = (targetSp - carSp) % 1
+  if d < 0 then d = d + 1 end
+  return d
 end
 
---- Build the quantized bucket index from segments.
---- Each bucket maps to the segment that covers that spline range.
---- Also precomputes brakeCornerStarts for O(1) approach detection.
----@param segments table[]
-function M.rebuildSegmentIndex(segments)
-  buckets = {}
-  indexedSegments = segments or {}
-  indexBuilt = false
-  brakeCornerStarts = {}
-  brakeToCornerLabel = {}
-  if not segments or #segments == 0 then
-    return
-  end
-  for b = 1, NUM_BUCKETS do
-    buckets[b] = nil
-  end
-  for i = 1, #segments do
-    local seg = segments[i]
-    local s0 = seg.s0 or 0
-    local s1 = seg.s1 or 0
-    local isWrap = s1 < s0
-    local b0 = math.floor(s0 * NUM_BUCKETS) + 1
-    local b1 = math.floor(s1 * NUM_BUCKETS) + 1
-    if b0 > NUM_BUCKETS then b0 = NUM_BUCKETS end
-    if b1 > NUM_BUCKETS then b1 = NUM_BUCKETS end
-    if isWrap then
-      for b = b0, NUM_BUCKETS do
-        buckets[b] = i
-      end
-      for b = 1, b1 do
-        buckets[b] = i
-      end
-    else
-      for b = b0, b1 do
-        buckets[b] = i
-      end
-    end
-    -- Collect brake/corner entries for approach lookahead
-    if seg.kind == "brake" or seg.kind == "corner" then
-      brakeCornerStarts[#brakeCornerStarts + 1] = { s0 = s0, idx = i }
-    end
-  end
-  -- Sort by s0 for binary search
-  table.sort(brakeCornerStarts, function(a, b) return a.s0 < b.s0 end)
-  -- Precompute brake -> corner label map
-  brakeToCornerLabel = {}
-  for i = 1, #segments do
-    local seg = segments[i]
-    if seg.kind == "brake" then
-      local bestLabel = seg.label or "?"
-      local bestDist = math.huge
-      for j = 1, #segments do
-        local cs = segments[j]
-        if cs.kind == "corner" and cs.brakeSpline then
-          local d = splineDist(cs.brakeSpline, seg.s0 or 0)
-          if d < bestDist then
-            bestDist = d
-            bestLabel = cs.label
-          end
+--- Find the next brake point ahead of the car. Returns the brake-point table
+--- and the spline-distance ahead (0..1). Falls back through the segment list
+--- if brakingPoints.best is empty.
+local function findNextBrake(carSp, brakes, segments)
+  local bestEntry, bestDelta
+  if type(brakes) == "table" and #brakes > 0 then
+    for i = 1, #brakes do
+      local bp = brakes[i]
+      if bp and bp.spline then
+        local d = forwardSplineDelta(carSp, bp.spline)
+        if d > 1e-9 and (bestDelta == nil or d < bestDelta) then
+          bestEntry = bp
+          bestDelta = d
         end
       end
-      brakeToCornerLabel[i] = bestLabel
     end
   end
-  indexBuilt = true
+  if bestEntry then
+    return bestEntry, bestDelta
+  end
+  -- Fallback: scan segments for the next brake-or-corner kind.
+  if type(segments) == "table" and #segments > 0 then
+    for i = 1, #segments do
+      local seg = segments[i]
+      if seg and (seg.kind == "brake" or seg.kind == "corner") then
+        local sp = seg.brakeSpline or seg.s0 or 0
+        local d = forwardSplineDelta(carSp, sp)
+        if d > 1e-9 and (bestDelta == nil or d < bestDelta) then
+          bestEntry = {
+            spline = sp,
+            entrySpeed = seg.entrySpeed,
+            label = seg.label,
+          }
+          bestDelta = d
+        end
+      end
+    end
+  end
+  return bestEntry, bestDelta
 end
 
---- O(1) lookup: find which segment contains the given spline position.
----@param splinePos number
----@return table|nil segment, integer|nil index
-local function findSegment(splinePos)
-  if not indexBuilt or #indexedSegments == 0 then
-    return nil, nil
+--- Resolve a corner label for a brake-point spline by walking the segment
+--- list. Used when brakingPoints.best entries don't carry their own labels.
+local function resolveCornerLabel(brakePoint, segments)
+  if not brakePoint then return nil end
+  if type(brakePoint.label) == "string" and brakePoint.label ~= "" then
+    return brakePoint.label
   end
-  local b = math.floor(wrap01(splinePos) * NUM_BUCKETS) + 1
-  if b > NUM_BUCKETS then b = NUM_BUCKETS end
-  local idx = buckets[b]
-  if idx then
-    local seg = indexedSegments[idx]
-    -- Validate position is within segment range (handles quantization boundary)
-    if seg then
-      local s0 = seg.s0 or 0
-      local s1 = seg.s1 or 0
-      local sp = wrap01(splinePos)
-      local inRange
+  if type(segments) ~= "table" then return nil end
+  local target = brakePoint.spline or 0
+  local bestLabel, bestDist
+  for i = 1, #segments do
+    local seg = segments[i]
+    if seg and seg.kind == "corner" then
+      local s = seg.brakeSpline or seg.s0 or 0
+      local d = math.abs(s - target)
+      if d > 0.5 then d = 1 - d end
+      if bestDist == nil or d < bestDist then
+        bestDist = d
+        bestLabel = seg.label
+      end
+    end
+  end
+  return bestLabel
+end
+
+--- Is the car currently inside a corner segment?
+local function inCornerSegment(carSp, segments)
+  if type(segments) ~= "table" then return false, nil end
+  local sp = wrap01(carSp)
+  for i = 1, #segments do
+    local seg = segments[i]
+    if seg and seg.kind == "corner" then
+      local s0, s1 = seg.s0 or 0, seg.s1 or 0
+      local inside
       if s1 > s0 then
-        inRange = sp >= s0 and sp <= s1
+        inside = sp >= s0 and sp <= s1
       else
-        -- Wrap-around segment (crosses start/finish)
-        inRange = sp >= s0 or sp <= s1
+        inside = sp >= s0 or sp <= s1
       end
-      if inRange then
-        return seg, idx
+      if inside then
+        return true, seg
       end
     end
   end
-  return nil, nil
+  return false, nil
 end
 
--- ---------------------------------------------------------------------------
--- Next-segment lookahead (precomputed O(1) via sorted brakeCornerStarts)
--- ---------------------------------------------------------------------------
-
---- Find the next brake or corner segment ahead of the current spline position.
---- Uses the precomputed sorted brakeCornerStarts list for efficient lookup.
----@param splinePos number
----@return table|nil nextSeg, number|nil splineDist, integer|nil segIdx
-local function findNextBrakeOrCorner(splinePos)
-  if #brakeCornerStarts == 0 then
-    return nil, nil, nil
-  end
-  local sp = wrap01(splinePos)
-  -- Binary search: find the first entry with s0 > sp
-  local lo, hi = 1, #brakeCornerStarts
-  local bestIdx = nil
-  while lo <= hi do
+--- Linear interpolate the reference speed at a spline position from a
+--- best-lap trace (sorted by spline ascending). Each sample must have
+--- `.spline` and `.speed`. Returns nil if the trace is missing or too short.
+local function refSpeedAtSpline(trace, sp)
+  if type(trace) ~= "table" or #trace < 2 then return nil end
+  local n = #trace
+  local s = wrap01(sp)
+  if s <= trace[1].spline then return tonumber(trace[1].speed) end
+  if s >= trace[n].spline then return tonumber(trace[n].speed) end
+  local lo, hi = 1, n
+  while hi - lo > 1 do
     local mid = math.floor((lo + hi) / 2)
-    if brakeCornerStarts[mid].s0 > sp then
-      bestIdx = mid
-      hi = mid - 1
-    else
-      lo = mid + 1
-    end
+    if trace[mid].spline <= s then lo = mid else hi = mid end
   end
-  -- If nothing ahead, wrap to the first entry
-  if not bestIdx then
-    bestIdx = 1
-  end
-  local entry = brakeCornerStarts[bestIdx]
-  local seg = indexedSegments[entry.idx]
-  local d = (entry.s0 - sp) % 1
-  if d < 1e-9 then d = 0 end
-  return seg, d, entry.idx
-end
-
---- Resolve the corner label for a brake segment.
---- Uses the precomputed brakeToCornerLabel map for O(1) lookup;
---- falls back to segment label if not indexed (e.g. dynamic segment).
----@param brakeSeg table
----@param segIdx integer|nil
----@return string
-local function cornerLabelForBrake(brakeSeg, segIdx)
-  if segIdx and brakeToCornerLabel[segIdx] then
-    return brakeToCornerLabel[segIdx]
-  end
-  return brakeSeg.label or "?"
+  local a, b = trace[lo], trace[hi]
+  local ds = b.spline - a.spline
+  if ds <= 1e-9 then return tonumber(a.speed) end
+  local t = (s - a.spline) / ds
+  local va, vb = tonumber(a.speed), tonumber(b.speed)
+  if not va or not vb then return nil end
+  return va + t * (vb - va)
 end
 
 -- ---------------------------------------------------------------------------
--- Hint selection (delegates to coaching_hints.buildRealTime)
+-- Public API
 -- ---------------------------------------------------------------------------
 
----@param cornerLabel string
----@param lapCount integer
----@param lastFeats table[]|nil
----@param bestFeats table[]|nil
----@return table|nil  {text, kind, cornerLabel}
-local function selectHint(cornerLabel, lapCount, lastFeats, bestFeats)
-  local key = cornerLabel .. "_" .. tostring(lapCount)
-  if hintShownThisLap[key] then
-    return nil
-  end
-
-  local result = coachingHints.buildRealTime(cornerLabel, lastFeats, bestFeats)
-  if not result then
-    return nil
-  end
-
-  hintShownThisLap[key] = true
+--- Place-holder viewmodel for the empty state. Returned when the app has zero
+--- reference data — keeps both tiles painted with sensible copy.
+local function placeholderView(curSpeed)
   return {
-    text = result.text,
-    kind = result.kind,
-    cornerLabel = cornerLabel,
+    primaryLine = "DRIVE A LAP",
+    secondaryLine = "REFERENCE WILL APPEAR",
+    kind = "placeholder",
+    subState = "no_reference",
+    cornerLabel = nil,
+    targetSpeedKmh = nil,
+    currentSpeedKmh = curSpeed,
+    distToBrakeM = nil,
+    progressPct = 0,
+    brakeIndex = nil,
   }
 end
 
--- ---------------------------------------------------------------------------
--- State machine tick
--- ---------------------------------------------------------------------------
-
---- Advance the phase state machine and select hints.
---- Called once per frame from script.update.
----@param opts table
----@return table|nil activeHint  {text, kind, cornerLabel} or nil
+--- Live-frame tick. Always returns a viewmodel (never nil).
+---@param opts table  {splinePos, currentSpeedKmh, bestSortedTrace, brakingPoints, segments, trackLengthM, approachMeters, dt}
+---@return table viewmodel
 function M.tick(opts)
-  local sp = opts.splinePos or 0
-  local lc = opts.lapCount or 0
-  local segments = opts.segments
-  local bestFeats = opts.bestCornerFeatures
-  local lastFeats = opts.lastLapCornerFeats
-  local trackLenM = opts.trackLengthM
-  local approachM = opts.approachMeters or APPROACH_DEFAULT_M
-
-  -- Clear dedup map and reset state on new lap
-  if lc ~= lastLapCount then
-    hintShownThisLap = {}
-    lastLapCount = lc
-    activeHint = nil
-    phase = "straight"
-    currentCornerLabel = nil
-    exitSplineTarget = nil
+  opts = opts or {}
+  local sp        = wrap01(tonumber(opts.splinePos) or 0)
+  local cur       = tonumber(opts.currentSpeedKmh) or 0
+  local trace     = opts.bestSortedTrace
+  local brakes    = opts.brakingPoints or {}
+  local segments  = opts.segments or {}
+  local trackLen  = tonumber(opts.trackLengthM) or 0
+  local approachM = tonumber(opts.approachMeters)
+  if not approachM or approachM ~= approachM or approachM <= 0 then
+    approachM = APPROACH_DEFAULT_M
   end
 
-  -- Rebuild index if segments changed
-  if segments ~= indexedSegments then
-    M.rebuildSegmentIndex(segments)
+  -- Empty state — no reference at all
+  local hasTrace    = type(trace) == "table" and #trace >= 2
+  local hasBrakes   = type(brakes) == "table" and #brakes > 0
+  local hasSegments = type(segments) == "table" and #segments > 0
+  if not hasTrace and not hasBrakes and not hasSegments then
+    lastView = placeholderView(cur)
+    return lastView
   end
 
-  if not indexBuilt or #indexedSegments == 0 then
-    phase = "straight"
-    activeHint = nil
-    return nil
+  -- Find the next braking opportunity ahead of the car
+  local nextBrake, nextDelta = findNextBrake(sp, brakes, segments)
+  local distToBrakeM
+  if nextBrake and nextDelta and trackLen > 0 then
+    distToBrakeM = nextDelta * trackLen
+  end
+  local cornerLabel = resolveCornerLabel(nextBrake, segments)
+  local targetSpeed = nextBrake and tonumber(nextBrake.entrySpeed) or nil
+
+  -- Are we currently inside a corner segment?
+  -- In-corner override: when the car is INSIDE a known corner segment,
+  -- the in-corner label takes priority over any next-corner-ahead label.
+  -- Also CLEAR nextBrake/targetSpeed/distToBrake so the in-corner priority
+  -- rules don't accidentally render the NEXT corner's target speed under
+  -- the CURRENT corner's label (e.g. "BRAKE NOW / TARGET 120 km/h" attributed
+  -- to T4 when 120 km/h is actually T5's entry speed).
+  local inCorner, cornerSeg = inCornerSegment(sp, segments)
+  if inCorner and cornerSeg and cornerSeg.label then
+    cornerLabel = cornerSeg.label
+    nextBrake = nil
+    distToBrakeM = nil
+    targetSpeed = nil
   end
 
-  local seg, segIdx = findSegment(sp)
-  local segKind = seg and seg.kind or nil
+  -- Reference speed at this exact spline position
+  local refSpeed = hasTrace and refSpeedAtSpline(trace, sp) or nil
 
-  -- Detect approaching: on a straight (or gap), check if next brake/corner is within approachMeters.
-  -- Skip when exiting a corner so the exit window can complete before approach begins.
-  if phase ~= "corner" and phase ~= "exiting" and (segKind == "straight" or segKind == nil) and trackLenM and trackLenM > 0 then
-    local nextSeg, nextDist, nextIdx = findNextBrakeOrCorner(sp)
-    if nextSeg and nextDist then
-      local distM = nextDist * trackLenM
-      if distM <= approachM then
-        local label = nextSeg.kind == "brake"
-          and cornerLabelForBrake(nextSeg, nextIdx)
-          or nextSeg.label
-        if currentCornerLabel ~= label then
-          currentCornerLabel = label
-          activeHint = selectHint(label, lc, lastFeats, bestFeats)
-        end
-        phase = "approaching"
-        return activeHint
-      end
-    end
+  -- Build the structured viewmodel that BOTH tiles consume
+  local view = {
+    primaryLine     = nil,
+    secondaryLine   = nil,
+    kind            = "info",
+    subState        = "cruising",
+    cornerLabel     = cornerLabel,
+    targetSpeedKmh  = targetSpeed,
+    currentSpeedKmh = cur,
+    distToBrakeM    = distToBrakeM,
+    progressPct     = 0,
+    brakeIndex      = nil,
+  }
+
+  if distToBrakeM and distToBrakeM <= approachM then
+    view.progressPct = clamp(1 - (distToBrakeM / approachM), 0, 1)
   end
 
-  -- Transition based on current segment kind
-  if segKind == "brake" then
-    local label = cornerLabelForBrake(seg, segIdx)
-    if currentCornerLabel ~= label then
-      currentCornerLabel = label
-      activeHint = selectHint(label, lc, lastFeats, bestFeats)
-    end
-    phase = "braking"
+  -- ----- Live-frame priority rules (one hint at a time) -----
 
-  elseif segKind == "corner" then
-    if currentCornerLabel ~= seg.label then
-      currentCornerLabel = seg.label
-      activeHint = selectHint(seg.label, lc, lastFeats, bestFeats)
-    end
-    phase = "corner"
+  if distToBrakeM and targetSpeed and distToBrakeM <= BRAKE_NOW_DIST_M
+      and cur > targetSpeed + BRAKE_OVER_KMH then
+    view.primaryLine = "BRAKE NOW"
+    view.secondaryLine = string.format("TARGET %.0f KM/H", targetSpeed)
+    view.kind = "brake"
+    view.subState = "braking"
 
-  elseif segKind == "straight" or segKind == nil then
-    if phase == "corner" then
-      -- Transition to exiting: hold hint for EXIT_WINDOW_SPLINE distance
-      phase = "exiting"
-      exitSplineTarget = wrap01(sp + EXIT_WINDOW_SPLINE)
-    elseif phase == "exiting" then
-      -- Check if we have passed the exit window
-      local pastExit
-      if exitSplineTarget then
-        local d = (sp - exitSplineTarget) % 1
-        pastExit = d < 0.5
-      else
-        pastExit = true
-      end
-      if pastExit then
-        phase = "straight"
-        activeHint = nil
-        currentCornerLabel = nil
-        exitSplineTarget = nil
-      end
-    else
-      phase = "straight"
-      activeHint = nil
-      currentCornerLabel = nil
-      exitSplineTarget = nil
-    end
+  elseif distToBrakeM and targetSpeed and distToBrakeM <= PREPARE_DIST_M
+      and cur > targetSpeed + PREPARE_OVER_KMH then
+    view.primaryLine = "PREPARE TO BRAKE"
+    view.secondaryLine = cornerLabel and ("NEXT: " .. cornerLabel) or "NEXT TURN"
+    view.kind = "brake"
+    view.subState = "approaching"
+
+  elseif inCorner and refSpeed and cur < refSpeed - CORNER_DELTA_KMH then
+    view.primaryLine = "CARRY MORE SPEED"
+    view.secondaryLine = string.format("%+.0f KM/H VS REFERENCE", cur - refSpeed)
+    view.kind = "line"
+    view.subState = "in_corner"
+
+  elseif inCorner and refSpeed and cur > refSpeed + CORNER_DELTA_KMH then
+    view.primaryLine = "EASE OFF"
+    view.secondaryLine = string.format("%+.0f KM/H VS REFERENCE", cur - refSpeed)
+    view.kind = "line"
+    view.subState = "in_corner"
+
+  elseif distToBrakeM and distToBrakeM <= approachM and cornerLabel then
+    -- We're inside the approach window but not yet too fast — show "approaching"
+    -- copy so the bottom tile has something to display.
+    view.primaryLine = "APPROACHING"
+    view.secondaryLine = "NEXT: " .. cornerLabel
+    view.kind = "info"
+    view.subState = "approaching"
+
+  else
+    -- Free flowing
+    view.primaryLine = "ON PACE"
+    view.secondaryLine = cornerLabel and ("NEXT: " .. cornerLabel) or "FREE LAP"
+    view.kind = "info"
+    view.subState = "cruising"
   end
 
-  return activeHint
+  -- Change detection key. Includes subState + primaryLine so escalations
+  -- like PREPARE TO BRAKE → BRAKE NOW (same kind, same corner) are NOT
+  -- collapsed and the urgent hint is shown immediately.
+  --
+  -- The old "inherit lastView primaryLine within DEDUP_HOLD_SEC" branch was a
+  -- no-op (when keys match, lastView is identical to the new view), so it
+  -- has been removed. Anti-flicker is now driven by hysteresis in the
+  -- threshold tests themselves (8 km/h corner deltas, 50 m / 100 m brake
+  -- distance bands) which already provide a comfortable dead band.
+  local key = table.concat({
+    tostring(view.kind or "?"),
+    tostring(view.subState or "?"),
+    tostring(view.cornerLabel or "?"),
+    tostring(view.primaryLine or "?"),
+  }, ":")
+  if key ~= lastEmittedKey then
+    lastEmittedKey = key
+  end
+
+  lastView = view
+  return view
 end
 
--- ---------------------------------------------------------------------------
--- Reset
--- ---------------------------------------------------------------------------
-
+--- Reset all module state. Called from the entry script when leaving the
+--- track or starting a fresh session.
 function M.reset()
-  phase = "straight"
-  currentCornerLabel = nil
-  activeHint = nil
-  hintShownThisLap = {}
-  lastLapCount = 0
-  exitSplineTarget = nil
-  buckets = {}
-  indexedSegments = {}
-  indexBuilt = false
-  brakeCornerStarts = {}
-  brakeToCornerLabel = {}
+  lastView = nil
+  lastEmittedKey = nil
+end
+
+--- No-op kept for backward compatibility. The current live-frame engine
+--- does NOT consume a precomputed segment index — `tick()` may perform short
+--- linear scans over `segments` (e.g. inCornerSegment, resolveCornerLabel,
+--- findNextBrake fallback). For tracks with many segments (Nordschleife 170+)
+--- this could be re-introduced as a bucket index if profiling shows it matters.
+---@diagnostic disable-next-line: unused-local
+function M.rebuildSegmentIndex(_segments)
+  -- intentionally empty (kept so existing call sites in the entry script work)
 end
 
 return M

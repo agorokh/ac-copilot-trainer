@@ -1,210 +1,121 @@
--- Font system: multi-font DWriteFont support for polished panels (issue #57 Part C).
--- Extends the original single-font BMW resolver with named font roles.
+-- Font system: bundled DWriteFont references via inline-path syntax (issue #72).
+-- Pattern lifted from CMRT-Essential-HUD/common/settings.lua: construct each
+-- DWriteFont once at module load with `Family:/content/fonts;Weight=...` so the
+-- file is resolved against the script root. CSP serves the bundled .ttf files
+-- from src/ac_copilot_trainer/content/fonts/ — no system-font fallback needed.
 
 local M = {}
 
 -- ---------------------------------------------------------------------------
--- Cache / state
+-- Bundled font references (constructed once, reused every frame).
+-- The :/content/fonts segment is a CSP shorthand for "directory under the
+-- running script's root". Each font name maps to a real .ttf inside that dir.
 -- ---------------------------------------------------------------------------
 
-local dwriteStr ---@type string|nil          -- legacy BMW fallback descriptor
-local dwriteTried = false
-
-local FONT_PT = 22                            -- legacy default point size
-
---- Named font descriptors resolved lazily.
---- Keys: "numbers" (Michroma / Consolas), "labels" (Montserrat / Segoe UI),
----        "brand" (Syncopate / Segoe UI), "legacy" (BMW.txt).
----@type table<string, string|false>
-local namedCache = {}
-
--- ---------------------------------------------------------------------------
--- Helpers
--- ---------------------------------------------------------------------------
-
----@param body string
----@return string|nil filename with extension
-local function extractFontFilename(body)
-  if not body then
+local function safeDWrite(spec)
+  if type(ui) ~= "table" or type(ui.DWriteFont) ~= "function" then
     return nil
   end
-  for line in body:gmatch("[^\r\n]+") do
-    local trimmed = line:match("^%s*(.-)%s*$") or line
-    local low = trimmed:lower()
-    if low ~= "" and not low:match("^;") and not low:match("^#") then
-      local eq = trimmed:match("=%s*(.+)$")
-      local seg = eq or trimmed
-      local fn = seg:match("([%w%s_%-%.]+%.[tT][tT][fF])")
-        or seg:match("([%w%s_%-%.]+%.[oO][tT][fF])")
-      if fn then
-        return fn:match("^%s*(.-)%s*$") or fn
-      end
-    end
-  end
-  local fb = body:match("([%w%s_%-%.]+%.[tT][tT][fF])") or body:match("([%w%s_%-%.]+%.[oO][tT][fF])")
-  if fb then
-    return fb:match("^%s*(.-)%s*$") or fb
+  local ok, font = pcall(function()
+    return ui.DWriteFont(spec)
+  end)
+  if ok and font then
+    return font
   end
   return nil
 end
 
--- ---------------------------------------------------------------------------
--- Legacy BMW descriptor (backward compat)
--- ---------------------------------------------------------------------------
+--- Bundled font cache. Built lazily on first access so test stubs that don't
+--- supply ui.DWriteFont don't crash.
+local cache = nil
 
----@return string|nil @Descriptor string for ui.pushDWriteFont, or nil
-function M.dwriteDescriptor()
-  if dwriteTried then
-    return dwriteStr
+local function loadCache()
+  if cache then
+    return cache
   end
-  dwriteTried = true
-  if not ac or type(ac.getFolder) ~= "function" or not ui or not ui.DWriteFont then
-    return nil
-  end
-  local okRoot, root = pcall(function()
-    return ac.getFolder(ac.FolderID.Root)
-  end)
-  if not okRoot or not root or root == "" then
-    return nil
-  end
-  local dirSep = root:find("\\", 1, true) and "\\" or "/"
-  local baseRoot = root:gsub("[\\/]+$", "")
-  local path = baseRoot .. dirSep .. "content" .. dirSep .. "fonts" .. dirSep .. "bmw.txt"
-  local f = io.open(path, "r")
-  if not f then
-    path = baseRoot .. dirSep .. "content" .. dirSep .. "fonts" .. dirSep .. "BMW.txt"
-    f = io.open(path, "r")
-  end
-  if not f then
-    return nil
-  end
-  local body = f:read("*a")
-  f:close()
-  if not body then
-    return nil
-  end
-  local ttf = extractFontFilename(body)
-  if not ttf then
-    return nil
-  end
-  local base = ttf:gsub("%.[^.]+$", ""):gsub("^%s+", ""):gsub("%s+$", "")
-  local ok, s = pcall(function()
-    return tostring(ui.DWriteFont(base, "content/fonts"):allowRealSizes(true))
-  end)
-  if ok and type(s) == "string" and s ~= "" then
-    dwriteStr = s
-    return dwriteStr
-  end
-  return nil
+  cache = {
+    -- Michroma — display/numbers font (corner labels, big speed numbers)
+    michroma = safeDWrite("Michroma:/content/fonts"),
+    -- Montserrat — UI labels (regular and bold weights)
+    montserrat = safeDWrite("Montserrat:/content/fonts;Weight=Regular"),
+    montserrat_bold = safeDWrite("Montserrat:/content/fonts;Weight=Bold"),
+    -- Syncopate — Porsche-style brand wordmark in the footer
+    syncopate_bold = safeDWrite("Syncopate:/content/fonts;Weight=Bold"),
+  }
+  return cache
 end
 
 -- ---------------------------------------------------------------------------
--- Named font resolution (Part C)
+-- Public API
 -- ---------------------------------------------------------------------------
 
---- Try to create a DWriteFont descriptor for a system-installed font.
---- Returns the descriptor string or nil.
----@param familyName string   e.g. "Michroma", "Montserrat", "Consolas"
----@return string|nil
-local function trySystemFont(familyName)
-  if not ui or not ui.DWriteFont then
-    return nil
-  end
-  local ok, desc = pcall(function()
-    return tostring(ui.DWriteFont(familyName):allowRealSizes(true))
-  end)
-  if ok and type(desc) == "string" and desc ~= "" then
-    return desc
-  end
-  return nil
+--- Font handles for use with `ui.pushDWriteFont(...)` and
+--- `ui.dwriteDrawText(...)`. Returns the cached table.
+---@return table
+function M.fonts()
+  return loadCache()
 end
 
---- Resolve a named font role. Tries preferred fonts in order, falls back.
---- Results are cached per role name.
----@param role 'numbers'|'labels'|'brand'|'legacy'
----@return string|nil @DWriteFont descriptor or nil (use builtin fallback)
-function M.namedDescriptor(role)
-  if namedCache[role] ~= nil then
-    local v = namedCache[role]
-    return v ~= false and v or nil
+--- Push a named font onto the DWriteFont stack. Pair with `M.pop()`. Returns
+--- a token that should be passed to `M.pop()` so unsupported builds don't
+--- accidentally pop something they didn't push.
+---@param role 'numbers'|'labels'|'labels_bold'|'brand'|'legacy'|nil
+---@return string|nil token
+function M.pushNamed(role)
+  if type(ui) ~= "table" or type(ui.pushDWriteFont) ~= "function" then
+    return nil
   end
-
-  local desc
+  local fonts = loadCache()
+  local font
   if role == "numbers" then
-    -- Michroma (Google Font, motorsport display) -> Consolas -> BMW legacy
-    desc = trySystemFont("Michroma")
-      or trySystemFont("Consolas")
-      or M.dwriteDescriptor()
+    font = fonts.michroma
   elseif role == "labels" then
-    -- Montserrat (Google Font, clean labels) -> Segoe UI -> BMW legacy
-    desc = trySystemFont("Montserrat")
-      or trySystemFont("Segoe UI")
-      or M.dwriteDescriptor()
+    font = fonts.montserrat
+  elseif role == "labels_bold" then
+    font = fonts.montserrat_bold
   elseif role == "brand" then
-    -- Syncopate (Google Font, branding) -> Segoe UI -> BMW legacy
-    desc = trySystemFont("Syncopate")
-      or trySystemFont("Segoe UI")
-      or M.dwriteDescriptor()
+    font = fonts.syncopate_bold
   else
-    desc = M.dwriteDescriptor()
+    font = fonts.michroma
   end
-
-  namedCache[role] = desc or false
-  return desc
+  if not font then
+    return nil
+  end
+  local ok = pcall(function()
+    ui.pushDWriteFont(font)
+  end)
+  if not ok then
+    return nil
+  end
+  return "dwrite"
 end
 
--- ---------------------------------------------------------------------------
--- Push / pop (named)
--- ---------------------------------------------------------------------------
-
---- Push a named font at a given size. Returns a kind token for pop().
----@param role 'numbers'|'labels'|'brand'|nil  (nil = legacy)
----@param size number|nil  point size (default 22)
----@return "dwrite"|"builtin"|nil
-function M.pushNamed(role, size)
-  local pt = size or FONT_PT
-  local desc = M.namedDescriptor(role or "legacy")
-  if desc and type(ui.pushDWriteFont) == "function" then
-    local ok = pcall(function()
-      ui.pushDWriteFont(desc, pt)
-    end)
-    if ok then
-      return "dwrite"
-    end
-    ok = pcall(function()
-      ui.pushDWriteFont(desc)
-    end)
-    if ok then
-      return "dwrite"
-    end
-  end
-  if ui and ui.Font and type(ui.pushFont) == "function" then
-    local ok = pcall(function()
-      ui.pushFont(ui.Font.Title)
-    end)
-    if ok then
-      return "builtin"
-    end
-  end
-  return nil
-end
-
--- ---------------------------------------------------------------------------
--- Legacy push / pop (backward compat)
--- ---------------------------------------------------------------------------
-
----@return "dwrite"|"builtin"|nil
-function M.push()
-  return M.pushNamed(nil, FONT_PT)
-end
-
----@param kind "dwrite"|"builtin"|nil
-function M.pop(kind)
-  if kind == "dwrite" and type(ui.popDWriteFont) == "function" then
+---@param token string|nil
+function M.pop(token)
+  if token == "dwrite" and type(ui) == "table" and type(ui.popDWriteFont) == "function" then
     pcall(ui.popDWriteFont)
-  elseif kind == "builtin" and type(ui.popFont) == "function" then
-    pcall(ui.popFont)
   end
+end
+
+-- Backward-compat shims (some legacy code paths call .push() / .dwriteDescriptor()).
+function M.push()
+  return M.pushNamed("numbers")
+end
+
+function M.namedDescriptor(role)
+  local fonts = loadCache()
+  if role == "labels" then
+    return fonts.montserrat
+  elseif role == "labels_bold" then
+    return fonts.montserrat_bold
+  elseif role == "brand" then
+    return fonts.syncopate_bold
+  end
+  return fonts.michroma
+end
+
+function M.dwriteDescriptor()
+  return loadCache().michroma
 end
 
 return M

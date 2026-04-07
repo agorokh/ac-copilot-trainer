@@ -1,5 +1,5 @@
 -- AC Copilot Trainer v0.4.2
-local APP_VERSION_UI = "v0.4.2"
+local APP_VERSION_UI = "v0.5.0"
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -583,6 +583,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   state.realtimeActiveHint = nil
+  state._cachedRealtimeView = nil
   hud.reset()
   resetDeltaSmoother()
 end
@@ -601,6 +602,7 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
+  state._cachedRealtimeView = nil
   hud.reset()
   realtimeCoaching.reset()
   tel = newTelemetry()
@@ -783,88 +785,6 @@ end
 --- Structured approach telemetry for HUD + coaching panel (issue #57 Part A).
 ---@param sim0 ac.StateSim|nil
 ---@return table|nil
-local function approachHudData(car0, sortedTrace, sim0)
-  ensureCornerSteerSides()
-  ensureCornerIniLoaded()
-  local best = state.brakingPoints.best
-  if not car0 or not car0.position or #best == 0 then
-    return nil
-  end
-  local carSp = car0.splinePosition or 0
-  local cx, cy, cz = car0.position.x, car0.position.y, car0.position.z
-  local bestI, bestSplineD, bestDistSq ---@type integer|nil, number|nil, number|nil
-  for i = 1, #best do
-    local p = best[i]
-    local dx, dy, dz = cx - p.px, cy - p.py, cz - p.pz
-    local distSq = dx * dx + dy * dy + dz * dz
-    local dS = splineForwardDelta(carSp, p.spline or 0)
-    if dS < 1e-9 then
-      dS = 1e-9
-    end
-    if bestI == nil or dS < bestSplineD - 1e-12 or (math.abs(dS - bestSplineD) <= 1e-12 and distSq < bestDistSq) then
-      bestI = i
-      bestSplineD = dS
-      bestDistSq = distSq
-    end
-  end
-  if not bestI or not bestDistSq or not bestSplineD then
-    return nil
-  end
-  local dM = math.sqrt(bestDistSq)
-  local tlM = trackLengthMeters(sim0)
-  if tlM and tlM > 0 then
-    dM = bestSplineD * tlM
-  end
-  local approachM = tonumber(config.approachMeters)
-  if not approachM or approachM ~= approachM or approachM <= 0 then
-    approachM = 200
-  end
-  if dM > approachM then
-    return nil
-  end
-  local bp = best[bestI]
-  local refSpd = bp.entrySpeed or 0
-  if sortedTrace then
-    refSpd = delta.bestSpeedKmhAtSpline(sortedTrace, bp.spline or 0) or refSpd
-  end
-  local cur = car0.speedKmh or 0
-  local dv = cur - refSpd
-  -- Speed bucket for payload consumers (telemetry / sidecar / future UI). Not shown in HUD copy yet.
-  local speedDelta = "match"
-  if dv > 8 then
-    speedDelta = "too fast"
-  elseif dv < -8 then
-    speedDelta = "too slow"
-  end
-  -- Function only returns when dM <= approachM, so status is always "approaching"
-  local status = "approaching"
-  local progressPct = 1 - (dM / approachM)
-  if progressPct < 0 then
-    progressPct = 0
-  elseif progressPct > 1 then
-    progressPct = 1
-  end
-  local turnLabel = cornerNames.resolveApproachLabel({
-    brakeSpline = bp.spline or 0,
-    brakeIndex = bestI,
-    segments = state.trackSegments,
-    iniById = state.cornerIniById,
-    cornerFeats = state.bestCornerFeatures,
-    steerSideByLabel = state.cornerSteerSideByLabel,
-    trace = sortedTrace,
-  })
-  return {
-    turnLabel = turnLabel,
-    targetSpeedKmh = refSpd,
-    currentSpeedKmh = cur,
-    distanceToBrakeM = dM,
-    status = status,
-    speedDelta = speedDelta,
-    progressPct = progressPct,
-    brakeIndex = bestI,
-  }
-end
-
 function script.windowMain(_dt)
   if not config.hudEnabled then
     return
@@ -931,6 +851,7 @@ function script.windowMain(_dt)
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
     realtimeHint = state.realtimeActiveHint,
+    realtimeView = state._cachedRealtimeView,
     postLapLines = postLines,
     coastWarn = coastWarn,
     tireLockupFlash = tires:lockupFlash(),
@@ -980,9 +901,8 @@ function script.windowSettings(_dt)
   end
 end
 
---- Coaching / approach telemetry window (WINDOW_1).
---- Issue #57 Part C: when approaching a corner, show polished structured data panel.
---- Falls back to post-lap coaching hints when not approaching.
+--- Coaching window (WINDOW_1) - issue #72 rebuild.
+--- Always renders the structured approach panel (chrome + footer + placeholders).
 function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
@@ -992,7 +912,7 @@ function script.windowCoaching(_dt)
   local remaining = state.coachingRemainSec or 0
   local laps = state.lapsCompleted or 0
 
-  -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
+  -- Periodic coaching diag (every 5s for first 60s, then stops)
   if not state._coachDiagT then state._coachDiagT = 0 end
   if not state._coachDiagCount then state._coachDiagCount = 0 end
   state._coachDiagT = state._coachDiagT + (_dt or 0)
@@ -1000,72 +920,123 @@ function script.windowCoaching(_dt)
     state._coachDiagT = 0
     state._coachDiagCount = state._coachDiagCount + 1
     ac.log(string.format(
-      "[COPILOT] coaching: simT=%.1f remainSec=%.2f lines=%d laps=%d (timer=dt not sim clock)",
+      "[COPILOT] coaching: simT=%.1f remainSec=%.2f lines=%d laps=%d (rebuild #72)",
       now, remaining, state.coachingLines and #state.coachingLines or 0, laps))
   end
 
-  -- Priority 1: approach telemetry panel (Part C) — shows when approaching a corner
-  local aData = state._cachedApproachData
-  if coachingOverlay.drawApproachPanel(aData) then
-    return  -- panel drawn, skip post-lap coaching in this window
+  -- Always render the bottom tile (issue #72: never an empty box).
+  -- Build the viewmodel from the cached realtime view; pass nil to render
+  -- chrome + placeholders when no data exists yet.
+  local view = state._cachedRealtimeView
+  local payload
+  if view then
+    payload = {
+      turnLabel        = view.cornerLabel,
+      targetSpeedKmh   = view.targetSpeedKmh,
+      currentSpeedKmh  = view.currentSpeedKmh,
+      distanceToBrakeM = view.distToBrakeM,
+      progressPct     = view.progressPct or 0,
+      subState        = view.subState or "no_reference",
+      status          = view.subState or "no_reference",
+    }
   end
+  coachingOverlay.drawApproachPanel(payload)
 
-  -- Priority 2: post-lap coaching (legacy) — shows between approaches
-  if laps == 0 then
-    coachingOverlay.drawFallback()
-    return
-  end
-
-  if remaining > 0 then
-    if state.coachingLines and #state.coachingLines > 0 then
-      coachingOverlay.draw(
-        state.coachingLines,
-        remaining,
-        normalizedCoachingHoldSeconds(),
-        normalizedCoachingMaxVisibleHints()
-      )
-    else
-      coachingOverlay.drawHoldNoHints(remaining)
-    end
+  -- Sidecar debrief (Ollama / rules-based) still draws below the panel
+  -- so the post-lap debrief paragraph is not silently dropped.
+  if type(state.sidecarDebriefText) == "string" and state.sidecarDebriefText ~= "" then
     coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
+  end
+end
+
+-- Issue #72: place each window once on first install (persisted via ac.storage),
+-- then leave the user alone forever. Position is user-controlled after this runs.
+-- Window SIZE is locked by the FIXED_SIZE manifest flag (not by this function).
+local function autoPlaceOnce()
+  if state._autoPlaceChecked then return end
+  if type(ac) ~= "table" or type(ac.storage) ~= "function" then return end
+  local placedFlag = ac.storage("hud_auto_placed_v1", false)
+  if placedFlag and placedFlag.get and placedFlag:get() then
+    state._autoPlaceChecked = true
+    return
+  end
+  if type(ac.getAppWindows) ~= "function" or type(ac.accessAppWindow) ~= "function" then
+    -- API not available yet — try again next frame instead of permanently
+    -- skipping the recovery path on a cold start.
     return
   end
 
-  coachingOverlay.drawBetweenLapsIdle(normalizedCoachingHoldSeconds())
-  coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
+  local localSim = ac.getSim() or {}
+  local screenW = tonumber(localSim.windowWidth) or 1920
+  local screenH = tonumber(localSim.windowHeight) or 1080
+  local targets = {
+    ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
+    ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
+    ["Settings"]           = vec2(math.floor(screenW * 0.05),     math.floor(screenH * 0.10)),
+  }
+  local required = 0
+  for _ in pairs(targets) do required = required + 1 end
+
+  local windows = ac.getAppWindows() or {}
+  if #windows == 0 then
+    -- Window list still empty (e.g. very early frame). Try again next frame.
+    return
+  end
+
+  local moved = 0
+  for i = 1, #windows do
+    local entry = windows[i]
+    local target = entry and entry.title and targets[entry.title] or nil
+    if target then
+      local ok, win = pcall(ac.accessAppWindow, entry.name)
+      if ok and win and win:valid() then
+        local moveOk = pcall(function() win:move(target) end)
+        if moveOk then moved = moved + 1 end
+      end
+    end
+  end
+
+  -- Only mark as done (and persist the flag) if we actually moved every
+  -- target window. Otherwise leave the flag unset so the next frame retries.
+  if moved >= required then
+    state._autoPlaceChecked = true
+    if placedFlag and placedFlag.set then
+      pcall(function() placedFlag:set(true) end)
+    end
+  end
 end
 
 function script.update(dt)
   sim = ac.getSim()
   car = ac.getCar(0)
 
-  -- Cache approach HUD data once per frame for both windowMain and windowCoaching
-  state._cachedApproachData = approachHudData(car, state.bestSortedTrace, sim)
+  autoPlaceOnce()
 
-  -- Real-time coaching state machine tick (issue #57 Part D)
-  -- Note: lastLapCornerFeats is updated later in the frame (at lap completion);
-  -- on the exact lap-boundary frame, hints use the prior lap's features.
-  -- This one-frame lag is imperceptible at 60 FPS and avoids reordering
-  -- the update pipeline.
-  if car and #(state.trackSegments or {}) > 0 then
+  -- Live-frame coaching tick (issue #72 rebuild).
+  -- Inputs are LIVE FRAME values and persisted reference data, NOT lap aggregates.
+  -- The engine returns a viewmodel even with no reference (no_reference subState).
+  if car then
     local sp = car.splinePosition or 0
-    local lc = car.lapCount or 0
+    local cur = car.speedKmh or 0
     local tlM = sim and sim.trackLengthM or nil
     local approachM = tonumber(config.approachMeters)
     if not approachM or approachM ~= approachM or approachM <= 0 then
       approachM = 200
     end
-    local rtHint = realtimeCoaching.tick({
+    local rtView = realtimeCoaching.tick({
       splinePos = sp,
-      lapCount = lc,
+      currentSpeedKmh = cur,
+      bestSortedTrace = state.bestSortedTrace,
+      brakingPoints = state.brakingPoints and state.brakingPoints.best or nil,
       segments = state.trackSegments,
-      bestCornerFeatures = state.bestCornerFeatures,
-      lastLapCornerFeats = state.lastLapCornerFeats,
       trackLengthM = tlM,
       approachMeters = approachM,
+      dt = dt,
     })
-    state.realtimeActiveHint = rtHint
+    state._cachedRealtimeView = rtView
+    state.realtimeActiveHint = rtView
   else
+    state._cachedRealtimeView = nil
     state.realtimeActiveHint = nil
   end
 

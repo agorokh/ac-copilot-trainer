@@ -88,47 +88,65 @@ local function drawProgressBar(x, y, w, h, pct)
 end
 
 -- ---------------------------------------------------------------------------
--- Approach telemetry panel (issue #57 Part C)
+-- Approach telemetry panel (issue #72 rebuild — always-visible, gearbox-style)
 -- ---------------------------------------------------------------------------
 
---- Polished approach telemetry panel for WINDOW_1.
---- Renders structured ApproachHudPayload data with designed layout.
---- Returns true if panel was drawn (caller can skip fallback).
----@param approachData table|nil  ApproachHudPayload from approachHudData()
----@return boolean @true if panel was drawn
+--- Helper: measure DWrite text safely (returns vec2)
+local function _measureDW(text, fontPx)
+  if type(ui.measureDWriteText) == "function" then
+    local sz = ui.measureDWriteText(text, fontPx)
+    if sz then return sz end
+  end
+  return vec2(string.len(text or "") * fontPx * 0.55, fontPx)
+end
+
+--- Helper: draw DWrite text safely
+local function _drawDW(text, fontPx, position, color)
+  if type(ui.dwriteDrawText) == "function" then
+    pcall(function()
+      ui.dwriteDrawText(text, fontPx, position, color)
+    end)
+  end
+end
+
+--- Bottom tile: structured approach telemetry panel.
+--- Renders panel chrome + footer + section labels when the required imgui
+--- APIs are available, with `—` placeholders for any missing telemetry.
+--- Returns `false` ONLY when the imgui primitives needed to draw the panel
+--- (`ui.drawRectFilled`, `vec2`, etc.) are not present on this CSP build —
+--- callers can treat that as "skip this frame, no panel drawn".
+---@param approachData table|nil  ApproachHudPayload, or nil for placeholder render
+---@return boolean @true if the panel was drawn; false if UI APIs unavailable
 function M.drawApproachPanel(approachData)
-  if not approachData or type(approachData) ~= "table" then
+  if not ui or type(vec2) ~= "function" then
     return false
   end
-  -- Gate: only render when actively approaching a corner
-  if tostring(approachData.status or "") ~= "approaching" then
-    return false
-  end
-  if not ui or type(ui.textColored) ~= "function" or not vec2 then
+  if type(ui.drawRectFilled) ~= "function" then
     return false
   end
 
-  local turnLabel     = tostring(approachData.turnLabel or "?")
-  local targetSpd     = tonumber(approachData.targetSpeedKmh) or 0
-  local currentSpd    = tonumber(approachData.currentSpeedKmh) or 0
-  local distanceM     = tonumber(approachData.distanceToBrakeM) or 0
-  local progressPct   = tonumber(approachData.progressPct) or 0
+  -- Resolve fields with placeholders so the layout NEVER collapses on empty state.
+  local hasData       = type(approachData) == "table"
+  local turnLabelRaw  = hasData and approachData.turnLabel or nil
+  local turnLabel     = (type(turnLabelRaw) == "string" and turnLabelRaw ~= "") and turnLabelRaw or "—"
+  local targetSpd     = hasData and tonumber(approachData.targetSpeedKmh) or nil
+  local currentSpd    = hasData and tonumber(approachData.currentSpeedKmh) or nil
+  local distanceM     = hasData and tonumber(approachData.distanceToBrakeM) or nil
+  local progressPct   = hasData and tonumber(approachData.progressPct) or 0
+  local subState      = hasData and tostring(approachData.subState or approachData.status or "no_reference") or "no_reference"
 
-  -- Panel dimensions from actual window (manifest: 520x280, NO_BACKGROUND)
-  local w, h = 520, 280
+  -- Window dimensions (from manifest FIXED_SIZE 640x240)
+  local w, h = 640, 240
   if ui.windowSize then
     local sz = ui.windowSize()
     if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
-      w = sz.x
-      h = sz.y
+      w, h = sz.x, sz.y
     end
   end
 
-  -- Panel chrome: dark bg + subtle border
-  if ui.drawRectFilled then
-    ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG, PANEL_ROUNDING)
-  end
-  if ui.drawRect then
+  -- Panel background — always rendered
+  ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG, PANEL_ROUNDING)
+  if type(ui.drawRect) == "function" then
     ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
   end
 
@@ -136,27 +154,25 @@ function M.drawApproachPanel(approachData)
   local padY = PANEL_PAD_Y
 
   ------------------------------------------------------------------
-  -- ROW 1: two columns
-  --   LEFT  : APPROACHING / TURN 4 LEFT (Michroma)
-  --   RIGHT : shared box with TARGET ENTRY + CURRENT side-by-side
+  -- ROW 1: split L/R
+  --   LEFT  : "APPROACHING" small caps + corner label (Michroma)
+  --   RIGHT : shared box → TARGET ENTRY | CURRENT  (Michroma numbers)
   ------------------------------------------------------------------
   local row1Y      = padY
   local leftX      = padX
-  local rightBoxX  = math.floor(w * 0.48)
+  local rightBoxX  = math.floor(w * 0.50)
   local rightBoxW  = w - rightBoxX - padX
-  local rightBoxH  = 78
-  local rightBoxY  = row1Y - 4
+  local rightBoxH  = 80
+  local rightBoxY  = row1Y - 6
 
-  -- Shared right-side box frame (TARGET and CURRENT share one box per user feedback)
-  if ui.drawRectFilled then
-    ui.drawRectFilled(
-      vec2(rightBoxX, rightBoxY),
-      vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
-      rgbm(0.04, 0.04, 0.05, 0.55),
-      8
-    )
-  end
-  if ui.drawRect then
+  -- Shared right-side box frame
+  ui.drawRectFilled(
+    vec2(rightBoxX, rightBoxY),
+    vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
+    rgbm(0.04, 0.04, 0.05, 0.55),
+    8
+  )
+  if type(ui.drawRect) == "function" then
     ui.drawRect(
       vec2(rightBoxX, rightBoxY),
       vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
@@ -167,126 +183,129 @@ function M.drawApproachPanel(approachData)
     )
   end
 
-  -- LEFT column: "APPROACHING" small caps + large corner label
-  if ui.setCursor then ui.setCursor(vec2(leftX, row1Y)) end
-  local k1 = fontMod.pushNamed("labels", 12)
-  ui.textColored("APPROACHING", COLOR_LABEL_GREY)
-  fontMod.pop(k1)
+  -- LEFT column: APPROACHING label
+  do
+    local labelStr = (subState == "no_reference") and "WAITING" or "APPROACHING"
+    local lk = fontMod.pushNamed("labels_bold", 11)
+    _drawDW(labelStr, 11, vec2(leftX, row1Y), COLOR_LABEL_GREY)
+    fontMod.pop(lk)
+  end
 
-  if ui.setCursor then ui.setCursor(vec2(leftX, row1Y + 20)) end
-  local k2 = fontMod.pushNamed("numbers", 28)
-  ui.textColored(turnLabel, COLOR_WHITE)
-  fontMod.pop(k2)
+  -- LEFT column: corner label (large Michroma uppercase)
+  do
+    local cornerStr = string.upper(turnLabel)
+    local ck = fontMod.pushNamed("numbers", 28)
+    _drawDW(cornerStr, 28, vec2(leftX, row1Y + 18), COLOR_WHITE)
+    fontMod.pop(ck)
+  end
 
-  -- RIGHT column: shared box with vertical split into TARGET ENTRY | CURRENT
+  -- RIGHT column: shared box vertical split
   local subColW = math.floor(rightBoxW / 2)
   local subPad  = 14
   local tgtX    = rightBoxX + subPad
   local curX    = rightBoxX + subColW + subPad
 
-  -- Vertical divider between the two sub-columns
-  if ui.drawRectFilled then
-    ui.drawRectFilled(
-      vec2(rightBoxX + subColW, rightBoxY + 10),
-      vec2(rightBoxX + subColW + 1, rightBoxY + rightBoxH - 10),
-      COLOR_BG_BORDER, 0
-    )
+  -- Vertical divider between TARGET ENTRY and CURRENT
+  ui.drawRectFilled(
+    vec2(rightBoxX + subColW, rightBoxY + 12),
+    vec2(rightBoxX + subColW + 1, rightBoxY + rightBoxH - 12),
+    COLOR_BG_BORDER,
+    0
+  )
+
+  -- TARGET ENTRY label
+  do
+    local lk = fontMod.pushNamed("labels_bold", 10)
+    _drawDW("TARGET ENTRY", 10, vec2(tgtX, rightBoxY + 12), COLOR_LABEL_GREY)
+    fontMod.pop(lk)
   end
 
-  -- TARGET ENTRY label + number + unit
-  if ui.setCursor then ui.setCursor(vec2(tgtX, rightBoxY + 10)) end
-  local k3 = fontMod.pushNamed("labels", 10)
-  ui.textColored("TARGET ENTRY", COLOR_LABEL_GREY)
-  fontMod.pop(k3)
+  -- TARGET ENTRY value (placeholder when nil)
+  do
+    local tgtStr = targetSpd and string.format("%.0f", targetSpd) or "—"
+    local nk = fontMod.pushNamed("numbers", 26)
+    _drawDW(tgtStr, 26, vec2(tgtX, rightBoxY + 30), COLOR_WHITE)
+    fontMod.pop(nk)
+    -- KM/H unit
+    local tgtSize = _measureDW(tgtStr, 26)
+    local uk = fontMod.pushNamed("labels_bold", 9)
+    _drawDW("KM/H", 9, vec2(tgtX + tgtSize.x + 4, rightBoxY + 48), COLOR_LABEL_GREY)
+    fontMod.pop(uk)
+  end
 
-  local tgtStr = string.format("%.0f", targetSpd)
-  if ui.setCursor then ui.setCursor(vec2(tgtX, rightBoxY + 26)) end
-  local k4 = fontMod.pushNamed("numbers", 26)
-  ui.textColored(tgtStr, COLOR_WHITE)
-  fontMod.pop(k4)
+  -- CURRENT label
+  do
+    local lk = fontMod.pushNamed("labels_bold", 10)
+    local labelColor = (currentSpd and targetSpd and currentSpd > targetSpd + 8)
+      and COLOR_RED or COLOR_LABEL_GREY
+    _drawDW("CURRENT", 10, vec2(curX, rightBoxY + 12), labelColor)
+    fontMod.pop(lk)
+  end
 
-  if ui.setCursor then ui.setCursor(vec2(tgtX + #tgtStr * 16 + 4, rightBoxY + 42)) end
-  local k5 = fontMod.pushNamed("labels", 10)
-  ui.textColored("KM/H", COLOR_LABEL_GREY)
-  fontMod.pop(k5)
-
-  -- CURRENT label + number + unit (red when > target+8, green <= target)
-  if ui.setCursor then ui.setCursor(vec2(curX, rightBoxY + 10)) end
-  local k6 = fontMod.pushNamed("labels", 10)
-  ui.textColored("CURRENT", COLOR_LABEL_GREY)
-  fontMod.pop(k6)
-
-  local curStr = string.format("%.0f", currentSpd)
-  local spdCol = speedColor(currentSpd, targetSpd)
-  if ui.setCursor then ui.setCursor(vec2(curX, rightBoxY + 26)) end
-  local k7 = fontMod.pushNamed("numbers", 26)
-  ui.textColored(curStr, spdCol)
-  fontMod.pop(k7)
-
-  if ui.setCursor then ui.setCursor(vec2(curX + #curStr * 16 + 4, rightBoxY + 42)) end
-  local k8 = fontMod.pushNamed("labels", 10)
-  ui.textColored("KM/H", COLOR_LABEL_GREY)
-  fontMod.pop(k8)
-
-  ------------------------------------------------------------------
-  -- Horizontal divider
-  ------------------------------------------------------------------
-  local div1Y = rightBoxY + rightBoxH + 16
-  if ui.drawRectFilled then
-    ui.drawRectFilled(
-      vec2(padX, div1Y),
-      vec2(w - padX, div1Y + 1),
-      COLOR_BG_BORDER, 0
-    )
+  -- CURRENT value (red when over target+8, white otherwise)
+  do
+    local curStr = currentSpd and string.format("%.0f", currentSpd) or "—"
+    local spdCol
+    if currentSpd and targetSpd then
+      spdCol = speedColor(currentSpd, targetSpd)
+    else
+      spdCol = COLOR_WHITE
+    end
+    local nk = fontMod.pushNamed("numbers", 28)
+    _drawDW(curStr, 28, vec2(curX, rightBoxY + 28), spdCol)
+    fontMod.pop(nk)
+    local curSize = _measureDW(curStr, 28)
+    local uk = fontMod.pushNamed("labels_bold", 9)
+    _drawDW("KM/H", 9, vec2(curX + curSize.x + 4, rightBoxY + 48), spdCol)
+    fontMod.pop(uk)
   end
 
   ------------------------------------------------------------------
   -- ROW 2: DISTANCE TO BRAKING POINT label + big number + progress bar
   ------------------------------------------------------------------
-  local row2Y = div1Y + 14
-  if ui.setCursor then ui.setCursor(vec2(padX, row2Y)) end
-  local k9 = fontMod.pushNamed("labels", 11)
-  ui.textColored("DISTANCE TO BRAKING POINT", COLOR_LABEL_GREY)
-  fontMod.pop(k9)
+  local row2Y = rightBoxY + rightBoxH + 18
 
-  -- Big distance number, right-aligned
-  local distStr = string.format("%d M", math.floor(distanceM + 0.5))
-  local distApproxW = #distStr * 14
-  if ui.setCursor then ui.setCursor(vec2(w - padX - distApproxW, row2Y - 2)) end
-  local k10 = fontMod.pushNamed("numbers", 22)
-  ui.textColored(distStr, COLOR_WHITE)
-  fontMod.pop(k10)
+  do
+    local lk = fontMod.pushNamed("labels_bold", 11)
+    _drawDW("DISTANCE TO BRAKING POINT", 11, vec2(padX, row2Y), COLOR_LABEL_GREY)
+    fontMod.pop(lk)
+  end
 
-  -- Progress bar: taller (14px) and red fill per Figma
-  local barY = row2Y + 28
+  -- Big distance value, right-aligned
+  do
+    local distStr = distanceM and string.format("%d M", math.floor(distanceM + 0.5)) or "—"
+    local nk = fontMod.pushNamed("numbers", 24)
+    local distSize = _measureDW(distStr, 24)
+    _drawDW(distStr, 24, vec2(w - padX - distSize.x, row2Y - 4), COLOR_WHITE)
+    fontMod.pop(nk)
+  end
+
+  -- Progress bar (taller, red fill per Figma)
+  local barY = row2Y + 26
   local barW = w - padX * 2
   local barH = 14
-  drawProgressBar(padX, barY, barW, barH, progressPct)
+  drawProgressBar(padX, barY, barW, barH, progressPct or 0)
 
   ------------------------------------------------------------------
-  -- Horizontal divider
+  -- Footer: AG PORSCHE ACADEMY (Syncopate brand)
   ------------------------------------------------------------------
-  local div2Y = barY + barH + 14
-  if ui.drawRectFilled then
-    ui.drawRectFilled(
-      vec2(padX, div2Y),
-      vec2(w - padX, div2Y + 1),
-      COLOR_BG_BORDER, 0
-    )
-  end
+  local divY = barY + barH + 14
+  ui.drawRectFilled(
+    vec2(padX, divY),
+    vec2(w - padX, divY + 1),
+    COLOR_BG_BORDER,
+    0
+  )
 
-  ------------------------------------------------------------------
-  -- Footer: AG PORSCHE ACADEMY (Syncopate, centered)
-  ------------------------------------------------------------------
-  local footerStr = "AG PORSCHE ACADEMY"
-  local footerApproxW = #footerStr * 8
-  local footerY = div2Y + 10
-  if ui.setCursor then
-    ui.setCursor(vec2(math.floor(w / 2 - footerApproxW / 2), footerY))
+  do
+    local footerStr = "AG PORSCHE ACADEMY"
+    local fontPx = 12
+    local footerSize = _measureDW(footerStr, fontPx)
+    local footerX = math.floor(w * 0.5 - footerSize.x * 0.5)
+    local fk = fontMod.pushNamed("brand", fontPx)
+    _drawDW(footerStr, fontPx, vec2(footerX, divY + 10), COLOR_WHITE)
+    fontMod.pop(fk)
   end
-  local k11 = fontMod.pushNamed("brand", 11)
-  ui.textColored(footerStr, COLOR_BRAND_GREY)
-  fontMod.pop(k11)
 
   return true
 end
