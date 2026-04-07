@@ -252,7 +252,7 @@ def lua():
     return rt
 
 
-def _build_trace(lua, n=2000):
+def _build_trace(lua, n: int = 2000):  # noqa: ANN001,ANN202  -- lua is lupa runtime
     """Build a 2000-sample best lap trace matching the persistence file shape:
     each sample is { spline, eMs, speed }, sorted by spline 0..1.
     """
@@ -266,7 +266,7 @@ def _build_trace(lua, n=2000):
     """)
 
 
-def _build_brake_points(lua):
+def _build_brake_points(lua):  # noqa: ANN001,ANN202
     """7 brake points matching the user's persistence file."""
     return lua.execute("""
         return {
@@ -281,7 +281,7 @@ def _build_brake_points(lua):
     """)
 
 
-def _build_segments(lua):
+def _build_segments(lua):  # noqa: ANN001,ANN202
     """13 segments (straight + brake + corner alternating)."""
     return lua.execute("""
         return {

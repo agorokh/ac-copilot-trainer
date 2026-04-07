@@ -27,7 +27,6 @@ local BRAKE_OVER_KMH       = 8     -- "too fast" delta for BRAKE NOW
 local PREPARE_OVER_KMH     = 5     -- "too fast" delta for PREPARE TO BRAKE
 local CORNER_DELTA_KMH     = 8     -- in-corner ±delta for "carry more / ease off"
 local APPROACH_DEFAULT_M   = 200   -- max distance ahead we even look at the next brake
-local DEDUP_HOLD_SEC       = 0.6   -- minimum time before re-firing the same hint kind
 
 -- ---------------------------------------------------------------------------
 -- Module state (reset via M.reset).
@@ -208,8 +207,6 @@ function M.tick(opts)
   if not approachM or approachM ~= approachM or approachM <= 0 then
     approachM = APPROACH_DEFAULT_M
   end
-  local dt = tonumber(opts.dt) or 0
-  if dt > 0 then monoClock = monoClock + dt end
 
   -- Empty state — no reference at all
   local hasTrace    = type(trace) == "table" and #trace >= 2
@@ -321,7 +318,6 @@ function M.tick(opts)
   }, ":")
   if key ~= lastEmittedKey then
     lastEmittedKey = key
-    lastEmittedAt = monoClock
   end
 
   lastView = view
@@ -333,8 +329,6 @@ end
 function M.reset()
   lastView = nil
   lastEmittedKey = nil
-  lastEmittedAt = -1e9
-  monoClock = 0
 end
 
 --- No-op kept for backward compatibility. The current live-frame engine
