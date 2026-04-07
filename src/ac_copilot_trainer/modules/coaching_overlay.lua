@@ -134,7 +134,6 @@ function M.drawApproachPanel(approachData)
   local distanceM     = hasData and tonumber(approachData.distanceToBrakeM) or nil
   local progressPct   = hasData and tonumber(approachData.progressPct) or 0
   local subState      = hasData and tostring(approachData.subState or approachData.status or "no_reference") or "no_reference"
-  local hasReference  = hasData and (turnLabelRaw ~= nil or targetSpd ~= nil)
 
   -- Window dimensions (from manifest FIXED_SIZE 640x240)
   local w, h = 640, 240
@@ -307,9 +306,6 @@ function M.drawApproachPanel(approachData)
     _drawDW(footerStr, fontPx, vec2(footerX, divY + 10), COLOR_WHITE)
     fontMod.pop(fk)
   end
-
-  -- Mark the variable as referenced for static analysis (avoids "unused" warning)
-  local _ = hasReference
 
   return true
 end

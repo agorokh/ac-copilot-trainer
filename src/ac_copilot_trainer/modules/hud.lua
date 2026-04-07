@@ -84,21 +84,17 @@ local function measure(text, fontPx)
   return vec2(string.len(text or "") * fontPx * 0.55, fontPx)
 end
 
---- Resolve a viewmodel from either the new realtimeView or the legacy
---- realtimeHint payload (for transitional commits / sidecar messages).
+--- Resolve a viewmodel from `vm.realtimeView`. Falls back to a generic
+--- "no reference" placeholder when the entry script hasn't populated one
+--- yet (very early frame, before `script.update` runs).
+---
+--- Issue #72 dropped the legacy `realtimeHint` shape (`.text`/`.kind`) —
+--- the entry script now ALWAYS assigns the new viewmodel shape with
+--- `.primaryLine`/`.secondaryLine`. The unused fallback was confusing
+--- and shape-mismatched (Cursor BugBot #21cc469d).
 local function resolveView(vm)
   if vm.realtimeView and type(vm.realtimeView) == "table" then
     return vm.realtimeView
-  end
-  if vm.realtimeHint and type(vm.realtimeHint) == "table" then
-    local h = vm.realtimeHint
-    return {
-      primaryLine = h.text,
-      secondaryLine = nil,
-      kind = h.kind,
-      subState = "active",
-      cornerLabel = h.cornerLabel,
-    }
   end
   return {
     primaryLine = "DRIVE A LAP",
