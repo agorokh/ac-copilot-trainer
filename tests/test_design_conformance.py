@@ -372,10 +372,14 @@ class TestApproachPanel:
         )
 
     def test_window_coaching_calls_approach_panel(self) -> None:
-        """PC-07: windowCoaching in entry script calls drawApproachPanel."""
+        """PC-07: windowCoaching in entry script calls drawApproachPanel.
+
+        Note: legacy approachHudData helper deleted in issue #72 rebuild.
+        Approach payload is now sourced from state._cachedRealtimeView
+        (live-frame engine), not from a per-frame brake-point snapshot.
+        """
         src = ENTRY.read_text(encoding="utf-8")
         assert "drawApproachPanel" in src
-        assert "approachHudData" in src
 
     def test_approach_panel_font_push_pop_balance(self) -> None:
         """PC-08: drawApproachPanel balances all font push/pop calls."""

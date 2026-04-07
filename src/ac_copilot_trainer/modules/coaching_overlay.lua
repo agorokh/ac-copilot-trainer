@@ -110,10 +110,13 @@ local function _drawDW(text, fontPx, position, color)
 end
 
 --- Bottom tile: structured approach telemetry panel.
---- ALWAYS renders panel chrome + footer + section labels — never returns false
---- and never produces an empty box. Missing data shows as `—` placeholders.
----@param approachData table|nil  ApproachHudPayload from approachHudData(), or nil
----@return boolean @always true (signals "panel was drawn")
+--- Renders panel chrome + footer + section labels when the required imgui
+--- APIs are available, with `—` placeholders for any missing telemetry.
+--- Returns `false` ONLY when the imgui primitives needed to draw the panel
+--- (`ui.drawRectFilled`, `vec2`, etc.) are not present on this CSP build —
+--- callers can treat that as "skip this frame, no panel drawn".
+---@param approachData table|nil  ApproachHudPayload, or nil for placeholder render
+---@return boolean @true if the panel was drawn; false if UI APIs unavailable
 function M.drawApproachPanel(approachData)
   if not ui or type(vec2) ~= "function" then
     return false

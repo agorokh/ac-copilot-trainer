@@ -583,6 +583,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   state.realtimeActiveHint = nil
+  state._cachedRealtimeView = nil
   hud.reset()
   resetDeltaSmoother()
 end
@@ -601,6 +602,7 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
+  state._cachedRealtimeView = nil
   hud.reset()
   realtimeCoaching.reset()
   tel = newTelemetry()
@@ -783,88 +785,6 @@ end
 --- Structured approach telemetry for HUD + coaching panel (issue #57 Part A).
 ---@param sim0 ac.StateSim|nil
 ---@return table|nil
-local function approachHudData(car0, sortedTrace, sim0)
-  ensureCornerSteerSides()
-  ensureCornerIniLoaded()
-  local best = state.brakingPoints.best
-  if not car0 or not car0.position or #best == 0 then
-    return nil
-  end
-  local carSp = car0.splinePosition or 0
-  local cx, cy, cz = car0.position.x, car0.position.y, car0.position.z
-  local bestI, bestSplineD, bestDistSq ---@type integer|nil, number|nil, number|nil
-  for i = 1, #best do
-    local p = best[i]
-    local dx, dy, dz = cx - p.px, cy - p.py, cz - p.pz
-    local distSq = dx * dx + dy * dy + dz * dz
-    local dS = splineForwardDelta(carSp, p.spline or 0)
-    if dS < 1e-9 then
-      dS = 1e-9
-    end
-    if bestI == nil or dS < bestSplineD - 1e-12 or (math.abs(dS - bestSplineD) <= 1e-12 and distSq < bestDistSq) then
-      bestI = i
-      bestSplineD = dS
-      bestDistSq = distSq
-    end
-  end
-  if not bestI or not bestDistSq or not bestSplineD then
-    return nil
-  end
-  local dM = math.sqrt(bestDistSq)
-  local tlM = trackLengthMeters(sim0)
-  if tlM and tlM > 0 then
-    dM = bestSplineD * tlM
-  end
-  local approachM = tonumber(config.approachMeters)
-  if not approachM or approachM ~= approachM or approachM <= 0 then
-    approachM = 200
-  end
-  if dM > approachM then
-    return nil
-  end
-  local bp = best[bestI]
-  local refSpd = bp.entrySpeed or 0
-  if sortedTrace then
-    refSpd = delta.bestSpeedKmhAtSpline(sortedTrace, bp.spline or 0) or refSpd
-  end
-  local cur = car0.speedKmh or 0
-  local dv = cur - refSpd
-  -- Speed bucket for payload consumers (telemetry / sidecar / future UI). Not shown in HUD copy yet.
-  local speedDelta = "match"
-  if dv > 8 then
-    speedDelta = "too fast"
-  elseif dv < -8 then
-    speedDelta = "too slow"
-  end
-  -- Function only returns when dM <= approachM, so status is always "approaching"
-  local status = "approaching"
-  local progressPct = 1 - (dM / approachM)
-  if progressPct < 0 then
-    progressPct = 0
-  elseif progressPct > 1 then
-    progressPct = 1
-  end
-  local turnLabel = cornerNames.resolveApproachLabel({
-    brakeSpline = bp.spline or 0,
-    brakeIndex = bestI,
-    segments = state.trackSegments,
-    iniById = state.cornerIniById,
-    cornerFeats = state.bestCornerFeatures,
-    steerSideByLabel = state.cornerSteerSideByLabel,
-    trace = sortedTrace,
-  })
-  return {
-    turnLabel = turnLabel,
-    targetSpeedKmh = refSpd,
-    currentSpeedKmh = cur,
-    distanceToBrakeM = dM,
-    status = status,
-    speedDelta = speedDelta,
-    progressPct = progressPct,
-    brakeIndex = bestI,
-  }
-end
-
 function script.windowMain(_dt)
   if not config.hudEnabled then
     return

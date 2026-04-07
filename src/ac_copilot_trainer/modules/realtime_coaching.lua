@@ -229,11 +229,16 @@ function M.tick(opts)
   -- Are we currently inside a corner segment?
   -- In-corner override: when the car is INSIDE a known corner segment,
   -- the in-corner label takes priority over any next-corner-ahead label.
-  -- Otherwise the HUD would say "CARRY MORE SPEED" while showing the next
-  -- corner's label, which is misleading mid-turn.
+  -- Also CLEAR nextBrake/targetSpeed/distToBrake so the in-corner priority
+  -- rules don't accidentally render the NEXT corner's target speed under
+  -- the CURRENT corner's label (e.g. "BRAKE NOW / TARGET 120 km/h" attributed
+  -- to T4 when 120 km/h is actually T5's entry speed).
   local inCorner, cornerSeg = inCornerSegment(sp, segments)
   if inCorner and cornerSeg and cornerSeg.label then
     cornerLabel = cornerSeg.label
+    nextBrake = nil
+    distToBrakeM = nil
+    targetSpeed = nil
   end
 
   -- Reference speed at this exact spline position

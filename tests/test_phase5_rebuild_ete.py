@@ -687,9 +687,15 @@ def test_ete06b_bloom_asset_bundled():
 # ---------------------------------------------------------------------------
 
 
-def test_ete07_auto_place_once_runs_once_then_skips() -> None:
+def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
     """ETE-07: autoPlaceOnce moves windows once, sets the storage flag, and
-    on the second call does nothing. Position is then user-controlled."""
+    on the second call does nothing. Position is then user-controlled.
+
+    This test executes the function twice via the lupa stub and asserts:
+      - first call moves at least one target window
+      - first call performs ZERO resize calls (size is locked by FIXED_SIZE)
+      - second call performs zero further moves (idempotent)
+    """
     entry_src = ENTRY.read_text(encoding="utf-8")
     # The entry script must define an autoPlaceOnce-style function
     assert re.search(
@@ -697,12 +703,51 @@ def test_ete07_auto_place_once_runs_once_then_skips() -> None:
         entry_src,
     ), "entry script must define an autoPlaceOnce-style function"
 
-    # The function must persist via ac.storage so it runs once per install,
-    # not per session
+    # The function must persist via ac.storage so it runs once per install
     assert re.search(
-        r"ac\.storage\s*\(\s*[\"'][\w_]*[Pp]laced",
+        r"ac\.storage\s*\(\s*[\"\'][\w_]*[Pp]laced",
         entry_src,
     ), 'autoPlaceOnce must persist via ac.storage("...placed...", ...)'
+
+    # Extract the autoPlaceOnce function body and execute it standalone
+    m = re.search(
+        r"local function autoPlaceOnce\(\).*?^end$",
+        entry_src,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, "autoPlaceOnce function body not found"
+    func_src = m.group(0)
+    # Strip `local` so the function becomes a global we can call
+    func_src_global = func_src.replace(
+        "local function autoPlaceOnce()", "function autoPlaceOnce()", 1
+    )
+
+    # Reset stub state and inject the function
+    lua.execute("state = {}")
+    lua.execute("_move_calls = {}")
+    lua.execute("_resize_calls = {}")
+    lua.execute("_storage_state = {}")
+    lua.execute(func_src_global)
+
+    # First call: should move at least one target window, zero resizes
+    lua.execute("autoPlaceOnce()")
+    move_calls_1 = lua.execute("return #_move_calls")
+    resize_calls_1 = lua.execute("return #_resize_calls")
+    assert move_calls_1 >= 1, (
+        f"first autoPlaceOnce call must move at least one window, got {move_calls_1}"
+    )
+    assert resize_calls_1 == 0, (
+        "autoPlaceOnce must NEVER call resize (size is locked by FIXED_SIZE), "
+        f"got {resize_calls_1} resize calls"
+    )
+
+    # Second call: storage flag persisted, must be a no-op
+    lua.execute("autoPlaceOnce()")
+    move_calls_2 = lua.execute("return #_move_calls")
+    assert move_calls_2 == move_calls_1, (
+        "second autoPlaceOnce call must NOT re-move windows, got "
+        f"{move_calls_2 - move_calls_1} extra moves"
+    )
 
 
 # ---------------------------------------------------------------------------
