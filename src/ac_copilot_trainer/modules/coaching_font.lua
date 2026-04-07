@@ -61,7 +61,7 @@ end
 --- accidentally pop something they didn't push.
 ---@param role 'numbers'|'labels'|'labels_bold'|'brand'|'legacy'|nil
 ---@return string|nil token
-function M.pushNamed(role, _size)
+function M.pushNamed(role)
   if type(ui) ~= "table" or type(ui.pushDWriteFont) ~= "function" then
     return nil
   end
