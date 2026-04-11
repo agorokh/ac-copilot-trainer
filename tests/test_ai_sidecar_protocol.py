@@ -54,6 +54,22 @@ def test_prepare_no_reply_mode() -> None:
     )
 
 
+def test_corner_query_requires_cur_ref_dist_keys() -> None:
+    out = prepare_outbound_message(
+        {
+            "protocol": PROTOCOL_VERSION,
+            "event": "corner_query",
+            "corner": "T1",
+            "cur": 80,
+            "ref": 70,
+            # missing dist
+        },
+        reply_coaching=True,
+    )
+    assert out is not None
+    assert out["event"] == EVENT_ANALYSIS_ERROR
+
+
 def test_corner_query_rejects_bool_speed() -> None:
     out = prepare_outbound_message(
         {

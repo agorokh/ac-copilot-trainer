@@ -228,6 +228,10 @@ end
 ---@return table viewmodel
 function M.tick(opts)
   opts = opts or {}
+  local dtf = tonumber(opts.dt) or 0
+  if dtf == dtf and dtf > 0 then
+    monoClock = monoClock + dtf
+  end
   local sp        = wrap01(tonumber(opts.splinePos) or 0)
   local cur       = tonumber(opts.currentSpeedKmh) or 0
   local trace     = opts.bestSortedTrace
@@ -380,7 +384,7 @@ function M.tick(opts)
       local advice = opts.cornerAdvisories[topLabel]
       if type(advice) == "string" and advice ~= "" then
         view.secondaryLine = advice
-        view.kind = "info"  -- use white/info color, not brake red
+        -- Keep view.kind from rules engine (e.g. brake red) — advisory is secondary only.
       end
     end
   end
@@ -414,6 +418,7 @@ function M.reset()
   lastView = nil
   lastEmittedKey = nil
   lastQueryState = {}
+  monoClock = 0
 end
 
 --- No-op kept for backward compatibility. The current live-frame engine

@@ -247,13 +247,24 @@ function M.pollInbound(maxPerTick)
           if type(data.debrief) == "string" and data.debrief ~= "" then
             debrief = data.debrief
           end
-          if source == "ollama" and pendingCoaching and pendingCoaching.lap == lap then
-            -- Round 8: Ollama follow-up overwrites the rules debrief with
-            -- the LLM version. Hints are preserved from the immediate
-            -- response (which has the richer rules-engine hints).
-            pendingCoaching.debrief = debrief or pendingCoaching.debrief
-            if ac and type(ac.log) == "function" then
-              ac.log("[COPILOT][WS-DIAG] ollama follow-up applied for lap " .. tostring(lap))
+          if source == "ollama" then
+            if pendingCoaching and pendingCoaching.lap == lap then
+              -- Round 8: Ollama follow-up overwrites the rules debrief with
+              -- the LLM version. Hints are preserved from the immediate
+              -- response (which has the richer rules-engine hints).
+              pendingCoaching.debrief = debrief or pendingCoaching.debrief
+              if ac and type(ac.log) == "function" then
+                ac.log("[COPILOT][WS-DIAG] ollama follow-up applied for lap " .. tostring(lap))
+              end
+            elseif debrief then
+              -- Late Ollama debrief after the immediate payload was consumed:
+              -- surface prose only — do not queue placeholder hints that would
+              -- replace rules-engine lines in the HUD.
+              pendingCoaching = {
+                lap = lap,
+                hints = {},
+                debrief = debrief,
+              }
             end
           else
             pendingCoaching = {

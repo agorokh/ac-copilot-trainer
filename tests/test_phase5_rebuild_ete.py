@@ -722,11 +722,22 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
         "local function autoPlaceOnce()", "function autoPlaceOnce()", 1
     )
 
-    # Reset stub state and inject the function
+    # Reset stub state and inject the function. ``autoPlaceOnce`` references
+    # module-level MANIFEST_WINDOW_SIZES — mirror it here because the regex
+    # extraction only captures the function body.
     lua.execute("state = {}")
     lua.execute("_move_calls = {}")
     lua.execute("_resize_calls = {}")
     lua.execute("_storage_state = {}")
+    lua.execute(
+        """
+MANIFEST_WINDOW_SIZES = {
+  ["AC Copilot Trainer"] = {520, 200},
+  ["Coaching"]           = {640, 240},
+  ["Settings"]           = {480, 580},
+}
+"""
+    )
     lua.execute(func_src_global)
 
     # First call: should move at least one target window (resize may run too

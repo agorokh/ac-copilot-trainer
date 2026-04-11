@@ -68,19 +68,24 @@ def prepare_outbound_message(
         # llama3.2:3b + tiny prompt). The Lua side fires this async when it
         # detects topCornerLabel transitions to a new corner.
         corner = str(inbound.get("corner") or "").strip()
+        for req in ("cur", "ref", "dist"):
+            if req not in inbound:
+                return {
+                    "protocol": PROTOCOL_VERSION,
+                    "event": EVENT_ANALYSIS_ERROR,
+                    "message": "corner_query requires cur, ref, and dist fields",
+                }
 
         def _corner_scalar(raw: Any) -> float:
-            if raw is None:
-                return 0.0
             parsed = _as_float(raw)
             if parsed is None:
                 raise ValueError
             return parsed
 
         try:
-            cur_kmh = _corner_scalar(inbound.get("cur"))
-            ref_kmh = _corner_scalar(inbound.get("ref"))
-            dist_m = _corner_scalar(inbound.get("dist"))
+            cur_kmh = _corner_scalar(inbound["cur"])
+            ref_kmh = _corner_scalar(inbound["ref"])
+            dist_m = _corner_scalar(inbound["dist"])
         except ValueError:
             return {
                 "protocol": PROTOCOL_VERSION,

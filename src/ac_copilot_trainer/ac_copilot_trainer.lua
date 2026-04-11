@@ -33,6 +33,13 @@ local cornerNames = require("corner_names")
 local hudSettings = require("hud_settings")
 local realtimeCoaching = require("realtime_coaching")
 
+--- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
+local MANIFEST_WINDOW_SIZES = {
+  ["AC Copilot Trainer"] = {520, 200},
+  ["Coaching"]           = {640, 240},
+  ["Settings"]           = {480, 580},
+}
+
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
 
@@ -1053,12 +1060,10 @@ local function autoPlaceOnce()
   local localSim = ac.getSim() or {}
   local screenW = tonumber(localSim.windowWidth) or 1920
   local screenH = tonumber(localSim.windowHeight) or 1080
-  -- Manifest sizes (must stay in sync with src/ac_copilot_trainer/manifest.ini)
-  local sizes = {
-    ["AC Copilot Trainer"] = vec2(520, 200),
-    ["Coaching"]           = vec2(640, 240),
-    ["Settings"]           = vec2(480, 580),
-  }
+  local sizes = {}
+  for title, wh in pairs(MANIFEST_WINDOW_SIZES) do
+    sizes[title] = vec2(wh[1], wh[2])
+  end
   local positions = {
     ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
     ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
@@ -1226,6 +1231,8 @@ function script.update(dt)
         local txt = wsBridge.takeCornerAdvisory(seg.label)
         if txt then
           state.cornerAdvisories[seg.label] = txt
+        else
+          state.cornerAdvisories[seg.label] = nil
         end
       end
     end
