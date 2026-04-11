@@ -230,6 +230,11 @@ def call_ollama_generate(
                     "temperature": temperature,
                     "num_predict": num_predict,
                 },
+                # Round 9: pin model in Ollama memory for 30 minutes after
+                # each call so subsequent lap_completes don't incur cold-load
+                # latency (>30s). Default keep_alive is 5 min which can
+                # expire mid-session if the user takes a break between laps.
+                "keep_alive": "30m",
             },
             separators=(",", ":"),
         ).encode("utf-8")
@@ -306,3 +311,124 @@ def compose_debrief(
         return llm
     logger.info("ollama unreachable or empty; using rules debrief")
     return rules
+
+
+def compose_corner_hint(
+    corner: str,
+    cur_kmh: float,
+    ref_kmh: float,
+    dist_m: float,
+    car: str | None = None,
+    track: str | None = None,
+) -> str | None:
+    """Round 10: real-time per-corner coaching hint (sub-1s).
+
+    Called when the realtime engine detects the car transitioning to a new
+    corner approach. Sends a TINY prompt to Ollama with just the corner
+    label, current/target speeds, and distance — asks for one short
+    actionable hint (max ~6 words). Total round-trip ~600-800ms with
+    llama3.2:3b + keep_alive=30m (proven via direct benchmark: 631ms for
+    "Reduce speed by 9 km/h.").
+
+    Returns the hint text (short string, already sanitized) or None if
+    Ollama failed. The Lua side falls back to the existing rules-engine
+    secondary line when None.
+    """
+    if not debrief_feature_enabled():
+        return None
+    base = ollama_base_url()
+    model = ollama_model()
+    # Intentionally tight generation params for latency:
+    # - num_predict = 20 (6-8 words max, trims eval_duration)
+    # - temperature = 0.2 (more deterministic, fewer off-topic tokens)
+    # - timeout = 10s (hard ceiling; 631ms is typical)
+    delta = cur_kmh - ref_kmh
+    abs_delta = abs(int(delta))
+    over_under = "over" if delta > 0 else "under"
+    prompt = (
+        "You coach a driver in an Assetto Corsa race car. The car has ONE "
+        "brake pedal that actuates all four wheels together. There is NO "
+        "individual wheel control. Reply with ONE short racing command.\n"
+        "\n"
+        "RULES:\n"
+        "- Max 8 words. Use UPPERCASE racing commands.\n"
+        "- Use ONLY these verbs: BRAKE, LIFT, EASE, HOLD, TRAIL, CARRY, TURN, ACCELERATE.\n"
+        "- NEVER mention front/rear/left/right brake (single pedal).\n"
+        "- If current < target by 5+: tell them to ACCELERATE or HOLD THROTTLE.\n"
+        "- If current > target by 5-15: BRAKE EARLIER or LIFT NOW.\n"
+        "- If current > target by 15+: BRAKE HARD NOW.\n"
+        "- If within 4 km/h of target: ON PACE or HOLD STEADY.\n"
+        "\n"
+        "EXAMPLES:\n"
+        "T1 200m ahead, 140 km/h, target 149 (9 under) -> HOLD THROTTLE, ON PACE\n"
+        "T3 80m ahead, 180 km/h, target 130 (50 over) -> BRAKE HARD NOW\n"
+        "T4 150m ahead, 155 km/h, target 68 (87 over) -> BRAKE HARD, HEAVY STOP\n"
+        "T6 100m ahead, 95 km/h, target 120 (25 under) -> ACCELERATE, BUILD SPEED\n"
+        "T2 60m ahead, 152 km/h, target 149 (3 over) -> ON PACE, HOLD STEADY\n"
+        "\n"
+        f"NOW: {corner} {int(dist_m)}m ahead, {int(cur_kmh)} km/h, "
+        f"target {int(ref_kmh)} ({abs_delta} {over_under}) ->"
+    )
+    text = call_ollama_generate(
+        prompt,
+        base_url=base,
+        model=model,
+        temperature=0.2,
+        num_predict=20,
+        timeout_sec=10.0,
+    )
+    if not text:
+        return None
+    # Round 10c: walk lines until we find one with actual content.
+    # The model sometimes emits blank leading lines or punctuation-only
+    # lines; we require >= 2 words before accepting.
+    candidate = None
+    for raw_line in text.strip().split("\n"):
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Strip common preambles
+        for pre in ("Action:", "Reply:", "Command:", "ANSWER:", "->", "=>"):
+            if line.upper().startswith(pre.upper()):
+                line = line[len(pre):].strip()
+        # Cut on first period (keep one trailing period for emphasis)
+        if "." in line:
+            line = line.split(".", 1)[0].strip() + "."
+        # Strip surrounding quotes
+        line = line.strip("\"'")
+        # Must have at least 2 words and >= 4 visible chars
+        words = [w for w in line.split() if w]
+        if len(words) >= 2 and len(line) >= 4:
+            candidate = line
+            break
+    if not candidate:
+        return None
+    return candidate.upper()[:60]
+
+
+def compose_llm_debrief_only(
+    inbound: dict[str, Any],
+    improvement_ranking: list[dict[str, Any]],
+) -> str | None:
+    """Only return LLM prose; returns None on any Ollama failure.
+
+    Round 9: used by the background follow-up path in server.py so we
+    only send a second `coaching_response` when there is ACTUAL LLM output
+    to deliver. If Ollama timed out or errored, we skip the follow-up
+    entirely (the immediate rules response already went out first).
+    """
+    if not debrief_feature_enabled():
+        return None
+    base = ollama_base_url()
+    model = ollama_model()
+    temp, n_pred, _ = read_generation_options()
+    debrief_timeout = read_debrief_ollama_timeout_sec()
+    prompt = build_llm_prompt(inbound, improvement_ranking)
+    return call_ollama_generate(
+        prompt,
+        base_url=base,
+        model=model,
+        temperature=temp,
+        num_predict=n_pred,
+        timeout_sec=debrief_timeout,
+    )

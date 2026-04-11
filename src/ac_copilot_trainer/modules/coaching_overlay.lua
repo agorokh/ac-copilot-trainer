@@ -70,7 +70,7 @@ end
 ---@param h number    bar height
 ---@param pct number  0..1 fill percentage
 local function drawProgressBar(x, y, w, h, pct)
-  if not ui or type(ui.drawRectFilled) ~= "function" or type(vec2) ~= "function" then return end
+  if not ui or ui.drawRectFilled == nil or vec2 == nil then return end
   local p0 = vec2(x, y)
   local p1 = vec2(x + w, y + h)
   -- Background
@@ -117,11 +117,43 @@ end
 --- callers can treat that as "skip this frame, no panel drawn".
 ---@param approachData table|nil  ApproachHudPayload, or nil for placeholder render
 ---@return boolean @true if the panel was drawn; false if UI APIs unavailable
+local _ovDiagLogged = false
 function M.drawApproachPanel(approachData)
-  if not ui or type(vec2) ~= "function" then
+  if not _ovDiagLogged and ac and type(ac.log) == "function" then
+    _ovDiagLogged = true
+    local function tt(t, k)
+      if type(t) ~= "table" then return "?" end
+      local v = t[k]
+      if v == nil then return "nil" end
+      return type(v)
+    end
+    local szStr = "err"
+    if type(ui) == "table" and ui.windowSize ~= nil then
+      local ok, sz = pcall(function() return ui.windowSize() end)
+      if ok and sz and sz.x then
+        szStr = string.format("%.0fx%.0f", sz.x, sz.y or 0)
+      else
+        szStr = "call-fail"
+      end
+    else
+      szStr = "missing"
+    end
+    ac.log(string.format(
+      "[COPILOT][OV-DIAG] win1 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s payload=%s",
+      szStr,
+      type(ui),
+      type(vec2),
+      type(rgbm),
+      tt(ui, "drawRectFilled"), tt(ui, "drawRect"),
+      tt(ui, "dwriteDrawText"),
+      (type(approachData) == "table") and "y" or "N"
+    ))
+  end
+  -- CSP cdata-callable safe check: vec2/ui.drawRectFilled are cdata, not "function"
+  if not ui or vec2 == nil then
     return false
   end
-  if type(ui.drawRectFilled) ~= "function" then
+  if ui.drawRectFilled == nil then
     return false
   end
 
@@ -271,17 +303,20 @@ function M.drawApproachPanel(approachData)
     fontMod.pop(lk)
   end
 
-  -- Big distance value, right-aligned
+  -- Big distance value, right-aligned. Shifted up (row2Y - 12 instead of
+  -- row2Y - 4) so the 24px number has visible breathing room above the
+  -- progress bar — round 6 user feedback: "number is stuck to the bar".
   do
     local distStr = distanceM and string.format("%d M", math.floor(distanceM + 0.5)) or "—"
     local nk = fontMod.pushNamed("numbers", 24)
     local distSize = _measureDW(distStr, 24)
-    _drawDW(distStr, 24, vec2(w - padX - distSize.x, row2Y - 4), COLOR_WHITE)
+    _drawDW(distStr, 24, vec2(w - padX - distSize.x, row2Y - 12), COLOR_WHITE)
     fontMod.pop(nk)
   end
 
-  -- Progress bar (taller, red fill per Figma)
-  local barY = row2Y + 26
+  -- Progress bar (taller, red fill per Figma). Nudged down 4px so it sits
+  -- clear of the 24px distance value above.
+  local barY = row2Y + 30
   local barW = w - padX * 2
   local barH = 14
   drawProgressBar(padX, barY, barW, barH, progressPct or 0)
@@ -307,6 +342,86 @@ function M.drawApproachPanel(approachData)
     fontMod.pop(fk)
   end
 
+  return true
+end
+
+--- Round 9: draw the post-lap debrief text filling WINDOW_1.
+--- Reuses the approach-panel chrome (dark rounded rect + border), draws the
+--- "POST-LAP DEBRIEF" small-caps title, then word-wraps the debrief body with
+--- Michroma font. Used during the coaching hold period after each lap.
+---@param text string  debrief paragraph (may contain \n separators)
+---@return boolean  true when drawn
+function M.drawLapDebrief(text)
+  if not ui or ui.drawRectFilled == nil or vec2 == nil then
+    return false
+  end
+  if type(text) ~= "string" or text == "" then
+    return false
+  end
+  local w, h = 640, 240
+  if ui.windowSize then
+    local ok, sz = pcall(function() return ui.windowSize() end)
+    if ok and sz and sz.x and sz.x > 0 then
+      w, h = sz.x, sz.y
+    end
+  end
+  -- Panel chrome (same as drawApproachPanel for consistency)
+  ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG, PANEL_ROUNDING)
+  if type(ui.drawRect) == "function" then
+    ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
+  end
+  local padX, padY = PANEL_PAD_X, PANEL_PAD_Y
+  -- Title
+  do
+    local lk = fontMod.pushNamed("labels_bold", 11)
+    _drawDW("POST-LAP DEBRIEF", 11, vec2(padX, padY), COLOR_RED)
+    fontMod.pop(lk)
+  end
+  -- Word-wrap body text
+  local bodyFontPx = 13
+  local bodyY = padY + 22
+  local maxW = w - padX * 2
+  local maxLines = math.floor((h - bodyY - padY - 14) / 18)
+  if maxLines < 1 then maxLines = 1 end
+  local bk = fontMod.pushNamed("labels_bold", bodyFontPx)
+  local lines = {}
+  local cur = ""
+  -- Split on whitespace, greedy wrap
+  for word in string.gmatch(text, "%S+") do
+    local trial = (cur == "") and word or (cur .. " " .. word)
+    local sz = _measureDW(trial, bodyFontPx)
+    if sz and sz.x and sz.x > maxW and cur ~= "" then
+      lines[#lines + 1] = cur
+      cur = word
+      if #lines >= maxLines - 1 then
+        break
+      end
+    else
+      cur = trial
+    end
+  end
+  if cur ~= "" and #lines < maxLines then
+    lines[#lines + 1] = cur
+  end
+  for i = 1, #lines do
+    local lineStr = lines[i]
+    if i == maxLines and #lines == maxLines then
+      -- Add ellipsis if we likely truncated
+      lineStr = lineStr .. "..."
+    end
+    _drawDW(lineStr, bodyFontPx, vec2(padX, bodyY + (i - 1) * 18), COLOR_WHITE)
+  end
+  fontMod.pop(bk)
+  -- Footer
+  do
+    local footerStr = "AG PORSCHE ACADEMY"
+    local fontPx = 11
+    local footerSize = _measureDW(footerStr, fontPx)
+    local footerX = math.floor(w * 0.5 - footerSize.x * 0.5)
+    local fk = fontMod.pushNamed("brand", fontPx)
+    _drawDW(footerStr, fontPx, vec2(footerX, h - padY - 4), COLOR_BRAND_GREY)
+    fontMod.pop(fk)
+  end
   return true
 end
 
@@ -406,7 +521,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
   if not coachingLines or #coachingLines == 0 or timeRemaining <= 0 then
     return
   end
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
 
@@ -459,7 +574,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
 end
 
 function M.drawFallback()
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
   drawStandardCoachingPanel(400, 120, 100)
@@ -478,7 +593,7 @@ end
 
 --- Coaching window when session has started but no tip is active (timer expired or empty hints).
 function M.drawBetweenLapsIdle(holdSeconds)
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
   drawStandardCoachingPanel(400, 140, 120)
@@ -505,7 +620,7 @@ end
 
 --- Lap completed and hold timer running, but `buildAfterLap` produced no lines (trace quality / first lap).
 function M.drawHoldNoHints(remainingSec)
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
   drawStandardCoachingPanel(400, 120, 100)
@@ -540,7 +655,7 @@ end
 ---@param vm CoachingHudStrip
 ---@return boolean @true if anything was drawn (caller may add spacing only then)
 function M.drawMainWindowStrip(vm)
-  if not ui or type(ui.textColored) ~= "function" or not vec2 then
+  if not ui or ui.textColored == nil or vec2 == nil then
     return false
   end
   local lines = vm.coachingLines
@@ -648,7 +763,7 @@ end
 --- Long text relies on the parent ImGui region for scrolling unless we add a child window later.
 ---@param text string|nil
 function M.drawSidecarDebrief(text)
-  if not text or text == "" or not ui or type(ui.textColored) ~= "function" then
+  if not text or text == "" or not ui or ui.textColored == nil then
     return
   end
   if ui.separator then

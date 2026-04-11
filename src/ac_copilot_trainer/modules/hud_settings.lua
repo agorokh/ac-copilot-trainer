@@ -105,7 +105,11 @@ function M.draw(vm)
       local curA = math.max(50, math.min(500, tonumber(cfg.approachMeters) or 200))
       local nvA, chA = ui.slider("Approach distance (m)", curA, 50, 500, "%.0f", true)
       if chA and nvA == nvA then
-        cfg.approachMeters = nvA
+        if type(vm.setApproachMeters) == "function" then
+          vm.setApproachMeters(nvA)
+        else
+          cfg.approachMeters = nvA
+        end
       end
     end)
     pcall(function()
@@ -177,6 +181,53 @@ function M.draw(vm)
       ui.text("Enable focus practice (this session): " .. (cur and "on" or "off"))
     end
     textWrappedMaybe(stf.focusPracticeHudSummary)
+  end
+
+  ui.separator()
+  ui.textColored("AI sidecar", rgbm(0.78, 0.8, 0.88, 1))
+  do
+    local curUrl = tostring(cfg.wsSidecarUrl or "")
+    -- Use the entry script's setter (per-key ac.storage) when provided so
+    -- the URL persists across reloads. Falls back to direct cfg mutation
+    -- if no setter was supplied (tests / older entry script versions).
+    local setUrl = vm.setWsSidecarUrl
+    local function applyUrl(newUrl)
+      if type(setUrl) == "function" then
+        setUrl(newUrl)
+      else
+        cfg.wsSidecarUrl = newUrl
+      end
+    end
+    if type(ui.inputText) == "function" then
+      pcall(function()
+        local nv, ch = ui.inputText("Sidecar URL###cpt_ws", curUrl, ui.InputTextFlags and ui.InputTextFlags.AutoSelectAll or 0)
+        if ch and type(nv) == "string" then
+          applyUrl(nv)
+        end
+      end)
+    else
+      ui.text("Sidecar URL: " .. (curUrl == "" and "<not set>" or curUrl))
+      ui.textColored("inputText not available — set ws://127.0.0.1:8765 in storage.", rgbm(0.65, 0.65, 0.7, 1))
+    end
+    if type(ui.button) == "function" then
+      pcall(function()
+        if ui.button("Set ws://127.0.0.1:8765###cpt_ws_default") then
+          applyUrl("ws://127.0.0.1:8765")
+        end
+      end)
+      pcall(function()
+        ui.sameLine()
+        if ui.button("Clear###cpt_ws_clear") then
+          applyUrl("")
+        end
+      end)
+    end
+    -- Status hint: shows whether the bridge has a URL configured.
+    if curUrl ~= "" then
+      ui.textColored("Configured. Bridge will dial on next tick.", rgbm(0.55, 0.85, 0.55, 1))
+    else
+      ui.textColored("URL empty — bridge is dormant.", rgbm(0.85, 0.65, 0.45, 1))
+    end
   end
 
   ui.separator()

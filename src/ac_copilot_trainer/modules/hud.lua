@@ -13,7 +13,7 @@ local M = {}
 -- ---------------------------------------------------------------------------
 
 local COLOR_BG_DARK   = rgbm(17 / 255, 17 / 255, 17 / 255, 0.60)
-local COLOR_BG_BORDER = rgbm(239 / 255, 68 / 255, 68 / 255, 0.40)  -- red-500/40
+local COLOR_BG_BORDER = rgbm(0.30, 0.32, 0.38, 0.40)  -- grey, matches coaching_overlay (round 5: user reverted to grey)
 local COLOR_RED       = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- #EF4444 (per spec)
 local COLOR_RED_HARD  = COLOR_RED                                  -- back-compat alias
 local COLOR_AMBER     = rgbm(251 / 255, 191 / 255, 36 / 255, 1.0)  -- amber-400
@@ -59,9 +59,12 @@ local PANEL_PAD_Y    = 14
 -- ---------------------------------------------------------------------------
 
 local function safeWindowSize()
-  if type(ui) == "table" and type(ui.windowSize) == "function" then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.x > 0 then
+  -- CSP `ui.windowSize` is a cdata callable (not "function" via type()), so
+  -- pcall it directly instead of type-checking. Falls back to the manifest
+  -- WINDOW_0 size if the call fails or returns garbage.
+  if type(ui) == "table" and ui.windowSize ~= nil then
+    local ok, sz = pcall(function() return ui.windowSize() end)
+    if ok and sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
       return sz
     end
   end
@@ -123,17 +126,50 @@ end
 -- Top tile renderer (gearbox-style absolute drawing)
 -- ---------------------------------------------------------------------------
 
+-- One-shot diag log: prints rendering API surface the first time M.draw runs.
+local _hudDiagLogged = false
+
 ---@param vm HudViewModel
 function M.draw(vm)
   vm = vm or {}
+  if not _hudDiagLogged and ac and type(ac.log) == "function" then
+    _hudDiagLogged = true
+    -- Use tostring() so we see cdata/userdata/nil distinction (not just y/N)
+    local function tt(t, k)
+      if type(t) ~= "table" then return "?" end
+      local v = t[k]
+      if v == nil then return "nil" end
+      return type(v)
+    end
+    local szStr = "err"
+    if type(ui) == "table" and ui.windowSize ~= nil then
+      local ok, sz = pcall(function() return ui.windowSize() end)
+      if ok and sz and sz.x then
+        szStr = string.format("%.0fx%.0f", sz.x, sz.y or 0)
+      else
+        szStr = "call-fail"
+      end
+    else
+      szStr = "missing"
+    end
+    ac.log(string.format(
+      "[COPILOT][HUD-DIAG] win0 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s windowSize=%s",
+      szStr,
+      type(ui),
+      type(vec2),
+      type(rgbm),
+      tt(ui, "drawRectFilled"), tt(ui, "drawRect"),
+      tt(ui, "dwriteDrawText"), tt(ui, "windowSize")
+    ))
+  end
   -- UI readiness guard: bail out cleanly on early frames or unusual CSP
-  -- builds where the imgui APIs are not yet available. Mirrors the same
-  -- defensive pattern in coaching_overlay.drawApproachPanel.
+  -- builds where the imgui APIs are not yet available. NOTE: in CSP, vec2,
+  -- rgbm, and `ui.*` rendering primitives are FFI cdata callables — `type()`
+  -- returns "cdata", not "function". Use nil-check + presence-check instead.
   if type(ui) ~= "table"
-      or type(vec2) ~= "function"
-      or type(ui.drawRectFilled) ~= "function"
-      or type(ui.drawRect) ~= "function"
-      or type(ui.windowSize) ~= "function" then
+      or vec2 == nil
+      or ui.drawRectFilled == nil
+      or ui.drawRect == nil then
     return
   end
   local view = resolveView(vm)

@@ -36,6 +36,13 @@ local lastView = nil               -- last returned viewmodel (for dedupe / fade
 local lastEmittedKey = nil         -- {kind .. ":" .. cornerLabel}
 local lastEmittedAt = -1e9         -- monotonic time of last emission (seconds)
 local monoClock = 0                -- accumulated dt for dedupe (no os.time dependency)
+-- Round 10c: track per-corner last-query state so we can re-query when
+-- cur/dist change significantly, not just on label transitions. Stops
+-- stale "BRAKE HARD NOW" from sticking when the car has already slowed.
+local lastQueryState = {}  -- [corner] = {cur, dist, t}
+local QUERY_MIN_GAP_SEC = 2.0
+local QUERY_CUR_DELTA_KMH = 20     -- re-query if cur changed by this much
+local QUERY_DIST_DELTA_M = 60      -- re-query if dist changed by this much
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -126,7 +133,18 @@ local function resolveCornerLabel(brakePoint, segments)
   return bestLabel
 end
 
---- Is the car currently inside a corner segment?
+--- Is the car currently in the APEX REGION of a corner segment?
+---
+--- IMPORTANT: `corner_analysis.buildSegments` produces "corner" segments
+--- spanning [brake_i + pad, brake_(i+1) - pad] — i.e. the entire brake-to-
+--- brake region INCLUDING the exit straight. We must NOT trust the full
+--- s0..s1 span as "in corner" or we'd be "in corner" 80% of the lap.
+---
+--- Use only the FIRST 30% of the corner segment (the brake-zone-to-apex
+--- portion), capped at 0.025 of track length (~42m on a 1700m track) so
+--- the apex window stays small even on long corners.
+local APEX_FRAC = 0.30
+local APEX_MAX_SPLINE = 0.025
 local function inCornerSegment(carSp, segments)
   if type(segments) ~= "table" then return false, nil end
   local sp = wrap01(carSp)
@@ -134,11 +152,24 @@ local function inCornerSegment(carSp, segments)
     local seg = segments[i]
     if seg and seg.kind == "corner" then
       local s0, s1 = seg.s0 or 0, seg.s1 or 0
-      local inside
+      local span
       if s1 > s0 then
-        inside = sp >= s0 and sp <= s1
+        span = s1 - s0
       else
-        inside = sp >= s0 or sp <= s1
+        span = (1 - s0) + s1
+      end
+      local apexLen = math.min(span * APEX_FRAC, APEX_MAX_SPLINE)
+      local apexEnd
+      if s1 > s0 then
+        apexEnd = s0 + apexLen
+      else
+        apexEnd = wrap01(s0 + apexLen)
+      end
+      local inside
+      if apexEnd > s0 then
+        inside = sp >= s0 and sp <= apexEnd
+      else
+        inside = sp >= s0 or sp <= apexEnd
       end
       if inside then
         return true, seg
@@ -226,31 +257,39 @@ function M.tick(opts)
   local cornerLabel = resolveCornerLabel(nextBrake, segments)
   local targetSpeed = nextBrake and tonumber(nextBrake.entrySpeed) or nil
 
-  -- Are we currently inside a corner segment?
-  -- In-corner override: when the car is INSIDE a known corner segment,
-  -- the in-corner label takes priority over any next-corner-ahead label.
-  -- Also CLEAR nextBrake/targetSpeed/distToBrake so the in-corner priority
-  -- rules don't accidentally render the NEXT corner's target speed under
-  -- the CURRENT corner's label (e.g. "BRAKE NOW / TARGET 120 km/h" attributed
-  -- to T4 when 120 km/h is actually T5's entry speed).
+  -- Are we currently in the APEX REGION of a known corner segment?
+  -- When in corner: use the in-corner label for the TOP TILE primary line,
+  -- but KEEP nextBrake/targetSpeed/distToBrakeM pointing to the upcoming
+  -- brake point so the BOTTOM TILE keeps showing real approach data.
+  --
+  -- The cascade naturally won't false-fire BRAKE NOW for the next corner
+  -- while in the current apex because distToBrakeM to the next brake is
+  -- still > 50m at that moment (the next brake is at the END of the
+  -- current corner segment). The previous version cleared these fields
+  -- to be safe, but that left the bottom tile blank (issue #75 round 3).
   local inCorner, cornerSeg = inCornerSegment(sp, segments)
+  local inCornerLabel = nil
   if inCorner and cornerSeg and cornerSeg.label then
-    cornerLabel = cornerSeg.label
-    nextBrake = nil
-    distToBrakeM = nil
-    targetSpeed = nil
+    inCornerLabel = cornerSeg.label
   end
+  -- Top tile prefers the in-corner label (current corner) when set,
+  -- else falls back to the upcoming corner's label (next brake target).
+  local topCornerLabel = inCornerLabel or cornerLabel
 
   -- Reference speed at this exact spline position
   local refSpeed = hasTrace and refSpeedAtSpline(trace, sp) or nil
 
-  -- Build the structured viewmodel that BOTH tiles consume
+  -- Build the structured viewmodel that BOTH tiles consume.
+  -- topCornerLabel = current corner if inCorner else next corner ahead.
+  -- cornerLabel/targetSpeedKmh/distToBrakeM = ALWAYS the upcoming brake point.
   local view = {
     primaryLine     = nil,
     secondaryLine   = nil,
     kind            = "info",
     subState        = "cruising",
-    cornerLabel     = cornerLabel,
+    cornerLabel     = topCornerLabel,
+    -- Bottom tile reads these (always the upcoming brake target):
+    approachLabel   = cornerLabel,
     targetSpeedKmh  = targetSpeed,
     currentSpeedKmh = cur,
     distToBrakeM    = distToBrakeM,
@@ -306,6 +345,46 @@ function M.tick(opts)
     view.subState = "cruising"
   end
 
+  -- Round 10: in-race per-corner LLM override.
+  -- When topCornerLabel is set and changed, fire a non-blocking corner_query
+  -- to the sidecar (debounced inside wsBridge). When an advisory is present
+  -- in state.cornerAdvisories[label], override view.secondaryLine so the
+  -- TOP tile shows the LLM hint (e.g. "EASE OFF THROTTLE TO 120 KM/H")
+  -- instead of the generic rules-based secondary.
+  local topLabel = view.cornerLabel
+  if type(topLabel) == "string" and topLabel ~= "" then
+    if opts.wsBridge and type(opts.wsBridge.sendCornerQuery) == "function"
+        and distToBrakeM then
+      local refAtBrake = targetSpeed or 0
+      local now = opts.simT or monoClock
+      local prev = lastQueryState[topLabel]
+      local shouldQuery = false
+      if prev == nil then
+        shouldQuery = true
+      else
+        local age = now - (prev.t or 0)
+        local curDelta = math.abs(cur - (prev.cur or 0))
+        local distDelta = math.abs(distToBrakeM - (prev.dist or 0))
+        if age >= QUERY_MIN_GAP_SEC
+            and (curDelta >= QUERY_CUR_DELTA_KMH or distDelta >= QUERY_DIST_DELTA_M) then
+          shouldQuery = true
+        end
+      end
+      if shouldQuery then
+        lastQueryState[topLabel] = { cur = cur, dist = distToBrakeM, t = now }
+        opts.wsBridge.sendCornerQuery(
+          topLabel, cur, refAtBrake, distToBrakeM, opts.lap)
+      end
+    end
+    if opts.cornerAdvisories and type(opts.cornerAdvisories) == "table" then
+      local advice = opts.cornerAdvisories[topLabel]
+      if type(advice) == "string" and advice ~= "" then
+        view.secondaryLine = advice
+        view.kind = "info"  -- use white/info color, not brake red
+      end
+    end
+  end
+
   -- Change detection key. Includes subState + primaryLine so escalations
   -- like PREPARE TO BRAKE → BRAKE NOW (same kind, same corner) are NOT
   -- collapsed and the urgent hint is shown immediately.
@@ -334,6 +413,7 @@ end
 function M.reset()
   lastView = nil
   lastEmittedKey = nil
+  lastQueryState = {}
 end
 
 --- No-op kept for backward compatibility. The current live-frame engine

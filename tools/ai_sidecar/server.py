@@ -16,6 +16,7 @@ from typing import Any
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     PROTOCOL_VERSION,
+    build_ollama_followup,
     prepare_outbound_message,
 )
 from tools.ai_sidecar.session import LapComparisonState
@@ -42,6 +43,31 @@ def _run_compare_laps(last_path: str, ref_path: str) -> None:
         extract_corner_table(ref),
     )
     print(json.dumps(ranked, indent=2))
+
+
+async def _send_ollama_followup(
+    websocket: Any,
+    inbound: dict[str, Any],
+    improvement_ranking: list[dict[str, Any]],
+) -> None:
+    """Call Ollama in a background task and send a follow-up coaching_response.
+
+    Runs AFTER the immediate rules-based response has been sent. Uses
+    asyncio.to_thread because the llm_coach helpers are sync. Silently
+    discards on any error (the socket may have closed in the meantime).
+    """
+    try:
+        followup = await asyncio.to_thread(
+            build_ollama_followup,
+            inbound,
+            improvement_ranking,
+        )
+    except Exception as e:
+        logger.info("ollama followup raised: %s", e)
+        return
+    if followup is None:
+        return
+    await _safe_send(websocket, followup)
 
 
 async def _safe_send(websocket: Any, payload: dict[str, Any]) -> None:
@@ -105,6 +131,21 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         )
         if out is not None:
             await _safe_send(websocket, out)
+
+            # Round 8: schedule Ollama follow-up in the background so the
+            # immediate response above is not blocked on LLM latency. CSP
+            # receives hints+rules_debrief in <100ms, then gets the Ollama
+            # debrief as a second message when it's ready (~5-15s later).
+            if (
+                data.get("event") == "lap_complete"
+                and reply_coaching
+            ):
+                imp_for_bg = []
+                if lap_state is not None:
+                    imp_for_bg = lap_state.improvement_ranking_for(data)
+                asyncio.create_task(
+                    _send_ollama_followup(websocket, data, imp_for_bg)
+                )
 
 
 async def _run(host: str, port: int, reply_coaching: bool) -> None:
