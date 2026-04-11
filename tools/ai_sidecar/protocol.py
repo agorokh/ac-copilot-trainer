@@ -63,6 +63,9 @@ def prepare_outbound_message(
 
     event = inbound.get("event")
 
+    if event == EVENT_CORNER_QUERY and not reply_coaching:
+        return None
+
     if event == EVENT_CORNER_QUERY:
         # Round 10: in-race per-corner hint. Blocks on Ollama (~631ms with
         # llama3.2:3b + tiny prompt). The Lua side fires this async when it

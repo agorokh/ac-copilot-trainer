@@ -54,6 +54,26 @@ def test_prepare_no_reply_mode() -> None:
     )
 
 
+def test_corner_query_respects_no_reply_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tools.ai_sidecar.protocol as proto
+
+    monkeypatch.setattr(proto, "compose_corner_hint", lambda **_k: "SHOULD NOT RUN")
+    assert (
+        prepare_outbound_message(
+            {
+                "protocol": PROTOCOL_VERSION,
+                "event": "corner_query",
+                "corner": "T1",
+                "cur": 80,
+                "ref": 70,
+                "dist": 12,
+            },
+            reply_coaching=False,
+        )
+        is None
+    )
+
+
 def test_corner_query_requires_cur_ref_dist_keys() -> None:
     out = prepare_outbound_message(
         {

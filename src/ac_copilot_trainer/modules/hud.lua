@@ -243,6 +243,50 @@ function M.draw(vm)
       ui.dwriteDrawText(secStr, secFontPx, secPos, sColor)
     end
     fontMod.pop(sk)
+    y = y + 20
+  end
+
+  -- Sidecar debrief (rules + optional Ollama follow-up); keeps LLM output visible
+  -- on WINDOW_0 without the removed coaching-window panel (Bugbot).
+  if type(vm.debriefText) == "string" and vm.debriefText ~= "" then
+    local raw = vm.debriefText
+    if string.len(raw) > 140 then
+      raw = string.sub(raw, 1, 137) .. "..."
+    end
+    local df = 10
+    local dk = fontMod.pushNamed("labels_bold", df)
+    if type(ui.dwriteDrawText) == "function" then
+      local lines = {}
+      local maxW = w - 24
+      local curLine = ""
+      for word in string.gmatch(raw, "%S+") do
+        local trial = (curLine == "") and word or (curLine .. " " .. word)
+        local tw = measure(trial, df)
+        if tw.x > maxW and curLine ~= "" then
+          lines[#lines + 1] = curLine
+          curLine = word
+          if #lines >= 3 then
+            break
+          end
+        else
+          curLine = trial
+        end
+      end
+      if curLine ~= "" and #lines < 3 then
+        lines[#lines + 1] = curLine
+      end
+      local yy = math.max(y, h - 56)
+      for li = 1, #lines do
+        local ln = lines[li]
+        if li == 3 and #lines == 3 then
+          ln = ln .. "..."
+        end
+        local ls = measure(ln, df)
+        local lp = vec2(centerX - ls.x * 0.5, yy + (li - 1) * (df + 3))
+        ui.dwriteDrawText(ln, df, lp, COLOR_TEXT_GREY)
+      end
+    end
+    fontMod.pop(dk)
   end
 end
 
