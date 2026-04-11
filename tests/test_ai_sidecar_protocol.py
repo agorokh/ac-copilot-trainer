@@ -10,6 +10,7 @@ import pytest
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
+    EVENT_CORNER_ADVICE,
     PROTOCOL_VERSION,
     prepare_outbound_message,
 )
@@ -51,6 +52,62 @@ def test_prepare_no_reply_mode() -> None:
         )
         is None
     )
+
+
+def test_corner_query_rejects_bool_speed() -> None:
+    out = prepare_outbound_message(
+        {
+            "protocol": PROTOCOL_VERSION,
+            "event": "corner_query",
+            "corner": "T1",
+            "cur": True,
+            "ref": 100,
+            "dist": 10,
+        },
+        reply_coaching=True,
+    )
+    assert out is not None
+    assert out["event"] == EVENT_ANALYSIS_ERROR
+
+
+def test_corner_query_silent_when_no_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tools.ai_sidecar.protocol as proto
+
+    monkeypatch.setattr(proto, "compose_corner_hint", lambda **_: None)
+    assert (
+        prepare_outbound_message(
+            {
+                "protocol": PROTOCOL_VERSION,
+                "event": "corner_query",
+                "corner": "T1",
+                "cur": 80,
+                "ref": 70,
+                "dist": 12,
+            },
+            reply_coaching=True,
+        )
+        is None
+    )
+
+
+def test_corner_query_returns_advice_when_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tools.ai_sidecar.protocol as proto
+
+    monkeypatch.setattr(proto, "compose_corner_hint", lambda **_: "BRAKE EARLIER")
+    out = prepare_outbound_message(
+        {
+            "protocol": PROTOCOL_VERSION,
+            "event": "corner_query",
+            "corner": "T1",
+            "cur": 80,
+            "ref": 70,
+            "dist": 12,
+        },
+        reply_coaching=True,
+    )
+    assert out is not None
+    assert out["event"] == EVENT_CORNER_ADVICE
+    assert out["text"] == "BRAKE EARLIER"
 
 
 def test_sidecar_websocket_lap_complete_roundtrip() -> None:

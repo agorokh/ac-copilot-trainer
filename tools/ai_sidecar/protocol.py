@@ -11,11 +11,11 @@ from typing import TYPE_CHECKING, Any
 
 from tools.ai_sidecar.coaching.llm_coach import (
     compose_corner_hint,
-    compose_debrief,
     compose_llm_debrief_only,
-    rules_fallback_debrief,
     debrief_feature_enabled,
+    rules_fallback_debrief,
 )
+from tools.ai_sidecar.features import _as_float
 
 if TYPE_CHECKING:
     from tools.ai_sidecar.session import LapComparisonState
@@ -41,7 +41,8 @@ def prepare_outbound_message(
 
     Returns:
         ``analysis_error`` for protocol violations, ``coaching_response`` when
-        ``reply_coaching`` and event is ``lap_complete``, else ``None``.
+        ``reply_coaching`` and event is ``lap_complete``, ``corner_advice`` when
+        a corner hint is available, else ``None`` (including silent ``corner_query``).
     """
     proto_raw = inbound.get("protocol")
     if proto_raw is not None:
@@ -67,11 +68,20 @@ def prepare_outbound_message(
         # llama3.2:3b + tiny prompt). The Lua side fires this async when it
         # detects topCornerLabel transitions to a new corner.
         corner = str(inbound.get("corner") or "").strip()
+
+        def _corner_scalar(raw: Any) -> float:
+            if raw is None:
+                return 0.0
+            parsed = _as_float(raw)
+            if parsed is None:
+                raise ValueError
+            return parsed
+
         try:
-            cur_kmh = float(inbound.get("cur") or 0)
-            ref_kmh = float(inbound.get("ref") or 0)
-            dist_m = float(inbound.get("dist") or 0)
-        except (TypeError, ValueError):
+            cur_kmh = _corner_scalar(inbound.get("cur"))
+            ref_kmh = _corner_scalar(inbound.get("ref"))
+            dist_m = _corner_scalar(inbound.get("dist"))
+        except ValueError:
             return {
                 "protocol": PROTOCOL_VERSION,
                 "event": EVENT_ANALYSIS_ERROR,
@@ -89,15 +99,15 @@ def prepare_outbound_message(
             ref_kmh=ref_kmh,
             dist_m=dist_m,
         )
-        out: dict[str, Any] = {
+        if not hint:
+            return None
+        return {
             "protocol": PROTOCOL_VERSION,
             "event": EVENT_CORNER_ADVICE,
             "corner": corner,
             "lap": inbound.get("lap"),
+            "text": hint,
         }
-        if hint:
-            out["text"] = hint
-        return out
 
     if event != EVENT_LAP_COMPLETE:
         logger.debug("ignored event=%s keys=%s", event, list(inbound.keys())[:12])

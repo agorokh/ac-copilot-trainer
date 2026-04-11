@@ -390,7 +390,7 @@ def compose_corner_hint(
         # Strip common preambles
         for pre in ("Action:", "Reply:", "Command:", "ANSWER:", "->", "=>"):
             if line.upper().startswith(pre.upper()):
-                line = line[len(pre):].strip()
+                line = line[len(pre) :].strip()
         # Cut on first period (keep one trailing period for emphasis)
         if "." in line:
             line = line.split(".", 1)[0].strip() + "."

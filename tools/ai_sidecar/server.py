@@ -23,6 +23,9 @@ from tools.ai_sidecar.session import LapComparisonState
 
 logger = logging.getLogger(__name__)
 
+# Strong refs so asyncio.Task objects are not GC'd mid-flight (Python docs).
+_background_tasks: set[asyncio.Task[Any]] = set()
+
 
 def _run_compare_laps(last_path: str, ref_path: str) -> None:
     """CLI harness: two lap JSON files → improvement ranking on stdout (issue #49)."""
@@ -136,16 +139,13 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             # immediate response above is not blocked on LLM latency. CSP
             # receives hints+rules_debrief in <100ms, then gets the Ollama
             # debrief as a second message when it's ready (~5-15s later).
-            if (
-                data.get("event") == "lap_complete"
-                and reply_coaching
-            ):
+            if data.get("event") == "lap_complete" and reply_coaching:
                 imp_for_bg = []
                 if lap_state is not None:
                     imp_for_bg = lap_state.improvement_ranking_for(data)
-                asyncio.create_task(
-                    _send_ollama_followup(websocket, data, imp_for_bg)
-                )
+                bg_task = asyncio.create_task(_send_ollama_followup(websocket, data, imp_for_bg))
+                _background_tasks.add(bg_task)
+                bg_task.add_done_callback(_background_tasks.discard)
 
 
 async def _run(host: str, port: int, reply_coaching: bool) -> None:

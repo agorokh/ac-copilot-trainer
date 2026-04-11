@@ -34,7 +34,7 @@ relates_to:
 - Round 10d in-game verification (staleness expiry)
 - Corner segment quality fix in corner_analysis.lua (brake-to-brake spans too long)
 - LLM coaching quality tuning (prompt edge cases)
-- Post-lap debrief rendering (drawLapDebrief exists but not wired)
+- Post-lap debrief panel removed; coaching UX is per-corner in-race only
 - Next epic selection after PR #75 merges
 
 ## Blockers / dependencies
