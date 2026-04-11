@@ -380,14 +380,16 @@ function M.tick(opts)
         end
       end
       if shouldQuery then
-        lastQueryState[topLabel] = {
-          cur = cur,
-          dist = distToBrakeM,
-          t = now,
-          lap = lapNow,
-        }
-        opts.wsBridge.sendCornerQuery(
+        local sent = opts.wsBridge.sendCornerQuery(
           topLabel, cur, refAtBrake, distToBrakeM, opts.lap)
+        if sent then
+          lastQueryState[topLabel] = {
+            cur = cur,
+            dist = distToBrakeM,
+            t = now,
+            lap = lapNow,
+          }
+        end
       end
     end
     if opts.cornerAdvisories and type(opts.cornerAdvisories) == "table" then

@@ -428,7 +428,8 @@ function M.takeCornerAdvisory(corner)
     return nil
   end
   local age = currentSimT - (tonumber(e.ts) or 0)
-  if age > CORNER_ADVISORY_MAX_AGE_SEC then
+  -- Negative age (sim time rewind / session reset) must not resurrect stale text.
+  if age < 0 or age > CORNER_ADVISORY_MAX_AGE_SEC then
     cornerAdvisories[corner] = nil
     return nil
   end

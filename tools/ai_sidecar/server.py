@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 
 # Strong refs so asyncio.Task objects are not GC'd mid-flight (Python docs).
 _background_tasks: set[asyncio.Task[Any]] = set()
+_OLLAMA_FOLLOWUP_CONCURRENCY = 4
+_ollama_followup_sem: asyncio.Semaphore | None = None
+
+
+def _get_ollama_followup_sem() -> asyncio.Semaphore:
+    global _ollama_followup_sem
+    if _ollama_followup_sem is None:
+        _ollama_followup_sem = asyncio.Semaphore(_OLLAMA_FOLLOWUP_CONCURRENCY)
+    return _ollama_followup_sem
 
 
 def _run_compare_laps(last_path: str, ref_path: str) -> None:
@@ -61,11 +70,12 @@ async def _send_ollama_followup(
     discards on any error (the socket may have closed in the meantime).
     """
     try:
-        followup = await asyncio.to_thread(
-            build_ollama_followup,
-            inbound,
-            improvement_ranking,
-        )
+        async with _get_ollama_followup_sem():
+            followup = await asyncio.to_thread(
+                build_ollama_followup,
+                inbound,
+                improvement_ranking,
+            )
     except Exception as e:
         logger.info("ollama followup raised: %s", e)
         return
