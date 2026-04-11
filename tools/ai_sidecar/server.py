@@ -15,6 +15,7 @@ from typing import Any
 
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
+    EVENT_COACHING_RESPONSE,
     PROTOCOL_VERSION,
     build_ollama_followup,
     prepare_outbound_message,
@@ -139,13 +140,16 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             # immediate response above is not blocked on LLM latency. CSP
             # receives hints+rules_debrief in <100ms, then gets the Ollama
             # debrief as a second message when it's ready (~5-15s later).
-            if data.get("event") == "lap_complete" and reply_coaching:
+            if (
+                reply_coaching
+                and data.get("event") == "lap_complete"
+                and isinstance(out, dict)
+                and out.get("event") == EVENT_COACHING_RESPONSE
+            ):
                 # Reuse improvementRanking from the immediate response — calling
                 # improvement_ranking_for again mutates LapComparisonState and
                 # diverges on PB laps (Bugbot).
-                imp_for_bg = []
-                if isinstance(out, dict):
-                    imp_for_bg = out.get("improvementRanking") or []
+                imp_for_bg = out.get("improvementRanking") or []
                 bg_task = asyncio.create_task(_send_ollama_followup(websocket, data, imp_for_bg))
                 _background_tasks.add(bg_task)
                 bg_task.add_done_callback(_background_tasks.discard)
