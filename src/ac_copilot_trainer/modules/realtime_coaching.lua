@@ -362,20 +362,30 @@ function M.tick(opts)
       local refAtBrake = targetSpeed or 0
       local now = opts.simT or monoClock
       local prev = lastQueryState[topLabel]
+      local lapNow = tonumber(opts.lap) or 0
       local shouldQuery = false
       if prev == nil then
+        shouldQuery = true
+      elseif (tonumber(prev.lap) or -1) ~= lapNow then
+        -- New lap revisiting the same corner label — fetch a fresh advisory.
         shouldQuery = true
       else
         local age = now - (prev.t or 0)
         local curDelta = math.abs(cur - (prev.cur or 0))
         local distDelta = math.abs(distToBrakeM - (prev.dist or 0))
         if age >= QUERY_MIN_GAP_SEC
-            and (curDelta >= QUERY_CUR_DELTA_KMH or distDelta >= QUERY_DIST_DELTA_M) then
+            or curDelta >= QUERY_CUR_DELTA_KMH
+            or distDelta >= QUERY_DIST_DELTA_M then
           shouldQuery = true
         end
       end
       if shouldQuery then
-        lastQueryState[topLabel] = { cur = cur, dist = distToBrakeM, t = now }
+        lastQueryState[topLabel] = {
+          cur = cur,
+          dist = distToBrakeM,
+          t = now,
+          lap = lapNow,
+        }
         opts.wsBridge.sendCornerQuery(
           topLabel, cur, refAtBrake, distToBrakeM, opts.lap)
       end

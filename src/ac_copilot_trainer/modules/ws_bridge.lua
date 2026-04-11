@@ -256,10 +256,11 @@ function M.pollInbound(maxPerTick)
               if ac and type(ac.log) == "function" then
                 ac.log("[COPILOT][WS-DIAG] ollama follow-up applied for lap " .. tostring(lap))
               end
-            elseif debrief then
+            elseif debrief and not pendingCoaching then
               -- Late Ollama debrief after the immediate payload was consumed:
               -- surface prose only — do not queue placeholder hints that would
-              -- replace rules-engine lines in the HUD.
+              -- replace rules-engine lines in the HUD. Never clobber a pending
+              -- payload for a newer lap with a stale follow-up for an older lap.
               pendingCoaching = {
                 lap = lap,
                 hints = {},
