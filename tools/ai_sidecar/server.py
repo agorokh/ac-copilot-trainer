@@ -107,6 +107,9 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     prepare_lock = asyncio.Lock()
     pending_followups: set[asyncio.Task[Any]] = set()
     pending_corner_task: asyncio.Task[Any] | None = None
+    # Monotonic id so a slow to_thread from a superseded corner_query does not
+    # send corner_advice after a newer query has already been issued (Codex).
+    corner_job_gen: list[int] = [0]
 
     def _followup_done(t: asyncio.Task[Any]) -> None:
         _background_tasks.discard(t)
@@ -158,7 +161,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             # (Bugbot). Lock is per-handler so clients do not block each other (Codex).
             if reply_coaching and data.get("event") == EVENT_CORNER_QUERY:
 
-                async def _corner_job(d: dict[str, Any]) -> None:
+                async def _corner_job(d: dict[str, Any], gen: int) -> None:
                     try:
                         async with prepare_lock:
                             out_c = await asyncio.to_thread(
@@ -167,14 +170,18 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                                 reply_coaching=reply_coaching,
                                 lap_state=lap_state,
                             )
+                        if gen != corner_job_gen[0]:
+                            return
                         if out_c is not None:
                             await _safe_send(websocket, out_c)
                     except Exception:
                         logger.exception("corner_query async handler failed")
 
+                corner_job_gen[0] += 1
+                job_gen = corner_job_gen[0]
                 if pending_corner_task and not pending_corner_task.done():
                     pending_corner_task.cancel()
-                t_c = asyncio.create_task(_corner_job(data))
+                t_c = asyncio.create_task(_corner_job(data, job_gen))
                 pending_corner_task = t_c
                 _background_tasks.add(t_c)
                 pending_followups.add(t_c)
