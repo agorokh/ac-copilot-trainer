@@ -31,7 +31,6 @@ _OLLAMA_FOLLOWUP_CONCURRENCY = 4
 # Best-effort cap: cancelling a task waiting in asyncio.to_thread can release this
 # semaphore before the worker thread finishes (Python limitation).
 _ollama_followup_sem: asyncio.Semaphore | None = None
-_prepare_lock = asyncio.Lock()
 
 
 def _get_ollama_followup_sem() -> asyncio.Semaphore:
@@ -105,6 +104,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         peer,
     )
     lap_state = LapComparisonState()
+    prepare_lock = asyncio.Lock()
     pending_followups: set[asyncio.Task[Any]] = set()
 
     def _followup_done(t: asyncio.Task[Any]) -> None:
@@ -152,13 +152,14 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
 
             # corner_query runs compose_corner_hint (blocking HTTP to Ollama). Do not
             # stall the websocket message loop — process it in a background task
-            # while still serializing prepare_outbound_message via _prepare_lock so
-            # lap_complete never races LapComparisonState mutations (Bugbot).
+            # while still serializing prepare_outbound_message via prepare_lock so
+            # lap_complete never races LapComparisonState mutations on this connection
+            # (Bugbot). Lock is per-handler so clients do not block each other (Codex).
             if reply_coaching and data.get("event") == EVENT_CORNER_QUERY:
 
                 async def _corner_job(d: dict[str, Any]) -> None:
                     try:
-                        async with _prepare_lock:
+                        async with prepare_lock:
                             out_c = await asyncio.to_thread(
                                 prepare_outbound_message,
                                 d,
@@ -176,7 +177,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 t_c.add_done_callback(_followup_done)
                 continue
 
-            async with _prepare_lock:
+            async with prepare_lock:
                 out = await asyncio.to_thread(
                     prepare_outbound_message,
                     data,
