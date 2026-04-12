@@ -24,6 +24,16 @@ local COLOR_TEXT_GREY = rgbm(212 / 255, 212 / 255, 212 / 255, 1.0) -- neutral-30
 local PANEL_ROUNDING = 8
 local PANEL_PAD_Y    = 14
 
+--- CSP: `ui.dwriteDrawText` is often a cdata callable, not `type(...) == "function"`.
+local function dwriteSafe(text, px, pos, color)
+  if ui == nil or ui.dwriteDrawText == nil then
+    return
+  end
+  pcall(function()
+    ui.dwriteDrawText(text, px, pos, color)
+  end)
+end
+
 -- ---------------------------------------------------------------------------
 -- View model contract (issue #72)
 -- ---------------------------------------------------------------------------
@@ -189,9 +199,7 @@ function M.draw(vm)
     local titleSize = measure("ACTIVE SUGGESTION", titleFontPx)
     local titlePos = vec2(centerX - titleSize.x * 0.5, PANEL_PAD_Y)
     local tk = fontMod.pushNamed("labels_bold", titleFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
-    end
+    dwriteSafe("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
     fontMod.pop(tk)
   end
 
@@ -204,9 +212,7 @@ function M.draw(vm)
     local cornerSize = measure(cornerStr, cornerFontPx)
     local cornerPos = vec2(centerX - cornerSize.x * 0.5, y)
     local ck = fontMod.pushNamed("numbers", cornerFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
-    end
+    dwriteSafe(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
     fontMod.pop(ck)
     y = y + 30
   end
@@ -219,9 +225,7 @@ function M.draw(vm)
     local primaryPos = vec2(centerX - primarySize.x * 0.5, y)
     local pColor = colorForKind(view.kind)
     local pk = fontMod.pushNamed("numbers", primaryFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText(primaryStr, primaryFontPx, primaryPos, pColor)
-    end
+    dwriteSafe(primaryStr, primaryFontPx, primaryPos, pColor)
     fontMod.pop(pk)
     y = y + 24
   end
@@ -239,9 +243,7 @@ function M.draw(vm)
       sColor = COLOR_TEXT_GREY
     end
     local sk = fontMod.pushNamed("numbers", secFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText(secStr, secFontPx, secPos, sColor)
-    end
+    dwriteSafe(secStr, secFontPx, secPos, sColor)
     fontMod.pop(sk)
     y = y + 20
   end
@@ -255,7 +257,7 @@ function M.draw(vm)
     end
     local df = 10
     local dk = fontMod.pushNamed("labels_bold", df)
-    if type(ui.dwriteDrawText) == "function" then
+    if ui and ui.dwriteDrawText ~= nil then
       local lines = {}
       local maxW = w - 24
       local curLine = ""
@@ -283,7 +285,7 @@ function M.draw(vm)
         end
         local ls = measure(ln, df)
         local lp = vec2(centerX - ls.x * 0.5, yy + (li - 1) * (df + 3))
-        ui.dwriteDrawText(ln, df, lp, COLOR_TEXT_GREY)
+        dwriteSafe(ln, df, lp, COLOR_TEXT_GREY)
       end
     end
     fontMod.pop(dk)

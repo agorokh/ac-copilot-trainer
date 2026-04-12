@@ -30,10 +30,9 @@ local function close_socket_if_any(s)
   if s == nil then
     return
   end
+  -- CSP sockets are often cdata callables; still expose :close() (Codex/Copilot).
   pcall(function()
-    if type(s) == "table" and s.close ~= nil then
-      s:close()
-    end
+    s:close()
   end)
 end
 

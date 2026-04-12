@@ -174,6 +174,8 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                             return
                         if out_c is not None:
                             await _safe_send(websocket, out_c)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception:
                         logger.exception("corner_query async handler failed")
 
