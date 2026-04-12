@@ -401,6 +401,9 @@ function M.sendJson(payload)
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] sendJson failed: " .. tostring(sendErr))
     end
+    -- Close before dropping the handle so reconnect:true cannot leave a zombie
+    -- recv path while tick() opens a replacement socket (Codex).
+    close_socket_if_any(sock)
     sock = nil
     lastTry = -RECONNECT_SEC
     return false
