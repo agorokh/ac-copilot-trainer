@@ -28,10 +28,18 @@ local lastCornerQueryAt = {}  ---@type table<string, number>
 
 ---@param u string|nil full ws URL, e.g. ws://127.0.0.1:8765
 function M.configure(u)
+  local prev = sock
   url = u
   sock = nil
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
+  if prev ~= nil then
+    pcall(function()
+      if type(prev) == "table" and prev.close ~= nil then
+        prev:close()
+      end
+    end)
+  end
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
@@ -394,7 +402,7 @@ end
 ---@param ref number      reference brake entry speed km/h
 ---@param dist number     distance to brake point in meters
 ---@param lap number|nil  current lap number
----@return boolean        true if a query was sent
+---@return boolean        true if JSON was sent on the active socket (false on send failure)
 function M.sendCornerQuery(corner, cur, ref, dist, lap)
   if type(corner) ~= "string" or corner == "" then return false end
   if not sock or not url or url == "" then return false end

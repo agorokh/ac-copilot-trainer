@@ -16,6 +16,7 @@ from typing import Any
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
+    EVENT_CORNER_QUERY,
     PROTOCOL_VERSION,
     build_ollama_followup,
     prepare_outbound_message,
@@ -27,7 +28,10 @@ logger = logging.getLogger(__name__)
 # Strong refs so asyncio.Task objects are not GC'd mid-flight (Python docs).
 _background_tasks: set[asyncio.Task[Any]] = set()
 _OLLAMA_FOLLOWUP_CONCURRENCY = 4
+# Best-effort cap: cancelling a task waiting in asyncio.to_thread can release this
+# semaphore before the worker thread finishes (Python limitation).
 _ollama_followup_sem: asyncio.Semaphore | None = None
+_prepare_lock = asyncio.Lock()
 
 
 def _get_ollama_followup_sem() -> asyncio.Semaphore:
@@ -146,12 +150,39 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     hints,
                 )
 
-            out = await asyncio.to_thread(
-                prepare_outbound_message,
-                data,
-                reply_coaching=reply_coaching,
-                lap_state=lap_state,
-            )
+            # corner_query runs compose_corner_hint (blocking HTTP to Ollama). Do not
+            # stall the websocket message loop — process it in a background task
+            # while still serializing prepare_outbound_message via _prepare_lock so
+            # lap_complete never races LapComparisonState mutations (Bugbot).
+            if reply_coaching and data.get("event") == EVENT_CORNER_QUERY:
+
+                async def _corner_job(d: dict[str, Any]) -> None:
+                    try:
+                        async with _prepare_lock:
+                            out_c = await asyncio.to_thread(
+                                prepare_outbound_message,
+                                d,
+                                reply_coaching=reply_coaching,
+                                lap_state=lap_state,
+                            )
+                        if out_c is not None:
+                            await _safe_send(websocket, out_c)
+                    except Exception:
+                        logger.exception("corner_query async handler failed")
+
+                t_c = asyncio.create_task(_corner_job(data))
+                _background_tasks.add(t_c)
+                pending_followups.add(t_c)
+                t_c.add_done_callback(_followup_done)
+                continue
+
+            async with _prepare_lock:
+                out = await asyncio.to_thread(
+                    prepare_outbound_message,
+                    data,
+                    reply_coaching=reply_coaching,
+                    lap_state=lap_state,
+                )
             if out is not None:
                 await _safe_send(websocket, out)
 
