@@ -357,8 +357,10 @@ function M.tick(opts)
   -- instead of the generic rules-based secondary.
   local topLabel = view.cornerLabel
   if type(topLabel) == "string" and topLabel ~= "" then
+    -- Only query within the configured approach window so Ollama is not spammed
+    -- for far-away brake points (Codex).
     if opts.wsBridge and type(opts.wsBridge.sendCornerQuery) == "function"
-        and distToBrakeM then
+        and distToBrakeM and distToBrakeM <= approachM then
       local refAtBrake = targetSpeed or 0
       local now = opts.simT or monoClock
       local prev = lastQueryState[topLabel]
