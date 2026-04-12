@@ -30,6 +30,10 @@ EVENT_ANALYSIS_ERROR = "analysis_error"
 EVENT_CORNER_QUERY = "corner_query"
 EVENT_CORNER_ADVICE = "corner_advice"
 
+_CORNER_LABEL_MAX_LEN = 64
+_CORNER_MAX_SPEED_ABS_KMH = 450.0
+_CORNER_MAX_DIST_M = 100_000.0
+
 
 def prepare_outbound_message(
     inbound: dict[str, Any],
@@ -46,6 +50,12 @@ def prepare_outbound_message(
     """
     proto_raw = inbound.get("protocol")
     if proto_raw is not None:
+        if isinstance(proto_raw, bool):
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "invalid protocol field",
+            }
         try:
             pv = int(proto_raw)
         except (TypeError, ValueError):
@@ -106,6 +116,27 @@ def prepare_outbound_message(
                 "protocol": PROTOCOL_VERSION,
                 "event": EVENT_ANALYSIS_ERROR,
                 "message": "corner_query requires corner label",
+            }
+        if len(corner) > _CORNER_LABEL_MAX_LEN:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query corner label too long",
+            }
+        if (
+            abs(cur_kmh) > _CORNER_MAX_SPEED_ABS_KMH
+            or abs(ref_kmh) > _CORNER_MAX_SPEED_ABS_KMH
+        ):
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query cur/ref out of range",
+            }
+        if dist_m < 0 or dist_m > _CORNER_MAX_DIST_M:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query dist out of range",
             }
         hint = compose_corner_hint(
             corner=corner,

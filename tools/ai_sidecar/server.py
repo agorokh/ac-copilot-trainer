@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
@@ -155,21 +156,19 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 )
 
             # corner_query runs compose_corner_hint (blocking HTTP to Ollama). Do not
-            # stall the websocket message loop — process it in a background task
-            # while still serializing prepare_outbound_message via prepare_lock so
-            # lap_complete never races LapComparisonState mutations on this connection
-            # (Bugbot). Lock is per-handler so clients do not block each other (Codex).
+            # stall the websocket message loop — process it in a background task.
+            # corner_query does not read LapComparisonState — keep it out of
+            # prepare_lock so lap_complete is not blocked behind Ollama (Copilot).
             if reply_coaching and data.get("event") == EVENT_CORNER_QUERY:
 
                 async def _corner_job(d: dict[str, Any], gen: int) -> None:
                     try:
-                        async with prepare_lock:
-                            out_c = await asyncio.to_thread(
-                                prepare_outbound_message,
-                                d,
-                                reply_coaching=reply_coaching,
-                                lap_state=lap_state,
-                            )
+                        out_c = await asyncio.to_thread(
+                            prepare_outbound_message,
+                            d,
+                            reply_coaching=reply_coaching,
+                            lap_state=lap_state,
+                        )
                         if gen != corner_job_gen[0]:
                             return
                         if out_c is not None:
@@ -205,7 +204,8 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 # receives hints+rules_debrief in <100ms, then gets the Ollama
                 # debrief as a second message when it's ready (~5-15s later).
                 if (
-                    reply_coaching
+                    debrief_feature_enabled()
+                    and reply_coaching
                     and data.get("event") == "lap_complete"
                     and isinstance(out, dict)
                     and out.get("event") == EVENT_COACHING_RESPONSE

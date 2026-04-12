@@ -74,6 +74,38 @@ def test_corner_query_respects_no_reply_mode(monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
+def test_prepare_rejects_bool_protocol() -> None:
+    out = prepare_outbound_message(
+        {
+            "protocol": True,
+            "event": "corner_query",
+            "corner": "T1",
+            "cur": 80,
+            "ref": 70,
+            "dist": 12,
+        },
+        reply_coaching=True,
+    )
+    assert out is not None
+    assert out["event"] == EVENT_ANALYSIS_ERROR
+
+
+def test_corner_query_rejects_oversized_label() -> None:
+    out = prepare_outbound_message(
+        {
+            "protocol": PROTOCOL_VERSION,
+            "event": "corner_query",
+            "corner": "X" * 80,
+            "cur": 80,
+            "ref": 70,
+            "dist": 12,
+        },
+        reply_coaching=True,
+    )
+    assert out is not None
+    assert out["event"] == EVENT_ANALYSIS_ERROR
+
+
 def test_corner_query_requires_protocol_field() -> None:
     out = prepare_outbound_message(
         {

@@ -43,6 +43,7 @@ function M.configure(u)
   sock = nil
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
+  _recvQueue = {}
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
@@ -54,6 +55,7 @@ function M.reset()
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
+  _recvQueue = {}
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).

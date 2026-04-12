@@ -360,8 +360,8 @@ function M.tick(opts)
     -- Only query within the configured approach window so Ollama is not spammed
     -- for far-away brake points (Codex).
     if opts.wsBridge and type(opts.wsBridge.sendCornerQuery) == "function"
-        and distToBrakeM and distToBrakeM <= approachM then
-      local refAtBrake = targetSpeed or 0
+        and distToBrakeM and distToBrakeM <= approachM and targetSpeed then
+      local refAtBrake = targetSpeed
       local now = opts.simT or monoClock
       local prev = lastQueryState[topLabel]
       local lapNow = tonumber(opts.lap) or 0
