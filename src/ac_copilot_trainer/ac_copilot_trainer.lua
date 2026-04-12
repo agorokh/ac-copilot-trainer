@@ -1232,7 +1232,7 @@ function script.update(dt)
     for i = 1, #state.trackSegments do
       local seg = state.trackSegments[i]
       if seg and seg.kind == "corner" and type(seg.label) == "string" then
-        local txt = wsBridge.takeCornerAdvisory(seg.label)
+        local txt = wsBridge.takeCornerAdvisory(seg.label, state.lapsCompleted)
         if txt then
           state.cornerAdvisories[seg.label] = txt
         else

@@ -116,6 +116,8 @@ end
 local _wsDiagLogged = false
 local _wsDiagAttempts = 0
 local _recvQueue = {}  -- CSP web.socket is callback-based; messages land here
+--- Cap noisy per-frame WS recv logs (Bugbot); diagnostics reset on new socket.
+local _wsRecvLogsLeft = 0
 
 local function _logWsDiagOnce(stage, extra)
   if _wsDiagLogged then return end
@@ -146,7 +148,8 @@ local function _onRecv(data)
   else
     preview = "<" .. type(data) .. ">"
   end
-  if ac and type(ac.log) == "function" then
+  if ac and type(ac.log) == "function" and _wsRecvLogsLeft > 0 then
+    _wsRecvLogsLeft = _wsRecvLogsLeft - 1
     ac.log(string.format("[COPILOT][WS-RECV] #%d (%d bytes) %s",
       _recvCount, bytes, preview))
   end
@@ -162,14 +165,6 @@ local function _onError(err)
   -- Round 8: DO NOT clear sock here. With reconnect:true, CSP auto-retries
   -- and onClose only fires when we explicitly call sock:close(). Clearing
   -- sock in onError would drop the reference mid-reconnect.
-end
-
-local function _onClose(reason)
-  if ac and type(ac.log) == "function" then
-    ac.log("[COPILOT][WS-DIAG] socket closed: " .. tostring(reason))
-  end
-  sock = nil
-  lastTry = -RECONNECT_SEC
 end
 
 --- Open a WebSocket using CSP's callback-based API.
@@ -199,9 +194,20 @@ local function tryOpen()
     return false
   end
   _recvQueue = {}
+  local opened = nil
   local params = {
     onError = _onError,
-    onClose = _onClose,
+    onClose = function(reason)
+      if ac and type(ac.log) == "function" then
+        ac.log("[COPILOT][WS-DIAG] socket closed: " .. tostring(reason))
+      end
+      -- Ignore stale onClose from a replaced socket (Codex): shared callback
+      -- table can outlive the handle we dropped during configure/reconnect.
+      if opened ~= nil and sock == opened then
+        sock = nil
+        lastTry = -RECONNECT_SEC
+      end
+    end,
     encoding = "utf8",
     -- Round 8: reconnect=true. Per SDK doc, onClose only fires on explicit
     -- sock:close() with this flag, so CSP auto-reconnects on transient drops
@@ -213,7 +219,9 @@ local function tryOpen()
     return web.socket(url, _onRecv, params)
   end)
   if ok and s ~= nil then
+    opened = s
     sock = s
+    _wsRecvLogsLeft = 4
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
@@ -451,12 +459,19 @@ end
 --- secondary line — no more "BRAKE HARD NOW" stuck when the car has
 --- slowed below target.
 ---@param corner string
+---@param currentLap number|nil  laps completed counter (must match advice lap)
 ---@return string|nil
 local CORNER_ADVISORY_MAX_AGE_SEC = 6.0
-function M.takeCornerAdvisory(corner)
+function M.takeCornerAdvisory(corner, currentLap)
   if type(corner) ~= "string" or corner == "" then return nil end
   local e = cornerAdvisories[corner]
   if not e or type(e.text) ~= "string" or e.text == "" then
+    return nil
+  end
+  local want = tonumber(currentLap)
+  local elap = tonumber(e.lap)
+  if want ~= nil and elap ~= nil and elap ~= want then
+    cornerAdvisories[corner] = nil
     return nil
   end
   local age = currentSimT - (tonumber(e.ts) or 0)
