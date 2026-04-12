@@ -249,11 +249,13 @@ end
 --- Drain up to `maxPerTick` inbound messages; queues `coaching_response` for `takeCoachingForLap`.
 ---@param maxPerTick number|nil
 function M.pollInbound(maxPerTick)
-  if not sock then
-    return
-  end
   local cap = tonumber(maxPerTick) or MAX_RECV_PER_TICK
   cap = math.max(1, math.min(32, math.floor(cap + 0.5)))
+  -- Callback queue can still hold frames after sendJson nils `sock`; drain them
+  -- so coaching_response / corner_advice are not dropped (Bugbot).
+  if not sock and #_recvQueue == 0 then
+    return
+  end
   for _ = 1, cap do
     local raw = tryRecvOne()
     if not raw then
