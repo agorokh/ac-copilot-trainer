@@ -123,10 +123,7 @@ def prepare_outbound_message(
                 "event": EVENT_ANALYSIS_ERROR,
                 "message": "corner_query corner label too long",
             }
-        if (
-            abs(cur_kmh) > _CORNER_MAX_SPEED_ABS_KMH
-            or abs(ref_kmh) > _CORNER_MAX_SPEED_ABS_KMH
-        ):
+        if abs(cur_kmh) > _CORNER_MAX_SPEED_ABS_KMH or abs(ref_kmh) > _CORNER_MAX_SPEED_ABS_KMH:
             return {
                 "protocol": PROTOCOL_VERSION,
                 "event": EVENT_ANALYSIS_ERROR,
