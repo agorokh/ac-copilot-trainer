@@ -67,6 +67,12 @@ def prepare_outbound_message(
         return None
 
     if event == EVENT_CORNER_QUERY:
+        if proto_raw is None:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query requires protocol field",
+            }
         # Round 10: in-race per-corner hint. Blocks on Ollama (~631ms with
         # llama3.2:3b + tiny prompt). The Lua side fires this async when it
         # detects topCornerLabel transitions to a new corner.

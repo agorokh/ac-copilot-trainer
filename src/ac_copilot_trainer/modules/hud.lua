@@ -261,6 +261,7 @@ function M.draw(vm)
       local lines = {}
       local maxW = w - 24
       local curLine = ""
+      local cappedLines = false
       for word in string.gmatch(raw, "%S+") do
         local trial = (curLine == "") and word or (curLine .. " " .. word)
         local tw = measure(trial, df)
@@ -268,6 +269,7 @@ function M.draw(vm)
           lines[#lines + 1] = curLine
           curLine = word
           if #lines >= 3 then
+            cappedLines = true
             break
           end
         else
@@ -280,7 +282,7 @@ function M.draw(vm)
       local yy = math.max(y, h - 56)
       for li = 1, #lines do
         local ln = lines[li]
-        if li == 3 and #lines == 3 then
+        if li == 3 and #lines == 3 and cappedLines then
           ln = ln .. "..."
         end
         local ls = measure(ln, df)

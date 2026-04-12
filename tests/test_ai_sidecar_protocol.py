@@ -74,6 +74,21 @@ def test_corner_query_respects_no_reply_mode(monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
+def test_corner_query_requires_protocol_field() -> None:
+    out = prepare_outbound_message(
+        {
+            "event": "corner_query",
+            "corner": "T1",
+            "cur": 80,
+            "ref": 70,
+            "dist": 12,
+        },
+        reply_coaching=True,
+    )
+    assert out is not None
+    assert out["event"] == EVENT_ANALYSIS_ERROR
+
+
 def test_corner_query_requires_cur_ref_dist_keys() -> None:
     out = prepare_outbound_message(
         {
