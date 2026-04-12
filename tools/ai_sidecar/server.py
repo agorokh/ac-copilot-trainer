@@ -76,6 +76,8 @@ async def _send_ollama_followup(
                 inbound,
                 improvement_ranking,
             )
+    except asyncio.CancelledError:
+        raise
     except Exception as e:
         logger.info("ollama followup raised: %s", e)
         return
@@ -99,70 +101,86 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
         peer,
     )
     lap_state = LapComparisonState()
-    async for message in websocket:
-        if not isinstance(message, str):
-            logger.warning("non-text frame ignored type=%s", type(message).__name__)
-            continue
-        try:
-            data = json.loads(message)
-        except json.JSONDecodeError:
-            logger.warning("invalid json (first 200 chars): %s", message[:200])
-            await _safe_send(
-                websocket,
-                {
-                    "protocol": PROTOCOL_VERSION,
-                    "event": EVENT_ANALYSIS_ERROR,
-                    "message": "invalid json",
-                },
-            )
-            continue
-        if not isinstance(data, dict):
-            logger.warning("json root must be object, got %s", type(data).__name__)
-            await _safe_send(
-                websocket,
-                {
-                    "protocol": PROTOCOL_VERSION,
-                    "event": EVENT_ANALYSIS_ERROR,
-                    "message": "root must be a JSON object",
-                },
-            )
-            continue
+    pending_followups: set[asyncio.Task[Any]] = set()
 
-        if data.get("event") == "lap_complete":
-            hints = data.get("coachingHints") or []
-            logger.info(
-                "lap_complete lap=%s lapTimeMs=%s hints=%s",
-                data.get("lap"),
-                data.get("lapTimeMs"),
-                hints,
+    def _followup_done(t: asyncio.Task[Any]) -> None:
+        _background_tasks.discard(t)
+        pending_followups.discard(t)
+
+    try:
+        async for message in websocket:
+            if not isinstance(message, str):
+                logger.warning("non-text frame ignored type=%s", type(message).__name__)
+                continue
+            try:
+                data = json.loads(message)
+            except json.JSONDecodeError:
+                logger.warning("invalid json (first 200 chars): %s", message[:200])
+                await _safe_send(
+                    websocket,
+                    {
+                        "protocol": PROTOCOL_VERSION,
+                        "event": EVENT_ANALYSIS_ERROR,
+                        "message": "invalid json",
+                    },
+                )
+                continue
+            if not isinstance(data, dict):
+                logger.warning("json root must be object, got %s", type(data).__name__)
+                await _safe_send(
+                    websocket,
+                    {
+                        "protocol": PROTOCOL_VERSION,
+                        "event": EVENT_ANALYSIS_ERROR,
+                        "message": "root must be a JSON object",
+                    },
+                )
+                continue
+
+            if data.get("event") == "lap_complete":
+                hints = data.get("coachingHints") or []
+                logger.info(
+                    "lap_complete lap=%s lapTimeMs=%s hints=%s",
+                    data.get("lap"),
+                    data.get("lapTimeMs"),
+                    hints,
+                )
+
+            out = await asyncio.to_thread(
+                prepare_outbound_message,
+                data,
+                reply_coaching=reply_coaching,
+                lap_state=lap_state,
             )
+            if out is not None:
+                await _safe_send(websocket, out)
 
-        out = await asyncio.to_thread(
-            prepare_outbound_message,
-            data,
-            reply_coaching=reply_coaching,
-            lap_state=lap_state,
-        )
-        if out is not None:
-            await _safe_send(websocket, out)
-
-            # Round 8: schedule Ollama follow-up in the background so the
-            # immediate response above is not blocked on LLM latency. CSP
-            # receives hints+rules_debrief in <100ms, then gets the Ollama
-            # debrief as a second message when it's ready (~5-15s later).
-            if (
-                reply_coaching
-                and data.get("event") == "lap_complete"
-                and isinstance(out, dict)
-                and out.get("event") == EVENT_COACHING_RESPONSE
-            ):
-                # Reuse improvementRanking from the immediate response — calling
-                # improvement_ranking_for again mutates LapComparisonState and
-                # diverges on PB laps (Bugbot).
-                imp_for_bg = out.get("improvementRanking") or []
-                bg_task = asyncio.create_task(_send_ollama_followup(websocket, data, imp_for_bg))
-                _background_tasks.add(bg_task)
-                bg_task.add_done_callback(_background_tasks.discard)
+                # Round 8: schedule Ollama follow-up in the background so the
+                # immediate response above is not blocked on LLM latency. CSP
+                # receives hints+rules_debrief in <100ms, then gets the Ollama
+                # debrief as a second message when it's ready (~5-15s later).
+                if (
+                    reply_coaching
+                    and data.get("event") == "lap_complete"
+                    and isinstance(out, dict)
+                    and out.get("event") == EVENT_COACHING_RESPONSE
+                ):
+                    # Reuse improvementRanking from the immediate response — calling
+                    # improvement_ranking_for again mutates LapComparisonState and
+                    # diverges on PB laps (Bugbot).
+                    imp_for_bg = out.get("improvementRanking") or []
+                    bg_task = asyncio.create_task(
+                        _send_ollama_followup(websocket, data, imp_for_bg)
+                    )
+                    _background_tasks.add(bg_task)
+                    pending_followups.add(bg_task)
+                    bg_task.add_done_callback(_followup_done)
+    finally:
+        for t in list(pending_followups):
+            if not t.done():
+                t.cancel()
+        if pending_followups:
+            await asyncio.gather(*pending_followups, return_exceptions=True)
 
 
 async def _run(host: str, port: int, reply_coaching: bool) -> None:

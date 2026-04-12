@@ -348,13 +348,14 @@ end
 --- it AS A FUNCTION to send data. We try the callable form first, then fall
 --- back to :send() / :write() for any non-CSP socket implementation.
 ---@param payload table|nil
+---@return boolean  true if bytes were handed to the socket layer
 function M.sendJson(payload)
   if not payload then
-    return
+    return false
   end
   local js = jsonEncode(payload)
   if not js or not sock then
-    return
+    return false
   end
   local sendOk, sendErr = pcall(function()
     if type(sock) == "function" then
@@ -379,7 +380,9 @@ function M.sendJson(payload)
     end
     sock = nil
     lastTry = -RECONNECT_SEC
+    return false
   end
+  return true
 end
 
 --- Round 10: send a corner_query event to the sidecar asking for a short
@@ -395,7 +398,7 @@ end
 function M.sendCornerQuery(corner, cur, ref, dist, lap)
   if type(corner) ~= "string" or corner == "" then return false end
   if not sock or not url or url == "" then return false end
-  M.sendJson({
+  local sent = M.sendJson({
     protocol = PROTOCOL_VERSION,
     event = "corner_query",
     corner = corner,
@@ -404,6 +407,9 @@ function M.sendCornerQuery(corner, cur, ref, dist, lap)
     dist = tonumber(dist) or 0,
     lap = tonumber(lap) or 0,
   })
+  if not sent then
+    return false
+  end
   if ac and type(ac.log) == "function" then
     ac.log(string.format(
       "[COPILOT][WS-DIAG] sendCornerQuery %s cur=%.0f ref=%.0f dist=%.0fm",

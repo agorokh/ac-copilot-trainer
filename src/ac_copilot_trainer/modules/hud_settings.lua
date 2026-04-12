@@ -198,7 +198,8 @@ function M.draw(vm)
         cfg.wsSidecarUrl = newUrl
       end
     end
-    if type(ui.inputText) == "function" then
+    -- CSP: ui.inputText may be a cdata callable — use nil-checks, not type() == "function".
+    if ui.inputText ~= nil then
       pcall(function()
         local nv, ch = ui.inputText("Sidecar URL###cpt_ws", curUrl, ui.InputTextFlags and ui.InputTextFlags.AutoSelectAll or 0)
         if ch and type(nv) == "string" then
@@ -209,7 +210,7 @@ function M.draw(vm)
       ui.text("Sidecar URL: " .. (curUrl == "" and "<not set>" or curUrl))
       ui.textColored("inputText not available — set ws://127.0.0.1:8765 in storage.", rgbm(0.65, 0.65, 0.7, 1))
     end
-    if type(ui.button) == "function" then
+    if ui.button ~= nil then
       pcall(function()
         if ui.button("Set ws://127.0.0.1:8765###cpt_ws_default") then
           applyUrl("ws://127.0.0.1:8765")
