@@ -106,6 +106,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     lap_state = LapComparisonState()
     prepare_lock = asyncio.Lock()
     pending_followups: set[asyncio.Task[Any]] = set()
+    pending_corner_task: asyncio.Task[Any] | None = None
 
     def _followup_done(t: asyncio.Task[Any]) -> None:
         _background_tasks.discard(t)
@@ -171,7 +172,10 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     except Exception:
                         logger.exception("corner_query async handler failed")
 
+                if pending_corner_task and not pending_corner_task.done():
+                    pending_corner_task.cancel()
                 t_c = asyncio.create_task(_corner_job(data))
+                pending_corner_task = t_c
                 _background_tasks.add(t_c)
                 pending_followups.add(t_c)
                 t_c.add_done_callback(_followup_done)
