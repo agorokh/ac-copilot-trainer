@@ -123,9 +123,10 @@ local function loadConfig()
     cfg = shallowCopyDefaults()
   end
   -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
+  -- Apply even when empty so an explicit clear in Settings wins over stale table-form data.
   if _wsUrlStorage and type(_wsUrlStorage.get) == "function" then
     local ok, val = pcall(function() return _wsUrlStorage:get() end)
-    if ok and type(val) == "string" and val ~= "" then
+    if ok and type(val) == "string" then
       cfg.wsSidecarUrl = val
     end
   end

@@ -26,24 +26,29 @@ local currentSimT = 0
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
 local lastCornerQueryAt = {}  ---@type table<string, number>
 
+local function close_socket_if_any(s)
+  if s == nil then
+    return
+  end
+  pcall(function()
+    if type(s) == "table" and s.close ~= nil then
+      s:close()
+    end
+  end)
+end
+
 ---@param u string|nil full ws URL, e.g. ws://127.0.0.1:8765
 function M.configure(u)
-  local prev = sock
+  close_socket_if_any(sock)
   url = u
   sock = nil
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
-  if prev ~= nil then
-    pcall(function()
-      if type(prev) == "table" and prev.close ~= nil then
-        prev:close()
-      end
-    end)
-  end
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
 function M.reset()
+  close_socket_if_any(sock)
   sock = nil
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
