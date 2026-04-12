@@ -700,6 +700,9 @@ local function resetRollingDrivingState()
   state.sectorHudMsg = ""
   state.sectorHudUntil = 0
   wsBridge.clearPendingCoaching()
+  if wsBridge.clearCornerAdvisories then
+    pcall(wsBridge.clearCornerAdvisories)
+  end
   resetDeltaSmoother()
 end
 

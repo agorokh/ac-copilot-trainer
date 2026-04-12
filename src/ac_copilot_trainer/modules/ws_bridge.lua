@@ -62,6 +62,11 @@ function M.clearPendingCoaching()
   pendingCoaching = nil
 end
 
+--- Drop cached corner_advice payloads (e.g. rolling session reset / lap rewind).
+function M.clearCornerAdvisories()
+  cornerAdvisories = {}
+end
+
 local function jsonEncode(t)
   if JSON and type(JSON.stringify) == "function" then
     local ok, s = pcall(JSON.stringify, t, false)
