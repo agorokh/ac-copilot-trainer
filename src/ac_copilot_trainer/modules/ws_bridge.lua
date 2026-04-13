@@ -69,7 +69,8 @@ function M.clearCornerAdvisories()
 end
 
 local function jsonEncode(t)
-  if JSON and type(JSON.stringify) == "function" then
+  -- JSON.* may be a plain function (CSP) or a callable userdata (e.g. lupa tests).
+  if JSON and JSON.stringify ~= nil then
     local ok, s = pcall(JSON.stringify, t, false)
     if ok and type(s) == "string" then
       return s
@@ -82,7 +83,7 @@ local function jsonDecode(s)
   if type(s) ~= "string" or s == "" then
     return nil
   end
-  if JSON and type(JSON.parse) == "function" then
+  if JSON and JSON.parse ~= nil then
     local ok, t = pcall(JSON.parse, s)
     if ok and type(t) == "table" then
       return t
