@@ -1,0 +1,34 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+  - "tests/**/*"
+source: process-miner
+rule_fingerprint: 7bd108f97312c423
+mined_from: 4 review comments across 1 PRs
+last_updated: 2026-04-13
+repository: agorokh/ac-copilot-trainer
+severity: maintainability
+preventability: guideline
+---
+
+# Code Idle Test (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **suggestion (testing):** Idle state test should assert on the actual placeholder copy, not just non-blank chrome
+
+Right now the test only checks for the panel chrome and `ACTIVE SUGGESTION`, so it wo...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Render telemetry footer during idle state**
+
+`M.draw()` calls `drawTelemetryFooter(vm)` in both active and idle ...
+- `drawTelemetryFooter()` returns early when `fadeAlpha < 0.01`, but in the idle path `drawActiveSuggestion()` is never called so `fadeAlpha` stays 0. As a result, the telemetry footer won’t render in t...
+- Hey - I've found 3 issues, and left some high level feedback:
+
+- In hud.lua you now maintain both coachingOverlay.tokens and a separate set of COLOR_* / PANEL_* constants; consider deriving the shadow...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

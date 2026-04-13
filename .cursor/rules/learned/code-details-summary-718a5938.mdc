@@ -1,0 +1,44 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tests/**/*"
+source: process-miner
+rule_fingerprint: 718a5938f21d5158
+mined_from: 33 review comments across 4 PRs
+last_updated: 2026-04-13
+repository: agorokh/ac-copilot-trainer
+severity: maintainability
+preventability: architecture
+---
+
+# Code Details Summary (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _🛠️ Refactor suggestion_ | _🟠 Major_
+
+**Actually consume the shared token table at runtime.**
+
+`tokens` is imported on Line 12 but never read after that, so WINDOW_0 still renders from its own duplica...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Keep the idle title red.**
+
+Line 256 switches `"ACTIVE SUGGESTION"` to `COLOR_LABEL_GREY`, but the active state uses `COLOR_RED` and the acceptance criteria call fo...
+- _🧹 Nitpick_ | _🔵 Trivial_
+
+**Unused legacy color tokens are acceptable but consider documenting the intent.**
+
+Static analysis flags `COLOR_LABEL`, `COLOR_TITLE`, and `COLOR_BRAND` as unused. These ap...
+- _🧹 Nitpick_ | _🔵 Trivial_
+
+**Intentional shadow tokens for test compatibility.**
+
+`COLOR_LABEL_GREY` and `COLOR_BRAND_GREY` are unused at runtime because `tokens.COLOR_LABEL_GREY` and `tokens.COLOR_BR...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

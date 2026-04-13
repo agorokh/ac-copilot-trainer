@@ -99,6 +99,10 @@ Stable operational principles derived from real usage across projects. Agents: r
 - **Propagate universal improvements upstream.** When a domain-agnostic workflow principle is improved in any child repo, propagate it back to template-repo so all future projects inherit it. See AGENT_CORE_PRINCIPLES.md "Upstream template sync."
 
 ## Learned Workspace Facts
+<!-- process-miner:learned:start -->
+- (process-miner) New learned rule file(s): code-details-summary-718a5938.md, code-color-media-3d67733e.md, code-details-summary-4d1f5ae7.md, code-test-that-aa41f86d.md, code-from-tokens-38a8cc38.md, code-review-pull-42883443.md, code-brake-dedupe-7e82cdb8.md, copilot-instructions-target-7c23a24b.md, code-idle-test-7bd108f9.md, corner-code-label-56297863.md, code-hold-dedupe-2f216e89.md, code-with-sourcery-3fb90e51.md
+<!-- process-miner:learned:end -->
+
 
 <!-- Append project-specific operational facts here after bootstrap. -->
 <!-- Example: "Pipeline venv at .venv/bin/python", "Gmail expanded to N threads on DATE" -->

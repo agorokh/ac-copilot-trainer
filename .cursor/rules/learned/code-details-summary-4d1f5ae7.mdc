@@ -1,0 +1,54 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tests/**/*"
+source: process-miner
+rule_fingerprint: 4d1f5ae74ccbe461
+mined_from: 11 review comments across 2 PRs
+last_updated: 2026-04-13
+repository: agorokh/ac-copilot-trainer
+severity: maintainability
+preventability: typecheck
+---
+
+# Code Details Summary (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+**Use post-integration alpha on fade-in.**
+
+When a hint becomes active from idle, `hasHint` is already true while `fadeAlpha` is still `0`. Line 93 snapshots that `0`...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -euo pipefail
+
+fd -i 'coaching_font\.' | while read -r f; do
+  echo "== $f...
+- _🧹 Nitpick_ | _🔵 Trivial_
+
+**Inconsistent color token usage in delta display.**
+
+The delta color logic mixes token usage with hardcoded values:
+- Line 240: Uses `tokens.COLOR_RED` ✓
+- Line 238: Uses h...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+**Keep the footer divider on the same chrome alpha as the active panel.**
+
+`drawActiveSuggestion()` now keeps the panel chrome fully opaque while a hint is active, bu...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

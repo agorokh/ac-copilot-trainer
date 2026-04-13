@@ -1,0 +1,48 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+  - "tests/**/*"
+source: process-miner
+rule_fingerprint: 3d67733e4ff58873
+mined_from: 20 review comments across 2 PRs
+last_updated: 2026-04-13
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code Color Media (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Telemetry footer never renders in idle state
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`drawTelemetryFooter` guards on `fadeAlpha < 0.01` and returns early, but `fadeAlpha` is only ever inc...
+- ### Imported tokens table unused; values already diverge
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`local tokens = coachingOverlay.tokens` is assigned but never read — no code references `tokens.X...
+- ### Missing background panel during fade-out final frame
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`M.draw` ignores the return value of `drawActiveSuggestion`. When `fadeAlpha` is just above 0.01 ...
+- ### Unused shadow tokens exist only for test regex
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+Seven local color variables (`COLOR_BG`, `COLOR_BG_BORDER`, `COLOR_RED`, `COLOR_WHITE`, `COLOR_AMBER`, ...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

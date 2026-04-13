@@ -1,0 +1,26 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 2f216e89cc510b89
+mined_from: 3 review comments across 1 PRs
+last_updated: 2026-04-13
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code Hold Dedupe (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- `DEDUP_HOLD_SEC` is defined but there is no logic that uses it to hold/merge viewmodels, so the advertised 600ms anti-flicker dedupe isn’t actually implemented. Either remove this constant (and relate...
+- `lastView`/`lastEmittedAt` are written but not read anywhere, which makes the dedupe state dead code and harder to reason about. If dedupe was intentionally removed, consider deleting these fields; ot...
+- This block updates `lastEmittedAt`, but nothing consults it to suppress/freeze output for `DEDUP_HOLD_SEC`. If the intention is a 600ms dedupe, implement the time check here (e.g., keep returning `las...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
