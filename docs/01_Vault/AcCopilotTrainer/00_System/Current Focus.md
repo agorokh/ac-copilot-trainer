@@ -2,22 +2,25 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-07
+last_updated: 2026-04-11
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/03_Investigations/_index.md
 ---
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Branch:** `main` (`72be94d`). Working tree clean, all session feature branches deleted locally and on origin.
+**Repo:** ac-copilot-trainer. **Branch:** `fix/issue-75-in-game-smoke-test` (PR #75 open). **Base `main`:** `72be94d` — Issue #72 Phase 5 HUD rebuild merged via PR #73; 186 tests were green on that tip before #75 work.
 
-**Status:** Issue #57 (Phase 5 HUD redesign Parts A–E), Issue #66 (P0 CSP runtime hotfix), Issue #69 (visual design match), and **Issue #72 (Phase 5 HUD rebuild — live-frame engine + bundled fonts + FIXED_SIZE windows + always-visible tiles)** are all CLOSED and merged. PR #73 was the last merge (`72be94d`). 186 tests pass. CI fully green (build, ruff, csp-api, csp-ui-safety, Sourcery, CodeRabbit, Cursor Bugbot).
+**Status:** PR #75 stacks CSP runtime fixes, WebSocket sidecar (rules + Ollama follow-up), per-corner `corner_query` / `corner_advice`, HUD diagnostics, and vault investigation nodes on top of the rebuild. Latest commits address review bots (async `corner_query` prepare, `ws_bridge` reconfigure close, task cancellation, protocol edge cases).
 
-**Single open gate:** in-game smoke test of PR #73 on Vallelunga + Porsche 911 GT3 R. The persistence file already has 7 brake points + 7 corner features + 13 segments + a 2000-sample best lap trace, so the live-frame engine should fire on the very first frame after `tryLoadDisk` runs — no fresh-session lap required.
+**Open gates:** Finish PR #75 review resolution + confirm GitHub Actions CI on the latest branch head after merge-from-main. **In-game smoke test** on Vallelunga + Porsche 911 GT3 R remains the product gate (persistence file already populated so live-frame coaching should fire on first frame after `tryLoadDisk`).
 
 **Next:**
 
-- **In-game smoke test** of PR #73 (top priority) — confirm both windows render with proper Figma layout, BRAKE NOW / PREPARE TO BRAKE / CARRY MORE SPEED / EASE OFF fire from live-frame inputs, and FIXED_SIZE recovers the 132×456 saved geometry while still allowing drag.
-- **Threshold tuning** in `realtime_coaching.lua` if the test reveals the 50/100 m + ±8 km/h bands are off.
-- **Next epic selection** after the smoke test passes (Phase 6 TBD or Phase 4 #19).
+- Land PR #75 (reviews clear, CI green, merge conflicts resolved).
+- Re-verify round 10d staleness / sim-time behaviour in-game after merge.
+- Threshold tuning in `realtime_coaching.lua` if the smoke test shows the 50/100 m + ±8 km/h bands are off.
+- Corner segment quality in `corner_analysis.lua` if brake-to-brake spans are still too long.
+- Next epic selection after the smoke test passes (Phase 6 TBD or Phase 4 #19).

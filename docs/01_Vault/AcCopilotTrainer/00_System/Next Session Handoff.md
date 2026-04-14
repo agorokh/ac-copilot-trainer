@@ -2,12 +2,15 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-07
+last_updated: 2026-04-11
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/00_System/glossary/_index.md
+  - AcCopilotTrainer/03_Investigations/csp-web-socket-api.md
+  - AcCopilotTrainer/03_Investigations/csp-cdata-callable-guards.md
+  - AcCopilotTrainer/03_Investigations/ac-storage-persistence.md
   - 00_Graph_Schema.md
 ---
 
@@ -15,27 +18,31 @@ relates_to:
 
 ## Resume here
 
-- **On `main` (`72be94d`), working tree clean.** Issue #72 (Phase 5 HUD rebuild) merged via PR #73; `fix/issue-72-phase5-rebuild` deleted locally and on origin. The remaining `origin/miner/weekly-20260406-*` branch is an automated weekly process-miner job, not user work — leave it alone.
-- **Top priority next session:** in-game smoke test of the rebuild on Vallelunga + Porsche 911 GT3 R (the persistence file `ks_porsche_911_gt3_r_2016__ks_vallelunga_club_circuit.json` already has 7 brake points + 7 corner features + 13 segments + a 2000-sample best lap trace, so the live-frame engine should fire on the very first frame after `tryLoadDisk` runs). User has not yet confirmed visual + behavioural correctness.
-- **Second priority:** harvest in-game tuning data and adjust thresholds in `realtime_coaching.lua` if needed (BRAKE_NOW_DIST_M=50, PREPARE_DIST_M=100, BRAKE_OVER_KMH=8, PREPARE_OVER_KMH=5, CORNER_DELTA_KMH=8). These were chosen by judgement, not measurement.
+- **Branch `fix/issue-75-in-game-smoke-test` — PR #75** implements the in-game smoke-test gate and CSP/sidecar fixes on top of **`main` @ `72be94d`** (PR #73 Phase 5 HUD rebuild merged).
+- **Top priority:** clear remaining PR #75 review threads, confirm Actions **CI** + **Policy** runs on the latest pushed SHA, then merge when GitHub shows a clean merge (no conflicts).
+- **`main` context:** Issue #57 / #66 / #69 / #72 are closed; the only product gate called out on `main` was the **in-game smoke test** of PR #73 — PR #75 is the active branch carrying fixes and tests toward that gate.
+- **Round 10d staleness** (`currentSimT` vs `os.clock`) should be re-checked in-game after the PR lands.
 
 ## What was delivered this session
 
-- **Issue #72 filed and PR #73 merged (`72be94d`)** — single-PR Phase 5 HUD rebuild with the live-frame coaching engine (no more lap-aggregate gating), bundled Michroma/Montserrat/Syncopate fonts under `content/fonts/` (SIL OFL v1.1), `bloom.png` asset, FIXED_SIZE manifest flags on WINDOW_0/WINDOW_1, `autoPlaceOnce()` one-time-per-install positioning, always-visible top + bottom tiles with `—` placeholders, gearbox-style absolute drawing via `ui.dwriteDrawText` / `ui.drawRectFilled` / `ui.pathArcTo`, deleted `coaching_hints.buildRealTime` and `approachHudData` dead paths, and 17 new ETE product-gate tests in `tests/test_phase5_rebuild_ete.py`.
-- **6 review-resolution rounds** on PR #73 (commits `17e1981`, `cb20575`, `9cabf21`, `fde8db5`, `123d666`, `09be656`) addressing 52 inline review comments from CodeRabbit, Cursor BugBot, Copilot, Sourcery, ChatGPT Codex, and Gemini. Final state: 52/52 review threads resolved (24 stale ones bulk-resolved via GraphQL after the underlying findings were fixed in code), all 5 CI checks green, 186 tests pass.
-- **Issues #66 (P0 hotfix) and #69 (visual rewrite) closed** earlier in the session via PRs #67 and #70.
+- **On `main` (pre-#75):** PR #73 — live-frame coaching engine, bundled fonts, FIXED_SIZE windows, ETE tests in `tests/test_phase5_rebuild_ete.py`, review-resolution rounds documented in prior handoff.
+- **On PR #75:** Multi-round in-game-driven fixes — CSP cdata-callable guards, `web.socket` callback bridge, per-key `ac.storage`, AI sidecar + `corner_query` / `corner_advice`, bounded Ollama follow-ups, server-side async prepare for `corner_query` with lock serialization against `lap_complete`, `ws_bridge.configure` closing the previous socket, HUD/footer debrief wiring, and expanded protocol tests (191 tests passing locally on branch tip).
 
 ## What remains
 
-- **In-game smoke test (the only remaining gate)** — confirm both windows render the dark rounded panels with Michroma/Montserrat/Syncopate fonts, BRAKE NOW fires within 50 m of a brake point at over+8 km/h, CARRY MORE SPEED fires in-corner at −8 km/h vs reference, and the windows can be dragged but not resized smaller (FIXED_SIZE flag must recover the previous 132×456 saved geometry).
-- **Threshold tuning** if the in-game test reveals the 50/100 m + ±8 km/h bands are too sensitive or too slow.
-- **Sidecar debrief still routes through `coachingOverlay.drawSidecarDebrief`** in WINDOW_1 below the panel — verify it doesn't visually conflict with the Figma layout.
-- **Next epic selection** when the smoke test passes.
+- Merge **origin/main** into PR #75 (or rebase), resolve vault/doc conflicts, push, and wait for CI on the new head.
+- **In-game smoke test** — both windows, BRAKE NOW / PREPARE / CARRY MORE SPEED / EASE OFF from live-frame inputs, drag without breaking FIXED_SIZE recovery (132×456), sidecar URL persistence, per-corner advice where enabled.
+- Optional: threshold tuning, corner segment quality, LLM prompt tuning from real laps.
+- Next epic after smoke test passes.
 
 ## Blockers / dependencies
 
-- None. CI fully green (build, ruff, csp-api, csp-ui-safety, Sourcery, CodeRabbit, Cursor Bugbot all pass on `main`). 186 tests pass.
+- None technical beyond finishing merge + CI on the integration head.
 
-## Failure protocol notes (none triggered)
+## Key learnings (see investigation nodes)
 
-The 6-round resolution loop completed successfully. No failures to record from this session.
+1. CSP cdata-callable: `type(vec2)` is `"cdata"` not `"function"` — use nil-checks before invoking.
+2. CSP `web.socket`: callback-based API; `sock(data)` to send; `reconnect: true` where supported.
+3. `ac.storage` table form can fail silently — use per-key `ac.storage("name", default)`.
+4. `os.clock()` in AC Lua is not wall time for low-CPU scripts — use sim time (e.g. `sim.gameTime`) for staleness.
+5. Ollama: pass `keep_alive` on generate calls as required by your deployment.

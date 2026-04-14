@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import pytest
@@ -148,3 +149,54 @@ def _count_text_calls(lua, literal: str) -> int:
 
 def _count_draw_rects(lua) -> int:
     return lua.execute("return #_draw_rect_filled_calls")
+
+
+def test_ws_bridge_corner_advisory_staleness_wall_clock(lua):
+    """Issue #75 / PR #75: corner_advice expires after 6s of sim wall-clock (currentSimT)."""
+    g = lua.globals()
+
+    def json_parse(s):
+        if not isinstance(s, str):
+            s = str(s)
+        return lua.table_from(json.loads(s))
+
+    g["JSON"] = lua.table_from({"parse": json_parse})
+    lua.execute(
+        r"""
+        web = {}
+        _ws_on_recv = nil
+        function web.socket(_u, cb, _p)
+          _ws_on_recv = cb
+          return { close = function() end }
+        end
+        """
+    )
+    lua.execute(
+        """
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.tick(0)
+        assert(_ws_on_recv ~= nil)
+        """
+    )
+    payload = json.dumps(
+        {
+            "protocol": 1,
+            "event": "corner_advice",
+            "corner": "T1",
+            "text": "lift slightly",
+            "lap": 0,
+        }
+    )
+    g["_corner_payload"] = payload
+    lua.execute("_ws_on_recv(_corner_payload)")
+    lua.execute(
+        """
+        local wb = require("ws_bridge")
+        wb.tick(0)
+        wb.pollInbound(8)
+        assert(wb.takeCornerAdvisory("T1", 0) == "lift slightly")
+        wb.tick(6.5)
+        assert(wb.takeCornerAdvisory("T1", 0) == nil)
+        """
+    )

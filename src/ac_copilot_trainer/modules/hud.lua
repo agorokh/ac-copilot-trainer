@@ -13,7 +13,7 @@ local M = {}
 -- ---------------------------------------------------------------------------
 
 local COLOR_BG_DARK   = rgbm(17 / 255, 17 / 255, 17 / 255, 0.60)
-local COLOR_BG_BORDER = rgbm(239 / 255, 68 / 255, 68 / 255, 0.40)  -- red-500/40
+local COLOR_BG_BORDER = rgbm(0.30, 0.32, 0.38, 0.40)  -- grey, matches coaching_overlay (round 5: user reverted to grey)
 local COLOR_RED       = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- #EF4444 (per spec)
 local COLOR_RED_HARD  = COLOR_RED                                  -- back-compat alias
 local COLOR_AMBER     = rgbm(251 / 255, 191 / 255, 36 / 255, 1.0)  -- amber-400
@@ -23,6 +23,16 @@ local COLOR_TEXT_GREY = rgbm(212 / 255, 212 / 255, 212 / 255, 1.0) -- neutral-30
 
 local PANEL_ROUNDING = 8
 local PANEL_PAD_Y    = 14
+
+--- CSP: `ui.dwriteDrawText` is often a cdata callable, not `type(...) == "function"`.
+local function dwriteSafe(text, px, pos, color)
+  if ui == nil or ui.dwriteDrawText == nil then
+    return
+  end
+  pcall(function()
+    ui.dwriteDrawText(text, px, pos, color)
+  end)
+end
 
 -- ---------------------------------------------------------------------------
 -- View model contract (issue #72)
@@ -59,9 +69,12 @@ local PANEL_PAD_Y    = 14
 -- ---------------------------------------------------------------------------
 
 local function safeWindowSize()
-  if type(ui) == "table" and type(ui.windowSize) == "function" then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.x > 0 then
+  -- CSP `ui.windowSize` is a cdata callable (not "function" via type()), so
+  -- pcall it directly instead of type-checking. Falls back to the manifest
+  -- WINDOW_0 size if the call fails or returns garbage.
+  if type(ui) == "table" and ui.windowSize ~= nil then
+    local ok, sz = pcall(function() return ui.windowSize() end)
+    if ok and sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
       return sz
     end
   end
@@ -123,17 +136,50 @@ end
 -- Top tile renderer (gearbox-style absolute drawing)
 -- ---------------------------------------------------------------------------
 
+-- One-shot diag log: prints rendering API surface the first time M.draw runs.
+local _hudDiagLogged = false
+
 ---@param vm HudViewModel
 function M.draw(vm)
   vm = vm or {}
+  if not _hudDiagLogged and ac and type(ac.log) == "function" then
+    _hudDiagLogged = true
+    -- Use tostring() so we see cdata/userdata/nil distinction (not just y/N)
+    local function tt(t, k)
+      if type(t) ~= "table" then return "?" end
+      local v = t[k]
+      if v == nil then return "nil" end
+      return type(v)
+    end
+    local szStr = "err"
+    if type(ui) == "table" and ui.windowSize ~= nil then
+      local ok, sz = pcall(function() return ui.windowSize() end)
+      if ok and sz and sz.x then
+        szStr = string.format("%.0fx%.0f", sz.x, sz.y or 0)
+      else
+        szStr = "call-fail"
+      end
+    else
+      szStr = "missing"
+    end
+    ac.log(string.format(
+      "[COPILOT][HUD-DIAG] win0 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s windowSize=%s",
+      szStr,
+      type(ui),
+      type(vec2),
+      type(rgbm),
+      tt(ui, "drawRectFilled"), tt(ui, "drawRect"),
+      tt(ui, "dwriteDrawText"), tt(ui, "windowSize")
+    ))
+  end
   -- UI readiness guard: bail out cleanly on early frames or unusual CSP
-  -- builds where the imgui APIs are not yet available. Mirrors the same
-  -- defensive pattern in coaching_overlay.drawApproachPanel.
+  -- builds where the imgui APIs are not yet available. NOTE: in CSP, vec2,
+  -- rgbm, and `ui.*` rendering primitives are FFI cdata callables — `type()`
+  -- returns "cdata", not "function". Use nil-check + presence-check instead.
   if type(ui) ~= "table"
-      or type(vec2) ~= "function"
-      or type(ui.drawRectFilled) ~= "function"
-      or type(ui.drawRect) ~= "function"
-      or type(ui.windowSize) ~= "function" then
+      or vec2 == nil
+      or ui.drawRectFilled == nil
+      or ui.drawRect == nil then
     return
   end
   local view = resolveView(vm)
@@ -153,9 +199,7 @@ function M.draw(vm)
     local titleSize = measure("ACTIVE SUGGESTION", titleFontPx)
     local titlePos = vec2(centerX - titleSize.x * 0.5, PANEL_PAD_Y)
     local tk = fontMod.pushNamed("labels_bold", titleFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
-    end
+    dwriteSafe("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
     fontMod.pop(tk)
   end
 
@@ -168,9 +212,7 @@ function M.draw(vm)
     local cornerSize = measure(cornerStr, cornerFontPx)
     local cornerPos = vec2(centerX - cornerSize.x * 0.5, y)
     local ck = fontMod.pushNamed("numbers", cornerFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
-    end
+    dwriteSafe(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
     fontMod.pop(ck)
     y = y + 30
   end
@@ -183,9 +225,7 @@ function M.draw(vm)
     local primaryPos = vec2(centerX - primarySize.x * 0.5, y)
     local pColor = colorForKind(view.kind)
     local pk = fontMod.pushNamed("numbers", primaryFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText(primaryStr, primaryFontPx, primaryPos, pColor)
-    end
+    dwriteSafe(primaryStr, primaryFontPx, primaryPos, pColor)
     fontMod.pop(pk)
     y = y + 24
   end
@@ -203,10 +243,54 @@ function M.draw(vm)
       sColor = COLOR_TEXT_GREY
     end
     local sk = fontMod.pushNamed("numbers", secFontPx)
-    if type(ui.dwriteDrawText) == "function" then
-      ui.dwriteDrawText(secStr, secFontPx, secPos, sColor)
-    end
+    dwriteSafe(secStr, secFontPx, secPos, sColor)
     fontMod.pop(sk)
+    y = y + 20
+  end
+
+  -- Sidecar debrief (rules + optional Ollama follow-up); keeps LLM output visible
+  -- on WINDOW_0 without the removed coaching-window panel (Bugbot).
+  if type(vm.debriefText) == "string" and vm.debriefText ~= "" then
+    local raw = vm.debriefText
+    if string.len(raw) > 140 then
+      raw = string.sub(raw, 1, 137) .. "..."
+    end
+    local df = 10
+    local dk = fontMod.pushNamed("labels_bold", df)
+    if ui and ui.dwriteDrawText ~= nil then
+      local lines = {}
+      local maxW = w - 24
+      local curLine = ""
+      local cappedLines = false
+      for word in string.gmatch(raw, "%S+") do
+        local trial = (curLine == "") and word or (curLine .. " " .. word)
+        local tw = measure(trial, df)
+        if tw.x > maxW and curLine ~= "" then
+          lines[#lines + 1] = curLine
+          curLine = word
+          if #lines >= 3 then
+            cappedLines = true
+            break
+          end
+        else
+          curLine = trial
+        end
+      end
+      if curLine ~= "" and #lines < 3 then
+        lines[#lines + 1] = curLine
+      end
+      local yy = math.max(y, h - 56)
+      for li = 1, #lines do
+        local ln = lines[li]
+        if li == 3 and #lines == 3 and cappedLines then
+          ln = ln .. "..."
+        end
+        local ls = measure(ln, df)
+        local lp = vec2(centerX - ls.x * 0.5, yy + (li - 1) * (df + 3))
+        dwriteSafe(ln, df, lp, COLOR_TEXT_GREY)
+      end
+    end
+    fontMod.pop(dk)
   end
 end
 

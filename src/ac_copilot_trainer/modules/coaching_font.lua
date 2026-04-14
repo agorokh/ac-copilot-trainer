@@ -13,7 +13,7 @@ local M = {}
 -- ---------------------------------------------------------------------------
 
 local function safeDWrite(spec)
-  if type(ui) ~= "table" or type(ui.DWriteFont) ~= "function" then
+  if type(ui) ~= "table" or ui.DWriteFont == nil then
     return nil
   end
   local ok, font = pcall(function()
@@ -62,7 +62,7 @@ end
 ---@param role 'numbers'|'labels'|'labels_bold'|'brand'|'legacy'|nil
 ---@return string|nil token
 function M.pushNamed(role)
-  if type(ui) ~= "table" or type(ui.pushDWriteFont) ~= "function" then
+  if type(ui) ~= "table" or ui.pushDWriteFont == nil then
     return nil
   end
   local fonts = loadCache()

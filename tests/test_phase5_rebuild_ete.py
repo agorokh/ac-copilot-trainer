@@ -446,8 +446,9 @@ def test_ete04_in_corner_slower_than_reference_says_carry_more_speed(lua):
     trace = _build_trace(lua)
     brakes = _build_brake_points(lua)
     segments = _build_segments(lua)
-    # Pick a spline inside the T4 corner (s0=0.45, s1=0.52)
-    sp = 0.48
+    # Inside T4 apex window only (first 30% of segment, capped — see
+    # realtime_coaching.inCornerSegment). s0=0.45, span=0.07 → apexEnd≈0.471.
+    sp = 0.465
     # Compute reference speed at sp (matches our trace formula)
     import math
 
@@ -518,9 +519,9 @@ def test_ete04c_ease_off_in_corner_faster_than_reference(lua):
     trace = _build_trace(lua)
     brakes = _build_brake_points(lua)
     segments = _build_segments(lua)
-    sp = 0.48  # inside T4 (s0=0.45, s1=0.52)
     import math
 
+    sp = 0.465  # within T4 apex window (see test_ete04)
     ref_speed = 100 + 60 * math.sin(sp * 6.28)
     cur_speed = ref_speed + 12
     opts = lua.eval(
@@ -592,9 +593,9 @@ def test_ete04e_in_corner_label_overrides_next_corner(lua):
     trace = _build_trace(lua)
     brakes = _build_brake_points(lua)
     segments = _build_segments(lua)
-    # Inside T4 (s0=0.45, s1=0.52)
+    # Inside T4 apex window (not the full s0..s1 span — see inCornerSegment).
     opts = lua.eval(
-        "{ splinePos = 0.49, currentSpeedKmh = 60, "
+        "{ splinePos = 0.465, currentSpeedKmh = 60, "
         "  bestSortedTrace = nil, brakingPoints = nil, segments = nil, trackLengthM = 4500 }"
     )
     opts["bestSortedTrace"] = trace
@@ -688,12 +689,12 @@ def test_ete06b_bloom_asset_bundled():
 
 
 def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
-    """ETE-07: autoPlaceOnce moves windows once, sets the storage flag, and
-    on the second call does nothing. Position is then user-controlled.
+    """ETE-07: autoPlaceOnce applies manifest geometry once per load, then gates
+    repeats via ``state._autoPlaceChecked`` (issue #75: imgui.ini could not be
+    cleared with an ac.storage flag alone).
 
     This test executes the function twice via the lupa stub and asserts:
       - first call moves at least one target window
-      - first call performs ZERO resize calls (size is locked by FIXED_SIZE)
       - second call performs zero further moves (idempotent)
     """
     entry_src = ENTRY.read_text(encoding="utf-8")
@@ -703,11 +704,10 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
         entry_src,
     ), "entry script must define an autoPlaceOnce-style function"
 
-    # The function must persist via ac.storage so it runs once per install
     assert re.search(
-        r"ac\.storage\s*\(\s*[\"\'][\w_]*[Pp]laced",
+        r"_autoPlaceChecked",
         entry_src,
-    ), 'autoPlaceOnce must persist via ac.storage("...placed...", ...)'
+    ), "autoPlaceOnce must gate via state._autoPlaceChecked after successful placement"
 
     # Extract the autoPlaceOnce function body and execute it standalone
     m = re.search(
@@ -722,22 +722,34 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
         "local function autoPlaceOnce()", "function autoPlaceOnce()", 1
     )
 
-    # Reset stub state and inject the function
+    # Reset stub state and inject the function. ``autoPlaceOnce`` references
+    # module-level MANIFEST_WINDOW_SIZES — mirror it here because the regex
+    # extraction only captures the function body.
     lua.execute("state = {}")
     lua.execute("_move_calls = {}")
     lua.execute("_resize_calls = {}")
     lua.execute("_storage_state = {}")
+    lua.execute(
+        """
+MANIFEST_WINDOW_SIZES = {
+  ["AC Copilot Trainer"] = {520, 200},
+  ["Coaching"]           = {640, 240},
+  ["Settings"]           = {480, 580},
+}
+"""
+    )
     lua.execute(func_src_global)
 
-    # First call: should move at least one target window, zero resizes
+    # First call: should move at least one target window (resize may run too
+    # — issue #75 forces resize+move so imgui-persisted geometry cannot win).
     lua.execute("autoPlaceOnce()")
     move_calls_1 = lua.execute("return #_move_calls")
     resize_calls_1 = lua.execute("return #_resize_calls")
     assert move_calls_1 >= 1, (
         f"first autoPlaceOnce call must move at least one window, got {move_calls_1}"
     )
-    assert resize_calls_1 == 0, (
-        "autoPlaceOnce must NEVER call resize (size is locked by FIXED_SIZE), "
+    assert resize_calls_1 >= 1, (
+        "first autoPlaceOnce call should resize tracked windows to manifest sizes, "
         f"got {resize_calls_1} resize calls"
     )
 

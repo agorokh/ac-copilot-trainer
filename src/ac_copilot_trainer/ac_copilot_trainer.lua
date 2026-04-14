@@ -33,6 +33,13 @@ local cornerNames = require("corner_names")
 local hudSettings = require("hud_settings")
 local realtimeCoaching = require("realtime_coaching")
 
+--- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
+local MANIFEST_WINDOW_SIZES = {
+  ["AC Copilot Trainer"] = {520, 200},
+  ["Coaching"]           = {640, 240},
+  ["Settings"]           = {480, 580},
+}
+
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
 
@@ -82,18 +89,91 @@ local function shallowCopyDefaults()
   return c
 end
 
+--- Per-key storage for critical settings.
+---
+--- Issue #75 in-game test: `ac.storage(layout)` table-form silently fails to
+--- persist on this CSP build (no `cfg/extension/state/lua/app/AC Copilot
+--- Trainer.ini` is ever written). Every other CSP app uses the per-key form
+--- `ac.storage("name", default)` which is known to work. We use it here for
+--- `wsSidecarUrl` so the URL persists across reloads and the WebSocket
+--- bridge can actually dial the sidecar.
+local _wsUrlStorage = nil
+local _approachMetersStorage = nil
+if ac and type(ac.storage) == "function" then
+  local ok1, sv1 = pcall(ac.storage, "ac_copilot_trainer.wsSidecarUrl_v1", "")
+  if ok1 and sv1 and type(sv1.get) == "function" then
+    _wsUrlStorage = sv1
+  end
+  local ok2, sv2 = pcall(ac.storage, "ac_copilot_trainer.approachMeters_v1", 200)
+  if ok2 and sv2 and type(sv2.get) == "function" then
+    _approachMetersStorage = sv2
+  end
+end
+
 --- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
 local function loadConfig()
+  local cfg
   if ac and type(ac.storage) == "function" then
     local ok, st = pcall(ac.storage, shallowCopyDefaults())
     if ok and type(st) == "table" then
-      return st
+      cfg = st
     end
   end
-  return shallowCopyDefaults()
+  if not cfg then
+    cfg = shallowCopyDefaults()
+  end
+  -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
+  -- Apply even when empty so an explicit clear in Settings wins over stale table-form data.
+  if _wsUrlStorage and type(_wsUrlStorage.get) == "function" then
+    local ok, val = pcall(function() return _wsUrlStorage:get() end)
+    if ok and type(val) == "string" then
+      cfg.wsSidecarUrl = val
+    end
+  end
+  -- Overlay approachMeters too (table-form is broken).
+  if _approachMetersStorage and type(_approachMetersStorage.get) == "function" then
+    local ok, val = pcall(function() return _approachMetersStorage:get() end)
+    if ok and type(val) == "number" and val > 0 then
+      cfg.approachMeters = val
+    end
+  end
+  return cfg
 end
 
 local config = loadConfig()
+
+--- Persist `wsSidecarUrl` to per-key storage AND immediately re-configure
+--- the running wsBridge with the new URL. wsBridge is already required at
+--- the top of this file, so it's in scope here. Calling configure() from
+--- the UI callback is safe (single-threaded Lua, no race).
+--- Persist `approachMeters` to per-key storage and log the change so we can
+--- verify the slider is wired correctly (issue #75 round 5: user reported the
+--- slider feels reversed; the formula is correct, but without persistence the
+--- value reset to 200 on every reload).
+local function setApproachMetersAndPersist(meters)
+  local m = tonumber(meters)
+  if not m or m ~= m then return end
+  m = math.max(50, math.min(500, math.floor(m + 0.5)))
+  config.approachMeters = m
+  if _approachMetersStorage and type(_approachMetersStorage.set) == "function" then
+    pcall(function() _approachMetersStorage:set(m) end)
+  end
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][APPROACH-DIAG] slider set to " .. tostring(m) .. " m")
+  end
+end
+
+local function setWsSidecarUrlAndReconfigure(url)
+  url = (type(url) == "string") and url or ""
+  config.wsSidecarUrl = url
+  if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
+    pcall(function() _wsUrlStorage:set(url) end)
+  end
+  pcall(function() wsBridge.configure(url) end)
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][WS-DIAG] setter applied url=" .. tostring(url))
+  end
+end
 
 --- Non-negative numeric hold for UI and countdown (invalid config → 30).
 local function normalizedCoachingHoldSeconds()
@@ -347,6 +427,9 @@ local state = {
   coachingRemainSec = 0,
   --- Last sidecar ``debrief`` paragraph (issue #46); persists until replaced or session reset.
   sidecarDebriefText = "",
+  -- Round 10: per-corner LLM advisories. Populated by wsBridge
+  -- corner_advice replies; consumed by realtime_coaching.tick.
+  cornerAdvisories = {},
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
   --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
@@ -574,6 +657,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.coachingLines = {}
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
+  state.cornerAdvisories = {}
   state.focusPracticeActive = false
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -596,6 +680,7 @@ local function resetRollingDrivingState()
   state.coachingLines = {}
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
+  state.cornerAdvisories = {}
   state.lapsCompleted = 0
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -615,6 +700,9 @@ local function resetRollingDrivingState()
   state.sectorHudMsg = ""
   state.sectorHudUntil = 0
   wsBridge.clearPendingCoaching()
+  if wsBridge.clearCornerAdvisories then
+    pcall(wsBridge.clearCornerAdvisories)
+  end
   resetDeltaSmoother()
 end
 
@@ -895,6 +983,8 @@ function script.windowSettings(_dt)
       tireHud = state.tireHud,
     },
     focusPracticeUi = focusPracticeUiProxy,
+    setWsSidecarUrl = setWsSidecarUrlAndReconfigure,
+    setApproachMeters = setApproachMetersAndPersist,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
@@ -930,8 +1020,13 @@ function script.windowCoaching(_dt)
   local view = state._cachedRealtimeView
   local payload
   if view then
+    -- Bottom tile shows the UPCOMING brake target (always), not the current
+    -- corner. view.approachLabel/targetSpeedKmh/distToBrakeM all point to the
+    -- next braking opportunity ahead. view.cornerLabel is the in-corner label
+    -- (used by the TOP tile only) — falls back to approachLabel if not in a
+    -- corner apex.
     payload = {
-      turnLabel        = view.cornerLabel,
+      turnLabel        = view.approachLabel or view.cornerLabel,
       targetSpeedKmh   = view.targetSpeedKmh,
       currentSpeedKmh  = view.currentSpeedKmh,
       distanceToBrakeM = view.distToBrakeM,
@@ -940,26 +1035,26 @@ function script.windowCoaching(_dt)
       status          = view.subState or "no_reference",
     }
   end
+  -- Round 10: the approach panel is the sole content of WINDOW_1.
+  -- Post-lap debrief was rejected by the user in favor of in-race per-
+  -- corner LLM coaching delivered via view.secondaryLine overrides on
+  -- the TOP tile (WINDOW_0). See realtime_coaching.lua round 10 block.
   coachingOverlay.drawApproachPanel(payload)
-
-  -- Sidecar debrief (Ollama / rules-based) still draws below the panel
-  -- so the post-lap debrief paragraph is not silently dropped.
-  if type(state.sidecarDebriefText) == "string" and state.sidecarDebriefText ~= "" then
-    coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
-  end
 end
 
 -- Issue #72: place each window once on first install (persisted via ac.storage),
 -- then leave the user alone forever. Position is user-controlled after this runs.
 -- Window SIZE is locked by the FIXED_SIZE manifest flag (not by this function).
+-- Issue #75: force window geometry on EVERY app load. The previous
+-- once-per-install gate (`hud_auto_placed_v1` storage flag) caused the
+-- imgui-persisted Pos+Size from `Documents/Assetto Corsa/cfg/extension/state/imgui.ini`
+-- to leak in and override the manifest defaults forever. CSP's FIXED_SIZE
+-- flag only disables interactive resizing — it does NOT clear persisted
+-- imgui state — so the only reliable fix is to call win:resize+win:move on
+-- every cold start until both succeed for all three windows.
 local function autoPlaceOnce()
   if state._autoPlaceChecked then return end
-  if type(ac) ~= "table" or type(ac.storage) ~= "function" then return end
-  local placedFlag = ac.storage("hud_auto_placed_v1", false)
-  if placedFlag and placedFlag.get and placedFlag:get() then
-    state._autoPlaceChecked = true
-    return
-  end
+  if type(ac) ~= "table" then return end
   if type(ac.getAppWindows) ~= "function" or type(ac.accessAppWindow) ~= "function" then
     -- API not available yet — try again next frame instead of permanently
     -- skipping the recovery path on a cold start.
@@ -969,13 +1064,17 @@ local function autoPlaceOnce()
   local localSim = ac.getSim() or {}
   local screenW = tonumber(localSim.windowWidth) or 1920
   local screenH = tonumber(localSim.windowHeight) or 1080
-  local targets = {
+  local sizes = {}
+  for title, wh in pairs(MANIFEST_WINDOW_SIZES) do
+    sizes[title] = vec2(wh[1], wh[2])
+  end
+  local positions = {
     ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
     ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
     ["Settings"]           = vec2(math.floor(screenW * 0.05),     math.floor(screenH * 0.10)),
   }
   local required = 0
-  for _ in pairs(targets) do required = required + 1 end
+  for _ in pairs(sizes) do required = required + 1 end
 
   local windows = ac.getAppWindows() or {}
   if #windows == 0 then
@@ -983,25 +1082,28 @@ local function autoPlaceOnce()
     return
   end
 
-  local moved = 0
+  local applied = 0
   for i = 1, #windows do
     local entry = windows[i]
-    local target = entry and entry.title and targets[entry.title] or nil
-    if target then
+    local title = entry and entry.title or nil
+    local sizeTarget = title and sizes[title] or nil
+    local posTarget  = title and positions[title] or nil
+    if sizeTarget and posTarget then
       local ok, win = pcall(ac.accessAppWindow, entry.name)
       if ok and win and win:valid() then
-        local moveOk = pcall(function() win:move(target) end)
-        if moveOk then moved = moved + 1 end
+        local resizeOk = pcall(function() win:resize(sizeTarget) end)
+        local moveOk   = pcall(function() win:move(posTarget) end)
+        if resizeOk and moveOk then applied = applied + 1 end
       end
     end
   end
 
-  -- Only mark as done (and persist the flag) if we actually moved every
-  -- target window. Otherwise leave the flag unset so the next frame retries.
-  if moved >= required then
+  if applied >= required then
     state._autoPlaceChecked = true
-    if placedFlag and placedFlag.set then
-      pcall(function() placedFlag:set(true) end)
+    if ac and type(ac.log) == "function" then
+      ac.log(string.format(
+        "[COPILOT][AUTOPLACE] forced %d/%d windows to manifest geometry on this load",
+        applied, required))
     end
   end
 end
@@ -1023,6 +1125,8 @@ function script.update(dt)
     if not approachM or approachM ~= approachM or approachM <= 0 then
       approachM = 200
     end
+    -- Round 10: pass wsBridge so realtime engine can fire corner_query
+    -- on corner transitions, and state.cornerAdvisories for the override.
     local rtView = realtimeCoaching.tick({
       splinePos = sp,
       currentSpeedKmh = cur,
@@ -1032,9 +1136,37 @@ function script.update(dt)
       trackLengthM = tlM,
       approachMeters = approachM,
       dt = dt,
+      wsBridge = wsBridge,
+      cornerAdvisories = state.cornerAdvisories,
+      lap = state.lapsCompleted or 0,
+      simT = ch.simSeconds(sim),
     })
     state._cachedRealtimeView = rtView
     state.realtimeActiveHint = rtView
+
+    -- Periodic [RT-DIAG] log (every 3 sec) to verify what the engine sees
+    -- live. Issue #75 round 3: prove the in-corner / brake-distance pipeline.
+    state._rtDiagT = (state._rtDiagT or 0) + (dt or 0)
+    if state._rtDiagT >= 3.0 and ac and type(ac.log) == "function" then
+      state._rtDiagT = 0
+      local function fmt(v, w)
+        if v == nil then return "nil" end
+        if type(v) == "number" then return string.format(w or "%.1f", v) end
+        return tostring(v)
+      end
+      ac.log(string.format(
+        "[COPILOT][RT-DIAG] sp=%s cur=%s primary=%s sub=%s topCorner=%s nextCorner=%s tgt=%s dist=%sm trace=%d brakes=%d segs=%d trackLen=%s",
+        fmt(sp, "%.4f"), fmt(cur, "%.0f"),
+        fmt(rtView and rtView.primaryLine), fmt(rtView and rtView.subState),
+        fmt(rtView and rtView.cornerLabel), fmt(rtView and rtView.approachLabel),
+        fmt(rtView and rtView.targetSpeedKmh, "%.0f"),
+        fmt(rtView and rtView.distToBrakeM, "%.0f"),
+        (state.bestSortedTrace and #state.bestSortedTrace) or 0,
+        (state.brakingPoints and state.brakingPoints.best and #state.brakingPoints.best) or 0,
+        (state.trackSegments and #state.trackSegments) or 0,
+        fmt(tlM, "%.0f")
+      ))
+    end
   else
     state._cachedRealtimeView = nil
     state.realtimeActiveHint = nil
@@ -1093,6 +1225,22 @@ function script.update(dt)
 
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
+  -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
+  -- The takeCornerAdvisory API returns the cached text for a label without
+  -- consuming it — we walk known corner labels from trackSegments and copy.
+  if state.trackSegments and type(state.trackSegments) == "table" then
+    for i = 1, #state.trackSegments do
+      local seg = state.trackSegments[i]
+      if seg and seg.kind == "corner" and type(seg.label) == "string" then
+        local txt = wsBridge.takeCornerAdvisory(seg.label, state.lapsCompleted)
+        if txt then
+          state.cornerAdvisories[seg.label] = txt
+        else
+          state.cornerAdvisories[seg.label] = nil
+        end
+      end
+    end
+  end
   local sidecarHints, sidecarDebrief = wsBridge.takeCoachingForLap(state.lapsCompleted or 0)
   if type(sidecarDebrief) == "string" and sidecarDebrief ~= "" then
     state.sidecarDebriefText = sidecarDebrief
@@ -1467,7 +1615,13 @@ function script.Draw3D(_dt)
 
   if config.brakeMarkersEnabled ~= false then
     local flMap = select(1, focusLabelMap())
-    trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last, {
+    -- Issue #75 round 4: brake marker source follows racingLineMode so the
+    -- user only sees what they asked for. "best" hides the orange last-lap
+    -- walls, "last" hides the red best walls, "both" shows everything.
+    local mode = config.racingLineMode or "best"
+    local bestList = (mode == "best" or mode == "both") and state.brakingPoints.best or nil
+    local lastList = (mode == "last" or mode == "both") and state.brakingPoints.last or nil
+    trackMarkers.draw(c, s, bestList, lastList, {
       active = state.focusPracticeActive == true,
       labels = flMap,
       corners = state.lastLapCornerFeats,

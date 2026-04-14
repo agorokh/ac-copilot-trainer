@@ -70,7 +70,7 @@ end
 ---@param h number    bar height
 ---@param pct number  0..1 fill percentage
 local function drawProgressBar(x, y, w, h, pct)
-  if not ui or type(ui.drawRectFilled) ~= "function" or type(vec2) ~= "function" then return end
+  if not ui or ui.drawRectFilled == nil or vec2 == nil then return end
   local p0 = vec2(x, y)
   local p1 = vec2(x + w, y + h)
   -- Background
@@ -117,11 +117,43 @@ end
 --- callers can treat that as "skip this frame, no panel drawn".
 ---@param approachData table|nil  ApproachHudPayload, or nil for placeholder render
 ---@return boolean @true if the panel was drawn; false if UI APIs unavailable
+local _ovDiagLogged = false
 function M.drawApproachPanel(approachData)
-  if not ui or type(vec2) ~= "function" then
+  if not _ovDiagLogged and ac and type(ac.log) == "function" then
+    _ovDiagLogged = true
+    local function tt(t, k)
+      if type(t) ~= "table" then return "?" end
+      local v = t[k]
+      if v == nil then return "nil" end
+      return type(v)
+    end
+    local szStr = "err"
+    if type(ui) == "table" and ui.windowSize ~= nil then
+      local ok, sz = pcall(function() return ui.windowSize() end)
+      if ok and sz and sz.x then
+        szStr = string.format("%.0fx%.0f", sz.x, sz.y or 0)
+      else
+        szStr = "call-fail"
+      end
+    else
+      szStr = "missing"
+    end
+    ac.log(string.format(
+      "[COPILOT][OV-DIAG] win1 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s payload=%s",
+      szStr,
+      type(ui),
+      type(vec2),
+      type(rgbm),
+      tt(ui, "drawRectFilled"), tt(ui, "drawRect"),
+      tt(ui, "dwriteDrawText"),
+      (type(approachData) == "table") and "y" or "N"
+    ))
+  end
+  -- CSP cdata-callable safe check: vec2/ui.drawRectFilled are cdata, not "function"
+  if not ui or vec2 == nil then
     return false
   end
-  if type(ui.drawRectFilled) ~= "function" then
+  if ui.drawRectFilled == nil then
     return false
   end
 
@@ -271,17 +303,20 @@ function M.drawApproachPanel(approachData)
     fontMod.pop(lk)
   end
 
-  -- Big distance value, right-aligned
+  -- Big distance value, right-aligned. Shifted up (row2Y - 12 instead of
+  -- row2Y - 4) so the 24px number has visible breathing room above the
+  -- progress bar — round 6 user feedback: "number is stuck to the bar".
   do
     local distStr = distanceM and string.format("%d M", math.floor(distanceM + 0.5)) or "—"
     local nk = fontMod.pushNamed("numbers", 24)
     local distSize = _measureDW(distStr, 24)
-    _drawDW(distStr, 24, vec2(w - padX - distSize.x, row2Y - 4), COLOR_WHITE)
+    _drawDW(distStr, 24, vec2(w - padX - distSize.x, row2Y - 12), COLOR_WHITE)
     fontMod.pop(nk)
   end
 
-  -- Progress bar (taller, red fill per Figma)
-  local barY = row2Y + 26
+  -- Progress bar (taller, red fill per Figma). Nudged down 4px so it sits
+  -- clear of the 24px distance value above.
+  local barY = row2Y + 30
   local barW = w - padX * 2
   local barH = 14
   drawProgressBar(padX, barY, barW, barH, progressPct or 0)
@@ -406,7 +441,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
   if not coachingLines or #coachingLines == 0 or timeRemaining <= 0 then
     return
   end
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
 
@@ -459,7 +494,7 @@ function M.draw(coachingLines, timeRemaining, holdSeconds, maxVisibleHints)
 end
 
 function M.drawFallback()
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
   drawStandardCoachingPanel(400, 120, 100)
@@ -478,7 +513,7 @@ end
 
 --- Coaching window when session has started but no tip is active (timer expired or empty hints).
 function M.drawBetweenLapsIdle(holdSeconds)
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
   drawStandardCoachingPanel(400, 140, 120)
@@ -505,7 +540,7 @@ end
 
 --- Lap completed and hold timer running, but `buildAfterLap` produced no lines (trace quality / first lap).
 function M.drawHoldNoHints(remainingSec)
-  if not ui or type(ui.textColored) ~= "function" then
+  if not ui or ui.textColored == nil then
     return
   end
   drawStandardCoachingPanel(400, 120, 100)
@@ -540,7 +575,7 @@ end
 ---@param vm CoachingHudStrip
 ---@return boolean @true if anything was drawn (caller may add spacing only then)
 function M.drawMainWindowStrip(vm)
-  if not ui or type(ui.textColored) ~= "function" or not vec2 then
+  if not ui or ui.textColored == nil or vec2 == nil then
     return false
   end
   local lines = vm.coachingLines
@@ -642,36 +677,6 @@ function M.drawMainWindowStrip(vm)
     ui.dummy(vec2(1, 6))
   end
   return true
-end
-
---- Wrapped debrief text from Python sidecar when ``AC_COPILOT_OLLAMA_ENABLE=1`` (issue #46).
---- Long text relies on the parent ImGui region for scrolling unless we add a child window later.
----@param text string|nil
-function M.drawSidecarDebrief(text)
-  if not text or text == "" or not ui or type(ui.textColored) ~= "function" then
-    return
-  end
-  if ui.separator then
-    ui.separator()
-  end
-  local fk = fontMod.push()
-  ui.textColored("SESSION DEBRIEF (sidecar)", rgbm(0.55, 0.82, 0.95, 0.95))
-  if ui.separator then
-    ui.separator()
-  end
-  local col = rgbm(0.78, 0.80, 0.86, 0.92)
-  if ui.textWrapped then
-    if ui.StyleColor and ui.pushStyleColor and ui.popStyleColor then
-      ui.pushStyleColor(ui.StyleColor.Text, col)
-      ui.textWrapped(text)
-      ui.popStyleColor()
-    else
-      ui.textWrapped(text)
-    end
-  else
-    ui.textColored(text, col)
-  end
-  fontMod.pop(fk)
 end
 
 return M

@@ -9,7 +9,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from tools.ai_sidecar.coaching.llm_coach import compose_debrief
+from tools.ai_sidecar.coaching.llm_coach import (
+    compose_corner_hint,
+    compose_llm_debrief_only,
+    debrief_feature_enabled,
+    rules_fallback_debrief,
+)
+from tools.ai_sidecar.features import _as_float
 
 if TYPE_CHECKING:
     from tools.ai_sidecar.session import LapComparisonState
@@ -21,6 +27,12 @@ PROTOCOL_VERSION = 1
 EVENT_LAP_COMPLETE = "lap_complete"
 EVENT_COACHING_RESPONSE = "coaching_response"
 EVENT_ANALYSIS_ERROR = "analysis_error"
+EVENT_CORNER_QUERY = "corner_query"
+EVENT_CORNER_ADVICE = "corner_advice"
+
+_CORNER_LABEL_MAX_LEN = 64
+_CORNER_MAX_SPEED_ABS_KMH = 450.0
+_CORNER_MAX_DIST_M = 100_000.0
 
 
 def prepare_outbound_message(
@@ -33,10 +45,17 @@ def prepare_outbound_message(
 
     Returns:
         ``analysis_error`` for protocol violations, ``coaching_response`` when
-        ``reply_coaching`` and event is ``lap_complete``, else ``None``.
+        ``reply_coaching`` and event is ``lap_complete``, ``corner_advice`` when
+        a corner hint is available, else ``None`` (including silent ``corner_query``).
     """
     proto_raw = inbound.get("protocol")
     if proto_raw is not None:
+        if isinstance(proto_raw, bool):
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "invalid protocol field",
+            }
         try:
             pv = int(proto_raw)
         except (TypeError, ValueError):
@@ -53,6 +72,85 @@ def prepare_outbound_message(
             }
 
     event = inbound.get("event")
+
+    if event == EVENT_CORNER_QUERY and not reply_coaching:
+        return None
+
+    if event == EVENT_CORNER_QUERY:
+        if proto_raw is None:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query requires protocol field",
+            }
+        # Round 10: in-race per-corner hint. Blocks on Ollama (~631ms with
+        # llama3.2:3b + tiny prompt). The Lua side fires this async when it
+        # detects topCornerLabel transitions to a new corner.
+        corner = str(inbound.get("corner") or "").strip()
+        for req in ("cur", "ref", "dist"):
+            if req not in inbound:
+                return {
+                    "protocol": PROTOCOL_VERSION,
+                    "event": EVENT_ANALYSIS_ERROR,
+                    "message": "corner_query requires cur, ref, and dist fields",
+                }
+
+        def _corner_scalar(raw: Any) -> float:
+            parsed = _as_float(raw)
+            if parsed is None:
+                raise ValueError
+            return parsed
+
+        try:
+            cur_kmh = _corner_scalar(inbound["cur"])
+            ref_kmh = _corner_scalar(inbound["ref"])
+            dist_m = _corner_scalar(inbound["dist"])
+        except ValueError:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query requires numeric cur/ref/dist",
+            }
+        if not corner:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query requires corner label",
+            }
+        if len(corner) > _CORNER_LABEL_MAX_LEN:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query corner label too long",
+            }
+        if abs(cur_kmh) > _CORNER_MAX_SPEED_ABS_KMH or abs(ref_kmh) > _CORNER_MAX_SPEED_ABS_KMH:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query cur/ref out of range",
+            }
+        if dist_m < 0 or dist_m > _CORNER_MAX_DIST_M:
+            return {
+                "protocol": PROTOCOL_VERSION,
+                "event": EVENT_ANALYSIS_ERROR,
+                "message": "corner_query dist out of range",
+            }
+        hint = compose_corner_hint(
+            corner=corner,
+            cur_kmh=cur_kmh,
+            ref_kmh=ref_kmh,
+            dist_m=dist_m,
+        )
+        if not hint:
+            return None
+        return {
+            "protocol": PROTOCOL_VERSION,
+            "event": EVENT_CORNER_ADVICE,
+            "corner": corner,
+            "lap": inbound.get("lap"),
+            "text": hint,
+        }
+
     if event != EVENT_LAP_COMPLETE:
         logger.debug("ignored event=%s keys=%s", event, list(inbound.keys())[:12])
         return None
@@ -81,9 +179,43 @@ def prepare_outbound_message(
         if imp:
             out["improvementRanking"] = imp
 
-    # Debrief may call Ollama with a short timeout (see AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC);
-    # server.py runs prepare_outbound_message in asyncio.to_thread so the WS loop stays responsive.
-    debrief = compose_debrief(inbound, imp)
-    if debrief:
-        out["debrief"] = debrief
+    # Round 8: DO NOT block on Ollama here. Return the rules-based debrief
+    # immediately so CSP gets a fast response (<100ms) and does not close
+    # the socket while we're still waiting on the LLM. The server then
+    # spawns a background task that sends a follow-up coaching_response
+    # with the Ollama debrief IF it completes before the socket closes.
+    if debrief_feature_enabled():
+        out["debrief"] = rules_fallback_debrief(inbound, imp)
     return out
+
+
+def build_ollama_followup(
+    inbound: dict[str, Any],
+    improvement_ranking: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Build a second coaching_response with the REAL Ollama debrief.
+
+    Round 9: uses compose_llm_debrief_only which returns None on any LLM
+    failure (timeout, empty response, etc.) — so we do NOT send a follow-up
+    that merely duplicates the immediate rules debrief. Returns None if
+    Ollama failed; the client keeps the rules response from the immediate
+    message.
+    """
+    if not debrief_feature_enabled():
+        return None
+    debrief = compose_llm_debrief_only(inbound, improvement_ranking)
+    if not debrief:
+        return None
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "event": EVENT_COACHING_RESPONSE,
+        "lap": inbound.get("lap"),
+        "hints": [
+            {
+                "kind": "general",
+                "text": "Ollama debrief",
+            },
+        ],
+        "debrief": debrief,
+        "debriefSource": "ollama",
+    }
