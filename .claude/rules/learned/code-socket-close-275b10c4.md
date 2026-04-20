@@ -1,0 +1,33 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 275b10c4463e233b
+mined_from: 4 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code Socket Close (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Close active websocket inside ws_bridge.reset**
+
+`M.reset()` drops the `sock` reference without closing it, but ...
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Close failed WebSocket before clearing bridge handle**
+
+When `reconnect = true`, this module intentionally keeps...
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Ignore stale socket close callbacks**
+
+`_onClose` unconditionally assigns `sock = nil`, but this callback is sha...
+- close_socket_if_any() only calls :close() when type(s)=="table". CSP web.socket returns a polymorphic callable (often a function/cdata) that still supports :close(); with the current guard, configure(...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

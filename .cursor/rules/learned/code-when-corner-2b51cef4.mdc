@@ -1,0 +1,28 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 2b51cef4b549e990
+mined_from: 4 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: guideline
+---
+
+# Code When Corner (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- When an LLM corner advisory is present, this code forces `view.kind = "info"`. Since `hud.draw()` uses `view.kind` to color the *primary* line, this can unintentionally turn urgent states like "BRAKE ...
+- `corner_query` is keyed off `topLabel` (which becomes the *in-corner* label when `inCornerLabel` is set), but the values sent (`distToBrakeM`/`targetSpeed` via `refAtBrake`) are always computed from `...
+- Protocol validation currently only enforces `protocol` when the field is present. That means `corner_query` frames without a `protocol` field will be accepted and processed, even though the module doc...
+- Debrief truncation can append an ellipsis twice: first when `raw` is trimmed to 140 chars (`.. "..."`), and again when rendering the 3rd wrapped line (`ln = ln .. "..."`). This can result in duplicate...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

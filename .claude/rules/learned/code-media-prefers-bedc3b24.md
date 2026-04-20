@@ -1,0 +1,48 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: bedc3b24d39a148b
+mined_from: 24 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: maintainability
+preventability: guideline
+---
+
+# Code Media Prefers (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Missing bool guard on float() for JSON values
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+The `corner_query` handler coerces untrusted JSON values `cur`, `ref`, and `dist` via `float(inbound....
+- ### New function uses old broken cdata guard pattern
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+The newly added `drawLapDebrief` function uses `type(ui.drawRect) == "function"` to guard the border ...
+- ### Corner advice sent even without hint text
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+When `compose_corner_hint` returns `None` (Ollama disabled, failed, or produced no valid output), a `corner_...
+- ### Background task may be garbage collected silently
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`asyncio.create_task()` is called without saving a reference to the returned task. The event loop...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

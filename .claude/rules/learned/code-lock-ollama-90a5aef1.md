@@ -1,0 +1,30 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 90a5aef16c269701
+mined_from: 3 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: reliability
+preventability: architecture
+---
+
+# Code Lock Ollama (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Do not hold prepare lock during corner_query Ollama calls**
+
+`_corner_job` takes `_prepare_lock` before running ...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Scope prepare lock per websocket connection**
+
+`_prepare_lock` is declared at module scope and then awaited insi...
+- `corner_query` handling holds `prepare_lock` across the entire `asyncio.to_thread(prepare_outbound_message, ...)` call. Since `prepare_outbound_message` blocks on Ollama for `corner_query`, this can d...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

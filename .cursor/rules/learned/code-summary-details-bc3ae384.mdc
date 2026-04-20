@@ -1,0 +1,55 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: bc3ae38438cd0291
+mined_from: 5 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: bug
+preventability: typecheck
+---
+
+# Code Summary Details (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>Review Summary by Qodo</h3>
+
+Fix issue #75: in-game smoke test — CSP runtime fixes + real-time per-corner LLM coaching
+
+<code>✨ Enhancement</code> <code>🐞 Bug fix</code>
+
+<img src="https://www.qod...
+- ## Pull request overview
+
+This PR hardens the in-game CSP Lua runtime for the Phase 5 HUD rebuild and extends the Python AI sidecar + Lua WebSocket bridge to support non-blocking Ollama debrief follow...
+- ## Pull request overview
+
+Copilot reviewed 18 out of 18 changed files in this pull request and generated 4 comments.
+
+
+
+
+
+---
+
+💡 <a href="/agorokh/ac-copilot-trainer/new/main?filename=.github/instruct...
+- ## Pull request overview
+
+Copilot reviewed 18 out of 18 changed files in this pull request and generated 3 comments.
+
+
+
+
+
+---
+
+💡 <a href="/agorokh/ac-copilot-trainer/new/main?filename=.github/instruct...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

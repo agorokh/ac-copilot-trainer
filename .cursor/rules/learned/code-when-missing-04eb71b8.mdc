@@ -1,0 +1,29 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 04eb71b85c3c20e0
+mined_from: 3 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: bug
+preventability: typecheck
+---
+
+# Code When Missing (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- `_corner_scalar()` returns 0.0 when the field is missing (`raw is None`), so a `corner_query` without `cur/ref/dist` can silently pass validation and call Ollama with zeros. That contradicts the inten...
+- `sendCornerQuery()` always returns `true` after calling `M.sendJson(...)`, even if the underlying send fails (e.g., `M.sendJson` catches an error and clears `sock`). Since `realtime_coaching.tick()` u...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Require protocol field for corner_query frames**
+
+`prepare_outbound_message()` currently accepts `corner_query` ...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

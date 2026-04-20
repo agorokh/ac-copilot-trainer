@@ -1,0 +1,34 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: cc5439695ac9e1ac
+mined_from: 4 review comments across 1 PRs
+last_updated: 2026-04-20
+repository: agorokh/ac-copilot-trainer
+severity: nit
+preventability: architecture
+---
+
+# Code Follow With (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Ignore stale Ollama follow-up hints after first consume**
+
+When an `ollama` follow-up arrives after the initial ...
+- In the Ollama follow-up path, if a `coaching_response` arrives with `debriefSource == "ollama"` after the initial response has already been consumed (so `pendingCoaching` is nil), this branch creates ...
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Avoid overwriting pending coaching with older Ollama follow-ups**
+
+In `pollInbound`, the `elseif debrief` branch...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Cancel orphaned Ollama follow-up tasks**
+
+This schedules `_send_ollama_followup()` without tying its lifetime to...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
