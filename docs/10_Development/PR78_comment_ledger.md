@@ -72,6 +72,8 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3114884150 | coderabbitai[bot] | yes |
 | 3114884160 | coderabbitai[bot] | yes |
 | 3114884161 | coderabbitai[bot] | yes |
+| 3114899783 | cursor[bot] | yes |
+| 3114899786 | cursor[bot] | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -93,14 +95,16 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3114884150**: `_recvQueue` moved to module scope so `configure`/`reset` clear the real queue.
 - **3114884160**: `startSidecarIfNeeded` calls `tryOpen()` before spawn so an already-listening sidecar is dialed instead of double-launched.
 - **3114884161**: `sidecarProtocolReady` gates `sidecarConnected()` until inbound JSON matches `PROTOCOL_VERSION`.
+- **3114899783**: Integer MB cap (`lap_archive.clampArchiveCapMB` floors); no per-frame persist on in-UI normalize; slider persists `math.floor`d MB.
+- **3114899786**: Removed unused `setWsSidecarUrl` viewmodel field and dead `setWsSidecarUrlAndReconfigure` helper (URL is per-key + auto-launch only).
 
-## Issue comments (`issues/78/comments`): 5
+## Issue comments (`issues/78/comments`): 6
 
-Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**. `4285619084` / `4285661809` (Codex usage limit notices) — **N/A**.
+Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**. `4285619084` / `4285661809` / `4285796677` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 22
+## PR reviews (`pulls/78/reviews`): 24
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` bot summaries on `582514f`).
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` bot summaries).
 
 ## Issue #77 scope proof
 

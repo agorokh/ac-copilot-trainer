@@ -49,7 +49,8 @@ function M.clampArchiveCapMB(raw)
   if n ~= n or n <= 0 then
     n = 500
   end
-  return math.max(ARCHIVE_CAP_MIN_MB, math.min(ARCHIVE_CAP_MAX_MB, n))
+  n = math.max(ARCHIVE_CAP_MIN_MB, math.min(ARCHIVE_CAP_MAX_MB, n))
+  return math.floor(n + 0.5)
 end
 
 -- Trace sample field order. `traceToColumns` builds rows by iterating this list (single source of truth).

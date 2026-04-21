@@ -201,10 +201,6 @@ local SESSION_UUID = string.format(
   math.random(0, 0xFFFF)
 )
 
---- Persist `wsSidecarUrl` to per-key storage AND immediately re-configure
---- the running wsBridge with the new URL. wsBridge is already required at
---- the top of this file, so it's in scope here. Calling configure() from
---- the UI callback is safe (single-threaded Lua, no race).
 --- Persist `approachMeters` to per-key storage and log the change so we can
 --- verify the slider is wired correctly (issue #75 round 5: user reported the
 --- slider feels reversed; the formula is correct, but without persistence the
@@ -219,18 +215,6 @@ local function setApproachMetersAndPersist(meters)
   end
   if ac and type(ac.log) == "function" then
     ac.log("[COPILOT][APPROACH-DIAG] slider set to " .. tostring(m) .. " m")
-  end
-end
-
-local function setWsSidecarUrlAndReconfigure(url)
-  url = (type(url) == "string") and url or ""
-  config.wsSidecarUrl = url
-  if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
-    pcall(function() _wsUrlStorage:set(url) end)
-  end
-  pcall(function() wsBridge.configure(url) end)
-  if ac and type(ac.log) == "function" then
-    ac.log("[COPILOT][WS-DIAG] setter applied url=" .. tostring(url))
   end
 end
 
@@ -1089,7 +1073,6 @@ function script.windowSettings(_dt)
       tireHud = state.tireHud,
     },
     focusPracticeUi = focusPracticeUiProxy,
-    setWsSidecarUrl = setWsSidecarUrlAndReconfigure,
     -- Issue #77 Part A: Settings UI shows sidecar process + connection status.
     sidecarSpawnedAlive = wsBridge.sidecarSpawnedAlive,
     sidecarConnected = wsBridge.sidecarConnected,

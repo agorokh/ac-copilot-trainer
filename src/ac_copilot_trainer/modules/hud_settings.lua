@@ -240,18 +240,17 @@ function M.draw(vm)
       end
     end
     if tonumber(cfg.lapArchiveMaxMB) ~= capMB then
+      -- Normalize in memory only; persisting here ran every frame (float vs int drift — Cursor #78).
       cfg.lapArchiveMaxMB = capMB
-      if vm.setLapArchiveMaxMB and type(vm.setLapArchiveMaxMB) == "function" then
-        pcall(vm.setLapArchiveMaxMB, capMB)
-      end
     end
     if ui.slider ~= nil then
       pcall(function()
         local nv, ch = ui.slider("Disk cap (MB)###cpt_archcap", capMB, 50, 5000, "%.0f", true)
         if ch and nv == nv then
-          cfg.lapArchiveMaxMB = nv
+          local nvInt = math.floor(tonumber(nv) + 0.5)
+          cfg.lapArchiveMaxMB = nvInt
           if vm.setLapArchiveMaxMB and type(vm.setLapArchiveMaxMB) == "function" then
-            pcall(vm.setLapArchiveMaxMB, nv)
+            pcall(vm.setLapArchiveMaxMB, nvInt)
           end
         end
       end)
