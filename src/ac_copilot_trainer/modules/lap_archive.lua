@@ -38,6 +38,11 @@ local ch = require("csp_helpers")
 
 local SCHEMA_VERSION = 1
 
+-- Full-directory scan in `rotate()` is O(n files). Run it every N writes so lap-end
+-- work stays smooth once the archive holds thousands of laps (PR #78 review).
+local ROTATE_EVERY_N_WRITES = 10
+local _writesUntilRotate = 0
+
 -- Trace sample field order. MUST match the order produced by `traceToColumns`.
 -- Documented in the schema header so future imports map columns identically.
 local TRACE_FIELDS = {
@@ -309,8 +314,11 @@ function M.write(rec, capMB)
   if not f then return false, "open failed: " .. tostring(ferr) end
   f:write(raw)
   f:close()
-  -- Rotate after every successful write. Cheap if under cap.
-  pcall(function() M.rotate(capMB or 500) end)
+  _writesUntilRotate = _writesUntilRotate + 1
+  if _writesUntilRotate >= ROTATE_EVERY_N_WRITES then
+    _writesUntilRotate = 0
+    pcall(function() M.rotate(capMB or 500) end)
+  end
   return true, path
 end
 

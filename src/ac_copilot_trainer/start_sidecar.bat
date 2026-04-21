@@ -2,10 +2,9 @@
 REM ac-copilot-trainer Python sidecar launcher (issue #77 part A)
 REM Auto-spawned by ws_bridge.lua via os.runConsoleProcess at app load.
 REM
-REM Hardcoded REPO_ROOT below: cleanest option for solo-developer Windows-only
-REM setup. To redeploy on a different machine, change this one line.
+REM Repo root: this .bat lives in src\ac_copilot_trainer\ — two levels up is checkout root.
 
-SET REPO_ROOT=C:\Users\arsen\Projects\ac-copilot-trainer
+SET "REPO_ROOT=%~dp0..\.."
 
 REM Ollama coaching env (matches the values that were verified in PR #75).
 SET AC_COPILOT_OLLAMA_ENABLE=1
@@ -19,7 +18,7 @@ SET AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC=60
 cd /d "%REPO_ROOT%"
 IF NOT EXIST "%REPO_ROOT%\tools\ai_sidecar" (
     echo [start_sidecar] ERROR: tools\ai_sidecar not found at %REPO_ROOT%
-    echo [start_sidecar] Edit REPO_ROOT in this .bat to point at your repo checkout.
+    echo [start_sidecar] Expected repo layout: REPO_ROOT\tools\ai_sidecar (REPO_ROOT=%REPO_ROOT%)
     exit /b 2
 )
 

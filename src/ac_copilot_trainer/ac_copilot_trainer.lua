@@ -466,6 +466,8 @@ local state = {
   -- Round 10: per-corner LLM advisories. Populated by wsBridge
   -- corner_advice replies; consumed by realtime_coaching.tick.
   cornerAdvisories = {},
+  --- CSP `ac.StateCar.isLapInvalidated` sampled each frame; ORed across the current lap for archive `is_valid`.
+  lapInvalidatedThisLap = false,
   --- Issue #77 Part C: stable per-script-load id stamped on every archived lap.
   sessionUuid = "",
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
@@ -696,6 +698,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
+  state.lapInvalidatedThisLap = false
   state.focusPracticeActive = false
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -719,6 +722,7 @@ local function resetRollingDrivingState()
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
+  state.lapInvalidatedThisLap = false
   state.lapsCompleted = 0
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -1325,6 +1329,12 @@ function script.update(dt)
 
   -- Lap boundary: finalize trace before appending this frame's sample.
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
+    -- Last frame of the completed lap may still carry invalidation (CSP `ac.StateCar`).
+    pcall(function()
+      if car.isLapInvalidated then
+        state.lapInvalidatedThisLap = true
+      end
+    end)
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
@@ -1521,7 +1531,7 @@ function script.update(dt)
         lap_n = state.lapsCompleted,
         lap_ms = lastMs,
         is_pb = (state.bestLapMs ~= nil and lastMs <= state.bestLapMs),
-        is_valid = true,  -- AC has no easy "lap invalidated" boolean here; default true
+        is_valid = not state.lapInvalidatedThisLap,
         trace = completedTrace,
         corners = feats,
         setup_snap = state.lastSetupSnap,
@@ -1543,6 +1553,7 @@ function script.update(dt)
       end
     end
 
+    state.lapInvalidatedThisLap = false
     state.sectorIndex = 1
     state.sectorStartSimT = ch.simSeconds(sim)
     state.lastSplineSector = sp
@@ -1561,6 +1572,14 @@ function script.update(dt)
 
   tel:setRecording(state.recording)
   tel:update(dt, car, sim)
+
+  if not sim.isInMainMenu and state.lastLapCount >= 0 and lc == state.lastLapCount then
+    pcall(function()
+      if car.isLapInvalidated then
+        state.lapInvalidatedThisLap = true
+      end
+    end)
+  end
 
   local ev = brakes:update(car, dt)
   if ev then
