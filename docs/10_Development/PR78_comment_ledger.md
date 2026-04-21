@@ -85,6 +85,7 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3115138063 | Copilot | yes |
 | 3115178703 | chatgpt-codex-connector[bot] | yes |
 | 3115179416 | cursor[bot] | yes |
+| 3115226944 | chatgpt-codex-connector[bot] | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -127,13 +128,17 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3115178703**: Exit callback increments a **nonzero child exit** streak; after **8** rapid nonzero exits, apply the same **120s** sim-time `spawnAbandonUntilT` backoff as spawn pcall failures (covers bat start then immediate failure without `runConsoleProcess` error).
 - **3115179416**: Bat **exit code 2** permanent abandon runs **outside** the `ac.log` guard so behavior does not depend on logging availability.
 
+### Post-`769bf82` audit (Codex inline)
+
+- **3115226944**: Do **not** reset `nonzeroExitStreak` on successful `runConsoleProcess` return; only clean exit (`code == 0`), permanent code **2**, `tryOpen()`, and configure/reset clear it — so the streak reaches the **8**-exit backoff across fast crash loops.
+
 ## Issue comments (`issues/78/comments`): 7
 
 Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` and again after `9e3ceca` — still **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 33
+## PR reviews (`pulls/78/reviews`): 34
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread. Post-`9e3ceca` review events `4145194031` (Codex) / `4145194773` (Cursor Bugbot) correspond to inline **3115178703** / **3115179416** above — **resolved** in code, not separate scope.
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread. Post-`9e3ceca` review events `4145194031` (Codex) / `4145194773` (Cursor Bugbot) correspond to inline **3115178703** / **3115179416** above — **resolved** in code, not separate scope. Post-`769bf82` Codex review `4145245239` maps to inline **3115226944** — **resolved** in code.
 
 ## Issue #77 scope proof
 

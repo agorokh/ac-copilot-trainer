@@ -198,7 +198,8 @@ function M.startSidecarIfNeeded(appDir)
   if okSpawn and spawnAccepted then
     sidecarChildEverLaunched = true
     spawnFailStreak = 0
-    nonzeroExitStreak = 0
+    -- Do not clear `nonzeroExitStreak` here: spawn can succeed while the bat exits fast;
+    -- streak must accumulate across attempts (Codex #78 / #3115226944).
   end
   if not okSpawn then
     spawnFailStreak = spawnFailStreak + 1
