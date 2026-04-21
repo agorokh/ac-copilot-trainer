@@ -84,12 +84,14 @@ At this snapshot, every inline thread ID is listed below as **RESOLVED** where t
 | 3120791490 | cursor[bot] | yes |
 | 3120791495 | cursor[bot] | yes |
 | 3120816778 | chatgpt-codex-connector[bot] | yes |
+| 3120832398 | cursor[bot] | yes |
+| 3120832399 | cursor[bot] | yes |
 
 ## Issue comments (`issues/80/comments`): 38
 
 PR conversation; bot guides and usage-limit notices are typically **N/A**. Human `agorokh` items require explicit triage.
 
-## PR reviews (`pulls/80/reviews`): 32
+## PR reviews (`pulls/80/reviews`): 34
 
 Automated summaries; map actionable items to inline rows above.
 
@@ -99,6 +101,8 @@ Automated summaries; map actionable items to inline rows above.
 - **3120773787**: `check_vault_follow_up.sh` treats `git commit -p` / `--patch` / `--interactive` (and short `-p` in combined flags) as commits that may include unstaged tracked paths.
 - **3120773789**: `vault-automerge.yml` listens for `unlabeled` and disables auto-merge when the `vault-only` label is removed.
 - **3120816778**: `check_vault_follow_up.sh` treats `--pathspec-from-file` / `--pathspec-from-file=...` as commits that may include unstaged tracked paths.
+- **3120832398**: ACK waiver only when **every** sensitive path matches allowed vault/core patterns — no blanket pass from an unrelated `docs/01_Vault/` edit alongside `scripts/` / `.github/` / `.claude/` changes.
+- **3120832399**: Combined short flags (`-vm`, etc.) skip the next token when a value-consuming flag (`m`, `F`, `c`, `C`, `t`) is present.
 
 ## Local verification
 

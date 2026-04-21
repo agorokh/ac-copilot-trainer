@@ -57,14 +57,17 @@ while i < len(parts):
         continue
     if token.startswith("-"):
         flags = token[1:]
+        consume_next = False
         for flag in flags:
             if flag == "a":
                 raise SystemExit(0)
             if flag == "p":
                 raise SystemExit(0)
             if flag in {"m", "F", "c", "C", "t"}:
+                consume_next = True
                 break
-        i += 1
+        # `-vm "msg"`: value follows the combined flag token (Bugbot #80).
+        i += 2 if consume_next and i + 1 < len(parts) else 1
         continue
 
     raise SystemExit(0)
@@ -88,12 +91,15 @@ if [[ -z "$SENSITIVE" ]]; then
   exit 0
 fi
 
-ACKED="$(printf '%s\n' "$FILES_TO_CHECK" | grep -E '^(docs/01_Vault/|docs/00_Core/SESSION_LIFECYCLE\.md$|docs/00_Core/MAINTAINING_THE_TEMPLATE\.md$)' || true)"
-[[ -n "$ACKED" ]] && exit 0
+ACK_ALLOW='^(docs/01_Vault/|docs/00_Core/SESSION_LIFECYCLE\.md$|docs/00_Core/MAINTAINING_THE_TEMPLATE\.md$)'
+SENSITIVE_NOT_ACKED="$(printf '%s\n' "$SENSITIVE" | grep -Ev "$ACK_ALLOW" || true)"
+if [[ -z "$SENSITIVE_NOT_ACKED" ]]; then
+  exit 0
+fi
 
 cat >&2 <<EOF
 [check_vault_follow_up] Sensitive commit paths without a vault follow-up:
 
-$(printf '%s\n' "$SENSITIVE" | sed 's/^/  - /')
+$(printf '%s\n' "$SENSITIVE_NOT_ACKED" | sed 's/^/  - /')
 EOF
 exit 1
