@@ -407,17 +407,20 @@ function M.stats()
     if io and type(io.scanDir) == "function" then
       local list = io.scanDir(dir, "lap_*.json")
       if type(list) == "table" then
-        count = #list
         for i = 1, #list do
-          if io.fileSize then
-            local ok, s = pcall(io.fileSize, dir .. "/" .. list[i])
-            if ok then
-              local sz = tonumber(s)
-              if sz and sz > 0 then
-                total = total + sz
-              elseif sz and sz < 0 then
-                -- Match `rotate` unknown-size heuristic (Bugbot #78).
-                total = total + (250 * 1024)
+          local name = list[i]
+          if type(name) == "string" then
+            count = count + 1
+            if io.fileSize then
+              local ok, s = pcall(io.fileSize, dir .. "/" .. name)
+              if ok then
+                local sz = tonumber(s)
+                if sz and sz > 0 then
+                  total = total + sz
+                elseif sz and sz < 0 then
+                  -- Match `rotate` unknown-size heuristic (Bugbot #78).
+                  total = total + (250 * 1024)
+                end
               end
             end
           end

@@ -184,7 +184,10 @@ function M.startSidecarIfNeeded(appDir)
         spawnAbandonUntilT = 1e12
         spawnFailStreak = 0
         nonzeroExitStreak = 0
-      elseif codeNum ~= nil and codeNum ~= 0 then
+      elseif codeNum == 0 then
+        nonzeroExitStreak = 0
+      elseif codeNum ~= 0 then
+        -- Includes missing/unparseable exit metadata (`codeNum == nil`, Bugbot #78): do not treat as clean.
         nonzeroExitStreak = nonzeroExitStreak + 1
         if nonzeroExitStreak >= 8 then
           spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
@@ -193,8 +196,6 @@ function M.startSidecarIfNeeded(appDir)
             ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated nonzero child exits (Codex #78)")
           end
         end
-      else
-        nonzeroExitStreak = 0
       end
       if ac and type(ac.log) == "function" then
         ac.log(string.format("[COPILOT][SIDECAR] exited code=%s err=%s",
