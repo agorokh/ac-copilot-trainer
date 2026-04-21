@@ -1356,9 +1356,9 @@ function script.update(dt)
     tryLoadDisk()
   end
 
-  wsBridge.tick(ch.simSeconds(sim))
-  -- Issue #77 Part A: per-frame self-heal; wsBridge gates via LAUNCH_RETRY_SEC.
+  -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
   pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
+  wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without

@@ -92,6 +92,9 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3115346219 | coderabbitai[bot] | yes |
 | 3115346235 | coderabbitai[bot] | yes |
 | 3115377868 | cursor[bot] | yes |
+| 3115531186 | Copilot | yes |
+| 3115531217 | Copilot | yes |
+| 3115531234 | Copilot | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -152,6 +155,12 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 ### Post-`26bfda8` audit (Cursor inline)
 
 - **3115377868**: `lap_archive.buildRecord` reads `sim.trackLengthM` via `pcall` without a `type(sim) == "table"` guard so userdata `ac.StateSim` populates `track.lengthM`.
+
+### Copilot inline (sidecar frame order + EmmyLua + PR text)
+
+- **3115531186**: `script.update` calls `wsBridge.startSidecarIfNeeded(appDir)` before `wsBridge.tick(...)` so `tick()` does not run its `tryOpen()` cadence in the same frame as the spawn path’s dial attempt.
+- **3115531217**: `persistence.archiveCarIdFromCar` / `archiveTrackIdFromSim` document `ac.StateCar|nil` and `ac.StateSim|nil` (userdata-safe `pcall` field reads).
+- **3115531234**: PR description files table + risk section updated to match `start_sidecar.bat` (walk-up repo discovery, optional `AC_COPILOT_REPO_ROOT` override) — no hardcoded checkout path.
 
 ## Issue comments (`issues/78/comments`): 7
 

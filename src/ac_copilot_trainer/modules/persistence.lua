@@ -39,7 +39,7 @@ local function tryCarFromCar(car)
 end
 
 --- Lap archive / filenames: same field order as `sessionKey` fallbacks, then sanitize.
----@param car table|nil
+---@param car ac.StateCar|nil
 ---@return string|nil
 function M.archiveCarIdFromCar(car)
   local raw = tryCarFromCar(car)
@@ -49,7 +49,7 @@ function M.archiveCarIdFromCar(car)
   return ch.sanitizeId(raw, "unknown")
 end
 
----@param sim table|nil
+---@param sim ac.StateSim|nil
 ---@return string|nil
 function M.archiveTrackIdFromSim(sim)
   local raw = tryTrackFromSim(sim)
