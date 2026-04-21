@@ -66,6 +66,8 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3114785255 | cursor[bot] | yes |
 | 3114812814 | cursor[bot] | yes |
 | 3114812816 | cursor[bot] | yes |
+| 3114836808 | chatgpt-codex-connector[bot] | yes |
+| 3114836811 | chatgpt-codex-connector[bot] | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -81,14 +83,16 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3114785255**: `start_sidecar.bat` exits after `py -3` sidecar exit instead of silently retrying with `python` (different interpreter).
 - **3114812814**: `lap_archive.stats()` cache TTL uses `os.time` instead of `os.clock`.
 - **3114812816**: Lap archive car/track ids use `persistence.archiveCarIdFromCar` / `archiveTrackIdFromSim` (single key list with `sessionKey`).
+- **3114836808**: `lapArchiveEnabled` / `lapArchiveMaxMB` persisted via per-key `ac.storage` + Settings callbacks (table-form broken on target CSP).
+- **3114836811**: `ws_bridge` clears `sidecarChildEverLaunched` after one-shot zombie close, on clean child exit when `sock` is nil, and in `M.reset`.
 
 ## Issue comments (`issues/78/comments`): 5
 
 Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**. `4285619084` / `4285661809` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 19
+## PR reviews (`pulls/78/reviews`): 20
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, and Bugbot summary `4144802228` after `34eb015`).
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, and Codex review `4144824801` after `7370f28`).
 
 ## Issue #77 scope proof
 

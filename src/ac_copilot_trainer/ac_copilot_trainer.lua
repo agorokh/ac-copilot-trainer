@@ -110,6 +110,8 @@ end
 --- bridge can actually dial the sidecar.
 local _wsUrlStorage = nil
 local _approachMetersStorage = nil
+local _lapArchiveEnabledStorage = nil
+local _lapArchiveMaxMBStorage = nil
 if ac and type(ac.storage) == "function" then
   local ok1, sv1 = pcall(ac.storage, "ac_copilot_trainer.wsSidecarUrl_v1", "")
   if ok1 and sv1 and type(sv1.get) == "function" then
@@ -118,6 +120,15 @@ if ac and type(ac.storage) == "function" then
   local ok2, sv2 = pcall(ac.storage, "ac_copilot_trainer.approachMeters_v1", 200)
   if ok2 and sv2 and type(sv2.get) == "function" then
     _approachMetersStorage = sv2
+  end
+  -- Lap archive toggles must use per-key storage too (table-form `ac.storage` is broken on target CSP — Codex #78).
+  local ok3, sv3 = pcall(ac.storage, "ac_copilot_trainer.lapArchiveEnabled_v1", 1)
+  if ok3 and sv3 and type(sv3.get) == "function" then
+    _lapArchiveEnabledStorage = sv3
+  end
+  local ok4, sv4 = pcall(ac.storage, "ac_copilot_trainer.lapArchiveMaxMB_v1", 500)
+  if ok4 and sv4 and type(sv4.get) == "function" then
+    _lapArchiveMaxMBStorage = sv4
   end
 end
 
@@ -154,6 +165,24 @@ local function loadConfig()
     local ok, val = pcall(function() return _approachMetersStorage:get() end)
     if ok and type(val) == "number" and val > 0 then
       cfg.approachMeters = val
+    end
+  end
+  if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.get) == "function" then
+    local ok, val = pcall(function() return _lapArchiveEnabledStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil then
+        cfg.lapArchiveEnabled = (n ~= 0)
+      end
+    end
+  end
+  if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.get) == "function" then
+    local ok, val = pcall(function() return _lapArchiveMaxMBStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil and n > 0 then
+        cfg.lapArchiveMaxMB = n
+      end
     end
   end
   cfg.lapArchiveMaxMB = lapArchive.clampArchiveCapMB(cfg.lapArchiveMaxMB)
@@ -202,6 +231,21 @@ local function setWsSidecarUrlAndReconfigure(url)
   pcall(function() wsBridge.configure(url) end)
   if ac and type(ac.log) == "function" then
     ac.log("[COPILOT][WS-DIAG] setter applied url=" .. tostring(url))
+  end
+end
+
+local function setLapArchiveEnabledAndPersist()
+  local v = (config.lapArchiveEnabled ~= false) and 1 or 0
+  if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.set) == "function" then
+    pcall(function() _lapArchiveEnabledStorage:set(v) end)
+  end
+end
+
+local function setLapArchiveMaxMBAndPersist(mb)
+  local m = lapArchive.clampArchiveCapMB(mb)
+  config.lapArchiveMaxMB = m
+  if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.set) == "function" then
+    pcall(function() _lapArchiveMaxMBStorage:set(m) end)
   end
 end
 
@@ -1053,6 +1097,8 @@ function script.windowSettings(_dt)
     lapArchiveStats = lapArchive.stats,
     lapArchiveClampCapMB = lapArchive.clampArchiveCapMB,
     setApproachMeters = setApproachMetersAndPersist,
+    setLapArchiveEnabled = setLapArchiveEnabledAndPersist,
+    setLapArchiveMaxMB = setLapArchiveMaxMBAndPersist,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()

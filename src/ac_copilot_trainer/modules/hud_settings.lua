@@ -18,6 +18,8 @@ local M = {}
 ---@field config table
 ---@field stats HudSettingsStats
 ---@field focusPracticeUi table|nil
+---@field setLapArchiveEnabled fun()|nil
+---@field setLapArchiveMaxMB fun(number)|nil
 
 ---@param mode "strictTrue"|"notFalse"
 --- `strictTrue`: matches `if not config.k` / `if config.k then` (only explicit `true` is on).
@@ -215,7 +217,21 @@ function M.draw(vm)
   do
     -- Append-only per-lap JSON archive (full trace + setup + corners + coaching).
     -- Builds the dataset for future analysis / RAG / training.
-    checkbox(cfg, "lapArchiveEnabled", "Archive completed laps to disk", "notFalse")
+    do
+      local cur = cfg.lapArchiveEnabled ~= false
+      if type(ui.checkbox) ~= "function" then
+        ui.text("Archive completed laps to disk: " .. (cur and "on" or "off"))
+      else
+        pcall(function()
+          if ui.checkbox("Archive completed laps to disk", cur) then
+            cfg.lapArchiveEnabled = not cur
+            if vm.setLapArchiveEnabled and type(vm.setLapArchiveEnabled) == "function" then
+              pcall(vm.setLapArchiveEnabled)
+            end
+          end
+        end)
+      end
+    end
     local capMB = math.max(50, math.min(5000, tonumber(cfg.lapArchiveMaxMB) or 500))
     if type(vm.lapArchiveClampCapMB) == "function" then
       local ok, v = pcall(function() return vm.lapArchiveClampCapMB(cfg.lapArchiveMaxMB) end)
@@ -225,11 +241,19 @@ function M.draw(vm)
     end
     if tonumber(cfg.lapArchiveMaxMB) ~= capMB then
       cfg.lapArchiveMaxMB = capMB
+      if vm.setLapArchiveMaxMB and type(vm.setLapArchiveMaxMB) == "function" then
+        pcall(vm.setLapArchiveMaxMB, capMB)
+      end
     end
     if ui.slider ~= nil then
       pcall(function()
         local nv, ch = ui.slider("Disk cap (MB)###cpt_archcap", capMB, 50, 5000, "%.0f", true)
-        if ch and nv == nv then cfg.lapArchiveMaxMB = nv end
+        if ch and nv == nv then
+          cfg.lapArchiveMaxMB = nv
+          if vm.setLapArchiveMaxMB and type(vm.setLapArchiveMaxMB) == "function" then
+            pcall(vm.setLapArchiveMaxMB, nv)
+          end
+        end
       end)
     else
       ui.text("Disk cap (MB): " .. tostring(capMB))

@@ -58,6 +58,8 @@ function M.configure(u)
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
   _recvQueue = {}
+  -- Explicit URL/socket reset must not leave zombie-latch set for the next dial (Codex #78).
+  sidecarChildEverLaunched = false
 end
 
 --- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
@@ -86,6 +88,8 @@ function M.startSidecarIfNeeded(appDir)
     close_socket_if_any(sock)
     sock = nil
     lastTry = -RECONNECT_SEC
+    -- One-shot zombie cleanup: do not keep closing a user-opened manual socket (Codex #78).
+    sidecarChildEverLaunched = false
   end
   if sock then return end
   if spawnedAlive then return end
@@ -128,6 +132,10 @@ function M.startSidecarIfNeeded(appDir)
     }, function(err, result)
       -- Process exited (clean or crash). Clear flag so next M.tick can relaunch.
       spawnedAlive = false
+      if sock == nil then
+        -- Clean exit: no stale handle — do not treat later manual sockets as zombies.
+        sidecarChildEverLaunched = false
+      end
       if ac and type(ac.log) == "function" then
         local exitCode = (type(result) == "table" and result.exitCode) or "?"
         ac.log(string.format("[COPILOT][SIDECAR] exited code=%s err=%s",
@@ -175,6 +183,7 @@ function M.reset()
   currentSimT = 0
   lastLaunchAttemptT = -1e9
   _recvQueue = {}
+  sidecarChildEverLaunched = false
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
