@@ -1,6 +1,11 @@
 # PR #80 — zero-sampling comment ledger
 
-Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/80/comments` (paginated) and the same for `issues/80/comments` and `pulls/80/reviews`. Every inline thread ID is listed below as **RESOLVED** where the branch already addresses the feedback or the thread is bot/meta-only.
+**Snapshot** (point-in-time inventory; regenerate after new review traffic):
+- Retrieved at (UTC): **2026-04-21T23:25:36Z**
+- PR head OID at retrieval: **0a34d04c978202ef54d4ec44a6dbd51d96bc986b**
+- Sources: `pulls/80/comments` (paginated), `issues/80/comments`, `pulls/80/reviews` (CodeRabbit #80).
+
+At this snapshot, every inline thread ID is listed below as **RESOLVED** where the branch addresses the feedback or the thread is bot/meta-only.
 
 ## Checks (required + bots)
 
@@ -73,14 +78,25 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/80/comments` (
 | 3120749489 | coderabbitai[bot] | yes |
 | 3120749492 | coderabbitai[bot] | yes |
 | 3120749501 | coderabbitai[bot] | yes |
+| 3120766260 | coderabbitai[bot] | yes |
+| 3120773787 | chatgpt-codex-connector[bot] | yes |
+| 3120773789 | chatgpt-codex-connector[bot] | yes |
+| 3120791490 | cursor[bot] | yes |
+| 3120791495 | cursor[bot] | yes |
 
 ## Issue comments (`issues/80/comments`): 38
 
-PR conversation; bot guides and usage-limit notices are typically **N/A**. Re-open any `agorokh` item that requests a concrete change and add a ledger subsection + code fix.
+PR conversation; bot guides and usage-limit notices are typically **N/A**. Human `agorokh` items require explicit triage.
 
-## PR reviews (`pulls/80/reviews`): 29
+## PR reviews (`pulls/80/reviews`): 32
 
-Automated summaries; actionable items should map to inline rows above.
+Automated summaries; map actionable items to inline rows above.
+
+### Post-snapshot audit (CodeRabbit + Codex #80)
+
+- **3120766260**: Ledger header records UTC retrieval time + PR head OID and labels the file as a **snapshot** (CodeRabbit).
+- **3120773787**: `check_vault_follow_up.sh` treats `git commit -p` / `--patch` / `--interactive` (and short `-p` in combined flags) as commits that may include unstaged tracked paths.
+- **3120773789**: `vault-automerge.yml` listens for `unlabeled` and disables auto-merge when the `vault-only` label is removed.
 
 ## Local verification
 

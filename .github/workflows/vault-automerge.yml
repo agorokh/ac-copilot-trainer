@@ -3,13 +3,28 @@ name: Vault auto-merge
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
+  disable-automerge-on-vault-unlabel:
+    if: >-
+      github.event.action == 'unlabeled' &&
+      github.event.label.name == 'vault-only' &&
+      github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Disable auto-merge when vault-only label is removed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
+
   guard-and-automerge:
     if: contains(github.event.pull_request.labels.*.name, 'vault-only') && github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest

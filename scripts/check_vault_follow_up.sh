@@ -35,6 +35,10 @@ opts_with_values = {"-m", "--message", "-F", "--file", "-c", "-C", "-t", "--temp
 
 while i < len(parts):
     token = parts[i]
+    # `git commit -p/--patch` and `--interactive` can fold unstaged paths into the
+    # commit; cached-only diff is then insufficient (Codex #80).
+    if token in {"-p", "--patch", "--interactive"}:
+        raise SystemExit(0)
     if token in {"-a", "--all", "-i", "--include", "-o", "--only"}:
         raise SystemExit(0)
     if token == "--":
@@ -52,6 +56,8 @@ while i < len(parts):
         flags = token[1:]
         for flag in flags:
             if flag == "a":
+                raise SystemExit(0)
+            if flag == "p":
                 raise SystemExit(0)
             if flag in {"m", "F", "c", "C", "t"}:
                 break
