@@ -348,6 +348,7 @@ function M.write(rec, capMB)
   if not f then return false, "open failed: " .. tostring(ferr) end
   if not f:write(raw) then
     f:close()
+    pcall(os.remove, path)
     return false, "write failed"
   end
   pcall(function()

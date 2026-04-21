@@ -778,6 +778,13 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
+  -- Rolling reset without leaving track: disjoint archive `session_uuid` vs prior stint (Codex #78).
+  SESSION_UUID = string.format(
+    "%04x%04x%04x",
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF)
+  )
   hud.reset()
   realtimeCoaching.reset()
   tel = newTelemetry()
@@ -1527,6 +1534,9 @@ function script.update(dt)
 
     state.racingLastLine = racingLine.traceToLine(completedTrace)
 
+    -- PB flag must use pre-update `bestLapMs` (Cursor #78); archive runs after PB block mutates it.
+    local isPbThisLap = lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
+
     local prevBestBp = copyBpList(state.brakingPoints.best)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
@@ -1594,7 +1604,7 @@ function script.update(dt)
         sim = sim,
         lap_n = state.lapsCompleted,
         lap_ms = lastMs,
-        is_pb = (state.bestLapMs ~= nil and lastMs <= state.bestLapMs),
+        is_pb = isPbThisLap,
         is_valid = not state.lapInvalidatedThisLap,
         trace = completedTrace,
         corners = feats,
