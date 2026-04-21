@@ -366,17 +366,18 @@ function M.write(rec, capMB)
     return false, "write failed"
   end
   local flushOk, flushRes = pcall(function() return f:flush() end)
-  if not flushOk or flushRes == false then
+  -- Lua 5.1 / LuaJIT: flush returns true on success, nil+err on failure (never boolean false — CodeRabbit #78).
+  if not flushOk or not flushRes then
     pcall(function() f:close() end)
     pcall(os.remove, path)
-    local ferr = (not flushOk) and tostring(flushRes) or "flush returned false"
-    return false, "flush failed: " .. ferr
+    local flushMsg = (not flushOk) and tostring(flushRes) or "flush returned nil"
+    return false, "flush failed: " .. flushMsg
   end
   local closeOk, closeRes = pcall(function() return f:close() end)
-  if not closeOk or closeRes == false then
+  if not closeOk or not closeRes then
     pcall(os.remove, path)
-    local cerr = (not closeOk) and tostring(closeRes) or "close returned false"
-    return false, "close failed: " .. cerr
+    local closeMsg = (not closeOk) and tostring(closeRes) or "close returned nil"
+    return false, "close failed: " .. closeMsg
   end
   pcall(function() M.rotate(capMB) end)
   bustStatsCache()

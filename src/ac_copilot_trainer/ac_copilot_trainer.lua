@@ -1225,8 +1225,9 @@ local function autoPlaceOnce()
 end
 
 --- CSP lap invalidation flags differ by build; probe known names without throwing.
+--- `ac.StateCar` is userdata in real CSP — never gate on `type(...) == "table"` (Codex #78).
 local function carLapInvalidatedFlag(carObj)
-  if type(carObj) ~= "table" then
+  if carObj == nil then
     return false
   end
   for _, key in ipairs({ "isLapInvalidated", "isCurrentLapInvalid", "currentLapInvalid" }) do

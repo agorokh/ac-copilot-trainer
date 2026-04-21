@@ -88,6 +88,9 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3115226944 | chatgpt-codex-connector[bot] | yes |
 | 3115286347 | chatgpt-codex-connector[bot] | yes |
 | 3115287680 | cursor[bot] | yes |
+| 3115341635 | chatgpt-codex-connector[bot] | yes |
+| 3115346219 | coderabbitai[bot] | yes |
+| 3115346235 | coderabbitai[bot] | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -139,13 +142,19 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3115286347**: `loadConfig` migrates persisted `wsSidecarUrl` to `CONFIG_DEFAULTS.wsSidecarUrl` when empty **or** not `ws://127.0.0.1:8765` / `ws://localhost:8765` (after trim), then `set()` so auto-launch and dial target stay aligned.
 - **3115287680**: While `currentSimT < spawnAbandonUntilT`, gate `tryOpen()` with `lastBackoffTryOpenT` + `LAUNCH_RETRY_SEC` instead of calling it every frame after the main launch throttle elapses.
 
+### Post-`61ec94f` audit (Codex + CodeRabbit)
+
+- **3115341635**: `carLapInvalidatedFlag` no longer returns early for non-table `car`; only `nil` is rejected so userdata `ac.StateCar` is probed via `pcall` field reads.
+- **3115346219**: Ledger “Local verification” lines match `Makefile` targets `ci-test` / `ci-format` / `ci-lint`.
+- **3115346235**: `lap_archive.write` treats flush/close as failed when `pcall` errors **or** the method result is not truthy (`not flushRes` / `not closeRes`); renamed inner error locals to avoid shadowing `ferr` from `io.open`.
+
 ## Issue comments (`issues/78/comments`): 7
 
 Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` and again after `9e3ceca` — still **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 36
+## PR reviews (`pulls/78/reviews`): 38
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread. Post-`9e3ceca` review events `4145194031` (Codex) / `4145194773` (Cursor Bugbot) correspond to inline **3115178703** / **3115179416** above — **resolved** in code, not separate scope. Post-`769bf82` Codex review `4145245239` maps to inline **3115226944** — **resolved** in code. Post-`a176b26` reviews `4145310407` (Codex) / `4145311753` (Cursor Bugbot) map to inline **3115286347** / **3115287680** — **resolved** in code.
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread. Post-`9e3ceca` review events `4145194031` (Codex) / `4145194773` (Cursor Bugbot) correspond to inline **3115178703** / **3115179416** above — **resolved** in code, not separate scope. Post-`769bf82` Codex review `4145245239` maps to inline **3115226944** — **resolved** in code. Post-`a176b26` reviews `4145310407` (Codex) / `4145311753` (Cursor Bugbot) map to inline **3115286347** / **3115287680** — **resolved** in code. Post-`61ec94f` Codex review `4145370656` → inline **3115341635**; CodeRabbit review `4145375398` → inline **3115346219** / **3115346235** — **resolved** in code.
 
 ## Issue #77 scope proof
 
@@ -157,4 +166,6 @@ Automated summaries; actionable items are the inline threads above. **N/A** (inc
 
 ## Local verification
 
-`python -m pytest tests/`, `python -m ruff format --check`, `python -m ruff check` (and CI coverage gate as in `Makefile`).
+Same as `make ci-test`, `make ci-format`, `make ci-lint`:
+
+`python -m pytest -q --cov=ac_copilot_trainer --cov=tools --cov-fail-under=80`, `python -m ruff format --check src tests tools scripts`, `python -m ruff check src tests tools scripts`.
