@@ -245,7 +245,7 @@ function M.draw(vm)
       -- Normalize in memory only; persisting here ran every frame (float vs int drift — Cursor #78).
       cfg.lapArchiveMaxMB = capMB
     end
-    if ui.slider ~= nil then
+    if type(ui.slider) == "function" then
       pcall(function()
         local nv, ch = ui.slider("Disk cap (MB)###cpt_archcap", capMB, 50, 5000, "%.0f", true)
         if ch and nv == nv then
