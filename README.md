@@ -35,6 +35,8 @@ Copy `src/ac_copilot_trainer/` to:
 
 Enable in Content Manager → Settings → Apps.
 
+**Python sidecar auto-launch (issue #77):** `start_sidecar.bat` walks upward from the app folder until it finds `tools/ai_sidecar` (your full git checkout). If you install only the Lua folder into `apps/lua/`, set environment variable `AC_COPILOT_REPO_ROOT` to the repository root before starting AC, or run `python -m tools.ai_sidecar` manually.
+
 ## Development
 
 ```bash

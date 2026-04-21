@@ -31,6 +31,8 @@ local currentSimT = 0
 --- LAUNCH_RETRY_SEC: minimum gap between launch attempts (also our
 ---                   "settling time" before we stop retrying transparently).
 local spawnedAlive = false
+--- True after this bridge successfully started a console child (used to drop only *our* stale sockets).
+local sidecarChildEverLaunched = false
 local lastLaunchAttemptT = -1e9
 local LAUNCH_RETRY_SEC = 5.0
 local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
@@ -78,8 +80,9 @@ end
 ---
 ---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
 function M.startSidecarIfNeeded(appDir)
-  -- Child died but CSP kept a stale socket handle (reconnect=true); drop it so we can respawn.
-  if not spawnedAlive and sock ~= nil then
+  -- Child we spawned died but CSP kept a stale socket handle (reconnect=true); do not tear down
+  -- sockets opened for a manually started sidecar (spawnedAlive was never true).
+  if not spawnedAlive and sock ~= nil and sidecarChildEverLaunched then
     close_socket_if_any(sock)
     sock = nil
     lastTry = -RECONNECT_SEC
@@ -137,6 +140,9 @@ function M.startSidecarIfNeeded(appDir)
     spawnAccepted = true
   end)
   spawnedAlive = okSpawn and spawnAccepted
+  if okSpawn and spawnAccepted then
+    sidecarChildEverLaunched = true
+  end
   if not okSpawn then
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][SIDECAR] runConsoleProcess failed: " .. tostring(errSpawn))
@@ -168,6 +174,7 @@ function M.reset()
   lastCornerQueryAt = {}
   currentSimT = 0
   lastLaunchAttemptT = -1e9
+  sidecarChildEverLaunched = false
   _recvQueue = {}
 end
 

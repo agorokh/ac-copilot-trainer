@@ -17,3 +17,5 @@ See git history on branch `feat/issue-77-lap-archive-and-sidecar-autolaunch` for
 ## Verification
 
 Local: `pytest`, `ruff format --check`, `ruff check`, coverage gate, `bandit`, `scripts/check_agent_forbidden.py`.
+
+Post-`1e5488b` Codex/Cursor threads (manual sidecar socket guard, archive `sidecar_debrief` omitted for lap alignment, README `AC_COPILOT_REPO_ROOT`) land in the next commit on this branch.

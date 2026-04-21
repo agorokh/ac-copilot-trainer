@@ -1565,7 +1565,9 @@ function script.update(dt)
         setup_snap = state.lastSetupSnap,
         setup_hash = state.setupHash,
         rules_hints = state.coachingLines,
-        sidecar_debrief = state.sidecarDebriefText,
+        -- Omit async sidecar debrief: it is applied on later frames than lap_complete, so stamping it
+        -- here would mis-label the archived lap (Codex #78).
+        sidecar_debrief = nil,
         corner_advice = state.cornerAdvisories,
       }
       local rec = lapArchive.buildRecord(archiveOpts)
