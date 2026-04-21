@@ -174,7 +174,6 @@ function M.reset()
   lastCornerQueryAt = {}
   currentSimT = 0
   lastLaunchAttemptT = -1e9
-  sidecarChildEverLaunched = false
   _recvQueue = {}
 end
 

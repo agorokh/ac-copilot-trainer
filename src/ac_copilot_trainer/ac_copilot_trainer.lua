@@ -717,6 +717,13 @@ local function resetRuntimeAfterLeavingTrack()
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
+  -- New driving stint without Lua reload: keep archive session ids disjoint (Codex #78).
+  SESSION_UUID = string.format(
+    "%04x%04x%04x",
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF)
+  )
   wsBridge.reset()
   renderDiag.reset()
   realtimeCoaching.reset()
