@@ -36,6 +36,7 @@ ROOT_FILE_ALLOWLIST = frozenset(
         "pyproject.toml",
         "Makefile",
         ".gitignore",
+        ".gitattributes",
         ".pre-commit-config.yaml",
         # Governance / docs at root
         "AGENTS.md",

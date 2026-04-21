@@ -23,6 +23,8 @@ local racingLine = require("racing_line")
 local tireMonitor = require("tire_monitor")
 local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
+-- Issue #77 Part C: per-lap archive (full trace + setup + corners + coaching).
+local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
 local sessionJournal = require("session_journal")
@@ -68,7 +70,10 @@ local CONFIG_DEFAULTS = {
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running — see `WARP.md` § WebSocket sidecar (issue #45).
-  wsSidecarUrl = "",
+  -- Issue #77 Part A: default URL points at our auto-launched sidecar.
+  -- Setting this here means a fresh install dials 127.0.0.1:8765 immediately
+  -- without the user touching Settings.
+  wsSidecarUrl = "ws://127.0.0.1:8765",
   --- Focus practice (issue #44): comma-separated corner labels `T1,T2`; empty = auto from worst consistency rows.
   focusPracticeCornerLabels = "",
   --- Auto-pick up to this many worst corners when `focusPracticeCornerLabels` is empty (1–3).
@@ -78,7 +83,22 @@ local CONFIG_DEFAULTS = {
   --- 3D overlays (issue #57 Part B); default on — toggles in Settings window.
   racingLineEnabled = true,
   brakeMarkersEnabled = true,
+  --- Issue #77 Part C: write one JSON per completed lap to journal/laps/.
+  --- Includes full per-sample trace (2000 samples), corner features, active
+  --- car setup snapshot, coaching context. Append-only with disk cap.
+  lapArchiveEnabled = true,
+  --- Hard cap on archive disk usage in MB. Oldest files deleted first.
+  lapArchiveMaxMB = 500,
 }
+
+--- Auto-launch always serves the sidecar on localhost:8765; other persisted URLs strand coaching (Codex #78).
+local function wsUrlMatchesAutolaunchTarget(s)
+  if type(s) ~= "string" then
+    return false
+  end
+  local u = s:lower():gsub("%s+", ""):gsub("/+$", "")
+  return u == "ws://127.0.0.1:8765" or u == "ws://localhost:8765"
+end
 
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
 local function shallowCopyDefaults()
@@ -99,6 +119,8 @@ end
 --- bridge can actually dial the sidecar.
 local _wsUrlStorage = nil
 local _approachMetersStorage = nil
+local _lapArchiveEnabledStorage = nil
+local _lapArchiveMaxMBStorage = nil
 if ac and type(ac.storage) == "function" then
   local ok1, sv1 = pcall(ac.storage, "ac_copilot_trainer.wsSidecarUrl_v1", "")
   if ok1 and sv1 and type(sv1.get) == "function" then
@@ -107,6 +129,15 @@ if ac and type(ac.storage) == "function" then
   local ok2, sv2 = pcall(ac.storage, "ac_copilot_trainer.approachMeters_v1", 200)
   if ok2 and sv2 and type(sv2.get) == "function" then
     _approachMetersStorage = sv2
+  end
+  -- Lap archive toggles must use per-key storage too (table-form `ac.storage` is broken on target CSP — Codex #78).
+  local ok3, sv3 = pcall(ac.storage, "ac_copilot_trainer.lapArchiveEnabled_v1", 1)
+  if ok3 and sv3 and type(sv3.get) == "function" then
+    _lapArchiveEnabledStorage = sv3
+  end
+  local ok4, sv4 = pcall(ac.storage, "ac_copilot_trainer.lapArchiveMaxMB_v1", 500)
+  if ok4 and sv4 and type(sv4.get) == "function" then
+    _lapArchiveMaxMBStorage = sv4
   end
 end
 
@@ -123,11 +154,21 @@ local function loadConfig()
     cfg = shallowCopyDefaults()
   end
   -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
-  -- Apply even when empty so an explicit clear in Settings wins over stale table-form data.
+  -- Issue #78: empty stored URL used to mean "cleared"; with auto-launch + no URL
+  -- editor in Settings, migrate empty back to localhost and persist so wsBridge.tick connects.
   if _wsUrlStorage and type(_wsUrlStorage.get) == "function" then
     local ok, val = pcall(function() return _wsUrlStorage:get() end)
     if ok and type(val) == "string" then
-      cfg.wsSidecarUrl = val
+      local migrated = false
+      if val == "" or not wsUrlMatchesAutolaunchTarget(val) then
+        cfg.wsSidecarUrl = CONFIG_DEFAULTS.wsSidecarUrl
+        migrated = true
+      else
+        cfg.wsSidecarUrl = val
+      end
+      if migrated and type(_wsUrlStorage.set) == "function" then
+        pcall(function() _wsUrlStorage:set(cfg.wsSidecarUrl) end)
+      end
     end
   end
   -- Overlay approachMeters too (table-form is broken).
@@ -137,15 +178,40 @@ local function loadConfig()
       cfg.approachMeters = val
     end
   end
+  if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.get) == "function" then
+    local ok, val = pcall(function() return _lapArchiveEnabledStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil then
+        cfg.lapArchiveEnabled = (n ~= 0)
+      end
+    end
+  end
+  if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.get) == "function" then
+    local ok, val = pcall(function() return _lapArchiveMaxMBStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil and n > 0 then
+        cfg.lapArchiveMaxMB = n
+      end
+    end
+  end
+  cfg.lapArchiveMaxMB = lapArchive.clampArchiveCapMB(cfg.lapArchiveMaxMB)
   return cfg
 end
 
 local config = loadConfig()
 
---- Persist `wsSidecarUrl` to per-key storage AND immediately re-configure
---- the running wsBridge with the new URL. wsBridge is already required at
---- the top of this file, so it's in scope here. Calling configure() from
---- the UI callback is safe (single-threaded Lua, no race).
+-- Issue #77 Part C: stable session id stamped on every archived lap from this script load.
+-- Use 16-bit math.random bounds only (Lua 5.1 / some LuaJIT builds reject 0xFFFFFFFF as int32).
+math.randomseed((os and os.time and os.time()) or 0)
+local SESSION_UUID = string.format(
+  "%04x%04x%04x",
+  math.random(0, 0xFFFF),
+  math.random(0, 0xFFFF),
+  math.random(0, 0xFFFF)
+)
+
 --- Persist `approachMeters` to per-key storage and log the change so we can
 --- verify the slider is wired correctly (issue #75 round 5: user reported the
 --- slider feels reversed; the formula is correct, but without persistence the
@@ -163,15 +229,19 @@ local function setApproachMetersAndPersist(meters)
   end
 end
 
-local function setWsSidecarUrlAndReconfigure(url)
-  url = (type(url) == "string") and url or ""
-  config.wsSidecarUrl = url
-  if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
-    pcall(function() _wsUrlStorage:set(url) end)
+local function setLapArchiveEnabledAndPersist(enabled)
+  config.lapArchiveEnabled = enabled and true or false
+  local v = (config.lapArchiveEnabled ~= false) and 1 or 0
+  if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.set) == "function" then
+    pcall(function() _lapArchiveEnabledStorage:set(v) end)
   end
-  pcall(function() wsBridge.configure(url) end)
-  if ac and type(ac.log) == "function" then
-    ac.log("[COPILOT][WS-DIAG] setter applied url=" .. tostring(url))
+end
+
+local function setLapArchiveMaxMBAndPersist(mb)
+  local m = lapArchive.clampArchiveCapMB(mb)
+  config.lapArchiveMaxMB = m
+  if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.set) == "function" then
+    pcall(function() _lapArchiveMaxMBStorage:set(m) end)
   end
 end
 
@@ -231,6 +301,27 @@ local td = throttleDet.new()
 local tires = tireMonitor.new()
 
 wsBridge.configure(config.wsSidecarUrl or "")
+
+-- Issue #77 Part A: resolve the deployed app dir (where start_sidecar.bat lives)
+-- so wsBridge can spawn the sidecar without hardcoded paths.
+local appDir = nil
+do
+  local info = debug.getinfo(1, "S")
+  if info and type(info.source) == "string" then
+    local src = info.source
+    if src:sub(1, 1) == "@" then src = src:sub(2) end
+    -- src is the absolute path to ac_copilot_trainer.lua; strip filename
+    appDir = src:match("^(.*)[/\\][^/\\]+$")
+  end
+end
+if not appDir or appDir == "" then
+  appDir = "."  -- fallback; .bat will fail and log clearly
+end
+
+-- Kick off sidecar spawn at script load. Subsequent wsBridge.tick calls also
+-- invoke startSidecarIfNeeded so a crashed child gets relaunched after the
+-- LAUNCH_RETRY_SEC gap.
+pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
 
 local lastDriveCar ---@type ac.StateCar|nil
 local lastDriveSim ---@type ac.StateSim|nil
@@ -430,6 +521,8 @@ local state = {
   -- Round 10: per-corner LLM advisories. Populated by wsBridge
   -- corner_advice replies; consumed by realtime_coaching.tick.
   cornerAdvisories = {},
+  --- Lap invalidation ORed each frame (`carLapInvalidatedFlag`) for archive `is_valid`.
+  lapInvalidatedThisLap = false,
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
   --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
@@ -658,11 +751,19 @@ local function resetRuntimeAfterLeavingTrack()
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
+  state.lapInvalidatedThisLap = false
   state.focusPracticeActive = false
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
   state.focusPracticeHudSummarySig = nil
+  -- New driving stint without Lua reload: keep archive session ids disjoint (Codex #78).
+  SESSION_UUID = string.format(
+    "%04x%04x%04x",
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF)
+  )
   wsBridge.reset()
   renderDiag.reset()
   realtimeCoaching.reset()
@@ -681,6 +782,7 @@ local function resetRollingDrivingState()
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
+  state.lapInvalidatedThisLap = false
   state.lapsCompleted = 0
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -688,6 +790,13 @@ local function resetRollingDrivingState()
   state.focusPracticeHudSummarySig = nil
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
+  -- Rolling reset without leaving track: disjoint archive `session_uuid` vs prior stint (Codex #78).
+  SESSION_UUID = string.format(
+    "%04x%04x%04x",
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF)
+  )
   hud.reset()
   realtimeCoaching.reset()
   tel = newTelemetry()
@@ -983,8 +1092,15 @@ function script.windowSettings(_dt)
       tireHud = state.tireHud,
     },
     focusPracticeUi = focusPracticeUiProxy,
-    setWsSidecarUrl = setWsSidecarUrlAndReconfigure,
+    -- Issue #77 Part A: Settings UI shows sidecar process + connection status.
+    sidecarSpawnedAlive = wsBridge.sidecarSpawnedAlive,
+    sidecarConnected = wsBridge.sidecarConnected,
+    -- Issue #77 Part C: lap archive stats for Settings UI.
+    lapArchiveStats = lapArchive.stats,
+    lapArchiveClampCapMB = lapArchive.clampArchiveCapMB,
     setApproachMeters = setApproachMetersAndPersist,
+    setLapArchiveEnabled = setLapArchiveEnabledAndPersist,
+    setLapArchiveMaxMB = setLapArchiveMaxMBAndPersist,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
@@ -1108,6 +1224,23 @@ local function autoPlaceOnce()
   end
 end
 
+--- CSP lap invalidation flags differ by build; probe known names without throwing.
+--- `ac.StateCar` is userdata in real CSP — never gate on `type(...) == "table"` (Codex #78).
+local function carLapInvalidatedFlag(carObj)
+  if carObj == nil then
+    return false
+  end
+  for _, key in ipairs({ "isLapInvalidated", "isCurrentLapInvalid", "currentLapInvalid" }) do
+    local ok, v = pcall(function()
+      return carObj[key]
+    end)
+    if ok and v == true then
+      return true
+    end
+  end
+  return false
+end
+
 function script.update(dt)
   sim = ac.getSim()
   car = ac.getCar(0)
@@ -1223,6 +1356,8 @@ function script.update(dt)
     tryLoadDisk()
   end
 
+  -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
+  pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
@@ -1280,6 +1415,10 @@ function script.update(dt)
 
   -- Lap boundary: finalize trace before appending this frame's sample.
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
+    -- Last frame of the completed lap may still carry invalidation (CSP `ac.StateCar`).
+    if carLapInvalidatedFlag(car) then
+      state.lapInvalidatedThisLap = true
+    end
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
@@ -1408,6 +1547,9 @@ function script.update(dt)
 
     state.racingLastLine = racingLine.traceToLine(completedTrace)
 
+    -- PB flag must use pre-update `bestLapMs` (Cursor #78); archive runs after PB block mutates it.
+    local isPbThisLap = lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
+
     local prevBestBp = copyBpList(state.brakingPoints.best)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
@@ -1464,6 +1606,45 @@ function script.update(dt)
       wsBridge.sendJson(lapPayload)
     end
 
+    -- Issue #77 Part C: archive this lap (trace + setup + corners + coaching).
+    -- Runs INDEPENDENTLY of sidecar / coaching success. Captures the dataset
+    -- for future RAG / classifier / fine-tune work. Forward-compatible schema
+    -- so imported MoTeC CSVs (Initiative B) drop into the same shape.
+    if config.lapArchiveEnabled ~= false and lastMs > 0 then
+      local archiveOpts = {
+        session_uuid = SESSION_UUID,
+        car = car,
+        sim = sim,
+        lap_n = state.lapsCompleted,
+        lap_ms = lastMs,
+        is_pb = isPbThisLap,
+        is_valid = not state.lapInvalidatedThisLap,
+        trace = completedTrace,
+        corners = feats,
+        setup_snap = state.lastSetupSnap,
+        setup_hash = state.setupHash,
+        rules_hints = state.coachingLines,
+        -- Omit async sidecar debrief: it is applied on later frames than lap_complete, so stamping it
+        -- here would mis-label the archived lap (Codex #78).
+        sidecar_debrief = nil,
+        -- `lapsCompleted` was incremented above; corner_query / corner_advice use the in-lap index
+        -- (Codex + Cursor Bugbot #78 post-5f0ce39).
+        corner_advice = wsBridge.cornerAdvisorySnapshotForLap((state.lapsCompleted or 0) - 1),
+      }
+      local rec = lapArchive.buildRecord(archiveOpts)
+      if rec then
+        local ok, pathOrErr = lapArchive.write(rec, lapArchive.clampArchiveCapMB(config.lapArchiveMaxMB))
+        if ac and type(ac.log) == "function" then
+          if ok then
+            ac.log("[COPILOT][ARCHIVE] wrote " .. tostring(pathOrErr))
+          else
+            ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
+          end
+        end
+      end
+    end
+
+    state.lapInvalidatedThisLap = false
     state.sectorIndex = 1
     state.sectorStartSimT = ch.simSeconds(sim)
     state.lastSplineSector = sp
@@ -1482,6 +1663,12 @@ function script.update(dt)
 
   tel:setRecording(state.recording)
   tel:update(dt, car, sim)
+
+  if not sim.isInMainMenu and state.lastLapCount >= 0 and lc == state.lastLapCount then
+    if carLapInvalidatedFlag(car) then
+      state.lapInvalidatedThisLap = true
+    end
+  end
 
   local ev = brakes:update(car, dt)
   if ev then

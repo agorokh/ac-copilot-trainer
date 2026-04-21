@@ -18,6 +18,8 @@ local M = {}
 ---@field config table
 ---@field stats HudSettingsStats
 ---@field focusPracticeUi table|nil
+---@field setLapArchiveEnabled fun(boolean)|nil
+---@field setLapArchiveMaxMB fun(number)|nil
 
 ---@param mode "strictTrue"|"notFalse"
 --- `strictTrue`: matches `if not config.k` / `if config.k then` (only explicit `true` is on).
@@ -186,48 +188,82 @@ function M.draw(vm)
   ui.separator()
   ui.textColored("AI sidecar", rgbm(0.78, 0.8, 0.88, 1))
   do
-    local curUrl = tostring(cfg.wsSidecarUrl or "")
-    -- Use the entry script's setter (per-key ac.storage) when provided so
-    -- the URL persists across reloads. Falls back to direct cfg mutation
-    -- if no setter was supplied (tests / older entry script versions).
-    local setUrl = vm.setWsSidecarUrl
-    local function applyUrl(newUrl)
-      if type(setUrl) == "function" then
-        setUrl(newUrl)
+    -- Issue #77 Part A: sidecar is now AUTO-LAUNCHED via os.runConsoleProcess
+    -- from ws_bridge.lua. The URL is fixed at ws://127.0.0.1:8765 and managed
+    -- internally — no user interaction required. We surface status only.
+    local curUrl = tostring(cfg.wsSidecarUrl or "ws://127.0.0.1:8765")
+    ui.text("URL: " .. curUrl)
+    local spawned = false
+    if vm.sidecarSpawnedAlive and type(vm.sidecarSpawnedAlive) == "function" then
+      local ok, alive = pcall(vm.sidecarSpawnedAlive)
+      if ok then spawned = alive end
+    end
+    local connected = false
+    if vm.sidecarConnected and type(vm.sidecarConnected) == "function" then
+      local ok, c = pcall(vm.sidecarConnected)
+      if ok then connected = c end
+    end
+    if connected then
+      ui.textColored("Status: connected (LLM coaching active)", rgbm(0.55, 0.85, 0.55, 1))
+    elseif spawned then
+      ui.textColored("Status: process launched, waiting for handshake...", rgbm(0.85, 0.85, 0.45, 1))
+    else
+      ui.textColored("Status: not running (will retry every 5s)", rgbm(0.85, 0.65, 0.45, 1))
+    end
+  end
+
+  ui.separator()
+  ui.textColored("Lap archive (issue #77)", rgbm(0.78, 0.8, 0.88, 1))
+  do
+    -- Append-only per-lap JSON archive (full trace + setup + corners + coaching).
+    -- Builds the dataset for future analysis / RAG / training.
+    do
+      local cur = cfg.lapArchiveEnabled ~= false
+      if type(ui.checkbox) ~= "function" then
+        ui.text("Archive completed laps to disk: " .. (cur and "on" or "off"))
       else
-        cfg.wsSidecarUrl = newUrl
+        pcall(function()
+          if ui.checkbox("Archive completed laps to disk", cur) then
+            local enabled = not cur
+            if vm.setLapArchiveEnabled and type(vm.setLapArchiveEnabled) == "function" then
+              pcall(vm.setLapArchiveEnabled, enabled)
+            else
+              cfg.lapArchiveEnabled = enabled
+            end
+          end
+        end)
       end
     end
-    -- CSP: ui.inputText may be a cdata callable — use nil-checks, not type() == "function".
-    if ui.inputText ~= nil then
+    local capMB = math.max(50, math.min(5000, tonumber(cfg.lapArchiveMaxMB) or 500))
+    if type(vm.lapArchiveClampCapMB) == "function" then
+      local ok, v = pcall(function() return vm.lapArchiveClampCapMB(cfg.lapArchiveMaxMB) end)
+      if ok and type(v) == "number" and v == v then
+        capMB = v
+      end
+    end
+    if tonumber(cfg.lapArchiveMaxMB) ~= capMB then
+      -- Normalize in memory only; persisting here ran every frame (float vs int drift — Cursor #78).
+      cfg.lapArchiveMaxMB = capMB
+    end
+    if type(ui.slider) == "function" then
       pcall(function()
-        local nv, ch = ui.inputText("Sidecar URL###cpt_ws", curUrl, ui.InputTextFlags and ui.InputTextFlags.AutoSelectAll or 0)
-        if ch and type(nv) == "string" then
-          applyUrl(nv)
+        local nv, ch = ui.slider("Disk cap (MB)###cpt_archcap", capMB, 50, 5000, "%.0f", true)
+        if ch and nv == nv then
+          local nvInt = math.floor(tonumber(nv) + 0.5)
+          cfg.lapArchiveMaxMB = nvInt
+          if vm.setLapArchiveMaxMB and type(vm.setLapArchiveMaxMB) == "function" then
+            pcall(vm.setLapArchiveMaxMB, nvInt)
+          end
         end
       end)
     else
-      ui.text("Sidecar URL: " .. (curUrl == "" and "<not set>" or curUrl))
-      ui.textColored("inputText not available — set ws://127.0.0.1:8765 in storage.", rgbm(0.65, 0.65, 0.7, 1))
+      ui.text("Disk cap (MB): " .. tostring(capMB))
     end
-    if ui.button ~= nil then
-      pcall(function()
-        if ui.button("Set ws://127.0.0.1:8765###cpt_ws_default") then
-          applyUrl("ws://127.0.0.1:8765")
-        end
-      end)
-      pcall(function()
-        ui.sameLine()
-        if ui.button("Clear###cpt_ws_clear") then
-          applyUrl("")
-        end
-      end)
-    end
-    -- Status hint: shows whether the bridge has a URL configured.
-    if curUrl ~= "" then
-      ui.textColored("Configured. Bridge will dial on next tick.", rgbm(0.55, 0.85, 0.55, 1))
-    else
-      ui.textColored("URL empty — bridge is dormant.", rgbm(0.85, 0.65, 0.45, 1))
+    if vm.lapArchiveStats and type(vm.lapArchiveStats) == "function" then
+      local ok, count, mb = pcall(vm.lapArchiveStats)
+      if ok and count and mb then
+        ui.text(string.format("Archived: %d laps, %.1f MB", count, mb))
+      end
     end
   end
 

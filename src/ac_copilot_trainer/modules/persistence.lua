@@ -38,6 +38,27 @@ local function tryCarFromCar(car)
   return nil
 end
 
+--- Lap archive / filenames: same field order as `sessionKey` fallbacks, then sanitize.
+---@param car ac.StateCar|nil
+---@return string|nil
+function M.archiveCarIdFromCar(car)
+  local raw = tryCarFromCar(car)
+  if not raw then
+    return nil
+  end
+  return ch.sanitizeId(raw, "unknown")
+end
+
+---@param sim ac.StateSim|nil
+---@return string|nil
+function M.archiveTrackIdFromSim(sim)
+  local raw = tryTrackFromSim(sim)
+  if not raw then
+    return nil
+  end
+  return ch.sanitizeId(raw, "unknown")
+end
+
 --- Session filename key: car id + track id. Prefer `ac.get*` globals; fall back to `car`/`sim` when globals yield unknown (menu / edge cases).
 function M.sessionKey(car, sim)
   local track = ch.trackIdRawFromGlobals() or "unknown_track"

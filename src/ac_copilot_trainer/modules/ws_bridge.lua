@@ -22,9 +22,37 @@ local cornerAdvisories = {}  ---@type table<string, { lap: number, text: string,
 --- os.clock() which is process CPU time (advances too slowly for a
 --- low-CPU Lua script, so the 6s staleness expiry never triggered).
 local currentSimT = 0
+
+--- Issue #77 Part A: sidecar auto-launch state.
+--- spawnedAlive: true while CSP believes the console child is running; cleared
+---               from os.runConsoleProcess exit callback so we can relaunch.
+--- lastLaunchAttemptT: sim-time seconds of the last spawn attempt (gate against
+---                     double-launch + crash-loop restart).
+--- LAUNCH_RETRY_SEC: minimum gap between launch attempts (also our
+---                   "settling time" before we stop retrying transparently).
+local spawnedAlive = false
+--- True after this bridge successfully started a console child (used to drop only *our* stale sockets).
+local sidecarChildEverLaunched = false
+local lastLaunchAttemptT = -1e9
+local LAUNCH_RETRY_SEC = 5.0
+--- Back off `runConsoleProcess` after streak failures or bat exit 2 (missing repo/tools — Copilot #78).
+local spawnFailStreak = 0
+--- Count rapid nonzero child exits (bat starts then dies — Codex #78); not the same as spawn pcall failures.
+local nonzeroExitStreak = 0
+local spawnAbandonUntilT = -1e9
+--- Throttle `tryOpen` during spawn backoff so we do not allocate a socket every frame (Cursor Bugbot #78).
+local lastBackoffTryOpenT = -1e9
+local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
 local lastCornerQueryAt = {}  ---@type table<string, number>
+--- CSP web.socket is callback-based; inbound frames land here. Must live at
+--- module scope before `M.configure` / `M.reset` assign to it (CodeRabbit #78).
+local _recvQueue = {}
+--- True after first inbound JSON with matching `protocol` (CodeRabbit #78).
+local sidecarProtocolReady = false
+--- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
+local tryOpen
 
 local function close_socket_if_any(s)
   if s == nil then
@@ -44,6 +72,174 @@ function M.configure(u)
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
   _recvQueue = {}
+  sidecarProtocolReady = false
+  -- Explicit URL/socket reset must not leave zombie-latch set for the next dial (Codex #78).
+  sidecarChildEverLaunched = false
+  spawnFailStreak = 0
+  nonzeroExitStreak = 0
+  spawnAbandonUntilT = -1e9
+  lastBackoffTryOpenT = -1e9
+end
+
+--- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
+---
+--- CSP exposes os.runConsoleProcess(params, callback) with terminateWithScript=true
+--- which ties the child process to the Lua script lifetime (also dies with AC on
+--- Win 8+). Pattern mirrored from the shipped CSP app `joypad-assist/mobile`.
+---
+--- Behaviour:
+---   1. If we already have a live socket, noop.
+---   2. If we already spawned a child this session and it's still alive, noop.
+---   3. If we tried to launch within LAUNCH_RETRY_SEC, noop (avoid crash-loop).
+---   4. Otherwise launch start_sidecar.bat (sibling of this Lua module's app dir).
+---      The .bat handles Python discovery + env vars.
+---
+--- Stdout from the child streams into ac.log prefixed `[SIDECAR]`.
+--- On unexpected child exit, we log the exit code; the next M.tick() will
+--- naturally re-attempt the launch via this function once LAUNCH_RETRY_SEC has
+--- elapsed.
+---
+---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
+function M.startSidecarIfNeeded(appDir)
+  -- Child we spawned died but CSP kept a stale socket handle (reconnect=true); do not tear down
+  -- sockets opened for a manually started sidecar (spawnedAlive was never true).
+  if not spawnedAlive and sock ~= nil and sidecarChildEverLaunched then
+    close_socket_if_any(sock)
+    sock = nil
+    lastTry = -RECONNECT_SEC
+    sidecarProtocolReady = false
+    -- One-shot zombie cleanup: do not keep closing a user-opened manual socket (Codex #78).
+    sidecarChildEverLaunched = false
+  end
+  if sock then return end
+  if spawnedAlive then return end
+
+  -- During backoff, only dial occasionally — `lastLaunchAttemptT` is not advanced on this path (Cursor Bugbot #78).
+  if currentSimT < spawnAbandonUntilT then
+    if currentSimT - lastBackoffTryOpenT < LAUNCH_RETRY_SEC then
+      return
+    end
+    lastBackoffTryOpenT = currentSimT
+    if tryOpen() then
+      nonzeroExitStreak = 0
+    end
+    return
+  end
+
+  if currentSimT - lastLaunchAttemptT < LAUNCH_RETRY_SEC then return end
+
+  -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
+  if tryOpen() then
+    nonzeroExitStreak = 0
+    return
+  end
+
+  lastLaunchAttemptT = currentSimT
+
+  if type(os) ~= "table" or type(os.runConsoleProcess) ~= "function" then
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][SIDECAR] os.runConsoleProcess unavailable on this CSP build; manual launch required")
+    end
+    return
+  end
+
+  local batPath
+  if type(appDir) == "string" and appDir ~= "" then
+    batPath = appDir .. "/" .. SIDECAR_BAT_RELATIVE
+  else
+    batPath = SIDECAR_BAT_RELATIVE  -- relative to AC working dir; fragile fallback
+  end
+
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][SIDECAR] launching: " .. batPath)
+  end
+
+  spawnedAlive = false
+  local spawnAccepted = false
+  local okSpawn, errSpawn = pcall(function()
+    local a, b = os.runConsoleProcess({
+      filename = batPath,
+      arguments = {},
+      workingDirectory = appDir or "",
+      timeout = 0,                   -- no per-call timeout; long-running server
+      terminateWithScript = true,    -- die with AC + script reload
+      inheritEnvironment = true,
+      dataCallback = function(_err, line)
+        if line and ac and type(ac.log) == "function" then
+          ac.log("[COPILOT][SIDECAR] " .. tostring(line):gsub("[\r\n]+$", ""))
+        end
+      end,
+    }, function(err, result)
+      -- Process exited (clean or crash). Clear flag so next M.tick can relaunch.
+      spawnedAlive = false
+      if sock == nil then
+        -- Clean exit: no stale handle — do not treat later manual sockets as zombies.
+        sidecarChildEverLaunched = false
+      end
+      local exitCode = (type(result) == "table" and result.exitCode) or "?"
+      local codeNum = tonumber(exitCode)
+      -- `start_sidecar.bat` uses `exit /b 2` when `tools/ai_sidecar` cannot be resolved (Copilot #78).
+      -- Must not depend on `ac.log` (Cursor #78 / Bugbot).
+      if codeNum == 2 then
+        spawnAbandonUntilT = 1e12
+        spawnFailStreak = 0
+        nonzeroExitStreak = 0
+      elseif codeNum == 0 then
+        nonzeroExitStreak = 0
+      elseif codeNum ~= 0 then
+        -- Includes missing/unparseable exit metadata (`codeNum == nil`, Bugbot #78): do not treat as clean.
+        nonzeroExitStreak = nonzeroExitStreak + 1
+        if nonzeroExitStreak >= 8 then
+          spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
+          nonzeroExitStreak = 0
+          if ac and type(ac.log) == "function" then
+            ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated nonzero child exits (Codex #78)")
+          end
+        end
+      end
+      if ac and type(ac.log) == "function" then
+        ac.log(string.format("[COPILOT][SIDECAR] exited code=%s err=%s",
+          tostring(exitCode), tostring(err or "nil")))
+      end
+    end)
+    if not a then
+      error(tostring(b or "runConsoleProcess returned nil/false"))
+    end
+    spawnAccepted = true
+  end)
+  spawnedAlive = okSpawn and spawnAccepted
+  if okSpawn and spawnAccepted then
+    sidecarChildEverLaunched = true
+    spawnFailStreak = 0
+    -- Do not clear `nonzeroExitStreak` here: spawn can succeed while the bat exits fast;
+    -- streak must accumulate across attempts (Codex #78 / #3115226944).
+  end
+  if not okSpawn then
+    spawnFailStreak = spawnFailStreak + 1
+    if spawnFailStreak >= 10 then
+      spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
+      spawnFailStreak = 0
+      if ac and type(ac.log) == "function" then
+        ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated spawn failures (Copilot #78)")
+      end
+    end
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][SIDECAR] runConsoleProcess failed: " .. tostring(errSpawn))
+    end
+  end
+end
+
+--- Public read-only status: is our spawned child sidecar process believed alive?
+--- Used by the Settings UI to render a status line.
+---@return boolean
+function M.sidecarSpawnedAlive()
+  return spawnedAlive
+end
+
+--- Public read-only status: inbound traffic validated against `PROTOCOL_VERSION` (CodeRabbit #78).
+---@return boolean
+function M.sidecarConnected()
+  return sock ~= nil and sidecarProtocolReady
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
@@ -55,7 +251,15 @@ function M.reset()
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
+  lastLaunchAttemptT = -1e9
   _recvQueue = {}
+  sidecarProtocolReady = false
+  -- Do not clear `spawnedAlive`: the console child can outlive this reset; clearing it risks a second spawn on port 8765 (Cursor #78).
+  sidecarChildEverLaunched = false
+  spawnFailStreak = 0
+  nonzeroExitStreak = 0
+  spawnAbandonUntilT = -1e9
+  lastBackoffTryOpenT = -1e9
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
@@ -117,7 +321,6 @@ end
 
 local _wsDiagLogged = false
 local _wsDiagAttempts = 0
-local _recvQueue = {}  -- CSP web.socket is callback-based; messages land here
 --- Cap noisy per-frame WS recv logs (Bugbot); diagnostics reset on new socket.
 local _wsRecvLogsLeft = 0
 
@@ -181,7 +384,7 @@ end
 --- are pushed to the callback, NOT pulled via receive(). Issue #75 round 6:
 --- our old implementation used the wrong API (no callback passed, sock:send /
 --- sock:receive), which produced "Callback should be a function" on tryOpen.
-local function tryOpen()
+tryOpen = function()
   _wsDiagAttempts = _wsDiagAttempts + 1
   if not url or url == "" then
     _logWsDiagOnce("empty-url")
@@ -196,6 +399,7 @@ local function tryOpen()
     return false
   end
   _recvQueue = {}
+  sidecarProtocolReady = false
   local opened = nil
   local params = {
     onError = _onError,
@@ -208,6 +412,7 @@ local function tryOpen()
       if opened ~= nil and sock == opened then
         sock = nil
         lastTry = -RECONNECT_SEC
+        sidecarProtocolReady = false
       end
     end,
     encoding = "utf8",
@@ -236,6 +441,7 @@ local function tryOpen()
     ))
   end
   sock = nil
+  sidecarProtocolReady = false
   return false
 end
 
@@ -268,6 +474,9 @@ function M.pollInbound(maxPerTick)
     if type(data) == "table" then
       local ev = data.event
       local pv = tonumber(data.protocol)
+      if pv == PROTOCOL_VERSION then
+        sidecarProtocolReady = true
+      end
       if ev == "coaching_response" and pv == PROTOCOL_VERSION then
         local lap = tonumber(data.lap)
         local hints = data.hints
@@ -418,6 +627,7 @@ function M.sendJson(payload)
     close_socket_if_any(sock)
     sock = nil
     lastTry = -RECONNECT_SEC
+    sidecarProtocolReady = false
     return false
   end
   return true
@@ -454,6 +664,27 @@ function M.sendCornerQuery(corner, cur, ref, dist, lap)
       corner, tonumber(cur) or 0, tonumber(ref) or 0, tonumber(dist) or 0))
   end
   return true
+end
+
+--- Label -> text for sidecar `corner_advice` entries matching `lap` (for lap archive; no HUD mutation).
+---@param lap number|nil
+---@return table<string, string>
+function M.cornerAdvisorySnapshotForLap(lap)
+  local want = tonumber(lap)
+  local out = {}
+  if not want then
+    return out
+  end
+  for corner, e in pairs(cornerAdvisories) do
+    if type(corner) == "string" and corner ~= "" and type(e) == "table" then
+      local elap = tonumber(e.lap)
+      local txt = e.text
+      if elap == want and type(txt) == "string" and txt ~= "" then
+        out[corner] = txt
+      end
+    end
+  end
+  return out
 end
 
 --- Round 10d: return the most recent corner_advice text for the label,
