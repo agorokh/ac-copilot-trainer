@@ -60,24 +60,27 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3114694288 | coderabbitai[bot] | yes |
 | 3114706575 | cursor[bot] | yes |
 | 3114706578 | cursor[bot] | yes |
+| 3114736822 | chatgpt-codex-connector[bot] | yes |
+| 3114739601 | cursor[bot] | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
 Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/10_Development/PR78_comment_ledger.md`).
 
 - **3114694276**: Ledger uses stable wording (no stale “next commit” phrasing).
-- **3114694280**: `wsBridge.cornerAdvisorySnapshotForLap(lap)` supplies lap-filtered `corner_advice_used` for the archive.
+- **3114694280**: `wsBridge.cornerAdvisorySnapshotForLap(...)` supplies lap-filtered `corner_advice_used` for the archive (lap argument = in-lap index, i.e. `(state.lapsCompleted or 0) - 1` after the lap-boundary increment).
+- **3114736822 / 3114739601**: Same off-by-one: snapshot must use the completed lap’s in-race index, not post-increment `lapsCompleted`.
 - **3114694284 / 3114694288**: Archive filename includes `lap_uuid` fragment; `flush` before `close` after JSON write.
 - **3114706575**: `start_sidecar.bat` sets `AC_COPILOT_OLLAMA_*` defaults only when undefined (respects inherited env).
 - **3114706578**: Each record gets a shallow copy of trace field names, not the module `TRACE_FIELDS` table reference.
 
 ## Issue comments (`issues/78/comments`): 3
 
-Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions).
+Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 15
+## PR reviews (`pulls/78/reviews`): 17
 
-Automated summaries; actionable items are the inline threads above. **N/A**.
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`).
 
 ## Issue #77 scope proof
 
