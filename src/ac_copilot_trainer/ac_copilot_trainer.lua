@@ -218,7 +218,8 @@ local function setApproachMetersAndPersist(meters)
   end
 end
 
-local function setLapArchiveEnabledAndPersist()
+local function setLapArchiveEnabledAndPersist(enabled)
+  config.lapArchiveEnabled = enabled and true or false
   local v = (config.lapArchiveEnabled ~= false) and 1 or 0
   if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.set) == "function" then
     pcall(function() _lapArchiveEnabledStorage:set(v) end)

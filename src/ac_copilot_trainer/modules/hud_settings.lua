@@ -18,7 +18,7 @@ local M = {}
 ---@field config table
 ---@field stats HudSettingsStats
 ---@field focusPracticeUi table|nil
----@field setLapArchiveEnabled fun()|nil
+---@field setLapArchiveEnabled fun(boolean)|nil
 ---@field setLapArchiveMaxMB fun(number)|nil
 
 ---@param mode "strictTrue"|"notFalse"
@@ -224,9 +224,11 @@ function M.draw(vm)
       else
         pcall(function()
           if ui.checkbox("Archive completed laps to disk", cur) then
-            cfg.lapArchiveEnabled = not cur
+            local enabled = not cur
             if vm.setLapArchiveEnabled and type(vm.setLapArchiveEnabled) == "function" then
-              pcall(vm.setLapArchiveEnabled)
+              pcall(vm.setLapArchiveEnabled, enabled)
+            else
+              cfg.lapArchiveEnabled = enabled
             end
           end
         end)
