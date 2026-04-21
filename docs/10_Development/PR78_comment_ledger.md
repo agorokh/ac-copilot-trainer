@@ -98,6 +98,7 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3115679454 | cursor[bot] | yes |
 | 3115822911 | cursor[bot] | yes |
 | 3115968326 | cursor[bot] | yes |
+| 3116030820 | cursor[bot] | yes |
 
 ### Post-`7fea735` audit (Cursor Bugbot inline)
 
@@ -110,6 +111,10 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 ### Post-`482baa9` audit (Cursor Bugbot inline)
 
 - **3115968326**: `lap_archive.stats` treats `io.fileSize` results like `rotate`: add only positive sizes; for negative indicators use the same `250 * 1024` heuristic instead of `tonumber(s) or 0` (which subtracted `-1` from the running total).
+
+### Post-`a1a1e26` audit (Cursor Bugbot inline)
+
+- **3116030820**: `lap_archive.write` wraps `f:write(raw)` in `pcall` (same posture as flush/close) so a throwing `write` cannot unwind `script.update`; failures close/remove the partial file and return `write failed: ...`.
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -177,13 +182,13 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3115531217**: `persistence.archiveCarIdFromCar` / `archiveTrackIdFromSim` document `ac.StateCar|nil` and `ac.StateSim|nil` (userdata-safe `pcall` field reads).
 - **3115531234**: PR description files table + risk section updated to match `start_sidecar.bat` (walk-up repo discovery, optional `AC_COPILOT_REPO_ROOT` override) — no hardcoded checkout path.
 
-## Issue comments (`issues/78/comments`): 12
+## Issue comments (`issues/78/comments`): 13
 
-Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` and again after `9e3ceca` — still **N/A**. `4285291480` (Sourcery guide) / `4285294093` (Qodo summary) — **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` / `4286535815` / `4286607320` / `4286671243` / `4286770545` / `4286876069` (Codex usage limit notices) — **N/A**.
+Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` and again after `9e3ceca` — still **N/A**. `4285291480` (Sourcery guide) / `4285294093` (Qodo summary) — **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` / `4286535815` / `4286607320` / `4286671243` / `4286770545` / `4286876069` / `4286943650` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 43
+## PR reviews (`pulls/78/reviews`): 44
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread. Post-`9e3ceca` review events `4145194031` (Codex) / `4145194773` (Cursor Bugbot) correspond to inline **3115178703** / **3115179416** above — **resolved** in code, not separate scope. Post-`769bf82` Codex review `4145245239` maps to inline **3115226944** — **resolved** in code. Post-`a176b26` reviews `4145310407` (Codex) / `4145311753` (Cursor Bugbot) map to inline **3115286347** / **3115287680** — **resolved** in code. Post-`61ec94f` Codex review `4145370656` → inline **3115341635**; CodeRabbit review `4145375398` → inline **3115346219** / **3115346235** — **resolved** in code. Post-`26bfda8` Cursor Bugbot review `4145407903` → inline **3115377868** — **resolved** in code. Copilot PR summary `4145618101` (submitted before `31f35e8`) — **N/A**; scope is covered by inline **3115531186** / **3115531217** / **3115531234**. Empty `cursor[bot]` reviews `4145789616` after `8c485e8`, `4145942369` after `92403f3`, and `4146102176` after `482baa9` — **N/A** (no body; bot bookkeeping).
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread. Post-`9e3ceca` review events `4145194031` (Codex) / `4145194773` (Cursor Bugbot) correspond to inline **3115178703** / **3115179416** above — **resolved** in code, not separate scope. Post-`769bf82` Codex review `4145245239` maps to inline **3115226944** — **resolved** in code. Post-`a176b26` reviews `4145310407` (Codex) / `4145311753` (Cursor Bugbot) map to inline **3115286347** / **3115287680** — **resolved** in code. Post-`61ec94f` Codex review `4145370656` → inline **3115341635**; CodeRabbit review `4145375398` → inline **3115346219** / **3115346235** — **resolved** in code. Post-`26bfda8` Cursor Bugbot review `4145407903` → inline **3115377868** — **resolved** in code. Copilot PR summary `4145618101` (submitted before `31f35e8`) — **N/A**; scope is covered by inline **3115531186** / **3115531217** / **3115531234**. Empty `cursor[bot]` reviews `4145789616` after `8c485e8`, `4145942369` after `92403f3`, and `4146102176` after `482baa9` — **N/A** (no body; bot bookkeeping). Cursor Bugbot batch review `4146167445` after `a1a1e26` — **N/A** (maps to inline **3116030820**).
 
 ## Issue #77 scope proof
 

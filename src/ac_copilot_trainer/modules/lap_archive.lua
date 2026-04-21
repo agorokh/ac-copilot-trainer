@@ -367,10 +367,12 @@ function M.write(rec, capMB)
   if not raw then return false, "encodeJsonCompact returned nil" end
   local f, ferr = io.open(path, "w")
   if not f then return false, "open failed: " .. tostring(ferr) end
-  if not f:write(raw) then
+  local writeOk, writeRes = pcall(function() return f:write(raw) end)
+  if not writeOk or not writeRes then
     pcall(function() f:close() end)
     pcall(os.remove, path)
-    return false, "write failed"
+    local writeMsg = (not writeOk) and tostring(writeRes) or "write returned nil"
+    return false, "write failed: " .. writeMsg
   end
   local flushOk, flushRes = pcall(function() return f:flush() end)
   -- Lua 5.1 / LuaJIT: flush returns true on success, nil+err on failure (never boolean false — CodeRabbit #78).
