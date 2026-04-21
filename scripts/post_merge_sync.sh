@@ -37,6 +37,10 @@ require_gh() {
   fi
 }
 
+fail() {
+  echo "error: $*" >&2
+}
+
 ensure_clean_worktree() {
   UNTRACKED="$(git ls-files --others --exclude-standard 2>/dev/null | sed '/^$/d' || true)"
   if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$UNTRACKED" ]]; then
@@ -51,13 +55,23 @@ phase_sync() {
   STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
   case "$STATE" in
     MERGED) ;;
-    OPEN) gh pr merge "$PR" --squash --delete-branch || exit 12 ;;
-    "") exit 20 ;;
-    *) exit 12 ;;
+    OPEN) gh pr merge "$PR" --squash --delete-branch || { fail "failed to merge PR #$PR"; exit 12; } ;;
+    "") fail "could not determine PR #$PR state"; exit 20 ;;
+    *) fail "PR #$PR is in unexpected state: $STATE"; exit 12 ;;
   esac
-  git fetch origin || exit 20
-  git checkout main
-  git pull --ff-only origin main || exit 10
+  git fetch origin || { fail "failed to fetch origin"; exit 20; }
+  git checkout main || { fail "failed to checkout main"; exit 10; }
+  git pull --ff-only origin main || { fail "failed to fast-forward local main from origin/main"; exit 10; }
+  LOCAL_MAIN_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+  REMOTE_MAIN_SHA="$(git rev-parse origin/main 2>/dev/null || true)"
+  if [[ -z "$LOCAL_MAIN_SHA" ]] || [[ -z "$REMOTE_MAIN_SHA" ]]; then
+    fail "could not resolve local or remote main after sync"
+    exit 20
+  fi
+  if [[ "$LOCAL_MAIN_SHA" != "$REMOTE_MAIN_SHA" ]]; then
+    fail "local main does not match origin/main after sync; refusing to continue"
+    exit 10
+  fi
   echo "Run classification: python3 scripts/post_merge_classify.py --pr $PR"
   echo "Then prepare vault SAVE: scripts/post_merge_sync.sh vault $PR"
 }
@@ -65,7 +79,10 @@ phase_sync() {
 phase_vault() {
   require_gh
   CURRENT="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  [[ "$CURRENT" != "main" ]] && exit 20
+  if [[ "$CURRENT" != "main" ]]; then
+    fail "phase_vault must be run from main; current branch is '${CURRENT:-unknown}'"
+    exit 20
+  fi
 
   VAULT_UNTRACKED="$(git ls-files --others --exclude-standard -- docs/01_Vault/ 2>/dev/null | sed '/^$/d' || true)"
   if git diff --quiet -- docs/01_Vault/ && git diff --cached --quiet -- docs/01_Vault/ && [[ -z "$VAULT_UNTRACKED" ]]; then
@@ -73,8 +90,17 @@ phase_vault() {
     return 0
   fi
 
-  OOS_TRACKED="$(git diff --name-only HEAD -- . ':(exclude)docs/01_Vault' 2>/dev/null | sort -u | sed '/^$/d' || true)"
-  [[ -n "$OOS_TRACKED" ]] && exit 30
+  OOS_TRACKED="$(
+    {
+      git diff --name-only HEAD -- . ':(exclude)docs/01_Vault' 2>/dev/null
+      git diff --cached --name-only -- . ':(exclude)docs/01_Vault' 2>/dev/null
+    } | sort -u | sed '/^$/d' || true
+  )"
+  if [[ -n "$OOS_TRACKED" ]]; then
+    fail "vault-only sync requires all tracked changes to stay under docs/01_Vault/. Offending paths:"
+    printf '%s\n' "$OOS_TRACKED" | sed 's/^/  - /' >&2
+    exit 30
+  fi
 
   VAULT_BRANCH="vault/post-merge-pr${PR}"
   git branch -D "$VAULT_BRANCH" >/dev/null 2>&1 || true
@@ -82,7 +108,7 @@ phase_vault() {
   git add docs/01_Vault/
   git commit --no-verify -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
   git push -u --force-with-lease origin "$VAULT_BRANCH" || exit 11
-  EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number' 2>/dev/null || true)"
+  EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)"
   if [[ -n "$EXISTING_PR" ]]; then
     gh pr edit "$EXISTING_PR" \
       --title "docs(vault): post-merge handoff for PR #${PR}" \

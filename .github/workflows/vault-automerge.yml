@@ -22,9 +22,16 @@ jobs:
         run: |
           set -euo pipefail
           files="$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only)"
-          [[ -z "$files" ]] && exit 1
-          out_of_scope="$(echo "$files" | grep -Ev '^docs/01_Vault/' || true)"
-          [[ -n "$out_of_scope" ]] && exit 1
+          if [[ -z "$files" ]]; then
+            echo "error: vault-only PR has no changed files" >&2
+            exit 1
+          fi
+          out_of_scope="$(printf '%s\n' "$files" | grep -Ev '^docs/01_Vault/' || true)"
+          if [[ -n "$out_of_scope" ]]; then
+            echo "error: vault-only PR contains out-of-scope files:" >&2
+            printf '%s\n' "$out_of_scope" | sed 's/^/  - /' >&2
+            exit 1
+          fi
       - name: Enable auto-merge
         env:
           GH_TOKEN: ${{ github.token }}

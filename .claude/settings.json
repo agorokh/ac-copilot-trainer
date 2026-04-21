@@ -74,7 +74,7 @@
           },
           {
             "type": "command",
-            "command": "input=$(cat); cmd=$(echo \"$input\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))\" 2>/dev/null); case \"$cmd\" in *git*commit*) root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; bash \"$root/scripts/check_vault_follow_up.sh\" || exit 2;; esac; exit 0",
+            "command": "cmd=$(python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))\" 2>/dev/null || true); case \"$cmd\" in *git*commit*) root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; AC_VAULT_FOLLOW_UP_COMMAND=\"$cmd\" bash \"$root/scripts/check_vault_follow_up.sh\" || exit 2;; esac; exit 0",
             "timeout": 5000
           }
         ]
