@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-04
+last_updated: 2026-04-21
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -16,6 +16,7 @@ relates_to:
 
 ## Resume here
 
+- Post-merge steward propagation is prepared on a rollout branch: adds deterministic `post-merge-steward`, `post_merge_sync.sh`, `post_merge_classify.py`, `check_vault_follow_up.sh`, `post-merge-notify.yml`, `vault-automerge.yml`, plus `.claude/settings.json` commit-guard/routing updates. Next action is PR-resolution follow-up on that rollout PR after push.
 - **Branch:** `feat/issue-46-ollama-debrief` — **PR #55** (draft): https://github.com/agorokh/ac-copilot-trainer/pull/55 — issue **#46** Ollama debrief + HUD; mark ready when green, then pr-resolution-follow-up (~10 min between polls).
 - **Also open:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (issue **#49** ranking / SHAP).
 - **Merged:** **#45** / PR #53 (WebSocket v1); **#43** / PR #52 (coaching UX); **#47** journal — confirm PR #51 status on GitHub.

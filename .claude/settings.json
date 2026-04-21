@@ -71,6 +71,11 @@
           {
             "type": "prompt",
             "prompt": "If the bash command would commit or push to protected branch main/master, BLOCK. Patterns: git commit on main/master, git push on main/master, git push origin HEAD:main or :master. Otherwise ALLOW."
+          },
+          {
+            "type": "command",
+            "command": "input=$(cat); cmd=$(echo \"$input\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))\" 2>/dev/null); case \"$cmd\" in *git*commit*) root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; bash \"$root/scripts/check_vault_follow_up.sh\" || exit 2;; esac; exit 0",
+            "timeout": 5000
           }
         ]
       }
