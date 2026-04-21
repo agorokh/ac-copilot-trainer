@@ -217,6 +217,15 @@ function M.draw(vm)
     -- Builds the dataset for future analysis / RAG / training.
     checkbox(cfg, "lapArchiveEnabled", "Archive completed laps to disk", "notFalse")
     local capMB = math.max(50, math.min(5000, tonumber(cfg.lapArchiveMaxMB) or 500))
+    if type(vm.lapArchiveClampCapMB) == "function" then
+      local ok, v = pcall(function() return vm.lapArchiveClampCapMB(cfg.lapArchiveMaxMB) end)
+      if ok and type(v) == "number" and v == v then
+        capMB = v
+      end
+    end
+    if tonumber(cfg.lapArchiveMaxMB) ~= capMB then
+      cfg.lapArchiveMaxMB = capMB
+    end
     if ui.slider ~= nil then
       pcall(function()
         local nv, ch = ui.slider("Disk cap (MB)###cpt_archcap", capMB, 50, 5000, "%.0f", true)

@@ -43,14 +43,67 @@ local SCHEMA_VERSION = 1
 local ROTATE_EVERY_N_WRITES = 10
 local _writesUntilRotate = 0
 
--- Trace sample field order. MUST match the order produced by `traceToColumns`.
--- Documented in the schema header so future imports map columns identically.
+--- Same bounds as Settings slider (issue #77 / PR #78).
+local ARCHIVE_CAP_MIN_MB = 50
+local ARCHIVE_CAP_MAX_MB = 5000
+
+---@param raw number|string|nil
+---@return number
+function M.clampArchiveCapMB(raw)
+  local n = tonumber(raw) or 500
+  if n ~= n or n <= 0 then
+    n = 500
+  end
+  return math.max(ARCHIVE_CAP_MIN_MB, math.min(ARCHIVE_CAP_MAX_MB, n))
+end
+
+-- Trace sample field order. `traceToColumns` builds rows by iterating this list (single source of truth).
 local TRACE_FIELDS = {
   "spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz",
 }
 
 local function lapArchiveDir()
-  return persistence.copilotStateDir() .. "/journal/laps"
+  return persistence.dataDir() .. "/journal/laps"
+end
+
+--- Settings UI calls `stats()` every frame; cache full-directory scan for a short TTL (Gemini #78).
+local _statsCacheT = -1e9
+local _statsCacheCount = 0
+local _statsCacheMb = 0
+local STATS_CACHE_TTL_SEC = 2.0
+
+local function bustStatsCache()
+  _statsCacheT = -1e9
+end
+
+local function carIdFromOptsCar(carTbl)
+  if type(carTbl) ~= "table" then
+    return nil
+  end
+  for _, key in ipairs({ "id", "name", "driverName" }) do
+    local ok, v = pcall(function()
+      return carTbl[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return ch.sanitizeId(tostring(v), "unknown")
+    end
+  end
+  return nil
+end
+
+local function trackIdFromOptsSim(simTbl)
+  if type(simTbl) ~= "table" then
+    return nil
+  end
+  for _, key in ipairs({ "trackName", "track", "trackConfiguration" }) do
+    local ok, v = pcall(function()
+      return simTbl[key]
+    end)
+    if ok and v ~= nil and tostring(v) ~= "" then
+      return ch.sanitizeId(tostring(v), "unknown")
+    end
+  end
+  return nil
 end
 
 --- Generate a short stable-ish UUID-like ID. Not RFC4122 — Lua 5.1 has no
@@ -90,25 +143,23 @@ local function traceToColumns(trace)
   for i = 1, #trace do
     local s = trace[i]
     if type(s) == "table" and type(s.spline) == "number" then
-      out[#out + 1] = {
-        s.spline,
-        tonumber(s.speed) or 0,
-        tonumber(s.eMs) or 0,
-        tonumber(s.throttle) or 0,
-        tonumber(s.brake) or 0,
-        tonumber(s.steer) or 0,
-        tonumber(s.gear) or 0,
-        tonumber(s.px) or 0,
-        tonumber(s.py) or 0,
-        tonumber(s.pz) or 0,
-      }
+      local row = {}
+      for fi = 1, #TRACE_FIELDS do
+        local fname = TRACE_FIELDS[fi]
+        if fname == "spline" then
+          row[fi] = s.spline
+        else
+          row[fi] = tonumber(s[fname]) or 0
+        end
+      end
+      out[#out + 1] = row
     end
   end
   return out
 end
 
 --- Build a flat snapshot table from setupReader output.
---- Input: snap = { path, keys = {{section, key, value}, ...} }
+--- Input: snap = { path, keys = { { section = ..., key = ..., value = ... }, ... } }
 --- Output: { ["SECTION.KEY"] = "value", ... }  (flat map for easy diffing)
 ---@param snap table|nil
 ---@return table
@@ -141,10 +192,9 @@ function M.buildRecord(opts)
   if type(opts) ~= "table" then return nil end
   if not opts.lap_n or not opts.lap_ms or opts.lap_ms <= 0 then return nil end
 
-  local car = opts.car
   local sim = opts.sim
-  local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
-  local trackId = ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local carId = carIdFromOptsCar(opts.car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = trackIdFromOptsSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
 
   local trackLengthM = nil
   if sim and type(sim) == "table" then
@@ -244,8 +294,7 @@ end
 ---@param capMB number
 ---@return integer, number, integer
 function M.rotate(capMB)
-  capMB = tonumber(capMB) or 500
-  if capMB <= 0 then capMB = 500 end
+  capMB = M.clampArchiveCapMB(capMB)
   local capBytes = capMB * 1024 * 1024
   local dir = lapArchiveDir()
   -- io.scanDir is a CSP API; fall back to noop if unavailable
@@ -276,18 +325,25 @@ function M.rotate(capMB)
   table.sort(files, function(a, b) return a.name < b.name end)
   local total = 0
   for i = 1, #files do
-    if files[i].size > 0 then total = total + files[i].size end
+    if files[i].size > 0 then
+      total = total + files[i].size
+    end
+  end
+  if total == 0 and #files > 0 then
+    total = #files * (250 * 1024)
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][ARCHIVE] rotate: lap file sizes unknown; using ~250KB each for cap math")
+    end
   end
   local deleted = 0
   local idx = 1
   while total > capBytes and idx <= #files do
     local f = files[idx]
-    if f.size > 0 then
-      local okRm = pcall(function() os.remove(f.path) end)
-      if okRm then
-        total = total - f.size
-        deleted = deleted + 1
-      end
+    local okRm = pcall(function() os.remove(f.path) end)
+    if okRm then
+      local delta = (f.size > 0) and f.size or (250 * 1024)
+      total = math.max(0, total - delta)
+      deleted = deleted + 1
     end
     idx = idx + 1
   end
@@ -300,6 +356,7 @@ end
 ---@return boolean, string
 function M.write(rec, capMB)
   if type(rec) ~= "table" then return false, "not a table" end
+  capMB = M.clampArchiveCapMB(capMB)
   local dir = lapArchiveDir()
   persistence.ensureParentDirForFile(dir .. "/_dummy")  -- create dir
   local lapMs = (rec.lap and tonumber(rec.lap.lap_ms)) or 0
@@ -317,14 +374,19 @@ function M.write(rec, capMB)
   _writesUntilRotate = _writesUntilRotate + 1
   if _writesUntilRotate >= ROTATE_EVERY_N_WRITES then
     _writesUntilRotate = 0
-    pcall(function() M.rotate(capMB or 500) end)
+    pcall(function() M.rotate(capMB) end)
   end
+  bustStatsCache()
   return true, path
 end
 
 --- Lightweight stats for the Settings UI: count + total MB used.
 ---@return integer count, number mb
 function M.stats()
+  local now = (os and os.clock and os.clock()) or 0
+  if now - _statsCacheT < STATS_CACHE_TTL_SEC then
+    return _statsCacheCount, _statsCacheMb
+  end
   local dir = lapArchiveDir()
   local count = 0
   local total = 0
@@ -342,7 +404,10 @@ function M.stats()
       end
     end
   end)
-  return count, total / (1024 * 1024)
+  _statsCacheT = now
+  _statsCacheCount = count
+  _statsCacheMb = total / (1024 * 1024)
+  return _statsCacheCount, _statsCacheMb
 end
 
 return M

@@ -134,11 +134,19 @@ local function loadConfig()
     cfg = shallowCopyDefaults()
   end
   -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
-  -- Apply even when empty so an explicit clear in Settings wins over stale table-form data.
+  -- Issue #78: empty stored URL used to mean "cleared"; with auto-launch + no URL
+  -- editor in Settings, migrate empty back to localhost and persist so wsBridge.tick connects.
   if _wsUrlStorage and type(_wsUrlStorage.get) == "function" then
     local ok, val = pcall(function() return _wsUrlStorage:get() end)
     if ok and type(val) == "string" then
-      cfg.wsSidecarUrl = val
+      if val ~= "" then
+        cfg.wsSidecarUrl = val
+      else
+        cfg.wsSidecarUrl = CONFIG_DEFAULTS.wsSidecarUrl
+        if type(_wsUrlStorage.set) == "function" then
+          pcall(function() _wsUrlStorage:set(cfg.wsSidecarUrl) end)
+        end
+      end
     end
   end
   -- Overlay approachMeters too (table-form is broken).
@@ -148,6 +156,7 @@ local function loadConfig()
       cfg.approachMeters = val
     end
   end
+  cfg.lapArchiveMaxMB = lapArchive.clampArchiveCapMB(cfg.lapArchiveMaxMB)
   return cfg
 end
 
@@ -468,8 +477,6 @@ local state = {
   cornerAdvisories = {},
   --- CSP `ac.StateCar.isLapInvalidated` sampled each frame; ORed across the current lap for archive `is_valid`.
   lapInvalidatedThisLap = false,
-  --- Issue #77 Part C: stable per-script-load id stamped on every archived lap.
-  sessionUuid = "",
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
   --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
@@ -1031,6 +1038,7 @@ function script.windowSettings(_dt)
     sidecarConnected = wsBridge.sidecarConnected,
     -- Issue #77 Part C: lap archive stats for Settings UI.
     lapArchiveStats = lapArchive.stats,
+    lapArchiveClampCapMB = lapArchive.clampArchiveCapMB,
     setApproachMeters = setApproachMetersAndPersist,
   })
   if config.enableRenderDiagnostics then
@@ -1542,7 +1550,7 @@ function script.update(dt)
       }
       local rec = lapArchive.buildRecord(archiveOpts)
       if rec then
-        local ok, pathOrErr = lapArchive.write(rec, config.lapArchiveMaxMB)
+        local ok, pathOrErr = lapArchive.write(rec, lapArchive.clampArchiveCapMB(config.lapArchiveMaxMB))
         if ac and type(ac.log) == "function" then
           if ok then
             ac.log("[COPILOT][ARCHIVE] wrote " .. tostring(pathOrErr))

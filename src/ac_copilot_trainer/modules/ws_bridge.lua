@@ -24,10 +24,10 @@ local cornerAdvisories = {}  ---@type table<string, { lap: number, text: string,
 local currentSimT = 0
 
 --- Issue #77 Part A: sidecar auto-launch state.
---- spawnedPid: PID of the child process we launched (nil = none, or already
----             dead). Updated by os.runConsoleProcess callback on exit.
---- lastLaunchAttemptT: wall-clock seconds of the last spawn attempt (gate
----                     against double-launch + crash-loop restart).
+--- spawnedAlive: true while CSP believes the console child is running; cleared
+---               from os.runConsoleProcess exit callback so we can relaunch.
+--- lastLaunchAttemptT: sim-time seconds of the last spawn attempt (gate against
+---                     double-launch + crash-loop restart).
 --- LAUNCH_RETRY_SEC: minimum gap between launch attempts (also our
 ---                   "settling time" before we stop retrying transparently).
 local spawnedAlive = false
@@ -101,9 +101,10 @@ function M.startSidecarIfNeeded(appDir)
     ac.log("[COPILOT][SIDECAR] launching: " .. batPath)
   end
 
-  spawnedAlive = true
+  spawnedAlive = false
+  local spawnAccepted = false
   local okSpawn, errSpawn = pcall(function()
-    os.runConsoleProcess({
+    local a, b = os.runConsoleProcess({
       filename = batPath,
       arguments = {},
       workingDirectory = appDir or "",
@@ -124,11 +125,15 @@ function M.startSidecarIfNeeded(appDir)
           tostring(exitCode), tostring(err or "nil")))
       end
     end)
+    if a == false then
+      error(tostring(b or "runConsoleProcess returned false"))
+    end
+    spawnAccepted = true
   end)
+  spawnedAlive = okSpawn and spawnAccepted
   if not okSpawn then
-    spawnedAlive = false
     if ac and type(ac.log) == "function" then
-      ac.log("[COPILOT][SIDECAR] runConsoleProcess threw: " .. tostring(errSpawn))
+      ac.log("[COPILOT][SIDECAR] runConsoleProcess failed: " .. tostring(errSpawn))
     end
   end
 end
@@ -140,7 +145,8 @@ function M.sidecarSpawnedAlive()
   return spawnedAlive
 end
 
---- Public read-only status: is the WebSocket actually connected (handshake done)?
+--- Public read-only status: CSP `web.socket` handle exists (dial in progress or connected).
+--- There is no separate handshake flag in this bridge; first recv populates the queue.
 ---@return boolean
 function M.sidecarConnected()
   return sock ~= nil
@@ -155,6 +161,7 @@ function M.reset()
   cornerAdvisories = {}
   lastCornerQueryAt = {}
   currentSimT = 0
+  lastLaunchAttemptT = -1e9
   _recvQueue = {}
 end
 
