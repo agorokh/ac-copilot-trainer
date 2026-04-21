@@ -62,6 +62,7 @@ local function lapArchiveDir()
 end
 
 --- Settings UI calls `stats()` every frame; cache full-directory scan for a short TTL (Gemini #78).
+--- Uses `os.time` (wall-ish seconds), not `os.clock` (CPU time can stall the TTL — Cursor #78).
 local _statsCacheT = -1e9
 local _statsCacheCount = 0
 local _statsCacheMb = 0
@@ -69,36 +70,6 @@ local STATS_CACHE_TTL_SEC = 2.0
 
 local function bustStatsCache()
   _statsCacheT = -1e9
-end
-
-local function carIdFromOptsCar(carTbl)
-  if type(carTbl) ~= "table" then
-    return nil
-  end
-  for _, key in ipairs({ "id", "name", "driverName" }) do
-    local ok, v = pcall(function()
-      return carTbl[key]
-    end)
-    if ok and v ~= nil and tostring(v) ~= "" then
-      return ch.sanitizeId(tostring(v), "unknown")
-    end
-  end
-  return nil
-end
-
-local function trackIdFromOptsSim(simTbl)
-  if type(simTbl) ~= "table" then
-    return nil
-  end
-  for _, key in ipairs({ "trackName", "track", "trackConfiguration" }) do
-    local ok, v = pcall(function()
-      return simTbl[key]
-    end)
-    if ok and v ~= nil and tostring(v) ~= "" then
-      return ch.sanitizeId(tostring(v), "unknown")
-    end
-  end
-  return nil
 end
 
 --- Generate a short stable-ish UUID-like ID. Not RFC4122 — Lua 5.1 has no
@@ -188,8 +159,8 @@ function M.buildRecord(opts)
   if not opts.lap_n or not opts.lap_ms or opts.lap_ms <= 0 then return nil end
 
   local sim = opts.sim
-  local carId = carIdFromOptsCar(opts.car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
-  local trackId = trackIdFromOptsSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local carId = persistence.archiveCarIdFromCar(opts.car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = persistence.archiveTrackIdFromSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
 
   local trackLengthM = nil
   if sim and type(sim) == "table" then
@@ -390,7 +361,7 @@ end
 --- Lightweight stats for the Settings UI: count + total MB used.
 ---@return integer count, number mb
 function M.stats()
-  local now = (os and os.clock and os.clock()) or 0
+  local now = (os and os.time and os.time()) or 0
   if now - _statsCacheT < STATS_CACHE_TTL_SEC then
     return _statsCacheCount, _statsCacheMb
   end

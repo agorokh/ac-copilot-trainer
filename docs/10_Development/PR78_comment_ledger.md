@@ -64,6 +64,8 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3114739601 | cursor[bot] | yes |
 | 3114785252 | cursor[bot] | yes |
 | 3114785255 | cursor[bot] | yes |
+| 3114812814 | cursor[bot] | yes |
+| 3114812816 | cursor[bot] | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -77,14 +79,16 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3114706578**: Each record gets a shallow copy of trace field names, not the module `TRACE_FIELDS` table reference.
 - **3114785252**: `lap_archive.write` uses `persistence.encodeJsonCompact` so large traces do not pretty-print into oversized files.
 - **3114785255**: `start_sidecar.bat` exits after `py -3` sidecar exit instead of silently retrying with `python` (different interpreter).
+- **3114812814**: `lap_archive.stats()` cache TTL uses `os.time` instead of `os.clock`.
+- **3114812816**: Lap archive car/track ids use `persistence.archiveCarIdFromCar` / `archiveTrackIdFromSim` (single key list with `sessionKey`).
 
-## Issue comments (`issues/78/comments`): 4
+## Issue comments (`issues/78/comments`): 5
 
-Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**. `4285619084` (Codex usage limit notice) — **N/A**.
+Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**. `4285619084` / `4285661809` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 18
+## PR reviews (`pulls/78/reviews`): 19
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, and Bugbot summary `4144770623` after `2bf60e6`).
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, and Bugbot summary `4144802228` after `34eb015`).
 
 ## Issue #77 scope proof
 
