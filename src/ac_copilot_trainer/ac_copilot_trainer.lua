@@ -23,6 +23,8 @@ local racingLine = require("racing_line")
 local tireMonitor = require("tire_monitor")
 local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
+-- Issue #77 Part C: per-lap archive (full trace + setup + corners + coaching).
+local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
 local sessionJournal = require("session_journal")
@@ -68,7 +70,10 @@ local CONFIG_DEFAULTS = {
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running — see `WARP.md` § WebSocket sidecar (issue #45).
-  wsSidecarUrl = "",
+  -- Issue #77 Part A: default URL points at our auto-launched sidecar.
+  -- Setting this here means a fresh install dials 127.0.0.1:8765 immediately
+  -- without the user touching Settings.
+  wsSidecarUrl = "ws://127.0.0.1:8765",
   --- Focus practice (issue #44): comma-separated corner labels `T1,T2`; empty = auto from worst consistency rows.
   focusPracticeCornerLabels = "",
   --- Auto-pick up to this many worst corners when `focusPracticeCornerLabels` is empty (1–3).
@@ -78,6 +83,12 @@ local CONFIG_DEFAULTS = {
   --- 3D overlays (issue #57 Part B); default on — toggles in Settings window.
   racingLineEnabled = true,
   brakeMarkersEnabled = true,
+  --- Issue #77 Part C: write one JSON per completed lap to journal/laps/.
+  --- Includes full per-sample trace (2000 samples), corner features, active
+  --- car setup snapshot, coaching context. Append-only with disk cap.
+  lapArchiveEnabled = true,
+  --- Hard cap on archive disk usage in MB. Oldest files deleted first.
+  lapArchiveMaxMB = 500,
 }
 
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
@@ -141,6 +152,10 @@ local function loadConfig()
 end
 
 local config = loadConfig()
+
+-- Issue #77 Part C: stable session id stamped on every archived lap from this script load.
+math.randomseed((os and os.time and os.time()) or 0)
+local SESSION_UUID = string.format("%08x%04x", math.random(0, 0xFFFFFFFF), math.random(0, 0xFFFF))
 
 --- Persist `wsSidecarUrl` to per-key storage AND immediately re-configure
 --- the running wsBridge with the new URL. wsBridge is already required at
@@ -231,6 +246,27 @@ local td = throttleDet.new()
 local tires = tireMonitor.new()
 
 wsBridge.configure(config.wsSidecarUrl or "")
+
+-- Issue #77 Part A: resolve the deployed app dir (where start_sidecar.bat lives)
+-- so wsBridge can spawn the sidecar without hardcoded paths.
+local appDir = nil
+do
+  local info = debug.getinfo(1, "S")
+  if info and type(info.source) == "string" then
+    local src = info.source
+    if src:sub(1, 1) == "@" then src = src:sub(2) end
+    -- src is the absolute path to ac_copilot_trainer.lua; strip filename
+    appDir = src:match("^(.*)[/\\][^/\\]+$")
+  end
+end
+if not appDir or appDir == "" then
+  appDir = "."  -- fallback; .bat will fail and log clearly
+end
+
+-- Kick off sidecar spawn at script load. Subsequent wsBridge.tick calls also
+-- invoke startSidecarIfNeeded so a crashed child gets relaunched after the
+-- LAUNCH_RETRY_SEC gap.
+pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
 
 local lastDriveCar ---@type ac.StateCar|nil
 local lastDriveSim ---@type ac.StateSim|nil
@@ -430,6 +466,8 @@ local state = {
   -- Round 10: per-corner LLM advisories. Populated by wsBridge
   -- corner_advice replies; consumed by realtime_coaching.tick.
   cornerAdvisories = {},
+  --- Issue #77 Part C: stable per-script-load id stamped on every archived lap.
+  sessionUuid = "",
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
   --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
@@ -984,6 +1022,11 @@ function script.windowSettings(_dt)
     },
     focusPracticeUi = focusPracticeUiProxy,
     setWsSidecarUrl = setWsSidecarUrlAndReconfigure,
+    -- Issue #77 Part A: Settings UI shows sidecar process + connection status.
+    sidecarSpawnedAlive = wsBridge.sidecarSpawnedAlive,
+    sidecarConnected = wsBridge.sidecarConnected,
+    -- Issue #77 Part C: lap archive stats for Settings UI.
+    lapArchiveStats = lapArchive.stats,
     setApproachMeters = setApproachMetersAndPersist,
   })
   if config.enableRenderDiagnostics then
@@ -1224,6 +1267,8 @@ function script.update(dt)
   end
 
   wsBridge.tick(ch.simSeconds(sim))
+  -- Issue #77 Part A: per-frame self-heal; wsBridge gates via LAUNCH_RETRY_SEC.
+  pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
   wsBridge.pollInbound(8)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
@@ -1462,6 +1507,40 @@ function script.update(dt)
         end
       end
       wsBridge.sendJson(lapPayload)
+    end
+
+    -- Issue #77 Part C: archive this lap (trace + setup + corners + coaching).
+    -- Runs INDEPENDENTLY of sidecar / coaching success. Captures the dataset
+    -- for future RAG / classifier / fine-tune work. Forward-compatible schema
+    -- so imported MoTeC CSVs (Initiative B) drop into the same shape.
+    if config.lapArchiveEnabled ~= false and lastMs > 0 then
+      local archiveOpts = {
+        session_uuid = SESSION_UUID,
+        car = car,
+        sim = sim,
+        lap_n = state.lapsCompleted,
+        lap_ms = lastMs,
+        is_pb = (state.bestLapMs ~= nil and lastMs <= state.bestLapMs),
+        is_valid = true,  -- AC has no easy "lap invalidated" boolean here; default true
+        trace = completedTrace,
+        corners = feats,
+        setup_snap = state.lastSetupSnap,
+        setup_hash = state.setupHash,
+        rules_hints = state.coachingLines,
+        sidecar_debrief = state.sidecarDebriefText,
+        corner_advice = state.cornerAdvisories,
+      }
+      local rec = lapArchive.buildRecord(archiveOpts)
+      if rec then
+        local ok, pathOrErr = lapArchive.write(rec, config.lapArchiveMaxMB)
+        if ac and type(ac.log) == "function" then
+          if ok then
+            ac.log("[COPILOT][ARCHIVE] wrote " .. tostring(pathOrErr))
+          else
+            ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
+          end
+        end
+      end
     end
 
     state.sectorIndex = 1

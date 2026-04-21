@@ -22,6 +22,18 @@ local cornerAdvisories = {}  ---@type table<string, { lap: number, text: string,
 --- os.clock() which is process CPU time (advances too slowly for a
 --- low-CPU Lua script, so the 6s staleness expiry never triggered).
 local currentSimT = 0
+
+--- Issue #77 Part A: sidecar auto-launch state.
+--- spawnedPid: PID of the child process we launched (nil = none, or already
+---             dead). Updated by os.runConsoleProcess callback on exit.
+--- lastLaunchAttemptT: wall-clock seconds of the last spawn attempt (gate
+---                     against double-launch + crash-loop restart).
+--- LAUNCH_RETRY_SEC: minimum gap between launch attempts (also our
+---                   "settling time" before we stop retrying transparently).
+local spawnedAlive = false
+local lastLaunchAttemptT = -1e9
+local LAUNCH_RETRY_SEC = 5.0
+local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
 local lastCornerQueryAt = {}  ---@type table<string, number>
@@ -44,6 +56,94 @@ function M.configure(u)
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
   _recvQueue = {}
+end
+
+--- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
+---
+--- CSP exposes os.runConsoleProcess(params, callback) with terminateWithScript=true
+--- which ties the child process to the Lua script lifetime (also dies with AC on
+--- Win 8+). Pattern mirrored from the shipped CSP app `joypad-assist/mobile`.
+---
+--- Behaviour:
+---   1. If we already have a live socket, noop.
+---   2. If we already spawned a child this session and it's still alive, noop.
+---   3. If we tried to launch within LAUNCH_RETRY_SEC, noop (avoid crash-loop).
+---   4. Otherwise launch start_sidecar.bat (sibling of this Lua module's app dir).
+---      The .bat handles Python discovery + env vars.
+---
+--- Stdout from the child streams into ac.log prefixed `[SIDECAR]`.
+--- On unexpected child exit, we log the exit code; the next M.tick() will
+--- naturally re-attempt the launch via this function once LAUNCH_RETRY_SEC has
+--- elapsed.
+---
+---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
+function M.startSidecarIfNeeded(appDir)
+  if sock then return end
+  if spawnedAlive then return end
+  if currentSimT - lastLaunchAttemptT < LAUNCH_RETRY_SEC then return end
+  lastLaunchAttemptT = currentSimT
+
+  if type(os) ~= "table" or type(os.runConsoleProcess) ~= "function" then
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][SIDECAR] os.runConsoleProcess unavailable on this CSP build; manual launch required")
+    end
+    return
+  end
+
+  local batPath
+  if type(appDir) == "string" and appDir ~= "" then
+    batPath = appDir .. "/" .. SIDECAR_BAT_RELATIVE
+  else
+    batPath = SIDECAR_BAT_RELATIVE  -- relative to AC working dir; fragile fallback
+  end
+
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][SIDECAR] launching: " .. batPath)
+  end
+
+  spawnedAlive = true
+  local okSpawn, errSpawn = pcall(function()
+    os.runConsoleProcess({
+      filename = batPath,
+      arguments = {},
+      workingDirectory = appDir or "",
+      timeout = 0,                   -- no per-call timeout; long-running server
+      terminateWithScript = true,    -- die with AC + script reload
+      inheritEnvironment = true,
+      dataCallback = function(_err, line)
+        if line and ac and type(ac.log) == "function" then
+          ac.log("[COPILOT][SIDECAR] " .. tostring(line):gsub("[\r\n]+$", ""))
+        end
+      end,
+    }, function(err, result)
+      -- Process exited (clean or crash). Clear flag so next M.tick can relaunch.
+      spawnedAlive = false
+      if ac and type(ac.log) == "function" then
+        local exitCode = (type(result) == "table" and result.exitCode) or "?"
+        ac.log(string.format("[COPILOT][SIDECAR] exited code=%s err=%s",
+          tostring(exitCode), tostring(err or "nil")))
+      end
+    end)
+  end)
+  if not okSpawn then
+    spawnedAlive = false
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][SIDECAR] runConsoleProcess threw: " .. tostring(errSpawn))
+    end
+  end
+end
+
+--- Public read-only status: is our spawned child sidecar process believed alive?
+--- Used by the Settings UI to render a status line.
+---@return boolean
+function M.sidecarSpawnedAlive()
+  return spawnedAlive
+end
+
+--- Public read-only status: is the WebSocket actually connected (handshake done)?
+---@return boolean
+function M.sidecarConnected()
+  return sock ~= nil
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
