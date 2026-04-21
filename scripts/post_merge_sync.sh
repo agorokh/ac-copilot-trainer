@@ -83,6 +83,17 @@ phase_vault() {
     fail "phase_vault must be run from main; current branch is '${CURRENT:-unknown}'"
     exit 20
   fi
+  git fetch origin || { fail "failed to fetch origin before vault sync"; exit 20; }
+  LOCAL_MAIN_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+  REMOTE_MAIN_SHA="$(git rev-parse origin/main 2>/dev/null || true)"
+  if [[ -z "$LOCAL_MAIN_SHA" ]] || [[ -z "$REMOTE_MAIN_SHA" ]]; then
+    fail "could not resolve local or remote main before vault sync"
+    exit 20
+  fi
+  if [[ "$LOCAL_MAIN_SHA" != "$REMOTE_MAIN_SHA" ]]; then
+    fail "phase_vault requires local main to match origin/main before creating the vault branch"
+    exit 10
+  fi
 
   VAULT_UNTRACKED="$(git ls-files --others --exclude-standard -- docs/01_Vault/ 2>/dev/null | sed '/^$/d' || true)"
   if git diff --quiet -- docs/01_Vault/ && git diff --cached --quiet -- docs/01_Vault/ && [[ -z "$VAULT_UNTRACKED" ]]; then
@@ -103,8 +114,11 @@ phase_vault() {
   fi
 
   VAULT_BRANCH="vault/post-merge-pr${PR}"
-  git branch -D "$VAULT_BRANCH" >/dev/null 2>&1 || true
-  git checkout -b "$VAULT_BRANCH"
+  if git show-ref --verify --quiet "refs/heads/$VAULT_BRANCH"; then
+    fail "local branch $VAULT_BRANCH already exists; delete it before rerunning phase_vault"
+    exit 10
+  fi
+  git checkout -b "$VAULT_BRANCH" || { fail "failed to create vault branch $VAULT_BRANCH"; exit 10; }
   git add docs/01_Vault/
   git commit --no-verify -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
   git push -u --force-with-lease origin "$VAULT_BRANCH" || exit 11
@@ -119,7 +133,7 @@ phase_vault() {
       --body "Vault-only handoff updates produced by post-merge-steward." \
       --base main --head "$VAULT_BRANCH" --label vault-only || exit 12
   fi
-  git checkout main >/dev/null 2>&1 || true
+  git checkout main >/dev/null 2>&1 || { fail "vault PR created, but failed to restore repository to main"; exit 10; }
 }
 
 case "$PHASE" in

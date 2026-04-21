@@ -41,7 +41,7 @@ memory: project
 
 - `0` success
 - `2` bad usage
-- `10` git conflict
+- `10` git operation failure (including conflicts and failed `git checkout`, `git pull --ff-only`, or `git commit`)
 - `11` branch protection rejected vault push
 - `12` unexpected PR state / PR creation failure
 - `20` infrastructure error

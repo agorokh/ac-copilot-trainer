@@ -13,7 +13,7 @@ fi
 STAGED="$(git diff --cached --name-only 2>/dev/null || true)"
 commit_includes_all_tracked() {
   case " ${AC_VAULT_FOLLOW_UP_COMMAND:-} " in
-    *" --all "*|*" -a "*|*" -am "*|*" -ma "*) return 0 ;;
+    *" --all "*|*" -a "*|*" -am "*) return 0 ;;
     *) return 1 ;;
   esac
 }
