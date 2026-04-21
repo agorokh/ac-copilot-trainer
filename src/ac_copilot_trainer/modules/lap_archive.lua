@@ -166,9 +166,8 @@ function M.buildRecord(opts)
   local trackId = persistence.archiveTrackIdFromSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
 
   local trackLengthM = nil
-  if sim and type(sim) == "table" then
-    pcall(function() trackLengthM = tonumber(sim.trackLengthM) end)
-  end
+  -- `ac.StateSim` is userdata in CSP — same pattern as grip/temps (Cursor Bugbot #78).
+  pcall(function() trackLengthM = tonumber(sim and sim.trackLengthM) end)
 
   local trackGrip = nil
   pcall(function() trackGrip = tonumber(sim and sim.trackGripLevel) end)
