@@ -182,9 +182,9 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3115531217**: `persistence.archiveCarIdFromCar` / `archiveTrackIdFromSim` document `ac.StateCar|nil` and `ac.StateSim|nil` (userdata-safe `pcall` field reads).
 - **3115531234**: PR description files table + risk section updated to match `start_sidecar.bat` (walk-up repo discovery, optional `AC_COPILOT_REPO_ROOT` override) — no hardcoded checkout path.
 
-## Issue comments (`issues/78/comments`): 13
+## Issue comments (`issues/78/comments`): 14
 
-Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` and again after `9e3ceca` — still **N/A**. `4285291480` (Sourcery guide) / `4285294093` (Qodo summary) — **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` / `4286535815` / `4286607320` / `4286671243` / `4286770545` / `4286876069` / `4286943650` (Codex usage limit notices) — **N/A**.
+Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` and again after `9e3ceca` — still **N/A**. `4285291480` (Sourcery guide) / `4285294093` (Qodo summary) — **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` / `4286535815` / `4286607320` / `4286671243` / `4286770545` / `4286876069` / `4286943650` / `4287024055` (Codex usage limit notices) — **N/A**.
 
 ## PR reviews (`pulls/78/reviews`): 44
 
