@@ -39,6 +39,9 @@ while i < len(parts):
     # commit; cached-only diff is then insufficient (Codex #80).
     if token in {"-p", "--patch", "--interactive"}:
         raise SystemExit(0)
+    # `--pathspec-from-file` can commit unstaged paths without positional pathspecs (Codex #80).
+    if token == "--pathspec-from-file" or token.startswith("--pathspec-from-file="):
+        raise SystemExit(0)
     if token in {"-a", "--all", "-i", "--include", "-o", "--only"}:
         raise SystemExit(0)
     if token == "--":
