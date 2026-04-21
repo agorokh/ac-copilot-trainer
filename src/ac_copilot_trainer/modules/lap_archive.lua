@@ -38,11 +38,6 @@ local ch = require("csp_helpers")
 
 local SCHEMA_VERSION = 1
 
--- Full-directory scan in `rotate()` is O(n files). Run it every N writes so lap-end
--- work stays smooth once the archive holds thousands of laps (PR #78 review).
-local ROTATE_EVERY_N_WRITES = 10
-local _writesUntilRotate = 0
-
 --- Same bounds as Settings slider (issue #77 / PR #78).
 local ARCHIVE_CAP_MIN_MB = 50
 local ARCHIVE_CAP_MAX_MB = 5000
@@ -339,8 +334,8 @@ function M.rotate(capMB)
   local idx = 1
   while total > capBytes and idx <= #files do
     local f = files[idx]
-    local okRm = pcall(function() os.remove(f.path) end)
-    if okRm then
+    local okRm, rmRes = pcall(os.remove, f.path)
+    if okRm and rmRes ~= nil and rmRes ~= false then
       local delta = (f.size > 0) and f.size or (250 * 1024)
       total = math.max(0, total - delta)
       deleted = deleted + 1
@@ -369,13 +364,12 @@ function M.write(rec, capMB)
   if not raw then return false, "encodeJson returned nil" end
   local f, ferr = io.open(path, "w")
   if not f then return false, "open failed: " .. tostring(ferr) end
-  f:write(raw)
-  f:close()
-  _writesUntilRotate = _writesUntilRotate + 1
-  if _writesUntilRotate >= ROTATE_EVERY_N_WRITES then
-    _writesUntilRotate = 0
-    pcall(function() M.rotate(capMB) end)
+  if not f:write(raw) then
+    f:close()
+    return false, "write failed"
   end
+  f:close()
+  pcall(function() M.rotate(capMB) end)
   bustStatsCache()
   return true, path
 end

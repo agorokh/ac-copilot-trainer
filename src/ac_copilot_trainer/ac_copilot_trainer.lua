@@ -163,8 +163,14 @@ end
 local config = loadConfig()
 
 -- Issue #77 Part C: stable session id stamped on every archived lap from this script load.
+-- Use 16-bit math.random bounds only (Lua 5.1 / some LuaJIT builds reject 0xFFFFFFFF as int32).
 math.randomseed((os and os.time and os.time()) or 0)
-local SESSION_UUID = string.format("%08x%04x", math.random(0, 0xFFFFFFFF), math.random(0, 0xFFFF))
+local SESSION_UUID = string.format(
+  "%04x%04x%04x",
+  math.random(0, 0xFFFF),
+  math.random(0, 0xFFFF),
+  math.random(0, 0xFFFF)
+)
 
 --- Persist `wsSidecarUrl` to per-key storage AND immediately re-configure
 --- the running wsBridge with the new URL. wsBridge is already required at
@@ -475,7 +481,7 @@ local state = {
   -- Round 10: per-corner LLM advisories. Populated by wsBridge
   -- corner_advice replies; consumed by realtime_coaching.tick.
   cornerAdvisories = {},
-  --- CSP `ac.StateCar.isLapInvalidated` sampled each frame; ORed across the current lap for archive `is_valid`.
+  --- Lap invalidation ORed each frame (`carLapInvalidatedFlag`) for archive `is_valid`.
   lapInvalidatedThisLap = false,
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
@@ -1163,6 +1169,22 @@ local function autoPlaceOnce()
   end
 end
 
+--- CSP lap invalidation flags differ by build; probe known names without throwing.
+local function carLapInvalidatedFlag(carObj)
+  if type(carObj) ~= "table" then
+    return false
+  end
+  for _, key in ipairs({ "isLapInvalidated", "isCurrentLapInvalid", "currentLapInvalid" }) do
+    local ok, v = pcall(function()
+      return carObj[key]
+    end)
+    if ok and v == true then
+      return true
+    end
+  end
+  return false
+end
+
 function script.update(dt)
   sim = ac.getSim()
   car = ac.getCar(0)
@@ -1338,11 +1360,9 @@ function script.update(dt)
   -- Lap boundary: finalize trace before appending this frame's sample.
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
     -- Last frame of the completed lap may still carry invalidation (CSP `ac.StateCar`).
-    pcall(function()
-      if car.isLapInvalidated then
-        state.lapInvalidatedThisLap = true
-      end
-    end)
+    if carLapInvalidatedFlag(car) then
+      state.lapInvalidatedThisLap = true
+    end
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
@@ -1582,11 +1602,9 @@ function script.update(dt)
   tel:update(dt, car, sim)
 
   if not sim.isInMainMenu and state.lastLapCount >= 0 and lc == state.lastLapCount then
-    pcall(function()
-      if car.isLapInvalidated then
-        state.lapInvalidatedThisLap = true
-      end
-    end)
+    if carLapInvalidatedFlag(car) then
+      state.lapInvalidatedThisLap = true
+    end
   end
 
   local ev = brakes:update(car, dt)

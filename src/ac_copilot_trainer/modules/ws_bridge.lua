@@ -78,6 +78,12 @@ end
 ---
 ---@param appDir string|nil  absolute path to the deployed app dir (where the .bat lives)
 function M.startSidecarIfNeeded(appDir)
+  -- Child died but CSP kept a stale socket handle (reconnect=true); drop it so we can respawn.
+  if not spawnedAlive and sock ~= nil then
+    close_socket_if_any(sock)
+    sock = nil
+    lastTry = -RECONNECT_SEC
+  end
   if sock then return end
   if spawnedAlive then return end
   if currentSimT - lastLaunchAttemptT < LAUNCH_RETRY_SEC then return end
