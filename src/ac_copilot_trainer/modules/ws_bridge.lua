@@ -37,6 +37,8 @@ local lastLaunchAttemptT = -1e9
 local LAUNCH_RETRY_SEC = 5.0
 --- Back off `runConsoleProcess` after streak failures or bat exit 2 (missing repo/tools — Copilot #78).
 local spawnFailStreak = 0
+--- Count rapid nonzero child exits (bat starts then dies — Codex #78); not the same as spawn pcall failures.
+local nonzeroExitStreak = 0
 local spawnAbandonUntilT = -1e9
 local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
@@ -72,6 +74,7 @@ function M.configure(u)
   -- Explicit URL/socket reset must not leave zombie-latch set for the next dial (Codex #78).
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
+  nonzeroExitStreak = 0
   spawnAbandonUntilT = -1e9
 end
 
@@ -111,6 +114,7 @@ function M.startSidecarIfNeeded(appDir)
 
   -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
   if tryOpen() then
+    nonzeroExitStreak = 0
     return
   end
 
@@ -160,16 +164,29 @@ function M.startSidecarIfNeeded(appDir)
         -- Clean exit: no stale handle — do not treat later manual sockets as zombies.
         sidecarChildEverLaunched = false
       end
+      local exitCode = (type(result) == "table" and result.exitCode) or "?"
+      local codeNum = tonumber(exitCode)
+      -- `start_sidecar.bat` uses `exit /b 2` when `tools/ai_sidecar` cannot be resolved (Copilot #78).
+      -- Must not depend on `ac.log` (Cursor #78 / Bugbot).
+      if codeNum == 2 then
+        spawnAbandonUntilT = 1e12
+        spawnFailStreak = 0
+        nonzeroExitStreak = 0
+      elseif codeNum ~= nil and codeNum ~= 0 then
+        nonzeroExitStreak = nonzeroExitStreak + 1
+        if nonzeroExitStreak >= 8 then
+          spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
+          nonzeroExitStreak = 0
+          if ac and type(ac.log) == "function" then
+            ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated nonzero child exits (Codex #78)")
+          end
+        end
+      else
+        nonzeroExitStreak = 0
+      end
       if ac and type(ac.log) == "function" then
-        local exitCode = (type(result) == "table" and result.exitCode) or "?"
         ac.log(string.format("[COPILOT][SIDECAR] exited code=%s err=%s",
           tostring(exitCode), tostring(err or "nil")))
-        -- `start_sidecar.bat` uses `exit /b 2` when `tools/ai_sidecar` cannot be resolved (Copilot #78).
-        local codeNum = tonumber(exitCode)
-        if codeNum == 2 then
-          spawnAbandonUntilT = 1e12
-          spawnFailStreak = 0
-        end
       end
     end)
     if not a then
@@ -181,6 +198,7 @@ function M.startSidecarIfNeeded(appDir)
   if okSpawn and spawnAccepted then
     sidecarChildEverLaunched = true
     spawnFailStreak = 0
+    nonzeroExitStreak = 0
   end
   if not okSpawn then
     spawnFailStreak = spawnFailStreak + 1
@@ -225,6 +243,7 @@ function M.reset()
   -- Do not clear `spawnedAlive`: the console child can outlive this reset; clearing it risks a second spawn on port 8765 (Cursor #78).
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
+  nonzeroExitStreak = 0
   spawnAbandonUntilT = -1e9
 end
 
