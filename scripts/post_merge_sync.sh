@@ -103,8 +103,8 @@ phase_vault() {
 
   OOS_TRACKED="$(
     {
-      git diff --name-only HEAD -- . ':(exclude)docs/01_Vault' 2>/dev/null
-      git diff --cached --name-only -- . ':(exclude)docs/01_Vault' 2>/dev/null
+      git diff --name-only HEAD -- . ':(exclude)docs/01_Vault/' 2>/dev/null
+      git diff --cached --name-only -- . ':(exclude)docs/01_Vault/' 2>/dev/null
     } | sort -u | sed '/^$/d' || true
   )"
   if [[ -n "$OOS_TRACKED" ]]; then
@@ -118,10 +118,14 @@ phase_vault() {
     fail "local branch $VAULT_BRANCH already exists; delete it before rerunning phase_vault"
     exit 10
   fi
+  if git ls-remote --exit-code --heads origin "$VAULT_BRANCH" >/dev/null 2>&1; then
+    fail "remote branch origin/$VAULT_BRANCH already exists; delete it before rerunning phase_vault"
+    exit 11
+  fi
   git checkout -b "$VAULT_BRANCH" || { fail "failed to create vault branch $VAULT_BRANCH"; exit 10; }
   git add docs/01_Vault/
-  git commit --no-verify -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
-  git push -u --force-with-lease origin "$VAULT_BRANCH" || exit 11
+  git commit -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
+  git push -u origin "$VAULT_BRANCH" || exit 11
   EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)"
   if [[ -n "$EXISTING_PR" ]]; then
     gh pr edit "$EXISTING_PR" \
