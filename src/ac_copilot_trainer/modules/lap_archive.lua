@@ -369,8 +369,9 @@ function M.write(rec, capMB)
   local fname = string.format("lap_%s_%s_%d_%d_%s.json",
     fileTimestampUtc(), sessShort, lapN, lapMs, lapKey)
   local path = dir .. "/" .. fname
-  local raw = persistence.encodeJson(rec)
-  if not raw then return false, "encodeJson returned nil" end
+  -- Large trace arrays: compact JSON avoids pretty-print whitespace blowing the cap (Cursor #78).
+  local raw = persistence.encodeJsonCompact(rec)
+  if not raw then return false, "encodeJsonCompact returned nil" end
   local f, ferr = io.open(path, "w")
   if not f then return false, "open failed: " .. tostring(ferr) end
   if not f:write(raw) then
