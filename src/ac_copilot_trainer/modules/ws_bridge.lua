@@ -39,6 +39,13 @@ local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
 local lastCornerQueryAt = {}  ---@type table<string, number>
+--- CSP web.socket is callback-based; inbound frames land here. Must live at
+--- module scope before `M.configure` / `M.reset` assign to it (CodeRabbit #78).
+local _recvQueue = {}
+--- True after first inbound JSON with matching `protocol` (CodeRabbit #78).
+local sidecarProtocolReady = false
+--- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
+local tryOpen
 
 local function close_socket_if_any(s)
   if s == nil then
@@ -58,6 +65,7 @@ function M.configure(u)
   lastTry = -RECONNECT_SEC
   pendingCoaching = nil
   _recvQueue = {}
+  sidecarProtocolReady = false
   -- Explicit URL/socket reset must not leave zombie-latch set for the next dial (Codex #78).
   sidecarChildEverLaunched = false
 end
@@ -88,12 +96,19 @@ function M.startSidecarIfNeeded(appDir)
     close_socket_if_any(sock)
     sock = nil
     lastTry = -RECONNECT_SEC
+    sidecarProtocolReady = false
     -- One-shot zombie cleanup: do not keep closing a user-opened manual socket (Codex #78).
     sidecarChildEverLaunched = false
   end
   if sock then return end
   if spawnedAlive then return end
   if currentSimT - lastLaunchAttemptT < LAUNCH_RETRY_SEC then return end
+
+  -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
+  if tryOpen() then
+    return
+  end
+
   lastLaunchAttemptT = currentSimT
 
   if type(os) ~= "table" or type(os.runConsoleProcess) ~= "function" then
@@ -142,8 +157,8 @@ function M.startSidecarIfNeeded(appDir)
           tostring(exitCode), tostring(err or "nil")))
       end
     end)
-    if a == false then
-      error(tostring(b or "runConsoleProcess returned false"))
+    if not a then
+      error(tostring(b or "runConsoleProcess returned nil/false"))
     end
     spawnAccepted = true
   end)
@@ -165,11 +180,10 @@ function M.sidecarSpawnedAlive()
   return spawnedAlive
 end
 
---- Public read-only status: CSP `web.socket` handle exists (dial in progress or connected).
---- There is no separate handshake flag in this bridge; first recv populates the queue.
+--- Public read-only status: inbound traffic validated against `PROTOCOL_VERSION` (CodeRabbit #78).
 ---@return boolean
 function M.sidecarConnected()
-  return sock ~= nil
+  return sock ~= nil and sidecarProtocolReady
 end
 
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
@@ -183,6 +197,8 @@ function M.reset()
   currentSimT = 0
   lastLaunchAttemptT = -1e9
   _recvQueue = {}
+  sidecarProtocolReady = false
+  spawnedAlive = false
   sidecarChildEverLaunched = false
 end
 
@@ -245,7 +261,6 @@ end
 
 local _wsDiagLogged = false
 local _wsDiagAttempts = 0
-local _recvQueue = {}  -- CSP web.socket is callback-based; messages land here
 --- Cap noisy per-frame WS recv logs (Bugbot); diagnostics reset on new socket.
 local _wsRecvLogsLeft = 0
 
@@ -309,7 +324,7 @@ end
 --- are pushed to the callback, NOT pulled via receive(). Issue #75 round 6:
 --- our old implementation used the wrong API (no callback passed, sock:send /
 --- sock:receive), which produced "Callback should be a function" on tryOpen.
-local function tryOpen()
+tryOpen = function()
   _wsDiagAttempts = _wsDiagAttempts + 1
   if not url or url == "" then
     _logWsDiagOnce("empty-url")
@@ -324,6 +339,7 @@ local function tryOpen()
     return false
   end
   _recvQueue = {}
+  sidecarProtocolReady = false
   local opened = nil
   local params = {
     onError = _onError,
@@ -336,6 +352,7 @@ local function tryOpen()
       if opened ~= nil and sock == opened then
         sock = nil
         lastTry = -RECONNECT_SEC
+        sidecarProtocolReady = false
       end
     end,
     encoding = "utf8",
@@ -364,6 +381,7 @@ local function tryOpen()
     ))
   end
   sock = nil
+  sidecarProtocolReady = false
   return false
 end
 
@@ -396,6 +414,9 @@ function M.pollInbound(maxPerTick)
     if type(data) == "table" then
       local ev = data.event
       local pv = tonumber(data.protocol)
+      if pv == PROTOCOL_VERSION then
+        sidecarProtocolReady = true
+      end
       if ev == "coaching_response" and pv == PROTOCOL_VERSION then
         local lap = tonumber(data.lap)
         local hints = data.hints
@@ -546,6 +567,7 @@ function M.sendJson(payload)
     close_socket_if_any(sock)
     sock = nil
     lastTry = -RECONNECT_SEC
+    sidecarProtocolReady = false
     return false
   end
   return true
