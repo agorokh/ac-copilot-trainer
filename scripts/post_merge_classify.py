@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def classify_changed_paths(paths: list[str]) -> list[str]:
-    norm = [p.strip().replace("\\", "/") for p in paths if p.strip()]
+    norm = [p.strip().replace("\\", "/").removeprefix("./") for p in paths if p.strip()]
     if not norm:
         return []
     messages: list[str] = []
@@ -26,9 +26,21 @@ def classify_changed_paths(paths: list[str]) -> list[str]:
         add("migration", "Migration paths touched: run your project's migrate command.")
     if any(p == ".env.example" or p.endswith("/.env.example") for p in norm):
         add("env", "`.env.example` changed: review for new required environment variables.")
-    if any(p == "pyproject.toml" or p.endswith("/pyproject.toml") for p in norm):
-        add("deps", "`pyproject.toml` changed: refresh local dependencies if needed.")
-    if any(p.startswith("scripts/") for p in norm):
+    if any(
+        p in {"pyproject.toml", "poetry.lock", "pdm.lock", "requirements.txt", "environment.yml"}
+        or p.endswith(
+            (
+                "/pyproject.toml",
+                "/poetry.lock",
+                "/pdm.lock",
+                "/requirements.txt",
+                "/environment.yml",
+            )
+        )
+        for p in norm
+    ):
+        add("deps", "Dependency files changed: refresh local dependencies if needed.")
+    if any(Path(p).parts and Path(p).parts[0] == "scripts" for p in norm):
         add("scripts", "`scripts/` changed: review new or updated setup/utility scripts.")
     if any(p.startswith(".github/workflows/") for p in norm):
         add(
@@ -68,12 +80,19 @@ def main() -> None:
     body = "## Post-merge follow-ups\n\n" + "\n".join(f"- {line}" for line in lines)
     print("\n".join(lines))
     if args.github_comment:
-        subprocess.run(
-            ["gh", "pr", "comment", str(args.pr), "--body-file", "-"],
-            input=body,
-            text=True,
-            check=True,
-        )
+        try:
+            subprocess.run(
+                ["gh", "pr", "comment", str(args.pr), "--body-file", "-"],
+                input=body,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"warning: failed to post GitHub PR comment via `gh pr comment` "
+                f"(exit code {exc.returncode}); continuing",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":

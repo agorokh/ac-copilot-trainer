@@ -19,17 +19,17 @@ import sys
 
 cmd = os.environ.get("AC_VAULT_FOLLOW_UP_COMMAND", "")
 if not cmd:
-    raise SystemExit(1)
+    raise SystemExit(0)
 
 try:
     parts = shlex.split(cmd)
 except ValueError:
-    raise SystemExit(1)
+    raise SystemExit(0)
 
 try:
     i = parts.index("commit") + 1
 except ValueError:
-    raise SystemExit(1)
+    raise SystemExit(0)
 
 opts_with_values = {"-m", "--message", "-F", "--file", "-c", "-C", "-t", "--template"}
 
@@ -43,6 +43,9 @@ while i < len(parts):
         i += 2
         continue
     if token.startswith(("--message=", "--file=", "--template=")):
+        i += 1
+        continue
+    if token.startswith("--"):
         i += 1
         continue
     if token.startswith("-"):

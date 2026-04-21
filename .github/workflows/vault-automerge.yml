@@ -24,11 +24,13 @@ jobs:
           set -euo pipefail
           files="$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only)"
           if [[ -z "$files" ]]; then
+            gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
             echo "error: vault-only PR has no changed files" >&2
             exit 1
           fi
           out_of_scope="$(printf '%s\n' "$files" | grep -Ev '^docs/01_Vault/' || true)"
           if [[ -n "$out_of_scope" ]]; then
+            gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
             echo "error: vault-only PR contains out-of-scope files:" >&2
             printf '%s\n' "$out_of_scope" | sed 's/^/  - /' >&2
             exit 1
