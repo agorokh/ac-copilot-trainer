@@ -296,22 +296,30 @@ function M.rotate(capMB)
   end
   -- Sort by name (filename starts with `lap_<YYYYMMDD-HHMMSS>_...` so alpha == chronological)
   table.sort(files, function(a, b) return a.name < b.name end)
-  local total = 0
+  -- Per-file `charge` must match what we subtract on delete (Bugbot #78 / zero-byte asymmetry).
   local unknownCount = 0
   for i = 1, #files do
-    if files[i].size > 0 then
-      total = total + files[i].size
-    elseif files[i].size < 0 then
+    local sz = files[i].size
+    if sz > 0 then
+      files[i].charge = sz
+    elseif sz < 0 then
+      files[i].charge = 250 * 1024
       unknownCount = unknownCount + 1
+    else
+      files[i].charge = 0
     end
   end
-  if unknownCount > 0 then
-    total = total + unknownCount * (250 * 1024)
-    if ac and type(ac.log) == "function" then
-      ac.log("[COPILOT][ARCHIVE] rotate: " .. tostring(unknownCount) .. " lap file(s) lacked size; using ~250KB each in cap math")
-    end
+  local total = 0
+  for i = 1, #files do
+    total = total + files[i].charge
+  end
+  if unknownCount > 0 and ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][ARCHIVE] rotate: " .. tostring(unknownCount) .. " lap file(s) lacked size; using ~250KB each in cap math")
   end
   if total == 0 and #files > 0 then
+    for j = 1, #files do
+      files[j].charge = 250 * 1024
+    end
     total = #files * (250 * 1024)
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][ARCHIVE] rotate: lap file sizes unknown; using ~250KB each for cap math")
@@ -323,7 +331,7 @@ function M.rotate(capMB)
     local f = files[idx]
     local okRm, rmRes = pcall(os.remove, f.path)
     if okRm and rmRes ~= nil and rmRes ~= false then
-      local delta = (f.size > 0) and f.size or (250 * 1024)
+      local delta = f.charge or 0
       total = math.max(0, total - delta)
       deleted = deleted + 1
     end
