@@ -49,12 +49,19 @@ IF NOT EXIST "!REPO_ROOT!\tools\ai_sidecar" (
 where py >nul 2>nul
 IF ERRORLEVEL 1 GOTO :USE_PYTHON
 py -3 -m tools.ai_sidecar --host 127.0.0.1 --port 8765
-IF ERRORLEVEL 1 (
-  echo [start_sidecar] py -3 sidecar exited (errorlevel=%ERRORLEVEL%); not retrying with a different python.exe
-  exit /b %ERRORLEVEL%
-)
-exit /b 0
+set "EC=!ERRORLEVEL!"
+if "!EC!"=="0" exit /b 0
+echo [start_sidecar] py -3 sidecar exited (errorlevel=!EC!); not retrying with a different python.exe
+REM Bugbot #78: `IF ERRORLEVEL 1` can miss NTSTATUS-style crash codes; any non-zero EC is failure.
+if "!EC!"=="2" exit /b 2
+if "!EC!" LSS "0" exit /b 1
+exit /b !EC!
 
 :USE_PYTHON
 python -m tools.ai_sidecar --host 127.0.0.1 --port 8765
-exit /b %ERRORLEVEL%
+set "EC=!ERRORLEVEL!"
+if "!EC!"=="0" exit /b 0
+echo [start_sidecar] python sidecar exited (errorlevel=!EC!)
+if "!EC!"=="2" exit /b 2
+if "!EC!" LSS "0" exit /b 1
+exit /b !EC!

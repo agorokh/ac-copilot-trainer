@@ -95,6 +95,11 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3115531186 | Copilot | yes |
 | 3115531217 | Copilot | yes |
 | 3115531234 | Copilot | yes |
+| 3115679454 | cursor[bot] | yes |
+
+### Post-`7fea735` audit (Cursor Bugbot inline)
+
+- **3115679454**: `start_sidecar.bat` captures `!ERRORLEVEL!` after `py` / `python` runs and treats any non-zero as failure (including negative NTSTATUS-style codes via `if "!EC!" LSS "0" exit /b 1`), replacing `IF ERRORLEVEL 1` fall-through that could report crashes as `exit /b 0`; `:USE_PYTHON` mirrors the same logic.
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
