@@ -575,6 +575,27 @@ function M.sendCornerQuery(corner, cur, ref, dist, lap)
   return true
 end
 
+--- Label -> text for sidecar `corner_advice` entries matching `lap` (for lap archive; no HUD mutation).
+---@param lap number|nil
+---@return table<string, string>
+function M.cornerAdvisorySnapshotForLap(lap)
+  local want = tonumber(lap)
+  local out = {}
+  if not want then
+    return out
+  end
+  for corner, e in pairs(cornerAdvisories) do
+    if type(corner) == "string" and corner ~= "" and type(e) == "table" then
+      local elap = tonumber(e.lap)
+      local txt = e.text
+      if elap == want and type(txt) == "string" and txt ~= "" then
+        out[corner] = txt
+      end
+    end
+  end
+  return out
+end
+
 --- Round 10d: return the most recent corner_advice text for the label,
 --- or nil if none arrived OR it's older than CORNER_ADVISORY_MAX_AGE_SEC
 --- of WALL-CLOCK time (via currentSimT from M.tick). Stale entries are

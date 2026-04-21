@@ -1575,7 +1575,7 @@ function script.update(dt)
         -- Omit async sidecar debrief: it is applied on later frames than lap_complete, so stamping it
         -- here would mis-label the archived lap (Codex #78).
         sidecar_debrief = nil,
-        corner_advice = state.cornerAdvisories,
+        corner_advice = wsBridge.cornerAdvisorySnapshotForLap(state.lapsCompleted),
       }
       local rec = lapArchive.buildRecord(archiveOpts)
       if rec then

@@ -224,6 +224,11 @@ function M.buildRecord(opts)
     end
   end
 
+  local traceFieldNames = {}
+  for i = 1, #TRACE_FIELDS do
+    traceFieldNames[i] = TRACE_FIELDS[i]
+  end
+
   local rulesHints = {}
   if type(opts.rules_hints) == "table" then
     for i = 1, #opts.rules_hints do
@@ -270,7 +275,7 @@ function M.buildRecord(opts)
     },
     trace = {
       samples_count = #samplesColumnar,
-      fields = TRACE_FIELDS,
+      fields = traceFieldNames,
       samples = samplesColumnar,
     },
     corners = cornersOut,
@@ -357,8 +362,12 @@ function M.write(rec, capMB)
   local lapMs = (rec.lap and tonumber(rec.lap.lap_ms)) or 0
   local lapN = (rec.lap and tonumber(rec.lap.lap_n)) or 0
   local sessShort = tostring(rec.session_uuid or "x"):sub(1, 8)
-  local fname = string.format("lap_%s_%s_%d_%d.json",
-    fileTimestampUtc(), sessShort, lapN, lapMs)
+  local lapKey = tostring(rec.lap_uuid or ""):gsub("[^%w]", ""):sub(1, 12)
+  if lapKey == "" then
+    lapKey = shortUuid()
+  end
+  local fname = string.format("lap_%s_%s_%d_%d_%s.json",
+    fileTimestampUtc(), sessShort, lapN, lapMs, lapKey)
   local path = dir .. "/" .. fname
   local raw = persistence.encodeJson(rec)
   if not raw then return false, "encodeJson returned nil" end
@@ -368,6 +377,9 @@ function M.write(rec, capMB)
     f:close()
     return false, "write failed"
   end
+  pcall(function()
+    f:flush()
+  end)
   f:close()
   pcall(function() M.rotate(capMB) end)
   bustStatsCache()

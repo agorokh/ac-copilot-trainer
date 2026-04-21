@@ -1,21 +1,92 @@
-# PR #78 — Comment ledger (full inventory)
+# PR #78 — zero-sampling comment ledger
 
-Canonical path (not repo root): see Bugbot follow-up on root-level tracking.
+Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --paginate` (and the same for `issues/78/comments` and `pulls/78/reviews`). Every inline thread ID is listed below as **RESOLVED**; actionable text was implemented on this branch or marked N/A for meta-only bot posts.
 
-## Inline review comments (23 + follow-ups)
+## Checks (required + bots)
 
-See git history on branch `feat/issue-77-lap-archive-and-sidecar-autolaunch` for resolution commits. Items from Gemini, Sourcery, Codex, Cursor Bugbot, Copilot, and CodeRabbit were addressed in `c0ce3c7` and subsequent commits.
+| Check | Outcome |
+|-------|---------|
+| build | pass |
+| Canonical docs exist | pass |
+| CodeRabbit | pass |
+| Sourcery | pass |
+| Cursor Bugbot | skipping (external) — not a failing GitHub job |
 
-## Scope proof (#77)
+## Inline review threads (`pulls/78/comments`)
+
+| Comment ID | Author | RESOLVED |
+|-------------|--------|----------|
+| 3114511556 | gemini-code-assist[bot] | yes |
+| 3114511559 | gemini-code-assist[bot] | yes |
+| 3114511561 | gemini-code-assist[bot] | yes |
+| 3114511563 | gemini-code-assist[bot] | yes |
+| 3114515719 | sourcery-ai[bot] | yes |
+| 3114515722 | sourcery-ai[bot] | yes |
+| 3114515728 | sourcery-ai[bot] | yes |
+| 3114521845 | chatgpt-codex-connector[bot] | yes |
+| 3114521847 | chatgpt-codex-connector[bot] | yes |
+| 3114521894 | cursor[bot] | yes |
+| 3114521895 | cursor[bot] | yes |
+| 3114522448 | Copilot | yes |
+| 3114522470 | Copilot | yes |
+| 3114522484 | Copilot | yes |
+| 3114522493 | Copilot | yes |
+| 3114522505 | Copilot | yes |
+| 3114522515 | Copilot | yes |
+| 3114525805 | coderabbitai[bot] | yes |
+| 3114525810 | coderabbitai[bot] | yes |
+| 3114525815 | coderabbitai[bot] | yes |
+| 3114525820 | coderabbitai[bot] | yes |
+| 3114525824 | coderabbitai[bot] | yes |
+| 3114525826 | coderabbitai[bot] | yes |
+| 3114539620 | chatgpt-codex-connector[bot] | yes |
+| 3114539624 | chatgpt-codex-connector[bot] | yes |
+| 3114539629 | chatgpt-codex-connector[bot] | yes |
+| 3114540641 | cursor[bot] | yes |
+| 3114561455 | chatgpt-codex-connector[bot] | yes |
+| 3114561460 | chatgpt-codex-connector[bot] | yes |
+| 3114567935 | cursor[bot] | yes |
+| 3114567940 | cursor[bot] | yes |
+| 3114567942 | cursor[bot] | yes |
+| 3114609395 | chatgpt-codex-connector[bot] | yes |
+| 3114609396 | chatgpt-codex-connector[bot] | yes |
+| 3114609397 | chatgpt-codex-connector[bot] | yes |
+| 3114658033 | chatgpt-codex-connector[bot] | yes |
+| 3114658034 | chatgpt-codex-connector[bot] | yes |
+| 3114664144 | cursor[bot] | yes |
+| 3114694276 | coderabbitai[bot] | yes |
+| 3114694280 | coderabbitai[bot] | yes |
+| 3114694284 | coderabbitai[bot] | yes |
+| 3114694288 | coderabbitai[bot] | yes |
+| 3114706575 | cursor[bot] | yes |
+| 3114706578 | cursor[bot] | yes |
+
+### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
+
+Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/10_Development/PR78_comment_ledger.md`).
+
+- **3114694276**: Ledger uses stable wording (no stale “next commit” phrasing).
+- **3114694280**: `wsBridge.cornerAdvisorySnapshotForLap(lap)` supplies lap-filtered `corner_advice_used` for the archive.
+- **3114694284 / 3114694288**: Archive filename includes `lap_uuid` fragment; `flush` before `close` after JSON write.
+- **3114706575**: `start_sidecar.bat` sets `AC_COPILOT_OLLAMA_*` defaults only when undefined (respects inherited env).
+- **3114706578**: Each record gets a shallow copy of trace field names, not the module `TRACE_FIELDS` table reference.
+
+## Issue comments (`issues/78/comments`): 3
+
+Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions).
+
+## PR reviews (`pulls/78/reviews`): 15
+
+Automated summaries; actionable items are the inline threads above. **N/A**.
+
+## Issue #77 scope proof
 
 | Requirement | Evidence |
 |-------------|----------|
-| Sidecar auto-launch | `ws_bridge.startSidecarIfNeeded`, `start_sidecar.bat` |
-| Per-lap archive + cap | `lap_archive.lua`, `ac_copilot_trainer.lua` |
-| Settings / clamp / URL migration | `hud_settings.lua`, `loadConfig` overlay |
+| Auto-launch sidecar | `ws_bridge.lua`, `start_sidecar.bat` |
+| Per-lap archive + disk cap | `lap_archive.lua`, lap-completion block in `ac_copilot_trainer.lua` |
+| Settings / status / archive controls | `hud_settings.lua` |
 
-## Verification
+## Local verification
 
-Local: `pytest`, `ruff format --check`, `ruff check`, coverage gate, `bandit`, `scripts/check_agent_forbidden.py`.
-
-Post-`1e5488b` Codex/Cursor threads (manual sidecar socket guard, archive `sidecar_debrief` omitted for lap alignment, README `AC_COPILOT_REPO_ROOT`) land in the next commit on this branch.
+`python -m pytest tests/`, `python -m ruff format --check`, `python -m ruff check` (and CI coverage gate as in `Makefile`).
