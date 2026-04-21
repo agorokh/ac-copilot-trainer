@@ -344,7 +344,10 @@ function M.write(rec, capMB)
   persistence.ensureParentDirForFile(dir .. "/_dummy")  -- create dir
   local lapMs = (rec.lap and tonumber(rec.lap.lap_ms)) or 0
   local lapN = (rec.lap and tonumber(rec.lap.lap_n)) or 0
-  local sessShort = tostring(rec.session_uuid or "x"):sub(1, 8)
+  local sessShort = tostring(rec.session_uuid or "x"):gsub("[^%w]", ""):sub(1, 8)
+  if sessShort == "" then
+    sessShort = "sess"
+  end
   local lapKey = tostring(rec.lap_uuid or ""):gsub("[^%w]", ""):sub(1, 12)
   if lapKey == "" then
     lapKey = shortUuid()
@@ -358,14 +361,23 @@ function M.write(rec, capMB)
   local f, ferr = io.open(path, "w")
   if not f then return false, "open failed: " .. tostring(ferr) end
   if not f:write(raw) then
-    f:close()
+    pcall(function() f:close() end)
     pcall(os.remove, path)
     return false, "write failed"
   end
-  pcall(function()
-    f:flush()
-  end)
-  f:close()
+  local flushOk, flushRes = pcall(function() return f:flush() end)
+  if not flushOk or flushRes == false then
+    pcall(function() f:close() end)
+    pcall(os.remove, path)
+    local ferr = (not flushOk) and tostring(flushRes) or "flush returned false"
+    return false, "flush failed: " .. ferr
+  end
+  local closeOk, closeRes = pcall(function() return f:close() end)
+  if not closeOk or closeRes == false then
+    pcall(os.remove, path)
+    local cerr = (not closeOk) and tostring(closeRes) or "close returned false"
+    return false, "close failed: " .. cerr
+  end
   pcall(function() M.rotate(capMB) end)
   bustStatsCache()
   return true, path

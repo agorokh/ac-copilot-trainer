@@ -35,6 +35,9 @@ local spawnedAlive = false
 local sidecarChildEverLaunched = false
 local lastLaunchAttemptT = -1e9
 local LAUNCH_RETRY_SEC = 5.0
+--- Back off `runConsoleProcess` after streak failures or bat exit 2 (missing repo/tools — Copilot #78).
+local spawnFailStreak = 0
+local spawnAbandonUntilT = -1e9
 local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
@@ -68,6 +71,8 @@ function M.configure(u)
   sidecarProtocolReady = false
   -- Explicit URL/socket reset must not leave zombie-latch set for the next dial (Codex #78).
   sidecarChildEverLaunched = false
+  spawnFailStreak = 0
+  spawnAbandonUntilT = -1e9
 end
 
 --- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
@@ -106,6 +111,10 @@ function M.startSidecarIfNeeded(appDir)
 
   -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
   if tryOpen() then
+    return
+  end
+
+  if currentSimT < spawnAbandonUntilT then
     return
   end
 
@@ -155,6 +164,12 @@ function M.startSidecarIfNeeded(appDir)
         local exitCode = (type(result) == "table" and result.exitCode) or "?"
         ac.log(string.format("[COPILOT][SIDECAR] exited code=%s err=%s",
           tostring(exitCode), tostring(err or "nil")))
+        -- `start_sidecar.bat` uses `exit /b 2` when `tools/ai_sidecar` cannot be resolved (Copilot #78).
+        local codeNum = tonumber(exitCode)
+        if codeNum == 2 then
+          spawnAbandonUntilT = 1e12
+          spawnFailStreak = 0
+        end
       end
     end)
     if not a then
@@ -165,8 +180,17 @@ function M.startSidecarIfNeeded(appDir)
   spawnedAlive = okSpawn and spawnAccepted
   if okSpawn and spawnAccepted then
     sidecarChildEverLaunched = true
+    spawnFailStreak = 0
   end
   if not okSpawn then
+    spawnFailStreak = spawnFailStreak + 1
+    if spawnFailStreak >= 10 then
+      spawnAbandonUntilT = math.max(spawnAbandonUntilT, currentSimT + 120)
+      spawnFailStreak = 0
+      if ac and type(ac.log) == "function" then
+        ac.log("[COPILOT][SIDECAR] auto-launch backing off 120s after repeated spawn failures (Copilot #78)")
+      end
+    end
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][SIDECAR] runConsoleProcess failed: " .. tostring(errSpawn))
     end
@@ -200,6 +224,8 @@ function M.reset()
   sidecarProtocolReady = false
   -- Do not clear `spawnedAlive`: the console child can outlive this reset; clearing it risks a second spawn on port 8765 (Cursor #78).
   sidecarChildEverLaunched = false
+  spawnFailStreak = 0
+  spawnAbandonUntilT = -1e9
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).

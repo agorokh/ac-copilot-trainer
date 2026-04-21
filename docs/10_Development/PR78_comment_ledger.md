@@ -81,6 +81,8 @@ Full inventory via `gh api repos/agorokh/ac-copilot-trainer/pulls/78/comments --
 | 3114990022 | cursor[bot] | yes |
 | 3115010037 | chatgpt-codex-connector[bot] | yes |
 | 3115067724 | cursor[bot] | yes |
+| 3115138041 | Copilot | yes |
+| 3115138063 | Copilot | yes |
 
 ### Latest audit batch (CodeRabbit / Cursor after `4d4eb85`)
 
@@ -112,13 +114,19 @@ Implemented in the same commit as this ledger refresh (see `git log -1 -- docs/1
 - **3115010037**: `rotate` adds ~250KB per file when `io.fileSize` fails (`size == -1`), not only when total is zero.
 - **3115067724**: `setLapArchiveEnabledAndPersist(enabled)` takes the new flag and assigns `config` (matches approach/cap MB setters).
 
+### Post-`5b6fd29` audit (Copilot inline + CodeRabbit review)
+
+- **3115138041**: `ws_bridge.startSidecarIfNeeded`: exit code **2** from `start_sidecar.bat` stops further auto-spawn for the session; streak backoff (**120s**) after **10** consecutive failed `runConsoleProcess` spawns; `tryOpen()` still connects a manually started sidecar before the backoff gate.
+- **3115138063**: `lap_archive.write` builds `sessShort` from `session_uuid` with the same `[^%w]` strip as `lapKey`, with fallback `sess` when empty.
+- **4145106151** (CodeRabbit PR review, duplicate of flush/close theme): `lap_archive.write` treats flush/close failures as hard errors, removes the partial file, and only runs `rotate` / `bustStatsCache` after a successful close.
+
 ## Issue comments (`issues/78/comments`): 7
 
 Bot-only notices (review in progress, guide, Qodo summary). **N/A** (no code actions). `4285289269` (CodeRabbit guide) had `updated_at` after `5f0ce39` — still **N/A**. `4285619084` / `4285661809` / `4285796677` / `4285928383` (Codex usage limit notices) — **N/A**.
 
-## PR reviews (`pulls/78/reviews`): 29
+## PR reviews (`pulls/78/reviews`): 31
 
-Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries).
+Automated summaries; actionable items are the inline threads above. **N/A** (including Codex review `4144721164` and Cursor Bugbot summary `4144723642` after `5f0ce39`, Bugbot summary `4144770623` after `2bf60e6`, Bugbot summary `4144802228` after `34eb015`, Codex review `4144824801` after `7370f28`, and post-`582514f` / `4095bd9` / `862255a` / `29d1f82` / `099d7a2` bot summaries). CodeRabbit review `4145106151` (flush/close / partial-file cleanup on `lap_archive.write`) is **resolved** in code — listed here because it is a top-level review, not an inline thread.
 
 ## Issue #77 scope proof
 
