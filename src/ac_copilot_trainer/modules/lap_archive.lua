@@ -409,7 +409,15 @@ function M.stats()
         for i = 1, #list do
           if io.fileSize then
             local ok, s = pcall(io.fileSize, dir .. "/" .. list[i])
-            if ok then total = total + (tonumber(s) or 0) end
+            if ok then
+              local sz = tonumber(s)
+              if sz and sz > 0 then
+                total = total + sz
+              elseif sz and sz < 0 then
+                -- Match `rotate` unknown-size heuristic (Bugbot #78).
+                total = total + (250 * 1024)
+              end
+            end
           end
         end
       end
