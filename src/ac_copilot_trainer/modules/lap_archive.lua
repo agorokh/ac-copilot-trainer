@@ -80,8 +80,10 @@ local _uuidCounter = 0
 local function shortUuid()
   _uuidCounter = _uuidCounter + 1
   local t = (os and os.time and os.time()) or 0
-  local r = math.random(0, 0xFFFFFF)
-  return string.format("%x%06x%x", t % 0xFFFFFFFF, r, _uuidCounter % 0xFFFF)
+  -- 16-bit bounds only (same constraint as SESSION_UUID in ac_copilot_trainer.lua — Cursor #78).
+  local r1 = math.random(0, 0xFFFF)
+  local r2 = math.random(0, 0xFFFF)
+  return string.format("%x%04x%04x%x", t % 0xFFFFFFFF, r1, r2, _uuidCounter % 0xFFFF)
 end
 
 local function isoUtcNow()
@@ -296,9 +298,18 @@ function M.rotate(capMB)
   -- Sort by name (filename starts with `lap_<YYYYMMDD-HHMMSS>_...` so alpha == chronological)
   table.sort(files, function(a, b) return a.name < b.name end)
   local total = 0
+  local unknownCount = 0
   for i = 1, #files do
     if files[i].size > 0 then
       total = total + files[i].size
+    elseif files[i].size < 0 then
+      unknownCount = unknownCount + 1
+    end
+  end
+  if unknownCount > 0 then
+    total = total + unknownCount * (250 * 1024)
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][ARCHIVE] rotate: " .. tostring(unknownCount) .. " lap file(s) lacked size; using ~250KB each in cap math")
     end
   end
   if total == 0 and #files > 0 then

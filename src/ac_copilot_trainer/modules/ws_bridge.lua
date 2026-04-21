@@ -198,7 +198,7 @@ function M.reset()
   lastLaunchAttemptT = -1e9
   _recvQueue = {}
   sidecarProtocolReady = false
-  spawnedAlive = false
+  -- Do not clear `spawnedAlive`: the console child can outlive this reset; clearing it risks a second spawn on port 8765 (Cursor #78).
   sidecarChildEverLaunched = false
 end
 
