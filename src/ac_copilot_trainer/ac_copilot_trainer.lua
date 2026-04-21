@@ -91,6 +91,15 @@ local CONFIG_DEFAULTS = {
   lapArchiveMaxMB = 500,
 }
 
+--- Auto-launch always serves the sidecar on localhost:8765; other persisted URLs strand coaching (Codex #78).
+local function wsUrlMatchesAutolaunchTarget(s)
+  if type(s) ~= "string" then
+    return false
+  end
+  local u = s:lower():gsub("%s+", ""):gsub("/+$", "")
+  return u == "ws://127.0.0.1:8765" or u == "ws://localhost:8765"
+end
+
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
 local function shallowCopyDefaults()
   local c = {}
@@ -150,13 +159,15 @@ local function loadConfig()
   if _wsUrlStorage and type(_wsUrlStorage.get) == "function" then
     local ok, val = pcall(function() return _wsUrlStorage:get() end)
     if ok and type(val) == "string" then
-      if val ~= "" then
-        cfg.wsSidecarUrl = val
-      else
+      local migrated = false
+      if val == "" or not wsUrlMatchesAutolaunchTarget(val) then
         cfg.wsSidecarUrl = CONFIG_DEFAULTS.wsSidecarUrl
-        if type(_wsUrlStorage.set) == "function" then
-          pcall(function() _wsUrlStorage:set(cfg.wsSidecarUrl) end)
-        end
+        migrated = true
+      else
+        cfg.wsSidecarUrl = val
+      end
+      if migrated and type(_wsUrlStorage.set) == "function" then
+        pcall(function() _wsUrlStorage:set(cfg.wsSidecarUrl) end)
       end
     end
   end

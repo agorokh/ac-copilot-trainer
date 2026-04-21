@@ -40,6 +40,8 @@ local spawnFailStreak = 0
 --- Count rapid nonzero child exits (bat starts then dies — Codex #78); not the same as spawn pcall failures.
 local nonzeroExitStreak = 0
 local spawnAbandonUntilT = -1e9
+--- Throttle `tryOpen` during spawn backoff so we do not allocate a socket every frame (Cursor Bugbot #78).
+local lastBackoffTryOpenT = -1e9
 local SIDECAR_BAT_RELATIVE = "start_sidecar.bat"  -- next to ws_bridge.lua's app dir
 --- Per-corner last-query timestamp (unused after round 10c moved the
 --- debounce to realtime_coaching; kept for backward compat with M.reset).
@@ -76,6 +78,7 @@ function M.configure(u)
   spawnFailStreak = 0
   nonzeroExitStreak = 0
   spawnAbandonUntilT = -1e9
+  lastBackoffTryOpenT = -1e9
 end
 
 --- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
@@ -110,15 +113,24 @@ function M.startSidecarIfNeeded(appDir)
   end
   if sock then return end
   if spawnedAlive then return end
+
+  -- During backoff, only dial occasionally — `lastLaunchAttemptT` is not advanced on this path (Cursor Bugbot #78).
+  if currentSimT < spawnAbandonUntilT then
+    if currentSimT - lastBackoffTryOpenT < LAUNCH_RETRY_SEC then
+      return
+    end
+    lastBackoffTryOpenT = currentSimT
+    if tryOpen() then
+      nonzeroExitStreak = 0
+    end
+    return
+  end
+
   if currentSimT - lastLaunchAttemptT < LAUNCH_RETRY_SEC then return end
 
   -- WebSocket dial first: if a sidecar is already listening, connect instead of spawning a second copy (CodeRabbit #78).
   if tryOpen() then
     nonzeroExitStreak = 0
-    return
-  end
-
-  if currentSimT < spawnAbandonUntilT then
     return
   end
 
@@ -246,6 +258,7 @@ function M.reset()
   spawnFailStreak = 0
   nonzeroExitStreak = 0
   spawnAbandonUntilT = -1e9
+  lastBackoffTryOpenT = -1e9
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
