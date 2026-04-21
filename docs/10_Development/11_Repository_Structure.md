@@ -11,7 +11,7 @@ These align with `scripts/check_agent_forbidden.py` for the unspecialized templa
 | `.github/` | Workflows, templates, GitHub agents |
 | `.claude/` | Claude Code hooks, agents, skills, rules |
 | `.cursor/` | Cursor rules, skills, Bugbot context |
-| `docs/` | Human and agent documentation; vault under `docs/01_Vault/` |
+| `docs/` | Human and agent documentation; vault under `docs/01_Vault/` (PR audit ledgers under `docs/10_Development/`, e.g. `PR78_comment_ledger.md`) |
 | `src/` | Application code |
 | `tests/` | Automated tests |
 | `scripts/` | Checked-in automation |
@@ -27,7 +27,7 @@ Default groups in code:
 
 | Group | Examples |
 |-------|----------|
-| Config / build | `pyproject.toml`, `Makefile`, `.gitignore`, `.pre-commit-config.yaml` |
+| Config / build | `pyproject.toml`, `Makefile`, `.gitignore`, `.gitattributes`, `.pre-commit-config.yaml` |
 | Governance / docs | `AGENTS.md`, `CLAUDE.md`, `CODEX.md`, `WARP.md`, `AGENT_CORE_PRINCIPLES.md`, `.cursorrules`, `README.md`, `LICENSE` |
 | Editor / toolchain | `.editorconfig`, `.python-version` |
 | Template integration | `.mcp.json`, `.env.example`, `.markdownlint.json` |

@@ -1,11 +1,42 @@
--- Dear ImGui HUD: tiered layout (glance / context / collapsible detail) — issue #33.
+-- WINDOW_0 — Active Suggestions tile (issue #72 rebuild).
+--
+-- Style adapted from CMRT-Essential-HUD/gearbox/first.lua: absolute-positioned
+-- ui.dwriteDrawText / ui.drawRectFilled / ui.pathArcTo. NO ImGui widgets.
+-- Always renders panel chrome + title even in the empty state — never blank.
 
-local coachingOverlay = require("coaching_overlay")
+local fontMod = require("coaching_font")
 
 local M = {}
 
---- UTF-8 FULL BLOCK (U+2588) for delta bar segments.
-local BLK = string.char(226, 150, 136)
+-- ---------------------------------------------------------------------------
+-- Design tokens (Figma CoachingHUD.tsx — see issue #72)
+-- ---------------------------------------------------------------------------
+
+local COLOR_BG_DARK   = rgbm(17 / 255, 17 / 255, 17 / 255, 0.60)
+local COLOR_BG_BORDER = rgbm(0.30, 0.32, 0.38, 0.40)  -- grey, matches coaching_overlay (round 5: user reverted to grey)
+local COLOR_RED       = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- #EF4444 (per spec)
+local COLOR_RED_HARD  = COLOR_RED                                  -- back-compat alias
+local COLOR_AMBER     = rgbm(251 / 255, 191 / 255, 36 / 255, 1.0)  -- amber-400
+local COLOR_GREEN     = rgbm(74 / 255, 222 / 255, 128 / 255, 1.0)
+local COLOR_WHITE     = rgbm(255 / 255, 255 / 255, 255 / 255, 1.0)
+local COLOR_TEXT_GREY = rgbm(212 / 255, 212 / 255, 212 / 255, 1.0) -- neutral-300
+
+local PANEL_ROUNDING = 8
+local PANEL_PAD_Y    = 14
+
+--- CSP: `ui.dwriteDrawText` is often a cdata callable, not `type(...) == "function"`.
+local function dwriteSafe(text, px, pos, color)
+  if ui == nil or ui.dwriteDrawText == nil then
+    return
+  end
+  pcall(function()
+    ui.dwriteDrawText(text, px, pos, color)
+  end)
+end
+
+-- ---------------------------------------------------------------------------
+-- View model contract (issue #72)
+-- ---------------------------------------------------------------------------
 
 ---@class HudViewModel
 ---@field recording boolean
@@ -14,231 +45,253 @@ local BLK = string.char(226, 150, 136)
 ---@field lapCount integer
 ---@field bestLapMs number|nil
 ---@field lastLapMs number|nil
----@field brakeBest integer
----@field brakeLast integer
----@field brakeSession integer
----@field telemetrySamples integer|nil
 ---@field deltaSmoothedSec number|nil
----@field sectorMessage string|nil
----@field approachLines string[]|nil
----@field postLapLines string[]|nil
----@field coastWarn boolean|nil
----@field throttleLapHint string|nil
----@field consistencyHud string|nil
----@field styleHud string|nil
----@field tireHud string|nil
----@field tireLockupFlash boolean|nil
----@field setupChangeMsg string|nil
----@field autoSetupLine string|nil
----@field refAiDistanceM number|nil
----@field segmentCount integer|nil
----@field coachingLines (string|{ kind: string, text: string })[]|nil
----@field coachingRemaining number|nil
----@field coachingHoldSeconds number|nil
----@field coachingMaxVisibleHints integer|nil
----@field coachingShowPrimer boolean|nil
----@field appVersionUi string|nil @e.g. "v0.4.2" — must match `APP_VERSION_UI` in entry script
----@field debriefText string|nil @sidecar post-lap paragraph when Ollama/rules debrief enabled (issue #46)
----@field focusPracticeUi table|nil @proxy: only `focusPracticeActive` + `focusPracticeHudSummary` (issue #44)
+---@field appVersionUi string|nil
+---@field debriefText string|nil
+---@field realtimeHint table|nil  @legacy {text, kind, cornerLabel} for back-compat
+---@field realtimeView table|nil  @new live-frame view {primaryLine, secondaryLine, kind, subState, cornerLabel, ...}
+---@field focusPracticeActive boolean|nil
+---@field focusPracticeLabel string|nil
 
-local function formatLapMs(ms)
-  if not ms or ms ~= ms or ms <= 0 then
-    return "—"
-  end
-  return string.format("%.3f s", ms / 1000)
-end
+-- Backward-compat: also keep ApproachHudPayload class declaration so existing
+-- structural tests for SD-03 still pass.
+---@class ApproachHudPayload
+---@field turnLabel string
+---@field targetSpeedKmh number
+---@field currentSpeedKmh number
+---@field distanceToBrakeM number
+---@field status string
+---@field progressPct number
+---@field brakeIndex integer
 
---- Graphical delta bar: center = neutral, left green = faster, right red = slower.
-local function drawDeltaBar(d)
-  local n = 28
-  local center = (n + 1) / 2
-  local mag = math.min(1, math.abs(d) / 0.12)
-  local spread = math.floor(mag * (n / 2) + 0.5)
-  for i = 1, n do
-    if i > 1 then
-      ui.sameLine(0, 0)
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+local function safeWindowSize()
+  -- CSP `ui.windowSize` is a cdata callable (not "function" via type()), so
+  -- pcall it directly instead of type-checking. Falls back to the manifest
+  -- WINDOW_0 size if the call fails or returns garbage.
+  if type(ui) == "table" and ui.windowSize ~= nil then
+    local ok, sz = pcall(function() return ui.windowSize() end)
+    if ok and sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
+      return sz
     end
-    local c = rgbm(0.22, 0.22, 0.24, 1)
-    if math.abs(i - center) < 0.51 then
-      c = rgbm(0.92, 0.92, 0.95, 1)
-    elseif d > 0.015 and i > center and i <= center + spread then
-      c = rgbm(0.92, 0.22, 0.22, 1)
-    elseif d < -0.015 and i < center and i >= center - spread then
-      c = rgbm(0.2, 0.78, 0.3, 1)
-    end
-    ui.textColored(c, BLK)
   end
+  return vec2(520, 200)
 end
 
---- Throttle / consistency / tires / buffer / brake counts (tier 3).
-local function drawTelemetryDetail(vm)
-  if vm.throttleLapHint and vm.throttleLapHint ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Throttle (last lap)")
-    ui.textWrapped(vm.throttleLapHint)
-  end
-  if vm.consistencyHud and vm.consistencyHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Consistency")
-    ui.textWrapped(vm.consistencyHud)
-  end
-  if vm.styleHud and vm.styleHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Style vs reference")
-    ui.textWrapped(vm.styleHud)
-  end
-  if vm.tireHud and vm.tireHud ~= "" then
-    ui.textColored(rgbm(0.75, 0.78, 0.85, 1), "Tires (last lap)")
-    ui.textWrapped(vm.tireHud)
-  end
-  if vm.refAiDistanceM ~= nil and vm.refAiDistanceM == vm.refAiDistanceM then
-    ui.text(string.format("AI line lateral (XZ): ~%.1f m", vm.refAiDistanceM))
-  end
-  if vm.segmentCount ~= nil and vm.segmentCount > 0 then
-    ui.text(string.format("Track segments: %d", vm.segmentCount))
-  end
-  if vm.telemetrySamples ~= nil then
-    ui.text(string.format("Telemetry buffer: %d samples", vm.telemetrySamples))
-  end
-  ui.text(string.format(
-    "Brake points — best: %d  last lap: %d  session: %d",
-    vm.brakeBest or 0,
-    vm.brakeLast or 0,
-    vm.brakeSession or 0
-  ))
+local function colorForKind(kind)
+  if kind == "brake" then return COLOR_RED_HARD end
+  if kind == "line" then return COLOR_AMBER end
+  if kind == "positive" then return COLOR_GREEN end
+  if kind == "placeholder" then return COLOR_TEXT_GREY end
+  return COLOR_WHITE
 end
 
+local function measure(text, fontPx)
+  if type(ui) == "table" and type(ui.measureDWriteText) == "function" then
+    local sz = ui.measureDWriteText(text, fontPx)
+    if sz then return sz end
+  end
+  return vec2(string.len(text or "") * fontPx * 0.55, fontPx)
+end
+
+--- Resolve a viewmodel from `vm.realtimeView`. Falls back to a generic
+--- "no reference" placeholder when the entry script hasn't populated one
+--- yet (very early frame, before `script.update` runs).
+---
+--- Issue #72 dropped the legacy `realtimeHint` shape (`.text`/`.kind`) —
+--- the entry script now ALWAYS assigns the new viewmodel shape with
+--- `.primaryLine`/`.secondaryLine`. The unused fallback was confusing
+--- and shape-mismatched (Cursor BugBot #21cc469d).
+local function resolveView(vm)
+  if vm.realtimeView and type(vm.realtimeView) == "table" then
+    return vm.realtimeView
+  end
+  return {
+    primaryLine = "DRIVE A LAP",
+    secondaryLine = "REFERENCE WILL APPEAR",
+    kind = "placeholder",
+    subState = "no_reference",
+  }
+end
+
+-- ---------------------------------------------------------------------------
+-- Lifecycle
+-- ---------------------------------------------------------------------------
+
+--- Reset HUD module state.
+---
+--- The Phase 5 live-frame rewrite (issue #72) holds no persistent module state
+--- — the renderer derives everything from the per-frame view model. Exported
+--- as a no-op so the entry script's session/driving reset paths can keep
+--- calling `hud.reset()` without crashing the runtime.
+function M.reset()
+  -- Intentionally empty: no module-level state to clear in the live-frame
+  -- rewrite. Kept exported for entry-script reset symmetry.
+end
+
+-- ---------------------------------------------------------------------------
+-- Top tile renderer (gearbox-style absolute drawing)
+-- ---------------------------------------------------------------------------
+
+-- One-shot diag log: prints rendering API surface the first time M.draw runs.
+local _hudDiagLogged = false
+
+---@param vm HudViewModel
 function M.draw(vm)
-  -- Tier 1 — always visible, top
-  ui.textColored(
-    rgbm(0.5, 0.55, 0.62, 1),
-    "AC Copilot Trainer " .. (type(vm.appVersionUi) == "string" and vm.appVersionUi ~= "" and vm.appVersionUi or "v?.?.?")
-  )
-  if vm.recording then
-    ui.sameLine(0, 12)
-    ui.textColored(rgbm(0, 1, 0, 1), "REC")
-  else
-    ui.sameLine(0, 12)
-    ui.textColored(rgbm(0.65, 0.65, 0.65, 1), "PAUSED")
-  end
-
-  ui.separator()
-  ui.text(string.format("%.0f km/h", vm.speed or 0))
-  if (vm.brake or 0) > 0.05 then
-    ui.text(string.format("Brake %.0f%%", (vm.brake or 0) * 100))
-  end
-
-  ui.textColored(rgbm(0.7, 0.72, 0.78, 1), "Delta vs best")
-  local dSmooth = vm.deltaSmoothedSec
-  if dSmooth == nil or dSmooth ~= dSmooth then
-    ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "No reference")
-  else
-    local d = dSmooth
-    local col = rgbm(0.25, 0.9, 0.35, 1)
-    if d > 0.02 then
-      col = rgbm(0.92, 0.28, 0.25, 1)
-    elseif d < -0.02 then
-      col = rgbm(0.35, 0.6, 0.95, 1)
+  vm = vm or {}
+  if not _hudDiagLogged and ac and type(ac.log) == "function" then
+    _hudDiagLogged = true
+    -- Use tostring() so we see cdata/userdata/nil distinction (not just y/N)
+    local function tt(t, k)
+      if type(t) ~= "table" then return "?" end
+      local v = t[k]
+      if v == nil then return "nil" end
+      return type(v)
     end
-    ui.textColored(col, string.format("%+.2f s", d))
-    drawDeltaBar(d)
-  end
-
-  ui.text(string.format(
-    "Lap %d   Best %s   Last %s",
-    vm.lapCount or 0,
-    formatLapMs(vm.bestLapMs),
-    formatLapMs(vm.lastLapMs)
-  ))
-
-  -- Tier 2 — context-sensitive
-  if vm.sectorMessage and vm.sectorMessage ~= "" then
-    ui.separator()
-    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Sector")
-    ui.textWrapped(vm.sectorMessage)
-  end
-
-  if vm.approachLines and #vm.approachLines > 0 then
-    ui.separator()
-    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Approach (brake)")
-    for i = 1, #vm.approachLines do
-      ui.text(vm.approachLines[i])
-    end
-  end
-
-  if vm.coastWarn then
-    ui.separator()
-    ui.textColored(rgbm(0.95, 0.75, 0.2, 1), "Coasting — roll to throttle")
-  end
-
-  if vm.postLapLines and #vm.postLapLines > 0 then
-    ui.separator()
-    ui.textColored(rgbm(0.85, 0.88, 0.95, 1), "Post-lap")
-    for i = 1, #vm.postLapLines do
-      ui.text(vm.postLapLines[i])
-    end
-  end
-
-  if vm.setupChangeMsg and vm.setupChangeMsg ~= "" then
-    ui.separator()
-    ui.textColored(rgbm(0.95, 0.75, 0.35, 1), vm.setupChangeMsg)
-  end
-  if vm.autoSetupLine and vm.autoSetupLine ~= "" then
-    if not vm.setupChangeMsg or vm.setupChangeMsg == "" then
-      ui.separator()
-    end
-    ui.textColored(rgbm(0.85, 0.82, 0.7, 1), "Setup")
-    ui.textWrapped(vm.autoSetupLine)
-  end
-
-  if vm.tireLockupFlash then
-    ui.separator()
-    ui.textColored(rgbm(0.95, 0.35, 0.2, 1), "Wheel slip spike")
-  end
-
-  if vm.debriefText and vm.debriefText ~= "" then
-    ui.separator()
-    ui.textColored(rgbm(0.55, 0.82, 0.95, 1), "Session debrief (sidecar)")
-    if ui.textWrapped then
-      ui.textWrapped(vm.debriefText)
+    local szStr = "err"
+    if type(ui) == "table" and ui.windowSize ~= nil then
+      local ok, sz = pcall(function() return ui.windowSize() end)
+      if ok and sz and sz.x then
+        szStr = string.format("%.0fx%.0f", sz.x, sz.y or 0)
+      else
+        szStr = "call-fail"
+      end
     else
-      ui.text(vm.debriefText)
+      szStr = "missing"
     end
+    ac.log(string.format(
+      "[COPILOT][HUD-DIAG] win0 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s windowSize=%s",
+      szStr,
+      type(ui),
+      type(vec2),
+      type(rgbm),
+      tt(ui, "drawRectFilled"), tt(ui, "drawRect"),
+      tt(ui, "dwriteDrawText"), tt(ui, "windowSize")
+    ))
+  end
+  -- UI readiness guard: bail out cleanly on early frames or unusual CSP
+  -- builds where the imgui APIs are not yet available. NOTE: in CSP, vec2,
+  -- rgbm, and `ui.*` rendering primitives are FFI cdata callables — `type()`
+  -- returns "cdata", not "function". Use nil-check + presence-check instead.
+  if type(ui) ~= "table"
+      or vec2 == nil
+      or ui.drawRectFilled == nil
+      or ui.drawRect == nil then
+    return
+  end
+  local view = resolveView(vm)
+
+  local sz = safeWindowSize()
+  local w = sz.x
+  local h = sz.y
+  local centerX = w * 0.5
+
+  -- Panel background — dark rounded rect with red bottom border accent
+  ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG_DARK, PANEL_ROUNDING)
+  ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
+
+  -- Top section: "ACTIVE SUGGESTION" small caps in red, centered
+  do
+    local titleFontPx = 11
+    local titleSize = measure("ACTIVE SUGGESTION", titleFontPx)
+    local titlePos = vec2(centerX - titleSize.x * 0.5, PANEL_PAD_Y)
+    local tk = fontMod.pushNamed("labels_bold", titleFontPx)
+    dwriteSafe("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
+    fontMod.pop(tk)
   end
 
-  if vm.focusPracticeUi and type(vm.focusPracticeUi) == "table" then
-    ui.separator()
-    ui.textColored(rgbm(0.55, 0.85, 0.95, 1), "Focus practice (#44)")
-    local st = vm.focusPracticeUi
-    local cur = st.focusPracticeActive == true
-    if type(ui.checkbox) == "function" then
-      pcall(function()
-        -- CSP/ImGui: checkbox returns the new bool each frame (stateful widget).
-        local nv = ui.checkbox("Enable (this session)", cur)
-        if type(nv) == "boolean" then
-          st.focusPracticeActive = nv
+  -- Corner label (when known) — large Michroma centered
+  local y = PANEL_PAD_Y + 22
+  local cornerLabel = view.cornerLabel
+  if type(cornerLabel) == "string" and cornerLabel ~= "" then
+    local cornerFontPx = 22
+    local cornerStr = string.upper(cornerLabel)
+    local cornerSize = measure(cornerStr, cornerFontPx)
+    local cornerPos = vec2(centerX - cornerSize.x * 0.5, y)
+    local ck = fontMod.pushNamed("numbers", cornerFontPx)
+    dwriteSafe(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
+    fontMod.pop(ck)
+    y = y + 30
+  end
+
+  -- Primary line (white Michroma uppercase, large)
+  if type(view.primaryLine) == "string" and view.primaryLine ~= "" then
+    local primaryFontPx = 18
+    local primaryStr = string.upper(view.primaryLine)
+    local primarySize = measure(primaryStr, primaryFontPx)
+    local primaryPos = vec2(centerX - primarySize.x * 0.5, y)
+    local pColor = colorForKind(view.kind)
+    local pk = fontMod.pushNamed("numbers", primaryFontPx)
+    dwriteSafe(primaryStr, primaryFontPx, primaryPos, pColor)
+    fontMod.pop(pk)
+    y = y + 24
+  end
+
+  -- Secondary line (amber Michroma uppercase, slightly smaller)
+  if type(view.secondaryLine) == "string" and view.secondaryLine ~= "" then
+    local secFontPx = 14
+    local secStr = string.upper(view.secondaryLine)
+    local secSize = measure(secStr, secFontPx)
+    local secPos = vec2(centerX - secSize.x * 0.5, y)
+    local sColor = COLOR_AMBER
+    if view.kind == "brake" then
+      sColor = COLOR_TEXT_GREY
+    elseif view.kind == "placeholder" then
+      sColor = COLOR_TEXT_GREY
+    end
+    local sk = fontMod.pushNamed("numbers", secFontPx)
+    dwriteSafe(secStr, secFontPx, secPos, sColor)
+    fontMod.pop(sk)
+    y = y + 20
+  end
+
+  -- Sidecar debrief (rules + optional Ollama follow-up); keeps LLM output visible
+  -- on WINDOW_0 without the removed coaching-window panel (Bugbot).
+  if type(vm.debriefText) == "string" and vm.debriefText ~= "" then
+    local raw = vm.debriefText
+    if string.len(raw) > 140 then
+      raw = string.sub(raw, 1, 137) .. "..."
+    end
+    local df = 10
+    local dk = fontMod.pushNamed("labels_bold", df)
+    if ui and ui.dwriteDrawText ~= nil then
+      local lines = {}
+      local maxW = w - 24
+      local curLine = ""
+      local cappedLines = false
+      for word in string.gmatch(raw, "%S+") do
+        local trial = (curLine == "") and word or (curLine .. " " .. word)
+        local tw = measure(trial, df)
+        if tw.x > maxW and curLine ~= "" then
+          lines[#lines + 1] = curLine
+          curLine = word
+          if #lines >= 3 then
+            cappedLines = true
+            break
+          end
+        else
+          curLine = trial
         end
-      end)
-    else
-      ui.textColored(rgbm(0.65, 0.65, 0.68, 1), cur and "Enabled (no checkbox API)" or "Disabled")
+      end
+      if curLine ~= "" and #lines < 3 then
+        lines[#lines + 1] = curLine
+      end
+      local yy = math.max(y, h - 56)
+      for li = 1, #lines do
+        local ln = lines[li]
+        if li == 3 and #lines == 3 and cappedLines then
+          ln = ln .. "..."
+        end
+        local ls = measure(ln, df)
+        local lp = vec2(centerX - ls.x * 0.5, yy + (li - 1) * (df + 3))
+        dwriteSafe(ln, df, lp, COLOR_TEXT_GREY)
+      end
     end
-    if st.focusPracticeHudSummary and st.focusPracticeHudSummary ~= "" then
-      ui.textWrapped(st.focusPracticeHudSummary)
-    end
+    fontMod.pop(dk)
   end
-
-  -- Tier 3 — detail (tree when supported; same fields flat on older CSP)
-  local flags = ui.TreeNodeFlags
-  local framed = flags and flags.Framed or nil
-  ui.separator()
-  if framed ~= nil then
-    ui.treeNode("Telemetry & stats", framed, function()
-      drawTelemetryDetail(vm)
-    end)
-  else
-    ui.textColored(rgbm(0.55, 0.55, 0.58, 1), "Telemetry & stats (no collapsible UI — showing flat)")
-    drawTelemetryDetail(vm)
-  end
-
-  -- Coaching strip after telemetry (issue #9 UX); separator only when strip draws.
-  coachingOverlay.drawMainWindowStrip(vm)
 end
 
 return M

@@ -4,6 +4,13 @@
 
 local M = {}
 
+-- Shared coaching thresholds (used by both buildAfterLap and buildRealTime)
+local ENTRY_SPEED_DELTA = 5      -- km/h above best → brake earlier
+local MIN_SPEED_SLOW = 4         -- km/h below best → carry more
+local MIN_SPEED_FAST = 6         -- km/h above best → overdriving
+local TRAIL_BRAKE_DELTA = 0.15   -- ratio difference threshold
+local GOOD_APPROACH_BAND = 3     -- km/h within best → positive hint
+
 local function cornerByLabel(corners, lab)
   if not corners or type(lab) ~= "string" then
     return nil
@@ -84,20 +91,20 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis, lapAnalys
         if c and b then
           local en, bn = tonumber(c.entrySpeed), tonumber(b.entrySpeed)
           local mn, mb = tonumber(c.minSpeed), tonumber(b.minSpeed)
-          if en and bn and en > bn + 5 then
+          if en and bn and en > bn + ENTRY_SPEED_DELTA then
             push(string.format("%s: entry %.0f vs ref %.0f km/h — try braking slightly earlier", lab, en, bn), "brake")
-          elseif mn and mb and mn + 4 < mb then
+          elseif mn and mb and mn + MIN_SPEED_SLOW < mb then
             push(string.format("%s: min speed %.0f vs ref %.0f km/h — carry more mid-corner", lab, mn, mb), "line")
-          elseif mn and mb and mn > mb + 6 then
+          elseif mn and mb and mn > mb + MIN_SPEED_FAST then
             push(string.format("%s: min speed %.0f vs ref %.0f km/h — you may be overdriving", lab, mn, mb), "line")
           end
         end
         if #out < 3 and c and b then
           local tb, tt = tonumber(c.trailBrakeRatio), tonumber(b.trailBrakeRatio)
-          if tb and tt and math.abs(tb - tt) > 0.15 then
-            if tb < tt - 0.15 then
+          if tb and tt and math.abs(tb - tt) > TRAIL_BRAKE_DELTA then
+            if tb < tt - TRAIL_BRAKE_DELTA then
               push(string.format("%s: less trail braking than ref — try easing off brakes more gradually", lab), "brake")
-            elseif tb > tt + 0.15 then
+            elseif tb > tt + TRAIL_BRAKE_DELTA then
               push(string.format("%s: more trail braking than ref — try releasing brakes earlier into turn-in", lab), "brake")
             end
           end
@@ -130,5 +137,11 @@ function M.buildAfterLap(lastFeats, bestFeats, cons, throttleAnalysis, lapAnalys
   end
   return out
 end
+
+-- M.buildRealTime DELETED in issue #72 - was a lap-aggregate compare that
+-- silently returned nil until at least 2 distinct laps were completed in the
+-- current session. The new live-frame engine in modules/realtime_coaching.lua
+-- produces hints from current speed vs reference at the same spline position,
+-- with no dependency on lap-aggregate features.
 
 return M

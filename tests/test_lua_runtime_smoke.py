@@ -1,0 +1,202 @@
+"""Lua runtime smoke tests for HUD modules using lupa."""
+
+from __future__ import annotations
+
+import json
+import pathlib
+
+import pytest
+
+lupa = pytest.importorskip("lupa", reason="lupa Lua runtime not installed (pip install lupa)")
+
+REPO = pathlib.Path(__file__).resolve().parent.parent
+MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
+
+STUB_UI_LUA = r"""
+ui = {}
+_calls = {}
+_text_colored_calls = {}
+_draw_rect_filled_calls = {}
+
+function ui.text(s)
+    _calls[#_calls + 1] = { name = "text", arg = s }
+end
+
+function ui.textColored(text, color)
+    _text_colored_calls[#_text_colored_calls + 1] = {
+        text = text, color = color,
+        text_type = type(text), color_type = type(color),
+    }
+end
+
+function ui.textWrapped(s) _calls[#_calls + 1] = { name = "textWrapped" } end
+function ui.separator() end
+function ui.sameLine(a, b) end
+function ui.windowSize() return _vec2(360, 220) end
+function ui.getCursor() return _vec2(0, 0) end
+function ui.setCursor(v) end
+function ui.drawRectFilled(p0, p1, color, rounding)
+    _draw_rect_filled_calls[#_draw_rect_filled_calls + 1] = true
+end
+function ui.drawRect() end
+function ui.deltaTime() return 0.016 end
+function ui.checkbox(label, current) return false end
+function ui.slider(label, val, min, max, fmt) return val, false end
+function ui.combo(label, preview, flags, fn) end
+function ui.selectable(label, sel) return false end
+function ui.pushDWriteFont() end
+function ui.popDWriteFont() end
+function ui.pushFont() end
+function ui.popFont() end
+ui.Font = { Title = "title" }
+
+-- rgbm: callable table so rgbm(r,g,b,m) works AND rgbm.colors.red works
+local _rgbm_meta = {}
+function _rgbm_meta.__call(_, r, g, b, m)
+    return { r = r or 0, g = g or 0, b = b or 0, mult = m or 1, _isRgbm = true }
+end
+rgbm = setmetatable({}, _rgbm_meta)
+rgbm.colors = {
+    red = rgbm(1, 0, 0, 1),
+    white = rgbm(1, 1, 1, 1),
+}
+
+function _vec2(x, y) return { x = x or 0, y = y or 0 } end
+vec2 = _vec2
+function vec3(x, y, z) return { x = x or 0, y = y or 0, z = z or 0 } end
+
+ac = {
+    log = function() end,
+    getFolder = function() return "" end,
+    FolderID = { Root = 0 },
+}
+
+-- Block bmw.txt loading
+local _real_open = io.open
+io.open = function(path, mode)
+    if path and (string.find(path, "bmw") or string.find(path, "BMW")) then return nil end
+    return _real_open(path, mode)
+end
+
+function _get_text_colored_violations()
+    local out = {}
+    for i = 1, #_text_colored_calls do
+        local c = _text_colored_calls[i]
+        -- Violation: text param is a table with .r/.g/.b (an rgbm)
+        if type(c.text) == "table" and c.text._isRgbm then
+            out[#out + 1] = { kind = "color_as_text", index = i }
+        end
+        -- Violation: color param is a string
+        if type(c.color) == "string" then
+            out[#out + 1] = { kind = "string_as_color", index = i }
+        end
+    end
+    return out, #_text_colored_calls
+end
+"""
+
+
+@pytest.fixture
+def lua():
+    rt = lupa.LuaRuntime(unpack_returned_tuples=False)
+    rt.execute(STUB_UI_LUA)
+    modules_path = str(MODULES_DIR).replace("\\", "/")
+    rt.execute(f'package.path = package.path .. ";{modules_path}/?.lua"')
+    return rt
+
+
+def test_hud_module_loads(lua):
+    """RT-01: hud.lua loads without error."""
+    hud = lua.execute('local m = require("hud"); return m')
+    assert hud is not None
+    assert hud["draw"] is not None
+
+
+def test_hud_settings_module_loads(lua):
+    """RT-04: hud_settings.lua loads without error."""
+    settings = lua.execute('local m = require("hud_settings"); return m')
+    assert settings is not None
+
+
+def test_coaching_overlay_module_loads(lua):
+    """RT-05: coaching_overlay.lua loads without error."""
+    overlay = lua.execute('local m = require("coaching_overlay"); return m')
+    assert overlay is not None
+    assert overlay["drawApproachPanel"] is not None
+
+
+def test_realtime_coaching_module_loads(lua):
+    """RT-06: realtime_coaching.lua loads without error."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    assert rtc is not None
+    assert rtc["tick"] is not None
+
+
+def _count_text_calls(lua, literal: str) -> int:
+    """Count how many textColored calls contain the given literal."""
+    code = f"""
+    local n = 0
+    for i = 1, #_text_colored_calls do
+        local c = _text_colored_calls[i]
+        if type(c.text) == "string" and c.text:find({literal!r}, 1, true) then
+            n = n + 1
+        end
+    end
+    return n
+    """
+    return lua.execute(code)
+
+
+def _count_draw_rects(lua) -> int:
+    return lua.execute("return #_draw_rect_filled_calls")
+
+
+def test_ws_bridge_corner_advisory_staleness_wall_clock(lua):
+    """Issue #75 / PR #75: corner_advice expires after 6s of sim wall-clock (currentSimT)."""
+    g = lua.globals()
+
+    def json_parse(s):
+        if not isinstance(s, str):
+            s = str(s)
+        return lua.table_from(json.loads(s))
+
+    g["JSON"] = lua.table_from({"parse": json_parse})
+    lua.execute(
+        r"""
+        web = {}
+        _ws_on_recv = nil
+        function web.socket(_u, cb, _p)
+          _ws_on_recv = cb
+          return { close = function() end }
+        end
+        """
+    )
+    lua.execute(
+        """
+        local wb = require("ws_bridge")
+        wb.configure("ws://127.0.0.1:8765")
+        wb.tick(0)
+        assert(_ws_on_recv ~= nil)
+        """
+    )
+    payload = json.dumps(
+        {
+            "protocol": 1,
+            "event": "corner_advice",
+            "corner": "T1",
+            "text": "lift slightly",
+            "lap": 0,
+        }
+    )
+    g["_corner_payload"] = payload
+    lua.execute("_ws_on_recv(_corner_payload)")
+    lua.execute(
+        """
+        local wb = require("ws_bridge")
+        wb.tick(0)
+        wb.pollInbound(8)
+        assert(wb.takeCornerAdvisory("T1", 0) == "lift slightly")
+        wb.tick(6.5)
+        assert(wb.takeCornerAdvisory("T1", 0) == nil)
+        """
+    )

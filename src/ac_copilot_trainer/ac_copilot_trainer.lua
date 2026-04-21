@@ -1,5 +1,5 @@
 -- AC Copilot Trainer v0.4.2
-local APP_VERSION_UI = "v0.4.2"
+local APP_VERSION_UI = "v0.5.0"
 -- https://github.com/agorokh/ac-copilot-trainer
 -- Issues #6–#8: telemetry, traces, delta, markers, throttle, corner analysis, tires, setup.
 
@@ -23,17 +23,30 @@ local racingLine = require("racing_line")
 local tireMonitor = require("tire_monitor")
 local setupReader = require("setup_reader")
 local coachingHints = require("coaching_hints")
+-- Issue #77 Part C: per-lap archive (full trace + setup + corners + coaching).
+local lapArchive = require("lap_archive")
 local coachingOverlay = require("coaching_overlay")
 local wsBridge = require("ws_bridge")
 local sessionJournal = require("session_journal")
 local ch = require("csp_helpers")
 local renderDiag = require("render_diag")
 local focusPractice = require("focus_practice")
+local cornerNames = require("corner_names")
+local hudSettings = require("hud_settings")
+local realtimeCoaching = require("realtime_coaching")
+
+--- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
+local MANIFEST_WINDOW_SIZES = {
+  ["AC Copilot Trainer"] = {520, 200},
+  ["Coaching"]           = {640, 240},
+  ["Settings"]           = {480, 580},
+}
 
 local sim ---@type ac.StateSim
 local car ---@type ac.StateCar
 
-local config = {
+--- Defaults for `ac.storage` (issue #57 Part A). Keys must stay stable across versions.
+local CONFIG_DEFAULTS = {
   brakeThreshold = 0.3,
   brakeDurationMin = 0.5,
   bufferSeconds = 30,
@@ -57,14 +70,180 @@ local config = {
   --- Racing line 3D style: "flat" = constant Y offset; "tilt" = back edge rises under braking.
   lineStyle = "tilt",
   --- Optional `ws://127.0.0.1:8765` when Python sidecar is running — see `WARP.md` § WebSocket sidecar (issue #45).
-  wsSidecarUrl = "",
+  -- Issue #77 Part A: default URL points at our auto-launched sidecar.
+  -- Setting this here means a fresh install dials 127.0.0.1:8765 immediately
+  -- without the user touching Settings.
+  wsSidecarUrl = "ws://127.0.0.1:8765",
   --- Focus practice (issue #44): comma-separated corner labels `T1,T2`; empty = auto from worst consistency rows.
   focusPracticeCornerLabels = "",
   --- Auto-pick up to this many worst corners when `focusPracticeCornerLabels` is empty (1–3).
   focusPracticeAutoCount = 3,
   --- When focus mode is on and corner geometry exists, dim brake walls outside the focus set.
   focusPracticeDimNonFocus = true,
+  --- 3D overlays (issue #57 Part B); default on — toggles in Settings window.
+  racingLineEnabled = true,
+  brakeMarkersEnabled = true,
+  --- Issue #77 Part C: write one JSON per completed lap to journal/laps/.
+  --- Includes full per-sample trace (2000 samples), corner features, active
+  --- car setup snapshot, coaching context. Append-only with disk cap.
+  lapArchiveEnabled = true,
+  --- Hard cap on archive disk usage in MB. Oldest files deleted first.
+  lapArchiveMaxMB = 500,
 }
+
+--- Auto-launch always serves the sidecar on localhost:8765; other persisted URLs strand coaching (Codex #78).
+local function wsUrlMatchesAutolaunchTarget(s)
+  if type(s) ~= "string" then
+    return false
+  end
+  local u = s:lower():gsub("%s+", ""):gsub("/+$", "")
+  return u == "ws://127.0.0.1:8765" or u == "ws://localhost:8765"
+end
+
+--- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
+local function shallowCopyDefaults()
+  local c = {}
+  for k, v in pairs(CONFIG_DEFAULTS) do
+    c[k] = v
+  end
+  return c
+end
+
+--- Per-key storage for critical settings.
+---
+--- Issue #75 in-game test: `ac.storage(layout)` table-form silently fails to
+--- persist on this CSP build (no `cfg/extension/state/lua/app/AC Copilot
+--- Trainer.ini` is ever written). Every other CSP app uses the per-key form
+--- `ac.storage("name", default)` which is known to work. We use it here for
+--- `wsSidecarUrl` so the URL persists across reloads and the WebSocket
+--- bridge can actually dial the sidecar.
+local _wsUrlStorage = nil
+local _approachMetersStorage = nil
+local _lapArchiveEnabledStorage = nil
+local _lapArchiveMaxMBStorage = nil
+if ac and type(ac.storage) == "function" then
+  local ok1, sv1 = pcall(ac.storage, "ac_copilot_trainer.wsSidecarUrl_v1", "")
+  if ok1 and sv1 and type(sv1.get) == "function" then
+    _wsUrlStorage = sv1
+  end
+  local ok2, sv2 = pcall(ac.storage, "ac_copilot_trainer.approachMeters_v1", 200)
+  if ok2 and sv2 and type(sv2.get) == "function" then
+    _approachMetersStorage = sv2
+  end
+  -- Lap archive toggles must use per-key storage too (table-form `ac.storage` is broken on target CSP — Codex #78).
+  local ok3, sv3 = pcall(ac.storage, "ac_copilot_trainer.lapArchiveEnabled_v1", 1)
+  if ok3 and sv3 and type(sv3.get) == "function" then
+    _lapArchiveEnabledStorage = sv3
+  end
+  local ok4, sv4 = pcall(ac.storage, "ac_copilot_trainer.lapArchiveMaxMB_v1", 500)
+  if ok4 and sv4 and type(sv4.get) == "function" then
+    _lapArchiveMaxMBStorage = sv4
+  end
+end
+
+--- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
+local function loadConfig()
+  local cfg
+  if ac and type(ac.storage) == "function" then
+    local ok, st = pcall(ac.storage, shallowCopyDefaults())
+    if ok and type(st) == "table" then
+      cfg = st
+    end
+  end
+  if not cfg then
+    cfg = shallowCopyDefaults()
+  end
+  -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
+  -- Issue #78: empty stored URL used to mean "cleared"; with auto-launch + no URL
+  -- editor in Settings, migrate empty back to localhost and persist so wsBridge.tick connects.
+  if _wsUrlStorage and type(_wsUrlStorage.get) == "function" then
+    local ok, val = pcall(function() return _wsUrlStorage:get() end)
+    if ok and type(val) == "string" then
+      local migrated = false
+      if val == "" or not wsUrlMatchesAutolaunchTarget(val) then
+        cfg.wsSidecarUrl = CONFIG_DEFAULTS.wsSidecarUrl
+        migrated = true
+      else
+        cfg.wsSidecarUrl = val
+      end
+      if migrated and type(_wsUrlStorage.set) == "function" then
+        pcall(function() _wsUrlStorage:set(cfg.wsSidecarUrl) end)
+      end
+    end
+  end
+  -- Overlay approachMeters too (table-form is broken).
+  if _approachMetersStorage and type(_approachMetersStorage.get) == "function" then
+    local ok, val = pcall(function() return _approachMetersStorage:get() end)
+    if ok and type(val) == "number" and val > 0 then
+      cfg.approachMeters = val
+    end
+  end
+  if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.get) == "function" then
+    local ok, val = pcall(function() return _lapArchiveEnabledStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil then
+        cfg.lapArchiveEnabled = (n ~= 0)
+      end
+    end
+  end
+  if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.get) == "function" then
+    local ok, val = pcall(function() return _lapArchiveMaxMBStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil and n > 0 then
+        cfg.lapArchiveMaxMB = n
+      end
+    end
+  end
+  cfg.lapArchiveMaxMB = lapArchive.clampArchiveCapMB(cfg.lapArchiveMaxMB)
+  return cfg
+end
+
+local config = loadConfig()
+
+-- Issue #77 Part C: stable session id stamped on every archived lap from this script load.
+-- Use 16-bit math.random bounds only (Lua 5.1 / some LuaJIT builds reject 0xFFFFFFFF as int32).
+math.randomseed((os and os.time and os.time()) or 0)
+local SESSION_UUID = string.format(
+  "%04x%04x%04x",
+  math.random(0, 0xFFFF),
+  math.random(0, 0xFFFF),
+  math.random(0, 0xFFFF)
+)
+
+--- Persist `approachMeters` to per-key storage and log the change so we can
+--- verify the slider is wired correctly (issue #75 round 5: user reported the
+--- slider feels reversed; the formula is correct, but without persistence the
+--- value reset to 200 on every reload).
+local function setApproachMetersAndPersist(meters)
+  local m = tonumber(meters)
+  if not m or m ~= m then return end
+  m = math.max(50, math.min(500, math.floor(m + 0.5)))
+  config.approachMeters = m
+  if _approachMetersStorage and type(_approachMetersStorage.set) == "function" then
+    pcall(function() _approachMetersStorage:set(m) end)
+  end
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][APPROACH-DIAG] slider set to " .. tostring(m) .. " m")
+  end
+end
+
+local function setLapArchiveEnabledAndPersist(enabled)
+  config.lapArchiveEnabled = enabled and true or false
+  local v = (config.lapArchiveEnabled ~= false) and 1 or 0
+  if _lapArchiveEnabledStorage and type(_lapArchiveEnabledStorage.set) == "function" then
+    pcall(function() _lapArchiveEnabledStorage:set(v) end)
+  end
+end
+
+local function setLapArchiveMaxMBAndPersist(mb)
+  local m = lapArchive.clampArchiveCapMB(mb)
+  config.lapArchiveMaxMB = m
+  if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.set) == "function" then
+    pcall(function() _lapArchiveMaxMBStorage:set(m) end)
+  end
+end
 
 --- Non-negative numeric hold for UI and countdown (invalid config → 30).
 local function normalizedCoachingHoldSeconds()
@@ -122,6 +301,27 @@ local td = throttleDet.new()
 local tires = tireMonitor.new()
 
 wsBridge.configure(config.wsSidecarUrl or "")
+
+-- Issue #77 Part A: resolve the deployed app dir (where start_sidecar.bat lives)
+-- so wsBridge can spawn the sidecar without hardcoded paths.
+local appDir = nil
+do
+  local info = debug.getinfo(1, "S")
+  if info and type(info.source) == "string" then
+    local src = info.source
+    if src:sub(1, 1) == "@" then src = src:sub(2) end
+    -- src is the absolute path to ac_copilot_trainer.lua; strip filename
+    appDir = src:match("^(.*)[/\\][^/\\]+$")
+  end
+end
+if not appDir or appDir == "" then
+  appDir = "."  -- fallback; .bat will fail and log clearly
+end
+
+-- Kick off sidecar spawn at script load. Subsequent wsBridge.tick calls also
+-- invoke startSidecarIfNeeded so a crashed child gets relaunched after the
+-- LAUNCH_RETRY_SEC gap.
+pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
 
 local lastDriveCar ---@type ac.StateCar|nil
 local lastDriveSim ---@type ac.StateSim|nil
@@ -318,6 +518,11 @@ local state = {
   coachingRemainSec = 0,
   --- Last sidecar ``debrief`` paragraph (issue #46); persists until replaced or session reset.
   sidecarDebriefText = "",
+  -- Round 10: per-corner LLM advisories. Populated by wsBridge
+  -- corner_advice replies; consumed by realtime_coaching.tick.
+  cornerAdvisories = {},
+  --- Lap invalidation ORed each frame (`carLapInvalidatedFlag`) for archive `is_valid`.
+  lapInvalidatedThisLap = false,
   --- Issue #44: runtime toggle (HUD checkbox); survives rolling session reset; cleared on full track exit.
   focusPracticeActive = false,
   --- Copy of `consistencySummary().worstThree` strings after each analytics lap.
@@ -326,6 +531,14 @@ local state = {
   lastLapCornerFeats = {},
   --- One-line HUD summary for focus targets.
   focusPracticeHudSummary = "",
+  --- Invalidation key for `focusPracticeHudSummary` (avoid rebuilding every frame).
+  focusPracticeHudSummarySig = nil,
+  --- Parsed `corners.ini` by section id; invalidated when `cornerIniTrackKey` changes (issue #57).
+  cornerIniById = {},
+  cornerIniTrackKey = nil,
+  --- Precomputed `T1` -> "Left"|"Right" from best reference trace (invalidated with segments/trace).
+  cornerSteerSideByLabel = {},
+  cornerSteerSideCacheKey = nil,
 }
 
 -- HUD sees only focus-practice fields (checkbox + summary), not the full `state` table.
@@ -364,6 +577,30 @@ local function focusLabelMap()
   return focusPractice.cornerLabelsMapFromWorst(state.focusWorstThree, config.focusPracticeAutoCount), false
 end
 
+--- Stable string for when `describeFocusMap` output can change (lap / worst corners / manual labels / toggle).
+local function focusHudSummarySig()
+  if not state.focusPracticeActive then
+    return "off"
+  end
+  local manual = config.focusPracticeCornerLabels
+  if type(manual) == "string" and manual:match("%S") then
+    return "m:" .. manual
+  end
+  local w = state.focusWorstThree
+  local wstr = ""
+  if type(w) == "table" then
+    for i = 1, #w do
+      wstr = wstr .. tostring(w[i]) .. "|"
+    end
+  end
+  return "a:"
+    .. tostring(config.focusPracticeAutoCount or 0)
+    .. ":"
+    .. wstr
+    .. ":"
+    .. tostring(state.lapsCompleted or -1)
+end
+
 local function rebuildBestReference()
   state.bestSortedTrace = delta.prepareTrace(state.bestLapTrace)
   local b = delta.sectorBoundariesMs(state.bestSortedTrace)
@@ -373,6 +610,7 @@ local function rebuildBestReference()
     state.bestSectorMs = { 0, 0, 0 }
   end
   resetDeltaSmoother()
+  state.cornerSteerSideCacheKey = nil
 end
 
 local function applyLoaded(data)
@@ -405,6 +643,7 @@ local function applyLoaded(data)
   end
   if data.trackSegments and type(data.trackSegments) == "table" then
     state.trackSegments = data.trackSegments
+    state.cornerSteerSideCacheKey = nil
   end
   if data.lapFeatureHistory and type(data.lapFeatureHistory) == "table" then
     state.lapFeatureHistory = data.lapFeatureHistory
@@ -488,6 +727,10 @@ local function resetRuntimeAfterLeavingTrack()
   state.postLapUntil = 0
   state.lastThrottleSummary = ""
   state.trackSegments = {}
+  state.cornerIniById = {}
+  state.cornerIniTrackKey = nil
+  state.cornerSteerSideByLabel = {}
+  state.cornerSteerSideCacheKey = nil
   state.lapFeatureHistory = {}
   state.bestCornerFeatures = {}
   state.lapsCompleted = 0
@@ -507,12 +750,26 @@ local function resetRuntimeAfterLeavingTrack()
   state.coachingLines = {}
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
+  state.cornerAdvisories = {}
+  state.lapInvalidatedThisLap = false
   state.focusPracticeActive = false
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
+  state.focusPracticeHudSummarySig = nil
+  -- New driving stint without Lua reload: keep archive session ids disjoint (Codex #78).
+  SESSION_UUID = string.format(
+    "%04x%04x%04x",
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF)
+  )
   wsBridge.reset()
   renderDiag.reset()
+  realtimeCoaching.reset()
+  state.realtimeActiveHint = nil
+  state._cachedRealtimeView = nil
+  hud.reset()
   resetDeltaSmoother()
 end
 
@@ -524,10 +781,24 @@ local function resetRollingDrivingState()
   state.coachingLines = {}
   state.coachingRemainSec = 0
   state.sidecarDebriefText = ""
+  state.cornerAdvisories = {}
+  state.lapInvalidatedThisLap = false
   state.lapsCompleted = 0
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
   state.focusPracticeHudSummary = ""
+  state.focusPracticeHudSummarySig = nil
+  state.realtimeActiveHint = nil
+  state._cachedRealtimeView = nil
+  -- Rolling reset without leaving track: disjoint archive `session_uuid` vs prior stint (Codex #78).
+  SESSION_UUID = string.format(
+    "%04x%04x%04x",
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF),
+    math.random(0, 0xFFFF)
+  )
+  hud.reset()
+  realtimeCoaching.reset()
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -538,6 +809,9 @@ local function resetRollingDrivingState()
   state.sectorHudMsg = ""
   state.sectorHudUntil = 0
   wsBridge.clearPendingCoaching()
+  if wsBridge.clearCornerAdvisories then
+    pcall(wsBridge.clearCornerAdvisories)
+  end
   resetDeltaSmoother()
 end
 
@@ -639,59 +913,75 @@ local function splineForwardDelta(carSpline, ptSpline)
   return d
 end
 
----@param sim0 ac.StateSim|nil
-local function approachHudLines(car0, sortedTrace, sim0)
-  local best = state.brakingPoints.best
-  if not car0 or not car0.position or #best == 0 then
-    return nil
+--- Key changes when track, segment layout, or reference trace length changes.
+local function cornerSteerSidesCacheKey()
+  local segs = state.trackSegments
+  local tr = state.bestSortedTrace
+  local n = type(segs) == "table" and #segs or 0
+  local t = type(tr) == "table" and #tr or 0
+  local tk = ch.trackIdRawFromGlobals() or ""
+  local h = 0.0
+  if n > 0 and type(segs[1]) == "table" then
+    h = (tonumber(segs[1].s0) or 0) * 1e6 + (tonumber(segs[1].s1) or 0)
   end
-  local carSp = car0.splinePosition or 0
-  local cx, cy, cz = car0.position.x, car0.position.y, car0.position.z
-  local bestI, bestSplineD, bestDistSq ---@type integer|nil, number|nil, number|nil
-  for i = 1, #best do
-    local p = best[i]
-    local dx, dy, dz = cx - p.px, cy - p.py, cz - p.pz
-    local distSq = dx * dx + dy * dy + dz * dz
-    local dS = splineForwardDelta(carSp, p.spline or 0)
-    if dS < 1e-9 then
-      dS = 1e-9
-    end
-    if bestI == nil or dS < bestSplineD - 1e-12 or (math.abs(dS - bestSplineD) <= 1e-12 and distSq < bestDistSq) then
-      bestI = i
-      bestSplineD = dS
-      bestDistSq = distSq
-    end
-  end
-  if not bestI or not bestDistSq or not bestSplineD then
-    return nil
-  end
-  local dM = math.sqrt(bestDistSq)
-  local tlM = trackLengthMeters(sim0)
-  if tlM and tlM > 0 then
-    dM = bestSplineD * tlM
-  end
-  if dM > config.approachMeters then
-    return nil
-  end
-  local bp = best[bestI]
-  local refSpd = bp.entrySpeed or 0
-  if sortedTrace then
-    refSpd = delta.bestSpeedKmhAtSpline(sortedTrace, bp.spline or 0) or refSpd
-  end
-  local cur = car0.speedKmh or 0
-  local dv = cur - refSpd
-  local tag = "match"
-  if dv > 8 then
-    tag = "too fast"
-  elseif dv < -8 then
-    tag = "too slow"
-  end
-  return {
-    string.format("Dist brake #%d: %.0f m", bestI, dM),
-    string.format("Ref speed: %.0f  Current: %.0f (%s)", refSpd, cur, tag),
-  }
+  return string.format("%s|%d|%d|%.6f", tk, n, t, h)
 end
 
+--- One full trace scan per (segments × reference trace) change; HUD reads O(1) map (PR #58).
+local function rebuildCornerSteerSideCache()
+  state.cornerSteerSideByLabel = {}
+  local segs = state.trackSegments
+  local tr = state.bestSortedTrace
+  if type(segs) ~= "table" or type(tr) ~= "table" or #tr < 2 then
+    return
+  end
+  for i = 1, #segs do
+    local seg = segs[i]
+    if type(seg) == "table" and seg.kind == "corner" and type(seg.label) == "string" then
+      local s0, s1 = seg.s0, seg.s1
+      if type(s0) == "number" and type(s1) == "number" then
+        local wrap = s1 <= s0
+        state.cornerSteerSideByLabel[seg.label] = cornerNames.steerSideForRange(tr, s0, s1, wrap)
+      end
+    end
+  end
+end
+
+local function ensureCornerSteerSides()
+  local key = cornerSteerSidesCacheKey()
+  if state.cornerSteerSideCacheKey == key then
+    return
+  end
+  rebuildCornerSteerSideCache()
+  state.cornerSteerSideCacheKey = key
+end
+
+local function ensureCornerIniLoaded()
+  local tk = ch.trackIdRawFromGlobals() or "unknown"
+  if state.cornerIniTrackKey == tk and type(state.cornerIniById) == "table" then
+    return
+  end
+  state.cornerIniTrackKey = tk
+  state.cornerIniById = {}
+  if not ac or type(ac.getTrackDataFilename) ~= "function" then
+    return
+  end
+  local okPath, path = pcall(ac.getTrackDataFilename, "corners.ini")
+  if not okPath or type(path) ~= "string" or path == "" then
+    return
+  end
+  local f = io.open(path, "r")
+  if not f then
+    return
+  end
+  local body = f:read("*a")
+  f:close()
+  state.cornerIniById = cornerNames.parseCornersIni(body)
+end
+
+--- Structured approach telemetry for HUD + coaching panel (issue #57 Part A).
+---@param sim0 ac.StateSim|nil
+---@return table|nil
 function script.windowMain(_dt)
   if not config.hudEnabled then
     return
@@ -748,38 +1038,22 @@ function script.windowMain(_dt)
   end
   local coachPrimer = (state.lapsCompleted or 0) == 0
 
-  if state.focusPracticeActive then
-    local flm, man = focusLabelMap()
-    state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
-  else
-    state.focusPracticeHudSummary = ""
-  end
-
   hud.draw({
     recording = tel:isRecording(),
-    telemetrySamples = tel:sampleCount(),
     speed = car.speedKmh or 0,
     brake = car.brake or 0,
     lapCount = car.lapCount or 0,
     bestLapMs = state.bestLapMs or (car.bestLapTimeMs or nil),
     lastLapMs = state.lastLapMs or (car.previousLapTimeMs or nil),
-    brakeBest = #state.brakingPoints.best,
-    brakeLast = #state.brakingPoints.last,
-    brakeSession = #state.brakingPoints.session,
     deltaSmoothedSec = dSmooth,
     sectorMessage = secMsg,
-    approachLines = approachHudLines(car, state.bestSortedTrace, sim),
+    realtimeHint = state.realtimeActiveHint,
+    realtimeView = state._cachedRealtimeView,
     postLapLines = postLines,
     coastWarn = coastWarn,
-    throttleLapHint = state.lastThrottleSummary,
-    consistencyHud = state.consistencyHud,
-    styleHud = state.styleHud,
-    tireHud = state.tireHud,
     tireLockupFlash = tires:lockupFlash(),
     setupChangeMsg = state.setupChangeMsg,
     autoSetupLine = autoSetupLine,
-    refAiDistanceM = state.refLatDistance,
-    segmentCount = #(state.trackSegments or {}),
     coachingLines = coachingHudLines,
     coachingRemaining = coachRem,
     coachingHoldSeconds = normalizedCoachingHoldSeconds(),
@@ -787,25 +1061,64 @@ function script.windowMain(_dt)
     coachingShowPrimer = coachPrimer,
     appVersionUi = APP_VERSION_UI,
     debriefText = (state.sidecarDebriefText ~= "") and state.sidecarDebriefText or nil,
+    focusPracticeActive = state.focusPracticeActive or false,
+    focusPracticeLabel = (state.focusPracticeHudSummary ~= "") and state.focusPracticeHudSummary or nil,
+  })
+end
+
+function script.windowSettings(_dt)
+  sim = ac.getSim()
+  if not sim or sim.isInMainMenu then
+    ui.text("Open Settings after loading a session (not from the main menu).")
+    return
+  end
+  car = ac.getCar(0)
+  if not car then
+    ui.text("Waiting for car data…")
+    return
+  end
+  hudSettings.draw({
+    config = config,
+    stats = {
+      telemetrySamples = tel:sampleCount(),
+      brakeBest = #state.brakingPoints.best,
+      brakeLast = #state.brakingPoints.last,
+      brakeSession = #state.brakingPoints.session,
+      refAiDistanceM = state.refLatDistance,
+      segmentCount = #(state.trackSegments or {}),
+      throttleLapHint = state.lastThrottleSummary,
+      consistencyHud = state.consistencyHud,
+      styleHud = state.styleHud,
+      tireHud = state.tireHud,
+    },
     focusPracticeUi = focusPracticeUiProxy,
+    -- Issue #77 Part A: Settings UI shows sidecar process + connection status.
+    sidecarSpawnedAlive = wsBridge.sidecarSpawnedAlive,
+    sidecarConnected = wsBridge.sidecarConnected,
+    -- Issue #77 Part C: lap archive stats for Settings UI.
+    lapArchiveStats = lapArchive.stats,
+    lapArchiveClampCapMB = lapArchive.clampArchiveCapMB,
+    setApproachMeters = setApproachMetersAndPersist,
+    setLapArchiveEnabled = setLapArchiveEnabledAndPersist,
+    setLapArchiveMaxMB = setLapArchiveMaxMBAndPersist,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
   end
 end
 
---- Separate coaching overlay window (issue #35 Part C, #37 Part C fix).
---- Registered as a second CSP app window; transparent background, top-right.
---- Issue #37: added diagnostic logging and fallback message for empty state.
+--- Coaching window (WINDOW_1) - issue #72 rebuild.
+--- Always renders the structured approach panel (chrome + footer + placeholders).
 function script.windowCoaching(_dt)
   if not config.hudEnabled then return end
   sim = sim or ac.getSim()
   if not sim or sim.isInMainMenu then return end
+  car = car or ac.getCar(0)
   local now = ch.simSeconds(sim)
   local remaining = state.coachingRemainSec or 0
   local laps = state.lapsCompleted or 0
 
-  -- #5: Periodic coaching diag (every 5s for first 60s, then stops)
+  -- Periodic coaching diag (every 5s for first 60s, then stops)
   if not state._coachDiagT then state._coachDiagT = 0 end
   if not state._coachDiagCount then state._coachDiagCount = 0 end
   state._coachDiagT = state._coachDiagT + (_dt or 0)
@@ -813,37 +1126,184 @@ function script.windowCoaching(_dt)
     state._coachDiagT = 0
     state._coachDiagCount = state._coachDiagCount + 1
     ac.log(string.format(
-      "[COPILOT] coaching: simT=%.1f remainSec=%.2f lines=%d laps=%d (timer=dt not sim clock)",
+      "[COPILOT] coaching: simT=%.1f remainSec=%.2f lines=%d laps=%d (rebuild #72)",
       now, remaining, state.coachingLines and #state.coachingLines or 0, laps))
   end
 
-  if laps == 0 then
-    coachingOverlay.drawFallback()
+  -- Always render the bottom tile (issue #72: never an empty box).
+  -- Build the viewmodel from the cached realtime view; pass nil to render
+  -- chrome + placeholders when no data exists yet.
+  local view = state._cachedRealtimeView
+  local payload
+  if view then
+    -- Bottom tile shows the UPCOMING brake target (always), not the current
+    -- corner. view.approachLabel/targetSpeedKmh/distToBrakeM all point to the
+    -- next braking opportunity ahead. view.cornerLabel is the in-corner label
+    -- (used by the TOP tile only) — falls back to approachLabel if not in a
+    -- corner apex.
+    payload = {
+      turnLabel        = view.approachLabel or view.cornerLabel,
+      targetSpeedKmh   = view.targetSpeedKmh,
+      currentSpeedKmh  = view.currentSpeedKmh,
+      distanceToBrakeM = view.distToBrakeM,
+      progressPct     = view.progressPct or 0,
+      subState        = view.subState or "no_reference",
+      status          = view.subState or "no_reference",
+    }
+  end
+  -- Round 10: the approach panel is the sole content of WINDOW_1.
+  -- Post-lap debrief was rejected by the user in favor of in-race per-
+  -- corner LLM coaching delivered via view.secondaryLine overrides on
+  -- the TOP tile (WINDOW_0). See realtime_coaching.lua round 10 block.
+  coachingOverlay.drawApproachPanel(payload)
+end
+
+-- Issue #72: place each window once on first install (persisted via ac.storage),
+-- then leave the user alone forever. Position is user-controlled after this runs.
+-- Window SIZE is locked by the FIXED_SIZE manifest flag (not by this function).
+-- Issue #75: force window geometry on EVERY app load. The previous
+-- once-per-install gate (`hud_auto_placed_v1` storage flag) caused the
+-- imgui-persisted Pos+Size from `Documents/Assetto Corsa/cfg/extension/state/imgui.ini`
+-- to leak in and override the manifest defaults forever. CSP's FIXED_SIZE
+-- flag only disables interactive resizing — it does NOT clear persisted
+-- imgui state — so the only reliable fix is to call win:resize+win:move on
+-- every cold start until both succeed for all three windows.
+local function autoPlaceOnce()
+  if state._autoPlaceChecked then return end
+  if type(ac) ~= "table" then return end
+  if type(ac.getAppWindows) ~= "function" or type(ac.accessAppWindow) ~= "function" then
+    -- API not available yet — try again next frame instead of permanently
+    -- skipping the recovery path on a cold start.
     return
   end
 
-  if remaining > 0 then
-    if state.coachingLines and #state.coachingLines > 0 then
-      coachingOverlay.draw(
-        state.coachingLines,
-        remaining,
-        normalizedCoachingHoldSeconds(),
-        normalizedCoachingMaxVisibleHints()
-      )
-    else
-      coachingOverlay.drawHoldNoHints(remaining)
+  local localSim = ac.getSim() or {}
+  local screenW = tonumber(localSim.windowWidth) or 1920
+  local screenH = tonumber(localSim.windowHeight) or 1080
+  local sizes = {}
+  for title, wh in pairs(MANIFEST_WINDOW_SIZES) do
+    sizes[title] = vec2(wh[1], wh[2])
+  end
+  local positions = {
+    ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
+    ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
+    ["Settings"]           = vec2(math.floor(screenW * 0.05),     math.floor(screenH * 0.10)),
+  }
+  local required = 0
+  for _ in pairs(sizes) do required = required + 1 end
+
+  local windows = ac.getAppWindows() or {}
+  if #windows == 0 then
+    -- Window list still empty (e.g. very early frame). Try again next frame.
+    return
+  end
+
+  local applied = 0
+  for i = 1, #windows do
+    local entry = windows[i]
+    local title = entry and entry.title or nil
+    local sizeTarget = title and sizes[title] or nil
+    local posTarget  = title and positions[title] or nil
+    if sizeTarget and posTarget then
+      local ok, win = pcall(ac.accessAppWindow, entry.name)
+      if ok and win and win:valid() then
+        local resizeOk = pcall(function() win:resize(sizeTarget) end)
+        local moveOk   = pcall(function() win:move(posTarget) end)
+        if resizeOk and moveOk then applied = applied + 1 end
+      end
     end
-    coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
-    return
   end
 
-  coachingOverlay.drawBetweenLapsIdle(normalizedCoachingHoldSeconds())
-  coachingOverlay.drawSidecarDebrief(state.sidecarDebriefText)
+  if applied >= required then
+    state._autoPlaceChecked = true
+    if ac and type(ac.log) == "function" then
+      ac.log(string.format(
+        "[COPILOT][AUTOPLACE] forced %d/%d windows to manifest geometry on this load",
+        applied, required))
+    end
+  end
+end
+
+--- CSP lap invalidation flags differ by build; probe known names without throwing.
+--- `ac.StateCar` is userdata in real CSP — never gate on `type(...) == "table"` (Codex #78).
+local function carLapInvalidatedFlag(carObj)
+  if carObj == nil then
+    return false
+  end
+  for _, key in ipairs({ "isLapInvalidated", "isCurrentLapInvalid", "currentLapInvalid" }) do
+    local ok, v = pcall(function()
+      return carObj[key]
+    end)
+    if ok and v == true then
+      return true
+    end
+  end
+  return false
 end
 
 function script.update(dt)
   sim = ac.getSim()
   car = ac.getCar(0)
+
+  autoPlaceOnce()
+
+  -- Live-frame coaching tick (issue #72 rebuild).
+  -- Inputs are LIVE FRAME values and persisted reference data, NOT lap aggregates.
+  -- The engine returns a viewmodel even with no reference (no_reference subState).
+  if car then
+    local sp = car.splinePosition or 0
+    local cur = car.speedKmh or 0
+    local tlM = sim and sim.trackLengthM or nil
+    local approachM = tonumber(config.approachMeters)
+    if not approachM or approachM ~= approachM or approachM <= 0 then
+      approachM = 200
+    end
+    -- Round 10: pass wsBridge so realtime engine can fire corner_query
+    -- on corner transitions, and state.cornerAdvisories for the override.
+    local rtView = realtimeCoaching.tick({
+      splinePos = sp,
+      currentSpeedKmh = cur,
+      bestSortedTrace = state.bestSortedTrace,
+      brakingPoints = state.brakingPoints and state.brakingPoints.best or nil,
+      segments = state.trackSegments,
+      trackLengthM = tlM,
+      approachMeters = approachM,
+      dt = dt,
+      wsBridge = wsBridge,
+      cornerAdvisories = state.cornerAdvisories,
+      lap = state.lapsCompleted or 0,
+      simT = ch.simSeconds(sim),
+    })
+    state._cachedRealtimeView = rtView
+    state.realtimeActiveHint = rtView
+
+    -- Periodic [RT-DIAG] log (every 3 sec) to verify what the engine sees
+    -- live. Issue #75 round 3: prove the in-corner / brake-distance pipeline.
+    state._rtDiagT = (state._rtDiagT or 0) + (dt or 0)
+    if state._rtDiagT >= 3.0 and ac and type(ac.log) == "function" then
+      state._rtDiagT = 0
+      local function fmt(v, w)
+        if v == nil then return "nil" end
+        if type(v) == "number" then return string.format(w or "%.1f", v) end
+        return tostring(v)
+      end
+      ac.log(string.format(
+        "[COPILOT][RT-DIAG] sp=%s cur=%s primary=%s sub=%s topCorner=%s nextCorner=%s tgt=%s dist=%sm trace=%d brakes=%d segs=%d trackLen=%s",
+        fmt(sp, "%.4f"), fmt(cur, "%.0f"),
+        fmt(rtView and rtView.primaryLine), fmt(rtView and rtView.subState),
+        fmt(rtView and rtView.cornerLabel), fmt(rtView and rtView.approachLabel),
+        fmt(rtView and rtView.targetSpeedKmh, "%.0f"),
+        fmt(rtView and rtView.distToBrakeM, "%.0f"),
+        (state.bestSortedTrace and #state.bestSortedTrace) or 0,
+        (state.brakingPoints and state.brakingPoints.best and #state.brakingPoints.best) or 0,
+        (state.trackSegments and #state.trackSegments) or 0,
+        fmt(tlM, "%.0f")
+      ))
+    end
+  else
+    state._cachedRealtimeView = nil
+    state.realtimeActiveHint = nil
+  end
 
   if sim.isInMainMenu then
     if state.wasDriving then
@@ -896,8 +1356,26 @@ function script.update(dt)
     tryLoadDisk()
   end
 
+  -- Issue #77 Part A: start sidecar before tick so we do not duplicate tryOpen() in the same frame.
+  pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
+  -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
+  -- The takeCornerAdvisory API returns the cached text for a label without
+  -- consuming it — we walk known corner labels from trackSegments and copy.
+  if state.trackSegments and type(state.trackSegments) == "table" then
+    for i = 1, #state.trackSegments do
+      local seg = state.trackSegments[i]
+      if seg and seg.kind == "corner" and type(seg.label) == "string" then
+        local txt = wsBridge.takeCornerAdvisory(seg.label, state.lapsCompleted)
+        if txt then
+          state.cornerAdvisories[seg.label] = txt
+        else
+          state.cornerAdvisories[seg.label] = nil
+        end
+      end
+    end
+  end
   local sidecarHints, sidecarDebrief = wsBridge.takeCoachingForLap(state.lapsCompleted or 0)
   if type(sidecarDebrief) == "string" and sidecarDebrief ~= "" then
     state.sidecarDebriefText = sidecarDebrief
@@ -937,6 +1415,10 @@ function script.update(dt)
 
   -- Lap boundary: finalize trace before appending this frame's sample.
   if state.lastLapCount >= 0 and lc > state.lastLapCount then
+    -- Last frame of the completed lap may still carry invalidation (CSP `ac.StateCar`).
+    if carLapInvalidatedFlag(car) then
+      state.lapInvalidatedThisLap = true
+    end
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
@@ -986,12 +1468,16 @@ function script.update(dt)
         local ns = cornerAnalysis.buildSegments(completedTrace, state.brakingPoints.best)
         if #ns > 0 then
           state.trackSegments = ns
+          state.cornerSteerSideCacheKey = nil
+          realtimeCoaching.rebuildSegmentIndex(ns)
         end
       end
       if #state.trackSegments == 0 then
         local ns = cornerAnalysis.buildSegments(completedTrace, segBrakes)
         if #ns > 0 then
           state.trackSegments = ns
+          state.cornerSteerSideCacheKey = nil
+          realtimeCoaching.rebuildSegmentIndex(ns)
         end
       end
       feats = cornerAnalysis.cornerFeaturesForLap(completedTrace, state.trackSegments)
@@ -1061,6 +1547,9 @@ function script.update(dt)
 
     state.racingLastLine = racingLine.traceToLine(completedTrace)
 
+    -- PB flag must use pre-update `bestLapMs` (Cursor #78); archive runs after PB block mutates it.
+    local isPbThisLap = lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
+
     local prevBestBp = copyBpList(state.brakingPoints.best)
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
       state.bestLapMs = lastMs
@@ -1117,6 +1606,45 @@ function script.update(dt)
       wsBridge.sendJson(lapPayload)
     end
 
+    -- Issue #77 Part C: archive this lap (trace + setup + corners + coaching).
+    -- Runs INDEPENDENTLY of sidecar / coaching success. Captures the dataset
+    -- for future RAG / classifier / fine-tune work. Forward-compatible schema
+    -- so imported MoTeC CSVs (Initiative B) drop into the same shape.
+    if config.lapArchiveEnabled ~= false and lastMs > 0 then
+      local archiveOpts = {
+        session_uuid = SESSION_UUID,
+        car = car,
+        sim = sim,
+        lap_n = state.lapsCompleted,
+        lap_ms = lastMs,
+        is_pb = isPbThisLap,
+        is_valid = not state.lapInvalidatedThisLap,
+        trace = completedTrace,
+        corners = feats,
+        setup_snap = state.lastSetupSnap,
+        setup_hash = state.setupHash,
+        rules_hints = state.coachingLines,
+        -- Omit async sidecar debrief: it is applied on later frames than lap_complete, so stamping it
+        -- here would mis-label the archived lap (Codex #78).
+        sidecar_debrief = nil,
+        -- `lapsCompleted` was incremented above; corner_query / corner_advice use the in-lap index
+        -- (Codex + Cursor Bugbot #78 post-5f0ce39).
+        corner_advice = wsBridge.cornerAdvisorySnapshotForLap((state.lapsCompleted or 0) - 1),
+      }
+      local rec = lapArchive.buildRecord(archiveOpts)
+      if rec then
+        local ok, pathOrErr = lapArchive.write(rec, lapArchive.clampArchiveCapMB(config.lapArchiveMaxMB))
+        if ac and type(ac.log) == "function" then
+          if ok then
+            ac.log("[COPILOT][ARCHIVE] wrote " .. tostring(pathOrErr))
+          else
+            ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
+          end
+        end
+      end
+    end
+
+    state.lapInvalidatedThisLap = false
     state.sectorIndex = 1
     state.sectorStartSimT = ch.simSeconds(sim)
     state.lastSplineSector = sp
@@ -1135,6 +1663,12 @@ function script.update(dt)
 
   tel:setRecording(state.recording)
   tel:update(dt, car, sim)
+
+  if not sim.isInMainMenu and state.lastLapCount >= 0 and lc == state.lastLapCount then
+    if carLapInvalidatedFlag(car) then
+      state.lapInvalidatedThisLap = true
+    end
+  end
 
   local ev = brakes:update(car, dt)
   if ev then
@@ -1174,6 +1708,19 @@ function script.update(dt)
     )
   else
     state.refLatDistance = nil
+  end
+
+  -- `script.update` already returns while `sim.isInMainMenu`; only recompute summary when inputs change.
+  if state.focusPracticeActive then
+    local sig = focusHudSummarySig()
+    if sig ~= state.focusPracticeHudSummarySig then
+      state.focusPracticeHudSummarySig = sig
+      local flm, man = focusLabelMap()
+      state.focusPracticeHudSummary = focusPractice.describeFocusMap(flm, man)
+    end
+  else
+    state.focusPracticeHudSummary = ""
+    state.focusPracticeHudSummarySig = nil
   end
 
   if state.lastLapCount >= 0 and lc < state.lastLapCount then
@@ -1253,19 +1800,29 @@ function script.Draw3D(_dt)
     end
   end
 
-  local flMap = select(1, focusLabelMap())
-  trackMarkers.draw(c, s, state.brakingPoints.best, state.brakingPoints.last, {
-    active = state.focusPracticeActive == true,
-    labels = flMap,
-    corners = state.lastLapCornerFeats,
-    dimNonFocus = config.focusPracticeDimNonFocus ~= false,
-  })
-  local mode = config.racingLineMode or "best"
-  local style = config.lineStyle or "tilt"
-  if mode == "best" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80), nil, style)
+  if config.brakeMarkersEnabled ~= false then
+    local flMap = select(1, focusLabelMap())
+    -- Issue #75 round 4: brake marker source follows racingLineMode so the
+    -- user only sees what they asked for. "best" hides the orange last-lap
+    -- walls, "last" hides the red best walls, "both" shows everything.
+    local mode = config.racingLineMode or "best"
+    local bestList = (mode == "best" or mode == "both") and state.brakingPoints.best or nil
+    local lastList = (mode == "last" or mode == "both") and state.brakingPoints.last or nil
+    trackMarkers.draw(c, s, bestList, lastList, {
+      active = state.focusPracticeActive == true,
+      labels = flMap,
+      corners = state.lastLapCornerFeats,
+      dimNonFocus = config.focusPracticeDimNonFocus ~= false,
+    })
   end
-  if mode == "last" or mode == "both" then
-    racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55), nil, style)
+  if config.racingLineEnabled ~= false then
+    local mode = config.racingLineMode or "best"
+    local style = config.lineStyle or "tilt"
+    if mode == "best" or mode == "both" then
+      racingLine.drawLineStrip(c, state.racingBestLine, rgbm(0.0, 0.85, 0.25, 0.80), nil, style)
+    end
+    if mode == "last" or mode == "both" then
+      racingLine.drawLineStrip(c, state.racingLastLine, rgbm(0.85, 0.75, 0.0, 0.55), nil, style)
+    end
   end
 end

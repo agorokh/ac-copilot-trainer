@@ -6,9 +6,11 @@ last_updated: 2026-04-21
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
-  - AcCopilotTrainer/01_Decisions/deep-research-synthesis.md
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/00_System/glossary/_index.md
+  - AcCopilotTrainer/03_Investigations/csp-web-socket-api.md
+  - AcCopilotTrainer/03_Investigations/csp-cdata-callable-guards.md
+  - AcCopilotTrainer/03_Investigations/ac-storage-persistence.md
   - 00_Graph_Schema.md
 ---
 
@@ -24,17 +26,24 @@ relates_to:
 
 ## What was delivered this session
 
-- **Issue #46 (PR #55):** `tools/ai_sidecar/coaching/llm_coach.py`; optional `debrief` on `coaching_response`; `AC_COPILOT_OLLAMA_*` env (see WARP / `.env.example`); Lua `telemetry.corners` on `lap_complete`, HUD + Coaching debrief UI, `sidecar_debrief_last` in journal; `tests/test_llm_coach.py` (mocked HTTP).
-- **Issue #49 (PR #54):** `features.py` / `improvement_ranking.py` / `session.py`; optional `improvementRanking` on `coaching_response`; `--compare-laps`; `[coaching]` adds numpy/sklearn/shap; tests + fixtures + protocol doc.
-- **Issue #45 (merged):** `tools/ai_sidecar/protocol.py` + extended `server.py` (`--no-reply`, `analysis_error` on bad JSON); `ws_bridge.lua` inbound queue + `takeCoachingForLap`; `ac_copilot_trainer.lua` `protocol:1` on `lap_complete` and sidecar override; `tests/test_ai_sidecar_protocol.py`; `12_WS_Sidecar_Protocol.md` + WARP; `websockets` added to `dev` optional deps for CI.
-- **PR #52 (merged):** Issue #43 — coaching max visible hints + contract tests + WARP.
-- **PR #51:** Phase 3 journal slice for epic #9 — `session_journal.lua` writes schema v1 JSON under `ScriptConfig/ac_copilot_trainer/journal/` when returning to AC main menu after ≥1 lap and successful persist; append-only `journal_index.jsonl` via `persistence.encodeJsonCompact`. `persistence.encodeJson` / `ensureParentDirForFile` exposed. Doc `docs/10_Development/11_Session_Journal_Schema.md`; Python `tools/session_journal.py` + tests.
+- **On `main` (pre-#75):** PR #73 — live-frame coaching engine, bundled fonts, FIXED_SIZE windows, ETE tests in `tests/test_phase5_rebuild_ete.py`, review-resolution rounds documented in prior handoff.
+- **On PR #75:** Multi-round in-game-driven fixes — CSP cdata-callable guards, `web.socket` callback bridge, per-key `ac.storage`, AI sidecar + `corner_query` / `corner_advice`, bounded Ollama follow-ups, server-side async prepare for `corner_query` with lock serialization against `lap_complete`, `ws_bridge.configure` closing the previous socket, HUD/footer debrief wiring, and expanded protocol tests (191 tests passing locally on branch tip).
 
 ## What remains
 
-- **#9 epic:** ML ranking (#49 in PR #54), focus practice (#44); Ollama debrief (#46) in PR #55; WebSocket (#45) merged; coaching UX (#43) merged.
-- **In-game check:** Confirm journal files appear on disk after menu exit (AC + CSP).
+- Merge **origin/main** into PR #75 (or rebase), resolve vault/doc conflicts, push, and wait for CI on the new head.
+- **In-game smoke test** — both windows, BRAKE NOW / PREPARE / CARRY MORE SPEED / EASE OFF from live-frame inputs, drag without breaking FIXED_SIZE recovery (132×456), sidecar URL persistence, per-corner advice where enabled.
+- Optional: threshold tuning, corner segment quality, LLM prompt tuning from real laps.
+- Next epic after smoke test passes.
 
 ## Blockers / dependencies
 
-- **Assetto Corsa + CSP runtime** for end-to-end journal verification; CI covers Python schema + repo checks only.
+- None technical beyond finishing merge + CI on the integration head.
+
+## Key learnings (see investigation nodes)
+
+1. CSP cdata-callable: `type(vec2)` is `"cdata"` not `"function"` — use nil-checks before invoking.
+2. CSP `web.socket`: callback-based API; `sock(data)` to send; `reconnect: true` where supported.
+3. `ac.storage` table form can fail silently — use per-key `ac.storage("name", default)`.
+4. `os.clock()` in AC Lua is not wall time for low-CPU scripts — use sim time (e.g. `sim.gameTime`) for staleness.
+5. Ollama: pass `keep_alive` on generate calls as required by your deployment.

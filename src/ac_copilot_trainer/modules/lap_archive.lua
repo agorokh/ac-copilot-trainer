@@ -1,0 +1,437 @@
+-- Per-lap archive (issue #77 Part C).
+--
+-- Append-only JSON-per-lap archive under `journal/laps/`. Designed for forward
+-- compatibility with future MoTeC CSV / .ibt imports (Initiative B): both
+-- in-game laps and imported reference laps share the same schema, distinguished
+-- only by the `source` and `import_format` top-level fields.
+--
+-- Disk-bounded rotation (cap MB, not lap count). Default 500 MB.
+--
+-- Schema v1:
+--   {
+--     schema_version = 1,
+--     source = "in_game" | "imported",
+--     import_format = nil | "motec_csv" | "ibt" | "delta",
+--     lap_uuid, session_uuid, exported_at,
+--     car = { id, displayName? },
+--     track = { id, layout?, lengthM? },
+--     conditions = { trackGripLevel?, ambientTempC?, trackTempC?, weatherType? },
+--     lap = { lap_n, lap_ms, is_pb, is_valid },
+--     setup = { hash, snapshot = { <flat INI key=value map> } },
+--     trace = {
+--       samples_count = N,
+--       fields = { "spline","speed","eMs","throttle","brake","steer","gear","px","py","pz" },
+--       samples = { { ...10 numbers... }, ... }   -- columnar; ~50% smaller than per-sample objects
+--     },
+--     corners = [ { label, entrySpeed, minSpeed, exitSpeed, brakePointSpline, trailBrakeRatio, throttleAvg, steerReversals, tractionCircleProxy } ],
+--     coaching = {
+--       rules_hints = { "...", ... },
+--       sidecar_debrief = "..." | nil,
+--       corner_advice_used = { ["T1"] = "BRAKE HARD NOW.", ... } | nil
+--     }
+--   }
+
+local M = {}
+
+local persistence = require("persistence")
+local ch = require("csp_helpers")
+
+local SCHEMA_VERSION = 1
+
+--- Same bounds as Settings slider (issue #77 / PR #78).
+local ARCHIVE_CAP_MIN_MB = 50
+local ARCHIVE_CAP_MAX_MB = 5000
+
+---@param raw number|string|nil
+---@return number
+function M.clampArchiveCapMB(raw)
+  local n = tonumber(raw) or 500
+  if n ~= n or n <= 0 then
+    n = 500
+  end
+  n = math.max(ARCHIVE_CAP_MIN_MB, math.min(ARCHIVE_CAP_MAX_MB, n))
+  return math.floor(n + 0.5)
+end
+
+-- Trace sample field order. `traceToColumns` builds rows by iterating this list (single source of truth).
+local TRACE_FIELDS = {
+  "spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz",
+}
+
+local function lapArchiveDir()
+  return persistence.dataDir() .. "/journal/laps"
+end
+
+--- Settings UI calls `stats()` every frame; cache full-directory scan for a short TTL (Gemini #78).
+--- Uses `os.time` (wall-ish seconds), not `os.clock` (CPU time can stall the TTL — Cursor #78).
+local _statsCacheT = -1e9
+local _statsCacheCount = 0
+local _statsCacheMb = 0
+local STATS_CACHE_TTL_SEC = 2.0
+
+local function bustStatsCache()
+  _statsCacheT = -1e9
+end
+
+--- Generate a short stable-ish UUID-like ID. Not RFC4122 — Lua 5.1 has no
+--- crypto, so we use os.time + math.random + a counter. Good enough for
+--- debug-friendly filenames; not for cryptographic uniqueness.
+local _uuidCounter = 0
+local function shortUuid()
+  _uuidCounter = _uuidCounter + 1
+  local t = (os and os.time and os.time()) or 0
+  -- 16-bit bounds only (same constraint as SESSION_UUID in ac_copilot_trainer.lua — Cursor #78).
+  local r1 = math.random(0, 0xFFFF)
+  local r2 = math.random(0, 0xFFFF)
+  return string.format("%x%04x%04x%x", t % 0xFFFFFFFF, r1, r2, _uuidCounter % 0xFFFF)
+end
+
+local function isoUtcNow()
+  if os and os.date then
+    local ok, s = pcall(os.date, "!%Y-%m-%dT%H:%M:%SZ")
+    if ok and type(s) == "string" then return s end
+  end
+  return ""
+end
+
+local function fileTimestampUtc()
+  if os and os.date then
+    local ok, s = pcall(os.date, "!%Y%m%d-%H%M%S")
+    if ok and type(s) == "string" then return s end
+  end
+  return tostring(os and os.time and os.time() or 0)
+end
+
+--- Convert per-sample-object trace ({spline=, speed=, ...}, ...) to columnar
+--- ({{0.001, 200, 0, 1.0, ...}, ...}). Drops samples missing the spline field.
+---@param trace table[]|nil
+---@return table[]
+local function traceToColumns(trace)
+  if type(trace) ~= "table" then return {} end
+  local out = {}
+  for i = 1, #trace do
+    local s = trace[i]
+    if type(s) == "table" and type(s.spline) == "number" then
+      local row = {}
+      for fi = 1, #TRACE_FIELDS do
+        local fname = TRACE_FIELDS[fi]
+        if fname == "spline" then
+          row[fi] = s.spline
+        else
+          row[fi] = tonumber(s[fname]) or 0
+        end
+      end
+      out[#out + 1] = row
+    end
+  end
+  return out
+end
+
+--- Build a flat snapshot table from setupReader output.
+--- Input: snap = { path, keys = { { section = ..., key = ..., value = ... }, ... } }
+--- Output: { ["SECTION.KEY"] = "value", ... }  (flat map for easy diffing)
+---@param snap table|nil
+---@return table
+local function flattenSetupSnapshot(snap)
+  local flat = {}
+  if type(snap) ~= "table" or type(snap.keys) ~= "table" then
+    return flat
+  end
+  for i = 1, #snap.keys do
+    local e = snap.keys[i]
+    if type(e) == "table" and type(e.key) == "string" and e.value ~= nil then
+      local sec = e.section or ""
+      local k = (sec ~= "" and (sec .. ".") or "") .. e.key
+      flat[k] = tostring(e.value)
+    end
+  end
+  return flat
+end
+
+--- Build the per-lap record. Caller supplies all the structured pieces.
+---@param opts table
+---  opts.session_uuid (string), opts.car (StateCar|nil), opts.sim (StateSim|nil),
+---  opts.lap_n (int), opts.lap_ms (int), opts.is_pb (bool), opts.is_valid (bool),
+---  opts.trace (per-sample objects), opts.corners (corner_features list),
+---  opts.setup_snap (setupReader snap), opts.setup_hash (string),
+---  opts.rules_hints (string list), opts.sidecar_debrief (string|nil),
+---  opts.corner_advice (table label->text|nil)
+---@return table|nil
+function M.buildRecord(opts)
+  if type(opts) ~= "table" then return nil end
+  if not opts.lap_n or not opts.lap_ms or opts.lap_ms <= 0 then return nil end
+
+  local sim = opts.sim
+  local carId = persistence.archiveCarIdFromCar(opts.car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = persistence.archiveTrackIdFromSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+
+  local trackLengthM = nil
+  -- `ac.StateSim` is userdata in CSP — same pattern as grip/temps (Cursor Bugbot #78).
+  pcall(function() trackLengthM = tonumber(sim and sim.trackLengthM) end)
+
+  local trackGrip = nil
+  pcall(function() trackGrip = tonumber(sim and sim.trackGripLevel) end)
+  local ambient = nil
+  pcall(function() ambient = tonumber(sim and sim.ambientTemperature) end)
+  local trackTemp = nil
+  pcall(function() trackTemp = tonumber(sim and sim.trackTemperature) end)
+
+  local samplesColumnar = traceToColumns(opts.trace)
+  local cornersOut = {}
+  if type(opts.corners) == "table" then
+    for i = 1, #opts.corners do
+      local c = opts.corners[i]
+      if type(c) == "table" then
+        cornersOut[#cornersOut + 1] = {
+          label = tostring(c.label or ""),
+          entrySpeed = tonumber(c.entrySpeed),
+          minSpeed = tonumber(c.minSpeed),
+          exitSpeed = tonumber(c.exitSpeed),
+          brakePointSpline = tonumber(c.brakePointSpline),
+          trailBrakeRatio = tonumber(c.trailBrakeRatio),
+          throttleAvg = tonumber(c.throttleAvg),
+          steerReversals = tonumber(c.steerReversals),
+          tractionCircleProxy = tonumber(c.tractionCircleProxy),
+        }
+      end
+    end
+  end
+
+  local traceFieldNames = {}
+  for i = 1, #TRACE_FIELDS do
+    traceFieldNames[i] = TRACE_FIELDS[i]
+  end
+
+  local rulesHints = {}
+  if type(opts.rules_hints) == "table" then
+    for i = 1, #opts.rules_hints do
+      local h = opts.rules_hints[i]
+      if type(h) == "string" and h ~= "" then
+        rulesHints[#rulesHints + 1] = h
+      elseif type(h) == "table" and type(h.text) == "string" then
+        rulesHints[#rulesHints + 1] = h.text
+      end
+    end
+  end
+
+  return {
+    schema_version = SCHEMA_VERSION,
+    source = "in_game",
+    import_format = nil,
+    lap_uuid = shortUuid(),
+    session_uuid = tostring(opts.session_uuid or shortUuid()),
+    exported_at = isoUtcNow(),
+    car = {
+      id = carId,
+      displayName = nil,
+    },
+    track = {
+      id = trackId,
+      layout = nil,
+      lengthM = trackLengthM,
+    },
+    conditions = {
+      trackGripLevel = trackGrip,
+      ambientTempC = ambient,
+      trackTempC = trackTemp,
+      weatherType = nil,
+    },
+    lap = {
+      lap_n = tonumber(opts.lap_n) or 0,
+      lap_ms = tonumber(opts.lap_ms) or 0,
+      is_pb = opts.is_pb == true,
+      is_valid = opts.is_valid ~= false,
+    },
+    setup = {
+      hash = tostring(opts.setup_hash or ""),
+      snapshot = flattenSetupSnapshot(opts.setup_snap),
+    },
+    trace = {
+      samples_count = #samplesColumnar,
+      fields = traceFieldNames,
+      samples = samplesColumnar,
+    },
+    corners = cornersOut,
+    coaching = {
+      rules_hints = rulesHints,
+      sidecar_debrief = (type(opts.sidecar_debrief) == "string" and opts.sidecar_debrief ~= "")
+          and opts.sidecar_debrief or nil,
+      corner_advice_used = (type(opts.corner_advice) == "table" and next(opts.corner_advice) ~= nil)
+          and opts.corner_advice or nil,
+    },
+  }
+end
+
+--- Walk archive dir, sum file sizes, delete oldest until total <= capMB.
+--- Returns (filesKept, mbUsed, filesDeleted).
+---@param capMB number
+---@return integer, number, integer
+function M.rotate(capMB)
+  capMB = M.clampArchiveCapMB(capMB)
+  local capBytes = capMB * 1024 * 1024
+  local dir = lapArchiveDir()
+  -- io.scanDir is a CSP API; fall back to noop if unavailable
+  local files = {}
+  local okScan = pcall(function()
+    if io and type(io.scanDir) == "function" then
+      local list = io.scanDir(dir, "lap_*.json")
+      if type(list) == "table" then
+        for i = 1, #list do
+          local name = list[i]
+          if type(name) == "string" then
+            local path = dir .. "/" .. name
+            local sz = -1
+            if io.fileSize then
+              local ok, s = pcall(io.fileSize, path)
+              if ok then sz = tonumber(s) or -1 end
+            end
+            files[#files + 1] = { path = path, name = name, size = sz }
+          end
+        end
+      end
+    end
+  end)
+  if not okScan or #files == 0 then
+    return 0, 0, 0
+  end
+  -- Sort by name (filename starts with `lap_<YYYYMMDD-HHMMSS>_...` so alpha == chronological)
+  table.sort(files, function(a, b) return a.name < b.name end)
+  -- Per-file `charge` must match what we subtract on delete (Bugbot #78 / zero-byte asymmetry).
+  local unknownCount = 0
+  for i = 1, #files do
+    local sz = files[i].size
+    if sz > 0 then
+      files[i].charge = sz
+    elseif sz < 0 then
+      files[i].charge = 250 * 1024
+      unknownCount = unknownCount + 1
+    else
+      files[i].charge = 0
+    end
+  end
+  local total = 0
+  for i = 1, #files do
+    total = total + files[i].charge
+  end
+  if unknownCount > 0 and ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][ARCHIVE] rotate: " .. tostring(unknownCount) .. " lap file(s) lacked size; using ~250KB each in cap math")
+  end
+  if total == 0 and #files > 0 then
+    for j = 1, #files do
+      files[j].charge = 250 * 1024
+    end
+    total = #files * (250 * 1024)
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][ARCHIVE] rotate: lap file sizes unknown; using ~250KB each for cap math")
+    end
+  end
+  local deleted = 0
+  local idx = 1
+  while total > capBytes and idx <= #files do
+    local f = files[idx]
+    local okRm, rmRes = pcall(os.remove, f.path)
+    if okRm and rmRes ~= nil and rmRes ~= false then
+      local delta = f.charge or 0
+      total = math.max(0, total - delta)
+      deleted = deleted + 1
+    end
+    idx = idx + 1
+  end
+  return #files - deleted, total / (1024 * 1024), deleted
+end
+
+--- Write a record to disk. Returns (true, path) on success, (false, errmsg) on failure.
+---@param rec table
+---@param capMB number|nil
+---@return boolean, string
+function M.write(rec, capMB)
+  if type(rec) ~= "table" then return false, "not a table" end
+  capMB = M.clampArchiveCapMB(capMB)
+  local dir = lapArchiveDir()
+  persistence.ensureParentDirForFile(dir .. "/_dummy")  -- create dir
+  local lapMs = (rec.lap and tonumber(rec.lap.lap_ms)) or 0
+  local lapN = (rec.lap and tonumber(rec.lap.lap_n)) or 0
+  local sessShort = tostring(rec.session_uuid or "x"):gsub("[^%w]", ""):sub(1, 8)
+  if sessShort == "" then
+    sessShort = "sess"
+  end
+  local lapKey = tostring(rec.lap_uuid or ""):gsub("[^%w]", ""):sub(1, 12)
+  if lapKey == "" then
+    lapKey = shortUuid()
+  end
+  local fname = string.format("lap_%s_%s_%d_%d_%s.json",
+    fileTimestampUtc(), sessShort, lapN, lapMs, lapKey)
+  local path = dir .. "/" .. fname
+  -- Large trace arrays: compact JSON avoids pretty-print whitespace blowing the cap (Cursor #78).
+  local raw = persistence.encodeJsonCompact(rec)
+  if not raw then return false, "encodeJsonCompact returned nil" end
+  local f, ferr = io.open(path, "w")
+  if not f then return false, "open failed: " .. tostring(ferr) end
+  local writeOk, writeRes = pcall(function() return f:write(raw) end)
+  if not writeOk or not writeRes then
+    pcall(function() f:close() end)
+    pcall(os.remove, path)
+    local writeMsg = (not writeOk) and tostring(writeRes) or "write returned nil"
+    return false, "write failed: " .. writeMsg
+  end
+  local flushOk, flushRes = pcall(function() return f:flush() end)
+  -- Lua 5.1 / LuaJIT: flush returns true on success, nil+err on failure (never boolean false — CodeRabbit #78).
+  if not flushOk or not flushRes then
+    pcall(function() f:close() end)
+    pcall(os.remove, path)
+    local flushMsg = (not flushOk) and tostring(flushRes) or "flush returned nil"
+    return false, "flush failed: " .. flushMsg
+  end
+  local closeOk, closeRes = pcall(function() return f:close() end)
+  if not closeOk or not closeRes then
+    pcall(os.remove, path)
+    local closeMsg = (not closeOk) and tostring(closeRes) or "close returned nil"
+    return false, "close failed: " .. closeMsg
+  end
+  pcall(function() M.rotate(capMB) end)
+  bustStatsCache()
+  return true, path
+end
+
+--- Lightweight stats for the Settings UI: count + total MB used.
+---@return integer count, number mb
+function M.stats()
+  local now = (os and os.time and os.time()) or 0
+  if now - _statsCacheT < STATS_CACHE_TTL_SEC then
+    return _statsCacheCount, _statsCacheMb
+  end
+  local dir = lapArchiveDir()
+  local count = 0
+  local total = 0
+  pcall(function()
+    if io and type(io.scanDir) == "function" then
+      local list = io.scanDir(dir, "lap_*.json")
+      if type(list) == "table" then
+        for i = 1, #list do
+          local name = list[i]
+          if type(name) == "string" then
+            count = count + 1
+            if io.fileSize then
+              local ok, s = pcall(io.fileSize, dir .. "/" .. name)
+              if ok then
+                local sz = tonumber(s)
+                if sz and sz > 0 then
+                  total = total + sz
+                elseif sz and sz < 0 then
+                  -- Match `rotate` unknown-size heuristic (Bugbot #78).
+                  total = total + (250 * 1024)
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end)
+  _statsCacheT = now
+  _statsCacheCount = count
+  _statsCacheMb = total / (1024 * 1024)
+  return _statsCacheCount, _statsCacheMb
+end
+
+return M
