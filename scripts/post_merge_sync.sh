@@ -24,10 +24,30 @@ if [[ -z "$PR" ]] || ! [[ "$PR" =~ ^[0-9]+$ ]]; then
 fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[[ -z "$REPO_ROOT" ]] && exit 20
+if [[ -z "$REPO_ROOT" ]]; then
+  echo "error: could not determine repository root" >&2
+  exit 20
+fi
 cd "$REPO_ROOT"
 
+require_gh() {
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "error: gh CLI not found" >&2
+    exit 20
+  fi
+}
+
+ensure_clean_worktree() {
+  UNTRACKED="$(git ls-files --others --exclude-standard 2>/dev/null | sed '/^$/d' || true)"
+  if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$UNTRACKED" ]]; then
+    echo "error: working tree is not clean. Please commit, stash, or remove changes before syncing." >&2
+    exit 20
+  fi
+}
+
 phase_sync() {
+  require_gh
+  ensure_clean_worktree
   STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
   case "$STATE" in
     MERGED) ;;
@@ -43,6 +63,7 @@ phase_sync() {
 }
 
 phase_vault() {
+  require_gh
   CURRENT="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [[ "$CURRENT" != "main" ]] && exit 20
 
@@ -61,9 +82,17 @@ phase_vault() {
   git add docs/01_Vault/
   git commit --no-verify -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
   git push -u --force-with-lease origin "$VAULT_BRANCH" || exit 11
-  gh pr create --title "docs(vault): post-merge handoff for PR #${PR}" \
-    --body "Vault-only handoff updates produced by post-merge-steward." \
-    --base main --head "$VAULT_BRANCH" --label vault-only || exit 12
+  EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number' 2>/dev/null || true)"
+  if [[ -n "$EXISTING_PR" ]]; then
+    gh pr edit "$EXISTING_PR" \
+      --title "docs(vault): post-merge handoff for PR #${PR}" \
+      --body "Vault-only handoff updates produced by post-merge-steward." \
+      --add-label vault-only || exit 12
+  else
+    gh pr create --title "docs(vault): post-merge handoff for PR #${PR}" \
+      --body "Vault-only handoff updates produced by post-merge-steward." \
+      --base main --head "$VAULT_BRANCH" --label vault-only || exit 12
+  fi
   git checkout main >/dev/null 2>&1 || true
 }
 

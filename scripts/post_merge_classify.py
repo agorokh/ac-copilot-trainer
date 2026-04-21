@@ -31,7 +31,10 @@ def classify_changed_paths(paths: list[str]) -> list[str]:
     if any(p.startswith("scripts/") for p in norm):
         add("scripts", "`scripts/` changed: review new or updated setup/utility scripts.")
     if any(p.startswith(".github/workflows/") for p in norm):
-        add("workflows", "`.github/workflows/` changed: review triggers, permissions, and secrets usage.")
+        add(
+            "workflows",
+            "`.github/workflows/` changed: review triggers, permissions, and secrets usage.",
+        )
     if any(Path(p).name == "Makefile" for p in norm):
         add("makefile", "`Makefile` changed: check for new targets and document if needed.")
     return messages
@@ -47,7 +50,12 @@ def main() -> None:
         print("error: gh CLI not found", file=sys.stderr)
         sys.exit(1)
 
-    r = subprocess.run(["gh", "pr", "diff", str(args.pr), "--name-only"], capture_output=True, text=True, check=False)
+    r = subprocess.run(
+        ["gh", "pr", "diff", str(args.pr), "--name-only"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     if r.returncode != 0:
         print(r.stderr.strip() or "gh pr diff failed", file=sys.stderr)
         sys.exit(r.returncode or 1)
@@ -60,7 +68,12 @@ def main() -> None:
     body = "## Post-merge follow-ups\n\n" + "\n".join(f"- {line}" for line in lines)
     print("\n".join(lines))
     if args.github_comment:
-        subprocess.run(["gh", "pr", "comment", str(args.pr), "--body-file", "-"], input=body, text=True, check=True)
+        subprocess.run(
+            ["gh", "pr", "comment", str(args.pr), "--body-file", "-"],
+            input=body,
+            text=True,
+            check=True,
+        )
 
 
 if __name__ == "__main__":

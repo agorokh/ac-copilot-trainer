@@ -44,7 +44,6 @@ memory: project
 - `10` git conflict
 - `11` branch protection rejected vault push
 - `12` unexpected PR state / PR creation failure
-- `13` linked issue still open
 - `20` infrastructure error
 - `30` vault scope violation
 
