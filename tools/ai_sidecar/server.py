@@ -280,8 +280,10 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t not in CLIENT_TO_SERVER_TYPES and t not in SERVER_TO_CLIENT_TYPES:
         await _safe_send(websocket, make_error(f"unsupported type: {t!r}", ref_type=t))
         return
-    if t in CLIENT_TO_SERVER_TYPES and t != TYPE_HELLO and not _has_loopback_target(
-        exclude=websocket
+    if (
+        t in CLIENT_TO_SERVER_TYPES
+        and t != TYPE_HELLO
+        and not _has_loopback_target(exclude=websocket)
     ):
         await _safe_send(websocket, make_error("no loopback Lua peer connected", ref_type=t))
         return
