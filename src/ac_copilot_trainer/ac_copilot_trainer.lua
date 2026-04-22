@@ -91,15 +91,6 @@ local CONFIG_DEFAULTS = {
   lapArchiveMaxMB = 500,
 }
 
---- Auto-launch always serves the sidecar on localhost:8765; other persisted URLs strand coaching (Codex #78).
-local function wsUrlMatchesAutolaunchTarget(s)
-  if type(s) ~= "string" then
-    return false
-  end
-  local u = s:lower():gsub("%s+", ""):gsub("/+$", "")
-  return u == "ws://127.0.0.1:8765" or u == "ws://localhost:8765"
-end
-
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
 local function shallowCopyDefaults()
   local c = {}
@@ -386,6 +377,12 @@ local function applyExternalConfigSet(key, value)
     config[key] = tostring(value)
   else
     return false, "unsupported config type"
+  end
+  if ac and type(ac.storage) == "function" then
+    local okStore, storage = pcall(ac.storage, key)
+    if okStore and storage and type(storage.set) == "function" then
+      pcall(function() storage:set(config[key]) end)
+    end
   end
   return true, nil
 end

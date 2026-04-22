@@ -328,6 +328,15 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 continue
 
             # External-client (`{v,type}`) frames: hub fan-out + minimal ack.
+            if isinstance(data.get(TYPE_KEY), str) and not is_external_frame(data):
+                await _safe_send(
+                    websocket,
+                    make_error(
+                        f"unsupported envelope version: {data.get('v')!r}",
+                        ref_type=data.get(TYPE_KEY),
+                    ),
+                )
+                continue
             if is_external_frame(data):
                 await _handle_external_frame(websocket, data)
                 continue
