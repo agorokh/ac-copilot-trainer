@@ -16,6 +16,8 @@ import asyncio
 import ipaddress
 import json
 import logging
+import secrets
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
@@ -187,12 +189,17 @@ def make_token_check(token: str | None):
                 "set" if supplied else "unset",
             )
             return None
-        if supplied != token:
+        if supplied is None or not secrets.compare_digest(supplied, token):
             logger.warning(
                 "ws upgrade rejected client=%s reason=bad-token peer=%s",
                 client_id,
                 getattr(connection, "remote_address", None),
             )
+            if hasattr(connection, "respond"):
+                return connection.respond(
+                    HTTPStatus.UNAUTHORIZED,
+                    "missing or invalid X-AC-Copilot-Token\n",
+                )
             return (
                 401,
                 [("Content-Type", "text/plain; charset=utf-8")],
@@ -451,7 +458,8 @@ def main() -> None:
         default=None,
         help=(
             "Bind a LAN-reachable address for external clients (e.g. 0.0.0.0). "
-            "Requires --token. When unset, the sidecar listens only on --host."
+            "Non-loopback binds require --token. "
+            "When unset, the sidecar listens only on --host."
         ),
     )
     p.add_argument(

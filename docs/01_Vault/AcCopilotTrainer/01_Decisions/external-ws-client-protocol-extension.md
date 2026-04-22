@@ -21,24 +21,26 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
 
 1. **Extend protocol v1 in a backward-compatible way.** Do **not** roll a v2. New message types are additive; existing `coaching_response` / `corner_advice` keep their shape. A client may ignore unknown message types.
 
-2. **New message namespace** (all JSON-over-WS):
+2. **New message namespace** (all JSON-over-WS, envelope `{ "v": 1, "type": "..." }`):
 
    | Direction | Type | Body |
    |---|---|---|
+   | client → server | `hello` | `{ client }` |
+   | server → client | `hello_ack` | `{ server_version, capabilities[] }` |
    | client → server | `config.get` | `{ key }` |
-   | server → client | `config.value` | `{ key, value, source: "storage"|"default" }` |
+   | server → client | `config.value` | `{ key, value }` |
    | client → server | `config.set` | `{ key, value }` |
-   | server → client | `config.ack` | `{ key, ok: bool, error?: string }` |
+   | server → client | `config.ack` | `{ key, applied: bool, reason?: string }` |
    | client → server | `action` | `{ name, args?: object }` |
-   | server → client | `action.result` | `{ name, ok: bool, result?: any, error?: string }` |
-   | client → server | `state.subscribe` | `{ topics: [...] }` |
+   | server → client | `action.ack` | `{ name, applied: bool, reason?: string }` |
+   | client → server | `state.subscribe` / `state.unsubscribe` | `{ topics: [...] }` |
    | server → client | `state.snapshot` | `{ topic, payload, ts_sim }` |
 
 3. **Auth and binding.**
    - Default sidecar bind stays `127.0.0.1:8765`. **No regression** for users who never connect an external client.
-   - New sidecar CLI flag `--external-bind <host>` (e.g. `0.0.0.0`) requires `--token <secret>` set at the same time, or the sidecar refuses to start.
+   - New sidecar CLI flag `--external-bind <host>` (e.g. `0.0.0.0`) requires `--token <secret>` for non-loopback binds, or the sidecar refuses to start.
    - External clients must send `X-AC-Copilot-Token: <secret>` on the WS upgrade request. Missing/wrong token → 401 and immediate close.
-   - Token lives in `firmware/screen/secrets/token.h` (gitignored) on the ESP32 side; in `%LOCALAPPDATA%\ac-copilot-trainer\sidecar.token` or an env var on the sidecar side.
+   - Token lives in `firmware/screen/secrets/sidecar.h` (gitignored) on the ESP32 side; the sidecar reads it from `--token`.
 
 4. **Config key surface.** Expose the existing `CONFIG_DEFAULTS` keys through the new messages. No new storage — reuse the per-key `ac.storage("<key>_v1", default)` pattern already in `ac_copilot_trainer.lua`. The Lua side handler in `ws_bridge.pollInbound` writes via the existing wrappers.
 

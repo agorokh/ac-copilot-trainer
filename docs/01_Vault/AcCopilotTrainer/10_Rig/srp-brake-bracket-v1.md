@@ -49,11 +49,11 @@ MOZA does not publish a dimensioned SRP chassis drawing, and the vendor support 
 
 | Variable | What to measure | Default | Why it matters |
 |----------|-----------------|---------|----------------|
-| 	ransducer_od | Transducer body OD (calipers) | 58 mm | Bore size through the plate |
-| 	ransducer_lip_od | Mounting flange OD | 64 mm | Flange-locating recess diameter |
-| 	ransducer_bolt_pcd | Flange bolt pitch circle | 50 mm | Flange bolt hole positions |
-| 	ransducer_bolt_n | Flange bolt count (3 or 4) | 4 | Number of PCD holes |
-| 	ransducer_bolt_d | Flange bolt clearance | 3.4 mm (M3) | Set 4.4 mm for M4 |
+| transducer_od | Transducer body OD (calipers) | 58 mm | Bore size through the plate |
+| transducer_lip_od | Mounting flange OD | 64 mm | Flange-locating recess diameter |
+| transducer_bolt_pcd | Flange bolt pitch circle | 50 mm | Flange bolt hole positions |
+| transducer_bolt_n | Flange bolt count (3 or 4) | 4 | Number of PCD holes |
+| transducer_bolt_d | Flange bolt clearance | 3.4 mm (M3) | Set 4.4 mm for M4 |
 | srp_mount_spacing | SRP tapped-hole spacing | 40 mm | Centre of the slot pair |
 | srp_bolt_d | SRP bolt clearance | 6.6 mm (M6) | Set 5.6 (M5) / 4.5 (M4) as needed |
 

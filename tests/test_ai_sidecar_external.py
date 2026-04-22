@@ -82,6 +82,9 @@ def test_validate_inbound_accepts_known_types() -> None:
 
 def test_validate_inbound_rejects_invalid() -> None:
     assert "unsupported envelope version" in (ep.validate_inbound({"type": "hello"}) or "")
+    assert "unsupported envelope version" in (
+        ep.validate_inbound({"v": True, "type": "hello", "client": "screen-01"}) or ""
+    )
     assert "non-empty 'client'" in (ep.validate_inbound({"v": 1, "type": "hello"}) or "")
     assert "non-empty 'key'" in (ep.validate_inbound({"v": 1, "type": "config.get"}) or "")
     assert "value" in (ep.validate_inbound({"v": 1, "type": "config.set", "key": "k"}) or "")

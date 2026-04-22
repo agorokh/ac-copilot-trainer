@@ -41,7 +41,6 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_CONFIG_GET,
     TYPE_CONFIG_SET,
     TYPE_ACTION,
-    TYPE_STATE_SUBSCRIBE,
 )
 
 # Names a client may invoke via `action`. Mirrors the Lua dispatcher in
@@ -107,7 +106,8 @@ def make_error(message: str, *, ref_type: str | None = None) -> dict[str, Any]:
 
 def validate_inbound(frame: dict[str, Any]) -> str | None:
     """Return ``None`` if ``frame`` is structurally valid, else an error string."""
-    if frame.get(ENVELOPE_KEY) != ENVELOPE_VERSION:
+    version = frame.get(ENVELOPE_KEY)
+    if isinstance(version, bool) or version != ENVELOPE_VERSION:
         return f"unsupported envelope version: {frame.get(ENVELOPE_KEY)!r}"
     t = frame.get(TYPE_KEY)
     if not isinstance(t, str) or not t:
