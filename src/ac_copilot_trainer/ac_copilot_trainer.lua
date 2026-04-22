@@ -456,7 +456,17 @@ local function applyExternalConfigSet(key, value)
     if n == nil then return false, "value must be numeric" end
     config[key] = n
   elseif type(existing) == "string" then
-    config[key] = tostring(value)
+    local strValue = tostring(value)
+    if key == "racingLineMode" then
+      if strValue ~= "best" and strValue ~= "last" and strValue ~= "both" then
+        return false, "value must be one of: best,last,both"
+      end
+    elseif key == "lineStyle" then
+      if strValue ~= "flat" and strValue ~= "tilt" then
+        return false, "value must be one of: flat,tilt"
+      end
+    end
+    config[key] = strValue
   else
     return false, "unsupported config type"
   end
