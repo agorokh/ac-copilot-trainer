@@ -213,6 +213,22 @@ def test_malformed_external_envelope_returns_error() -> None:
     assert "requires non-empty string 'type'" in err["message"]
 
 
+def test_external_peer_non_object_payload_returns_external_error() -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "x"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send("[]")
+                err_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                return json.loads(err_raw)
+
+    err = asyncio.run(_run())
+    assert err["v"] == ep.ENVELOPE_VERSION
+    assert err["type"] == ep.TYPE_ERROR
+    assert "root must be a JSON object" in err["message"]
+
+
 def test_config_set_round_trip_via_hub() -> None:
     """Two peers: A sends config.set, B receives it; B's ack reaches A."""
 

@@ -306,25 +306,31 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 data = json.loads(message)
             except json.JSONDecodeError:
                 logger.warning("invalid json (first 200 chars): %s", message[:200])
-                await _safe_send(
-                    websocket,
-                    {
-                        "protocol": PROTOCOL_VERSION,
-                        "event": EVENT_ANALYSIS_ERROR,
-                        "message": "invalid json",
-                    },
-                )
+                if websocket in _external_peers:
+                    await _safe_send(websocket, make_error("invalid json"))
+                else:
+                    await _safe_send(
+                        websocket,
+                        {
+                            "protocol": PROTOCOL_VERSION,
+                            "event": EVENT_ANALYSIS_ERROR,
+                            "message": "invalid json",
+                        },
+                    )
                 continue
             if not isinstance(data, dict):
                 logger.warning("json root must be object, got %s", type(data).__name__)
-                await _safe_send(
-                    websocket,
-                    {
-                        "protocol": PROTOCOL_VERSION,
-                        "event": EVENT_ANALYSIS_ERROR,
-                        "message": "root must be a JSON object",
-                    },
-                )
+                if websocket in _external_peers:
+                    await _safe_send(websocket, make_error("root must be a JSON object"))
+                else:
+                    await _safe_send(
+                        websocket,
+                        {
+                            "protocol": PROTOCOL_VERSION,
+                            "event": EVENT_ANALYSIS_ERROR,
+                            "message": "root must be a JSON object",
+                        },
+                    )
                 continue
 
             # Route any envelope-like payload through external validation so

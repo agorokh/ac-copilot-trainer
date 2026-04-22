@@ -429,17 +429,24 @@ tryOpen = function()
   _recvQueue = {}
   sidecarProtocolReady = false
   local function announceExternalHello()
-    -- Re-announce on every (re)open so sidecar reconnects keep forwarding
-    -- external `action`/`config.*` frames to the Lua bridge (PR #83 follow-up).
+    -- Re-announce on (re)open so sidecar reconnects keep forwarding external
+    -- `action`/`config.*` frames to the Lua bridge (PR #83 follow-up).
     M.sendJson({
       v = PROTOCOL_VERSION,
       type = "hello",
       client = "ac-copilot-trainer-lua",
     })
   end
+  local suppressOnOpenHelloOnce = false
   local opened = nil
   local params = {
     onOpen = function()
+      -- Some CSP builds may invoke onOpen on first connect; avoid sending a
+      -- duplicate hello when we already announced right after socket creation.
+      if suppressOnOpenHelloOnce then
+        suppressOnOpenHelloOnce = false
+        return
+      end
       announceExternalHello()
     end,
     onError = _onError,
@@ -472,6 +479,10 @@ tryOpen = function()
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
+    -- Send hello immediately for builds that ignore params.onOpen; onOpen still
+    -- handles reconnect handshakes when reconnect=true.
+    suppressOnOpenHelloOnce = true
+    announceExternalHello()
     return true
   end
   if ac and type(ac.log) == "function" then
