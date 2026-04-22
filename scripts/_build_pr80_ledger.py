@@ -9,22 +9,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
-def gh_executable() -> str:
-    gh = shutil.which("gh")
-    if gh is None:
+def require_gh() -> None:
+    if shutil.which("gh") is None:
         raise SystemExit("error: gh CLI not found on PATH")
-    return gh
 
 
 def paginate(url_base: str) -> list:
-    gh = gh_executable()
     out: list = []
     page = 1
     while True:
         url = f"{url_base}?per_page=100&page={page}"
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-        r = subprocess.run(
-            [gh, "api", url],
+        r = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+            ["gh", "api", url],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -43,7 +39,6 @@ def paginate(url_base: str) -> list:
 
 def load_comment_thread_resolved() -> dict[int, bool]:
     """Map REST review comment `id` (databaseId) -> review thread isResolved."""
-    gh = gh_executable()
     query = """query ($cursor: String) {
       repository(owner: "agorokh", name: "ac-copilot-trainer") {
         pullRequest(number: 80) {
@@ -61,9 +56,8 @@ def load_comment_thread_resolved() -> dict[int, bool]:
     cursor: str | None = None
     while True:
         payload = json.dumps({"query": query, "variables": {"cursor": cursor}})
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-        r = subprocess.run(
-            [gh, "api", "graphql", "--input", "-"],
+        r = subprocess.run(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+            ["gh", "api", "graphql", "--input", "-"],
             input=payload,
             text=True,
             capture_output=True,
@@ -99,11 +93,10 @@ def issue_row_resolved(c: dict) -> str:
 
 
 def main() -> None:
-    gh = gh_executable()
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+    require_gh()
     head_oid = json.loads(
-        subprocess.check_output(
-            [gh, "pr", "view", "80", "--json", "headRefOid"],
+        subprocess.check_output(  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit  # noqa: E501
+            ["gh", "pr", "view", "80", "--json", "headRefOid"],
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -229,9 +222,9 @@ def main() -> None:
                 "as shorthand for `sync <pr>`; unknown tokens error instead of defaulting to sync."
             ),
             (
-                "- **3121237426**–**3121237429**: Semgrep subprocess audit suppressions on "
-                "`scripts/_build_pr80_ledger.py` (`gh` argv is repo-controlled pagination "
-                "and GraphQL only)."
+                "- **3121237426**–**3121237429**: `scripts/_build_pr80_ledger.py` uses literal "
+                '`"gh"` on PATH (via shutil.which check) and `# nosemgrep` on the same line '
+                "as each subprocess sink for Semgrep/OpenGrep."
             ),
             (
                 "- **3121251331** / **3121251333**: `commit_may_include_unstaged_tracked` handles "
