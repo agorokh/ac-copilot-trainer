@@ -2,25 +2,56 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-11
+last_updated: 2026-04-21
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
+  - AcCopilotTrainer/01_Decisions/external-ws-client-protocol-extension.md
+  - AcCopilotTrainer/01_Decisions/screen-ui-stack-lvgl-touch.md
   - AcCopilotTrainer/03_Investigations/_index.md
 ---
 
 # Current focus
 
-**Repo:** ac-copilot-trainer. **Branch:** `fix/issue-75-in-game-smoke-test` (PR #75 open). **Base `main`:** `72be94d` — Issue #72 Phase 5 HUD rebuild merged via PR #73; 186 tests were green on that tip before #75 work.
+**Repo:** ac-copilot-trainer.
 
-**Status:** PR #75 stacks CSP runtime fixes, WebSocket sidecar (rules + Ollama follow-up), per-corner `corner_query` / `corner_advice`, HUD diagnostics, and vault investigation nodes on top of the rebuild. Latest commits address review bots (async `corner_query` prepare, `ws_bridge` reconfigure close, task cancellation, protocol edge cases).
+## Stream A — Rig screen Phase-2 UI (PR #83 + follow-on)
 
-**Open gates:** Finish PR #75 review resolution + confirm GitHub Actions CI on the latest branch head after merge-from-main. **In-game smoke test** on Vallelunga + Porsche 911 GT3 R remains the product gate (persistence file already populated so live-frame coaching should fire on first frame after `tryLoadDisk`).
+**Status:** PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83)
+**end-to-end working** as of 2026-04-21 21:00 PT. Sidecar accepts the
+ESP32 with token, device emits `{v:1,type:"action",name:"toggleFocusPractice"}`
+every 10 s, display renders via `Arduino_Canvas`. User is doing code
+review and designing visuals.
 
-**Next:**
+**Next:** Phase-2 LVGL bring-up per
+[`01_Decisions/screen-ui-stack-lvgl-touch.md`](../01_Decisions/screen-ui-stack-lvgl-touch.md):
+LVGL 8.3 + 40-line AXS15231B touch reader + canvas-flush bridge, then
+SquareLine layout.
 
-- Land PR #75 (reviews clear, CI green, merge conflicts resolved).
-- Re-verify round 10d staleness / sim-time behaviour in-game after merge.
-- Threshold tuning in `realtime_coaching.lua` if the smoke test shows the 50/100 m + ±8 km/h bands are off.
-- Corner segment quality in `corner_analysis.lua` if brake-to-brake spans are still too long.
-- Next epic selection after the smoke test passes (Phase 6 TBD or Phase 4 #19).
+**Live-dev requirement:** PC's **Windows Mobile Hotspot `AG_PC 7933`**
+must be on. Router AHOME5G mesh blocks cross-AP TCP — see
+[`03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md`](../03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md).
+
+## Stream B — CSP-apps integration (Pocket Technician, Setup Exchange)
+
+**New epic.** User wants the rig touchscreen to bridge our trainer
+PLUS Pocket Technician and Setup Exchange. Discovery is in progress
+(see freshly-written investigation node in `03_Investigations/`); the
+integration ADR lands as `01_Decisions/screen-and-csp-apps-integration.md`
+with the verdict on read-only state scrape vs. cooperative same-VM
+`require()`.
+
+## Stream C — PR #75 in-game smoke test (still open)
+
+Branch `fix/issue-75-in-game-smoke-test`. Pre-existing; merge
+`origin/main` in, resolve conflicts, push, run live in Vallelunga +
+Porsche 911 GT3 R.
+
+## Priority call
+
+Stream A is the user's hot path — physical device works for the first
+time and they want to push to real touch UI. Stream B (CSP apps) is the
+research/design phase happening in parallel. Stream C is pre-existing
+backlog; pick it up only after A reaches "real tile toggles
+focusPractice in-game".

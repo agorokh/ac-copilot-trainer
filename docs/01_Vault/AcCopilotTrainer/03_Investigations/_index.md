@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-04-08
+updated: 2026-04-21
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -16,3 +16,8 @@ Technical deep-dives and root-cause analyses from development sessions.
 | [csp-cdata-callable-guards.md](csp-cdata-callable-guards.md) | `type(vec2)` returns "cdata" not "function" in CSP/LuaJIT — use nil-checks |
 | [csp-web-socket-api.md](csp-web-socket-api.md) | CSP web.socket is callback-based; sock(data) to send; reconnect:true required |
 | [ac-storage-persistence.md](ac-storage-persistence.md) | ac.storage table-form silently fails; use per-key form for persistence |
+| [jc3248w535-board-identification-2026-04-21.md](jc3248w535-board-identification-2026-04-21.md) | Board ID + pin verification for the Guition rig screen. |
+| [screen-firmware-windows-build-gotchas-2026-04-21.md](screen-firmware-windows-build-gotchas-2026-04-21.md) | PlatformIO long-cmd / Windows SCons workarounds. |
+| [jc3248w535-display-canvas-flush-2026-04-21.md](jc3248w535-display-canvas-flush-2026-04-21.md) | JC3248W535 needs Arduino_Canvas + ips=false; Arduino_AXS15231B init table is for the 1.91" AMOLED variant. |
+| [router-mesh-cross-ap-tcp-block-2026-04-21.md](router-mesh-cross-ap-tcp-block-2026-04-21.md) | AHOME5G mesh drops cross-AP TCP between PC and screen; Windows Mobile Hotspot is the workaround. |
+| [csp-app-pocket-tech-setup-exchange-2026-04-21.md](csp-app-pocket-tech-setup-exchange-2026-04-21.md) | Surface map for x4fab's PocketTechnician + SetupExchange — APIs, files, integration paths. |
