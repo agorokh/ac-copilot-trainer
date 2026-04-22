@@ -437,16 +437,21 @@ tryOpen = function()
       client = "ac-copilot-trainer-lua",
     })
   end
-  local suppressOnOpenHelloOnce = false
+  local inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
   local opened = nil
   local params = {
     onOpen = function()
-      -- Some CSP builds may invoke onOpen on first connect; avoid sending a
-      -- duplicate hello when we already announced right after socket creation.
-      if suppressOnOpenHelloOnce then
-        suppressOnOpenHelloOnce = false
-        return
+      -- Some CSP builds invoke onOpen on first connect; skip only when it lands
+      -- immediately after the inline hello. Reconnect onOpen events happen later
+      -- and must re-announce hello to re-register with the sidecar.
+      if inlineHelloAt ~= nil and type(os) == "table" and type(os.time) == "function" then
+        local now = os.time()
+        if type(now) == "number" and now - inlineHelloAt <= 1 then
+          inlineHelloAt = nil
+          return
+        end
       end
+      inlineHelloAt = nil
       announceExternalHello()
     end,
     onError = _onError,
@@ -481,7 +486,7 @@ tryOpen = function()
     end
     -- Send hello immediately for builds that ignore params.onOpen; onOpen still
     -- handles reconnect handshakes when reconnect=true.
-    suppressOnOpenHelloOnce = true
+    inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
     announceExternalHello()
     return true
   end

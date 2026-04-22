@@ -28,6 +28,7 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    _external_peers,
     _handler,
     _is_loopback,
     make_token_check,
@@ -47,13 +48,17 @@ def _free_port() -> int:
 async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     port = _free_port()
     process_request = make_token_check(token)
-    async with ws_serve(
-        lambda ws: _handler(ws, reply_coaching=True),
-        "127.0.0.1",
-        port,
-        process_request=process_request,
-    ):
-        yield port
+    _external_peers.clear()
+    try:
+        async with ws_serve(
+            lambda ws: _handler(ws, reply_coaching=True),
+            "127.0.0.1",
+            port,
+            process_request=process_request,
+        ):
+            yield port
+    finally:
+        _external_peers.clear()
 
 
 def test_make_token_check_returns_none_without_token() -> None:
