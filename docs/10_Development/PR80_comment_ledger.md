@@ -1,11 +1,11 @@
 # PR #80 — zero-sampling comment ledger
 
-**Snapshot** (point-in-time inventory; regenerate after new review traffic):
-- Retrieved at (UTC): **2026-04-21T23:25:36Z**
-- PR head OID at retrieval: **0a34d04c978202ef54d4ec44a6dbd51d96bc986b**
-- Sources: `pulls/80/comments` (paginated), `issues/80/comments`, `pulls/80/reviews` (CodeRabbit #80).
+**Snapshot** (regenerate after new review traffic):
+- Retrieved at (UTC): **2026-04-22T02:01:08Z**
+- PR head OID at retrieval: **22d76dba8b62e68d42cfcdc1b1c79e6ff952eae5**
+- Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (all paginated).
 
-At this snapshot, every inline thread ID is listed below as **RESOLVED** where the branch addresses the feedback or the thread is bot/meta-only.
+Every inline thread ID is listed below as **RESOLVED** where the branch addresses the feedback or the item is bot/meta-only. Issue and PR review rows use **N/A** for bot housekeeping unless a human asks for a concrete code outcome (then **yes** when satisfied).
 
 ## Checks (required + bots)
 
@@ -15,7 +15,9 @@ At this snapshot, every inline thread ID is listed below as **RESOLVED** where t
 | Canonical docs exist | pass |
 | Sourcery review | pass |
 | CodeRabbit | pass |
+| Cursor Bugbot | skipping (external) |
 | guard-and-automerge | skipping |
+| disable-automerge-on-vault-unlabel | skipping |
 
 ## Inline review threads (`pulls/80/comments`)
 
@@ -86,23 +88,107 @@ At this snapshot, every inline thread ID is listed below as **RESOLVED** where t
 | 3120816778 | chatgpt-codex-connector[bot] | yes |
 | 3120832398 | cursor[bot] | yes |
 | 3120832399 | cursor[bot] | yes |
+| 3120855104 | chatgpt-codex-connector[bot] | yes |
+| 3120878163 | cursor[bot] | yes |
+| 3120878165 | cursor[bot] | yes |
 
 ## Issue comments (`issues/80/comments`): 38
 
-PR conversation; bot guides and usage-limit notices are typically **N/A**. Human `agorokh` items require explicit triage.
+| Comment ID | Author | RESOLVED |
+|-------------|--------|----------|
+| 4292005718 | sourcery-ai[bot] | N/A |
+| 4292005780 | coderabbitai[bot] | N/A |
+| 4292006356 | qodo-code-review[bot] | N/A |
+| 4292035492 | agorokh | N/A |
+| 4292035500 | agorokh | N/A |
+| 4292035517 | agorokh | N/A |
+| 4292035522 | agorokh | N/A |
+| 4292035922 | coderabbitai[bot] | N/A |
+| 4292037109 | qodo-code-review[bot] | N/A |
+| 4292139056 | agorokh | N/A |
+| 4292139058 | agorokh | N/A |
+| 4292139088 | agorokh | N/A |
+| 4292139114 | agorokh | N/A |
+| 4292139456 | coderabbitai[bot] | N/A |
+| 4292140707 | qodo-code-review[bot] | N/A |
+| 4292204211 | agorokh | N/A |
+| 4292204231 | agorokh | N/A |
+| 4292204232 | agorokh | N/A |
+| 4292204257 | agorokh | N/A |
+| 4292204413 | gemini-code-assist[bot] | N/A |
+| 4292204568 | coderabbitai[bot] | N/A |
+| 4292205594 | qodo-code-review[bot] | N/A |
+| 4292264212 | agorokh | N/A |
+| 4292264252 | agorokh | N/A |
+| 4292264263 | agorokh | N/A |
+| 4292264265 | agorokh | N/A |
+| 4292264427 | gemini-code-assist[bot] | N/A |
+| 4292264601 | coderabbitai[bot] | N/A |
+| 4292265602 | qodo-code-review[bot] | N/A |
+| 4292315993 | agorokh | N/A |
+| 4292316017 | agorokh | N/A |
+| 4292316026 | agorokh | N/A |
+| 4292316049 | agorokh | N/A |
+| 4292316211 | gemini-code-assist[bot] | N/A |
+| 4292316507 | coderabbitai[bot] | N/A |
+| 4292317628 | qodo-code-review[bot] | N/A |
+| 4292377487 | agorokh | yes |
+| 4292392583 | Copilot | N/A |
 
-## PR reviews (`pulls/80/reviews`): 34
+## PR reviews (`pulls/80/reviews`): 36
 
-Automated summaries; map actionable items to inline rows above.
+| Review ID | Author | State | RESOLVED |
+|-----------|--------|-------|----------|
+| 4150933656 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4150935627 | gemini-code-assist[bot] | COMMENTED | N/A |
+| 4150940497 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4150947421 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4150958567 | gemini-code-assist[bot] | COMMENTED | N/A |
+| 4150958694 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4150965150 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4150968864 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151003023 | cursor[bot] | COMMENTED | N/A |
+| 4151010686 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4151015479 | gemini-code-assist[bot] | COMMENTED | N/A |
+| 4151019910 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4151026549 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151040045 | cursor[bot] | COMMENTED | N/A |
+| 4151052496 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4151062858 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151064157 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4151093326 | cursor[bot] | COMMENTED | N/A |
+| 4151100953 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4151102687 | SourceryAI | COMMENTED | N/A |
+| 4151111929 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151111956 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4151129437 | cursor[bot] | COMMENTED | N/A |
+| 4151142141 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4151149127 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151151972 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4151177253 | cursor[bot] | COMMENTED | N/A |
+| 4151223115 | copilot-pull-request-reviewer[bot] | COMMENTED | N/A |
+| 4151224087 | coderabbitai[bot] | COMMENTED | N/A |
+| 4151244692 | coderabbitai[bot] | COMMENTED | N/A |
+| 4151253962 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151275754 | cursor[bot] | COMMENTED | N/A |
+| 4151300174 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151315233 | cursor[bot] | COMMENTED | N/A |
+| 4151336059 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151357433 | cursor[bot] | COMMENTED | N/A |
 
-### Post-snapshot audit (CodeRabbit + Codex #80)
+### Post-snapshot audit (latest batch)
 
-- **3120766260**: Ledger header records UTC retrieval time + PR head OID and labels the file as a **snapshot** (CodeRabbit).
-- **3120773787**: `check_vault_follow_up.sh` treats `git commit -p` / `--patch` / `--interactive` (and short `-p` in combined flags) as commits that may include unstaged tracked paths.
-- **3120773789**: `vault-automerge.yml` listens for `unlabeled` and disables auto-merge when the `vault-only` label is removed.
-- **3120816778**: `check_vault_follow_up.sh` treats `--pathspec-from-file` / `--pathspec-from-file=...` as commits that may include unstaged tracked paths.
-- **3120832398**: ACK waiver only when **every** sensitive path matches allowed vault/core patterns — no blanket pass from an unrelated `docs/01_Vault/` edit alongside `scripts/` / `.github/` / `.claude/` changes.
-- **3120832399**: Combined short flags (`-vm`, etc.) skip the next token when a value-consuming flag (`m`, `F`, `c`, `C`, `t`) is present.
+- **3120855104**: `commit_may_include_unstaged_tracked` advances **two** argv tokens for value-taking long options (`--author`, `--date`, `--cleanup`, `--trailer`, `--reuse-message`, `--reedit-message`).
+- **3120878163**: Combined short flags handle **inline** `-mfoo` values (suffix after `m`/`F`/`c`/`C`/`t` in the same argv token) so the next token is not swallowed as a fake message.
+- **3120878165**: `scripts/claude_pretool_vault_guard.sh` reads hook JSON from stdin; JSON parse failure **blocks** when stdin still looks like `git commit` (fail-closed). `.claude/settings.json` PreToolUse Bash hook invokes that script instead of `python3 ... || true`.
+
+## Steward scope proof (PR #80)
+
+| Requirement | Evidence |
+|-------------|----------|
+| Post-merge steward / deterministic contract | `scripts/post_merge_*.sh`, `.github/workflows/post-merge-notify.yml`, `docs/10_Development/11_Repository_Structure.md` (see PR diff) |
+| Vault follow-up on sensitive paths | `scripts/check_vault_follow_up.sh`, `scripts/claude_pretool_vault_guard.sh`, `.claude/settings.json` |
+| Vault-only auto-merge safety | `.github/workflows/vault-automerge.yml` |
 
 ## Local verification
 

@@ -32,6 +32,15 @@ except ValueError:
     raise SystemExit(0)
 
 opts_with_values = {"-m", "--message", "-F", "--file", "-c", "-C", "-t", "--template"}
+# Long options that take a separate argv value (Codex #80); without this, the next token is misread as a pathspec.
+long_needs_next = {
+    "--author",
+    "--date",
+    "--cleanup",
+    "--trailer",
+    "--reuse-message",
+    "--reedit-message",
+}
 
 while i < len(parts):
     token = parts[i]
@@ -52,22 +61,32 @@ while i < len(parts):
     if token.startswith(("--message=", "--file=", "--template=")):
         i += 1
         continue
+    if token in long_needs_next:
+        i += 2
+        continue
     if token.startswith("--"):
         i += 1
         continue
     if token.startswith("-"):
-        flags = token[1:]
-        consume_next = False
-        for flag in flags:
-            if flag == "a":
+        rest = token[1:]
+        pos = 0
+        while pos < len(rest):
+            ch = rest[pos]
+            if ch == "a":
                 raise SystemExit(0)
-            if flag == "p":
+            if ch == "p":
                 raise SystemExit(0)
-            if flag in {"m", "F", "c", "C", "t"}:
-                consume_next = True
+            if ch in {"m", "F", "c", "C", "t"}:
+                suffix = rest[pos + 1 :]
+                # `-mfoo` carries the message in the same argv token (Bugbot #80).
+                if suffix:
+                    i += 1
+                else:
+                    i += 2 if i + 1 < len(parts) else 1
                 break
-        # `-vm "msg"`: value follows the combined flag token (Bugbot #80).
-        i += 2 if consume_next and i + 1 < len(parts) else 1
+            pos += 1
+        else:
+            i += 1
         continue
 
     raise SystemExit(0)
