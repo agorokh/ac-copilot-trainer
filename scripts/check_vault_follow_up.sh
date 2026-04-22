@@ -58,13 +58,14 @@ while i < len(parts):
     if token.startswith("-"):
         flags = token[1:]
         consume_next = False
-        for flag in flags:
+        for j, flag in enumerate(flags):
             if flag == "a":
                 raise SystemExit(0)
             if flag == "p":
                 raise SystemExit(0)
             if flag in {"m", "F", "c", "C", "t"}:
-                consume_next = True
+                # `-tmfoo`: `-t` consumes `mfoo` from the same token.
+                consume_next = j == len(flags) - 1
                 break
         # `-vm "msg"`: value follows the combined flag token (Bugbot #80).
         i += 2 if consume_next and i + 1 < len(parts) else 1
@@ -86,7 +87,7 @@ if [[ -z "$FILES_TO_CHECK" ]]; then
   exit 0
 fi
 
-SENSITIVE="$(printf '%s\n' "$FILES_TO_CHECK" | grep -E '^(\.claude/|docs/01_Vault/|scripts/|\.github/workflows/)' || true)"
+SENSITIVE="$(printf '%s\n' "$FILES_TO_CHECK" | grep -E '^(\.claude/|docs/00_Core/|docs/01_Vault/|scripts/|\.github/workflows/)' || true)"
 if [[ -z "$SENSITIVE" ]]; then
   exit 0
 fi

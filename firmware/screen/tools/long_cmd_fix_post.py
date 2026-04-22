@@ -1,3 +1,4 @@
+# ruff: noqa: E402,F821
 # POST-phase script: runs AFTER the platform/framework scripts have set up
 # CC/CXX/AR/LINK and all child envs (FrameworkArduino, lib_builders, etc.)
 # have been cloned from the parent env.
@@ -15,41 +16,59 @@
 Import("env", "projenv")
 import os
 
-pio_home = os.environ.get('PLATFORMIO_CORE_DIR',
-    os.path.join(os.environ.get('USERPROFILE',''), '.platformio'))
-tc_bin = os.path.join(pio_home, 'packages', 'toolchain-xtensa-esp32s3', 'bin')
+if os.name != "nt":
+    print("[long_cmd_fix:post] skipped (Windows cmd.exe workaround)")
+else:
+    pio_home = os.environ.get(
+        "PLATFORMIO_CORE_DIR",
+        os.path.join(os.environ.get("USERPROFILE", ""), ".platformio"),
+    )
+    tc_bin = os.path.join(pio_home, "packages", "toolchain-xtensa-esp32s3", "bin")
+    cc = os.path.join(tc_bin, "xtensa-esp32s3-elf-gcc.exe")
+    cxx = os.path.join(tc_bin, "xtensa-esp32s3-elf-g++.exe")
+    ar = os.path.join(tc_bin, "xtensa-esp32s3-elf-gcc-ar.exe")
 
-cc  = os.path.join(tc_bin, 'xtensa-esp32s3-elf-gcc.exe')
-cxx = os.path.join(tc_bin, 'xtensa-esp32s3-elf-g++.exe')
-ar  = os.path.join(tc_bin, 'xtensa-esp32s3-elf-gcc-ar.exe')
+    missing = [p for p in [tc_bin, cc, cxx, ar] if not os.path.exists(p)]
+    if missing:
+        raise RuntimeError(
+            "[long_cmd_fix:post] missing toolchain paths. "
+            "Check PLATFORMIO_CORE_DIR and toolchain package name:\n"
+            + "\n".join(f"  - {p}" for p in missing)
+        )
 
-ccq  = f'"{cc}"'
-cxxq = f'"{cxx}"'
-arq  = f'"{ar}"'
+    ccq = f'"{cc}"'
+    cxxq = f'"{cxx}"'
+    arq = f'"{ar}"'
 
-TEMPFILE_REPLACE = dict(
-    CC   = ccq,
-    CXX  = cxxq,
-    AR   = arq,
-    LINK = cxxq,
-    ARCOM   = "${TEMPFILE('$AR $ARFLAGS $TARGET $SOURCES', '$ARCOMSTR')}",
-    LINKCOM = "${TEMPFILE('$LINK -o $TARGET $LINKFLAGS $__RPATH $SOURCES $_LIBDIRFLAGS $_LIBFLAGS', '$LINKCOMSTR')}",
-    CCCOM   = "${TEMPFILE('$CC -o $TARGET -c $CFLAGS $CCFLAGS $_CCCOMCOM $SOURCES', '$CCCOMSTR')}",
-    CXXCOM  = "${TEMPFILE('$CXX -o $TARGET -c $CXXFLAGS $CCFLAGS $_CCCOMCOM $SOURCES', '$CXXCOMSTR')}",
-)
+    tempfile_replace = dict(
+        CC=ccq,
+        CXX=cxxq,
+        AR=arq,
+        LINK=cxxq,
+        ARCOM="${TEMPFILE('$AR $ARFLAGS $TARGET $SOURCES', '$ARCOMSTR')}",
+        LINKCOM=(
+            "${TEMPFILE('$LINK -o $TARGET $LINKFLAGS $__RPATH "
+            "$SOURCES $_LIBDIRFLAGS $_LIBFLAGS', '$LINKCOMSTR')}"
+        ),
+        CCCOM="${TEMPFILE('$CC -o $TARGET -c $CFLAGS $CCFLAGS $_CCCOMCOM $SOURCES', '$CCCOMSTR')}",
+        CXXCOM=(
+            "${TEMPFILE('$CXX -o $TARGET -c $CXXFLAGS $CCFLAGS "
+            "$_CCCOMCOM $SOURCES', '$CXXCOMSTR')}"
+        ),
+    )
 
-def patch(e, label):
-    e.Replace(**TEMPFILE_REPLACE)
-    # Also re-ensure PATH on this env, in case something earlier scrubbed it.
-    e.PrependENVPath("PATH", tc_bin)
-    print(f"[long_cmd_fix:post] patched {label}: CC={e.get('CC')}")
+    def patch(e, label):
+        e.Replace(**tempfile_replace)
+        # Also re-ensure PATH on this env, in case something earlier scrubbed it.
+        e.PrependENVPath("PATH", tc_bin)
+        print(f"[long_cmd_fix:post] patched {label}: CC={e.get('CC')}")
 
-patch(env, "env")
-patch(projenv, "projenv")
+    patch(env, "env")
+    patch(projenv, "projenv")
 
-# Patch every cloned lib-builder env (includes FrameworkArduino).
-for lb in env.GetLibBuilders():
-    try:
-        patch(lb.env, f"libbuilder[{lb.name}]")
-    except Exception as ex:
-        print(f"[long_cmd_fix:post] could not patch libbuilder {lb.name}: {ex}")
+    # Patch every cloned lib-builder env (includes FrameworkArduino).
+    for lb in env.GetLibBuilders():
+        try:
+            patch(lb.env, f"libbuilder[{lb.name}]")
+        except Exception as ex:
+            print(f"[long_cmd_fix:post] could not patch libbuilder {lb.name}: {ex}")

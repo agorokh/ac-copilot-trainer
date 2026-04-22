@@ -299,6 +299,7 @@ local tel = newTelemetry()
 local brakes = newBrakes()
 local td = throttleDet.new()
 local tires = tireMonitor.new()
+local pendingWsSidecarUrl = nil
 
 -- Forward-declare so closures registered with wsBridge below capture the
 -- main state table as an upvalue (Lua resolves locals lexically at compile
@@ -351,7 +352,8 @@ local function applyExternalConfigSet(key, value)
     return true, nil
   end
   if key == "lapArchiveEnabled" then
-    setLapArchiveEnabledAndPersist(value and true or false)
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    setLapArchiveEnabledAndPersist(value)
     return true, nil
   end
   if key == "lapArchiveMaxMB" then
@@ -366,14 +368,16 @@ local function applyExternalConfigSet(key, value)
     if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
       pcall(function() _wsUrlStorage:set(u) end)
     end
-    wsBridge.configure(u)
+    -- Delay reconfigure so pollInbound can send config.ack on the current socket first.
+    pendingWsSidecarUrl = u
     return true, nil
   end
   -- Type-match the persisted/default value so the screen cannot inject a string
   -- where a boolean is expected.
   local existing = config[key]
   if type(existing) == "boolean" then
-    config[key] = value and true or false
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    config[key] = value
   elseif type(existing) == "number" then
     local n = tonumber(value)
     if n == nil then return false, "value must be numeric" end
@@ -565,6 +569,8 @@ local function traceHasPbSplineCoverage(trace)
   return true
 end
 
+-- `state` is forward-declared above so wsBridge closures capture the upvalue slot.
+-- Do not read `state.<field>` before this assignment.
 state = {
   initialized = false,
   bestLapMs = nil,
@@ -1455,6 +1461,10 @@ function script.update(dt)
   pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
+  if pendingWsSidecarUrl ~= nil then
+    wsBridge.configure(pendingWsSidecarUrl)
+    pendingWsSidecarUrl = nil
+  end
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
   -- consuming it — we walk known corner labels from trackSegments and copy.

@@ -1,3 +1,4 @@
+# ruff: noqa: E402,F821
 # PRE-phase script: runs BEFORE the platform/framework scripts so that when
 # they clone env for FrameworkArduino and lib envs, our PATH setting is
 # inherited by every cloned env.
@@ -15,13 +16,19 @@
 Import("env")
 import os
 
-pio_home = os.environ.get('PLATFORMIO_CORE_DIR',
-    os.path.join(os.environ.get('USERPROFILE',''), '.platformio'))
-tc_bin = os.path.join(pio_home, 'packages', 'toolchain-xtensa-esp32s3', 'bin')
+if os.name != "nt":
+    print("[long_cmd_fix:pre] skipped (Windows cmd.exe workaround)")
+else:
+    pio_home = os.environ.get(
+        "PLATFORMIO_CORE_DIR",
+        os.path.join(os.environ.get("USERPROFILE", ""), ".platformio"),
+    )
+    tc_bin = os.path.join(pio_home, "packages", "toolchain-xtensa-esp32s3", "bin")
 
-env.PrependENVPath("PATH", tc_bin)
-if tc_bin.lower() not in os.environ.get('PATH', '').lower():
-    os.environ['PATH'] = tc_bin + os.pathsep + os.environ.get('PATH', '')
+    env.PrependENVPath("PATH", tc_bin)
+    path_entries = [p.lower() for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    if tc_bin.lower() not in path_entries:
+        os.environ["PATH"] = tc_bin + os.pathsep + os.environ.get("PATH", "")
 
-print(f"[long_cmd_fix:pre] toolchain PATH prepended: {tc_bin}")
-print(f"[long_cmd_fix:pre] exists={os.path.isdir(tc_bin)}")
+    print(f"[long_cmd_fix:pre] toolchain PATH prepended: {tc_bin}")
+    print(f"[long_cmd_fix:pre] exists={os.path.isdir(tc_bin)}")

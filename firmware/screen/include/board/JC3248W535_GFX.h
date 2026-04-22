@@ -56,5 +56,9 @@ inline Arduino_GFX* jc3248w535_make_display() {
       JC_TFT_NATIVE_W, JC_TFT_NATIVE_H);
   Arduino_GFX* canvas = new Arduino_Canvas(
       JC_TFT_NATIVE_W, JC_TFT_NATIVE_H, output);
+  if (JC_TFT_BL >= 0) {
+    pinMode(JC_TFT_BL, OUTPUT);
+    digitalWrite(JC_TFT_BL, HIGH);
+  }
   return canvas;
 }

@@ -1,4 +1,5 @@
-// Minimal LVGL v9 config for the Phase-1 status screen.
+// Placeholder LVGL v9 config reserved for Phase 2 bringup.
+// Phase 1 firmware intentionally uses Arduino_GFX only and does not include LVGL.
 // Copy + prune of the upstream lv_conf_template.h; only the flags we care
 // about are annotated. Everything else uses upstream defaults.
 
@@ -12,7 +13,7 @@
 #define LV_COLOR_16_SWAP 1  // AXS15231B big-endian byte order
 
 /* ------------------ MEMORY ----------------- */
-#define LV_MEM_SIZE (48U * 1024U)   // small heap; draw buf lives in PSRAM
+#define LV_MEM_SIZE (48U * 1024U)   // TODO(phase-2): increase before enabling LVGL UI
 #define LV_MEM_ADR  0
 #define LV_MEM_AUTO_DEFRAG 1
 

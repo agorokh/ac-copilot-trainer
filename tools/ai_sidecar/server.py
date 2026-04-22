@@ -244,7 +244,7 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t == TYPE_HELLO:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
-        await _safe_send(websocket, make_hello_ack(str(PROTOCOL_VERSION)))
+        await _safe_send(websocket, make_hello_ack())
         return
     if websocket not in _external_peers:
         await _safe_send(

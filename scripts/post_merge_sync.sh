@@ -95,12 +95,6 @@ phase_vault() {
     exit 10
   fi
 
-  VAULT_UNTRACKED="$(git ls-files --others --exclude-standard -- docs/01_Vault/ 2>/dev/null | sed '/^$/d' || true)"
-  if git diff --quiet -- docs/01_Vault/ && git diff --cached --quiet -- docs/01_Vault/ && [[ -z "$VAULT_UNTRACKED" ]]; then
-    echo "No vault changes."
-    return 0
-  fi
-
   OOS_TRACKED="$(
     {
       git diff --name-only HEAD -- . ':(exclude)docs/01_Vault/' 2>/dev/null
@@ -111,6 +105,12 @@ phase_vault() {
     fail "vault-only sync requires all tracked changes to stay under docs/01_Vault/. Offending paths:"
     printf '%s\n' "$OOS_TRACKED" | sed 's/^/  - /' >&2
     exit 30
+  fi
+
+  VAULT_UNTRACKED="$(git ls-files --others --exclude-standard -- docs/01_Vault/ 2>/dev/null | sed '/^$/d' || true)"
+  if git diff --quiet -- docs/01_Vault/ && git diff --cached --quiet -- docs/01_Vault/ && [[ -z "$VAULT_UNTRACKED" ]]; then
+    echo "No vault changes."
+    return 0
   fi
 
   VAULT_BRANCH="vault/post-merge-pr${PR}"
@@ -124,18 +124,20 @@ phase_vault() {
   fi
   git checkout -b "$VAULT_BRANCH" || { fail "failed to create vault branch $VAULT_BRANCH"; exit 10; }
   git add docs/01_Vault/
-  git commit -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
-  git push -u origin "$VAULT_BRANCH" || exit 11
+  git commit -m "docs(vault): post-merge handoff for PR #${PR}" \
+    || { fail "failed to commit vault changes for PR #${PR}"; exit 10; }
+  git push -u origin "$VAULT_BRANCH" \
+    || { fail "failed to push vault branch $VAULT_BRANCH"; exit 11; }
   EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)"
   if [[ -n "$EXISTING_PR" ]]; then
     gh pr edit "$EXISTING_PR" \
       --title "docs(vault): post-merge handoff for PR #${PR}" \
       --body "Vault-only handoff updates produced by post-merge-steward." \
-      --add-label vault-only || exit 12
+      --add-label vault-only || { fail "failed to edit existing vault PR #$EXISTING_PR"; exit 12; }
   else
     gh pr create --title "docs(vault): post-merge handoff for PR #${PR}" \
       --body "Vault-only handoff updates produced by post-merge-steward." \
-      --base main --head "$VAULT_BRANCH" --label vault-only || exit 12
+      --base main --head "$VAULT_BRANCH" --label vault-only || { fail "failed to create vault PR for $VAULT_BRANCH"; exit 12; }
   fi
   git checkout main >/dev/null 2>&1 || { fail "vault PR created, but failed to restore repository to main"; exit 10; }
 }

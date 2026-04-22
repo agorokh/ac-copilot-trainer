@@ -17,6 +17,7 @@ from typing import Any
 ENVELOPE_KEY = "v"
 ENVELOPE_VERSION = 1
 TYPE_KEY = "type"
+SERVER_VERSION = "1.0.0"
 
 # Client → server.
 TYPE_HELLO = "hello"
@@ -75,14 +76,16 @@ CLIENT_HEADER = "X-AC-Copilot-Client"
 
 def is_external_frame(frame: Any) -> bool:
     """Return True iff ``frame`` is a ``{"v":1,"type":...}`` envelope."""
+    v = frame.get(ENVELOPE_KEY) if isinstance(frame, dict) else None
     return (
         isinstance(frame, dict)
-        and frame.get(ENVELOPE_KEY) == ENVELOPE_VERSION
+        and not isinstance(v, bool)
+        and v == ENVELOPE_VERSION
         and isinstance(frame.get(TYPE_KEY), str)
     )
 
 
-def make_hello_ack(server_version: str) -> dict[str, Any]:
+def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
         TYPE_KEY: TYPE_HELLO_ACK,
@@ -99,40 +102,6 @@ def make_error(message: str, *, ref_type: str | None = None) -> dict[str, Any]:
     }
     if ref_type is not None:
         out["ref_type"] = ref_type
-    return out
-
-
-def make_action_ack(
-    name: str,
-    *,
-    applied: bool,
-    reason: str | None = None,
-) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        ENVELOPE_KEY: ENVELOPE_VERSION,
-        TYPE_KEY: TYPE_ACTION_ACK,
-        "name": name,
-        "applied": applied,
-    }
-    if reason is not None:
-        out["reason"] = reason
-    return out
-
-
-def make_config_ack(
-    key: str,
-    *,
-    applied: bool,
-    reason: str | None = None,
-) -> dict[str, Any]:
-    out: dict[str, Any] = {
-        ENVELOPE_KEY: ENVELOPE_VERSION,
-        TYPE_KEY: TYPE_CONFIG_ACK,
-        "key": key,
-        "applied": applied,
-    }
-    if reason is not None:
-        out["reason"] = reason
     return out
 
 

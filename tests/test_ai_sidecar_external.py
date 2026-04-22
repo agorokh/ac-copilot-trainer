@@ -204,6 +204,8 @@ def test_config_set_round_trip_via_hub() -> None:
                         }
                     )
                 )
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(a.recv(), timeout=0.1)
                 forwarded = json.loads(await asyncio.wait_for(b.recv(), timeout=2.0))
 
                 await b.send(
@@ -216,6 +218,8 @@ def test_config_set_round_trip_via_hub() -> None:
                         }
                     )
                 )
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(b.recv(), timeout=0.1)
                 ack_back = json.loads(await asyncio.wait_for(a.recv(), timeout=2.0))
                 return forwarded, ack_back
 

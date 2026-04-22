@@ -13,7 +13,7 @@ local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
 
 --- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
---- the main script; absent handlers reply with `{type:"action.ack", applied:false}`.
+--- the main script; absent handlers reply with `{type="action.ack", applied=false}`.
 local actionHandlers = {} ---@type table<string, fun(args:table|nil):boolean,string|nil>
 local configGetter ---@type (fun(key:string):any)|nil
 local configSetter ---@type (fun(key:string,value:any):boolean,string|nil)|nil
@@ -32,8 +32,12 @@ end
 ---@param getter (fun(key:string):any)|nil
 ---@param setter (fun(key:string,value:any):boolean,string|nil)|nil
 function M.registerConfigBridge(getter, setter)
-  configGetter = getter
-  configSetter = setter
+  if type(getter) == "function" then
+    configGetter = getter
+  end
+  if type(setter) == "function" then
+    configSetter = setter
+  end
 end
 
 --- Latest coaching_response waiting for application (lap index matches lapsCompleted).
@@ -593,7 +597,23 @@ function M.pollInbound(maxPerTick)
           end
         elseif t == "config.get" then
           local key = type(data.key) == "string" and data.key or ""
-          if key ~= "" and configGetter then
+          if key == "" then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "config.ack",
+              key = key,
+              applied = false,
+              reason = "empty key",
+            })
+          elseif not configGetter then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "config.ack",
+              key = key,
+              applied = false,
+              reason = "no config bridge",
+            })
+          else
             local okGet, val = pcall(configGetter, key)
             if okGet then
               M.sendJson({
@@ -601,6 +621,14 @@ function M.pollInbound(maxPerTick)
                 type = "config.value",
                 key = key,
                 value = val,
+              })
+            else
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "config.ack",
+                key = key,
+                applied = false,
+                reason = "getter error: " .. tostring(val),
               })
             end
           end

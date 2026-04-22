@@ -52,9 +52,9 @@ be a stock ISP router default we cannot change without router admin.
 network; device joins the hotspot directly. Both peers end up on
 `192.168.137.0/24` with PC at `192.168.137.1` (gateway).
 
-Hotspot creds (PC default; rotate when sensitive):
+Hotspot creds (redacted in repo; set locally on your machine):
 - SSID: `AG_PC 7933`
-- Pass: `4r3U9$87`
+- Pass: `<redacted-local-only>`
 
 Programmatic enable (PowerShell, runs once):
 
