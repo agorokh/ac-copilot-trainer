@@ -72,7 +72,7 @@ phase_sync() {
       STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
       if [[ "$STATE" != "MERGED" ]]; then
         fail "PR #$PR is not MERGED after merge attempt (state: ${STATE:-unknown}); resolve checks or wait for auto-merge"
-        exit 18
+        exit 12
       fi
       ;;
     "") fail "could not determine PR #$PR state"; exit 20 ;;

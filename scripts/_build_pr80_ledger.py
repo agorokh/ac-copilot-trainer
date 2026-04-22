@@ -248,6 +248,14 @@ def main() -> None:
                 "- **3121344689**: `phase_sync` re-reads `gh pr view` state after `gh pr merge` "
                 "and fails unless the PR is `MERGED` (catches auto-merge queue)."
             ),
+            (
+                "- **3121369562**: Stale Bugbot thread referencing reverted `firmware/screen` "
+                "(GPIO 21 / QSPI); tree removed by revert `c56208b`."
+            ),
+            (
+                "- **3121381620**: Pending-merge path uses exit **12** (documented in "
+                "`.claude/agents/post-merge-steward.md`) instead of a non-contract code."
+            ),
             "",
             "## Steward scope proof (PR #80)",
             "",
