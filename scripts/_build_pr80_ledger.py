@@ -265,6 +265,10 @@ def main() -> None:
                 "- **3121425314**: `_build_pr80_ledger.py` is documented as PR #80-only audit "
                 "scaffolding (not maintained infra); delete or generalize after merge."
             ),
+            (
+                "- **3121465138**: `phase_vault` wraps `git add docs/01_Vault/` with `fail` + exit "
+                "**10** for documented git failures (Bugbot)."
+            ),
             "",
             "## Steward scope proof (PR #80)",
             "",

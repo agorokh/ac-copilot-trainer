@@ -1,8 +1,8 @@
 # PR #80 — zero-sampling comment ledger
 
 **Snapshot** (regenerate after new review traffic):
-- Retrieved at (UTC): **2026-04-22T03:49:50Z**
-- PR head OID at retrieval: **88ffd405167cebd03f083e1282d201edb6e08def**
+- Retrieved at (UTC): **2026-04-22T04:05:25Z**
+- PR head OID at retrieval: **2a5af2714de98148feb6b88581c5232420a6c361**
 - Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (paginated REST); `reviewThreads` via GraphQL for GitHub `isResolved`.
 
 Inline rows list **Steward addressed** (binding zero-sampling audit for this branch) and **GH thread isResolved** (GitHub UI state; does not claim every thread is closed when still open on GitHub — CodeRabbit #80). Exit gate: zero rows with **Steward addressed** ≠ `yes`.
@@ -110,8 +110,9 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 3121369562 | cursor[bot] | yes | yes |
 | 3121381620 | chatgpt-codex-connector[bot] | yes | no |
 | 3121425314 | cursor[bot] | yes | yes |
+| 3121465138 | cursor[bot] | yes | no |
 
-## Issue comments (`issues/80/comments`): 40
+## Issue comments (`issues/80/comments`): 41
 
 | Comment ID | Author | RESOLVED |
 |-------------|--------|----------|
@@ -155,8 +156,9 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4292392583 | Copilot | N/A |
 | 4293259462 | qodo-code-review[bot] | N/A |
 | 4293312583 | chatgpt-codex-connector[bot] | N/A |
+| 4293392110 | chatgpt-codex-connector[bot] | N/A |
 
-## PR reviews (`pulls/80/reviews`): 49
+## PR reviews (`pulls/80/reviews`): 50
 
 | Review ID | Author | State | RESOLVED |
 |-----------|--------|-------|----------|
@@ -209,6 +211,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4151862938 | cursor[bot] | COMMENTED | N/A |
 | 4151874409 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
 | 4151914675 | cursor[bot] | COMMENTED | N/A |
+| 4151951337 | cursor[bot] | COMMENTED | N/A |
 
 ### Post-snapshot audit (latest batch)
 
@@ -228,6 +231,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 - **3121369562**: Stale Bugbot thread referencing reverted `firmware/screen` (GPIO 21 / QSPI); tree removed by revert `c56208b`.
 - **3121381620**: Pending-merge path uses exit **12** (documented in `.claude/agents/post-merge-steward.md`) instead of a non-contract code.
 - **3121425314**: `_build_pr80_ledger.py` is documented as PR #80-only audit scaffolding (not maintained infra); delete or generalize after merge.
+- **3121465138**: `phase_vault` wraps `git add docs/01_Vault/` with `fail` + exit **10** for documented git failures (Bugbot).
 
 ## Steward scope proof (PR #80)
 

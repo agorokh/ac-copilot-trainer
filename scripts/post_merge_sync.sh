@@ -142,7 +142,7 @@ phase_vault() {
     exit 11
   fi
   git checkout -b "$VAULT_BRANCH" || { fail "failed to create vault branch $VAULT_BRANCH"; exit 10; }
-  git add docs/01_Vault/
+  git add docs/01_Vault/ || { fail "failed to stage vault changes under docs/01_Vault/"; exit 10; }
   git commit -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
   git push -u origin "$VAULT_BRANCH" || exit 11
   EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)"
