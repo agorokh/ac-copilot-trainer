@@ -157,6 +157,22 @@ def test_upgrade_accepted_with_token() -> None:
     assert "config.set" in ack["capabilities"]
 
 
+def test_upgrade_accepted_with_token_for_non_loopback_peer() -> None:
+    token_check = make_token_check("s3cret")
+    assert token_check is not None
+
+    class _Conn:
+        remote_address = ("192.168.1.50", 12345)
+
+    class _Req:
+        headers = {
+            ep.AUTH_HEADER: "s3cret",
+            ep.CLIENT_HEADER: "test-client",
+        }
+
+    assert token_check(_Conn(), _Req()) is None
+
+
 def test_upgrade_accepted_without_token_on_loopback() -> None:
     async def _run() -> dict:
         async with _running_sidecar(token="s3cret") as port:

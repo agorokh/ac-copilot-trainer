@@ -5,8 +5,8 @@ This module is independent of ``protocol.py`` (which carries the legacy
 external surface uses the more compact ``{"v":1,"type":"..."}`` envelope so the
 ESP32 firmware can encode/decode without tracking two field names.
 
-All frames are JSON objects. Unknown ``type`` values are tolerated by both
-peers (clients and the Lua bridge already ignore unknown event types).
+All frames are JSON objects. Unknown ``type`` values are rejected by
+``validate_inbound()`` and produce an ``error`` frame from the sidecar.
 """
 
 from __future__ import annotations
