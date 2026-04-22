@@ -244,6 +244,10 @@ def main() -> None:
                 "`-xS`, …) advances one argv only; lone `-u`/`-S` still consumes the next argv "
                 "when present."
             ),
+            (
+                "- **3121344689**: `phase_sync` re-reads `gh pr view` state after `gh pr merge` "
+                "and fails unless the PR is `MERGED` (catches auto-merge queue)."
+            ),
             "",
             "## Steward scope proof (PR #80)",
             "",

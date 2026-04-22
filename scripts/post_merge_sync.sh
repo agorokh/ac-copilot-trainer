@@ -66,7 +66,15 @@ phase_sync() {
   STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
   case "$STATE" in
     MERGED) ;;
-    OPEN) gh pr merge "$PR" --squash --delete-branch || { fail "failed to merge PR #$PR"; exit 12; } ;;
+    OPEN)
+      gh pr merge "$PR" --squash --delete-branch || { fail "failed to merge PR #$PR"; exit 12; }
+      # `gh pr merge` can queue auto-merge when required checks are pending (Codex #80).
+      STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
+      if [[ "$STATE" != "MERGED" ]]; then
+        fail "PR #$PR is not MERGED after merge attempt (state: ${STATE:-unknown}); resolve checks or wait for auto-merge"
+        exit 18
+      fi
+      ;;
     "") fail "could not determine PR #$PR state"; exit 20 ;;
     *) fail "PR #$PR is in unexpected state: $STATE"; exit 12 ;;
   esac
