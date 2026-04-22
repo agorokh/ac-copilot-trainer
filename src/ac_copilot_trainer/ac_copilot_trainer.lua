@@ -436,7 +436,13 @@ local function applyExternalConfigSet(key, value)
     return true, nil
   end
   if key == "wsSidecarUrl" then
-    local u = tostring(value or "")
+    if type(value) ~= "string" then
+      return false, "value must be string"
+    end
+    local u = value
+    if u ~= "" and not (u:match("^ws://") or u:match("^wss://")) then
+      return false, "value must start with ws:// or wss://"
+    end
     config.wsSidecarUrl = u
     if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
       pcall(function() _wsUrlStorage:set(u) end)
@@ -465,12 +471,19 @@ local function applyExternalConfigSet(key, value)
       if strValue ~= "flat" and strValue ~= "tilt" then
         return false, "value must be one of: flat,tilt"
       end
+    elseif key == "focusPracticeCornerLabels" then
+      if #strValue > 128 then
+        return false, "value too long"
+      end
+      if not strValue:match("^[%w%s,%-_]*$") then
+        return false, "value contains unsupported characters"
+      end
     end
     config[key] = strValue
   else
     return false, "unsupported config type"
   end
-  persistLegacyPerKeyConfig(key, existing, config[key])
+  persistLegacyPerKeyConfig(key, CONFIG_DEFAULTS[key], config[key])
   return true, nil
 end
 

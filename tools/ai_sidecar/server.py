@@ -232,6 +232,15 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
             _external_peers.discard(p)
 
 
+def _has_loopback_target(*, exclude: Any) -> bool:
+    for peer in _external_peers:
+        if peer is exclude:
+            continue
+        if _is_loopback_peer(peer):
+            return True
+    return False
+
+
 async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
     try:
         await websocket.send(payload)
@@ -270,6 +279,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         return
     if t not in CLIENT_TO_SERVER_TYPES and t not in SERVER_TO_CLIENT_TYPES:
         await _safe_send(websocket, make_error(f"unsupported type: {t!r}", ref_type=t))
+        return
+    if t in CLIENT_TO_SERVER_TYPES and t != TYPE_HELLO and not _has_loopback_target(
+        exclude=websocket
+    ):
+        await _safe_send(websocket, make_error("no loopback Lua peer connected", ref_type=t))
         return
     # All other request/response types are forwarded to every other peer.
     # The Lua client receives `config.set` / `action` / `state.subscribe` and
@@ -429,21 +443,25 @@ async def _run(host: str, port: int, reply_coaching: bool, token: str | None) ->
         raise SystemExit('websockets is required. Install: pip install -e ".[coaching]"') from e
 
     process_request = make_token_check(token)
-    async with websockets.serve(
-        lambda ws: _handler(ws, reply_coaching),
-        host,
-        port,
-        process_request=process_request,
-    ):
-        logger.info(
-            "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s token=%s",
+    _external_peers.clear()
+    try:
+        async with websockets.serve(
+            lambda ws: _handler(ws, reply_coaching),
             host,
             port,
-            PROTOCOL_VERSION,
-            reply_coaching,
-            "set" if token else "unset",
-        )
-        await asyncio.Future()
+            process_request=process_request,
+        ):
+            logger.info(
+                "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s token=%s",
+                host,
+                port,
+                PROTOCOL_VERSION,
+                reply_coaching,
+                "set" if token else "unset",
+            )
+            await asyncio.Future()
+    finally:
+        _external_peers.clear()
 
 
 def _is_loopback(host: str) -> bool:
