@@ -82,7 +82,7 @@ def is_external_frame(frame: Any) -> bool:
     )
 
 
-def make_hello_ack(server_version: str = "1.0.0") -> dict[str, Any]:
+def make_hello_ack(server_version: str) -> dict[str, Any]:
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
         TYPE_KEY: TYPE_HELLO_ACK,

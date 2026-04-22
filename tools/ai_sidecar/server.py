@@ -176,9 +176,6 @@ def make_token_check(token: str | None):
     if not token:
         return None
 
-    from websockets.datastructures import Headers
-    from websockets.http11 import Response
-
     def _check(connection: Any, request: Any) -> Any:
         supplied = request.headers.get(AUTH_HEADER)
         client_id = request.headers.get(CLIENT_HEADER) or "<unknown>"
@@ -196,11 +193,10 @@ def make_token_check(token: str | None):
                 client_id,
                 getattr(connection, "remote_address", None),
             )
-            return Response(
-                status_code=401,
-                reason_phrase="Unauthorized",
-                headers=Headers([("Content-Type", "text/plain; charset=utf-8")]),
-                body=b"missing or invalid X-AC-Copilot-Token\n",
+            return (
+                401,
+                [("Content-Type", "text/plain; charset=utf-8")],
+                b"missing or invalid X-AC-Copilot-Token\n",
             )
         logger.info(
             "ws upgrade accepted client=%s peer=%s",
@@ -223,8 +219,10 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     results = await asyncio.gather(*[_safe_send_raw(p, payload) for p in targets])
     for p, err in zip(targets, results, strict=True):
         if err is not None:
-            logger.info("broadcast send failed peer=%s err=%s",
-                        getattr(p, "remote_address", None), err)
+            logger.info(
+                "broadcast send failed peer=%s err=%s", getattr(p, "remote_address", None), err
+            )
+            _external_peers.discard(p)
 
 
 async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
@@ -246,7 +244,13 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t == TYPE_HELLO:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
-        await _safe_send(websocket, make_hello_ack())
+        await _safe_send(websocket, make_hello_ack(str(PROTOCOL_VERSION)))
+        return
+    if websocket not in _external_peers:
+        await _safe_send(
+            websocket,
+            make_error("peer must send hello before other frame types", ref_type=t),
+        )
         return
     if t in SERVER_TO_CLIENT_TYPES and not _is_loopback_peer(websocket):
         await _safe_send(
@@ -482,12 +486,12 @@ def main() -> None:
     reply = not args.no_reply
 
     if args.external_bind is not None:
-        if not args.token:
+        host = args.external_bind
+        if not _is_loopback(host) and not args.token:
             raise SystemExit(
-                "--external-bind requires --token "
+                "--external-bind requires --token for non-loopback addresses "
                 "(refusing to expose unauthenticated socket)"
             )
-        host = args.external_bind
     else:
         host = args.host
     if not _is_loopback(host) and not args.token:

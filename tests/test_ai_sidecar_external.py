@@ -77,9 +77,7 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "action", "name": "toggleFocusPractice"}) is None
-    assert (
-        ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
-    )
+    assert ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
 
 
 def test_validate_inbound_rejects_invalid() -> None:
@@ -131,7 +129,10 @@ def test_upgrade_rejected_without_token() -> None:
 
     response = token_check(_Conn(), _Req())
     assert response is not None
-    assert response.status_code == 401
+    if isinstance(response, tuple):
+        assert response[0] == 401
+    else:
+        assert response.status_code == 401
 
 
 def test_upgrade_accepted_with_token() -> None:
@@ -144,9 +145,7 @@ def test_upgrade_accepted_with_token() -> None:
                     ep.CLIENT_HEADER: "test-client",
                 },
             ) as ws:
-                await ws.send(
-                    json.dumps({"v": 1, "type": "hello", "client": "test"})
-                )
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "test"}))
                 raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
                 return json.loads(raw)
 
@@ -173,9 +172,7 @@ def test_action_with_unknown_name_rejected() -> None:
             async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
                 await ws.send(json.dumps({"v": 1, "type": "hello", "client": "x"}))
                 await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
-                await ws.send(
-                    json.dumps({"v": 1, "type": "action", "name": "nukeFleet"})
-                )
+                await ws.send(json.dumps({"v": 1, "type": "action", "name": "nukeFleet"}))
                 err_raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
                 return json.loads(err_raw)
 
@@ -194,9 +191,7 @@ def test_config_set_round_trip_via_hub() -> None:
                 ws_connect(f"ws://127.0.0.1:{port}/") as b,
             ):
                 for s, name in [(a, "client-a"), (b, "client-b")]:
-                    await s.send(
-                        json.dumps({"v": 1, "type": "hello", "client": name})
-                    )
+                    await s.send(json.dumps({"v": 1, "type": "hello", "client": name}))
                     await asyncio.wait_for(s.recv(), timeout=2.0)  # hello_ack
 
                 await a.send(

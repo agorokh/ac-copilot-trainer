@@ -17,3 +17,6 @@ secrets/*
 # Factory firmware dump: keep the folder structure, never the binary.
 _factory-backup/*.bin
 _factory-backup/*.sha256
+
+# Optional local SCons diagnostics.
+_log_scons_env.txt

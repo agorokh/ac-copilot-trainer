@@ -316,11 +316,11 @@ if wsBridge.registerActionHandler then
     return true, nil
   end)
   wsBridge.registerActionHandler("cycleRacingLine", function()
-    -- "best" -> "ideal" -> "off" -> "best" cycle (mirrors Settings dropdown).
+    -- "best" -> "last" -> "both" -> "best" cycle (matches Draw3D modes).
     local cur = config.racingLineMode or "best"
     local nxt
-    if cur == "best" then nxt = "ideal"
-    elseif cur == "ideal" then nxt = "off"
+    if cur == "best" then nxt = "last"
+    elseif cur == "last" then nxt = "both"
     else nxt = "best" end
     config.racingLineMode = nxt
     return true, "now: " .. nxt

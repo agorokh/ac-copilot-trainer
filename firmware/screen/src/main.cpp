@@ -39,7 +39,8 @@ static WebsocketsClient ws;
 static constexpr int SCREEN_W = 480;
 static constexpr int SCREEN_H = 320;
 
-// A small palette (RGB565).
+// A small palette (RGB565). Phase 1 draws directly with Arduino_GFX.
+// If LVGL is reintroduced later, re-check byte ordering vs LV_COLOR_16_SWAP.
 static constexpr uint16_t COL_BG     = 0x0000;  // black
 static constexpr uint16_t COL_FG     = 0xFFFF;  // white
 static constexpr uint16_t COL_DIM    = 0x7BEF;  // grey
@@ -267,7 +268,6 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       Serial.println("[ws] closed");
       break;
     case WebsocketsEvent::GotPing:
-      ws.pong();
       break;
     case WebsocketsEvent::GotPong:
       break;
@@ -277,6 +277,7 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
 
 static void ws_try_connect() {
   if (WiFi.status() != WL_CONNECTED) return;
+  ws = WebsocketsClient();
   ws_state = WsState::Connecting;
   last_error = "";
   refresh_ui();
@@ -299,8 +300,8 @@ static void ws_try_connect() {
 }
 
 static void ws_tick() {
+  ws.poll();
   if (ws_state == WsState::Open) {
-    ws.poll();
     if ((int32_t)(millis() - demo_next_at) >= 0) {
       send_demo_action();
       demo_next_at = millis() + DEMO_INTERVAL_MS;
@@ -350,7 +351,7 @@ void setup() {
   // Pulse 6× LOW/HIGH at 400ms so the user can see brightness change. Whichever
   // pin actually drives BL will make the panel visibly blink. After the pulse
   // we leave them all HIGH.
-  const int BL_CANDIDATES[] = {1, 38, 5, 16, 18, 6, 21};
+  const int BL_CANDIDATES[] = {JC_TFT_BL, 38, 5, 16, 18, 6, 21};
   const int BL_N = sizeof(BL_CANDIDATES) / sizeof(BL_CANDIDATES[0]);
   for (int i = 0; i < BL_N; ++i) pinMode(BL_CANDIDATES[i], OUTPUT);
   Serial.printf("[diag] BL sweep over pins: ");

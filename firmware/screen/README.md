@@ -10,7 +10,7 @@ CST820/AXS5106 touch). Full identity + cable notes:
 ## Phase-1 acceptance
 
 1. Board boots, backlight on, Arduino_GFX status screen renders.
-2. Joins WiFi (SSID from `secrets/wifi.h`).
+2. Joins WiFi (SSID from `secrets/wifi_secrets.h`).
 3. Dials the sidecar WS at `ws://SIDECAR_HOST:SIDECAR_PORT/` with an
    `X-AC-Copilot-Token` header.
 4. Status labels live-update (WiFi state, WS state, last error).
@@ -35,12 +35,12 @@ Confirm `pio` and `esptool.py` resolve on PATH; you may need to add
 ## Build, flash, monitor
 
 ```powershell
-cd C:\Users\arsen\Projects\ac-copilot-trainer\firmware\screen
+cd firmware\screen
 
 # Copy secrets templates once, then fill in.
-Copy-Item secrets\wifi.h.example    secrets\wifi.h
+Copy-Item secrets\wifi_secrets.h.example secrets\wifi_secrets.h
 Copy-Item secrets\sidecar.h.example secrets\sidecar.h
-# edit secrets\wifi.h    -> real SSID + password
+# edit secrets\wifi_secrets.h -> real SSID + password
 # edit secrets\sidecar.h -> LAN IP of the PC + token
 
 # Build + flash + monitor
@@ -82,7 +82,7 @@ to force ROM DFU, then `esptool.py ... write_flash 0 <factory.bin>`.
 
 ## Layout
 
-```
+```text
 firmware/screen/
 ├── platformio.ini             PIO config (board, flags, deps)
 ├── default_16MB.csv           custom partition table
@@ -93,7 +93,7 @@ firmware/screen/
 ├── src/
 │   └── main.cpp               Phase-1 firmware
 ├── secrets/                   gitignored — real credentials live here
-│   ├── wifi.h.example
+│   ├── wifi_secrets.h.example
 │   └── sidecar.h.example
 └── _factory-backup/           gitignored binaries; keep the .sha256 locally
 ```
