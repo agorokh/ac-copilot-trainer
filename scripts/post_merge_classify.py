@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -26,19 +27,27 @@ def classify_changed_paths(paths: list[str]) -> list[str]:
         add("migration", "Migration paths touched: run your project's migrate command.")
     if any(p == ".env.example" or p.endswith("/.env.example") for p in norm):
         add("env", "`.env.example` changed: review for new required environment variables.")
-    if any(
-        p in {"pyproject.toml", "poetry.lock", "pdm.lock", "requirements.txt", "environment.yml"}
-        or p.endswith(
-            (
-                "/pyproject.toml",
-                "/poetry.lock",
-                "/pdm.lock",
-                "/requirements.txt",
-                "/environment.yml",
-            )
-        )
-        for p in norm
-    ):
+    dependency_files = (
+        "pyproject.toml",
+        "poetry.lock",
+        "pdm.lock",
+        "requirements.txt",
+        "environment.yml",
+        "uv.lock",
+        "Pipfile",
+        "Pipfile.lock",
+        "package.json",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "Cargo.toml",
+        "Cargo.lock",
+        "go.mod",
+        "go.sum",
+        "platformio.ini",
+    )
+    dependency_suffixes = tuple(f"/{name}" for name in dependency_files)
+    if any(p in dependency_files or p.endswith(dependency_suffixes) for p in norm):
         add("deps", "Dependency files changed: refresh local dependencies if needed.")
     if any(Path(p).parts and Path(p).parts[0] == "scripts" for p in norm):
         add("scripts", "`scripts/` changed: review new or updated setup/utility scripts.")
@@ -62,17 +71,42 @@ def main() -> None:
         print("error: gh CLI not found", file=sys.stderr)
         sys.exit(1)
 
-    r = subprocess.run(
-        ["gh", "pr", "diff", str(args.pr), "--name-only"],
+    repo = subprocess.run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],  # noqa: S603,S607
         capture_output=True,
         text=True,
         check=False,
     )
-    if r.returncode != 0:
-        print(r.stderr.strip() or "gh pr diff failed", file=sys.stderr)
-        sys.exit(r.returncode or 1)
+    if repo.returncode != 0:
+        print(repo.stderr.strip() or "gh repo view failed", file=sys.stderr)
+        sys.exit(repo.returncode or 1)
+    owner_repo = repo.stdout.strip()
+    if not owner_repo or "/" not in owner_repo:
+        print("could not determine owner/repo from gh repo view", file=sys.stderr)
+        sys.exit(1)
 
-    lines = classify_changed_paths(r.stdout.splitlines())
+    files_json = subprocess.run(
+        ["gh", "api", "--paginate", "--slurp", f"repos/{owner_repo}/pulls/{args.pr}/files"],  # noqa: S603,S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if files_json.returncode != 0:
+        print(files_json.stderr.strip() or "gh api pulls/files failed", file=sys.stderr)
+        sys.exit(files_json.returncode or 1)
+    try:
+        files = json.loads(files_json.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"failed to parse changed file list JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+    file_items: list[dict[str, object]] = []
+    if isinstance(files, list):
+        for page in files:
+            if isinstance(page, list):
+                file_items.extend(item for item in page if isinstance(item, dict))
+    paths = [str(item.get("filename", "")) for item in file_items]
+
+    lines = classify_changed_paths(paths)
     if not lines:
         print("No post-merge classification flags for these paths.")
         return

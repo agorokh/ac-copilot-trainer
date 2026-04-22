@@ -91,15 +91,6 @@ local CONFIG_DEFAULTS = {
   lapArchiveMaxMB = 500,
 }
 
---- Auto-launch always serves the sidecar on localhost:8765; other persisted URLs strand coaching (Codex #78).
-local function wsUrlMatchesAutolaunchTarget(s)
-  if type(s) ~= "string" then
-    return false
-  end
-  local u = s:lower():gsub("%s+", ""):gsub("/+$", "")
-  return u == "ws://127.0.0.1:8765" or u == "ws://localhost:8765"
-end
-
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
 local function shallowCopyDefaults()
   local c = {}
@@ -141,6 +132,84 @@ if ac and type(ac.storage) == "function" then
   end
 end
 
+local function isDedicatedPerKeyConfig(key)
+  return key == "wsSidecarUrl"
+    or key == "approachMeters"
+    or key == "lapArchiveEnabled"
+    or key == "lapArchiveMaxMB"
+end
+
+local function coercePersistedConfigValue(defaultValue, storedValue)
+  local defaultType = type(defaultValue)
+  if defaultType == "boolean" then
+    if type(storedValue) == "boolean" then
+      return storedValue
+    end
+    local n = tonumber(storedValue)
+    if n ~= nil then
+      return n ~= 0
+    end
+    return nil
+  end
+  if defaultType == "number" then
+    local n = tonumber(storedValue)
+    if n ~= nil then
+      return n
+    end
+    return nil
+  end
+  if defaultType == "string" then
+    if storedValue == nil then
+      return nil
+    end
+    return tostring(storedValue)
+  end
+  return nil
+end
+
+local function overlayLegacyPerKeyConfig(cfg)
+  if not (ac and type(ac.storage) == "function") then
+    return
+  end
+  for key, defaultValue in pairs(CONFIG_DEFAULTS) do
+    if not isDedicatedPerKeyConfig(key) then
+      local initDefault = defaultValue
+      if type(defaultValue) == "boolean" then
+        initDefault = defaultValue and 1 or 0
+      end
+      local okStore, store = pcall(ac.storage, key, initDefault)
+      if okStore and store and type(store.get) == "function" then
+        local okGet, persisted = pcall(function() return store:get() end)
+        if okGet then
+          local coerced = coercePersistedConfigValue(defaultValue, persisted)
+          if coerced ~= nil then
+            cfg[key] = coerced
+          end
+        end
+      end
+    end
+  end
+end
+
+local function persistLegacyPerKeyConfig(key, defaultValue, value)
+  if not (ac and type(ac.storage) == "function") then
+    return
+  end
+  local initDefault = defaultValue
+  if type(defaultValue) == "boolean" then
+    initDefault = defaultValue and 1 or 0
+  end
+  local okStore, store = pcall(ac.storage, key, initDefault)
+  if not (okStore and store and type(store.set) == "function") then
+    return
+  end
+  local persistValue = value
+  if type(defaultValue) == "boolean" and type(value) == "boolean" then
+    persistValue = value and 1 or 0
+  end
+  pcall(function() store:set(persistValue) end)
+end
+
 --- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
 local function loadConfig()
   local cfg
@@ -153,6 +222,10 @@ local function loadConfig()
   if not cfg then
     cfg = shallowCopyDefaults()
   end
+  -- External `config.set` writes per-key stores (`ac.storage(key)`) for fields
+  -- not covered by dedicated storages. Overlay them here so values survive
+  -- reloads even when table-form `ac.storage(defaults)` is unreliable.
+  overlayLegacyPerKeyConfig(cfg)
   -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
   -- Issue #78: empty stored URL used to mean "cleared"; with auto-launch + no URL
   -- editor in Settings, migrate empty back to localhost and persist so wsBridge.tick connects.
@@ -160,7 +233,7 @@ local function loadConfig()
     local ok, val = pcall(function() return _wsUrlStorage:get() end)
     if ok and type(val) == "string" then
       local migrated = false
-      if val == "" or not wsUrlMatchesAutolaunchTarget(val) then
+      if val == "" then
         cfg.wsSidecarUrl = CONFIG_DEFAULTS.wsSidecarUrl
         migrated = true
       else
@@ -299,8 +372,131 @@ local tel = newTelemetry()
 local brakes = newBrakes()
 local td = throttleDet.new()
 local tires = tireMonitor.new()
+local pendingWsSidecarUrl = nil
+
+-- Forward-declare so closures registered with wsBridge below capture the
+-- main state table as an upvalue (Lua resolves locals lexically at compile
+-- time; without this they would compile to globals and stay nil — issue #81).
+local state
 
 wsBridge.configure(config.wsSidecarUrl or "")
+
+-- Issue #81: external WS clients (rig touchscreen) drive these via the sidecar.
+-- Each handler returns (applied:boolean, reason:string|nil); the bridge fans an
+-- `action.ack` back to the originator.
+if wsBridge.registerActionHandler then
+  wsBridge.registerActionHandler("toggleFocusPractice", function()
+    state.focusPracticeActive = not (state.focusPracticeActive or false)
+    return true, nil
+  end)
+  wsBridge.registerActionHandler("cycleRacingLine", function()
+    -- "best" -> "last" -> "both" -> "best" cycle (matches Draw3D modes).
+    local cur = config.racingLineMode or "best"
+    local nxt
+    if cur == "best" then nxt = "last"
+    elseif cur == "last" then nxt = "both"
+    else nxt = "best" end
+    config.racingLineMode = nxt
+    return true, "now: " .. nxt
+  end)
+  wsBridge.registerActionHandler("tareDelta", function()
+    -- Drop any in-flight queued coaching/corner advice for the current lap;
+    -- next sample will rebuild a clean delta baseline.
+    pcall(function() wsBridge.clearPendingCoaching() end)
+    pcall(function() wsBridge.clearCornerAdvisories() end)
+    return true, nil
+  end)
+  wsBridge.registerActionHandler("reloadSetup", function(_)
+    return false, "reloadSetup not yet implemented (issue #81 phase-2)"
+  end)
+  wsBridge.registerActionHandler("applySetupFromPath", function(_)
+    return false, "applySetupFromPath not yet implemented (issue #81 phase-2)"
+  end)
+end
+
+local function applyExternalConfigSet(key, value)
+  if config[key] == nil then
+    return false, "unknown config key"
+  end
+  if key == "approachMeters" then
+    local n = tonumber(value)
+    if n == nil then return false, "value must be numeric" end
+    setApproachMetersAndPersist(n)
+    return true, nil
+  end
+  if key == "lapArchiveEnabled" then
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    setLapArchiveEnabledAndPersist(value)
+    return true, nil
+  end
+  if key == "lapArchiveMaxMB" then
+    local n = tonumber(value)
+    if n == nil then return false, "value must be numeric" end
+    setLapArchiveMaxMBAndPersist(n)
+    return true, nil
+  end
+  if key == "wsSidecarUrl" then
+    if type(value) ~= "string" then
+      return false, "value must be string"
+    end
+    local u = value
+    if u ~= "" and not (u:match("^ws://") or u:match("^wss://")) then
+      return false, "value must start with ws:// or wss://"
+    end
+    config.wsSidecarUrl = u
+    if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
+      pcall(function() _wsUrlStorage:set(u) end)
+    end
+    -- Delay reconfigure so pollInbound can send config.ack on the current socket first.
+    pendingWsSidecarUrl = u
+    return true, nil
+  end
+  -- Type-match the persisted/default value so the screen cannot inject a string
+  -- where a boolean is expected.
+  local existing = config[key]
+  if type(existing) == "boolean" then
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    config[key] = value
+  elseif type(existing) == "number" then
+    local n = tonumber(value)
+    if n == nil then return false, "value must be numeric" end
+    config[key] = n
+  elseif type(existing) == "string" then
+    local strValue = tostring(value)
+    if key == "racingLineMode" then
+      if strValue ~= "best" and strValue ~= "last" and strValue ~= "both" then
+        return false, "value must be one of: best,last,both"
+      end
+    elseif key == "lineStyle" then
+      if strValue ~= "flat" and strValue ~= "tilt" then
+        return false, "value must be one of: flat,tilt"
+      end
+    elseif key == "focusPracticeCornerLabels" then
+      if #strValue > 128 then
+        return false, "value too long"
+      end
+      if not strValue:match("^[%w%s,%-_]*$") then
+        return false, "value contains unsupported characters"
+      end
+    end
+    config[key] = strValue
+  else
+    return false, "unsupported config type"
+  end
+  persistLegacyPerKeyConfig(key, CONFIG_DEFAULTS[key], config[key])
+  return true, nil
+end
+
+if wsBridge.registerConfigBridge then
+  wsBridge.registerConfigBridge(
+    function(key)
+      return config[key]
+    end,
+    function(key, value)
+      return applyExternalConfigSet(key, value)
+    end
+  )
+end
 
 -- Issue #77 Part A: resolve the deployed app dir (where start_sidecar.bat lives)
 -- so wsBridge can spawn the sidecar without hardcoded paths.
@@ -470,7 +666,9 @@ local function traceHasPbSplineCoverage(trace)
   return true
 end
 
-local state = {
+-- `state` is forward-declared above so wsBridge closures capture the upvalue slot.
+-- Do not read `state.<field>` before this assignment.
+state = {
   initialized = false,
   bestLapMs = nil,
   lastLapMs = nil,
@@ -1360,6 +1558,10 @@ function script.update(dt)
   pcall(function() wsBridge.startSidecarIfNeeded(appDir) end)
   wsBridge.tick(ch.simSeconds(sim))
   wsBridge.pollInbound(8)
+  if pendingWsSidecarUrl ~= nil then
+    wsBridge.configure(pendingWsSidecarUrl)
+    pendingWsSidecarUrl = nil
+  end
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
   -- consuming it — we walk known corner labels from trackSegments and copy.

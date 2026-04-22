@@ -12,6 +12,34 @@ local MAX_RECV_PER_TICK = 8
 local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
 
+--- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
+--- the main script; absent handlers reply with `{type="action.ack", applied=false}`.
+local actionHandlers = {} ---@type table<string, fun(args:table|nil):boolean,string|nil>
+local configGetter ---@type (fun(key:string):any)|nil
+local configSetter ---@type (fun(key:string,value:any):boolean,string|nil)|nil
+
+--- Public: register an action handler invoked when the sidecar forwards
+--- `{v:1, type:"action", name=<n>, args=<t>}`. Handler returns
+--- `(applied:boolean, reason:string|nil)`.
+---@param name string
+---@param fn fun(args:table|nil):boolean,string|nil
+function M.registerActionHandler(name, fn)
+  if type(name) == "string" and name ~= "" and type(fn) == "function" then
+    actionHandlers[name] = fn
+  end
+end
+
+---@param getter (fun(key:string):any)|nil
+---@param setter (fun(key:string,value:any):boolean,string|nil)|nil
+function M.registerConfigBridge(getter, setter)
+  if type(getter) == "function" then
+    configGetter = getter
+  end
+  if type(setter) == "function" then
+    configSetter = setter
+  end
+end
+
 --- Latest coaching_response waiting for application (lap index matches lapsCompleted).
 local pendingCoaching ---@type { lap: number, hints: table[], debrief: string|nil }|nil
 
@@ -400,8 +428,32 @@ tryOpen = function()
   end
   _recvQueue = {}
   sidecarProtocolReady = false
+  local function announceExternalHello()
+    -- Re-announce on (re)open so sidecar reconnects keep forwarding external
+    -- `action`/`config.*` frames to the Lua bridge (PR #83 follow-up).
+    M.sendJson({
+      v = PROTOCOL_VERSION,
+      type = "hello",
+      client = "ac-copilot-trainer-lua",
+    })
+  end
+  local inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
   local opened = nil
   local params = {
+    onOpen = function()
+      -- Some CSP builds invoke onOpen on first connect; skip only when it lands
+      -- immediately after the inline hello. Reconnect onOpen events happen later
+      -- and must re-announce hello to re-register with the sidecar.
+      if inlineHelloAt ~= nil and type(os) == "table" and type(os.time) == "function" then
+        local now = os.time()
+        if type(now) == "number" and now - inlineHelloAt <= 1 then
+          inlineHelloAt = nil
+          return
+        end
+      end
+      inlineHelloAt = nil
+      announceExternalHello()
+    end,
     onError = _onError,
     onClose = function(reason)
       if ac and type(ac.log) == "function" then
@@ -432,6 +484,10 @@ tryOpen = function()
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
+    -- Send hello immediately for builds that ignore params.onOpen; onOpen still
+    -- handles reconnect handshakes when reconnect=true.
+    inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
+    announceExternalHello()
     return true
   end
   if ac and type(ac.log) == "function" then
@@ -519,6 +575,127 @@ function M.pollInbound(maxPerTick)
             }
           end
         end
+      elseif tonumber(data.v) == PROTOCOL_VERSION and type(data.type) == "string" then
+        -- Issue #81: external-client envelope. The sidecar fans `config.set`,
+        -- `action`, and `state.subscribe` here so we can apply them locally
+        -- and emit acks/values that the sidecar broadcasts back to the screen.
+        sidecarProtocolReady = true
+        local t = data.type
+        if t == "action" then
+          local name = type(data.name) == "string" and data.name or ""
+          local handler = actionHandlers[name]
+          if not handler then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "action.ack",
+              name = name,
+              applied = false,
+              reason = "no handler",
+            })
+          else
+            local okCall, applied, reason = pcall(handler, data.args)
+            if not okCall then
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "action.ack",
+                name = name,
+                applied = false,
+                reason = "handler error: " .. tostring(applied),
+              })
+            else
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "action.ack",
+                name = name,
+                applied = applied and true or false,
+                reason = reason,
+              })
+            end
+            if ac and type(ac.log) == "function" then
+              ac.log(string.format("[COPILOT][WS-EXT] action %s applied=%s",
+                name, tostring(applied)))
+            end
+          end
+        elseif t == "config.get" then
+          local key = type(data.key) == "string" and data.key or ""
+          if key == "" then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "config.ack",
+              key = key,
+              applied = false,
+              reason = "empty key",
+            })
+          elseif not configGetter then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "config.ack",
+              key = key,
+              applied = false,
+              reason = "no config bridge",
+            })
+          else
+            local okGet, val = pcall(configGetter, key)
+            if okGet then
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "config.value",
+                key = key,
+                value = val,
+              })
+            else
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "config.ack",
+                key = key,
+                applied = false,
+                reason = "getter error: " .. tostring(val),
+              })
+            end
+          end
+        elseif t == "config.set" then
+          local key = type(data.key) == "string" and data.key or ""
+          local value = data.value
+          if key == "" then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "config.ack",
+              key = key,
+              applied = false,
+              reason = "empty key",
+            })
+          elseif not configSetter then
+            M.sendJson({
+              v = PROTOCOL_VERSION,
+              type = "config.ack",
+              key = key,
+              applied = false,
+              reason = "no config bridge",
+            })
+          else
+            local okSet, applied, reason = pcall(configSetter, key, value)
+            if not okSet then
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "config.ack",
+                key = key,
+                applied = false,
+                reason = "setter error: " .. tostring(applied),
+              })
+            else
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = "config.ack",
+                key = key,
+                applied = applied and true or false,
+                reason = reason,
+              })
+            end
+          end
+        end
+        -- hello / hello_ack / state.* are not consumed by Lua at this stage;
+        -- the sidecar handles `hello`/`hello_ack` and we silently accept the
+        -- rest until Phase-2 telemetry push lands.
       elseif ev == "corner_advice" and pv == PROTOCOL_VERSION then
         -- Round 10: in-race per-corner LLM hint reply.
         local corner = tostring(data.corner or "")

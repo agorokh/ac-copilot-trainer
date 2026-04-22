@@ -9,6 +9,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: vault-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   disable-automerge-on-vault-unlabel:
     if: >-
@@ -37,7 +41,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          files="$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only)"
+          files="$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
           if [[ -z "$files" ]]; then
             gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
             echo "error: vault-only PR has no changed files" >&2
