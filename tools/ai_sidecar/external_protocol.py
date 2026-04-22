@@ -41,6 +41,7 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_CONFIG_GET,
     TYPE_CONFIG_SET,
     TYPE_ACTION,
+    TYPE_STATE_SUBSCRIBE,
 )
 
 # Names a client may invoke via `action`. Mirrors the Lua dispatcher in

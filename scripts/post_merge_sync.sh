@@ -13,8 +13,8 @@ case "${1:-}" in
     exit 2
     ;;
   *)
-    PHASE="sync"
-    PR="$1"
+    echo "usage: scripts/post_merge_sync.sh {sync|vault} <pr_number>" >&2
+    exit 2
     ;;
 esac
 
@@ -123,7 +123,7 @@ phase_vault() {
     exit 11
   fi
   git checkout -b "$VAULT_BRANCH" || { fail "failed to create vault branch $VAULT_BRANCH"; exit 10; }
-  git add docs/01_Vault/
+  git add -A docs/01_Vault/
   git commit -m "docs(vault): post-merge handoff for PR #${PR}" \
     || { fail "failed to commit vault changes for PR #${PR}"; exit 10; }
   git push -u origin "$VAULT_BRANCH" \

@@ -84,6 +84,7 @@ static uint32_t ws_backoff_ms   = 1000;    // 1s -> 30s
 static constexpr uint32_t WS_BACKOFF_MAX_MS = 30000;
 static uint32_t demo_next_at    = 0;
 static constexpr uint32_t DEMO_INTERVAL_MS = 10000;
+static constexpr bool ENABLE_DEMO_ACTION = false;  // Phase-1 safety: no unsolicited in-game actions.
 
 // -- Drawing helpers ---------------------------------------------------------
 
@@ -198,6 +199,9 @@ static void refresh_ui() {
 // -- Network -----------------------------------------------------------------
 
 static void send_demo_action() {
+  if (!ENABLE_DEMO_ACTION) {
+    return;
+  }
   JsonDocument doc;
   doc["v"]    = 1;
   doc["type"] = "action";
@@ -302,7 +306,7 @@ static void ws_try_connect() {
 static void ws_tick() {
   ws.poll();
   if (ws_state == WsState::Open) {
-    if ((int32_t)(millis() - demo_next_at) >= 0) {
+    if (ENABLE_DEMO_ACTION && (int32_t)(millis() - demo_next_at) >= 0) {
       send_demo_action();
       demo_next_at = millis() + DEMO_INTERVAL_MS;
     }

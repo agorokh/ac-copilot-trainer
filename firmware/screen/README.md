@@ -89,7 +89,7 @@ firmware/screen/
 ├── include/
 │   ├── lv_conf.h              LVGL v9 minimal config
 │   └── board/
-│       └── LGFX_JC3248W535.h  LovyanGFX board config (pin map TBD-verified)
+│       └── JC3248W535_GFX.h   Arduino_GFX board config (pin map TBD-verified)
 ├── src/
 │   └── main.cpp               Phase-1 firmware
 ├── secrets/                   gitignored — real credentials live here

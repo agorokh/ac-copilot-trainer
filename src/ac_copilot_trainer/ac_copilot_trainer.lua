@@ -160,7 +160,7 @@ local function loadConfig()
     local ok, val = pcall(function() return _wsUrlStorage:get() end)
     if ok and type(val) == "string" then
       local migrated = false
-      if val == "" or not wsUrlMatchesAutolaunchTarget(val) then
+      if val == "" then
         cfg.wsSidecarUrl = CONFIG_DEFAULTS.wsSidecarUrl
         migrated = true
       else
