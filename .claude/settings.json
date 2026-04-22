@@ -71,6 +71,11 @@
           {
             "type": "prompt",
             "prompt": "If the bash command would commit or push to protected branch main/master, BLOCK. Patterns: git commit on main/master, git push on main/master, git push origin HEAD:main or :master. Otherwise ALLOW."
+          },
+          {
+            "type": "command",
+            "command": "root=\\\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\\\"; bash \\\"$root/scripts/claude_pretool_vault_guard.sh\\\"",
+            "timeout": 5000
           }
         ]
       }

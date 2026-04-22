@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-11
+last_updated: 2026-04-21
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -18,10 +18,11 @@ relates_to:
 
 ## Resume here
 
-- **Branch `fix/issue-75-in-game-smoke-test` — PR #75** implements the in-game smoke-test gate and CSP/sidecar fixes on top of **`main` @ `72be94d`** (PR #73 Phase 5 HUD rebuild merged).
-- **Top priority:** clear remaining PR #75 review threads, confirm Actions **CI** + **Policy** runs on the latest pushed SHA, then merge when GitHub shows a clean merge (no conflicts).
-- **`main` context:** Issue #57 / #66 / #69 / #72 are closed; the only product gate called out on `main` was the **in-game smoke test** of PR #73 — PR #75 is the active branch carrying fixes and tests toward that gate.
-- **Round 10d staleness** (`currentSimT` vs `os.clock`) should be re-checked in-game after the PR lands.
+- Post-merge steward propagation is prepared on a rollout branch: adds deterministic `post-merge-steward`, `post_merge_sync.sh`, `post_merge_classify.py`, `check_vault_follow_up.sh`, `post-merge-notify.yml`, `vault-automerge.yml`, plus `.claude/settings.json` commit-guard/routing updates. Next action is PR-resolution follow-up on that rollout PR after push.
+- **Branch:** `feat/issue-46-ollama-debrief` — **PR #55** (draft): https://github.com/agorokh/ac-copilot-trainer/pull/55 — issue **#46** Ollama debrief + HUD; mark ready when green, then pr-resolution-follow-up (~10 min between polls).
+- **Also open:** `feat/issue-49-ai-sidecar-shap` — **PR #54** (issue **#49** ranking / SHAP).
+- **Merged:** **#45** / PR #53 (WebSocket v1); **#43** / PR #52 (coaching UX); **#47** journal — confirm PR #51 status on GitHub.
+- **Parent #9:** remaining **#44** (focus practice), **#49** (PR #54), **#51** (journal slice — confirm merge), **#19** (Phase 4 — later).
 
 ## What was delivered this session
 
