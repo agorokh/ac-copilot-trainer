@@ -84,15 +84,21 @@ while i < len(parts):
                 suffix = rest[pos + 1 :]
                 if suffix:
                     i += 1
-                else:
+                elif len(rest) == 1:
+                    # Lone `-u` / `-S`: optional mode/key may be the next argv (Codex #80).
                     i += 2 if i + 1 < len(parts) else 1
+                else:
+                    # `-vu`, etc.: trailing `-u` uses its default; do not eat the pathspec (Bugbot #80).
+                    i += 1
                 break
             if ch == "S":
                 suffix = rest[pos + 1 :]
                 if suffix:
                     i += 1
-                else:
+                elif len(rest) == 1:
                     i += 2 if i + 1 < len(parts) else 1
+                else:
+                    i += 1
                 break
             if ch == "a":
                 raise SystemExit(0)

@@ -239,6 +239,11 @@ def main() -> None:
                 "- **3121261290**: `_git_commit_intent` matches a bounded `git … commit` token "
                 "sequence instead of `*git*commit*`."
             ),
+            (
+                "- **3121313798**: Trailing `-u`/`-S` in a combined short-flag token (`-vu`, "
+                "`-xS`, …) advances one argv only; lone `-u`/`-S` still consumes the next argv "
+                "when present."
+            ),
             "",
             "## Steward scope proof (PR #80)",
             "",

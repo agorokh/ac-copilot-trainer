@@ -1,8 +1,8 @@
 # PR #80 — zero-sampling comment ledger
 
 **Snapshot** (regenerate after new review traffic):
-- Retrieved at (UTC): **2026-04-22T02:40:03Z**
-- PR head OID at retrieval: **451129d1902103814b9f218f66738765ba0d658e**
+- Retrieved at (UTC): **2026-04-22T02:55:28Z**
+- PR head OID at retrieval: **ceacea2f5a279bcdca0d7bfc2f2d9c4fdee08a3e**
 - Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (paginated REST); `reviewThreads` via GraphQL for GitHub `isResolved`.
 
 Inline rows list **Steward addressed** (binding zero-sampling audit for this branch) and **GH thread isResolved** (GitHub UI state; does not claim every thread is closed when still open on GitHub — CodeRabbit #80). Exit gate: zero rows with **Steward addressed** ≠ `yes`.
@@ -98,12 +98,14 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 3121221239 | cursor[bot] | yes | yes |
 | 3121237426 | sourcery-ai[bot] | yes | yes |
 | 3121237427 | sourcery-ai[bot] | yes | yes |
-| 3121237429 | sourcery-ai[bot] | yes | no |
+| 3121237429 | sourcery-ai[bot] | yes | yes |
 | 3121251331 | chatgpt-codex-connector[bot] | yes | no |
 | 3121251333 | chatgpt-codex-connector[bot] | yes | no |
 | 3121261284 | cursor[bot] | yes | yes |
 | 3121261290 | cursor[bot] | yes | yes |
 | 3121286297 | chatgpt-codex-connector[bot] | yes | no |
+| 3121305070 | chatgpt-codex-connector[bot] | yes | no |
+| 3121313798 | cursor[bot] | yes | no |
 
 ## Issue comments (`issues/80/comments`): 38
 
@@ -148,7 +150,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4292377487 | agorokh | yes |
 | 4292392583 | Copilot | N/A |
 
-## PR reviews (`pulls/80/reviews`): 43
+## PR reviews (`pulls/80/reviews`): 45
 
 | Review ID | Author | State | RESOLVED |
 |-----------|--------|-------|----------|
@@ -195,6 +197,8 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4151753429 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
 | 4151762505 | cursor[bot] | COMMENTED | N/A |
 | 4151785358 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151802431 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151810755 | cursor[bot] | COMMENTED | N/A |
 
 ### Post-snapshot audit (latest batch)
 
@@ -209,6 +213,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 - **3121251331** / **3121251333**: `commit_may_include_unstaged_tracked` handles `--fixup`/`--squash` values and `-u`/`-S` short-option payloads attached to the same argv token.
 - **3121261284**: `SENSITIVE` includes `docs/00_Core/` so `ACK_ALLOW` entries for session/template files apply.
 - **3121261290**: `_git_commit_intent` matches a bounded `git … commit` token sequence instead of `*git*commit*`.
+- **3121313798**: Trailing `-u`/`-S` in a combined short-flag token (`-vu`, `-xS`, …) advances one argv only; lone `-u`/`-S` still consumes the next argv when present.
 
 ## Steward scope proof (PR #80)
 
