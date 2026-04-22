@@ -428,8 +428,20 @@ tryOpen = function()
   end
   _recvQueue = {}
   sidecarProtocolReady = false
+  local function announceExternalHello()
+    -- Re-announce on every (re)open so sidecar reconnects keep forwarding
+    -- external `action`/`config.*` frames to the Lua bridge (PR #83 follow-up).
+    M.sendJson({
+      v = PROTOCOL_VERSION,
+      type = "hello",
+      client = "ac-copilot-trainer-lua",
+    })
+  end
   local opened = nil
   local params = {
+    onOpen = function()
+      announceExternalHello()
+    end,
     onError = _onError,
     onClose = function(reason)
       if ac and type(ac.log) == "function" then
@@ -460,13 +472,7 @@ tryOpen = function()
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
-    -- Issue #81: announce ourselves so the sidecar registers us as an external
-    -- peer and forwards screen-side `action`/`config.set` frames to us.
-    M.sendJson({
-      v = PROTOCOL_VERSION,
-      type = "hello",
-      client = "ac-copilot-trainer-lua",
-    })
+    announceExternalHello()
     return true
   end
   if ac and type(ac.log) == "function" then

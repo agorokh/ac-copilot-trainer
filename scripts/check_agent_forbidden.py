@@ -22,6 +22,7 @@ ALLOWED_TOPLEVEL_DIRS = {
     "src",
     "tests",
     "tools",
+    "firmware",
     ".claude",
     # Common additions when you specialize (uncomment as needed):
     # "apps",

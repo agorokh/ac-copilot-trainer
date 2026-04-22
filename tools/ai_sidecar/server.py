@@ -25,6 +25,7 @@ from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
     CLIENT_HEADER,
+    ENVELOPE_KEY,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
     TYPE_CONFIG_ACK,
@@ -38,7 +39,6 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_STATE_SNAPSHOT,
     TYPE_STATE_SUBSCRIBE,
     TYPE_STATE_UNSUBSCRIBE,
-    is_external_frame,
     make_error,
     make_hello_ack,
     validate_inbound,
@@ -327,17 +327,9 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                 )
                 continue
 
-            # External-client (`{v,type}`) frames: hub fan-out + minimal ack.
-            if isinstance(data.get(TYPE_KEY), str) and not is_external_frame(data):
-                await _safe_send(
-                    websocket,
-                    make_error(
-                        f"unsupported envelope version: {data.get('v')!r}",
-                        ref_type=data.get(TYPE_KEY),
-                    ),
-                )
-                continue
-            if is_external_frame(data):
+            # Route any envelope-like payload through external validation so
+            # malformed `{v,type}` frames get explicit protocol errors.
+            if ENVELOPE_KEY in data or TYPE_KEY in data:
                 await _handle_external_frame(websocket, data)
                 continue
 

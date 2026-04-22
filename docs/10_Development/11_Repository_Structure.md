@@ -12,6 +12,7 @@ These align with `scripts/check_agent_forbidden.py` for the unspecialized templa
 | `.claude/` | Claude Code hooks, agents, skills, rules |
 | `.cursor/` | Cursor rules, skills, Bugbot context |
 | `docs/` | Human and agent documentation; vault under `docs/01_Vault/` (PR audit ledgers under `docs/10_Development/`, e.g. `PR78_comment_ledger.md`) |
+| `firmware/` | Embedded firmware projects and board-specific assets (e.g. `firmware/screen/`) |
 | `src/` | Application code |
 | `tests/` | Automated tests |
 | `scripts/` | Checked-in automation |
