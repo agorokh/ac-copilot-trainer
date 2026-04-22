@@ -1,4 +1,9 @@
-"""Regenerate docs/10_Development/PR80_comment_ledger.md from GitHub (paginated)."""
+"""Regenerate `docs/10_Development/PR80_comment_ledger.md` from GitHub (paginated).
+
+This is **PR #80 zero-sampling audit scaffolding**: it hardcodes this repository and PR 80
+on purpose. It is not generic product tooling; remove or replace after the steward PR lands
+(Cursor #80).
+"""
 
 from __future__ import annotations
 
@@ -255,6 +260,10 @@ def main() -> None:
             (
                 "- **3121381620**: Pending-merge path uses exit **12** (documented in "
                 "`.claude/agents/post-merge-steward.md`) instead of a non-contract code."
+            ),
+            (
+                "- **3121425314**: `_build_pr80_ledger.py` is documented as PR #80-only audit "
+                "scaffolding (not maintained infra); delete or generalize after merge."
             ),
             "",
             "## Steward scope proof (PR #80)",
