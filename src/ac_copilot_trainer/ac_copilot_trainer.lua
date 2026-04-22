@@ -132,6 +132,84 @@ if ac and type(ac.storage) == "function" then
   end
 end
 
+local function isDedicatedPerKeyConfig(key)
+  return key == "wsSidecarUrl"
+    or key == "approachMeters"
+    or key == "lapArchiveEnabled"
+    or key == "lapArchiveMaxMB"
+end
+
+local function coercePersistedConfigValue(defaultValue, storedValue)
+  local defaultType = type(defaultValue)
+  if defaultType == "boolean" then
+    if type(storedValue) == "boolean" then
+      return storedValue
+    end
+    local n = tonumber(storedValue)
+    if n ~= nil then
+      return n ~= 0
+    end
+    return nil
+  end
+  if defaultType == "number" then
+    local n = tonumber(storedValue)
+    if n ~= nil then
+      return n
+    end
+    return nil
+  end
+  if defaultType == "string" then
+    if storedValue == nil then
+      return nil
+    end
+    return tostring(storedValue)
+  end
+  return nil
+end
+
+local function overlayLegacyPerKeyConfig(cfg)
+  if not (ac and type(ac.storage) == "function") then
+    return
+  end
+  for key, defaultValue in pairs(CONFIG_DEFAULTS) do
+    if not isDedicatedPerKeyConfig(key) then
+      local initDefault = defaultValue
+      if type(defaultValue) == "boolean" then
+        initDefault = defaultValue and 1 or 0
+      end
+      local okStore, store = pcall(ac.storage, key, initDefault)
+      if okStore and store and type(store.get) == "function" then
+        local okGet, persisted = pcall(function() return store:get() end)
+        if okGet then
+          local coerced = coercePersistedConfigValue(defaultValue, persisted)
+          if coerced ~= nil then
+            cfg[key] = coerced
+          end
+        end
+      end
+    end
+  end
+end
+
+local function persistLegacyPerKeyConfig(key, defaultValue, value)
+  if not (ac and type(ac.storage) == "function") then
+    return
+  end
+  local initDefault = defaultValue
+  if type(defaultValue) == "boolean" then
+    initDefault = defaultValue and 1 or 0
+  end
+  local okStore, store = pcall(ac.storage, key, initDefault)
+  if not (okStore and store and type(store.set) == "function") then
+    return
+  end
+  local persistValue = value
+  if type(defaultValue) == "boolean" and type(value) == "boolean" then
+    persistValue = value and 1 or 0
+  end
+  pcall(function() store:set(persistValue) end)
+end
+
 --- Persistent app settings (CSP `ac.storage`); shallow copy fallback when API missing (tests / old CSP).
 local function loadConfig()
   local cfg
@@ -144,6 +222,10 @@ local function loadConfig()
   if not cfg then
     cfg = shallowCopyDefaults()
   end
+  -- External `config.set` writes per-key stores (`ac.storage(key)`) for fields
+  -- not covered by dedicated storages. Overlay them here so values survive
+  -- reloads even when table-form `ac.storage(defaults)` is unreliable.
+  overlayLegacyPerKeyConfig(cfg)
   -- Overlay the per-key wsSidecarUrl (table-form is broken on this CSP build).
   -- Issue #78: empty stored URL used to mean "cleared"; with auto-launch + no URL
   -- editor in Settings, migrate empty back to localhost and persist so wsBridge.tick connects.
@@ -378,12 +460,7 @@ local function applyExternalConfigSet(key, value)
   else
     return false, "unsupported config type"
   end
-  if ac and type(ac.storage) == "function" then
-    local okStore, storage = pcall(ac.storage, key)
-    if okStore and storage and type(storage.set) == "function" then
-      pcall(function() storage:set(config[key]) end)
-    end
-  end
+  persistLegacyPerKeyConfig(key, existing, config[key])
   return true, nil
 end
 

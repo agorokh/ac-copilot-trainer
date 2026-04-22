@@ -472,7 +472,6 @@ tryOpen = function()
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
-    announceExternalHello()
     return true
   end
   if ac and type(ac.log) == "function" then

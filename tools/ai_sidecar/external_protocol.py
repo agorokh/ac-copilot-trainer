@@ -74,17 +74,6 @@ AUTH_HEADER = "X-AC-Copilot-Token"
 CLIENT_HEADER = "X-AC-Copilot-Client"
 
 
-def is_external_frame(frame: Any) -> bool:
-    """Return True iff ``frame`` is a ``{"v":1,"type":...}`` envelope."""
-    v = frame.get(ENVELOPE_KEY) if isinstance(frame, dict) else None
-    return (
-        isinstance(frame, dict)
-        and not isinstance(v, bool)
-        and v == ENVELOPE_VERSION
-        and isinstance(frame.get(TYPE_KEY), str)
-    )
-
-
 def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
