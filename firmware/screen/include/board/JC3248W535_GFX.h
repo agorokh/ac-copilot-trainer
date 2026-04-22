@@ -37,16 +37,24 @@
 #define JC_TFT_NATIVE_W  320
 #define JC_TFT_NATIVE_H  480
 
-// Factory: build the QSPI bus + AXS15231B panel wrapper. Caller owns the
-// returned pointer for the whole program lifetime - we do not free it.
+// Build the QSPI panel + canvas. Returns the Arduino_Canvas — drawing into it
+// goes to a PSRAM framebuffer; calling canvas->flush() pushes the whole frame
+// to the panel in one DMA transfer.
+//
+// CRITICAL: AXS15231B over QSPI requires a full-framebuffer Arduino_Canvas.
+// Pixel-by-pixel writes confuse the controller and produce the "black + thin
+// white column" or "blue lines all over" artefacts seen in earlier attempts.
+// Reference: github.com/me-processware/JC3248W535-Driver
+//   - uses Arduino_AXS15231B with ips=false (no INVON for this panel)
+//   - wraps in Arduino_Canvas (PSRAM framebuffer + flush())
 inline Arduino_GFX* jc3248w535_make_display() {
   Arduino_DataBus* bus = new Arduino_ESP32QSPI(
       JC_TFT_QSPI_CS, JC_TFT_QSPI_SCK,
       JC_TFT_QSPI_D0, JC_TFT_QSPI_D1, JC_TFT_QSPI_D2, JC_TFT_QSPI_D3);
-  // Arduino_AXS15231B(bus, rst, rotation, ips, width, height)
-  // rotation=1 gives landscape (480 wide, 320 tall) at the draw-call layer.
-  Arduino_GFX* gfx = new Arduino_AXS15231B(
-      bus, JC_TFT_RST, /*rotation=*/1, /*ips=*/true,
+  Arduino_GFX* output = new Arduino_AXS15231B(
+      bus, JC_TFT_RST, /*rotation=*/0, /*ips=*/false,
       JC_TFT_NATIVE_W, JC_TFT_NATIVE_H);
-  return gfx;
+  Arduino_GFX* canvas = new Arduino_Canvas(
+      JC_TFT_NATIVE_W, JC_TFT_NATIVE_H, output);
+  return canvas;
 }

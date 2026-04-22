@@ -171,17 +171,26 @@ static void draw_static_chrome() {
 }
 
 static void refresh_ui() {
+  bool changed = false;
   if (wifi_state != last_painted_wifi) {
     draw_row(ROW_WIFI, wifi_label(wifi_state), wifi_colour(wifi_state));
     last_painted_wifi = wifi_state;
+    changed = true;
   }
   if (ws_state != last_painted_ws) {
     draw_row(ROW_WS, ws_label(ws_state), ws_colour(ws_state));
     last_painted_ws = ws_state;
+    changed = true;
   }
   if (last_error != last_painted_err) {
     draw_row(ROW_ERR, last_error.length() ? last_error.c_str() : "", COL_ERR);
     last_painted_err = last_error;
+    changed = true;
+  }
+  // Canvas-backed display: nothing reaches the panel until flush(). Only
+  // flush when something actually changed to avoid a per-tick DMA cost.
+  if (changed && gfx) {
+    gfx->flush();
   }
 }
 
@@ -308,13 +317,9 @@ static void ws_tick() {
 
 // -- Setup / Loop ------------------------------------------------------------
 
-// Sweep rotations + use the LCD CMD path directly to bypass any rotation/
-// addressing assumptions. The user reports "black + thin white column on
-// right" which is the classic AXS15231B partial-init signature: the panel is
-// powered, backlit, and accepting one-column writes, but our address window
-// lands off the visible area. We try every rotation and fill the whole
-// addressable window with RED — at least ONE rotation should paint the
-// visible area if the panel is alive.
+// Sweep rotations to confirm the canvas+QSPI flush path paints visibly.
+// Arduino_Canvas + AXS15231B requires an explicit flush() after each scene
+// (the canvas is a PSRAM framebuffer; nothing reaches the panel until flush).
 static void sweep_rotations() {
   uint16_t colors[4] = { 0xF800 /*R*/, 0x07E0 /*G*/, 0x001F /*B*/, 0xFFFF /*W*/ };
   for (uint8_t r = 0; r < 4; ++r) {
@@ -323,13 +328,13 @@ static void sweep_rotations() {
     int h = gfx->height();
     Serial.printf("[diag] rot=%u size=%dx%d  fill=0x%04X\n", r, w, h, colors[r]);
     gfx->fillScreen(colors[r]);
-    // Draw a thick border + diagonal cross so we can see ANY rendered pixel.
     gfx->fillRect(0, 0, w, 8, 0x0000);
     gfx->fillRect(0, h - 8, w, 8, 0x0000);
     gfx->fillRect(0, 0, 8, h, 0x0000);
     gfx->fillRect(w - 8, 0, 8, h, 0x0000);
     gfx->drawLine(0, 0, w - 1, h - 1, 0x0000);
     gfx->drawLine(0, h - 1, w - 1, 0, 0x0000);
+    gfx->flush();
     delay(2200);
   }
 }
@@ -378,7 +383,8 @@ void setup() {
   gfx->setRotation(1);
   draw_static_chrome();
   refresh_ui();
-  Serial.println("[diag] static chrome drawn");
+  gfx->flush();
+  Serial.println("[diag] static chrome drawn + flushed");
 
   // WiFi.
   wifi_try_begin();
