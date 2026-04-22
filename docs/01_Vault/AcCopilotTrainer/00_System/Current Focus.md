@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-21
+last_updated: 2026-04-22
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -16,13 +16,13 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-## Stream A — Rig screen Phase-2 UI (PR #83 + follow-on)
+## Stream A — Rig screen Phase-2 UI (post-PR #83)
 
 **Status:** PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83)
-**end-to-end working** as of 2026-04-21 21:00 PT. Sidecar accepts the
-ESP32 with token, device emits `{v:1,type:"action",name:"toggleFocusPractice"}`
-every 10 s, display renders via `Arduino_Canvas`. User is doing code
-review and designing visuals.
+is merged to `main` (2026-04-22). End-to-end path is working: sidecar
+accepts ESP32 with token, device emits
+`{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s, and display
+renders via `Arduino_Canvas`.
 
 **Next:** Phase-2 LVGL bring-up per
 [`01_Decisions/screen-ui-stack-lvgl-touch.md`](../01_Decisions/screen-ui-stack-lvgl-touch.md):
@@ -50,8 +50,6 @@ Porsche 911 GT3 R.
 
 ## Priority call
 
-Stream A is the user's hot path — physical device works for the first
-time and they want to push to real touch UI. Stream B (CSP apps) is the
-research/design phase happening in parallel. Stream C is pre-existing
-backlog; pick it up only after A reaches "real tile toggles
-focusPractice in-game".
+Stream A is the user's hot path: move from working transport to real touch
+UI (LVGL + tile actions). Stream B (CSP apps) is the research/design
+phase in parallel. Stream C remains pre-existing backlog.

@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-21
+last_updated: 2026-04-22
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -18,7 +18,7 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-21, end of day)
+## Resume here (2026-04-22, post-merge follow-up)
 
 **End-to-end rig screen ↔ sidecar is working.** PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83)
 landed the sidecar `--external-bind`/`--token`, protocol v1 `{v,type}`
@@ -59,9 +59,11 @@ rig touchscreen to those CSP apps too).
    ADR (`01_Decisions/screen-and-csp-apps-integration.md`) will codify
    the strategy (read-only state scrape vs. cooperative same-VM call).
 
-4. **Once PR #83 merges:** the orchestrator should run post-merge steward
-   propagation against `main`; vault changes from this session are
-   already on the feat branch.
+4. **Post-merge stewardship (PR #83) ran on 2026-04-22** against `main`.
+   Classification highlights to review manually:
+   - dependency-related files changed
+   - `scripts/` changed
+   - `.github/workflows/` changed
 
 ## What was delivered today (2026-04-21)
 
