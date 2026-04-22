@@ -74,7 +74,7 @@
           },
           {
             "type": "command",
-            "command": "cmd=$(python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))\" 2>/dev/null || true); should_check=$(AC_VAULT_FOLLOW_UP_COMMAND=\"$cmd\" python3 -c \"import os,shlex; cmd=os.environ.get('AC_VAULT_FOLLOW_UP_COMMAND','');\ntry:\n parts=shlex.split(cmd)\nexcept ValueError:\n print('0'); raise SystemExit(0)\nprint('1' if (parts and parts[0]=='git' and 'commit' in parts[1:]) else '0')\" 2>/dev/null || true); if [ \"$should_check\" = \"1\" ]; then root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; AC_VAULT_FOLLOW_UP_COMMAND=\"$cmd\" bash \"$root/scripts/check_vault_follow_up.sh\" || exit 2; fi; exit 0",
+            "command": "root=\\\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\\\"; bash \\\"$root/scripts/claude_pretool_vault_guard.sh\\\"",
             "timeout": 5000
           }
         ]

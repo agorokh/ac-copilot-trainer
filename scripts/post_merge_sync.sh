@@ -13,8 +13,14 @@ case "${1:-}" in
     exit 2
     ;;
   *)
-    echo "usage: scripts/post_merge_sync.sh {sync|vault} <pr_number>" >&2
-    exit 2
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+      PHASE="sync"
+      PR="$1"
+    else
+      echo "usage: scripts/post_merge_sync.sh {sync|vault} <pr_number>" >&2
+      echo "error: expected sync, vault, or a numeric PR number; got '${1:-}'" >&2
+      exit 2
+    fi
     ;;
 esac
 
@@ -52,10 +58,23 @@ ensure_clean_worktree() {
 phase_sync() {
   require_gh
   ensure_clean_worktree
+  BASE="$(gh pr view "$PR" --json baseRefName --jq '.baseRefName' 2>/dev/null || true)"
+  if [[ "$BASE" != "main" ]]; then
+    fail "PR #$PR must target main for phase_sync (base is '${BASE:-unknown}')"
+    exit 20
+  fi
   STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
   case "$STATE" in
     MERGED) ;;
-    OPEN) gh pr merge "$PR" --squash --delete-branch || { fail "failed to merge PR #$PR"; exit 12; } ;;
+    OPEN)
+      gh pr merge "$PR" --squash --delete-branch || { fail "failed to merge PR #$PR"; exit 12; }
+      # `gh pr merge` can queue auto-merge when required checks are pending (Codex #80).
+      STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
+      if [[ "$STATE" != "MERGED" ]]; then
+        fail "PR #$PR is not MERGED after merge attempt (state: ${STATE:-unknown}); resolve checks or wait for auto-merge"
+        exit 12
+      fi
+      ;;
     "") fail "could not determine PR #$PR state"; exit 20 ;;
     *) fail "PR #$PR is in unexpected state: $STATE"; exit 12 ;;
   esac
@@ -95,6 +114,12 @@ phase_vault() {
     exit 10
   fi
 
+  VAULT_UNTRACKED="$(git ls-files --others --exclude-standard -- docs/01_Vault/ 2>/dev/null | sed '/^$/d' || true)"
+  if git diff --quiet -- docs/01_Vault/ && git diff --cached --quiet -- docs/01_Vault/ && [[ -z "$VAULT_UNTRACKED" ]]; then
+    echo "No vault changes."
+    return 0
+  fi
+
   OOS_TRACKED="$(
     {
       git diff --name-only HEAD -- . ':(exclude)docs/01_Vault/' 2>/dev/null
@@ -107,12 +132,6 @@ phase_vault() {
     exit 30
   fi
 
-  VAULT_UNTRACKED="$(git ls-files --others --exclude-standard -- docs/01_Vault/ 2>/dev/null | sed '/^$/d' || true)"
-  if git diff --quiet -- docs/01_Vault/ && git diff --cached --quiet -- docs/01_Vault/ && [[ -z "$VAULT_UNTRACKED" ]]; then
-    echo "No vault changes."
-    return 0
-  fi
-
   VAULT_BRANCH="vault/post-merge-pr${PR}"
   if git show-ref --verify --quiet "refs/heads/$VAULT_BRANCH"; then
     fail "local branch $VAULT_BRANCH already exists; delete it before rerunning phase_vault"
@@ -123,21 +142,19 @@ phase_vault() {
     exit 11
   fi
   git checkout -b "$VAULT_BRANCH" || { fail "failed to create vault branch $VAULT_BRANCH"; exit 10; }
-  git add -A docs/01_Vault/
-  git commit -m "docs(vault): post-merge handoff for PR #${PR}" \
-    || { fail "failed to commit vault changes for PR #${PR}"; exit 10; }
-  git push -u origin "$VAULT_BRANCH" \
-    || { fail "failed to push vault branch $VAULT_BRANCH"; exit 11; }
+  git add docs/01_Vault/ || { fail "failed to stage vault changes under docs/01_Vault/"; exit 10; }
+  git commit -m "docs(vault): post-merge handoff for PR #${PR}" || exit 10
+  git push -u origin "$VAULT_BRANCH" || exit 11
   EXISTING_PR="$(gh pr list --head "$VAULT_BRANCH" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)"
   if [[ -n "$EXISTING_PR" ]]; then
     gh pr edit "$EXISTING_PR" \
       --title "docs(vault): post-merge handoff for PR #${PR}" \
       --body "Vault-only handoff updates produced by post-merge-steward." \
-      --add-label vault-only || { fail "failed to edit existing vault PR #$EXISTING_PR"; exit 12; }
+      --add-label vault-only || exit 12
   else
     gh pr create --title "docs(vault): post-merge handoff for PR #${PR}" \
       --body "Vault-only handoff updates produced by post-merge-steward." \
-      --base main --head "$VAULT_BRANCH" --label vault-only || { fail "failed to create vault PR for $VAULT_BRANCH"; exit 12; }
+      --base main --head "$VAULT_BRANCH" --label vault-only || exit 12
   fi
   git checkout main >/dev/null 2>&1 || { fail "vault PR created, but failed to restore repository to main"; exit 10; }
 }
