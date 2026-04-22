@@ -1,0 +1,19 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# Editors
+.vscode/
+.idea/
+
+# Real secrets live here; only the .example files are committed.
+secrets/*
+!secrets/.gitkeep
+!secrets/*.example
+
+# Factory firmware dump: keep the folder structure, never the binary.
+_factory-backup/*.bin
+_factory-backup/*.sha256
