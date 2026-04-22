@@ -1,5 +1,10 @@
 """Async WebSocket server: versioned lap JSON from Lua + optional coaching replies (issue #45).
 
+External clients (issue #81) speak the v1 ``{"v":1,"type":...}`` envelope and
+are bridged through the same connection set: the Lua loopback client is the
+source of truth for ``config.set`` / ``action`` / ``state.snapshot``; the
+sidecar fans those messages between connected peers.
+
 Run: python -m tools.ai_sidecar
 Requires optional extra: pip install -e ".[coaching]"
 """
@@ -8,12 +13,23 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import logging
 from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
+from tools.ai_sidecar.external_protocol import (
+    AUTH_HEADER,
+    CLIENT_HEADER,
+    TYPE_HELLO,
+    TYPE_KEY,
+    is_external_frame,
+    make_error,
+    make_hello_ack,
+    validate_inbound,
+)
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
@@ -32,6 +48,12 @@ _OLLAMA_FOLLOWUP_CONCURRENCY = 4
 # Best-effort cap: cancelling a task waiting in asyncio.to_thread can release this
 # semaphore before the worker thread finishes (Python limitation).
 _ollama_followup_sem: asyncio.Semaphore | None = None
+
+# Connected external-protocol peers (any client that has spoken a `{v,type}`
+# frame, including the Lua loopback client). Used for hub-style fan-out.
+_external_peers: set[Any] = set()
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def _get_ollama_followup_sem() -> asyncio.Semaphore:
@@ -97,6 +119,88 @@ async def _safe_send(websocket: Any, payload: dict[str, Any]) -> None:
         logger.exception("websocket send failed")
 
 
+def make_token_check(token: str | None):
+    """Build a websockets ``process_request`` callback for the optional token gate.
+
+    Returns ``None`` when no token is configured (default loopback deployment).
+    Otherwise returns a callable that closes the upgrade with HTTP 401 if the
+    ``X-AC-Copilot-Token`` header is missing or wrong.
+    """
+    if not token:
+        return None
+
+    from websockets.datastructures import Headers
+    from websockets.http11 import Response
+
+    def _check(connection: Any, request: Any) -> Any:
+        supplied = request.headers.get(AUTH_HEADER)
+        client_id = request.headers.get(CLIENT_HEADER) or "<unknown>"
+        if supplied != token:
+            logger.warning(
+                "ws upgrade rejected client=%s reason=bad-token peer=%s",
+                client_id,
+                getattr(connection, "remote_address", None),
+            )
+            return Response(
+                status_code=401,
+                reason_phrase="Unauthorized",
+                headers=Headers([("Content-Type", "text/plain; charset=utf-8")]),
+                body=b"missing or invalid X-AC-Copilot-Token\n",
+            )
+        logger.info(
+            "ws upgrade accepted client=%s peer=%s",
+            client_id,
+            getattr(connection, "remote_address", None),
+        )
+        return None
+
+    return _check
+
+
+async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
+    """Forward a ``{v,type}`` frame to every external peer except ``exclude``."""
+    if not _external_peers:
+        return
+    payload = json.dumps(frame, separators=(",", ":"))
+    targets = [p for p in _external_peers if p is not exclude]
+    if not targets:
+        return
+    results = await asyncio.gather(
+        *[_safe_send_raw(p, payload) for p in targets],
+        return_exceptions=True,
+    )
+    for p, r in zip(targets, results):
+        if isinstance(r, Exception):
+            logger.info("broadcast send failed peer=%s err=%s",
+                        getattr(p, "remote_address", None), r)
+
+
+async def _safe_send_raw(websocket: Any, payload: str) -> None:
+    try:
+        await websocket.send(payload)
+    except Exception:
+        logger.exception("broadcast websocket send failed")
+
+
+async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
+    """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
+    err = validate_inbound(data)
+    if err is not None:
+        await _safe_send(websocket, make_error(err, ref_type=data.get(TYPE_KEY)))
+        return
+    t = data[TYPE_KEY]
+    if t == TYPE_HELLO:
+        # Track this peer for fan-out and acknowledge directly.
+        _external_peers.add(websocket)
+        await _safe_send(websocket, make_hello_ack())
+        return
+    # All other request/response types are forwarded to every other peer.
+    # The Lua client receives `config.set` / `action` / `state.subscribe` and
+    # responds with `config.value` / `config.ack` / `action.ack` /
+    # `state.snapshot`, which are also forwarded back through this same path.
+    await _broadcast_external(data, exclude=websocket)
+
+
 async def _handler(websocket: Any, reply_coaching: bool) -> None:
     peer = getattr(websocket, "remote_address", None)
     logger.info(
@@ -144,6 +248,11 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                         "message": "root must be a JSON object",
                     },
                 )
+                continue
+
+            # External-client (`{v,type}`) frames: hub fan-out + minimal ack.
+            if is_external_frame(data):
+                await _handle_external_frame(websocket, data)
                 continue
 
             if data.get("event") == "lap_complete":
@@ -221,6 +330,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     pending_followups.add(bg_task)
                     bg_task.add_done_callback(_followup_done)
     finally:
+        _external_peers.discard(websocket)
         for t in list(pending_followups):
             if not t.done():
                 t.cancel()
@@ -228,25 +338,37 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             await asyncio.gather(*pending_followups, return_exceptions=True)
 
 
-async def _run(host: str, port: int, reply_coaching: bool) -> None:
+async def _run(host: str, port: int, reply_coaching: bool, token: str | None) -> None:
     try:
         import websockets
     except ImportError as e:
         raise SystemExit('websockets is required. Install: pip install -e ".[coaching]"') from e
 
+    process_request = make_token_check(token)
     async with websockets.serve(
         lambda ws: _handler(ws, reply_coaching),
         host,
         port,
+        process_request=process_request,
     ):
         logger.info(
-            "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s",
+            "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s token=%s",
             host,
             port,
             PROTOCOL_VERSION,
             reply_coaching,
+            "set" if token else "unset",
         )
         await asyncio.Future()
+
+
+def _is_loopback(host: str) -> bool:
+    if host in LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def main() -> None:
@@ -254,6 +376,22 @@ def main() -> None:
     p = argparse.ArgumentParser(description="AC Copilot Trainer AI sidecar (WebSocket)")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument(
+        "--external-bind",
+        default=None,
+        help=(
+            "Bind a LAN-reachable address for external clients (e.g. 0.0.0.0). "
+            "Requires --token. When unset, the sidecar listens only on --host."
+        ),
+    )
+    p.add_argument(
+        "--token",
+        default=None,
+        help=(
+            "Shared secret enforced on the WS upgrade as X-AC-Copilot-Token. "
+            "Required whenever --external-bind is non-loopback."
+        ),
+    )
     p.add_argument(
         "--compare-laps",
         nargs=2,
@@ -276,8 +414,22 @@ def main() -> None:
         _run_compare_laps(args.compare_laps[0], args.compare_laps[1])
         return
     reply = not args.no_reply
+
+    if args.external_bind is not None:
+        if not args.token:
+            raise SystemExit("--external-bind requires --token (refusing to expose unauthenticated socket)")
+        if not _is_loopback(args.external_bind) and _is_loopback(args.host):
+            host = args.external_bind
+        else:
+            host = args.external_bind
+    else:
+        host = args.host
+        if args.token and not _is_loopback(host):
+            # Defensive: someone bound a non-loopback host directly via --host.
+            logger.info("token enforced on non-loopback --host=%s", host)
+
     try:
-        asyncio.run(_run(args.host, args.port, reply))
+        asyncio.run(_run(host, args.port, reply, args.token))
     except KeyboardInterrupt:
         logger.info("sidecar stopped")
 

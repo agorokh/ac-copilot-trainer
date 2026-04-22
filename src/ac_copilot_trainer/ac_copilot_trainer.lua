@@ -300,7 +300,101 @@ local brakes = newBrakes()
 local td = throttleDet.new()
 local tires = tireMonitor.new()
 
+-- Forward-declare so closures registered with wsBridge below capture the
+-- main state table as an upvalue (Lua resolves locals lexically at compile
+-- time; without this they would compile to globals and stay nil — issue #81).
+local state
+
 wsBridge.configure(config.wsSidecarUrl or "")
+
+-- Issue #81: external WS clients (rig touchscreen) drive these via the sidecar.
+-- Each handler returns (applied:boolean, reason:string|nil); the bridge fans an
+-- `action.ack` back to the originator.
+if wsBridge.registerActionHandler then
+  wsBridge.registerActionHandler("toggleFocusPractice", function()
+    state.focusPracticeActive = not (state.focusPracticeActive or false)
+    return true, nil
+  end)
+  wsBridge.registerActionHandler("cycleRacingLine", function()
+    -- "best" -> "ideal" -> "off" -> "best" cycle (mirrors Settings dropdown).
+    local cur = config.racingLineMode or "best"
+    local nxt
+    if cur == "best" then nxt = "ideal"
+    elseif cur == "ideal" then nxt = "off"
+    else nxt = "best" end
+    config.racingLineMode = nxt
+    return true, "now: " .. nxt
+  end)
+  wsBridge.registerActionHandler("tareDelta", function()
+    -- Drop any in-flight queued coaching/corner advice for the current lap;
+    -- next sample will rebuild a clean delta baseline.
+    pcall(function() wsBridge.clearPendingCoaching() end)
+    pcall(function() wsBridge.clearCornerAdvisories() end)
+    return true, nil
+  end)
+  wsBridge.registerActionHandler("reloadSetup", function(_)
+    return false, "reloadSetup not yet implemented (issue #81 phase-2)"
+  end)
+  wsBridge.registerActionHandler("applySetupFromPath", function(_)
+    return false, "applySetupFromPath not yet implemented (issue #81 phase-2)"
+  end)
+end
+
+if wsBridge.registerConfigBridge then
+  wsBridge.registerConfigBridge(
+    function(key)
+      return config[key]
+    end,
+    function(key, value)
+      if config[key] == nil then
+        return false, "unknown config key"
+      end
+      -- Type-match the persisted default so the screen cannot inject a string
+      -- where a boolean is expected.
+      local existing = config[key]
+      if type(existing) == "boolean" then
+        config[key] = value and true or false
+      elseif type(existing) == "number" then
+        local n = tonumber(value)
+        if n == nil then return false, "value must be numeric" end
+        config[key] = n
+      elseif type(existing) == "string" then
+        config[key] = tostring(value)
+      else
+        return false, "unsupported config type"
+      end
+      return true, nil
+    end
+  )
+end
+
+if wsBridge.registerConfigBridge then
+  wsBridge.registerConfigBridge(
+    function(key)
+      return config[key]
+    end,
+    function(key, value)
+      if config[key] == nil then
+        return false, "unknown config key"
+      end
+      -- Type-match the persisted default so the screen cannot inject a string
+      -- where a boolean is expected.
+      local existing = config[key]
+      if type(existing) == "boolean" then
+        config[key] = value and true or false
+      elseif type(existing) == "number" then
+        local n = tonumber(value)
+        if n == nil then return false, "value must be numeric" end
+        config[key] = n
+      elseif type(existing) == "string" then
+        config[key] = tostring(value)
+      else
+        return false, "unsupported config type"
+      end
+      return true, nil
+    end
+  )
+end
 
 -- Issue #77 Part A: resolve the deployed app dir (where start_sidecar.bat lives)
 -- so wsBridge can spawn the sidecar without hardcoded paths.
@@ -470,7 +564,7 @@ local function traceHasPbSplineCoverage(trace)
   return true
 end
 
-local state = {
+state = {
   initialized = false,
   bestLapMs = nil,
   lastLapMs = nil,
