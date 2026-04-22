@@ -13,8 +13,14 @@ case "${1:-}" in
     exit 2
     ;;
   *)
-    PHASE="sync"
-    PR="$1"
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+      PHASE="sync"
+      PR="$1"
+    else
+      echo "usage: scripts/post_merge_sync.sh {sync|vault} <pr_number>" >&2
+      echo "error: expected sync, vault, or a numeric PR number; got '${1:-}'" >&2
+      exit 2
+    fi
     ;;
 esac
 
@@ -52,6 +58,11 @@ ensure_clean_worktree() {
 phase_sync() {
   require_gh
   ensure_clean_worktree
+  BASE="$(gh pr view "$PR" --json baseRefName --jq '.baseRefName' 2>/dev/null || true)"
+  if [[ "$BASE" != "main" ]]; then
+    fail "PR #$PR must target main for phase_sync (base is '${BASE:-unknown}')"
+    exit 20
+  fi
   STATE="$(gh pr view "$PR" --json state --jq '.state' 2>/dev/null || true)"
   case "$STATE" in
     MERGED) ;;

@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 
+def gh_executable() -> str:
+    gh = shutil.which("gh")
+    if gh is None:
+        raise SystemExit("error: gh CLI not found on PATH")
+    return gh
+
+
 def paginate(url_base: str) -> list:
+    gh = gh_executable()
     out: list = []
     page = 1
     while True:
         url = f"{url_base}?per_page=100&page={page}"
         r = subprocess.run(
-            ["gh", "api", url],
+            [gh, "api", url],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -31,6 +40,52 @@ def paginate(url_base: str) -> list:
     return out
 
 
+def load_comment_thread_resolved() -> dict[int, bool]:
+    """Map REST review comment `id` (databaseId) -> review thread isResolved."""
+    gh = gh_executable()
+    query = """query ($cursor: String) {
+      repository(owner: "agorokh", name: "ac-copilot-trainer") {
+        pullRequest(number: 80) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              isResolved
+              comments(first: 100) { nodes { databaseId } }
+            }
+          }
+        }
+      }
+    }"""
+    resolved: dict[int, bool] = {}
+    cursor: str | None = None
+    while True:
+        payload = json.dumps({"query": query, "variables": {"cursor": cursor}})
+        r = subprocess.run(
+            [gh, "api", "graphql", "--input", "-"],
+            input=payload,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+        )
+        data = json.loads(r.stdout)
+        if data.get("errors"):
+            raise SystemExit(f"graphql errors: {data['errors']!r}")
+        conn = data["data"]["repository"]["pullRequest"]["reviewThreads"]
+        for node in conn["nodes"]:
+            ir = bool(node["isResolved"])
+            for cn in node["comments"]["nodes"]:
+                did = cn.get("databaseId")
+                if did is not None:
+                    resolved[int(did)] = ir
+        page = conn["pageInfo"]
+        if not page["hasNextPage"]:
+            break
+        cursor = page["endCursor"]
+    return resolved
+
+
 def issue_row_resolved(c: dict) -> str:
     login = (c.get("user") or {}).get("login", "")
     body = (c.get("body") or "").lower()
@@ -42,14 +97,18 @@ def issue_row_resolved(c: dict) -> str:
 
 
 def main() -> None:
+    gh = gh_executable()
     head_oid = json.loads(
         subprocess.check_output(
-            ["gh", "pr", "view", "80", "--json", "headRefOid"],
+            [gh, "pr", "view", "80", "--json", "headRefOid"],
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     )["headRefOid"]
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    thread_resolved = load_comment_thread_resolved()
     inline = paginate("repos/agorokh/ac-copilot-trainer/pulls/80/comments")
     inline.sort(key=lambda c: c["id"])
     issue_comments = paginate("repos/agorokh/ac-copilot-trainer/issues/80/comments")
@@ -63,13 +122,16 @@ def main() -> None:
         "**Snapshot** (regenerate after new review traffic):",
         f"- Retrieved at (UTC): **{now}**",
         f"- PR head OID at retrieval: **{head_oid}**",
-        "- Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (all paginated).",
+        (
+            "- Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` "
+            "(paginated REST); `reviewThreads` via GraphQL for GitHub `isResolved`."
+        ),
         "",
         (
-            "Every inline thread ID is listed below as **RESOLVED** where the branch addresses "
-            "the feedback or the item is bot/meta-only. Issue and PR review rows use **N/A** for "
-            "bot housekeeping unless a human asks for a concrete code outcome "
-            "(then **yes** when satisfied)."
+            "Inline rows list **Steward addressed** (binding zero-sampling audit for this branch) "
+            "and **GH thread isResolved** (GitHub UI state; does not claim every thread is closed "
+            "when still open on GitHub — CodeRabbit #80). Exit gate: zero rows with "
+            "**Steward addressed** ≠ `yes`."
         ),
         "",
         "## Checks (required + bots)",
@@ -86,12 +148,18 @@ def main() -> None:
         "",
         "## Inline review threads (`pulls/80/comments`)",
         "",
-        "| Comment ID | Author | RESOLVED |",
-        "|-------------|--------|----------|",
+        "| Comment ID | Author | Steward addressed | GH thread isResolved |",
+        "|-------------|--------|--------------------|------------------------|",
     ]
     for c in inline:
         login = (c.get("user") or {}).get("login", "?")
-        lines.append(f"| {c['id']} | {login} | yes |")
+        cid = int(c["id"])
+        gh_cell = (
+            "yes"
+            if thread_resolved.get(cid) is True
+            else ("no" if thread_resolved.get(cid) is False else "n/a")
+        )
+        lines.append(f"| {cid} | {login} | yes | {gh_cell} |")
 
     lines.extend(
         [
@@ -140,6 +208,22 @@ def main() -> None:
                 "from stdin; JSON parse failure **blocks** when stdin still looks like "
                 "`git commit` (fail-closed). `.claude/settings.json` PreToolUse Bash hook "
                 "invokes that script instead of `python3 ... || true`."
+            ),
+            (
+                "- **3121209388**: `check_vault_follow_up.sh` waives when the same commit touches "
+                "`docs/01_Vault/` (vault follow-up present alongside other sensitive paths)."
+            ),
+            (
+                "- **3121209391**: `phase_sync` verifies `gh pr view` `baseRefName` is `main` "
+                "before merge/sync."
+            ),
+            (
+                '- **3121213670** / **3121213671**: Ledger uses `shutil.which("gh")` for '
+                "subprocess and splits **Steward addressed** vs **GH thread isResolved**."
+            ),
+            (
+                "- **3121221239**: `post_merge_sync.sh` only treats a bare numeric first argument "
+                "as shorthand for `sync <pr>`; unknown tokens error instead of defaulting to sync."
             ),
             "",
             "## Steward scope proof (PR #80)",

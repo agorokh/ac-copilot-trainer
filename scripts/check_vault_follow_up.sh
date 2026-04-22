@@ -116,6 +116,11 @@ if [[ -z "$SENSITIVE_NOT_ACKED" ]]; then
   exit 0
 fi
 
+# Codex #80: any same-commit path under docs/01_Vault/ counts as a vault follow-up for the rest of the sensitive set.
+if printf '%s\n' "$FILES_TO_CHECK" | grep -qE '^docs/01_Vault/'; then
+  exit 0
+fi
+
 cat >&2 <<EOF
 [check_vault_follow_up] Sensitive commit paths without a vault follow-up:
 
