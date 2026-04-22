@@ -1,8 +1,8 @@
 # PR #80 — zero-sampling comment ledger
 
 **Snapshot** (regenerate after new review traffic):
-- Retrieved at (UTC): **2026-04-22T04:05:25Z**
-- PR head OID at retrieval: **2a5af2714de98148feb6b88581c5232420a6c361**
+- Retrieved at (UTC): **2026-04-22T04:16:17Z**
+- PR head OID at retrieval: **29fd5e902f0a7567fbbb6a80e59fcda0fbcd2856**
 - Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (paginated REST); `reviewThreads` via GraphQL for GitHub `isResolved`.
 
 Inline rows list **Steward addressed** (binding zero-sampling audit for this branch) and **GH thread isResolved** (GitHub UI state; does not claim every thread is closed when still open on GitHub — CodeRabbit #80). Exit gate: zero rows with **Steward addressed** ≠ `yes`.
@@ -110,7 +110,13 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 3121369562 | cursor[bot] | yes | yes |
 | 3121381620 | chatgpt-codex-connector[bot] | yes | no |
 | 3121425314 | cursor[bot] | yes | yes |
-| 3121465138 | cursor[bot] | yes | no |
+| 3121465138 | cursor[bot] | yes | yes |
+| 3121510361 | chatgpt-codex-connector[bot] | yes | no |
+| 3121510364 | chatgpt-codex-connector[bot] | yes | no |
+| 3121516357 | coderabbitai[bot] | yes | no |
+| 3121516361 | coderabbitai[bot] | yes | no |
+| 3121516366 | coderabbitai[bot] | yes | no |
+| 3121519701 | cursor[bot] | yes | no |
 
 ## Issue comments (`issues/80/comments`): 41
 
@@ -158,7 +164,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4293312583 | chatgpt-codex-connector[bot] | N/A |
 | 4293392110 | chatgpt-codex-connector[bot] | N/A |
 
-## PR reviews (`pulls/80/reviews`): 50
+## PR reviews (`pulls/80/reviews`): 53
 
 | Review ID | Author | State | RESOLVED |
 |-----------|--------|-------|----------|
@@ -212,6 +218,9 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4151874409 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
 | 4151914675 | cursor[bot] | COMMENTED | N/A |
 | 4151951337 | cursor[bot] | COMMENTED | N/A |
+| 4151993868 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151999487 | coderabbitai[bot] | COMMENTED | N/A |
+| 4152002674 | cursor[bot] | COMMENTED | N/A |
 
 ### Post-snapshot audit (latest batch)
 
