@@ -340,32 +340,50 @@ if wsBridge.registerActionHandler then
   end)
 end
 
-if wsBridge.registerConfigBridge then
-  wsBridge.registerConfigBridge(
-    function(key)
-      return config[key]
-    end,
-    function(key, value)
-      if config[key] == nil then
-        return false, "unknown config key"
-      end
-      -- Type-match the persisted default so the screen cannot inject a string
-      -- where a boolean is expected.
-      local existing = config[key]
-      if type(existing) == "boolean" then
-        config[key] = value and true or false
-      elseif type(existing) == "number" then
-        local n = tonumber(value)
-        if n == nil then return false, "value must be numeric" end
-        config[key] = n
-      elseif type(existing) == "string" then
-        config[key] = tostring(value)
-      else
-        return false, "unsupported config type"
-      end
-      return true, nil
+local function applyExternalConfigSet(key, value)
+  if config[key] == nil then
+    return false, "unknown config key"
+  end
+  if key == "approachMeters" then
+    local n = tonumber(value)
+    if n == nil then return false, "value must be numeric" end
+    setApproachMetersAndPersist(n)
+    return true, nil
+  end
+  if key == "lapArchiveEnabled" then
+    setLapArchiveEnabledAndPersist(value and true or false)
+    return true, nil
+  end
+  if key == "lapArchiveMaxMB" then
+    local n = tonumber(value)
+    if n == nil then return false, "value must be numeric" end
+    setLapArchiveMaxMBAndPersist(n)
+    return true, nil
+  end
+  if key == "wsSidecarUrl" then
+    local u = tostring(value or "")
+    config.wsSidecarUrl = u
+    if _wsUrlStorage and type(_wsUrlStorage.set) == "function" then
+      pcall(function() _wsUrlStorage:set(u) end)
     end
-  )
+    wsBridge.configure(u)
+    return true, nil
+  end
+  -- Type-match the persisted/default value so the screen cannot inject a string
+  -- where a boolean is expected.
+  local existing = config[key]
+  if type(existing) == "boolean" then
+    config[key] = value and true or false
+  elseif type(existing) == "number" then
+    local n = tonumber(value)
+    if n == nil then return false, "value must be numeric" end
+    config[key] = n
+  elseif type(existing) == "string" then
+    config[key] = tostring(value)
+  else
+    return false, "unsupported config type"
+  end
+  return true, nil
 end
 
 if wsBridge.registerConfigBridge then
@@ -374,24 +392,7 @@ if wsBridge.registerConfigBridge then
       return config[key]
     end,
     function(key, value)
-      if config[key] == nil then
-        return false, "unknown config key"
-      end
-      -- Type-match the persisted default so the screen cannot inject a string
-      -- where a boolean is expected.
-      local existing = config[key]
-      if type(existing) == "boolean" then
-        config[key] = value and true or false
-      elseif type(existing) == "number" then
-        local n = tonumber(value)
-        if n == nil then return false, "value must be numeric" end
-        config[key] = n
-      elseif type(existing) == "string" then
-        config[key] = tostring(value)
-      else
-        return false, "unsupported config type"
-      end
-      return true, nil
+      return applyExternalConfigSet(key, value)
     end
   )
 end

@@ -138,7 +138,11 @@ def make_config_ack(
 
 def validate_inbound(frame: dict[str, Any]) -> str | None:
     """Return ``None`` if ``frame`` is structurally valid, else an error string."""
+    if frame.get(ENVELOPE_KEY) != ENVELOPE_VERSION:
+        return f"unsupported envelope version: {frame.get(ENVELOPE_KEY)!r}"
     t = frame.get(TYPE_KEY)
+    if not isinstance(t, str) or not t:
+        return "frame requires non-empty string 'type'"
     if t == TYPE_HELLO:
         if not isinstance(frame.get("client"), str) or not frame["client"]:
             return "hello requires non-empty 'client'"
@@ -167,6 +171,8 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         for topic in topics:
             if not isinstance(topic, str) or not topic:
                 return f"{t} 'topics' entries must be non-empty strings"
+            if topic not in KNOWN_TOPICS:
+                return f"unknown topic: {topic!r}"
         return None
     # Server→client types may legitimately appear when the Lua client forwards
     # a reply for the sidecar to fan out — accept silently.

@@ -13,7 +13,7 @@ local PROTOCOL_VERSION = 1
 M.PROTOCOL_VERSION = PROTOCOL_VERSION
 
 --- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
---- the main script; absent handlers reply with `{type=action.ack, applied=false}`.
+--- the main script; absent handlers reply with `{type:"action.ack", applied:false}`.
 local actionHandlers = {} ---@type table<string, fun(args:table|nil):boolean,string|nil>
 local configGetter ---@type (fun(key:string):any)|nil
 local configSetter ---@type (fun(key:string,value:any):boolean,string|nil)|nil

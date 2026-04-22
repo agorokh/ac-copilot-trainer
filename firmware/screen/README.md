@@ -9,7 +9,7 @@ CST820/AXS5106 touch). Full identity + cable notes:
 
 ## Phase-1 acceptance
 
-1. Board boots, backlight on, LVGL status screen renders.
+1. Board boots, backlight on, Arduino_GFX status screen renders.
 2. Joins WiFi (SSID from `secrets/wifi.h`).
 3. Dials the sidecar WS at `ws://SIDECAR_HOST:SIDECAR_PORT/` with an
    `X-AC-Copilot-Token` header.
@@ -74,9 +74,11 @@ to force ROM DFU, then `esptool.py ... write_flash 0 <factory.bin>`.
 - **Backlight never turns on / black screen.** Suspect the pins in
   `include/board/LGFX_JC3248W535.h` first — they are community defaults and
   have not yet been verified on this physical board.
-- **WS never opens, status says "Sidecar: closed".** Today that's expected —
-  the sidecar still binds loopback and doesn't accept tokens. Lua + sidecar
-  work is tracked under the `external-ws-client-protocol-extension` ADR.
+- **WS never opens, status says "Sidecar: closed".** Verify the sidecar is started
+  with an external bind + token that match `secrets/sidecar.h`:
+  `py -3 -m tools.ai_sidecar --external-bind 0.0.0.0 --port 8765 --token <TOKEN>`.
+  The sidecar now accepts authenticated external clients and keeps loopback Lua
+  traffic working for in-game coaching.
 
 ## Layout
 

@@ -23,8 +23,19 @@ from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
     CLIENT_HEADER,
+    TYPE_ACTION,
+    TYPE_ACTION_ACK,
+    TYPE_CONFIG_ACK,
+    TYPE_CONFIG_GET,
+    TYPE_CONFIG_SET,
+    TYPE_CONFIG_VALUE,
+    TYPE_ERROR,
     TYPE_HELLO,
+    TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_STATE_SNAPSHOT,
+    TYPE_STATE_SUBSCRIBE,
+    TYPE_STATE_UNSUBSCRIBE,
     is_external_frame,
     make_error,
     make_hello_ack,
@@ -54,6 +65,26 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 _external_peers: set[Any] = set()
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+CLIENT_TO_SERVER_TYPES = frozenset(
+    {
+        TYPE_HELLO,
+        TYPE_CONFIG_SET,
+        TYPE_CONFIG_GET,
+        TYPE_ACTION,
+        TYPE_STATE_SUBSCRIBE,
+        TYPE_STATE_UNSUBSCRIBE,
+    }
+)
+SERVER_TO_CLIENT_TYPES = frozenset(
+    {
+        TYPE_HELLO_ACK,
+        TYPE_CONFIG_VALUE,
+        TYPE_CONFIG_ACK,
+        TYPE_ACTION_ACK,
+        TYPE_STATE_SNAPSHOT,
+        TYPE_ERROR,
+    }
+)
 
 
 def _get_ollama_followup_sem() -> asyncio.Semaphore:
@@ -82,6 +113,22 @@ def _run_compare_laps(last_path: str, ref_path: str) -> None:
         extract_corner_table(ref),
     )
     print(json.dumps(ranked, indent=2))
+
+
+def _peer_host(connection: Any) -> str | None:
+    peer = getattr(connection, "remote_address", None)
+    if isinstance(peer, tuple) and peer:
+        return str(peer[0])
+    if isinstance(peer, str):
+        return peer
+    return None
+
+
+def _is_loopback_peer(connection: Any) -> bool:
+    host = _peer_host(connection)
+    if host is None:
+        return False
+    return _is_loopback(host)
 
 
 async def _send_ollama_followup(
@@ -135,6 +182,14 @@ def make_token_check(token: str | None):
     def _check(connection: Any, request: Any) -> Any:
         supplied = request.headers.get(AUTH_HEADER)
         client_id = request.headers.get(CLIENT_HEADER) or "<unknown>"
+        if _is_loopback_peer(connection):
+            logger.info(
+                "ws upgrade accepted loopback client=%s peer=%s token=%s",
+                client_id,
+                getattr(connection, "remote_address", None),
+                "set" if supplied else "unset",
+            )
+            return None
         if supplied != token:
             logger.warning(
                 "ws upgrade rejected client=%s reason=bad-token peer=%s",
@@ -165,21 +220,20 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     targets = [p for p in _external_peers if p is not exclude]
     if not targets:
         return
-    results = await asyncio.gather(
-        *[_safe_send_raw(p, payload) for p in targets],
-        return_exceptions=True,
-    )
-    for p, r in zip(targets, results):
-        if isinstance(r, Exception):
+    results = await asyncio.gather(*[_safe_send_raw(p, payload) for p in targets])
+    for p, err in zip(targets, results, strict=True):
+        if err is not None:
             logger.info("broadcast send failed peer=%s err=%s",
-                        getattr(p, "remote_address", None), r)
+                        getattr(p, "remote_address", None), err)
 
 
-async def _safe_send_raw(websocket: Any, payload: str) -> None:
+async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
     try:
         await websocket.send(payload)
-    except Exception:
+    except Exception as e:
         logger.exception("broadcast websocket send failed")
+        return e
+    return None
 
 
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
@@ -193,6 +247,18 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
         await _safe_send(websocket, make_hello_ack())
+        return
+    if t in SERVER_TO_CLIENT_TYPES and not _is_loopback_peer(websocket):
+        await _safe_send(
+            websocket,
+            make_error(
+                f"{t} is server-originated and accepted only from loopback peers",
+                ref_type=t,
+            ),
+        )
+        return
+    if t not in CLIENT_TO_SERVER_TYPES and t not in SERVER_TO_CLIENT_TYPES:
+        await _safe_send(websocket, make_error(f"unsupported type: {t!r}", ref_type=t))
         return
     # All other request/response types are forwarded to every other peer.
     # The Lua client receives `config.set` / `action` / `state.subscribe` and
@@ -417,16 +483,15 @@ def main() -> None:
 
     if args.external_bind is not None:
         if not args.token:
-            raise SystemExit("--external-bind requires --token (refusing to expose unauthenticated socket)")
-        if not _is_loopback(args.external_bind) and _is_loopback(args.host):
-            host = args.external_bind
-        else:
-            host = args.external_bind
+            raise SystemExit(
+                "--external-bind requires --token "
+                "(refusing to expose unauthenticated socket)"
+            )
+        host = args.external_bind
     else:
         host = args.host
-        if args.token and not _is_loopback(host):
-            # Defensive: someone bound a non-loopback host directly via --host.
-            logger.info("token enforced on non-loopback --host=%s", host)
+    if not _is_loopback(host) and not args.token:
+        raise SystemExit("--token is required for non-loopback bind addresses")
 
     try:
         asyncio.run(_run(host, args.port, reply, args.token))
