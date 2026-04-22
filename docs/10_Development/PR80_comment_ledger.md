@@ -1,8 +1,8 @@
 # PR #80 — zero-sampling comment ledger
 
 **Snapshot** (regenerate after new review traffic):
-- Retrieved at (UTC): **2026-04-22T02:18:27Z**
-- PR head OID at retrieval: **041fd537eab309dde7288e1bedb4ea09e1a517c7**
+- Retrieved at (UTC): **2026-04-22T02:33:22Z**
+- PR head OID at retrieval: **bc4adc7a6c76f4aa89f6baeb2b25f182e4b5e30f**
 - Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (paginated REST); `reviewThreads` via GraphQL for GitHub `isResolved`.
 
 Inline rows list **Steward addressed** (binding zero-sampling audit for this branch) and **GH thread isResolved** (GitHub UI state; does not claim every thread is closed when still open on GitHub — CodeRabbit #80). Exit gate: zero rows with **Steward addressed** ≠ `yes`.
@@ -94,8 +94,15 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 3121209388 | chatgpt-codex-connector[bot] | yes | no |
 | 3121209391 | chatgpt-codex-connector[bot] | yes | no |
 | 3121213670 | coderabbitai[bot] | yes | no |
-| 3121213671 | coderabbitai[bot] | yes | no |
-| 3121221239 | cursor[bot] | yes | no |
+| 3121213671 | coderabbitai[bot] | yes | yes |
+| 3121221239 | cursor[bot] | yes | yes |
+| 3121237426 | sourcery-ai[bot] | yes | no |
+| 3121237427 | sourcery-ai[bot] | yes | no |
+| 3121237429 | sourcery-ai[bot] | yes | no |
+| 3121251331 | chatgpt-codex-connector[bot] | yes | no |
+| 3121251333 | chatgpt-codex-connector[bot] | yes | no |
+| 3121261284 | cursor[bot] | yes | no |
+| 3121261290 | cursor[bot] | yes | no |
 
 ## Issue comments (`issues/80/comments`): 38
 
@@ -140,7 +147,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4292377487 | agorokh | yes |
 | 4292392583 | Copilot | N/A |
 
-## PR reviews (`pulls/80/reviews`): 39
+## PR reviews (`pulls/80/reviews`): 42
 
 | Review ID | Author | State | RESOLVED |
 |-----------|--------|-------|----------|
@@ -183,6 +190,9 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4151705193 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
 | 4151710640 | coderabbitai[bot] | COMMENTED | N/A |
 | 4151719727 | cursor[bot] | COMMENTED | N/A |
+| 4151739213 | sourcery-ai[bot] | COMMENTED | N/A |
+| 4151753429 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
+| 4151762505 | cursor[bot] | COMMENTED | N/A |
 
 ### Post-snapshot audit (latest batch)
 
@@ -191,8 +201,12 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 - **3120878165**: `scripts/claude_pretool_vault_guard.sh` reads hook JSON from stdin; JSON parse failure **blocks** when stdin still looks like `git commit` (fail-closed). `.claude/settings.json` PreToolUse Bash hook invokes that script instead of `python3 ... || true`.
 - **3121209388**: `check_vault_follow_up.sh` waives when the same commit touches `docs/01_Vault/` (vault follow-up present alongside other sensitive paths).
 - **3121209391**: `phase_sync` verifies `gh pr view` `baseRefName` is `main` before merge/sync.
-- **3121213670** / **3121213671**: Ledger uses `shutil.which("gh")` for subprocess and splits **Steward addressed** vs **GH thread isResolved**.
+- **3121213670** / **3121213671**: Ledger resolves gh via shutil.which and splits **Steward addressed** vs **GH thread isResolved**.
 - **3121221239**: `post_merge_sync.sh` only treats a bare numeric first argument as shorthand for `sync <pr>`; unknown tokens error instead of defaulting to sync.
+- **3121237426**–**3121237429**: Semgrep subprocess audit suppressions on `scripts/_build_pr80_ledger.py` (`gh` argv is repo-controlled pagination and GraphQL only).
+- **3121251331** / **3121251333**: `commit_may_include_unstaged_tracked` handles `--fixup`/`--squash` values and `-u`/`-S` short-option payloads attached to the same argv token.
+- **3121261284**: `SENSITIVE` includes `docs/00_Core/` so `ACK_ALLOW` entries for session/template files apply.
+- **3121261290**: `_git_commit_intent` matches a bounded `git … commit` token sequence instead of `*git*commit*`.
 
 ## Steward scope proof (PR #80)
 

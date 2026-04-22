@@ -22,6 +22,7 @@ def paginate(url_base: str) -> list:
     page = 1
     while True:
         url = f"{url_base}?per_page=100&page={page}"
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         r = subprocess.run(
             [gh, "api", url],
             capture_output=True,
@@ -60,6 +61,7 @@ def load_comment_thread_resolved() -> dict[int, bool]:
     cursor: str | None = None
     while True:
         payload = json.dumps({"query": query, "variables": {"cursor": cursor}})
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         r = subprocess.run(
             [gh, "api", "graphql", "--input", "-"],
             input=payload,
@@ -98,6 +100,7 @@ def issue_row_resolved(c: dict) -> str:
 
 def main() -> None:
     gh = gh_executable()
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
     head_oid = json.loads(
         subprocess.check_output(
             [gh, "pr", "view", "80", "--json", "headRefOid"],
@@ -218,12 +221,30 @@ def main() -> None:
                 "before merge/sync."
             ),
             (
-                '- **3121213670** / **3121213671**: Ledger uses `shutil.which("gh")` for '
-                "subprocess and splits **Steward addressed** vs **GH thread isResolved**."
+                "- **3121213670** / **3121213671**: Ledger resolves gh via shutil.which and splits "
+                "**Steward addressed** vs **GH thread isResolved**."
             ),
             (
                 "- **3121221239**: `post_merge_sync.sh` only treats a bare numeric first argument "
                 "as shorthand for `sync <pr>`; unknown tokens error instead of defaulting to sync."
+            ),
+            (
+                "- **3121237426**–**3121237429**: Semgrep subprocess audit suppressions on "
+                "`scripts/_build_pr80_ledger.py` (`gh` argv is repo-controlled pagination "
+                "and GraphQL only)."
+            ),
+            (
+                "- **3121251331** / **3121251333**: `commit_may_include_unstaged_tracked` handles "
+                "`--fixup`/`--squash` values and `-u`/`-S` short-option payloads attached to the "
+                "same argv token."
+            ),
+            (
+                "- **3121261284**: `SENSITIVE` includes `docs/00_Core/` so `ACK_ALLOW` entries for "
+                "session/template files apply."
+            ),
+            (
+                "- **3121261290**: `_git_commit_intent` matches a bounded `git … commit` token "
+                "sequence instead of `*git*commit*`."
             ),
             "",
             "## Steward scope proof (PR #80)",

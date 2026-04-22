@@ -64,6 +64,13 @@ while i < len(parts):
     if token in long_needs_next:
         i += 2
         continue
+    # `--fixup` / `--squash` take a commit object (Codex #80); `=` forms consume one token.
+    if token.startswith("--fixup"):
+        i += 2 if token == "--fixup" else 1
+        continue
+    if token.startswith("--squash"):
+        i += 2 if token == "--squash" else 1
+        continue
     if token.startswith("--"):
         i += 1
         continue
@@ -72,6 +79,21 @@ while i < len(parts):
         pos = 0
         while pos < len(rest):
             ch = rest[pos]
+            # `-u<mode>` / `-S<keyid>` attach values in the same argv token (Codex #80).
+            if ch == "u":
+                suffix = rest[pos + 1 :]
+                if suffix:
+                    i += 1
+                else:
+                    i += 2 if i + 1 < len(parts) else 1
+                break
+            if ch == "S":
+                suffix = rest[pos + 1 :]
+                if suffix:
+                    i += 1
+                else:
+                    i += 2 if i + 1 < len(parts) else 1
+                break
             if ch == "a":
                 raise SystemExit(0)
             if ch == "p":
@@ -105,7 +127,7 @@ if [[ -z "$FILES_TO_CHECK" ]]; then
   exit 0
 fi
 
-SENSITIVE="$(printf '%s\n' "$FILES_TO_CHECK" | grep -E '^(\.claude/|docs/01_Vault/|scripts/|\.github/workflows/)' || true)"
+SENSITIVE="$(printf '%s\n' "$FILES_TO_CHECK" | grep -E '^(\.claude/|docs/01_Vault/|docs/00_Core/|scripts/|\.github/workflows/)' || true)"
 if [[ -z "$SENSITIVE" ]]; then
   exit 0
 fi
