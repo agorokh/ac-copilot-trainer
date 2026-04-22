@@ -1,8 +1,8 @@
 # PR #80 — zero-sampling comment ledger
 
 **Snapshot** (regenerate after new review traffic):
-- Retrieved at (UTC): **2026-04-22T04:16:17Z**
-- PR head OID at retrieval: **29fd5e902f0a7567fbbb6a80e59fcda0fbcd2856**
+- Retrieved at (UTC): **2026-04-22T04:27:06Z**
+- PR head OID at retrieval: **542ea8b8cb3255e4db5a876a9db7ade97bf4c305**
 - Sources: `pulls/80/comments`, `issues/80/comments`, `pulls/80/reviews` (paginated REST); `reviewThreads` via GraphQL for GitHub `isResolved`.
 
 Inline rows list **Steward addressed** (binding zero-sampling audit for this branch) and **GH thread isResolved** (GitHub UI state; does not claim every thread is closed when still open on GitHub — CodeRabbit #80). Exit gate: zero rows with **Steward addressed** ≠ `yes`.
@@ -117,6 +117,8 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 3121516361 | coderabbitai[bot] | yes | no |
 | 3121516366 | coderabbitai[bot] | yes | no |
 | 3121519701 | cursor[bot] | yes | no |
+| 3121541912 | chatgpt-codex-connector[bot] | yes | no |
+| 3121541917 | chatgpt-codex-connector[bot] | yes | no |
 
 ## Issue comments (`issues/80/comments`): 41
 
@@ -164,7 +166,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4293312583 | chatgpt-codex-connector[bot] | N/A |
 | 4293392110 | chatgpt-codex-connector[bot] | N/A |
 
-## PR reviews (`pulls/80/reviews`): 53
+## PR reviews (`pulls/80/reviews`): 54
 
 | Review ID | Author | State | RESOLVED |
 |-----------|--------|-------|----------|
@@ -221,6 +223,7 @@ Inline rows list **Steward addressed** (binding zero-sampling audit for this bra
 | 4151993868 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
 | 4151999487 | coderabbitai[bot] | COMMENTED | N/A |
 | 4152002674 | cursor[bot] | COMMENTED | N/A |
+| 4152023223 | chatgpt-codex-connector[bot] | COMMENTED | N/A |
 
 ### Post-snapshot audit (latest batch)
 
