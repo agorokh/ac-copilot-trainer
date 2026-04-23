@@ -6,123 +6,90 @@ last_updated: 2026-04-22
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
-  - AcCopilotTrainer/00_System/invariants/_index.md
-  - AcCopilotTrainer/00_System/glossary/_index.md
+  - AcCopilotTrainer/00_System/glossary/rig-network.md
+  - AcCopilotTrainer/00_System/glossary/install-paths.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
+  - AcCopilotTrainer/10_Rig/physical-rig-integration-epic-59.md
   - AcCopilotTrainer/01_Decisions/external-ws-client-protocol-extension.md
   - AcCopilotTrainer/01_Decisions/screen-ui-stack-lvgl-touch.md
-  - AcCopilotTrainer/03_Investigations/jc3248w535-display-canvas-flush-2026-04-21.md
-  - AcCopilotTrainer/03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md
-  - 00_Graph_Schema.md
+  - AcCopilotTrainer/01_Decisions/screen-and-csp-apps-integration.md
+  - AcCopilotTrainer/01_Decisions/dashboard-visual-design-figma.md
+  - AcCopilotTrainer/03_Investigations/screen-debugging-journey-2026-04-21.md
+  - AcCopilotTrainer/03_Investigations/cowork-session-retrospective-2026-04-21.md
+  - AcCopilotTrainer/03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md
+  - AcCopilotTrainer/03_Investigations/pr-75-ollama-corner-coaching-protocol.md
 ---
 
 # Next session handoff
 
-## Resume here (2026-04-22, post-merge follow-up)
+## Resume here (2026-04-22, end of day)
 
-**End-to-end rig screen ↔ sidecar is working.** PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83)
-landed the sidecar `--external-bind`/`--token`, protocol v1 `{v,type}`
-extension, Lua `ws_bridge` action+config bridge, and the JC3248W535
-display fix. Sidecar logs the device join with token; firmware emits
-`{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s.
+**PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) is MERGED** at head `caa8a9ad` (2026-04-22T17:20Z). Vault post-merge handoff PR [#84](https://github.com/agorokh/ac-copilot-trainer/pull/84) also merged (17:34Z). End-to-end rig screen ↔ sidecar path confirmed working pre-merge; device emits `{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s over the hotspot.
 
-User is doing a code review on PR #83 + designing visuals for the
-real touchscreen UI. Next agent picks up at the **Phase-2 LVGL bring-up**
-and the **Pocket Technician / Setup Exchange integration research**
-(both are the user's stated next priorities — he wants to bridge the
-rig touchscreen to those CSP apps too).
+User then asked for **vault enrichment** as prep for the next phase (physical device screen development). This handoff reflects the post-enrichment state.
+
+## Pre-read before starting work
+
+Cold-start agents: read these 6 nodes first, in order. They give you 80% of the context in ~3000 words.
+
+1. [`Current Focus`](Current%20Focus.md) — which streams are hot, what's blocked.
+2. [`glossary/rig-network`](glossary/rig-network.md) — every address, token, SSID, port.
+3. [`glossary/install-paths`](glossary/install-paths.md) — where AC, PT, SX, our app, factory backup live.
+4. [`10_Rig/esp32-jc3248w535-screen-v1`](../10_Rig/esp32-jc3248w535-screen-v1.md) — firmware state, change log.
+5. [`10_Rig/physical-rig-integration-epic-59`](../10_Rig/physical-rig-integration-epic-59.md) — the full EPIC this is one slice of.
+6. [`01_Decisions/dashboard-visual-design-figma`](../01_Decisions/dashboard-visual-design-figma.md) — Figma URL + design tokens.
+
+If you're working on screen firmware specifically, also:
+- [`01_Decisions/screen-ui-stack-lvgl-touch`](../01_Decisions/screen-ui-stack-lvgl-touch.md) — LVGL 8.3 + touch bring-up plan with ready-to-paste snippets.
+- [`03_Investigations/screen-debugging-journey-2026-04-21`](../03_Investigations/screen-debugging-journey-2026-04-21.md) — **dead-ends already tried. DO NOT REPEAT.**
 
 ## Concrete next moves
 
-1. **Start the sidecar with the hotspot config** before any device test:
+1. **Close issue [#81](https://github.com/agorokh/ac-copilot-trainer/issues/81)** via `gh issue close 81 -c "Implementation landed in PR #83, merged 2026-04-22 at head caa8a9ad"`. (Leftover housekeeping from the merge.)
+
+2. **Start the sidecar + hotspot** before any device test. PR [#78](https://github.com/agorokh/ac-copilot-trainer/pull/78) added **auto-launch** so the sidecar spawns when the trainer Lua loads; see [`pr-78-sidecar-autolaunch-lap-archive`](../03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md). For rig testing outside of AC (firmware smoke):
    ```bash
-   py -m tools.ai_sidecar --external-bind 0.0.0.0 \
-                          --token replace-me-when-sidecar-auth-ships
+   py -m tools.ai_sidecar --external-bind 0.0.0.0 --token <T>
    ```
-   PC must have **Windows Mobile Hotspot `AG_PC 7933`** running so the
-   device can reach `192.168.137.1`. See
-   [`03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md`](../03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md).
+   PC must have Windows Mobile Hotspot `AG_PC 7933` running. If PC rebooted, re-enable via the WinRT PowerShell snippet in [`glossary/rig-network`](glossary/rig-network.md).
 
-2. **Phase-2 firmware: bring up LVGL 8.3 + touch.**
-   - Add `lib_deps += lvgl/lvgl @ ~8.3.11` to `firmware/screen/platformio.ini`.
-   - Add `firmware/screen/include/board/JC3248W535_Touch.h` with the 40-line
-     I²C reader (full snippet in
-     [`01_Decisions/screen-ui-stack-lvgl-touch.md`](../01_Decisions/screen-ui-stack-lvgl-touch.md)).
-   - Wire `lv_disp_drv_t.flush_cb` to call `gfx->draw16bitBeRGBBitmap()`,
-     then `((Arduino_Canvas*)gfx)->flush()` once per ~16 ms in `loop()`.
-   - Drop a one-screen "tap → toggle focusPractice" button so we can see
-     the round-trip on-panel.
+3. **Phase-2 firmware: bring up LVGL 8.3 + touch.** Follow [`screen-ui-stack-lvgl-touch`](../01_Decisions/screen-ui-stack-lvgl-touch.md):
+   - `lib_deps += lvgl/lvgl @ ~8.3.11` in `firmware/screen/platformio.ini`.
+   - Add `firmware/screen/include/board/JC3248W535_Touch.h` (40-line I²C reader — full snippet in the ADR).
+   - Wire `lv_disp_drv_t.flush_cb` → `gfx->draw16bitBeRGBBitmap()` → `((Arduino_Canvas*)gfx)->flush()` once per ~16 ms.
+   - Drop a one-screen "tap → toggle focusPractice" button — that's the end-to-end proof.
 
-3. **Pocket Technician + Setup Exchange research is in flight.** Look in
-   `03_Investigations/` for the freshly-written node before re-doing the
-   discovery — it should land alongside this handoff. The integration
-   ADR (`01_Decisions/screen-and-csp-apps-integration.md`) will codify
-   the strategy (read-only state scrape vs. cooperative same-VM call).
+4. **Port the Figma design** screen-by-screen to LVGL. Re-use the bundled fonts from `src/ac_copilot_trainer/content/fonts/` — convert to LVGL binaries via `lv_font_conv` (Michroma 20pt for numbers, Montserrat Reg/Bold for body, Syncopate Bold for brand footer). Tokens are in [`dashboard-visual-design-figma`](../01_Decisions/dashboard-visual-design-figma.md).
 
-4. **Post-merge stewardship (PR #83) ran on 2026-04-22** against `main`.
-   Classification highlights to review manually:
-   - dependency-related files changed
-   - `scripts/` changed
-   - `.github/workflows/` changed
+5. **Add the PT/SX setup tiles.** Per [`screen-and-csp-apps-integration`](../01_Decisions/screen-and-csp-apps-integration.md): implement `src/ac_copilot_trainer/modules/setup_control.lua` that wraps `ac.getSetupSpinners()` / `ac.setSetupSpinnerValue()`, expose via WS types `setup.spinner.list/set/ack`. Rig tile renders top-3 spinners (TC, ABS, brake bias) as ± buttons.
 
-## What was delivered today (2026-04-21)
+6. **In-game verification** (once LVGL + setup tiles are in): AC running + trainer loaded + device on; tap a tile; confirm trainer state changes (focusPractice / spinner / etc.) — and watch the HUD re-render.
 
-- **PR #83** (`feat/issue-81-external-ws-client`): sidecar bind+token+401,
-  `{v,type}` protocol extension, Lua action/config bridge, 9 new + 37
-  regression tests passing.
-- **JC3248W535 display fix** (commit d8d3d2e): `Arduino_AXS15231B` +
-  `Arduino_Canvas` + `ips=false` + explicit `flush()`. Replaced the
-  moononournation init table that was tuned for the 1.91" AMOLED variant.
-- **Network workaround**: Windows Mobile Hotspot bypasses the AHOME5G
-  mesh's per-AP subnet split.
-- **Two new investigation nodes**:
-  [`jc3248w535-display-canvas-flush-2026-04-21`](../03_Investigations/jc3248w535-display-canvas-flush-2026-04-21.md)
-  and
-  [`router-mesh-cross-ap-tcp-block-2026-04-21`](../03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md).
-- **One new decision**: [`screen-ui-stack-lvgl-touch`](../01_Decisions/screen-ui-stack-lvgl-touch.md)
-  — LVGL 8.3 + AXS15231B touch + SquareLine for Phase-2.
+7. **Later phases** (out of scope this week, tracked in EPIC #59): tyre-heatmap tile, coaching-summary tile reading from per-lap archive (schema v1, see [`pr-78-sidecar-autolaunch-lap-archive`](../03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md)), real-time `corner_advice` passthrough (see [`pr-75-ollama-corner-coaching-protocol`](../03_Investigations/pr-75-ollama-corner-coaching-protocol.md)).
 
-## What remains
+## Key learnings carried over
 
-**Phase-2 firmware (rig screen UI):**
+From [`screen-debugging-journey-2026-04-21`](../03_Investigations/screen-debugging-journey-2026-04-21.md) and prior investigations:
 
-- Touch bring-up + LVGL 8.3 + canvas-flush bridge.
-- SquareLine project in `firmware/screen/squareline/` exporting to
-  `firmware/screen/src/ui/`.
-- Replace the 10-second auto-ping with a real tile.
+1. **AXS15231B QSPI** panels need `Arduino_Canvas` + `flush()` — per-pixel writes garble the controller. Use `ips=false` for the 320×480 LCD variant.
+2. **JC3248W535 touch IS the AXS15231B** at I²C 0x3B — no separate touch IC. 40-line reader in the ADR.
+3. **moononournation init table** is for the 1.91" AMOLED, not our LCD.
+4. **AHOME5G mesh** segregates per-AP subnets; TCP dropped cross-AP. Hotspot is the dev path.
+5. **Factory backup restore** is the proof-of-life test when display looks dead. Binary at `firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin`.
+6. **CSP API quirks**: `type(vec2/rgbm)` returns `"cdata"` not `"function"` (use nil-checks); `web.socket` is callback-based (`reconnect:true` mandatory); `ac.storage` table-form silently fails (use per-key form).
+7. **Sim-time not os.clock** for staleness — see `ac-storage-persistence.md` and the `corner_advice` TTL in PR #75.
 
-**Trainer integration:**
+## What was delivered this session (2026-04-22)
 
-- In-game smoke test of the full round-trip (AC running + Copilot Trainer
-  loaded + screen tap toggling `focusPractice` live).
-
-**CSP apps bridge (new epic):**
-
-- Decide read-only-scrape vs cooperative-same-VM approach for Pocket
-  Technician and Setup Exchange.
-- Draft `01_Decisions/screen-and-csp-apps-integration.md`.
-
-**PR #75 stream (still open from prior sessions):**
-
-- Merge `origin/main` into PR #75, resolve conflicts, push, in-game
-  smoke test on Vallelunga + Porsche 911 GT3 R.
+| Area | Artefact |
+|------|----------|
+| MCP infra | TurboVault + 6 MCP servers installed, Doppler wired (`~/Projects/mcp-work/mcp-servers`) |
+| Vault enrichment | 7 new nodes: EPIC #59 expansion, Figma ADR, debugging-journey, Cowork retrospective, PR #78 & PR #75 coverage, glossary rig-network + install-paths |
+| Vault updates | Current Focus (PR #83 MERGED state), both `_index.md`s, esp32 change log, glossary `_index`, this handoff |
+| PR reviews | PR #83 closure audit (0 unresolved); PR #84 vault handoff merged |
 
 ## Blockers / dependencies
 
-- **Hotspot must be on** for any live device test. If the PC reboots,
-  re-enable via Settings → Network → Mobile hotspot, or the WinRT
-  PowerShell snippet in the router-mesh investigation node.
-- No router admin access to remove the cross-AP block, so the hotspot
-  is the long-term dev path (acceptable, only impacts dev workstation).
-
-## Key learnings (linked to investigation nodes)
-
-1. AXS15231B QSPI panels need `Arduino_Canvas` + `flush()` — per-pixel
-   writes garble the controller.
-2. moononournation's `Arduino_AXS15231B` init table targets the 1.91"
-   AMOLED, NOT the 320×480 LCD. Use `ips=false`.
-3. JC3248W535 touch IS the AXS15231B at I²C 0x3B; no separate touch IC.
-4. Mesh Wi-Fi networks may segregate per-AP subnets; ICMP routes but TCP
-   may not. Mobile hotspot sidesteps it.
-5. Existing CSP/ws_bridge insights from PR #75 still apply (web.socket
-   callbacks, per-key ac.storage, sim-time staleness).
+- Hotspot must be on for any live device test.
+- AC user-data folder path still TBD (probably under `OneDrive\Documents\Assetto Corsa\` or `%APPDATA%\Assetto Corsa\`) — tagged in [`install-paths`](glossary/install-paths.md). Verify before the sidecar file-watch work.
+- No router admin access to remove cross-AP block, so hotspot is the long-term dev path.
