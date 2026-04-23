@@ -45,7 +45,7 @@ Guessed the moononournation init table was wrong and wrote a custom `Arduino_AXS
 
 ### 4. PC-side firewall disable + LAN probe
 
-When the device joined `AHOME5G` on `192.168.0.220` but couldn't TCP to sidecar on PC `192.168.4.26`, tried: disabled Windows Defender Firewall entirely, added inbound port 8765 rule. Still no connect.
+When the device joined the home mesh SSID on its mesh-assigned subnet but couldn't TCP to sidecar on the PC mesh subnet, tried: disabled Windows Defender Firewall entirely, added inbound port 8765 rule. Still no connect.
 
 **Result:** Proved the block is NOT on the PC. It's at the router.
 
@@ -59,7 +59,7 @@ Suspected Tailscale's VPN stack might be intercepting LAN TCP. Checked routing t
 
 Tried to see other visible SSIDs via `netsh wlan show networks`.
 
-**Result:** The network is a **mesh with 8 BSSIDs** of `AHOME5G`. They share the SSID but segment subnets per-AP. Router drops cross-AP TCP. No user access to router admin to remove the block.
+**Result:** The network is a **mesh with 8 BSSIDs** under one SSID. It segments subnets per-AP. Router drops cross-AP TCP. No user access to router admin to remove the block.
 
 ## The actual fixes (for cross-reference)
 
@@ -79,7 +79,7 @@ The moononournation init table is tuned for a 1.91" 360×640 AMOLED variant, not
 
 ### Network fix
 
-Windows Mobile Hotspot: `AG_PC 7933` / pass `4r3U9$87` / PC becomes `192.168.137.1`, device gets `192.168.137.25`. Sidecar launched with `--external-bind 0.0.0.0 --token <T>` binds the hotspot interface; device firmware compiled with `SIDECAR_HOST="192.168.137.1"` and `WIFI_SSID="AG_PC 7933"`.
+Windows Mobile Hotspot: local SSID + password (kept out of git) / PC becomes hotspot gateway / device gets hotspot lease. Sidecar launched with `--external-bind 0.0.0.0 --token <T>` binds the hotspot interface; device firmware compiled with hotspot gateway as `SIDECAR_HOST` and hotspot SSID as `WIFI_SSID`.
 
 ## The proof-of-life trick: factory backup restore
 
@@ -87,14 +87,14 @@ Windows Mobile Hotspot: `AG_PC 7933` / pass `4r3U9$87` / PC becomes `192.168.137
 
 ```powershell
 # At flash time, BEFORE touching the panel, dump the factory image:
-esptool.py --port COM6 read_flash 0x0 0x1000000 `
+esptool.py --port <DEVICE_SERIAL_PORT> read_flash 0x0 0x1000000 `
   firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin
 ```
 
 Then if the panel ever looks dead, restore it:
 
 ```powershell
-esptool.py --port COM6 write_flash 0x0 `
+esptool.py --port <DEVICE_SERIAL_PORT> write_flash 0x0 `
   firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin
 ```
 

@@ -52,14 +52,14 @@ Landed as protocol v1 extension (lives alongside the `{v,type}` envelope from PR
   "type": "corner_advice",
   "corner_id": "T4",
   "sim_time": 1234.56,
-  "source": "rules" | "ollama",
+  "source": "rules",
   "hint": "BRAKE HARD NOW.",
   "body": "Car's still pushing at 142 — brake now and trail off to 95 by the apex. You'll hit the kerb on exit if you over-rotate; stay on the throttle through the rumble strip.",
   "ttl_sim_s": 6.0
 }
 ```
 
-- `source=rules` arrives <10 ms after query. `source=ollama` arrives 3–7 s later for the same `corner_id`.
+- `source` accepts `"rules"` or `"ollama"`. `source=rules` arrives <10 ms after query; `source=ollama` arrives 3–7 s later for the same `corner_id`.
 - `ttl_sim_s` is wall-clock sim-time staleness. After 6 s of sim-time, Lua clears the cached advice from its overlay. This is **sim-time, not `os.clock()` time** — see [`ac-storage-persistence`](ac-storage-persistence.md) for why we use sim clock everywhere.
 - Lua dedupes by `corner_id` → keeps the most recent `source=ollama` response, falls back to `source=rules` if the Ollama one never arrives or is stale.
 

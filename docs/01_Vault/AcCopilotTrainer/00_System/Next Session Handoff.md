@@ -6,6 +6,8 @@ last_updated: 2026-04-22
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/00_System/invariants/_index.md
+  - AcCopilotTrainer/00_System/Architecture Invariants.md
   - AcCopilotTrainer/00_System/glossary/rig-network.md
   - AcCopilotTrainer/00_System/glossary/install-paths.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md

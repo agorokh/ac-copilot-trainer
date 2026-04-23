@@ -66,7 +66,7 @@ Forward-compatible with imported MoTeC CSV reference laps (Initiative B is futur
   "trace": {
     "samples_count": 2000,
     "fields": ["spline","speed","eMs","throttle","brake","steer","gear","px","py","pz"],
-    "samples": [[0.001,200.5,0,1.0,0,0.05,5]]
+    "samples": [[0.001,200.5,0,1.0,0.0,0.05,5,-120.3,0.8,42.1]]
   },
   "corners": [{"label":"T1","entrySpeed":211,"minSpeed":84}],
   "coaching": {
