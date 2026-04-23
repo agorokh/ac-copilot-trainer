@@ -1,5 +1,5 @@
 ---
-type: glossary-term
+type: entity
 status: active
 created: 2026-04-22
 updated: 2026-04-22
@@ -15,13 +15,13 @@ Single reference for all the addresses, SSIDs, and tokens the rig screen + sidec
 | Role | Value |
 |------|-------|
 | Windows Mobile Hotspot SSID | `<HOTSPOT_SSID>` |
-| Windows Mobile Hotspot password | `<set-locally-not-in-git>` |
+| Windows Mobile Hotspot password | `<redacted-local-only>` |
 | PC (hotspot interface) IP | `<HOTSPOT_GATEWAY_IP>` |
 | ESP32 rig screen IP | `<RIG_SCREEN_IP>` |
 | Sidecar port | `8765` |
 | Sidecar URL for rig | `ws://<HOTSPOT_GATEWAY_IP>:8765/` |
 | WS auth header | `X-AC-Copilot-Token: <token>` |
-| Dev placeholder token | `<set-locally-not-in-git>` |
+| Dev placeholder token | `<redacted-local-only>` |
 | Device WS client-id | `<DEVICE_CLIENT_ID>` |
 | Device VID/PID | `<DEVICE_USB_VID_PID>` |
 | Device MAC | `<DEVICE_MAC>` |

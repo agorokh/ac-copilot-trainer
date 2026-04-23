@@ -98,7 +98,7 @@ esptool.py --port <DEVICE_SERIAL_PORT> write_flash 0x0 `
   firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin
 ```
 
-If the stock UI boots, the panel is alive and the problem is in our firmware. Binary lives at `firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin` (16 MB, SHA recorded in change log of [`esp32-jc3248w535-screen-v1.md`](../10_Rig/esp32-jc3248w535-screen-v1.md)).
+If the stock UI boots, the panel is alive and the problem is in our firmware. Binary lives at `firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin` (16 MB; keep SHA in a local-only companion file `firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin.sha256`).
 
 **Always dump the factory flash BEFORE first experimental flash.**
 

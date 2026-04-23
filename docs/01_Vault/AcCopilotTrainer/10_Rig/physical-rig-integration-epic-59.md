@@ -1,5 +1,5 @@
 ---
-type: epic
+type: state
 status: active
 created: 2026-04-22
 updated: 2026-04-22
