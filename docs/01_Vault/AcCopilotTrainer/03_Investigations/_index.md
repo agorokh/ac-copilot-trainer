@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-04-21
+updated: 2026-04-22
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -21,3 +21,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 | [jc3248w535-display-canvas-flush-2026-04-21.md](jc3248w535-display-canvas-flush-2026-04-21.md) | JC3248W535 needs Arduino_Canvas + ips=false; Arduino_AXS15231B init table is for the 1.91" AMOLED variant. |
 | [router-mesh-cross-ap-tcp-block-2026-04-21.md](router-mesh-cross-ap-tcp-block-2026-04-21.md) | AHOME5G mesh drops cross-AP TCP between PC and screen; Windows Mobile Hotspot is the workaround. |
 | [csp-app-pocket-tech-setup-exchange-2026-04-21.md](csp-app-pocket-tech-setup-exchange-2026-04-21.md) | Surface map for x4fab's PocketTechnician + SetupExchange — APIs, files, integration paths. |
+| [screen-debugging-journey-2026-04-21.md](screen-debugging-journey-2026-04-21.md) | Dead-ends tried before the display + network fixes landed. DO NOT REPEAT. |
+| [cowork-session-retrospective-2026-04-21.md](cowork-session-retrospective-2026-04-21.md) | User's critique of earlier Cowork session + durable autonomy/ownership preferences. |
+| [pr-78-sidecar-autolaunch-lap-archive.md](pr-78-sidecar-autolaunch-lap-archive.md) | Sidecar auto-launch via CSP os.runConsoleProcess + per-lap JSON archive schema v1 + 500 MB rotation. |
+| [pr-75-ollama-corner-coaching-protocol.md](pr-75-ollama-corner-coaching-protocol.md) | corner_query / corner_advice protocol, two-phase response (rules < 10ms + Ollama ~3-7s), sim-time staleness. |

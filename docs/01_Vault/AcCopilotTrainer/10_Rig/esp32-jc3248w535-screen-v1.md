@@ -2,14 +2,20 @@
 type: state
 status: active
 created: 2026-04-21
-updated: 2026-04-21
+updated: 2026-04-22
 relates_to:
   - AcCopilotTrainer/10_Rig/_index.md
+  - AcCopilotTrainer/10_Rig/physical-rig-integration-epic-59.md
   - AcCopilotTrainer/03_Investigations/jc3248w535-board-identification-2026-04-21.md
+  - AcCopilotTrainer/03_Investigations/jc3248w535-display-canvas-flush-2026-04-21.md
+  - AcCopilotTrainer/03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md
+  - AcCopilotTrainer/03_Investigations/screen-debugging-journey-2026-04-21.md
   - AcCopilotTrainer/03_Investigations/screen-firmware-windows-build-gotchas-2026-04-21.md
   - AcCopilotTrainer/01_Decisions/screen-firmware-toolchain.md
   - AcCopilotTrainer/01_Decisions/screen-firmware-in-trainer-monorepo.md
   - AcCopilotTrainer/01_Decisions/external-ws-client-protocol-extension.md
+  - AcCopilotTrainer/01_Decisions/screen-ui-stack-lvgl-touch.md
+  - AcCopilotTrainer/01_Decisions/dashboard-visual-design-figma.md
   - 00_Graph_Schema.md
 ---
 
@@ -105,3 +111,6 @@ Picking this up with Claude Code — the firmware is good; the work is server-si
 - **2026-04-21 (late)** — Phase 1 firmware SHIPPED. Build succeeds (135 s), flash succeeds (29 s), board boots cleanly, joins `AHOME5G`, runs WS retry loop against sidecar URL. Toolchain pivoted from LovyanGFX+LVGL to `Arduino_GFX@1.4.7` (no LVGL) — see ADR addendum and windows-build-gotchas investigation. Next gate = sidecar external-bind (gh #81).
 - **2026-04-21 (~21:00 PT)** — **End-to-end working.** PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) lands the sidecar `--external-bind`/`--token`, protocol v1 `{v,type}` extension, Lua `ws_bridge` action+config bridge, and the firmware fixes. Two key fixes that took most of today: (a) display now uses `Arduino_AXS15231B` + `Arduino_Canvas` + `ips=false` + `flush()` — the moononournation init table is for a 1.91" AMOLED variant, see [`03_Investigations/jc3248w535-display-canvas-flush-2026-04-21.md`](../03_Investigations/jc3248w535-display-canvas-flush-2026-04-21.md). (b) router AHOME5G mesh drops cross-AP TCP between PC (192.168.4.x) and device (192.168.0.x); workaround is Windows Mobile Hotspot `AG_PC 7933` so both peers share `192.168.137.x`, see [`03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md`](../03_Investigations/router-mesh-cross-ap-tcp-block-2026-04-21.md). Sidecar log: `INFO ws upgrade accepted client=ac-copilot-screen-01 peer=('192.168.137.25', 57810)`; device emits `{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s. Touch is unverified; LVGL not yet bring-up'd.
 - **Phase-2 stack chosen**: LVGL 8.3 + 40-line AXS15231B I²C touch reader + SquareLine export. See [`01_Decisions/screen-ui-stack-lvgl-touch.md`](../01_Decisions/screen-ui-stack-lvgl-touch.md).
+- **2026-04-22** — **PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) MERGED** at head `caa8a9ad` after review-fix push (`1f24999`) covering sidecar auth hardening + protocol validation + Lua config bridge cleanup. Zero-sampling closure audit: 145 review threads, 0 unresolved non-outdated, 0 check-runs non-success, 0 agorokh-authored unresolved. PR #84 (vault post-merge handoff) merged 17:34.
+- **2026-04-22** — Dead-end investigations captured in [`screen-debugging-journey-2026-04-21`](../03_Investigations/screen-debugging-journey-2026-04-21.md) so next session doesn't re-walk the 7-pin BL sweep / custom `JC3248W535_GFX.h` subclass / cycling-color diagnostic paths. EPIC context now in [`physical-rig-integration-epic-59`](physical-rig-integration-epic-59.md). Figma design source of truth in [`01_Decisions/dashboard-visual-design-figma`](../01_Decisions/dashboard-visual-design-figma.md).
+- **Issue #81 housekeeping:** still OPEN on GitHub despite #83 merging. Needs `gh issue close 81` next session.

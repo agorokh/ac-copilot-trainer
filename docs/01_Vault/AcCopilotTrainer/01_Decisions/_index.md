@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-03-28
-updated: 2026-03-29
+updated: 2026-04-22
 relates_to:
   - ProjectTemplate/00_System/Architecture Invariants.md
   - 00_Graph_Schema.md
@@ -19,3 +19,4 @@ Architecture Decision Records for this vault.
 - [external-ws-client-protocol-extension](external-ws-client-protocol-extension.md) — sidecar opt-in LAN bind + token + `{v,type}` envelope (issue #81).
 - [screen-ui-stack-lvgl-touch](screen-ui-stack-lvgl-touch.md) — LVGL 8.3 + AXS15231B touch + SquareLine for the rig screen UI.
 - [screen-and-csp-apps-integration](screen-and-csp-apps-integration.md) — bridge the rig screen to Pocket Technician + Setup Exchange via same-VM API replication, not cross-VM bridging.
+- [dashboard-visual-design-figma](dashboard-visual-design-figma.md) — Figma file is source of truth for both HUD (shipped) and rig touchscreen (Phase 2); design tokens + cockpit-UX rules captured here.
