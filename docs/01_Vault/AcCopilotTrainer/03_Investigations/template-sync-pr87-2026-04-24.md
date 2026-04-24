@@ -1,7 +1,7 @@
 ---
 type: investigation
-status: in_progress
-memory_tier: tier2
+status: active
+memory_tier: canonical
 last_updated: 2026-04-24
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -9,6 +9,9 @@ relates_to:
 ---
 
 # Template-sync PR #87 (2026-04-24)
+
+**Resolution:** PR #87 MERGED 2026-04-24T22:12Z as squash commit `ab13a71`. Upstream tracker [`agorokh/template-repo#97`](https://github.com/agorokh/template-repo/issues/97) carries 17+ deferred items (3× P1, 2× P2). See `Next Session Handoff.md` for follow-up summary and post-merge classifier output.
+
 
 ## What
 
