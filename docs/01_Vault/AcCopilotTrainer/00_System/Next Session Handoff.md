@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-22
+last_updated: 2026-04-24
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -20,11 +20,21 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/cowork-session-retrospective-2026-04-21.md
   - AcCopilotTrainer/03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md
   - AcCopilotTrainer/03_Investigations/pr-75-ollama-corner-coaching-protocol.md
+  - AcCopilotTrainer/03_Investigations/template-sync-pr87-2026-04-24.md
 ---
 
 # Next session handoff
 
-## Resume here (2026-04-22, end of day)
+## Resume here (2026-04-24, mid-session)
+
+**Template-sync PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87) is OPEN** on branch `chore/template-sync-2026-04-24` at head `53bf74f` (2026-04-24T20:49Z). Session was syncing `template-repo@061d9ab` (template-2026.04, 52 commits) to fix hook-drift bug affecting orchestrator (template-repo PR #92). Agent pushed 3 commits:
+  - `e5b85d8` — template sync
+  - `2e4943c` — ruff pin + b64decode guard + ProjectTemplate path fix
+  - `53bf74f` — tighten b64decode to `validate=True` (Copilot round-3 feedback)
+
+CI status at stop: build, Canonical-docs, pip-audit, CodeRabbit all **green**. Cursor Bugbot still running. Review threads all resolved (14 original + 4 new Copilot threads). 
+
+**Session stopped before cooldown (620s) completed** (deadline ~2026-04-24T21:09Z). Agent was monitoring for final CI results. Upstream tracker filed: [agorokh/template-repo#97](https://github.com/agorokh/template-repo/issues/97) catalogs 15 deferred items. See [`template-sync-pr87-2026-04-24`](../03_Investigations/template-sync-pr87-2026-04-24.md) for full context.
 
 **PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) is MERGED** at head `caa8a9ad` (2026-04-22T17:20Z). Vault post-merge handoff PR [#84](https://github.com/agorokh/ac-copilot-trainer/pull/84) also merged (17:34Z). End-to-end rig screen ↔ sidecar path confirmed working pre-merge; device emits `{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s over the hotspot.
 
