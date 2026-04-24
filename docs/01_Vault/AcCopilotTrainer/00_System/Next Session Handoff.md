@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-24
+last_updated: 2026-04-24T21:14:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,16 +25,23 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-24, mid-session)
+## Resume here (2026-04-24, cooldown complete)
 
-**Template-sync PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87) is OPEN** on branch `chore/template-sync-2026-04-24` at head `53bf74f` (2026-04-24T20:49Z). Session was syncing `template-repo@061d9ab` (template-2026.04, 52 commits) to fix hook-drift bug affecting orchestrator (template-repo PR #92). Agent pushed 3 commits:
+**Template-sync PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87) is OPEN & READY TO MERGE** on branch `chore/template-sync-2026-04-24` at head `53bf74f` (2026-04-24T20:49Z). Session synced `template-repo@061d9ab` (template-2026.04, 52 commits) to fix hook-drift bug affecting orchestrator (template-repo PR #92). Pushed 3 commits:
   - `e5b85d8` — template sync
   - `2e4943c` — ruff pin + b64decode guard + ProjectTemplate path fix
   - `53bf74f` — tighten b64decode to `validate=True` (Copilot round-3 feedback)
 
-CI status at stop: build, Canonical-docs, pip-audit, CodeRabbit all **green**. Cursor Bugbot still running. Review threads all resolved (14 original + 4 new Copilot threads). 
+**Final CI status (post-cooldown verification):** 
+  - Build: ✅ SUCCESS
+  - Canonical docs: ✅ SUCCESS  
+  - pip-audit: ✅ SUCCESS
+  - CodeRabbit: ✅ SUCCESS
+  - Cursor Bugbot: ✅ SUCCESS
+  - Review threads: **0 unresolved** (25 total across 4 Copilot feedback rounds)
+  - Merge state: **CLEAN**
 
-**Session stopped before cooldown (620s) completed** (deadline ~2026-04-24T21:09Z). Agent was monitoring for final CI results. Upstream tracker filed: [agorokh/template-repo#97](https://github.com/agorokh/template-repo/issues/97) catalogs 15 deferred items. See [`template-sync-pr87-2026-04-24`](../03_Investigations/template-sync-pr87-2026-04-24.md) for full context.
+Upstream tracker filed: [agorokh/template-repo#97](https://github.com/agorokh/template-repo/issues/97) catalogs 17+ deferred items across 9 template files (3× P1, 2× P2). See [`template-sync-pr87-2026-04-24`](../03_Investigations/template-sync-pr87-2026-04-24.md) for full context.
 
 **PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) is MERGED** at head `caa8a9ad` (2026-04-22T17:20Z). Vault post-merge handoff PR [#84](https://github.com/agorokh/ac-copilot-trainer/pull/84) also merged (17:34Z). End-to-end rig screen ↔ sidecar path confirmed working pre-merge; device emits `{v:1,type:"action",name:"toggleFocusPractice"}` every 10 s over the hotspot.
 
@@ -57,7 +64,9 @@ If you're working on screen firmware specifically, also:
 
 ## Concrete next moves
 
-1. **Close issue [#81](https://github.com/agorokh/ac-copilot-trainer/issues/81)** via `gh issue close 81 -c "Implementation landed in PR #83, merged 2026-04-22 at head caa8a9ad"`. (Leftover housekeeping from the merge.)
+1. **Merge PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87)** — all checks green, 0 unresolved threads. Use `gh pr merge 87 --squash` or `--rebase` per preference. Then run `vault-memory` post-merge skill to update this handoff.
+
+2. **Close issue [#81](https://github.com/agorokh/ac-copilot-trainer/issues/81)** via `gh issue close 81 -c "Implementation landed in PR #83, merged 2026-04-22 at head caa8a9ad"`. (Leftover housekeeping from the merge.)
 
 2. **Start the sidecar + hotspot** before any device test. PR [#78](https://github.com/agorokh/ac-copilot-trainer/pull/78) added **auto-launch** so the sidecar spawns when the trainer Lua loads; see [`pr-78-sidecar-autolaunch-lap-archive`](../03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md). For rig testing outside of AC (firmware smoke):
    ```bash
