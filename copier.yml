@@ -9,6 +9,10 @@ _subdirectory: "."
 project_name:
   type: str
   help: "Project name (e.g., alpaca-trading, PEP 503 style with hyphens)"
+  validator: >-
+    {% if not (project_name | regex_search('^[a-z0-9]+(?:[_-][a-z0-9]+)*$')) %}
+    project_name must be a PEP 503 / repo-slug style string: lowercase letters and digits, separated by single hyphens or underscores (e.g., alpaca-trading). This is also the canonical `repo_id` written into ops/service.yaml and registered in workstation-ops/ops/sources.yaml.
+    {% endif %}
 
 project_key:
   type: str
@@ -34,6 +38,8 @@ github_org:
   help: "GitHub org or user for this project (used in docs / URLs where applicable)"
 
 _skip_if_exists:
+  # Generated from settings.base.json + settings.local.json; never overwrite with Copier.
+  - ".claude/settings.json"
   # Template on-disk layout uses ProjectTemplate; post-copy task renames to project_key.
   # List both so Copier update skips whether matching template paths or the renamed tree.
   - "docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md"

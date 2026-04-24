@@ -4,7 +4,7 @@ This template assumes **multiple surfaces** for the same repo. Policies in `AGEN
 
 ## Required: Obsidian vault (Tier-2 memory)
 
-- **Path:** `docs/01_Vault/ProjectTemplate/` (rename on bootstrap).
+- **Path:** `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap).
 - **Why:** Structured ADRs, invariants, handoffs, and investigations do not belong scattered in chat logs.
 - Open the folder as an Obsidian vault so humans can browse; agents follow `.claude/skills/vault-memory/SKILL.md`.
 

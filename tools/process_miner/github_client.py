@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     pass
@@ -231,3 +233,90 @@ class GitHubClient:
                 continue
 
         return issues
+
+    def get_latest_commit_for_path(
+        self, owner: str, repo: str, path: str, *, ref: str
+    ) -> dict[str, Any] | None:
+        """Most recent commit touching ``path`` on ``ref`` (branch name or SHA)."""
+        endpoint = f"/repos/{owner}/{repo}/commits"
+        data = self._make_request(
+            endpoint,
+            {"sha": ref, "path": path, "per_page": 1},
+        )
+        if isinstance(data, list) and data:
+            return data[0]
+        return None
+
+    def list_commits_for_path(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        *,
+        sha: str,
+        since: datetime,
+        until: datetime,
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Commits touching ``path`` on ``sha`` with ``since`` / ``until`` (committer dates)."""
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=UTC)
+        params: dict[str, Any] = {
+            "sha": sha,
+            "path": path,
+            "per_page": per_page,
+            "since": since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "until": until.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        data = self._make_request(f"/repos/{owner}/{repo}/commits", params)
+        return data if isinstance(data, list) else []
+
+    def get_recursive_tree(
+        self, owner: str, repo: str, tree_sha: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Return tree entries from recursive tree API; second value is ``truncated`` flag."""
+        data = self._make_request(
+            f"/repos/{owner}/{repo}/git/trees/{tree_sha}",
+            {"recursive": "1"},
+        )
+        entries = data.get("tree") if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            return [], bool(data.get("truncated")) if isinstance(data, dict) else False
+        return entries, bool(data.get("truncated"))
+
+    def get_branch_tip(self, owner: str, repo: str, branch: str) -> tuple[str, str]:
+        """Return ``(tip_commit_sha, root_tree_sha)`` for ``branch`` (one REST call)."""
+        enc = quote(branch, safe="")
+        data = self._make_request(f"/repos/{owner}/{repo}/branches/{enc}")
+        try:
+            tip = str(data["commit"]["sha"])
+            inner = data["commit"]["commit"]
+            return tip, str(inner["tree"]["sha"])
+        except (KeyError, TypeError) as e:
+            raise ValueError(
+                f"Unexpected GitHub branch payload for {owner}/{repo}@{branch!r}: {e}"
+            ) from e
+
+    def get_contents_text(self, owner: str, repo: str, path: str, *, ref: str) -> str | None:
+        """Fetch file contents at ``path`` on ``ref``; returns UTF-8 text or None if missing."""
+        try:
+            enc = quote(path, safe="/")
+            data = self._make_request(
+                f"/repos/{owner}/{repo}/contents/{enc}",
+                {"ref": ref},
+            )
+        except self._requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 404:
+                return None
+            raise
+        if not isinstance(data, dict):
+            return None
+        if data.get("type") != "file":
+            return None
+        b64 = data.get("content")
+        if not isinstance(b64, str):
+            return None
+        raw = base64.b64decode(b64.replace("\n", ""))
+        return raw.decode("utf-8", errors="replace")

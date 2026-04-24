@@ -31,13 +31,26 @@ memory: project
 
 ## Mandatory wait after each push (non-optional)
 
-**After every `git push` that targets an open PR, wait ~10 minutes before the next poll.** Async bots (CodeRabbit, Cursor Bugbot, Copilot, etc.) routinely take several minutes; polling immediately causes false “done” reports and skipped work.
+**After every `git push` that targets an open PR, wait ~10 minutes before the next poll.** Async bots (CodeRabbit, Gemini Code Assist, Cursor Bugbot, GitHub Copilot, Qodo / PR-Agent, Sourcery) routinely take several minutes; polling immediately causes false “done” reports and skipped work.
 
 ```bash
 sleep 600   # 10 minutes — do not shorten for “speed”; this is the cooldown between bot runs
 ```
 
 Only skip `sleep 600` if **every** third-party check on the PR is already `SUCCESS`/`COMPLETED` with **no** new inline threads expected (e.g. docs-only PR and bots already finished on the current SHA).
+
+## Bot triggers after each push (non-optional for PR branches)
+
+Run these **after every `git push`** that targets the open PR (before or immediately after starting the `sleep 600` window—triggers and wait work together):
+
+1. **CodeRabbit:** `gh pr comment <P> --repo <owner/repo> --body '@coderabbitai review'`
+2. **Gemini Code Assist:** `gh pr comment <P> --repo <owner/repo> --body '/gemini review'`
+3. **Copilot code review (if enabled):** On GitHub.com with `gh` **≥ 2.88**, `gh pr edit <P> --repo <owner/repo> --add-reviewer @copilot` (check `gh pr edit --help` for your version). On GitHub Enterprise Server or if CLI support is missing, use the PR **Reviewers** UI.
+4. **Qodo (PR-Agent):** `gh pr comment <P> --repo <owner/repo> --body '/review'`
+5. **Sourcery:** `gh pr comment <P> --repo <owner/repo> --body '@sourcery-ai review'`
+6. **Cursor Bugbot:** no PR comment trigger—expect automatic runs; triage its threads like any other reviewer.
+7. **`sleep 600` must run in the foreground** in the same session (not `run_in_background` / detached). Short polls after the full wait are fine; skipping the wait requires meeting the exception in § Mandatory wait above.
+8. **Watermark audit:** Record the push completion time (UTC). When querying `reviewThreads` or scanning comments, treat items **created or updated after** that watermark as the primary signal set for “new bot work on this SHA,” so pre-push threads do not mask new failures.
 
 ## Loop
 
@@ -77,7 +90,7 @@ Use REST comments or `gh pr view --comments` only as **supplemental** context (e
 
 ## Bots
 
-Treat CodeRabbit, Bugbot, Copilot, and similar bots like human reviewers unless the finding is clearly invalid.
+Treat CodeRabbit, Gemini Code Assist, Cursor Bugbot, GitHub Copilot, Qodo / PR-Agent, and Sourcery like human reviewers unless the finding is clearly invalid.
 
 ## Guardrails
 

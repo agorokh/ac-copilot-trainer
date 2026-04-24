@@ -4,10 +4,10 @@ status: active
 memory_tier: canonical
 last_updated: 2026-03-27
 relates_to:
-  - ProjectTemplate/00_System/invariants/_index.md
-  - ProjectTemplate/00_System/glossary/_index.md
-  - ProjectTemplate/00_System/Current Focus.md
-  - ProjectTemplate/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/00_System/invariants/_index.md
+  - AcCopilotTrainer/00_System/glossary/_index.md
+  - AcCopilotTrainer/00_System/Current Focus.md
+  - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
 
 # Project state

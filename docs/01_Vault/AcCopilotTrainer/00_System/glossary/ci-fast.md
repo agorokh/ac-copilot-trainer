@@ -4,8 +4,8 @@ status: active
 created: 2026-03-27
 updated: 2026-03-28
 relates_to:
-  - ProjectTemplate/00_System/Workflow OS.md
-part_of: ProjectTemplate/00_System/glossary/_index.md
+  - AcCopilotTrainer/00_System/Workflow OS.md
+part_of: AcCopilotTrainer/00_System/glossary/_index.md
 ---
 
 # ci-fast

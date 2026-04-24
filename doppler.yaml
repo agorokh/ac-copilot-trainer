@@ -1,0 +1,6 @@
+# Doppler project for dev secrets (LLM + GitHub PATs). Install: https://docs.doppler.com/docs/install-cli
+# Run commands with injected env, e.g. `doppler run -- python scripts/cross_repo_aggregate.py`
+# Add missing keys in the Doppler dashboard (ag-dev-ecosystem); never commit real secrets.
+setup:
+  project: ag-dev-ecosystem
+  config: dev

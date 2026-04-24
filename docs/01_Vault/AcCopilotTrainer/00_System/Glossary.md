@@ -4,7 +4,7 @@ status: active
 memory_tier: canonical
 last_validated: 2026-03-27
 relates_to:
-  - ProjectTemplate/00_System/glossary/_index.md
+  - AcCopilotTrainer/00_System/glossary/_index.md
   - 00_Graph_Schema.md
 ---
 

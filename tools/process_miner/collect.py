@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tools.process_miner.bot_authorship import infer_author_from_user, parse_review_structure
 from tools.process_miner.github_client import GitHubClient
 from tools.process_miner.schemas import (
     CIStatus,
@@ -65,28 +66,45 @@ def collect_pr_data(
         review_comments_raw = client.get_pr_review_comments(
             owner, repo, pr_number, max_pages=max_pages
         )
-        review_comments = [
-            ReviewComment(
-                id=str(c["id"]),
-                body=c.get("body", "") or "",
-                author=c["user"]["login"] if c.get("user") else "unknown",
-                created_at=parse_datetime(c.get("created_at")) or datetime.now(UTC),
-                path=c.get("path"),
-                line=c.get("line"),
-                pr_number=pr_number,
-                is_inline=True,
+        review_comments = []
+        for c in review_comments_raw:
+            user = c.get("user")
+            login, author_type, bot_name = infer_author_from_user(
+                user if isinstance(user, dict) else None
             )
-            for c in review_comments_raw
-        ]
+            body = c.get("body", "") or ""
+            review_comments.append(
+                ReviewComment(
+                    id=str(c["id"]),
+                    body=body,
+                    author=login,
+                    author_type=author_type,
+                    bot_name=bot_name,
+                    review_structure=parse_review_structure(body, author_type, bot_name),
+                    created_at=parse_datetime(c.get("created_at")) or datetime.now(UTC),
+                    path=c.get("path"),
+                    line=c.get("line"),
+                    pr_number=pr_number,
+                    is_inline=True,
+                )
+            )
 
         reviews_raw = client.get_pr_reviews(owner, repo, pr_number, max_pages=max_pages)
         for review in reviews_raw:
             if review.get("body"):
+                user = review.get("user")
+                login, author_type, bot_name = infer_author_from_user(
+                    user if isinstance(user, dict) else None
+                )
+                body = str(review["body"])
                 review_comments.append(
                     ReviewComment(
                         id=f"review_{review['id']}",
-                        body=str(review["body"]),
-                        author=review["user"]["login"] if review.get("user") else "unknown",
+                        body=body,
+                        author=login,
+                        author_type=author_type,
+                        bot_name=bot_name,
+                        review_structure=parse_review_structure(body, author_type, bot_name),
                         created_at=parse_datetime(
                             review.get("submitted_at") or review.get("created_at")
                         )
@@ -99,17 +117,26 @@ def collect_pr_data(
         issue_comments_raw = client.get_pr_issue_comments(
             owner, repo, pr_number, max_pages=max_pages
         )
-        issue_comments = [
-            ReviewComment(
-                id=str(c["id"]),
-                body=c.get("body", "") or "",
-                author=c["user"]["login"] if c.get("user") else "unknown",
-                created_at=parse_datetime(c.get("created_at")) or datetime.now(UTC),
-                pr_number=pr_number,
-                is_inline=False,
+        issue_comments = []
+        for c in issue_comments_raw:
+            user = c.get("user")
+            login, author_type, bot_name = infer_author_from_user(
+                user if isinstance(user, dict) else None
             )
-            for c in issue_comments_raw
-        ]
+            body = c.get("body", "") or ""
+            issue_comments.append(
+                ReviewComment(
+                    id=str(c["id"]),
+                    body=body,
+                    author=login,
+                    author_type=author_type,
+                    bot_name=bot_name,
+                    review_structure=parse_review_structure(body, author_type, bot_name),
+                    created_at=parse_datetime(c.get("created_at")) or datetime.now(UTC),
+                    pr_number=pr_number,
+                    is_inline=False,
+                )
+            )
 
         ci_status: CIStatus | None = None
         try:
@@ -160,6 +187,9 @@ def collect_pr_data(
         created = parse_datetime(pr_raw.get("created_at"))
         merged = parse_datetime(pr_raw.get("merged_at"))
 
+        merge_sha = pr_raw.get("merge_commit_sha")
+        merge_commit_sha = str(merge_sha) if merge_sha else None
+
         pr_data = PRData(
             number=pr_number,
             title=str(pr_raw["title"]),
@@ -172,6 +202,7 @@ def collect_pr_data(
             issue_comments=issue_comments,
             ci_status=ci_status,
             linked_issues=linked_issues,
+            merge_commit_sha=merge_commit_sha,
         )
 
         pr_data_list.append(pr_data)
@@ -188,6 +219,7 @@ def collect_pr_data(
                     "author": pr.author,
                     "created_at": pr.created_at.isoformat() if pr.created_at else None,
                     "merged_at": pr.merged_at.isoformat() if pr.merged_at else None,
+                    "merge_commit_sha": pr.merge_commit_sha,
                     "body": pr.body,
                     "files": [
                         {"path": f.path, "additions": f.additions, "deletions": f.deletions}
@@ -198,6 +230,9 @@ def collect_pr_data(
                             "id": c.id,
                             "body": c.body,
                             "author": c.author,
+                            "author_type": c.author_type,
+                            "bot_name": c.bot_name,
+                            "review_structure": c.review_structure,
                             "created_at": c.created_at.isoformat() if c.created_at else None,
                             "path": c.path,
                             "line": c.line,
@@ -211,6 +246,9 @@ def collect_pr_data(
                             "id": c.id,
                             "body": c.body,
                             "author": c.author,
+                            "author_type": c.author_type,
+                            "bot_name": c.bot_name,
+                            "review_structure": c.review_structure,
                             "created_at": c.created_at.isoformat() if c.created_at else None,
                             "pr_number": c.pr_number,
                         }

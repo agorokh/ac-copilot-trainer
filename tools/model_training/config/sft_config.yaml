@@ -1,6 +1,8 @@
 # Phase 1 placeholder — no secrets. Point dataset paths at exporter output after Phase 1 runs.
 # Example: python -m tools.model_training.data_pipeline --source .cache/repo_knowledge/knowledge.db \
 #          --output .cache/training_data/
+# Phase 2 dry-run: python -m tools.model_training.train --config tools/model_training/config/sft_config.yaml \
+#          --data .cache/training_data/sft_pairs.jsonl --dry-run
 version: 1
 training:
   objective: sft

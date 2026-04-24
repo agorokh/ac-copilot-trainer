@@ -13,11 +13,11 @@ Execute in order. Pause for human decisions where noted.
 
 1. Pick a **project key** (short, filesystem-safe).
 2. Update `pyproject.toml`: `name`, `description`, package layout.
-3. Rename `src/project_template/` → your package name (or keep and align imports).
+3. Rename `src/ac_copilot_trainer/` → your package name (or keep and align imports).
 
 ## 2. Vault (Obsidian)
 
-Follow **`docs/00_Core/BOOTSTRAP_NEW_PROJECT.md`** §2: rename `docs/01_Vault/ProjectTemplate`, global replace `ProjectTemplate` in the listed files.
+Follow **`docs/00_Core/BOOTSTRAP_NEW_PROJECT.md`** §2: rename `docs/01_Vault/AcCopilotTrainer`, global replace `AcCopilotTrainer` in the listed files.
 
 ## 3. Agent docs and repo layout
 
@@ -45,7 +45,11 @@ Repo **`.mcp.json`** runs the **official GitHub MCP Server** via **Docker** (`gh
 
 Details: **`docs/00_Core/TOOLCHAIN.md`** and **`.env.example`**.
 
-## 6. Hooks and verify
+## 6. Workstation service catalog
+
+Follow [`docs/00_Core/BOOTSTRAP_NEW_PROJECT.md#workstation-service-catalog`](../../../docs/00_Core/BOOTSTRAP_NEW_PROJECT.md#workstation-service-catalog) — that section is the canonical contract (rules, schema, registration). Operationally for this skill: prompt the user — "Does this project expose any long-lived services on the local workstation (launchd, Docker, brew services, process-compose)?" — and follow the linked section either way (a "no" answer still commits `ops/service.yaml` with `services: []`).
+
+## 7. Hooks and verify
 
 ```bash
 make hooks-install

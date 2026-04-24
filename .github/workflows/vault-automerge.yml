@@ -1,64 +1,74 @@
 name: Vault auto-merge
 
+# Validates that a vault-only PR (label `vault-only`) touches *only* paths under
+# `docs/01_Vault/**`, then enables GitHub auto-merge. Branch protection still
+# applies — if required reviews/checks block the bot, a human must merge.
+#
+# This decouples the post-merge-steward agent from `git push origin main`:
+# the agent opens a labeled PR, this workflow guards scope and ships it.
+
 on:
   pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: vault-automerge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
-  disable-automerge-on-vault-unlabel:
-    if: >-
-      github.event.action == 'unlabeled' &&
-      github.event.label.name == 'vault-only' &&
-      github.event.pull_request.head.repo.fork == false
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    steps:
-      - name: Disable auto-merge when vault-only label is removed
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-        run: gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
-
   guard-and-automerge:
-    if: contains(github.event.pull_request.labels.*.name, 'vault-only') && github.event.pull_request.head.repo.fork == false
+    if: contains(github.event.pull_request.labels.*.name, 'vault-only')
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
       - name: Validate vault-only scope
+        id: scope
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          files="$(gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
+          files="$(gh pr diff "$PR_NUMBER" --repo "$REPO" --name-only)"
           if [[ -z "$files" ]]; then
-            gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
-            echo "error: vault-only PR has no changed files" >&2
+            echo "::error::PR has no file changes"
             exit 1
           fi
-          out_of_scope="$(printf '%s\n' "$files" | grep -Ev '^docs/01_Vault/' || true)"
+          out_of_scope="$(echo "$files" | grep -Ev '^docs/01_Vault/' || true)"
           if [[ -n "$out_of_scope" ]]; then
-            gh pr merge "$PR_NUMBER" --repo "$REPO" --disable-auto || true
-            echo "error: vault-only PR contains out-of-scope files:" >&2
-            printf '%s\n' "$out_of_scope" | sed 's/^/  - /' >&2
+            echo "::error::vault-only PR contains out-of-scope files:"
+            echo "$out_of_scope"
+            comment_path="$(mktemp)"
+            {
+              printf '%s\n\n' 'Auto-merge declined: `vault-only` PR must touch only `docs/01_Vault/**`. Out-of-scope files:'
+              printf '%s\n' '```'
+              printf '%s\n' "$out_of_scope"
+              printf '%s\n' '```'
+            } >"$comment_path"
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$comment_path"
+            rm -f "$comment_path"
             exit 1
           fi
-      - name: Enable auto-merge
+          echo "All changes within docs/01_Vault/ — scope OK."
+
+      - name: Enable auto-merge (squash)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --auto --delete-branch
+          auto_log="$(mktemp)"
+          if ! gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --auto --delete-branch 2>&1 | tee "$auto_log"; then
+            if grep -qiE '(not enabled|disabled|protected|required)' "$auto_log"; then
+              echo "::warning::Auto-merge could not be enabled (likely branch protection / required reviews missing). A human must merge."
+              gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
+                "Vault scope validated, but auto-merge could not be enabled by the bot. Branch protection / required reviews may be the cause. A human with merge rights should land this PR."
+              rm -f "$auto_log"
+              exit 0
+            fi
+            rm -f "$auto_log"
+            echo "::error::Failed to enable auto-merge"
+            exit 1
+          fi
+          rm -f "$auto_log"

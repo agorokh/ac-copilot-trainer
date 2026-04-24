@@ -14,9 +14,9 @@ import sys
 import tomllib
 from pathlib import Path
 
-TEMPLATE_VAULT_DIR = "ProjectTemplate"
-TEMPLATE_PKG_DIR = "project_template"
-TEMPLATE_PYPROJECT_NAME = "project-template"
+TEMPLATE_VAULT_DIR = "AcCopilotTrainer"
+TEMPLATE_PKG_DIR = "ac_copilot_trainer"
+TEMPLATE_PYPROJECT_NAME = "ac-copilot-trainer"
 
 
 def main() -> int:
@@ -28,7 +28,7 @@ def main() -> int:
     if template_vault.is_dir():
         lines.append(
             f"- Vault folder still named `{TEMPLATE_VAULT_DIR}/`. "
-            "Rename `docs/01_Vault/ProjectTemplate` → `docs/01_Vault/<YourProjectKey>` "
+            "Rename `docs/01_Vault/AcCopilotTrainer` → `docs/01_Vault/<YourProjectKey>` "
             "(see docs/00_Core/BOOTSTRAP_NEW_PROJECT.md)."
         )
 

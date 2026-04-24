@@ -5,6 +5,6 @@ alwaysApply: true
 # Claude Code pointers
 
 - Read [AGENTS.md](../AGENTS.md), [CLAUDE.md](../CLAUDE.md), and [AGENT_CORE_PRINCIPLES.md](../AGENT_CORE_PRINCIPLES.md) before substantive edits.
-- Vault memory: `docs/01_Vault/ProjectTemplate/` (rename on bootstrap).
+- Vault memory: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap).
 - Orchestration agents: `.claude/agents/issue-driven-coding-orchestrator.md`, `.claude/agents/pr-resolution-follow-up.md`.
 - Run `make ci-fast` before claiming work is complete.

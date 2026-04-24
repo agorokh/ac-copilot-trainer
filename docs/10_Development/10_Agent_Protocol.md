@@ -19,10 +19,10 @@
 
 | Need | Location | Notes |
 |------|----------|-------|
-| Application code | `src/project_template/` | Rename package on bootstrap |
+| Application code | `src/ac_copilot_trainer/` | Rename package on bootstrap |
 | Tests | `tests/` | Mirror package structure |
 | Long-form docs | `docs/` | Follow numbering convention if you adopt one |
-| Architecture memory | `docs/01_Vault/ProjectTemplate/` | Obsidian vault |
+| Architecture memory | `docs/01_Vault/AcCopilotTrainer/` | Obsidian vault |
 | One-off experiments | `.scratch/` | Gitignored |
 | Automation | `scripts/` | Review before adding — prefer modules |
 | CI | `.github/workflows/` | Keep fast paths for docs-only PRs if needed |

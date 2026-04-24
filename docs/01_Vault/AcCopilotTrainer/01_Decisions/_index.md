@@ -4,7 +4,7 @@ status: active
 created: 2026-03-28
 updated: 2026-04-22
 relates_to:
-  - ProjectTemplate/00_System/Architecture Invariants.md
+  - AcCopilotTrainer/00_System/Architecture Invariants.md
   - 00_Graph_Schema.md
 ---
 

@@ -13,10 +13,11 @@ Guidance for **Claude Code** (claude.ai/code) in this repository.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
+make init-knowledge   # local SQLite for repo-knowledge MCP (idempotent)
 make ci-fast
 ```
 
-Optional: `make hooks-install` once per clone. See [WARP.md](WARP.md) for operator detail.
+Optional: `make hooks-install` once per clone. See `AGENTS.md` § Local development for operator detail.
 
 ---
 
@@ -94,7 +95,7 @@ Project hooks live in `.claude/settings.json`. They run on Edit/Write/Bash/Stop 
 
 ## Local LLMs and API keys
 
-Document provider endpoints, model names, and env vars in `.env.example` and `WARP.md`. Never commit real keys. For local inference (Ollama, HF, etc.), note cache directories and offline constraints here when relevant.
+Document provider endpoints, model names, and env vars in `.env.example` and `AGENTS.md` § Local development. Never commit real keys. For local inference (Ollama, HF, etc.), note cache directories and offline constraints here when relevant.
 
 ---
 

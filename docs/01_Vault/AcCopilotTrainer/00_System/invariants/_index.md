@@ -3,12 +3,12 @@ type: index
 status: active
 created: 2026-03-27
 updated: 2026-03-27
-part_of: ProjectTemplate/00_System/Architecture Invariants.md
+part_of: AcCopilotTrainer/00_System/Architecture Invariants.md
 relates_to:
-  - ProjectTemplate/00_System/invariants/entrypoint.md
-  - ProjectTemplate/00_System/invariants/no-secrets.md
-  - ProjectTemplate/00_System/invariants/data-immutability.md
-  - ProjectTemplate/00_System/invariants/persistence.md
+  - AcCopilotTrainer/00_System/invariants/entrypoint.md
+  - AcCopilotTrainer/00_System/invariants/no-secrets.md
+  - AcCopilotTrainer/00_System/invariants/data-immutability.md
+  - AcCopilotTrainer/00_System/invariants/persistence.md
   - 00_Graph_Schema.md
 ---
 

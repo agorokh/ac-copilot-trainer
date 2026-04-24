@@ -1,0 +1,6 @@
+{
+  "hub_repo": "agorokh/template-repo",
+  "hub_path": "docs/01_Vault/ProjectTemplate/pitfalls",
+  "hub_branch": "main",
+  "hub_branch_note": "Default follows main for freshest pitfalls. Forks or strict reproducibility: set hub_branch to a tag or commit SHA."
+}

@@ -2,41 +2,34 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
 from tools.process_miner.schemas import AnalysisResult
+from tools.process_miner.simple_frontmatter import parse_simple_frontmatter
+from tools.process_miner.vault_audit import VaultAuditResult
 from tools.repo_knowledge.schema import apply_schema
-
-
-def _parse_simple_frontmatter(text: str) -> tuple[dict[str, str], str]:
-    """Parse leading ``---`` YAML-ish key: value lines; ignore complex YAML."""
-    if not text.startswith("---"):
-        return {}, text
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}, text
-    raw = text[3:end]
-    body = text[end + 4 :].lstrip("\n")
-    meta: dict[str, str] = {}
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if ":" not in line:
-            continue
-        key, val = line.split(":", 1)
-        meta[key.strip()] = val.strip().strip("\"'")
-    return meta, body
+from tools.repo_knowledge.session_debrief_ingest import (
+    ingest_session_debrief_records,
+    load_debrief_records,
+    utc_now_iso_z,
+)
 
 
 def ingest_decisions_from_vault(conn: sqlite3.Connection, vault_root: Path, now: str) -> None:
-    """Replace ``decisions`` rows from vault markdown (``type: decision``, non-template)."""
+    """Replace vault-sourced ``decisions`` rows (``type: decision``, non-template).
+
+    Rows with ``rationale = 'bootstrap_knowledge'`` (from ``bootstrap_knowledge.py``) are kept
+    so weekly miner ingest does not wipe invariant seed data loaded in CI before the miner runs.
+    """
     if not vault_root.is_dir():
         return
-    conn.execute("DELETE FROM decisions")
+    conn.execute(
+        "DELETE FROM decisions WHERE IFNULL(rationale, '') != ?",
+        ("bootstrap_knowledge",),
+    )
     for path in sorted(vault_root.rglob("*.md")):
         try:
             rel = path.relative_to(vault_root).as_posix()
@@ -45,7 +38,7 @@ def ingest_decisions_from_vault(conn: sqlite3.Connection, vault_root: Path, now:
         if "99_Templates/" in rel:
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
-        meta, body = _parse_simple_frontmatter(text)
+        meta, body = parse_simple_frontmatter(text)
         if meta.get("type") != "decision":
             continue
         dec_id = meta.get("id", "")
@@ -64,19 +57,73 @@ def ingest_decisions_from_vault(conn: sqlite3.Connection, vault_root: Path, now:
         )
 
 
+def ingest_vault_audit(
+    conn: sqlite3.Connection, repo: str, audit: VaultAuditResult, now: str
+) -> None:
+    """Append a ``vault_health`` row and replace ``vault_nodes`` snapshot for ``repo``."""
+    details = json.dumps(audit.to_stats_dict(), ensure_ascii=False)
+    conn.execute(
+        """
+        INSERT INTO vault_health (
+            repo, mined_at, health_score, freshness, depth, frontmatter_validity,
+            connectivity, coverage, save_rate, save_compliant, save_total, details_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            repo,
+            now,
+            audit.health_score,
+            audit.freshness_score,
+            audit.depth_score,
+            audit.frontmatter_score,
+            audit.connectivity_score,
+            audit.coverage_score,
+            audit.save_rate,
+            audit.save_compliant_prs,
+            audit.save_total_prs,
+            details,
+        ),
+    )
+    conn.execute("DELETE FROM vault_nodes WHERE repo = ?", (repo,))
+    for n in audit.nodes:
+        conn.execute(
+            """
+            INSERT INTO vault_nodes (repo, path, node_type, status, last_updated, frontmatter_ok)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                repo,
+                n.path,
+                n.node_type,
+                n.status,
+                n.last_updated.isoformat() if n.last_updated else None,
+                1 if n.frontmatter_ok else 0,
+            ),
+        )
+
+
 def ingest_analysis(
     result: AnalysisResult,
     repo: str,
     db_path: Path,
     *,
     repo_root: Path | None = None,
-) -> None:
-    """Upsert patterns, files, evidence, and CI rows from an analysis result."""
+    ingest_session_debrief: bool = False,
+    debrief_max_age_days: int = 14,
+    vault_audit: VaultAuditResult | None = None,
+) -> tuple[int, int]:
+    """Upsert patterns, files, evidence, and CI rows from an analysis result.
+
+    Returns ``(session_debrief_applied, session_debrief_skipped_duplicate)``. Both are zero when
+    ``ingest_session_debrief`` is false or ``repo_root`` is unset.
+    """
+    debrief_applied = 0
+    debrief_skipped = 0
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
         apply_schema(conn)
-        now = datetime.now(UTC).isoformat()
+        now = utc_now_iso_z()
         conn.execute(
             "INSERT INTO ingest_meta (key, value) VALUES ('last_repo', ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -99,7 +146,7 @@ def ingest_analysis(
 
         for cluster in result.clusters:
             title = cluster.title[:2000]
-            cur = conn.execute(
+            conn.execute(
                 """
                 INSERT INTO patterns (
                     pattern_text, severity, preventability, frequency, first_seen, last_seen
@@ -110,13 +157,15 @@ def ingest_analysis(
                     last_seen = excluded.last_seen,
                     severity = excluded.severity,
                     preventability = excluded.preventability
-                RETURNING id
                 """,
                 (title, cluster.severity, cluster.preventability, cluster.count, now, now),
             )
-            row = cur.fetchone()
+            row = conn.execute(
+                "SELECT id FROM patterns WHERE pattern_text = ?",
+                (title,),
+            ).fetchone()
             if row is None or row[0] is None:
-                raise RuntimeError("INSERT INTO patterns RETURNING id returned no row")
+                raise RuntimeError("pattern upsert did not yield a row id")
             pattern_id = int(row[0])
 
             file_counts: dict[str, int] = {}
@@ -189,6 +238,17 @@ def ingest_analysis(
             vault = repo_root / "docs" / "01_Vault"
             ingest_decisions_from_vault(conn, vault, now)
 
+        if vault_audit is not None:
+            ingest_vault_audit(conn, repo, vault_audit, now)
+
+        if ingest_session_debrief and repo_root is not None:
+            debrief_dir = repo_root / ".cache" / "session_debriefs"
+            debrief_recs = load_debrief_records(debrief_dir, max_age_days=debrief_max_age_days)
+            debrief_applied, debrief_skipped = ingest_session_debrief_records(
+                conn, repo_root, debrief_recs, now_iso=now
+            )
+
         conn.commit()
     finally:
         conn.close()
+    return debrief_applied, debrief_skipped

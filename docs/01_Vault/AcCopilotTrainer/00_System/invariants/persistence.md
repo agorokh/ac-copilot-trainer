@@ -4,9 +4,9 @@ status: active
 created: 2026-03-27
 updated: 2026-03-27
 relates_to:
-  - ProjectTemplate/00_System/invariants/_index.md
-  - ProjectTemplate/00_System/invariants/entrypoint.md
-part_of: ProjectTemplate/00_System/invariants/_index.md
+  - AcCopilotTrainer/00_System/invariants/_index.md
+  - AcCopilotTrainer/00_System/invariants/entrypoint.md
+part_of: AcCopilotTrainer/00_System/invariants/_index.md
 ---
 
 # Invariant: single persistence authority
