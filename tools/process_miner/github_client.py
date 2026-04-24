@@ -320,11 +320,11 @@ class GitHubClient:
         if not isinstance(b64, str):
             return None
         # GitHub occasionally returns non-base64 payloads for unusual content
-        # types (e.g. Git LFS pointers surfaced as text). Treat those as "not a
-        # decodable file" rather than leaking binascii.Error to callers whose
-        # contract is "text or None". (Copilot feedback on PR #87.)
+        # types (e.g. Git LFS pointers surfaced as text). validate=True rejects
+        # any non-alphabet bytes so the "text or None" contract holds; without
+        # it, b64decode silently drops stray characters and returns garbage.
         try:
-            raw = base64.b64decode(b64.replace("\n", ""), validate=False)
+            raw = base64.b64decode(b64.replace("\n", ""), validate=True)
         except (binascii.Error, ValueError):
             return None
         return raw.decode("utf-8", errors="replace")
