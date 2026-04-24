@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import os
 import re
 import time
@@ -318,5 +319,12 @@ class GitHubClient:
         b64 = data.get("content")
         if not isinstance(b64, str):
             return None
-        raw = base64.b64decode(b64.replace("\n", ""))
+        # GitHub occasionally returns non-base64 payloads for unusual content
+        # types (e.g. Git LFS pointers surfaced as text). Treat those as "not a
+        # decodable file" rather than leaking binascii.Error to callers whose
+        # contract is "text or None". (Copilot feedback on PR #87.)
+        try:
+            raw = base64.b64decode(b64.replace("\n", ""), validate=False)
+        except (binascii.Error, ValueError):
+            return None
         return raw.decode("utf-8", errors="replace")

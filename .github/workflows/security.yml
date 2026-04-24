@@ -27,5 +27,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mining,knowledge]" pip-audit
 
+      # pip 26.0.1 (bundled on the GHA runner): CVE-2026-3219 — no fix version published yet.
+      # Ignored here because the vulnerability is in the installer itself, not a project dependency;
+      # revisit when a fixed pip is released and remove the --ignore-vuln flag.
       - name: Run pip-audit
-        run: pip-audit
+        run: pip-audit --ignore-vuln CVE-2026-3219

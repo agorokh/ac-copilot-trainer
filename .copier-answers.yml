@@ -1,6 +1,6 @@
 # Changes here will be overwritten by Copier
 _src_path: https://github.com/agorokh/template-repo.git
-_commit: 061d9abf0018ee5589bb2304d5aa5841815c82df
+_commit: 061d9abf0018ee5589bb2304d5aa5841815c82df  # pragma: allowlist secret
 project_name: ac-copilot-trainer
 project_key: AcCopilotTrainer
 package_name: ac_copilot_trainer

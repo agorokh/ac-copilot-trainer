@@ -39,8 +39,8 @@ memory: project
 ### Phase C — vault SAVE (LLM judgment, then deterministic ship)
 
 4. **SAVE** per `docs/00_Core/SESSION_LIFECYCLE.md`, editing **only** files under `docs/01_Vault/`:
-   - Update `docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md`: move merged work to “What was delivered” (PR link, merge SHA, date); refresh “Resume here” / “What remains” (include Phase B follow-ups).
-   - Update `docs/01_Vault/ProjectTemplate/00_System/Current Focus.md` if this PR closed the active focus.
+   - Update `docs/01_Vault/AcCopilotTrainer/00_System/Next Session Handoff.md`: move merged work to “What was delivered” (PR link, merge SHA, date); refresh “Resume here” / “What remains” (include Phase B follow-ups).
+   - Update `docs/01_Vault/AcCopilotTrainer/00_System/Current Focus.md` if this PR closed the active focus.
 
 5. Ship the vault edits via `scripts/post_merge_sync.sh vault <P>`. The script:
    - Refuses to commit if any **non-vault** tracked changes exist (exit 30) — keep the working tree scoped.

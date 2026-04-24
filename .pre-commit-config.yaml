@@ -12,7 +12,9 @@ repos:
         args: ["--branch", "main", "--branch", "master"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+    # Keep in sync with the `ruff>=0.15.11` floor in pyproject.toml so pre-commit
+    # and `make ci-fast` run the same ruff version and agree on lint/format output.
+    rev: v0.15.12
     hooks:
       - id: ruff
         args: [--fix]
