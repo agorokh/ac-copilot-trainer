@@ -54,6 +54,7 @@ memory: project
 10. **Mark the PR ready for review:** use pull request number **P** (from the PR you opened; it can differ from issue **N**): `gh pr ready <P> --repo <owner/repo>` (exits draft state so reviewers and bots are notified).
 11. **Wait for async bots before handoff:** follow **§ Mandatory wait after each push** in `.claude/agents/pr-resolution-follow-up.md`—use the same **`sleep 600`** cooldown after `gh pr ready` as after a `git push` (that section owns the normative wait; do not skip it).
 12. Hand off to **PR resolution** using the same pull request number **P** as in step 10: in Claude Code invoke **`Task(subagent_type="pr-resolution-follow-up", …)`**; in Cursor use **`Task(subagent_type="generalPurpose", …)`** with the **pr-resolution-follow-up** checklist from `.claude/agents/pr-resolution-follow-up.md`, or execute that file’s steps inline until CI is green and bot threads are addressed.
+13. **Fresh file reads before edits:** before substantive **Edit**/**Write** on paths you will change, load current contents for those targets (in Claude Code use **`query_file_patterns`** with those paths; in other tools use an equivalent bulk read) so patches apply to the latest revisions.
 
 ## Planning
 

@@ -3,10 +3,10 @@ type: index
 status: active
 created: 2026-03-27
 updated: 2026-04-22
-part_of: ProjectTemplate/00_System/Glossary.md
+part_of: AcCopilotTrainer/00_System/Glossary.md
 relates_to:
   - 00_Graph_Schema.md
-  - ProjectTemplate/00_System/invariants/_index.md
+  - AcCopilotTrainer/00_System/invariants/_index.md
 ---
 
 # Glossary (index)

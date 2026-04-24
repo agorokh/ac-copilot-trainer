@@ -5,12 +5,33 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: check-yaml
+      - id: check-toml
       - id: check-added-large-files
         args: ["--maxkb=512"]
+      - id: no-commit-to-branch
+        args: ["--branch", "main", "--branch", "master"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+    # Keep in sync with the `ruff>=0.15.11` floor in pyproject.toml so pre-commit
+    # and `make ci-fast` run the same ruff version and agree on lint/format output.
+    rev: v0.15.12
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: [--baseline, .secrets.baseline]
+
+  - repo: local
+    hooks:
+      - id: check-test-artifacts
+        name: Detect test artifacts in production code
+        entry: python scripts/pre_commit_check_test_artifacts.py
+        language: python
+        pass_filenames: true
+        # Double-quoted so `\\.` becomes regex literal dot (YAML escape rules).
+        files: "(^src/.*\\.(json|csv)$)|(^(src|tools)/.*\\.py$)"

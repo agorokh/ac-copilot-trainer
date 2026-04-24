@@ -6,7 +6,7 @@ Cursor Bugbot can include this file during review.
 
 - Follow **AGENTS.md**, **AGENT_CORE_PRINCIPLES.md**, **`docs/00_Core/SESSION_LIFECYCLE.md`**, and vault **invariants** (`docs/01_Vault/AcCopilotTrainer/00_System/invariants/_index.md`).
 - **No secrets** — no API keys, tokens, or private keys in code or tests.
-- **No commits to `main`** from agents — branch + PR only.
+- **No commits to `main`** from agents — branch + PR only, **except** vault-only post-merge handoff under `docs/01_Vault/` when `main` accepts direct push (see `docs/00_Core/SESSION_LIFECYCLE.md` § Vault-only updates and `.claude/agents/post-merge-steward.md`). If push is blocked, escalate to a human.
 - **Canonical paths only** — see `docs/10_Development/11_Repository_Structure.md`.
 
 ## Quality

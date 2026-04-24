@@ -6,8 +6,8 @@ updated: 2026-03-29
 id: ADR-T3-REVIEWER
 area: ml-training
 relates_to:
-  - ProjectTemplate/01_Decisions/_index.md
-  - ProjectTemplate/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/01_Decisions/_index.md
+  - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
 
 # Local fine-tuned reviewer model (Tier 3)

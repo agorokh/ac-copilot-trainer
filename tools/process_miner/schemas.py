@@ -23,6 +23,9 @@ class ReviewComment:
     id: str
     body: str
     author: str
+    author_type: str = "unknown"  # "bot" | "human" | "unknown" (explicit human for real people)
+    bot_name: str | None = None  # Normalized bot id when author_type == "bot"
+    review_structure: dict[str, str] | None = None  # Parsed ## sections for structured bot reviews
     created_at: datetime | None = None  # May be None if not available
     path: str | None = None  # File path for inline comments
     line: int | None = None  # Line number for inline comments
@@ -63,6 +66,7 @@ class PRData:
     issue_comments: list[ReviewComment] = field(default_factory=list)
     ci_status: CIStatus | None = None
     linked_issues: list[LinkedIssue] = field(default_factory=list)
+    merge_commit_sha: str | None = None
 
 
 @dataclass
@@ -77,6 +81,9 @@ class CommentCluster:
     severity: str  # bug, reliability, security, perf, maintainability, nit
     preventability: str  # automation, guideline, agent_rule, architecture
     representative_examples: list[str] = field(default_factory=list)
+    dominant_author_type: str | None = None  # bot | human | mixed | unknown
+    dominant_bot_name: str | None = None  # When cluster author mix is bot-dominated
+    distinct_pr_count: int = 0  # Unique PR numbers with ≥1 comment in cluster (#70)
 
 
 @dataclass

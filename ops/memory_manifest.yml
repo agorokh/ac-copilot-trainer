@@ -1,0 +1,71 @@
+manifest_version: 1
+updated_at: "2026-04-23T18:00:00Z"
+owner: "template-repo"
+anchors:
+  umbrella_issue: "https://github.com/agorokh/agent-factory/issues/62"
+  umbrella_adr: "https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/memory-fleet-observability.md"
+
+# Canary-query acceptance contract (authoritative source; mirrors the ADR).
+# Consumers (``memory-health-scan`` skill + workstation-ops exporter):
+#   A workspace is "memory is working" iff
+#     (1) the response text does NOT contain "No relevant context found" (case-insensitive), AND
+#     (2) the response text contains at least one line matching ``^- \[\d+\]`` under a
+#         References section.
+# The top-level ``references: []`` envelope on the MCP result is bibliographic
+# metadata and MUST NOT be used as the acceptance signal.
+canary_acceptance:
+  must_not_contain: "no relevant context found"
+  must_match_regex: "^- \\[\\d+\\]"
+
+# rms schedule guidance (mirrors propagation_manifest.yml cadence shape).
+rms_scheduling:
+  daily_job:
+    cadence: "daily"
+    command: "hermes run-skill memory-health-scan"
+  weekly_job:
+    cadence: "weekly"
+    command: "hermes run-skill memory-health-scan --actuate"
+
+hosts:
+  - id: "mac-mini-dev"
+    owner_repo: "agorokh/agent-factory"
+    notes: "Primary developer mac. Runs agent-factory steward vault, epam_dialx operator-local KB, and divorce_proceedings workspace (registered for fleet awareness; ingest managed externally by the operator)."
+    workspaces:
+      - name: "agent_factory_steward"
+        endpoint: "http://localhost:8020"
+        vault_root: "docs/01_Vault/AgentFactory"
+        audit_log: "docs/01_Vault/.turbovault/audit/operations.jsonl"
+        launchd_label: "ai.lightrag.ingest-audit.agent_factory_steward"
+        stale_after_hours: 24
+        canary_queries:
+          - prompt: "Copilot PR 41 OAuth token"
+            mode: "hybrid"
+            expected_refs_any:
+              - "pr41-tier3-verification-complete-2026-04-19.md"
+              - "copilot-token-exchange-2026-04-19.md"
+          - prompt: "LightRAG Neo4j graph storage"
+            mode: "mix"
+      - name: "epam_dialx"
+        endpoint: "http://localhost:8040"
+        vault_root: "~/Projects/dialx-knowledge/EPAM_Notes"
+        audit_log: "~/Projects/dialx-knowledge/EPAM_Notes/.turbovault/audit/operations.jsonl"
+        launchd_label: "ai.lightrag.ingest-audit.epam_dialx"
+        stale_after_hours: 24
+        canary_queries:
+          - prompt: "EPAM DIAL governance entities"
+            mode: "global"
+      # divorce_proceedings: fleet-registered for awareness only.
+      # Ingest pipeline is operator-managed externally (selective / section-level,
+      # not whole-vault audit-ingest); the standard audit launchd unit is
+      # intentionally NOT installed for this workspace. ``stale_after_hours`` is
+      # generous because the operator drives ingest cadence. Canary is a
+      # placeholder until the operator pins a stable probe prompt.
+      - name: "divorce_proceedings"
+        endpoint: "http://localhost:8060"
+        vault_root: "~/Projects/court_fillings_processing/data/obsidian_vault"
+        audit_log: "~/Projects/court_fillings_processing/data/obsidian_vault/.turbovault/audit/operations.jsonl"
+        launchd_label: null
+        stale_after_hours: 168
+        canary_queries:
+          - prompt: "divorce proceedings case index"
+            mode: "hybrid"

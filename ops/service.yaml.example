@@ -1,0 +1,116 @@
+# workstation-ops service catalog declaration (EXAMPLE / STUB)
+# =============================================================================
+# This repo, when cloned/copier'd into a new project, SHOULD declare any
+# long-lived workstation services it exposes via this file. The declaration is
+# consumed by the workstation-ops control plane (https://github.com/agorokh/workstation-ops)
+# for cross-repo service inventory, port-collision detection, drift auditing,
+# and Prometheus target generation.
+#
+# TO ACTIVATE:
+#   1. Copy this file to ops/service.yaml (same directory, drop .example).
+#   2. Replace `repo_id` with your project's repo name (must match the repo_id
+#      registered in workstation-ops/ops/sources.yaml).
+#   3. Populate the `services:` list with your long-lived services (see the
+#      EXAMPLES section below for YAML formatting requirements when switching
+#      from the inline `services: []` to a block list).
+#   4. Register your repo in workstation-ops/ops/sources.yaml:
+#
+#        - repo_id: <your-repo>
+#          path: ../../<your-repo>/ops/service.yaml
+#          required: false
+#
+#   5. Validate from the workstation-ops repository (e.g. cd ../workstation-ops):
+#        make services-status   # should include your services in the table
+#
+# IF THIS REPO EXPOSES NO LONG-LIVED SERVICES:
+#   Still create `ops/service.yaml` with an empty services list. This makes the
+#   declaration explicit (not forgotten) and allows workstation-ops to show
+#   "<your-repo> is aware of the catalog contract; no services declared":
+#
+#        version: 1
+#        repo_id: <your-repo>
+#        services: []
+#
+# SCOPE — WHAT BELONGS HERE:
+#   ✅ launchd LaunchAgents this repo installs
+#   ✅ Docker containers / docker-compose services this repo runs locally
+#   ✅ brew services this repo depends on for local development
+#   ✅ process-compose bundles this repo defines
+#
+# SCOPE — WHAT DOES NOT BELONG:
+#   ❌ Claude Desktop / Claude Code MCP servers (stdio children, not workstation-supervised)
+#   ❌ AWS / cloud services (different host — catalog is Mac Mini-scoped until it
+#      grows a `host:` dimension)
+#   ❌ One-off scripts invoked by humans (not long-lived)
+#   ❌ CI-only services
+#
+# SCHEMA REFERENCE:
+#   Full field list and validation rules:
+#     https://github.com/agorokh/workstation-ops/blob/main/src/workstation_ops/service_catalog.py
+#   Live examples:
+#     https://github.com/agorokh/agent-factory/blob/main/ops/service.yaml
+#     https://github.com/agorokh/Alpaca_trading/blob/main/ops/service.yaml
+
+version: 1
+# repo_id MUST match the repo_id registered in workstation-ops/ops/sources.yaml.
+# The value below is the canonical template placeholder for `project_name`, so
+# that `scripts/copier_post_copy.py` rewrites it to the answered `project_name`
+# during `copier copy`. **Manual-bootstrap users** must edit this value by hand
+# before committing `ops/service.yaml` (see
+# docs/00_Core/BOOTSTRAP_NEW_PROJECT.md#workstation-service-catalog step 2).
+# (Note: this comment intentionally omits the literal placeholder string so that
+# Copier's blanket text rewrite does not corrupt the explanation in child repos.)
+repo_id: ac-copilot-trainer
+
+services: []
+
+# -----------------------------------------------------------------------------
+# EXAMPLES — to use, FIRST replace the `services: []` line above with a
+# `services:` header (no `[]`), then uncomment / adapt entries below so they
+# nest under it as a YAML block list. Keeping `services: []` AND uncommenting
+# entries produces invalid YAML (entries are not nested under `services`).
+# -----------------------------------------------------------------------------
+
+#  # Example 1: native launchd service with an HTTP health endpoint
+#  - id: my-api-server
+#    runtime: launchd
+#    profile: core                    # free-form grouping; used for --profile filtering
+#    ports: [9000]                    # all TCP ports the service owns; used for collision detection
+#    health:
+#      url: http://127.0.0.1:9000/health
+#    launchd:
+#      label: com.myproject.api       # must match the plist Label
+#
+#  # Example 2: Docker container (use docker.container_name XOR docker.service, not both)
+#  - id: my-database
+#    runtime: docker
+#    profile: data
+#    ports: [5433]
+#    docker:
+#      container_name: myproject_postgres
+#      # service: my-compose-service   # alternative: docker-compose service name (instead of container_name)
+#
+#  # Example 3: launchd job with dependencies + no port (scheduled/label-only tracking)
+#  - id: my-nightly-job
+#    runtime: launchd
+#    profile: jobs
+#    depends_on: [my-database]        # cross-service ordering hint
+#    launchd:
+#      label: com.myproject.nightly
+#
+#  # Example 4: brew service (system-wide dependency)
+#  - id: redis-local
+#    runtime: brew
+#    profile: data
+#    ports: [6379]
+#    brew:
+#      name: redis
+#
+#  # Example 5: process-compose bundle (multi-process supervisor)
+#  - id: my-stack
+#    runtime: process-compose
+#    profile: tools
+#    process_compose:
+#      path: ./ops/process-compose.yaml   # path to the process-compose config
+#
+# ALLOWED `runtime` VALUES: launchd | docker | brew | process-compose

@@ -7,7 +7,7 @@ on:
     inputs:
       days:
         description: Lookback days
-        default: "7"
+        default: "30"
 
 # GitHub REST check-runs endpoint requires checks: read (see collect_pr_data / get_pr_check_runs).
 # Keep checks: read in this block — omitting it silently drops CI rollup data (no check_runs).
@@ -32,19 +32,28 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[mining,knowledge]"
 
+      - name: Bootstrap knowledge from canonical docs
+        run: make bootstrap-knowledge
+
       - name: Run process miner
+        id: mine
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           DAYS_INPUT: ${{ github.event.inputs.days }}
         run: |
-          if [ -z "$DAYS_INPUT" ]; then DAYS=7; else DAYS="$DAYS_INPUT"; fi
+          if [ -z "$DAYS_INPUT" ]; then DAYS=30; else DAYS="$DAYS_INPUT"; fi
           python scripts/process_miner.py \
             --repo "$REPO" \
             --days "$DAYS" \
             --emit-learned \
             --ingest-knowledge \
             --max-prs 40
+
+      - name: Zero learned rules warning
+        if: steps.mine.outputs.learned_artifact_files_count == '0'
+        run: |
+          echo "::warning::Process miner wrote 0 new learned artifact files this run (stricter clustering or sparse review data)."
 
       - name: Configure git
         run: |

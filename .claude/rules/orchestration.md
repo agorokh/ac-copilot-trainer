@@ -15,6 +15,7 @@ paths:
 | Green CI + GraphQL `reviewThreads` + `sleep 600` | `.claude/agents/pr-resolution-follow-up.md` |
 | Dependabot / workflows / `.mcp.json` risk + merge order | `.claude/agents/dependency-review.md` → then **pr-resolution-follow-up** for the bot loop |
 | Post-merge pattern extraction (optional) | `.claude/agents/learner.md` |
+| After merge: sync main, classify diff, vault handoff | `.claude/agents/post-merge-steward.md` |
 
 **Delegation:** In **Claude Code**, use the **Task** tool with `subagent_type` set to the agent name (e.g. `pr-resolution-follow-up`, `dependency-review`, `learner`). Prose “invoke X” in agent markdown is the same contract. **In Cursor**, Task only allows `generalPurpose`, `explore`, `shell`, `best-of-n-runner` — use **`generalPurpose`** plus the checklist from the same agent markdown, or run steps inline (`.cursor/rules/cursor-task-delegation.mdc`).
 

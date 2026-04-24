@@ -1,0 +1,50 @@
+# Qodo PR-Agent (self-hosted): automated code review via open-source PR-Agent.
+#
+# STATUS: DISABLED — waiting for local LLM (Qwen3.5 5-8B on dedicated Mac).
+# The paid Qodo SaaS app handles reviews until then. To enable, change the
+# trigger from workflow_dispatch to pull_request + issue_comment (see commented
+# block below) and configure the secret.
+#
+# Future local model: point OPENAI_KEY at local inference (Ollama/LM Studio)
+# and set [config] model in .pr_agent.toml to the local model name.
+#
+# Secret management: use Doppler GitHub Actions integration (doppler/cli-action)
+# to inject secrets from ag-dev-ecosystem rather than per-repo GitHub secrets.
+# See doppler.yaml and docs/00_Core/OPTIONAL_CAPABILITIES.md.
+#
+# Propagates to child repos via Copier template sync.
+
+name: Qodo PR-Agent (self-hosted)
+
+on:
+  # DISABLED: manual-only until local LLM is ready.
+  workflow_dispatch:
+  # FUTURE: uncomment to auto-trigger on every PR event:
+  # pull_request:
+  #   types: [opened, reopened, ready_for_review, synchronize]
+  # issue_comment:
+
+concurrency:
+  group: qodo-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  pr_agent:
+    # Skip bot-authored events to avoid review loops.
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Qodo review (self-hosted)
+    steps:
+      - name: Run PR-Agent
+        # Pinned SHA — do not use @main (third-party code + tokens). Bump intentionally.
+        uses: qodo-ai/pr-agent@d82f7d3e696cd00822694aaa3096265d3889f3f1
+        env:
+          # Future: inject via doppler/cli-action instead of per-repo secret.
+          OPENAI_KEY: ${{ secrets.OPENAI_KEY }}  # pragma: allowlist secret
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

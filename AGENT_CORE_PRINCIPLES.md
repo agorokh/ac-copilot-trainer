@@ -67,7 +67,7 @@ Every AI assistant (Cursor, Claude Code, Codex, Warp, GitHub Copilot agents) wor
 ## Memory model
 
 1. **Tier 1 — `AGENTS.md`** — Short, durable facts (commands, ports, policy changes).
-2. **Tier 2 — Obsidian vault** — Architecture invariants, ADRs, investigations, handoffs under `docs/01_Vault/ProjectTemplate/` (rename on bootstrap).
+2. **Tier 2 — Obsidian vault** — Architecture invariants, ADRs, investigations, handoffs under `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap).
 
 Promote stable facts from Tier 1 into the vault when they become architectural.
 

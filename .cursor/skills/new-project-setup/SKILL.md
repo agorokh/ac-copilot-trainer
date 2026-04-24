@@ -7,4 +7,6 @@ allowed-tools: Read, Grep, Glob, Write, Edit, Bash
 
 # New project setup
 
-See `.claude/skills/new-project-setup/SKILL.md` — keep both copies in sync when editing.
+See `.claude/skills/new-project-setup/SKILL.md` — pointer pattern matching the rest of `.cursor/skills/`. Keep canonical content in the `.claude` copy; both must be edited together when the skill changes.
+
+Includes a **Workstation service catalog** step that defers to [`docs/00_Core/BOOTSTRAP_NEW_PROJECT.md#workstation-service-catalog`](../../../docs/00_Core/BOOTSTRAP_NEW_PROJECT.md#workstation-service-catalog) (the single source of truth for the contract, schema, and `services: []` rule) and runs before the verify step.

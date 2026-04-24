@@ -1,0 +1,355 @@
+inventory_version: 1
+generated_at: '2026-04-04T23:31:56Z'
+repos:
+- slug: agorokh/template-repo
+  name: template-repo
+  domain: infra
+  notes: Hub template; inventory lives here.
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-04-04T23:21:23Z'
+    updated_at: '2026-04-04T23:11:39Z'
+    stars: 1
+    open_issues_count: 7
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: AcCopilotTrainer
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 8
+    error: null
+  activity: null
+- slug: agorokh/ac-copilot-trainer
+  name: ac-copilot-trainer
+  domain: gaming
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-04-04T23:30:34Z'
+    updated_at: '2026-04-04T22:38:59Z'
+    stars: 0
+    open_issues_count: 6
+    visibility: public
+    error: null
+  template_sync:
+    copier_answers_present: true
+    copier_answers_short_sha: d538721
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: AcCopilotTrainer
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 8
+    error: null
+  activity: null
+- slug: agorokh/mcp-servers
+  name: mcp-servers
+  domain: infra
+  github:
+    default_branch: main
+    language: TypeScript
+    archived: false
+    pushed_at: '2026-04-04T00:30:36Z'
+    updated_at: '2026-04-04T00:30:20Z'
+    stars: 0
+    open_issues_count: 1
+    visibility: public
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: AcCopilotTrainer
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 8
+    error: null
+  activity: null
+- slug: agorokh/disclosures-discovery
+  name: disclosures-discovery
+  domain: legal
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-04-03T05:46:44Z'
+    updated_at: '2026-04-03T05:46:48Z'
+    stars: 0
+    open_issues_count: 0
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: false
+    project_key: null
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 2
+    error: null
+  activity: null
+- slug: agorokh/alpaca_trading
+  name: alpaca_trading
+  domain: trading
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-03-29T17:02:29Z'
+    updated_at: '2026-03-26T14:31:03Z'
+    stars: 0
+    open_issues_count: 10
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: AlpacaTrading
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 8
+    error: null
+  activity: null
+- slug: agorokh/case_operations
+  name: case_operations
+  domain: legal
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-03-26T19:34:20Z'
+    updated_at: '2026-03-26T19:32:54Z'
+    stars: 0
+    open_issues_count: 1
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: CaseOps
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 6
+    error: null
+  activity: null
+- slug: agorokh/court-fillings-processing
+  name: court-fillings-processing
+  domain: legal
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-03-31T15:14:49Z'
+    updated_at: '2026-03-31T15:14:31Z'
+    stars: 0
+    open_issues_count: 2
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: false
+    project_key: null
+    error: null
+  agent_config:
+    claude_dir_present: false
+    settings_json_present: false
+    hook_event_count: null
+    error: null
+  activity: null
+- slug: agorokh/dial-sandbox
+  name: dial-sandbox
+  domain: infra
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-03-29T00:51:49Z'
+    updated_at: '2026-03-29T00:50:42Z'
+    stars: 0
+    open_issues_count: 3
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: DialSandbox
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 5
+    error: null
+  activity: null
+- slug: agorokh/camera-poc
+  name: camera-poc
+  domain: infra
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2026-03-24T18:05:15Z'
+    updated_at: '2026-03-24T18:04:50Z'
+    stars: 0
+    open_issues_count: 0
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: true
+    project_key: CameraPoc
+    error: null
+  agent_config:
+    claude_dir_present: true
+    settings_json_present: true
+    hook_event_count: 5
+    error: null
+  activity: null
+- slug: agorokh/tesla-automation
+  name: tesla-automation
+  domain: infra
+  github:
+    default_branch: main
+    language: Makefile
+    archived: false
+    pushed_at: '2025-11-06T10:32:51Z'
+    updated_at: '2025-11-06T09:58:05Z'
+    stars: 0
+    open_issues_count: 1
+    visibility: public
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: false
+    project_key: null
+    error: null
+  agent_config:
+    claude_dir_present: false
+    settings_json_present: false
+    hook_event_count: null
+    error: null
+  activity: null
+- slug: agorokh/stock_hero_helper
+  name: stock_hero_helper
+  domain: trading
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2025-11-03T20:18:18Z'
+    updated_at: '2025-11-03T20:18:22Z'
+    stars: 0
+    open_issues_count: 0
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: false
+    project_key: null
+    error: null
+  agent_config:
+    claude_dir_present: false
+    settings_json_present: false
+    hook_event_count: null
+    error: null
+  activity: null
+- slug: agorokh/imessage-semantic-analysis
+  name: imessage-semantic-analysis
+  domain: infra
+  github:
+    default_branch: main
+    language: Python
+    archived: false
+    pushed_at: '2025-11-01T06:41:50Z'
+    updated_at: '2025-11-01T04:15:35Z'
+    stars: 0
+    open_issues_count: 0
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: false
+    project_key: null
+    error: null
+  agent_config:
+    claude_dir_present: false
+    settings_json_present: false
+    hook_event_count: null
+    error: null
+  activity: null
+- slug: agorokh/alpaca-mcp-server
+  name: alpaca-mcp-server
+  domain: trading
+  github:
+    default_branch: add-warp-md-clean
+    language: Python
+    archived: false
+    pushed_at: '2025-08-22T15:14:08Z'
+    updated_at: '2025-08-22T01:49:12Z'
+    stars: 0
+    open_issues_count: 0
+    visibility: private
+    error: null
+  template_sync:
+    copier_answers_present: false
+    copier_answers_short_sha: null
+    error: null
+  vault:
+    vault_root_present: false
+    project_key: null
+    error: null
+  agent_config:
+    claude_dir_present: false
+    settings_json_present: false
+    hook_event_count: null
+    error: null
+  activity: null

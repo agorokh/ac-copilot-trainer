@@ -16,8 +16,11 @@ from pathlib import Path
 
 ALLOWED_TOPLEVEL_DIRS = {
     ".cursor",
+    ".gemini",
     ".github",
     "docs",
+    "ops",
+    "reports",
     "scripts",
     "src",
     "tests",
@@ -26,7 +29,6 @@ ALLOWED_TOPLEVEL_DIRS = {
     ".claude",
     # Common additions when you specialize (uncomment as needed):
     # "apps",
-    # "ops",
     # "archive",
 }
 
@@ -39,11 +41,10 @@ ROOT_FILE_ALLOWLIST = frozenset(
         ".gitignore",
         ".gitattributes",
         ".pre-commit-config.yaml",
+        ".secrets.baseline",
         # Governance / docs at root
         "AGENTS.md",
         "CLAUDE.md",
-        "CODEX.md",
-        "WARP.md",
         "AGENT_CORE_PRINCIPLES.md",
         ".cursorrules",
         "README.md",
@@ -56,6 +57,9 @@ ROOT_FILE_ALLOWLIST = frozenset(
         ".env.example",
         ".markdownlint.json",
         "copier.yml",
+        # Third-party code-review bots (repo-level config)
+        ".pr_agent.toml",
+        ".sourcery.yaml",
     }
 )
 

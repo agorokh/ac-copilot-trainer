@@ -1,0 +1,53 @@
+# Qodo / PR-Agent repository settings (root of default branch).
+# Docs: https://github.com/qodo-ai/pr-agent/wiki/.pr_agent.toml
+#
+# PLAN: Free tier (30 PR reviews/month across all repos).
+# Each push-triggered review burns 1 credit. With 13 repos and ~20 PRs/week,
+# budget is tight. Use push trigger strategically, not on every commit.
+#
+# WHEN TO TRIGGER QODO (for agents and operators):
+#   - Automatic: on PR publish (first open / draft->ready). Always fires. (1 credit)
+#   - Manual `/review`: comment on a PR when you want Qodo structured analysis.
+#     USE when: PR has 3+ changed files, touches security/auth/financial paths,
+#     refactors a module boundary, or other bots disagree on severity.
+#     SKIP when: docs-only, vault-only, dependency bumps, or other bots already
+#     surfaced the same findings.
+#   - Push-triggered: enabled below but conservative — only /review on push,
+#     no /describe or /improve (those burn credits too).
+#
+# SELF-HOSTED (future): .github/workflows/qodo-review.yml is disabled
+# (workflow_dispatch only). When local LLM is ready (Qwen3.5 on Mac),
+# enable it and point [config] model at local endpoint. That path has
+# NO credit limit. See docs/00_Core/OPTIONAL_CAPABILITIES.md.
+
+# --- SaaS (hosted Qodo app) settings ---
+
+[github_app]
+# Enable review on subsequent pushes, not just PR open.
+# Each push costs 1 credit from the 30/month free budget.
+handle_push_trigger = true
+push_commands = ["/review"]
+
+[pr_reviewer]
+extra_instructions = """
+Enforce the same bar as this repo's AGENTS.md and .cursor/BUGBOT.md:
+- No secrets or credentials in code, tests, or docs.
+- No direct commits to the default branch from automation; prefer issue-driven branches and PRs.
+- Respect docs/10_Development/11_Repository_Structure.md and vault invariants under docs/01_Vault/.
+- Prefer explicit errors over silent fallbacks; keep changes scoped to the PR; defer scope creep to new Issues.
+"""
+
+# --- Self-hosted (GitHub Actions) settings ---
+# These only apply when qodo-review.yml workflow is enabled.
+
+[config]  # pragma: allowlist secret
+# OpenRouter backend for self-hosted path (future local LLM).
+model = "openrouter/anthropic/claude-sonnet-4.6"
+model_turbo = "openrouter/anthropic/claude-sonnet-4.6"
+fallback_models = ["openrouter/anthropic/claude-sonnet-4.6"]
+
+[github_action_config]
+# Self-hosted auto-review (only active when workflow is enabled).
+auto_review = true
+auto_describe = false
+auto_improve = false

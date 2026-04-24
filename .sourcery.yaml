@@ -1,0 +1,45 @@
+# Sourcery — project-level rules for IDE/CLI/GitHub reviews.
+# Docs: https://docs.sourcery.ai/References/Legacy-Configuration/sourcery-yaml/
+ignore:
+  - .git
+  - venv
+  - .venv
+  - env
+  - .env
+  - .tox
+  - node_modules
+  - vendor
+  - .cache
+  - __pycache__/
+  - .mypy_cache/
+  - "*.pyc"
+
+rule_settings:
+  enable: [default]
+  disable: []
+  rule_types:
+    - refactoring
+    - suggestion
+    - comment
+  python_version: "3.11"
+
+rules: []
+
+metrics:
+  # Matches Sourcery’s documented default for IDE quality bars (0–100 scale), not a PR merge gate.
+  quality_threshold: 25.0
+
+github:
+  labels: []
+  ignore_labels:
+    - sourcery-ignore
+  request_review: author
+  sourcery_branch: sourcery/{base_branch}
+
+clone_detection:
+  min_lines: 10
+  min_duplicates: 2
+  identical_clones_only: false
+
+proxy:
+  no_ssl_verify: false

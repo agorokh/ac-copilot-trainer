@@ -8,6 +8,67 @@ from pathlib import Path
 from tools.process_miner.schemas import AnalysisResult
 
 
+def _bot_review_sections(result: AnalysisResult) -> list[str]:
+    """Bot vs human breakdown, per-bot severity, and multi-bot agreement (issue #56)."""
+    st = result.stats
+    breakdown = st.get("comment_author_type_breakdown")
+    if not breakdown:
+        return []
+    lines: list[str] = [
+        "## Bot vs human review comments",
+        "",
+        "Counts are over review and issue thread comments for this run (excludes the PR body).",
+        "",
+    ]
+    for k in sorted(breakdown.keys()):
+        lines.append(f"- **{k}:** {breakdown[k]}")
+    lines.extend(["", "---", ""])
+
+    per_bot = st.get("per_bot_severity_counts") or {}
+    if isinstance(per_bot, dict) and per_bot:
+        lines.append("## Per-bot comment severity (heuristic)")
+        lines.append("")
+        for bot in sorted(per_bot.keys()):
+            sev_map = per_bot[bot]
+            if not isinstance(sev_map, dict):
+                continue
+            parts = [f"{s}={sev_map[s]}" for s in sorted(sev_map.keys())]
+            lines.append(f"- **{bot}:** {', '.join(parts)}")
+        lines.extend(["", "---", ""])
+
+    mbc = st.get("multi_bot_pr_count", 0)
+    lines.append("## Multi-bot agreement (PRs with ≥2 distinct bots)")
+    lines.append("")
+    lines.append(f"- **PRs in window with ≥2 bots:** {mbc}")
+    lines.append("")
+
+    bag = st.get("bot_agreement_by_pr") or []
+    if isinstance(bag, list) and bag:
+        lines.append(
+            "Per-PR summaries (pair co-occurrence counts use agreement locations: "
+            "file+line when present, else path+comment id, else comment id):"
+        )
+        lines.append("")
+        for row in bag[:25]:
+            if not isinstance(row, dict):
+                continue
+            pr_n = row.get("pr_number", 0)
+            dbs = row.get("distinct_bots") or []
+            multi_loc = row.get("locations_with_multiple_bots", 0)
+            lines.append(
+                f"- **PR #{pr_n}** — bots: {', '.join(str(x) for x in dbs)}; "
+                f"locations with multiple bots: {multi_loc}"
+            )
+            pairs = row.get("bot_pair_co_occurrence") or {}
+            if isinstance(pairs, dict) and pairs:
+                top = sorted(pairs.items(), key=lambda x: (-int(x[1]), str(x[0])))[:6]
+                lines.append(f"  top pairs: {', '.join(f'{a}={b}' for a, b in top)}")
+            lines.append("")
+    lines.append("---")
+    lines.append("")
+    return lines
+
+
 def _executive_summary_lines(result: AnalysisResult) -> list[str]:
     """Build executive summary bullets with defensive ``stats`` lookups."""
     st = result.stats
@@ -44,6 +105,7 @@ def render_report(
     *,
     period_days: int | None = None,
     until: datetime | None = None,
+    vault_section_lines: list[str] | None = None,
 ) -> None:
     """Render analysis result as markdown report.
 
@@ -74,6 +136,11 @@ def render_report(
 
     lines.extend(_executive_summary_lines(result))
 
+    lines.extend(_bot_review_sections(result))
+
+    if vault_section_lines:
+        lines.extend(vault_section_lines)
+
     lines.append("## Analyzed PRs")
     lines.append("")
     for pr in result.prs:
@@ -103,6 +170,10 @@ def render_report(
         lines.append(f"- **Count:** {cluster.count} comments")
         lines.append(f"- **Severity:** {cluster.severity}")
         lines.append(f"- **Preventability:** {cluster.preventability}")
+        if cluster.dominant_author_type:
+            lines.append(f"- **Dominant author type:** {cluster.dominant_author_type}")
+        if cluster.dominant_bot_name:
+            lines.append(f"- **Dominant bot:** {cluster.dominant_bot_name}")
         if cluster.affected_files:
             lines.append(f"- **Affected Files:** {', '.join(cluster.affected_files[:3])}")
         lines.append("")
@@ -206,6 +277,10 @@ def render_report(
         lines.append(f"- Count: {cluster.count}")
         lines.append(f"- Severity: {cluster.severity}")
         lines.append(f"- Preventability: {cluster.preventability}")
+        if cluster.dominant_author_type:
+            lines.append(f"- Dominant author type: {cluster.dominant_author_type}")
+        if cluster.dominant_bot_name:
+            lines.append(f"- Dominant bot: {cluster.dominant_bot_name}")
         affected = ", ".join(cluster.affected_files) if cluster.affected_files else "N/A"
         lines.append(f"- Affected Files: {affected}")
         lines.append("")

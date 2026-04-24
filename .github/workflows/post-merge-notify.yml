@@ -7,21 +7,20 @@ on:
 
 permissions:
   contents: read
-  issues: write
   pull-requests: write
 
 jobs:
   classify:
-    if: github.event.pull_request.merged == true && github.event.pull_request.head.repo.fork == false
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
       - name: Classify merged PR and comment
         env:
           GH_TOKEN: ${{ github.token }}

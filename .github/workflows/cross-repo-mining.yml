@@ -18,6 +18,11 @@ on:
         type: string
         default: "30"
         required: false
+      open_pr:
+        description: "Re-run mining with MINING_EMIT_LEARNED=1 and open a PR for new learned rules"
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -38,11 +43,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mining]"
 
+      # MINING_USE_DEFAULT_FLEET=1: when MINING_REPOS is empty, use built-in fleet (see fleet.py).
+      # Optional: MINING_EMIT_LEARNED=1 writes learned/universal + learned/domain/* locally; CI keeps contents:read
+      # only. Opening a PR for new universal rules needs a follow-up workflow (contents:write + branch push + PR).
       - name: Run cross-repo aggregate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MINING_REPOS: ${{ inputs.repos || vars.CROSS_REPO_MINING_REPOS }}
           MINING_DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.days || '30' }}
+          MINING_USE_DEFAULT_FLEET: "1"
         run: python scripts/cross_repo_aggregate.py
 
       - name: Upload summary artifact
@@ -52,3 +61,48 @@ jobs:
           name: cross-repo-mining-summary
           path: reports/cross_repo_mining/aggregate_summary.json
           if-no-files-found: ignore
+
+  # Optional: same mining + emit as aggregate, then propose a PR (needs write permissions).
+  # Runs in parallel with `aggregate` on purpose: default job stays contents:read-only; this job
+  # cannot reuse the read-only job's checkout without a second checkout anyway. Duplicated API work
+  # is an intentional tradeoff for simple permission boundaries.
+  learned-rules-pr:
+    if: github.event_name == 'workflow_dispatch' && inputs.open_pr == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install project + miner deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,mining]"
+
+      - name: Mine, emit learned rules, open PR if changed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MINING_REPOS: ${{ inputs.repos || vars.CROSS_REPO_MINING_REPOS }}
+          MINING_DAYS: ${{ inputs.days || '30' }}
+          MINING_EMIT_LEARNED: "1"
+          # When repos input + variable are empty, fall back to fleet list (same as aggregate job).
+          MINING_USE_DEFAULT_FLEET: "1"
+        run: python scripts/cross_repo_aggregate.py
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore(mining): cross-repo learned rules (process-miner)"
+          branch: process-miner/learned-rules-${{ github.run_id }}
+          delete-branch: true
+          title: "Cross-repo mining: learned rules (workflow)"
+          body: |
+            Automated proposal from **Cross-Repo Mining** (`workflow_dispatch`, `open_pr`).
+
+            Review diffs under `.claude/rules/learned/` and `.cursor/rules/learned/` before merge.

@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-22
+last_updated: 2026-04-24T21:14:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -17,6 +17,13 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+## Stream T — Template-sync PR #87 (READY TO MERGE, 2026-04-24)
+
+**Status:** PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87) **OPEN, ready to merge** (head `53bf74f`, 2026-04-24T20:49Z).
+Synced canonical template (52 commits since Apr 4) to fix orchestrator hook-drift bug (template-repo PR #92). Post-cooldown verification: **all checks green (build, docs, audit, CodeRabbit, Bugbot), 0 unresolved review threads, mergeStateStatus CLEAN**. See [`03_Investigations/template-sync-pr87-2026-04-24`](../03_Investigations/template-sync-pr87-2026-04-24.md) for full context.
+
+**Next:** Merge PR #87, then run post-merge skill to update this handoff.
 
 ## Stream A — Rig screen Phase-2 UI (PR #83 MERGED, building on top)
 

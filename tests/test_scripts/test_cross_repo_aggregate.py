@@ -45,3 +45,43 @@ def test_parse_days_env(
         assert days is None
         assert err is not None
         assert expect_err_substr in err
+
+
+def test_fleet_vault_summary_rolls_up_scores() -> None:
+    mod = _load_cross_repo_aggregate()
+    per_repo = {
+        "a": {
+            "vault_health": {
+                "health_score": 80,
+                "node_count": 10,
+                "coverage_gaps": ["g1"],
+            }
+        },
+        "b": {
+            "vault_health": {
+                "health_score": 60,
+                "node_count": 5,
+                "coverage_gaps": [],
+            }
+        },
+        "skip": {"vault_health": {"error": "no token"}},
+    }
+    s = mod._fleet_vault_summary(per_repo)
+    assert s is not None
+    assert s["repos_scored"] == 2
+    assert s["avg_health_score"] == 70.0
+    assert s["min_health_score"] == 60
+    assert s["max_health_score"] == 80
+    assert s["avg_node_count"] == 7.5
+    assert s["total_coverage_gap_hints"] == 1
+    assert s["rankings"] == [
+        {"repo": "a", "health_score": 80},
+        {"repo": "b", "health_score": 60},
+    ]
+    assert s["coverage_gap_patterns"] == {"g1": 1}
+
+
+def test_fleet_vault_summary_empty_returns_none() -> None:
+    mod = _load_cross_repo_aggregate()
+    assert mod._fleet_vault_summary({}) is None
+    assert mod._fleet_vault_summary({"x": {}}) is None

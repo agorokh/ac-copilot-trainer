@@ -1,0 +1,268 @@
+name: PR pain detection
+
+# Scores a merged PR with `tools/pr_pain/pain_score.py`. If the level is not
+# `low` AND the source repo is in `enabled_repos` (.github/pr-pain-config.yml),
+# files / appends a `process-learning` issue in `agorokh/template-repo`.
+#
+# Triggers:
+#   pull_request: closed       — template-repo's own merged PRs (self-feedback loop)
+#   workflow_dispatch          — manual run; the target repo MUST be in
+#                                `enabled_repos` or `dry_run_repos`
+#                                (.github/pr-pain-config.yml). Un-allowlisted
+#                                manual runs hit the "Skipped" notice and
+#                                produce no score — by design, to keep the
+#                                allowlist the single source of truth.
+#   repository_dispatch        — child-repo dispatchers (added by future Copier rev)
+#
+# Determinism contract: this workflow MUST NOT block merges. All failures here
+# log + exit non-zero only inside the workflow; PR merge already happened.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_url:
+        description: "PR URL (https://github.com/owner/repo/pull/N) — required"
+        required: true
+  repository_dispatch:
+    types: [pr-pain-eval]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  # `compute_pain_score` queries `/repos/{repo}/actions/runs?branch=...` to
+  # count CI red runs on the PR head — needs Actions read. Without this,
+  # the score's `ci_red_runs` field would silently be 0 on every PR.
+  actions: read
+
+concurrency:
+  group: pr-pain-${{ github.event.pull_request.number || github.event.client_payload.pr || github.event.inputs.pr_url }}
+  cancel-in-progress: false
+
+jobs:
+  score:
+    # Skip on non-merged closes and on PRs from forks (where we lack tokens).
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Verify gh ≥ 2.28 (--paginate --slurp requirement)
+        # `_fetch_paginated` and `_fetch_workflow_runs` rely on `gh api
+        # --paginate --slurp`, which landed in gh 2.28 (May 2024). The
+        # current ubuntu-latest runner ships a much newer gh, but pin
+        # this assumption so a future image regression fails LOUD instead
+        # of silently corrupting paginated responses.
+        run: |
+          set -euo pipefail
+          ver="$(gh --version | head -n1 | awk '{print $3}')"
+          echo "gh version: $ver"
+          maj="${ver%%.*}"
+          rest="${ver#*.}"
+          mn="${rest%%.*}"
+          if [ "$maj" -lt 2 ] || { [ "$maj" -eq 2 ] && [ "$mn" -lt 28 ]; }; then
+            echo "::error::gh $ver is too old; need >= 2.28 for --paginate --slurp"
+            exit 1
+          fi
+
+      - name: Resolve source repo + PR
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEFAULT_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DISPATCH_URL: ${{ github.event.inputs.pr_url }}
+          PAYLOAD_PR: ${{ github.event.client_payload.pr }}
+          PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              echo "repo=$DEFAULT_REPO" >> "$GITHUB_OUTPUT"
+              echo "pr=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+              ;;
+            workflow_dispatch)
+              # Parse https://github.com/owner/repo/pull/N
+              if [[ ! "$DISPATCH_URL" =~ ^https://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
+                echo "::error::Invalid pr_url: $DISPATCH_URL"
+                exit 1
+              fi
+              echo "repo=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+              echo "pr=${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+              ;;
+            repository_dispatch)
+              if [[ -z "$PAYLOAD_REPO" || -z "$PAYLOAD_PR" ]]; then
+                echo "::error::repository_dispatch payload must include {repo, pr}"
+                exit 1
+              fi
+              echo "repo=$PAYLOAD_REPO" >> "$GITHUB_OUTPUT"
+              echo "pr=$PAYLOAD_PR" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Unsupported event: $EVENT_NAME"
+              exit 1
+              ;;
+          esac
+
+      - name: Check allowlist
+        id: allow
+        env:
+          SOURCE_REPO: ${{ steps.resolve.outputs.repo }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          # PyYAML is preinstalled on ubuntu-latest runners; if it ever
+          # disappears (alternate runner image, fork running this on a
+          # custom-runner repo, etc.) fail loudly per repo
+          # `errors-silent-fallbacks` policy. Auto-`pip install` would
+          # introduce network variability into a workflow path designed
+          # to be deterministic — Qodo round-15 finding.
+          import os, sys, pathlib, json
+          try:
+              import yaml
+          except ImportError:
+              print(
+                  "::error::PyYAML is required for the allowlist parser but not "
+                  "installed on this runner. On ubuntu-latest it ships in the "
+                  "default Python; on alternate images add `pip install pyyaml` "
+                  "to a setup step before this job (do NOT silently install it "
+                  "here — keep this workflow deterministic).",
+                  file=sys.stderr,
+              )
+              raise SystemExit(1)
+          cfg_path = pathlib.Path(".github/pr-pain-config.yml")
+          if not cfg_path.exists():
+              print("enabled=false")
+              print("dry_run=false")
+              raise SystemExit(0)
+          cfg = yaml.safe_load(cfg_path.read_text()) or {}
+          repo = os.environ["SOURCE_REPO"]
+          enabled = repo in (cfg.get("enabled_repos") or [])
+          dry_run = repo in (cfg.get("dry_run_repos") or [])
+          print(f"enabled={'true' if enabled else 'false'}")
+          print(f"dry_run={'true' if dry_run else 'false'}")
+          PY
+
+      - name: Score PR
+        id: score
+        # Score whenever a repo is allowlisted OR opted into dry_run mode.
+        # Without `|| dry_run == 'true'` here, `dry_run_repos` would be dead
+        # code: the file step is the one that respects dry_run, but it
+        # depends on this step's outputs to know what was scored.
+        if: >-
+          steps.allow.outputs.enabled == 'true' ||
+          steps.allow.outputs.dry_run == 'true'
+        env:
+          # Same token rules as the File step: prefer the PAT so cross-repo
+          # scoring works (the workflow's GITHUB_TOKEN can't read PR or
+          # actions data on external repos).
+          GH_TOKEN: ${{ secrets.PAIN_REPORT_TOKEN || github.token }}
+          SOURCE_REPO: ${{ steps.resolve.outputs.repo }}
+          SOURCE_PR: ${{ steps.resolve.outputs.pr }}
+          DRY_RUN: ${{ steps.allow.outputs.dry_run }}
+        run: |
+          set -euo pipefail
+          python3 -m tools.pr_pain.pain_score \
+            --repo "$SOURCE_REPO" \
+            --pr "$SOURCE_PR" \
+            --json > pain.json
+          cat pain.json
+          level=$(python3 -c "import json,sys; print(json.load(open('pain.json'))['level'])")
+          score=$(python3 -c "import json; print(json.load(open('pain.json'))['score'])")
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "score=$score" >> "$GITHUB_OUTPUT"
+          mode="enabled"
+          if [ "$DRY_RUN" = "true" ]; then mode="dry-run (no issue filed)"; fi
+          {
+            echo "## PR pain score ($mode)"
+            echo
+            echo "- repo: \`$SOURCE_REPO\`"
+            echo "- PR: #$SOURCE_PR"
+            echo "- score: **$score** ($level)"
+            echo
+            echo '```json'
+            cat pain.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skipped (repo not in allowlist)
+        if: >-
+          steps.allow.outputs.enabled != 'true' &&
+          steps.allow.outputs.dry_run != 'true'
+        env:
+          SOURCE_REPO: ${{ steps.resolve.outputs.repo }}
+          SOURCE_PR: ${{ steps.resolve.outputs.pr }}
+        run: |
+          echo "::notice::PR pain detection disabled for $SOURCE_REPO (#$SOURCE_PR). Add to .github/pr-pain-config.yml::enabled_repos (or dry_run_repos to score-only) to enable."
+
+      - name: File / append process-learning issue
+        if: >-
+          steps.allow.outputs.enabled == 'true' &&
+          steps.allow.outputs.dry_run != 'true' &&
+          steps.score.outputs.level != 'low'
+        env:
+          # PAIN_REPORT_TOKEN is a PAT with `issues:write` on template-repo
+          # AND `pull_requests:read` + `actions:read` on every source repo
+          # we plan to score. Without it: in-repo scoring + filing works
+          # (default GITHUB_TOKEN has those perms for the same repo), but
+          # cross-repo scoring will fail at `gh pr view` against an external
+          # repo. Provision it alongside the first child-repo dispatcher
+          # rev — see docs/01_Vault/.../pr-pain-detection-workflow-2026-04.md.
+          GH_TOKEN: ${{ secrets.PAIN_REPORT_TOKEN || github.token }}
+          SOURCE_REPO: ${{ steps.resolve.outputs.repo }}
+          SOURCE_PR: ${{ steps.resolve.outputs.pr }}
+          PAIN_LEVEL: ${{ steps.score.outputs.level }}
+        run: |
+          set -euo pipefail
+          # Ensure required labels exist on target repo (idempotent).
+          # `gh label create --force` requires `--color`; without it the
+          # command exits non-zero on missing-label first-run.
+          #
+          # Per repo policy `errors-silent-fallbacks`: do NOT swallow the
+          # exit code with `|| true`. Label creation failures are usually
+          # real (PAT lacks `repo`/`issues:write` on the target, or the
+          # target repo is wrong) — making them invisible means the issue
+          # gets filed without `from:<repo>` / `pain:<level>` labels and
+          # the operator never sees why the triage views are empty. We
+          # capture stderr, emit a warning to the step summary on
+          # failure, but continue (label creation is non-blocking — the
+          # subsequent file_issue.py call also adds labels and an issue
+          # without the auxiliary labels is still better than no issue).
+          create_label() {
+            local name="$1" color="$2" desc="$3"
+            local stderr
+            if ! stderr=$(gh label create "$name" --repo agorokh/template-repo \
+                --color "$color" --description "$desc" --force 2>&1 >/dev/null); then
+              echo "::warning title=Label creation failed::label=${name} stderr=${stderr}"
+              {
+                echo "### Label creation failed"
+                echo ""
+                echo "- label: \`${name}\`"
+                echo "- error: ${stderr}"
+                echo ""
+                echo "The issue will still be filed; auxiliary labels may be missing."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          }
+          src_label="from:$(echo "$SOURCE_REPO" | cut -d/ -f2)"
+          create_label process-learning "f9d0c4" \
+            "Recurring PR pain pattern auto-filed by tools/pr_pain"
+          create_label "$src_label" "c5def5" \
+            "Source repo for the pain pattern"
+          create_label "pain:$PAIN_LEVEL" \
+            "$( [ "$PAIN_LEVEL" = high ] && echo b60205 || echo fbca04 )" \
+            "Pain score severity ($PAIN_LEVEL)"
+          python3 -m tools.pr_pain.file_issue \
+            --score-file pain.json \
+            --target-repo agorokh/template-repo

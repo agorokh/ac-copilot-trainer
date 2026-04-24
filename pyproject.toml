@@ -16,14 +16,27 @@ dev = [
   "pytest>=9.0.3",
   "pytest-cov>=7.1.0",
   "bandit>=1.9.4",
-  "ruff>=0.15.10",
+  "detect-secrets>=1.5.0",
+  "ruff>=0.15.11",
   "pre-commit>=4.5.1",
+  "pyyaml>=6.0.3",
+  # Security floor: keep pygments at 2.20.0+ because CVE-2026-4539 is fixed there (see #6).
+  "pygments>=2.20.0",
+  # Project-specific:
   "requests>=2.33.1",
   "websockets>=16.0",
   "lupa>=2.7",  # Lua runtime for HUD smoke tests (issue #66)
 ]
 mining = [
+  # Security floor: requests 2.33.0+ fixes CVE-2026-25645 (surfaced in pip-audit with dev+mining+knowledge).
   "requests>=2.33.1",
+  "scikit-learn>=1.8.0",
+  "numpy>=2.4.4",
+]
+mining-semantic = [
+  # Opt-in for MINING_SEMANTIC_CLUSTER=1 — sentence-transformer embeddings + agglom clustering.
+  # ~80 MB model download on first run (all-MiniLM-L6-v2). CPU-only on M2/M5 Pro.
+  "sentence-transformers>=5.4.1",
   "scikit-learn>=1.8.0",
   "numpy>=2.4.4",
 ]
@@ -39,6 +52,14 @@ coaching = [
     "scikit-learn>=1.8.0",
     "shap>=0.51.0",
 ]
+# Tier 3 Phase 2+ (#26): not installed in CI; see tools/model_training/train.py
+training = [
+  "torch>=2.11.0",
+  "transformers>=5.5.4",
+  "trl>=1.2.0",
+  "peft>=0.19.1",
+  "datasets>=4.8.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
@@ -48,8 +69,11 @@ include = ["ac_copilot_trainer*", "tools*"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.format]
+line-ending = "lf"
+
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "DTZ"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

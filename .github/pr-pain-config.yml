@@ -1,0 +1,26 @@
+# PR pain detection allowlist + thresholds.
+#
+# Filing is gated to repos in `enabled_repos`. Start conservative — add a repo
+# only after you've seen 2-3 real pain reports from it and confirmed the score
+# is sane. This file is read by `.github/workflows/pr-pain-detection.yml`.
+#
+# Threshold tuning lives in `tools/pr_pain/pain_score.py` (THRESHOLD_HIGH /
+# THRESHOLD_MEDIUM constants). Edit there with a code change so churn is
+# auditable.
+
+enabled_repos:
+  - agorokh/template-repo
+  # - agorokh/agent-factory     # enable after first validation cycle
+  # - agorokh/workstation-ops   # enable after first validation cycle
+
+# Repos in `dry_run_repos` are scored, but no issue is filed — score is only
+# logged in the workflow run. Useful for safe rollout.
+dry_run_repos: []
+
+# Optional: extend the bot-detection allowlist without touching code.
+# Logins listed here are added to `tools/pr_pain/pain_score.py:_BUILTIN_KNOWN_BOTS`
+# and weighted at 0.1 (bot) instead of 0.3 (human) in the comment-volume metric.
+# Bots with the literal `[bot]` suffix in their login are auto-detected and do
+# NOT need to be listed here — only add hosted reviewers (CodeRabbit, ChatGPT
+# Codex, Cursor, Sourcery, etc.) whose login lacks the `[bot]` suffix.
+extra_bot_logins: []
