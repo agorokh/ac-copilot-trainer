@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-24T21:14:00Z
+last_updated: 2026-04-24T22:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -17,13 +17,6 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
-
-## Stream T — Template-sync PR #87 (READY TO MERGE, 2026-04-24)
-
-**Status:** PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87) **OPEN, ready to merge** (head `53bf74f`, 2026-04-24T20:49Z).
-Synced canonical template (52 commits since Apr 4) to fix orchestrator hook-drift bug (template-repo PR #92). Post-cooldown verification: **all checks green (build, docs, audit, CodeRabbit, Bugbot), 0 unresolved review threads, mergeStateStatus CLEAN**. See [`03_Investigations/template-sync-pr87-2026-04-24`](../03_Investigations/template-sync-pr87-2026-04-24.md) for full context.
-
-**Next:** Merge PR #87, then run post-merge skill to update this handoff.
 
 ## Stream A — Rig screen Phase-2 UI (PR #83 MERGED, building on top)
 
@@ -61,6 +54,7 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-04-24** — PR [#87](https://github.com/agorokh/ac-copilot-trainer/pull/87) **template sync to template-repo@061d9ab** MERGED at `ab13a71`. Fixes orchestrator hook-drift, ships 9 new skills, deterministic flow-control hooks, post-merge steward + `vault-automerge.yml`. Upstream tracker `agorokh/template-repo#97` for 17+ deferred items. Full context in [`03_Investigations/template-sync-pr87-2026-04-24`](../03_Investigations/template-sync-pr87-2026-04-24.md).
 - **2026-04-22** — Session MCP infra: installed TurboVault + 6 MCP servers; see `~/Projects/mcp-work/mcp-servers` + `docs.claude.md`.
 - **2026-04-22** — PR [#84](https://github.com/agorokh/ac-copilot-trainer/pull/84) vault post-merge handoff.
 - **2026-04-22** — PR [#83](https://github.com/agorokh/ac-copilot-trainer/pull/83) external WS + Lua bridge MERGED.
