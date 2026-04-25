@@ -25,13 +25,16 @@ typedef lv_obj_t* (*ui_nav_factory_fn)(void);
 void ui_nav_init(void);
 
 // Push a new screen by running `factory` on the current LVGL context. The
-// returned screen is loaded and remembered. No-op if the stack is full
-// (depth 2). Safe to call from event callbacks (the previous screen is
-// deleted on the next LVGL idle to avoid dangling event handlers).
+// returned screen is loaded and remembered on the back-stack. No-op if the
+// stack is full (depth 2). Safe to call from event callbacks; pushing does
+// not delete the previous screen — that screen remains on the stack and is
+// only freed when `ui_nav_pop()` returns to it. (Doc fix from Copilot on
+// PR #91: original wording suggested push freed memory, which it doesn't.)
 void ui_nav_push(ui_nav_factory_fn factory);
 
-// Pop back to the previous screen, deleting the current one. No-op when
-// at the root screen.
+// Pop back to the previous screen, deleting the current one on the next
+// LVGL idle (via `lv_async_call`) so the call is safe from a widget event
+// callback that lives on the screen being popped. No-op when at the root.
 void ui_nav_pop(void);
 
 // True when the current screen is the root (Launcher).

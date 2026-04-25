@@ -32,6 +32,7 @@
 
 #if PHASE1_FALLBACK == 0
 #include <lvgl.h>
+#include <esp_heap_caps.h>   // heap_caps_malloc / MALLOC_CAP_SPIRAM
 #include "board/JC3248W535_Touch.h"
 #include "ui/app_state.h"
 #include "ui/nav.h"
@@ -99,11 +100,19 @@ static uint32_t demo_next_at    = 0;
 static constexpr uint32_t DEMO_INTERVAL_MS = 10000;
 static constexpr bool ENABLE_DEMO_ACTION = false;  // Phase-1 safety: no unsolicited in-game actions.
 
+// (Phase-2 LVGL path now pushes the launcher during `lvgl_bringup()`, so
+// there is no longer a one-shot WS-open guard; see the call to
+// `ui_nav_push(launcher_create)` below. This addresses chatgpt-codex P1
+// and gemini-code-assist medium feedback on PR #91 — the device must show
+// the launcher even when the sidecar is unreachable.)
+
 #if PHASE1_FALLBACK == 0
-// One-shot guard: only push the launcher onto the navigator the first time
-// WS opens. Subsequent reconnects update `app_state` but leave the user on
-// whatever screen they were on.
-static bool      launcher_pushed = false;
+// Issue #86 Part B3: the launcher pill should only flip to DISCONNECTED
+// after the link has been down for > 3 s. We capture the close timestamp
+// in `ws_on_event` and apply the state transition from `ws_tick()` once
+// the threshold has passed. `0` means "no pending close".
+static uint32_t ws_disconnected_pending_at = 0;
+static constexpr uint32_t WS_DISCONNECT_GRACE_MS = 3000;
 #endif
 
 // -- Drawing helpers (Phase 1 only) -----------------------------------------
@@ -266,8 +275,13 @@ static void lvgl_bringup() {
   lv_buf_b = static_cast<lv_color_t*>(
       heap_caps_malloc(LV_BUF_PIXELS * sizeof(lv_color_t), MALLOC_CAP_SPIRAM));
   if (!lv_buf_a || !lv_buf_b) {
-    Serial.println("[lvgl] PSRAM draw-buffer alloc failed");
-    while (true) { delay(1000); }
+    // PSRAM draw-buffer allocation must not silently hang the device.
+    // Print loudly and reset so the watchdog crash log is visible to a
+    // user with a serial monitor open. (Sourcery review on PR #91.)
+    Serial.println("[fatal][lvgl] PSRAM draw-buffer alloc failed -- restarting in 3s");
+    Serial.flush();
+    delay(3000);
+    ESP.restart();
   }
   lv_disp_draw_buf_init(&lv_draw_buf, lv_buf_a, lv_buf_b, LV_BUF_PIXELS);
 
@@ -286,6 +300,11 @@ static void lvgl_bringup() {
 
   ui_nav_init();
   app_state_set(APP_BOOTING);
+  // Push the launcher immediately so the device shows real UI during the
+  // boot/connection phase, not a blank LVGL default. The launcher header
+  // pill reflects WiFi/WS state via `app_state_get()`. Critical for the
+  // sidecar-unreachable failure mode (chatgpt-codex P1 on PR #91).
+  ui_nav_push(launcher_create);
   lv_last_tick_ms = millis();
   lv_next_canvas_flush_ms = lv_last_tick_ms + 16;
 }
@@ -378,11 +397,14 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       last_error    = "";
       Serial.println("[ws] open");
 #if PHASE1_FALLBACK == 0
+      // Launcher is already on the stack from `lvgl_bringup()`. Promote
+      // BOOTING → CONNECTED → LAUNCHER_IDLE on first open and on every
+      // reconnect; the launcher header listens to this and updates the
+      // CONNECTED/DISCONNECTED pill without us pushing a new screen.
+      // Cancel any pending disconnect threshold (Part B3 grace window).
+      ws_disconnected_pending_at = 0;
       app_state_set(APP_CONNECTED);
-      if (!launcher_pushed) {
-        // First time WS comes up — load the Launcher screen.
-        ui_nav_push(launcher_create);
-        launcher_pushed = true;
+      if (ui_nav_at_root()) {
         app_state_set(APP_LAUNCHER_IDLE);
       }
 #endif
@@ -401,7 +423,12 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       last_error = "ws closed";
       Serial.println("[ws] closed");
 #if PHASE1_FALLBACK == 0
-      app_state_set(APP_DISCONNECTED);
+      // Part B3: don't flip the pill immediately — give the auto-reconnect
+      // logic up to WS_DISCONNECT_GRACE_MS to recover before showing the
+      // user a DISCONNECTED state. `ws_tick()` evaluates the deadline.
+      if (ws_disconnected_pending_at == 0) {
+        ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
+      }
 #endif
       break;
     case WebsocketsEvent::GotPing:
@@ -451,6 +478,15 @@ static void ws_tick() {
     }
     return;
   }
+#if PHASE1_FALLBACK == 0
+  // Part B3: if the WS is closed and the grace window has elapsed without
+  // a successful reconnect, surface DISCONNECTED to the launcher pill.
+  if (ws_disconnected_pending_at != 0 &&
+      (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
+    app_state_set(APP_DISCONNECTED);
+    ws_disconnected_pending_at = 0;
+  }
+#endif
   if (WiFi.status() != WL_CONNECTED) return;
   if (millis() >= ws_retry_at) {
     ws_try_connect();
@@ -542,10 +578,10 @@ void setup() {
 #else
   // LVGL bring-up (issue #86 Part A1–A5): allocates draw buffers in PSRAM,
   // registers the Arduino_Canvas flush bridge, registers the AXS15231B
-  // I²C touch reader as the LVGL pointer device, and prepares the
-  // navigator. The actual launcher screen is loaded once WS first opens.
+  // I²C touch reader as the LVGL pointer device, prepares the navigator,
+  // and pushes the Launcher screen so the user sees real UI during boot.
   lvgl_bringup();
-  Serial.println("[diag] LVGL ready; awaiting WS open to load launcher");
+  Serial.println("[diag] LVGL ready; launcher pushed (state=BOOTING)");
 #endif
 
   // WiFi.

@@ -41,10 +41,12 @@
 /* =====================
  *   HAL / TICK
  * ===================== */
-/* We drive lv_tick_inc() manually from loop() per the ADR. */
-#define LV_TICK_CUSTOM                 1
-#define LV_TICK_CUSTOM_INCLUDE         "Arduino.h"
-#define LV_TICK_CUSTOM_SYS_TIME_EXPR   (millis())
+/* main.cpp calls `lv_tick_inc(elapsed)` once per loop(), so the LVGL custom
+ * sys-time tick source is intentionally OFF. Enabling both is internally
+ * inconsistent (Copilot review on PR #91); pick one and stick with it. The
+ * manual path is preferred because we already track `lv_last_tick_ms` for
+ * the canvas-flush throttle. */
+#define LV_TICK_CUSTOM                 0
 #define LV_DPI_DEF                     130
 
 /* =====================

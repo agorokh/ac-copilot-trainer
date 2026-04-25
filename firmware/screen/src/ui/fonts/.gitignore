@@ -1,3 +1,5 @@
-# Allow lv_font_conv outputs (generated locally per README).
-!*.c
-!*.bin
+# Ignore lv_font_conv outputs generated locally per README.
+# Bundled font sources under src/, the README, and the OFL license remain
+# tracked because they are not matched by these patterns.
+*.c
+*.bin

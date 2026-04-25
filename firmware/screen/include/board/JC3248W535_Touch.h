@@ -51,8 +51,13 @@ inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
 
   uint16_t rx = ((uint16_t)(buf[2] & 0x0F) << 8) | buf[3];
   uint16_t ry = ((uint16_t)(buf[4] & 0x0F) << 8) | buf[5];
-  // Sentinel-reject obvious garbage frames.
-  if (rx > 500 || ry > 500) return false;
+  // Reject any frame whose raw coordinates exceed the native panel bounds.
+  // The landscape mapping below computes `(NATIVE_W - 1) - rx` as a
+  // `uint16_t`, so any rx >= NATIVE_W (320) would underflow and produce a
+  // wrapped y in the 65k range. Clamping against the panel size — not an
+  // arbitrary 500 sentinel — keeps the formula safe even on noisy I²C
+  // frames. (Reported by gemini-code-assist + chatgpt-codex on PR #91.)
+  if (rx >= JC_TOUCH_NATIVE_W || ry >= JC_TOUCH_NATIVE_H) return false;
 
   // Native-portrait → landscape (rotation=1) mapping. Verify on first
   // finger; flip the formula if axes come out swapped.
