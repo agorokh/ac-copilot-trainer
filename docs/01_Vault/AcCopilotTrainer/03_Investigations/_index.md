@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-04-22
+updated: 2026-04-25
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -25,3 +25,4 @@ Technical deep-dives and root-cause analyses from development sessions.
 | [cowork-session-retrospective-2026-04-21.md](cowork-session-retrospective-2026-04-21.md) | User's critique of earlier Cowork session + durable autonomy/ownership preferences. |
 | [pr-78-sidecar-autolaunch-lap-archive.md](pr-78-sidecar-autolaunch-lap-archive.md) | Sidecar auto-launch via CSP os.runConsoleProcess + per-lap JSON archive schema v1 + 500 MB rotation. |
 | [pr-75-ollama-corner-coaching-protocol.md](pr-75-ollama-corner-coaching-protocol.md) | corner_query / corner_advice protocol, two-phase response (rules < 10ms + Ollama ~3-7s), sim-time staleness. |
+| [ci-conventional-stale-pr-title-2026-04-25.md](ci-conventional-stale-pr-title-2026-04-25.md) | `ci-conventional` fails after a PR title rename — Actions captures the event payload at trigger time and doesn't re-fire on rename. Push a fresh commit. |
