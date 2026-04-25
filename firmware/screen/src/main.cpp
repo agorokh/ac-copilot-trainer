@@ -517,18 +517,29 @@ static void ws_try_connect() {
 static void ws_tick() {
   ws.poll();
 #if PHASE1_FALLBACK == 0
-  // If WiFi has dropped, ws.poll() can't observe a clean ConnectionClosed,
-  // so we arm the same grace timer here. This block must run BEFORE the
-  // `ws_state == Open` early return below -- otherwise the arming code is
-  // unreachable in exactly the scenario it's meant to handle (WiFi drops
-  // while ws_state is still Open). (Sourcery + Cursor Bugbot on PR #91.)
-  if (WiFi.status() != WL_CONNECTED && ws_state != WsState::Idle) {
+  const bool wifi_up = (WiFi.status() == WL_CONNECTED);
+  // Arm the disconnect grace timer whenever the link is not actually up.
+  // We intentionally do NOT gate this on `ws_state != Idle` because a
+  // cold boot where WiFi never comes up keeps ws_state at Idle forever,
+  // and we still want the pill to surface DISCONNECTED so the failure
+  // is visible on-device. (chatgpt-codex P2 on PR #91.)
+  //
+  // This block must run BEFORE the `ws_state == Open` early return below
+  // -- otherwise the arming code is unreachable in exactly the scenario
+  // it's meant to handle (WiFi drops while ws_state is still Open).
+  // (Sourcery + Cursor Bugbot on PR #91.)
+  const bool link_up = wifi_up && ws_state == WsState::Open;
+  if (!link_up) {
     disconnect_grace_arm();
+  } else {
+    // Link is fully up again; clear any timer armed by a transient
+    // WiFi.status() blip during a still-Open WS session, otherwise the
+    // timer would expire and force APP_DISCONNECTED while the link is
+    // genuinely live (Cursor Bugbot finding on PR #91).
+    disconnect_grace_clear();
   }
   // Surface DISCONNECTED to the launcher pill if the grace window has
-  // elapsed without a successful reconnect. Run before the
-  // open-fast-path return too so the timer is honored even if `ws_state`
-  // flips to Open mid-tick due to a reconnect race.
+  // elapsed. Run before the open-fast-path return below.
   disconnect_grace_evaluate();
 #endif
   if (ws_state == WsState::Open) {

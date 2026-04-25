@@ -49,7 +49,11 @@ inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
   uint8_t buf[8];
   for (uint8_t i = 0; i < 8; ++i) buf[i] = Wire.read();
 
-  uint8_t fingers = buf[1];
+  // Some AXS15xxx variants encode status/flags in the high nibble of this
+  // byte; only the low nibble is the actual finger count. Mask so a future
+  // controller revision that sets status bits doesn't make us parse bogus
+  // coordinates with no real touch present. (Sourcery review on PR #91.)
+  uint8_t fingers = buf[1] & 0x0F;
   if (fingers == 0) return false;
 
   uint16_t rx = ((uint16_t)(buf[2] & 0x0F) << 8) | buf[3];
