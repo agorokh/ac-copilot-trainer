@@ -121,8 +121,37 @@ static constexpr bool ENABLE_DEMO_ACTION = false;  // Phase-1 safety: no unsolic
 // after the link has been down for > 3 s. We capture the close timestamp
 // in `ws_on_event` and apply the state transition from `ws_tick()` once
 // the threshold has passed. `0` means "no pending close".
+//
+// Centralised here so all four arm-call-sites (clean WS close, sync
+// connect failure, WiFi loss, future reconnect-race) use the same
+// timer semantics. (Sourcery review on PR #91 -- WS disconnect grace
+// handling was previously spread across ws_on_event/ws_try_connect/
+// ws_tick with ordering-sensitive comments.)
 static uint32_t ws_disconnected_pending_at = 0;
 static constexpr uint32_t WS_DISCONNECT_GRACE_MS = 3000;
+
+// Arm the disconnect grace timer if it isn't already armed. Idempotent
+// across multiple call sites in a single tick.
+static inline void disconnect_grace_arm() {
+  if (ws_disconnected_pending_at == 0) {
+    ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
+  }
+}
+
+// If the grace timer has elapsed, surface APP_DISCONNECTED to the
+// launcher pill and clear the timer. Safe to call every tick.
+static inline void disconnect_grace_evaluate() {
+  if (ws_disconnected_pending_at != 0 &&
+      (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
+    app_state_set(APP_DISCONNECTED);
+    ws_disconnected_pending_at = 0;
+  }
+}
+
+// Cancel any pending grace timer (called when the WS reconnects).
+static inline void disconnect_grace_clear() {
+  ws_disconnected_pending_at = 0;
+}
 #endif
 
 // -- Drawing helpers (Phase 1 only) -----------------------------------------
@@ -412,7 +441,7 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       // reconnect; the launcher header listens to this and updates the
       // CONNECTED/DISCONNECTED pill without us pushing a new screen.
       // Cancel any pending disconnect threshold (Part B3 grace window).
-      ws_disconnected_pending_at = 0;
+      disconnect_grace_clear();
       app_state_set(APP_CONNECTED);
       if (ui_nav_at_root()) {
         app_state_set(APP_LAUNCHER_IDLE);
@@ -436,9 +465,7 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       // Part B3: don't flip the pill immediately — give the auto-reconnect
       // logic up to WS_DISCONNECT_GRACE_MS to recover before showing the
       // user a DISCONNECTED state. `ws_tick()` evaluates the deadline.
-      if (ws_disconnected_pending_at == 0) {
-        ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
-      }
+      disconnect_grace_arm();
 #endif
       break;
     case WebsocketsEvent::GotPing:
@@ -479,9 +506,7 @@ static void ws_try_connect() {
     // arm it here, a sidecar-unreachable boot leaves the pill stuck on
     // "CONNECTING" forever. (chatgpt-codex P1 + Cursor Bugbot medium +
     // Sourcery suggestion on PR #91.)
-    if (ws_disconnected_pending_at == 0) {
-      ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
-    }
+    disconnect_grace_arm();
 #endif
 #if PHASE1_FALLBACK
     refresh_ui();
@@ -493,25 +518,18 @@ static void ws_tick() {
   ws.poll();
 #if PHASE1_FALLBACK == 0
   // If WiFi has dropped, ws.poll() can't observe a clean ConnectionClosed,
-  // so the grace timer needs to be armed here too. Without this, a Wi-Fi
-  // loss after a successful WS open leaves `app_state` stuck at
-  // CONNECTED/LAUNCHER_IDLE. This block must run BEFORE the
+  // so we arm the same grace timer here. This block must run BEFORE the
   // `ws_state == Open` early return below -- otherwise the arming code is
-  // unreachable in exactly the scenario it's meant to handle. (Sourcery
-  // suggestion + Cursor Bugbot follow-up on PR #91.)
-  if (WiFi.status() != WL_CONNECTED && ws_disconnected_pending_at == 0 &&
-      ws_state != WsState::Idle) {
-    ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
+  // unreachable in exactly the scenario it's meant to handle (WiFi drops
+  // while ws_state is still Open). (Sourcery + Cursor Bugbot on PR #91.)
+  if (WiFi.status() != WL_CONNECTED && ws_state != WsState::Idle) {
+    disconnect_grace_arm();
   }
-  // Part B3: if the WS is closed and the grace window has elapsed without
-  // a successful reconnect, surface DISCONNECTED to the launcher pill.
-  // Run this before the open-fast-path return too so the timer is honored
-  // even if `ws_state` flips to Open mid-tick due to a reconnect race.
-  if (ws_disconnected_pending_at != 0 &&
-      (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
-    app_state_set(APP_DISCONNECTED);
-    ws_disconnected_pending_at = 0;
-  }
+  // Surface DISCONNECTED to the launcher pill if the grace window has
+  // elapsed without a successful reconnect. Run before the
+  // open-fast-path return too so the timer is honored even if `ws_state`
+  // flips to Open mid-tick due to a reconnect race.
+  disconnect_grace_evaluate();
 #endif
   if (ws_state == WsState::Open) {
     if (ENABLE_DEMO_ACTION && (int32_t)(millis() - demo_next_at) >= 0) {

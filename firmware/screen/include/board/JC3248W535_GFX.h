@@ -34,8 +34,12 @@
 // Panel native orientation is 320x480 portrait. We rotate at runtime to
 // landscape (480x320). Arduino_AXS15231B accepts width/height in its ctor
 // as the *native* portrait dimensions; rotation is applied via setRotation.
-#define JC_TFT_NATIVE_W  320
-#define JC_TFT_NATIVE_H  480
+//
+// Source of truth lives in JC3248W535_Panel.h so the touch reader can't
+// drift out of sync with the display config. (Sourcery review on PR #91.)
+#include "JC3248W535_Panel.h"
+#define JC_TFT_NATIVE_W  JC_PANEL_NATIVE_W
+#define JC_TFT_NATIVE_H  JC_PANEL_NATIVE_H
 
 // Build the QSPI panel + canvas. Returns the Arduino_Canvas — drawing into it
 // goes to a PSRAM framebuffer; calling canvas->flush() pushes the whole frame

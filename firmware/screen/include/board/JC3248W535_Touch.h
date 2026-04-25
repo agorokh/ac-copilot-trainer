@@ -25,8 +25,11 @@
 #define JC_TOUCH_I2C_ADDR  0x3B
 #define JC_TOUCH_SDA       4
 #define JC_TOUCH_SCL       8
-#define JC_TOUCH_NATIVE_W  320
-#define JC_TOUCH_NATIVE_H  480
+// Source of truth for these dimensions is JC3248W535_Panel.h. (Sourcery
+// review on PR #91 - keep display + touch in sync via a single header.)
+#include "JC3248W535_Panel.h"
+#define JC_TOUCH_NATIVE_W  JC_PANEL_NATIVE_W
+#define JC_TOUCH_NATIVE_H  JC_PANEL_NATIVE_H
 
 inline void jc_touch_begin() {
   Wire.begin(JC_TOUCH_SDA, JC_TOUCH_SCL, 400000);
