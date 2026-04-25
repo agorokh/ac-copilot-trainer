@@ -41,7 +41,13 @@
 
 using namespace websockets;
 
-static Arduino_GFX* gfx = nullptr;
+static Arduino_GFX*    gfx        = nullptr;
+// Narrow once at construction time so the LVGL flush path doesn't repeat an
+// unchecked static_cast on every dirty frame. `jc3248w535_make_display()`
+// always wraps the panel in an Arduino_Canvas, but if that ever changes,
+// `gfx_canvas` stays null and the canvas-flush is skipped instead of UB.
+// (CodeRabbit nit on PR #91.)
+static Arduino_Canvas* gfx_canvas = nullptr;
 static WebsocketsClient ws;
 
 // -- Screen layout (rotation=1 -> 480x320 landscape) -------------------------
@@ -320,8 +326,8 @@ static void lvgl_tick() {
 
   // Canvas push: ~60 Hz cap. Only push when LVGL actually drew something.
   if (lv_canvas_dirty && (int32_t)(now - lv_next_canvas_flush_ms) >= 0) {
-    if (gfx) {
-      static_cast<Arduino_Canvas*>(gfx)->flush();
+    if (gfx_canvas) {
+      gfx_canvas->flush();
     }
     lv_canvas_dirty = false;
     lv_next_canvas_flush_ms = now + 16;
@@ -553,6 +559,10 @@ void setup() {
 
   Serial.println("[diag] make_display() ...");
   gfx = jc3248w535_make_display();
+  // jc3248w535_make_display() returns the outer Arduino_Canvas. Cache the
+  // narrowed pointer once so the LVGL canvas-flush path is checked-once,
+  // not cast-on-every-frame. (CodeRabbit nit on PR #91.)
+  gfx_canvas = static_cast<Arduino_Canvas*>(gfx);
   Serial.printf("[diag] gfx ptr=%p\n", gfx);
   Serial.println("[diag] gfx->begin() ...");
   bool ok = gfx && gfx->begin();

@@ -67,6 +67,7 @@ struct launcher_ctx_t {
     lv_obj_t*  spinner;        // reconnect spinner (visible only when disconnected)
     lv_timer_t* poll_timer;    // 500 ms tick to refresh the pill
     app_state_t last_state;    // last value seen by the timer
+    bool        first_render;  // true until the first apply_pill_state() call
 };
 
 // --- Helpers ---------------------------------------------------------------
@@ -99,9 +100,10 @@ void poll_state_cb(lv_timer_t* t) {
     auto* ctx = static_cast<launcher_ctx_t*>(t->user_data);
     if (!ctx) return;
     app_state_t now = app_state_get();
-    if (now != ctx->last_state) {
+    if (ctx->first_render || now != ctx->last_state) {
         apply_pill_state(ctx, now);
-        ctx->last_state = now;
+        ctx->last_state    = now;
+        ctx->first_render  = false;
     }
 }
 
@@ -266,8 +268,18 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
 }  // namespace
 
 extern "C" lv_obj_t* launcher_create(void) {
+    // ESP32 Arduino is built with -fno-exceptions, so `new` returns nullptr
+    // on OOM rather than throwing. Guard so we don't crash on the very next
+    // ctx-> dereference; ui_nav_push() refuses null factories. (CodeRabbit
+    // P1 on PR #91.)
     auto* ctx = new launcher_ctx_t{};
-    ctx->last_state = static_cast<app_state_t>(0xFF);  // force first refresh
+    if (!ctx) {
+        Serial.println("[fatal][ui] launcher ctx alloc failed");
+        return nullptr;
+    }
+    // Use a dedicated `first_render` flag instead of casting an out-of-range
+    // 0xFF to `app_state_t` (UB on -fshort-enums). (CodeRabbit P1 on PR #91.)
+    ctx->first_render = true;
 
     lv_obj_t* scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);
@@ -304,8 +316,9 @@ extern "C" lv_obj_t* launcher_create(void) {
 
     // Initial render of the pill + start the 500 ms poll timer.
     apply_pill_state(ctx, app_state_get());
-    ctx->last_state = app_state_get();
-    ctx->poll_timer = lv_timer_create(poll_state_cb, 500, ctx);
+    ctx->last_state    = app_state_get();
+    ctx->first_render  = false;
+    ctx->poll_timer    = lv_timer_create(poll_state_cb, 500, ctx);
 
     return scr;
 }

@@ -14,7 +14,7 @@ you ever rebuild the HUD font set.
 
 All four faces should be converted with the same range:
 
-```
+```text
 0x20-0x7F,0x2022,0x00D7
 ```
 

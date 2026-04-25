@@ -33,8 +33,11 @@
 #define UI_OK_GREEN         lv_color_hex(0x22C55E)   /* "ON PACE" chip       */
 #define UI_LINE_AMBER       lv_color_hex(0xFFC43D)   /* HUD-side line hint   */
 
-/* Borders — base color + suggested opacity for the style */
-#define UI_BORDER_SOFT      UI_TX_PRIMARY            /* rgba(255,255,255,0.12) */
+/* Borders — base color + suggested opacity for the style.
+ * Bind UI_BORDER_SOFT to the literal white (not UI_TX_PRIMARY) so a future
+ * retune of the primary text color (e.g. to near-white #F5F5F5) does not
+ * silently drag border color along with it. (CodeRabbit nit on PR #91.) */
+#define UI_BORDER_SOFT      lv_color_hex(0xFFFFFF)   /* rgba(255,255,255,0.12) */
 #define UI_BORDER_SOFT_OPA  ((lv_opa_t)31)           /* 0.12 × 255             */
 #define UI_BORDER_ALERT     UI_ALERT_RED
 #define UI_BORDER_ALERT_OPA ((lv_opa_t)102)          /* 0.40 × 255             */

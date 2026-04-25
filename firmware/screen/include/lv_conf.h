@@ -36,7 +36,10 @@
 #define LV_MEM_ADR           0
 #define LV_MEM_AUTO_DEFRAG   1
 #define LV_MEM_BUF_MAX_NUM   16
-#define LV_MEMCPY_MEMSET_STD 0
+/* ESP32 newlib's memcpy/memset are word-aligned and use Xtensa hardware loops,
+ * generally faster than LVGL's portable implementations on the partial-buffer
+ * flush path. Cheap perf win. (CodeRabbit nit on PR #91.) */
+#define LV_MEMCPY_MEMSET_STD 1
 
 /* =====================
  *   HAL / TICK
