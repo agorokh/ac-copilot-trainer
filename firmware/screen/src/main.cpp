@@ -309,13 +309,21 @@ static void lv_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* c
 
 static void lv_indev_read_cb(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
   uint16_t x = 0, y = 0;
+  // LVGL 8.3 pre-fills `data->point` from the last raw POINTER point in
+  // `_lv_indev_read`, so leaving point untouched on REL "happens to work."
+  // Use the canonical static-last_x/last_y pattern from
+  // lv_port_indev_template.c so the contract survives a future LVGL upgrade
+  // and is self-documenting. (CodeRabbit nit on PR #91.)
+  static lv_coord_t last_x = 0, last_y = 0;
   if (jc_touch_read(&x, &y)) {
+    last_x = x;
+    last_y = y;
     data->state = LV_INDEV_STATE_PR;
-    data->point.x = x;
-    data->point.y = y;
   } else {
     data->state = LV_INDEV_STATE_REL;
   }
+  data->point.x = last_x;
+  data->point.y = last_y;
 }
 
 static void lvgl_bringup() {
@@ -557,31 +565,27 @@ static void ws_tick() {
 #if PHASE1_FALLBACK == 0
   const bool wifi_up = (WiFi.status() == WL_CONNECTED);
   const bool link_up = wifi_up && ws_state == WsState::Open;
-  // Arm the disconnect grace timer when there is real evidence that the
-  // link is unhealthy:
-  //   * Wi-Fi has actually failed (wifi_state == Failed: bad SSID, AP
-  //     down, ssid timeout, or a previously-Connected drop), OR
-  //   * we have completed at least one WS connection attempt
-  //     (ws_state past Connecting -- so any of Open/Closed/Error/
-  //     AuthRejected after the first dial).
+  // Arm the disconnect grace timer when we have completed at least one
+  // WS connection attempt (ws_state past Connecting -- so any of
+  // Open/Closed/Error/AuthRejected after the first dial). The cold-boot
+  // SSID-timeout case is handled directly inside wifi_tick() via an
+  // explicit disconnect_grace_arm() call, because wifi_tick() resets
+  // wifi_state back to Connecting in the same loop iteration before
+  // ws_tick() can observe Failed (Cursor Bugbot dead-code follow-up).
   //
   // We deliberately do NOT arm during the very first boot window
-  // (wifi_state in {Idle, Connecting} AND ws_state in {Idle, Connecting}),
-  // otherwise the pill would flash red "DISCONNECTED" after the 3 s
-  // grace even though no real failure has happened yet — defeating the
-  // intent of the CONNECTING amber state. The synchronous
-  // ws.connect() failure path arms the timer explicitly, so a real
-  // sidecar-unreachable boot still surfaces DISCONNECTED via
-  // ws_state = Error. (Cursor Bugbot follow-up on PR #91, refining the
-  // earlier chatgpt-codex P2 fix; codex's "cold boot WiFi never comes
-  // up" case is now handled via wifi_state == Failed below.)
+  // (ws_state in {Idle, Connecting}), otherwise the pill would flash
+  // red "DISCONNECTED" after the 3 s grace even though no real failure
+  // has happened yet -- defeating the intent of the CONNECTING amber
+  // state. The synchronous ws.connect() failure path arms the timer
+  // explicitly, so a real sidecar-unreachable boot still surfaces
+  // DISCONNECTED via ws_state = Error.
   //
   // This block must run BEFORE the `ws_state == Open` early return
   // below -- otherwise the arming code is unreachable in exactly the
   // scenario it's meant to handle (WiFi drops while ws_state is still
   // Open). (Sourcery + Cursor Bugbot on PR #91.)
-  const bool link_failure = (wifi_state == WifiState::Failed) ||
-                            (ws_state != WsState::Idle &&
+  const bool link_failure = (ws_state != WsState::Idle &&
                              ws_state != WsState::Connecting);
   if (!link_up && link_failure) {
     disconnect_grace_arm();
