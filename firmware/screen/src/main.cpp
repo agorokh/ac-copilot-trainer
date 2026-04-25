@@ -491,6 +491,28 @@ static void ws_try_connect() {
 
 static void ws_tick() {
   ws.poll();
+#if PHASE1_FALLBACK == 0
+  // If WiFi has dropped, ws.poll() can't observe a clean ConnectionClosed,
+  // so the grace timer needs to be armed here too. Without this, a Wi-Fi
+  // loss after a successful WS open leaves `app_state` stuck at
+  // CONNECTED/LAUNCHER_IDLE. This block must run BEFORE the
+  // `ws_state == Open` early return below -- otherwise the arming code is
+  // unreachable in exactly the scenario it's meant to handle. (Sourcery
+  // suggestion + Cursor Bugbot follow-up on PR #91.)
+  if (WiFi.status() != WL_CONNECTED && ws_disconnected_pending_at == 0 &&
+      ws_state != WsState::Idle) {
+    ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
+  }
+  // Part B3: if the WS is closed and the grace window has elapsed without
+  // a successful reconnect, surface DISCONNECTED to the launcher pill.
+  // Run this before the open-fast-path return too so the timer is honored
+  // even if `ws_state` flips to Open mid-tick due to a reconnect race.
+  if (ws_disconnected_pending_at != 0 &&
+      (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
+    app_state_set(APP_DISCONNECTED);
+    ws_disconnected_pending_at = 0;
+  }
+#endif
   if (ws_state == WsState::Open) {
     if (ENABLE_DEMO_ACTION && (int32_t)(millis() - demo_next_at) >= 0) {
       send_demo_action();
@@ -498,23 +520,6 @@ static void ws_tick() {
     }
     return;
   }
-#if PHASE1_FALLBACK == 0
-  // Part B3: if the WS is closed and the grace window has elapsed without
-  // a successful reconnect, surface DISCONNECTED to the launcher pill.
-  if (ws_disconnected_pending_at != 0 &&
-      (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
-    app_state_set(APP_DISCONNECTED);
-    ws_disconnected_pending_at = 0;
-  }
-  // If WiFi has dropped, ws.poll() can't observe a clean ConnectionClosed,
-  // so the grace timer needs to be armed here too. Without this, a Wi-Fi
-  // loss after a successful WS open leaves `app_state` stuck at
-  // CONNECTED/LAUNCHER_IDLE. (Sourcery suggestion on PR #91.)
-  if (WiFi.status() != WL_CONNECTED && ws_disconnected_pending_at == 0 &&
-      ws_state != WsState::Idle) {
-    ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
-  }
-#endif
   if (WiFi.status() != WL_CONNECTED) return;
   if (millis() >= ws_retry_at) {
     ws_try_connect();

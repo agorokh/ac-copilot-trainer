@@ -69,7 +69,7 @@ lv_font_conv \
 
 LVGL declares converted faces as `LV_FONT_DECLARE(font_xxx)` in the
 firmware. The symbol name comes from the `.c` filename, so the four
-generated symbols you can use from the screens (Parts B–F) are:
+generated symbols you can use from the screens (Parts C–F) are:
 
 | Symbol                       | Use                                  |
 |------------------------------|--------------------------------------|
