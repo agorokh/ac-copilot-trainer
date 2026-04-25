@@ -53,8 +53,7 @@ inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
   if (tx_status != 0) {
 #ifdef JC_TOUCH_DEBUG_I2C
     if ((++jc_touch_i2c_err % 128) == 0) {
-      Serial.printf("[touch] I2C tx err=%u (sample %u)
-", tx_status, jc_touch_i2c_err);
+      Serial.printf("[touch] I2C tx err=%u (sample %u)\n", tx_status, jc_touch_i2c_err);
     }
 #endif
     return false;
@@ -64,8 +63,7 @@ inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
   if (got < 8) {
 #ifdef JC_TOUCH_DEBUG_I2C
     if ((++jc_touch_i2c_err % 128) == 0) {
-      Serial.printf("[touch] I2C short read got=%u (sample %u)
-", got, jc_touch_i2c_err);
+      Serial.printf("[touch] I2C short read got=%u (sample %u)\n", got, jc_touch_i2c_err);
     }
 #endif
     return false;
