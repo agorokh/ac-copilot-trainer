@@ -129,28 +129,41 @@ static constexpr bool ENABLE_DEMO_ACTION = false;  // Phase-1 safety: no unsolic
 // ws_tick with ordering-sensitive comments.)
 static uint32_t ws_disconnected_pending_at = 0;
 static constexpr uint32_t WS_DISCONNECT_GRACE_MS = 3000;
+// Latched once disconnect_grace_evaluate() has actually surfaced
+// APP_DISCONNECTED, so subsequent ws_tick() calls don't re-arm a
+// fresh 3-s timer that fires repeated app_state_set(APP_DISCONNECTED)
+// calls every 3 seconds while the link stays down. Cleared on reconnect
+// via disconnect_grace_clear(). (Cursor Bugbot Low on PR #91.)
+static bool disconnect_already_surfaced = false;
 
 // Arm the disconnect grace timer if it isn't already armed. Idempotent
-// across multiple call sites in a single tick.
+// across multiple call sites in a single tick. Skipped while
+// disconnect_already_surfaced is latched -- there is no remaining grace
+// to apply until a successful reconnect clears the state.
 static inline void disconnect_grace_arm() {
-  if (ws_disconnected_pending_at == 0) {
+  if (ws_disconnected_pending_at == 0 && !disconnect_already_surfaced) {
     ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
   }
 }
 
 // If the grace timer has elapsed, surface APP_DISCONNECTED to the
-// launcher pill and clear the timer. Safe to call every tick.
+// launcher pill, clear the timer, and latch the surfaced flag. Safe to
+// call every tick.
 static inline void disconnect_grace_evaluate() {
   if (ws_disconnected_pending_at != 0 &&
       (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
     app_state_set(APP_DISCONNECTED);
     ws_disconnected_pending_at = 0;
+    disconnect_already_surfaced = true;
   }
 }
 
-// Cancel any pending grace timer (called when the WS reconnects).
+// Cancel any pending grace timer (called when the WS reconnects). Also
+// clears the latched-surfaced flag so the next link drop will re-arm a
+// fresh grace window.
 static inline void disconnect_grace_clear() {
   ws_disconnected_pending_at = 0;
+  disconnect_already_surfaced = false;
 }
 #endif
 
@@ -408,6 +421,15 @@ static void wifi_tick() {
     } else if (millis() > wifi_retry_at) {
       wifi_state = WifiState::Failed;
       last_error = "wifi: retrying";
+#if PHASE1_FALLBACK == 0
+      // wifi_try_begin() below resets wifi_state to Connecting in the
+      // same wifi_tick() call, so ws_tick() (which runs after wifi_tick
+      // in loop()) never observes Failed during a cold-boot SSID timeout.
+      // Arm the grace timer directly here so the launcher pill still
+      // surfaces DISCONNECTED in that case. (chatgpt-codex P2 follow-up
+      // on PR #91.)
+      disconnect_grace_arm();
+#endif
       WiFi.disconnect(true, false);
       delay(200);
       wifi_try_begin();

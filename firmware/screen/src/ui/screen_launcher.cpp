@@ -224,12 +224,16 @@ lv_obj_t* make_tile(lv_obj_t* parent,
     lv_obj_set_style_text_color(sub_lbl, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_align(sub_lbl, LV_ALIGN_TOP_LEFT, 0, 22);
 
-    // Right chevron in gold.
+    // Right chevron in gold. Align the glyph to the right edge of the
+    // CHEVRON_W-wide label widget so the visible `>` sits near the tile
+    // margin, not at the left of an 18 px-wide block. (Cursor Bugbot
+    // finding on PR #91.)
     lv_obj_t* chev = lv_label_create(tile);
     lv_label_set_text(chev, ">");
     lv_obj_set_style_text_color(chev, UI_ACCENT_GOLD, LV_PART_MAIN);
-    lv_obj_align(chev, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_width(chev, CHEVRON_W);
+    lv_obj_set_style_text_align(chev, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_align(chev, LV_ALIGN_RIGHT_MID, -4, 0);
 
     // Tap target floor: tile is 72 px tall × full content width — well
     // above the 60 px minimum from Part A7.
