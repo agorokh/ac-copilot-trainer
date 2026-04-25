@@ -40,6 +40,7 @@
 #include "ui/tokens.h"
 
 #include <Arduino.h>
+#include <new>  // std::nothrow -- explicit non-throwing allocation under -fno-exceptions
 
 namespace {
 
@@ -297,11 +298,14 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
 }  // namespace
 
 extern "C" lv_obj_t* launcher_create(void) {
-    // ESP32 Arduino is built with -fno-exceptions, so `new` returns nullptr
-    // on OOM rather than throwing. Guard so we don't crash on the very next
-    // ctx-> dereference; ui_nav_push() refuses null factories. (CodeRabbit
-    // P1 on PR #91.)
-    auto* ctx = new launcher_ctx_t{};
+    // ESP32 Arduino is built with -fno-exceptions, but the throwing form
+    // of new() does NOT silently return nullptr under that flag -- it
+    // calls __cxa_throw which terminates the firmware instead of giving
+    // us a controlled failure path. Use the non-throwing placement form
+    // (std::nothrow) so the OOM guard below can actually execute and
+    // ui_nav_push() refuses our null factory cleanly. (CodeRabbit P1 +
+    // chatgpt-codex P2 on PR #91.)
+    auto* ctx = new (std::nothrow) launcher_ctx_t();
     if (!ctx) {
         Serial.println("[fatal][ui] launcher ctx alloc failed");
         return nullptr;
