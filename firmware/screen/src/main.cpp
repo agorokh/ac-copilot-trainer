@@ -418,6 +418,22 @@ static void wifi_tick() {
 #if PHASE1_FALLBACK
     refresh_ui();
 #endif
+    // Force-close the WS so a transient WiFi blip can't leave the
+    // socket in a half-open `WsState::Open` while the underlying TCP
+    // is dead. Without this, a WiFi-drop-and-recover faster than the
+    // WS keepalive timeout keeps `ws_state == Open` indefinitely and
+    // blocks `ws_try_connect()` from running. (Cursor Bugbot finding
+    // on PR #91.)
+#if PHASE1_FALLBACK == 0
+    if (ws_state == WsState::Open) {
+      Serial.println("[ws] forcing close after WiFi loss");
+      ws.close();
+      ws_state = WsState::Closed;
+      // Arm the grace timer here too, since `ws.close()` may not
+      // synchronously fire `ConnectionClosed` if the network is gone.
+      disconnect_grace_arm();
+    }
+#endif
     wifi_try_begin();
   }
 }
@@ -518,20 +534,36 @@ static void ws_tick() {
   ws.poll();
 #if PHASE1_FALLBACK == 0
   const bool wifi_up = (WiFi.status() == WL_CONNECTED);
-  // Arm the disconnect grace timer whenever the link is not actually up.
-  // We intentionally do NOT gate this on `ws_state != Idle` because a
-  // cold boot where WiFi never comes up keeps ws_state at Idle forever,
-  // and we still want the pill to surface DISCONNECTED so the failure
-  // is visible on-device. (chatgpt-codex P2 on PR #91.)
-  //
-  // This block must run BEFORE the `ws_state == Open` early return below
-  // -- otherwise the arming code is unreachable in exactly the scenario
-  // it's meant to handle (WiFi drops while ws_state is still Open).
-  // (Sourcery + Cursor Bugbot on PR #91.)
   const bool link_up = wifi_up && ws_state == WsState::Open;
-  if (!link_up) {
+  // Arm the disconnect grace timer when there is real evidence that the
+  // link is unhealthy:
+  //   * Wi-Fi has actually failed (wifi_state == Failed: bad SSID, AP
+  //     down, ssid timeout, or a previously-Connected drop), OR
+  //   * we have completed at least one WS connection attempt
+  //     (ws_state past Connecting -- so any of Open/Closed/Error/
+  //     AuthRejected after the first dial).
+  //
+  // We deliberately do NOT arm during the very first boot window
+  // (wifi_state in {Idle, Connecting} AND ws_state in {Idle, Connecting}),
+  // otherwise the pill would flash red "DISCONNECTED" after the 3 s
+  // grace even though no real failure has happened yet — defeating the
+  // intent of the CONNECTING amber state. The synchronous
+  // ws.connect() failure path arms the timer explicitly, so a real
+  // sidecar-unreachable boot still surfaces DISCONNECTED via
+  // ws_state = Error. (Cursor Bugbot follow-up on PR #91, refining the
+  // earlier chatgpt-codex P2 fix; codex's "cold boot WiFi never comes
+  // up" case is now handled via wifi_state == Failed below.)
+  //
+  // This block must run BEFORE the `ws_state == Open` early return
+  // below -- otherwise the arming code is unreachable in exactly the
+  // scenario it's meant to handle (WiFi drops while ws_state is still
+  // Open). (Sourcery + Cursor Bugbot on PR #91.)
+  const bool link_failure = (wifi_state == WifiState::Failed) ||
+                            (ws_state != WsState::Idle &&
+                             ws_state != WsState::Connecting);
+  if (!link_up && link_failure) {
     disconnect_grace_arm();
-  } else {
+  } else if (link_up) {
     // Link is fully up again; clear any timer armed by a transient
     // WiFi.status() blip during a still-Open WS session, otherwise the
     // timer would expire and force APP_DISCONNECTED while the link is

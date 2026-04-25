@@ -40,12 +40,36 @@ inline void jc_touch_begin() {
 inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
   static const uint8_t cmd[11] = {
       0xB5, 0xAB, 0xA5, 0x5A, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00};
+  // Optional low-rate I2C error logging. Enable from PlatformIO with
+  //   build_flags = -DJC_TOUCH_DEBUG_I2C
+  // to distinguish "no finger" from I2C wiring/noise problems without
+  // flooding the serial console. (Sourcery suggestion on PR #91.)
+#ifdef JC_TOUCH_DEBUG_I2C
+  static uint32_t jc_touch_i2c_err = 0;
+#endif
   Wire.beginTransmission(JC_TOUCH_I2C_ADDR);
   Wire.write(cmd, sizeof(cmd));
-  if (Wire.endTransmission() != 0) return false;
+  const uint8_t tx_status = Wire.endTransmission();
+  if (tx_status != 0) {
+#ifdef JC_TOUCH_DEBUG_I2C
+    if ((++jc_touch_i2c_err % 128) == 0) {
+      Serial.printf("[touch] I2C tx err=%u (sample %u)
+", tx_status, jc_touch_i2c_err);
+    }
+#endif
+    return false;
+  }
 
-  uint8_t got = Wire.requestFrom(JC_TOUCH_I2C_ADDR, (uint8_t)8);
-  if (got < 8) return false;
+  const uint8_t got = Wire.requestFrom(JC_TOUCH_I2C_ADDR, (uint8_t)8);
+  if (got < 8) {
+#ifdef JC_TOUCH_DEBUG_I2C
+    if ((++jc_touch_i2c_err % 128) == 0) {
+      Serial.printf("[touch] I2C short read got=%u (sample %u)
+", got, jc_touch_i2c_err);
+    }
+#endif
+    return false;
+  }
   uint8_t buf[8];
   for (uint8_t i = 0; i < 8; ++i) buf[i] = Wire.read();
 
