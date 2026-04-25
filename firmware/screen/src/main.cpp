@@ -42,11 +42,15 @@
 using namespace websockets;
 
 static Arduino_GFX*    gfx        = nullptr;
-// Narrow once at construction time so the LVGL flush path doesn't repeat an
-// unchecked static_cast on every dirty frame. `jc3248w535_make_display()`
-// always wraps the panel in an Arduino_Canvas, but if that ever changes,
-// `gfx_canvas` stays null and the canvas-flush is skipped instead of UB.
-// (CodeRabbit nit on PR #91.)
+// Narrow once at construction time so the LVGL flush path doesn't repeat
+// an unchecked static_cast on every dirty frame. The factory invariant —
+// `jc3248w535_make_display()` ALWAYS returns an Arduino_Canvas — is
+// asserted in JC3248W535_GFX.h and reverified at boot via the
+// dimensional sanity check in setup() (which logs loudly if a future
+// factory swap returns a surface with non-native dimensions). Keep the
+// runtime null-guard at the call site so the LVGL flush path stays
+// defensive even before the assertion has run. (CodeRabbit + sourcery
+// reviews on PR #91.)
 static Arduino_Canvas* gfx_canvas = nullptr;
 static WebsocketsClient ws;
 

@@ -72,7 +72,10 @@ typedef enum {
 struct launcher_ctx_t {
     lv_obj_t*  status_dot;     // colored dot in the header pill
     lv_obj_t*  status_label;   // "CONNECTED" / "DISCONNECTED" text
-    lv_obj_t*  spinner;        // reconnect spinner (visible only when disconnected)
+    lv_obj_t*  spinner;        // visible whenever the link is not live —
+                               // i.e. APP_BOOTING and APP_DISCONNECTED both
+                               // show it; APP_CONNECTED / APP_LAUNCHER_IDLE
+                               // hide it. (sourcery clarification on PR #91.)
     lv_timer_t* poll_timer;    // 500 ms tick to refresh the pill
     app_state_t last_state;    // last value seen by the timer
     bool        first_render;  // true until the first apply_pill_state() call
