@@ -326,8 +326,11 @@ extern "C" lv_obj_t* launcher_create(void) {
               LAUNCHER_APP_SETUP_EXCHANGE);
 
     // Initial render of the pill + start the 500 ms poll timer.
-    apply_pill_state(ctx, app_state_get());
-    ctx->last_state    = app_state_get();
+    // Sample app_state_get() once so the pill and last_state can't disagree
+    // if the state changes between the two reads (Copilot review on PR #91).
+    const app_state_t initial_state = app_state_get();
+    apply_pill_state(ctx, initial_state);
+    ctx->last_state    = initial_state;
     ctx->first_render  = false;
     ctx->poll_timer    = lv_timer_create(poll_state_cb, 500, ctx);
 

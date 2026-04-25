@@ -2,9 +2,16 @@
 
 This directory ships the **source** TTFs (`src/`) and the **SIL OFL v1.1**
 license (`OFL.txt`) bundled with the firmware so the board build is
-self-contained. The firmware links the converted **`.c`** outputs that
-LVGL's `lv_font_conv` produces from those TTFs — **you must run the
-converter once** before flashing the LVGL build (issue #86 Part A4).
+self-contained. Parts C–F of issue #86 will start using custom faces and
+will reference the converted **`.c`** outputs that LVGL's `lv_font_conv`
+produces from these TTFs.
+
+**Conversion is optional today.** Part A/B firmware does not yet declare or
+use any of the generated faces — the launcher and placeholders fall back to
+LVGL's built-in Montserrat 14 (set as `LV_FONT_DEFAULT` in
+`firmware/screen/include/lv_conf.h`). When a screen in Parts C–F adds a
+`LV_FONT_DECLARE(font_xxx)` and a corresponding style hook, run the
+converter (instructions below) before flashing that build.
 
 The font sources are the same files used by the in-game HUD, copied from
 `src/ac_copilot_trainer/content/fonts/`. Keep the two trees in sync if
@@ -71,9 +78,9 @@ generated symbols you can use from the screens (Parts B–F) are:
 | `font_montserrat_11`         | Body / descriptions                  |
 | `font_montserrat_bold_12`    | Emphasis                             |
 
-Until the conversion runs, the screens fall back to LVGL's built-in
-Montserrat 14 (set as `LV_FONT_DEFAULT` in `firmware/screen/include/lv_conf.h`)
-so the build still links.
+These symbols become valid the first time a screen pulls one in via
+`LV_FONT_DECLARE(...)`; until then the build is unaffected by whether
+the `.c` files exist on disk.
 
 ## License
 

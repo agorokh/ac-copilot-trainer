@@ -47,14 +47,19 @@
 // Reference: github.com/me-processware/JC3248W535-Driver
 //   - uses Arduino_AXS15231B with ips=false (no INVON for this panel)
 //   - wraps in Arduino_Canvas (PSRAM framebuffer + flush())
-inline Arduino_GFX* jc3248w535_make_display() {
+//
+// Return type is Arduino_Canvas* (not Arduino_GFX*) so callers don't need an
+// unchecked downcast to reach canvas-only methods like flush(). Callers that
+// only need Arduino_GFX behaviour can still take the value as Arduino_GFX*
+// because Arduino_Canvas derives from Arduino_GFX. (Copilot review on PR #91.)
+inline Arduino_Canvas* jc3248w535_make_display() {
   Arduino_DataBus* bus = new Arduino_ESP32QSPI(
       JC_TFT_QSPI_CS, JC_TFT_QSPI_SCK,
       JC_TFT_QSPI_D0, JC_TFT_QSPI_D1, JC_TFT_QSPI_D2, JC_TFT_QSPI_D3);
   Arduino_GFX* output = new Arduino_AXS15231B(
       bus, JC_TFT_RST, /*rotation=*/0, /*ips=*/false,
       JC_TFT_NATIVE_W, JC_TFT_NATIVE_H);
-  Arduino_GFX* canvas = new Arduino_Canvas(
+  Arduino_Canvas* canvas = new Arduino_Canvas(
       JC_TFT_NATIVE_W, JC_TFT_NATIVE_H, output);
   if (JC_TFT_BL >= 0) {
     pinMode(JC_TFT_BL, OUTPUT);

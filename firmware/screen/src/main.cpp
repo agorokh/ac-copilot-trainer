@@ -41,16 +41,16 @@
 
 using namespace websockets;
 
+// We keep two pointers to the same display object: `gfx` for Arduino_GFX
+// behaviour (begin/setRotation/draw primitives) and `gfx_canvas` for the
+// LVGL flush path (which calls Arduino_Canvas::flush()). The factory
+// returns Arduino_Canvas* directly — see JC3248W535_GFX.h — so neither
+// pointer requires a downcast and a future change to the factory return
+// type will surface as a compile error rather than UB. The boot-time
+// dimensional sanity check below is kept as defence-in-depth in case the
+// factory is ever swapped to a different Arduino_Canvas-derived surface.
+// (Copilot + CodeRabbit + sourcery reviews on PR #91.)
 static Arduino_GFX*    gfx        = nullptr;
-// Narrow once at construction time so the LVGL flush path doesn't repeat
-// an unchecked static_cast on every dirty frame. The factory invariant —
-// `jc3248w535_make_display()` ALWAYS returns an Arduino_Canvas — is
-// asserted in JC3248W535_GFX.h and reverified at boot via the
-// dimensional sanity check in setup() (which logs loudly if a future
-// factory swap returns a surface with non-native dimensions). Keep the
-// runtime null-guard at the call site so the LVGL flush path stays
-// defensive even before the assertion has run. (CodeRabbit + sourcery
-// reviews on PR #91.)
 static Arduino_Canvas* gfx_canvas = nullptr;
 static WebsocketsClient ws;
 
@@ -562,11 +562,14 @@ void setup() {
   Serial.println("[diag] BL pins all HIGH after pulse");
 
   Serial.println("[diag] make_display() ...");
-  gfx = jc3248w535_make_display();
-  // jc3248w535_make_display() returns the outer Arduino_Canvas. Cache the
-  // narrowed pointer once so the LVGL canvas-flush path is checked-once,
-  // not cast-on-every-frame. (CodeRabbit nit on PR #91.)
-  gfx_canvas = static_cast<Arduino_Canvas*>(gfx);
+  // jc3248w535_make_display() now returns Arduino_Canvas* directly, so we
+  // get both pointers without a downcast. `gfx` keeps the
+  // base-class behaviour we use for begin/setRotation/draw; `gfx_canvas`
+  // exposes flush() for the LVGL canvas-flush path. (Copilot review on
+  // PR #91 — the previous static_cast was UB-adjacent if the factory was
+  // ever swapped; this makes the invariant compile-time-checked.)
+  gfx_canvas = jc3248w535_make_display();
+  gfx        = gfx_canvas;
   Serial.printf("[diag] gfx ptr=%p\n", gfx);
   Serial.println("[diag] gfx->begin() ...");
   bool ok = gfx && gfx->begin();
