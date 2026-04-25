@@ -47,7 +47,15 @@ namespace {
 constexpr int LAUNCHER_W      = 480;
 constexpr int LAUNCHER_H      = 320;
 constexpr int HEADER_H        = 56;
-constexpr int CONTENT_PAD     = 16;
+// Horizontal pad for the header and content column (breathing room on the
+// left/right edges). Vertical pad is split out separately because the
+// content area only has `LAUNCHER_H - HEADER_H = 264` px and the three
+// 72 px tiles plus two 12 px gaps already consume 240 px — leaving exactly
+// 24 px for top + bottom inset combined. Keeping a single 16 px pad on
+// both axes overflows the column by 8 px and clips the bottom of the
+// third tile (Cursor Bugbot on PR #91).
+constexpr int CONTENT_PAD_H   = 16;
+constexpr int CONTENT_PAD_V   = 12;   // 264 - 240 = 24 px → 12 px top + 12 px bottom
 constexpr int TILE_H          = 72;
 constexpr int TILE_GAP        = UI_GAP_TILES;       // 12 px (tokens.h)
 constexpr int CHEVRON_W       = 18;
@@ -227,8 +235,8 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
     lv_obj_set_style_bg_opa(header, UI_BG_HEADER_OPA, LV_PART_MAIN);
     lv_obj_set_style_border_width(header, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(header, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_left(header, CONTENT_PAD, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(header, CONTENT_PAD, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(header, CONTENT_PAD_H, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(header, CONTENT_PAD_H, LV_PART_MAIN);
     lv_obj_set_style_pad_top(header, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_bottom(header, 0, LV_PART_MAIN);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
@@ -292,9 +300,9 @@ extern "C" lv_obj_t* launcher_create(void) {
 
     // Content column under the header.
     lv_obj_t* col = lv_obj_create(scr);
-    lv_obj_set_size(col, LAUNCHER_W - 2 * CONTENT_PAD,
-                    LAUNCHER_H - HEADER_H - 2 * CONTENT_PAD);
-    lv_obj_align(col, LV_ALIGN_TOP_MID, 0, HEADER_H + CONTENT_PAD);
+    lv_obj_set_size(col, LAUNCHER_W - 2 * CONTENT_PAD_H,
+                    LAUNCHER_H - HEADER_H - 2 * CONTENT_PAD_V);
+    lv_obj_align(col, LV_ALIGN_TOP_MID, 0, HEADER_H + CONTENT_PAD_V);
     lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(col, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(col, 0, LV_PART_MAIN);

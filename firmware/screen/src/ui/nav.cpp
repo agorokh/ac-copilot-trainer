@@ -32,7 +32,10 @@ extern "C" void ui_nav_push(ui_nav_factory_fn factory) {
     if (factory == nullptr) return;
     if (depth >= NAV_MAX_DEPTH) {
         // At max depth — refuse to push so we never grow unbounded.
-        // Caller should pop first.
+        // Caller should pop first. Log when LVGL warnings are on so a
+        // misrouted tap doesn't look like an unresponsive UI bug
+        // (sourcery on PR #91).
+        Serial.println("[ui_nav] push ignored: max depth reached");
         return;
     }
     lv_obj_t* next = factory();
