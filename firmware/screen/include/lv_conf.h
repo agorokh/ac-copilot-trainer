@@ -100,7 +100,10 @@
 #define LV_USE_SWITCH        0
 #define LV_USE_CHECKBOX      0
 #define LV_USE_ROLLER        0
-#define LV_USE_ARC           0
+/* lv_spinner depends on lv_arc in LVGL 8.3; LV_USE_SPINNER=1 above
+ * requires LV_USE_ARC=1 here or the LVGL preprocessor refuses to
+ * build the spinner widget. (chatgpt-codex P1 on PR #91.) */
+#define LV_USE_ARC           1
 #define LV_USE_TABLE         0
 #define LV_USE_TABVIEW       0
 #define LV_USE_TILEVIEW      0   /* ADR mentions tileview as future option. */
