@@ -1,0 +1,3 @@
+# Allow lv_font_conv outputs (generated locally per README).
+!*.c
+!*.bin

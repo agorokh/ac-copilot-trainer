@@ -1,22 +1,17 @@
-// AC Copilot Rig Screen - Phase 1 firmware (Arduino_GFX, no LVGL).
+// AC Copilot Rig Screen — Phase-2 firmware (LVGL 8.3 path, default).
 //
-// Goal of this revision is deliberately narrow:
-//   1. Boot, turn the backlight on, render a status screen with Arduino_GFX.
-//   2. Join WiFi.
-//   3. Dial ws://SIDECAR_HOST:SIDECAR_PORT with X-AC-Copilot-Token.
-//   4. Reflect connection state live on the screen (WiFi/WS/last error).
-//   5. Demo action auto-sent every 10s once WS is Open, so we can prove the
-//      full round-trip as soon as the sidecar + Lua side of the protocol v1
-//      extension lands. (No touch yet - see Phase-1b.)
+// Phase-1 raw-Arduino_GFX status screen is preserved behind
+// `#define PHASE1_FALLBACK 1` for one release in case the LVGL path needs
+// a quick rollback. The default build (PHASE1_FALLBACK 0) brings up
+// LVGL on top of the Arduino_Canvas + AXS15231B QSPI flush model
+// established in PR #83 and adds touch via the AXS15231B's I²C
+// secondary at 0x3B. See:
+//   docs/01_Vault/AcCopilotTrainer/01_Decisions/screen-ui-stack-lvgl-touch.md
+//   docs/01_Vault/AcCopilotTrainer/03_Investigations/jc3248w535-display-canvas-flush-2026-04-21.md
 //
-// Why Arduino_GFX (not LovyanGFX):
-//   LovyanGFX 1.2.20 has no Panel_AXS15231B class, and the JC3248W535 panel
-//   is AXS15231B over QSPI. Arduino_GFX (moononournation) ships the community
-//   standard Arduino_AXS15231B driver. LVGL intentionally absent in Phase 1.
-//
-// See:
-//   docs/01_Vault/AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
-//   docs/01_Vault/AcCopilotTrainer/01_Decisions/external-ws-client-protocol-extension.md
+// WiFi + WebSocket + auto-ping logic is unchanged from PR #83; only the
+// UI surface was replaced. On WS connect/disconnect the LVGL UI sees the
+// transition through `app_state_set(APP_CONNECTED|APP_DISCONNECTED)`.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -24,10 +19,24 @@
 #include <ArduinoJson.h>
 
 #include "board/JC3248W535_GFX.h"
-// wifi_secrets.h (not wifi.h) because Windows case-insensitive FS collides
-// with the framework's WiFi.h.
 #include "wifi_secrets.h"  // WIFI_SSID, WIFI_PASSWORD          (secrets/)
 #include "sidecar.h"       // SIDECAR_HOST/PORT/PATH/TOKEN/CLIENT_ID (secrets/)
+
+// ---------------------------------------------------------------------------
+// PHASE1_FALLBACK: 1 → keep the original raw-GFX status screen (PR #83).
+// 0 → bring up LVGL + touch (Phase 2). Default 0 from issue #86.
+// ---------------------------------------------------------------------------
+#ifndef PHASE1_FALLBACK
+#define PHASE1_FALLBACK 0
+#endif
+
+#if PHASE1_FALLBACK == 0
+#include <lvgl.h>
+#include "board/JC3248W535_Touch.h"
+#include "ui/app_state.h"
+#include "ui/nav.h"
+#include "ui/screen_launcher.h"
+#endif
 
 using namespace websockets;
 
@@ -39,6 +48,7 @@ static WebsocketsClient ws;
 static constexpr int SCREEN_W = 480;
 static constexpr int SCREEN_H = 320;
 
+#if PHASE1_FALLBACK
 // A small palette (RGB565). Phase 1 draws directly with Arduino_GFX.
 // If LVGL is reintroduced later, re-check byte ordering vs LV_COLOR_16_SWAP.
 static constexpr uint16_t COL_BG     = 0x0000;  // black
@@ -64,6 +74,7 @@ static constexpr int BTN_X = (SCREEN_W - 300) / 2;
 static constexpr int BTN_Y = 220;
 static constexpr int BTN_W = 300;
 static constexpr int BTN_H = 72;
+#endif  // PHASE1_FALLBACK
 
 // -- State -------------------------------------------------------------------
 
@@ -74,9 +85,11 @@ static WifiState wifi_state = WifiState::Idle;
 static WsState   ws_state   = WsState::Idle;
 static String    last_error;
 
+#if PHASE1_FALLBACK
 static WifiState last_painted_wifi = (WifiState)0xFF;
 static WsState   last_painted_ws   = (WsState)0xFF;
 static String    last_painted_err  = String("\x01");  // sentinel
+#endif
 
 static uint32_t wifi_retry_at   = 0;
 static uint32_t ws_retry_at     = 0;
@@ -86,8 +99,16 @@ static uint32_t demo_next_at    = 0;
 static constexpr uint32_t DEMO_INTERVAL_MS = 10000;
 static constexpr bool ENABLE_DEMO_ACTION = false;  // Phase-1 safety: no unsolicited in-game actions.
 
-// -- Drawing helpers ---------------------------------------------------------
+#if PHASE1_FALLBACK == 0
+// One-shot guard: only push the launcher onto the navigator the first time
+// WS opens. Subsequent reconnects update `app_state` but leave the user on
+// whatever screen they were on.
+static bool      launcher_pushed = false;
+#endif
 
+// -- Drawing helpers (Phase 1 only) -----------------------------------------
+
+#if PHASE1_FALLBACK
 static const char* wifi_label(WifiState s) {
   switch (s) {
     case WifiState::Idle:       return "WiFi: idle";
@@ -195,6 +216,99 @@ static void refresh_ui() {
     gfx->flush();
   }
 }
+#else  // PHASE1_FALLBACK == 0 — LVGL bring-up
+
+// LVGL partial-buffer parameters. Two 240×40 RGB565 buffers in PSRAM
+// (~38 KiB total) per the ADR's Pattern A. Allocated at setup() time.
+static constexpr uint32_t LV_BUF_W       = 240;
+static constexpr uint32_t LV_BUF_LINES   = 40;
+static constexpr uint32_t LV_BUF_PIXELS  = LV_BUF_W * LV_BUF_LINES;
+static lv_disp_draw_buf_t lv_draw_buf;
+static lv_color_t*        lv_buf_a = nullptr;
+static lv_color_t*        lv_buf_b = nullptr;
+static lv_disp_drv_t      lv_disp_drv;
+static lv_indev_drv_t     lv_indev_drv;
+static uint32_t           lv_last_tick_ms = 0;
+static uint32_t           lv_next_canvas_flush_ms = 0;
+static bool               lv_canvas_dirty = false;
+
+static void lv_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* color_p) {
+  if (gfx) {
+    uint32_t w = (area->x2 - area->x1 + 1);
+    uint32_t h = (area->y2 - area->y1 + 1);
+    // LV_COLOR_16_SWAP=1 → bytes already in big-endian RGB565. The
+    // moononournation API name is "BeRGBBitmap" — feed straight in.
+    gfx->draw16bitBeRGBBitmap(area->x1, area->y1,
+                              reinterpret_cast<uint16_t*>(&color_p->full),
+                              w, h);
+    lv_canvas_dirty = true;
+  }
+  lv_disp_flush_ready(drv);
+}
+
+static void lv_indev_read_cb(lv_indev_drv_t* /*drv*/, lv_indev_data_t* data) {
+  uint16_t x = 0, y = 0;
+  if (jc_touch_read(&x, &y)) {
+    data->state = LV_INDEV_STATE_PR;
+    data->point.x = x;
+    data->point.y = y;
+  } else {
+    data->state = LV_INDEV_STATE_REL;
+  }
+}
+
+static void lvgl_bringup() {
+  lv_init();
+
+  // Allocate the two partial buffers in PSRAM (heap_caps with SPIRAM).
+  lv_buf_a = static_cast<lv_color_t*>(
+      heap_caps_malloc(LV_BUF_PIXELS * sizeof(lv_color_t), MALLOC_CAP_SPIRAM));
+  lv_buf_b = static_cast<lv_color_t*>(
+      heap_caps_malloc(LV_BUF_PIXELS * sizeof(lv_color_t), MALLOC_CAP_SPIRAM));
+  if (!lv_buf_a || !lv_buf_b) {
+    Serial.println("[lvgl] PSRAM draw-buffer alloc failed");
+    while (true) { delay(1000); }
+  }
+  lv_disp_draw_buf_init(&lv_draw_buf, lv_buf_a, lv_buf_b, LV_BUF_PIXELS);
+
+  lv_disp_drv_init(&lv_disp_drv);
+  lv_disp_drv.hor_res  = SCREEN_W;
+  lv_disp_drv.ver_res  = SCREEN_H;
+  lv_disp_drv.flush_cb = lv_flush_cb;
+  lv_disp_drv.draw_buf = &lv_draw_buf;
+  lv_disp_drv_register(&lv_disp_drv);
+
+  jc_touch_begin();
+  lv_indev_drv_init(&lv_indev_drv);
+  lv_indev_drv.type    = LV_INDEV_TYPE_POINTER;
+  lv_indev_drv.read_cb = lv_indev_read_cb;
+  lv_indev_drv_register(&lv_indev_drv);
+
+  ui_nav_init();
+  app_state_set(APP_BOOTING);
+  lv_last_tick_ms = millis();
+  lv_next_canvas_flush_ms = lv_last_tick_ms + 16;
+}
+
+static void lvgl_tick() {
+  uint32_t now = millis();
+  uint32_t elapsed = now - lv_last_tick_ms;
+  if (elapsed > 0) {
+    lv_tick_inc(elapsed);
+    lv_last_tick_ms = now;
+  }
+  lv_timer_handler();
+
+  // Canvas push: ~60 Hz cap. Only push when LVGL actually drew something.
+  if (lv_canvas_dirty && (int32_t)(now - lv_next_canvas_flush_ms) >= 0) {
+    if (gfx) {
+      static_cast<Arduino_Canvas*>(gfx)->flush();
+    }
+    lv_canvas_dirty = false;
+    lv_next_canvas_flush_ms = now + 16;
+  }
+}
+#endif  // PHASE1_FALLBACK
 
 // -- Network -----------------------------------------------------------------
 
@@ -214,7 +328,9 @@ static void send_demo_action() {
 
 static void wifi_try_begin() {
   wifi_state = WifiState::Connecting;
+#if PHASE1_FALLBACK
   refresh_ui();
+#endif
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
@@ -228,7 +344,9 @@ static void wifi_tick() {
       wifi_state = WifiState::Connected;
       last_error = "";
       Serial.printf("[wifi] up  %s\n", WiFi.localIP().toString().c_str());
+#if PHASE1_FALLBACK
       refresh_ui();
+#endif
     } else if (millis() > wifi_retry_at) {
       wifi_state = WifiState::Failed;
       last_error = "wifi: retrying";
@@ -239,14 +357,17 @@ static void wifi_tick() {
   } else if (wifi_state == WifiState::Connected && WiFi.status() != WL_CONNECTED) {
     wifi_state = WifiState::Failed;
     last_error = "wifi: lost, retrying";
+#if PHASE1_FALLBACK
     refresh_ui();
+#endif
     wifi_try_begin();
   }
 }
 
 static void ws_on_message(WebsocketsMessage msg) {
   Serial.printf("[ws] <- %s\n", msg.data().c_str());
-  // TODO Phase 2: parse config.value / state.snapshot / ack.
+  // TODO Phase 2 (Parts C–E): dispatch state.snapshot / config.value / ack
+  // by `topic` to the active screen.
 }
 
 static void ws_on_event(WebsocketsEvent ev, String data) {
@@ -256,6 +377,15 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       ws_backoff_ms = 1000;
       last_error    = "";
       Serial.println("[ws] open");
+#if PHASE1_FALLBACK == 0
+      app_state_set(APP_CONNECTED);
+      if (!launcher_pushed) {
+        // First time WS comes up — load the Launcher screen.
+        ui_nav_push(launcher_create);
+        launcher_pushed = true;
+        app_state_set(APP_LAUNCHER_IDLE);
+      }
+#endif
       JsonDocument doc;
       doc["v"]       = 1;
       doc["type"]    = "hello";
@@ -270,13 +400,18 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       ws_state   = WsState::Closed;
       last_error = "ws closed";
       Serial.println("[ws] closed");
+#if PHASE1_FALLBACK == 0
+      app_state_set(APP_DISCONNECTED);
+#endif
       break;
     case WebsocketsEvent::GotPing:
       break;
     case WebsocketsEvent::GotPong:
       break;
   }
+#if PHASE1_FALLBACK
   refresh_ui();
+#endif
 }
 
 static void ws_try_connect() {
@@ -284,7 +419,9 @@ static void ws_try_connect() {
   ws = WebsocketsClient();
   ws_state = WsState::Connecting;
   last_error = "";
+#if PHASE1_FALLBACK
   refresh_ui();
+#endif
 
   ws.onMessage(ws_on_message);
   ws.onEvent(ws_on_event);
@@ -299,7 +436,9 @@ static void ws_try_connect() {
     ws_state   = WsState::Error;
     last_error = "ws connect failed";
     Serial.println("[ws] connect returned false");
+#if PHASE1_FALLBACK
     refresh_ui();
+#endif
   }
 }
 
@@ -322,6 +461,7 @@ static void ws_tick() {
 
 // -- Setup / Loop ------------------------------------------------------------
 
+#if PHASE1_FALLBACK
 // Sweep rotations to confirm the canvas+QSPI flush path paints visibly.
 // Arduino_Canvas + AXS15231B requires an explicit flush() after each scene
 // (the canvas is a PSRAM framebuffer; nothing reaches the panel until flush).
@@ -343,12 +483,18 @@ static void sweep_rotations() {
     delay(2200);
   }
 }
+#endif
 
 void setup() {
   Serial.begin(115200);
   delay(250);
   Serial.println();
   Serial.println("[boot] AC Copilot Screen " CLIENT_ID);
+#if PHASE1_FALLBACK
+  Serial.println("[boot] PHASE1_FALLBACK=1 (raw Arduino_GFX UI)");
+#else
+  Serial.println("[boot] LVGL 8.3 path (issue #86 Part A)");
+#endif
 
   // Try every plausible BL pin simultaneously — community configs report
   // GPIO 1 (most common), 38, 5, and sometimes 16/18 for JC3248W535 clones.
@@ -381,15 +527,26 @@ void setup() {
   }
   Serial.printf("[diag] init size: %dx%d\n", gfx->width(), gfx->height());
 
+  // Always settle on landscape rotation=1 before any UI bring-up runs.
+  gfx->setRotation(1);
+
+#if PHASE1_FALLBACK
   // Sweep every rotation so AT LEAST one fills the visible area visibly.
   sweep_rotations();
 
-  // Settle on landscape rotation=1, draw the chrome.
   gfx->setRotation(1);
   draw_static_chrome();
   refresh_ui();
   gfx->flush();
   Serial.println("[diag] static chrome drawn + flushed");
+#else
+  // LVGL bring-up (issue #86 Part A1–A5): allocates draw buffers in PSRAM,
+  // registers the Arduino_Canvas flush bridge, registers the AXS15231B
+  // I²C touch reader as the LVGL pointer device, and prepares the
+  // navigator. The actual launcher screen is loaded once WS first opens.
+  lvgl_bringup();
+  Serial.println("[diag] LVGL ready; awaiting WS open to load launcher");
+#endif
 
   // WiFi.
   wifi_try_begin();
@@ -401,5 +558,8 @@ void setup() {
 void loop() {
   wifi_tick();
   ws_tick();
-  delay(5);
+#if PHASE1_FALLBACK == 0
+  lvgl_tick();
+#endif
+  delay(2);
 }
