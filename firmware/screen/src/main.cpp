@@ -426,7 +426,7 @@ static void wifi_tick() {
 #if PHASE1_FALLBACK
       refresh_ui();
 #endif
-    } else if (millis() > wifi_retry_at) {
+    } else if ((int32_t)(millis() - wifi_retry_at) >= 0) {
       wifi_state = WifiState::Failed;
       last_error = "wifi: retrying";
 #if PHASE1_FALLBACK == 0
@@ -489,9 +489,15 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       // Cancel any pending disconnect threshold (Part B3 grace window).
       disconnect_grace_clear();
       app_state_set(APP_CONNECTED);
-      if (ui_nav_at_root()) {
-        app_state_set(APP_LAUNCHER_IDLE);
-      }
+      // Always promote to APP_LAUNCHER_IDLE on a (re)connect, regardless of
+      // whether the user is currently on the launcher screen or inside a
+      // placeholder (Pocket Tech / Setup Exchange / AC Copilot). Otherwise
+      // the LAUNCHER_IDLE transition would never fire if the user popped
+      // back to the launcher AFTER reconnect happened, leaving the state
+      // stuck at APP_CONNECTED -- functionally harmless today but couples
+      // future state-driven UI to a fragile assumption. (Cursor Bugbot
+      // Low on PR #91.)
+      app_state_set(APP_LAUNCHER_IDLE);
 #endif
       JsonDocument doc;
       doc["v"]       = 1;
@@ -608,7 +614,7 @@ static void ws_tick() {
     return;
   }
   if (WiFi.status() != WL_CONNECTED) return;
-  if (millis() >= ws_retry_at) {
+  if ((int32_t)(millis() - ws_retry_at) >= 0) {
     ws_try_connect();
     ws_backoff_ms = min<uint32_t>(WS_BACKOFF_MAX_MS, ws_backoff_ms * 2);
     ws_retry_at   = millis() + ws_backoff_ms;
