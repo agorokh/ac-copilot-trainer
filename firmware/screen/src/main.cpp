@@ -610,7 +610,16 @@ void setup() {
   // I²C touch reader as the LVGL pointer device, prepares the navigator,
   // and pushes the Launcher screen so the user sees real UI during boot.
   lvgl_bringup();
-  Serial.println("[diag] LVGL ready; launcher pushed (state=BOOTING)");
+  // Verify the launcher actually got pushed. `launcher_create()` returns
+  // nullptr on OOM and `ui_nav_push()` refuses null factories silently, so
+  // we want a distinct error log rather than a misleading success line if
+  // the device is sitting on the LVGL default empty screen. (CodeRabbit
+  // review on PR #91.)
+  if (ui_nav_depth() > 0) {
+    Serial.println("[diag] LVGL ready; launcher pushed (state=BOOTING)");
+  } else {
+    Serial.println("[error] LVGL ready but launcher push failed (OOM?) -- blank screen");
+  }
 #endif
 
   // WiFi.

@@ -83,22 +83,36 @@ struct launcher_ctx_t {
 
 // --- Helpers ---------------------------------------------------------------
 
-// Apply the connected/disconnected look to the status pill widgets.
+// Apply the connected/booting/disconnected look to the status pill widgets.
+// APP_BOOTING gets its own visual (amber dot + "CONNECTING" label) so the
+// boot/Wi-Fi/initial-WS-attempt window doesn't read as a red error indicator
+// while the spinner is up. (CodeRabbit review on PR #91.)
 void apply_pill_state(launcher_ctx_t* ctx, app_state_t s) {
     const bool connected = (s == APP_CONNECTED || s == APP_LAUNCHER_IDLE);
-    const lv_color_t dot_color = connected ? UI_ACCENT_GOLD : UI_ALERT_RED;
-    const char*      pill_text = connected ? "CONNECTED" : "DISCONNECTED";
+    const bool booting   = (s == APP_BOOTING);
+    const lv_color_t dot_color = connected ? UI_ACCENT_GOLD
+                                : booting  ? UI_LINE_AMBER
+                                           : UI_ALERT_RED;
+    const char*      pill_text = connected ? "CONNECTED"
+                                : booting  ? "CONNECTING"
+                                           : "DISCONNECTED";
     if (ctx->status_dot) {
         lv_obj_set_style_bg_color(ctx->status_dot, dot_color, LV_PART_MAIN);
     }
     if (ctx->status_label) {
         lv_label_set_text(ctx->status_label, pill_text);
+        // Booting reads as a neutral "we're working on it" — keep the label
+        // primary white instead of alert-red. Anything other than connected
+        // or booting is still a real disconnect.
         lv_obj_set_style_text_color(
             ctx->status_label,
-            connected ? UI_TX_PRIMARY : UI_ALERT_RED,
+            (connected || booting) ? UI_TX_PRIMARY : UI_ALERT_RED,
             LV_PART_MAIN);
     }
     if (ctx->spinner) {
+        // Spinner stays visible whenever the link isn't actually up — that
+        // includes the booting state, which is exactly when the user wants
+        // to see motion.
         if (connected) {
             lv_obj_add_flag(ctx->spinner, LV_OBJ_FLAG_HIDDEN);
         } else {
