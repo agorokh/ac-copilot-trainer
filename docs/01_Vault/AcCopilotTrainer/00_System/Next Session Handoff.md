@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-25T05:15:00Z
+last_updated: 2026-04-25T07:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,7 +25,29 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-25, post-merge of PR #89)
+## Resume here (2026-04-25, after PR #91 Part A+B push — CI cooldown in flight)
+
+**PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) Phase-2 rig screen Part A + Part B is OPEN** at head `8f88881` (2026-04-25T07:25Z) on branch `feat/issue-86-rig-screen-phase2-launcher-and-apps`. Two commits:
+
+- `4557da5` — **Part A** LVGL 8.3 bring-up + framework + design tokens + font staging. Original CI run failed only `ci-conventional` because the PR was opened with the EPIC's title and renamed to a conventional-commit form *after* GitHub Actions captured the event payload. The renamed title `feat(screen): Phase-2 LVGL bring-up + UI scaffold (issue #86 Part A)` parses fine through `scripts/ci_policy.py`.
+- `8f88881` — **Part B** App Launcher screen (`Menu.tsx` port) — header strip + connection pill + 3 vertical app tiles (AC COPILOT, POCKET TECHNICIAN, SETUP EXCHANGE) — plus a 3-second WS-closed grace period before flipping the pill to DISCONNECTED (`WS_DISCONNECT_GRACE_MS` in `main.cpp`). Same commit folds **8 bot-review fixes** against Part A: gemini P1 touch-coord underflow clamp; chatgpt-codex P1 launcher pushed at boot (not on first WS open); sourcery `ESP.restart()` on PSRAM alloc fail + drop unused `pending_delete` + drop `volatile` from `app_state_t`; Copilot `<esp_heap_caps.h>` include + `LV_TICK_CUSTOM=0` + `nav.h` doc fix + fonts `.gitignore` rewritten to actually ignore generated outputs.
+
+**Per the orchestrator playbook, the agent is in the mandatory `sleep 600` cooldown** after the push so async bots (sourcery, gemini, copilot, chatgpt-codex, cursor, CodeRabbit) finish their reviews before the PR-resolution loop kicks in. Resume by running through `.claude/agents/pr-resolution-follow-up.md`:
+
+1. `gh pr view 91 --json statusCheckRollup,reviews,latestReviews` to inventory the **current** CI state and bot threads against `8f88881`.
+2. Pull inline review comments via `gh api repos/agorokh/ac-copilot-trainer/pulls/91/comments`.
+3. Group findings, batch-fix as follow-up commits on the same branch, push, **wait `sleep 600` again**, repeat until CI green + bot threads addressed.
+4. Once CI is green and reviews resolved, the user merges (or asks the agent to coordinate the merge); then **post-merge steward** opens the vault handoff PR per `.claude/agents/post-merge-steward.md`.
+
+After PR #91 lands, **Parts C–F continue as follow-up commits on the same branch** per the issue's "single PR per epic" rule. The next part to land is:
+
+- **Part C** — AC Copilot mirror (`ACCopilot.tsx` port). Adds `coaching.snapshot` topic at 10 Hz from a new `coaching_overlay.lua` `publishTopic(...)` call; subscribes to `corner_advice` from PR #75.
+
+The original handoff (post-PR #89 merge) is preserved below for context. **The Stream A / EPIC #59 hot path is unchanged.**
+
+---
+
+## Resume context (carried over from 2026-04-25 post-PR #89)
 
 **Same-day follow-up PR [#89](https://github.com/agorokh/ac-copilot-trainer/pull/89) MERGED 2026-04-25T05:08:27Z** as squash commit `a55a0ed` on `main`. Two-line `.gitattributes` patch pinning `*.sh` and `*.bash` to `eol=lf` — fixes the Windows-checkout regression introduced by PR #87 where Git checked out shell hooks with CRLF and Bash failed `bash: root=...: No such file or directory` on `PreToolUse:Bash`. The hook fix is now live at the repo level. Same item is queued upstream as part of [`agorokh/template-repo#97`](https://github.com/agorokh/template-repo/issues/97) so the next downstream sync inherits the fix.
 
