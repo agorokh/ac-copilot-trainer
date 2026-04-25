@@ -473,6 +473,16 @@ static void ws_try_connect() {
     ws_state   = WsState::Error;
     last_error = "ws connect failed";
     Serial.println("[ws] connect returned false");
+#if PHASE1_FALLBACK == 0
+    // No socket was ever opened, so `ws_on_event(ConnectionClosed)` won't
+    // fire and the disconnect grace timer would never arm. If we don't
+    // arm it here, a sidecar-unreachable boot leaves the pill stuck on
+    // "CONNECTING" forever. (chatgpt-codex P1 + Cursor Bugbot medium +
+    // Sourcery suggestion on PR #91.)
+    if (ws_disconnected_pending_at == 0) {
+      ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
+    }
+#endif
 #if PHASE1_FALLBACK
     refresh_ui();
 #endif
@@ -495,6 +505,14 @@ static void ws_tick() {
       (int32_t)(millis() - ws_disconnected_pending_at) >= 0) {
     app_state_set(APP_DISCONNECTED);
     ws_disconnected_pending_at = 0;
+  }
+  // If WiFi has dropped, ws.poll() can't observe a clean ConnectionClosed,
+  // so the grace timer needs to be armed here too. Without this, a Wi-Fi
+  // loss after a successful WS open leaves `app_state` stuck at
+  // CONNECTED/LAUNCHER_IDLE. (Sourcery suggestion on PR #91.)
+  if (WiFi.status() != WL_CONNECTED && ws_disconnected_pending_at == 0 &&
+      ws_state != WsState::Idle) {
+    ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
   }
 #endif
   if (WiFi.status() != WL_CONNECTED) return;
