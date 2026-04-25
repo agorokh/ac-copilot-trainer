@@ -287,7 +287,7 @@ static void lv_flush_cb(lv_disp_drv_t* drv, const lv_area_t* area, lv_color_t* c
     // LV_COLOR_16_SWAP=1 → bytes already in big-endian RGB565. The
     // moononournation API name is "BeRGBBitmap" — feed straight in.
     gfx->draw16bitBeRGBBitmap(area->x1, area->y1,
-                              reinterpret_cast<uint16_t*>(&color_p->full),
+                              reinterpret_cast<uint16_t*>(color_p),
                               w, h);
     lv_canvas_dirty = true;
   }
