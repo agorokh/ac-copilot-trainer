@@ -15,6 +15,11 @@ M.PROTOCOL_VERSION = PROTOCOL_VERSION
 --- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
 --- the main script; absent handlers reply with `{type="action.ack", applied=false}`.
 local actionHandlers = {} ---@type table<string, fun(args:table|nil):boolean,string|nil>
+--- Issue #86 Part D: external-client request handlers (`setup.list`,
+--- `setup.load`). Stored keyed by request type with the ack type the
+--- bridge will use when shipping the response payload. See
+--- `M.registerRequestHandler` and the dispatch block in `pollInbound`.
+local requestHandlers = {} ---@type table<string, { ackType: string, fn: fun(payload:table|nil):table,string|nil }>
 local configGetter ---@type (fun(key:string):any)|nil
 local configSetter ---@type (fun(key:string,value:any):boolean,string|nil)|nil
 
@@ -692,6 +697,32 @@ function M.pollInbound(maxPerTick)
               })
             end
           end
+        else
+          -- Issue #86 Part D: generic request dispatch. The screen sends
+          -- `{v:1, type:"setup.list"|"setup.load", ...}` and we look up a
+          -- pre-registered handler that returns the ack payload. Handlers
+          -- live in the entry script (registered via `registerRequestHandler`)
+          -- so the bridge stays stateless about app-level features.
+          local entry = requestHandlers[t]
+          if entry then
+            local okCall, resp, errExtra = pcall(entry.fn, data.payload or data)
+            if not okCall then
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = entry.ackType,
+                ok = false,
+                error = "handler error: " .. tostring(resp),
+              })
+            else
+              local ackBody = type(resp) == "table" and resp or {}
+              ackBody.v = PROTOCOL_VERSION
+              ackBody.type = entry.ackType
+              if errExtra and ackBody.error == nil then
+                ackBody.error = tostring(errExtra)
+              end
+              M.sendJson(ackBody)
+            end
+          end
         end
         -- hello / hello_ack / state.* are not consumed by Lua at this stage;
         -- the sidecar handles `hello`/`hello_ack` and we silently accept the
@@ -808,6 +839,40 @@ function M.sendJson(payload)
     return false
   end
   return true
+end
+
+--- Issue #86 Part C/D: external-client `state.snapshot` push.
+--- Wraps `M.sendJson` with the v1 envelope expected by the rig screen
+--- (`{v=1, type="state.snapshot", topic=<t>, payload=<p>}`). Returns
+--- `false` silently when no socket is present so the caller can keep
+--- calling unconditionally from a 10 Hz tick without log spam.
+---@param topic string  topic name (e.g. "coaching.snapshot", "setup.active")
+---@param payload table|nil  topic payload, JSON-encodable
+---@return boolean
+function M.publishTopic(topic, payload)
+  if type(topic) ~= "string" or topic == "" then return false end
+  if not sock then return false end
+  return M.sendJson({
+    v = PROTOCOL_VERSION,
+    type = "state.snapshot",
+    topic = topic,
+    payload = payload or {},
+  })
+end
+
+--- Issue #86 Part D: register a handler for an external `request` event
+--- (e.g. screen → trainer `setup.list`, `setup.load`). Handler signature
+--- mirrors action handlers: `(payload:table|nil) -> (response_payload, error?)`.
+--- The bridge takes the returned table and ships it as the matching ack
+--- type (`setup.list.result`, `setup.load.ack`).
+---@param requestType string  e.g. "setup.list"
+---@param ackType string      e.g. "setup.list.result"
+---@param fn fun(payload:table|nil):table,string|nil
+function M.registerRequestHandler(requestType, ackType, fn)
+  if type(requestType) ~= "string" or requestType == "" then return end
+  if type(ackType) ~= "string" or ackType == "" then return end
+  if type(fn) ~= "function" then return end
+  requestHandlers[requestType] = { ackType = ackType, fn = fn }
 end
 
 --- Round 10: send a corner_query event to the sidecar asking for a short

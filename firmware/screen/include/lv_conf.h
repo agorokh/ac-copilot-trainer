@@ -108,6 +108,15 @@
 #define LV_USE_TABVIEW       0
 #define LV_USE_TILEVIEW      0   /* ADR mentions tileview as future option. */
 #define LV_USE_WIN           0
+/* lv_extra/widgets/keyboard and lv_extra/widgets/spinbox both `#error` when
+ * LV_USE_TEXTAREA is 0 (they declare an `lv_textarea_t` field). LVGL 8.3
+ * pulls them in via `lv_extra.h` regardless of widget needs, so we have to
+ * disable them explicitly here. We don't use either widget on the rig
+ * screen — issue #86 Parts B–D only need labels, buttons, bars, lists,
+ * spinner. (Discovered while building Part C/D locally; CI never runs the
+ * pio build, so this never triggered before.) */
+#define LV_USE_KEYBOARD      0
+#define LV_USE_SPINBOX       0
 
 /* =====================
  *   FONTS

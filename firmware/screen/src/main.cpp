@@ -36,7 +36,9 @@
 #include "board/JC3248W535_Touch.h"
 #include "ui/app_state.h"
 #include "ui/nav.h"
+#include "ui/screen_ac_copilot.h"
 #include "ui/screen_launcher.h"
+#include "ui/screen_pocket_technician.h"
 #endif
 
 using namespace websockets;
@@ -468,10 +470,108 @@ static void wifi_tick() {
   }
 }
 
+#if PHASE1_FALLBACK == 0
+// Issue #86 Parts C/D: dispatch per-message-type. `state.snapshot` carries
+// a `topic` field we route to the appropriate screen module; `setup.*`
+// frames go straight to the Pocket Technician screen module.
+//
+// The dispatch never blocks the WS callback for long: each branch either
+// builds a small POD and calls a screen setter, or fans a few labels
+// through the same setters. Heavy LVGL work happens later via the
+// `lv_async_call` queue inside the screen modules.
+static void dispatch_phase2_message(const String& body) {
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    Serial.printf("[ws] parse err: %s\n", err.c_str());
+    return;
+  }
+  if (doc["v"].as<int>() != 1) {
+    return;
+  }
+  const char* type = doc["type"] | "";
+  if (type[0] == 0) {
+    // Round-10 corner_advice uses the legacy `event` envelope.
+    const char* ev = doc["event"] | "";
+    if (strcmp(ev, "corner_advice") == 0) {
+      const char* corner = doc["corner"] | "";
+      const char* text   = doc["text"]   | "";
+      if (*corner && *text) {
+        screen_ac_copilot_apply_corner_advice(corner, text);
+      }
+    }
+    return;
+  }
+
+  if (strcmp(type, "state.snapshot") == 0) {
+    const char* topic = doc["topic"] | "";
+    JsonVariantConst payload = doc["payload"];
+    if (strcmp(topic, "coaching.snapshot") == 0) {
+      coaching_snapshot_t snap = {};
+      const char* corner_id    = payload["corner_id"]    | "";
+      const char* corner_label = payload["corner_label"] | corner_id;
+      const char* primary      = payload["primary_line"]   | "";
+      const char* secondary    = payload["secondary_line"] | "";
+      const char* kind         = payload["kind"]         | "info";
+      const char* sub_state    = payload["sub_state"]    | "cruising";
+      strncpy(snap.corner_label, corner_label, sizeof(snap.corner_label) - 1);
+      strncpy(snap.primary_line, primary,      sizeof(snap.primary_line) - 1);
+      strncpy(snap.secondary_line, secondary,  sizeof(snap.secondary_line) - 1);
+      strncpy(snap.kind, kind,                 sizeof(snap.kind) - 1);
+      strncpy(snap.sub_state, sub_state,       sizeof(snap.sub_state) - 1);
+      // Lua sends nil → ArduinoJson reports as null; default to -1 sentinel.
+      snap.target_speed_kmh  = payload["target_speed_kmh"].is<int>()
+                                 ? payload["target_speed_kmh"].as<int>() : -1;
+      snap.current_speed_kmh = payload["current_speed_kmh"].is<int>()
+                                 ? payload["current_speed_kmh"].as<int>() : -1;
+      snap.dist_to_brake_m   = payload["dist_to_brake_m"].is<int>()
+                                 ? payload["dist_to_brake_m"].as<int>() : -1;
+      snap.progress_pct      = payload["progress_pct"].is<int>()
+                                 ? payload["progress_pct"].as<int>() : 0;
+      snap.has_data          = true;
+      screen_ac_copilot_apply_snapshot(&snap);
+    } else if (strcmp(topic, "setup.active") == 0) {
+      const char* name = payload["name"] | "";
+      if (*name) screen_pocket_technician_set_active_setup(name);
+    }
+  } else if (strcmp(type, "setup.list.result") == 0) {
+    const char* car_id   = doc["car_id"]   | "";
+    const char* track_id = doc["track_id"] | "";
+    if (*car_id || *track_id) {
+      screen_pocket_technician_set_identity(*car_id ? car_id : nullptr,
+                                            *track_id ? track_id : nullptr);
+    }
+    screen_pocket_technician_clear_setups();
+    JsonArrayConst setups = doc["setups"].as<JsonArrayConst>();
+    if (!setups.isNull()) {
+      for (JsonVariantConst entry : setups) {
+        const char* name      = entry["name"]      | "";
+        const char* mtime_iso = entry["mtime_iso"] | "";
+        int32_t best_ms = entry["best_ms"].is<int>() ? entry["best_ms"].as<int>() : -1;
+        if (*name) {
+          screen_pocket_technician_add_setup(name, mtime_iso, best_ms);
+        }
+      }
+    }
+  } else if (strcmp(type, "setup.load.ack") == 0) {
+    bool ok = doc["ok"] | false;
+    const char* name  = doc["name"]  | "";
+    const char* error = doc["error"] | "";
+    screen_pocket_technician_apply_load_ack(ok, name, ok ? nullptr : error);
+  }
+}
+#endif
+
 static void ws_on_message(WebsocketsMessage msg) {
+  // Verbose log on Phase-1 fallback only — the LVGL path produces 10 Hz
+  // coaching.snapshot frames which would flood the serial monitor.
+#if PHASE1_FALLBACK
   Serial.printf("[ws] <- %s\n", msg.data().c_str());
-  // TODO Phase 2 (Parts C–E): dispatch state.snapshot / config.value / ack
-  // by `topic` to the active screen.
+#else
+  // Issue #86 Parts C/D: parse + dispatch. Tolerates malformed JSON by
+  // logging once and dropping; never blocks the WS poll path.
+  dispatch_phase2_message(msg.data());
+#endif
 }
 
 static void ws_on_event(WebsocketsEvent ev, String data) {
@@ -745,10 +845,39 @@ void setup() {
   ws_retry_at = millis() + 500;
 }
 
+#if PHASE1_FALLBACK == 0
+// Drain the Pocket Technician out-queue. Called every loop tick after
+// `ws_tick()`; bounded to a few sends per call so a long-stuck WS write
+// can't starve the LVGL render path.
+static void pt_request_drain() {
+  if (ws_state != WsState::Open) return;
+  for (int i = 0; i < 4; ++i) {
+    pt_request_t req = screen_pocket_technician_pop_request();
+    if (req.kind == PT_REQ_NONE) break;
+
+    JsonDocument doc;
+    doc["v"] = 1;
+    if (req.kind == PT_REQ_LIST) {
+      doc["type"] = "setup.list";
+    } else if (req.kind == PT_REQ_LOAD) {
+      doc["type"] = "setup.load";
+      doc["name"] = req.name;
+    } else {
+      continue;
+    }
+    String out;
+    serializeJson(doc, out);
+    ws.send(out);
+    Serial.printf("[ws] -> %s\n", out.c_str());
+  }
+}
+#endif
+
 void loop() {
   wifi_tick();
   ws_tick();
 #if PHASE1_FALLBACK == 0
+  pt_request_drain();
   lvgl_tick();
 #endif
   delay(2);

@@ -37,6 +37,8 @@
 
 #include "ui/app_state.h"
 #include "ui/nav.h"
+#include "ui/screen_ac_copilot.h"
+#include "ui/screen_pocket_technician.h"
 #include "ui/tokens.h"
 
 #include <Arduino.h>
@@ -143,9 +145,10 @@ void on_screen_delete(lv_event_t* e) {
     delete ctx;
 }
 
-// Placeholder factories for screens that arrive in Parts C–E. Each
-// returns a screen with a centered "Coming soon" label so navigation
-// works end-to-end on Part B alone. Parts C/D/E will replace these.
+// Placeholder factory retained for Setup Exchange (Part E) until that
+// screen is implemented. Parts C and D have shipped — see
+// screen_ac_copilot.cpp / screen_pocket_technician.cpp for the real
+// factories, wired below in `on_tile_clicked`.
 lv_obj_t* placeholder_screen(const char* title) {
     lv_obj_t* scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);
@@ -173,8 +176,8 @@ lv_obj_t* placeholder_screen(const char* title) {
     return scr;
 }
 
-lv_obj_t* ac_copilot_create(void)      { return placeholder_screen("AC COPILOT"); }
-lv_obj_t* pocket_tech_create(void)     { return placeholder_screen("POCKET TECHNICIAN"); }
+// AC Copilot (Part C) and Pocket Technician (Part D) now have real
+// factories; Setup Exchange (Part E) is still a placeholder.
 lv_obj_t* setup_exchange_create(void)  { return placeholder_screen("SETUP EXCHANGE"); }
 
 void on_tile_clicked(lv_event_t* e) {
@@ -182,10 +185,10 @@ void on_tile_clicked(lv_event_t* e) {
         reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
     switch (app) {
         case LAUNCHER_APP_AC_COPILOT:
-            ui_nav_push(ac_copilot_create);
+            ui_nav_push(screen_ac_copilot_create);
             break;
         case LAUNCHER_APP_POCKET_TECH:
-            ui_nav_push(pocket_tech_create);
+            ui_nav_push(screen_pocket_technician_create);
             break;
         case LAUNCHER_APP_SETUP_EXCHANGE:
             ui_nav_push(setup_exchange_create);

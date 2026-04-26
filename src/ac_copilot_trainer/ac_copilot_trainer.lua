@@ -34,6 +34,9 @@ local focusPractice = require("focus_practice")
 local cornerNames = require("corner_names")
 local hudSettings = require("hud_settings")
 local realtimeCoaching = require("realtime_coaching")
+-- Issue #86 Part C/D: rig-screen-driven features.
+local coachingPublisher = require("coaching_publisher")
+local setupLibrary = require("setup_library")
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
 local MANIFEST_WINDOW_SIZES = {
@@ -411,6 +414,73 @@ if wsBridge.registerActionHandler then
   end)
   wsBridge.registerActionHandler("applySetupFromPath", function(_)
     return false, "applySetupFromPath not yet implemented (issue #81 phase-2)"
+  end)
+end
+
+-- Issue #86 Part D4: bidirectional setup picker. The screen sends
+-- `setup.list` to enumerate, then `setup.load` to apply by name. Both
+-- responses go back over the existing v1 envelope.
+if wsBridge.registerRequestHandler then
+  wsBridge.registerRequestHandler("setup.list", "setup.list.result", function(_payload)
+    local ident = setupLibrary.activeIdentity()
+    local list = setupLibrary.list()
+    local items = {}
+    for i = 1, #list do
+      local entry = list[i]
+      local name = entry.name
+      local mtime = tonumber(entry.mtime)
+      local mtimeIso = nil
+      if mtime and os and type(os.date) == "function" then
+        local okIso, s = pcall(os.date, "!%Y-%m-%dT%H:%M:%SZ", mtime)
+        if okIso and type(s) == "string" then
+          mtimeIso = s
+        end
+      end
+      items[i] = {
+        name = name,
+        mtime_iso = mtimeIso,
+        best_ms = setupLibrary.bestForSetup(name),
+      }
+    end
+    return {
+      ok = true,
+      car_id = ident.car_id,
+      track_id = ident.track_id,
+      setups = items,
+    }
+  end)
+
+  -- D5 safety gate: refuse loads when CSP says reset is not allowed (i.e.
+  -- not in the pits / not on an out-lap). Same gate PT enforces by hiding
+  -- its window. The screen renders the red toast on `ok=false`.
+  wsBridge.registerRequestHandler("setup.load", "setup.load.ack", function(payload)
+    local name = (type(payload) == "table" and tostring(payload.name or "")) or ""
+    if name == "" then
+      return { ok = false, name = name, error = "missing name" }
+    end
+    local resetOk = true
+    if ac and type(ac.isCarResetAllowed) == "function" then
+      local okCall, allowed = pcall(ac.isCarResetAllowed)
+      resetOk = okCall and (allowed == true)
+    end
+    if not resetOk then
+      return { ok = false, name = name, error = "must be in pits" }
+    end
+    local ack = setupLibrary.loadByName(name)
+    if ack and ack.ok and wsBridge.publishTopic then
+      -- D4: broadcast `setup.active` so PT and the launcher stay in sync.
+      -- Setup hash is computed via setup_reader on the next tick when
+      -- snapshotActive runs; for the immediate broadcast we send the path
+      -- and let the screen UI treat hash as advisory.
+      pcall(function()
+        wsBridge.publishTopic("setup.active", {
+          name = ack.name,
+          path = ack.path,
+          changed_at = (os and os.time and os.time()) or 0,
+        })
+      end)
+    end
+    return ack
   end)
 end
 
@@ -1474,6 +1544,19 @@ function script.update(dt)
     })
     state._cachedRealtimeView = rtView
     state.realtimeActiveHint = rtView
+
+    -- Issue #86 Part C3: 10 Hz `coaching.snapshot` publish to the rig screen.
+    -- No-op when the WS isn't open. coaching_publisher accumulates dt
+    -- internally so this call is safe at any frame rate.
+    pcall(function()
+      coachingPublisher.publishIfDue({
+        dt = dt,
+        view = rtView,
+        car = car,
+        sim = sim,
+        wsBridge = wsBridge,
+      })
+    end)
 
     -- Periodic [RT-DIAG] log (every 3 sec) to verify what the engine sees
     -- live. Issue #75 round 3: prove the in-corner / brake-distance pipeline.
