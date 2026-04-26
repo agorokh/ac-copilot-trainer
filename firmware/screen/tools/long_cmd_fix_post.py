@@ -15,6 +15,7 @@
 #       over Windows' 8191-char limit is written to a @response-file instead.
 Import("env", "projenv")
 import os
+import subprocess
 
 if os.name != "nt":
     print("[long_cmd_fix:post] skipped (Windows cmd.exe workaround)")
@@ -26,7 +27,10 @@ else:
     tc_bin = os.path.join(pio_home, "packages", "toolchain-xtensa-esp32s3", "bin")
     cc = os.path.join(tc_bin, "xtensa-esp32s3-elf-gcc.exe")
     cxx = os.path.join(tc_bin, "xtensa-esp32s3-elf-g++.exe")
-    ar = os.path.join(tc_bin, "xtensa-esp32s3-elf-gcc-ar.exe")
+    # Plain ar — gcc-ar is only a --plugin=lto wrapper; it forwards @response-file
+    # straight to the inner ar.exe which fails ("invalid option -- @") because
+    # binutils 2.31.1 in this toolchain predates @file support for ar.
+    ar = os.path.join(tc_bin, "xtensa-esp32s3-elf-ar.exe")
 
     missing = [p for p in [tc_bin, cc, cxx, ar] if not os.path.exists(p)]
     if missing:
@@ -40,12 +44,40 @@ else:
     cxxq = f'"{cxx}"'
     arq = f'"{ar}"'
 
+    # CC / CXX / LINK keep TEMPFILE wrapping because gcc/g++ honour @response-file.
+    # AR does NOT — passing @file to xtensa ar.exe fails ("invalid option -- @"
+    # because binutils 2.31.1 in this toolchain predates @file support). And the
+    # full LVGL archive command is ~10K chars which exceeds Windows' 8191 cmd.exe
+    # shell limit. Solution: invoke ar in batches through a Python action that
+    # uses subprocess.call with shell=False — that goes straight through
+    # CreateProcess and each batch stays well under any limit.
+    AR_BATCH_SIZE = 40
+
+    def _batched_ar_action(target, source, env, _ar=ar):
+        target_path = str(target[0])
+        sources = [str(s) for s in source]
+        if os.path.exists(target_path):
+            try:
+                os.remove(target_path)
+            except OSError as exc:
+                print(f"[long_cmd_fix:post:ar] could not remove existing archive: {exc}")
+                return 1
+        for i in range(0, len(sources), AR_BATCH_SIZE):
+            chunk = sources[i : i + AR_BATCH_SIZE]
+            arflags = "rcs" if i == 0 else "qs"
+            cmd = [_ar, arflags, target_path] + chunk
+            rc = subprocess.call(cmd)
+            if rc != 0:
+                print(f"[long_cmd_fix:post:ar] ar batch {i}-{i+len(chunk)} failed rc={rc}")
+                return rc
+        return 0
+
     tempfile_replace = dict(
         CC=ccq,
         CXX=cxxq,
         AR=arq,
         LINK=cxxq,
-        ARCOM="${TEMPFILE('$AR $ARFLAGS $TARGET $SOURCES', '$ARCOMSTR')}",
+        ARCOM=_batched_ar_action,
         LINKCOM=(
             "${TEMPFILE('$LINK -o $TARGET $LINKFLAGS $__RPATH "
             "$SOURCES $_LIBDIRFLAGS $_LIBFLAGS', '$LINKCOMSTR')}"
