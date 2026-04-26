@@ -717,10 +717,25 @@ function M.pollInbound(maxPerTick)
               local ackBody = type(resp) == "table" and resp or {}
               ackBody.v = PROTOCOL_VERSION
               ackBody.type = entry.ackType
-              if errExtra and ackBody.error == nil then
+              -- Only propagate the secondary `errExtra` return when the
+              -- handler did NOT report success. If a successful handler
+              -- returns a warning string in the second slot, surfacing it
+              -- as `error` would trigger the screen's red-toast path
+              -- (CodeRabbit on PR #91). Drop it silently.
+              if errExtra and ackBody.error == nil and ackBody.ok ~= true then
                 ackBody.error = tostring(errExtra)
               end
               M.sendJson(ackBody)
+            end
+          else
+            -- Unknown request type: do NOT silently drop. Emit a single
+            -- diagnostic so the failure mode is debuggable from `ac.log`.
+            -- (CodeRabbit on PR #91 — the action branch already replies
+            -- with `applied=false`, but the generic dispatch has no
+            -- canonical ackType to send here, so we log instead.)
+            if ac and type(ac.log) == "function" then
+              pcall(ac.log, string.format(
+                "[COPILOT][WS-DIAG] unhandled request type=%q (no handler registered)", t))
             end
           end
         end

@@ -440,6 +440,10 @@ if wsBridge.registerRequestHandler then
         name = name,
         mtime_iso = mtimeIso,
         best_ms = setupLibrary.bestForSetup(name),
+        -- Carry the absolute INI path so the screen can disambiguate setups
+        -- with colliding basenames across track/layout folders (chatgpt-codex
+        -- P1 on PR #91). Optional: legacy clients ignore it.
+        path = entry.path,
       }
     end
     return {
@@ -455,7 +459,11 @@ if wsBridge.registerRequestHandler then
   -- its window. The screen renders the red toast on `ok=false`.
   wsBridge.registerRequestHandler("setup.load", "setup.load.ack", function(payload)
     local name = (type(payload) == "table" and tostring(payload.name or "")) or ""
-    if name == "" then
+    local path = nil
+    if type(payload) == "table" and type(payload.path) == "string" and payload.path ~= "" then
+      path = payload.path
+    end
+    if name == "" and not path then
       return { ok = false, name = name, error = "missing name" }
     end
     local resetOk = true
@@ -466,7 +474,20 @@ if wsBridge.registerRequestHandler then
     if not resetOk then
       return { ok = false, name = name, error = "must be in pits" }
     end
-    local ack = setupLibrary.loadByName(name)
+    -- Pass both name and path so the library can disambiguate same-basename
+    -- files across track/layout folders. Normalize a non-table return into
+    -- a well-formed ack so the screen never sees an ambiguous response
+    -- (CodeRabbit on PR #91: nil/non-table from loadByName used to ship a
+    -- malformed ack with no `ok` field, which the screen contract treats
+    -- as success).
+    local ack = setupLibrary.loadByName({ name = name, path = path })
+    if type(ack) ~= "table" then
+      ack = { ok = false, name = name, error = "library returned no ack" }
+    elseif ack.ok == nil then
+      ack.ok = false
+      if ack.error == nil then ack.error = "library returned malformed ack" end
+    end
+    if ack.name == nil then ack.name = name end
     if ack and ack.ok and wsBridge.publishTopic then
       -- D4: broadcast `setup.active` so PT and the launcher stay in sync.
       -- Setup hash is computed via setup_reader on the next tick when

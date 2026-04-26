@@ -107,17 +107,34 @@ function M.list()
       tryAdd(carDir .. "/" .. topList[i], topList[i])
     end
   end
-  -- Per-track sub-directories.
+  -- Per-track sub-directories - and within each track, per-layout sub-folders.
+  -- AC stores setups at <UserSetups>/<carID>/<trackID>[/<layoutID>]/<name>.ini.
+  -- chatgpt-codex P2 on PR #91: layout-specific setups were missed because we
+  -- only scanned one level deep. Now walk track-then-layout.
+  local function scanIniDir(dirPath)
+    local okIni, iniList = pcall(io.scanDir, dirPath, "*.ini")
+    if okIni and type(iniList) == "table" then
+      for j = 1, #iniList do
+        tryAdd(dirPath .. "/" .. iniList[j], iniList[j])
+      end
+    end
+  end
   local okSubs, subDirs = pcall(io.scanDir, carDir)
   if okSubs and type(subDirs) == "table" then
     for i = 1, #subDirs do
       local sub = subDirs[i]
+      -- Skip files (which contain a dot) - only recurse into directories.
       if type(sub) == "string" and not sub:match("%.") then
         local subPath = carDir .. "/" .. sub
-        local okIni, iniList = pcall(io.scanDir, subPath, "*.ini")
-        if okIni and type(iniList) == "table" then
-          for j = 1, #iniList do
-            tryAdd(subPath .. "/" .. iniList[j], iniList[j])
+        scanIniDir(subPath)
+        -- Recurse one more level for tracks that nest layout folders.
+        local okLay, layList = pcall(io.scanDir, subPath)
+        if okLay and type(layList) == "table" then
+          for k = 1, #layList do
+            local lay = layList[k]
+            if type(lay) == "string" and not lay:match("%.") then
+              scanIniDir(subPath .. "/" .. lay)
+            end
           end
         end
       end
@@ -167,6 +184,7 @@ function M.bestForSetup(setupName)
 
   local wantCar = activeCarId()
   local wantTrack = activeTrackId()
+  local wantLayout = activeTrackLayoutId()
   local wantName = setupName:lower()
   local best  ---@type integer|nil
 
@@ -200,21 +218,29 @@ function M.bestForSetup(setupName)
             local lapMs = tonumber(rec.lap.lap_ms)
             local carOk = tostring(rec.car.id or ""):lower() == wantCar:lower()
             local trackOk = tostring(rec.track.id or ""):lower() == wantTrack:lower()
-            local snap = rec.setup.snapshot
-            local nameOk = false
-            if type(snap) == "table" then
-              -- The lap-archive flatten format keys snapshot entries as
-              -- "SECTION.KEY" with no top-level setup name. Until the
-              -- schema is extended to record the setup name, we look at
-              -- the legacy `path` field on the same record (set by
-              -- `setup_reader.readIniSnapshot`) which IS the basename.
-              local snapPath = nil
-              if rec.setup.path then snapPath = tostring(rec.setup.path) end
-              if snapPath and snapPath:lower():gsub("%.ini$", "") == wantName then
-                nameOk = true
+            -- Filter by layout when one is active (CodeRabbit on PR #91).
+            -- A faster lap on a different layout (e.g. monza_junior vs
+            -- monza) must NOT surface as BEST for the current layout. When
+            -- the session has no layout, we accept any layout-tagged record
+            -- (treat the layout filter as soft).
+            local layoutOk = true
+            if wantLayout ~= "" then
+              local recLayout = tostring(rec.track.layout or ""):lower()
+              if recLayout ~= "" and recLayout ~= wantLayout:lower() then
+                layoutOk = false
               end
             end
-            if lapMs and lapMs > 0 and carOk and trackOk and nameOk
+            -- The path comparison does not depend on snapshot CONTENTS, so
+            -- check it outside the snapshot-table guard (Cursor on PR #91).
+            -- Lap records that omit `setup.snapshot` but still set
+            -- `setup.path` are now matched correctly.
+            local snapPath = nil
+            if rec.setup.path then snapPath = tostring(rec.setup.path) end
+            local nameOk = false
+            if snapPath and snapPath:lower():gsub("%.ini$", "") == wantName then
+              nameOk = true
+            end
+            if lapMs and lapMs > 0 and carOk and trackOk and layoutOk and nameOk
                 and rec.lap.is_valid ~= false then
               if best == nil or lapMs < best then
                 best = lapMs
@@ -229,27 +255,44 @@ function M.bestForSetup(setupName)
   return best
 end
 
---- Load a setup by basename (no `.ini`). Returns `{ok:bool, name, message?, error?}`
---- shaped like the WS ack the screen consumes.
+--- Load a setup. Returns `{ok:bool, name, message?, error?}` shaped like the
+--- WS ack the screen consumes. Accepts either a basename (legacy) or a full
+--- path; when both are provided the path wins (chatgpt-codex P1 on PR #91:
+--- two setups with the same basename across track/layout folders used to
+--- collide on first-match).
 ---
---- Caller MUST gate on `ac.isCarResetAllowed()` before invoking — see
+--- Caller MUST gate on `ac.isCarResetAllowed()` before invoking - see
 --- the entry script's `setup.load` request handler. The gate is the
 --- single source of truth so it can be unit-tested in one place.
----@param name string
+---@param nameOrOpts string|table  basename, or { name=..., path=... }
 ---@return table  ack payload
-function M.loadByName(name)
-  if type(name) ~= "string" or name == "" then
-    return { ok = false, name = name or "", error = "empty name" }
+function M.loadByName(nameOrOpts)
+  local name, wantPath
+  if type(nameOrOpts) == "table" then
+    name = tostring(nameOrOpts.name or "")
+    wantPath = nameOrOpts.path
+    if type(wantPath) ~= "string" or wantPath == "" then wantPath = nil end
+  else
+    name = (type(nameOrOpts) == "string") and nameOrOpts or ""
+  end
+  if name == "" and not wantPath then
+    return { ok = false, name = "", error = "empty name" }
   end
   installRefreshHookOnce()
 
   -- Resolve to a full path via the cached listing (busts on SetupsListRefresh).
+  -- Path match wins over name when both are present so callers can carry the
+  -- exact track/layout selection forward.
   local list = M.list()
   local match
-  for i = 1, #list do
-    if list[i].name == name then
-      match = list[i]
-      break
+  if wantPath then
+    for i = 1, #list do
+      if list[i].path == wantPath then match = list[i]; break end
+    end
+  end
+  if not match and name ~= "" then
+    for i = 1, #list do
+      if list[i].name == name then match = list[i]; break end
     end
   end
   if not match then

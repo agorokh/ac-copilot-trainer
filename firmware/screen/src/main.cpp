@@ -519,15 +519,27 @@ static void dispatch_phase2_message(const String& body) {
       strncpy(snap.secondary_line, secondary,  sizeof(snap.secondary_line) - 1);
       strncpy(snap.kind, kind,                 sizeof(snap.kind) - 1);
       strncpy(snap.sub_state, sub_state,       sizeof(snap.sub_state) - 1);
-      // Lua sends nil → ArduinoJson reports as null; default to -1 sentinel.
-      snap.target_speed_kmh  = payload["target_speed_kmh"].is<int>()
-                                 ? payload["target_speed_kmh"].as<int>() : -1;
-      snap.current_speed_kmh = payload["current_speed_kmh"].is<int>()
-                                 ? payload["current_speed_kmh"].as<int>() : -1;
-      snap.dist_to_brake_m   = payload["dist_to_brake_m"].is<int>()
-                                 ? payload["dist_to_brake_m"].as<int>() : -1;
-      snap.progress_pct      = payload["progress_pct"].is<int>()
-                                 ? payload["progress_pct"].as<int>() : 0;
+      // Accept both integer and floating-point JSON numbers (chatgpt-codex P1
+      // + CodeRabbit "Critical" on PR #91): the Lua publisher emits
+      // tonumber(view.targetSpeedKmh) and car.speedKmh, both of which can be
+      // fractional. is<int>() returns false for floats, so the screen would
+      // silently default valid telemetry to -1. Cast through float and round
+      // half-up to int32. Nil/missing fields keep the -1/0 sentinels.
+      auto numOr = [](JsonVariantConst v, int32_t fallback) -> int32_t {
+        if (v.is<int>())   return (int32_t)v.as<int>();
+        if (v.is<float>()) {
+          float f = v.as<float>();
+          return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+        }
+        return fallback;
+      };
+      snap.target_speed_kmh  = numOr(payload["target_speed_kmh"],  -1);
+      snap.current_speed_kmh = numOr(payload["current_speed_kmh"], -1);
+      snap.dist_to_brake_m   = numOr(payload["dist_to_brake_m"],   -1);
+      int32_t pp = numOr(payload["progress_pct"], 0);
+      if (pp < 0) pp = 0;
+      if (pp > 100) pp = 100;
+      snap.progress_pct      = pp;
       snap.has_data          = true;
       screen_ac_copilot_apply_snapshot(&snap);
     } else if (strcmp(topic, "setup.active") == 0) {
@@ -547,9 +559,11 @@ static void dispatch_phase2_message(const String& body) {
       for (JsonVariantConst entry : setups) {
         const char* name      = entry["name"]      | "";
         const char* mtime_iso = entry["mtime_iso"] | "";
+        const char* path      = entry["path"]      | "";
         int32_t best_ms = entry["best_ms"].is<int>() ? entry["best_ms"].as<int>() : -1;
         if (*name) {
-          screen_pocket_technician_add_setup(name, mtime_iso, best_ms);
+          screen_pocket_technician_add_setup(name, mtime_iso, best_ms,
+                                              *path ? path : nullptr);
         }
       }
     }
@@ -862,6 +876,10 @@ static void pt_request_drain() {
     } else if (req.kind == PT_REQ_LOAD) {
       doc["type"] = "setup.load";
       doc["name"] = req.name;
+      // Carry the absolute INI path when the trainer reported it on the list,
+      // so the Lua handler can disambiguate setups whose basenames collide
+      // across track/layout folders (chatgpt-codex P1 on PR #91).
+      if (req.path[0]) doc["path"] = req.path;
     } else {
       continue;
     }

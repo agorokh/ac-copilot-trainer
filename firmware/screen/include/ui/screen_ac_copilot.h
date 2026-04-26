@@ -15,6 +15,11 @@
 
 #include <lvgl.h>
 #include <stdint.h>
+#ifdef __cplusplus
+#include <cstdbool>
+#else
+#include <stdbool.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {

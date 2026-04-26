@@ -35,12 +35,18 @@ namespace {
 // ---- Module-static cache -------------------------------------------------
 
 constexpr int  PT_MAX_SETUPS    = 64;     // bounded list cache
-constexpr int  PT_MAX_REQUESTS  = 4;      // out-queue depth
+// Effective capacity of a one-slot-wasted ring is N-1, so we size the array
+// at 5 to honor the documented depth of 4 in-flight requests (CodeRabbit on
+// PR #91). On creation we already enqueue PT_REQ_LIST once, so a user who
+// quickly taps three setups before the WS drains used to lose the third
+// tap silently with capacity 4.
+constexpr int  PT_MAX_REQUESTS  = 5;
 
 struct setup_row_t {
     char    name[48];
     char    mtime_iso[32];
     int32_t best_ms;       // -1 = unknown
+    char    path[160];     // empty if trainer didn't ship a path
 };
 
 setup_row_t g_setups[PT_MAX_SETUPS];
@@ -55,7 +61,7 @@ pt_request_t g_req_q[PT_MAX_REQUESTS];
 int          g_req_head = 0;
 int          g_req_tail = 0;
 
-bool req_q_push(pt_request_kind_t kind, const char* name) {
+bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
     pt_request_t* r = &g_req_q[g_req_tail];
@@ -65,6 +71,12 @@ bool req_q_push(pt_request_kind_t kind, const char* name) {
         r->name[sizeof(r->name) - 1] = 0;
     } else {
         r->name[0] = 0;
+    }
+    if (path) {
+        strncpy(r->path, path, sizeof(r->path) - 1);
+        r->path[sizeof(r->path) - 1] = 0;
+    } else {
+        r->path[0] = 0;
     }
     g_req_tail = next;
     return true;
@@ -80,7 +92,8 @@ struct pt_ctx_t {
     lv_obj_t* active_row_obj;  // row being loaded (for gold pulse)
     lv_timer_t* pulse_timer;
     int       pulse_steps_left;
-    char      pending_name[48];  // setup the user just tapped
+    char      pending_name[48];   // setup the user just tapped
+    char      pending_path[160];  // matching path; "" if not known
 };
 
 pt_ctx_t* g_active_ctx = nullptr;
@@ -115,6 +128,7 @@ void on_back_clicked(lv_event_t*) {
 }
 
 void rebuild_list_widgets(pt_ctx_t* ctx);
+lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s);
 
 void on_row_clicked(lv_event_t* e) {
     auto* ctx = g_active_ctx;
@@ -125,6 +139,8 @@ void on_row_clicked(lv_event_t* e) {
     const setup_row_t& s = g_setups[idx];
     strncpy(ctx->pending_name, s.name, sizeof(ctx->pending_name) - 1);
     ctx->pending_name[sizeof(ctx->pending_name) - 1] = 0;
+    strncpy(ctx->pending_path, s.path, sizeof(ctx->pending_path) - 1);
+    ctx->pending_path[sizeof(ctx->pending_path) - 1] = 0;
     ctx->active_row_obj = row;
 
     // Visual: subtle scale + spinner-like flash via a pressed style.
@@ -133,7 +149,9 @@ void on_row_clicked(lv_event_t* e) {
     // Stage `setup.load` for main.cpp to pick up. Drop silently if the
     // queue is full — the user will see no toast which matches their
     // mental model of "I tapped, nothing happened, let me tap again."
-    req_q_push(PT_REQ_LOAD, s.name);
+    // Carry the path so the Lua handler can disambiguate setups that
+    // share a basename across track/layout folders.
+    req_q_push(PT_REQ_LOAD, s.name, s.path[0] ? s.path : nullptr);
 }
 
 void pulse_step_cb(lv_timer_t* t) {
@@ -279,6 +297,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     ctx->pulse_timer      = nullptr;
     ctx->pulse_steps_left = 0;
     ctx->pending_name[0]  = 0;
+    ctx->pending_path[0]  = 0;
 
     lv_obj_t* scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);
@@ -364,13 +383,18 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     // loop tick. The trainer's response (setup.list.result) reaches us via
     // screen_pocket_technician_clear_setups + add_setup, then a final
     // rebuild via set_identity / set_active_setup callbacks.
-    req_q_push(PT_REQ_LIST, nullptr);
+    req_q_push(PT_REQ_LIST, nullptr, nullptr);
 
     return scr;
 }
 
 extern "C" void screen_pocket_technician_clear_setups(void) {
     g_setup_count = 0;
+    // Full rebuild on the clear-edge only - keeps the list-arrival path at
+    // O(N) total widget creations instead of O(N^2) (CodeRabbit + Cursor on
+    // PR #91). main.cpp's `setup.list.result` dispatch always calls
+    // clear_setups() before streaming add_setup(), so this is the canonical
+    // place to drop+rebuild the column.
     if (g_active_ctx) {
         rebuild_list_widgets(g_active_ctx);
     }
@@ -378,10 +402,11 @@ extern "C" void screen_pocket_technician_clear_setups(void) {
 
 extern "C" void screen_pocket_technician_add_setup(const char* name,
                                                     const char* mtime_iso,
-                                                    int32_t best_ms) {
+                                                    int32_t best_ms,
+                                                    const char* path) {
     if (!name || !*name) return;
     if (g_setup_count >= PT_MAX_SETUPS) return;
-    setup_row_t* row = &g_setups[g_setup_count++];
+    setup_row_t* row = &g_setups[g_setup_count];
     strncpy(row->name, name, sizeof(row->name) - 1);
     row->name[sizeof(row->name) - 1] = 0;
     if (mtime_iso) {
@@ -391,8 +416,22 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
         row->mtime_iso[0] = 0;
     }
     row->best_ms = best_ms;
-    if (g_active_ctx) {
-        rebuild_list_widgets(g_active_ctx);
+    if (path) {
+        strncpy(row->path, path, sizeof(row->path) - 1);
+        row->path[sizeof(row->path) - 1] = 0;
+    } else {
+        row->path[0] = 0;
+    }
+    int idx = g_setup_count++;
+
+    if (g_active_ctx && g_active_ctx->list_col) {
+        // Append-only: drop the placeholder on the very first entry, then
+        // create exactly one new row widget. No churn on the existing rows.
+        if (g_active_ctx->placeholder_lbl) {
+            lv_obj_del(g_active_ctx->placeholder_lbl);
+            g_active_ctx->placeholder_lbl = nullptr;
+        }
+        make_row(g_active_ctx->list_col, idx, *row);
     }
 }
 
@@ -424,7 +463,7 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
         // Successful load — kick off the gold pulse on the active row.
         start_gold_pulse(g_active_ctx);
         // Re-fetch the list so any "BEST" recomputation lands.
-        req_q_push(PT_REQ_LIST, nullptr);
+        req_q_push(PT_REQ_LIST, nullptr, nullptr);
     } else {
         // Reset any pressed visual then surface the toast.
         if (g_active_ctx->active_row_obj) {
@@ -443,6 +482,7 @@ extern "C" pt_request_t screen_pocket_technician_pop_request(void) {
     pt_request_t out;
     out.kind = PT_REQ_NONE;
     out.name[0] = 0;
+    out.path[0] = 0;
     if (g_req_head == g_req_tail) return out;
     out = g_req_q[g_req_head];
     g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;

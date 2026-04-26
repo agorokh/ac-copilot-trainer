@@ -23,6 +23,12 @@ local PUBLISH_INTERVAL_SEC = 0.1
 local TOPIC = "coaching.snapshot"
 
 local _accumDt = 0.0
+-- _lastSpeed is the last speed we successfully read from the car. We only
+-- substitute it when the underlying car.speedKmh read FAILED (pcall raised
+-- or returned a non-number), not when it returned a genuine 0. Conflating
+-- "stopped" with "missing" used to freeze the screen on a prior speed for a
+-- parked driver (Cursor + CodeRabbit on PR #91); separate the success-of-read
+-- from the numeric value to fix.
 local _lastSpeed = nil
 
 --- Publish at most once every PUBLISH_INTERVAL_SEC sim seconds.
@@ -43,7 +49,12 @@ function M.publishIfDue(opts)
   if _accumDt < PUBLISH_INTERVAL_SEC then
     return false
   end
-  _accumDt = 0.0
+  -- Carry residual time across the boundary instead of zeroing the
+  -- accumulator: zeroing would discard the leftover fraction and slowly
+  -- drop the effective rate below 10 Hz over time. (CodeRabbit nit on PR
+  -- #91.)
+  _accumDt = _accumDt - PUBLISH_INTERVAL_SEC
+  if _accumDt < 0 then _accumDt = 0.0 end
 
   local wsBridge = opts.wsBridge
   if not wsBridge or type(wsBridge.publishTopic) ~= "function" then
@@ -56,13 +67,27 @@ function M.publishIfDue(opts)
   -- Always send a payload, even when the view-model is empty / placeholder
   -- so the screen can render the "DRIVE A LAP" empty state instead of
   -- staying frozen on the last live snapshot from a prior session.
+  --
+  -- Speed read: separate the SUCCESS of the pcall from the value. When the
+  -- read succeeds and returns 0 (parked / paused), forward that 0 — the
+  -- screen contract treats 0 as a legitimate value and only -1 / nil as
+  -- "missing". When the read raised, fall back to the cached last-known
+  -- value so transient CSP nil/cdata flips do not make the screen flicker.
   local cur = 0
+  local readOk = false
   if car then
     local okSpeed, sp = pcall(function() return car.speedKmh end)
-    if okSpeed and type(sp) == "number" then cur = sp end
+    if okSpeed and type(sp) == "number" then
+      cur = sp
+      readOk = true
+    end
   end
-  if cur == 0 and _lastSpeed then cur = _lastSpeed end
-  _lastSpeed = cur
+  if not readOk and _lastSpeed then
+    cur = _lastSpeed
+  end
+  if readOk then
+    _lastSpeed = cur
+  end
 
   local primary = "DRIVE A LAP"
   local secondary = "REFERENCE WILL APPEAR"

@@ -15,13 +15,39 @@ constexpr int TOAST_BOTTOM_OFFSET = 8;
 // pointer because `ui_nav_pop()` deletes the previous screen and would
 // invalidate any cached widget. Each call creates a fresh toast on the
 // currently active screen and arms a one-shot timer to delete it.
+//
+// Lifetime invariant (Cursor / CodeRabbit on PR #91): when LVGL deletes
+// the toast — either because its timer fired naturally OR because the
+// parent screen was popped before the timer fired — we must cancel the
+// pending timer so it does not later fire on a freed object. We hook
+// `LV_EVENT_DELETE` on the toast to do exactly this. A pointer to the
+// timer is stashed in the toast's `user_data` field; the deletion-event
+// callback reads it, deletes the timer, and clears the field. The timer
+// callback in turn nulls its own `user_data` on the toast first so the
+// deletion callback (triggered by `lv_obj_del`) becomes a no-op.
 
-void toast_delete_cb(lv_timer_t* t) {
+void toast_timer_cb(lv_timer_t* t) {
     lv_obj_t* obj = static_cast<lv_obj_t*>(t->user_data);
     if (obj) {
+        // Detach so the LV_EVENT_DELETE handler does not double-delete the
+        // timer when LVGL recursively deletes the toast.
+        lv_obj_set_user_data(obj, nullptr);
         lv_obj_del(obj);
     }
+    // The timer is one-shot; LVGL does not auto-delete it after the call,
+    // so we must explicitly remove it here. Safe because we are returning
+    // to LVGL's own timer dispatch loop.
     lv_timer_del(t);
+}
+
+void toast_obj_delete_cb(lv_event_t* e) {
+    auto* obj = lv_event_get_target(e);
+    if (obj == nullptr) return;
+    auto* t = static_cast<lv_timer_t*>(lv_obj_get_user_data(obj));
+    if (t != nullptr) {
+        lv_obj_set_user_data(obj, nullptr);
+        lv_timer_del(t);
+    }
 }
 
 }  // namespace
@@ -55,8 +81,13 @@ extern "C" void ui_toast_show(const char* text, uint32_t ms_visible) {
     if (ms_visible == 0) {
         ms_visible = 3000;
     }
-    lv_timer_t* t = lv_timer_create(toast_delete_cb, ms_visible, toast);
+    lv_timer_t* t = lv_timer_create(toast_timer_cb, ms_visible, toast);
     lv_timer_set_repeat_count(t, 1);
+    // Cross-link toast <-> timer so navigation-induced deletes cancel the
+    // pending fire (use-after-free guard, reported by Cursor + CodeRabbit
+    // on PR #91).
+    lv_obj_set_user_data(toast, t);
+    lv_obj_add_event_cb(toast, toast_obj_delete_cb, LV_EVENT_DELETE, nullptr);
 }
 
 extern "C" void ui_toast_error(const char* text) {

@@ -34,6 +34,10 @@
 #define LV_MEM_CUSTOM        0
 #define LV_MEM_SIZE          (64U * 1024U)
 #define LV_MEM_ADR           0
+/* LV_MEM_AUTO_DEFRAG is documentation-only on LVGL v8.3 with LV_MEM_CUSTOM=0:
+ * the v8.3 builtin allocator (lv_tlsf) does not honor this flag (only the
+ * legacy custom allocator path read it pre-v8). Kept here so the intent is
+ * obvious if we ever flip to a custom allocator. (CodeRabbit nit on PR #91.) */
 #define LV_MEM_AUTO_DEFRAG   1
 #define LV_MEM_BUF_MAX_NUM   16
 /* ESP32 newlib's memcpy/memset are word-aligned and use Xtensa hardware loops,
@@ -79,7 +83,9 @@
 /* =====================
  *   WIDGETS (Part A: enable everything Parts B–F will need)
  * ===================== */
-#define LV_USE_OBJ           1
+/* LV_USE_OBJ is not a v8.3 toggle — lv_obj is unconditionally built into the
+ * core. The separately toggleable LV_USE_OBJ landed in v9. Removed on PR #91
+ * after CodeRabbit confirmed against upstream lvgl/lvgl release/v8.3. */
 #define LV_USE_LABEL         1
 #define LV_LABEL_TEXT_SELECTION 0
 #define LV_LABEL_LONG_TXT_HINT  1
@@ -174,7 +180,11 @@
 /* =====================
  *   OS / FS / NETWORK
  * ===================== */
-#define LV_USE_OS            LV_OS_NONE
+/* LV_USE_OS / LV_OS_NONE is the v9 OS abstraction; the v8.3 release template
+ * does NOT define it, and defining it here is a no-op. Removed on PR #91
+ * after CodeRabbit confirmed against the upstream lvgl/lvgl release/v8.3
+ * lv_conf_template.h. The filesystem flags below ARE in the v8.3 template
+ * and stay. */
 #define LV_USE_FS_STDIO      0
 #define LV_USE_FS_POSIX      0
 #define LV_USE_FS_WIN32      0
