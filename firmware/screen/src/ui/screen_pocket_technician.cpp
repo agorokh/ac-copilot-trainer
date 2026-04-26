@@ -465,10 +465,15 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
         // Re-fetch the list so any "BEST" recomputation lands.
         req_q_push(PT_REQ_LIST, nullptr, nullptr);
     } else {
-        // Reset any pressed visual then surface the toast.
+        // Reset any pressed visual then surface the toast. The row's
+        // PRESSED-state bg was originally UI_BG_HEADER (matching the
+        // header pill), so restore THAT, not UI_BG_PANEL -- overriding
+        // to the unpressed colour permanently kills pressed-state
+        // feedback on the failed row even after the toast clears
+        // (Cursor Bugbot LOW on PR #91).
         if (g_active_ctx->active_row_obj) {
             lv_obj_set_style_bg_color(g_active_ctx->active_row_obj,
-                                      UI_BG_PANEL,
+                                      UI_BG_HEADER,
                                       LV_PART_MAIN | LV_STATE_PRESSED);
             g_active_ctx->active_row_obj = nullptr;
         }

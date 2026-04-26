@@ -571,7 +571,11 @@ static void dispatch_phase2_message(const String& body) {
     bool ok = doc["ok"] | false;
     const char* name  = doc["name"]  | "";
     const char* error = doc["error"] | "";
-    screen_pocket_technician_apply_load_ack(ok, name, ok ? nullptr : error);
+    // Treat an empty `error` field the same as missing so the screen's
+    // "unknown" fallback fires instead of formatting "Load failed: " with
+    // a blank trailer (Cursor Bugbot LOW on PR #91).
+    const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
+    screen_pocket_technician_apply_load_ack(ok, name, err_arg);
   }
 }
 #endif

@@ -43,8 +43,14 @@ local _lastSpeed = nil
 function M.publishIfDue(opts)
   if type(opts) ~= "table" then return false end
   local dt = tonumber(opts.dt) or 0
-  if dt > 0 and dt < 1.0 then  -- guard against pause/resume jumps
-    _accumDt = _accumDt + dt
+  if dt > 0 then
+    -- Cap a single-frame contribution at PUBLISH_INTERVAL_SEC so a long
+    -- pause/resume frame doesn't "burst publish" once we cross the boundary,
+    -- but the publisher still wakes up on the very next call instead of
+    -- being skipped entirely. (CodeRabbit follow-up nit on PR #91: the prior
+    -- `dt < 1.0` guard dropped the long-frame contribution, so a paused-
+    -- then-resumed session could stall publishing for one extra quantum.)
+    _accumDt = _accumDt + math.min(dt, PUBLISH_INTERVAL_SEC)
   end
   if _accumDt < PUBLISH_INTERVAL_SEC then
     return false

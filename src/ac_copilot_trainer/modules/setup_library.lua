@@ -232,13 +232,30 @@ function M.bestForSetup(setupName)
             end
             -- The path comparison does not depend on snapshot CONTENTS, so
             -- check it outside the snapshot-table guard (Cursor on PR #91).
-            -- Lap records that omit `setup.snapshot` but still set
-            -- `setup.path` are now matched correctly.
-            local snapPath = nil
-            if rec.setup.path then snapPath = tostring(rec.setup.path) end
+            -- Read both `setup.path` (current schema, written by lap_archive
+            -- as of PR #91 follow-up) and `setup.snapshot.path` (legacy
+            -- archives written before PR #91) so previously-saved laps still
+            -- show their BEST after the schema bump.
+            local snapPath
+            if type(rec.setup.path) == "string" and rec.setup.path ~= "" then
+              snapPath = rec.setup.path
+            elseif type(rec.setup.snapshot) == "table"
+                and type(rec.setup.snapshot.path) == "string"
+                and rec.setup.snapshot.path ~= "" then
+              snapPath = rec.setup.snapshot.path
+            end
             local nameOk = false
-            if snapPath and snapPath:lower():gsub("%.ini$", "") == wantName then
-              nameOk = true
+            if snapPath then
+              -- Cursor Bugbot HIGH on PR #91: the previous comparison
+              -- diffed the full lower-cased path (with .ini stripped)
+              -- against the basename, so a path like
+              -- "C:/.../monza/race.ini" never matched wantName="race".
+              -- Strip directory components plus the .ini suffix before
+              -- comparing.
+              local lower = snapPath:lower():gsub("\\", "/")
+              local base = lower:match("([^/]+)$") or lower
+              base = base:gsub("%.ini$", "")
+              if base == wantName then nameOk = true end
             end
             if lapMs and lapMs > 0 and carOk and trackOk and layoutOk and nameOk
                 and rec.lap.is_valid ~= false then

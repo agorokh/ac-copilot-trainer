@@ -17,7 +17,7 @@
 --     track = { id, layout?, lengthM? },
 --     conditions = { trackGripLevel?, ambientTempC?, trackTempC?, weatherType? },
 --     lap = { lap_n, lap_ms, is_pb, is_valid },
---     setup = { hash, snapshot = { <flat INI key=value map> } },
+--     setup = { hash, path?, snapshot = { <flat INI key=value map> } },
 --     trace = {
 --       samples_count = N,
 --       fields = { "spline","speed","eMs","throttle","brake","steer","gear","px","py","pz" },
@@ -244,6 +244,14 @@ function M.buildRecord(opts)
     },
     setup = {
       hash = tostring(opts.setup_hash or ""),
+      -- Persist the source INI path so `setup_library.bestForSetup`
+      -- can correlate a saved lap to the basename surfaced in the
+      -- Pocket Technician list (Cursor Bugbot HIGH on PR #91: without
+      -- this, the BEST column was wired to a field that was never
+      -- written and stayed "—" forever).
+      path = (type(opts.setup_snap) == "table" and type(opts.setup_snap.path) == "string"
+              and opts.setup_snap.path ~= "")
+              and opts.setup_snap.path or nil,
       snapshot = flattenSetupSnapshot(opts.setup_snap),
     },
     trace = {
