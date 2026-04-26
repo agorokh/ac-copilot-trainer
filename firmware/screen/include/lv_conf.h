@@ -123,6 +123,19 @@
  * pio build, so this never triggered before.) */
 #define LV_USE_KEYBOARD      0
 #define LV_USE_SPINBOX       0
+/* Calendar's "header dropdown" variant references lv_dropdown_* even when
+ * LV_USE_DROPDOWN=0. We don't use calendar at all, so disable the whole tree
+ * (and other extras we don't use) to keep the link clean. */
+#define LV_USE_CALENDAR      0
+#define LV_USE_CHART         0
+#define LV_USE_METER         0
+#define LV_USE_MSGBOX        0
+#define LV_USE_SPAN          0
+#define LV_USE_COLORWHEEL    0
+#define LV_USE_IMGBTN        0
+#define LV_USE_LED           0
+#define LV_USE_ANIMIMG       0
+#define LV_USE_MENU          0
 
 /* =====================
  *   FONTS
