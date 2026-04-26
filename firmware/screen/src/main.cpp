@@ -814,20 +814,24 @@ void setup() {
   }
   Serial.printf("[diag] init size: %dx%d\n", gfx->width(), gfx->height());
 
-  // Sanity-check the canvas narrow: if the factory is ever swapped to a
-  // non-canvas surface, the dimensions will mismatch the JC_TFT_NATIVE_*
-  // values and we want to know loudly at boot rather than silently DMA
-  // garbage. (sourcery feedback on PR #91 about the static_cast UB risk.)
+  // Sanity-check the canvas narrow: factory now constructs the canvas at
+  // landscape dims (480×320) and the panel hardware at rotation=1. If the
+  // factory is ever swapped to a non-canvas surface or someone reverts to
+  // native-portrait construction, the dimensions will mismatch and we want
+  // to know loudly at boot rather than silently DMA garbage.
   if (gfx_canvas &&
-      (gfx_canvas->width()  != JC_TFT_NATIVE_W ||
-       gfx_canvas->height() != JC_TFT_NATIVE_H)) {
-    Serial.printf("[warn] canvas dims %dx%d != native %dx%d -- factory mismatch?\n",
+      (gfx_canvas->width()  != JC_TFT_LANDSCAPE_W ||
+       gfx_canvas->height() != JC_TFT_LANDSCAPE_H)) {
+    Serial.printf("[warn] canvas dims %dx%d != landscape %dx%d -- factory mismatch?\n",
                   gfx_canvas->width(), gfx_canvas->height(),
-                  JC_TFT_NATIVE_W, JC_TFT_NATIVE_H);
+                  JC_TFT_LANDSCAPE_W, JC_TFT_LANDSCAPE_H);
   }
 
-  // Always settle on landscape rotation=1 before any UI bring-up runs.
-  gfx->setRotation(1);
+  // No setRotation() call here: AXS15231B was constructed with rotation=1
+  // (MADCTL applied during begin()) and Canvas was built at landscape dims.
+  // Calling Canvas::setRotation now would swap its `_width` row stride away
+  // from the framebuffer's actual layout — exactly the diagonal-shear bug
+  // we just fixed.
 
 #if PHASE1_FALLBACK
   // Sweep every rotation so AT LEAST one fills the visible area visibly.
