@@ -17,6 +17,8 @@ local M = {}
 
 local ch = require("csp_helpers")
 local persistence = require("persistence")  -- shares the journal/laps dir layout
+local meta = require("ac_content_meta")    -- ui_car.json / ui_track.json reader
+local setupReader = require("setup_reader") -- INI key harvest for per-row params
 
 -- Re-list callbacks. Wired once on first use of M.list/loadByName so the
 -- module works even if the entry script never calls a setup hook
@@ -61,15 +63,17 @@ local function activeTrackLayoutId()
   return ch.sanitizeId(raw, "")
 end
 
---- Enumerate setups for the current car. Filenames have `.ini` stripped
---- before being returned. mtime comes from `io.fileModified` when CSP
---- exposes it; otherwise nil (the screen renders "—" in that case).
+--- Enumerate setups for the current car AND track. Filenames have `.ini`
+--- stripped. mtime comes from `io.fileModified` when CSP exposes it.
 ---
---- AC layout note: setups live at
----   `<UserSetups>/<carID>/<trackID>[/<layoutID>]/<name>.ini`
---- but we only care about the per-car bucket since AC's own setup picker
---- folds track/layout into a single list (which is also how PT/SX surface
---- them). We scan recursively two levels deep so layouts come along.
+--- AC layout: `<UserSetups>/<carID>/<trackID>[/<layoutID>]/<name>.ini`. We
+--- include:
+---   * top-level `<carID>/<name>.ini` — global setups (no track tag)
+---   * `<carID>/<trackID>/...` recursively — only the active track's folder
+--- The previous "include every track's setups" pile was confusing on the
+--- screen — picking a Spa setup at Monza wouldn't actually load right.
+--- Filtering at the source keeps the screen list focused on what's drivable
+--- right now.
 ---
 ---@return table[]   {name, mtime, path}[]
 function M.list()
@@ -83,6 +87,8 @@ function M.list()
   if not carId or carId == "unknown" then return out end
   local carDir = root .. "/" .. carId
   if not (io and type(io.scanDir) == "function") then return out end
+  local trackId = activeTrackId()
+  local hasTrack = trackId and trackId ~= "" and trackId ~= "unknown"
 
   local function tryAdd(filePath, baseName)
     if type(baseName) ~= "string" then return end
@@ -100,42 +106,34 @@ function M.list()
     }
   end
 
-  -- Top-level (some users keep flat per-car setups).
+  -- Top-level setups in the car folder are always included (these are
+  -- "global" not-yet-track-tagged setups; AC's own picker shows them too).
   local okTop, topList = pcall(io.scanDir, carDir, "*.ini")
   if okTop and type(topList) == "table" then
     for i = 1, #topList do
       tryAdd(carDir .. "/" .. topList[i], topList[i])
     end
   end
-  -- Per-track sub-directories - and within each track, per-layout sub-folders.
-  -- AC stores setups at <UserSetups>/<carID>/<trackID>[/<layoutID>]/<name>.ini.
-  -- chatgpt-codex P2 on PR #91: layout-specific setups were missed because we
-  -- only scanned one level deep. Now walk track-then-layout.
-  local function scanIniDir(dirPath)
-    local okIni, iniList = pcall(io.scanDir, dirPath, "*.ini")
-    if okIni and type(iniList) == "table" then
-      for j = 1, #iniList do
-        tryAdd(dirPath .. "/" .. iniList[j], iniList[j])
+  -- Per-track folder for the ACTIVE track only — plus its layout subfolders.
+  -- We don't want Spa setups showing in the list while driving Monza.
+  if hasTrack then
+    local function scanIniDir(dirPath)
+      local okIni, iniList = pcall(io.scanDir, dirPath, "*.ini")
+      if okIni and type(iniList) == "table" then
+        for j = 1, #iniList do
+          tryAdd(dirPath .. "/" .. iniList[j], iniList[j])
+        end
       end
     end
-  end
-  local okSubs, subDirs = pcall(io.scanDir, carDir)
-  if okSubs and type(subDirs) == "table" then
-    for i = 1, #subDirs do
-      local sub = subDirs[i]
-      -- Skip files (which contain a dot) - only recurse into directories.
-      if type(sub) == "string" and not sub:match("%.") then
-        local subPath = carDir .. "/" .. sub
-        scanIniDir(subPath)
-        -- Recurse one more level for tracks that nest layout folders.
-        local okLay, layList = pcall(io.scanDir, subPath)
-        if okLay and type(layList) == "table" then
-          for k = 1, #layList do
-            local lay = layList[k]
-            if type(lay) == "string" and not lay:match("%.") then
-              scanIniDir(subPath .. "/" .. lay)
-            end
-          end
+    local trackDir = carDir .. "/" .. trackId
+    scanIniDir(trackDir)
+    -- Layout subfolders (track has multiple layouts, e.g. monza/junior).
+    local okLay, layList = pcall(io.scanDir, trackDir)
+    if okLay and type(layList) == "table" then
+      for k = 1, #layList do
+        local lay = layList[k]
+        if type(lay) == "string" and not lay:match("%.") then
+          scanIniDir(trackDir .. "/" .. lay)
         end
       end
     end
@@ -337,13 +335,65 @@ end
 
 --- Lightweight track/car identity for the screen's meta bar — keeps the
 --- entry script from having to plumb car/sim into the request handler.
----@return table  {car_id, track_id, layout_id}
+--- Also supplies human-readable display names so the screen can show
+--- "Porsche 911 GT3 R 2016" instead of "ks_porsche_911_gt3_r_2016".
+---@return table  {car_id, car_name, track_id, track_name, layout_id}
 function M.activeIdentity()
+  local carId = activeCarId()
+  local trackId = activeTrackId()
+  local layoutId = activeTrackLayoutId()
+  -- Read AC's ui_*.json directly. CSP `ac.getCarName` / `ac.getCarUIData`
+  -- aren't exposed on every build; the file path is stable.
+  local carUI = meta.carUI(carId)
+  local trackUI = meta.trackUI(trackId, layoutId)
   return {
-    car_id = activeCarId(),
-    track_id = activeTrackId(),
-    layout_id = activeTrackLayoutId(),
+    car_id = carId,
+    car_name = (carUI and carUI.name) or ch.carDisplayName() or carId,
+    car_brand = (carUI and carUI.brand) or nil,
+    car_class = (carUI and carUI.class) or nil,
+    track_id = trackId,
+    track_name = (trackUI and trackUI.name) or ch.trackDisplayName() or trackId,
+    track_country = (trackUI and trackUI.country) or nil,
+    layout_id = layoutId,
   }
+end
+
+--- Read a setup INI and return a small summary table the screen renders
+--- under each row. Maps the AC section conventions verified against a real
+--- ks_porsche_911_gt3_r_2016 setup file:
+---   [FRONT_BIAS] VALUE=N         -> brake_bias (front bias %)
+---   [ABS] VALUE=N                -> abs
+---   [TRACTION_CONTROL] VALUE=N   -> tc
+---   [WING_1] VALUE=N             -> wing_f (front wing or splitter)
+---   [WING_2] VALUE=N             -> wing_r (rear wing angle)
+--- Anything missing comes back nil so the screen leaves the chip out.
+---@param iniPath string  absolute path to the .ini
+---@return table  {brake_bias, abs, tc, wing_f, wing_r}
+function M.summaryForSetup(iniPath)
+  local snap = setupReader.readIniSnapshot(iniPath)
+  if not snap or type(snap.keys) ~= "table" then
+    return {}
+  end
+  local out = {}
+  for i = 1, #snap.keys do
+    local e = snap.keys[i]
+    local sec = tostring(e.section or ""):upper()
+    local key = tostring(e.key or ""):upper()
+    if key == "VALUE" then
+      if sec == "FRONT_BIAS" then
+        out.brake_bias = tonumber(e.value)
+      elseif sec == "ABS" then
+        out.abs = tonumber(e.value)
+      elseif sec == "TRACTION_CONTROL" then
+        out.tc = tonumber(e.value)
+      elseif sec == "WING_1" then
+        out.wing_f = tonumber(e.value)
+      elseif sec == "WING_2" then
+        out.wing_r = tonumber(e.value)
+      end
+    end
+  end
+  return out
 end
 
 return M

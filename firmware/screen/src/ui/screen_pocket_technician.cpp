@@ -47,14 +47,22 @@ struct setup_row_t {
     char    mtime_iso[32];
     int32_t best_ms;       // -1 = unknown
     char    path[160];     // empty if trainer didn't ship a path
+    int32_t brake_bias;
+    int32_t abs;
+    int32_t tc;
+    int32_t wing_f;
+    int32_t wing_r;
 };
 
 setup_row_t g_setups[PT_MAX_SETUPS];
 int         g_setup_count = 0;
 
 char g_car_id[32]    = {0};
+char g_car_name[64]  = {0};   // human-readable; empty falls back to g_car_id
+char g_car_brand[32] = {0};   // empty hides brand line
 char g_track_id[32]  = {0};
-char g_active_name[48] = {0};
+char g_track_name[48] = {0};  // human-readable; empty falls back to g_track_id
+char g_active_name[48] = {0}; // currently loaded setup name (from setup.active)
 
 // Out-queue (FIFO).
 pt_request_t g_req_q[PT_MAX_REQUESTS];
@@ -86,7 +94,9 @@ bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
 
 struct pt_ctx_t {
     lv_obj_t* meta_track;
+    lv_obj_t* meta_brand;
     lv_obj_t* meta_car;
+    lv_obj_t* meta_active;
     lv_obj_t* list_col;        // scrollable column
     lv_obj_t* placeholder_lbl; // "Loading…" / "No setups found"
     lv_obj_t* active_row_obj;  // row being loaded (for gold pulse)
@@ -100,19 +110,20 @@ pt_ctx_t* g_active_ctx = nullptr;
 
 // --- Layout constants ------------------------------------------------------
 
-constexpr int SCREEN_W   = 480;
-constexpr int SCREEN_H   = 320;
+// Portrait 320×480 (device mounted vertical).
+constexpr int SCREEN_W   = 320;
+constexpr int SCREEN_H   = 480;
 constexpr int HEADER_H   = 40;
-constexpr int META_H     = 24;
+constexpr int META_H     = 84;  // TRACK / BRAND / MODEL / ACTIVE
 constexpr int OUTER_PAD  = 12;
-constexpr int ROW_H      = 56;
+constexpr int ROW_H      = 68;  // name+best on row 1, params+date on row 2
 constexpr int ROW_GAP    = 8;
 
 // --- Helpers ---------------------------------------------------------------
 
 void format_lap_ms(int32_t ms, char* out, size_t n) {
     if (ms <= 0) {
-        snprintf(out, n, "—");
+        snprintf(out, n, "-");
         return;
     }
     int total_ms = (int)ms;
@@ -206,28 +217,42 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
 
+    // Row 1: name (left) + BEST lap (right)
     lv_obj_t* name_lbl = lv_label_create(row);
     lv_label_set_text(name_lbl, s.name);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_width(name_lbl, lv_pct(60));
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
     lv_obj_align(name_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    lv_obj_t* date_lbl = lv_label_create(row);
-    lv_label_set_text(date_lbl, s.mtime_iso[0] ? s.mtime_iso : "—");
-    lv_obj_set_style_text_color(date_lbl, UI_TX_QUIET, LV_PART_MAIN);
-    lv_obj_align(date_lbl, LV_ALIGN_TOP_LEFT, 0, 22);
-
-    lv_obj_t* best_lbl_static = lv_label_create(row);
-    lv_label_set_text(best_lbl_static, "BEST");
-    lv_obj_set_style_text_color(best_lbl_static, UI_TX_MUTED, LV_PART_MAIN);
-    lv_obj_set_style_text_letter_space(best_lbl_static, 1, LV_PART_MAIN);
-    lv_obj_align(best_lbl_static, LV_ALIGN_TOP_RIGHT, -100, 0);
 
     char lap_buf[20];
     format_lap_ms(s.best_ms, lap_buf, sizeof(lap_buf));
     lv_obj_t* best_val = lv_label_create(row);
     lv_label_set_text(best_val, lap_buf);
     lv_obj_set_style_text_color(best_val, UI_ACCENT_GOLD, LV_PART_MAIN);
-    lv_obj_align(best_val, LV_ALIGN_TOP_RIGHT, -32, 0);
+    lv_obj_align(best_val, LV_ALIGN_TOP_RIGHT, -16, 0);
+
+    // Row 2: setup summary chips (left) -- BB / ABS / TC / Wings front-rear.
+    // Compact single-line format keeps it readable in the 280-px row width.
+    char chip_buf[64];
+    char *q = chip_buf;
+    int qrem = (int)sizeof(chip_buf);
+    int n;
+    if (s.brake_bias >= 0) { n = snprintf(q, qrem, "BB:%d  ", (int)s.brake_bias); q += n; qrem -= n; }
+    if (s.abs >= 0)        { n = snprintf(q, qrem, "ABS:%d  ", (int)s.abs);        q += n; qrem -= n; }
+    if (s.tc >= 0)         { n = snprintf(q, qrem, "TC:%d  ", (int)s.tc);          q += n; qrem -= n; }
+    if (s.wing_f >= 0 || s.wing_r >= 0) {
+        char wf[6], wr[6];
+        if (s.wing_f >= 0) snprintf(wf, sizeof(wf), "%d", (int)s.wing_f); else snprintf(wf, sizeof(wf), "-");
+        if (s.wing_r >= 0) snprintf(wr, sizeof(wr), "%d", (int)s.wing_r); else snprintf(wr, sizeof(wr), "-");
+        snprintf(q, qrem, "W:%s/%s", wf, wr);
+    }
+    if (chip_buf[0] == 0) snprintf(chip_buf, sizeof(chip_buf), "%s", s.mtime_iso[0] ? s.mtime_iso : "");
+    lv_obj_t* chips = lv_label_create(row);
+    lv_label_set_text(chips, chip_buf);
+    lv_obj_set_style_text_color(chips, UI_TX_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(chips, 1, LV_PART_MAIN);
+    lv_obj_align(chips, LV_ALIGN_TOP_LEFT, 0, 26);
 
     lv_obj_t* chev = lv_label_create(row);
     lv_label_set_text(chev, ">");
@@ -257,16 +282,56 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     }
 }
 
+// Strip brand prefix from full car name. AC ui_car.json name reads
+// Porsche 911 GT3 R 2016 with brand Porsche; the model row should be
+// 911 GT3 R 2016 so the BRAND row above does not duplicate.
+static const char* model_after_brand(const char* full, const char* brand) {
+    if (!full || !brand || !*brand) return full;
+    size_t bn = strlen(brand);
+    if (strncasecmp(full, brand, bn) == 0) {
+        const char* tail = full + bn;
+        while (*tail == 0x20 || *tail == 0x2d || *tail == 0x2f) tail++;
+        if (*tail) return tail;
+    }
+    return full;
+}
+
 void update_meta(pt_ctx_t* ctx) {
     if (!ctx) return;
-    char buf[80];
+    char buf[96];
     if (ctx->meta_track) {
-        snprintf(buf, sizeof(buf), "TRACK: %s", g_track_id[0] ? g_track_id : "—");
+        const char* t = g_track_name[0] ? g_track_name : (g_track_id[0] ? g_track_id : "-");
+        snprintf(buf, sizeof(buf), "TRACK: %s", t);
         lv_label_set_text(ctx->meta_track, buf);
     }
+    if (ctx->meta_brand) {
+        if (g_car_brand[0]) {
+            char up[32];
+            size_t i = 0;
+            for (; g_car_brand[i] && i < sizeof(up) - 1; ++i) {
+                char c = g_car_brand[i];
+                up[i] = (c >= 0x61 && c <= 0x7a) ? (char)(c - 32) : c;
+            }
+            up[i] = 0;
+            lv_label_set_text(ctx->meta_brand, up);
+            lv_obj_clear_flag(ctx->meta_brand, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(ctx->meta_brand, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     if (ctx->meta_car) {
-        snprintf(buf, sizeof(buf), "CAR: %s", g_car_id[0] ? g_car_id : "—");
-        lv_label_set_text(ctx->meta_car, buf);
+        const char* full = g_car_name[0] ? g_car_name : (g_car_id[0] ? g_car_id : "-");
+        const char* model = g_car_brand[0] ? model_after_brand(full, g_car_brand) : full;
+        lv_label_set_text(ctx->meta_car, model);
+    }
+    if (ctx->meta_active) {
+        if (g_active_name[0]) {
+            snprintf(buf, sizeof(buf), "ACTIVE: %s", g_active_name);
+            lv_label_set_text(ctx->meta_active, buf);
+            lv_obj_clear_flag(ctx->meta_active, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(ctx->meta_active, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 }
 
@@ -290,7 +355,9 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
         return nullptr;
     }
     ctx->meta_track       = nullptr;
+    ctx->meta_brand       = nullptr;
     ctx->meta_car         = nullptr;
+    ctx->meta_active      = nullptr;
     ctx->list_col         = nullptr;
     ctx->placeholder_lbl  = nullptr;
     ctx->active_row_obj   = nullptr;
@@ -345,15 +412,38 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_set_style_pad_all(meta, 0, LV_PART_MAIN);
     lv_obj_clear_flag(meta, LV_OBJ_FLAG_SCROLLABLE);
 
+    // Stack: TRACK / BRAND-letterspaced / MODEL / ACTIVE.
     ctx->meta_track = lv_label_create(meta);
     lv_obj_set_style_text_color(ctx->meta_track, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_track, 1, LV_PART_MAIN);
-    lv_obj_align(ctx->meta_track, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_width(ctx->meta_track, SCREEN_W - 2 * OUTER_PAD);
+    lv_label_set_long_mode(ctx->meta_track, LV_LABEL_LONG_DOT);
+    lv_obj_align(ctx->meta_track, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    ctx->meta_brand = lv_label_create(meta);
+    lv_obj_set_style_text_color(ctx->meta_brand, UI_TX_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(ctx->meta_brand, 2, LV_PART_MAIN);
+    lv_obj_set_width(ctx->meta_brand, SCREEN_W - 2 * OUTER_PAD);
+    lv_label_set_long_mode(ctx->meta_brand, LV_LABEL_LONG_DOT);
+    lv_obj_align(ctx->meta_brand, LV_ALIGN_TOP_LEFT, 0, 20);
+    lv_label_set_text(ctx->meta_brand, "");
+    lv_obj_add_flag(ctx->meta_brand, LV_OBJ_FLAG_HIDDEN);
 
     ctx->meta_car = lv_label_create(meta);
     lv_obj_set_style_text_color(ctx->meta_car, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_car, 1, LV_PART_MAIN);
-    lv_obj_align(ctx->meta_car, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_width(ctx->meta_car, SCREEN_W - 2 * OUTER_PAD);
+    lv_label_set_long_mode(ctx->meta_car, LV_LABEL_LONG_DOT);
+    lv_obj_align(ctx->meta_car, LV_ALIGN_TOP_LEFT, 0, 40);
+
+    ctx->meta_active = lv_label_create(meta);
+    lv_obj_set_style_text_color(ctx->meta_active, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(ctx->meta_active, 1, LV_PART_MAIN);
+    lv_obj_set_width(ctx->meta_active, SCREEN_W - 2 * OUTER_PAD);
+    lv_label_set_long_mode(ctx->meta_active, LV_LABEL_LONG_DOT);
+    lv_obj_align(ctx->meta_active, LV_ALIGN_TOP_LEFT, 0, 60);
+    lv_label_set_text(ctx->meta_active, "");
+    lv_obj_add_flag(ctx->meta_active, LV_OBJ_FLAG_HIDDEN);
 
     // ---- Setup list (scrollable) -------------------------------------------
     const int list_y = HEADER_H + 6 + META_H + 6;
@@ -403,7 +493,8 @@ extern "C" void screen_pocket_technician_clear_setups(void) {
 extern "C" void screen_pocket_technician_add_setup(const char* name,
                                                     const char* mtime_iso,
                                                     int32_t best_ms,
-                                                    const char* path) {
+                                                    const char* path,
+                                                    const pt_setup_summary_t* summary) {
     if (!name || !*name) return;
     if (g_setup_count >= PT_MAX_SETUPS) return;
     setup_row_t* row = &g_setups[g_setup_count];
@@ -422,6 +513,15 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
     } else {
         row->path[0] = 0;
     }
+    if (summary) {
+        row->brake_bias = summary->brake_bias;
+        row->abs        = summary->abs;
+        row->tc         = summary->tc;
+        row->wing_f     = summary->wing_f;
+        row->wing_r     = summary->wing_r;
+    } else {
+        row->brake_bias = -1; row->abs = -1; row->tc = -1; row->wing_f = -1; row->wing_r = -1;
+    }
     int idx = g_setup_count++;
 
     if (g_active_ctx && g_active_ctx->list_col) {
@@ -435,24 +535,46 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
     }
 }
 
-extern "C" void screen_pocket_technician_set_identity(const char* car_id, const char* track_id) {
+extern "C" void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,
+                                                       const char* car_brand,
+                                                       const char* track_id, const char* track_name) {
     if (car_id) {
         strncpy(g_car_id, car_id, sizeof(g_car_id) - 1);
         g_car_id[sizeof(g_car_id) - 1] = 0;
+    }
+    if (car_name) {
+        strncpy(g_car_name, car_name, sizeof(g_car_name) - 1);
+        g_car_name[sizeof(g_car_name) - 1] = 0;
+    } else {
+        g_car_name[0] = 0;
+    }
+    if (car_brand) {
+        strncpy(g_car_brand, car_brand, sizeof(g_car_brand) - 1);
+        g_car_brand[sizeof(g_car_brand) - 1] = 0;
+    } else {
+        g_car_brand[0] = 0;
     }
     if (track_id) {
         strncpy(g_track_id, track_id, sizeof(g_track_id) - 1);
         g_track_id[sizeof(g_track_id) - 1] = 0;
     }
+    if (track_name) {
+        strncpy(g_track_name, track_name, sizeof(g_track_name) - 1);
+        g_track_name[sizeof(g_track_name) - 1] = 0;
+    } else {
+        g_track_name[0] = 0;
+    }
     if (g_active_ctx) update_meta(g_active_ctx);
 }
 
 extern "C" void screen_pocket_technician_set_active_setup(const char* name) {
-    if (!name) return;
-    strncpy(g_active_name, name, sizeof(g_active_name) - 1);
-    g_active_name[sizeof(g_active_name) - 1] = 0;
-    // No widget hooks here — Part D leaves the "active row highlight" for
-    // a follow-up. The cached name is kept so a future visual can opt in.
+    if (name) {
+        strncpy(g_active_name, name, sizeof(g_active_name) - 1);
+        g_active_name[sizeof(g_active_name) - 1] = 0;
+    } else {
+        g_active_name[0] = 0;
+    }
+    if (g_active_ctx) update_meta(g_active_ctx);
 }
 
 extern "C" void screen_pocket_technician_apply_load_ack(bool ok,

@@ -30,14 +30,29 @@ lv_obj_t* screen_pocket_technician_create(void);
 // folders (chatgpt-codex P1 on PR #91). Pass nullptr to keep the
 // load request `name`-only (legacy behavior).
 void screen_pocket_technician_clear_setups(void);
+typedef struct {
+    int32_t brake_bias;  // -1 if missing
+    int32_t abs;
+    int32_t tc;
+    int32_t wing_f;
+    int32_t wing_r;
+} pt_setup_summary_t;
+
 void screen_pocket_technician_add_setup(const char* name,
                                          const char* mtime_iso,
                                          int32_t best_ms,
-                                         const char* path);
+                                         const char* path,
+                                         const pt_setup_summary_t* summary);
 
 // Update the meta bar from `state.snapshot topic="setup.active"` or from
-// the `setup.list.result` envelope's car_id/track_id fields.
-void screen_pocket_technician_set_identity(const char* car_id, const char* track_id);
+// the `setup.list.result` envelope's car_*/track_* fields.
+//
+// Display names (`car_name`, `track_name`) are optional — when nullptr or
+// empty, the meta bar falls back to the directory ID. Sending both lets
+// the screen show "Porsche 911 GT3 R 2016" in place of "ks_porsche_911_gt3r_2016".
+void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,
+                                            const char* car_brand,
+                                            const char* track_id, const char* track_name);
 void screen_pocket_technician_set_active_setup(const char* name);
 
 // Result of the most recent `setup.load` (called from main.cpp's WS dispatch).

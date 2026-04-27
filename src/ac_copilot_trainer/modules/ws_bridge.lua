@@ -84,6 +84,15 @@ local lastCornerQueryAt = {}  ---@type table<string, number>
 local _recvQueue = {}
 --- True after first inbound JSON with matching `protocol` (CodeRabbit #78).
 local sidecarProtocolReady = false
+--- Hello-retry state for the v1 external surface: some CSP builds don't fire
+--- params.onOpen reliably on the first connect. Without a hello we never
+--- register as a v1 peer with the sidecar, and `state.snapshot` frames are
+--- silently dropped (no loopback target). Track per-socket whether we've
+--- successfully sent hello and the last attempt time so we can retry from
+--- M.tick at most once a second.
+local externalHelloPending = false
+local externalHelloLastTryT = -1e9
+local EXTERNAL_HELLO_RETRY_SEC = 1.0
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
 
@@ -433,31 +442,34 @@ tryOpen = function()
   end
   _recvQueue = {}
   sidecarProtocolReady = false
+  -- Mark that we owe the sidecar a hello on this socket. The actual send is
+  -- retried from M.tick() until `sidecarProtocolReady` flips (set when the
+  -- sidecar's v1 hello_ack arrives) — this is the only reliable signal that
+  -- our hello landed and we're registered as an external peer.
+  externalHelloPending = true
+  externalHelloLastTryT = -1e9
   local function announceExternalHello()
-    -- Re-announce on (re)open so sidecar reconnects keep forwarding external
-    -- `action`/`config.*` frames to the Lua bridge (PR #83 follow-up).
     M.sendJson({
       v = PROTOCOL_VERSION,
       type = "hello",
       client = "ac-copilot-trainer-lua",
     })
   end
-  local inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
   local opened = nil
   local params = {
     onOpen = function()
-      -- Some CSP builds invoke onOpen on first connect; skip only when it lands
-      -- immediately after the inline hello. Reconnect onOpen events happen later
-      -- and must re-announce hello to re-register with the sidecar.
-      if inlineHelloAt ~= nil and type(os) == "table" and type(os.time) == "function" then
-        local now = os.time()
-        if type(now) == "number" and now - inlineHelloAt <= 1 then
-          inlineHelloAt = nil
-          return
-        end
-      end
-      inlineHelloAt = nil
+      -- Always announce hello on onOpen. The previous "inline hello + dedup"
+      -- pattern silently dropped the registration when the inline send fired
+      -- before the socket was actually open: sendJson returned false, and
+      -- the dedup window then suppressed the onOpen retry, leaving the peer
+      -- connected at WS level but never v1-registered with the sidecar (so
+      -- coaching.snapshot frames never flowed). The sidecar's
+      -- `_external_peers.add()` is idempotent — a duplicate hello is a no-op
+      -- on the server side, so always sending here is safe.
       announceExternalHello()
+      if ac and type(ac.log) == "function" then
+        ac.log("[COPILOT][WS-DIAG] onOpen: hello announced")
+      end
     end,
     onError = _onError,
     onClose = function(reason)
@@ -489,10 +501,14 @@ tryOpen = function()
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
-    -- Send hello immediately for builds that ignore params.onOpen; onOpen still
-    -- handles reconnect handshakes when reconnect=true.
-    inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
-    announceExternalHello()
+    -- DO NOT announce hello inline: web.socket() returns the socket handle
+    -- before the underlying TCP+WS upgrade actually completes. Calling
+    -- sendJson here writes to a not-yet-open socket; CSP web.Socket either
+    -- buffers or silently drops, and we have no reliable signal of which.
+    -- Rely on the params.onOpen callback for hello — that's only invoked
+    -- once the socket is genuinely ready to receive frames, and the sidecar's
+    -- `_external_peers.add()` is idempotent so duplicate hellos are safe
+    -- if a future CSP build also fires hello from somewhere else.
     return true
   end
   if ac and type(ac.log) == "function" then
@@ -800,6 +816,30 @@ function M.tick(simTime)
     return
   end
   if sock then
+    -- Issue #86 follow-up: retry the v1 hello until the sidecar acks it.
+    -- `params.onOpen` is unreliable across CSP builds (some never fire it
+    -- on the initial connect, only on later reconnects), and the original
+    -- "send hello inline right after web.socket()" pattern dropped silently
+    -- because the socket isn't actually writable at that point. The retry
+    -- here closes the gap: every tick (rate-limited to 1 s) we resend
+    -- hello until we observe a v1 frame back from the sidecar (which sets
+    -- `sidecarProtocolReady`), at which point we stop retrying. The sidecar's
+    -- `_external_peers.add()` is idempotent so duplicate hellos are no-ops.
+    if externalHelloPending and not sidecarProtocolReady then
+      if currentSimT - externalHelloLastTryT >= EXTERNAL_HELLO_RETRY_SEC then
+        externalHelloLastTryT = currentSimT
+        local sent = M.sendJson({
+          v = PROTOCOL_VERSION,
+          type = "hello",
+          client = "ac-copilot-trainer-lua",
+        })
+        if ac and type(ac.log) == "function" then
+          ac.log("[COPILOT][WS-DIAG] hello retry sent=" .. tostring(sent))
+        end
+      end
+    elseif sidecarProtocolReady then
+      externalHelloPending = false
+    end
     return
   end
   if currentSimT - lastTry < RECONNECT_SEC then

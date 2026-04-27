@@ -69,12 +69,13 @@ ac_copilot_ctx_t* g_active_ctx = nullptr;
 
 // --- Helpers ---------------------------------------------------------------
 
-constexpr int SCREEN_W   = 480;
-constexpr int SCREEN_H   = 320;
+// Portrait 320×480 (device mounted vertical).
+constexpr int SCREEN_W   = 320;
+constexpr int SCREEN_H   = 480;
 constexpr int HEADER_H   = 40;
 constexpr int CARD_PAD   = 12;
 constexpr int OUTER_PAD  = 12;
-constexpr int ALERT_H    = 80;
+constexpr int ALERT_H    = 110;   // taller in portrait so 2 wrap-lines fit
 constexpr int CARD_GAP   = 8;
 
 void on_back_clicked(lv_event_t*) {
@@ -87,7 +88,7 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
 
     if (ctx->alert_meta_label) {
         lv_label_set_text(ctx->alert_meta_label,
-                          s.corner_label[0] ? s.corner_label : "—");
+                          s.corner_label[0] ? s.corner_label : "-");
     }
 
     // LLM advice override on the secondary line — only when the cached
@@ -112,7 +113,7 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
 
     if (ctx->approaching_corner) {
         lv_label_set_text(ctx->approaching_corner,
-                          s.corner_label[0] ? s.corner_label : "—");
+                          s.corner_label[0] ? s.corner_label : "-");
     }
 
     char buf[40];
@@ -120,7 +121,7 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
         if (s.dist_to_brake_m >= 0) {
             snprintf(buf, sizeof(buf), "%d M", (int)s.dist_to_brake_m);
         } else {
-            snprintf(buf, sizeof(buf), "—");
+            snprintf(buf, sizeof(buf), "-");
         }
         lv_label_set_text(ctx->dist_value, buf);
     }
@@ -136,7 +137,7 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
         if (s.target_speed_kmh > 0) {
             snprintf(buf, sizeof(buf), "%d KM/H", (int)s.target_speed_kmh);
         } else {
-            snprintf(buf, sizeof(buf), "—");
+            snprintf(buf, sizeof(buf), "-");
         }
         lv_label_set_text(ctx->target_value, buf);
     }
@@ -145,7 +146,7 @@ void apply_to_widgets(ac_copilot_ctx_t* ctx) {
         if (s.current_speed_kmh >= 0) {
             snprintf(buf, sizeof(buf), "%d KM/H", (int)s.current_speed_kmh);
         } else {
-            snprintf(buf, sizeof(buf), "—");
+            snprintf(buf, sizeof(buf), "-");
         }
         lv_label_set_text(ctx->current_value, buf);
         // CURRENT goes red when current > target + 8 (issue #86 C2).
@@ -271,7 +272,7 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     lv_obj_align(ctx->alert_meta_label, LV_ALIGN_TOP_LEFT, 16, 0);
     lv_obj_set_style_text_color(ctx->alert_meta_label, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->alert_meta_label, 1, LV_PART_MAIN);
-    lv_label_set_text(ctx->alert_meta_label, "—");
+    lv_label_set_text(ctx->alert_meta_label, "-");
 
     ctx->alert_primary = lv_label_create(alert);
     lv_obj_align(ctx->alert_primary, LV_ALIGN_TOP_LEFT, 0, 22);
@@ -313,7 +314,7 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     lv_obj_set_style_text_color(ctx->approaching_corner, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->approaching_corner, 2, LV_PART_MAIN);
     lv_obj_align(ctx->approaching_corner, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_label_set_text(ctx->approaching_corner, "—");
+    lv_label_set_text(ctx->approaching_corner, "-");
 
     // DISTANCE TO BRAKING + value + bar
     lv_obj_t* dist_lbl = lv_label_create(tele);
@@ -326,7 +327,7 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     lv_obj_set_style_text_color(ctx->dist_value, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->dist_value, 1, LV_PART_MAIN);
     lv_obj_align(ctx->dist_value, LV_ALIGN_TOP_RIGHT, 0, 32);
-    lv_label_set_text(ctx->dist_value, "—");
+    lv_label_set_text(ctx->dist_value, "-");
 
     ctx->dist_bar = lv_bar_create(tele);
     lv_obj_set_size(ctx->dist_bar, SCREEN_W - 2 * OUTER_PAD - 2 * CARD_PAD, 4);
@@ -338,7 +339,9 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     lv_obj_set_style_bg_color(ctx->dist_bar, UI_ACCENT_GOLD, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(ctx->dist_bar, LV_OPA_COVER, LV_PART_INDICATOR);
 
-    // TARGET / CURRENT row
+    // TARGET / CURRENT — stacked vertically in portrait (no room for the
+    // two-column landscape layout at 320px wide). LABEL on the left, value
+    // on the right of the same row. CURRENT directly below TARGET.
     lv_obj_t* target_lbl = lv_label_create(tele);
     lv_label_set_text(target_lbl, "TARGET");
     lv_obj_set_style_text_color(target_lbl, UI_TX_MUTED, LV_PART_MAIN);
@@ -348,20 +351,20 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
     ctx->target_value = lv_label_create(tele);
     lv_obj_set_style_text_color(ctx->target_value, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->target_value, 1, LV_PART_MAIN);
-    lv_obj_align(ctx->target_value, LV_ALIGN_TOP_LEFT, 60, 76);
-    lv_label_set_text(ctx->target_value, "—");
+    lv_obj_align(ctx->target_value, LV_ALIGN_TOP_RIGHT, 0, 76);
+    lv_label_set_text(ctx->target_value, "-");
 
     lv_obj_t* current_lbl = lv_label_create(tele);
     lv_label_set_text(current_lbl, "CURRENT");
     lv_obj_set_style_text_color(current_lbl, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(current_lbl, 1, LV_PART_MAIN);
-    lv_obj_align(current_lbl, LV_ALIGN_TOP_LEFT, 220, 76);
+    lv_obj_align(current_lbl, LV_ALIGN_TOP_LEFT, 0, 100);
 
     ctx->current_value = lv_label_create(tele);
     lv_obj_set_style_text_color(ctx->current_value, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->current_value, 1, LV_PART_MAIN);
-    lv_obj_align(ctx->current_value, LV_ALIGN_TOP_LEFT, 290, 76);
-    lv_label_set_text(ctx->current_value, "—");
+    lv_obj_align(ctx->current_value, LV_ALIGN_TOP_RIGHT, 0, 100);
+    lv_label_set_text(ctx->current_value, "-");
 
     // Delta chip (bottom)
     ctx->delta_chip = lv_label_create(tele);

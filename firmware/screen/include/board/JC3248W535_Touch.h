@@ -11,11 +11,14 @@
 //   - F1ATB JC3248W535 setup writeup
 //   - me-processware/JC3248W535-Driver
 //
-// Native panel orientation is 320×480 portrait. main.cpp settles on
-// rotation=1 (landscape 480×320) so we map raw → screen as
-//     screen_x = ry
-//     screen_y = (JC_TOUCH_NATIVE_W - 1) - rx
-// where JC_TOUCH_NATIVE_W is the portrait width (320).
+// Native panel orientation is 320×480 portrait, and the rig screen is
+// MOUNTED portrait (iPhone-style), so the LVGL logical frame is also 320×480.
+// Raw I²C coords come in panel-native (rx 0..319, ry 0..479) and map 1:1
+// to LVGL coords with no rotation — but typically the touch axes are flipped
+// from the display axes on this board, so we still apply the simple flip
+// `(NATIVE_W-1)-rx` if testing reveals a mirrored axis. Start with the
+// straight identity mapping and flip empirically if a finger at top-left
+// reads as bottom-right.
 
 #pragma once
 
@@ -36,7 +39,7 @@ inline void jc_touch_begin() {
 }
 
 // Returns true and fills *x/*y when a finger is present. Coords are in the
-// landscape (rotation=1) frame: 0..479 x 0..319.
+// portrait LVGL frame: 0..319 x 0..479 (matches panel native + portrait mount).
 inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
   static const uint8_t cmd[11] = {
       0xB5, 0xAB, 0xA5, 0x5A, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00};
@@ -88,9 +91,9 @@ inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
   // frames. (Reported by gemini-code-assist + chatgpt-codex on PR #91.)
   if (rx >= JC_TOUCH_NATIVE_W || ry >= JC_TOUCH_NATIVE_H) return false;
 
-  // Native-portrait → landscape (rotation=1) mapping. Verify on first
-  // finger; flip the formula if axes come out swapped.
-  *x = ry;
-  *y = (uint16_t)((JC_TOUCH_NATIVE_W - 1) - rx);
+  // Portrait mount: native panel coords match LVGL coords 1:1. Identity
+  // mapping for now; flip a single axis here if testing shows a mirror.
+  *x = rx;
+  *y = ry;
   return true;
 }

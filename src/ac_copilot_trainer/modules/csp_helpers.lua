@@ -127,6 +127,39 @@ function M.carIdRawFromGlobals()
   return nil
 end
 
+--- Best-effort human-readable car name. Tries `ac.getCarName(0)` and the
+--- INI-driven `ac.getCarUIData` path, falling back to the directory ID.
+--- Returns a string or nil.
+function M.carDisplayName()
+  if ac and type(ac.getCarName) == "function" then
+    local ok, v = pcall(ac.getCarName, 0)
+    if ok and type(v) == "string" and v ~= "" then return v end
+  end
+  -- CSP exposes a UI-data table per car with a `name` key.
+  if ac and type(ac.getCarUIData) == "function" then
+    local ok, t = pcall(ac.getCarUIData, 0)
+    if ok and type(t) == "table" and type(t.name) == "string" and t.name ~= "" then
+      return t.name
+    end
+  end
+  return nil
+end
+
+--- Best-effort human-readable track name. Returns string or nil.
+function M.trackDisplayName()
+  if ac and type(ac.getTrackName) == "function" then
+    local ok, v = pcall(ac.getTrackName)
+    if ok and type(v) == "string" and v ~= "" then return v end
+  end
+  if ac and type(ac.getTrackUIData) == "function" then
+    local ok, t = pcall(ac.getTrackUIData)
+    if ok and type(t) == "table" and type(t.name) == "string" and t.name ~= "" then
+      return t.name
+    end
+  end
+  return nil
+end
+
 --- Reset CSP render state after each Draw3D overlay module (issue #33).
 --- Overlay draws set ReadOnlyLessEqual at their start; restore depth to Normal so we do not
 --- leave the same mode as the draw (no-op) or leak overlay state to other Draw3D users.

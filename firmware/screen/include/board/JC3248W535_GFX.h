@@ -59,26 +59,48 @@
 //   - uses Arduino_AXS15231B with ips=false (no INVON for this panel)
 //   - wraps in Arduino_Canvas (PSRAM framebuffer + flush())
 //
-// Rotation: AXS15231B is constructed with rotation=1 so Arduino_TFT::begin()
-// sets the panel's MADCTL register for landscape on init. Canvas is built at
-// landscape dimensions (480×320) so its framebuffer row stride matches what
-// LVGL writes and what flush() reads. Do NOT call setRotation() on either
-// pointer afterwards — the construction-time setup is final.
+// Rotation strategy: AXS15231B `rotation=0` is the only MADCTL combination
+// the panel actually displays with on this board (other modes go black with
+// a single white scan line — confirmed empirically; the controller likely
+// requires `MX|MV` for the panel's physical mount). `rotation=0` MADCTL =
+// `MX | MV | RGB` makes the controller transpose its scan, displaying the
+// image in landscape from the user's POV.
+//
+// AXS15231B's MADCTL cases (per moononournation Arduino_GFX 1.4.7):
+//   case 0 → MX | MV | RGB   ← LANDSCAPE (works on this board)
+//   case 1 → MX | MY | RGB   ← black + white line on this board
+//   case 2 → MY | MV | RGB   ← (untested)
+//   case 3 → RGB only        ← black + white line on this board
+//
+// The trick to making landscape work without clipping:
+//   `Arduino_TFT::setRotation` derives `_max_x = WIDTH - 1` from the ctor's
+//   `w` arg. If we pass the panel as native portrait (320, 480), _max_x=319
+//   and Canvas::flush()'s 480-wide draw call gets clipped to 320 cols —
+//   the "not fit in wideness" bug. Solution: pass landscape dims (480, 320)
+//   to the AXS15231B ctor so `_max_x=479` from the start, then build the
+//   Canvas at matching landscape (480×320). LVGL renders landscape native
+//   into the canvas, flush() sends 480×320 to the panel without clipping,
+//   and the MV bit handles the actual physical scan rotation.
+// Device is mounted PORTRAIT (iPhone-style) on the rig: user sees 320 wide
+// × 480 tall. The AXS15231B in `rotation=0` (MX|MV|RGB) transposes its scan
+// at the controller level — a memory image stored as W×H displays as H×W
+// physically. So we render the UI directly into a NATIVE PORTRAIT canvas
+// (320×480) and the MV transpose lands it on the panel correctly oriented
+// for portrait viewing. Rendering 480×320 landscape into memory would put
+// 480-wide content along the panel's short axis — what the user perceives
+// as a 90°-rotated, sideways-reading layout.
 inline Arduino_Canvas* jc3248w535_make_display() {
   Arduino_DataBus* bus = new Arduino_ESP32QSPI(
       JC_TFT_QSPI_CS, JC_TFT_QSPI_SCK,
       JC_TFT_QSPI_D0, JC_TFT_QSPI_D1, JC_TFT_QSPI_D2, JC_TFT_QSPI_D3);
-  // rotation=1 on the panel: begin() will write MADCTL = MX|MV|RGB so the
-  // controller scans pixels in landscape order. The panel's intrinsic w/h
-  // ctor args remain native portrait — Arduino_TFT swaps internally on rotation.
+  // rotation=0 → MADCTL = MX|MV|RGB. Native dims so _max_x=319, _max_y=479
+  // — matches the canvas dims, no clipping. The MV bit handles the physical
+  // scan transpose so portrait memory displays correctly on the device.
   Arduino_GFX* output = new Arduino_AXS15231B(
-      bus, JC_TFT_RST, /*rotation=*/1, /*ips=*/false,
+      bus, JC_TFT_RST, /*rotation=*/0, /*ips=*/false,
       JC_TFT_NATIVE_W, JC_TFT_NATIVE_H);
-  // Canvas built at landscape dims so its 307200-byte framebuffer is laid out
-  // as 320 rows × 480 px. LVGL writes with stride=480, flush() reads with
-  // stride=480 → matches.
   Arduino_Canvas* canvas = new Arduino_Canvas(
-      JC_TFT_LANDSCAPE_W, JC_TFT_LANDSCAPE_H, output);
+      JC_TFT_NATIVE_W, JC_TFT_NATIVE_H, output);
   if (JC_TFT_BL >= 0) {
     pinMode(JC_TFT_BL, OUTPUT);
     digitalWrite(JC_TFT_BL, HIGH);

@@ -36,6 +36,10 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SETUP_LIST,
+    TYPE_SETUP_LIST_RESULT,
+    TYPE_SETUP_LOAD,
+    TYPE_SETUP_LOAD_ACK,
     TYPE_STATE_SNAPSHOT,
     TYPE_STATE_SUBSCRIBE,
     TYPE_STATE_UNSUBSCRIBE,
@@ -75,6 +79,13 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_ACTION,
         TYPE_STATE_SUBSCRIBE,
         TYPE_STATE_UNSUBSCRIBE,
+        # Issue #86 Part D: rig screen requests setup ops via these; relay to
+        # the loopback Lua peer which actually scans the filesystem and calls
+        # ac.loadSetup(). Without these in the allow-list, validate_inbound
+        # rejects the frames with "unknown type" and the screen sits in
+        # "Loading…" forever.
+        TYPE_SETUP_LIST,
+        TYPE_SETUP_LOAD,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -85,6 +96,9 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_ACTION_ACK,
         TYPE_STATE_SNAPSHOT,
         TYPE_ERROR,
+        # Issue #86 Part D: replies the Lua peer sends back to the screen.
+        TYPE_SETUP_LIST_RESULT,
+        TYPE_SETUP_LOAD_ACK,
     }
 )
 
@@ -252,14 +266,19 @@ async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
 
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
+    peer = getattr(websocket, "remote_address", None)
+    t_in = data.get(TYPE_KEY, "?")
     err = validate_inbound(data)
     if err is not None:
+        logger.warning("external frame rejected peer=%s type=%s reason=%s", peer, t_in, err)
         await _safe_send(websocket, make_error(err, ref_type=data.get(TYPE_KEY)))
         return
     t = data[TYPE_KEY]
     if t == TYPE_HELLO:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
+        logger.info("external hello accepted peer=%s client=%s peers=%d",
+                    peer, data.get("client", "?"), len(_external_peers))
         await _safe_send(websocket, make_hello_ack())
         return
     if websocket not in _external_peers:
@@ -291,6 +310,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # The Lua client receives `config.set` / `action` / `state.subscribe` and
     # responds with `config.value` / `config.ack` / `action.ack` /
     # `state.snapshot`, which are also forwarded back through this same path.
+    topic = data.get("topic")
+    logger.info("relay peer=%s type=%s%s peers=%d",
+                peer, t,
+                f" topic={topic}" if topic else "",
+                len(_external_peers))
     await _broadcast_external(data, exclude=websocket)
 
 

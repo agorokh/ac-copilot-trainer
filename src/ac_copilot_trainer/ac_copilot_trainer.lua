@@ -436,20 +436,33 @@ if wsBridge.registerRequestHandler then
           mtimeIso = s
         end
       end
+      -- Per-row summary: brake bias / abs / tc / wing front+rear from the
+      -- INI. Bounded: this opens each setup file once when the list is
+      -- requested. With per-track filter capping at <50 setups in a busy
+      -- session this is well under a frame budget.
+      local sum = {}
+      pcall(function() sum = setupLibrary.summaryForSetup(entry.path) or {} end)
       items[i] = {
         name = name,
         mtime_iso = mtimeIso,
         best_ms = setupLibrary.bestForSetup(name),
-        -- Carry the absolute INI path so the screen can disambiguate setups
-        -- with colliding basenames across track/layout folders (chatgpt-codex
-        -- P1 on PR #91). Optional: legacy clients ignore it.
         path = entry.path,
+        brake_bias = sum.brake_bias,
+        abs = sum.abs,
+        tc = sum.tc,
+        wing_f = sum.wing_f,
+        wing_r = sum.wing_r,
       }
     end
     return {
       ok = true,
       car_id = ident.car_id,
+      car_name = ident.car_name,        -- "Porsche 911 GT3 R 2016"
+      car_brand = ident.car_brand,      -- "Porsche"
+      car_class = ident.car_class,      -- "race"
       track_id = ident.track_id,
+      track_name = ident.track_name,    -- "Monza"
+      track_country = ident.track_country,
       setups = items,
     }
   end)

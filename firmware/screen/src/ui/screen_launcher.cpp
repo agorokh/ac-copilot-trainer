@@ -6,7 +6,7 @@
 // and the TSX reference under
 // agorokh/Ingamecoachingtrainerdesign/src/app/components/mobile/Menu.tsx).
 //
-// Layout (rotation=1, 480×320 landscape):
+// Layout (portrait 320×480, device mounted vertical):
 //   ┌────────────────────────────────────────────────────────────────┐
 //   │ AC LAUNCHER                            ● CONNECTED  (header)   │  56 px
 //   ├────────────────────────────────────────────────────────────────┤
@@ -46,19 +46,18 @@
 
 namespace {
 
-// --- Layout constants (landscape 480×320) ----------------------------------
-constexpr int LAUNCHER_W      = 480;
-constexpr int LAUNCHER_H      = 320;
+// --- Layout constants (portrait 320×480) -----------------------------------
+constexpr int LAUNCHER_W      = 320;
+constexpr int LAUNCHER_H      = 480;
 constexpr int HEADER_H        = 56;
-// Horizontal pad for the header and content column (breathing room on the
-// left/right edges). Vertical pad is split out separately because the
-// content area only has `LAUNCHER_H - HEADER_H = 264` px and the three
-// 72 px tiles plus two 12 px gaps already consume 240 px — leaving exactly
-// 24 px for top + bottom inset combined. Keeping a single 16 px pad on
-// both axes overflows the column by 8 px and clips the bottom of the
-// third tile (Cursor Bugbot on PR #91).
+// Portrait gives us a roomy 424 px below the header. Three 72 px tiles + two
+// 12 px gaps = 240 px, leaving (424 - 240) = 184 px to split between top and
+// bottom insets — 92 px each. We keep CONTENT_PAD_V at 24 px above the first
+// tile (matching the original landscape feel) so the tiles sit near the
+// header, with breathing room beneath. CONTENT_PAD_H stays a horizontal pad
+// for left/right edges of the content column.
 constexpr int CONTENT_PAD_H   = 16;
-constexpr int CONTENT_PAD_V   = 12;   // 264 - 240 = 24 px → 12 px top + 12 px bottom
+constexpr int CONTENT_PAD_V   = 24;
 constexpr int TILE_H          = 72;
 constexpr int TILE_GAP        = UI_GAP_TILES;       // 12 px (tokens.h)
 constexpr int CHEVRON_W       = 18;
@@ -273,9 +272,11 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
     lv_obj_set_style_text_letter_space(brand, 2, LV_PART_MAIN);
     lv_obj_align(brand, LV_ALIGN_LEFT_MID, 0, 0);
 
-    // Right-aligned status pill: [dot] [label] [spinner-when-disconnected]
+    // Right-aligned status pill: [dot] [label] [spinner-when-disconnected].
+    // Sized for portrait 320 width: title ~130 px + 16 pad + pill 130 px +
+    // 16 pad ≈ 292 px, fits inside the header without overlap.
     lv_obj_t* pill = lv_obj_create(header);
-    lv_obj_set_size(pill, 180, 32);
+    lv_obj_set_size(pill, 130, 32);
     lv_obj_align(pill, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_opa(pill, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(pill, 0, LV_PART_MAIN);
@@ -290,10 +291,13 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
 
     ctx->status_label = lv_label_create(pill);
     lv_label_set_text(ctx->status_label, "DISCONNECTED");
-    lv_obj_align(ctx->status_label, LV_ALIGN_LEFT_MID, STATUS_DOT_DIA + 8, 0);
+    lv_obj_align(ctx->status_label, LV_ALIGN_LEFT_MID, STATUS_DOT_DIA + 6, 0);
 
+    // Spinner: smaller diameter so it nests inside the pill instead of
+    // bleeding out the right edge in portrait (it overlapped the brand text
+    // in the previous landscape sizing).
     ctx->spinner = lv_spinner_create(pill, /*time=*/1000, /*arc length=*/60);
-    lv_obj_set_size(ctx->spinner, 22, 22);
+    lv_obj_set_size(ctx->spinner, 18, 18);
     lv_obj_align(ctx->spinner, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_flag(ctx->spinner, LV_OBJ_FLAG_HIDDEN);
 }

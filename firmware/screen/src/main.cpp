@@ -58,8 +58,11 @@ static WebsocketsClient ws;
 
 // -- Screen layout (rotation=1 -> 480x320 landscape) -------------------------
 
-static constexpr int SCREEN_W = 480;
-static constexpr int SCREEN_H = 320;
+// Device mounted portrait (iPhone-style), so the LVGL logical screen is
+// 320 wide × 480 tall. The AXS15231B's MV transpose at `rotation=0` puts
+// portrait memory onto the panel correctly oriented for the user.
+static constexpr int SCREEN_W = 320;
+static constexpr int SCREEN_H = 480;
 
 #if PHASE1_FALLBACK
 // A small palette (RGB565). Phase 1 draws directly with Arduino_GFX.
@@ -348,6 +351,10 @@ static void lvgl_bringup() {
   lv_disp_draw_buf_init(&lv_draw_buf, lv_buf_a, lv_buf_b, LV_BUF_PIXELS);
 
   lv_disp_drv_init(&lv_disp_drv);
+  // Panel + canvas + LVGL all in landscape (480×320). The AXS15231B's MV bit
+  // handles the physical scan transpose at the controller level, so LVGL,
+  // canvas FB, and panel all agree on the same coordinate system. No software
+  // rotation needed. See JC3248W535_GFX.h for the MADCTL rationale.
   lv_disp_drv.hor_res  = SCREEN_W;
   lv_disp_drv.ver_res  = SCREEN_H;
   lv_disp_drv.flush_cb = lv_flush_cb;
@@ -547,11 +554,17 @@ static void dispatch_phase2_message(const String& body) {
       if (*name) screen_pocket_technician_set_active_setup(name);
     }
   } else if (strcmp(type, "setup.list.result") == 0) {
-    const char* car_id   = doc["car_id"]   | "";
-    const char* track_id = doc["track_id"] | "";
+    const char* car_id     = doc["car_id"]     | "";
+    const char* car_name   = doc["car_name"]   | "";
+    const char* car_brand  = doc["car_brand"]  | "";
+    const char* track_id   = doc["track_id"]   | "";
+    const char* track_name = doc["track_name"] | "";
     if (*car_id || *track_id) {
-      screen_pocket_technician_set_identity(*car_id ? car_id : nullptr,
-                                            *track_id ? track_id : nullptr);
+      screen_pocket_technician_set_identity(*car_id     ? car_id     : nullptr,
+                                            *car_name   ? car_name   : nullptr,
+                                            *car_brand  ? car_brand  : nullptr,
+                                            *track_id   ? track_id   : nullptr,
+                                            *track_name ? track_name : nullptr);
     }
     screen_pocket_technician_clear_setups();
     JsonArrayConst setups = doc["setups"].as<JsonArrayConst>();
@@ -562,8 +575,27 @@ static void dispatch_phase2_message(const String& body) {
         const char* path      = entry["path"]      | "";
         int32_t best_ms = entry["best_ms"].is<int>() ? entry["best_ms"].as<int>() : -1;
         if (*name) {
+          // Parse the per-row summary chips (Part D follow-up). Floats are
+          // accepted (CSP sometimes serializes ints as JSON numbers with .0)
+          // and rounded half-up. Missing fields default to -1 (=== unknown).
+          auto numOr = [](JsonVariantConst v, int32_t fallback) -> int32_t {
+            if (v.isNull()) return fallback;
+            if (v.is<int>())   return (int32_t)v.as<int>();
+            if (v.is<float>()) {
+              float f = v.as<float>();
+              return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+            }
+            return fallback;
+          };
+          pt_setup_summary_t sum;
+          sum.brake_bias = numOr(entry["brake_bias"], -1);
+          sum.abs        = numOr(entry["abs"],        -1);
+          sum.tc         = numOr(entry["tc"],         -1);
+          sum.wing_f     = numOr(entry["wing_f"],     -1);
+          sum.wing_r     = numOr(entry["wing_r"],     -1);
           screen_pocket_technician_add_setup(name, mtime_iso, best_ms,
-                                              *path ? path : nullptr);
+                                              *path ? path : nullptr,
+                                              &sum);
         }
       }
     }
@@ -648,19 +680,32 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
 #endif
 }
 
+// One-time WS client init: register callbacks + auth headers exactly once at
+// boot. Do NOT reassign `ws` or call addHeader on every reconnect — the
+// ArduinoWebsockets v0.5.3 `operator=` (websockets_client.cpp:48-79) copies
+// _endpoint/_client/callbacks but leaves `_customHeaders` untouched, so a
+// per-connect `ws = WebsocketsClient(); ws.addHeader(...)` accumulates
+// duplicate header entries across reconnect attempts. After N retries the
+// upgrade carries N copies of `X-AC-Copilot-Token`, which the websockets
+// (Python) server rejects with MultipleValuesError → 500 → upgrade fails.
+static bool g_ws_initialized = false;
+static void ws_init_once() {
+  if (g_ws_initialized) return;
+  g_ws_initialized = true;
+  ws.onMessage(ws_on_message);
+  ws.onEvent(ws_on_event);
+  ws.addHeader("X-AC-Copilot-Token", SIDECAR_TOKEN);
+  ws.addHeader("X-AC-Copilot-Client", CLIENT_ID);
+}
+
 static void ws_try_connect() {
   if (WiFi.status() != WL_CONNECTED) return;
-  ws = WebsocketsClient();
+  ws_init_once();
   ws_state = WsState::Connecting;
   last_error = "";
 #if PHASE1_FALLBACK
   refresh_ui();
 #endif
-
-  ws.onMessage(ws_on_message);
-  ws.onEvent(ws_on_event);
-  ws.addHeader("X-AC-Copilot-Token", SIDECAR_TOKEN);
-  ws.addHeader("X-AC-Copilot-Client", CLIENT_ID);
 
   String url = "ws://" + String(SIDECAR_HOST) + ":" + String(SIDECAR_PORT) +
                String(SIDECAR_PATH);
@@ -814,24 +859,19 @@ void setup() {
   }
   Serial.printf("[diag] init size: %dx%d\n", gfx->width(), gfx->height());
 
-  // Sanity-check the canvas narrow: factory now constructs the canvas at
-  // landscape dims (480×320) and the panel hardware at rotation=1. If the
-  // factory is ever swapped to a non-canvas surface or someone reverts to
-  // native-portrait construction, the dimensions will mismatch and we want
-  // to know loudly at boot rather than silently DMA garbage.
+  // Sanity-check the canvas: factory builds it at native portrait (320×480)
+  // matching the panel's own _width/_height. The MV bit handles the physical
+  // transpose — UI in memory is portrait, panel displays it correctly oriented.
   if (gfx_canvas &&
-      (gfx_canvas->width()  != JC_TFT_LANDSCAPE_W ||
-       gfx_canvas->height() != JC_TFT_LANDSCAPE_H)) {
-    Serial.printf("[warn] canvas dims %dx%d != landscape %dx%d -- factory mismatch?\n",
+      (gfx_canvas->width()  != JC_TFT_NATIVE_W ||
+       gfx_canvas->height() != JC_TFT_NATIVE_H)) {
+    Serial.printf("[warn] canvas dims %dx%d != native %dx%d -- factory mismatch?\n",
                   gfx_canvas->width(), gfx_canvas->height(),
-                  JC_TFT_LANDSCAPE_W, JC_TFT_LANDSCAPE_H);
+                  JC_TFT_NATIVE_W, JC_TFT_NATIVE_H);
   }
 
-  // No setRotation() call here: AXS15231B was constructed with rotation=1
-  // (MADCTL applied during begin()) and Canvas was built at landscape dims.
-  // Calling Canvas::setRotation now would swap its `_width` row stride away
-  // from the framebuffer's actual layout — exactly the diagonal-shear bug
-  // we just fixed.
+  // No setRotation() call here. Panel + canvas constructed at native portrait;
+  // MADCTL set at begin() via AXS15231B's rotation=0 case (MX|MV|RGB).
 
 #if PHASE1_FALLBACK
   // Sweep every rotation so AT LEAST one fills the visible area visibly.
