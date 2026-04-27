@@ -25,3 +25,4 @@ Technical deep-dives and root-cause analyses from development sessions.
 | [cowork-session-retrospective-2026-04-21.md](cowork-session-retrospective-2026-04-21.md) | User's critique of earlier Cowork session + durable autonomy/ownership preferences. |
 | [pr-78-sidecar-autolaunch-lap-archive.md](pr-78-sidecar-autolaunch-lap-archive.md) | Sidecar auto-launch via CSP os.runConsoleProcess + per-lap JSON archive schema v1 + 500 MB rotation. |
 | [pr-75-ollama-corner-coaching-protocol.md](pr-75-ollama-corner-coaching-protocol.md) | corner_query / corner_advice protocol, two-phase response (rules < 10ms + Ollama ~3-7s), sim-time staleness. |
+| [screen-end-to-end-bringup-2026-04-26.md](screen-end-to-end-bringup-2026-04-26.md) | 8 root-cause bugs found during PR #91 Parts C+D bring-up on real hardware: AR linker, ArduinoWebsockets header leak, sidecar allow-list, sidecar bind, CSP onOpen unreliable, AXS15231B rotation matrix, portrait mount, em-dash glyph. |

@@ -25,7 +25,55 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-25, post-merge of PR #89)
+## Resume here (2026-04-26, PR #91 Parts C+D first ran on real hardware)
+
+**The hot path has moved.** PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91)
+(Phase-2 launcher + AC Copilot mirror + Pocket Technician picker) ran end-to-end on
+the actual JC3248W535 device for the first time today. Eight distinct root-cause bugs
+needed fixing along the way — none of which CI or static analysis caught. Full
+catalogue with reproduction details and fixes:
+[screen-end-to-end-bringup-2026-04-26.md](../03_Investigations/screen-end-to-end-bringup-2026-04-26.md).
+
+**Working on the device today (verified):**
+
+* Launcher + status pill + portrait layout (320×480, MX|MV mode on AXS15231B)
+* AC Copilot mirror — live `coaching.snapshot` at 10Hz, primary/secondary lines,
+  TARGET/CURRENT speed flip-to-red logic, distance bar, delta chip
+* Pocket Technician — TRACK + BRAND + MODEL meta from `ui_*.json`, per-track filter,
+  setup chips (BB / ABS / TC / Wings F-R), gold-pulse on row tap, `setup.active`
+  broadcast, ACTIVE row in gold
+
+**Open follow-ups** (do these as a Part-D polish PR or before merge):
+
+1. **`start_sidecar.bat` binds loopback only.** `--host 127.0.0.1` without
+   `--external-bind` means the rig screen can't reach the trainer's auto-spawned
+   sidecar. Manual launch with `--external-bind 0.0.0.0 --token <T>` is the workaround
+   today. Plumbing fix: read `AC_COPILOT_SIDECAR_TOKEN` env var in the bat and pass
+   `--external-bind 0.0.0.0` when set.
+2. **BB chip stale across some setup taps.** TC and ABS update correctly when
+   switching between rows; BB chip was observed not updating on at least one row.
+   Trainer logs (`SETUP-DIAG`) confirm the values are sent correctly per row, so
+   the bug is FW-side. Diagnostic logs were stripped before commit; re-add briefly
+   to root-cause.
+3. **Font conversion (Part A4).** Bundled Syncopate / Michroma / Montserrat from
+   `content/fonts/` haven't been converted via `lv_font_conv` yet, so the screens
+   are running on default LVGL Montserrat 14 (ASCII only). Not blocking but kills
+   any non-ASCII glyph (em-dashes, bullets) until landed.
+
+**Known infrastructure pitfall** observed today: Windows Mobile Hotspot's "Power
+saving" auto-shutoff fires even when AC is running. Document in the rig-setup
+runbook to disable it.
+
+### Branch + PR state
+
+`feat/issue-86-rig-screen-phase2-launcher-and-apps` head is the device-bring-up
+commit series (rotation matrix discovery, ws_init_once, sidecar allow-list, hello
+retry, portrait layouts, em-dash → ASCII, brand line + setup chips, ac_content_meta
+reader). All landed on PR #91. Run the full PR resolution loop after pushing.
+
+---
+
+## Prior — 2026-04-25, post-merge of PR #89
 
 **Same-day follow-up PR [#89](https://github.com/agorokh/ac-copilot-trainer/pull/89) MERGED 2026-04-25T05:08:27Z** as squash commit `a55a0ed` on `main`. Two-line `.gitattributes` patch pinning `*.sh` and `*.bash` to `eol=lf` — fixes the Windows-checkout regression introduced by PR #87 where Git checked out shell hooks with CRLF and Bash failed `bash: root=...: No such file or directory` on `PreToolUse:Bash`. The hook fix is now live at the repo level. Same item is queued upstream as part of [`agorokh/template-repo#97`](https://github.com/agorokh/template-repo/issues/97) so the next downstream sync inherits the fix.
 
