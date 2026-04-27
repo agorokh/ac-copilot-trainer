@@ -1,0 +1,46 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 8492dba141dbbce1
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code This Duplicated (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Duplicated render state restore logic across two modules
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`restoreRenderState` in `racing_line.lua` and `restoreMarkerRenderState` in `track_markers.lu...
+- ### Duplicated `setV3` helper across two modules
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+The `setV3` function is introduced with identical implementation in both `racing_line.lua` and `track_mar...
+- ### Duplicated rgbm setter not deduped like setV3
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`setRgbm` in `racing_line.lua` and `setWallColor` in `track_markers.lua` are near-identical functions bo...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

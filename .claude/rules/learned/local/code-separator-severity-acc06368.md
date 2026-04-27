@@ -1,0 +1,52 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: acc063680a6869f6
+mined_from: 5 review comments across 4 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: automation
+---
+
+# Code Separator Severity (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Path separator lost when root has trailing slash
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+When `root` ends with a path separator, `sep` is set to `""` to avoid a double separator between `roo...
+- ### `lastEmittedAt` variable is now dead code
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`lastEmittedAt` is declared and initialized to `-1e9` but never read or written to anywhere in the module af...
+- ### Reset clears process-alive flag without terminating child
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`M.reset()` sets `spawnedAlive = false` and `sidecarChildEverLaunched = false` even though t...
+- ### Stats count includes entries that rotate would skip
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`stats()` sets `count = #list` without filtering by `type(list[i]) == "string"`, but `rotate()` gu...
+
+## Suggested enforcement
+
+- Prefer lint/format or CI checks over manual review for this class of issue.

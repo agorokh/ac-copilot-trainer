@@ -1,0 +1,37 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "scripts/**/*"
+source: process-miner
+rule_fingerprint: 8320f42694ecaeae
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: architecture
+---
+
+# Code Merge That (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Re-check PR merge state after invoking `gh pr merge`**
+
+`phase_sync` assumes `gh pr merge` means the PR is alrea...
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Re-check PR merge state before treating sync as successful**
+
+`gh pr merge` is not a guarantee that the PR is me...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Validate PR base branch before running auto-merge**
+
+Phase `sync` now merges any OPEN PR number via `gh pr merge...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

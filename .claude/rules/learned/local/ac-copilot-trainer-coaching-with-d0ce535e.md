@@ -1,0 +1,56 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: d0ce535efb62fdf3
+mined_from: 4 review comments across 4 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: automation
+---
+
+# Ac_Copilot_Trainer Coaching With (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>Review Summary by Qodo</h3>
+
+Gate render diagnostics, add coaching HUD strip, BMW font support, taller brake walls
+
+<code>✨ Enhancement</code> <code>🐞 Bug fix</code>
+
+<img src="https://www.qodo.ai...
+- <h3>Review Summary by Qodo</h3>
+
+Add configurable coaching hints display cap with HUD parity
+
+<code>✨ Enhancement</code>
+
+<img src="https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.svg" ...
+- <h3>Review Summary by Qodo</h3>
+
+Add Ollama post-lap debrief with HUD display and rules fallback (issue #46)
+
+<code>✨ Enhancement</code> <code>🧪 Tests</code>
+
+<img src="https://www.qodo.ai/wp-content/...
+- <h3>Review Summary by Qodo</h3>
+
+Sidecar auto-launch and per-lap archive with car setup capture
+
+<code>✨ Enhancement</code>
+
+<img src="https://www.qodo.ai/wp-content/uploads/2025/11/light-grey-line.sv...
+
+## Suggested enforcement
+
+- Prefer lint/format or CI checks over manual review for this class of issue.

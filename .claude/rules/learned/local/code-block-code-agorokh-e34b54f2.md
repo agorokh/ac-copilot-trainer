@@ -1,0 +1,72 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+  - "firmware/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: e34b54f2450dfce8
+mined_from: 35 review comments across 14 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: typecheck
+---
+
+# Code_Block Code Agorokh (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+# First, check the file exists and read the relevant lines
+wc -l src/ac_copilot_trainer/mo...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+# Verify that the module has sticky guards for debug* helpers but not for lega...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🌐 Web query:
+
+`In Lua/LuaJIT, are sequence-like tables conventionally 1-based, and what does math.floor(1/2) return?`
+
+...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+wc -l src/ac_copilot_trainer/modules/track_markers.lua
+```
+
+Repository: agorokh/ac-copilot...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

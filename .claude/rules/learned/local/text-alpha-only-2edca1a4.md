@@ -1,0 +1,34 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tests/**/*"
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 2edca1a4cb4719bd
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: test
+---
+
+# Text Alpha Only (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **issue (testing):** Docstring mentions title text alpha, but the test currently only verifies background alpha
+
+The assertions only check the background rgbm alpha, so the title text alpha requiremen...
+- Design brief/PR description says text should be fully opaque (background only is transparent), but COLOR_BRAND is defined with alpha 0.70 and used for footer text. Consider making footer text alpha 1....
+- The module header/doc says “text 100% opaque”, but `textAlpha` is set to `fadeAlpha` and then applied to all text colors. If the design requirement is that only the background is transparent (text alw...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

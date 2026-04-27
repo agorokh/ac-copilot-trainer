@@ -1,0 +1,52 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 731890805a9dc928
+mined_from: 5 review comments across 3 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: typecheck
+---
+
+# Code Json Guard (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Unguarded `.get()` on possibly non-dict JSON response crashes connection
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`json.loads(raw)` can return any JSON type (list, string, number, `None`, ...
+- ### Missing bool guard on float() for JSON values
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+The `corner_query` handler coerces untrusted JSON values `cur`, `ref`, and `dist` via `float(inbound....
+- ### Protocol field lacks bool guard on int coercion
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+The `int(proto_raw)` coercion at the protocol validation entry point has no `isinstance(proto_raw, boo...
+- ### `is_external_frame` missing bool guard on version check
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`is_external_frame` compares `frame.get("v") == 1` without a `bool` guard. Since Python `Tr...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

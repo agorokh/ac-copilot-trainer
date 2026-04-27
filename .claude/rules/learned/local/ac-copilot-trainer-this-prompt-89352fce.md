@@ -1,0 +1,49 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 89352fcedf915d3e
+mined_from: 11 review comments across 10 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Ac_Copilot_Trainer This Prompt (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <img src="https://www.qodo.ai/wp-content/uploads/2026/01/action-required.png" height="20" alt="Action required">
+
+1\. Debrief not journaled <code>🐞 Bug</code> <code>≡ Correctness</code>
+
+<pre>
+<b><i>s...
+- <h3>Code Review by Qodo</h3>
+
+<code>🐞 Bugs (0)</code>  <code>📘 Rule violations (0)</code>  <code>📎 Requirement gaps (0)</code>  <code>🎨 UX Issues (0)</code>
+
+<img src="https://www.qodo.ai/wp-content/u...
+- <h3>Code Review by Qodo</h3>
+
+<code>🐞 Bugs (2)</code>  <code>📘 Rule violations (0)</code>  <code>📎 Requirement gaps (1)</code>  <code>🎨 UX Issues (0)</code>
+
+<img src="https://www.qodo.ai/wp-content/u...
+- <h3>Code Review by Qodo</h3>
+
+<code>🐞 Bugs (0)</code>  <code>📘 Rule violations (0)</code>  <code>📎 Requirement gaps (0)</code>  <code>🎨 UX Issues (0)</code>
+
+<img src="https://www.qodo.ai/wp-content/u...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

@@ -1,0 +1,52 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 72af333cfc122cfb
+mined_from: 8 review comments across 6 PRs
+last_updated: 2026-04-27
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: guideline
+---
+
+# Code Reset Stale (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Rolling reset skips clearing `_cachedRealtimeView` state
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+Both `resetDrivingState` and `resetRollingDrivingState` clear `state.realtimeActiveHint = ...
+- ### Stale recv queue survives reset, repopulates cleared state
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`M.reset()` clears `cornerAdvisories` and resets `currentSimT` to 0, but does not clear ...
+- ### Reset clears launch flag, preventing sidecar relaunch after crash
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`M.reset()` sets `sidecarChildEverLaunched = false` while leaving `spawnedAlive` ...
+- ### Nil return from spawn API leaves sidecar permanently broken
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+The return value check `if a == false then` only catches an explicit `false` from `os.r...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
