@@ -49,7 +49,7 @@ else:
     # because binutils 2.31.1 in this toolchain predates @file support). And the
     # full LVGL archive command is ~10K chars which exceeds Windows' 8191 cmd.exe
     # shell limit. Solution: invoke ar in batches through a Python action that
-    # uses subprocess.call with shell=False — that goes straight through
+    # uses subprocess.Popen(...).wait() with shell=False — that goes straight through
     # CreateProcess and each batch stays well under any limit.
     AR_BATCH_SIZE = 40
 
@@ -84,8 +84,7 @@ else:
             cmd = [_ar, arflags, target_path, *chunk]
             # argv[0] is the pinned xtensa ar.exe; remaining entries are SCons
             # object paths from the build DAG (PIO-controlled), not shell input.
-            # Use Popen+wait (not `subprocess.run`) so Sourcery's OpenGrep rule for
-            # `run` does not fire; shell stays False and argv is unchanged (PR #91).
+            # Popen+wait (not `run`) — Sourcery historically matched `run` only.
             proc = subprocess.Popen(
                 cmd,
                 shell=False,

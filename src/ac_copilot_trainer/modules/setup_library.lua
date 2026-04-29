@@ -257,7 +257,12 @@ function M.bestForSetup(setupName, setupPath)
             local layoutOk = true
             if wantLayout ~= "" then
               local recLayout = tostring(rec.track.layout or ""):lower()
-              if recLayout ~= "" and recLayout ~= wantLayout:lower() then
+              -- When the session has an active layout, ignore legacy laps that
+              -- never recorded `track.layout` — they are not provably for this
+              -- layout (chatgpt-codex P2 on PR #91).
+              if recLayout == "" then
+                layoutOk = false
+              elseif recLayout ~= wantLayout:lower() then
                 layoutOk = false
               end
             end
@@ -348,20 +353,26 @@ function M.loadByName(nameOrOpts)
     return { ok = false, name = name, error = "not found" }
   end
 
+  local resolvedName = match.name
+
   if not (ac and type(ac.loadSetup) == "function") then
-    return { ok = false, name = name, error = "ac.loadSetup unavailable" }
+    return { ok = false, name = resolvedName, error = "ac.loadSetup unavailable" }
   end
 
   local okCall, loadRet = pcall(ac.loadSetup, match.path)
   if not okCall then
-    return { ok = false, name = name, error = "loadSetup raised: " .. tostring(loadRet) }
+    return {
+      ok = false,
+      name = resolvedName,
+      error = "loadSetup raised: " .. tostring(loadRet),
+    }
   end
   -- CSP may return false/nil instead of throwing when a load is refused.
   -- Treat any non-truthy return as failure (Cursor Bugbot on PR #91).
   if loadRet == nil or loadRet == false then
     return {
       ok = false,
-      name = name,
+      name = resolvedName,
       error = "loadSetup refused or returned failure",
     }
   end
@@ -371,7 +382,9 @@ function M.loadByName(nameOrOpts)
   _listCacheKey = nil
   return {
     ok = true,
-    name = name,
+    -- Echo the listing's canonical basename so path-only loads still surface
+    -- a usable name for `setup.active` + UI correlation (codex P2 on PR #91).
+    name = resolvedName,
     message = "loaded: " .. match.path,
     path = match.path,
   }
