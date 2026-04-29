@@ -277,8 +277,12 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t == TYPE_HELLO:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
-        logger.info("external hello accepted peer=%s client=%s peers=%d",
-                    peer, data.get("client", "?"), len(_external_peers))
+        logger.info(
+            "external hello accepted peer=%s client=%s peers=%d",
+            peer,
+            data.get("client", "?"),
+            len(_external_peers),
+        )
         await _safe_send(websocket, make_hello_ack())
         return
     if websocket not in _external_peers:
@@ -311,10 +315,13 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # responds with `config.value` / `config.ack` / `action.ack` /
     # `state.snapshot`, which are also forwarded back through this same path.
     topic = data.get("topic")
-    logger.info("relay peer=%s type=%s%s peers=%d",
-                peer, t,
-                f" topic={topic}" if topic else "",
-                len(_external_peers))
+    logger.info(
+        "relay peer=%s type=%s%s peers=%d",
+        peer,
+        t,
+        f" topic={topic}" if topic else "",
+        len(_external_peers),
+    )
     await _broadcast_external(data, exclude=websocket)
 
 
