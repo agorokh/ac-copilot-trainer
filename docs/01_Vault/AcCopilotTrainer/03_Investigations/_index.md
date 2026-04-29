@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-04-22
+updated: 2026-04-26
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -26,3 +26,4 @@ Technical deep-dives and root-cause analyses from development sessions.
 | [pr-78-sidecar-autolaunch-lap-archive.md](pr-78-sidecar-autolaunch-lap-archive.md) | Sidecar auto-launch via CSP os.runConsoleProcess + per-lap JSON archive schema v1 + 500 MB rotation. |
 | [pr-75-ollama-corner-coaching-protocol.md](pr-75-ollama-corner-coaching-protocol.md) | corner_query / corner_advice protocol, two-phase response (rules < 10ms + Ollama ~3-7s), sim-time staleness. |
 | [screen-end-to-end-bringup-2026-04-26.md](screen-end-to-end-bringup-2026-04-26.md) | 8 root-cause bugs found during PR #91 Parts C+D bring-up on real hardware: AR linker, ArduinoWebsockets header leak, sidecar allow-list, sidecar bind, CSP onOpen unreliable, AXS15231B rotation matrix, portrait mount, em-dash glyph. |
+| [wifi-hotspot-single-radio-2026-04-26.md](wifi-hotspot-single-radio-2026-04-26.md) | Intel 7260 single-radio: hotspot's "2.4 GHz" lies while connected to 5 GHz client mode; SSID-with-space breaks ESP32 scan. Fix: disconnect 5 GHz primary + rename SSID. |

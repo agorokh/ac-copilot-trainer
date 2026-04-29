@@ -138,7 +138,7 @@ If you're working on screen firmware specifically, also:
    ```bash
    py -m tools.ai_sidecar --external-bind 0.0.0.0 --token <T>
    ```
-   PC must have Windows Mobile Hotspot `AG_PC 7933` running. If PC rebooted, re-enable via the WinRT PowerShell snippet in [`glossary/rig-network`](glossary/rig-network.md).
+   **Hotspot SSID is now `AG_RIG`** (no space) on **2.4 GHz forced** + the AHOME5G profile is set to `connectionmode=manual` so it doesn't snap back and steal the radio. **Disconnect Wi-Fi from AHOME5G** (`netsh wlan disconnect`) before starting the hotspot — the Intel 7260 is single-radio so it cannot host 2.4 GHz while connected to a 5 GHz network. Full diagnosis + recovery commands: [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md).
 
 4. **Phase-2 firmware: bring up LVGL 8.3 + touch.** Follow [`screen-ui-stack-lvgl-touch`](../01_Decisions/screen-ui-stack-lvgl-touch.md):
    - `lib_deps += lvgl/lvgl @ ~8.3.11` in `firmware/screen/platformio.ini`.
