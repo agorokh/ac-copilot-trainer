@@ -58,7 +58,10 @@ void screen_pocket_technician_set_active_setup(const char* name);
 // Result of the most recent `setup.load` (called from main.cpp's WS dispatch).
 // `ok=true` triggers a gold border pulse on the active row; `ok=false`
 // shows the 3 s red toast with `error` (or "load failed" when null).
-void screen_pocket_technician_apply_load_ack(bool ok, const char* name, const char* error);
+// `path` mirrors the list row / `setup.load` request when present so duplicate
+// basenames correlate acks to the correct row (chatgpt-codex P2 on PR #91).
+void screen_pocket_technician_apply_load_ack(bool ok, const char* name,
+                                              const char* path, const char* error);
 
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request
@@ -71,10 +74,14 @@ typedef enum {
     PT_REQ_LOAD,        // {"v":1,"type":"setup.load","name":"<name>"}
 } pt_request_kind_t;
 
+// Absolute INI paths on Windows can exceed 160–256 chars; keep one shared cap
+// across the out-queue, pending correlation, and row cache (codex P2 on PR #91).
+#define PT_SETUP_PATH_MAX 384
+
 typedef struct {
     pt_request_kind_t kind;
     char              name[64];   // valid for PT_REQ_LOAD only
-    char              path[256];  // optional unique disambiguator; "" if unknown
+    char              path[PT_SETUP_PATH_MAX];  // optional disambiguator; "" if unknown
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.

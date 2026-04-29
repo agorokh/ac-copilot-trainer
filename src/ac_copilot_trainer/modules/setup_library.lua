@@ -25,14 +25,28 @@ local setupReader = require("setup_reader") -- INI key harvest for per-row param
 -- explicitly. CSP's `ac.onSetupsListRefresh` fires when SX drops a new
 -- file or AC reloads setups; we just bust the local cache.
 local _cachedList = nil  -- {name, mtime, path}[] — invalidated by SetupsListRefresh
+local _listCacheKey = nil ---@type string|nil  -- car/track/layout tuple; busts on session change
 local _hookInstalled = false
+
+local function listCacheKey()
+  return table.concat({
+    activeCarId(),
+    "\t",
+    activeTrackId(),
+    "\t",
+    activeTrackLayoutId(),
+  })
+end
 
 local function installRefreshHookOnce()
   if _hookInstalled then return end
   _hookInstalled = true
   if ac and type(ac.onSetupsListRefresh) == "function" then
     pcall(function()
-      ac.onSetupsListRefresh(function() _cachedList = nil end)
+      ac.onSetupsListRefresh(function()
+        _cachedList = nil
+        _listCacheKey = nil
+      end)
     end)
   end
 end
@@ -78,7 +92,12 @@ end
 ---@return table[]   {name, mtime, path}[]
 function M.list()
   installRefreshHookOnce()
-  if _cachedList then return _cachedList end
+  local key = listCacheKey()
+  if _cachedList and _listCacheKey == key then
+    return _cachedList
+  end
+  _cachedList = nil
+  _listCacheKey = nil
 
   local out = {}
   local root = userSetupsRoot()
@@ -147,6 +166,7 @@ function M.list()
     return tostring(a.name) < tostring(b.name)
   end)
   _cachedList = out
+  _listCacheKey = key
   return out
 end
 
@@ -345,6 +365,7 @@ function M.loadByName(nameOrOpts)
   -- Bust the cache so a follow-up `setup.list` re-reads BEST values that
   -- might now reference the freshly-loaded setup.
   _cachedList = nil
+  _listCacheKey = nil
   return {
     ok = true,
     name = name,

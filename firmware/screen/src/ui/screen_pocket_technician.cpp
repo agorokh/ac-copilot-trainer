@@ -46,7 +46,7 @@ struct setup_row_t {
     char    name[48];
     char    mtime_iso[32];
     int32_t best_ms;       // -1 = unknown
-    char    path[256];     // empty if trainer didn't ship a path
+    char    path[PT_SETUP_PATH_MAX];  // empty if trainer didn't ship a path
     int32_t brake_bias;
     int32_t abs;
     int32_t tc;
@@ -76,7 +76,7 @@ int          g_req_tail = 0;
 constexpr int PT_MAX_PENDING_LOADS = PT_MAX_REQUESTS - 1;
 struct pending_load_t {
     char      name[64];
-    char      path[256];
+    char      path[PT_SETUP_PATH_MAX];
     lv_obj_t* row;
 };
 static pending_load_t g_pending_loads[PT_MAX_PENDING_LOADS];
@@ -102,11 +102,23 @@ static bool pending_load_push(const char* name, const char* path, lv_obj_t* row)
     return true;
 }
 
-// Removes and returns the first pending entry whose name matches `name`.
-static lv_obj_t* pending_load_take_row_for_name(const char* name) {
+// Removes and returns the pending row for this ack. When `ack_path` is set,
+// require a path match so two quick taps on different `race.ini` rows cannot
+// steal each other's ack (chatgpt-codex P2 on PR #91). When `ack_path` is
+// empty, only match pendings that also had no path at enqueue time so a
+// path-qualified row never pairs with a bare ack.
+static lv_obj_t* pending_load_take_row(const char* name, const char* ack_path) {
     if (!name || !name[0]) return nullptr;
     for (int i = 0; i < g_pending_load_n; ++i) {
         if (strcmp(g_pending_loads[i].name, name) != 0) continue;
+        if (ack_path && ack_path[0]) {
+            if (strcmp(g_pending_loads[i].path, ack_path) != 0) continue;
+        } else {
+            // Ack omitted `path`: only match pendings that also omitted a path
+            // on enqueue; otherwise two same-basename rows with different paths
+            // can steal each other's ack (chatgpt-codex P2 on PR #91).
+            if (g_pending_loads[i].path[0] != 0) continue;
+        }
         lv_obj_t* row = g_pending_loads[i].row;
         for (int j = i; j < g_pending_load_n - 1; ++j) {
             g_pending_loads[j] = g_pending_loads[j + 1];
@@ -151,7 +163,7 @@ struct pt_ctx_t {
     lv_timer_t* pulse_timer;
     int       pulse_steps_left;
     char      pending_name[48];   // setup the user just tapped
-    char      pending_path[256];  // matching path; "" if not known
+    char      pending_path[PT_SETUP_PATH_MAX];  // matching path; "" if not known
 };
 
 pt_ctx_t* g_active_ctx = nullptr;
@@ -662,11 +674,12 @@ extern "C" void screen_pocket_technician_set_active_setup(const char* name) {
 
 extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
                                                          const char* name,
+                                                         const char* path,
                                                          const char* error) {
     if (!g_active_ctx) return;
     lv_obj_t* row = nullptr;
     if (name && name[0]) {
-        row = pending_load_take_row_for_name(name);
+        row = pending_load_take_row(name, path);
     }
     if (!row) {
         row = g_active_ctx->active_row_obj;

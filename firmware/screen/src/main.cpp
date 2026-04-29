@@ -63,6 +63,8 @@ static WebsocketsClient ws;
 // portrait memory onto the panel correctly oriented for the user.
 static constexpr int SCREEN_W = 320;
 static constexpr int SCREEN_H = 480;
+static_assert(SCREEN_W == JC_TFT_NATIVE_W && SCREEN_H == JC_TFT_NATIVE_H,
+              "LVGL + Phase-1 rollback share native portrait canvas dimensions");
 
 #if PHASE1_FALLBACK
 // A small palette (RGB565). Phase 1 draws directly with Arduino_GFX.
@@ -602,12 +604,14 @@ static void dispatch_phase2_message(const String& body) {
   } else if (strcmp(type, "setup.load.ack") == 0) {
     bool ok = doc["ok"] | false;
     const char* name  = doc["name"]  | "";
+    const char* lpath = doc["path"]  | "";
     const char* error = doc["error"] | "";
     // Treat an empty `error` field the same as missing so the screen's
     // "unknown" fallback fires instead of formatting "Load failed: " with
     // a blank trailer (Cursor Bugbot LOW on PR #91).
     const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
-    screen_pocket_technician_apply_load_ack(ok, name, err_arg);
+    screen_pocket_technician_apply_load_ack(
+        ok, name, (*lpath) ? lpath : nullptr, err_arg);
   }
 }
 #endif
@@ -877,7 +881,11 @@ void setup() {
   // Sweep every rotation so AT LEAST one fills the visible area visibly.
   sweep_rotations();
 
-  gfx->setRotation(1);
+  // Stay on rotation=0 (native portrait) so `SCREEN_W`/`SCREEN_H` (320×480)
+  // match `gfx->width()`/`height()` after `begin()`. A forced `setRotation(1)`
+  // landscape mode with portrait-sized layout constants left the Phase-1
+  // rollback UI mis-scaled (Cursor Bugbot on PR #91).
+  gfx->setRotation(0);
   draw_static_chrome();
   refresh_ui();
   gfx->flush();

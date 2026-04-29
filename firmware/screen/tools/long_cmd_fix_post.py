@@ -53,7 +53,11 @@ else:
     # CreateProcess and each batch stays well under any limit.
     AR_BATCH_SIZE = 40
 
-    def _batched_ar_action(target, source, _env, _ar=ar) -> int:
+    def _batched_ar_action(target, source, env, _ar=ar) -> int:  # noqa: ARG001
+        # SCons passes `env` by keyword; it is unused here (PIO graph is in target/source).
+        # Toolchain path `_ar` and SCons-provided `source`/`target` are trusted
+        # (PIO build graph), not interactive user input — see PR #91 Sourcery
+        # opengrep threads on subprocess hardening.
         target_path = str(target[0])
         sources = [str(s) for s in source]
         if os.path.exists(target_path):
@@ -65,8 +69,19 @@ else:
         for i in range(0, len(sources), AR_BATCH_SIZE):
             chunk = sources[i : i + AR_BATCH_SIZE]
             arflags = "rcs" if i == 0 else "qs"
-            cmd = [_ar, arflags, target_path] + chunk
-            rc = subprocess.call(cmd)
+            if arflags not in {"rcs", "qs"}:
+                return 1
+            cmd = [_ar, arflags, target_path, *chunk]
+            # argv[0] is the pinned xtensa ar.exe; remaining entries are SCons
+            # object paths from the build DAG (PIO-controlled), not shell input.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                shell=False,
+            )
+            rc = int(proc.returncode)
             if rc != 0:
                 print(f"[long_cmd_fix:post:ar] ar batch {i}-{i + len(chunk)} failed rc={rc}")
                 return rc
