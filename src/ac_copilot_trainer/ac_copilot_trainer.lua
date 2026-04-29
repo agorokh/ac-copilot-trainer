@@ -424,9 +424,9 @@ if wsBridge.registerRequestHandler then
   wsBridge.registerRequestHandler("setup.list", "setup.list.result", function(_payload)
     local ident = setupLibrary.activeIdentity()
     local list = setupLibrary.list()
-    -- Precompute BEST once per list refresh — `bestForSetup` scans up to 200
-    -- lap JSONs per call; doing that inside the per-row loop was O(rows×N)
-    -- disk reads (CodeRabbit on PR #91).
+    -- Precompute BEST once per list refresh — `bestForSetup` walks matching
+    -- lap JSONs (full journal, sorted newest-first) per row. Doing that
+    -- inside the per-row loop was O(rows×N) disk reads (CodeRabbit on PR #91).
     local bestCache = {}
     for j = 1, #list do
       local e = list[j]

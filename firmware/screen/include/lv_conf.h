@@ -29,7 +29,7 @@
  *   MEMORY
  * ===================== */
 /* 64 KiB pool. LVGL 8.3 widgets + 4 screens budgeted under 150 KiB total
- * including the two 240×40 RGB565 partial buffers (~38 KiB) allocated in
+ * including the two 320×40 RGB565 partial buffers (~50 KiB) allocated in
  * PSRAM by main.cpp. Bump if `lv_mem_monitor` reports > 80% used. */
 #define LV_MEM_CUSTOM        0
 #define LV_MEM_SIZE          (64U * 1024U)

@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 // Build and return a fresh launcher screen. Call this through `ui_nav_push`,
-// not directly. Part A ships a placeholder; Part B will replace it with the
-// real Menu.tsx port.
+// not directly. Part B ships the Menu.tsx port; later parts extend the other
+// app tiles without changing this factory's contract.
 lv_obj_t* launcher_create(void);
 
 #ifdef __cplusplus

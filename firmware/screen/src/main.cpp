@@ -56,7 +56,7 @@ static Arduino_GFX*    gfx        = nullptr;
 static Arduino_Canvas* gfx_canvas = nullptr;
 static WebsocketsClient ws;
 
-// -- Screen layout (rotation=1 -> 480x320 landscape) -------------------------
+// -- Screen layout (LVGL logical = native portrait 320×480) -----------------
 
 // Device mounted portrait (iPhone-style), so the LVGL logical screen is
 // 320 wide × 480 tall. The AXS15231B's MV transpose at `rotation=0` puts
@@ -358,10 +358,9 @@ static void lvgl_bringup() {
   lv_disp_draw_buf_init(&lv_draw_buf, lv_buf_a, lv_buf_b, LV_BUF_PIXELS);
 
   lv_disp_drv_init(&lv_disp_drv);
-  // Panel + canvas + LVGL all in landscape (480×320). The AXS15231B's MV bit
-  // handles the physical scan transpose at the controller level, so LVGL,
-  // canvas FB, and panel all agree on the same coordinate system. No software
-  // rotation needed. See JC3248W535_GFX.h for the MADCTL rationale.
+  // Panel + canvas + LVGL all in native portrait (320×480). LVGL's hor/ver
+  // res match the canvas framebuffer; MADCTL is configured at construction.
+  // See JC3248W535_GFX.h for the rotation / shear lessons.
   lv_disp_drv.hor_res  = SCREEN_W;
   lv_disp_drv.ver_res  = SCREEN_H;
   lv_disp_drv.flush_cb = lv_flush_cb;

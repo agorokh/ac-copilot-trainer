@@ -257,12 +257,11 @@ function M.bestForSetup(setupName, setupPath)
             local layoutOk = true
             if wantLayout ~= "" then
               local recLayout = tostring(rec.track.layout or ""):lower()
-              -- When the session has an active layout, ignore legacy laps that
-              -- never recorded `track.layout` — they are not provably for this
-              -- layout (chatgpt-codex P2 on PR #91).
-              if recLayout == "" then
-                layoutOk = false
-              elseif recLayout ~= wantLayout:lower() then
+              -- Only reject when the archive *named* a different layout.
+              -- `lap_archive` historically omits `track.layout` on many records;
+              -- treating empty as non-match made BEST vanish for all layout
+              -- sessions (codex P1 on PR #91).
+              if recLayout ~= "" and recLayout ~= wantLayout:lower() then
                 layoutOk = false
               end
             end

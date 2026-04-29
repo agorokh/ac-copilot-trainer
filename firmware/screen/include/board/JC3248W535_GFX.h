@@ -31,14 +31,11 @@
 #define JC_TFT_RST       -1   // shared with board reset
 #define JC_TFT_BL         1   // backlight (PWM capable)
 
-// Panel native orientation is 320x480 portrait. We run in landscape (480x320),
-// configured at construction so the panel hardware (MADCTL) and the canvas
-// framebuffer match from the first byte. Calling Arduino_Canvas::setRotation
-// later does NOT propagate to the underlying AXS15231B (Canvas's setRotation
-// only adjusts its own coordinate transform), and the framebuffer is sized
-// from construction-time WIDTH/HEIGHT — rotating the canvas after-the-fact
-// makes its `_width` row stride disagree with `WIDTH`, which produced the
-// "pixelish, doesn't fit the screen" diagonal-shear artefact on first flash.
+// Panel native orientation is 320×480 portrait. The firmware now keeps the
+// canvas at those native dims (no software setRotation) so the framebuffer,
+// LVGL logical coords, and MADCTL all agree from the first byte. Earlier builds
+// tried landscape + post-hoc rotation, which desynchronised Canvas stride vs
+// the AXS15231B scan order and produced the "pixelish / diagonal shear" bug.
 //
 // Source of truth for the panel's native dims lives in JC3248W535_Panel.h.
 #include "JC3248W535_Panel.h"
