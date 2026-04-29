@@ -54,12 +54,24 @@ else:
     AR_BATCH_SIZE = 40
 
     def _batched_ar_action(target, source, env, _ar=ar) -> int:  # noqa: ARG001
-        # SCons passes `env` by keyword; it is unused here (PIO graph is in target/source).
-        # Toolchain path `_ar` and SCons-provided `source`/`target` are trusted
-        # (PIO build graph), not interactive user input — see PR #91 Sourcery
-        # opengrep threads on subprocess hardening.
+        # SCons passes `env` by keyword. We use it only to prove every `.o`
+        # path lives under the active build dir before spawning ar — satisfies
+        # Sourcery/OpenGrep "tainted subprocess args" without shell=True.
         target_path = str(target[0])
         sources = [str(s) for s in source]
+        build_root = None
+        try:
+            build_root = os.path.normcase(
+                os.path.abspath(str(env.subst("${BUILD_DIR}")))
+            )
+        except Exception:
+            build_root = None
+        if build_root:
+            for p in sources:
+                pabs = os.path.normcase(os.path.abspath(p))
+                if pabs != build_root and not pabs.startswith(build_root + os.sep):
+                    print(f"[long_cmd_fix:post:ar] reject object outside BUILD_DIR: {p}")
+                    return 1
         if os.path.exists(target_path):
             try:
                 os.remove(target_path)

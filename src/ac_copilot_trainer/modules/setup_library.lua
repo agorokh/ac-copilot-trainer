@@ -28,16 +28,6 @@ local _cachedList = nil  -- {name, mtime, path}[] — invalidated by SetupsListR
 local _listCacheKey = nil ---@type string|nil  -- car/track/layout tuple; busts on session change
 local _hookInstalled = false
 
-local function listCacheKey()
-  return table.concat({
-    activeCarId(),
-    "\t",
-    activeTrackId(),
-    "\t",
-    activeTrackLayoutId(),
-  })
-end
-
 local function installRefreshHookOnce()
   if _hookInstalled then return end
   _hookInstalled = true
@@ -75,6 +65,18 @@ local function activeTrackLayoutId()
   local raw = ch.safeTrackLayoutRaw()
   if raw == nil then return "" end
   return ch.sanitizeId(raw, "")
+end
+
+-- Must sit *below* activeCarId/activeTrackId/activeTrackLayoutId so Lua 5.1
+-- resolves locals, not globals (chatgpt-codex P1 on PR #91).
+local function listCacheKey()
+  return table.concat({
+    activeCarId(),
+    "\t",
+    activeTrackId(),
+    "\t",
+    activeTrackLayoutId(),
+  })
 end
 
 --- Enumerate setups for the current car AND track. Filenames have `.ini`
