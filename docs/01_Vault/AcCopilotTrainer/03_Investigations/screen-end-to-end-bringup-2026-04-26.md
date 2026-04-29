@@ -2,7 +2,7 @@
 type: investigation
 status: active
 created: 2026-04-26
-updated: 2026-04-26
+updated: 2026-04-29
 memory_tier: canonical
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -229,8 +229,9 @@ between setups in the PT list (verified `bb=66 / bb=57` payloads in the trainer
 log, both arrive at the device). The rendered BB chip on at least one row was
 observed not updating between taps. Diagnostic logs confirm the trainer side
 sends correct values. Either a per-row LVGL label cache or an FW
-parsing edge case for the specific JSON shape — not yet root-caused. Filing as
-a Part-D polish follow-up; the rest of the chips work.
+parsing edge case for the specific JSON shape — not yet root-caused.
+
+**Tracking:** filed as GitHub issue [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93) (Part-D polish); the rest of the chips work.
 
 ## Files changed
 

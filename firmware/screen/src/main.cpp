@@ -573,7 +573,6 @@ static void dispatch_phase2_message(const String& body) {
         const char* name      = entry["name"]      | "";
         const char* mtime_iso = entry["mtime_iso"] | "";
         const char* path      = entry["path"]      | "";
-        int32_t best_ms = entry["best_ms"].is<int>() ? entry["best_ms"].as<int>() : -1;
         if (*name) {
           // Parse the per-row summary chips (Part D follow-up). Floats are
           // accepted (CSP sometimes serializes ints as JSON numbers with .0)
@@ -587,6 +586,7 @@ static void dispatch_phase2_message(const String& body) {
             }
             return fallback;
           };
+          int32_t best_ms = numOr(entry["best_ms"], -1);
           pt_setup_summary_t sum;
           sum.brake_bias = numOr(entry["brake_bias"], -1);
           sum.abs        = numOr(entry["abs"],        -1);

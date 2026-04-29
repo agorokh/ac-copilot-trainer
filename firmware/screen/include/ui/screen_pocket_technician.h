@@ -74,7 +74,7 @@ typedef enum {
 typedef struct {
     pt_request_kind_t kind;
     char              name[64];   // valid for PT_REQ_LOAD only
-    char              path[160];  // optional unique disambiguator; "" if unknown
+    char              path[256];  // optional unique disambiguator; "" if unknown
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.

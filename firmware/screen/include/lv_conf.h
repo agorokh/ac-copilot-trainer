@@ -72,12 +72,12 @@
 
 #define LV_USE_FLEX          1
 #define LV_USE_GRID          1
-#define LV_USE_ANIMATION     1
-/* LV_USE_SHADOW / LV_USE_BLEND_MODES / LV_USE_OPA_SCALE / LV_USE_IMG_TRANSFORM /
- * LV_USE_GROUP intentionally omitted: the v8.3 release template does NOT define
- * these symbols. In v8.3 they're either gated on draw-engine flags
- * (LV_DRAW_*) or implicit in lv_obj. Defining them here is a no-op and risks
- * rotting if someone copies them into v9. (CodeRabbit nit on PR #91.) */
+/* LV_USE_ANIMATION / LV_USE_SHADOW / LV_USE_BLEND_MODES / LV_USE_OPA_SCALE /
+ * LV_USE_IMG_TRANSFORM / LV_USE_GROUP intentionally omitted: the v8.3 release
+ * template does NOT define these symbols. In v8.3 they're either gated on
+ * draw-engine flags (LV_DRAW_*) or implicit in lv_obj / default-on in
+ * lv_conf_internal.h. Defining them here is a no-op and risks rotting if
+ * someone copies them into v9. (CodeRabbit nit on PR #91.) */
 #define LV_USE_GPU_NXP_PXP   0
 
 /* =====================

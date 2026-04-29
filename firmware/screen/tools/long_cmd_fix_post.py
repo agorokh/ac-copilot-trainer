@@ -53,7 +53,7 @@ else:
     # CreateProcess and each batch stays well under any limit.
     AR_BATCH_SIZE = 40
 
-    def _batched_ar_action(target, source, env, _ar=ar):
+    def _batched_ar_action(target, source, _env, _ar=ar) -> int:
         target_path = str(target[0])
         sources = [str(s) for s in source]
         if os.path.exists(target_path):
@@ -68,7 +68,7 @@ else:
             cmd = [_ar, arflags, target_path] + chunk
             rc = subprocess.call(cmd)
             if rc != 0:
-                print(f"[long_cmd_fix:post:ar] ar batch {i}-{i+len(chunk)} failed rc={rc}")
+                print(f"[long_cmd_fix:post:ar] ar batch {i}-{i + len(chunk)} failed rc={rc}")
                 return rc
         return 0
 
@@ -84,8 +84,7 @@ else:
         ),
         CCCOM="${TEMPFILE('$CC -o $TARGET -c $CFLAGS $CCFLAGS $_CCCOMCOM $SOURCES', '$CCCOMSTR')}",
         CXXCOM=(
-            "${TEMPFILE('$CXX -o $TARGET -c $CXXFLAGS $CCFLAGS "
-            "$_CCCOMCOM $SOURCES', '$CXXCOMSTR')}"
+            "${TEMPFILE('$CXX -o $TARGET -c $CXXFLAGS $CCFLAGS $_CCCOMCOM $SOURCES', '$CXXCOMSTR')}"
         ),
     )
 

@@ -46,7 +46,7 @@ struct setup_row_t {
     char    name[48];
     char    mtime_iso[32];
     int32_t best_ms;       // -1 = unknown
-    char    path[160];     // empty if trainer didn't ship a path
+    char    path[256];     // empty if trainer didn't ship a path
     int32_t brake_bias;
     int32_t abs;
     int32_t tc;
@@ -68,6 +68,54 @@ char g_active_name[48] = {0}; // currently loaded setup name (from setup.active)
 pt_request_t g_req_q[PT_MAX_REQUESTS];
 int          g_req_head = 0;
 int          g_req_tail = 0;
+
+// Pending row ↔ `setup.load.ack` correlation (CodeRabbit + Cursor on PR #91).
+// `main.cpp` can emit several `PT_REQ_LOAD` frames per tick; each ack must
+// pulse/toast the row that initiated that load, not whichever row was tapped
+// last.
+constexpr int PT_MAX_PENDING_LOADS = PT_MAX_REQUESTS - 1;
+struct pending_load_t {
+    char      name[64];
+    char      path[256];
+    lv_obj_t* row;
+};
+static pending_load_t g_pending_loads[PT_MAX_PENDING_LOADS];
+static int            g_pending_load_n = 0;
+
+static void pending_load_clear() {
+    g_pending_load_n = 0;
+}
+
+static bool pending_load_push(const char* name, const char* path, lv_obj_t* row) {
+    if (g_pending_load_n >= PT_MAX_PENDING_LOADS) return false;
+    pending_load_t* p = &g_pending_loads[g_pending_load_n++];
+    *p = pending_load_t{};
+    if (name) {
+        strncpy(p->name, name, sizeof(p->name) - 1);
+        p->name[sizeof(p->name) - 1] = 0;
+    }
+    if (path && path[0]) {
+        strncpy(p->path, path, sizeof(p->path) - 1);
+        p->path[sizeof(p->path) - 1] = 0;
+    }
+    p->row = row;
+    return true;
+}
+
+// Removes and returns the first pending entry whose name matches `name`.
+static lv_obj_t* pending_load_take_row_for_name(const char* name) {
+    if (!name || !name[0]) return nullptr;
+    for (int i = 0; i < g_pending_load_n; ++i) {
+        if (strcmp(g_pending_loads[i].name, name) != 0) continue;
+        lv_obj_t* row = g_pending_loads[i].row;
+        for (int j = i; j < g_pending_load_n - 1; ++j) {
+            g_pending_loads[j] = g_pending_loads[j + 1];
+        }
+        --g_pending_load_n;
+        return row;
+    }
+    return nullptr;
+}
 
 bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
@@ -103,7 +151,7 @@ struct pt_ctx_t {
     lv_timer_t* pulse_timer;
     int       pulse_steps_left;
     char      pending_name[48];   // setup the user just tapped
-    char      pending_path[160];  // matching path; "" if not known
+    char      pending_path[256];  // matching path; "" if not known
 };
 
 pt_ctx_t* g_active_ctx = nullptr;
@@ -148,6 +196,19 @@ void on_row_clicked(lv_event_t* e) {
     auto idx = (intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= g_setup_count) return;
     const setup_row_t& s = g_setups[idx];
+    int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
+    if (next == g_req_head) return;  // WS out-queue full
+    if (g_pending_load_n >= PT_MAX_PENDING_LOADS) return;
+
+    // Stage `setup.load` first; only commit UI/pending correlation if the
+    // request actually queued (Cursor Bugbot on PR #91).
+    if (!req_q_push(PT_REQ_LOAD, s.name, s.path[0] ? s.path : nullptr)) return;
+    if (!pending_load_push(s.name, s.path[0] ? s.path : nullptr, row)) {
+        // Undo the queued request — pending and ring capacities should stay in
+        // lockstep, but never leave a dangling LOAD without correlation.
+        g_req_tail = (g_req_tail - 1 + PT_MAX_REQUESTS) % PT_MAX_REQUESTS;
+        return;
+    }
     strncpy(ctx->pending_name, s.name, sizeof(ctx->pending_name) - 1);
     ctx->pending_name[sizeof(ctx->pending_name) - 1] = 0;
     strncpy(ctx->pending_path, s.path, sizeof(ctx->pending_path) - 1);
@@ -156,13 +217,6 @@ void on_row_clicked(lv_event_t* e) {
 
     // Visual: subtle scale + spinner-like flash via a pressed style.
     lv_obj_set_style_bg_color(row, UI_BG_HEADER, LV_PART_MAIN | LV_STATE_PRESSED);
-
-    // Stage `setup.load` for main.cpp to pick up. Drop silently if the
-    // queue is full — the user will see no toast which matches their
-    // mental model of "I tapped, nothing happened, let me tap again."
-    // Carry the path so the Lua handler can disambiguate setups that
-    // share a basename across track/layout folders.
-    req_q_push(PT_REQ_LOAD, s.name, s.path[0] ? s.path : nullptr);
 }
 
 void pulse_step_cb(lv_timer_t* t) {
@@ -234,20 +288,41 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
 
     // Row 2: setup summary chips (left) -- BB / ABS / TC / Wings front-rear.
     // Compact single-line format keeps it readable in the 280-px row width.
+    // snprintf return may exceed qrem on truncation — clamp advances so qrem
+    // never goes negative (Cursor + codex on PR #91).
     char chip_buf[64];
-    char *q = chip_buf;
-    int qrem = (int)sizeof(chip_buf);
-    int n;
-    if (s.brake_bias >= 0) { n = snprintf(q, qrem, "BB:%d  ", (int)s.brake_bias); q += n; qrem -= n; }
-    if (s.abs >= 0)        { n = snprintf(q, qrem, "ABS:%d  ", (int)s.abs);        q += n; qrem -= n; }
-    if (s.tc >= 0)         { n = snprintf(q, qrem, "TC:%d  ", (int)s.tc);          q += n; qrem -= n; }
+    chip_buf[0] = '\0';
+    char* q    = chip_buf;
+    size_t rem = sizeof(chip_buf);
+    auto append = [&](const char* fmt, int v) {
+        if (rem <= 1) return;
+        int n = snprintf(q, rem, fmt, v);
+        if (n < 0) return;
+        size_t w = (size_t)n;
+        if (w >= rem) w = rem - 1;
+        q += w;
+        rem -= w;
+    };
+    if (s.brake_bias >= 0) append("BB:%d  ", (int)s.brake_bias);
+    if (s.abs >= 0) append("ABS:%d  ", (int)s.abs);
+    if (s.tc >= 0) append("TC:%d  ", (int)s.tc);
     if (s.wing_f >= 0 || s.wing_r >= 0) {
         char wf[6], wr[6];
         if (s.wing_f >= 0) snprintf(wf, sizeof(wf), "%d", (int)s.wing_f); else snprintf(wf, sizeof(wf), "-");
         if (s.wing_r >= 0) snprintf(wr, sizeof(wr), "%d", (int)s.wing_r); else snprintf(wr, sizeof(wr), "-");
-        snprintf(q, qrem, "W:%s/%s", wf, wr);
+        if (rem > 1) {
+            int n = snprintf(q, rem, "W:%s/%s", wf, wr);
+            if (n >= 0) {
+                size_t w = (size_t)n;
+                if (w >= rem) w = rem - 1;
+                q += w;
+                rem -= w;
+            }
+        }
     }
-    if (chip_buf[0] == 0) snprintf(chip_buf, sizeof(chip_buf), "%s", s.mtime_iso[0] ? s.mtime_iso : "");
+    if (chip_buf[0] == '\0') {
+        snprintf(chip_buf, sizeof(chip_buf), "%s", s.mtime_iso[0] ? s.mtime_iso : "");
+    }
     lv_obj_t* chips = lv_label_create(row);
     lv_label_set_text(chips, chip_buf);
     lv_obj_set_style_text_color(chips, UI_TX_MUTED, LV_PART_MAIN);
@@ -264,6 +339,9 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
 
 void rebuild_list_widgets(pt_ctx_t* ctx) {
     if (!ctx || !ctx->list_col) return;
+    // Row widgets are about to be destroyed — drop any pending `setup.load`
+    // correlation that still points at them (PR #91 review threads).
+    pending_load_clear();
     // Clear existing children.
     lv_obj_clean(ctx->list_col);
     ctx->active_row_obj = nullptr;
@@ -344,6 +422,11 @@ void on_screen_delete(lv_event_t* e) {
         }
         delete ctx;
     }
+    // Drop stale Pocket Technician loads when leaving the screen — otherwise
+    // taps queued while offline fire after reconnect (Cursor Bugbot on PR #91).
+    pending_load_clear();
+    g_req_head = 0;
+    g_req_tail = 0;
 }
 
 }  // namespace
@@ -578,11 +661,21 @@ extern "C" void screen_pocket_technician_set_active_setup(const char* name) {
 }
 
 extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
-                                                         const char* /*name*/,
+                                                         const char* name,
                                                          const char* error) {
     if (!g_active_ctx) return;
+    lv_obj_t* row = nullptr;
+    if (name && name[0]) {
+        row = pending_load_take_row_for_name(name);
+    }
+    if (!row) {
+        row = g_active_ctx->active_row_obj;
+    }
+    g_active_ctx->active_row_obj = row;
+
     if (ok) {
-        // Successful load — kick off the gold pulse on the active row.
+        // Successful load — kick off the gold pulse on the row that owns
+        // this ack (Cursor Bugbot on PR #91).
         start_gold_pulse(g_active_ctx);
         // Re-fetch the list so any "BEST" recomputation lands.
         req_q_push(PT_REQ_LIST, nullptr, nullptr);
@@ -593,12 +686,12 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
         // to the unpressed colour permanently kills pressed-state
         // feedback on the failed row even after the toast clears
         // (Cursor Bugbot LOW on PR #91).
-        if (g_active_ctx->active_row_obj) {
-            lv_obj_set_style_bg_color(g_active_ctx->active_row_obj,
+        if (row) {
+            lv_obj_set_style_bg_color(row,
                                       UI_BG_HEADER,
                                       LV_PART_MAIN | LV_STATE_PRESSED);
-            g_active_ctx->active_row_obj = nullptr;
         }
+        g_active_ctx->active_row_obj = nullptr;
         char msg[80];
         snprintf(msg, sizeof(msg), "Load failed: %s", error ? error : "unknown");
         ui_toast_error(msg);

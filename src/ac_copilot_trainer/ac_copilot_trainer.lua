@@ -424,6 +424,17 @@ if wsBridge.registerRequestHandler then
   wsBridge.registerRequestHandler("setup.list", "setup.list.result", function(_payload)
     local ident = setupLibrary.activeIdentity()
     local list = setupLibrary.list()
+    -- Precompute BEST once per list refresh — `bestForSetup` scans up to 200
+    -- lap JSONs per call; doing that inside the per-row loop was O(rows×N)
+    -- disk reads (CodeRabbit on PR #91).
+    local bestCache = {}
+    for j = 1, #list do
+      local e = list[j]
+      local key = (type(e.path) == "string" and e.path ~= "") and e.path or ("n:" .. tostring(e.name))
+      if bestCache[key] == nil then
+        bestCache[key] = setupLibrary.bestForSetup(e.name, e.path)
+      end
+    end
     local items = {}
     for i = 1, #list do
       local entry = list[i]
@@ -442,10 +453,12 @@ if wsBridge.registerRequestHandler then
       -- session this is well under a frame budget.
       local sum = {}
       pcall(function() sum = setupLibrary.summaryForSetup(entry.path) or {} end)
+      local bkey = (type(entry.path) == "string" and entry.path ~= "") and entry.path
+        or ("n:" .. tostring(name))
       items[i] = {
         name = name,
         mtime_iso = mtimeIso,
-        best_ms = setupLibrary.bestForSetup(name),
+        best_ms = bestCache[bkey],
         path = entry.path,
         brake_bias = sum.brake_bias,
         abs = sum.abs,
@@ -479,7 +492,10 @@ if wsBridge.registerRequestHandler then
     if name == "" and not path then
       return { ok = false, name = name, error = "missing name" }
     end
-    local resetOk = true
+    -- Fail closed: only allow when CSP explicitly reports reset is allowed.
+    -- Missing API / pcall failure must NOT bypass the pits gate (Cursor +
+    -- CodeRabbit on PR #91).
+    local resetOk = false
     if ac and type(ac.isCarResetAllowed) == "function" then
       local okCall, allowed = pcall(ac.isCarResetAllowed)
       resetOk = okCall and (allowed == true)

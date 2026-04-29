@@ -168,9 +168,15 @@ end
 --- laps and the screen calls this per-row only when refreshing the list,
 --- not per-frame. CSP exposes `io.scanDir` + `io.open`, both blocking.
 ---@param setupName string  basename without `.ini`
+---@param setupPath string|nil  optional absolute path — when present, lap
+---   records are matched on normalized full path first so two `race.ini`
+---   files under different track folders cannot cross-contaminate BEST
+---   (chatgpt-codex P2 on PR #91).
 ---@return integer|nil  fastest lap_ms, or nil
-function M.bestForSetup(setupName)
+function M.bestForSetup(setupName, setupPath)
   if type(setupName) ~= "string" or setupName == "" then return nil end
+  if type(setupPath) ~= "string" then setupPath = nil end
+  if setupPath == "" then setupPath = nil end
   if not (io and type(io.scanDir) == "function") then return nil end
 
   local dir = persistence.dataDir() .. "/journal/laps"
@@ -184,6 +190,10 @@ function M.bestForSetup(setupName)
   local wantTrack = activeTrackId()
   local wantLayout = activeTrackLayoutId()
   local wantName = setupName:lower()
+  local wantPathNorm ---@type string|nil
+  if setupPath then
+    wantPathNorm = setupPath:lower():gsub("\\", "/")
+  end
   local best  ---@type integer|nil
 
   -- Avoid pulling JSON globally (CSP build dependent). Rely on `JSON.parse`
@@ -244,16 +254,17 @@ function M.bestForSetup(setupName)
             end
             local nameOk = false
             if snapPath then
-              -- Cursor Bugbot HIGH on PR #91: the previous comparison
-              -- diffed the full lower-cased path (with .ini stripped)
-              -- against the basename, so a path like
-              -- "C:/.../monza/race.ini" never matched wantName="race".
-              -- Strip directory components plus the .ini suffix before
-              -- comparing.
               local lower = snapPath:lower():gsub("\\", "/")
-              local base = lower:match("([^/]+)$") or lower
-              base = base:gsub("%.ini$", "")
-              if base == wantName then nameOk = true end
+              if wantPathNorm then
+                -- Strict path match when the list row carried a disambiguator
+                -- so `.../monza/race.ini` and `.../spa/race.ini` never share BEST.
+                nameOk = (lower == wantPathNorm)
+              else
+                -- Basename-only when no path on the row (legacy / sparse archives).
+                local base = lower:match("([^/]+)$") or lower
+                base = base:gsub("%.ini$", "")
+                if base == wantName then nameOk = true end
+              end
             end
             if lapMs and lapMs > 0 and carOk and trackOk and layoutOk and nameOk
                 and rec.lap.is_valid ~= false then
@@ -318,9 +329,18 @@ function M.loadByName(nameOrOpts)
     return { ok = false, name = name, error = "ac.loadSetup unavailable" }
   end
 
-  local okCall, err = pcall(ac.loadSetup, match.path)
+  local okCall, loadRet = pcall(ac.loadSetup, match.path)
   if not okCall then
-    return { ok = false, name = name, error = "loadSetup raised: " .. tostring(err) }
+    return { ok = false, name = name, error = "loadSetup raised: " .. tostring(loadRet) }
+  end
+  -- CSP may return false/nil instead of throwing when a load is refused.
+  -- Treat any non-truthy return as failure (Cursor Bugbot on PR #91).
+  if loadRet == nil or loadRet == false then
+    return {
+      ok = false,
+      name = name,
+      error = "loadSetup refused or returned failure",
+    }
   end
   -- Bust the cache so a follow-up `setup.list` re-reads BEST values that
   -- might now reference the freshly-loaded setup.

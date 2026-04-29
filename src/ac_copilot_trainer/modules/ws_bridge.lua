@@ -713,6 +713,15 @@ function M.pollInbound(maxPerTick)
               })
             end
           end
+        elseif t == "hello" or t == "hello_ack" then
+          -- Sidecar / trainer lifecycle frames — intentionally ignored here
+          -- (see comment after the generic-dispatch block). Do not route them
+          -- through the request-handler `else` or they spam diagnostics.
+        elseif type(t) == "string" and t:sub(1, 6) == "state." then
+          -- Passive telemetry envelopes (`state.snapshot`, etc.) are fanned by
+          -- the sidecar to peers; Lua does not register handlers for them.
+          -- Treat as silent accepts (Cursor Bugbot on PR #91: the generic
+          -- `else` used to log every `state.*` as "unhandled request type").
         else
           -- Issue #86 Part D: generic request dispatch. The screen sends
           -- `{v:1, type:"setup.list"|"setup.load", ...}` and we look up a
