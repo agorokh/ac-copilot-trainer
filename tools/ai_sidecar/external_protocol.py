@@ -26,6 +26,12 @@ TYPE_CONFIG_SET = "config.set"
 TYPE_ACTION = "action"
 TYPE_STATE_SUBSCRIBE = "state.subscribe"
 TYPE_STATE_UNSUBSCRIBE = "state.unsubscribe"
+# Issue #86 Part D: rig-screen → trainer Lua request types. The sidecar relays
+# these to the loopback Lua peer; replies come back as `setup.list.result` /
+# `setup.load.ack` (server→client below). Validation is structural only —
+# the Lua side enforces the in-pits gate and does the actual ac.loadSetup().
+TYPE_SETUP_LIST = "setup.list"
+TYPE_SETUP_LOAD = "setup.load"
 
 # Server → client.
 TYPE_HELLO_ACK = "hello_ack"
@@ -34,6 +40,9 @@ TYPE_CONFIG_ACK = "config.ack"
 TYPE_ACTION_ACK = "action.ack"
 TYPE_STATE_SNAPSHOT = "state.snapshot"
 TYPE_ERROR = "error"
+# Issue #86 Part D: replies to the screen for setup operations.
+TYPE_SETUP_LIST_RESULT = "setup.list.result"
+TYPE_SETUP_LOAD_ACK = "setup.load.ack"
 
 # Capabilities advertised in `hello_ack` so clients can branch on optional
 # server features without a v2 bump.
@@ -122,6 +131,24 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             return "action requires non-empty 'name'"
         if name not in KNOWN_ACTIONS:
             return f"unknown action: {name!r}"
+        return None
+    if t == TYPE_SETUP_LIST:
+        # No required fields — empty payload is valid (lists all setups for
+        # the active car). The Lua handler reads ac.getCarID(0) directly.
+        return None
+    if t == TYPE_SETUP_LOAD:
+        name = frame.get("name")
+        path = frame.get("path")
+        # Either a basename or an absolute path is required. The Lua side
+        # prefers `path` when both are present so same-name setups in
+        # different track folders disambiguate cleanly.
+        name_ok = isinstance(name, str) and name != ""
+        path_ok = isinstance(path, str) and path != ""
+        if not (name_ok or path_ok):
+            return "setup.load requires non-empty 'name' or 'path'"
+        return None
+    if t in (TYPE_SETUP_LIST_RESULT, TYPE_SETUP_LOAD_ACK):
+        # Server-to-client replies forwarded from the Lua peer — accept silently.
         return None
     if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE):
         topics = frame.get("topics")

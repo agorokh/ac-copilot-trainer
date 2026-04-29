@@ -17,7 +17,7 @@
 --     track = { id, layout?, lengthM? },
 --     conditions = { trackGripLevel?, ambientTempC?, trackTempC?, weatherType? },
 --     lap = { lap_n, lap_ms, is_pb, is_valid },
---     setup = { hash, snapshot = { <flat INI key=value map> } },
+--     setup = { hash, path?, snapshot = { <flat INI key=value map> } },
 --     trace = {
 --       samples_count = N,
 --       fields = { "spline","speed","eMs","throttle","brake","steer","gear","px","py","pz" },
@@ -154,12 +154,24 @@ end
 ---  opts.lap_n (int), opts.lap_ms (int), opts.is_pb (bool), opts.is_valid (bool),
 ---  opts.trace (per-sample objects), opts.corners (corner_features list),
 ---  opts.setup_snap (setupReader snap), opts.setup_hash (string),
+---  opts.setup_ini_path (string|nil) absolute active INI path (preferred over snap.path),
 ---  opts.rules_hints (string list), opts.sidecar_debrief (string|nil),
 ---  opts.corner_advice (table label->text|nil)
 ---@return table|nil
 function M.buildRecord(opts)
   if type(opts) ~= "table" then return nil end
   if not opts.lap_n or not opts.lap_ms or opts.lap_ms <= 0 then return nil end
+
+  local archiveSetupPath = nil
+  if type(opts.setup_ini_path) == "string" and opts.setup_ini_path ~= "" then
+    archiveSetupPath = opts.setup_ini_path
+  elseif type(opts.setup_snap) == "table" and type(opts.setup_snap.path) == "string"
+      and opts.setup_snap.path ~= "" then
+    local sp = opts.setup_snap.path
+    if string.find(sp, "[/\\]") then
+      archiveSetupPath = sp
+    end
+  end
 
   local sim = opts.sim
   local carId = persistence.archiveCarIdFromCar(opts.car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
@@ -244,6 +256,10 @@ function M.buildRecord(opts)
     },
     setup = {
       hash = tostring(opts.setup_hash or ""),
+      -- Persist a path `bestForSetup` can match against list rows. Prefer the
+      -- canonical absolute INI from the trainer (`setup_ini_path`); `snap.path`
+      -- is usually basename-only from `readIniSnapshot` (codex P1 on PR #91).
+      path = archiveSetupPath,
       snapshot = flattenSetupSnapshot(opts.setup_snap),
     },
     trace = {

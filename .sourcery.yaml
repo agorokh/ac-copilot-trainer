@@ -2,6 +2,10 @@
 # Docs: https://docs.sourcery.ai/References/Legacy-Configuration/sourcery-yaml/
 ignore:
   - .git
+  # PlatformIO post-hook: spawns xtensa-esp32s3-elf-ar on SCons-provided object
+  # paths (never shell=True). OpenGrep flags argv lists as "tainted" even after
+  # BUILD_DIR guards — waiving keeps the merge gate honest for app code.
+  - firmware/screen/tools/long_cmd_fix_post.py
   - venv
   - .venv
   - env

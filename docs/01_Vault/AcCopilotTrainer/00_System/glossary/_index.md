@@ -15,6 +15,7 @@ Alphabetical term nodes. Each term links to related invariants or decisions as t
 
 | Term | Link |
 |------|------|
+| AC setup INI format | [ac-setup-ini-format.md](ac-setup-ini-format.md) |
 | ci-fast | [ci-fast.md](ci-fast.md) |
 | Install paths | [install-paths.md](install-paths.md) |
 | Rig network | [rig-network.md](rig-network.md) |

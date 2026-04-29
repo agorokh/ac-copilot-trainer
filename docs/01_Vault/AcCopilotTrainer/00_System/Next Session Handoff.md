@@ -25,25 +25,51 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-25, after PR #91 Part A+B push — CI cooldown in flight)
+## Resume here (2026-04-26, PR #91 Parts C+D first ran on real hardware)
 
-**PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) Phase-2 rig screen Part A + Part B is OPEN** at head `8f88881` (2026-04-25T07:25Z) on branch `feat/issue-86-rig-screen-phase2-launcher-and-apps`. Two commits:
+**The hot path has moved.** PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91)
+(Phase-2 launcher + AC Copilot mirror + Pocket Technician picker) ran end-to-end on
+the actual JC3248W535 device for the first time today. Eight distinct root-cause bugs
+needed fixing along the way — none of which CI or static analysis caught. Full
+catalogue with reproduction details and fixes:
+[screen-end-to-end-bringup-2026-04-26.md](../03_Investigations/screen-end-to-end-bringup-2026-04-26.md).
 
-- `4557da5` — **Part A** LVGL 8.3 bring-up + framework + design tokens + font staging. Original CI run failed only `ci-conventional` because the PR was opened with the EPIC's title and renamed to a conventional-commit form *after* GitHub Actions captured the event payload. The renamed title `feat(screen): Phase-2 LVGL bring-up + UI scaffold (issue #86 Part A)` parses fine through `scripts/ci_policy.py`.
-- `8f88881` — **Part B** App Launcher screen (`Menu.tsx` port) — header strip + connection pill + 3 vertical app tiles (AC COPILOT, POCKET TECHNICIAN, SETUP EXCHANGE) — plus a 3-second WS-closed grace period before flipping the pill to DISCONNECTED (`WS_DISCONNECT_GRACE_MS` in `main.cpp`). Same commit folds **8 bot-review fixes** against Part A: gemini P1 touch-coord underflow clamp; chatgpt-codex P1 launcher pushed at boot (not on first WS open); sourcery `ESP.restart()` on PSRAM alloc fail + drop unused `pending_delete` + drop `volatile` from `app_state_t`; Copilot `<esp_heap_caps.h>` include + `LV_TICK_CUSTOM=0` + `nav.h` doc fix + fonts `.gitignore` rewritten to actually ignore generated outputs.
+**Working on the device today (verified):**
 
-**Per the orchestrator playbook, the agent is in the mandatory `sleep 600` cooldown** after the push so async bots (sourcery, gemini, copilot, chatgpt-codex, cursor, CodeRabbit) finish their reviews before the PR-resolution loop kicks in. Resume by running through `.claude/agents/pr-resolution-follow-up.md`:
+* Launcher + status pill + portrait layout (320×480, MX|MV mode on AXS15231B)
+* AC Copilot mirror — live `coaching.snapshot` at 10Hz, primary/secondary lines,
+  TARGET/CURRENT speed flip-to-red logic, distance bar, delta chip
+* Pocket Technician — TRACK + BRAND + MODEL meta from `ui_*.json`, per-track filter,
+  setup chips (BB / ABS / TC / Wings F-R), gold-pulse on row tap, `setup.active`
+  broadcast, ACTIVE row in gold
 
-1. `gh pr view 91 --json statusCheckRollup,reviews,latestReviews` to inventory the **current** CI state and bot threads against `8f88881`.
-2. Pull inline review comments via `gh api repos/agorokh/ac-copilot-trainer/pulls/91/comments`.
-3. Group findings, batch-fix as follow-up commits on the same branch, push, **wait `sleep 600` again**, repeat until CI green + bot threads addressed.
-4. Once CI is green and reviews resolved, the user merges (or asks the agent to coordinate the merge); then **post-merge steward** opens the vault handoff PR per `.claude/agents/post-merge-steward.md`.
+**Open follow-ups** (do these as a Part-D polish PR or before merge):
 
-After PR #91 lands, **Parts C–F continue as follow-up commits on the same branch** per the issue's "single PR per epic" rule. The next part to land is:
+1. **`start_sidecar.bat` binds loopback only.** `--host 127.0.0.1` without
+   `--external-bind` means the rig screen can't reach the trainer's auto-spawned
+   sidecar. Manual launch with `--external-bind 0.0.0.0 --token <T>` is the workaround
+   today. Plumbing fix: read `AC_COPILOT_SIDECAR_TOKEN` env var in the bat and pass
+   `--external-bind 0.0.0.0` when set.
+2. **BB chip stale across some setup taps.** TC and ABS update correctly when
+   switching between rows; BB chip was observed not updating on at least one row.
+   Trainer logs (`SETUP-DIAG`) confirm the values are sent correctly per row, so
+   the bug is FW-side. Diagnostic logs were stripped before commit; re-add briefly
+   to root-cause.
+3. **Font conversion (Part A4).** Bundled Syncopate / Michroma / Montserrat from
+   `content/fonts/` haven't been converted via `lv_font_conv` yet, so the screens
+   are running on default LVGL Montserrat 14 (ASCII only). Not blocking but kills
+   any non-ASCII glyph (em-dashes, bullets) until landed.
 
-- **Part C** — AC Copilot mirror (`ACCopilot.tsx` port). Adds `coaching.snapshot` topic at 10 Hz from a new `coaching_overlay.lua` `publishTopic(...)` call; subscribes to `corner_advice` from PR #75.
+**Known infrastructure pitfall** observed today: Windows Mobile Hotspot's "Power
+saving" auto-shutoff fires even when AC is running. Document in the rig-setup
+runbook to disable it.
 
-The original handoff (post-PR #89 merge) is preserved below for context. **The Stream A / EPIC #59 hot path is unchanged.**
+### Branch + PR state
+
+`feat/issue-86-rig-screen-phase2-launcher-and-apps` head is the device-bring-up
+commit series (rotation matrix discovery, ws_init_once, sidecar allow-list, hello
+retry, portrait layouts, em-dash → ASCII, brand line + setup chips, ac_content_meta
+reader). All landed on PR #91. **2026-04-29:** zero-sampling PR #91 review pass completed on-device follow-ups + merge of `origin/main` into the PR branch (resolve vault conflicts below).
 
 ---
 
@@ -112,7 +138,7 @@ If you're working on screen firmware specifically, also:
    ```bash
    py -m tools.ai_sidecar --external-bind 0.0.0.0 --token <T>
    ```
-   PC must have Windows Mobile Hotspot `AG_PC 7933` running. If PC rebooted, re-enable via the WinRT PowerShell snippet in [`glossary/rig-network`](glossary/rig-network.md).
+   **Hotspot SSID is now `AG_RIG`** (no space) on **2.4 GHz forced** + the AHOME5G profile is set to `connectionmode=manual` so it doesn't snap back and steal the radio. **Disconnect Wi-Fi from AHOME5G** (`netsh wlan disconnect`) before starting the hotspot — the Intel 7260 is single-radio so it cannot host 2.4 GHz while connected to a 5 GHz network. Full diagnosis + recovery commands: [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md).
 
 4. **Phase-2 firmware: bring up LVGL 8.3 + touch.** Follow [`screen-ui-stack-lvgl-touch`](../01_Decisions/screen-ui-stack-lvgl-touch.md):
    - `lib_deps += lvgl/lvgl @ ~8.3.11` in `firmware/screen/platformio.ini`.

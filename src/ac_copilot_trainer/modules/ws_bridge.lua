@@ -15,6 +15,11 @@ M.PROTOCOL_VERSION = PROTOCOL_VERSION
 --- Issue #81: external-client `{v:1,type:...}` envelope. Handlers registered by
 --- the main script; absent handlers reply with `{type="action.ack", applied=false}`.
 local actionHandlers = {} ---@type table<string, fun(args:table|nil):boolean,string|nil>
+--- Issue #86 Part D: external-client request handlers (`setup.list`,
+--- `setup.load`). Stored keyed by request type with the ack type the
+--- bridge will use when shipping the response payload. See
+--- `M.registerRequestHandler` and the dispatch block in `pollInbound`.
+local requestHandlers = {} ---@type table<string, { ackType: string, fn: fun(payload:table|nil):table,string|nil }>
 local configGetter ---@type (fun(key:string):any)|nil
 local configSetter ---@type (fun(key:string,value:any):boolean,string|nil)|nil
 
@@ -79,6 +84,17 @@ local lastCornerQueryAt = {}  ---@type table<string, number>
 local _recvQueue = {}
 --- True after first inbound JSON with matching `protocol` (CodeRabbit #78).
 local sidecarProtocolReady = false
+--- Hello-retry state for the v1 external surface: some CSP builds don't fire
+--- params.onOpen reliably on the first connect. Without a hello we never
+--- register as a v1 peer with the sidecar, and `state.snapshot` frames are
+--- silently dropped (no loopback target). Track per-socket whether we've
+--- successfully sent hello and the last attempt time so we can retry from
+--- M.tick at most once a second.
+local externalHelloPending = false
+local externalHelloLastTryT = -1e9
+local externalHelloLogLastT = -1e9
+local EXTERNAL_HELLO_LOG_MIN_SEC = 10.0
+local EXTERNAL_HELLO_RETRY_SEC = 1.0
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
 
@@ -428,31 +444,34 @@ tryOpen = function()
   end
   _recvQueue = {}
   sidecarProtocolReady = false
+  -- Mark that we owe the sidecar a hello on this socket. The actual send is
+  -- retried from M.tick() until `sidecarProtocolReady` flips (set when the
+  -- sidecar's v1 hello_ack arrives) — this is the only reliable signal that
+  -- our hello landed and we're registered as an external peer.
+  externalHelloPending = true
+  externalHelloLastTryT = -1e9
   local function announceExternalHello()
-    -- Re-announce on (re)open so sidecar reconnects keep forwarding external
-    -- `action`/`config.*` frames to the Lua bridge (PR #83 follow-up).
     M.sendJson({
       v = PROTOCOL_VERSION,
       type = "hello",
       client = "ac-copilot-trainer-lua",
     })
   end
-  local inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
   local opened = nil
   local params = {
     onOpen = function()
-      -- Some CSP builds invoke onOpen on first connect; skip only when it lands
-      -- immediately after the inline hello. Reconnect onOpen events happen later
-      -- and must re-announce hello to re-register with the sidecar.
-      if inlineHelloAt ~= nil and type(os) == "table" and type(os.time) == "function" then
-        local now = os.time()
-        if type(now) == "number" and now - inlineHelloAt <= 1 then
-          inlineHelloAt = nil
-          return
-        end
-      end
-      inlineHelloAt = nil
+      -- Always announce hello on onOpen. The previous "inline hello + dedup"
+      -- pattern silently dropped the registration when the inline send fired
+      -- before the socket was actually open: sendJson returned false, and
+      -- the dedup window then suppressed the onOpen retry, leaving the peer
+      -- connected at WS level but never v1-registered with the sidecar (so
+      -- coaching.snapshot frames never flowed). The sidecar's
+      -- `_external_peers.add()` is idempotent — a duplicate hello is a no-op
+      -- on the server side, so always sending here is safe.
       announceExternalHello()
+      if ac and type(ac.log) == "function" then
+        ac.log("[COPILOT][WS-DIAG] onOpen: hello announced")
+      end
     end,
     onError = _onError,
     onClose = function(reason)
@@ -484,10 +503,14 @@ tryOpen = function()
     if ac and type(ac.log) == "function" then
       ac.log("[COPILOT][WS-DIAG] CONNECTED url=" .. tostring(url) .. " attempts=" .. tostring(_wsDiagAttempts))
     end
-    -- Send hello immediately for builds that ignore params.onOpen; onOpen still
-    -- handles reconnect handshakes when reconnect=true.
-    inlineHelloAt = (type(os) == "table" and type(os.time) == "function") and os.time() or nil
-    announceExternalHello()
+    -- DO NOT announce hello inline: web.socket() returns the socket handle
+    -- before the underlying TCP+WS upgrade actually completes. Calling
+    -- sendJson here writes to a not-yet-open socket; CSP web.Socket either
+    -- buffers or silently drops, and we have no reliable signal of which.
+    -- Rely on the params.onOpen callback for hello — that's only invoked
+    -- once the socket is genuinely ready to receive frames, and the sidecar's
+    -- `_external_peers.add()` is idempotent so duplicate hellos are safe
+    -- if a future CSP build also fires hello from somewhere else.
     return true
   end
   if ac and type(ac.log) == "function" then
@@ -692,6 +715,56 @@ function M.pollInbound(maxPerTick)
               })
             end
           end
+        elseif t == "hello" or t == "hello_ack" then
+          -- Sidecar / trainer lifecycle frames — intentionally ignored here
+          -- (see comment after the generic-dispatch block). Do not route them
+          -- through the request-handler `else` or they spam diagnostics.
+        elseif type(t) == "string" and t:sub(1, 6) == "state." then
+          -- Passive telemetry envelopes (`state.snapshot`, etc.) are fanned by
+          -- the sidecar to peers; Lua does not register handlers for them.
+          -- Treat as silent accepts (Cursor Bugbot on PR #91: the generic
+          -- `else` used to log every `state.*` as "unhandled request type").
+        else
+          -- Issue #86 Part D: generic request dispatch. The screen sends
+          -- `{v:1, type:"setup.list"|"setup.load", ...}` and we look up a
+          -- pre-registered handler that returns the ack payload. Handlers
+          -- live in the entry script (registered via `registerRequestHandler`)
+          -- so the bridge stays stateless about app-level features.
+          local entry = requestHandlers[t]
+          if entry then
+            local okCall, resp, errExtra = pcall(entry.fn, data.payload or data)
+            if not okCall then
+              M.sendJson({
+                v = PROTOCOL_VERSION,
+                type = entry.ackType,
+                ok = false,
+                error = "handler error: " .. tostring(resp),
+              })
+            else
+              local ackBody = type(resp) == "table" and resp or {}
+              ackBody.v = PROTOCOL_VERSION
+              ackBody.type = entry.ackType
+              -- Only propagate the secondary `errExtra` return when the
+              -- handler did NOT report success. If a successful handler
+              -- returns a warning string in the second slot, surfacing it
+              -- as `error` would trigger the screen's red-toast path
+              -- (CodeRabbit on PR #91). Drop it silently.
+              if errExtra and ackBody.error == nil and ackBody.ok ~= true then
+                ackBody.error = tostring(errExtra)
+              end
+              M.sendJson(ackBody)
+            end
+          else
+            -- Unknown request type: do NOT silently drop. Emit a single
+            -- diagnostic so the failure mode is debuggable from `ac.log`.
+            -- (CodeRabbit on PR #91 — the action branch already replies
+            -- with `applied=false`, but the generic dispatch has no
+            -- canonical ackType to send here, so we log instead.)
+            if ac and type(ac.log) == "function" then
+              pcall(ac.log, string.format(
+                "[COPILOT][WS-DIAG] unhandled request type=%q (no handler registered)", t))
+            end
+          end
         end
         -- hello / hello_ack / state.* are not consumed by Lua at this stage;
         -- the sidecar handles `hello`/`hello_ack` and we silently accept the
@@ -754,6 +827,35 @@ function M.tick(simTime)
     return
   end
   if sock then
+    -- Issue #86 follow-up: retry the v1 hello until the sidecar acks it.
+    -- `params.onOpen` is unreliable across CSP builds (some never fire it
+    -- on the initial connect, only on later reconnects), and the original
+    -- "send hello inline right after web.socket()" pattern dropped silently
+    -- because the socket isn't actually writable at that point. The retry
+    -- here closes the gap: every tick (rate-limited to 1 s) we resend
+    -- hello until we observe a v1 frame back from the sidecar (which sets
+    -- `sidecarProtocolReady`), at which point we stop retrying. The sidecar's
+    -- `_external_peers.add()` is idempotent so duplicate hellos are no-ops.
+    if externalHelloPending and not sidecarProtocolReady then
+      if currentSimT - externalHelloLastTryT >= EXTERNAL_HELLO_RETRY_SEC then
+        externalHelloLastTryT = currentSimT
+        local sent = M.sendJson({
+          v = PROTOCOL_VERSION,
+          type = "hello",
+          client = "ac-copilot-trainer-lua",
+        })
+        if ac and type(ac.log) == "function" then
+          -- Retries stay at 1 Hz for correctness; log line is rate-limited so a
+          -- dead sidecar cannot spam the CSP console (Qodo on PR #91).
+          if currentSimT - externalHelloLogLastT >= EXTERNAL_HELLO_LOG_MIN_SEC then
+            externalHelloLogLastT = currentSimT
+            ac.log("[COPILOT][WS-DIAG] hello retry sent=" .. tostring(sent))
+          end
+        end
+      end
+    elseif sidecarProtocolReady then
+      externalHelloPending = false
+    end
     return
   end
   if currentSimT - lastTry < RECONNECT_SEC then
@@ -808,6 +910,40 @@ function M.sendJson(payload)
     return false
   end
   return true
+end
+
+--- Issue #86 Part C/D: external-client `state.snapshot` push.
+--- Wraps `M.sendJson` with the v1 envelope expected by the rig screen
+--- (`{v=1, type="state.snapshot", topic=<t>, payload=<p>}`). Returns
+--- `false` silently when no socket is present so the caller can keep
+--- calling unconditionally from a 10 Hz tick without log spam.
+---@param topic string  topic name (e.g. "coaching.snapshot", "setup.active")
+---@param payload table|nil  topic payload, JSON-encodable
+---@return boolean
+function M.publishTopic(topic, payload)
+  if type(topic) ~= "string" or topic == "" then return false end
+  if not sock then return false end
+  return M.sendJson({
+    v = PROTOCOL_VERSION,
+    type = "state.snapshot",
+    topic = topic,
+    payload = payload or {},
+  })
+end
+
+--- Issue #86 Part D: register a handler for an external `request` event
+--- (e.g. screen → trainer `setup.list`, `setup.load`). Handler signature
+--- mirrors action handlers: `(payload:table|nil) -> (response_payload, error?)`.
+--- The bridge takes the returned table and ships it as the matching ack
+--- type (`setup.list.result`, `setup.load.ack`).
+---@param requestType string  e.g. "setup.list"
+---@param ackType string      e.g. "setup.list.result"
+---@param fn fun(payload:table|nil):table,string|nil
+function M.registerRequestHandler(requestType, ackType, fn)
+  if type(requestType) ~= "string" or requestType == "" then return end
+  if type(ackType) ~= "string" or ackType == "" then return end
+  if type(fn) ~= "function" then return end
+  requestHandlers[requestType] = { ackType = ackType, fn = fn }
 end
 
 --- Round 10: send a corner_query event to the sidecar asking for a short

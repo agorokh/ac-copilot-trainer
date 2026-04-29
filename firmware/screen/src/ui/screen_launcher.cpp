@@ -1,0 +1,367 @@
+// Launcher screen — issue #86 Part B (Menu.tsx port).
+//
+// Three vertical app tiles + live CONNECTED/DISCONNECTED status pill,
+// matching the Figma "Menu" component (see
+// docs/01_Vault/AcCopilotTrainer/01_Decisions/dashboard-visual-design-figma.md
+// and the TSX reference under
+// agorokh/Ingamecoachingtrainerdesign/src/app/components/mobile/Menu.tsx).
+//
+// Layout (portrait 320×480, device mounted vertical):
+//   ┌────────────────────────────────────────────────────────────────┐
+//   │ AC LAUNCHER                            ● CONNECTED  (header)   │  56 px
+//   ├────────────────────────────────────────────────────────────────┤
+//   │ ┌────────────────────────────────────────────────────────────┐ │
+//   │ │ AC COPILOT                                            >    │ │  72 px
+//   │ │ Real-time coaching overlay                                  │ │
+//   │ └────────────────────────────────────────────────────────────┘ │
+//   │ (12 px gap)                                                     │
+//   │ ┌────────────────────────────────────────────────────────────┐ │  72 px
+//   │ │ POCKET TECHNICIAN                                     >    │ │
+//   │ │ Saved setups manager                                        │ │
+//   │ └────────────────────────────────────────────────────────────┘ │
+//   │ (12 px gap)                                                     │
+//   │ ┌────────────────────────────────────────────────────────────┐ │  72 px
+//   │ │ SETUP EXCHANGE                                        >    │ │
+//   │ │ Community setups browser                                    │ │
+//   │ └────────────────────────────────────────────────────────────┘ │
+//   └────────────────────────────────────────────────────────────────┘
+//
+// Status pill is driven by `app_state_get()` via a 500 ms timer. The
+// disconnect threshold (3 s, per issue #86 Part B3) is enforced in
+// `main.cpp`'s WS state transitions which call `app_state_set(...)`; the
+// pill simply mirrors whatever `app_state_t` is current. Tiles remain
+// tappable even when disconnected — Parts C–E will gate dependent
+// behavior on their own.
+
+#include "ui/screen_launcher.h"
+
+#include "ui/app_state.h"
+#include "ui/nav.h"
+#include "ui/screen_ac_copilot.h"
+#include "ui/screen_pocket_technician.h"
+#include "ui/tokens.h"
+
+#include <Arduino.h>
+#include <new>  // std::nothrow -- explicit non-throwing allocation under -fno-exceptions
+
+namespace {
+
+// --- Layout constants (portrait 320×480) -----------------------------------
+constexpr int LAUNCHER_W      = 320;
+constexpr int LAUNCHER_H      = 480;
+constexpr int HEADER_H        = 56;
+// Portrait gives us a roomy 424 px below the header. Three 72 px tiles + two
+// 12 px gaps = 240 px, leaving (424 - 240) = 184 px to split between top and
+// bottom insets — 92 px each. We keep CONTENT_PAD_V at 24 px above the first
+// tile (matching the original landscape feel) so the tiles sit near the
+// header, with breathing room beneath. CONTENT_PAD_H stays a horizontal pad
+// for left/right edges of the content column.
+constexpr int CONTENT_PAD_H   = 16;
+constexpr int CONTENT_PAD_V   = 24;
+constexpr int TILE_H          = 72;
+constexpr int TILE_GAP        = UI_GAP_TILES;       // 12 px (tokens.h)
+constexpr int CHEVRON_W       = 18;
+constexpr int STATUS_DOT_DIA  = 10;
+
+// --- App identifiers -------------------------------------------------------
+typedef enum {
+    LAUNCHER_APP_AC_COPILOT = 0,
+    LAUNCHER_APP_POCKET_TECH,
+    LAUNCHER_APP_SETUP_EXCHANGE,
+} launcher_app_t;
+
+// --- Per-screen widget cache, owned by the screen via user_data -----------
+struct launcher_ctx_t {
+    lv_obj_t*  status_dot;     // colored dot in the header pill
+    lv_obj_t*  status_label;   // "CONNECTED" / "DISCONNECTED" text
+    lv_obj_t*  spinner;        // visible whenever the link is not live —
+                               // i.e. APP_BOOTING and APP_DISCONNECTED both
+                               // show it; APP_CONNECTED / APP_LAUNCHER_IDLE
+                               // hide it. (sourcery clarification on PR #91.)
+    lv_timer_t* poll_timer;    // 500 ms tick to refresh the pill
+    app_state_t last_state;    // last value seen by the timer
+    bool        first_render;  // true until the first apply_pill_state() call
+};
+
+// --- Helpers ---------------------------------------------------------------
+
+// Apply the connected/booting/disconnected look to the status pill widgets.
+// APP_BOOTING gets its own visual (amber dot + "CONNECTING" label) so the
+// boot/Wi-Fi/initial-WS-attempt window doesn't read as a red error indicator
+// while the spinner is up. (CodeRabbit review on PR #91.)
+void apply_pill_state(launcher_ctx_t* ctx, app_state_t s) {
+    const bool connected = (s == APP_CONNECTED || s == APP_LAUNCHER_IDLE);
+    const bool booting   = (s == APP_BOOTING);
+    const lv_color_t dot_color = connected ? UI_ACCENT_GOLD
+                                : booting  ? UI_LINE_AMBER
+                                           : UI_ALERT_RED;
+    const char*      pill_text = connected ? "CONNECTED"
+                                : booting  ? "CONNECTING"
+                                           : "DISCONNECTED";
+    if (ctx->status_dot) {
+        lv_obj_set_style_bg_color(ctx->status_dot, dot_color, LV_PART_MAIN);
+    }
+    if (ctx->status_label) {
+        lv_label_set_text(ctx->status_label, pill_text);
+        // Booting reads as a neutral "we're working on it" — keep the label
+        // primary white instead of alert-red. Anything other than connected
+        // or booting is still a real disconnect.
+        lv_obj_set_style_text_color(
+            ctx->status_label,
+            (connected || booting) ? UI_TX_PRIMARY : UI_ALERT_RED,
+            LV_PART_MAIN);
+    }
+    if (ctx->spinner) {
+        // Spinner stays visible whenever the link isn't actually up — that
+        // includes the booting state, which is exactly when the user wants
+        // to see motion.
+        if (connected) {
+            lv_obj_add_flag(ctx->spinner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(ctx->spinner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void poll_state_cb(lv_timer_t* t) {
+    auto* ctx = static_cast<launcher_ctx_t*>(t->user_data);
+    if (!ctx) return;
+    app_state_t now = app_state_get();
+    if (ctx->first_render || now != ctx->last_state) {
+        apply_pill_state(ctx, now);
+        ctx->last_state    = now;
+        ctx->first_render  = false;
+    }
+}
+
+void on_screen_delete(lv_event_t* e) {
+    auto* ctx = static_cast<launcher_ctx_t*>(lv_event_get_user_data(e));
+    if (!ctx) return;
+    if (ctx->poll_timer) {
+        lv_timer_del(ctx->poll_timer);
+        ctx->poll_timer = nullptr;
+    }
+    delete ctx;
+}
+
+// Placeholder factory retained for Setup Exchange (Part E) until that
+// screen is implemented. Parts C and D have shipped — see
+// screen_ac_copilot.cpp / screen_pocket_technician.cpp for the real
+// factories, wired below in `on_tile_clicked`.
+lv_obj_t* placeholder_screen(const char* title) {
+    lv_obj_t* scr = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* heading = lv_label_create(scr);
+    lv_label_set_text(heading, title);
+    lv_obj_set_style_text_color(heading, UI_TX_PRIMARY, LV_PART_MAIN);
+    lv_obj_align(heading, LV_ALIGN_TOP_MID, 0, 32);
+
+    lv_obj_t* body = lv_label_create(scr);
+    lv_label_set_text(body, "Coming soon\nTap to return");
+    lv_obj_set_style_text_color(body, UI_TX_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_center(body);
+
+    // Whole-screen tap returns to launcher.
+    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        scr,
+        [](lv_event_t*) { ui_nav_pop(); },
+        LV_EVENT_CLICKED,
+        nullptr);
+    return scr;
+}
+
+// AC Copilot (Part C) and Pocket Technician (Part D) now have real
+// factories; Setup Exchange (Part E) is still a placeholder.
+lv_obj_t* setup_exchange_create(void)  { return placeholder_screen("SETUP EXCHANGE"); }
+
+void on_tile_clicked(lv_event_t* e) {
+    auto app = static_cast<launcher_app_t>(
+        reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
+    switch (app) {
+        case LAUNCHER_APP_AC_COPILOT:
+            ui_nav_push(screen_ac_copilot_create);
+            break;
+        case LAUNCHER_APP_POCKET_TECH:
+            ui_nav_push(screen_pocket_technician_create);
+            break;
+        case LAUNCHER_APP_SETUP_EXCHANGE:
+            ui_nav_push(setup_exchange_create);
+            break;
+    }
+}
+
+// Build one app tile. Returns the outer container so the caller can
+// position it via grid/flex.
+lv_obj_t* make_tile(lv_obj_t* parent,
+                    const char* title,
+                    const char* subtitle,
+                    launcher_app_t app) {
+    lv_obj_t* tile = lv_obj_create(parent);
+    lv_obj_set_size(tile, lv_pct(100), TILE_H);
+    lv_obj_set_style_bg_color(tile, UI_BG_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tile, UI_BG_PANEL_OPA, LV_PART_MAIN);
+    lv_obj_set_style_border_color(tile, UI_BORDER_SOFT, LV_PART_MAIN);
+    lv_obj_set_style_border_opa(tile, UI_BORDER_SOFT_OPA, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tile, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(tile, UI_RADIUS_TILE, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tile, 12, LV_PART_MAIN);
+    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+    // Pressed-state visual feedback (Part A7): subtle tile background dim.
+    lv_obj_set_style_bg_color(tile, UI_BG_HEADER, LV_PART_MAIN | LV_STATE_PRESSED);
+    lv_obj_add_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+
+    // Title (top-left).
+    lv_obj_t* title_lbl = lv_label_create(tile);
+    lv_label_set_text(title_lbl, title);
+    lv_obj_set_style_text_color(title_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
+    lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Subtitle below title.
+    lv_obj_t* sub_lbl = lv_label_create(tile);
+    lv_label_set_text(sub_lbl, subtitle);
+    lv_obj_set_style_text_color(sub_lbl, UI_TX_MUTED, LV_PART_MAIN);
+    lv_obj_align(sub_lbl, LV_ALIGN_TOP_LEFT, 0, 22);
+
+    // Right chevron in gold. Align the glyph to the right edge of the
+    // CHEVRON_W-wide label widget so the visible `>` sits near the tile
+    // margin, not at the left of an 18 px-wide block. (Cursor Bugbot
+    // finding on PR #91.)
+    lv_obj_t* chev = lv_label_create(tile);
+    lv_label_set_text(chev, ">");
+    lv_obj_set_style_text_color(chev, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_set_width(chev, CHEVRON_W);
+    lv_obj_set_style_text_align(chev, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+    lv_obj_align(chev, LV_ALIGN_RIGHT_MID, -4, 0);
+
+    // Tap target floor: tile is 72 px tall × full content width — well
+    // above the 60 px minimum from Part A7.
+    lv_obj_add_event_cb(
+        tile,
+        on_tile_clicked,
+        LV_EVENT_CLICKED,
+        reinterpret_cast<void*>(static_cast<uintptr_t>(app)));
+
+    return tile;
+}
+
+// Build the header strip (title + status pill). The pill widgets are
+// stashed back into `ctx` so the poll timer can update them.
+void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
+    lv_obj_t* header = lv_obj_create(parent);
+    lv_obj_set_size(header, LAUNCHER_W, HEADER_H);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, UI_BG_HEADER, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(header, UI_BG_HEADER_OPA, LV_PART_MAIN);
+    lv_obj_set_style_border_width(header, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(header, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(header, CONTENT_PAD_H, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(header, CONTENT_PAD_H, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(header, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(header, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* brand = lv_label_create(header);
+    lv_label_set_text(brand, "AC LAUNCHER");
+    lv_obj_set_style_text_color(brand, UI_TX_PRIMARY, LV_PART_MAIN);
+    // Letter-spacing approximation: LVGL 8.3 supports `text_letter_space`.
+    lv_obj_set_style_text_letter_space(brand, 2, LV_PART_MAIN);
+    lv_obj_align(brand, LV_ALIGN_LEFT_MID, 0, 0);
+
+    // Right-aligned status pill: [dot] [label] [spinner-when-disconnected].
+    // Sized for portrait 320 width: title ~130 px + 16 pad + pill 130 px +
+    // 16 pad ≈ 292 px, fits inside the header without overlap.
+    lv_obj_t* pill = lv_obj_create(header);
+    lv_obj_set_size(pill, 130, 32);
+    lv_obj_align(pill, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_opa(pill, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(pill, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(pill, 0, LV_PART_MAIN);
+    lv_obj_clear_flag(pill, LV_OBJ_FLAG_SCROLLABLE);
+
+    ctx->status_dot = lv_obj_create(pill);
+    lv_obj_set_size(ctx->status_dot, STATUS_DOT_DIA, STATUS_DOT_DIA);
+    lv_obj_set_style_radius(ctx->status_dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+    lv_obj_set_style_border_width(ctx->status_dot, 0, LV_PART_MAIN);
+    lv_obj_align(ctx->status_dot, LV_ALIGN_LEFT_MID, 0, 0);
+
+    ctx->status_label = lv_label_create(pill);
+    lv_label_set_text(ctx->status_label, "DISCONNECTED");
+    lv_obj_align(ctx->status_label, LV_ALIGN_LEFT_MID, STATUS_DOT_DIA + 6, 0);
+
+    // Spinner: smaller diameter so it nests inside the pill instead of
+    // bleeding out the right edge in portrait (it overlapped the brand text
+    // in the previous landscape sizing).
+    ctx->spinner = lv_spinner_create(pill, /*time=*/1000, /*arc length=*/60);
+    lv_obj_set_size(ctx->spinner, 18, 18);
+    lv_obj_align(ctx->spinner, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_flag(ctx->spinner, LV_OBJ_FLAG_HIDDEN);
+}
+
+}  // namespace
+
+extern "C" lv_obj_t* launcher_create(void) {
+    // ESP32 Arduino is built with -fno-exceptions, but the throwing form
+    // of new() does NOT silently return nullptr under that flag -- it
+    // calls __cxa_throw which terminates the firmware instead of giving
+    // us a controlled failure path. Use the non-throwing placement form
+    // (std::nothrow) so the OOM guard below can actually execute and
+    // ui_nav_push() refuses our null factory cleanly. (CodeRabbit P1 +
+    // chatgpt-codex P2 on PR #91.)
+    auto* ctx = new (std::nothrow) launcher_ctx_t();
+    if (!ctx) {
+        Serial.println("[fatal][ui] launcher ctx alloc failed");
+        return nullptr;
+    }
+    // Use a dedicated `first_render` flag instead of casting an out-of-range
+    // 0xFF to `app_state_t` (UB on -fshort-enums). (CodeRabbit P1 on PR #91.)
+    ctx->first_render = true;
+
+    lv_obj_t* scr = lv_obj_create(nullptr);
+    lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    // Free the context + timer when LVGL deletes the screen.
+    lv_obj_add_event_cb(scr, on_screen_delete, LV_EVENT_DELETE, ctx);
+
+    make_header(scr, ctx);
+
+    // Content column under the header.
+    lv_obj_t* col = lv_obj_create(scr);
+    lv_obj_set_size(col, LAUNCHER_W - 2 * CONTENT_PAD_H,
+                    LAUNCHER_H - HEADER_H - 2 * CONTENT_PAD_V);
+    lv_obj_align(col, LV_ALIGN_TOP_MID, 0, HEADER_H + CONTENT_PAD_V);
+    lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(col, TILE_GAP, LV_PART_MAIN);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_tile(col, "AC COPILOT",
+              "Real-time coaching overlay",
+              LAUNCHER_APP_AC_COPILOT);
+    make_tile(col, "POCKET TECHNICIAN",
+              "Saved setups manager",
+              LAUNCHER_APP_POCKET_TECH);
+    make_tile(col, "SETUP EXCHANGE",
+              "Community setups browser",
+              LAUNCHER_APP_SETUP_EXCHANGE);
+
+    // Initial render of the pill + start the 500 ms poll timer.
+    // Sample app_state_get() once so the pill and last_state can't disagree
+    // if the state changes between the two reads (Copilot review on PR #91).
+    const app_state_t initial_state = app_state_get();
+    apply_pill_state(ctx, initial_state);
+    ctx->last_state    = initial_state;
+    ctx->first_render  = false;
+    ctx->poll_timer    = lv_timer_create(poll_state_cb, 500, ctx);
+
+    return scr;
+}
