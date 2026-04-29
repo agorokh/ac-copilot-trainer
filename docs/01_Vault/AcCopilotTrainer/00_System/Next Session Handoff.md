@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-25T07:35:00Z
+last_updated: 2026-04-29T17:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,51 +25,24 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-26, PR #91 Parts C+D first ran on real hardware)
+## Resume here (2026-04-29 — PR #91 merged to `main`)
 
-**The hot path has moved.** PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91)
-(Phase-2 launcher + AC Copilot mirror + Pocket Technician picker) ran end-to-end on
-the actual JC3248W535 device for the first time today. Eight distinct root-cause bugs
-needed fixing along the way — none of which CI or static analysis caught. Full
-catalogue with reproduction details and fixes:
-[screen-end-to-end-bringup-2026-04-26.md](../03_Investigations/screen-end-to-end-bringup-2026-04-26.md).
+PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** `2026-04-29T17:02:22Z` as squash [`35d770c`](https://github.com/agorokh/ac-copilot-trainer/commit/35d770c7e51da021133488809d4c5dbd254e0195). **Issue #86 Parts A–D** (LVGL launcher, AC Copilot mirror, Pocket Technician + trainer/sidecar) are on `main`. Post-merge steward: `scripts/post_merge_classify.py --pr 91` reported **no** migration/env/deps/script flags.
 
-**Working on the device today (verified):**
+**Still the best single read for device reality:** [screen-end-to-end-bringup-2026-04-26.md](../03_Investigations/screen-end-to-end-bringup-2026-04-26.md) (eight root causes fixed between CI-green and on-device green).
 
-* Launcher + status pill + portrait layout (320×480, MX|MV mode on AXS15231B)
-* AC Copilot mirror — live `coaching.snapshot` at 10Hz, primary/secondary lines,
-  TARGET/CURRENT speed flip-to-red logic, distance bar, delta chip
-* Pocket Technician — TRACK + BRAND + MODEL meta from `ui_*.json`, per-track filter,
-  setup chips (BB / ABS / TC / Wings F-R), gold-pulse on row tap, `setup.active`
-  broadcast, ACTIVE row in gold
+**Open follow-ups** (next PRs / issue #86 E–F):
 
-**Open follow-ups** (do these as a Part-D polish PR or before merge):
+1. **`start_sidecar.bat` loopback-only** — rig screen needs `--external-bind 0.0.0.0` + token path (see bring-up doc).
+2. **BB chip stale on some PT rows** — FW-side; trainer sends correct values.
+3. **Part A4 fonts** — run `lv_font_conv` for bundled TTFs; until then Montserrat 14 ASCII only.
+4. **Part E / Part F** per EPIC #86 (Setup Exchange, polish/SPIFFS/debug).
 
-1. **`start_sidecar.bat` binds loopback only.** `--host 127.0.0.1` without
-   `--external-bind` means the rig screen can't reach the trainer's auto-spawned
-   sidecar. Manual launch with `--external-bind 0.0.0.0 --token <T>` is the workaround
-   today. Plumbing fix: read `AC_COPILOT_SIDECAR_TOKEN` env var in the bat and pass
-   `--external-bind 0.0.0.0` when set.
-2. **BB chip stale across some setup taps.** TC and ABS update correctly when
-   switching between rows; BB chip was observed not updating on at least one row.
-   Trainer logs (`SETUP-DIAG`) confirm the values are sent correctly per row, so
-   the bug is FW-side. Diagnostic logs were stripped before commit; re-add briefly
-   to root-cause.
-3. **Font conversion (Part A4).** Bundled Syncopate / Michroma / Montserrat from
-   `content/fonts/` haven't been converted via `lv_font_conv` yet, so the screens
-   are running on default LVGL Montserrat 14 (ASCII only). Not blocking but kills
-   any non-ASCII glyph (em-dashes, bullets) until landed.
-
-**Known infrastructure pitfall** observed today: Windows Mobile Hotspot's "Power
-saving" auto-shutoff fires even when AC is running. Document in the rig-setup
-runbook to disable it.
+**Hotspot pitfall:** disable Windows Mobile Hotspot power-saving when AC runs (see [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md)).
 
 ### Branch + PR state
 
-`feat/issue-86-rig-screen-phase2-launcher-and-apps` head is the device-bring-up
-commit series (rotation matrix discovery, ws_init_once, sidecar allow-list, hello
-retry, portrait layouts, em-dash → ASCII, brand line + setup chips, ac_content_meta
-reader). All landed on PR #91. **2026-04-29:** zero-sampling PR #91 review pass completed on-device follow-ups + merge of `origin/main` into the PR branch (resolve vault conflicts below).
+Feature branch `feat/issue-86-rig-screen-phase2-launcher-and-apps` was deleted locally after merge (remote may still exist briefly). Continue from **`main`** @ `35d770c` or newer.
 
 ---
 
@@ -165,6 +138,12 @@ From [`screen-debugging-journey-2026-04-21`](../03_Investigations/screen-debuggi
 5. **Factory backup restore** is the proof-of-life test when display looks dead. Binary at `firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin`.
 6. **CSP API quirks**: `type(vec2/rgbm)` returns `"cdata"` not `"function"` (use nil-checks); `web.socket` is callback-based (`reconnect:true` mandatory); `ac.storage` table-form silently fails (use per-key form).
 7. **Sim-time not os.clock** for staleness — see `ac-storage-persistence.md` and the `corner_advice` TTL in PR #75.
+
+## What was delivered (2026-04-29)
+
+| Area | Artefact |
+|------|----------|
+| Rig screen Phase-2 (EPIC #86 A–D) | PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) merged at [`35d770c`](https://github.com/agorokh/ac-copilot-trainer/commit/35d770c7e51da021133488809d4c5dbd254e0195) — LVGL 8.3 portrait UI, launcher, AC Copilot + `coaching.snapshot`, Pocket Technician + `setup.list`/`setup.load`, `setup_library` / `ws_bridge` / `lap_archive` / `ac_content_meta`, sidecar protocol + `long_cmd_fix_post` Windows `ar` batching, vault bring-up + glossary nodes bundled in the same squash. |
 
 ## What was delivered (2026-04-25)
 
