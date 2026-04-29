@@ -9,7 +9,9 @@
 local M = {}
 
 local _carCache = {}    -- carId -> {name=, brand=, class=}
+local _carMiss = {}     -- carId -> true after a failed read (not `false` in _carCache)
 local _trackCache = {}  -- "trackId" or "trackId/layoutId" -> {name=, country=}
+local _trackMiss = {}   -- key -> true after all candidates fail
 
 -- ----------------------------------------------------------------------------
 -- AC root resolution. We try several FolderID names in order; whichever the
@@ -78,14 +80,20 @@ end
 ---@return table|nil  {name, brand, class} (any may be missing) or nil on failure
 function M.carUI(carId)
   if type(carId) ~= "string" or carId == "" or carId == "unknown" then return nil end
+  if _carMiss[carId] then return nil end
   local cached = _carCache[carId]
   if cached ~= nil then return cached end
-  _carCache[carId] = false  -- negative-cache while we try
   local root = carContentRoot()
-  if not root then return nil end
+  if not root then
+    _carMiss[carId] = true
+    return nil
+  end
   local raw = readFile(root .. "/" .. carId .. "/ui/ui_car.json")
   local d = parseJson(raw)
-  if not d then return nil end
+  if not d then
+    _carMiss[carId] = true
+    return nil
+  end
   local out = {
     name  = (type(d.name)  == "string" and d.name  ~= "") and d.name  or nil,
     brand = (type(d.brand) == "string" and d.brand ~= "") and d.brand or nil,
@@ -102,11 +110,14 @@ end
 function M.trackUI(trackId, layoutId)
   if type(trackId) ~= "string" or trackId == "" or trackId == "unknown" then return nil end
   local key = (layoutId and layoutId ~= "") and (trackId .. "/" .. layoutId) or trackId
+  if _trackMiss[key] then return nil end
   local cached = _trackCache[key]
   if cached ~= nil then return cached end
-  _trackCache[key] = false  -- negative-cache while we try
   local root = trackContentRoot()
-  if not root then return nil end
+  if not root then
+    _trackMiss[key] = true
+    return nil
+  end
   -- Layout-specific ui_track.json wins when present, otherwise fall back to
   -- the track-root one.
   local candidates = {}
@@ -125,6 +136,7 @@ function M.trackUI(trackId, layoutId)
       return out
     end
   end
+  _trackMiss[key] = true
   return nil
 end
 

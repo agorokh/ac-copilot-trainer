@@ -92,6 +92,8 @@ local sidecarProtocolReady = false
 --- M.tick at most once a second.
 local externalHelloPending = false
 local externalHelloLastTryT = -1e9
+local externalHelloLogLastT = -1e9
+local EXTERNAL_HELLO_LOG_MIN_SEC = 10.0
 local EXTERNAL_HELLO_RETRY_SEC = 1.0
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
@@ -843,7 +845,12 @@ function M.tick(simTime)
           client = "ac-copilot-trainer-lua",
         })
         if ac and type(ac.log) == "function" then
-          ac.log("[COPILOT][WS-DIAG] hello retry sent=" .. tostring(sent))
+          -- Retries stay at 1 Hz for correctness; log line is rate-limited so a
+          -- dead sidecar cannot spam the CSP console (Qodo on PR #91).
+          if currentSimT - externalHelloLogLastT >= EXTERNAL_HELLO_LOG_MIN_SEC then
+            externalHelloLogLastT = currentSimT
+            ac.log("[COPILOT][WS-DIAG] hello retry sent=" .. tostring(sent))
+          end
         end
       end
     elseif sidecarProtocolReady then
