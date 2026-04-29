@@ -291,9 +291,10 @@ static void refresh_ui() {
 #else  // PHASE1_FALLBACK == 0 — LVGL bring-up
 
 // LVGL partial-buffer parameters. Two full-width ×40 RGB565 strips in PSRAM
-// so each flush region matches the 320 px logical screen width (Cursor Bugbot
-// on PR #91 — a 240 px strip under-draws when LVGL spans the full row).
-static constexpr uint32_t LV_BUF_W       = 320;
+// so each flush region matches the logical screen width (Cursor Bugbot on PR
+// #91 — a 240 px strip under-draws when LVGL spans the full row). Tie strip
+// width to `SCREEN_W` so hor_res and buffer stride cannot drift (Copilot PR #91).
+static constexpr uint32_t LV_BUF_W       = static_cast<uint32_t>(SCREEN_W);
 static constexpr uint32_t LV_BUF_LINES   = 40;
 static constexpr uint32_t LV_BUF_PIXELS  = LV_BUF_W * LV_BUF_LINES;
 static lv_disp_draw_buf_t lv_draw_buf;
