@@ -34,12 +34,11 @@ void toast_timer_cb(lv_timer_t* t) {
         lv_obj_set_user_data(obj, nullptr);
         lv_obj_del(obj);
     }
-    // `lv_timer_set_repeat_count(..., 1)` means LVGL deletes this timer
-    // internally after the callback returns (lv_timer.c repeat handling).
-    // Do NOT call `lv_timer_del(t)` here — that double-frees (Cursor Bugbot
-    // on PR #91). If the toast was deleted early, `toast_obj_delete_cb` already
-    // removed the timer and cleared `user_data`, so `obj` is null above and
-    // LVGL still retires the one-shot timer exactly once.
+    // One-shot without `repeat_count == 1`: that path lets LVGL auto-delete
+    // the timer after the callback, which overlaps awkwardly with
+    // `toast_obj_delete_cb` when Bugbot models both paths. We keep the
+    // default infinite repeat and delete exactly once here instead.
+    lv_timer_del(t);
 }
 
 void toast_obj_delete_cb(lv_event_t* e) {
@@ -84,7 +83,6 @@ extern "C" void ui_toast_show(const char* text, uint32_t ms_visible) {
         ms_visible = 3000;
     }
     lv_timer_t* t = lv_timer_create(toast_timer_cb, ms_visible, toast);
-    lv_timer_set_repeat_count(t, 1);
     // Cross-link toast <-> timer so navigation-induced deletes cancel the
     // pending fire (use-after-free guard, reported by Cursor + CodeRabbit
     // on PR #91).

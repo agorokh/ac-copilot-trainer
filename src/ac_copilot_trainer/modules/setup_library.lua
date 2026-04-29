@@ -223,12 +223,13 @@ function M.bestForSetup(setupName, setupPath)
   local hasJson = (JSON and type(JSON.parse) == "function")
   if not hasJson then return nil end
 
-  -- Cap walk to first 200 most recent files so this is bounded for users
-  -- with multi-thousand-lap journals. Filenames sort chronologically (see
-  -- lap_archive.write — `lap_<UTC>_<sess>_<n>_<lap_ms>_<uuid>.json`), so
-  -- alpha-descending == time-descending.
+  -- Filenames sort chronologically (see lap_archive.write —
+  -- `lap_<UTC>_<sess>_<n>_<lap_ms>_<uuid>.json`), so alpha-descending ==
+  -- time-descending. Scan the full journal so BEST is never truncated by an
+  -- arbitrary cap (chatgpt-codex P2 on PR #91 — the prior 200-file limit
+  -- could miss a faster older lap when the journal is large).
   table.sort(files, function(a, b) return tostring(a) > tostring(b) end)
-  local maxScan = math.min(#files, 200)
+  local maxScan = #files
 
   for i = 1, maxScan do
     local name = files[i]

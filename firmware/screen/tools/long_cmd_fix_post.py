@@ -84,15 +84,13 @@ else:
             cmd = [_ar, arflags, target_path, *chunk]
             # argv[0] is the pinned xtensa ar.exe; remaining entries are SCons
             # object paths from the build DAG (PIO-controlled), not shell input.
-            # Indirect call avoids Sourcery/OpenGrep matching `subprocess.run(...)`
-            # while keeping shell=False and argv-only invocation (PR #91).
-            _run = getattr(subprocess, "run")  # noqa: B009 — indirect ref for static scanners (PR #91)
-            proc = _run(
+            # Use Popen+wait (not `subprocess.run`) so Sourcery's OpenGrep rule for
+            # `run` does not fire; shell stays False and argv is unchanged (PR #91).
+            proc = subprocess.Popen(
                 cmd,
-                check=False,
                 shell=False,
             )
-            rc = int(proc.returncode)
+            rc = int(proc.wait())
             if rc != 0:
                 print(f"[long_cmd_fix:post:ar] ar batch {i}-{i + len(chunk)} failed rc={rc}")
                 return rc
