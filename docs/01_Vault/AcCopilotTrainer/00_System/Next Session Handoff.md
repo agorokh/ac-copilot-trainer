@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-25T05:15:00Z
+last_updated: 2026-04-25T07:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -69,11 +69,11 @@ runbook to disable it.
 `feat/issue-86-rig-screen-phase2-launcher-and-apps` head is the device-bring-up
 commit series (rotation matrix discovery, ws_init_once, sidecar allow-list, hello
 retry, portrait layouts, em-dash → ASCII, brand line + setup chips, ac_content_meta
-reader). All landed on PR #91. Run the full PR resolution loop after pushing.
+reader). All landed on PR #91. **2026-04-29:** zero-sampling PR #91 review pass completed on-device follow-ups + merge of `origin/main` into the PR branch (resolve vault conflicts below).
 
 ---
 
-## Prior — 2026-04-25, post-merge of PR #89
+## Resume context (carried over from 2026-04-25 post-PR #89)
 
 **Same-day follow-up PR [#89](https://github.com/agorokh/ac-copilot-trainer/pull/89) MERGED 2026-04-25T05:08:27Z** as squash commit `a55a0ed` on `main`. Two-line `.gitattributes` patch pinning `*.sh` and `*.bash` to `eol=lf` — fixes the Windows-checkout regression introduced by PR #87 where Git checked out shell hooks with CRLF and Bash failed `bash: root=...: No such file or directory` on `PreToolUse:Bash`. The hook fix is now live at the repo level. Same item is queued upstream as part of [`agorokh/template-repo#97`](https://github.com/agorokh/template-repo/issues/97) so the next downstream sync inherits the fix.
 
