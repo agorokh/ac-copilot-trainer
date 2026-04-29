@@ -61,9 +61,7 @@ else:
         sources = [str(s) for s in source]
         build_root = None
         try:
-            build_root = os.path.normcase(
-                os.path.abspath(str(env.subst("${BUILD_DIR}")))
-            )
+            build_root = os.path.normcase(os.path.abspath(str(env.subst("${BUILD_DIR}"))))
         except Exception:
             build_root = None
         if build_root:

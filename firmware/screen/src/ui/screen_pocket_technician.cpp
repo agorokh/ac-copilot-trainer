@@ -633,6 +633,13 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
 extern "C" void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,
                                                        const char* car_brand,
                                                        const char* track_id, const char* track_name) {
+    char prev_car[sizeof(g_car_id)];
+    char prev_track[sizeof(g_track_id)];
+    strncpy(prev_car, g_car_id, sizeof(prev_car));
+    prev_car[sizeof(prev_car) - 1] = 0;
+    strncpy(prev_track, g_track_id, sizeof(prev_track));
+    prev_track[sizeof(prev_track) - 1] = 0;
+
     if (car_id) {
         strncpy(g_car_id, car_id, sizeof(g_car_id) - 1);
         g_car_id[sizeof(g_car_id) - 1] = 0;
@@ -658,6 +665,14 @@ extern "C" void screen_pocket_technician_set_identity(const char* car_id, const 
         g_track_name[sizeof(g_track_name) - 1] = 0;
     } else {
         g_track_name[0] = 0;
+    }
+    // New list identity means any prior ACTIVE row may belong to another
+    // car/track — clear until `setup.active` / a fresh load ack arrives
+    // (chatgpt-codex P2 on PR #91).
+    if ((car_id && strcmp(prev_car, g_car_id) != 0) ||
+        (track_id && strcmp(prev_track, g_track_id) != 0)) {
+        g_active_name[0] = 0;
+        pending_load_clear();
     }
     if (g_active_ctx) update_meta(g_active_ctx);
 }

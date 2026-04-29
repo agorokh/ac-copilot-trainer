@@ -34,10 +34,12 @@ void toast_timer_cb(lv_timer_t* t) {
         lv_obj_set_user_data(obj, nullptr);
         lv_obj_del(obj);
     }
-    // The timer is one-shot; LVGL does not auto-delete it after the call,
-    // so we must explicitly remove it here. Safe because we are returning
-    // to LVGL's own timer dispatch loop.
-    lv_timer_del(t);
+    // `lv_timer_set_repeat_count(..., 1)` means LVGL deletes this timer
+    // internally after the callback returns (lv_timer.c repeat handling).
+    // Do NOT call `lv_timer_del(t)` here — that double-frees (Cursor Bugbot
+    // on PR #91). If the toast was deleted early, `toast_obj_delete_cb` already
+    // removed the timer and cleared `user_data`, so `obj` is null above and
+    // LVGL still retires the one-shot timer exactly once.
 }
 
 void toast_obj_delete_cb(lv_event_t* e) {

@@ -149,7 +149,11 @@ static bool disconnect_already_surfaced = false;
 // to apply until a successful reconnect clears the state.
 static inline void disconnect_grace_arm() {
   if (ws_disconnected_pending_at == 0 && !disconnect_already_surfaced) {
-    ws_disconnected_pending_at = millis() + WS_DISCONNECT_GRACE_MS;
+    // `0` is reserved for "disarmed". `millis() + delta` can wrap to 0;
+    // bump to 1 so we never collide with the sentinel (Cursor Bugbot on PR #91).
+    uint32_t deadline = millis() + WS_DISCONNECT_GRACE_MS;
+    if (deadline == 0) deadline = 1;
+    ws_disconnected_pending_at = deadline;
   }
 }
 
@@ -480,6 +484,18 @@ static void wifi_tick() {
 }
 
 #if PHASE1_FALLBACK == 0
+// JSON numeric helper shared by coaching + setup.list branches (Cursor
+// Bugbot: dedupe the two identical `numOr` lambdas in PR #91).
+static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
+  if (v.isNull()) return fallback;
+  if (v.is<int>()) return (int32_t)v.as<int>();
+  if (v.is<float>()) {
+    float f = v.as<float>();
+    return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+  }
+  return fallback;
+}
+
 // Issue #86 Parts C/D: dispatch per-message-type. `state.snapshot` carries
 // a `topic` field we route to the appropriate screen module; `setup.*`
 // frames go straight to the Pocket Technician screen module.
@@ -495,12 +511,10 @@ static void dispatch_phase2_message(const String& body) {
     Serial.printf("[ws] parse err: %s\n", err.c_str());
     return;
   }
-  if (doc["v"].as<int>() != 1) {
-    return;
-  }
-  const char* type = doc["type"] | "";
-  if (type[0] == 0) {
-    // Round-10 corner_advice uses the legacy `event` envelope.
+  // Legacy `corner_advice` uses the pre-v1 `event` envelope and may omit
+  // `v` / `type` — handle before enforcing the v1 envelope (chatgpt-codex P2
+  // on PR #91).
+  {
     const char* ev = doc["event"] | "";
     if (strcmp(ev, "corner_advice") == 0) {
       const char* corner = doc["corner"] | "";
@@ -508,7 +522,14 @@ static void dispatch_phase2_message(const String& body) {
       if (*corner && *text) {
         screen_ac_copilot_apply_corner_advice(corner, text);
       }
+      return;
     }
+  }
+  if (doc["v"].as<int>() != 1) {
+    return;
+  }
+  const char* type = doc["type"] | "";
+  if (type[0] == 0) {
     return;
   }
 
@@ -534,18 +555,10 @@ static void dispatch_phase2_message(const String& body) {
       // fractional. is<int>() returns false for floats, so the screen would
       // silently default valid telemetry to -1. Cast through float and round
       // half-up to int32. Nil/missing fields keep the -1/0 sentinels.
-      auto numOr = [](JsonVariantConst v, int32_t fallback) -> int32_t {
-        if (v.is<int>())   return (int32_t)v.as<int>();
-        if (v.is<float>()) {
-          float f = v.as<float>();
-          return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
-        }
-        return fallback;
-      };
-      snap.target_speed_kmh  = numOr(payload["target_speed_kmh"],  -1);
-      snap.current_speed_kmh = numOr(payload["current_speed_kmh"], -1);
-      snap.dist_to_brake_m   = numOr(payload["dist_to_brake_m"],   -1);
-      int32_t pp = numOr(payload["progress_pct"], 0);
+      snap.target_speed_kmh  = phase2_json_num_or(payload["target_speed_kmh"],  -1);
+      snap.current_speed_kmh = phase2_json_num_or(payload["current_speed_kmh"], -1);
+      snap.dist_to_brake_m   = phase2_json_num_or(payload["dist_to_brake_m"],   -1);
+      int32_t pp = phase2_json_num_or(payload["progress_pct"], 0);
       if (pp < 0) pp = 0;
       if (pp > 100) pp = 100;
       snap.progress_pct      = pp;
@@ -579,22 +592,13 @@ static void dispatch_phase2_message(const String& body) {
           // Parse the per-row summary chips (Part D follow-up). Floats are
           // accepted (CSP sometimes serializes ints as JSON numbers with .0)
           // and rounded half-up. Missing fields default to -1 (=== unknown).
-          auto numOr = [](JsonVariantConst v, int32_t fallback) -> int32_t {
-            if (v.isNull()) return fallback;
-            if (v.is<int>())   return (int32_t)v.as<int>();
-            if (v.is<float>()) {
-              float f = v.as<float>();
-              return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
-            }
-            return fallback;
-          };
-          int32_t best_ms = numOr(entry["best_ms"], -1);
+          int32_t best_ms = phase2_json_num_or(entry["best_ms"], -1);
           pt_setup_summary_t sum;
-          sum.brake_bias = numOr(entry["brake_bias"], -1);
-          sum.abs        = numOr(entry["abs"],        -1);
-          sum.tc         = numOr(entry["tc"],         -1);
-          sum.wing_f     = numOr(entry["wing_f"],     -1);
-          sum.wing_r     = numOr(entry["wing_r"],     -1);
+          sum.brake_bias = phase2_json_num_or(entry["brake_bias"], -1);
+          sum.abs        = phase2_json_num_or(entry["abs"],        -1);
+          sum.tc         = phase2_json_num_or(entry["tc"],         -1);
+          sum.wing_f     = phase2_json_num_or(entry["wing_f"],     -1);
+          sum.wing_r     = phase2_json_num_or(entry["wing_r"],     -1);
           screen_pocket_technician_add_setup(name, mtime_iso, best_ms,
                                               *path ? path : nullptr,
                                               &sum);
