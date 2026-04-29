@@ -1957,6 +1957,7 @@ function script.update(dt)
         trace = completedTrace,
         corners = feats,
         setup_snap = state.lastSetupSnap,
+        setup_ini_path = setupReader.activeSetupIniPath(car, sim),
         setup_hash = state.setupHash,
         rules_hints = state.coachingLines,
         -- Omit async sidecar debrief: it is applied on later frames than lap_complete, so stamping it

@@ -30,6 +30,9 @@
 #include <string.h>
 #include <new>
 
+// Updated from main.cpp each `loop()` tick (after `ws_tick`).
+static bool g_pt_sidecar_link_up = false;
+
 namespace {
 
 // ---- Module-static cache -------------------------------------------------
@@ -211,6 +214,7 @@ void on_row_clicked(lv_event_t* e) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return;  // WS out-queue full
     if (g_pending_load_n >= PT_MAX_PENDING_LOADS) return;
+    if (!g_pt_sidecar_link_up) return;
 
     // Stage `setup.load` first; only commit UI/pending correlation if the
     // request actually queued (Cursor Bugbot on PR #91).
@@ -442,6 +446,10 @@ void on_screen_delete(lv_event_t* e) {
 }
 
 }  // namespace
+
+extern "C" void screen_pocket_technician_set_sidecar_link_up(int link_up) {
+    g_pt_sidecar_link_up = link_up != 0;
+}
 
 extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     auto* ctx = new (std::nothrow) pt_ctx_t();

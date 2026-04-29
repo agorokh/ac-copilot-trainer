@@ -87,6 +87,10 @@ typedef struct {
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.
 pt_request_t screen_pocket_technician_pop_request(void);
 
+// Mirrors WS link state from main.cpp each loop tick so row taps cannot queue
+// `setup.load` while the sidecar socket is down (chatgpt-codex P2 on PR #91).
+void screen_pocket_technician_set_sidecar_link_up(int link_up);
+
 #ifdef __cplusplus
 }
 #endif

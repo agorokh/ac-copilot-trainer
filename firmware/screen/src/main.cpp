@@ -955,6 +955,7 @@ void loop() {
   wifi_tick();
   ws_tick();
 #if PHASE1_FALLBACK == 0
+  screen_pocket_technician_set_sidecar_link_up(ws_state == WsState::Open);
   pt_request_drain();
   lvgl_tick();
 #endif

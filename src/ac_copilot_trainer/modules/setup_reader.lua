@@ -72,6 +72,17 @@ local function guessSetupIniPath(car, _sim)
   return trackRoot .. "/race.ini"
 end
 
+--- Absolute path to the active setup INI (same resolution as `snapshotActive`).
+--- The snapshot table stores only the basename in `path`; callers that need a
+--- disk path for correlation (e.g. lap archive → Pocket Technician BEST) should
+--- use this helper (chatgpt-codex P1 on PR #91).
+---@param car ac.StateCar|nil
+---@param sim ac.StateSim|nil
+---@return string|nil
+function M.activeSetupIniPath(car, sim)
+  return guessSetupIniPath(car, sim)
+end
+
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.
 ---@param path string|nil
 ---@return table|nil
