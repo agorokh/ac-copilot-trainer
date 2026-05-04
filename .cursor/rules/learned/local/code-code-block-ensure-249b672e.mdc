@@ -1,0 +1,60 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tests/**/*"
+  - "scripts/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 249b672e3494c804
+mined_from: 61 review comments across 15 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: test
+---
+
+# Code Code_Block Ensure (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+**Handle fixture read/parse failures with a clean CLI error path.**
+
+`_run_compare_laps` currently crashes with a traceback on missing files or invalid JSON. For an o...
+- _🧹 Nitpick_ | _🔵 Trivial_
+
+**Remove redundant local import.**
+
+`extract_corner_table` is already imported at line 10. The local import at line 70 is redundant.
+
+
+<details>
+<summary>♻️ Proposed fix</su...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+**Run `ruff format` to unblock CI.**
+
+`ruff format --check` is currently failing on this file; formatting must be applied before merge.
+
+
+
+<details>
+<summary>💡 Exampl...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Don't derive `apexSpeedKmh` from the entry/exit average.**
+
+`src/ac_copilot_trainer/modules/corner_analysis.lua` only gives you `entrySpeed`, `minSpeed`, and `exitS...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

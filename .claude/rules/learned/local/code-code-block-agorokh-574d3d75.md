@@ -1,0 +1,72 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+  - "scripts/**/*"
+  - "firmware/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 574d3d75a1eda83b
+mined_from: 30 review comments across 9 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: automation
+---
+
+# Code Code_Block Agorokh (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+# Verify current coercion path and absence/presence of finite-value guards/tes...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+# Verify lapTimeMs coercion behavior is currently unguarded and check test cov...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+# Verify whether boolean corner IDs are explicitly guarded before int conversi...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+set -e
+rg -n -C2 'writeSessionEnd|sidecarDebriefText|sidecar_debrief_last' src...
+
+## Suggested enforcement
+
+- Prefer lint/format or CI checks over manual review for this class of issue.

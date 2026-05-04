@@ -1,0 +1,33 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "scripts/**/*"
+  - "firmware/**/*"
+source: process-miner
+rule_fingerprint: 375d1b47d27a6ece
+mined_from: 6 review comments across 2 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: security
+preventability: guideline
+---
+
+# Audit Security Subprocess (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **security (python.lang.security.audit.dangerous-subprocess-use-audit):** Detected subprocess function 'run' without a static string. If this data can be controlled by a malicious actor, it may be an ...
+- **security (python.lang.security.audit.dangerous-subprocess-use-audit):** Detected subprocess function 'run' without a static string. If this data can be controlled by a malicious actor, it may be an ...
+- **security (python.lang.security.audit.dangerous-subprocess-use-audit):** Detected subprocess function 'check_output' without a static string. If this data can be controlled by a malicious actor, it m...
+- **security (python.lang.security.audit.dangerous-subprocess-use-audit):** Detected subprocess function 'call' without a static string. If this data can be controlled by a malicious actor, it may be an...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

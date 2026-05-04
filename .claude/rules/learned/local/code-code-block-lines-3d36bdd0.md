@@ -1,0 +1,48 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: 3d36bdd096b828ad
+mined_from: 4 review comments across 3 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: guideline
+---
+
+# Code Code_Block Lines (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _🧹 Nitpick_ | _🔵 Trivial_
+
+**Consider reusing `focusLabelMap()` to reduce duplication.**
+
+Lines 1000-1006 duplicate the logic in `focusLabelMap()` (lines 333-341). Since `focusPracticeActive` is alrea...
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+**Reset the active-suggestion state on session resets.**
+
+`fadeAlpha`, `fadeTarget`, and `lastHintText` live at module scope, so they survive track exits. Because `sc...
+- _⚠️ Potential issue_ | _🔴 Critical_
+
+**Restore the `hud.reset()` compatibility hook.**
+
+`src/ac_copilot_trainer/ac_copilot_trainer.lua`, Lines 586 and 604 still call `hud.reset()`. With no `M.reset` e...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+**Include `subState` in the dedupe key.**
+
+The current key collapses `ON PACE`→`APPROACHING` and `PREPARE TO BRAKE`→`BRAKE NOW` for the same corner because they all s...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

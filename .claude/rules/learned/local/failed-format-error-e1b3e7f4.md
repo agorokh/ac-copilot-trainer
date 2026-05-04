@@ -1,0 +1,56 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tests/**/*"
+source: process-miner
+rule_fingerprint: e1b3e7f4179c6fe4
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: automation
+---
+
+# Failed Format Error (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🟡 Minor_
+
+**Fix formatting to pass CI.**
+
+The pipeline reports that `ruff format --check` failed for this file. Run the formatter to fix:
+
+```shell
+python3 -m ruff format tests...
+- ## CI Feedback 🧐
+
+A test triggered by this PR failed. Here is an AI-generated analysis of the failure:
+
+<table><tr><td>
+
+**Action:** build</td></tr>
+<tr><td>
+
+**Failed stage:** [make ci-fast](https://...
+- ## CI Feedback 🧐
+
+A test triggered by this PR failed. Here is an AI-generated analysis of the failure:
+
+<table><tr><td>
+
+**Action:** build</td></tr>
+<tr><td>
+
+**Failed stage:** [make ci-fast](https://...
+
+## Suggested enforcement
+
+- Prefer lint/format or CI checks over manual review for this class of issue.

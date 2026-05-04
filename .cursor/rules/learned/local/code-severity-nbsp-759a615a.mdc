@@ -1,0 +1,53 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 759a615a5c9763cc
+mined_from: 4 review comments across 3 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Severity Nbsp (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Uncaught `http.client` exception crashes WebSocket handler
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+The `except` clause in `call_ollama_generate` catches `urllib.error.URLError`, `TimeoutE...
+- ### Reset clears process-alive flag without terminating child
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`M.reset()` sets `spawnedAlive = false` and `sidecarChildEverLaunched = false` even though t...
+- ### Config set of wsSidecarUrl silently drops ack
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+When an external client sends `config.set` with key `wsSidecarUrl`, `applyExternalConfigSet` calls `wsBr...
+- ### Generic config.set path silently skips persistence
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+The fall-through path in `applyExternalConfigSet` updates `config[key]` in memory but never pers...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

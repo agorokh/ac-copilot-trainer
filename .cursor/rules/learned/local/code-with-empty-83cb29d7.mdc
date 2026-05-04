@@ -1,0 +1,42 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "firmware/**/*"
+source: process-miner
+rule_fingerprint: 83cb29d78ffaeede
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code With Empty (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Empty-string error from sidecar produces blank toast
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+When parsing `setup.load.ack`, the dispatch passes `ok ? nullptr : error` where `error` is initia...
+- Addressed in this push (`fe5ee83`): `dispatch_phase2_message` now collapses an empty `error` C-string to `nullptr` before passing to `screen_pocket_technician_apply_load_ack`, so the screen-side `erro...
+- <!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+<!-- This is an auto-generated comment: skip review by coderabbit.ai -->
+
+> [!IMPORTANT]
+> ## Review skipped
+> 
+> Too many files!...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

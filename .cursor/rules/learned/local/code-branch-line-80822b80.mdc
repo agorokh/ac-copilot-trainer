@@ -1,0 +1,47 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "scripts/**/*"
+source: process-miner
+rule_fingerprint: 80822b803668befb
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: typecheck
+---
+
+# Code Branch Line (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Track length never captured due to userdata type guard
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`buildRecord` guards `sim.trackLengthM` access with `type(sim) == "table"`, but `ac.StateSim...
+- ### Vault branch not cleaned up on mid-flow failure
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+In `phase_vault`, if `git commit` (line 146), `git push` (line 147), or the `gh pr create`/`gh pr e...
+- ### Unhandled WS types now log warning spam
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+The newly added generic-dispatch `else` branch logs an `[COPILOT][WS-DIAG] unhandled request type` line for...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

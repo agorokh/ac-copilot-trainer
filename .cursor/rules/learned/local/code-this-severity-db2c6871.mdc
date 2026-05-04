@@ -1,0 +1,54 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "src/**/*"
+  - "tools/**/*"
+  - "firmware/**/*"
+source: process-miner
+rule_fingerprint: db2c68714dd1274c
+mined_from: 6 review comments across 4 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: test
+---
+
+# Code This Severity (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### Missing boolean guard in `_as_float` unlike `_positive_lap_time_ms`
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`_as_float` accepts Python booleans (`True` → `1.0`, `False` → `0.0`) because `boo...
+- ### Unused `COLOR_LABEL` variable is dead code
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`COLOR_LABEL` is declared on line 15 but never referenced anywhere in `hud.lua`. All other `COLOR_*` consta...
+- ### Several HUD fields computed every frame but never rendered
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+The diff removes all rendering of `vm.sectorMessage`, `vm.coastWarn`, `vm.tireLockupFlash`,...
+- ### `lastEmittedAt` variable is now dead code
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`lastEmittedAt` is declared and initialized to `-1e9` but never read or written to anywhere in the module af...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

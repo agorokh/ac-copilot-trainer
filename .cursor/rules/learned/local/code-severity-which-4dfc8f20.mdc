@@ -1,0 +1,54 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+  - "src/**/*"
+  - "scripts/**/*"
+source: process-miner
+rule_fingerprint: 4dfc8f2015784427
+mined_from: 6 review comments across 5 PRs
+last_updated: 2026-05-04
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: "gaming"
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: guideline
+---
+
+# Code Severity Which (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ### `_positive_lap_time_ms` misses `OverflowError` from infinity
+
+**Medium Severity**
+
+<!-- DESCRIPTION START -->
+`_positive_lap_time_ms` catches `(TypeError, ValueError)` but `int(float('inf'))` rais...
+- ### Fallback clock `monoClock` is never incremented
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+New debounce code uses `opts.simT or monoClock` as the time reference, but `monoClock` is initialized ...
+- ### `drawSidecarDebrief` is now dead code with no callers
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+The `drawSidecarDebrief` function in `coaching_overlay.lua` is now completely unused. Its only c...
+- ### Stats count includes entries that rotate would skip
+
+**Low Severity**
+
+<!-- DESCRIPTION START -->
+`stats()` sets `count = #list` without filtering by `type(list[i]) == "string"`, but `rotate()` gu...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
