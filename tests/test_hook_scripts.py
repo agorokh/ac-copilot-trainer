@@ -1000,3 +1000,380 @@ def test_hook_json_field_malformed_json_exits_zero() -> None:
     )
     assert r.returncode == 0
     assert "not valid JSON" in r.stderr
+
+
+# ---------------------------------------------------------------------------
+# hook_sql_ddl_guard.py — deterministic replacement for the SQL OPT-IN prompt
+# ---------------------------------------------------------------------------
+
+SQL_GUARD = SCRIPTS / "hook_sql_ddl_guard.py"
+
+
+def _run_sql_guard(payload: dict, *, env_extra: dict[str, str] | None = None) -> tuple[int, str]:
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    # Clean any inherited opt-in so each test asserts its own state.
+    env.pop("CLAUDE_SQL_DDL_GUARD", None)
+    if env_extra:
+        env.update(env_extra)
+    r = subprocess.run(
+        [sys.executable, str(SQL_GUARD)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=15,
+    )
+    return r.returncode, r.stderr
+
+
+def test_sql_guard_default_no_op_even_with_ddl() -> None:
+    """Template default is opt-in. No env var → always allow, regardless of content."""
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/src/models.sql",
+                "content": "CREATE TABLE users (id INT);",
+            }
+        }
+    )
+    assert rc == 0
+
+
+def test_sql_guard_opt_in_blocks_create_table_in_src() -> None:
+    rc, err = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/src/models.sql",
+                "content": "CREATE TABLE users (id INT);",
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 2
+    assert "SQL DDL" in err
+    assert "CREATE TABLE" in err.upper()
+
+
+@pytest.mark.parametrize(
+    ("snippet", "needle"),
+    [
+        ("TRUNCATE users;", "TRUNCATE"),
+        ("CREATE UNIQUE INDEX idx ON t (a);", "INDEX"),
+        ("CREATE DATABASE app;", "DATABASE"),
+        ("DROP DATABASE app;", "DATABASE"),
+        ("CREATE EXTERNAL TABLE t (a INT);", "EXTERNAL"),
+        ("CREATE OR REPLACE TABLE t (a INT);", "REPLACE"),
+        ("CREATE VIEW v AS SELECT 1;", "VIEW"),
+        ("CREATE OR REPLACE VIEW v AS SELECT 1;", "VIEW"),
+        ("DROP VIEW v;", "VIEW"),
+    ],
+)
+def test_sql_guard_opt_in_blocks_extended_ddl_shapes(snippet: str, needle: str) -> None:
+    rc, err = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/src/models.sql",
+                "content": snippet,
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 2
+    assert "BLOCK: SQL DDL" in err
+    assert needle.upper() in err.upper()
+
+
+def test_sql_guard_opt_in_allows_migrations_dir() -> None:
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/db/migrations/001_create_users.sql",
+                "content": "CREATE TABLE users (id INT);",
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 0
+
+
+def test_sql_guard_opt_in_allows_tests_path() -> None:
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/tests/test_db.py",
+                "content": "sql = 'CREATE TABLE t (id INT)'",
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 0
+
+
+def test_sql_guard_opt_in_allows_docs_md() -> None:
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/docs/schema.md",
+                "content": "```sql\nCREATE TABLE x (id INT);\n```",
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 0
+
+
+def test_sql_guard_opt_in_allows_no_ddl_content() -> None:
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/src/foo.py",
+                "content": "x = 1\n# select * from users\n",
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 0
+
+
+def test_sql_guard_opt_in_picks_up_edit_new_string() -> None:
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/src/dao.py",
+                "new_string": "ALTER TABLE accounts ADD COLUMN balance NUMERIC;",
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 2
+
+
+def test_sql_guard_opt_in_picks_up_multiedit_edits() -> None:
+    rc, _ = _run_sql_guard(
+        {
+            "tool_input": {
+                "file_path": "/repo/src/dao.py",
+                "edits": [
+                    {"new_string": "# harmless"},
+                    {"new_string": "DROP TABLE accounts;"},
+                ],
+            }
+        },
+        env_extra={"CLAUDE_SQL_DDL_GUARD": "1"},
+    )
+    assert rc == 2
+
+
+def test_sql_guard_malformed_json_fails_open() -> None:
+    r = subprocess.run(
+        [sys.executable, str(SQL_GUARD)],
+        input="not json",
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "CLAUDE_SQL_DDL_GUARD": "1", "LC_ALL": "C"},
+        timeout=15,
+    )
+    assert r.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# hook_stop_save_reminder.py — deterministic replacement for type:"agent" Stop
+# ---------------------------------------------------------------------------
+
+STOP_REMINDER = SCRIPTS / "hook_stop_save_reminder.py"
+
+
+def _run_stop_reminder(
+    cwd: Path, env_extra: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env["CLAUDE_PROJECT_DIR"] = str(cwd)
+    env.pop("CLAUDE_DISABLE_STOP_SAVE_REMINDER", None)
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, str(STOP_REMINDER)],
+        input="",
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=10,
+    )
+
+
+def test_stop_reminder_plain_when_no_marker(tmp_path: Path) -> None:
+    r = _run_stop_reminder(tmp_path)
+    assert r.returncode == 0
+    assert "SAVE reminder" in r.stdout
+    # Plain (no-marker) branch: must not surface the vault-dirty handoff line.
+    assert "Next Session Handoff.md" not in r.stdout
+
+
+def test_stop_reminder_vault_dirty_message_when_marker(tmp_path: Path) -> None:
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir()
+    (scratch / "vault-dirty").write_text("")
+    r = _run_stop_reminder(tmp_path)
+    assert r.returncode == 0
+    assert "vault-dirty" in r.stdout
+    assert "Next Session Handoff.md" in r.stdout
+    # Marker should be cleared after the hook surfaces the reminder.
+    assert not (scratch / "vault-dirty").exists()
+
+
+def test_stop_reminder_kill_switch_is_silent(tmp_path: Path) -> None:
+    r = _run_stop_reminder(tmp_path, env_extra={"CLAUDE_DISABLE_STOP_SAVE_REMINDER": "1"})
+    assert r.returncode == 0
+    assert r.stdout == ""
+
+
+def test_stop_reminder_kill_switch_clears_vault_dirty_marker(tmp_path: Path) -> None:
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir()
+    (scratch / "vault-dirty").write_text("")
+    r = _run_stop_reminder(tmp_path, env_extra={"CLAUDE_DISABLE_STOP_SAVE_REMINDER": "1"})
+    assert r.returncode == 0
+    assert r.stdout == ""
+    assert not (scratch / "vault-dirty").exists()
+
+
+def test_stop_reminder_kill_switch_drains_stdin(tmp_path: Path) -> None:
+    """Kill-switch must still consume stdin so the parent is not left blocked."""
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+    env["CLAUDE_DISABLE_STOP_SAVE_REMINDER"] = "1"
+    r = subprocess.run(
+        [sys.executable, str(STOP_REMINDER)],
+        input='{"hook": "payload"}\n',
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=10,
+    )
+    assert r.returncode == 0
+    assert r.stdout == ""
+
+
+def test_stop_reminder_argv_root_overrides_cwd(tmp_path: Path) -> None:
+    """Explicit argv[1] repo root matches the settings.base.json Stop wrapper."""
+    scratch = tmp_path / ".scratch"
+    scratch.mkdir()
+    (scratch / "vault-dirty").write_text("")
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    r = subprocess.run(
+        [sys.executable, str(STOP_REMINDER), str(tmp_path)],
+        cwd=str(nested),
+        input="",
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=10,
+    )
+    assert r.returncode == 0
+    assert "Next Session Handoff.md" in r.stdout
+    assert not (scratch / "vault-dirty").exists()
+
+
+def test_stop_reminder_always_exits_zero_even_on_garbage_stdin(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
+    r = subprocess.run(
+        [sys.executable, str(STOP_REMINDER)],
+        input="\x00\x01garbage",
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=10,
+    )
+    assert r.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Invariant: no LLM-bearing hook types anywhere in the merged template config
+# ---------------------------------------------------------------------------
+
+
+def _walk_hook_types(settings: dict) -> list[tuple[str, str, dict]]:
+    """Return [(event, matcher, hook), ...] for every hook defined in settings."""
+    out: list[tuple[str, str, dict]] = []
+    for event, groups in (settings.get("hooks") or {}).items():
+        for group in groups or []:
+            matcher = str(group.get("matcher", "*"))
+            for h in group.get("hooks", []) or []:
+                if isinstance(h, dict):
+                    out.append((event, matcher, h))
+    return out
+
+
+def test_invariant_no_prompt_or_agent_hooks_in_base() -> None:
+    """Issue #107: zero `type: "prompt"` and zero `type: "agent"` hooks in the
+    canonical template config. Both forms call an LLM in the hot path and have
+    been the source of brown-out / stall incidents documented in PR #91,
+    PR #95, PR #103, and this PR's changelog entry.
+
+    Children can locally re-enable prompt/agent hooks via `settings.local.json`
+    (and own the brown-out risk). The template stays deterministic.
+    """
+    base = REPO_ROOT / ".claude" / "settings.base.json"
+    data = json.loads(base.read_text(encoding="utf-8"))
+    offenders = [
+        f"{event}[{matcher}] -> {h.get('type')}: {str(h.get('prompt') or h.get('command'))[:80]}"
+        for event, matcher, h in _walk_hook_types(data)
+        if h.get("type") in ("prompt", "agent")
+    ]
+    assert not offenders, (
+        "settings.base.json contains LLM-bearing hooks; see issue #107.\n  - "
+        + "\n  - ".join(offenders)
+    )
+
+
+def test_invariant_no_prompt_or_agent_hooks_in_generated_settings() -> None:
+    """The committed `.claude/settings.json` (merge_settings.py output) must
+    also be free of LLM-bearing hooks. Belt-and-suspenders for repos that
+    inspect only the merged file."""
+    p = REPO_ROOT / ".claude" / "settings.json"
+    if not p.is_file():
+        pytest.skip(".claude/settings.json not present (generated artifact)")
+    data = json.loads(p.read_text(encoding="utf-8"))
+    offenders = [
+        f"{event}[{matcher}] -> {h.get('type')}"
+        for event, matcher, h in _walk_hook_types(data)
+        if h.get("type") in ("prompt", "agent")
+    ]
+    assert not offenders, (
+        "Generated settings.json contains LLM-bearing hooks. Re-run "
+        "`python3 scripts/merge_settings.py --no-local` after fixing base.\n  - "
+        + "\n  - ".join(offenders)
+    )
+
+
+def test_invariant_stop_hooks_are_command_only() -> None:
+    """Stop hooks specifically must be `type: "command"` (issue #107).
+
+    The 120s `type: "agent"` SAVE hook was an active brown-out source: under
+    upstream model outages the sub-agent itself hung, extending the
+    user-visible session-stop window. Replaced by hook_stop_save_reminder.py."""
+    base = REPO_ROOT / ".claude" / "settings.base.json"
+    data = json.loads(base.read_text(encoding="utf-8"))
+    offenders = [
+        f"Stop[{matcher}] -> {h.get('type')!r}"
+        for event, matcher, h in _walk_hook_types(data)
+        if event == "Stop" and h.get("type") != "command"
+    ]
+    assert not offenders, (
+        "Stop hooks must be type=command only (issue #107). Saw:\n  - " + "\n  - ".join(offenders)
+    )
