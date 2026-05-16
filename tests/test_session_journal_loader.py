@@ -75,6 +75,37 @@ def test_non_utf8_raises_encoding_parse_error(tmp_path: Path) -> None:
     assert exc_info.value.reason == "encoding"
 
 
+def test_json_error_byte_offset_is_utf8_not_char_index(tmp_path: Path) -> None:
+    path = tmp_path / "unicode.json"
+    # Euro sign is one character but three UTF-8 bytes before the truncated tail.
+    text = '{"note": "\u20ac", "broken": '
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(SessionJournalParseError) as exc_info:
+        load_export(path)
+
+    err = exc_info.value
+    char_pos = len(text)
+    assert err.byte_offset is not None
+    assert err.byte_offset == len(text[:char_pos].encode("utf-8"))
+    assert err.byte_offset > char_pos
+
+
+def test_ingest_loop_logs_oserror_and_continues(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(sample_valid_session_journal()), encoding="utf-8")
+    not_a_file = tmp_path / "subdir"
+    not_a_file.mkdir()
+
+    caplog.set_level(logging.ERROR)
+    loaded = ingest_exports([not_a_file, good])
+
+    assert len(loaded) == 1
+    assert any(r.exc_info is not None for r in caplog.records)
+
+
 def test_ingest_loop_logs_exception_and_continues(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

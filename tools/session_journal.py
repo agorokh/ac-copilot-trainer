@@ -61,6 +61,13 @@ def _snippet_around(text: str, offset: int, width: int = 200) -> str:
     return text[start:end]
 
 
+def _utf8_byte_offset(text: str, char_index: int) -> int:
+    """Map a decoded-string index to a UTF-8 byte offset."""
+    if char_index <= 0:
+        return 0
+    return len(text[:char_index].encode("utf-8"))
+
+
 # Lua `JSON.stringify` omits keys with nil values; `llm_debrief` is reserved (milestone 3d).
 REQUIRED_TOP_LEVEL_KEYS = frozenset(
     {
@@ -220,7 +227,7 @@ def load_export(path: str | Path) -> dict[str, Any]:
             export_path,
             reason="json",
             message=str(exc),
-            byte_offset=exc.pos,
+            byte_offset=_utf8_byte_offset(text, exc.pos),
             snippet=_snippet_around(text, exc.pos),
         ) from exc
 
@@ -233,7 +240,7 @@ def ingest_exports(paths: Iterable[str | Path]) -> list[dict[str, Any]]:
     for path in paths:
         try:
             loaded.append(load_export(path))
-        except (SessionJournalParseError, ValidationError, FileNotFoundError):
+        except (SessionJournalParseError, ValidationError, OSError):
             logger.exception("Failed to load session journal export: %s", path)
     return loaded
 
