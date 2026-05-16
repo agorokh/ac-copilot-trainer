@@ -494,6 +494,15 @@ static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
     float f = v.as<float>();
     return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
   }
+  // CSP / Lua may stringify small ints in some envelopes (issue #93).
+  if (v.is<const char*>()) {
+    const char* s = v.as<const char*>();
+    if (s && *s) {
+      char* end = nullptr;
+      long n = strtol(s, &end, 10);
+      if (end && end != s && *end == '\0') return (int32_t)n;
+    }
+  }
   return fallback;
 }
 
@@ -606,6 +615,7 @@ static void dispatch_phase2_message(const String& body) {
         }
       }
     }
+    screen_pocket_technician_finish_setup_list();
   } else if (strcmp(type, "setup.load.ack") == 0) {
     bool ok = doc["ok"] | false;
     const char* name  = doc["name"]  | "";

@@ -59,6 +59,8 @@ struct setup_row_t {
 
 setup_row_t g_setups[PT_MAX_SETUPS];
 int         g_setup_count = 0;
+// Parallel to g_setups[i] — chip label widget for row i (issue #93 refresh).
+lv_obj_t*   g_row_chip_labels[PT_MAX_SETUPS] = {};
 
 char g_car_id[32]    = {0};
 char g_car_name[64]  = {0};   // human-readable; empty falls back to g_car_id
@@ -197,6 +199,58 @@ void format_lap_ms(int32_t ms, char* out, size_t n) {
     snprintf(out, n, "%d:%02d.%03d", minutes, seconds, millis);
 }
 
+// Build the per-row chip line (BB / ABS / TC / wings). Shared by row create
+// and the post-list refresh path (issue #93).
+void format_setup_chips(const setup_row_t& s, char* chip_buf, size_t chip_len) {
+    chip_buf[0] = '\0';
+    char* q    = chip_buf;
+    size_t rem = chip_len;
+    auto append = [&](const char* fmt, int v) {
+        if (rem <= 1) return;
+        int n = snprintf(q, rem, fmt, v);
+        if (n < 0) return;
+        size_t w = (size_t)n;
+        if (w >= rem) w = rem - 1;
+        q += w;
+        rem -= w;
+    };
+    if (s.brake_bias >= 0) append("BB:%d  ", (int)s.brake_bias);
+    if (s.abs >= 0) append("ABS:%d  ", (int)s.abs);
+    if (s.tc >= 0) append("TC:%d  ", (int)s.tc);
+    if (s.wing_f >= 0 || s.wing_r >= 0) {
+        char wf[6], wr[6];
+        if (s.wing_f >= 0) snprintf(wf, sizeof(wf), "%d", (int)s.wing_f);
+        else snprintf(wf, sizeof(wf), "-");
+        if (s.wing_r >= 0) snprintf(wr, sizeof(wr), "%d", (int)s.wing_r);
+        else snprintf(wr, sizeof(wr), "-");
+        if (rem > 1) {
+            int n = snprintf(q, rem, "W:%s/%s", wf, wr);
+            if (n >= 0) {
+                size_t w = (size_t)n;
+                if (w >= rem) w = rem - 1;
+                q += w;
+                rem -= w;
+            }
+        }
+    }
+    if (chip_buf[0] == '\0') {
+        snprintf(chip_buf, chip_len, "%s", s.mtime_iso[0] ? s.mtime_iso : "");
+    }
+}
+
+void refresh_chip_label(int idx) {
+    if (idx < 0 || idx >= g_setup_count) return;
+    lv_obj_t* chips = g_row_chip_labels[idx];
+    if (!chips) return;
+    char chip_buf[64];
+    format_setup_chips(g_setups[idx], chip_buf, sizeof(chip_buf));
+    // Clear-then-set avoids LVGL skipping a repaint when only the BB digits
+    // change but the overall label width stays similar (issue #93).
+    lv_label_set_text(chips, "");
+    lv_label_set_text(chips, chip_buf);
+    lv_obj_invalidate(chips);
+}
+
 void on_back_clicked(lv_event_t*) {
     ui_nav_pop();
 }
@@ -303,47 +357,16 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     lv_obj_align(best_val, LV_ALIGN_TOP_RIGHT, -16, 0);
 
     // Row 2: setup summary chips (left) -- BB / ABS / TC / Wings front-rear.
-    // Compact single-line format keeps it readable in the 280-px row width.
-    // snprintf return may exceed qrem on truncation — clamp advances so qrem
-    // never goes negative (Cursor + codex on PR #91).
     char chip_buf[64];
-    chip_buf[0] = '\0';
-    char* q    = chip_buf;
-    size_t rem = sizeof(chip_buf);
-    auto append = [&](const char* fmt, int v) {
-        if (rem <= 1) return;
-        int n = snprintf(q, rem, fmt, v);
-        if (n < 0) return;
-        size_t w = (size_t)n;
-        if (w >= rem) w = rem - 1;
-        q += w;
-        rem -= w;
-    };
-    if (s.brake_bias >= 0) append("BB:%d  ", (int)s.brake_bias);
-    if (s.abs >= 0) append("ABS:%d  ", (int)s.abs);
-    if (s.tc >= 0) append("TC:%d  ", (int)s.tc);
-    if (s.wing_f >= 0 || s.wing_r >= 0) {
-        char wf[6], wr[6];
-        if (s.wing_f >= 0) snprintf(wf, sizeof(wf), "%d", (int)s.wing_f); else snprintf(wf, sizeof(wf), "-");
-        if (s.wing_r >= 0) snprintf(wr, sizeof(wr), "%d", (int)s.wing_r); else snprintf(wr, sizeof(wr), "-");
-        if (rem > 1) {
-            int n = snprintf(q, rem, "W:%s/%s", wf, wr);
-            if (n >= 0) {
-                size_t w = (size_t)n;
-                if (w >= rem) w = rem - 1;
-                q += w;
-                rem -= w;
-            }
-        }
-    }
-    if (chip_buf[0] == '\0') {
-        snprintf(chip_buf, sizeof(chip_buf), "%s", s.mtime_iso[0] ? s.mtime_iso : "");
-    }
+    format_setup_chips(s, chip_buf, sizeof(chip_buf));
     lv_obj_t* chips = lv_label_create(row);
     lv_label_set_text(chips, chip_buf);
     lv_obj_set_style_text_color(chips, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(chips, 1, LV_PART_MAIN);
     lv_obj_align(chips, LV_ALIGN_TOP_LEFT, 0, 26);
+    if (idx >= 0 && idx < PT_MAX_SETUPS) {
+        g_row_chip_labels[idx] = chips;
+    }
 
     lv_obj_t* chev = lv_label_create(row);
     lv_label_set_text(chev, ">");
@@ -358,6 +381,9 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     // Row widgets are about to be destroyed — drop any pending `setup.load`
     // correlation that still points at them (PR #91 review threads).
     pending_load_clear();
+    for (int i = 0; i < PT_MAX_SETUPS; ++i) {
+        g_row_chip_labels[i] = nullptr;
+    }
     // Clear existing children.
     lv_obj_clean(ctx->list_col);
     ctx->active_row_obj = nullptr;
@@ -601,6 +627,7 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
     if (!name || !*name) return;
     if (g_setup_count >= PT_MAX_SETUPS) return;
     setup_row_t* row = &g_setups[g_setup_count];
+    *row = setup_row_t{};
     strncpy(row->name, name, sizeof(row->name) - 1);
     row->name[sizeof(row->name) - 1] = 0;
     if (mtime_iso) {
@@ -635,6 +662,13 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
             g_active_ctx->placeholder_lbl = nullptr;
         }
         make_row(g_active_ctx->list_col, idx, *row);
+    }
+}
+
+extern "C" void screen_pocket_technician_finish_setup_list(void) {
+    if (!g_active_ctx) return;
+    for (int i = 0; i < g_setup_count; ++i) {
+        refresh_chip_label(i);
     }
 }
 

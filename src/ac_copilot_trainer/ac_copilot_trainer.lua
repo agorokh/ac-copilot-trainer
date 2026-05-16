@@ -455,16 +455,23 @@ if wsBridge.registerRequestHandler then
       pcall(function() sum = setupLibrary.summaryForSetup(entry.path) or {} end)
       local bkey = (type(entry.path) == "string" and entry.path ~= "") and entry.path
         or ("n:" .. tostring(name))
+      -- Round-trip chip fields as integers so the screen JSON parser never
+      -- drops BB on float/string shapes (issue #93).
+      local function chipInt(v)
+        local n = tonumber(v)
+        if n == nil then return nil end
+        return math.floor(n + 0.5)
+      end
       items[i] = {
         name = name,
         mtime_iso = mtimeIso,
         best_ms = bestCache[bkey],
         path = entry.path,
-        brake_bias = sum.brake_bias,
-        abs = sum.abs,
-        tc = sum.tc,
-        wing_f = sum.wing_f,
-        wing_r = sum.wing_r,
+        brake_bias = chipInt(sum.brake_bias),
+        abs = chipInt(sum.abs),
+        tc = chipInt(sum.tc),
+        wing_f = chipInt(sum.wing_f),
+        wing_r = chipInt(sum.wing_r),
       }
     end
     return {

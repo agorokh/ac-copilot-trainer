@@ -44,6 +44,11 @@ void screen_pocket_technician_add_setup(const char* name,
                                          const char* path,
                                          const pt_setup_summary_t* summary);
 
+// Called after the last `add_setup` in a `setup.list.result` batch so chip
+// labels are repainted from the row cache (issue #93 — LVGL can keep a stale
+// BB glyph when rows are appended during WS dispatch).
+void screen_pocket_technician_finish_setup_list(void);
+
 // Update the meta bar from `state.snapshot topic="setup.active"` or from
 // the `setup.list.result` envelope's car_*/track_* fields.
 //
