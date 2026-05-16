@@ -485,24 +485,35 @@ static void wifi_tick() {
 }
 
 #if PHASE1_FALLBACK == 0
-// JSON numeric helper shared by coaching + setup.list branches (Cursor
-// Bugbot: dedupe the two identical `numOr` lambdas in PR #91).
-static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
-  if (v.isNull()) return fallback;
-  if (v.is<int>()) return (int32_t)v.as<int>();
+// Shared int32 coercion for coaching + setup.list (int/float/stringified int).
+static bool phase2_json_try_int32(JsonVariantConst v, int32_t* out) {
+  if (v.isNull()) return false;
+  if (v.is<int>()) {
+    *out = (int32_t)v.as<int>();
+    return true;
+  }
   if (v.is<float>()) {
     float f = v.as<float>();
-    return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+    *out = (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+    return true;
   }
-  // CSP / Lua may stringify small ints in some envelopes (issue #93).
   if (v.is<const char*>()) {
     const char* s = v.as<const char*>();
-    if (s && *s) {
-      char* end = nullptr;
-      long n = strtol(s, &end, 10);
-      if (end && end != s && *end == '\0') return (int32_t)n;
+    if (!s || !*s) return false;
+    char* end = nullptr;
+    long n = strtol(s, &end, 10);
+    if (end && end != s && *end == '\0') {
+      *out = (int32_t)n;
+      return true;
     }
+    return false;
   }
+  return false;
+}
+
+static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
+  int32_t n = 0;
+  if (phase2_json_try_int32(v, &n)) return n;
   return fallback;
 }
 
@@ -511,18 +522,12 @@ static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
 static int32_t phase2_json_setup_chip(JsonVariantConst v,
                                       const char* field,
                                       const char* setup_name) {
+  int32_t n = 0;
+  if (phase2_json_try_int32(v, &n)) return n;
   if (v.isNull()) return -1;
-  if (v.is<int>()) return (int32_t)v.as<int>();
-  if (v.is<float>()) {
-    float f = v.as<float>();
-    return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
-  }
   if (v.is<const char*>()) {
     const char* s = v.as<const char*>();
     if (!s || !*s) return -1;
-    char* end = nullptr;
-    long n = strtol(s, &end, 10);
-    if (end && end != s && *end == '\0') return (int32_t)n;
     Serial.printf("[ws][pt] setup.list chip %s unparsable for '%s': %s\n",
                   field, setup_name ? setup_name : "?", s);
     return -1;
