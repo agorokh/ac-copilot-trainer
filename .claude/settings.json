@@ -93,17 +93,5 @@
         ]
       }
     ]
-  },
-  "permissions": {
-    "allow": [
-      "PowerShell(Get-NetFirewallProfile -Profile Private,Public,Domain)",
-      "Bash(gh api *)",
-      "Bash(gh pr *)"
-    ]
-  },
-  "enabledMcpjsonServers": [
-    "context7",
-    "github",
-    "repo-knowledge"
-  ]
+  }
 }
