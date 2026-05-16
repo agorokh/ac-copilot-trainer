@@ -49,6 +49,28 @@ def test_schema_invalid_propagates_validation_error(tmp_path: Path) -> None:
     assert any("missing keys" in e for e in exc_info.value.errors)
 
 
+def test_json_array_raises_validation_error_at_trust_boundary(tmp_path: Path) -> None:
+    path = tmp_path / "array.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+
+    with pytest.raises(ValidationError) as exc_info:
+        load_export(path)
+
+    assert exc_info.value.errors == ["root must be a JSON object"]
+
+
+def test_json_snippet_collapses_newlines(tmp_path: Path) -> None:
+    path = tmp_path / "multiline.json"
+    text = '{\n  "schema_version": 1,\n  "broken": '
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(SessionJournalParseError) as exc_info:
+        load_export(path)
+
+    assert exc_info.value.snippet is not None
+    assert "\n" not in exc_info.value.snippet
+
+
 def test_missing_path_propagates_file_not_found(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist.json"
     with pytest.raises(FileNotFoundError):
@@ -89,6 +111,20 @@ def test_json_error_byte_offset_is_utf8_not_char_index(tmp_path: Path) -> None:
     assert err.byte_offset is not None
     assert err.byte_offset == len(text[:char_pos].encode("utf-8"))
     assert err.byte_offset > char_pos
+
+
+def test_ingest_missing_file_logs_and_continues(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps(sample_valid_session_journal()), encoding="utf-8")
+    missing = tmp_path / "missing.json"
+
+    caplog.set_level(logging.ERROR)
+    loaded = ingest_exports([missing, good])
+
+    assert len(loaded) == 1
+    assert any(r.exc_info is not None for r in caplog.records)
 
 
 def test_ingest_loop_logs_oserror_and_continues(

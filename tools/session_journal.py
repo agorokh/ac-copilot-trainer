@@ -34,7 +34,14 @@ class ValidationError(ValueError):
 
 
 class SessionJournalParseError(Exception):
-    """Failed to read or parse a session journal export file."""
+    """Failed to read or parse a session journal export file.
+
+    ``byte_offset`` is always a byte index into the on-disk UTF-8 file when set.
+    JSON syntax errors map ``JSONDecodeError.pos`` (a decoded-string character
+    index) through ``_utf8_byte_offset`` before storing. ``snippet`` is always
+    sliced from the decoded string at the character index (newlines collapsed
+    for log-friendly single-line output).
+    """
 
     def __init__(
         self,
@@ -58,7 +65,8 @@ def _snippet_around(text: str, offset: int, width: int = 200) -> str:
     half = max(1, width // 2)
     start = max(0, offset - half)
     end = min(len(text), offset + half)
-    return text[start:end]
+    snippet = text[start:end]
+    return snippet.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
 
 
 def _utf8_byte_offset(text: str, char_index: int) -> int:
@@ -230,6 +238,9 @@ def load_export(path: str | Path) -> dict[str, Any]:
             byte_offset=_utf8_byte_offset(text, exc.pos),
             snippet=_snippet_around(text, exc.pos),
         ) from exc
+
+    if not isinstance(parsed, dict):
+        raise ValidationError(["root must be a JSON object"])
 
     return validate_export(parsed)
 
