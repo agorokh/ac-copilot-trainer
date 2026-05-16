@@ -2,10 +2,64 @@
 
 from __future__ import annotations
 
+import json
+import logging
+from collections.abc import Iterable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 JOURNAL_SCHEMA_VERSION = 1
+
+__all__ = [
+    "JOURNAL_SCHEMA_VERSION",
+    "SessionJournalParseError",
+    "ValidationError",
+    "ingest_exports",
+    "load_export",
+    "sample_valid_session_journal",
+    "validate_export",
+    "validate_session_journal",
+]
+
+
+class ValidationError(ValueError):
+    """Schema validation failed for a parsed session journal export."""
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
+class SessionJournalParseError(Exception):
+    """Failed to read or parse a session journal export file."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        reason: str,
+        message: str,
+        byte_offset: int | None = None,
+        snippet: str | None = None,
+    ) -> None:
+        self.path = Path(path)
+        self.reason = reason
+        self.byte_offset = byte_offset
+        self.snippet = snippet
+        super().__init__(message)
+
+
+def _snippet_around(text: str, offset: int, width: int = 200) -> str:
+    if offset < 0:
+        offset = 0
+    half = max(1, width // 2)
+    start = max(0, offset - half)
+    end = min(len(text), offset + half)
+    return text[start:end]
+
 
 # Lua `JSON.stringify` omits keys with nil values; `llm_debrief` is reserved (milestone 3d).
 REQUIRED_TOP_LEVEL_KEYS = frozenset(
@@ -127,6 +181,61 @@ def validate_session_journal(obj: Any) -> list[str]:
                     errors.append(f"coaching_hints_last[{i}] must be object or string")
 
     return errors
+
+
+def validate_export(obj: Any) -> dict[str, Any]:
+    """Validate a parsed export object; raise ValidationError if invalid."""
+    errors = validate_session_journal(obj)
+    if errors:
+        raise ValidationError(errors)
+    return obj
+
+
+def load_export(path: str | Path) -> dict[str, Any]:
+    """Load, parse, and validate a session journal export from disk."""
+    export_path = Path(path)
+    raw = export_path.read_bytes()
+
+    if not raw:
+        raise SessionJournalParseError(
+            export_path,
+            reason="empty file",
+            message="empty file",
+        )
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SessionJournalParseError(
+            export_path,
+            reason="encoding",
+            message=str(exc),
+            byte_offset=exc.start,
+        ) from exc
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SessionJournalParseError(
+            export_path,
+            reason="json",
+            message=str(exc),
+            byte_offset=exc.pos,
+            snippet=_snippet_around(text, exc.pos),
+        ) from exc
+
+    return validate_export(parsed)
+
+
+def ingest_exports(paths: Iterable[str | Path]) -> list[dict[str, Any]]:
+    """Load many exports; log failures and continue."""
+    loaded: list[dict[str, Any]] = []
+    for path in paths:
+        try:
+            loaded.append(load_export(path))
+        except (SessionJournalParseError, ValidationError, FileNotFoundError):
+            logger.exception("Failed to load session journal export: %s", path)
+    return loaded
 
 
 def sample_valid_session_journal() -> dict[str, Any]:
