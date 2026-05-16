@@ -39,9 +39,9 @@ def test_summary_for_setup_reads_front_bias(lua) -> None:
 
 def test_firmware_chip_refresh_path_present() -> None:
     """Issue #93: LVGL stale BB chip fix is clear-then-set + invalidate on stored labels."""
-    cpp = (
-        REPO / "firmware" / "screen" / "src" / "ui" / "screen_pocket_technician.cpp"
-    ).read_text(encoding="utf-8")
+    cpp = (REPO / "firmware" / "screen" / "src" / "ui" / "screen_pocket_technician.cpp").read_text(
+        encoding="utf-8"
+    )
     assert "g_row_chip_labels" in cpp
     assert "refresh_chip_label" in cpp
     assert 'lv_label_set_text(chips, "")' in cpp
