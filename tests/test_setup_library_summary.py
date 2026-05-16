@@ -37,6 +37,17 @@ def test_summary_for_setup_reads_front_bias(lua) -> None:
     assert summary["wing_r"] == 20
 
 
+def test_firmware_chip_refresh_path_present() -> None:
+    """Issue #93: LVGL stale BB chip fix is clear-then-set + invalidate on stored labels."""
+    cpp = (
+        REPO / "firmware" / "screen" / "src" / "ui" / "screen_pocket_technician.cpp"
+    ).read_text(encoding="utf-8")
+    assert "g_row_chip_labels" in cpp
+    assert "refresh_chip_label" in cpp
+    assert 'lv_label_set_text(chips, "")' in cpp
+    assert "lv_obj_invalidate(chips)" in cpp
+
+
 def test_chip_int_coercion_rounds_and_omits_invalid(lua) -> None:
     """chipInt helper used in setup.list matches issue #93 semantics."""
     out = lua.execute(

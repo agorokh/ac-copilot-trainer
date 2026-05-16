@@ -14,6 +14,7 @@
 // transition through `app_state_set(APP_CONNECTED|APP_DISCONNECTED)`.
 
 #include <Arduino.h>
+#include <climits>
 #include <WiFi.h>
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
@@ -485,6 +486,12 @@ static void wifi_tick() {
 }
 
 #if PHASE1_FALLBACK == 0
+static int32_t phase2_json_clamp_long(long n) {
+  if (n > (long)INT32_MAX) return INT32_MAX;
+  if (n < (long)INT32_MIN) return INT32_MIN;
+  return (int32_t)n;
+}
+
 // Shared int32 coercion for coaching + setup.list (int/float/stringified int).
 static bool phase2_json_try_int32(JsonVariantConst v, int32_t* out) {
   if (v.isNull()) return false;
@@ -503,7 +510,7 @@ static bool phase2_json_try_int32(JsonVariantConst v, int32_t* out) {
     char* end = nullptr;
     long n = strtol(s, &end, 10);
     if (end && end != s && *end == '\0') {
-      *out = (int32_t)n;
+      *out = phase2_json_clamp_long(n);
       return true;
     }
     return false;
