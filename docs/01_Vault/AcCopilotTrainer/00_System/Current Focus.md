@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-04-29T17:15:00Z
+last_updated: 2026-05-16T23:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -19,6 +19,8 @@ relates_to:
 **Repo:** ac-copilot-trainer.
 
 ## Stream A — Rig screen Phase-2 UI (PR #91 merged — Parts A–D on `main`)
+
+**Infra (2026-05-16):** PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) landed template-2026.05 deterministic Claude hooks on `main` (`5d3019e`) — does not change device/UI scope; removes LLM-bearing Stop/PreToolUse hooks that caused session stalls.
 
 **Status:** PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** `2026-04-29T17:02:22Z` as squash commit `[35d770c](https://github.com/agorokh/ac-copilot-trainer/commit/35d770c7e51da021133488809d4c5dbd254e0195)` on `main` (LVGL 8.3 portrait UI, launcher, AC Copilot mirror + `coaching.snapshot`, Pocket Technician + `setup.list` / `setup.load`, trainer Lua/sidecar protocol, lap-archive path alignment, Windows `ar` batching). Device bring-up catalogue: `[screen-end-to-end-bringup-2026-04-26](../03_Investigations/screen-end-to-end-bringup-2026-04-26.md)`.
 

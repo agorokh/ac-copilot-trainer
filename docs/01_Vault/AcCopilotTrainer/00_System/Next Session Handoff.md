@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-04-29T17:20:00Z
+last_updated: 2026-05-16T23:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,7 +25,25 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-04-29 — PR #91 merged to `main`)
+## Resume here (2026-05-16 — PR #96 merged to `main`)
+
+PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) **MERGED** `2026-05-16T22:55:03Z` as squash [`5d3019e`](https://github.com/agorokh/ac-copilot-trainer/commit/5d3019e56db0e35e7816699eecc6b664937e1c93). **template-2026.05 deterministic hooks** are on `main`: zero `type: "prompt"` / `type: "agent"` in `.claude/settings.base.json`; replacements `hook_sql_ddl_guard.py`, `hook_stop_save_reminder.py`, `hook_post_bash_failure_hint.py`; CI invariants in `tests/test_hook_scripts.py`. Closes upstream [template-repo#107](https://github.com/agorokh/template-repo/issues/107).
+
+Post-merge: `scripts/post_merge_classify.py --pr 96` flagged **`scripts/`** — review new hook scripts; no migration/env/deps.
+
+**Operator notes after this merge:**
+
+1. Regenerate committed `.claude/settings.json` with `python scripts/merge_settings.py --no-local` whenever `settings.base.json` changes (never merge local `permissions` / MCP overlay into commits).
+2. Optional: `CLAUDE_SQL_DDL_GUARD=1` enables DDL guard; `CLAUDE_DISABLE_STOP_SAVE_REMINDER=1` silences Stop SAVE stdout.
+3. PostToolUse Edit|Write ruff/pre-commit hooks were removed (template PR #101) — rely on commit-time pre-commit only.
+
+**Active product focus unchanged** — rig screen EPIC #86 remainder (Parts E–F, sidecar bind, fonts). See **PR #91** section below and `Current Focus.md` Stream A.
+
+Continue from **`main`** @ `5d3019e` or newer.
+
+---
+
+## What was delivered (PR #91 — 2026-04-29)
 
 PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** `2026-04-29T17:02:22Z` as squash [`35d770c`](https://github.com/agorokh/ac-copilot-trainer/commit/35d770c7e51da021133488809d4c5dbd254e0195). **Issue #86 Parts A–D** (LVGL launcher, AC Copilot mirror, Pocket Technician + trainer/sidecar) are on `main`. Post-merge steward: `scripts/post_merge_classify.py --pr 91` reported **no** migration/env/deps/script flags.
 
@@ -40,9 +58,9 @@ PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** `2026
 
 **Hotspot pitfall:** disable Windows Mobile Hotspot power-saving when AC runs (see [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md)).
 
-### Branch + PR state
+### Branch + PR state (PR #91)
 
-Feature branch `feat/issue-86-rig-screen-phase2-launcher-and-apps` was deleted locally after merge (remote may still exist briefly). Continue from **`main`** @ `35d770c` or newer.
+Feature branch `feat/issue-86-rig-screen-phase2-launcher-and-apps` was deleted locally after merge. Superseded by **`main`** @ `5d3019e` (includes PR #96 hook stack).
 
 ---
 
