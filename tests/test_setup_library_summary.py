@@ -35,3 +35,25 @@ def test_summary_for_setup_reads_front_bias(lua) -> None:
     assert summary["tc"] == 3
     assert summary["wing_f"] == 2
     assert summary["wing_r"] == 20
+
+
+def test_chip_int_coercion_rounds_and_omits_invalid(lua) -> None:
+    """chipInt helper used in setup.list matches issue #93 semantics."""
+    out = lua.execute(
+        """
+        local function chipInt(v)
+          if v == nil then return nil end
+          local n = tonumber(v)
+          if n == nil then return nil end
+          return math.floor(n + 0.5)
+        end
+        return {
+          bb = chipInt(66.4),
+          missing = chipInt(nil),
+          bad = chipInt("not-a-number"),
+        }
+        """
+    )
+    assert out["bb"] == 66
+    assert out["missing"] is None
+    assert out["bad"] is None

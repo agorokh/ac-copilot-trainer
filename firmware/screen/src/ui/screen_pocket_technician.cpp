@@ -241,7 +241,10 @@ void format_setup_chips(const setup_row_t& s, char* chip_buf, size_t chip_len) {
 void refresh_chip_label(int idx) {
     if (idx < 0 || idx >= g_setup_count) return;
     lv_obj_t* chips = g_row_chip_labels[idx];
-    if (!chips) return;
+    if (!chips || !lv_obj_is_valid(chips)) {
+        g_row_chip_labels[idx] = nullptr;
+        return;
+    }
     char chip_buf[64];
     format_setup_chips(g_setups[idx], chip_buf, sizeof(chip_buf));
     // Clear-then-set avoids LVGL skipping a repaint when only the BB digits
@@ -469,6 +472,9 @@ void on_screen_delete(lv_event_t* e) {
     pending_load_clear();
     g_req_head = 0;
     g_req_tail = 0;
+    for (int i = 0; i < PT_MAX_SETUPS; ++i) {
+        g_row_chip_labels[i] = nullptr;
+    }
 }
 
 }  // namespace

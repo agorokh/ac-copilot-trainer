@@ -458,6 +458,7 @@ if wsBridge.registerRequestHandler then
       -- Round-trip chip fields as integers so the screen JSON parser never
       -- drops BB on float/string shapes (issue #93).
       local function chipInt(v)
+        if v == nil then return nil end
         local n = tonumber(v)
         if n == nil then return nil end
         return math.floor(n + 0.5)
