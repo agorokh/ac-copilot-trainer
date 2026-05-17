@@ -46,6 +46,8 @@ def test_firmware_chip_refresh_path_present() -> None:
     assert "refresh_chip_label" in cpp
     assert 'lv_label_set_text(chips, "")' in cpp
     assert "lv_obj_invalidate(chips)" in cpp
+    assert "lv_obj_is_valid(chips)" in cpp
+    assert "g_row_chip_labels[i] = nullptr" in cpp
 
 
 def test_chip_int_coercion_rounds_and_omits_invalid(lua) -> None:
