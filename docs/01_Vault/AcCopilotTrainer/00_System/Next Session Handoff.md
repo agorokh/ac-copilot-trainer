@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-05-16T23:00:00Z
+last_updated: 2026-05-17T00:40:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,21 +25,22 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-05-16 — PR #96 merged to `main`)
+## Resume here (2026-05-17 — PRs #99 and #100 on `main`)
 
-PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) **MERGED** `2026-05-16T22:55:03Z` as squash [`5d3019e`](https://github.com/agorokh/ac-copilot-trainer/commit/5d3019e56db0e35e7816699eecc6b664937e1c93). **template-2026.05 deterministic hooks** are on `main`: zero `type: "prompt"` / `type: "agent"` in `.claude/settings.base.json`; replacements `hook_sql_ddl_guard.py`, `hook_stop_save_reminder.py`, `hook_post_bash_failure_hint.py`; CI invariants in `tests/test_hook_scripts.py`. Closes upstream [template-repo#107](https://github.com/agorokh/template-repo/issues/107).
+Continue from **`main`** @ [`ac810c0`](https://github.com/agorokh/ac-copilot-trainer/commit/ac810c0fcf51352895c66f81cc1a75d3cb0d660a) or newer.
 
-Post-merge: `scripts/post_merge_classify.py --pr 96` flagged **`scripts/`** — review new hook scripts; no migration/env/deps.
+**Latest merges (same session):**
 
-**Operator notes after this merge:**
+| PR | Merged | Squash | Issue |
+|----|--------|--------|-------|
+| [#99](https://github.com/agorokh/ac-copilot-trainer/pull/99) | `2026-05-17T00:33:44Z` | [`ebdef7e`](https://github.com/agorokh/ac-copilot-trainer/commit/ebdef7e8d3a1ed388e914f217fc393b600162e31) | [#97](https://github.com/agorokh/ac-copilot-trainer/issues/97) session-journal loader hardening |
+| [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) | `2026-05-17T00:34:09Z` | [`ac810c0`](https://github.com/agorokh/ac-copilot-trainer/commit/ac810c0fcf51352895c66f81cc1a75d3cb0d660a) | [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93) PT row BB chip stale on setup switch |
 
-1. Regenerate committed `.claude/settings.json` with `python scripts/merge_settings.py --no-local` whenever `settings.base.json` changes (never merge local `permissions` / MCP overlay into commits).
-2. Optional: `CLAUDE_SQL_DDL_GUARD=1` enables DDL guard; `CLAUDE_DISABLE_STOP_SAVE_REMINDER=1` silences Stop SAVE stdout.
-3. PostToolUse Edit|Write ruff/pre-commit hooks were removed (template PR #101) — rely on commit-time pre-commit only.
+Post-merge classification: **`post_merge_classify.py --pr 99`** and **`--pr 100`** — no migration / env / deps / script flags.
 
-**Active product focus unchanged** — rig screen EPIC #86 remainder (Parts E–F, sidecar bind, fonts). See **PR #91** section below and `Current Focus.md` Stream A.
+**What remains (rig screen EPIC #86):** Parts E–F, `start_sidecar.bat` external-bind + token, Part A4 `lv_font_conv` fonts, on-device confirmation of PT chip refresh after list batches. BB chip staleness fix is **shipped** in #100 (LVGL clear-then-set + invalidate, Lua `chipInt`, firmware `phase2_json_try_int32`); optional human rig smoke still valuable.
 
-Continue from **`main`** @ `5d3019e` or newer.
+**Prior infra (still on `main`):** PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) template-2026.05 deterministic hooks (`5d3019e`). Operator notes: regenerate `.claude/settings.json` via `python scripts/merge_settings.py --no-local` when `settings.base.json` changes; commit-time pre-commit only (no PostToolUse ruff hooks).
 
 ---
 
@@ -52,15 +53,16 @@ PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** `2026
 **Open follow-ups** (next PRs / issue #86 E–F):
 
 1. **`start_sidecar.bat` loopback-only** — rig screen needs `--external-bind 0.0.0.0` + token path (see bring-up doc).
-2. **BB chip stale on some PT rows** — FW-side; trainer sends correct values.
-3. **Part A4 fonts** — run `lv_font_conv` for bundled TTFs; until then Montserrat 14 ASCII only.
-4. **Part E / Part F** per EPIC #86 (Setup Exchange, polish/SPIFFS/debug).
+2. **Part A4 fonts** — run `lv_font_conv` for bundled TTFs; until then Montserrat 14 ASCII only.
+3. **Part E / Part F** per EPIC #86 (Setup Exchange, polish/SPIFFS/debug).
+
+**Delivered 2026-05-17 — PR #100 / issue #93:** PT row BB chips refresh after `setup.list` via `refresh_chip_label()` (clear-then-set + `lv_obj_invalidate`), integer chip JSON from Lua, shared firmware JSON int parser; tests in `tests/test_setup_library_summary.py`.
 
 **Hotspot pitfall:** disable Windows Mobile Hotspot power-saving when AC runs (see [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md)).
 
 ### Branch + PR state (PR #91)
 
-Feature branch `feat/issue-86-rig-screen-phase2-launcher-and-apps` was deleted locally after merge. Superseded by **`main`** @ `5d3019e` (includes PR #96 hook stack).
+Feature branch `feat/issue-86-rig-screen-phase2-launcher-and-apps` was deleted locally after merge. Superseded by **`main`** @ `ac810c0` (includes PRs #96–#100).
 
 ---
 
