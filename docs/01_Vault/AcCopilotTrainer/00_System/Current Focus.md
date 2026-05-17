@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-05-16T23:00:00Z
+last_updated: 2026-05-17T00:40:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -33,7 +33,7 @@ PR #83 (WS + Lua bridge) **MERGED 2026-04-22** at `caa8a9ad` — still the found
 - **Part E** — Setup Exchange (`se_proxy.py`, SPIFFS LRU) per issue.
 - **Part F** — SPIFFS persistence, telemetry backpressure, debug screen, token runbook.
 - **Part A4** — `lv_font_conv` for bundled faces (screens still default to built-in Montserrat until converted).
-- **Polish / bugs** — `start_sidecar.bat` external-bind + token, BB chip staleness on some PT rows (see handoff).
+- **Polish / bugs** — `start_sidecar.bat` external-bind + token; PT BB chip refresh landed in PR [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) (optional on-device smoke).
 
 **Live-dev:** Hotspot + sidecar path per `[glossary/rig-network.md](../glossary/rig-network.md)`. Firmware: `python -m platformio run -e jc3248w535` under `firmware/screen/` (CI does not build firmware).
 
@@ -61,6 +61,8 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-05-17** — PR [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) **MERGED** at `ac810c0` — PT row BB chip refresh (LVGL + Lua `chipInt` + firmware JSON int path); closes [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93).
+- **2026-05-17** — PR [#99](https://github.com/agorokh/ac-copilot-trainer/pull/99) **MERGED** at `ebdef7e` — `tools/session_journal.py` loader hardening + tests; closes [#97](https://github.com/agorokh/ac-copilot-trainer/issues/97).
 - **2026-04-29** — PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** at `35d770c` — Phase-2 LVGL rig screen Parts A–D (launcher, AC Copilot mirror, Pocket Technician, trainer/sidecar plumbing).
 - **2026-04-25** — PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) development: Part A + B through full Parts C+D bring-up (pre-merge branch work).
 - **2026-04-25** — PR [#89](https://github.com/agorokh/ac-copilot-trainer/pull/89) `.gitattributes *.sh/*.bash eol=lf` **MERGED** at `a55a0ed`. Hotfix for the Windows CRLF hook misfire from PR #87. Same item is queued upstream as part of `[agorokh/template-repo#97](https://github.com/agorokh/template-repo/issues/97)`.
