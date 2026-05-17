@@ -14,6 +14,7 @@
 // transition through `app_state_set(APP_CONNECTED|APP_DISCONNECTED)`.
 
 #include <Arduino.h>
+#include <climits>
 #include <WiFi.h>
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
@@ -485,16 +486,62 @@ static void wifi_tick() {
 }
 
 #if PHASE1_FALLBACK == 0
-// JSON numeric helper shared by coaching + setup.list branches (Cursor
-// Bugbot: dedupe the two identical `numOr` lambdas in PR #91).
-static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
-  if (v.isNull()) return fallback;
-  if (v.is<int>()) return (int32_t)v.as<int>();
+static int32_t phase2_json_clamp_long(long n) {
+  if (n > (long)INT32_MAX) return INT32_MAX;
+  if (n < (long)INT32_MIN) return INT32_MIN;
+  return (int32_t)n;
+}
+
+// Shared int32 coercion for coaching + setup.list (int/float/stringified int).
+static bool phase2_json_try_int32(JsonVariantConst v, int32_t* out) {
+  if (v.isNull()) return false;
+  if (v.is<int>()) {
+    *out = (int32_t)v.as<int>();
+    return true;
+  }
   if (v.is<float>()) {
     float f = v.as<float>();
-    return (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+    *out = (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
+    return true;
   }
+  if (v.is<const char*>()) {
+    const char* s = v.as<const char*>();
+    if (!s || !*s) return false;
+    char* end = nullptr;
+    long n = strtol(s, &end, 10);
+    if (end && end != s && *end == '\0') {
+      *out = phase2_json_clamp_long(n);
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
+  int32_t n = 0;
+  if (phase2_json_try_int32(v, &n)) return n;
   return fallback;
+}
+
+// setup.list chip fields: missing/null -> -1 (omit chip). Present but
+// unparsable -> log and -1 (issue #93 — avoid silent fallback).
+static int32_t phase2_json_setup_chip(JsonVariantConst v,
+                                      const char* field,
+                                      const char* setup_name) {
+  int32_t n = 0;
+  if (phase2_json_try_int32(v, &n)) return n;
+  if (v.isNull()) return -1;
+  if (v.is<const char*>()) {
+    const char* s = v.as<const char*>();
+    if (!s || !*s) return -1;
+    Serial.printf("[ws][pt] setup.list chip %s unparsable for '%s': %s\n",
+                  field, setup_name ? setup_name : "?", s);
+    return -1;
+  }
+  Serial.printf("[ws][pt] setup.list chip %s unexpected JSON type for '%s'\n",
+                field, setup_name ? setup_name : "?");
+  return -1;
 }
 
 // Issue #86 Parts C/D: dispatch per-message-type. `state.snapshot` carries
@@ -595,17 +642,18 @@ static void dispatch_phase2_message(const String& body) {
           // and rounded half-up. Missing fields default to -1 (=== unknown).
           int32_t best_ms = phase2_json_num_or(entry["best_ms"], -1);
           pt_setup_summary_t sum;
-          sum.brake_bias = phase2_json_num_or(entry["brake_bias"], -1);
-          sum.abs        = phase2_json_num_or(entry["abs"],        -1);
-          sum.tc         = phase2_json_num_or(entry["tc"],         -1);
-          sum.wing_f     = phase2_json_num_or(entry["wing_f"],     -1);
-          sum.wing_r     = phase2_json_num_or(entry["wing_r"],     -1);
+          sum.brake_bias = phase2_json_setup_chip(entry["brake_bias"], "brake_bias", name);
+          sum.abs        = phase2_json_setup_chip(entry["abs"], "abs", name);
+          sum.tc         = phase2_json_setup_chip(entry["tc"], "tc", name);
+          sum.wing_f     = phase2_json_setup_chip(entry["wing_f"], "wing_f", name);
+          sum.wing_r     = phase2_json_setup_chip(entry["wing_r"], "wing_r", name);
           screen_pocket_technician_add_setup(name, mtime_iso, best_ms,
                                               *path ? path : nullptr,
                                               &sum);
         }
       }
     }
+    screen_pocket_technician_finish_setup_list();
   } else if (strcmp(type, "setup.load.ack") == 0) {
     bool ok = doc["ok"] | false;
     const char* name  = doc["name"]  | "";
