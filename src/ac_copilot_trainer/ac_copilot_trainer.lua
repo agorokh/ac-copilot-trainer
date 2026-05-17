@@ -452,7 +452,14 @@ if wsBridge.registerRequestHandler then
       -- requested. With per-track filter capping at <50 setups in a busy
       -- session this is well under a frame budget.
       local sum = {}
-      pcall(function() sum = setupLibrary.summaryForSetup(entry.path) or {} end)
+      local okSum, sumOrErr = pcall(setupLibrary.summaryForSetup, entry.path)
+      if okSum and type(sumOrErr) == "table" then
+        sum = sumOrErr
+      elseif ac and type(ac.log) == "function" then
+        local detail = okSum and "non-table return" or tostring(sumOrErr)
+        ac.log("[COPILOT][setup.list] summaryForSetup failed for "
+          .. tostring(entry.path) .. ": " .. detail)
+      end
       local bkey = (type(entry.path) == "string" and entry.path ~= "") and entry.path
         or ("n:" .. tostring(name))
       -- Round-trip chip fields as integers so the screen JSON parser never
