@@ -11,9 +11,12 @@ agents (and ``propagation_health_check.py``) make:
   ``secrets-from-doppler.md``.
 
 The vault uses ``ProjectTemplate`` as the placeholder project key; child
-repos rename this folder at bootstrap. Tests target the template path
-directly — they intentionally do not follow the rename, because the template
-repo is the one that ships ``ProjectTemplate``.
+repos rename this folder at bootstrap (e.g. ``AgentFactory``, ``DialSandbox``).
+This test resolves the invariants directory by globbing
+``docs/01_Vault/*/00_System/invariants/`` so the same test file remains
+runnable in both the template repo and its renamed children — see
+[agorokh/agent-factory#169](https://github.com/agorokh/agent-factory/issues/169)
+for the fleet-rollout context that surfaced the hard-coded path.
 """
 
 from __future__ import annotations
@@ -23,8 +26,33 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INVARIANTS_DIR = REPO_ROOT / "docs" / "01_Vault" / "ProjectTemplate" / "00_System" / "invariants"
+VAULT_ROOT = REPO_ROOT / "docs" / "01_Vault"
+
+
+def _resolve_invariants_dir() -> Path:
+    """Find the single ``<ProjectKey>/00_System/invariants/`` under the vault.
+
+    Globs ``docs/01_Vault/*/00_System/invariants/`` and returns the unique
+    match. Fails loudly if zero or multiple matches — children should rename
+    ``ProjectTemplate`` to a single project key at bootstrap, never fan out.
+    """
+    candidates = sorted(VAULT_ROOT.glob("*/00_System/invariants"))
+    candidates = [p for p in candidates if p.is_dir()]
+    if not candidates:
+        # Fall back to the template default so the failure message points at
+        # the expected path rather than an opaque "list is empty".
+        return VAULT_ROOT / "ProjectTemplate" / "00_System" / "invariants"
+    if len(candidates) > 1:
+        raise AssertionError(
+            f"expected one vault project under {VAULT_ROOT}, found "
+            f"{[p.relative_to(VAULT_ROOT) for p in candidates]}"
+        )
+    return candidates[0]
+
+
+INVARIANTS_DIR = _resolve_invariants_dir()
 INDEX = INVARIANTS_DIR / "_index.md"
+PROJECT_KEY = INVARIANTS_DIR.relative_to(VAULT_ROOT).parts[0]
 
 REQUIRED_INVARIANTS = {
     "entrypoint.md",
@@ -92,8 +120,10 @@ def test_index_lists_all_invariants() -> None:
 def test_index_relates_to_includes_new_invariants() -> None:
     """Issue #115 invariants must be in the index's relates_to (graph edges)."""
     index_text = INDEX.read_text(encoding="utf-8")
-    assert "ProjectTemplate/00_System/invariants/memory-three-tiers.md" in index_text
-    assert "ProjectTemplate/00_System/invariants/secrets-from-doppler.md" in index_text
+    # Use the resolved project key so renamed children (AgentFactory,
+    # DialSandbox, ...) pass without per-child patches.
+    assert f"{PROJECT_KEY}/00_System/invariants/memory-three-tiers.md" in index_text
+    assert f"{PROJECT_KEY}/00_System/invariants/secrets-from-doppler.md" in index_text
 
 
 def test_claude_md_carries_auto_memory_override() -> None:
