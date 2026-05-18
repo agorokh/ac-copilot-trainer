@@ -190,7 +190,7 @@ _BASH_INDIRECT_EXEC_RE = re.compile(
     """,
     re.VERBOSE | re.IGNORECASE,
 )
-_BASH_SYNTHETIC_CODE_PATH = "scripts/.bash_memory_gate_edit"
+_BASH_SYNTHETIC_CODE_PATH = "scripts/bash_memory_gate_edit"
 
 _DEFAULT_TTL_SECONDS = 1800  # 30 minutes
 _LOCK_NAME = ".last_memory_query"
@@ -337,8 +337,11 @@ def _file_tokens(rel_path: str) -> list[str]:
     # like `.github/` since they are semantically substantive.
     parts = rel_path.split("/")
     if parts and "." in parts[-1]:
-        # Drop the file extension: `gate.py` → `gate`.
-        parts[-1] = parts[-1].rsplit(".", 1)[0]
+        base = parts[-1]
+        # Leading-dot basenames (``.bash_edit``) are not ``name.ext``.
+        if not (base.startswith(".") and base.count(".") == 1):
+            # Drop the file extension: `gate.py` → `gate`.
+            parts[-1] = base.rsplit(".", 1)[0]
     out: list[str] = []
     for segment in parts:
         for tok in _TOKEN_SPLIT_RE.split(segment):

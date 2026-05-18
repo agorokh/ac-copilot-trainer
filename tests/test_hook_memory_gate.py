@@ -378,6 +378,21 @@ def test_bash_non_file_edit_allowed(fake_repo: Path) -> None:
 # -------------------------------------------------------------------------
 
 
+def test_bash_indirect_exec_irrelevant_body_still_blocked(fake_repo: Path) -> None:
+    """Indirect-exec synthetic path must not pass on generic ``scripts`` spam."""
+    _write_lock(
+        fake_repo,
+        age_s=60,
+        response_body="vault handoff and session lifecycle notes only",
+    )
+    rc, _, stderr = _run(
+        {"tool_name": "Bash", "tool_input": {"command": "python3 -c 'print(1)'"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+    assert "token overlap" in stderr or "relevant" in stderr.lower()
+
+
 def test_bash_python_dash_c_blocked(fake_repo: Path) -> None:
     """`python -c "..."` is an arbitrary code-write surface → gate fires."""
     rc, _, stderr = _run(
