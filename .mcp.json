@@ -2,7 +2,10 @@
   "mcpServers": {
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     },
     "github": {
       "command": "docker",
@@ -17,10 +20,19 @@
     },
     "repo-knowledge": {
       "command": "python",
-      "args": ["-m", "tools.repo_knowledge.mcp_server"],
+      "args": [
+        "-m",
+        "tools.repo_knowledge.mcp_server"
+      ],
       "env": {
         "REPO_KNOWLEDGE_DB": ".cache/repo_knowledge/knowledge.db"
       }
+    },
+    "agentic-memory": {
+      "command": "bash",
+      "args": [
+        "scripts/mcp/agentic-memory.sh"
+      ]
     }
   }
 }

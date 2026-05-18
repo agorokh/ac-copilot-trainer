@@ -14,9 +14,29 @@ memory: project
 
 **This agent owns** the only detailed procedure for **`sleep 600`**, **GraphQL `reviewThreads`**, and **check polling**. Other agents must **link here**, not copy those steps.
 
+## Tier-3 Substrate Query (mandatory first step)
+
+**Before entering the CI/review loop**, query the semantic substrate for prior bot-resolution patterns and PR history on the touched modules. The loop's value depends on having prior PR-resolution context **before** the first `gh pr view` — otherwise the agent treats each bot comment cold and re-discovers resolutions that already happened in previous PRs.
+
+**Template** (starting point — refine after the first response):
+
+```
+mcp__agentic-memory__query_knowledge_graph(
+    prompt="PR #<P> review patterns | prior bot resolutions for <module> | CI failure history | invariant violations flagged in prior PRs",
+    workspace="<resolved from ops/memory_manifest.yml by repo basename>",
+    limit=80,
+)
+```
+
+**Refinement** (encouraged): after the first `gh pr view`, follow up with queries naming the specific bot whose threads are open (CodeRabbit, Gemini, Qodo, Sourcery, Copilot, Cursor Bugbot) — prior resolution patterns differ per reviewer.
+
+**Workspace resolution**: read `ops/memory_manifest.yml`; match the workspace whose `name` matches this repo's basename. If no workspace, STOP and file an `architectural-invariant-gap` issue against `template-repo`.
+
+**Surfacing**: include the substrate response under `## Pre-loaded substrate context` in your first reply, before the first `gh pr view`. This gives prior patterns to compare new bot threads against ("we already resolved this class last quarter").
+
 ## Session lifecycle
 
-- **LOAD:** Before entering the CI/review loop, complete vault LOAD per `docs/00_Core/SESSION_LIFECYCLE.md` (at minimum `Next Session Handoff.md`, `Current Focus.md`, and any `relates_to` subgraph needed for this PR).
+- **LOAD:** (1) Execute the Tier-3 substrate query from § **Tier-3 Substrate Query** above. (2) Complete vault LOAD per `docs/00_Core/SESSION_LIFECYCLE.md` (at minimum `Next Session Handoff.md`, `Current Focus.md`, and any `relates_to` subgraph needed for this PR). Tier-3 and vault are complementary; do not treat reading the handoff as a substitute for the substrate query.
 - **SAVE:** After exiting this loop — success, green-with-follow-ups, or abandoned PR — run SAVE: update `Next Session Handoff.md` and record any new learnings as small linked vault nodes (or hand off explicitly in the handoff if the session ends abruptly).
 
 ## When to involve other agents
@@ -101,3 +121,21 @@ Treat CodeRabbit, Gemini Code Assist, Cursor Bugbot, GitHub Copilot, Qodo / PR-A
 ## Exit
 
 Stop when checks are green and **GraphQL `reviewThreads` shows no unresolved blocking threads** (or each is explicitly handled with a reply in the UI).
+
+<!-- memory-contract:start -->
+<!-- DO NOT EDIT BY HAND. Re-render with: python3 scripts/merge_memory_contract.py -->
+
+## Memory contract (pointer)
+
+The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+
+References:
+
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
+
+Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).
+
+<!-- memory-contract:end -->

@@ -15,6 +15,26 @@ memory: project
 
 **Canonical routing matrix:** this file owns § **Routing** below. Other agents link here instead of duplicating the full table.
 
+## Tier-3 Substrate Query (mandatory first step)
+
+**Before any other action** — before reading the issue, before routing, before branch creation — query the semantic substrate for prior context. The runtime gate (`scripts/hook_memory_gate.py`) blocks code-path edits without a fresh substrate stamp, but the gate fires AFTER the agent has internalized the issue. Without this explicit step the agent pattern-matches the issue cold and drifts before the gate has anything to enforce against.
+
+**Template** (starting point — refine after the first response):
+
+```
+mcp__agentic-memory__query_knowledge_graph(
+    prompt="issue #<N>: <issue title> | <key terms from body> | prior decisions on touched modules",
+    workspace="<resolved from ops/memory_manifest.yml by repo basename>",
+    limit=80,
+)
+```
+
+**Refinement** (encouraged): the template above is the floor, not the ceiling. After the first response, issue follow-up queries naming the specific architectural concerns the issue surfaces — invariants touched, related investigations, similar past issues. Each query refreshes the gate stamp.
+
+**Workspace resolution**: read `ops/memory_manifest.yml`; find the workspace whose `name` matches this repo's basename (e.g. `template_repo` for `template-repo/`; `agent_factory_steward` for `agent-factory/`). If no workspace is registered, **STOP** and file an `architectural-invariant-gap` issue against `template-repo` before proceeding — the substrate gap is itself a propagation invariant.
+
+**Surfacing**: include the substrate response (verbatim, or summarized when long) under a `## Pre-loaded substrate context` heading in your first substantive reply, **before** routing decisions or branch creation. This makes Tier-3 context visible to operators and to any Task-spawned subagents you spawn later.
+
 ## Routing
 
 | Trigger / issue type | Primary agent | Secondary (handoff) | Skills & tools (load as needed) |
@@ -42,7 +62,7 @@ memory: project
 
 ## Non-negotiables
 
-1. **Session lifecycle:** LOAD vault context per `docs/00_Core/SESSION_LIFECYCLE.md` before routing or implementation decisions; SAVE (update `Next Session Handoff.md`, add/update small linked vault nodes as needed) after completion **or failure**.
+1. **Tier-3 memory query** (mandatory first step): execute the call template from § **Tier-3 Substrate Query** above. The vault LOAD per `docs/00_Core/SESSION_LIFECYCLE.md` (handoff → `relates_to` subgraph → invariants index) is the **second** step — Tier-3 substrate query and vault LOAD are complementary, not alternatives. SAVE (update `Next Session Handoff.md`, add/update small linked vault nodes as needed) after completion **or failure**.
 2. Load issue context: `gh issue view <N> --json title,body,state,labels,comments`.
 3. If closed or not found — stop.
 4. If the issue is **dependency/tooling-only** (Dependabot, “bump X”, workflow-only), prefer spawning **`dependency-review`** (Task or manual follow) before treating it as a feature build.
@@ -64,9 +84,45 @@ memory: project
 
 Use repository exploration or specialized reviewers when the change crosses architectural boundaries. If a subagent name is unavailable in your tool, perform the same steps manually — **do not skip** invariant checks or PR hygiene.
 
+### Subagent memory propagation (mandatory)
+
+Subagents spawned via the `Task` tool **do not auto-load** `CLAUDE.md` — the orchestrator MUST embed memory context in the Task prompt. Otherwise the subagent operates blind to the vault and Tier-3 substrate, and the gate (`scripts/hook_memory_gate.py`) blocks any code-path edit it attempts. Concrete template for every `Task(prompt=…)`:
+
+```
+## Pre-loaded memory context
+
+Vault handoff: <one-paragraph summary or verbatim from SessionStart hook output>
+Tier-3 prefetch (workspace: <name>): <verbatim from hook_session_start_memory_prefetch.py stdout>
+Memory contract: docs/00_Core/MEMORY_CONTRACT.md (loaded contract authoritative)
+
+## Your task
+
+<the actual task here>
+```
+
+If the prefetch was empty or the workspace was missing, **say so explicitly** in the subagent's prompt (`Tier-3 prefetch: empty — see CLAUDE_MEMORY_GATE degraded mode`) so the subagent doesn't waste turns re-querying a known-empty workspace.
+
 ## Done when
 
 - PR is **not** in draft state (marked ready via `gh pr ready <P> --repo <owner/repo>`)
 - CI passes on the PR
 - Acceptance criteria in the Issue are met or explicitly deferred with a new Issue
 - Vault handoff updated if work continues next session
+
+<!-- memory-contract:start -->
+<!-- DO NOT EDIT BY HAND. Re-render with: python3 scripts/merge_memory_contract.py -->
+
+## Memory contract (pointer)
+
+The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+
+References:
+
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
+
+Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).
+
+<!-- memory-contract:end -->

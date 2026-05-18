@@ -1,4 +1,4 @@
-.PHONY: all clean ci-fast ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety init-knowledge bootstrap-knowledge merge-settings format lint test hooks-install hooks-run
+.PHONY: all clean ci-fast ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety doppler-doctor memory-contract memory-contract-check init-knowledge bootstrap-knowledge merge-settings format lint test hooks-install hooks-run
 
 PYTHON ?= python3
 
@@ -41,6 +41,15 @@ bootstrap-knowledge: init-knowledge
 
 merge-settings:
 	$(PYTHON) scripts/merge_settings.py
+
+doppler-doctor:
+	$(PYTHON) scripts/doppler_doctor.py
+
+memory-contract:
+	$(PYTHON) scripts/merge_memory_contract.py
+
+memory-contract-check:
+	$(PYTHON) scripts/merge_memory_contract.py --check
 
 ci-policy:
 	bash scripts/check_policy_docs.sh

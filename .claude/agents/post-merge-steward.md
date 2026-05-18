@@ -13,6 +13,26 @@ memory: project
 
 **Goal:** Close the delivery gap after `pr-resolution-follow-up` exits: local repo matches `main`, branches are tidy, humans see migration/env/deps hints, and vault session files reflect what shipped — **without** the agent ever pushing to `main` directly.
 
+## Tier-3 Substrate Query (mandatory first step)
+
+**Before running Phase A** (`scripts/post_merge_sync.sh sync <P>`), query the semantic substrate for prior post-merge classification patterns and handoff conventions. Without this, the vault SAVE in Phase C reinvents conventions that already exist.
+
+**Template** (starting point — refine after the first response):
+
+```
+mcp__agentic-memory__query_knowledge_graph(
+    prompt="post-merge classification patterns | prior <scripts|migrations|env|deps|workflows> classifications | vault handoff conventions for this repo",
+    workspace="<resolved from ops/memory_manifest.yml by repo basename>",
+    limit=80,
+)
+```
+
+**Refinement** (encouraged): after Phase B (`post_merge_classify.py`) prints the classification, issue follow-up queries naming the specific changed paths (e.g. *"prior post-merge handoff entries for `scripts/hook_*` changes"*) so Phase C SAVE matches established style.
+
+**Workspace resolution**: read `ops/memory_manifest.yml`; match the workspace whose `name` matches this repo's basename. If no workspace, STOP and file an `architectural-invariant-gap` issue against `template-repo`.
+
+**Surfacing**: include the substrate response under `## Pre-loaded substrate context` in your first reply, before invoking Phase A. Gives Phase C the conventions baseline.
+
 ## Inputs
 
 - Merged (or ready-to-merge) PR number **P** for **this** repository.
@@ -105,3 +125,21 @@ memory: project
 ## Routing
 
 Listed in `.claude/agents/issue-driven-coding-orchestrator.md` § Routing as the owner for post-merge sync/classify/vault updates.
+
+<!-- memory-contract:start -->
+<!-- DO NOT EDIT BY HAND. Re-render with: python3 scripts/merge_memory_contract.py -->
+
+## Memory contract (pointer)
+
+The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+
+References:
+
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
+
+Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).
+
+<!-- memory-contract:end -->

@@ -82,6 +82,20 @@ Promote stable facts from Tier 1 into the vault when they become architectural.
 
 ---
 
+## Architectural invariant gap — stop and file upstream (mandatory)
+
+When you detect runtime behavior that contradicts a documented invariant (vault auto-memory write, `.env` on a deploy host, Tier-3 substrate routing through the wrong provider, hook bypass, etc.):
+
+1. **Stop the current task.** Do not "patch around" the gap to keep moving.
+2. **File a `template-repo` issue** using the [`architectural-invariant-gap`](https://github.com/agorokh/template-repo/issues/new?template=architectural-invariant-gap.md) template. Cover: which invariant, evidence, root cause, proposed structural fix, propagation map.
+3. **Resume the tactical task only after the upstream issue is filed.** A tactical patch in a child repo for an invariant violation is **forbidden** — it perpetuates the failure and guarantees the same mistake recurs on every other host.
+
+This rule emerged from the 2026-05-16 postmortem ([agorokh/template-repo#115](https://github.com/agorokh/template-repo/issues/115)). An agent caught the production Graphiti deploy silently routing through OpenRouter (not DIAL); its first instinct was to "edit the `.env` to add DIAL keys" — a tactical patch that would have perpetuated the `.env`-on-deploy-host violation. The correct move was to file the structural fix upstream and propagate.
+
+Companion invariants: [`memory-three-tiers.md`](docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](docs/01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md).
+
+---
+
 ## Upstream template sync
 
 **If you are working in a project created *from* the organization template:** when you improve a **domain-agnostic** workflow (issue design, hooks, skills, agent protocol, CI policy), propagate it back to the **canonical template** repository:

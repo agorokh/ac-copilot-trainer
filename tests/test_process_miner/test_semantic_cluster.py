@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import numpy as np
 import pytest
 
-# Guard: skip the whole module if scikit-learn is not installed, since
-# cluster_by_embeddings imports sklearn unconditionally.
-pytest.importorskip("sklearn", reason="scikit-learn not installed")  # noqa: E402
+# Guard: skip the whole module if scikit-learn or numpy is not installed, since
+# cluster_by_embeddings imports sklearn unconditionally and the tests use numpy.
+pytest.importorskip("sklearn", reason="scikit-learn not installed")
+np = pytest.importorskip("numpy", reason="numpy not installed")  # noqa: E402
 
 from tools.process_miner.schemas import ReviewComment  # noqa: E402
 
