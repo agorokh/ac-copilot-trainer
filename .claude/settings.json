@@ -19,6 +19,14 @@
           {
             "type": "command",
             "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; cd \"$root\" || exit 0; if [ \"${CLAUDE_SKIP_NETWORK:-}\" = \"1\" ]; then exit 0; fi; ( git fetch origin main --quiet 2>/dev/null & _pmf=$!; ( sleep 8; kill $_pmf 2>/dev/null ) & wait $_pmf 2>/dev/null ) || true; BEHIND=$(git rev-list --count main..origin/main 2>/dev/null || echo 0); case \"$BEHIND\" in ''|*[!0-9]*) BEHIND=0;; esac; if [ \"$BEHIND\" -gt 0 ] 2>/dev/null; then echo \"WARNING: local main is $BEHIND commit(s) behind origin/main. Run post-merge-steward (see .claude/agents/post-merge-steward.md) or: git checkout main && git pull --ff-only origin main\"; fi"
+          },
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/bin/python3\"; [ -x \"$PY\" ] || PY=python3; \"$PY\" \"$root/scripts/hook_session_start_memory_prefetch.py\" || true"
+          },
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_session_start_memory_redirect.py\" 2>/dev/null || true"
           }
         ]
       }
@@ -75,6 +83,16 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_memory_gate.py\"",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "Stop": [
@@ -84,6 +102,11 @@
             "type": "command",
             "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/session_debrief.py\" 2>/dev/null || true",
             "timeout": 15000
+          },
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_stop_drift_audit.py\" \"$root\" 2>/dev/null || true",
+            "timeout": 10000
           },
           {
             "type": "command",
