@@ -33,6 +33,16 @@ def _run(cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedPr
     )
 
 
+def _read_stamp(repo: Path) -> tuple[Path, dict]:
+    """Return whichever stamp file exists (lock preferred over missing marker)."""
+    lock = repo / ".scratch" / ".last_memory_query"
+    missing = repo / ".scratch" / ".last_memory_query.missing"
+    if lock.is_file():
+        return lock, json.loads(lock.read_text(encoding="utf-8"))
+    assert missing.is_file()
+    return missing, json.loads(missing.read_text(encoding="utf-8"))
+
+
 def _setup_repo(tmp_path: Path, manifest: str | None) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / ".git").mkdir()
@@ -90,9 +100,9 @@ def test_workspace_match_manifest_hyphen_vs_dir_underscore(tmp_path: Path) -> No
     )
     proc = _run(repo)
     assert proc.returncode == 0
-    missing = repo / ".scratch" / ".last_memory_query.missing"
-    data = json.loads(missing.read_text(encoding="utf-8"))
+    _path, data = _read_stamp(repo)
     assert data["workspace"] == "my-repo"
+    assert data["prefetch_ok"] is False
 
 
 def test_workspace_match_by_name(tmp_path: Path) -> None:
@@ -118,10 +128,8 @@ def test_workspace_match_by_name(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path, manifest=manifest)
     proc = _run(repo)
     assert proc.returncode == 0
-    missing = repo / ".scratch" / ".last_memory_query.missing"
-    assert missing.is_file(), proc.stdout + proc.stderr
-    assert not (repo / ".scratch" / ".last_memory_query").exists()
-    data = json.loads(missing.read_text(encoding="utf-8"))
+    stamp_path, data = _read_stamp(repo)
+    assert stamp_path.name == ".last_memory_query"
     assert data["workspace"] == ws_name
     assert data["prefetch_ok"] is False
 
@@ -152,12 +160,13 @@ def test_workspace_match_by_vault_root_containing_repo(tmp_path: Path) -> None:
     (repo / "ops" / "memory_manifest.yml").write_text(manifest, encoding="utf-8")
     proc = _run(repo)
     assert proc.returncode == 0
-    missing = repo / ".scratch" / ".last_memory_query.missing"
-    data = json.loads(missing.read_text(encoding="utf-8"))
+    stamp_path, data = _read_stamp(repo)
+    assert stamp_path.name == ".last_memory_query"
     assert data["workspace"] == "unrelated-workspace"
 
 
-def test_graphiti_backend_writes_missing_marker(tmp_path: Path) -> None:
+def test_graphiti_backend_stamps_lock_not_missing_marker(tmp_path: Path) -> None:
+    """Provisioned graphiti workspaces must not disable the memory gate."""
     ws_name = tmp_path.name.lower().replace("-", "_")
     manifest = textwrap.dedent(f"""\
         manifest_version: 2
@@ -176,12 +185,13 @@ def test_graphiti_backend_writes_missing_marker(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path, manifest=manifest)
     proc = _run(repo)
     assert proc.returncode == 0
-    missing = repo / ".scratch" / ".last_memory_query.missing"
-    assert missing.is_file(), proc.stdout + proc.stderr
-    assert not (repo / ".scratch" / ".last_memory_query").exists()
-    data = json.loads(missing.read_text(encoding="utf-8"))
+    lock = repo / ".scratch" / ".last_memory_query"
+    assert lock.is_file(), proc.stdout + proc.stderr
+    assert not (repo / ".scratch" / ".last_memory_query.missing").exists()
+    data = json.loads(lock.read_text(encoding="utf-8"))
     assert data["prefetch_ok"] is False
     assert data["workspace"] == ws_name
+    assert "graphiti" in proc.stdout.lower()
 
 
 def test_disabled_via_env(tmp_path: Path) -> None:
@@ -224,9 +234,9 @@ def test_blocked_remote_http_endpoint_writes_missing_marker(tmp_path: Path) -> N
     proc = _run(repo)
     assert proc.returncode == 0
     assert "blocked endpoint" in proc.stderr
-    missing = repo / ".scratch" / ".last_memory_query.missing"
-    assert missing.is_file()
-    assert not (repo / ".scratch" / ".last_memory_query").exists()
+    stamp_path, data = _read_stamp(repo)
+    assert stamp_path.name == ".last_memory_query"
+    assert data["prefetch_ok"] is False
 
 
 def test_pyyaml_missing_degrades(tmp_path: Path, monkeypatch) -> None:

@@ -251,6 +251,7 @@ def _stamp_lock(
     prompt: str,
     ok: bool,
     response_body: str = "",
+    provisioned: bool,
 ) -> Path:
     """Write the gate lockfile.
 
@@ -284,9 +285,13 @@ def _stamp_lock(
         "response_body": safe_body if ok else "",
         "response_body_len": len(safe_body) if ok else 0,
     }
-    if ok:
+    if provisioned:
         out = scratch / ".last_memory_query"
-        # Best-effort delete of any stale "missing" marker
+        if not ok:
+            payload["hint"] = (
+                "Tier-3 prefetch did not return a response body — issue an "
+                "mcp__agentic-memory__query_knowledge_graph call before code edits"
+            )
         try:
             (scratch / ".last_memory_query.missing").unlink()
         except FileNotFoundError:
@@ -423,12 +428,26 @@ def main() -> int:
         _print_super_ego_prefix(root)
     prompt = _derive_prompt(root)
     if not _enabled():
-        _stamp_lock(root, workspace=None, prompt=prompt, ok=False, response_body="")
+        _stamp_lock(
+            root,
+            workspace=None,
+            prompt=prompt,
+            ok=False,
+            response_body="",
+            provisioned=False,
+        )
         return 0
     manifest = _load_manifest(root)
     ws = _resolve_workspace(root, manifest)
     if ws is None:
-        _stamp_lock(root, workspace=None, prompt=prompt, ok=False, response_body="")
+        _stamp_lock(
+            root,
+            workspace=None,
+            prompt=prompt,
+            ok=False,
+            response_body="",
+            provisioned=False,
+        )
         sys.stdout.write(
             "WARNING: no Tier-3 workspace registered for this repo in "
             "ops/memory_manifest.yml; gate degrades to warn-only on code paths "
@@ -452,6 +471,12 @@ def main() -> int:
             body = _http_query_lightrag(endpoint, prompt, _timeout_s())
             if not body.strip():
                 prefetch_ok = False
+    if backend == "graphiti" and not prefetch_ok:
+        sys.stdout.write(
+            "WARNING: graphiti workspace — SessionStart HTTP prefetch is not "
+            "implemented yet; call mcp__agentic-memory__query_knowledge_graph "
+            "before code-path edits (gate remains enforced).\n"
+        )
     # TODO(PR-D+): handle backend == "graphiti" via its HTTP API once finalized.
     _stamp_lock(
         root,
@@ -459,6 +484,7 @@ def main() -> int:
         prompt=prompt,
         ok=prefetch_ok,
         response_body=body,
+        provisioned=True,
     )
     _print_summary(workspace=workspace_name, prompt=prompt, body=body)
     return 0
@@ -478,6 +504,7 @@ if __name__ == "__main__":
                 prompt="(prefetch error)",
                 ok=False,
                 response_body="",
+                provisioned=False,
             )
         except Exception:  # noqa: BLE001
             pass
