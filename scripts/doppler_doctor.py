@@ -147,7 +147,7 @@ def _check_no_literal_keys(root: Path) -> list[str]:
         path = root / rel
         if not path.is_file():
             continue
-        if _SKIP_SCAN_DIR_NAMES.intersection(path.parts):
+        if _SKIP_SCAN_DIR_NAMES.intersection(Path(rel).parts):
             continue
         if _path_allowed("/" + rel):
             continue

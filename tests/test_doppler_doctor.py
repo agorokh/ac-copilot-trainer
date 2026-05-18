@@ -176,6 +176,23 @@ def test_sk_in_tests_outside_fixtures_fails(clean_repo: Path) -> None:
     assert "literal sk-…" in proc.stdout
 
 
+def test_skip_dirs_ignore_clone_path_not_repo_relative(tmp_path: Path) -> None:
+    """``.cache`` in the absolute clone path must not skip tracked in-repo files."""
+    repo = tmp_path / ".cache" / "myproject"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    (repo / "src").mkdir()
+    (repo / "src" / "config.py").write_text(
+        f'OPENAI_API_KEY="{_SAMPLE_PROJ}"\n',
+        encoding="utf-8",
+    )
+    (repo / ".env.example").write_text("OPENAI_API_KEY=\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    proc = _run(repo)
+    assert proc.returncode == 1
+    assert "literal sk-…" in proc.stdout
+
+
 def test_allowed_paths_are_skipped(clean_repo: Path) -> None:
     """sk-… patterns under ``tests/fixtures/`` should NOT fail."""
     (clean_repo / "tests" / "fixtures").mkdir(parents=True)
