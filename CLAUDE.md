@@ -40,6 +40,21 @@ See `.claude/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE
 
 **Session end (SAVE):** update `Next Session Handoff.md`; add or update **small linked nodes** (not only monolithic edits). See `SESSION_LIFECYCLE.md`.
 
+### Memory architecture (three tiers, no side channels)
+
+Persistent memory in this project lives in **exactly one** of three tiers — write to the right one, **read all three**:
+
+| Tier | Substrate | Write | Read |
+|---|---|---|---|
+| **1** | `AGENTS.md` (operational facts + changelog) | Direct `Edit` for short facts (versions, ports, learned preferences) | Auto-loaded at session start |
+| **2** | Vault at `docs/01_Vault/AcCopilotTrainer/` — Obsidian markdown graph per [`docs/01_Vault/00_Graph_Schema.md`](docs/01_Vault/00_Graph_Schema.md) | Direct `Write` of small linked nodes (decisions, investigations, invariants, glossary, handoffs) | `@`-included by this `CLAUDE.md`; indirectly via Tier-3 query |
+| **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](ops/memory_manifest.yml). Canonical backend: Graphiti. See [`docs/00_Core/MEMORY_SUBSTRATE.md`](docs/00_Core/MEMORY_SUBSTRATE.md). | **Indirect** — built by re-ingesting Tier-2; agents do not write directly | `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)`. **Read at LOAD is mandatory** for substantive sessions and is enforced by `scripts/hook_memory_gate.py`. |
+
+**Side channels are forbidden.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project** — `scripts/hook_session_start_memory_redirect.py` writes a deprecation marker there on every SessionStart so an agent that tries to write sees the warning. Scratch databases, per-user notes, ad-hoc files outside the three tiers — same: invisible to other agents, other sessions, teammates, and the Tier-3 ingest pipelines.
+
+Canonical invariant: [`docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md`](docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md). Full contract: [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md). Postmortem driving this rule: [agorokh/template-repo#115](https://github.com/agorokh/template-repo/issues/115).
+
+@docs/00_Core/MEMORY_CONTRACT.md
 @docs/00_Core/SESSION_LIFECYCLE.md
 @docs/01_Vault/00_Graph_Schema.md
 @docs/01_Vault/AcCopilotTrainer/00_System/Project State.md

@@ -13,6 +13,26 @@ color: purple
 
 **Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing.
 
+## Tier-3 Substrate Query (mandatory first step)
+
+**Before extracting learnings**, query the semantic substrate for what's already been captured. The whole point of this agent is to add durable knowledge — duplicating prior entries is anti-value. The substrate is the canonical "what we already know" surface.
+
+**Template** (starting point — refine after the first response):
+
+```
+mcp__agentic-memory__query_knowledge_graph(
+    prompt="prior learnings on <merged-PR-topic> | existing patterns vs new | tier-1 changelog entries on adjacent areas | universal vs project-specific tags",
+    workspace="<resolved from ops/memory_manifest.yml by repo basename>",
+    limit=80,
+)
+```
+
+**Refinement** (encouraged): after reading the merged PR diff + commit messages, follow up with queries naming specific files / invariants touched (e.g. *"prior learnings on `hook_*` script patterns"*) so new bullets don't duplicate existing tier-1 facts.
+
+**Workspace resolution**: read `ops/memory_manifest.yml`; match the workspace whose `name` matches this repo's basename. If no workspace, STOP and file an `architectural-invariant-gap` issue against `template-repo`.
+
+**Surfacing**: include the substrate response under `## Pre-loaded substrate context` in your first reply, before proposing tier-1 (`AGENTS.md`) or tier-2 (vault) updates. Tag each proposed bullet as `(new)` vs `(refines existing: <link>)` based on substrate findings.
+
 ## When to run
 
 - After a **merged** PR when the team wants **Post-merge learnings extraction**: durable takeaways such as repeated fixes, new conventions, or template-worthy improvements.
@@ -38,3 +58,21 @@ Use `docs/00_Core/MAINTAINING_THE_TEMPLATE.md` for tagging cadence (`template-YY
 - **No secrets** in notes, Issues, or commits.
 - Do not replace human review; this agent **summarizes and proposes** edits for maintainers to accept.
 - If scope is unclear, link the merged PR and draft a follow-up Issue for a human maintainer to open instead of guessing.
+
+<!-- memory-contract:start -->
+<!-- DO NOT EDIT BY HAND. Re-render with: python3 scripts/merge_memory_contract.py -->
+
+## Memory contract (pointer)
+
+The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+
+References:
+
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
+
+Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).
+
+<!-- memory-contract:end -->

@@ -8,6 +8,12 @@
 
 ---
 
+## Memory-first — every named agent starts with a Tier-3 substrate query
+
+Every named agent in `.claude/agents/*.md` (issue-driven orchestrator, PR-resolution follow-up, post-merge steward, dependency review, learner) opens with a `## Tier-3 Substrate Query (mandatory first step)` section. The agent **must** issue at least one `mcp__agentic-memory__query_knowledge_graph` call with a task-specific prompt **before** any other action (routing, branch creation, classification, scoring, extraction). The runtime gate (`scripts/hook_memory_gate.py`) blocks code-path edits without a fresh, file-relevant Tier-3 stamp; the Stop drift audit (`scripts/hook_stop_drift_audit.py`) scores conversational drift post-hoc and feeds the next session via super-ego prefix. Read the canonical contract at [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md). Both Cursor and Claude Code load the same `.claude/agents/*.md` files — the procedure is unified across hosts.
+
+---
+
 ## Mandatory reading
 
 1. **[AGENT_CORE_PRINCIPLES.md](AGENT_CORE_PRINCIPLES.md)** — Non-negotiable workflow and hygiene.
@@ -112,3 +118,21 @@ Stable operational principles derived from real usage across projects. Agents: r
 - 2026-03-27: v1.2 — Multi-tool governance: TOOLCHAIN, OPTIONAL_CAPABILITIES, MAINTAINING_THE_TEMPLATE, GITHUB_SETUP; mandatory vault callout + maintainer link; CLAUDE.md quick start and Desktop/MCP/upstream-sync clarity; AGENT_CORE_PRINCIPLES child-vs-template upstream wording; README "keeping current"; Dependabot groups; gitignore `.claude.local.md`.
 - 2026-03-26: v1.1 — Added issue-grouping-by-file-overlap, own-every-failure, preserve-manual-work, upstream-sync. (Source: court-fillings-processing learnings)
 <!-- CHANGELOG:END -->
+
+<!-- memory-contract:start -->
+<!-- DO NOT EDIT BY HAND. Re-render with: python3 scripts/merge_memory_contract.py -->
+
+## Memory contract (pointer)
+
+Per-agent substantive rules live in `.claude/agents/*.md` — each file opens with **`## Tier-3 Substrate Query (mandatory first step)`** before its procedure. The **Memory-first** section at the top of this file summarizes the unified requirement for all named agents.
+
+References:
+
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` + `scripts/hook_stop_drift_audit.py` (see contract doc).
+- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
+
+Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).
+
+<!-- memory-contract:end -->
