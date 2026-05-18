@@ -88,8 +88,8 @@ def _project_root() -> Path:
 
 def _slugify(path: Path) -> str:
     """Match Claude Code's auto-memory directory naming convention."""
-    abs_str = str(path.resolve())
-    # Claude Code uses `-` as path separator in the slug; preserve leading `-`.
+    # Normalize to POSIX separators before slugging (Windows uses ``\``).
+    abs_str = path.resolve().as_posix()
     return abs_str.replace("/", "-")
 
 

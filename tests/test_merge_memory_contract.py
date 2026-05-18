@@ -26,6 +26,7 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
         timeout=20,
+        cwd=str(REPO_ROOT),
     )
 
 

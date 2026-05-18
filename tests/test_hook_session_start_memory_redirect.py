@@ -36,7 +36,7 @@ def _setup_repo(tmp_path: Path) -> Path:
 
 
 def _expected_target(project_root: Path, home: Path) -> Path:
-    slug = str(project_root.resolve()).replace("/", "-")
+    slug = project_root.resolve().as_posix().replace("/", "-")
     return home / ".claude" / "projects" / slug / "memory"
 
 
@@ -97,13 +97,18 @@ def test_does_not_delete_existing_files(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_fail_open_on_oserror(tmp_path: Path, monkeypatch) -> None:
-    """Unwritable HOME must not wedge the session."""
+    """Write failures must not wedge the session (cross-platform)."""
     home = tmp_path / "home"
-    home.mkdir(mode=0o500)  # read-only
-    try:
-        monkeypatch.setenv("HOME", str(home))
-        repo = _setup_repo(tmp_path / "repo")
-        proc = _run(repo, env={"HOME": str(home)})
-        assert proc.returncode == 0
-    finally:
-        home.chmod(0o700)
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    repo = _setup_repo(tmp_path / "repo")
+    original_write = Path.write_text
+
+    def guarded_write(self: Path, data: str, *args, **kwargs) -> int:
+        if self.name == "README.md":
+            raise OSError("simulated write failure")
+        return original_write(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", guarded_write)
+    proc = _run(repo, env={"HOME": str(home)})
+    assert proc.returncode == 0

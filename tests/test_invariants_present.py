@@ -104,7 +104,7 @@ def test_invariant_frontmatter_valid(name: str) -> None:
     )
     assert fm.get("created"), f"{name}: missing 'created'"
     assert fm.get("updated"), f"{name}: missing 'updated'"
-    assert "part_of" in fm or "relates_to" in (INVARIANTS_DIR / name).read_text(encoding="utf-8"), (
+    assert "part_of" in fm or "relates_to" in fm, (
         f"{name}: must declare part_of or relates_to in frontmatter"
     )
 
@@ -132,6 +132,7 @@ def test_claude_md_carries_auto_memory_override() -> None:
     assert (
         "Memory architecture override" in claude_md
         or "Memory architecture (three tiers, no side channels)" in claude_md
+        or "Persistent memory (three tiers, no side channels)" in claude_md
     ), "CLAUDE.md must include the auto-memory deprecation block per issue #115"
     assert "deprecated for this project" in claude_md
     assert "memory-three-tiers.md" in claude_md

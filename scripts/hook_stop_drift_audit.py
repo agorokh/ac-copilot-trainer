@@ -246,7 +246,8 @@ def _is_cited(text: str, substrate_tokens: set[str]) -> bool:
     """True if the response shows any substrate citation signal."""
     if not text:
         return False
-    lower = text.lower()
+    normalized = text.replace("\\", "/")
+    lower = normalized.lower()
     if any(needle.lower() in lower for needle in _CITATION_HEURISTICS):
         return True
     if substrate_tokens:

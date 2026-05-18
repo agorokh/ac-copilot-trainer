@@ -29,18 +29,15 @@ Personal overrides: root **`.claude.local.md`** (gitignored) for preferences not
 
 ---
 
-## Persistent memory (two-tier)
+## Persistent memory (three tiers, no side channels)
 
-See `.claude/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE.md`** for LOAD/SAVE.
+See `.claude/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE.md`** for LOAD/SAVE detail.
 
-- **Tier 1** — `AGENTS.md` (quick facts, changelog block at bottom).
-- **Tier 2** — Obsidian vault graph: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap); schema at `docs/01_Vault/00_Graph_Schema.md` (outside the renamed folder).
-
-**Session start (LOAD):** `Next Session Handoff.md` → follow `relates_to` / `_index.md` for needed subgraph → `Current Focus.md` → `Project State.md` as needed.
+**Session start (LOAD):** `Next Session Handoff.md` → follow `relates_to` / `_index.md` for needed subgraph → `Current Focus.md` → `Project State.md` as needed; **Tier-3 substrate query is mandatory** before substantive code edits (enforced by `scripts/hook_memory_gate.py`).
 
 **Session end (SAVE):** update `Next Session Handoff.md`; add or update **small linked nodes** (not only monolithic edits). See `SESSION_LIFECYCLE.md`.
 
-### Memory architecture (three tiers, no side channels)
+### Memory architecture
 
 Persistent memory in this project lives in **exactly one** of three tiers — write to the right one, **read all three**:
 

@@ -61,6 +61,13 @@ def clean_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def test_non_git_root_fails_closed(tmp_path: Path) -> None:
+    """When ``git ls-files`` cannot run, the doctor must not report OK."""
+    proc = _run(tmp_path)
+    assert proc.returncode == 1
+    assert "git ls-files failed" in proc.stdout + proc.stderr
+
+
 def test_clean_repo_passes(clean_repo: Path) -> None:
     proc = _run(clean_repo)
     assert proc.returncode == 0, proc.stdout + proc.stderr

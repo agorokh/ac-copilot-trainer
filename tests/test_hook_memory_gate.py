@@ -197,6 +197,19 @@ def test_no_stamp_blocks_code_path(fake_repo: Path) -> None:
     assert "BLOCK" in stderr
 
 
+def test_missing_marker_non_json_still_degrades(fake_repo: Path) -> None:
+    """Degraded mode is keyed on marker presence, not JSON parse success."""
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    (scratch / ".last_memory_query.missing").write_text("unprovisioned\n", encoding="utf-8")
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0
+    assert "degraded" in stderr.lower()
+
+
 def test_missing_marker_degrades_to_warn(fake_repo: Path) -> None:
     _write_missing(fake_repo)
     rc, _, stderr = _run(

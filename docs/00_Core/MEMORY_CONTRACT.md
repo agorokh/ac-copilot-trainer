@@ -15,7 +15,7 @@ Memory in this project lives in **exactly three tiers** — `AGENTS.md` (Tier 1,
 
 1. **Read Tier 3 at LOAD** via `mcp__agentic-memory__query_knowledge_graph` for the active workspace before any substantive Edit/Write/Bash on code paths. The substrate is the reason we keep three tiers; skipping the read means re-discovering context every session.
 2. **Write to the right tier at SAVE.** Short operational facts → `AGENTS.md`. Structured knowledge (decisions, investigations, invariants, glossary, handoffs) → vault as small linked nodes. **Tier 3 is read-mostly from the agent surface** — it is rebuilt by re-ingesting Tier-2 on cadence; agents do not write to it directly.
-3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
+3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs and ad-hoc files outside the three tiers are side channels ([invariant](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)). Tier-3 is normally populated by **vault → ingest**; direct substrate writes (`mcp__agentic-memory__add_episode`, etc.) are optional exceptions for material findings when the MCP is available — not a substitute for vault SAVE.
 
 These rules are enforced by deterministic hooks (`scripts/hook_session_start_memory_prefetch.py`, `scripts/hook_memory_gate.py`, `scripts/hook_stop_save_reminder.py`) — not by trust in the agent's prompt-following. Failure modes are explicit and surfaced to the human.
 
@@ -44,7 +44,7 @@ At session start, the `SessionStart` command hook (`.claude/settings.base.json`)
 
 **Agent obligation:** if you need to do meaningful work, **issue at least one `mcp__agentic-memory__query_knowledge_graph` call early in the session** with a prompt tied to the issue/branch/task. The SessionStart hook does an initial prefetch using branch name + issue title as the query; refine with a task-specific query once you understand scope.
 
-If you are a **Task-spawned subagent**, the orchestrator embeds the SessionStart memory prefetch output as a `## Pre-loaded memory context` block in your prompt. You inherit the same lockfile on disk; further MCP queries supplement context but do not rewrite the gate stamp (only SessionStart prefetch updates `.scratch/.last_memory_query` today).
+If you are a **Task-spawned subagent**, the orchestrator embeds the SessionStart memory prefetch output as a `## Pre-loaded memory context` block in your prompt. You inherit the same `.scratch/.last_memory_query` stamp on disk; further MCP queries supplement your context in the prompt but **do not** update the gate stamp today (only SessionStart prefetch writes/refreshes `.scratch/.last_memory_query`).
 
 ---
 
@@ -95,7 +95,7 @@ When the orchestrator (`issue-driven-coding-orchestrator`) or any agent invokes 
 
 - **Embed memory context.** The orchestrator MUST include a `## Pre-loaded memory context` section in the subagent's prompt with the SessionStart prefetch output (verbatim or summarized). Subagents do not auto-load `CLAUDE.md`; this is the explicit propagation channel.
 - **Embed the contract pointer.** Include the line `Memory contract: docs/00_Core/MEMORY_CONTRACT.md (loaded contract authoritative).` so the subagent treats memory as required, not optional.
-- **Inherit the lockfile.** Subagents in the same session share `.scratch/.last_memory_query`. They may refresh it with their own MCP queries but the parent's stamp counts.
+- **Inherit the lockfile.** Subagents in the same session share the parent's `.scratch/.last_memory_query` stamp; their own MCP queries supplement context but do not refresh the stamp (same rule as the primary agent until query-time stamp refresh lands).
 
 In **Cursor**, where Task only allows `subagent_type` in `{generalPurpose, explore, shell, best-of-n-runner}`, the same contract applies: use `generalPurpose` with the embedded memory context, per `.cursor/rules/cursor-task-delegation.mdc`.
 

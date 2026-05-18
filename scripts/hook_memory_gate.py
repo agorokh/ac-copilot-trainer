@@ -534,12 +534,13 @@ def main() -> int:
 
     lock_path, missing_path = _lock_paths(root)
     lock = _read_lock(lock_path)
-    missing = _read_lock(missing_path)
+    missing_marker_present = missing_path.is_file()
+    missing = _read_lock(missing_path) if missing_marker_present else None
 
     # Degraded mode: SessionStart prefetch said no workspace registered for this
     # repo. Warn once on stderr and allow — the right fix is to register the
     # workspace via PR C, not to break developer flow.
-    if missing:
+    if missing_marker_present:
         sys.stderr.write(
             "WARN  hook_memory_gate.py: degraded — Tier-3 prefetch unavailable "
             f"for {root} (see ops/memory_manifest.yml). "

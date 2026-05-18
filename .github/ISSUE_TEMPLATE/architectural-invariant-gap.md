@@ -8,7 +8,7 @@ assignees: []
 
 <!--
 Required reading before filing this issue:
-- docs/01_Vault/ProjectTemplate/00_System/invariants/_index.md (or your renamed vault key)
+- docs/01_Vault/AcCopilotTrainer/00_System/invariants/_index.md (or your renamed vault key)
 - AGENT_CORE_PRINCIPLES.md § "Architectural invariant gap" routing rule
 
 When this template applies: an agent or operator detected runtime behavior that

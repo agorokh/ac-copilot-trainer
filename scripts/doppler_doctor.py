@@ -115,7 +115,8 @@ def _git_tracked_paths(root: Path) -> list[str]:
         check=False,
     )
     if proc.returncode != 0:
-        return []
+        detail = (proc.stderr or proc.stdout or "unknown error").strip()
+        raise RuntimeError(f"git ls-files failed in {root}: {detail}")
     return [p for p in proc.stdout.split("\0") if p]
 
 
@@ -258,7 +259,10 @@ def main() -> int:
         ("literal OpenAI/Bearer sk-… keys", _check_no_literal_keys),
         (".env.example key-name catalogue", _check_env_example_catalogue),
     ):
-        violations = fn(root)
+        try:
+            violations = fn(root)
+        except RuntimeError as exc:
+            violations = [str(exc)]
         _print_section(title, violations)
         static_failures += len(violations)
 

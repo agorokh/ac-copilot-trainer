@@ -72,12 +72,13 @@ Treat automated review comments as blocking unless:
 
 ---
 
-## Persistent memory (two-tier)
+## Persistent memory (three tiers)
 
 | Tier | Location | Use |
 |------|----------|-----|
 | 1 | `AGENTS.md` (bottom) | Short operational facts, policy updates |
 | 2 | `docs/01_Vault/AcCopilotTrainer/` (+ `docs/01_Vault/00_Graph_Schema.md`) | Linked graph: ADRs, invariants, glossary, investigations, session handoff |
+| 3 | Semantic substrate per [`ops/memory_manifest.yml`](ops/memory_manifest.yml) | **Read at LOAD** via `mcp__agentic-memory__query_knowledge_graph`; written indirectly via vault → ingest (see [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md)) |
 
 Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`). Session protocol: `docs/00_Core/SESSION_LIFECYCLE.md`.
 

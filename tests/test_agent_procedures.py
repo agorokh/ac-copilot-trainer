@@ -133,6 +133,6 @@ def test_agents_md_top_pointer_present() -> None:
     )
     pointer_pos = text.find("Memory-first")
     mandatory_pos = text.find("## Mandatory reading")
-    assert pointer_pos > 0 and mandatory_pos > pointer_pos, (
+    assert pointer_pos >= 0 and mandatory_pos > pointer_pos, (
         "AGENTS.md 'Memory-first' pointer must precede '## Mandatory reading'."
     )
