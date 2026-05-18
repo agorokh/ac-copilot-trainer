@@ -52,7 +52,7 @@ Collapsing Tier 3 into "vault" misses the point. The vault is human-readable mar
 
 ## Rationale (postmortem)
 
-A 2026-05-16 postmortem ([issue #115](https://github.com/agorokh/template-repo/issues/115); see also [`memory-enforcement-postmortem-2026-05-16.md`](../../02_Investigations/memory-enforcement-postmortem-2026-05-16.md)) catalogued an agent that wrote 6 "memories" to the auto-memory directory and consequently re-derived a credential strategy that already existed in the vault — and got it wrong. The substrate (Graphiti) was reachable but never queried. Documentation alone did not prevent the drift; runtime enforcement is mandatory.
+A 2026-05-16 postmortem ([template-repo issue #115](https://github.com/agorokh/template-repo/issues/115)) catalogued an agent that wrote 6 "memories" to the auto-memory directory and consequently re-derived a credential strategy that already existed in the vault — and got it wrong. The substrate (Graphiti) was reachable but never queried. Documentation alone did not prevent the drift; runtime enforcement is mandatory.
 
 ## See also
 

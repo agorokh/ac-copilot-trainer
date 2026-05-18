@@ -126,6 +126,37 @@ def test_workspace_match_by_name(tmp_path: Path) -> None:
     assert data["prefetch_ok"] is False
 
 
+def test_workspace_match_by_vault_root_containing_repo(tmp_path: Path) -> None:
+    """When the repo path lies under ``vault_root``, match even if names differ."""
+    vault_root = tmp_path / "vault"
+    repo = vault_root / "nested-repo"
+    repo.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "ops").mkdir()
+    manifest = textwrap.dedent(f"""\
+        manifest_version: 2
+        hosts:
+          - id: test-host
+            workspaces:
+              - name: unrelated-workspace
+                backend: lightrag
+                endpoint: "http://127.0.0.1:1"
+                vault_root: "{vault_root}"
+                audit_log: "/nowhere"
+                launchd_label: null
+                stale_after_hours: 24
+                canary_queries:
+                  - prompt: "test"
+                    mode: "hybrid"
+        """)
+    (repo / "ops" / "memory_manifest.yml").write_text(manifest, encoding="utf-8")
+    proc = _run(repo)
+    assert proc.returncode == 0
+    missing = repo / ".scratch" / ".last_memory_query.missing"
+    data = json.loads(missing.read_text(encoding="utf-8"))
+    assert data["workspace"] == "unrelated-workspace"
+
+
 def test_graphiti_backend_writes_missing_marker(tmp_path: Path) -> None:
     ws_name = tmp_path.name.lower().replace("-", "_")
     manifest = textwrap.dedent(f"""\

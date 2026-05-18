@@ -44,6 +44,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from memory_vault_paths import vault_relpath
+
 
 def _repo_root() -> Path:
     """Resolve repo root: optional ``argv[1]`` from the hook wrapper, else env, else cwd."""
@@ -62,12 +64,15 @@ def _disabled() -> bool:
     return val in ("1", "true", "yes", "on")
 
 
-_VAULT_DIRTY_REMINDER = (
-    "SAVE reminder: `.scratch/vault-dirty` is set — at minimum update "
-    "`docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md` "
-    "(resume / shipped / remains / blockers) before closing. "
-    "See `docs/00_Core/SESSION_LIFECYCLE.md` for the full SAVE checklist."
-)
+def _vault_dirty_reminder(root: Path) -> str:
+    handoff = vault_relpath(root, "00_System", "Next Session Handoff.md")
+    return (
+        "SAVE reminder: `.scratch/vault-dirty` is set — at minimum update "
+        f"`{handoff}` "
+        "(resume / shipped / remains / blockers) before closing. "
+        "See `docs/00_Core/SESSION_LIFECYCLE.md` for the full SAVE checklist."
+    )
+
 
 _PLAIN_REMINDER = (
     "SAVE reminder: see `docs/00_Core/SESSION_LIFECYCLE.md` — handoff, "
@@ -158,10 +163,11 @@ def main() -> int:
         return 0
 
     advisory = _memory_audit(root)
-    _append_audit_record(root, advisory)
+    if advisory is not None:
+        _append_audit_record(root, advisory)
 
     if marker.exists():
-        sys.stdout.write(_VAULT_DIRTY_REMINDER + "\n")
+        sys.stdout.write(_vault_dirty_reminder(root) + "\n")
         if advisory:
             sys.stdout.write(advisory + "\n")
         # Clear the marker now that we have surfaced the reminder.

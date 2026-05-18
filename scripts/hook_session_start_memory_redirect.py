@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """SessionStart command hook — auto-memory directory deprecation marker.
 
-Backs the ``memory-three-tiers`` invariant
-(``docs/01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md``).
+Backs the ``memory-three-tiers`` invariant under ``docs/01_Vault/<ProjectKey>/``.
 
 On every SessionStart, this script writes a deprecation README inside Claude
 Code's per-user auto-memory directory for this project so an agent that
@@ -31,6 +30,8 @@ import os
 import sys
 from pathlib import Path
 
+from memory_vault_paths import vault_relpath
+
 MARKER_README = (
     "# DEPRECATED — Auto-memory is not used in this project\n"
     "\n"
@@ -52,7 +53,7 @@ MARKER_README = (
     "\n"
     "## Canonical contract\n"
     "\n"
-    "- Invariant: `docs/01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md`\n"
+    "- Invariant: `{invariant_path}`\n"
     "- Contract:  `docs/00_Core/MEMORY_CONTRACT.md`\n"
     "- Postmortem driving this rule: https://github.com/agorokh/template-repo/issues/115\n"
     "\n"
@@ -97,6 +98,11 @@ def _auto_memory_dir(project_root: Path) -> Path:
     return Path.home() / ".claude" / "projects" / slug / "memory"
 
 
+def _marker_readme(project_root: Path) -> str:
+    invariant_path = vault_relpath(project_root, "00_System", "invariants", "memory-three-tiers.md")
+    return MARKER_README.format(invariant_path=invariant_path)
+
+
 def main() -> int:
     if not _enabled():
         return 0
@@ -110,7 +116,7 @@ def main() -> int:
     try:
         readme = target / "README.md"
         # Always refresh content so a template update lands without manual ops.
-        readme.write_text(MARKER_README, encoding="utf-8")
+        readme.write_text(_marker_readme(project_root), encoding="utf-8")
         sentinel = target / "DEPRECATED.txt"
         sentinel.write_text(MARKER_SENTINEL, encoding="utf-8")
     except OSError:

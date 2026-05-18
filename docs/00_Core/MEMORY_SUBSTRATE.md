@@ -138,5 +138,5 @@ This keeps v1 manifests parseable until every consumer adopts the v2 schema, and
 
 - [VAULT_TAXONOMY.md](VAULT_TAXONOMY.md) — what `origin` means and how it shapes ingest cadence
 - [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml) — live manifest with the schema in use
-- [`.claude/rules/memory-substrate.md`](../../.claude/rules/memory-substrate.md) — rule pointer for agents
+- [`.claude/rules/memory.md`](../../.claude/rules/memory.md) — rule pointer for agents
 - Graphiti MCP server: [getzep/graphiti/mcp_server](https://github.com/getzep/graphiti/tree/main/mcp_server)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """``make doppler-doctor`` — static and (optionally) runtime checks for the
-secrets-from-doppler invariant (``docs/01_Vault/ProjectTemplate/00_System/
+secrets-from-doppler invariant (``docs/01_Vault/<ProjectKey>/00_System/
 invariants/secrets-from-doppler.md``).
 
 Static checks (always run, CI-safe):

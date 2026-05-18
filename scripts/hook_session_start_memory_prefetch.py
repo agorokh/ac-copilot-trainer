@@ -5,8 +5,8 @@ This is the LOAD half of the memory contract
 (``docs/00_Core/MEMORY_CONTRACT.md``):
 
 1. Resolve the **active workspace** for this repo from
-   ``ops/memory_manifest.yml`` (matched by ``vault_root`` containing the repo
-   path, falling back to the workspace whose name matches the parent
+   ``ops/memory_manifest.yml`` (matched by repo path under ``vault_root`` when
+   name matching fails, else the workspace whose name matches the repo
    directory).
 2. Issue an HTTP query against the workspace endpoint with a prompt derived
    from the current branch name (and optional ``CLAUDE_LOAD_PROMPT`` env).
@@ -180,7 +180,7 @@ def _resolve_workspace(root: Path, manifest: dict | None) -> dict | None:
         if isinstance(vr, str):
             try:
                 vr_resolved = _resolve_vault_root(vr, root)
-                if vr_resolved.is_relative_to(root):
+                if root.is_relative_to(vr_resolved):
                     vault_matches.append(ws)
             except (OSError, ValueError):
                 pass

@@ -4,7 +4,7 @@
 **Category:** Core
 **Owns:** the LOAD/SAVE protocol across **all three memory tiers** for Claude Code, Cursor, and Task-spawned subagents.
 **Loaded by:** `@docs/00_Core/MEMORY_CONTRACT.md` in `CLAUDE.md` (Claude Code auto-inclusion); referenced by `.cursor/rules/memory-contract.mdc` (Cursor auto-apply); embedded in `.claude/agents/*.md` and `AGENTS.md` via marker-delimited sections re-rendered by `scripts/merge_memory_contract.py`.
-**Companion invariants:** [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/ProjectTemplate/00_System/invariants/secrets-from-doppler.md).
+**Companion invariants:** [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md).
 **Originating postmortem:** [issue #115](https://github.com/agorokh/template-repo/issues/115).
 
 ---
@@ -15,7 +15,7 @@ Memory in this project lives in **exactly three tiers** — `AGENTS.md` (Tier 1,
 
 1. **Read Tier 3 at LOAD** via `mcp__agentic-memory__query_knowledge_graph` for the active workspace before any substantive Edit/Write/Bash on code paths. The substrate is the reason we keep three tiers; skipping the read means re-discovering context every session.
 2. **Write to the right tier at SAVE.** Short operational facts → `AGENTS.md`. Structured knowledge (decisions, investigations, invariants, glossary, handoffs) → vault as small linked nodes. **Tier 3 is read-mostly from the agent surface** — it is rebuilt by re-ingesting Tier-2 on cadence; agents do not write to it directly.
-3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md)).
+3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
 
 These rules are enforced by deterministic hooks (`scripts/hook_session_start_memory_prefetch.py`, `scripts/hook_memory_gate.py`, `scripts/hook_stop_save_reminder.py`) — not by trust in the agent's prompt-following. Failure modes are explicit and surfaced to the human.
 
@@ -29,7 +29,7 @@ These rules are enforced by deterministic hooks (`scripts/hook_session_start_mem
 | **2** | Obsidian vault at `docs/01_Vault/<ProjectKey>/` (markdown graph; `00_Graph_Schema.md`) | Direct `Write` / `Edit` of small linked nodes (decisions, investigations, invariants, glossary, handoffs) | `@`-included by `CLAUDE.md`; indirectly via Tier-3 query (the substrate is built by re-ingesting Tier-2) |
 | **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml). Backend: `graphiti` (canonical) or `lightrag` (legacy). | **Indirect.** The substrate ingests Tier-2 vault notes on cadence (`stale_after_hours` per workspace). Agents do **not** write to the substrate directly. | `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)` + `mcp__agentic-memory__search_*`. **Read at LOAD is mandatory.** |
 
-Auto-memory (`~/.claude/projects/.../memory/`) is **not** a tier — it is a side channel actively deprecated for this project. See [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md).
+Auto-memory (`~/.claude/projects/.../memory/`) is **not** a tier — it is a side channel actively deprecated for this project. See [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
 
 ---
 
@@ -172,6 +172,6 @@ Heuristic accuracy: the citation check is substring-match — an agent that happ
 - [`MEMORY_SUBSTRATE.md`](MEMORY_SUBSTRATE.md) — Tier-3 substrate detail (Graphiti vs LightRAG; workspace schema).
 - [`VAULT_TAXONOMY.md`](VAULT_TAXONOMY.md) — `origin` classification (`repo-product` / `repo-embedded` / `human-curated`).
 - [`HOOK_DESIGN.md`](HOOK_DESIGN.md) — why hooks are deterministic and never LLM-bearing.
-- [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/ProjectTemplate/00_System/invariants/secrets-from-doppler.md) — companion invariants.
+- [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md) — companion invariants.
 - [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml) — workspace registry.
 - [`ops/propagation_manifest.yml`](../../ops/propagation_manifest.yml) — fleet convergence tracking; PR C adds the `memory-enforcement-v1` invariant.
