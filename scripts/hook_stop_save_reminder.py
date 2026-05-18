@@ -21,6 +21,11 @@ Behavior:
     ``rm`` hook; no stdout reminder when disabled).
   * If ``.scratch/vault-dirty`` exists in the repo root → print the
     vault-dirty reminder (handoff first, then full SAVE) and clear the marker.
+  * **Memory contract SAVE audit (PR #115/B):** when ``.scratch/vault-dirty``
+    is set and the SessionStart stamp is older than ~25 minutes (no query-time
+    refresh yet — see issue #115 follow-up), print a one-line advisory and
+    append to ``.scratch/memory_audit.jsonl``. **Advisory only** — Stop hooks
+    must never block.
   * Otherwise → print the lightweight SAVE reminder (no marker = nothing
     obviously dirty, but the contract still asks the agent to SAVE).
   * Always exits 0. Stop hooks must never wedge the session.
@@ -33,8 +38,10 @@ Why stdout, not stderr:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -57,7 +64,7 @@ def _disabled() -> bool:
 
 _VAULT_DIRTY_REMINDER = (
     "SAVE reminder: `.scratch/vault-dirty` is set — at minimum update "
-    "`docs/01_Vault/AcCopilotTrainer/00_System/Next Session Handoff.md` "
+    "`docs/01_Vault/ProjectTemplate/00_System/Next Session Handoff.md` "
     "(resume / shipped / remains / blockers) before closing. "
     "See `docs/00_Core/SESSION_LIFECYCLE.md` for the full SAVE checklist."
 )
@@ -68,6 +75,66 @@ _PLAIN_REMINDER = (
     "changed, failure notes on abort. No vault-dirty marker so nothing is "
     "obviously stale; SAVE on real work only."
 )
+
+
+def _memory_audit(root: Path) -> str | None:
+    """Return a one-line advisory when vault work is dirty but the Tier-3
+    stamp was not refreshed (proxy until query-time refresh lands)."""
+    scratch = root / ".scratch"
+    lock_path = scratch / ".last_memory_query"
+    if not lock_path.is_file():
+        # No stamp → SessionStart prefetch did not run or this repo is
+        # un-provisioned (gate already degrades to warn-only). Nothing to audit.
+        return None
+    try:
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    stamp_ts = data.get("timestamp_utc")
+    if not isinstance(stamp_ts, str):
+        return None
+    try:
+        when = datetime.fromisoformat(stamp_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = datetime.now(UTC)
+    age_s = (now - when).total_seconds()
+    # If the stamp is younger than ~5 min, treat it as "the session started
+    # and immediately stopped" → nothing meaningful to audit.
+    if age_s < 300:
+        return None
+    # Until query-time stamp refresh exists, only nudge when vault-dirty is set
+    # (real SAVE obligation) and the session ran long enough to matter.
+    if not (scratch / "vault-dirty").is_file() or age_s < 1500:
+        return None
+    workspace = data.get("workspace") or "(unknown)"
+    return (
+        "memory-audit advisory: `.scratch/vault-dirty` is set but the Tier-3 "
+        f"stamp was not refreshed this session (last stamp {int(age_s)}s ago, "
+        f"workspace={workspace}). Complete SAVE + substrate handoff per "
+        "`docs/00_Core/MEMORY_CONTRACT.md`."
+    )
+
+
+def _append_audit_record(root: Path, advisory: str | None) -> None:
+    """Best-effort append to ``.scratch/memory_audit.jsonl`` for later mining."""
+    scratch = root / ".scratch"
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    record = {
+        "timestamp_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "advisory": advisory,
+        "vault_dirty": (scratch / "vault-dirty").exists(),
+    }
+    try:
+        with (scratch / "memory_audit.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+    except OSError:
+        return
 
 
 def main() -> int:
@@ -90,8 +157,13 @@ def main() -> int:
                 pass
         return 0
 
+    advisory = _memory_audit(root)
+    _append_audit_record(root, advisory)
+
     if marker.exists():
         sys.stdout.write(_VAULT_DIRTY_REMINDER + "\n")
+        if advisory:
+            sys.stdout.write(advisory + "\n")
         # Clear the marker now that we have surfaced the reminder.
         try:
             marker.unlink()
@@ -100,6 +172,8 @@ def main() -> int:
         return 0
 
     sys.stdout.write(_PLAIN_REMINDER + "\n")
+    if advisory:
+        sys.stdout.write(advisory + "\n")
     return 0
 
 

@@ -1,0 +1,43 @@
+---
+alwaysApply: true
+---
+
+# Memory contract (mandatory for every Cursor agent)
+
+Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md). Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md). Enforcement is by deterministic hooks (see `scripts/hook_memory_gate.py`), not by prompt-following.
+
+**Three tiers, one rule: read all three at LOAD, write to the right one at SAVE, no side channels.** Tier 1 = `AGENTS.md` (short operational facts, auto-loaded). Tier 2 = vault under `docs/01_Vault/<ProjectKey>/` (structured markdown graph, `@`-included). Tier 3 = semantic substrate via `mcp__agentic-memory__query_knowledge_graph` ([`ops/memory_manifest.yml`](../../ops/memory_manifest.yml); Graphiti canonical, LightRAG legacy). **Reading Tier 3 at LOAD is mandatory** for substantive sessions — it's the reason the substrate exists.
+
+## LOAD
+
+At session start, the SessionStart command hook (`scripts/hook_session_start_memory_prefetch.py`) pre-fetches Tier-3 substrate findings for this repo's workspace (resolved from [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml)) and stamps `.scratch/.last_memory_query`. If you need to do meaningful work, **issue at least one** `mcp__agentic-memory__query_knowledge_graph` call early in the session with a task-specific prompt to refresh the stamp.
+
+## Runtime gate
+
+`PreToolUse` hook on `Edit | Write | Bash` **blocks** code-path edits (`src/`, `scripts/`, `tests/`, `ops/`, `.github/workflows/`, `tools/`) when `.scratch/.last_memory_query` is missing or stale (default TTL 1800s). Doc paths (`docs/`, top-level `*.md`, `.claude/agents/`, `.cursor/`, `.scratch/`) are always allowed. Kill-switch: `CLAUDE_MEMORY_GATE=0`.
+
+## SAVE
+
+Short operational facts go to **Tier 1** (`AGENTS.md`). Structured knowledge goes to **Tier 2** — small linked vault nodes per [`docs/01_Vault/00_Graph_Schema.md`](../../docs/01_Vault/00_Graph_Schema.md). Update `Next Session Handoff.md`. **Tier 3** (the semantic substrate) ingests Tier-2 automatically — do not double-write. **Never** write to `~/.claude/projects/.../memory/` — that auto-memory side channel is deprecated for this project (invariant: [`memory-three-tiers.md`](../../docs/01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md)).
+
+## Cursor Task subagents
+
+Cursor's `Task` tool accepts only `generalPurpose`, `explore`, `shell`, `best-of-n-runner` as `subagent_type`. When you delegate, **include the memory context in the prompt**:
+
+```
+## Pre-loaded memory context
+
+Vault handoff: <verbatim from SessionStart hook output>
+Tier-3 prefetch (workspace: <name>): <verbatim from hook_session_start_memory_prefetch.py stdout>
+Memory contract: docs/00_Core/MEMORY_CONTRACT.md
+
+## Your task
+
+<the actual task here>
+```
+
+This is the equivalent of the Claude Code orchestrator's subagent propagation rule. The Cursor subagent then inherits the `.scratch/.last_memory_query` lockfile on disk and is gated identically.
+
+## Where to refresh the contract
+
+Run `python3 scripts/merge_memory_contract.py` after pulling a new template release to re-render the marker-delimited blocks in `AGENTS.md` and `.claude/agents/*.md`. The script is idempotent; per-repo customizations outside the markers are preserved.
