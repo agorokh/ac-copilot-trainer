@@ -471,11 +471,16 @@ def main() -> int:
             body = _http_query_lightrag(endpoint, prompt, _timeout_s())
             if not body.strip():
                 prefetch_ok = False
-    if backend == "graphiti" and not prefetch_ok:
+    # Graphiti has no SessionStart HTTP prefetch yet. Stamping a provisioned lock
+    # with an empty response_body hard-blocks the gate with no recovery path
+    # (MCP queries do not refresh `.last_memory_query` today).
+    provisioned = backend != "graphiti"
+    if backend == "graphiti":
         sys.stdout.write(
             "WARNING: graphiti workspace — SessionStart HTTP prefetch is not "
-            "implemented yet; call mcp__agentic-memory__query_knowledge_graph "
-            "before code-path edits (gate remains enforced).\n"
+            "implemented yet; gate degrades to warn-only. Call "
+            "mcp__agentic-memory__query_knowledge_graph for context until "
+            "graphiti HTTP prefetch or MCP lockfile refresh lands.\n"
         )
     # TODO(PR-D+): handle backend == "graphiti" via its HTTP API once finalized.
     _stamp_lock(
@@ -484,7 +489,7 @@ def main() -> int:
         prompt=prompt,
         ok=prefetch_ok,
         response_body=body,
-        provisioned=True,
+        provisioned=provisioned,
     )
     _print_summary(workspace=workspace_name, prompt=prompt, body=body)
     return 0

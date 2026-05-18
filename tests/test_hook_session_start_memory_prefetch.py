@@ -165,8 +165,8 @@ def test_workspace_match_by_vault_root_containing_repo(tmp_path: Path) -> None:
     assert data["workspace"] == "unrelated-workspace"
 
 
-def test_graphiti_backend_stamps_lock_not_missing_marker(tmp_path: Path) -> None:
-    """Provisioned graphiti workspaces must not disable the memory gate."""
+def test_graphiti_backend_degrades_via_missing_marker(tmp_path: Path) -> None:
+    """Graphiti without HTTP prefetch must not write an empty provisioned lock."""
     ws_name = tmp_path.name.lower().replace("-", "_")
     manifest = textwrap.dedent(f"""\
         manifest_version: 2
@@ -185,13 +185,13 @@ def test_graphiti_backend_stamps_lock_not_missing_marker(tmp_path: Path) -> None
     repo = _setup_repo(tmp_path, manifest=manifest)
     proc = _run(repo)
     assert proc.returncode == 0
-    lock = repo / ".scratch" / ".last_memory_query"
-    assert lock.is_file(), proc.stdout + proc.stderr
-    assert not (repo / ".scratch" / ".last_memory_query.missing").exists()
-    data = json.loads(lock.read_text(encoding="utf-8"))
+    missing = repo / ".scratch" / ".last_memory_query.missing"
+    assert missing.is_file(), proc.stdout + proc.stderr
+    assert not (repo / ".scratch" / ".last_memory_query").exists()
+    data = json.loads(missing.read_text(encoding="utf-8"))
     assert data["prefetch_ok"] is False
     assert data["workspace"] == ws_name
-    assert "graphiti" in proc.stdout.lower()
+    assert "warn-only" in proc.stdout.lower()
 
 
 def test_disabled_via_env(tmp_path: Path) -> None:
