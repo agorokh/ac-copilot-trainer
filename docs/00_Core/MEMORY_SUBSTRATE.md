@@ -1,9 +1,15 @@
 # Memory substrate (Tier-3)
 
 **Status:** Template
-**Version:** 1.0
+**Version:** 1.1
 **Category:** Core
 **Related:** [VAULT_TAXONOMY.md](VAULT_TAXONOMY.md), [SESSION_LIFECYCLE.md](SESSION_LIFECYCLE.md), [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml)
+
+> **2026-05-17 substrate-selection sunset** ([Graphiti sunset ADR in agent-factory](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md)):
+>
+> - **LightRAG = canonical online substrate.** All agent reads via `mcp__agentic-memory__*` (which wraps LightRAG). Default for new workspaces.
+> - **Graphiti = offline-only.** Retained for entity-resolution + bi-temporal metadata feeding LightRAG's chunk index. **Agents NEVER query Graphiti directly.**
+> - **Substrate writes are indirect.** No write tool is exposed on the agent surface; the substrate is rebuilt by re-ingesting Tier-2 vault notes on cadence.
 
 ---
 
@@ -11,45 +17,44 @@
 
 Tier-3 memory (the semantic graph that complements `AGENTS.md` and the Obsidian vault) is served by a **substrate**: a process or process-group that owns the graph store, the entity/relation extraction pipeline, and the retrieval surface that downstream agents call.
 
-This template supports two substrates today. Each workspace in `ops/memory_manifest.yml` declares its substrate via the per-workspace `backend` field.
+This template uses one canonical online substrate (LightRAG) plus an optional offline metadata layer (Graphiti). Each workspace in `ops/memory_manifest.yml` declares its substrate via the per-workspace `backend` field.
 
 | Backend | Purpose | Default for new workspaces? |
 |---|---|---|
-| `graphiti` ([getzep/graphiti](https://github.com/getzep/graphiti)) | Bi-temporal entity-relation graph with automatic contradiction detection. One MCP server hosts all workspaces by `group_id`. | **Yes — canonical going forward.** |
-| `lightrag` ([HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)) | Dual-level (entity + relation) retrieval over a per-workspace HTTP server. Mature ingest path for narrative vaults. | No — workspaces that exist on this backend persist until each is migrated to `graphiti`. |
-
-There is **no perpetual sidecar**. The two-backend state is a migration window, not an end-state.
+| `lightrag` ([HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)) | Dual-level (entity + relation) retrieval over a per-workspace HTTP server. **Canonical online substrate.** All agent reads via `mcp__agentic-memory__*`. | **Yes — canonical.** |
+| `graphiti` ([getzep/graphiti](https://github.com/getzep/graphiti)) | Bi-temporal entity-relation graph with automatic contradiction detection. **Offline-only after the 2026-05-17 sunset**: produces entity-resolution + bi-temporal metadata that feeds LightRAG's chunk index. Never on the agent read path. | No — offline use only. |
 
 ---
 
 ## Why the substrate choice matters
 
-The two backends differ in three semantic dimensions that propagate to every consumer:
+The two backends differ in three semantic dimensions:
 
 1. **Process topology**
-   - `graphiti`: **one** MCP server process, **one** Neo4j connection, workspaces partitioned by per-call `group_id`. Fewer ports, less per-workspace ops, single blast-radius.
-   - `lightrag`: **N** HTTP server processes (one per workspace) on distinct ports. Fault-isolated per workspace; more launchd plists.
+   - `lightrag`: **N** HTTP server processes (one per workspace) on distinct ports. Fault-isolated per workspace; one launchd plist per workspace.
+   - `graphiti`: **one** MCP server process, **one** Neo4j connection, workspaces partitioned by per-call `group_id`. For OFFLINE entity-resolution use only.
 
 2. **Temporal semantics**
-   - `graphiti`: bi-temporal edges (`valid_at` / `invalid_at` + `created_at` / `expired_at`). Contradictions detected on ingest and resolved by stamping `invalid_at` on the loser; nothing is hard-deleted. Supports "what was true at time T" queries natively.
-   - `lightrag`: append-mostly; no first-class temporal validity model. Time queries are not native.
+   - `lightrag`: append-mostly chunk index; time-aware retrieval comes from bi-temporal metadata that Graphiti feeds in offline.
+   - `graphiti`: bi-temporal edges (`valid_at` / `invalid_at` + `created_at` / `expired_at`). Used to produce metadata, **not** for online queries.
 
-3. **Retrieval shape**
-   - `graphiti`: structured entity/edge results from `search_nodes` / `search_memory_facts`. Caller composes prose.
-   - `lightrag`: prose RAG output with embedded reference lines. Mode parameter (`hybrid` / `mix` / `global` / `local` / `naive`) controls retrieval strategy.
+3. **Retrieval shape (agent-visible)**
+   - `lightrag` via `mcp__agentic-memory__query_knowledge_graph`: prose RAG output with embedded reference lines + `references` array. Mode parameter (`hybrid` / `mix` / `global` / `local` / `naive`) controls retrieval strategy.
+   - `graphiti`: **not exposed at the agent surface.** Its outputs land as metadata on LightRAG chunks via the ingest pipeline.
 
-These differences are why `ops/memory_manifest.yml` declares `canary_acceptance` per backend (the response shapes are not interchangeable) and why each workspace's `mode` field is backend-scoped vocabulary.
+These differences are why `ops/memory_manifest.yml` declares `canary_acceptance` per backend and why each workspace's `mode` field is backend-scoped vocabulary.
 
 ---
 
 ## When to use which
 
-- **`graphiti` is the default for any new workspace.** It is the canonical substrate going forward. Choose it unless you have a concrete reason not to.
-- **Choose `lightrag`** only when:
-  - You are operating an existing `lightrag` workspace that has not yet been migrated, OR
-  - You explicitly need LightRAG's mode vocabulary (`hybrid` / `mix` / `global` / `local` / `naive`) for a use case that has been validated against Graphiti's retrieval and demonstrably underperforms.
+- **`lightrag` is the canonical online substrate for every workspace.** All new workspaces are born onto LightRAG. All agent reads go through `mcp__agentic-memory__*`.
+- **`graphiti` is retained only for offline workflows** that LightRAG cannot replicate (per the sunset ADR):
+  - Bi-temporal entity resolution at ingest time
+  - Temporal drift detection
+  - Offline writeback validation
 
-The bias is: new workspaces are born onto `graphiti`. Existing `lightrag` workspaces migrate forward, they do not retroactively re-establish themselves as legacy.
+These offline outputs feed LightRAG's chunk metadata. Agents never see them as Graphiti queries; they see them as enriched LightRAG retrieval results.
 
 ---
 
@@ -61,21 +66,19 @@ Every workspace lives as a row under a host in `ops/memory_manifest.yml`. The mi
 
 ```yaml
 - name: "<workspace_id>"
-  backend: "graphiti"           # or "lightrag" if migrating an existing one
+  backend: "lightrag"           # canonical online; "graphiti" only for offline workspaces (per sunset ADR)
   origin: "repo-embedded"       # see VAULT_TAXONOMY.md
-  endpoint: "http://localhost:8100" # graphiti: shared MCP URL; lightrag: per-workspace port
+  endpoint: "http://localhost:8060" # per-workspace LightRAG port
   vault_root: "~/path/to/vault"
   audit_log: "~/path/to/vault/.turbovault/audit/operations.jsonl"
-  launchd_label: null           # graphiti: null; lightrag: ai.lightrag.ingest-audit.<name>
+  launchd_label: "ai.lightrag.ingest-audit.<name>" # null when ingest is operator-managed externally
   stale_after_hours: 24
   canary_queries:
     - prompt: "<short probe relevant to this vault>"
-      mode: "search_nodes"      # graphiti tool name OR lightrag mode
+      mode: "hybrid"            # lightrag retrieval mode
 ```
 
-For `graphiti` workspaces, `launchd_label` is `null` (single shared process). For `lightrag` workspaces, `launchd_label` typically follows `ai.lightrag.ingest-audit.<workspace_name>`; use `null` when ingest is operator-managed externally (see `divorce_proceedings` in the live manifest).
-
-For `graphiti` workspaces, the MCP `group_id` defaults to the workspace `name`. Override via manifest `graph_namespace` (consumers map that field to `group_id` on each Graphiti call).
+For `lightrag` workspaces, `launchd_label` typically follows `ai.lightrag.ingest-audit.<workspace_name>`; use `null` when ingest is operator-managed externally.
 
 ---
 
@@ -91,7 +94,7 @@ Tier-3 substrates (LightRAG, Graphiti, anything that runs programmatic LLM extra
 
 The base URL is `DIAL_BASE_URL` (verify exact var name in Doppler at use time).
 
-**Mapping to third-party tools:** upstream Graphiti / LightRAG images often demand env vars literally named `OPENAI_API_KEY` and `OPENAI_API_URL`. Those are *name slots* the tool's code looks for — the *values* MUST be sourced from DIAL. Compose / shell mapping pattern:
+**Mapping to third-party tools:** upstream LightRAG / Graphiti images often demand env vars literally named `OPENAI_API_KEY` and `OPENAI_API_URL`. Those are *name slots* the tool's code looks for — the *values* MUST be sourced from DIAL. Compose / shell mapping pattern:
 
 ```bash
 OPENAI_API_KEY=${DIAL_API_KEY_PROJECT:-${DIAL_API_KEY:?DIAL credential required}}
@@ -108,17 +111,18 @@ doppler run --project ag-dev-ecosystem --config dev_work -- docker compose up -d
 
 **Hard rule:** a raw `OPENAI_API_KEY` sourced from a real OpenAI key MUST NEVER appear in any substrate config, .env, ADR, or deploy bundle in this org.
 
-## Migration discipline
+---
 
-When migrating a workspace from `lightrag` to `graphiti`:
+## Sunset migration discipline
 
-1. Stand up the workspace in Graphiti (re-ingest via the file→episode reconciler — Graphiti has no LightRAG-graph importer).
-2. Verify recall quality against the existing canary queries (translated to Graphiti's tool vocabulary).
-3. Flip the `backend` value in `ops/memory_manifest.yml` in a single PR.
-4. Retire the LightRAG launchd plist for that workspace.
-5. Vault handoff: record the migration in the project's vault investigation log.
+Workspaces that were on `backend: graphiti` during the migration window are being reverted to `backend: lightrag` per the sunset ADR. Any new offline-use Graphiti deployments (entity-resolution, bi-temporal metadata pipelines) follow these rules:
 
-Do **not** leave a workspace ingesting into both substrates simultaneously — that creates the dual-write authority problem the substrate boundary is designed to avoid.
+1. Mark the workspace `backend: graphiti` ONLY for an offline use case justified by the sunset ADR's offline-workflow criteria.
+2. Add a `notes` field referencing the sunset ADR + the specific offline workflow.
+3. The agent-facing read path remains `mcp__agentic-memory__*` pointed at the LightRAG instance that consumes Graphiti's offline output.
+4. Verify the LightRAG canary still passes with the Graphiti-derived metadata in place.
+
+Do **not** add a Graphiti workspace to the agent's MCP connection list; it must remain off the read path. **Transitional exception:** rows in `ops/memory_manifest.yml` that still declare `backend: graphiti` as unprovisioned placeholders (see the manifest comment block) are not agent read targets—the SessionStart prefetch may probe them and records a `missing` marker until workstation-ops flips each row to `lightrag`.
 
 ---
 
@@ -126,11 +130,11 @@ Do **not** leave a workspace ingesting into both substrates simultaneously — t
 
 Consumers that parse `ops/memory_manifest.yml` MUST:
 
-- Treat a workspace with no `backend` field as `backend: "lightrag"` (the implicit v1 default).
-- Treat a flat (un-nested) `canary_acceptance` block as `canary_acceptance.lightrag` (the v1 shape).
+- Treat a workspace with no `backend` field as `backend: "lightrag"` (the canonical default).
+- Treat a flat (un-nested) `canary_acceptance` block as `canary_acceptance.lightrag` (the legacy v1 shape).
 - Default missing `origin` to `null` and treat as "unclassified" without erroring.
 
-This keeps v1 manifests parseable until every consumer adopts the v2 schema, and lets the migration roll out per-workspace rather than as a coordinated cut-over.
+**Strict mode (recommended for fleet health checks):** `scripts/check_memory_manifest.py` (wired into `ci_policy`) **fails** when a workspace row omits `backend`, uses an unknown value, or declares `graphiti` without `notes`. Manifest *parsers* may still default omitted `backend` to `lightrag` for backward compatibility when reading legacy files, but the SessionStart hook **does not** default at runtime — omitted `backend` skips HTTP prefetch and stamps `.scratch/.last_memory_query.missing`. The hook only issues HTTP reads when `backend == "lightrag"`; `graphiti` rows (including sunset placeholders) never hit the agent read path — see `tests/test_hook_session_start_memory_prefetch.py::test_graphiti_backend_writes_missing_marker` and `test_missing_backend_skips_prefetch`.
 
 ---
 
@@ -138,5 +142,6 @@ This keeps v1 manifests parseable until every consumer adopts the v2 schema, and
 
 - [VAULT_TAXONOMY.md](VAULT_TAXONOMY.md) — what `origin` means and how it shapes ingest cadence
 - [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml) — live manifest with the schema in use
-- [`.claude/rules/memory.md`](../../.claude/rules/memory.md) — rule pointer for agents
-- Graphiti MCP server: [getzep/graphiti/mcp_server](https://github.com/getzep/graphiti/tree/main/mcp_server)
+- [`.claude/rules/memory-substrate.md`](../../.claude/rules/memory-substrate.md) — rule pointer for agents
+- LightRAG: [HKUDS/LightRAG](https://github.com/HKUDS/LightRAG)
+- Graphiti (offline-only): [getzep/graphiti/mcp_server](https://github.com/getzep/graphiti/tree/main/mcp_server) — see [Graphiti sunset ADR](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md) in agent-factory

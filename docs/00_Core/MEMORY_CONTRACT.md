@@ -4,18 +4,18 @@
 **Category:** Core
 **Owns:** the LOAD/SAVE protocol across **all three memory tiers** for Claude Code, Cursor, and Task-spawned subagents.
 **Loaded by:** `@docs/00_Core/MEMORY_CONTRACT.md` in `CLAUDE.md` (Claude Code auto-inclusion); referenced by `.cursor/rules/memory-contract.mdc` (Cursor auto-apply); embedded in `.claude/agents/*.md` and `AGENTS.md` via marker-delimited sections re-rendered by `scripts/merge_memory_contract.py`.
-**Companion invariants:** [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md).
+**Companion invariants:** [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/ProjectTemplate/00_System/invariants/secrets-from-doppler.md).
 **Originating postmortem:** [issue #115](https://github.com/agorokh/template-repo/issues/115).
 
 ---
 
 ## The contract in one paragraph
 
-Memory in this project lives in **exactly three tiers** — `AGENTS.md` (Tier 1, short operational facts, auto-loaded), the vault (Tier 2, structured markdown graph), and a per-workspace semantic substrate (Tier 3, Graphiti / LightRAG, queryable via `mcp__agentic-memory__*`). Every agent — primary, Task-spawned subagent, Cursor coding agent, CLI invocation — **MUST**:
+Memory in this project lives in **exactly three tiers** — `AGENTS.md` (Tier 1, short operational facts, auto-loaded), the vault (Tier 2, structured markdown graph), and a per-workspace semantic substrate (Tier 3, LightRAG canonical online — Graphiti retained for offline entity-resolution + bi-temporal metadata only per the [Graphiti sunset ADR](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md) maintained in agent-factory — queryable via `mcp__agentic-memory__*`). Every agent — primary, Task-spawned subagent, Cursor coding agent, CLI invocation — **MUST**:
 
 1. **Read Tier 3 at LOAD** via `mcp__agentic-memory__query_knowledge_graph` for the active workspace before any substantive Edit/Write/Bash on code paths. The substrate is the reason we keep three tiers; skipping the read means re-discovering context every session.
 2. **Write to the right tier at SAVE.** Short operational facts → `AGENTS.md`. Structured knowledge (decisions, investigations, invariants, glossary, handoffs) → vault as small linked nodes. **Tier 3 is read-mostly from the agent surface** — it is rebuilt by re-ingesting Tier-2 on cadence; agents do not write to it directly.
-3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs and ad-hoc files outside the three tiers are side channels ([invariant](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)). Tier-3 is normally populated by **vault → ingest**; direct substrate writes (`mcp__agentic-memory__add_episode`, etc.) are optional exceptions for material findings when the MCP is available — not a substitute for vault SAVE.
+3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md)).
 
 These rules are enforced by deterministic hooks (`scripts/hook_session_start_memory_prefetch.py`, `scripts/hook_memory_gate.py`, `scripts/hook_stop_save_reminder.py`) — not by trust in the agent's prompt-following. Failure modes are explicit and surfaced to the human.
 
@@ -27,9 +27,9 @@ These rules are enforced by deterministic hooks (`scripts/hook_session_start_mem
 |---|---|---|---|
 | **1** | `AGENTS.md` bottom section + changelog | Direct `Edit` for short operational facts (commands, ports, learned preferences, policy updates) | Auto-loaded by Claude Code / Cursor at session start |
 | **2** | Obsidian vault at `docs/01_Vault/<ProjectKey>/` (markdown graph; `00_Graph_Schema.md`) | Direct `Write` / `Edit` of small linked nodes (decisions, investigations, invariants, glossary, handoffs) | `@`-included by `CLAUDE.md`; indirectly via Tier-3 query (the substrate is built by re-ingesting Tier-2) |
-| **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml). Backend: `graphiti` (canonical) or `lightrag` (legacy). | **Indirect.** The substrate ingests Tier-2 vault notes on cadence (`stale_after_hours` per workspace). Agents do **not** write to the substrate directly. | `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)` + `mcp__agentic-memory__search_*`. **Read at LOAD is mandatory.** |
+| **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml). Backend: **`lightrag` (canonical online)** or `graphiti` (offline-only per [sunset ADR](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md); never on the agent read path). | **Indirect.** The substrate ingests Tier-2 vault notes on cadence (`stale_after_hours` per workspace). Agents do **not** write to the substrate directly — no MCP write tools are exposed by design. | For **`lightrag`** workspaces only: `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)` + `mcp__agentic-memory__search_*`. Not used for `graphiti` rows (offline-only). **Read at LOAD is mandatory** when a matching LightRAG workspace is live. |
 
-Auto-memory (`~/.claude/projects/.../memory/`) is **not** a tier — it is a side channel actively deprecated for this project. See [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
+Auto-memory (`~/.claude/projects/.../memory/`) is **not** a tier — it is a side channel actively deprecated for this project. See [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md).
 
 ---
 
@@ -44,7 +44,7 @@ At session start, the `SessionStart` command hook (`.claude/settings.base.json`)
 
 **Agent obligation:** if you need to do meaningful work, **issue at least one `mcp__agentic-memory__query_knowledge_graph` call early in the session** with a prompt tied to the issue/branch/task. The SessionStart hook does an initial prefetch using branch name + issue title as the query; refine with a task-specific query once you understand scope.
 
-If you are a **Task-spawned subagent**, the orchestrator embeds the SessionStart memory prefetch output as a `## Pre-loaded memory context` block in your prompt. You inherit the same `.scratch/.last_memory_query` stamp on disk; further MCP queries supplement your context in the prompt but **do not** update the gate stamp today (only SessionStart prefetch writes/refreshes `.scratch/.last_memory_query`).
+If you are a **Task-spawned subagent**, the orchestrator embeds the SessionStart memory prefetch output as a `## Pre-loaded memory context` block in your prompt. You inherit the same lockfile on disk; further MCP queries supplement context but do not rewrite the gate stamp (only SessionStart prefetch updates `.scratch/.last_memory_query` today).
 
 ---
 
@@ -53,7 +53,7 @@ If you are a **Task-spawned subagent**, the orchestrator embeds the SessionStart
 At session end (Stop hook) or before a Phase-C vault commit:
 
 1. **Vault SAVE** — Update `Next Session Handoff.md`. Add or update small linked nodes for any new investigation, decision, or convention per [`00_Graph_Schema.md`](../01_Vault/00_Graph_Schema.md). Prefer **new small files** over appending to monoliths.
-2. **Tier-3 substrate write** — Material findings (new architectural decisions, recurring failure patterns, fleet-wide invariant violations) should be promoted to the substrate so future agents retrieve them at LOAD. For `graphiti` workspaces, add via `mcp__agentic-memory__add_episode` (when available) or rely on the vault → substrate ingest pipeline (Graphiti ingests new vault notes on its cadence). For `lightrag` workspaces, the ingest-audit launchd unit picks up new vault notes within `stale_after_hours`.
+2. **Tier-3 substrate write** — *agents never write to the substrate directly.* No MCP write tool is exposed; the substrate is rebuilt by re-ingesting Tier-2 vault notes on cadence. Material findings (architectural decisions, recurring failure patterns, fleet-wide invariant violations) become Tier-3-discoverable by being written as Tier-2 vault nodes (small linked markdown). For `lightrag` workspaces (canonical online), the ingest-audit launchd unit picks up new vault notes within `stale_after_hours`. Operational/audit events that don't merit a knowledge node go to JSONL audit logs alongside the vault (e.g. `docs/01_Vault/<ProjectKey>/_inbox/cycles/steward-events.jsonl`).
 3. **Stop audit** — `scripts/hook_stop_save_reminder.py` logs whether (a) the session touched code paths and (b) a vault or Tier-3 write occurred. Mismatches surface to the human as a one-line reminder; they are **not blocking** (template invariant: no LLM in hooks; the audit script is deterministic but advisory).
 
 ---
@@ -95,7 +95,7 @@ When the orchestrator (`issue-driven-coding-orchestrator`) or any agent invokes 
 
 - **Embed memory context.** The orchestrator MUST include a `## Pre-loaded memory context` section in the subagent's prompt with the SessionStart prefetch output (verbatim or summarized). Subagents do not auto-load `CLAUDE.md`; this is the explicit propagation channel.
 - **Embed the contract pointer.** Include the line `Memory contract: docs/00_Core/MEMORY_CONTRACT.md (loaded contract authoritative).` so the subagent treats memory as required, not optional.
-- **Inherit the lockfile.** Subagents in the same session share the parent's `.scratch/.last_memory_query` stamp; their own MCP queries supplement context but do not refresh the stamp (same rule as the primary agent until query-time stamp refresh lands).
+- **Inherit the lockfile.** Subagents in the same session share `.scratch/.last_memory_query`. They may refresh it with their own MCP queries but the parent's stamp counts.
 
 In **Cursor**, where Task only allows `subagent_type` in `{generalPurpose, explore, shell, best-of-n-runner}`, the same contract applies: use `generalPurpose` with the embedded memory context, per `.cursor/rules/cursor-task-delegation.mdc`.
 
@@ -169,9 +169,9 @@ Heuristic accuracy: the citation check is substring-match — an agent that happ
 ## See also
 
 - [`SESSION_LIFECYCLE.md`](SESSION_LIFECYCLE.md) — LOAD → OPERATE → SAVE that this contract slots into.
-- [`MEMORY_SUBSTRATE.md`](MEMORY_SUBSTRATE.md) — Tier-3 substrate detail (Graphiti vs LightRAG; workspace schema).
+- [`MEMORY_SUBSTRATE.md`](MEMORY_SUBSTRATE.md) — Tier-3 substrate detail (LightRAG canonical online; Graphiti offline-only per sunset ADR; workspace schema).
 - [`VAULT_TAXONOMY.md`](VAULT_TAXONOMY.md) — `origin` classification (`repo-product` / `repo-embedded` / `human-curated`).
 - [`HOOK_DESIGN.md`](HOOK_DESIGN.md) — why hooks are deterministic and never LLM-bearing.
-- [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md) — companion invariants.
+- [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/ProjectTemplate/00_System/invariants/secrets-from-doppler.md) — companion invariants.
 - [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml) — workspace registry.
 - [`ops/propagation_manifest.yml`](../../ops/propagation_manifest.yml) — fleet convergence tracking; PR C adds the `memory-enforcement-v1` invariant.

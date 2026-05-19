@@ -5,14 +5,30 @@ anchors:
   umbrella_issue: "https://github.com/agorokh/agent-factory/issues/62"
   umbrella_adr: "https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/memory-fleet-observability.md"
 
-# Canary-query acceptance contract (authoritative source; mirrors the ADR).
-# Consumers (``memory-health-scan`` skill + workstation-ops exporter):
-#   A workspace is "memory is working" iff
-#     (1) the response text does NOT contain "No relevant context found" (case-insensitive), AND
-#     (2) the response text contains at least one line matching ``^- \[\d+\]`` under a
-#         References section.
-# The top-level ``references: []`` envelope on the MCP result is bibliographic
-# metadata and MUST NOT be used as the acceptance signal.
+# ---------------------------------------------------------------------------
+# Schema v2 notes
+# ---------------------------------------------------------------------------
+# Two changes from v1, both backward-compatible for consumers that follow the
+# defaults documented below:
+#
+#  - Per-workspace `backend: "lightrag" | "graphiti"` discriminator.
+#    Consumers that encounter a workspace without `backend` MUST treat it as
+#    "lightrag" (the canonical default). **New workspaces SHOULD default to
+#    "lightrag" per docs/00_Core/MEMORY_SUBSTRATE.md** (the 2026-05-17 sunset
+#    ADR reversed an earlier "graphiti canonical" direction; `graphiti` is
+#    retained only for offline entity-resolution + bi-temporal metadata,
+#    never on the agent read path).
+#
+#  - Per-workspace `origin: "repo-product" | "repo-embedded" | "human-curated"`
+#    classification. Optional but recommended; see docs/00_Core/VAULT_TAXONOMY.md
+#    for definitions and ingest-cadence implications.
+#
+# Canary-acceptance contract is now keyed by backend (different substrates
+# return different response shapes). Consumers MUST look up
+# `canary_acceptance[workspace.backend]`. A flat (un-nested) v1 form, if seen,
+# is treated as `canary_acceptance.lightrag` for backward compatibility.
+# ---------------------------------------------------------------------------
+
 canary_acceptance:
   must_not_contain: "no relevant context found"
   must_match_regex: "^- \\[\\d+\\]"
