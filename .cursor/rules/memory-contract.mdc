@@ -4,9 +4,9 @@ alwaysApply: true
 
 # Memory contract (mandatory for every Cursor agent)
 
-Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md). Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md). Enforcement is by deterministic hooks (see `scripts/hook_memory_gate.py`), not by prompt-following.
+Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md). Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md). Enforcement is by deterministic hooks (see `scripts/hook_memory_gate.py`), not by prompt-following.
 
-**Three tiers, one rule: read all three at LOAD, write to the right one at SAVE, no side channels.** Tier 1 = `AGENTS.md` (short operational facts, auto-loaded). Tier 2 = vault under `docs/01_Vault/<ProjectKey>/` (structured markdown graph, `@`-included). Tier 3 = semantic substrate via `mcp__agentic-memory__query_knowledge_graph` ([`ops/memory_manifest.yml`](../../ops/memory_manifest.yml); Graphiti canonical, LightRAG legacy). **Reading Tier 3 at LOAD is mandatory** for substantive sessions — it's the reason the substrate exists.
+**Three tiers, one rule: read all three at LOAD, write to the right one at SAVE, no side channels.** Tier 1 = `AGENTS.md` (short operational facts, auto-loaded). Tier 2 = vault under `docs/01_Vault/<ProjectKey>/` (structured markdown graph, `@`-included). Tier 3 = semantic substrate via `mcp__agentic-memory__query_knowledge_graph` ([`ops/memory_manifest.yml`](../../ops/memory_manifest.yml); **LightRAG canonical online**; Graphiti offline-only per the [Graphiti sunset ADR](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md)). **Reading Tier 3 at LOAD is mandatory** for substantive sessions — it's the reason the substrate exists.
 
 ## LOAD
 
@@ -18,7 +18,7 @@ At session start, the SessionStart command hook (`scripts/hook_session_start_mem
 
 ## SAVE
 
-Short operational facts go to **Tier 1** (`AGENTS.md`). Structured knowledge goes to **Tier 2** — small linked vault nodes per [`docs/01_Vault/00_Graph_Schema.md`](../../docs/01_Vault/00_Graph_Schema.md). Update `Next Session Handoff.md`. **Tier 3** (the semantic substrate) ingests Tier-2 automatically — do not double-write. **Never** write to `~/.claude/projects/.../memory/` — that auto-memory side channel is deprecated for this project (invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
+Short operational facts go to **Tier 1** (`AGENTS.md`). Structured knowledge goes to **Tier 2** — small linked vault nodes per [`docs/01_Vault/00_Graph_Schema.md`](../../docs/01_Vault/00_Graph_Schema.md). Update `Next Session Handoff.md`. **Tier 3** (the semantic substrate) ingests Tier-2 automatically — do not double-write. **Never** write to `~/.claude/projects/.../memory/` — that auto-memory side channel is deprecated for this project (invariant: [`memory-three-tiers.md`](../../docs/01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md)).
 
 ## Cursor Task subagents
 

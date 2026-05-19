@@ -2,7 +2,7 @@
 type: invariant
 status: active
 created: 2026-05-17
-updated: 2026-05-17
+updated: 2026-05-19
 relates_to:
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md
@@ -21,7 +21,7 @@ All persistent project memory lives in **exactly one** of three declared tiers. 
 |---|---|---|---|
 | **1** | [`AGENTS.md`](../../../../../AGENTS.md) + tier-1 changelog block | Direct `Edit` for short operational facts (commands, ports, learned preferences, policy updates) | Auto-loaded by Claude Code / Cursor at session start |
 | **2** | [Vault](../../) at `docs/01_Vault/<ProjectKey>/` (Obsidian markdown graph; see [`00_Graph_Schema.md`](../../../../00_Graph_Schema.md)) | Direct `Write` / `Edit` of small linked nodes (decisions, investigations, invariants, glossary, handoffs) | `@`-included by `CLAUDE.md`; also indirectly via Tier-3 query (the substrate is built by re-ingesting Tier-2) |
-| **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](../../../../../ops/memory_manifest.yml). Backend: `graphiti` (canonical) or `lightrag` (legacy). See [`MEMORY_SUBSTRATE.md`](../../../../00_Core/MEMORY_SUBSTRATE.md). | **Indirect.** The substrate ingests new vault notes on its cadence (`stale_after_hours` per workspace). Agents do **not** write to the substrate directly. | `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)` + `mcp__agentic-memory__search_*`. **Read at LOAD is mandatory** for substantive sessions. |
+| **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](../../../../../ops/memory_manifest.yml). Backend: **`lightrag` (canonical online)** or `graphiti` (offline-only per [Graphiti sunset ADR](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md); never on the agent read path). See [`MEMORY_SUBSTRATE.md`](../../../../00_Core/MEMORY_SUBSTRATE.md). | **Indirect.** The substrate ingests new vault notes on its cadence (`stale_after_hours` per workspace). Agents do **not** write to the substrate directly — no MCP write tools are exposed by design. | For **`lightrag`** workspaces only: `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)` + `mcp__agentic-memory__search_*`. Not used for `graphiti` rows (offline-only). **Read at LOAD is mandatory** when a matching LightRAG workspace is live. |
 
 ## What is forbidden (side channels)
 
@@ -52,7 +52,7 @@ Collapsing Tier 3 into "vault" misses the point. The vault is human-readable mar
 
 ## Rationale (postmortem)
 
-A 2026-05-16 postmortem ([template-repo issue #115](https://github.com/agorokh/template-repo/issues/115)) catalogued an agent that wrote 6 "memories" to the auto-memory directory and consequently re-derived a credential strategy that already existed in the vault — and got it wrong. The substrate (Graphiti) was reachable but never queried. Documentation alone did not prevent the drift; runtime enforcement is mandatory.
+A 2026-05-16 postmortem ([issue #115](https://github.com/agorokh/template-repo/issues/115); see also [`memory-enforcement-postmortem-2026-05-16.md`](../../02_Investigations/memory-enforcement-postmortem-2026-05-16.md)) catalogued an agent that wrote 6 "memories" to the auto-memory directory and consequently re-derived a credential strategy that already existed in the vault — and got it wrong. The substrate (Graphiti) was reachable but never queried. Documentation alone did not prevent the drift; runtime enforcement is mandatory.
 
 ## See also
 
