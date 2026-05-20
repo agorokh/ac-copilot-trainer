@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-05-17T00:40:00Z
+last_updated: 2026-05-20T05:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -17,6 +17,8 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
 ## Stream A — Rig screen Phase-2 UI (PR #91 merged — Parts A–D on `main`)
 

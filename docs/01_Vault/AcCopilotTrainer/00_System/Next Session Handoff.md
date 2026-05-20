@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-05-17T00:40:00Z
+last_updated: 2026-05-20T05:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,18 +25,22 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-05-17 — PRs #99 and #100 on `main`)
+## Resume here (2026-05-20 — PR #111 on `main`)
 
-Continue from **`main`** @ [`ac810c0`](https://github.com/agorokh/ac-copilot-trainer/commit/ac810c0fcf51352895c66f81cc1a75d3cb0d660a) or newer.
+Continue from **`main`** @ [`8d34073`](https://github.com/agorokh/ac-copilot-trainer/commit/8d3407301f825cad7ca205b69160ab87d190780a) or newer.
 
-**Latest merges (same session):**
+**Latest merges:**
 
-| PR | Merged | Squash | Issue |
-|----|--------|--------|-------|
+| PR | Merged | Squash | Issue / note |
+|----|--------|--------|----------------|
+| [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) | `2026-05-20T04:58:54Z` | [`8d34073`](https://github.com/agorokh/ac-copilot-trainer/commit/8d3407301f825cad7ca205b69160ab87d190780a) | [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) closeout doc (non-vault); supersedes closed [#110](https://github.com/agorokh/ac-copilot-trainer/pull/110) |
+| [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) | `2026-05-20T02:43:31Z` | (squash on `main`) | #108 partial — `.cursor/rules/memory-contract.mdc` only |
 | [#99](https://github.com/agorokh/ac-copilot-trainer/pull/99) | `2026-05-17T00:33:44Z` | [`ebdef7e`](https://github.com/agorokh/ac-copilot-trainer/commit/ebdef7e8d3a1ed388e914f217fc393b600162e31) | [#97](https://github.com/agorokh/ac-copilot-trainer/issues/97) session-journal loader hardening |
 | [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) | `2026-05-17T00:34:09Z` | [`ac810c0`](https://github.com/agorokh/ac-copilot-trainer/commit/ac810c0fcf51352895c66f81cc1a75d3cb0d660a) | [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93) PT row BB chip stale on setup switch |
 
-Post-merge classification: **`post_merge_classify.py --pr 99`** and **`--pr 100`** — no migration / env / deps / script flags.
+Post-merge classification: **`post_merge_classify.py --pr 111`** (and #99/#100) — no migration / env / deps / script flags.
+
+**Agent-surface campaign (#108):** Issue **closed**. Closeout: [`docs/10_Development/issue-108-agent-alignment-closeout.md`](../../../10_Development/issue-108-agent-alignment-closeout.md). Five drifted agent bodies (`dependency-review`, `issue-driven-coding-orchestrator`, `learner`, `post-merge-steward`, `pr-resolution-follow-up`) **deferred** until Steward re-dispatch — do not revert PR #109 memory-contract paths.
 
 **What remains (rig screen EPIC #86):** Parts E–F, `start_sidecar.bat` external-bind + token, Part A4 `lv_font_conv` fonts, on-device confirmation of PT chip refresh after list batches. BB chip staleness fix is **shipped** in #100 (LVGL clear-then-set + invalidate, Lua `chipInt`, firmware `phase2_json_try_int32`); optional human rig smoke still valuable.
 
