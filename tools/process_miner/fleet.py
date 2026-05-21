@@ -40,15 +40,16 @@ def _normalize_slug(slug: str) -> str:
     return slug.strip().lower().replace(" ", "")
 
 
-def _repo_root_candidates() -> tuple[Path, ...]:
-    """Walk up from this file until we find a likely repo root."""
+def _repo_root() -> Path | None:
+    """Return the repository root (git or pyproject.toml), not intermediate parents."""
     here = Path(__file__).resolve()
-    candidates: list[Path] = []
     for parent in here.parents:
-        candidates.append(parent)
-        if (parent / ".git").exists():
-            break
-    return tuple(candidates)
+        if (parent / ".git").is_dir():
+            return parent
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    return None
 
 
 def _registry_path_from_env() -> Path | None:
@@ -65,10 +66,11 @@ def _find_registry() -> Path | None:
     env_path = _registry_path_from_env()
     if env_path is not None:
         return env_path
-    for root in _repo_root_candidates():
+    root = _repo_root()
+    if root is not None:
         for name in _REGISTRY_FILENAMES:
             candidate = root / name
-            if candidate.exists():
+            if candidate.is_file():
                 return candidate
     if _SHIPPED_EXAMPLE_REGISTRY.exists():
         return _SHIPPED_EXAMPLE_REGISTRY

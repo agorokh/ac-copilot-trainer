@@ -111,10 +111,46 @@ def test_fleet_registry_slug_normalization(tmp_path: Path) -> None:
     assert slug_domain == {"your-org/example-repo": "infra"}
 
 
+def test_find_registry_only_at_repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".git").mkdir()
+    sub = root / "tools" / "process_miner"
+    sub.mkdir(parents=True)
+    (sub / ".fleet-registry.yml").write_text("repos: []\n", encoding="utf-8")
+    (root / ".fleet-registry.yml").write_text(
+        'repos:\n  - slug: "your-org/from-root"\n    domain: infra\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fleet_mod, "_repo_root", lambda: root)
+    found = fleet_mod._find_registry()
+    assert found == root / ".fleet-registry.yml"
+    slug_domain, _ = load_fleet_registry(found)
+    assert slug_domain == {"your-org/from-root": "infra"}
+
+
+def test_find_registry_ignores_subdirectory_without_root_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / ".git").mkdir()
+    sub = root / "tools" / "process_miner"
+    sub.mkdir(parents=True)
+    (sub / ".fleet-registry.yml").write_text(
+        'repos:\n  - slug: "your-org/from-subdir"\n    domain: legal\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fleet_mod, "_repo_root", lambda: root)
+    found = fleet_mod._find_registry()
+    assert found is not None
+    assert found.resolve() == fleet_mod._SHIPPED_EXAMPLE_REGISTRY.resolve()
+
+
 def test_find_registry_falls_back_to_shipped_example(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(fleet_mod, "_repo_root_candidates", lambda: ())
+    monkeypatch.setattr(fleet_mod, "_repo_root", lambda: None)
     monkeypatch.delenv("FLEET_REGISTRY_PATH", raising=False)
     found = fleet_mod._find_registry()
     assert found is not None
