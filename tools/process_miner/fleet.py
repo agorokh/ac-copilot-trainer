@@ -32,7 +32,8 @@ _EXAMPLE_FILENAME = "fleet.example.yml"
 _SHIPPED_EXAMPLE_REGISTRY = Path(__file__).resolve().parent / _EXAMPLE_FILENAME
 _ENV_REGISTRY_PATH = "FLEET_REGISTRY_PATH"
 
-_fleet_cache: tuple[Path | None, dict] | None = None
+_FleetCache = tuple[Path | None, dict, dict[str, str], tuple[str, ...]]
+_fleet_cache: _FleetCache | None = None
 
 
 def _normalize_slug(slug: str) -> str:
@@ -124,29 +125,20 @@ def _build_repo_domain(data: dict) -> dict[str, str]:
 
 
 def _build_fleet_repos(data: dict) -> tuple[str, ...]:
-    repos = data.get("repos") or []
-    if not isinstance(repos, list):
-        return ()
-    slugs: list[str] = []
-    for entry in repos:
-        if not isinstance(entry, dict):
-            continue
-        slug = entry.get("slug")
-        domain = entry.get("domain")
-        if isinstance(slug, str) and isinstance(domain, str):
-            slugs.append(_normalize_slug(slug))
-    return tuple(slugs)
+    return tuple(_build_repo_domain(data).keys())
 
 
-def _fleet_state() -> tuple[Path | None, dict]:
+def _fleet_state() -> _FleetCache:
     """Load registry path and parsed data on first use (not at import time)."""
     global _fleet_cache
     if _fleet_cache is None:
         path = _find_registry()
         if path is None:
-            _fleet_cache = (None, {})
+            _fleet_cache = (None, {}, {}, ())
         else:
-            _fleet_cache = (path, _load_registry_file(path))
+            data = _load_registry_file(path)
+            domain = _build_repo_domain(data)
+            _fleet_cache = (path, data, domain, tuple(domain.keys()))
     return _fleet_cache
 
 
@@ -158,19 +150,19 @@ def is_shipped_example_registry(path: Path | None) -> bool:
 
 
 def __getattr__(name: str):
-    path, data = _fleet_state()
+    path, _data, domain, repos = _fleet_state()
     if name == "REGISTRY_PATH":
         return path
     if name == "USING_EXAMPLE_REGISTRY":
         return is_shipped_example_registry(path)
     if name == "REPO_DOMAIN":
-        return _build_repo_domain(data)
+        return domain
     if name == "DEFAULT_FLEET_REPOS":
-        return _build_fleet_repos(data)
+        return repos
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def domain_for_repo(repo_slug: str) -> str | None:
     """Return domain tag or None if unknown."""
-    _, data = _fleet_state()
-    return _build_repo_domain(data).get(_normalize_slug(repo_slug))
+    _, _, domain, _ = _fleet_state()
+    return domain.get(_normalize_slug(repo_slug))
