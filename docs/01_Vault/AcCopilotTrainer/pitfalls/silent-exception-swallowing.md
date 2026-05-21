@@ -28,9 +28,7 @@ relates_to:
 
 # Silent exception swallowing
 
-**8 clusters, 109 comments, 3 repos** (example-doc-pipeline, alpaca_trading, template-repo).
-
-<!-- GitHub repo slug uses double “l” (example-doc-pipeline); see fleet/_index.md -->
+**8 clusters, 109 comments, 3 repos** (example-doc-pipeline, your-org/example-trading-repo, template-repo).
 
 ## Pattern
 
@@ -52,4 +50,4 @@ If the code is in a streaming/async path, the exception MUST propagate to the ca
 
 ## Canonical damage
 
-In `alpaca_trading` PR #751, a bare `except ValueError` in the streaming node hid a DB connection error, which prevented the kill switch from activating during a live trading session. The fix was narrowing to `except decimal.InvalidOperation` and re-raising all others.
+In `your-org/example-trading-repo` PR #751, a bare `except ValueError` in the streaming node hid a DB connection error, which prevented the kill switch from activating during a live trading session. The fix was narrowing to `except decimal.InvalidOperation` and re-raising all others.

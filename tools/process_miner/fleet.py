@@ -137,10 +137,12 @@ def _build_fleet_repos(data: dict) -> tuple[str, ...]:
     return tuple(slugs)
 
 
+REGISTRY_PATH: Path | None = _find_registry()
+USING_EXAMPLE_REGISTRY: bool = REGISTRY_PATH is not None and REGISTRY_PATH.name == _EXAMPLE_FILENAME
+
 _REGISTRY_DATA: dict
-_REGISTRY_PATH = _find_registry()
-if _REGISTRY_PATH is not None:
-    _REGISTRY_DATA = _load_registry_file(_REGISTRY_PATH)
+if REGISTRY_PATH is not None:
+    _REGISTRY_DATA = _load_registry_file(REGISTRY_PATH)
 else:
     _REGISTRY_DATA = {}
 

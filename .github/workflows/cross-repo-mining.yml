@@ -43,7 +43,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mining]"
 
-      # MINING_USE_DEFAULT_FLEET=1: when MINING_REPOS is empty, use built-in fleet (see fleet.py).
+      # MINING_USE_DEFAULT_FLEET=1: when MINING_REPOS is empty, use .fleet-registry.yml (not fleet.example.yml).
       # Optional: MINING_EMIT_LEARNED=1 writes learned/universal + learned/domain/* locally; CI keeps contents:read
       # only. Opening a PR for new universal rules needs a follow-up workflow (contents:write + branch push + PR).
       - name: Run cross-repo aggregate

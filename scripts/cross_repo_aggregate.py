@@ -19,7 +19,10 @@ from tools.process_miner.aggregate import (  # noqa: E402
     cluster_title_to_repos,
     default_token,
 )
-from tools.process_miner.fleet import DEFAULT_FLEET_REPOS  # noqa: E402
+from tools.process_miner.fleet import (  # noqa: E402
+    DEFAULT_FLEET_REPOS,
+    USING_EXAMPLE_REGISTRY,
+)
 
 
 def _fleet_vault_summary(per_repo_stats: dict) -> dict | None:
@@ -87,8 +90,18 @@ def main() -> int:
         "true",
         "yes",
     ):
+        if USING_EXAMPLE_REGISTRY:
+            print(
+                "error: MINING_USE_DEFAULT_FLEET=1 cannot use the shipped "
+                "fleet.example.yml (placeholder slugs only). Copy "
+                "tools/process_miner/fleet.example.yml to .fleet-registry.yml "
+                "with your real fleet, or set MINING_REPOS / "
+                "CROSS_REPO_MINING_REPOS.",
+                file=sys.stderr,
+            )
+            return 1
         repos = list(DEFAULT_FLEET_REPOS)
-        print("MINING_USE_DEFAULT_FLEET=1: using built-in agorokh fleet list (#70).")
+        print("MINING_USE_DEFAULT_FLEET=1: using fleet registry (#70).")
     if not repos:
         print(
             "MINING_REPOS empty. Set comma-separated owner/repo list, or "

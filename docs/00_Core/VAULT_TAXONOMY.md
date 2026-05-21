@@ -33,7 +33,7 @@ The vault **is** the repository's own documentation directory. Markdown lives in
 - **Update pattern:** continuous high-frequency edits, deletes, renames via PRs; small, atomic, frequent.
 - **Conflict semantics:** humans resolve via PR review; the vault is single-writer via the repo's branch protection.
 - **Bi-temporal value:** **high** — facts about an evolving system get superseded constantly; "what did we believe on date X" is a real query.
-- **Examples:** `agent_factory_steward` (this template's vault descendants), `alpaca_trading` (vault inside the trader repo).
+- **Examples:** `agent_factory_steward` (this template's vault descendants), `your-org/example-trading-repo` (vault inside the trader repo).
 
 ### `human-curated`
 

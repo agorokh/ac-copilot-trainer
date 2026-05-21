@@ -6,8 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from tools.process_miner import fleet as fleet_mod
 from tools.process_miner.aggregate import find_universal_scope_titles
-from tools.process_miner.fleet import load_fleet_registry
+from tools.process_miner.fleet import (
+    USING_EXAMPLE_REGISTRY,
+    load_fleet_registry,
+)
 
 
 def test_fleet_registry_loads_from_root_file(tmp_path: Path) -> None:
@@ -105,6 +109,23 @@ def test_fleet_registry_slug_normalization(tmp_path: Path) -> None:
 
     slug_domain, _ = load_fleet_registry(registry_path)
     assert slug_domain == {"your-org/example-repo": "infra"}
+
+
+def test_find_registry_falls_back_to_shipped_example(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(fleet_mod, "_repo_root_candidates", lambda: ())
+    monkeypatch.delenv("FLEET_REGISTRY_PATH", raising=False)
+    found = fleet_mod._find_registry()
+    assert found is not None
+    assert found.name == "fleet.example.yml"
+    slug_domain, repos = load_fleet_registry(found)
+    assert "agorokh/template-repo" in slug_domain
+    assert len(repos) >= 10
+
+
+def test_using_example_registry_flag() -> None:
+    assert isinstance(USING_EXAMPLE_REGISTRY, bool)
 
 
 def test_fleet_registry_env_override_missing_file(

@@ -43,4 +43,4 @@ Most common forms:
 
 ## Canonical damage
 
-In `alpaca_trading` PR #759, the price history cache was split from `update_state.py` into its own module. The split changed the lock scope: bar append and price history read became two separate lock acquisitions instead of one, introducing a race condition where reads could see partially-updated data.
+In `your-org/example-trading-repo` PR #759, the price history cache was split from `update_state.py` into its own module. The split changed the lock scope: bar append and price history read became two separate lock acquisitions instead of one, introducing a race condition where reads could see partially-updated data.
