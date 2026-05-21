@@ -19,7 +19,7 @@ repos:
   - slug: "your-org/example-legal-repo-a"
     domain: "legal"
   - slug: "your-org/example-doc-pipeline"
-    domain: "writing"
+    domain: "legal"
   - slug: "your-org/example-sandbox"
     domain: "infra"
   - slug: "your-org/example-vision-poc"

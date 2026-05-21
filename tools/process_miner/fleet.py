@@ -133,7 +133,7 @@ def _build_fleet_repos(data: dict) -> tuple[str, ...]:
         slug = entry.get("slug")
         domain = entry.get("domain")
         if isinstance(slug, str) and isinstance(domain, str):
-            slugs.append(slug)
+            slugs.append(_normalize_slug(slug))
     return tuple(slugs)
 
 
