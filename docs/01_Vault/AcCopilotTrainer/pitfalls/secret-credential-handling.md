@@ -16,10 +16,10 @@ canonical_prs:
   - repo: agorokh/template-repo
     prs: [81]
     note: API key resolution not endpoint-aware -- OpenAI key silently sent to OpenRouter
-  - repo: agorokh/dial-sandbox
+  - repo: your-org/example-sandbox
     prs: [12]
     note: GHCR token passed on kubectl command line, visible in process listings
-  - repo: agorokh/alpaca_trading
+  - repo: your-org/example-trading-repo
     prs: [756]
     note: Agent instructions contradict AGENTS.md deployment policy on credential handling
 relates_to:

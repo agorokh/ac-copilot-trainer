@@ -107,7 +107,7 @@ def test_cluster_majority_boilerplate() -> None:
 
 
 def test_process_chrome_actionable_count_dropped() -> None:
-    # Exact pattern that dominated the Apr 2026 alpaca_trading run
+    # Exact pattern that dominated the Apr 2026 example-trading-repo run
     assert is_process_chrome_only("**Actionable comments posted: 3**")
     assert is_process_chrome_only("Actionable comments posted: 1")
 
