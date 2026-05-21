@@ -330,7 +330,7 @@ repos:
   name: example-trading-mcp
   domain: trading
   github:
-    default_branch: add-warp-md-clean
+    default_branch: main
     language: Python
     archived: false
     pushed_at: '2025-08-22T15:14:08Z'
