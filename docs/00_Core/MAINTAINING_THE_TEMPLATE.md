@@ -27,7 +27,7 @@ After meaningful workflow, hook, or policy changes, tag **`template-YYYY.MM`** (
 
 ### Reverse flow (child → template)
 
-When a child finds a **domain-agnostic** improvement, open a PR here first (see `AGENT_CORE_PRINCIPLES.md` — *Upstream template sync*). Do not copy product-specific paths, secrets, or proprietary prompts. Tier **B** children (e.g. Alpaca_trading) may contribute **richer** hooks via this path before you forward-port template-only changes manually.
+When a child finds a **domain-agnostic** improvement, open a PR here first (see `AGENT_CORE_PRINCIPLES.md` — *Upstream template sync*). Do not copy product-specific paths, secrets, or proprietary prompts. Tier **B** children (e.g. your-org/example-trading-repo) may contribute **richer** hooks via this path before you forward-port template-only changes manually.
 
 ## What “continuously up to date” means
 

@@ -102,7 +102,7 @@ Once bootstrapped, this repo should declare workstation services in `ops/service
 
 **Out of scope** for `ops/service.yaml`: Claude Desktop / Claude Code MCP servers (stdio children, not workstation-supervised), AWS / cloud services (different host; catalog is Mac Mini-scoped), one-off scripts, CI-only services.
 
-See [`ops/service.yaml.example`](../../ops/service.yaml.example) for the full schema reference and live-example links to agent-factory and Alpaca_trading.
+See [`ops/service.yaml.example`](../../ops/service.yaml.example) for the full schema reference and live-example links to agent-factory and your-org/example-trading-repo.
 
 ## 8. Tier-3 semantic memory (optional)
 

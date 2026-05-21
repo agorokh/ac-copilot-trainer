@@ -194,7 +194,7 @@ def _validate_answer_strings(project_name: str, project_key: str, package_name: 
         raise ValueError(
             "copier_post_copy: project_name must be a PEP 503 / repo-slug "
             "(lowercase letters and digits separated by single hyphens or "
-            f"underscores, e.g. 'alpaca-trading'); got {project_name!r}"
+            f"underscores, e.g. 'example-trading-app'); got {project_name!r}"
         )
 
 

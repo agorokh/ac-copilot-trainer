@@ -15,7 +15,7 @@ There is no safe automated way to propagate template changes to the existing fle
 
 ## 1. The `.claude/settings.json` problem (solve first)
 
-This is the single most dangerous file. It is JSON (no merge markers), it is the most customized file across the fleet, and the template version is not even the richest -- Alpaca_trading has hooks the template lacks.
+This is the single most dangerous file. It is JSON (no merge markers), it is the most customized file across the fleet, and the template version is not even the richest -- your-org/example-trading-repo has hooks the template lacks.
 
 ### Solution: compositional hooks via merge script
 
@@ -53,7 +53,7 @@ Manual per-repo patching. For each child, the propagation checklist for #37/#38 
 
 ## 2. Tiered migration plan
 
-### Tier A: closest to template (ac-copilot-trainer, dial-sandbox)
+### Tier A: closest to template (ac-copilot-trainer, your-org/example-sandbox)
 
 These repos have full vault structure and standard hooks. Migration path:
 
@@ -67,15 +67,15 @@ These repos have full vault structure and standard hooks. Migration path:
 
 **Risk:** Low. These repos are close enough that Copier diffs will be small and reviewable.
 
-### Tier B: evolved beyond template (Alpaca_trading, example_legal_workspace)
+### Tier B: evolved beyond template (your-org/example-trading-repo, your-org/example-legal-repo-a)
 
 These repos have RICHER configurations than the template. Migration is bidirectional.
 
-**Alpaca_trading (progenitor):**
-1. **Reverse flow first.** Audit Alpaca's `.claude/settings.json` for hooks the template should adopt. Open a PR on template-repo to upstream those hooks.
-2. **Then forward-propagate** only the NEW items from #37/#38 that Alpaca does not already have (detect-secrets, init-knowledge, Bandit scope).
-3. **Do NOT onboard to Copier.** Alpaca's structure diverged enough that Copier updates would produce large, noisy diffs. Continue with manual propagation and the merge-script pattern.
-4. **example_legal_workspace** has a sibling-repo guard hook and custom hooks. Same approach: manual propagation of specific changes, no Copier onboarding until structural alignment improves.
+**your-org/example-trading-repo (progenitor):**
+1. **Reverse flow first.** Audit the example trading repo's `.claude/settings.json` for hooks the template should adopt. Open a PR on template-repo to upstream those hooks.
+2. **Then forward-propagate** only the NEW items from #37/#38 that the example trading repo does not already have (detect-secrets, init-knowledge, Bandit scope).
+3. **Do NOT onboard to Copier.** The example trading repo's structure diverged enough that Copier updates would produce large, noisy diffs. Continue with manual propagation and the merge-script pattern.
+4. **your-org/example-legal-repo-a** has a sibling-repo guard hook and custom hooks. Same approach: manual propagation of specific changes, no Copier onboarding until structural alignment improves.
 
 **Risk:** Medium. These repos can regress if template overwrites their richer hooks. Manual review is mandatory.
 
@@ -140,18 +140,18 @@ These repos have different structures and would not benefit from full template s
 [ ] Enable template-sync.yml workflow (already present but inert)
 ```
 
-### dial-sandbox (Tier A)
+### your-org/example-sandbox (Tier A)
 
 ```text
 [ ] Same as ac-copilot-trainer checklist
 [ ] Copy template-sync.yml workflow (not present yet)
 ```
 
-### Alpaca_trading (Tier B -- reverse flow first)
+### your-org/example-trading-repo (Tier B -- reverse flow first)
 
 ```text
-[ ] Audit Alpaca hooks -> PR to template for universal ones
-[ ] After template absorbs Alpaca innovations:
+[ ] Audit example-trading hooks -> PR to template for universal ones
+[ ] After template absorbs example-trading innovations:
 [ ]   Copy scripts/ci_secrets.sh
 [ ]   Copy scripts/init_knowledge_db.py
 [ ]   Add init-knowledge target to Makefile
@@ -161,7 +161,7 @@ These repos have different structures and would not benefit from full template s
 [ ] Do NOT run copier copy or copier update
 ```
 
-### example_legal_workspace (Tier B)
+### your-org/example-legal-repo-a (Tier B)
 
 ```text
 [ ] Copy scripts/ci_secrets.sh
@@ -210,11 +210,11 @@ These repos have different structures and would not benefit from full template s
 4. After merge, tag `template-YYYY.MM` if it is a governance change.
 5. Forward-propagate to other children per tier checklists.
 
-### Known backlog (Alpaca_trading -> template)
+### Known backlog (your-org/example-trading-repo -> template)
 
-Alpaca has the most evolved hooks in the fleet. Before propagating #37/#38 to Alpaca, audit these Alpaca-specific hooks for template adoption:
+The example trading repo has the most evolved hooks in the fleet. Before propagating #37/#38 to it, audit these example-trading-specific hooks for template adoption:
 
-- Hook innovations unique to Alpaca (audit needed)
+- Hook innovations unique to the example trading repo (audit needed)
 - Any PostToolUse patterns not in template
 - Any PreToolUse guards not in template
 
@@ -247,10 +247,10 @@ This audit should happen BEFORE forward propagation to avoid the template overwr
 
 ## 7. Recommended execution order
 
-1. **Now:** Manually propagate #37 changes to ac-copilot-trainer and dial-sandbox (Tier A, lowest risk, roughly 1 hour each).
-2. **This week:** Audit Alpaca_trading hooks for reverse flow. Open template PR for universal hooks found.
+1. **Now:** Manually propagate #37 changes to ac-copilot-trainer and your-org/example-sandbox (Tier A, lowest risk, roughly 1 hour each).
+2. **This week:** Audit your-org/example-trading-repo hooks for reverse flow. Open template PR for universal hooks found.
 3. **Next:** Onboard ac-copilot-trainer to Copier (create `.copier-answers.yml`, test `copier update`). This is the proof-of-concept for automated sync.
-4. **Then:** Propagate #37 to Tier B repos (Alpaca, example_legal_workspace) manually, preserving their custom hooks.
+4. **Then:** Propagate #37 to Tier B repos (your-org/example-trading-repo, your-org/example-legal-repo-a) manually, preserving their custom hooks.
 5. **Build:** `scripts/merge_settings.py` for the compositional hooks pattern. Test on template-repo first.
 6. **Defer:** example-doc-pipeline until there is a concrete need. **example-legal-discovery** had a **2026-04** alignment pass (merge-settings, tracked `.cursor/` policy, vault-memory); further template updates remain **selective** — see Tier C inventory. Low ROI for full Copier or vault graph rename.
 
@@ -263,11 +263,11 @@ template-repo (tagged releases)
     |
     |-- copier update (Tier A repos, automated PRs via template-sync.yml)
     |     |-- ac-copilot-trainer
-    |     |-- dial-sandbox
+    |     |-- your-org/example-sandbox
     |
     |-- manual propagation + merge_settings.py (Tier B repos)
-    |     |-- Alpaca_trading (also reverse-flows innovations)
-    |     |-- example_legal_workspace
+    |     |-- your-org/example-trading-repo (also reverse-flows innovations)
+    |     |-- your-org/example-legal-repo-a
     |
     |-- selective file copy (Tier C repos, only when actively maintained)
           |-- example-legal-discovery

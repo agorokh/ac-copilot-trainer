@@ -24,7 +24,7 @@ The vault is a **build artifact** of another repository's content pipeline. Mark
 - **Update pattern:** bulk-rebuild when source changes; rare, atomic, large.
 - **Conflict semantics:** the rebuild replaces the prior vault snapshot wholesale; reconciliation happens at the pipeline boundary, not in the graph.
 - **Bi-temporal value:** mostly cosmetic — facts don't evolve incrementally within the vault, they get re-emitted by a deterministic pipeline.
-- **Examples:** `example_workspace_a` (built from court-filing PDFs by the `example_doc_pipeline` repo).
+- **Examples:** `example_workspace_a` (built from document-ingest PDFs by the `example-doc-pipeline` repo).
 
 ### `repo-embedded`
 

@@ -138,7 +138,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-legal-repo-a
-  name: example_legal_workspace
+  name: example-legal-workspace
   domain: legal
   github:
     default_branch: main

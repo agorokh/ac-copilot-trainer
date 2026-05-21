@@ -249,7 +249,7 @@ def test_long_comment_with_review_now_phrase_not_chrome() -> None:
     """``review … now`` bot-ack pattern applies only to short bodies (Bugbot #81)."""
     body = (
         "I'll fix the allocation logic in the next commit; please review the retry path "
-        "now that we've added exponential backoff around the Alpaca websocket reconnect."
+        "now that we've added exponential backoff around the example broker websocket reconnect."
     )
     assert not is_process_chrome_only(body)
 
@@ -276,7 +276,7 @@ def test_process_chrome_post_merge_follow_ups_dropped() -> None:
 
 def test_rate_limit_technical_discussion_is_NOT_chrome() -> None:
     body = (
-        "The rate limit for the Alpaca API is 200 requests per minute. "
+        "The rate limit for the example broker API is 200 requests per minute. "
         "We should add backoff logic in the retry handler."
     )
     assert not is_process_chrome_only(body)
