@@ -150,14 +150,17 @@ def is_shipped_example_registry(path: Path | None) -> bool:
 
 
 def __getattr__(name: str):
-    path, _data, domain, repos = _fleet_state()
     if name == "REGISTRY_PATH":
+        path, _, _, _ = _fleet_state()
         return path
     if name == "USING_EXAMPLE_REGISTRY":
+        path, _, _, _ = _fleet_state()
         return is_shipped_example_registry(path)
     if name == "REPO_DOMAIN":
+        _, _, domain, _ = _fleet_state()
         return domain
     if name == "DEFAULT_FLEET_REPOS":
+        _, _, _, repos = _fleet_state()
         return repos
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
