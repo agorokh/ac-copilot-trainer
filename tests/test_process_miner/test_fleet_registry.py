@@ -118,7 +118,7 @@ def test_find_registry_falls_back_to_shipped_example(
     monkeypatch.delenv("FLEET_REGISTRY_PATH", raising=False)
     found = fleet_mod._find_registry()
     assert found is not None
-    assert found.name == "fleet.example.yml"
+    assert found.resolve() == fleet_mod._SHIPPED_EXAMPLE_REGISTRY.resolve()
     slug_domain, repos = load_fleet_registry(found)
     assert "agorokh/template-repo" in slug_domain
     assert len(repos) >= 10

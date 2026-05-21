@@ -43,15 +43,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,mining]"
 
-      # MINING_USE_DEFAULT_FLEET=1: when MINING_REPOS is empty, use .fleet-registry.yml (not fleet.example.yml).
-      # Optional: MINING_EMIT_LEARNED=1 writes learned/universal + learned/domain/* locally; CI keeps contents:read
-      # only. Opening a PR for new universal rules needs a follow-up workflow (contents:write + branch push + PR).
+      # Set repository variable CROSS_REPO_MINING_REPOS (comma-separated owner/repo) or pass repos on
+      # workflow_dispatch. MINING_USE_DEFAULT_FLEET is not set here: CI has no .fleet-registry.yml and
+      # the shipped fleet.example.yml is placeholders-only.
       - name: Run cross-repo aggregate
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MINING_REPOS: ${{ inputs.repos || vars.CROSS_REPO_MINING_REPOS }}
           MINING_DAYS: ${{ github.event_name == 'workflow_dispatch' && inputs.days || '30' }}
-          MINING_USE_DEFAULT_FLEET: "1"
         run: python scripts/cross_repo_aggregate.py
 
       - name: Upload summary artifact
@@ -90,8 +89,6 @@ jobs:
           MINING_REPOS: ${{ inputs.repos || vars.CROSS_REPO_MINING_REPOS }}
           MINING_DAYS: ${{ inputs.days || '30' }}
           MINING_EMIT_LEARNED: "1"
-          # When repos input + variable are empty, fall back to fleet list (same as aggregate job).
-          MINING_USE_DEFAULT_FLEET: "1"
         run: python scripts/cross_repo_aggregate.py
 
       - name: Create pull request

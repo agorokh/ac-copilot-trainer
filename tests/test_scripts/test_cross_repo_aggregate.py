@@ -91,9 +91,7 @@ def test_main_rejects_default_fleet_when_example_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mod = _load_cross_repo_aggregate()
-    from tools.process_miner import fleet as fleet_mod
-
     monkeypatch.delenv("MINING_REPOS", raising=False)
     monkeypatch.setenv("MINING_USE_DEFAULT_FLEET", "1")
-    monkeypatch.setattr(fleet_mod, "USING_EXAMPLE_REGISTRY", True)
+    monkeypatch.setattr(mod, "USING_EXAMPLE_REGISTRY", True)
     assert mod.main() == 1
