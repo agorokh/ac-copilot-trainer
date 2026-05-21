@@ -49,7 +49,7 @@ Zero of these carry engineering signal. TF-IDF clusters by surface-word overlap,
 
 ## Finding 3: Real recurring patterns exist but are invisible to TF-IDF
 
-Manual audit of `alpaca_trading` cache (50 PRs, 1,916 comments) found concrete, recurring implementation mistakes:
+Manual audit of `your-org/example-trading-repo` cache (50 PRs, 1,916 comments) found concrete, recurring implementation mistakes:
 
 ### Pattern A: Silent exception swallowing (8 PRs, 18 findings)
 
@@ -57,7 +57,7 @@ The same conceptual mistake applied to different contexts over 3+ months:
 
 | PR | File | Mistake |
 |----|------|---------|
-| #842 | `agent/streaming/alpaca_stream_listener.py` | Async reconnect wraps sync DB I/O in bare except, drops metrics silently |
+| #842 | `agent/streaming/example_stream_listener.py` | Async reconnect wraps sync DB I/O in bare except, drops metrics silently |
 | #818 | `core/errors/error_handler.py` | `LogAndReRaiseStrategy` named to re-raise but `handle()` silently returns None |
 | #792 | `agent/streaming/nodes/gate_factory.py` | `fail_open=True` returns `{result_key: True}` on ANY exception |
 | #758 | `agent/streaming/service.py` | try/except around import that always fails → fallback permanently active |

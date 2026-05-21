@@ -12,10 +12,10 @@ scope_paths:
   - "**/pipeline/**"
 domains: [trading, legal, infra, gaming]
 canonical_prs:
-  - repo: agorokh/alpaca_trading
+  - repo: your-org/example-trading-repo
     prs: [751, 737]
     note: Kill-switch bypass caused by bare except ValueError hiding DB connection errors
-  - repo: agorokh/court-fillings-processing
+  - repo: your-org/example-doc-pipeline
     prs: [27, 25]
     note: Filing registry enrichment failures silently skipped
   - repo: agorokh/template-repo
@@ -28,9 +28,7 @@ relates_to:
 
 # Silent exception swallowing
 
-**8 clusters, 109 comments, 3 repos** (court-fillings-processing, alpaca_trading, template-repo).
-
-<!-- GitHub repo slug uses double “l” (court-fillings-processing); see fleet/_index.md -->
+**8 clusters, 109 comments, 3 repos** (example-doc-pipeline, your-org/example-trading-repo, template-repo).
 
 ## Pattern
 
@@ -52,4 +50,4 @@ If the code is in a streaming/async path, the exception MUST propagate to the ca
 
 ## Canonical damage
 
-In `alpaca_trading` PR #751, a bare `except ValueError` in the streaming node hid a DB connection error, which prevented the kill switch from activating during a live trading session. The fix was narrowing to `except decimal.InvalidOperation` and re-raising all others.
+In `your-org/example-trading-repo` PR #751, a bare `except ValueError` in the streaming node hid a DB connection error, which prevented the kill switch from activating during a live trading session. The fix was narrowing to `except decimal.InvalidOperation` and re-raising all others.

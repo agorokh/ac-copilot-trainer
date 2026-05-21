@@ -24,7 +24,7 @@ The vault is a **build artifact** of another repository's content pipeline. Mark
 - **Update pattern:** bulk-rebuild when source changes; rare, atomic, large.
 - **Conflict semantics:** the rebuild replaces the prior vault snapshot wholesale; reconciliation happens at the pipeline boundary, not in the graph.
 - **Bi-temporal value:** mostly cosmetic — facts don't evolve incrementally within the vault, they get re-emitted by a deterministic pipeline.
-- **Examples:** `divorce_proceedings` (built from court-filing PDFs by the `court_fillings_processing` repo).
+- **Examples:** `example_workspace_a` (built from document-ingest PDFs by the `example-doc-pipeline` repo).
 
 ### `repo-embedded`
 
@@ -33,7 +33,7 @@ The vault **is** the repository's own documentation directory. Markdown lives in
 - **Update pattern:** continuous high-frequency edits, deletes, renames via PRs; small, atomic, frequent.
 - **Conflict semantics:** humans resolve via PR review; the vault is single-writer via the repo's branch protection.
 - **Bi-temporal value:** **high** — facts about an evolving system get superseded constantly; "what did we believe on date X" is a real query.
-- **Examples:** `agent_factory_steward` (this template's vault descendants), `alpaca_trading` (vault inside the trader repo).
+- **Examples:** `agent_factory_steward` (this template's vault descendants), `your-org/example-trading-repo` (vault inside the trader repo).
 
 ### `human-curated`
 
@@ -42,7 +42,7 @@ The vault is an **operator-authored knowledge base** with mixed origins. Some en
 - **Update pattern:** mixed — periodic bulk infusions plus continuous manual edits.
 - **Conflict semantics:** the operator is the single writer; conflicting facts resolved by hand (or by Tier-3's contradiction detection, surfaced for review).
 - **Bi-temporal value:** **useful** — particularly for tracking when external knowledge was infused vs. when manual edits happened.
-- **Examples:** `epam_dialx` (operator-curated EPAM knowledge base with Novartis-content infusions and structured MCP imports), `dial_sandbox_mnemos` (operator-curated demo subset of `epam_dialx`).
+- **Examples:** `example_kb_workspace` (operator-curated knowledge base with client-content infusions and structured MCP imports), `example_demo_workspace` (operator-curated demo subset of `example_kb_workspace`).
 
 ---
 

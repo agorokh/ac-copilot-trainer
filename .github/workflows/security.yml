@@ -30,5 +30,11 @@ jobs:
       # pip 26.0.1 (bundled on the GHA runner): CVE-2026-3219 — no fix version published yet.
       # Ignored here because the vulnerability is in the installer itself, not a project dependency;
       # revisit when a fixed pip is released and remove the --ignore-vuln flag.
+      # PYSEC-2024-277 (joblib via scikit-learn) and PYSEC-2025-183 (PyJWT via mcp): supplier-disputed,
+      # no fix version on PyPI; tracked until upstream publishes a patched release.
       - name: Run pip-audit
-        run: pip-audit --ignore-vuln CVE-2026-3219
+        run: >-
+          pip-audit
+          --ignore-vuln CVE-2026-3219
+          --ignore-vuln PYSEC-2024-277
+          --ignore-vuln PYSEC-2025-183

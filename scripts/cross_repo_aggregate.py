@@ -19,7 +19,6 @@ from tools.process_miner.aggregate import (  # noqa: E402
     cluster_title_to_repos,
     default_token,
 )
-from tools.process_miner.fleet import DEFAULT_FLEET_REPOS  # noqa: E402
 
 
 def _fleet_vault_summary(per_repo_stats: dict) -> dict | None:
@@ -63,6 +62,30 @@ def _fleet_vault_summary(per_repo_stats: dict) -> dict | None:
     }
 
 
+def _repos_from_default_fleet() -> tuple[list[str], int | None]:
+    """Load default fleet repos only when MINING_USE_DEFAULT_FLEET is requested."""
+    from tools.process_miner import fleet as fleet_mod
+
+    try:
+        using_example = fleet_mod.USING_EXAMPLE_REGISTRY
+        default_repos = list(fleet_mod.DEFAULT_FLEET_REPOS)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        print(f"error: failed to load fleet registry: {exc}", file=sys.stderr)
+        return [], 1
+
+    if using_example:
+        print(
+            "error: MINING_USE_DEFAULT_FLEET=1 cannot use the shipped "
+            "fleet.example.yml (placeholder slugs only). Copy "
+            "tools/process_miner/fleet.example.yml to .fleet-registry.yml "
+            "with your real fleet, or set MINING_REPOS / "
+            "CROSS_REPO_MINING_REPOS.",
+            file=sys.stderr,
+        )
+        return [], 1
+    return default_repos, None
+
+
 def _parse_days_env() -> tuple[int | None, str | None]:
     raw = os.environ.get("MINING_DAYS", "30").strip()
     try:
@@ -87,8 +110,10 @@ def main() -> int:
         "true",
         "yes",
     ):
-        repos = list(DEFAULT_FLEET_REPOS)
-        print("MINING_USE_DEFAULT_FLEET=1: using built-in agorokh fleet list (#70).")
+        repos, fleet_err = _repos_from_default_fleet()
+        if fleet_err is not None:
+            return fleet_err
+        print("MINING_USE_DEFAULT_FLEET=1: using fleet registry (#70).")
     if not repos:
         print(
             "MINING_REPOS empty. Set comma-separated owner/repo list, or "

@@ -104,7 +104,7 @@ def test_check_mode_exits_0_when_in_sync(tmp_path: Path) -> None:
 
 
 def test_skip_missing_target(tmp_path: Path) -> None:
-    """Missing targets don't fail the run (e.g. dial-sandbox has no learner.md)."""
+    """Missing targets don't fail the run (e.g. example-sandbox has no learner.md)."""
     proc = _run(["--root", str(tmp_path), "--target", "AGENTS.md"])
     # Should print a skip line and exit 0 (no target to render).
     assert proc.returncode == 0

@@ -85,3 +85,28 @@ def test_fleet_vault_summary_empty_returns_none() -> None:
     mod = _load_cross_repo_aggregate()
     assert mod._fleet_vault_summary({}) is None
     assert mod._fleet_vault_summary({"x": {}}) is None
+
+
+def test_main_rejects_default_fleet_when_example_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_cross_repo_aggregate()
+    monkeypatch.delenv("MINING_REPOS", raising=False)
+    monkeypatch.setenv("MINING_USE_DEFAULT_FLEET", "1")
+    monkeypatch.setattr(mod, "_repos_from_default_fleet", lambda: ([], 1))
+    assert mod.main() == 1
+
+
+def test_repos_from_default_fleet_registry_load_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_cross_repo_aggregate()
+    import tools.process_miner.fleet as fleet_mod
+
+    def _broken() -> None:
+        raise RuntimeError("bad registry")
+
+    monkeypatch.setattr(fleet_mod, "_fleet_state", _broken)
+    repos, code = mod._repos_from_default_fleet()
+    assert repos == []
+    assert code == 1

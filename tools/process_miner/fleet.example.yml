@@ -1,0 +1,34 @@
+# Example fleet registry — used as the source of truth for cross-repo
+# mining when a `.fleet-registry.yml` is not present at the repo root.
+#
+# Copy this file to `.fleet-registry.yml` (which is gitignored) and
+# replace placeholder slugs with your real fleet. Slugs mirror the
+# sanitized public fleet inventory under docs/01_Vault/.../fleet_inventory.yml.
+
+repos:
+  - slug: "your-org/example-template-repo"
+    domain: "infra"
+  - slug: "your-org/example-ac-copilot-trainer"
+    domain: "gaming"
+  - slug: "your-org/example-mcp-servers"
+    domain: "infra"
+  - slug: "your-org/example-legal-repo-b"
+    domain: "legal"
+  - slug: "your-org/example-trading-repo"
+    domain: "trading"
+  - slug: "your-org/example-legal-repo-a"
+    domain: "legal"
+  - slug: "your-org/example-doc-pipeline"
+    domain: "legal"
+  - slug: "your-org/example-sandbox"
+    domain: "infra"
+  - slug: "your-org/example-vision-poc"
+    domain: "infra"
+  - slug: "your-org/example-automation"
+    domain: "infra"
+  - slug: "your-org/example-trading-tool"
+    domain: "trading"
+  - slug: "your-org/example-text-analysis"
+    domain: "infra"
+  - slug: "your-org/example-trading-mcp"
+    domain: "trading"

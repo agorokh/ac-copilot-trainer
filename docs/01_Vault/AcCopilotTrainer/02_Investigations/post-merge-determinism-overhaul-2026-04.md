@@ -13,7 +13,7 @@ relates_to:
 
 ## Context
 
-The post-merge steward (`.claude/agents/post-merge-steward.md` + `scripts/post_merge_sync.sh`) has been deployed to 3 of ~6 fleet repos via Copier (template-repo, agent-factory, workstation-ops). Behavior varies wildly across hosts (Claude Code vs Cursor vs Codex) and across repos with different pre-commit / branch-protection setups. Real failure mode observed on `agorokh/agent-factory#52`: agent stashed WIP, committed vault docs to `main` with `SKIP=…` to bypass `no-commit-to-branch` and Hermes drift hooks, then `git push origin main` was rejected by branch protection — agent forced the human to push the docs commit manually.
+The post-merge steward (`.claude/agents/post-merge-steward.md` + `scripts/post_merge_sync.sh`) has been deployed across a fleet of repositories via Copier (template-repo and several downstream repos). Behavior varies across hosts (Claude Code vs Cursor vs Codex) and across repos with different pre-commit / branch-protection setups. A representative failure mode was observed where an agent stashed WIP, committed vault docs to `main` using hook-bypass envs to skip `no-commit-to-branch` and project drift hooks, then `git push origin main` was rejected by branch protection — the agent was forced to escalate to the human to push manually.
 
 ## Findings
 

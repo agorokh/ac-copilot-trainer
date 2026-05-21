@@ -1,8 +1,8 @@
 inventory_version: 1
 generated_at: '2026-04-04T23:31:56Z'
 repos:
-- slug: agorokh/template-repo
-  name: template-repo
+- slug: your-org/example-template-repo
+  name: example-template-repo
   domain: infra
   notes: Hub template; inventory lives here.
   github:
@@ -29,8 +29,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/ac-copilot-trainer
-  name: ac-copilot-trainer
+- slug: your-org/example-ac-copilot-trainer
+  name: example-ac-copilot-trainer
   domain: gaming
   github:
     default_branch: main
@@ -56,8 +56,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/mcp-servers
-  name: mcp-servers
+- slug: your-org/example-mcp-servers
+  name: example-mcp-servers
   domain: infra
   github:
     default_branch: main
@@ -83,8 +83,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/disclosures-discovery
-  name: disclosures-discovery
+- slug: your-org/example-legal-repo-b
+  name: example-legal-repo-b
   domain: legal
   github:
     default_branch: main
@@ -110,8 +110,8 @@ repos:
     hook_event_count: 2
     error: null
   activity: null
-- slug: agorokh/alpaca_trading
-  name: alpaca_trading
+- slug: your-org/example-trading-repo
+  name: example-trading-repo
   domain: trading
   github:
     default_branch: main
@@ -129,7 +129,7 @@ repos:
     error: null
   vault:
     vault_root_present: true
-    project_key: AlpacaTrading
+    project_key: ExampleTradingProject
     error: null
   agent_config:
     claude_dir_present: true
@@ -137,8 +137,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/case_operations
-  name: case_operations
+- slug: your-org/example-legal-repo-a
+  name: example-legal-repo-a
   domain: legal
   github:
     default_branch: main
@@ -156,7 +156,7 @@ repos:
     error: null
   vault:
     vault_root_present: true
-    project_key: CaseOps
+    project_key: ExampleLegalProject
     error: null
   agent_config:
     claude_dir_present: true
@@ -164,8 +164,8 @@ repos:
     hook_event_count: 6
     error: null
   activity: null
-- slug: agorokh/court-fillings-processing
-  name: court-fillings-processing
+- slug: your-org/example-doc-pipeline
+  name: example-doc-pipeline
   domain: legal
   github:
     default_branch: main
@@ -191,8 +191,8 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/dial-sandbox
-  name: dial-sandbox
+- slug: your-org/example-sandbox
+  name: example-sandbox
   domain: infra
   github:
     default_branch: main
@@ -210,7 +210,7 @@ repos:
     error: null
   vault:
     vault_root_present: true
-    project_key: DialSandbox
+    project_key: ExampleSandboxProject
     error: null
   agent_config:
     claude_dir_present: true
@@ -218,8 +218,8 @@ repos:
     hook_event_count: 5
     error: null
   activity: null
-- slug: agorokh/camera-poc
-  name: camera-poc
+- slug: your-org/example-vision-poc
+  name: example-vision-poc
   domain: infra
   github:
     default_branch: main
@@ -237,7 +237,7 @@ repos:
     error: null
   vault:
     vault_root_present: true
-    project_key: CameraPoc
+    project_key: ExampleVisionProject
     error: null
   agent_config:
     claude_dir_present: true
@@ -245,8 +245,8 @@ repos:
     hook_event_count: 5
     error: null
   activity: null
-- slug: agorokh/tesla-automation
-  name: tesla-automation
+- slug: your-org/example-automation
+  name: example-automation
   domain: infra
   github:
     default_branch: main
@@ -272,8 +272,8 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/stock_hero_helper
-  name: stock_hero_helper
+- slug: your-org/example-trading-tool
+  name: example-trading-tool
   domain: trading
   github:
     default_branch: main
@@ -299,8 +299,8 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/imessage-semantic-analysis
-  name: imessage-semantic-analysis
+- slug: your-org/example-text-analysis
+  name: example-text-analysis
   domain: infra
   github:
     default_branch: main
@@ -326,11 +326,11 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/alpaca-mcp-server
-  name: alpaca-mcp-server
+- slug: your-org/example-trading-mcp
+  name: example-trading-mcp
   domain: trading
   github:
-    default_branch: add-warp-md-clean
+    default_branch: main
     language: Python
     archived: false
     pushed_at: '2025-08-22T15:14:08Z'

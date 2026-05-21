@@ -47,11 +47,11 @@ def test_find_cross_repo_patterns_single_repo_ignored() -> None:
 
 def test_find_universal_scope_two_domains() -> None:
     title_repos = {
-        "shared pattern": {"agorokh/template-repo", "agorokh/case_operations"},
+        "shared pattern": {"your-org/example-template-repo", "your-org/example-legal-repo-a"},
     }
     slug_domain = {
-        "agorokh/template-repo": "infra",
-        "agorokh/case_operations": "legal",
+        "your-org/example-template-repo": "infra",
+        "your-org/example-legal-repo-a": "legal",
     }
     assert find_universal_scope_titles(title_repos, slug_domain) == {"shared pattern"}
 
@@ -134,10 +134,10 @@ def test_best_cluster_for_title_tie_breaks_by_repo_slug_order() -> None:
 def test_find_universal_scope_omits_unknown_domain_for_breadth() -> None:
     """Two repos with only one known domain must not become S0 via a None domain entry."""
     title_repos = {
-        "pair": {"agorokh/template-repo", "unknown/orphan-repo"},
+        "pair": {"your-org/example-template-repo", "unknown/orphan-repo"},
     }
     slug_domain = {
-        "agorokh/template-repo": "infra",
+        "your-org/example-template-repo": "infra",
         "unknown/orphan-repo": None,
     }
     assert find_universal_scope_titles(title_repos, slug_domain) == set()
@@ -197,11 +197,11 @@ def test_find_domain_scope_titles_rejects_non_positive_min_repos() -> None:
 
 def test_find_domain_scope_titles_same_domain_pair() -> None:
     title_repos = {
-        "legal only": {"agorokh/case_operations", "agorokh/court-fillings-processing"},
+        "legal only": {"your-org/example-legal-repo-a", "your-org/example-doc-pipeline"},
     }
     slug_domain = {
-        "agorokh/case_operations": "legal",
-        "agorokh/court-fillings-processing": "legal",
+        "your-org/example-legal-repo-a": "legal",
+        "your-org/example-doc-pipeline": "legal",
     }
     universal: set[str] = set()
     dom = find_domain_scope_titles(title_repos, slug_domain, universal, min_repos=2)

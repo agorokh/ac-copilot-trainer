@@ -239,5 +239,5 @@ def test_validate_answer_strings_rejects_non_slug_project_name() -> None:
         with pytest.raises(ValueError, match="project_name"):
             mod._validate_answer_strings(bad, "Foo", "foo")
     # Sanity: representative valid slugs must still pass.
-    for ok in ("foo", "alpaca-trading", "foo_bar", "foo123", "a-b-c"):
+    for ok in ("foo", "example-trading-app", "foo_bar", "foo123", "a-b-c"):
         mod._validate_answer_strings(ok, "Foo", "foo")

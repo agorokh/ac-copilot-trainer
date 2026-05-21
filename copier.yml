@@ -8,15 +8,15 @@ _subdirectory: "."
 
 project_name:
   type: str
-  help: "Project name (e.g., alpaca-trading, PEP 503 style with hyphens)"
+  help: "Project name (e.g., example-trading-app, PEP 503 style with hyphens)"
   validator: >-
     {% if not (project_name | regex_search('^[a-z0-9]+(?:[_-][a-z0-9]+)*$')) %}
-    project_name must be a PEP 503 / repo-slug style string: lowercase letters and digits, separated by single hyphens or underscores (e.g., alpaca-trading). This is also the canonical `repo_id` written into ops/service.yaml and registered in workstation-ops/ops/sources.yaml.
+    project_name must be a PEP 503 / repo-slug style string: lowercase letters and digits, separated by single hyphens or underscores (e.g., example-trading-app). This is also the canonical `repo_id` written into ops/service.yaml and registered in workstation-ops/ops/sources.yaml.
     {% endif %}
 
 project_key:
   type: str
-  help: "Vault project key / Obsidian folder name (e.g., AlpacaTrading)"
+  help: "Vault project key / Obsidian folder name (e.g., ExampleTradingProject)"
   default: >-
     {% set body = project_name | title | replace('-', '') | replace('_', '') %}{% if body and body[0] in '0123456789' %}P{% endif %}{{ body }}
   validator: >-

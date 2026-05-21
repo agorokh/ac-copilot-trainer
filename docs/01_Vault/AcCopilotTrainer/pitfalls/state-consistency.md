@@ -15,10 +15,10 @@ canonical_prs:
   - repo: agorokh/ac-copilot-trainer
     prs: [38, 35]
     note: Session-exit persistence never runs, next session reuses stale state
-  - repo: agorokh/disclosures-discovery
+  - repo: your-org/example-legal-repo-b
     prs: [135]
     note: ON CONFLICT DO UPDATE overwrites description despite PR constraint saying provenance-only
-  - repo: agorokh/alpaca_trading
+  - repo: your-org/example-trading-repo
     prs: [780]
     note: Architecture health score arithmetic inconsistent between sections
 relates_to:

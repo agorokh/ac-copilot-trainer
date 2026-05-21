@@ -4,7 +4,7 @@ status: active
 created: 2026-04-04
 updated: 2026-04-04
 memory_tier: canonical
-issue: https://github.com/agorokh/template-repo/issues/71
+issue: https://github.com/your-org/example-template-repo/issues/71
 relates_to:
   - AcCopilotTrainer/fleet/_index.md
   - AcCopilotTrainer/fleet/fleet_inventory.yml

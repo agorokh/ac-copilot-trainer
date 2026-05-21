@@ -11,7 +11,7 @@ agents (and ``propagation_health_check.py``) make:
   ``secrets-from-doppler.md``.
 
 The vault uses ``ProjectTemplate`` as the placeholder project key; child
-repos rename this folder at bootstrap (e.g. ``AgentFactory``, ``DialSandbox``).
+repos rename this folder at bootstrap (e.g. ``AgentFactory``, ``ExampleSandbox``).
 This test resolves the invariants directory by globbing
 ``docs/01_Vault/*/00_System/invariants/`` so the same test file remains
 runnable in both the template repo and its renamed children — see
@@ -121,7 +121,7 @@ def test_index_relates_to_includes_new_invariants() -> None:
     """Issue #115 invariants must be in the index's relates_to (graph edges)."""
     index_text = INDEX.read_text(encoding="utf-8")
     # Use the resolved project key so renamed children (AgentFactory,
-    # DialSandbox, ...) pass without per-child patches.
+    # ExampleSandbox, ...) pass without per-child patches.
     assert f"{PROJECT_KEY}/00_System/invariants/memory-three-tiers.md" in index_text
     assert f"{PROJECT_KEY}/00_System/invariants/secrets-from-doppler.md" in index_text
 

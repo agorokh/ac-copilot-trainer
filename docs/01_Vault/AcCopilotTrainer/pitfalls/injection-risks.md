@@ -11,10 +11,10 @@ scope_paths:
   - "src/**"
 domains: [trading, legal, infra]
 canonical_prs:
-  - repo: agorokh/template-repo
+  - repo: your-org/example-template-repo
     prs: [58, 57]
     note: Workflow dispatch input directly interpolated into shell script
-  - repo: agorokh/disclosures-discovery
+  - repo: your-org/example-legal-repo-b
     prs: [135]
     note: Per-row SQL query uses string interpolation -- breaks on quotes, injection risk
 relates_to:
@@ -25,7 +25,7 @@ relates_to:
 
 # Injection risks (SQL + shell)
 
-**2 clusters, 9 comments, 2 repos** (template-repo, disclosures-discovery)
+**2 clusters, 9 comments, 2 repos** (your-org/example-template-repo, your-org/example-legal-repo-b)
 
 ## Pattern
 
