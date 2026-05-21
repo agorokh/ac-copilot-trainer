@@ -2,18 +2,33 @@
 # mining when a `.fleet-registry.yml` is not present at the repo root.
 #
 # Copy this file to `.fleet-registry.yml` (which is gitignored) and
-# replace placeholder slugs with your real fleet. The example slugs
-# below are deliberately fictional so that the public source tree
-# does not enumerate private repositories.
+# replace placeholder slugs with your real fleet. Slugs mirror the
+# sanitized public fleet inventory under docs/01_Vault/.../fleet_inventory.yml.
 
 repos:
-  - slug: "your-org/this-repo"
-    domain: "gaming"
-  - slug: "your-org/template-repo"
+  - slug: "agorokh/template-repo"
     domain: "infra"
+  - slug: "agorokh/ac-copilot-trainer"
+    domain: "gaming"
+  - slug: "agorokh/mcp-servers"
+    domain: "infra"
+  - slug: "your-org/example-legal-repo-b"
+    domain: "legal"
   - slug: "your-org/example-trading-repo"
     domain: "trading"
-  - slug: "your-org/example-infra-repo"
-    domain: "infra"
-  - slug: "your-org/example-content-repo"
+  - slug: "your-org/example-legal-repo-a"
+    domain: "legal"
+  - slug: "your-org/example-doc-pipeline"
     domain: "writing"
+  - slug: "your-org/example-sandbox"
+    domain: "infra"
+  - slug: "your-org/example-vision-poc"
+    domain: "infra"
+  - slug: "agorokh/tesla-automation"
+    domain: "infra"
+  - slug: "your-org/example-trading-tool"
+    domain: "trading"
+  - slug: "your-org/example-text-analysis"
+    domain: "infra"
+  - slug: "your-org/example-trading-mcp"
+    domain: "trading"

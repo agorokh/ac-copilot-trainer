@@ -111,7 +111,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-trading-repo
-  name: alpaca_trading
+  name: example-trading-repo
   domain: trading
   github:
     default_branch: main
@@ -192,7 +192,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-sandbox
-  name: dial-sandbox
+  name: example-sandbox
   domain: infra
   github:
     default_branch: main
@@ -219,7 +219,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-vision-poc
-  name: camera-poc
+  name: example-vision-poc
   domain: infra
   github:
     default_branch: main
@@ -273,7 +273,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-trading-tool
-  name: stock_hero_helper
+  name: example-trading-tool
   domain: trading
   github:
     default_branch: main
@@ -300,7 +300,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-text-analysis
-  name: imessage-semantic-analysis
+  name: example-text-analysis
   domain: infra
   github:
     default_branch: main
@@ -327,7 +327,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-trading-mcp
-  name: alpaca-mcp-server
+  name: example-trading-mcp
   domain: trading
   github:
     default_branch: add-warp-md-clean

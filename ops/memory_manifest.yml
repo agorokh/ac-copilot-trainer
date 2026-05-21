@@ -58,11 +58,11 @@ hosts:
     owner_repo: "<your-org>/<your-orchestrator-repo>"
     notes: "Example host. Each workspace is one LightRAG endpoint with its own vault root and audit log. Replace with the real fleet at the operator level."
     workspaces:
-      - name: "example_workspace"
+      - name: "example_kb_workspace"
         endpoint: "http://localhost:8020"
         vault_root: "docs/01_Vault/ExampleProject"
         audit_log: "docs/01_Vault/.turbovault/audit/operations.jsonl"
-        launchd_label: "ai.lightrag.ingest-audit.example_workspace"
+        launchd_label: "ai.lightrag.ingest-audit.example_kb_workspace"
         stale_after_hours: 24
         canary_queries:
           - prompt: "example architectural decision"

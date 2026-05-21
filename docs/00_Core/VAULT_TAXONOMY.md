@@ -42,7 +42,7 @@ The vault is an **operator-authored knowledge base** with mixed origins. Some en
 - **Update pattern:** mixed — periodic bulk infusions plus continuous manual edits.
 - **Conflict semantics:** the operator is the single writer; conflicting facts resolved by hand (or by Tier-3's contradiction detection, surfaced for review).
 - **Bi-temporal value:** **useful** — particularly for tracking when external knowledge was infused vs. when manual edits happened.
-- **Examples:** `example_kb_workspace` (operator-curated EPAM knowledge base with client-content infusions and structured MCP imports), `dial_sandbox_mnemos` (operator-curated demo subset of `example_kb_workspace`).
+- **Examples:** `example_kb_workspace` (operator-curated knowledge base with client-content infusions and structured MCP imports), `example_demo_workspace` (operator-curated demo subset of `example_kb_workspace`).
 
 ---
 
