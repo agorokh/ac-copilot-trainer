@@ -122,7 +122,13 @@ def test_merge_from_fleet_py_adds_all_default_slugs(monkeypatch: pytest.MonkeyPa
     monkeypatch.syspath_prepend(str(ROOT))
     from tools.process_miner.fleet import DEFAULT_FLEET_REPOS
 
-    base = [{"slug": "agorokh/template-repo", "name": "template-repo", "domain": "infra"}]
+    base = [
+        {
+            "slug": "your-org/example-template-repo",
+            "name": "example-template-repo",
+            "domain": "infra",
+        }
+    ]
     out = fir.merge_from_fleet_py(base)
     assert {r["slug"] for r in out} == set(DEFAULT_FLEET_REPOS)
 

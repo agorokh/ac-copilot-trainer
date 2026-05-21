@@ -6,11 +6,11 @@
 # sanitized public fleet inventory under docs/01_Vault/.../fleet_inventory.yml.
 
 repos:
-  - slug: "agorokh/template-repo"
+  - slug: "your-org/example-template-repo"
     domain: "infra"
-  - slug: "agorokh/ac-copilot-trainer"
+  - slug: "your-org/example-ac-copilot-trainer"
     domain: "gaming"
-  - slug: "agorokh/mcp-servers"
+  - slug: "your-org/example-mcp-servers"
     domain: "infra"
   - slug: "your-org/example-legal-repo-b"
     domain: "legal"
@@ -24,7 +24,7 @@ repos:
     domain: "infra"
   - slug: "your-org/example-vision-poc"
     domain: "infra"
-  - slug: "agorokh/tesla-automation"
+  - slug: "your-org/example-automation"
     domain: "infra"
   - slug: "your-org/example-trading-tool"
     domain: "trading"

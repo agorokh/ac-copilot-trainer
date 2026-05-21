@@ -20,7 +20,7 @@ def test_fleet_registry_loads_from_root_file(tmp_path: Path) -> None:
         "\n".join(
             [
                 "repos:",
-                '  - slug: "agorokh/template-repo"',
+                '  - slug: "your-org/example-template-repo"',
                 "    domain: infra",
                 "    default: true",
                 '  - slug: "your-org/example-legal-repo-a"',
@@ -33,11 +33,11 @@ def test_fleet_registry_loads_from_root_file(tmp_path: Path) -> None:
     slug_domain, default_fleet_repos = load_fleet_registry(registry_path)
 
     assert slug_domain == {
-        "agorokh/template-repo": "infra",
+        "your-org/example-template-repo": "infra",
         "your-org/example-legal-repo-a": "legal",
     }
     assert default_fleet_repos == (
-        "agorokh/template-repo",
+        "your-org/example-template-repo",
         "your-org/example-legal-repo-a",
     )
 
@@ -120,7 +120,7 @@ def test_find_registry_falls_back_to_shipped_example(
     assert found is not None
     assert found.resolve() == fleet_mod._SHIPPED_EXAMPLE_REGISTRY.resolve()
     slug_domain, repos = load_fleet_registry(found)
-    assert "agorokh/template-repo" in slug_domain
+    assert "your-org/example-template-repo" in slug_domain
     assert len(repos) >= 10
 
 

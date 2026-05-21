@@ -66,7 +66,14 @@ def _repos_from_default_fleet() -> tuple[list[str], int | None]:
     """Load default fleet repos only when MINING_USE_DEFAULT_FLEET is requested."""
     from tools.process_miner import fleet as fleet_mod
 
-    if fleet_mod.USING_EXAMPLE_REGISTRY:
+    try:
+        using_example = fleet_mod.USING_EXAMPLE_REGISTRY
+        default_repos = list(fleet_mod.DEFAULT_FLEET_REPOS)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        print(f"error: failed to load fleet registry: {exc}", file=sys.stderr)
+        return [], 1
+
+    if using_example:
         print(
             "error: MINING_USE_DEFAULT_FLEET=1 cannot use the shipped "
             "fleet.example.yml (placeholder slugs only). Copy "
@@ -76,7 +83,7 @@ def _repos_from_default_fleet() -> tuple[list[str], int | None]:
             file=sys.stderr,
         )
         return [], 1
-    return list(fleet_mod.DEFAULT_FLEET_REPOS), None
+    return default_repos, None
 
 
 def _parse_days_env() -> tuple[int | None, str | None]:

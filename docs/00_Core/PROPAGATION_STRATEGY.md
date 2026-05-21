@@ -83,7 +83,7 @@ These repos have RICHER configurations than the template. Migration is bidirecti
 
 These repos have different structures and would not benefit from full template sync.
 
-**example-legal-discovery** (inventory as of **2026-04-14**):
+**example-legal-discovery** (`your-org/example-legal-repo-b`; inventory as of **2026-04-14**):
 - **Role:** Forensic financial pipeline (SQLite corpus); not the template Python package / `AcCopilotTrainer` vault layout. **Tier C selective propagation** remains the right classification.
 - **What is aligned (manual, scoped):** Compositional Claude settings — `scripts/merge_settings.py`, `.claude/settings.base.json`, `make merge-settings`, and CI check `ci-claude-settings` in `Makefile`; tracked `.cursor/rules/` and `.cursor/skills/` via `.gitignore` exceptions; vault-memory skill and memory rules; handoff still uses `docs/00_State/` with canonical notes under `docs/01_Vault/` (user taxonomy, not template graph rename).
 - **What is explicitly out of scope:** `copier copy` / `copier update`, `.copier-answers.yml`, and `template-sync.yml` automation — **not planned** for this repo; continuing parity is **selective file copy** when a template change is worth porting.

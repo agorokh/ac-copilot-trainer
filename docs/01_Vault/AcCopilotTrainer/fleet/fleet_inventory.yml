@@ -1,8 +1,8 @@
 inventory_version: 1
 generated_at: '2026-04-04T23:31:56Z'
 repos:
-- slug: agorokh/template-repo
-  name: template-repo
+- slug: your-org/example-template-repo
+  name: example-template-repo
   domain: infra
   notes: Hub template; inventory lives here.
   github:
@@ -29,8 +29,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/ac-copilot-trainer
-  name: ac-copilot-trainer
+- slug: your-org/example-ac-copilot-trainer
+  name: example-ac-copilot-trainer
   domain: gaming
   github:
     default_branch: main
@@ -56,8 +56,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/mcp-servers
-  name: mcp-servers
+- slug: your-org/example-mcp-servers
+  name: example-mcp-servers
   domain: infra
   github:
     default_branch: main
@@ -245,8 +245,8 @@ repos:
     hook_event_count: 5
     error: null
   activity: null
-- slug: agorokh/tesla-automation
-  name: tesla-automation
+- slug: your-org/example-automation
+  name: example-automation
   domain: infra
   github:
     default_branch: main
