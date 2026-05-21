@@ -75,10 +75,12 @@ def _find_registry() -> Path | None:
 
 
 def _load_registry_file(path: Path) -> dict:
-    """Parse a fleet registry YAML file; return {} on recoverable errors."""
+    """Parse a fleet registry YAML file; return {} only when the file is missing."""
     if yaml is None:
-        _LOG.warning("PyYAML not installed; fleet registry unavailable")
-        return {}
+        raise RuntimeError(
+            "PyYAML is required to load the fleet registry at "
+            f"{path}. Install with: pip install -e '.[dev]'"
+        )
     try:
         with path.open(encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
@@ -86,8 +88,7 @@ def _load_registry_file(path: Path) -> dict:
         _LOG.warning("Failed to read fleet registry %s: %s", path, exc)
         return {}
     except yaml.YAMLError as exc:
-        _LOG.warning("Invalid YAML in fleet registry %s: %s", path, exc)
-        return {}
+        raise ValueError(f"Invalid YAML in fleet registry {path}") from exc
     if not isinstance(data, dict):
         _LOG.warning("Fleet registry root must be a mapping: %s", path)
         return {}

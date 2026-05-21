@@ -46,6 +46,10 @@ def test_fleet_registry_malformed_content_gracefully_degrades(tmp_path: Path) ->
     assert slug_domain == {}
     assert default_fleet_repos == ()
 
+    registry_path.write_text("repos:\n  - slug: [\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid YAML"):
+        load_fleet_registry(registry_path)
+
     registry_path.write_text(
         "\n".join(
             [
