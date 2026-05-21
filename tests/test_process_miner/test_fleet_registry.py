@@ -107,6 +107,15 @@ def test_fleet_registry_slug_normalization(tmp_path: Path) -> None:
     assert slug_domain == {"your-org/example-repo": "infra"}
 
 
+def test_fleet_registry_env_override_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "no-such-registry.yml"
+    monkeypatch.setenv("FLEET_REGISTRY_PATH", str(missing))
+    with pytest.raises(FileNotFoundError, match="FLEET_REGISTRY_PATH"):
+        load_fleet_registry()
+
+
 def test_fleet_registry_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     registry_path = tmp_path / "custom-fleet.yml"
     registry_path.write_text(

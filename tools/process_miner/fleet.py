@@ -54,8 +54,7 @@ def _registry_path_from_env() -> Path | None:
     path = Path(override).expanduser()
     if path.is_file():
         return path
-    _LOG.warning("%s is set but not a file: %s", _ENV_REGISTRY_PATH, path)
-    return None
+    raise FileNotFoundError(f"{_ENV_REGISTRY_PATH} is set but not a readable file: {path}")
 
 
 def _find_registry() -> Path | None:
