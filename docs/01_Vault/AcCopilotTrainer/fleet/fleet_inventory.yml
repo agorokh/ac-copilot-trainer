@@ -83,8 +83,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/disclosures-discovery
-  name: disclosures-discovery
+- slug: your-org/example-legal-repo-b
+  name: example-legal-discovery
   domain: legal
   github:
     default_branch: main
@@ -110,7 +110,7 @@ repos:
     hook_event_count: 2
     error: null
   activity: null
-- slug: agorokh/alpaca_trading
+- slug: your-org/example-trading-repo
   name: alpaca_trading
   domain: trading
   github:
@@ -137,8 +137,8 @@ repos:
     hook_event_count: 8
     error: null
   activity: null
-- slug: agorokh/case_operations
-  name: case_operations
+- slug: your-org/example-legal-repo-a
+  name: example_legal_workspace
   domain: legal
   github:
     default_branch: main
@@ -164,8 +164,8 @@ repos:
     hook_event_count: 6
     error: null
   activity: null
-- slug: agorokh/court-fillings-processing
-  name: court-fillings-processing
+- slug: your-org/example-doc-pipeline
+  name: example-doc-pipeline
   domain: legal
   github:
     default_branch: main
@@ -191,7 +191,7 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/dial-sandbox
+- slug: your-org/example-sandbox
   name: dial-sandbox
   domain: infra
   github:
@@ -218,7 +218,7 @@ repos:
     hook_event_count: 5
     error: null
   activity: null
-- slug: agorokh/camera-poc
+- slug: your-org/example-vision-poc
   name: camera-poc
   domain: infra
   github:
@@ -272,7 +272,7 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/stock_hero_helper
+- slug: your-org/example-trading-tool
   name: stock_hero_helper
   domain: trading
   github:
@@ -299,7 +299,7 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/imessage-semantic-analysis
+- slug: your-org/example-text-analysis
   name: imessage-semantic-analysis
   domain: infra
   github:
@@ -326,7 +326,7 @@ repos:
     hook_event_count: null
     error: null
   activity: null
-- slug: agorokh/alpaca-mcp-server
+- slug: your-org/example-trading-mcp
   name: alpaca-mcp-server
   domain: trading
   github:

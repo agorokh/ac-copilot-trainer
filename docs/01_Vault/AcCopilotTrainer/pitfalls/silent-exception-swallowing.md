@@ -12,10 +12,10 @@ scope_paths:
   - "**/pipeline/**"
 domains: [trading, legal, infra, gaming]
 canonical_prs:
-  - repo: agorokh/alpaca_trading
+  - repo: your-org/example-trading-repo
     prs: [751, 737]
     note: Kill-switch bypass caused by bare except ValueError hiding DB connection errors
-  - repo: agorokh/court-fillings-processing
+  - repo: your-org/example-doc-pipeline
     prs: [27, 25]
     note: Filing registry enrichment failures silently skipped
   - repo: agorokh/template-repo
@@ -28,9 +28,9 @@ relates_to:
 
 # Silent exception swallowing
 
-**8 clusters, 109 comments, 3 repos** (court-fillings-processing, alpaca_trading, template-repo).
+**8 clusters, 109 comments, 3 repos** (example-doc-pipeline, alpaca_trading, template-repo).
 
-<!-- GitHub repo slug uses double “l” (court-fillings-processing); see fleet/_index.md -->
+<!-- GitHub repo slug uses double “l” (example-doc-pipeline); see fleet/_index.md -->
 
 ## Pattern
 

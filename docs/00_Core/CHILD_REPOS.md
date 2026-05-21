@@ -12,9 +12,9 @@ Known repos spawned from (or aligned with) this template. Tiers reflect how safe
 | ac-copilot-trainer | A | No | manual | — | Full template v1.4 |
 | dial-sandbox | A | No | manual | — | Full template v1.3 |
 | Alpaca_trading | B | Never (progenitor) | manual | — | Richer hooks than template |
-| case_operations | B | No | manual | — | Custom sibling-repo guard |
-| disclosures-discovery | C | No | N/A | — | Flat `docs/00_State/`, no vault graph |
-| court-fillings-processing | C | No | N/A | — | No `.claude/` dir |
+| example_legal_workspace | B | No | manual | — | Custom sibling-repo guard |
+| example-legal-discovery | C | No | N/A | — | Flat `docs/00_State/`, no vault graph |
+| example-doc-pipeline | C | No | N/A | — | No `.claude/` dir |
 
 ## Quarterly review
 

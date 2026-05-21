@@ -12,13 +12,13 @@ scope_paths:
   - "**/pipeline/**"
 domains: [trading, legal, gaming]
 canonical_prs:
-  - repo: agorokh/alpaca_trading
+  - repo: your-org/example-trading-repo
     prs: [838]
     note: NaN notional bypasses all qty guards, producing invalid orders
   - repo: agorokh/ac-copilot-trainer
     prs: [45, 42]
     note: Shell injection via unsanitized path in ensureDir passes to os.execute
-  - repo: agorokh/court-fillings-processing
+  - repo: your-org/example-doc-pipeline
     prs: [15]
     note: Missing backup pruning on all-copies-failed path
 relates_to:
@@ -28,7 +28,7 @@ relates_to:
 
 # Missing input validation
 
-**9 clusters, 77 comments, 3 repos** (alpaca_trading, ac-copilot-trainer, court-fillings-processing)
+**9 clusters, 77 comments, 3 repos** (alpaca_trading, ac-copilot-trainer, example-doc-pipeline)
 
 ## Pattern
 

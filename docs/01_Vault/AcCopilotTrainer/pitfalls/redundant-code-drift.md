@@ -11,10 +11,10 @@ scope_paths:
   - "**/vault/**"
 domains: [legal, trading, infra]
 canonical_prs:
-  - repo: agorokh/court-fillings-processing
+  - repo: your-org/example-doc-pipeline
     prs: [22, 18]
     note: Duplicated wikilink-building logic across two modules drifts out of sync
-  - repo: agorokh/alpaca_trading
+  - repo: your-org/example-trading-repo
     prs: [759]
     note: Non-atomic append-then-read after module split introduces race condition
 relates_to:

@@ -1,0 +1,19 @@
+# Example fleet registry — used as the source of truth for cross-repo
+# mining when a `.fleet-registry.yml` is not present at the repo root.
+#
+# Copy this file to `.fleet-registry.yml` (which is gitignored) and
+# replace placeholder slugs with your real fleet. The example slugs
+# below are deliberately fictional so that the public source tree
+# does not enumerate private repositories.
+
+repos:
+  - slug: "your-org/this-repo"
+    domain: "gaming"
+  - slug: "your-org/template-repo"
+    domain: "infra"
+  - slug: "your-org/example-trading-repo"
+    domain: "trading"
+  - slug: "your-org/example-infra-repo"
+    domain: "infra"
+  - slug: "your-org/example-content-repo"
+    domain: "writing"

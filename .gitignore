@@ -44,3 +44,10 @@ scripts/create_symlink.ps1
 
 # Cursor hook runtime state (e.g. continual-learning)
 .cursor/hooks/state/
+
+# Fleet registry (operator-local; not committed). See tools/process_miner/fleet.example.yml for the schema.
+.fleet-registry.yml
+.fleet-registry.yaml
+
+# Operator-local memory manifest (replaces ops/memory_manifest.yml in operator overlay)
+ops/memory_manifest.local.yml

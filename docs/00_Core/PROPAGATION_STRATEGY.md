@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Created:** 2026-04-02
-**Last inventory update:** 2026-04-14 (disclosures-discovery alignment note)
+**Last inventory update:** 2026-04-14 (example-legal-discovery alignment note)
 **Category:** Core
 
 ---
@@ -67,7 +67,7 @@ These repos have full vault structure and standard hooks. Migration path:
 
 **Risk:** Low. These repos are close enough that Copier diffs will be small and reviewable.
 
-### Tier B: evolved beyond template (Alpaca_trading, case_operations)
+### Tier B: evolved beyond template (Alpaca_trading, example_legal_workspace)
 
 These repos have RICHER configurations than the template. Migration is bidirectional.
 
@@ -75,22 +75,22 @@ These repos have RICHER configurations than the template. Migration is bidirecti
 1. **Reverse flow first.** Audit Alpaca's `.claude/settings.json` for hooks the template should adopt. Open a PR on template-repo to upstream those hooks.
 2. **Then forward-propagate** only the NEW items from #37/#38 that Alpaca does not already have (detect-secrets, init-knowledge, Bandit scope).
 3. **Do NOT onboard to Copier.** Alpaca's structure diverged enough that Copier updates would produce large, noisy diffs. Continue with manual propagation and the merge-script pattern.
-4. **case_operations** has a sibling-repo guard hook and custom hooks. Same approach: manual propagation of specific changes, no Copier onboarding until structural alignment improves.
+4. **example_legal_workspace** has a sibling-repo guard hook and custom hooks. Same approach: manual propagation of specific changes, no Copier onboarding until structural alignment improves.
 
 **Risk:** Medium. These repos can regress if template overwrites their richer hooks. Manual review is mandatory.
 
-### Tier C: partial adoption (disclosures-discovery, court-fillings-processing)
+### Tier C: partial adoption (example-legal-discovery, example-doc-pipeline)
 
 These repos have different structures and would not benefit from full template sync.
 
-**disclosures-discovery** (inventory as of **2026-04-14**):
+**example-legal-discovery** (inventory as of **2026-04-14**):
 - **Role:** Forensic financial pipeline (SQLite corpus); not the template Python package / `AcCopilotTrainer` vault layout. **Tier C selective propagation** remains the right classification.
 - **What is aligned (manual, scoped):** Compositional Claude settings — `scripts/merge_settings.py`, `.claude/settings.base.json`, `make merge-settings`, and CI check `ci-claude-settings` in `Makefile`; tracked `.cursor/rules/` and `.cursor/skills/` via `.gitignore` exceptions; vault-memory skill and memory rules; handoff still uses `docs/00_State/` with canonical notes under `docs/01_Vault/` (user taxonomy, not template graph rename).
 - **What is explicitly out of scope:** `copier copy` / `copier update`, `.copier-answers.yml`, and `template-sync.yml` automation — **not planned** for this repo; continuing parity is **selective file copy** when a template change is worth porting.
 - **Older checklist items superseded:** The per-repo checklist below that said “do NOT add vault-dirty / SessionStart vault handoff” assumed no vault paths. The repo now uses vault-dirty-style hooks **only** where paths match `docs/01_Vault/*` and `docs/00_State/*` (see child’s `settings.base.json`). Do not treat the old “no vault” bullets as current.
-- **Proof of alignment work:** [disclosures-discovery#142](https://github.com/agorokh/disclosures-discovery/issues/142) / [PR #143](https://github.com/agorokh/disclosures-discovery/pull/143).
+- **Proof of alignment work:** [example-legal-discovery#142](https://github.com/your-org/example-legal-repo-b/issues/142) / [PR #143](https://github.com/your-org/example-legal-repo-b/pull/143).
 
-**court-fillings-processing:**
+**example-doc-pipeline:**
 - Has no `.claude/` directory at all. Would BENEFIT from template hooks.
 - Propagate: copy `.claude/settings.json` wholesale (no existing hooks to preserve), copy scripts, Makefile.
 - This is the one repo where a fresh `copier copy` might actually work, but test in a branch first.
@@ -161,7 +161,7 @@ These repos have different structures and would not benefit from full template s
 [ ] Do NOT run copier copy or copier update
 ```
 
-### case_operations (Tier B)
+### example_legal_workspace (Tier B)
 
 ```text
 [ ] Copy scripts/ci_secrets.sh
@@ -174,12 +174,12 @@ These repos have different structures and would not benefit from full template s
 [ ] Do NOT run copier copy or copier update
 ```
 
-### disclosures-discovery (Tier C)
+### example-legal-discovery (Tier C)
 
 **Current baseline (2026-04):** Merge-settings pattern and cursor policy tracking are **done** in the child repo. Treat the list below as **optional forward ports** from template when there is a concrete need — not a stale backlog.
 
 ```text
-[x] merge_settings.py + settings.base.json + ci-claude-settings (done in disclosures-discovery)
+[x] merge_settings.py + settings.base.json + ci-claude-settings (done in example-legal-discovery)
 [ ] Copy scripts/ci_secrets.sh (optional — if adding detect-secrets to pre-commit)
 [ ] Copy scripts/init_knowledge_db.py + Makefile target (optional — only if adopting knowledge DB)
 [ ] Patch timeouts / hooks in settings.base.json via merge (optional — follow template hook changelog)
@@ -187,7 +187,7 @@ These repos have different structures and would not benefit from full template s
 [ ] Copier / template-sync — NOT planned; selective propagation only
 ```
 
-### court-fillings-processing (Tier C)
+### example-doc-pipeline (Tier C)
 
 ```text
 [ ] Create .claude/ directory
@@ -250,9 +250,9 @@ This audit should happen BEFORE forward propagation to avoid the template overwr
 1. **Now:** Manually propagate #37 changes to ac-copilot-trainer and dial-sandbox (Tier A, lowest risk, roughly 1 hour each).
 2. **This week:** Audit Alpaca_trading hooks for reverse flow. Open template PR for universal hooks found.
 3. **Next:** Onboard ac-copilot-trainer to Copier (create `.copier-answers.yml`, test `copier update`). This is the proof-of-concept for automated sync.
-4. **Then:** Propagate #37 to Tier B repos (Alpaca, case_operations) manually, preserving their custom hooks.
+4. **Then:** Propagate #37 to Tier B repos (Alpaca, example_legal_workspace) manually, preserving their custom hooks.
 5. **Build:** `scripts/merge_settings.py` for the compositional hooks pattern. Test on template-repo first.
-6. **Defer:** court-fillings-processing until there is a concrete need. **disclosures-discovery** had a **2026-04** alignment pass (merge-settings, tracked `.cursor/` policy, vault-memory); further template updates remain **selective** — see Tier C inventory. Low ROI for full Copier or vault graph rename.
+6. **Defer:** example-doc-pipeline until there is a concrete need. **example-legal-discovery** had a **2026-04** alignment pass (merge-settings, tracked `.cursor/` policy, vault-memory); further template updates remain **selective** — see Tier C inventory. Low ROI for full Copier or vault graph rename.
 
 ---
 
@@ -267,11 +267,11 @@ template-repo (tagged releases)
     |
     |-- manual propagation + merge_settings.py (Tier B repos)
     |     |-- Alpaca_trading (also reverse-flows innovations)
-    |     |-- case_operations
+    |     |-- example_legal_workspace
     |
     |-- selective file copy (Tier C repos, only when actively maintained)
-          |-- disclosures-discovery
-          |-- court-fillings-processing
+          |-- example-legal-discovery
+          |-- example-doc-pipeline
 ```
 
 The merge-script pattern for `.claude/settings.json` applies to ALL tiers. Even Copier-onboarded repos should use it because `_skip_if_exists` for settings.json means Copier will never touch hooks -- the merge script is the sync channel for that file.

@@ -24,7 +24,7 @@ The vault is a **build artifact** of another repository's content pipeline. Mark
 - **Update pattern:** bulk-rebuild when source changes; rare, atomic, large.
 - **Conflict semantics:** the rebuild replaces the prior vault snapshot wholesale; reconciliation happens at the pipeline boundary, not in the graph.
 - **Bi-temporal value:** mostly cosmetic — facts don't evolve incrementally within the vault, they get re-emitted by a deterministic pipeline.
-- **Examples:** `divorce_proceedings` (built from court-filing PDFs by the `court_fillings_processing` repo).
+- **Examples:** `example_workspace_a` (built from court-filing PDFs by the `example_doc_pipeline` repo).
 
 ### `repo-embedded`
 
@@ -42,7 +42,7 @@ The vault is an **operator-authored knowledge base** with mixed origins. Some en
 - **Update pattern:** mixed — periodic bulk infusions plus continuous manual edits.
 - **Conflict semantics:** the operator is the single writer; conflicting facts resolved by hand (or by Tier-3's contradiction detection, surfaced for review).
 - **Bi-temporal value:** **useful** — particularly for tracking when external knowledge was infused vs. when manual edits happened.
-- **Examples:** `epam_dialx` (operator-curated EPAM knowledge base with Novartis-content infusions and structured MCP imports), `dial_sandbox_mnemos` (operator-curated demo subset of `epam_dialx`).
+- **Examples:** `example_kb_workspace` (operator-curated EPAM knowledge base with client-content infusions and structured MCP imports), `dial_sandbox_mnemos` (operator-curated demo subset of `example_kb_workspace`).
 
 ---
 

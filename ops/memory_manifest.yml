@@ -2,8 +2,11 @@ manifest_version: 1
 updated_at: "2026-04-23T18:00:00Z"
 owner: "template-repo"
 anchors:
-  umbrella_issue: "https://github.com/agorokh/agent-factory/issues/62"
-  umbrella_adr: "https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/memory-fleet-observability.md"
+  # Placeholder anchors. Operator overlays replace these with real upstream
+  # issue / ADR URLs in their .gitignored manifest. The schema does not
+  # depend on these being reachable.
+  umbrella_issue: "<your-orchestrator-repo>/issues/<umbrella-issue>"
+  umbrella_adr: "<your-orchestrator-repo>/blob/main/docs/01_Vault/<Project>/01_Decisions/memory-fleet-observability.md"
 
 # ---------------------------------------------------------------------------
 # Schema v2 notes
@@ -42,46 +45,29 @@ rms_scheduling:
     cadence: "weekly"
     command: "hermes run-skill memory-health-scan --actuate"
 
+# ---------------------------------------------------------------------------
+# This file is the SCHEMA reference shipped with template-repo. A real
+# operator's memory manifest (with actual host IDs, vault paths, and
+# workspace names) lives outside the repo (or in a gitignored overlay)
+# because it includes operator-specific filesystem layout and private
+# workspace names. See docs/00_Core/MEMORY_SUBSTRATE.md for the contract;
+# the example below shows the shape, not a real fleet.
+# ---------------------------------------------------------------------------
 hosts:
-  - id: "mac-mini-dev"
-    owner_repo: "agorokh/agent-factory"
-    notes: "Primary developer mac. Runs agent-factory steward vault, epam_dialx operator-local KB, and divorce_proceedings workspace (registered for fleet awareness; ingest managed externally by the operator)."
+  - id: "example-host"
+    owner_repo: "<your-org>/<your-orchestrator-repo>"
+    notes: "Example host. Each workspace is one LightRAG endpoint with its own vault root and audit log. Replace with the real fleet at the operator level."
     workspaces:
-      - name: "agent_factory_steward"
+      - name: "example_workspace"
         endpoint: "http://localhost:8020"
-        vault_root: "docs/01_Vault/AgentFactory"
+        vault_root: "docs/01_Vault/ExampleProject"
         audit_log: "docs/01_Vault/.turbovault/audit/operations.jsonl"
-        launchd_label: "ai.lightrag.ingest-audit.agent_factory_steward"
+        launchd_label: "ai.lightrag.ingest-audit.example_workspace"
         stale_after_hours: 24
         canary_queries:
-          - prompt: "Copilot PR 41 OAuth token"
+          - prompt: "example architectural decision"
             mode: "hybrid"
             expected_refs_any:
-              - "pr41-tier3-verification-complete-2026-04-19.md"
-              - "copilot-token-exchange-2026-04-19.md"
+              - "example-investigation-2026-04-19.md"
           - prompt: "LightRAG Neo4j graph storage"
             mode: "mix"
-      - name: "epam_dialx"
-        endpoint: "http://localhost:8040"
-        vault_root: "~/Projects/dialx-knowledge/EPAM_Notes"
-        audit_log: "~/Projects/dialx-knowledge/EPAM_Notes/.turbovault/audit/operations.jsonl"
-        launchd_label: "ai.lightrag.ingest-audit.epam_dialx"
-        stale_after_hours: 24
-        canary_queries:
-          - prompt: "EPAM DIAL governance entities"
-            mode: "global"
-      # divorce_proceedings: fleet-registered for awareness only.
-      # Ingest pipeline is operator-managed externally (selective / section-level,
-      # not whole-vault audit-ingest); the standard audit launchd unit is
-      # intentionally NOT installed for this workspace. ``stale_after_hours`` is
-      # generous because the operator drives ingest cadence. Canary is a
-      # placeholder until the operator pins a stable probe prompt.
-      - name: "divorce_proceedings"
-        endpoint: "http://localhost:8060"
-        vault_root: "~/Projects/court_fillings_processing/data/obsidian_vault"
-        audit_log: "~/Projects/court_fillings_processing/data/obsidian_vault/.turbovault/audit/operations.jsonl"
-        launchd_label: null
-        stale_after_hours: 168
-        canary_queries:
-          - prompt: "divorce proceedings case index"
-            mode: "hybrid"

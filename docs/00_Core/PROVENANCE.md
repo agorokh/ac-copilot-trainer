@@ -5,7 +5,7 @@ This template generalizes practices observed across:
 | Repository | Notable patterns absorbed |
 |------------|---------------------------|
 | `alpaca_trading-dev` | `.claude/settings.json` hook style, policy CI for canonical docs, `AGENTS.md` / `CLAUDE.md` depth, mirrored `.cursor` skills, Bugbot injection, Dependabot + security workflows, vault path layout |
-| `court_fillings_processing` | `make ci-fast` parity, doc hygiene and agent-proofing **scripts** as CI gates, layered `docs/10_Development` protocol, issue/PR templates |
+| `example_doc_pipeline` | `make ci-fast` parity, doc hygiene and agent-proofing **scripts** as CI gates, layered `docs/10_Development` protocol, issue/PR templates |
 | `disclosures_discovery` | `check_policy_docs.sh`, SQLite MCP example, `block-data-edits`-style path protection (adapt per project), `policy.yml` split from main CI |
 | `imessage-semantic-analysis` | `CLAUDE.md` session tail + `AGENTS.md` durable changelog blocks, long-form operator guide (now consolidated into `AGENTS.md`) |
 
