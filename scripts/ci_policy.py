@@ -35,6 +35,7 @@ ALLOWED_BRANCH_PREFIXES: tuple[str, ...] = (
     "dependabot/",
     "cursor/",
     "renovate/",
+    "sanitize/",  # urgent privacy/metadata scrub branches (e.g. PR #113)
 )
 
 # Conventional commit style for PR titles (type, optional scope, optional !, colon, message).
