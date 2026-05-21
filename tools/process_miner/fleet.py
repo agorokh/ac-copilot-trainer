@@ -166,6 +166,10 @@ def __getattr__(name: str):
 
 
 def domain_for_repo(repo_slug: str) -> str | None:
-    """Return domain tag or None if unknown."""
-    _, _, domain, _ = _fleet_state()
+    """Return domain tag or None if unknown or the registry cannot be loaded."""
+    try:
+        _, _, domain, _ = _fleet_state()
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        _LOG.debug("Fleet registry unavailable for %s: %s", repo_slug, exc)
+        return None
     return domain.get(_normalize_slug(repo_slug))

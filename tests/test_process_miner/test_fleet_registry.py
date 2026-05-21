@@ -128,6 +128,20 @@ def test_using_example_registry_flag() -> None:
     assert isinstance(USING_EXAMPLE_REGISTRY, bool)
 
 
+def test_domain_for_repo_returns_none_when_registry_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fleet_mod._fleet_cache = None
+    monkeypatch.setattr(fleet_mod, "yaml", None)
+    monkeypatch.setattr(
+        fleet_mod,
+        "_find_registry",
+        lambda: fleet_mod._SHIPPED_EXAMPLE_REGISTRY,
+    )
+    assert fleet_mod.domain_for_repo("your-org/example-repo") is None
+    fleet_mod._fleet_cache = None
+
+
 def test_fleet_registry_env_override_missing_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
