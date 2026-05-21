@@ -100,6 +100,17 @@ def test_fleet_registry_empty_file_and_empty_repos(tmp_path: Path) -> None:
     assert find_universal_scope_titles(title_repos, slug_domain) == set()
 
 
+def test_fleet_registry_domain_normalization(tmp_path: Path) -> None:
+    registry_path = tmp_path / ".fleet-registry.yml"
+    registry_path.write_text(
+        'repos:\n  - slug: "your-org/example-repo"\n    domain: " Legal "\n',
+        encoding="utf-8",
+    )
+
+    slug_domain, _ = load_fleet_registry(registry_path)
+    assert slug_domain == {"your-org/example-repo": "legal"}
+
+
 def test_fleet_registry_slug_normalization(tmp_path: Path) -> None:
     registry_path = tmp_path / ".fleet-registry.yml"
     registry_path.write_text(

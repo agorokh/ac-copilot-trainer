@@ -40,6 +40,10 @@ def _normalize_slug(slug: str) -> str:
     return slug.strip().lower().replace(" ", "")
 
 
+def _normalize_domain(domain: str) -> str:
+    return domain.strip().lower()
+
+
 def _repo_root() -> Path | None:
     """Return the repository root (git or pyproject.toml), not intermediate parents."""
     here = Path(__file__).resolve()
@@ -122,7 +126,7 @@ def _build_repo_domain(data: dict) -> dict[str, str]:
         slug = entry.get("slug")
         domain = entry.get("domain")
         if isinstance(slug, str) and isinstance(domain, str):
-            domain_map[_normalize_slug(slug)] = domain
+            domain_map[_normalize_slug(slug)] = _normalize_domain(domain)
     return domain_map
 
 
