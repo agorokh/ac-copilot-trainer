@@ -84,7 +84,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-legal-repo-b
-  name: example-legal-discovery
+  name: example-legal-repo-b
   domain: legal
   github:
     default_branch: main
@@ -138,7 +138,7 @@ repos:
     error: null
   activity: null
 - slug: your-org/example-legal-repo-a
-  name: example-legal-workspace
+  name: example-legal-repo-a
   domain: legal
   github:
     default_branch: main
