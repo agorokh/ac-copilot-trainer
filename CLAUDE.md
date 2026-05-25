@@ -119,3 +119,29 @@ Document provider endpoints, model names, and env vars in `.env.example` and `AG
 <!-- SESSION:START -->
 <!-- Keep last ~3 timestamped lines; archive detail under docs/01_Vault/.../05_Sessions/ or docs/90_Archive/sessions/ -->
 <!-- SESSION:END -->
+
+<!-- BEGIN MEMORY KICKOFF (rendered by tools/render_repo_memory_kickoff.py) -->
+
+## Tier-3 memory contract (auto-generated)
+
+**Canonical workspace:** `ac_copilot`  
+**Backend:** `lightrag`  
+**Endpoint (local on `mac-mini-dev`):** `http://localhost:8045`  
+**From a non-central host (M5 / remote):** set `AGENTIC_MEMORY_BRIDGE_HOST=mac-mini-dev` in your agent environment so loopback endpoints in `~/.config/agentic-memory/fleet_registry.toml` rewrite to the Tailscale name. See [`agent-factory/docs/00_Core/HOSTS.md`](https://github.com/agorokh/agent-factory/blob/main/docs/00_Core/HOSTS.md).
+
+**Query before any code edit:**
+
+```python
+mcp__agentic-memory__query_knowledge_graph(
+    prompt="Assetto Corsa copilot training pipeline",
+    workspace="ac_copilot",
+)
+```
+
+The SessionStart hook in this repo runs `scripts/hook_session_start_memory_prefetch.py` (stdlib-only when PyYAML is absent) and stamps `.scratch/.last_memory_query` so the PreToolUse `hook_memory_gate.py` allows code edits. If the substrate is unreachable, write a one-line bypass rationale to `.scratch/.memory_bypass_rationale` — the gate logs the bypass instead of silently passing.
+
+**Do not** write to `~/.claude/projects/.../memory/`, do not create new workspaces without a manifest row, do not edit `~/Library/LaunchAgents/ai.lightrag.*.plist` by hand. See [`agent-factory/docs/00_Core/ANTI_PATTERNS.md`](https://github.com/agorokh/agent-factory/blob/main/docs/00_Core/ANTI_PATTERNS.md).
+
+Re-render this block: `python3 ~/Projects/agent-factory/tools/render_repo_memory_kickoff.py --repo-root . --apply`
+
+<!-- END MEMORY KICKOFF -->
