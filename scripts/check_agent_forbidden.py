@@ -30,6 +30,10 @@ ALLOWED_TOPLEVEL_DIRS = {
     # Common additions when you specialize (uncomment as needed):
     # "apps",
     # "archive",
+    # /post-merge unification (agorokh/agent-factory#246 follow-up): each repo
+    # mirrors the canonical agent doc into .codex/skills/post-merge/SKILL.md
+    # for Codex parity.
+    ".codex",
 }
 
 # Tracked files at repository root (single path segment). Warnings only if not listed.

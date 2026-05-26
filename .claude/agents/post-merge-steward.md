@@ -3,7 +3,9 @@ name: post-merge-steward
 description: |
   After a PR merges: sync local main, clean the merged branch, classify the diff for migrations/env/deps/scripts,
   and ship vault handoff updates via a labeled `vault/post-merge-pr<N>` branch + auto-merge workflow (never push to main).
-  Triggers on "post-merge", "land PR", "PR merged", or SessionStart when local main is behind origin/main.
+  Triggers on "post-merge", "land PR", "PR merged", or SessionStart when local main is behind origin/main
+  (the SessionStart hook `scripts/hook_session_start_post_merge_steward.py` writes a deterministic block marker;
+   see invariant `session-boundary-hygiene.md` and issue #246).
 model: inherit
 color: green
 memory: project
@@ -43,12 +45,14 @@ mcp__agentic-memory__query_knowledge_graph(
 ### Phase A — `sync` (deterministic; no LLM)
 
 1. Run `scripts/post_merge_sync.sh sync <P>`. The script:
-   - Auto-stashes any WIP under label `post-merge-pr<P>-wip` (recovery instructions printed on failure).
+   - Auto-stashes any WIP under label `post-merge-pr<P>-wip` (audited internal use — `POST_MERGE_SYNC_INTERNAL=1` allowance to the `hook_block_git_stash.py` gate; recovery instructions printed on failure).
    - Merges PR if still OPEN (`gh pr merge --squash --delete-branch`).
    - `git checkout main && git pull --ff-only origin main`.
    - Deletes local PR head branch when safe; prunes stale tracking branches.
    - Reports linked-issue states.
    - Restores stash best-effort on success.
+   - On success: clears `.scratch/session_stale.marker` so the
+     `hook_stale_main_gate.py` PreToolUse gate unblocks Edit/Write (issue #246).
 
 2. **Never** auto-run migrations, DB commands, or destructive scripts. Detect and print only.
 
@@ -59,8 +63,8 @@ mcp__agentic-memory__query_knowledge_graph(
 ### Phase C — vault SAVE (LLM judgment, then deterministic ship)
 
 4. **SAVE** per `docs/00_Core/SESSION_LIFECYCLE.md`, editing **only** files under `docs/01_Vault/`:
-   - Update `docs/01_Vault/AcCopilotTrainer/00_System/Next Session Handoff.md`: move merged work to “What was delivered” (PR link, merge SHA, date); refresh “Resume here” / “What remains” (include Phase B follow-ups).
-   - Update `docs/01_Vault/AcCopilotTrainer/00_System/Current Focus.md` if this PR closed the active focus.
+   - Update `docs/01_Vault/AgentFactory/00_System/Next Session Handoff.md`: move merged work to “What was delivered” (PR link, merge SHA, date); refresh “Resume here” / “What remains” (include Phase B follow-ups).
+   - Update `docs/01_Vault/AgentFactory/00_System/Current Focus.md` if this PR closed the active focus.
 
 5. Ship the vault edits via `scripts/post_merge_sync.sh vault <P>`. The script:
    - Refuses to commit if any **non-vault** tracked changes exist (exit 30) — keep the working tree scoped.
