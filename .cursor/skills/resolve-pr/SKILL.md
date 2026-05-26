@@ -6,8 +6,4 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 
 # PR Resolution Follow-Up
 
-Delegates to the `pr-resolution-follow-up` agent. Load and follow `.claude/agents/pr-resolution-follow-up.md`.
-
----
-
-Keep aligned with `.claude/skills/resolve-pr/SKILL.md`. In Cursor, use `generalPurpose` Task per `.cursor/rules/cursor-task-delegation.mdc`.
+See `.claude/skills/resolve-pr/SKILL.md` — keep both copies in sync when editing.

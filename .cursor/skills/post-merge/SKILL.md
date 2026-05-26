@@ -4,10 +4,6 @@ description: After a PR merges — sync main, clean branch, classify diff, updat
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 ---
 
-# Post-Merge Steward
+# Post-merge steward
 
-Delegates to the `post-merge-steward` agent. Load and follow `.claude/agents/post-merge-steward.md`.
-
----
-
-Keep aligned with `.claude/skills/post-merge/SKILL.md`. In Cursor, use `generalPurpose` Task per `.cursor/rules/cursor-task-delegation.mdc`.
+See `.claude/skills/post-merge/SKILL.md` — keep both copies in sync when editing.

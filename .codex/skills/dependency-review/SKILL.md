@@ -1,11 +1,7 @@
 ---
 name: dependency-review
-description: |
-  Narrow review for Dependabot, pip/pyproject, GitHub Actions, MCP config, and security-workflow bumps.
-  Triggers on "dependency PR", "Dependabot", "bump pyproject", "workflow-only change".
-model: inherit
-color: yellow
-memory: project
+description: Review Dependabot PRs, pip/pyproject bumps, GitHub Actions updates, MCP config changes, and security workflow bumps.
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 ---
 
 # Dependency review
@@ -53,7 +49,7 @@ mcp__agentic-memory__query_knowledge_graph(
 ## Context discipline
 
 - Read **only** touched manifest/workflow files plus the issue/PR body—no whole-repo grep for “all workflows.”
-- Prefer **Context7** when a bumped **action** or **npm/py** package behavior is unclear.
+- Prefer official docs and workflow logs when a bumped **action** or **npm/py** package behavior is unclear; use **Context7** only when installed (otherwise official docs and targeted web search—do not block on Context7).
 
 ## Session lifecycle
 
@@ -69,13 +65,13 @@ mcp__agentic-memory__query_knowledge_graph(
 
 ## Memory contract (pointer)
 
-The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+The substantive memory rules for this skill live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
 
 References:
 
-- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
-- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
-- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../../docs/01_Vault/AgentFactory/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp). Stop-hook drift audit removed 2026-05-20 per slim-down ADR (#205).
 - Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
 
 Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).

@@ -50,21 +50,35 @@ MARKER_END = "<!-- memory-contract:end -->"
 
 # Default targets (relative to repo root). Each must already exist; the script
 # does not create new files. Missing targets are reported but not fatal — a
-# given child may not have a `learner.md` agent, for example.
+# given child may not have a `learner` skill, for example.
+#
+# As of 2026-05-26 the 5 former workflow agents (post-merge-steward,
+# issue-driven-coding-orchestrator, pr-resolution-follow-up, dependency-review,
+# learner) collapsed to skills under `.claude/skills/<slash-name>/SKILL.md`.
+# The agent files no longer exist; the skill is the canonical surface.
 DEFAULT_TARGETS: tuple[str, ...] = (
     "AGENTS.md",
-    ".claude/agents/issue-driven-coding-orchestrator.md",
-    ".claude/agents/pr-resolution-follow-up.md",
-    ".claude/agents/post-merge-steward.md",
-    ".claude/agents/dependency-review.md",
-    ".claude/agents/learner.md",
+    ".claude/skills/orchestrate/SKILL.md",
+    ".claude/skills/resolve-pr/SKILL.md",
+    ".claude/skills/post-merge/SKILL.md",
+    ".claude/skills/dependency-review/SKILL.md",
+    ".claude/skills/learner/SKILL.md",
 )
 
 INVARIANT_FILENAME = "memory-three-tiers.md"
 
 
 def _link_prefix_for(rel_target: str) -> str:
-    """Agent files live under ``.claude/agents/`` — links need ``../../``."""
+    """Adjust link prefixes for files outside repo root.
+
+    * Skill files live under ``.claude/skills/<name>/SKILL.md`` (depth 3) — links
+      need ``../../../``.
+    * Legacy agent files (kept for repos that still have them: account-intake-
+      overview, mcp-harvest-ingestion) live under ``.claude/agents/`` (depth 2)
+      — links need ``../../``.
+    """
+    if rel_target.startswith(".claude/skills/"):
+        return "../../../"
     if rel_target.startswith(".claude/agents/"):
         return "../../"
     return ""
@@ -90,15 +104,21 @@ def _vault_invariant_link(root: Path, link_prefix: str) -> str:
     )
 
 
-def _block_body_agent_pointer(root: Path, *, link_prefix: str) -> str:
-    """Pointer stub for ``.claude/agents/*.md`` (rules live in-procedure above)."""
+def _block_body_skill_pointer(root: Path, *, link_prefix: str) -> str:
+    """Pointer stub for ``.claude/skills/<name>/SKILL.md`` and legacy
+    ``.claude/agents/*.md`` files (rules live in-procedure above).
+
+    Renamed from ``_block_body_agent_pointer`` 2026-05-26 when the 5 workflow
+    agents collapsed to skills. The block body is identical in shape; only the
+    word "agent" → "skill/agent" so the same renderer serves both surfaces.
+    """
     p = link_prefix
     invariant_link = _vault_invariant_link(root, p)
     return (
         "\n"
         "## Memory contract (pointer)\n"
         "\n"
-        "The substantive memory rules for this agent live in the file's "
+        "The substantive memory rules for this skill live in the file's "
         "**`## Tier-3 Substrate Query (mandatory first step)`** section above. "
         "They are placed before the procedure on purpose, so the agent reads them "
         "in execution order.\n"
@@ -109,9 +129,8 @@ def _block_body_agent_pointer(root: Path, *, link_prefix: str) -> str:
         f"[`docs/00_Core/MEMORY_CONTRACT.md`]({p}docs/00_Core/MEMORY_CONTRACT.md).\n"
         f"- Canonical invariant: {invariant_link}.\n"
         "- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate "
-        "blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + "
-        "`scripts/hook_stop_drift_audit.py` (Stop hook scores conversational "
-        "drift; next session's prefetch warns at turn-1 when drift_score is high).\n"
+        "blocks code-path edits without a fresh, file-relevant Tier-3 stamp). "
+        "Stop-hook drift audit removed 2026-05-20 per slim-down ADR (#205).\n"
         "- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in "
         "the vault SAVE so the next session can correct.\n"
         "\n"
@@ -138,8 +157,7 @@ def _block_body_agents_md(root: Path, *, link_prefix: str) -> str:
         "- Canonical contract: "
         f"[`docs/00_Core/MEMORY_CONTRACT.md`]({p}docs/00_Core/MEMORY_CONTRACT.md).\n"
         f"- Canonical invariant: {invariant_link}.\n"
-        "- Runtime enforcement: `scripts/hook_memory_gate.py` + "
-        "`scripts/hook_stop_drift_audit.py` (see contract doc).\n"
+        "- Runtime enforcement: `scripts/hook_memory_gate.py` (see contract doc).\n"
         "- Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in "
         "the vault SAVE so the next session can correct.\n"
         "\n"
@@ -152,7 +170,7 @@ def _block_body(root: Path, *, link_prefix: str, rel_target: str) -> str:
     """Render the memory-contract marker block for a target file."""
     if rel_target == "AGENTS.md":
         return _block_body_agents_md(root, link_prefix=link_prefix)
-    return _block_body_agent_pointer(root, link_prefix=link_prefix)
+    return _block_body_skill_pointer(root, link_prefix=link_prefix)
 
 
 def _wrapped_block(root: Path, rel_target: str) -> str:
