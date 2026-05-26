@@ -1,12 +1,7 @@
 ---
-name: issue-driven-coding-orchestrator
-description: |
-  End-to-end delivery from a single GitHub issue number: branch, draft PR, implementation, tests/docs,
-  make ci-fast, then hand off to PR resolution until green. Triggers on "implement issue #N",
-  "orchestrate issue N", or a lone issue number after asking for the orchestrator.
-model: inherit
-color: blue
-memory: project
+name: orchestrate
+description: End-to-end issue delivery — branch, draft PR, implement, tests, CI, then hand off to PR resolution. Use when asked to implement an issue or given an issue number.
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 ---
 
 # Issue-Driven Coding Orchestrator
@@ -58,7 +53,7 @@ mcp__agentic-memory__query_knowledge_graph(
 1. **`gh issue view <N> --json title,body,state,labels,comments`** first—contract is title/body/comments before codebase search.
 2. **Pointer over paste:** link `AGENTS.md`, `10_Agent_Protocol.md`, vault paths; do not dump whole files into the prompt.
 3. **Search after scope:** use targeted search/semantic exploration only once you know subsystem (package, workflow name); avoid repo-wide grep loops with tiny query variants.
-4. **Third-party APIs:** prefer **Context7** MCP (see `.mcp.json`, `.claude/rules/context7.md`) over guessing library behavior.
+4. **Third-party APIs:** prefer official docs and targeted web search; use **Context7** MCP only when installed (otherwise do not block on it—see `.claude/rules/context7.md`, [workstation-reference.md](../../docs/01_Vault/AgentFactory/00_System/workstation-reference.md)).
 
 ## Non-negotiables
 
@@ -114,13 +109,13 @@ If the prefetch was empty or the workspace was missing, **say so explicitly** in
 
 ## Memory contract (pointer)
 
-The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+The substantive memory rules for this skill live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
 
 References:
 
-- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
-- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
-- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../../docs/01_Vault/AgentFactory/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp). Stop-hook drift audit removed 2026-05-20 per slim-down ADR (#205).
 - Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
 
 Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).

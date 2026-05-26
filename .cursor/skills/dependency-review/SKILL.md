@@ -4,14 +4,6 @@ description: Review Dependabot PRs, pip/pyproject bumps, GitHub Actions updates,
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 ---
 
-# Dependency Review
+# Dependency review
 
-This skill delegates to the `dependency-review` agent.
-
-Load and follow the full agent definition at `.claude/agents/dependency-review.md`.
-
-The agent handles: narrow review of dependency PRs (Dependabot, pip/pyproject, GitHub Actions, MCP config, security workflows), then hands off to `pr-resolution-follow-up`.
-
----
-
-Keep aligned with `.claude/skills/dependency-review/SKILL.md`. In Cursor, use `generalPurpose` Task per `.cursor/rules/cursor-task-delegation.mdc`.
+See `.claude/skills/dependency-review/SKILL.md` — keep both copies in sync when editing.

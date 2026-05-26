@@ -25,9 +25,9 @@ Every named agent in `.claude/agents/*.md` (issue-driven orchestrator, PR-resolu
 
 **Agent mesh (Claude Code):** [CLAUDE.md](CLAUDE.md) § Orchestration gives the overview. **Cursor** users: the Task tool cannot use Claude Code agent names as `subagent_type`; use `generalPurpose` + `.claude/agents/*.md` checklists per [`.cursor/rules/cursor-task-delegation.mdc`](.cursor/rules/cursor-task-delegation.mdc). Key locations:
 
-- **Routing table:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing
-- **PR/bot loop:** `pr-resolution-follow-up` owns the `sleep 600` + GraphQL `reviewThreads` procedure (see `.claude/agents/pr-resolution-follow-up.md`)
-- **Dependency/tooling PRs:** `dependency-review` fronts, then hands off to `pr-resolution-follow-up` (see `.claude/agents/dependency-review.md`)
+- **Routing table:** `.claude/skills/orchestrate/SKILL.md` § Routing
+- **PR/bot loop:** `/resolve-pr` owns the `sleep 600` + GraphQL `reviewThreads` procedure (see `.claude/skills/resolve-pr/SKILL.md`)
+- **Dependency/tooling PRs:** `dependency-review` fronts, then hands off to `/resolve-pr` (see `.claude/skills/dependency-review/SKILL.md`)
 
 ---
 
@@ -131,7 +131,7 @@ References:
 
 - Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md).
 - Canonical invariant: [`memory-three-tiers.md`](docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
-- Runtime enforcement: `scripts/hook_memory_gate.py` + `scripts/hook_stop_drift_audit.py` (see contract doc).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (see contract doc).
 - Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
 
 Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).

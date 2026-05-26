@@ -26,7 +26,6 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
         timeout=20,
-        cwd=str(REPO_ROOT),
     )
 
 
@@ -104,7 +103,7 @@ def test_check_mode_exits_0_when_in_sync(tmp_path: Path) -> None:
 
 
 def test_skip_missing_target(tmp_path: Path) -> None:
-    """Missing targets don't fail the run (e.g. example-sandbox has no learner.md)."""
+    """Missing targets don't fail the run (e.g. dial-sandbox has no /learner skill)."""
     proc = _run(["--root", str(tmp_path), "--target", "AGENTS.md"])
     # Should print a skip line and exit 0 (no target to render).
     assert proc.returncode == 0
@@ -134,19 +133,30 @@ def test_preserves_per_repo_customization(tmp_path: Path) -> None:
         assert needle in text, f"customization lost: {needle!r}"
 
 
-def test_agent_targets_use_parent_relative_links(tmp_path: Path) -> None:
-    agents = tmp_path / ".claude" / "agents"
-    agents.mkdir(parents=True)
-    target = agents / "learner.md"
-    target.write_text("# Agent\n", encoding="utf-8")
-    proc = _run(["--root", str(tmp_path), "--target", ".claude/agents/learner.md"])
+def test_skill_targets_use_parent_relative_links(tmp_path: Path) -> None:
+    """Skill files live at .claude/skills/<name>/SKILL.md (depth 3) — the
+    rendered contract block must use ``../../../`` relative links."""
+    skill_dir = tmp_path / ".claude" / "skills" / "learner"
+    skill_dir.mkdir(parents=True)
+    target = skill_dir / "SKILL.md"
+    target.write_text("# Skill\n", encoding="utf-8")
+    proc = _run(["--root", str(tmp_path), "--target", ".claude/skills/learner/SKILL.md"])
     assert proc.returncode == 0
     text = target.read_text(encoding="utf-8")
-    # Post-#117 pointer stub still references MEMORY_CONTRACT.md (canonical
-    # contract pointer) with the correct ../../ parent-relative prefix when
-    # rendered into .claude/agents/<name>.md. ops/memory_manifest.yml link
-    # was removed from the stub (substantive rules now in-procedure), so
-    # that assertion is dropped — verify the canonical contract link only.
+    assert "](../../../docs/00_Core/MEMORY_CONTRACT.md)" in text
+
+
+def test_legacy_agent_targets_use_parent_relative_links(tmp_path: Path) -> None:
+    """The 2 remaining agent files (.claude/agents/<name>.md, depth 2) still
+    use ``../../`` relative links — kept for account-intake-overview and
+    mcp-harvest-ingestion."""
+    agents = tmp_path / ".claude" / "agents"
+    agents.mkdir(parents=True)
+    target = agents / "account-intake-overview.md"
+    target.write_text("# Agent\n", encoding="utf-8")
+    proc = _run(["--root", str(tmp_path), "--target", ".claude/agents/account-intake-overview.md"])
+    assert proc.returncode == 0
+    text = target.read_text(encoding="utf-8")
     assert "](../../docs/00_Core/MEMORY_CONTRACT.md)" in text
 
 

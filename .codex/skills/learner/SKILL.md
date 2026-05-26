@@ -1,12 +1,7 @@
 ---
 name: learner
-description: |
-  Post-merge learnings extraction (optional): after a merged PR, extract patterns, update AGENTS.md learned facts, and improve vault knowledge.
-  Triggers when a maintainer explicitly delegates **Post-merge learnings extraction** (routing matrix) or asks to run **`learner`** after merge.
-allowed-tools: Read, Grep, Glob, Write, Edit
-memory: project
-model: inherit
-color: purple
+description: Post-merge learnings extraction — analyze a merged PR, extract patterns, update AGENTS.md learned facts, and improve vault knowledge.
+allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 ---
 
 # Learner
@@ -64,13 +59,13 @@ Use `docs/00_Core/MAINTAINING_THE_TEMPLATE.md` for tagging cadence (`template-YY
 
 ## Memory contract (pointer)
 
-The substantive memory rules for this agent live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
+The substantive memory rules for this skill live in the file's **`## Tier-3 Substrate Query (mandatory first step)`** section above. They are placed before the procedure on purpose, so the agent reads them in execution order.
 
 References:
 
-- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../docs/00_Core/MEMORY_CONTRACT.md).
-- Canonical invariant: [`memory-three-tiers.md`](../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
-- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp) + `scripts/hook_stop_drift_audit.py` (Stop hook scores conversational drift; next session's prefetch warns at turn-1 when drift_score is high).
+- Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../../docs/00_Core/MEMORY_CONTRACT.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../../docs/01_Vault/AgentFactory/00_System/invariants/memory-three-tiers.md).
+- Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp). Stop-hook drift audit removed 2026-05-20 per slim-down ADR (#205).
 - Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
 
 Originating postmortem: [template-repo#115](https://github.com/agorokh/template-repo/issues/115).

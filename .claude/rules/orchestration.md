@@ -7,17 +7,17 @@ paths:
 
 # Orchestration (Claude Code agents)
 
-**Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` — issue type → primary agent → handoff → skills. Other agent files link there instead of duplicating the full table.
+**Canonical routing matrix:** `.claude/skills/orchestrate/SKILL.md` — issue type → primary agent → handoff → skills. Other agent files link there instead of duplicating the full table.
 
 | Role | Agent file |
 |------|------------|
-| Issue → branch → Draft PR → implement → `make ci-fast` | `.claude/agents/issue-driven-coding-orchestrator.md` |
-| Green CI + GraphQL `reviewThreads` + `sleep 600` | `.claude/agents/pr-resolution-follow-up.md` |
-| Dependabot / workflows / `.mcp.json` risk + merge order | `.claude/agents/dependency-review.md` → then **pr-resolution-follow-up** for the bot loop |
-| Post-merge pattern extraction (optional) | `.claude/agents/learner.md` |
-| After merge: sync main, classify diff, vault handoff | `.claude/agents/post-merge-steward.md` |
+| Issue → branch → Draft PR → implement → `make ci-fast` | `.claude/skills/orchestrate/SKILL.md` |
+| Green CI + GraphQL `reviewThreads` + `sleep 600` | `.claude/skills/resolve-pr/SKILL.md` |
+| Dependabot / workflows / `.mcp.json` risk + merge order | `.claude/skills/dependency-review/SKILL.md` → then **pr-resolution-follow-up** for the bot loop |
+| Post-merge pattern extraction (optional) | `.claude/skills/learner/SKILL.md` |
+| After merge: sync main, classify diff, vault handoff | `.claude/skills/post-merge/SKILL.md` |
 
-**Delegation:** In **Claude Code**, use the **Task** tool with `subagent_type` set to the agent name (e.g. `pr-resolution-follow-up`, `dependency-review`, `learner`). Prose “invoke X” in agent markdown is the same contract. **In Cursor**, Task only allows `generalPurpose`, `explore`, `shell`, `best-of-n-runner` — use **`generalPurpose`** plus the checklist from the same agent markdown, or run steps inline (`.cursor/rules/cursor-task-delegation.mdc`).
+**Delegation:** In **Claude Code**, use the **Task** tool with `subagent_type` set to the agent name (e.g. `/resolve-pr`, `dependency-review`, `learner`). Prose “invoke X” in agent markdown is the same contract. **In Cursor**, Task only allows `generalPurpose`, `explore`, `shell`, `best-of-n-runner` — use **`generalPurpose`** plus the checklist from the same agent markdown, or run steps inline (`.cursor/rules/cursor-task-delegation.mdc`).
 
 **Skills (when to load)** — see `.claude/skills/*/SKILL.md` (mirrored under `.cursor/skills/` where present).
 
