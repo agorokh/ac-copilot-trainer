@@ -78,16 +78,19 @@ Surface the sibling-skill names in your first reply (contract bullet #4). When `
 
 ### 5. Council routing
 
-| Trigger | Council required | Why |
-|---|---|---|
-| External publication (Medium, Confluence, EPAM client, Slack to anyone outside `#me`) | **both** (`gemini_second_opinion` + `mistral_second_opinion`) | Adversarial review on factual claims and framing before the artifact escapes the local context |
-| Irreversible / fleet-wide decision (ADR, propagation plan, dependency choice that affects N≥3 repos) | **both** | Mistral does adversarial; Gemini stress-tests design |
-| Cross-domain claim (mixes legal + technical, finance + engineering, etc.) | **mistral** at minimum | Adversarial framing surfaces over-claims |
-| Factual claim about people, markets, EPAM offerings, or external entities | **gemini** at minimum | Second eye on facts |
-| Pure format conversion (CSV → table, JSON → markdown), glossary lookup, internal walkthrough that names no facts | not-required | Council adds cost without signal |
-| Operator explicitly asked for council, deliberation, or "second opinion" | **both** | Honor the explicit request |
+The council is now **5 voices** (mcp-servers#88, "Grounded Adversarial Quorum"; canonical protocol: `~/Projects/mcp-servers/docs/00_Core/COUNCIL_PROTOCOL.md`). **Ideators**: `gemini_second_opinion` (architectural), `mistral_second_opinion` (adversarial critic), `kimi_second_opinion` (long-horizon). **Grounder**: `perplexity_second_opinion` / `perplexity_search_grounded` (live web + citations). **Synthesizer**: `chatgpt_ask` (integrates; does not vote). All free subscription/session auth — no paid API keys.
 
-If the council disagrees with each other, surface that disagreement in the first reply under `## Council decision` — do not silently average them.
+| Trigger | Convene | Why |
+|---|---|---|
+| External publication (Medium, Confluence, EPAM client, Slack outside `#me`) | **ideators + grounder** | Adversarial review + live-web fact-check before the artifact escapes |
+| Irreversible / fleet-wide decision (ADR, propagation plan, dependency choice affecting N≥3 repos) | **full quorum** (3 ideators + grounder, then synthesize) | The Grounded Adversarial Quorum in full |
+| Factual / current-events claim (people, markets, EPAM offerings, external entities, "is this still true?") | **perplexity** (grounder) at minimum | Only voice with live web; the others reason from stale weights |
+| Cross-domain claim (legal + technical, finance + engineering, etc.) | **mistral** (adversarial) at minimum | Surfaces over-claims |
+| Large multi-file / full-context review | **kimi** (long-horizon) at minimum | Tracks consistency across the whole change |
+| Pure format conversion (CSV → table, JSON → markdown), glossary lookup, internal walkthrough that names no facts | not-required | Council adds cost without signal |
+| Operator explicitly asked for council, deliberation, or "second opinion" | **full quorum** | Honor the explicit request |
+
+If the council disagrees with each other, surface that disagreement in the first reply under `## Council decision` — do not silently average them; let the **grounder** break ties with fresh facts.
 
 ### 6. Stamp file
 
