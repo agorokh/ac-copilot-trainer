@@ -46,7 +46,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-DEFAULT_TIMEOUT_S = 6.0
+# Fleet probe contract (ws-ops#128/template#159): measured naive ~14-18s,
+# hybrid ~40s; prefetch needs a relevance stamp, so naive + 30s.
+DEFAULT_TIMEOUT_S = 30.0
 SUMMARY_TRUNCATE = 1200  # chars of summary stdout we surface to the agent
 
 
@@ -216,7 +218,7 @@ def _resolve_vault_root(vr: str, root: Path) -> Path:
 def _http_query_lightrag(endpoint: str, prompt: str, timeout: float) -> str:
     """POST /query → response text. Empty on failure."""
     url = endpoint.rstrip("/") + "/query"
-    payload = json.dumps({"query": prompt, "mode": "hybrid"}).encode("utf-8")
+    payload = json.dumps({"query": prompt, "mode": "naive"}).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=payload,
