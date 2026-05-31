@@ -204,6 +204,17 @@ phase_sync() {
 
   restore_stash_best_effort
 
+  # Session-boundary hygiene (issue #246): main is now reconciled with
+  # origin/main and branches are pruned, so re-run the deterministic residue
+  # detector. hook_session_start_post_merge_steward.py clears
+  # .scratch/session_stale.marker only when no violations remain, which
+  # unblocks the hook_stale_main_gate.py PreToolUse gate. Without this the
+  # marker persists after a successful sync and keeps blocking Edit/Write.
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$REPO_ROOT/scripts/hook_session_start_post_merge_steward.py" >/dev/null 2>&1 \
+      || echo "note: marker reconcile failed (non-fatal); clear .scratch/session_stale.marker manually if the gate stays active." >&2
+  fi
+
   echo ""
   echo "Run classification: python3 scripts/post_merge_classify.py --pr $PR"
   echo "Then prepare vault SAVE: scripts/post_merge_sync.sh vault $PR"
