@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-05-20T05:00:00Z
+last_updated: 2026-05-31T03:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,18 +25,21 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-05-20 — PR #111 on `main`)
+## Resume here (2026-05-31 — PR #129 on `main`)
 
-Continue from **`main`** @ [`8d34073`](https://github.com/agorokh/ac-copilot-trainer/commit/8d3407301f825cad7ca205b69160ab87d190780a) or newer.
+Continue from **`main`** @ [`9454235`](https://github.com/agorokh/ac-copilot-trainer/commit/945423580ef4f5de2df4c4ad908cabb4724beab3) or newer. Local `main` fast-forwarded by post-merge steward; PR head branch deleted.
 
 **Latest merges:**
 
 | PR | Merged | Squash | Issue / note |
 |----|--------|--------|----------------|
+| [#129](https://github.com/agorokh/ac-copilot-trainer/pull/129) | `2026-05-31T03:06:48Z` | [`9454235`](https://github.com/agorokh/ac-copilot-trainer/commit/945423580ef4f5de2df4c4ad908cabb4724beab3) | Memory prefetch fix — `hook_session_start_memory_prefetch.py` now queries LightRAG in `naive` mode with a 30s timeout (was `hybrid` @ 6s, which falsely reported the substrate unreachable and hard-blocked edits). Force-propagated from [`template-repo#159`](https://github.com/agorokh/template-repo/issues/159) (PR #160). No linked issue. |
 | [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) | `2026-05-20T04:58:54Z` | [`8d34073`](https://github.com/agorokh/ac-copilot-trainer/commit/8d3407301f825cad7ca205b69160ab87d190780a) | [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) closeout doc (non-vault); supersedes closed [#110](https://github.com/agorokh/ac-copilot-trainer/pull/110) |
 | [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) | `2026-05-20T02:43:31Z` | (squash on `main`) | #108 partial — `.cursor/rules/memory-contract.mdc` only |
 | [#99](https://github.com/agorokh/ac-copilot-trainer/pull/99) | `2026-05-17T00:33:44Z` | [`ebdef7e`](https://github.com/agorokh/ac-copilot-trainer/commit/ebdef7e8d3a1ed388e914f217fc393b600162e31) | [#97](https://github.com/agorokh/ac-copilot-trainer/issues/97) session-journal loader hardening |
 | [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) | `2026-05-17T00:34:09Z` | [`ac810c0`](https://github.com/agorokh/ac-copilot-trainer/commit/ac810c0fcf51352895c66f81cc1a75d3cb0d660a) | [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93) PT row BB chip stale on setup switch |
+
+Post-merge classification (#129): **`post_merge_classify.py --pr 129`** flagged only **`scripts/`** — the single change is the prefetch hook itself (`hook_session_start_memory_prefetch.py`: `hybrid`→`naive`, `6s`→`30s`). No migration / env / deps / workflow flags; no manual run required. The next SessionStart prefetch will use the new mode/timeout automatically.
 
 Post-merge classification: **`post_merge_classify.py --pr 111`** (and #99/#100) — no migration / env / deps / script flags.
 
