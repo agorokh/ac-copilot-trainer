@@ -26,7 +26,19 @@ mcp__agentic-memory__query_knowledge_graph(
 
 **Refinement** (encouraged): after the first `gh pr view`, follow up with queries naming the specific bot whose threads are open (CodeRabbit, Gemini, Qodo, Sourcery, Copilot, Cursor Bugbot) — prior resolution patterns differ per reviewer.
 
-**Workspace resolution**: read `ops/memory_manifest.yml`; match the workspace whose `name` matches this repo's basename. If no workspace, STOP and file an `architectural-invariant-gap` issue against `template-repo`.
+**Workspace resolution** (ladder — first hit wins):
+
+1. **`ops/memory_manifest.yml`** — match a workspace whose `name` equals this repo's basename (e.g. `template_repo` for `template-repo/`, `college_advisory` for `college-advisory/`).
+2. **`ops/memory_manifest.local.yml`** (gitignored, operator-owned) — same match rule. The template ships only generic rows; child-repo workspaces this operator owns live here. Schema: [`ops/memory_manifest.local.example.yml`](../../../ops/memory_manifest.local.example.yml).
+3. **`mcp__agentic-memory__list_workspaces`** — call the bridge and, if the repo basename appears in `visible_workspace_ids` (and is **not** in `disabled_workspace_ids`), use it directly. The bridge registry is authoritative for "is this workspace live now"; a manifest gap is a manifest bug, not a session blocker.
+4. **Recorded exception?** If a top-level `resolution_exceptions:` block in `ops/memory_manifest.yml` (or the gitignored `ops/memory_manifest.local.yml`) lists this repo's basename, the missing workspace is a **known, accepted gap**: degrade to warn-only, reference its `tracking_issue`, and **do not file** — SessionStart's prefetch surfaces the same `accepted Tier-3 gap (tracked: …)` line.
+5. **No exception and no match on all three** → distinguish two cases (do **not** reflexively STOP + file a gap issue):
+   - **Declared, not yet registered/provisioned** (the workspace name appears in this repo's `AGENTS.md` / vault but has no manifest row and is absent from `list_workspaces`): the **expected transient** for a freshly bootstrapped repo. SessionStart has already put the gate in **warn-only bootstrap mode**, so code-path edits are permitted *without* `CLAUDE_MEMORY_GATE=0`. Ground on vault Tier-2 (grep/Read) and proceed; ensure substrate provisioning is tracked against the owning infra repo (workstation-ops). See [`docs/00_Core/MEMORY_CONTRACT.md`](../../../docs/00_Core/MEMORY_CONTRACT.md) § Workspace lifecycle.
+   - **Genuine gap** — before filing, do the required issue-creation preflight: read [`docs/01_Vault/AcCopilotTrainer/pitfalls/_index.md`](../../../docs/01_Vault/AcCopilotTrainer/pitfalls/_index.md) and [`.claude/pitfalls-hub.json`](../../../.claude/pitfalls-hub.json), then **dedup in the same tracker where the gap would be filed**: `gh issue list --repo <template-owner>/template-repo --state open --search "<repo-basename> Tier-3 workspace"` (and scan the `architectural-invariant-gap` label). If a matching open issue exists, add a dated sighting comment and reference it — **do not open a duplicate**. File a new `architectural-invariant-gap` issue against `<template-owner>/template-repo` only when no `resolution_exceptions` entry and no open issue exist **and** an *observable* condition holds: (a) the repo's `AGENTS.md` / vault **asserts the workspace is already provisioned or queryable** (not merely planned) yet the ladder finds nothing — a doc/state lie to fix; or (b) provisioning is **observably overdue** — the workstation-ops provisioning issue is missing, closed without the workspace going live, or past the due-date/milestone recorded in that issue (not merely "feels slow"). If the gate is **actually blocking** this session (`bridge_workspace_not_visible` / `bridge_workspace_disabled` / unreachable on a *registered* row), set `CLAUDE_MEMORY_GATE=0`, say why in the vault SAVE, and ensure provisioning is tracked against workstation-ops.
+
+   **Decision rule (anchor on the observable gate state, not intent):** gate **warn-only** → proceed, no issue, no bypass. Gate **blocking** → fix the bridge/provisioning, or bypass-with-audit. Never file a per-session gap issue for the expected *declared* transient or for a recorded `resolution_exceptions` gap.
+
+Do **not** infer across domains. If multiple unrelated workspaces are visible, pass the matched one explicitly to `workspace=…`.
 
 **Surfacing**: include the substrate response under `## Pre-loaded substrate context` in your first reply, before the first `gh pr view`. This gives prior patterns to compare new bot threads against ("we already resolved this class last quarter").
 
@@ -128,7 +140,7 @@ The substantive memory rules for this skill live in the file's **`## Tier-3 Subs
 References:
 
 - Canonical contract: [`docs/00_Core/MEMORY_CONTRACT.md`](../../../docs/00_Core/MEMORY_CONTRACT.md).
-- Canonical invariant: [`memory-three-tiers.md`](../../../docs/01_Vault/AgentFactory/00_System/invariants/memory-three-tiers.md).
+- Canonical invariant: [`memory-three-tiers.md`](../../../docs/01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
 - Runtime enforcement: `scripts/hook_memory_gate.py` (PreToolUse gate blocks code-path edits without a fresh, file-relevant Tier-3 stamp). Stop-hook drift audit removed 2026-05-20 per slim-down ADR (#205).
 - Kill switch: `CLAUDE_MEMORY_GATE=0` bypasses the gate; surface why in the vault SAVE so the next session can correct.
 
