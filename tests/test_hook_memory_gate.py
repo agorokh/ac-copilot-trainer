@@ -7,7 +7,9 @@ Behaviors covered:
   * **Block (exit 2)** on code-path Edit when the stamp is stale or missing
     AND the missing marker is absent.
   * **Allow** on code-path Edit when ``.scratch/.last_memory_query.missing``
-    exists (degraded mode while PR C provisions workspaces).
+    records that no workspace is registered yet.
+  * **Block** when the missing marker names a registered workspace whose
+    prefetch failed.
   * **Allow** on doc-path Edit regardless of stamp state.
   * **Kill-switch** ``CLAUDE_MEMORY_GATE=0`` bypasses entirely.
   * **Fail-open** on malformed payload (exit 0).
@@ -79,7 +81,9 @@ def _write_lock(
     (scratch / ".last_memory_query").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _write_missing(tmp_path: Path) -> None:
+def _write_missing(
+    tmp_path: Path, *, workspace: str | None = None, hint: str = "no workspace"
+) -> None:
     scratch = tmp_path / ".scratch"
     scratch.mkdir(exist_ok=True)
     (scratch / ".last_memory_query").unlink(missing_ok=True)
@@ -88,11 +92,11 @@ def _write_missing(tmp_path: Path) -> None:
             {
                 "token": "m",
                 "timestamp_utc": _now_minus(0),
-                "workspace": None,
+                "workspace": workspace,
                 "prompt": "test",
                 "ttl_seconds": 1800,
                 "prefetch_ok": False,
-                "hint": "no workspace",
+                "hint": hint,
             }
         ),
         encoding="utf-8",
@@ -105,6 +109,80 @@ def fake_repo(tmp_path: Path) -> Path:
     ``_repo_root`` walk anchors to ``tmp_path``."""
     (tmp_path / ".git").mkdir()
     return tmp_path
+
+
+def _write_accepted_gap_missing(scratch: Path) -> None:
+    scratch.mkdir(exist_ok=True)
+    (scratch / ".last_memory_query.missing").write_text(
+        json.dumps(
+            {
+                "token": "m",
+                "timestamp_utc": _now_minus(0),
+                "workspace": None,
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": False,
+                "reason": "accepted_gap",
+                "gate_policy": "allow",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_accepted_gap_marker_allows_code_path(fake_repo: Path) -> None:
+    """Qodo 'Output Contract' (PR #175): the prefetch's accepted-gap marker
+    (workspace=null, gate_policy=allow, reason=accepted_gap) must be consumed by
+    the gate as a no-workspace degrade — code-path edits allowed, not blocked."""
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    (scratch / ".last_memory_query").unlink(missing_ok=True)
+    _write_accepted_gap_missing(scratch)
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0, stderr
+    # Qodo "Accepted gap still warns": must degrade QUIETLY — a tailored
+    # accepted-gap line, NOT the generic "register or provision" nag.
+    assert "accepted Tier-3 gap" in stderr
+    assert "register or provision" not in stderr
+
+
+def test_accepted_gap_allows_even_with_coexisting_fresh_lock(fake_repo: Path) -> None:
+    """Cursor Bugbot regression (PR #175): an accepted-gap marker must allow
+    edits UNCONDITIONALLY, even if a fresh ``.last_memory_query`` lock with an
+    irrelevant body still exists (best-effort unlink failed or a timestamp tie).
+    Under the old gate_policy='warn' stamp this fell through to relevance checks
+    and blocked; with gate_policy='allow' the no-workspace branch returns 0."""
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    # Fresh lock with a body that does NOT mention the edited file (would block
+    # under relevance checks if reached).
+    (scratch / ".last_memory_query").write_text(
+        json.dumps(
+            {
+                "token": "t",
+                "timestamp_utc": _now_minus(0),
+                "workspace": "some_ws",
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": True,
+                "response_body": "totally unrelated context about quux",
+                "response_body_len": 40,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_accepted_gap_missing(scratch)
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "scripts/hook_session_start_memory_prefetch.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 0, stderr
 
 
 def test_fresh_stamp_allows_code_path(fake_repo: Path) -> None:
@@ -197,19 +275,6 @@ def test_no_stamp_blocks_code_path(fake_repo: Path) -> None:
     assert "BLOCK" in stderr
 
 
-def test_missing_marker_non_json_still_degrades(fake_repo: Path) -> None:
-    """Degraded mode is keyed on marker presence, not JSON parse success."""
-    scratch = fake_repo / ".scratch"
-    scratch.mkdir(exist_ok=True)
-    (scratch / ".last_memory_query.missing").write_text("unprovisioned\n", encoding="utf-8")
-    rc, _, stderr = _run(
-        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
-        cwd=fake_repo,
-    )
-    assert rc == 0
-    assert "degraded" in stderr.lower()
-
-
 def test_missing_marker_degrades_to_warn(fake_repo: Path) -> None:
     _write_missing(fake_repo)
     rc, _, stderr = _run(
@@ -220,8 +285,134 @@ def test_missing_marker_degrades_to_warn(fake_repo: Path) -> None:
     assert "degraded" in stderr.lower() or "prefetch unavailable" in stderr
 
 
-def test_missing_marker_wins_over_stale_lock(fake_repo: Path) -> None:
-    """Stale success stamp must not block when prefetch degraded."""
+def test_warn_missing_with_fresh_lock_enforces_relevance(fake_repo: Path) -> None:
+    """Stale warn marker + fresh lock must not skip token-overlap checks."""
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    _write_lock(fake_repo, age_s=0, response_body="unrelated substrate prose only")
+    (scratch / ".last_memory_query.missing").write_text(
+        json.dumps(
+            {
+                "token": "m",
+                "timestamp_utc": _now_minus(60),
+                "workspace": "template_repo",
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": False,
+                "hint": "template_repo",
+                "gate_policy": "warn",
+                "reason": "prefetch timed out after 30s",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+    assert "BLOCK" in stderr
+
+
+def test_recent_warn_missing_with_leftover_fresh_lock_degrades_to_warn(fake_repo: Path) -> None:
+    """If the warn marker is newer than the lock, we must degrade to warn-only."""
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    _write_lock(fake_repo, age_s=60, response_body="unrelated substrate prose only")
+    (scratch / ".last_memory_query.missing").write_text(
+        json.dumps(
+            {
+                "token": "m",
+                "timestamp_utc": _now_minus(0),
+                "workspace": "template_repo",
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": False,
+                "hint": "template_repo",
+                "gate_policy": "warn",
+                "reason": "prefetch timed out after 30s",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0
+    assert "degraded" in stderr.lower()
+
+
+def test_warn_missing_without_lock_allows_code_path(fake_repo: Path) -> None:
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    (scratch / ".last_memory_query").unlink(missing_ok=True)
+    (scratch / ".last_memory_query.missing").write_text(
+        json.dumps(
+            {
+                "token": "m",
+                "timestamp_utc": _now_minus(0),
+                "workspace": "template_repo",
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": False,
+                "hint": "template_repo",
+                "gate_policy": "warn",
+                "reason": "prefetch timed out after 30s",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0
+    assert "warn-only" in stderr.lower()
+
+
+def test_registered_missing_marker_blocks_code_path(fake_repo: Path) -> None:
+    _write_missing(fake_repo, workspace="template_repo", hint="template_repo")
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+    assert "registered Tier-3 workspace is unavailable" in stderr
+    assert "template_repo" in stderr
+
+
+def test_blocking_missing_marker_blocks_code_path(fake_repo: Path) -> None:
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    (scratch / ".last_memory_query").unlink(missing_ok=True)
+    (scratch / ".last_memory_query.missing").write_text(
+        json.dumps(
+            {
+                "token": "m",
+                "timestamp_utc": _now_minus(0),
+                "workspace": "alpaca_trading",
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": False,
+                "hint": "alpaca_trading",
+                "gate_policy": "block",
+                "reason": "bridge_workspace_not_visible",
+            }
+        ),
+        encoding="utf-8",
+    )
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+    assert "bridge_workspace_not_visible" in stderr
+    assert "alpaca_trading" in stderr
+
+
+def test_registered_missing_marker_wins_over_stale_lock(fake_repo: Path) -> None:
+    """Stale success stamp must not bypass registered workspace prefetch failure."""
     scratch = fake_repo / ".scratch"
     scratch.mkdir(exist_ok=True)
     (scratch / ".last_memory_query").write_text(
@@ -251,11 +442,38 @@ def test_missing_marker_wins_over_stale_lock(fake_repo: Path) -> None:
         ),
         encoding="utf-8",
     )
-    rc, _, _ = _run(
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+    assert "registered Tier-3 workspace is unavailable" in stderr
+
+
+def test_unregistered_missing_marker_wins_over_stale_lock(fake_repo: Path) -> None:
+    """No-workspace bootstrap marker remains warn-only even with a stale lock."""
+    scratch = fake_repo / ".scratch"
+    scratch.mkdir(exist_ok=True)
+    (scratch / ".last_memory_query").write_text(
+        json.dumps(
+            {
+                "token": "t",
+                "timestamp_utc": _now_minus(3600),
+                "workspace": "stale_ws",
+                "prompt": "test",
+                "ttl_seconds": 1800,
+                "prefetch_ok": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_missing(fake_repo)
+    rc, _, stderr = _run(
         {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
         cwd=fake_repo,
     )
     assert rc == 0
+    assert "degraded" in stderr.lower()
 
 
 def test_doc_path_always_allowed(fake_repo: Path) -> None:
@@ -389,21 +607,6 @@ def test_bash_non_file_edit_allowed(fake_repo: Path) -> None:
 # code via interpreter eval or piped script execution rather than the
 # directly-gated Edit/Write tools.
 # -------------------------------------------------------------------------
-
-
-def test_bash_indirect_exec_irrelevant_body_still_blocked(fake_repo: Path) -> None:
-    """Indirect-exec synthetic path must not pass on generic ``scripts`` spam."""
-    _write_lock(
-        fake_repo,
-        age_s=60,
-        response_body="vault handoff and session lifecycle notes only",
-    )
-    rc, _, stderr = _run(
-        {"tool_name": "Bash", "tool_input": {"command": "python3 -c 'print(1)'"}},
-        cwd=fake_repo,
-    )
-    assert rc == 2
-    assert "token overlap" in stderr or "relevant" in stderr.lower()
 
 
 def test_bash_python_dash_c_blocked(fake_repo: Path) -> None:

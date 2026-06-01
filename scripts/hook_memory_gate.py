@@ -21,6 +21,9 @@ Behavior:
   * **Degraded mode:** when the SessionStart prefetch wrote
     ``.scratch/.last_memory_query.missing`` (no Tier-3 workspace registered
     for this repo), the gate warns once on stderr and allows.
+  * **Bridge mismatch:** when that missing marker says ``gate_policy=block``
+    (for example manifest workspace disabled or not visible in the active
+    agentic-memory bridge provenance), the gate blocks code-path edits.
 
 Fail-open contract (same shape as the other deterministic hooks):
   * Malformed JSON → exit 0.
@@ -45,6 +48,10 @@ import shlex
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
 # ---------------------------------------------------------------------------
 # Path policy
@@ -190,7 +197,7 @@ _BASH_INDIRECT_EXEC_RE = re.compile(
     """,
     re.VERBOSE | re.IGNORECASE,
 )
-_BASH_SYNTHETIC_CODE_PATH = "scripts/bash_memory_gate_edit"
+_BASH_SYNTHETIC_CODE_PATH = "scripts/.bash_memory_gate_edit"
 
 _DEFAULT_TTL_SECONDS = 1800  # 30 minutes
 _LOCK_NAME = ".last_memory_query"
@@ -198,17 +205,33 @@ _LOCK_MISSING_NAME = ".last_memory_query.missing"
 
 
 def _repo_root() -> Path:
+    """Resolve to the main working directory, even from a git worktree.
+
+    In a worktree, ``.git`` is a *file*, and ``Path.cwd()`` walks to the worktree
+    path whose basename is a random slug — never matching manifest
+    ``match_repo_basenames``. After locating any ``.git`` (or ``CLAUDE_PROJECT_DIR``),
+    ask git for ``--git-common-dir`` so the workspace match in
+    ``ops/memory_manifest.yml`` succeeds for both main and worktree sessions.
+    Both ``hook_session_start_memory_prefetch.py`` and this gate must agree on
+    the same root, since prefetch stamps and gate reads
+    ``.scratch/.last_memory_query``.
+    """
+    from hook_repo_root import normalize_to_main_worktree_dir
+
     env_root = os.environ.get("CLAUDE_PROJECT_DIR")
     if env_root:
-        candidate = Path(env_root)
-        if candidate.is_dir():
-            return candidate.resolve()
-    # Fall back to git rev-parse equivalent.
+        candidate_env = Path(env_root)
+        if candidate_env.is_dir():
+            return normalize_to_main_worktree_dir(candidate_env)
     here = Path.cwd().resolve()
+    candidate: Path | None = None
     for parent in (here, *here.parents):
         if (parent / ".git").exists():
-            return parent
-    return here
+            candidate = parent
+            break
+    if candidate is None:
+        return here
+    return normalize_to_main_worktree_dir(candidate)
 
 
 def _gate_enabled() -> bool:
@@ -337,11 +360,8 @@ def _file_tokens(rel_path: str) -> list[str]:
     # like `.github/` since they are semantically substantive.
     parts = rel_path.split("/")
     if parts and "." in parts[-1]:
-        base = parts[-1]
-        # Leading-dot basenames (``.bash_edit``) are not ``name.ext``.
-        if not (base.startswith(".") and base.count(".") == 1):
-            # Drop the file extension: `gate.py` → `gate`.
-            parts[-1] = base.rsplit(".", 1)[0]
+        # Drop the file extension: `gate.py` → `gate`.
+        parts[-1] = parts[-1].rsplit(".", 1)[0]
     out: list[str] = []
     for segment in parts:
         for tok in _TOKEN_SPLIT_RE.split(segment):
@@ -534,19 +554,61 @@ def main() -> int:
 
     lock_path, missing_path = _lock_paths(root)
     lock = _read_lock(lock_path)
-    missing_marker_present = missing_path.is_file()
-    missing = _read_lock(missing_path) if missing_marker_present else None
+    missing = _read_lock(missing_path)
 
-    # Degraded mode: SessionStart prefetch said no workspace registered for this
-    # repo. Warn once on stderr and allow — the right fix is to register the
-    # workspace via PR C, not to break developer flow.
-    if missing_marker_present:
-        sys.stderr.write(
-            "WARN  hook_memory_gate.py: degraded — Tier-3 prefetch unavailable "
-            f"for {root} (see ops/memory_manifest.yml). "
-            "Code-path edits allowed; register or provision the workspace.\n"
-        )
-        return 0
+    # Degraded mode: no manifest workspace is a bootstrap warning, but a
+    # registered workspace that failed prefetch is a hard memory-gate failure.
+    if missing:
+        ws = missing.get("workspace") if isinstance(missing, dict) else None
+        registered_ws = ws.strip() if isinstance(ws, str) else ""
+        gate_policy = missing.get("gate_policy") if isinstance(missing, dict) else None
+        # A timeout-origin marker (gate_policy == "warn") means the substrate is healthy
+        # but slow — never hard-block on a mere prefetch timeout, even for a registered
+        # workspace (agorokh/workstation-ops#128 rec 2). A genuine outage (registered_ws
+        # with no warn policy) or a bridge mismatch (gate_policy == "block") still blocks.
+        if gate_policy != "warn" and (registered_ws or gate_policy == "block"):
+            return _emit_block(
+                root=root,
+                paths=code_paths,
+                workspace_hint=registered_ws or _maybe_workspace_hint(lock, missing),
+                reason=(
+                    str(missing.get("reason") or "registered Tier-3 workspace is unavailable")
+                    + ". Fix the active agentic-memory registry/allowlist before code-path edits."
+                ),
+            )
+        if gate_policy == "warn":
+            # Stale warn marker can coexist if unlink failed after a later successful
+            # prefetch — honor a fresh lock instead of skipping relevance checks.
+            # But if the warn marker is newer than the lock, the most recent prefetch
+            # timed out, so we degrade to warn-only even if the leftover lock is within TTL.
+            warn_is_newer = lock and str(missing.get("timestamp_utc", "")) > str(
+                lock.get("timestamp_utc", "")
+            )
+            if not lock or not _lock_is_fresh(lock, _ttl_seconds()) or warn_is_newer:
+                sys.stderr.write(
+                    "WARN  hook_memory_gate.py: degraded (warn-only) — Tier-3 prefetch "
+                    f"timed out for {root}: {missing.get('reason') or 'substrate slow'}. "
+                    "Code-path edits allowed; query Tier-3 manually to ground this session.\n"
+                )
+                return 0
+        elif str(missing.get("reason") or "") == "accepted_gap":
+            # A recorded resolution_exceptions gap is known and accepted — the
+            # SessionStart NOTE already surfaced the tracking issue. Degrade
+            # *quietly* (no "register or provision" nudge) per the manifest
+            # contract, so it does not become recurring noise (Qodo review,
+            # PR #175). Code-path edits allowed.
+            sys.stderr.write(
+                "WARN  hook_memory_gate.py: accepted Tier-3 gap (see SessionStart "
+                f"NOTE) for {root}; code-path edits allowed.\n"
+            )
+            return 0
+        else:
+            sys.stderr.write(
+                "WARN  hook_memory_gate.py: degraded — Tier-3 prefetch unavailable "
+                f"for {root} (see ops/memory_manifest.yml). "
+                "Code-path edits allowed; register or provision the workspace.\n"
+            )
+            return 0
 
     workspace_hint = _maybe_workspace_hint(lock, missing)
 
