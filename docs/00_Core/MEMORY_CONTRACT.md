@@ -4,7 +4,7 @@
 **Category:** Core
 **Owns:** the LOAD/SAVE protocol across **all three memory tiers** for Claude Code, Cursor, and Task-spawned subagents.
 **Loaded by:** `@docs/00_Core/MEMORY_CONTRACT.md` in `CLAUDE.md` (Claude Code auto-inclusion); referenced by `.cursor/rules/memory-contract.mdc` (Cursor auto-apply); embedded in `.claude/agents/*.md` and `AGENTS.md` via marker-delimited sections re-rendered by `scripts/merge_memory_contract.py`.
-**Companion invariants:** [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/ProjectTemplate/00_System/invariants/secrets-from-doppler.md).
+**Companion invariants:** [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md).
 **Originating postmortem:** [issue #115](https://github.com/agorokh/template-repo/issues/115).
 
 ---
@@ -15,9 +15,11 @@ Memory in this project lives in **exactly three tiers** — `AGENTS.md` (Tier 1,
 
 1. **Read Tier 3 at LOAD** via `mcp__agentic-memory__query_knowledge_graph` for the active workspace before any substantive Edit/Write/Bash on code paths. The substrate is the reason we keep three tiers; skipping the read means re-discovering context every session.
 2. **Write to the right tier at SAVE.** Short operational facts → `AGENTS.md`. Structured knowledge (decisions, investigations, invariants, glossary, handoffs) → vault as small linked nodes. **Tier 3 is read-mostly from the agent surface** — it is rebuilt by re-ingesting Tier-2 on cadence; agents do not write to it directly.
-3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md)).
+3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
 
 These rules are enforced by deterministic hooks (`scripts/hook_session_start_memory_prefetch.py`, `scripts/hook_memory_gate.py`, `scripts/hook_stop_save_reminder.py`) — not by trust in the agent's prompt-following. Failure modes are explicit and surfaced to the human.
+
+Simplicity policy (2026-05-24): prefer deterministic, in-band controls that directly affect execution behavior; avoid adding template-core report-only health-check layers that are frequently skipped by non-agent and human paths.
 
 ---
 
@@ -29,7 +31,7 @@ These rules are enforced by deterministic hooks (`scripts/hook_session_start_mem
 | **2** | Obsidian vault at `docs/01_Vault/<ProjectKey>/` (markdown graph; `00_Graph_Schema.md`) | Direct `Write` / `Edit` of small linked nodes (decisions, investigations, invariants, glossary, handoffs) | `@`-included by `CLAUDE.md`; indirectly via Tier-3 query (the substrate is built by re-ingesting Tier-2) |
 | **3** | Per-workspace semantic substrate declared in [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml). Backend: **`lightrag` (canonical online)** or `graphiti` (offline-only per [sunset ADR](https://github.com/agorokh/agent-factory/blob/main/docs/01_Vault/AgentFactory/01_Decisions/adr-2026-05-17-graphiti-sunset.md); never on the agent read path). | **Indirect.** The substrate ingests Tier-2 vault notes on cadence (`stale_after_hours` per workspace). Agents do **not** write to the substrate directly — no MCP write tools are exposed by design. | For **`lightrag`** workspaces only: `mcp__agentic-memory__query_knowledge_graph(prompt, workspace=…)` + `mcp__agentic-memory__search_*`. Not used for `graphiti` rows (offline-only). **Read at LOAD is mandatory** when a matching LightRAG workspace is live. |
 
-Auto-memory (`~/.claude/projects/.../memory/`) is **not** a tier — it is a side channel actively deprecated for this project. See [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md).
+Auto-memory (`~/.claude/projects/.../memory/`) is **not** a tier — it is a side channel actively deprecated for this project. See [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md).
 
 ---
 
@@ -39,8 +41,9 @@ At session start, the `SessionStart` command hook (`.claude/settings.base.json`)
 
 1. `cat docs/01_Vault/<ProjectKey>/00_System/Next Session Handoff.md` → first turn context.
 2. `scripts/knowledge_session_summary.py` → top patterns from the local repo-knowledge SQLite.
-3. `scripts/hook_session_start_memory_prefetch.py` → pre-fetches Tier-3 substrate findings for the workspace resolved from `ops/memory_manifest.yml` (matched by repo path), and **stamps `.scratch/.last_memory_query` with `{token, timestamp_utc, workspace, prompt}`**. If no workspace matches, the hook prints a `WARNING: no Tier-3 workspace registered` line and writes `.scratch/.last_memory_query.missing` — the gate hook then **degrades to warn-only** on code paths so the session is not bricked while PR C lands workspace provisioning.
+3. `scripts/hook_session_start_memory_prefetch.py` → pre-fetches Tier-3 substrate findings for the workspace resolved from `ops/memory_manifest.yml` (matched by repo path), and **stamps `.scratch/.last_memory_query` with `{token, timestamp_utc, workspace, prompt}`**. If no workspace matches, the hook prints a `WARNING: no Tier-3 workspace registered` line and writes `.scratch/.last_memory_query.missing` — the gate hook then **degrades to warn-only** on code paths so the session is not bricked while PR C lands workspace provisioning. If sanitized bridge provenance is available and says the resolved live LightRAG workspace is disabled or not visible, the hook writes a **blocking** missing marker instead; the gate then fails fast so the agent cannot silently query another workspace universe. **This provenance is supplied automatically:** `scripts/mcp/agentic-memory.sh` runs `scripts/mcp/capture_bridge_provenance.py` before launching the MCP server, writing the live bridge's visible/disabled workspace set to `${XDG_CACHE_HOME:-$HOME/.cache}/agentic-memory/bridge_provenance.json` (rewritten every launch; the capture removes the file when it cannot refresh, so no mtime TTL is needed — an optional backstop is available via `AGENTIC_MEMORY_BRIDGE_PROVENANCE_MAX_AGE_S`; path override via `AGENTIC_MEMORY_BRIDGE_PROVENANCE_FILE`). So a manifest-declared workspace the bridge omits is surfaced at SessionStart rather than as `workspace_unknown` mid-session ([#172](https://github.com/agorokh/template-repo/issues/172)).
 4. `scripts/hook_session_start_memory_redirect.py` → physically marks the auto-memory directory as deprecated (writes a `README.md` that explains the deprecation) so an agent that *tries* to write there sees the warning before silently succeeding.
+5. `scripts/hook_session_start_post_merge_steward.py` → if local `main` is behind `origin/main`, prints a `POST-MERGE STEWARD NEEDED` routing block and writes `.scratch/post-merge-steward-needed.json`. This does not merge or pull by itself; it makes the agent-facing next action explicit before new implementation work starts.
 
 **Agent obligation:** if you need to do meaningful work, **issue at least one `mcp__agentic-memory__query_knowledge_graph` call early in the session** with a prompt tied to the issue/branch/task. The SessionStart hook does an initial prefetch using branch name + issue title as the query; refine with a task-specific query once you understand scope.
 
@@ -154,12 +157,45 @@ Knobs:
 
 Heuristic accuracy: the citation check is substring-match — an agent that happens to mention `MEMORY_CONTRACT.md` in passing scores as "cited" even if the response isn't substantively grounded. Conversely, an agent that paraphrases substrate findings without naming them may score as drift. The audit is **a feedback signal, not a verdict**. Operators should review the `memory_audit.jsonl` records over multiple sessions to decide whether the substrate is working in practice for their fleet.
 
+## Workspace lifecycle: declared ≠ registered ≠ provisioned
+
+A Tier-3 workspace moves through **three distinct states**. Conflating them is
+the root cause of [issue #169](https://github.com/agorokh/template-repo/issues/169):
+a freshly bootstrapped repo *names* a workspace in `AGENTS.md` / vault state and
+then an agent treats that name as if the substrate were live, hits the
+resolution ladder cold, and burns a session on a spurious "architectural gap."
+
+| State | What it means | How an agent detects it | Gate behavior (deterministic) | Correct agent action |
+|---|---|---|---|---|
+| **Declared** | The workspace *name* appears in `AGENTS.md` / vault, but there is **no manifest row and no live bridge entry**. Declaration is aspirational — it does **not** register or provision anything. | Resolution ladder steps 1–3 all miss (no `ops/memory_manifest.yml` row, no `…local.yml` row, name absent from `list_workspaces`). | **Warn-only** (bootstrap mode): SessionStart writes a no-workspace missing marker; `hook_memory_gate.py` allows code-path edits. | This is an **expected transient**, *not* a gap. Operate vault-only (Tier-2 grep/Read) for grounding; track substrate provisioning against the owning infra repo (workstation-ops). Do **not** file a fresh `architectural-invariant-gap` issue per session, and do **not** set `CLAUDE_MEMORY_GATE=0` — the gate already allows edits. |
+| **Registered** | A manifest row exists (`ops/memory_manifest.yml` or `…local.yml`) but the substrate server isn't live yet — e.g. the `template_repo` placeholder row (`health_probe: false`, closed-loopback `http://127.0.0.1:1`), or any row whose workspace is **absent from the live bridge** `visible_workspace_ids`. | Ladder step 1/2 hits, but the prefetch query fails: unreachable endpoint, or `bridge_workspace_not_visible` / `bridge_workspace_disabled`. | **Hard block** (by #115 design): a *registered* workspace must be reachable before code edits. Unreachable/not-visible → blocking missing marker. | Provision the substrate (see below) **or** fix the bridge registry/allowlist so the workspace is visible. Only if neither is possible this session: set `CLAUDE_MEMORY_GATE=0`, **say why in the vault SAVE**, and ensure a provisioning issue is tracked against workstation-ops. Adding a placeholder row to "satisfy the ladder" makes the gate *stricter*, not looser — register a workspace only when you intend to provision it. |
+| **Provisioned & visible** | Substrate server is live and the workspace appears in the bridge `visible_workspace_ids`. | `query_knowledge_graph(workspace=…)` returns content; `list_workspaces` lists it. | Normal: a fresh, file-relevant query stamps the lock and edits proceed. | Query early with a task-specific prompt; refine per file touched. |
+
+**Rule of thumb for bootstrap:** declaring a workspace name is free and harmless
+(warn-only), but **registering** a manifest row is a commitment to provision it —
+until the server is live, a registered-but-unreachable workspace blocks edits on
+purpose. Don't register ahead of provisioning unless you accept the block.
+
+### Decision tree (authoritative — the skills link here)
+
+Resolve the workspace via the ladder (`ops/memory_manifest.yml` → `…local.yml` →
+`list_workspaces`), then **anchor every decision on the observable gate state**, not
+on intent or how a doc "feels":
+
+1. **Gate is warn-only** (no manifest row resolved → bootstrap mode) → **proceed.** Ground on vault Tier-2. **No** `architectural-invariant-gap` issue, **no** `CLAUDE_MEMORY_GATE=0`.
+2. **Gate is blocking** (`bridge_workspace_not_visible` / `bridge_workspace_disabled` / unreachable on a *registered* row) → **fix first:** provision the substrate or correct the bridge registry/allowlist so the workspace is visible. Only if neither is possible this session, `CLAUDE_MEMORY_GATE=0` is a **last resort** — record the reason in the vault SAVE and confirm a workstation-ops provisioning issue exists.
+3. **File an `architectural-invariant-gap` issue** *only* when an observable condition holds: (a) `AGENTS.md` / vault **asserts the workspace is already provisioned/queryable** yet the ladder finds nothing (a doc/state lie), or (b) provisioning is **observably overdue** — verifiable via `gh issue view` on the workstation-ops provisioning issue (missing, closed without the workspace going live, or past its recorded due-date/milestone).
+
+Never file a per-session gap issue, and never normalize `CLAUDE_MEMORY_GATE=0`, for the expected *declared* transient (rule 1).
+
 ## What happens when something goes wrong
 
 | Symptom | Cause | Recovery |
 |---|---|---|
 | Gate blocks every Edit on code paths | No SessionStart prefetch ran (e.g. hook script missing, repo-root mis-detected, or Claude/Cursor host doesn't fire SessionStart) | Run `python3 scripts/hook_session_start_memory_prefetch.py` manually to stamp the lockfile; or set `CLAUDE_MEMORY_GATE=0` and file an `architectural-invariant-gap` issue |
-| Gate degrades to warn-only and logs `no Tier-3 workspace registered` | This repo is not in `ops/memory_manifest.yml` | File a tracking issue against template-repo (PR C will provision; for transient sessions set `CLAUDE_MEMORY_GATE=0`) |
+| Workspace named in `AGENTS.md` / vault but ladder finds no match (freshly bootstrapped repo) | Workspace is **declared, not registered** — see lifecycle table above | **Not a gap.** The gate is already warn-only (bootstrap mode); operate vault-only and track substrate provisioning against workstation-ops. Do not file a per-session `architectural-invariant-gap` issue and do not set `CLAUDE_MEMORY_GATE=0` for this state. File a gap issue only if the declaration claims the workspace is already live (a doc/state lie) or provisioning is **observably overdue** (the workstation-ops provisioning issue is missing, closed without the workspace going live, or past its recorded due-date/milestone). |
+| Gate degrades to warn-only and logs `no Tier-3 workspace registered` | This repo is not in `ops/memory_manifest.yml` | Walk the workspace-resolution ladder before bypassing: (1) check `ops/memory_manifest.local.yml` (operator-owned, gitignored — schema in `ops/memory_manifest.local.example.yml`); (2) call `mcp__agentic-memory__list_workspaces` and if the repo basename appears in `visible_workspace_ids` (and not in `disabled_workspace_ids`), pass it explicitly to `mcp__agentic-memory__query_knowledge_graph(..., workspace=…)`; (3) if the gap is known and accepted, record the repo under a top-level `resolution_exceptions` block in `ops/memory_manifest.local.yml` (`reason` + `tracking_issue`) — SessionStart then degrades **quietly** (prints `accepted Tier-3 gap (tracked: …)`) and the ladder stops re-filing. **In this warn-only state the gate already permits code-path edits**, so `CLAUDE_MEMORY_GATE=0` is unnecessary and a per-session `architectural-invariant-gap` issue is wrong for a merely *declared* (not yet registered/provisioned) workspace — see the lifecycle table above. (4) For a genuine gap, first read `docs/01_Vault/AcCopilotTrainer/pitfalls/_index.md` and `.claude/pitfalls-hub.json`, then **dedup in the same tracker where the issue would be filed**: `gh issue list --repo <template-owner>/template-repo --state open --search "<repo-basename> Tier-3 workspace"` (and scan the `architectural-invariant-gap` label). Comment on a matching open issue instead of opening a duplicate; file against `<template-owner>/template-repo` only when the declaration claims the workspace is already live (a doc/state lie) or provisioning is observably overdue (the workstation-ops provisioning issue is missing, closed without the workspace going live, or past its recorded due-date/milestone). Canonical procedure: [`.claude/skills/resolve-pr/SKILL.md`](../../.claude/skills/resolve-pr/SKILL.md) § Workspace resolution. |
+| Gate blocks with `bridge_workspace_not_visible` or `bridge_workspace_disabled` | Manifest workspace and active agentic-memory bridge registry disagree (now auto-detected: the wrapper captures live provenance to `…/agentic-memory/bridge_provenance.json` so the prefetch fires this check at SessionStart — [#172](https://github.com/agorokh/template-repo/issues/172)) | Run `mcp__agentic-memory__get_bridge_provenance` (and `list_workspaces` where available), inspect `registry_path`, `visible_workspace_ids`, and `disabled_workspace_ids`, then fix the bridge registry/allowlist. Do not proceed by querying an unrelated workspace. |
 | MCP server unreachable | Substrate host down (verify with `mcp__agentic-memory__verify_server_health`) | Vault-only mode: query the vault directly via grep / Read; surface the substrate outage in the session handoff so the next session retries the prefetch |
 | Subagent ignores memory contract | Orchestrator did not embed `## Pre-loaded memory context` in the Task prompt | Orchestrator bug — fix in `.claude/agents/issue-driven-coding-orchestrator.md`; the lockfile still gates the subagent's Edit/Write, so blast radius is contained |
 | Agent writes to `~/.claude/projects/.../memory/` despite contract | The auto-memory directory marker was not yet written (first run after template upgrade) | The SessionStart redirect hook (PR B) creates the marker on every session start; if the agent still writes there, file an `architectural-invariant-gap` issue (this is a hook regression) |
@@ -172,6 +208,5 @@ Heuristic accuracy: the citation check is substring-match — an agent that happ
 - [`MEMORY_SUBSTRATE.md`](MEMORY_SUBSTRATE.md) — Tier-3 substrate detail (LightRAG canonical online; Graphiti offline-only per sunset ADR; workspace schema).
 - [`VAULT_TAXONOMY.md`](VAULT_TAXONOMY.md) — `origin` classification (`repo-product` / `repo-embedded` / `human-curated`).
 - [`HOOK_DESIGN.md`](HOOK_DESIGN.md) — why hooks are deterministic and never LLM-bearing.
-- [`memory-three-tiers.md`](../01_Vault/ProjectTemplate/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/ProjectTemplate/00_System/invariants/secrets-from-doppler.md) — companion invariants.
+- [`memory-three-tiers.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md), [`secrets-from-doppler.md`](../01_Vault/AcCopilotTrainer/00_System/invariants/secrets-from-doppler.md) — companion invariants.
 - [`ops/memory_manifest.yml`](../../ops/memory_manifest.yml) — workspace registry.
-- [`ops/propagation_manifest.yml`](../../ops/propagation_manifest.yml) — fleet convergence tracking; PR C adds the `memory-enforcement-v1` invariant.
