@@ -1,3 +1,20 @@
+# ----------------------------------------------------------------------------
+# repo: per-repo classification data for hook_memory_gate.py (PR #194).
+# Template propagation copies the gate code but NEVER overwrites this
+# block. Adjust code_dirs to enumerate THIS repo's actual code directories
+# so the gate gates real production code (not just template defaults).
+# ----------------------------------------------------------------------------
+repo:
+  code_dirs:
+    - "src"
+    - "scripts"
+    - "tests"
+    - "ops"
+    - "tools"
+    - ".github/workflows"
+    - ".github/actions"
+    - "firmware"
+
 manifest_version: 1
 updated_at: "2026-04-23T18:00:00Z"
 owner: "template-repo"

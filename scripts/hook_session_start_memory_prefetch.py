@@ -5,9 +5,10 @@ This is the LOAD half of the memory contract
 (``docs/00_Core/MEMORY_CONTRACT.md``):
 
 1. Resolve the **active workspace** for this repo from
-   ``ops/memory_manifest.yml`` (matched by repo path under ``vault_root`` when
-   name matching fails, else the workspace whose name matches the repo
-   directory).
+   ``ops/memory_manifest.yml`` (matched by ``vault_root`` containing the repo
+   path, falling back to the workspace whose name matches the parent
+   directory). The operator-owned ``ops/memory_manifest.local.yml`` extension is
+   merged in too, so child-repo workspaces registered locally resolve here.
 2. Issue an HTTP query against the workspace endpoint with a prompt derived
    from the current branch name (and optional ``CLAUDE_LOAD_PROMPT`` env).
 3. Print a short, deterministic summary to stdout so Claude Code injects it
@@ -18,7 +19,10 @@ This is the LOAD half of the memory contract
 
 If no workspace is registered for this repo, the hook writes
 ``.scratch/.last_memory_query.missing`` instead so the gate degrades to
-warn-only and the human sees the gap.
+warn-only and the human sees the gap. If a top-level ``resolution_exceptions``
+block (tracked or local manifest) lists this repo as a *known, accepted* gap,
+the hook surfaces the tracking issue and degrades quietly so the agent does not
+re-file a duplicate ``architectural-invariant-gap`` issue every session.
 
 The script is **deterministic** (no LLM in the hook hot path; the upstream
 MCP server may use one for extraction, but its call is a network request from
@@ -28,8 +32,19 @@ this script's perspective). Fail-open contract: any error → degrade to
 Environment knobs (rare):
 
 * ``CLAUDE_MEMORY_PREFETCH=0`` — skip the entire hook (treated as "missing").
-* ``CLAUDE_MEMORY_PREFETCH_TIMEOUT_S`` — HTTP timeout (default 6s).
+* ``CLAUDE_MEMORY_PREFETCH_TIMEOUT_S`` — HTTP timeout (default 30s; ~2× measured
+  naive p100 headroom on the fleet — see ``DEFAULT_TIMEOUT_S``).
+* ``CLAUDE_MEMORY_PREFETCH_MODE`` — LightRAG query mode for the prefetch
+  (default ``naive``, ~14–18s measured on the fleet; ``local`` adds graph
+  relevance but is ~34–40s — no faster than ``hybrid``/``mix`` — so it is not
+  the prefetch default).
 * ``CLAUDE_LOAD_PROMPT`` — override the auto-derived prompt.
+* ``AGENTIC_MEMORY_BRIDGE_PROVENANCE_JSON`` / ``..._FILE`` — optional
+  sanitized output from ``mcp__agentic-memory__get_bridge_provenance``. When
+  present, a manifest LightRAG workspace must be visible and not disabled in
+  the active bridge; otherwise the hook writes a blocking missing marker so
+  ``hook_memory_gate.py`` fails fast instead of letting the agent silently query
+  the wrong workspace universe.
 """
 
 from __future__ import annotations
@@ -40,29 +55,71 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Fleet probe contract (ws-ops#128/template#159): measured naive ~14-18s,
-# hybrid ~40s; prefetch needs a relevance stamp, so naive + 30s.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+# Fleet probe contract (agorokh/workstation-ops#128, agorokh/template-repo#159,
+# agorokh/agent-factory#291). The old 6s default falsely reported the substrate
+# "unreachable" and hard-blocked edits fleet-wide, because real query latency is far
+# higher. MEASURED on the fleet (M2PRO, 2026-05-30, two live workspaces):
+#     naive  ~14–18s   |   local  ~34–40s   |   mix/hybrid  ~38–41s
+# So ``local`` is NOT "a few seconds" — it is ~40s, no better than hybrid for a prefetch.
+# Only ``naive`` returns materially faster, and the SessionStart prefetch only needs a
+# relevance *stamp* (vector/keyword retrieval that mentions the work's tokens), not graph
+# synthesis. Three-part fix: (1) prefetch uses ``naive``; (2) timeout raised to 30s
+# (≈2× the measured naive p100 for headroom); (3) a *timeout* is warn-only (substrate
+# slow, not down) — see main() / hook_memory_gate.py — never a hard block.
 DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_QUERY_MODE = "naive"
+ERR_TIMEOUT = "timeout"
+ERR_UNREACHABLE = "unreachable"
 SUMMARY_TRUNCATE = 1200  # chars of summary stdout we surface to the agent
+BRIDGE_PROVENANCE_LIMIT = 16_384  # bytes/chars; provenance should be small sanitized JSON
+# Optional opt-in staleness guard for a file-sourced capture, in seconds. The
+# default is **0 (disabled)**: an mtime TTL is the wrong validity signal because
+# the capture is written once per *server launch*, not per Claude session, so a
+# long-running bridge would have a still-accurate file that a TTL would wrongly
+# drop — silently disabling the drift check (cursor-bot #172 review). Freshness
+# is instead guaranteed at the source: the wrapper rewrites the file on every
+# launch, and ``capture_bridge_provenance.py`` removes it when it cannot produce
+# fresh provenance in a real launch. Operators who still want a backstop set
+# ``AGENTIC_MEMORY_BRIDGE_PROVENANCE_MAX_AGE_S`` to a positive value.
+DEFAULT_BRIDGE_PROVENANCE_MAX_AGE_S = 0  # disabled by default; opt-in only
 
 
 def _repo_root() -> Path:
+    """Resolve to the **main** working directory, even from a git worktree.
+
+    Worktree layout: `.git` is a *file* containing `gitdir: .../worktrees/<slug>`.
+    Walking up looking for `.git` stops at the worktree path, whose basename is
+    a random slug that never matches manifest `match_repo_basenames`. The fix:
+    once we find the `.git` marker (or ``CLAUDE_PROJECT_DIR``), ask git for
+    ``--git-common-dir`` (the shared main ``.git``) and return its parent.
+    """
+    from hook_repo_root import normalize_to_main_worktree_dir
+
     env_root = os.environ.get("CLAUDE_PROJECT_DIR")
     if env_root:
         p = Path(env_root)
         if p.is_dir():
-            return p.resolve()
+            return normalize_to_main_worktree_dir(p)
     here = Path.cwd().resolve()
+    candidate: Path | None = None
     for parent in (here, *here.parents):
         if (parent / ".git").exists():
-            return parent
-    return here
+            candidate = parent
+            break
+    if candidate is None:
+        return here
+    return normalize_to_main_worktree_dir(candidate)
 
 
 def _enabled() -> bool:
@@ -81,6 +138,28 @@ def _timeout_s() -> float:
     except (TypeError, ValueError):
         pass
     return DEFAULT_TIMEOUT_S
+
+
+def _query_mode() -> str:
+    """LightRAG mode for the SessionStart prefetch.
+
+    Defaults to ``naive`` (~14–18s measured on the fleet — the prefetch only needs a
+    relevance stamp, not graph synthesis). Overridable via ``CLAUDE_MEMORY_PREFETCH_MODE``
+    for operators who want ``local`` (slower, ~34–40s, more graph-local relevance) or,
+    rarely, ``hybrid``/``mix``.
+    """
+    raw = os.environ.get("CLAUDE_MEMORY_PREFETCH_MODE", "").strip().lower()
+    if not raw:
+        return DEFAULT_QUERY_MODE
+    valid_modes = ("local", "naive", "hybrid", "mix", "global")
+    if raw in valid_modes:
+        return raw
+    sys.stderr.write(
+        "WARN  hook_session_start_memory_prefetch: unrecognized "
+        f"CLAUDE_MEMORY_PREFETCH_MODE {raw!r}; falling back to default "
+        f"{DEFAULT_QUERY_MODE!r}. Accepted values: {valid_modes}\n"
+    )
+    return DEFAULT_QUERY_MODE
 
 
 def _ttl_seconds() -> int:
@@ -128,24 +207,85 @@ def _derive_prompt(root: Path) -> str:
     return root.name
 
 
-def _load_manifest(root: Path) -> dict | None:
-    path = root / "ops" / "memory_manifest.yml"
+def _safe_load_yaml(path: Path, *, warn_on_problems: bool) -> dict | None:
+    """Load a YAML mapping from ``path``; return ``None`` on any failure.
+
+    ``warn_on_problems`` makes setup/parse defects **loud** on stderr — missing
+    PyYAML, an unparseable file, or a non-mapping top level. Only the *tracked*
+    manifest sets this: a malformed tracked manifest is operator misconfiguration
+    that would otherwise silently route into the degraded "no workspace" /
+    "accepted gap" paths and mask the real problem (Qodo review, PR #175). A
+    missing or malformed *local* manifest is routine and stays quiet.
+    """
     if not path.is_file():
         return None
     try:
         import yaml  # type: ignore
     except ImportError:
-        print(
-            "WARNING: hook_session_start_memory_prefetch.py needs PyYAML — "
-            "run `pip install -e '.[dev]'` or use the repo .venv python in "
-            "SessionStart hooks (see .claude/settings.base.json).",
-            file=sys.stderr,
-        )
+        if warn_on_problems:
+            print(
+                "WARNING: hook_session_start_memory_prefetch.py needs PyYAML — "
+                "run `pip install -e '.[dev]'` or use the repo .venv python in "
+                "SessionStart hooks (see .claude/settings.base.json).",
+                file=sys.stderr,
+            )
         return None
     try:
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError):
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        if warn_on_problems:
+            print(
+                f"WARNING: hook_session_start_memory_prefetch.py could not parse "
+                f"{path.name} ({exc.__class__.__name__}); treating as no manifest. "
+                "Fix the YAML to restore Tier-3 workspace resolution.",
+                file=sys.stderr,
+            )
         return None
+    if data is not None and not isinstance(data, dict):
+        if warn_on_problems:
+            print(
+                f"WARNING: hook_session_start_memory_prefetch.py: {path.name} top "
+                f"level is {type(data).__name__}, not a mapping; treating as no "
+                "manifest.",
+                file=sys.stderr,
+            )
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _load_manifest(root: Path) -> dict | None:
+    return _safe_load_yaml(root / "ops" / "memory_manifest.yml", warn_on_problems=True)
+
+
+def _load_local_manifest(root: Path) -> dict | None:
+    """Operator-owned, gitignored manifest extension (``memory_manifest.local.yml``).
+
+    The committed manifest ships only a generic skeleton; child-repo workspaces
+    and resolution exceptions this operator owns live here. The local example
+    file (``ops/memory_manifest.local.example.yml``) has long documented that "a
+    merge step at boot can concatenate the workspaces" — this is that merge.
+    """
+    return _safe_load_yaml(root / "ops" / "memory_manifest.local.yml", warn_on_problems=False)
+
+
+def _gather_workspaces(manifest: dict | None) -> list[dict]:
+    """Flatten ``hosts[].workspaces`` from a manifest dict."""
+    if not isinstance(manifest, dict):
+        return []
+    hosts = manifest.get("hosts") or []
+    if not isinstance(hosts, list):
+        return []
+    out: list[dict] = []
+    for host in hosts:
+        if not isinstance(host, dict):
+            continue
+        workspaces = host.get("workspaces")
+        if not isinstance(workspaces, list):
+            continue
+        for ws in workspaces:
+            if isinstance(ws, dict):
+                out.append(ws)
+    return out
 
 
 def _name_match_keys(name: str) -> set[str]:
@@ -154,40 +294,104 @@ def _name_match_keys(name: str) -> set[str]:
     return {lowered, lowered.replace("-", "_"), lowered.replace("_", "-")}
 
 
-def _resolve_workspace(root: Path, manifest: dict | None) -> dict | None:
-    """Return the workspace dict that matches this repo, or None."""
-    if not isinstance(manifest, dict):
-        return None
-    hosts = manifest.get("hosts") or []
-    if not isinstance(hosts, list):
-        return None
-    candidates: list[dict] = []
-    for host in hosts:
-        if not isinstance(host, dict):
-            continue
-        for ws in host.get("workspaces") or []:
-            if isinstance(ws, dict):
-                candidates.append(ws)
+def _resolve_workspace(
+    root: Path, manifest: dict | None, local_manifest: dict | None
+) -> dict | None:
+    """Return the workspace dict that matches this repo, or None.
+
+    Resolution order (Kimi #180 council — template-relative config must live
+    in per-repo data, not copied logic):
+      1. ``repo.tier3_workspace_id`` — explicit per-repo redirect when the
+         canonical workspace name differs from the repo basename
+         (e.g. template-repo → ``agent_factory_steward``). Local manifest
+         wins over tracked, mirroring the ``resolution_exceptions`` precedence
+         decided in PR #175 (Qodo review).
+      2. Workspace name matches repo basename (hyphen/underscore tolerant).
+      3. ``vault_root`` prefix matches this repo's root.
+
+    Candidates are the tracked manifest's workspaces first, then the
+    operator-owned ``memory_manifest.local.yml`` extension — so operator
+    child-repo rows registered locally are visible to SessionStart prefetch.
+    """
+    candidates = _gather_workspaces(manifest) + _gather_workspaces(local_manifest)
     if not candidates:
         return None
-    # Prefer workspace name (repo basename) over vault_root path heuristics.
+    # 1. Explicit per-repo redirect via repo.tier3_workspace_id.
+    tier3_id: str | None = None
+    for man in (local_manifest, manifest):  # local wins
+        if not isinstance(man, dict):
+            continue
+        repo_block = man.get("repo")
+        if isinstance(repo_block, dict):
+            val = repo_block.get("tier3_workspace_id")
+            if isinstance(val, str) and val.strip():
+                tier3_id = val.strip()
+                break
+    if tier3_id:
+        id_keys = _name_match_keys(tier3_id)
+        for ws in candidates:
+            ws_name = ws.get("name")
+            if isinstance(ws_name, str) and _name_match_keys(ws_name) & id_keys:
+                return ws
+        # tier3_id declared but unknown to the manifest → return None so the
+        # standard "no workspace registered" warning surfaces. Better than
+        # silently falling back to basename match and resolving to a wrong
+        # workspace.
+        return None
+    # 2. Workspace name matches repo basename.
     basename_keys = _name_match_keys(root.name)
     for ws in candidates:
         ws_name = ws.get("name")
         if isinstance(ws_name, str) and _name_match_keys(ws_name) & basename_keys:
             return ws
+    # 3. vault_root prefix match (only if unambiguous).
     vault_matches: list[dict] = []
     for ws in candidates:
         vr = ws.get("vault_root")
         if isinstance(vr, str):
             try:
                 vr_resolved = _resolve_vault_root(vr, root)
-                if root.is_relative_to(vr_resolved):
+                if vr_resolved.is_relative_to(root):
                     vault_matches.append(ws)
             except (OSError, ValueError):
                 pass
     if len(vault_matches) == 1:
         return vault_matches[0]
+    return None
+
+
+def _resolve_exception(
+    root: Path, manifest: dict | None, local_manifest: dict | None
+) -> dict | None:
+    """Return a recorded ``resolution_exceptions`` entry for this repo, or None.
+
+    A ``resolution_exceptions`` block (top-level, in the tracked manifest or the
+    local extension) maps a repo basename to ``{reason, tracking_issue}`` and
+    declares the missing Tier-3 workspace a *known, accepted gap*. The prefetch
+    surfaces it and degrades to warn-only so the agent does NOT file yet another
+    duplicate ``architectural-invariant-gap`` issue each session (the recurring
+    pain behind template-repo#145 / #167 / #169 / #172).
+
+    **Local entries win** — checked source-by-source (local first, then tracked)
+    rather than via a merged dict. A merged ``dict.update()`` only overwrites on
+    *identical* keys, so a local ``foo_bar`` and a tracked ``foo-bar`` (both
+    valid under the documented hyphen/underscore tolerance) would BOTH survive
+    and tracked-first iteration would wrongly win (Qodo review, PR #175).
+    """
+    basename_keys = _name_match_keys(root.name)
+    for man in (local_manifest, manifest):  # local precedence
+        if not isinstance(man, dict):
+            continue
+        block = man.get("resolution_exceptions")
+        if not isinstance(block, dict):
+            continue
+        for key, val in block.items():
+            if (
+                isinstance(key, str)
+                and isinstance(val, dict)
+                and _name_match_keys(key) & basename_keys
+            ):
+                return val
     return None
 
 
@@ -215,10 +419,19 @@ def _resolve_vault_root(vr: str, root: Path) -> Path:
     return (root / expanded).resolve()
 
 
-def _http_query_lightrag(endpoint: str, prompt: str, timeout: float) -> str:
-    """POST /query → response text. Empty on failure."""
+def _http_query_lightrag(
+    endpoint: str, prompt: str, timeout: float, mode: str
+) -> tuple[str, str | None]:
+    """POST /query → ``(response_text, error_kind)``.
+
+    ``error_kind`` is ``None`` on success, ``ERR_TIMEOUT`` when the substrate did not
+    answer within ``timeout`` (healthy but slow — a cold hybrid query is ~40s), or
+    ``ERR_UNREACHABLE`` for connection refused / DNS / other transport errors. The caller
+    treats ``ERR_TIMEOUT`` as warn-only and ``ERR_UNREACHABLE`` as a genuine outage
+    (agorokh/workstation-ops#128).
+    """
     url = endpoint.rstrip("/") + "/query"
-    payload = json.dumps({"query": prompt, "mode": "naive"}).encode("utf-8")
+    payload = json.dumps({"query": prompt, "mode": mode}).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=payload,
@@ -228,16 +441,142 @@ def _http_query_lightrag(endpoint: str, prompt: str, timeout: float) -> str:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed scheme
             body = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.URLError, OSError, TimeoutError):
-        return ""
+    except TimeoutError:  # socket.timeout is an alias of TimeoutError (py3.10+)
+        return "", ERR_TIMEOUT
+    except urllib.error.URLError as exc:
+        # urlopen wraps a read/connect timeout in URLError(reason=TimeoutError).
+        if isinstance(getattr(exc, "reason", None), TimeoutError):
+            return "", ERR_TIMEOUT
+        return "", ERR_UNREACHABLE
+    except OSError:
+        return "", ERR_UNREACHABLE
     # LightRAG returns {"response": "...prose..."} or plain text; surface the field if present.
     try:
         data = json.loads(body)
         if isinstance(data, dict) and isinstance(data.get("response"), str):
-            return data["response"]
+            return data["response"], None
     except (json.JSONDecodeError, ValueError):
         pass
-    return body
+    return body, None
+
+
+def _default_bridge_provenance_file() -> Path:
+    """Canonical capture path written by ``scripts/mcp/capture_bridge_provenance.py``.
+
+    Kept identical to that script's ``default_provenance_path`` (sans the env
+    override, which ``_load_bridge_provenance`` handles separately) so the
+    wrapper-side writer and this reader agree without an env handshake. Parity is
+    pinned by ``tests/test_capture_bridge_provenance.py``.
+    """
+    cache_home = os.environ.get("XDG_CACHE_HOME", "").strip() or str(Path.home() / ".cache")
+    return Path(cache_home) / "agentic-memory" / "bridge_provenance.json"
+
+
+def _bridge_provenance_max_age_s() -> float:
+    raw = os.environ.get("AGENTIC_MEMORY_BRIDGE_PROVENANCE_MAX_AGE_S", "")
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return float(DEFAULT_BRIDGE_PROVENANCE_MAX_AGE_S)
+
+
+def _read_bridge_provenance_file(path: Path) -> str:
+    """Read a provenance capture, honouring the staleness + size bounds.
+
+    Returns "" (treated as "no assertion") when the file is absent, too large,
+    or older than the max-age guard. A non-positive max age disables the guard.
+    """
+    max_age = _bridge_provenance_max_age_s()
+    try:
+        if max_age > 0:
+            age = time.time() - path.stat().st_mtime
+            if age > max_age:
+                return ""
+        with path.open("r", encoding="utf-8") as f:
+            raw = f.read(BRIDGE_PROVENANCE_LIMIT + 1)
+    except OSError:
+        return ""
+    if len(raw) > BRIDGE_PROVENANCE_LIMIT:
+        return ""
+    return raw
+
+
+def _load_bridge_provenance() -> dict | None:
+    """Return optional agentic-memory bridge provenance supplied by the host.
+
+    The MCP tool itself is not callable from this deterministic SessionStart
+    hook, but ``scripts/mcp/agentic-memory.sh`` captures the sanitized
+    ``get_bridge_provenance`` payload to a well-known file before launching the
+    server (issue #172). Resolution order: inline ``..._JSON`` env →
+    ``..._FILE`` env → the canonical capture file. Absence means "no assertion
+    available" rather than failure; malformed payloads fail open so a bad shell
+    export does not wedge startup.
+    """
+    raw = os.environ.get("AGENTIC_MEMORY_BRIDGE_PROVENANCE_JSON", "").strip()
+    if len(raw) > BRIDGE_PROVENANCE_LIMIT:
+        return None
+    if not raw:
+        fp = os.environ.get("AGENTIC_MEMORY_BRIDGE_PROVENANCE_FILE", "").strip()
+        path = Path(os.path.expanduser(fp)) if fp else _default_bridge_provenance_file()
+        raw = _read_bridge_provenance_file(path)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    # The MCP envelope wraps the payload in a ``result`` field. Earlier servers
+    # returned a JSON string; newer ones return the decoded object directly.
+    # Qodo PR #194 / #192 Part 6: both must be unwrapped — otherwise the
+    # dict-form envelope leaks through with no ``visible_workspace_ids`` and
+    # ``_bridge_workspace_problem`` silently skips the mismatch check.
+    if isinstance(data, dict) and "result" in data:
+        inner = data["result"]
+        if isinstance(inner, str):
+            try:
+                data = json.loads(inner)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        elif isinstance(inner, dict):
+            data = inner
+    return data if isinstance(data, dict) else None
+
+
+def _bridge_workspace_problem(ws: dict, provenance: dict | None) -> tuple[str | None, str | None]:
+    """Return ``(code, message)`` when bridge provenance contradicts manifest.
+
+    Only live LightRAG rows are checked. Graphiti rows are offline-only or
+    placeholders per ``MEMORY_SUBSTRATE.md`` and intentionally do not appear on
+    the agent read path.
+    """
+    if not provenance:
+        return None, None
+    workspace = ws.get("name")
+    if not isinstance(workspace, str) or not workspace:
+        return None, None
+    backend = str(ws.get("backend") or "").lower()
+    if backend != "lightrag":
+        return None, None
+
+    visible_raw = provenance.get("visible_workspace_ids")
+    disabled_raw = provenance.get("disabled_workspace_ids")
+    visible = [str(x) for x in visible_raw] if isinstance(visible_raw, list) else []
+    disabled = [str(x) for x in disabled_raw] if isinstance(disabled_raw, list) else []
+    registry = provenance.get("registry_path") or "<unknown registry>"
+
+    if workspace in disabled:
+        return (
+            "bridge_workspace_disabled",
+            f"manifest workspace {workspace!r} is disabled in active agentic-memory "
+            f"bridge registry {registry}; visible_workspace_ids={visible}",
+        )
+    if visible and workspace not in visible:
+        return (
+            "bridge_workspace_not_visible",
+            f"manifest workspace {workspace!r} is not visible in active agentic-memory "
+            f"bridge registry {registry}; visible_workspace_ids={visible}",
+        )
+    return None, None
 
 
 # Maximum chars of substrate response body persisted into the lockfile.
@@ -253,7 +592,8 @@ def _stamp_lock(
     prompt: str,
     ok: bool,
     response_body: str = "",
-    provisioned: bool,
+    reason: str | None = None,
+    gate_policy: str = "allow",
 ) -> Path:
     """Write the gate lockfile.
 
@@ -287,13 +627,11 @@ def _stamp_lock(
         "response_body": safe_body if ok else "",
         "response_body_len": len(safe_body) if ok else 0,
     }
-    if provisioned:
+    if reason:
+        payload["reason"] = reason
+    if ok:
         out = scratch / ".last_memory_query"
-        if not ok:
-            payload["hint"] = (
-                "Tier-3 prefetch did not return a response body — issue an "
-                "mcp__agentic-memory__query_knowledge_graph call before code edits"
-            )
+        # Best-effort delete of any stale "missing" marker
         try:
             (scratch / ".last_memory_query.missing").unlink()
         except FileNotFoundError:
@@ -303,6 +641,7 @@ def _stamp_lock(
     else:
         out = scratch / ".last_memory_query.missing"
         payload["hint"] = workspace or "no workspace registered for this repo"
+        payload["gate_policy"] = gate_policy
         try:
             (scratch / ".last_memory_query").unlink()
         except FileNotFoundError:
@@ -325,10 +664,16 @@ def _print_summary(*, workspace: str | None, prompt: str, body: str) -> None:
             snippet = snippet[:SUMMARY_TRUNCATE] + "…(truncated)"
         sys.stdout.write(f"  result:\n{snippet}\n")
     else:
-        sys.stdout.write(
-            "  result: (substrate unreachable or empty; gate will allow "
-            "code-path edits in degraded mode)\n"
-        )
+        if workspace:
+            sys.stdout.write(
+                "  result: (substrate unreachable or empty; gate will block "
+                "code-path edits until Tier-3 prefetch succeeds)\n"
+            )
+        else:
+            sys.stdout.write(
+                "  result: (substrate unreachable or empty; gate will allow "
+                "code-path edits in degraded mode)\n"
+            )
     sys.stdout.write("---\n")
 
 
@@ -430,26 +775,45 @@ def main() -> int:
         _print_super_ego_prefix(root)
     prompt = _derive_prompt(root)
     if not _enabled():
-        _stamp_lock(
-            root,
-            workspace=None,
-            prompt=prompt,
-            ok=False,
-            response_body="",
-            provisioned=False,
-        )
+        _stamp_lock(root, workspace=None, prompt=prompt, ok=False, response_body="")
         return 0
     manifest = _load_manifest(root)
-    ws = _resolve_workspace(root, manifest)
+    local_manifest = _load_local_manifest(root)
+    ws = _resolve_workspace(root, manifest, local_manifest)
     if ws is None:
-        _stamp_lock(
-            root,
-            workspace=None,
-            prompt=prompt,
-            ok=False,
-            response_body="",
-            provisioned=False,
-        )
+        exception = _resolve_exception(root, manifest, local_manifest)
+        if exception is not None:
+            why = str(exception.get("reason") or "accepted Tier-3 gap").strip()
+            tracking = str(exception.get("tracking_issue") or "").strip()
+            # An accepted gap is semantically "no workspace registered, but known"
+            # — it must behave like the generic no-workspace path: gate_policy
+            # defaults to "allow" (workspace=None), so hook_memory_gate.py's
+            # no-workspace branch allows code edits UNCONDITIONALLY, independent of
+            # any leftover .last_memory_query lock. Do NOT use gate_policy="warn"
+            # here: that policy is for the timeout case (a *registered* workspace
+            # whose leftover fresh lock should still enforce relevance), and a
+            # coexisting fresh lock (best-effort unlink failed, or timestamp tie)
+            # would then fall through to relevance checks and wrongly block edits
+            # despite a recorded resolution_exceptions gap (Cursor Bugbot, PR #175).
+            _stamp_lock(
+                root,
+                workspace=None,
+                prompt=prompt,
+                ok=False,
+                response_body="",
+                reason="accepted_gap",
+            )
+            msg = f"NOTE: accepted Tier-3 gap for this repo ({why})"
+            if tracking:
+                msg += f"; tracked in {tracking}"
+            msg += (
+                ". Gate allows code-path edits (degraded, like an unregistered "
+                "workspace); do NOT file a new architectural-invariant-gap issue "
+                "(recorded in resolution_exceptions).\n"
+            )
+            sys.stdout.write(msg)
+            return 0
+        _stamp_lock(root, workspace=None, prompt=prompt, ok=False, response_body="")
         sys.stdout.write(
             "WARNING: no Tier-3 workspace registered for this repo in "
             "ops/memory_manifest.yml; gate degrades to warn-only on code paths "
@@ -457,33 +821,100 @@ def main() -> int:
         )
         return 0
     workspace_name = ws.get("name") or ""
-    endpoint = ws.get("endpoint") or ""
-    backend = (ws.get("backend") or "lightrag").lower()
-    body = ""
-    prefetch_ok = bool(endpoint and backend == "lightrag")
-    if prefetch_ok:
-        allowed, reason = _endpoint_allowed(endpoint)
-        if not allowed:
-            prefetch_ok = False
+    raw_backend = ws.get("backend")
+    if raw_backend is None or str(raw_backend).strip() == "":
+        # Per manifest contract (ops/memory_manifest.yml schema v2 notes): a row
+        # that omits ``backend`` MUST be treated as ``lightrag`` (the canonical
+        # online substrate). The old "skip prefetch, treat as empty" behavior
+        # hard-blocked any registered v1-manifest workspace (Qodo PR #194 / #192
+        # Part 5). Default to lightrag and continue — explicit unknown values
+        # still warn + skip below.
+        backend = "lightrag"
+    else:
+        backend = str(raw_backend).lower()
+        if backend not in ("lightrag", "graphiti"):
             sys.stderr.write(
-                f"WARN  hook_session_start_memory_prefetch: blocked endpoint "
-                f"({reason}): {endpoint}\n"
+                f"WARN  hook_session_start_memory_prefetch: workspace {workspace_name!r} "
+                f"has unknown backend={raw_backend!r}; skipping Tier-3 HTTP prefetch.\n"
             )
-        else:
-            body = _http_query_lightrag(endpoint, prompt, _timeout_s())
-            if not body.strip():
-                prefetch_ok = False
-    # Graphiti has no SessionStart HTTP prefetch yet. Stamping a provisioned lock
-    # with an empty response_body hard-blocks the gate with no recovery path
-    # (MCP queries do not refresh `.last_memory_query` today).
-    provisioned = backend != "graphiti"
+    bridge_problem, bridge_message = _bridge_workspace_problem(ws, _load_bridge_provenance())
+    if bridge_problem:
+        _stamp_lock(
+            root,
+            workspace=workspace_name,
+            prompt=prompt,
+            ok=False,
+            response_body="",
+            reason=bridge_problem,
+            gate_policy="block",
+        )
+        sys.stdout.write(
+            "ERROR: Tier-3 workspace mismatch: "
+            f"{bridge_message}. Do not query a different workspace; run "
+            "mcp__agentic-memory__get_bridge_provenance and fix the bridge "
+            "registry/allowlist before code-path edits.\n"
+        )
+        return 0
+    body = ""
     if backend == "graphiti":
         sys.stdout.write(
-            "WARNING: graphiti workspace — SessionStart HTTP prefetch is not "
-            "implemented yet; gate degrades to warn-only. Call "
-            "mcp__agentic-memory__query_knowledge_graph for context until "
-            "graphiti HTTP prefetch or MCP lockfile refresh lands.\n"
+            "NOTE: workspace declares backend=graphiti (offline-only per sunset ADR); "
+            "SessionStart prefetch does not query Graphiti on the agent read path. "
+            "Registered-workspace code edits stay blocked until backend is lightrag "
+            "and the endpoint is live.\n"
         )
+    prefetch_ok = backend == "lightrag"
+    if prefetch_ok:
+        from hook_memory_manifest import resolve_memory_endpoints
+
+        timeout_s = _timeout_s()
+        mode = _query_mode()
+        # Probe reachable endpoints in priority order (env-bridge ts.net →
+        # consumer-registry HTTPS → loopback) instead of the old loopback-only
+        # SSRF guard + single manifest endpoint, so a non-central tailnet host can
+        # reach the same substrate the MCP read path uses rather than dead
+        # loopback (template-repo#180 / workstation-ops#170). The resolver applies
+        # its own allowlist (registry-named or Tailscale-shaped host; HTTPS for
+        # non-loopback), so the loopback-only _endpoint_allowed guard is retired.
+        candidates = resolve_memory_endpoints(workspace_name, ws, env=dict(os.environ))
+        saw_timeout = False
+        for candidate in candidates:
+            body, err = _http_query_lightrag(candidate.url, prompt, timeout_s, mode)
+            if err is None and body.strip():
+                break
+            if err == ERR_TIMEOUT:
+                # A timeout on ONE candidate doesn't prove the substrate is merely
+                # slow — it may be a stale bridge/blackholed registry host while a
+                # later candidate (e.g. manifest loopback) answers. Keep probing;
+                # only treat it as slow-not-down if nothing answers (#187 review).
+                saw_timeout = True
+            body = ""
+        if not body.strip() and saw_timeout:
+            # Substrate is healthy but slow (a cold LightRAG query can take ~40s).
+            # A mere timeout must NEVER hard-block edits (ws-ops#128 rec 2): write a
+            # warn-only missing marker so the gate degrades instead of bricking the
+            # session, even though the workspace is registered.
+            _stamp_lock(
+                root,
+                workspace=workspace_name,
+                prompt=prompt,
+                ok=False,
+                response_body="",
+                reason=(
+                    f"prefetch timed out after {timeout_s:g}s (substrate slow, not down); "
+                    "warn-only — raise CLAUDE_MEMORY_PREFETCH_TIMEOUT_S or query manually"
+                ),
+                gate_policy="warn",
+            )
+            sys.stdout.write(
+                f"WARNING: Tier-3 prefetch timed out after {timeout_s:g}s for workspace "
+                f"{workspace_name!r} (mode={mode}); substrate is slow, not down. "
+                "Gate degrades to warn-only this session; run "
+                "mcp__agentic-memory__query_knowledge_graph manually to ground edits.\n"
+            )
+            return 0
+        if not body.strip():
+            prefetch_ok = False
     # TODO(PR-D+): handle backend == "graphiti" via its HTTP API once finalized.
     _stamp_lock(
         root,
@@ -491,27 +922,40 @@ def main() -> int:
         prompt=prompt,
         ok=prefetch_ok,
         response_body=body,
-        provisioned=provisioned,
     )
     _print_summary(workspace=workspace_name, prompt=prompt, body=body)
     return 0
+
+
+def _workspace_name_for_failure(root: Path) -> str | None:
+    """Best-effort registered workspace id for fail-open missing markers."""
+    try:
+        manifest = _load_manifest(root)
+        local_manifest = _load_local_manifest(root)
+        ws = _resolve_workspace(root, manifest, local_manifest)
+        if not ws:
+            return None
+        name = str(ws.get("name") or "").strip()
+        return name or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception as exc:  # noqa: BLE001 — fail-open
-        # On total failure, still stamp the missing marker so the gate degrades
-        # to warn-only and the session can proceed.
+        # On total failure, still stamp the missing marker. If a registered
+        # workspace can be resolved, the gate blocks code edits; otherwise this
+        # remains the no-workspace bootstrap warning path.
         try:
             root = _repo_root()
             _stamp_lock(
                 root,
-                workspace=None,
+                workspace=_workspace_name_for_failure(root),
                 prompt="(prefetch error)",
                 ok=False,
                 response_body="",
-                provisioned=False,
             )
         except Exception:  # noqa: BLE001
             pass
