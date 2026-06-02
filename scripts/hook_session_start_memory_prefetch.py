@@ -299,21 +299,52 @@ def _resolve_workspace(
 ) -> dict | None:
     """Return the workspace dict that matches this repo, or None.
 
+    Resolution order (Kimi #180 council — template-relative config must live
+    in per-repo data, not copied logic):
+      1. ``repo.tier3_workspace_id`` — explicit per-repo redirect when the
+         canonical workspace name differs from the repo basename
+         (e.g. template-repo → ``agent_factory_steward``). Local manifest
+         wins over tracked, mirroring the ``resolution_exceptions`` precedence
+         decided in PR #175 (Qodo review).
+      2. Workspace name matches repo basename (hyphen/underscore tolerant).
+      3. ``vault_root`` prefix matches this repo's root.
+
     Candidates are the tracked manifest's workspaces first, then the
-    operator-owned ``memory_manifest.local.yml`` extension — so a tracked
-    name-match wins, and operator child-repo rows registered locally are
-    visible to SessionStart prefetch (previously only the agent-facing ladder
-    consulted the local manifest; the deterministic hook ignored it).
+    operator-owned ``memory_manifest.local.yml`` extension — so operator
+    child-repo rows registered locally are visible to SessionStart prefetch.
     """
     candidates = _gather_workspaces(manifest) + _gather_workspaces(local_manifest)
     if not candidates:
         return None
-    # Prefer workspace name (repo basename) over vault_root path heuristics.
+    # 1. Explicit per-repo redirect via repo.tier3_workspace_id.
+    tier3_id: str | None = None
+    for man in (local_manifest, manifest):  # local wins
+        if not isinstance(man, dict):
+            continue
+        repo_block = man.get("repo")
+        if isinstance(repo_block, dict):
+            val = repo_block.get("tier3_workspace_id")
+            if isinstance(val, str) and val.strip():
+                tier3_id = val.strip()
+                break
+    if tier3_id:
+        id_keys = _name_match_keys(tier3_id)
+        for ws in candidates:
+            ws_name = ws.get("name")
+            if isinstance(ws_name, str) and _name_match_keys(ws_name) & id_keys:
+                return ws
+        # tier3_id declared but unknown to the manifest → return None so the
+        # standard "no workspace registered" warning surfaces. Better than
+        # silently falling back to basename match and resolving to a wrong
+        # workspace.
+        return None
+    # 2. Workspace name matches repo basename.
     basename_keys = _name_match_keys(root.name)
     for ws in candidates:
         ws_name = ws.get("name")
         if isinstance(ws_name, str) and _name_match_keys(ws_name) & basename_keys:
             return ws
+    # 3. vault_root prefix match (only if unambiguous).
     vault_matches: list[dict] = []
     for ws in candidates:
         vr = ws.get("vault_root")
@@ -494,11 +525,20 @@ def _load_bridge_provenance() -> dict | None:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return None
-    if isinstance(data, dict) and isinstance(data.get("result"), str):
-        try:
-            data = json.loads(data["result"])
-        except (json.JSONDecodeError, ValueError):
-            return None
+    # The MCP envelope wraps the payload in a ``result`` field. Earlier servers
+    # returned a JSON string; newer ones return the decoded object directly.
+    # Qodo PR #194 / #192 Part 6: both must be unwrapped — otherwise the
+    # dict-form envelope leaks through with no ``visible_workspace_ids`` and
+    # ``_bridge_workspace_problem`` silently skips the mismatch check.
+    if isinstance(data, dict) and "result" in data:
+        inner = data["result"]
+        if isinstance(inner, str):
+            try:
+                data = json.loads(inner)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        elif isinstance(inner, dict):
+            data = inner
     return data if isinstance(data, dict) else None
 
 
@@ -783,12 +823,13 @@ def main() -> int:
     workspace_name = ws.get("name") or ""
     raw_backend = ws.get("backend")
     if raw_backend is None or str(raw_backend).strip() == "":
-        sys.stderr.write(
-            f"WARN  hook_session_start_memory_prefetch: workspace {workspace_name!r} "
-            "omits backend; skipping Tier-3 HTTP prefetch (set backend explicitly in "
-            "ops/memory_manifest.yml — see MEMORY_SUBSTRATE.md).\n"
-        )
-        backend = ""
+        # Per manifest contract (ops/memory_manifest.yml schema v2 notes): a row
+        # that omits ``backend`` MUST be treated as ``lightrag`` (the canonical
+        # online substrate). The old "skip prefetch, treat as empty" behavior
+        # hard-blocked any registered v1-manifest workspace (Qodo PR #194 / #192
+        # Part 5). Default to lightrag and continue — explicit unknown values
+        # still warn + skip below.
+        backend = "lightrag"
     else:
         backend = str(raw_backend).lower()
         if backend not in ("lightrag", "graphiti"):

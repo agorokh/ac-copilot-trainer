@@ -609,45 +609,338 @@ def test_bash_non_file_edit_allowed(fake_repo: Path) -> None:
 # -------------------------------------------------------------------------
 
 
-def test_bash_python_dash_c_blocked(fake_repo: Path) -> None:
-    """`python -c "..."` is an arbitrary code-write surface → gate fires."""
+def test_bash_python_dash_c_mutating_blocked(fake_repo: Path) -> None:
+    """`python -c "open('x','w').write(...)"` mutates a file → gate fires."""
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'python -c \'open("x.py","w").write("y")\''},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"mutating python -c not blocked: {stderr}"
+
+
+def test_bash_python3_dash_c_pathlib_mutation_blocked(fake_repo: Path) -> None:
+    """`Path(...).write_text(...)` is a mutation primitive."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": 'python3 -c \'from pathlib import Path; Path("x.py").write_text("y")\''
+            },
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_python_dash_c_readonly_allowed(fake_repo: Path) -> None:
+    """`python -c "import json; print(json.load(open('x.json')))"` is read-only.
+
+    Council #180/#188: don't brick agents on read-only one-liners — the gate's
+    purpose is forcing memory-grounding before *mutations*, not pure reads.
+    """
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "python -c 'import json; print(json.load(open(\"x.json\")))'"
+            },
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"read-only python -c was blocked: {stderr}"
+
+
+def test_bash_python_dash_c_bare_open_readonly_allowed(fake_repo: Path) -> None:
+    """`open('x')` defaults to read mode 'r' → not a mutation."""
     rc, _, stderr = _run(
         {"tool_name": "Bash", "tool_input": {"command": "python -c 'open(\"x\")'"}},
         cwd=fake_repo,
     )
-    assert rc == 2, f"stderr: {stderr}"
+    assert rc == 0, f"read-only open() was blocked: {stderr}"
 
 
-def test_bash_python3_dash_c_blocked(fake_repo: Path) -> None:
+def test_bash_python_dash_c_dynamic_exec_blocked(fake_repo: Path) -> None:
+    """`python -c "eval(...)"` / `__import__(...)` are evasion patterns → block."""
     rc, _, _ = _run(
-        {"tool_name": "Bash", "tool_input": {"command": "python3 -c 'open(\"x\")'"}},
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "python -c 'eval(\"open(1)\")'"},
+        },
         cwd=fake_repo,
     )
     assert rc == 2
 
 
-def test_bash_node_eval_blocked(fake_repo: Path) -> None:
-    rc, _, _ = _run(
+def test_bash_node_eval_arithmetic_allowed(fake_repo: Path) -> None:
+    """`node -e "1+1"` has no mutation → allow."""
+    rc, _, stderr = _run(
         {"tool_name": "Bash", "tool_input": {"command": 'node -e "1+1"'}},
         cwd=fake_repo,
     )
+    assert rc == 0, f"arithmetic node -e was blocked: {stderr}"
+
+
+def test_bash_node_eval_fs_write_blocked(fake_repo: Path) -> None:
+    """`node -e "fs.writeFileSync(...)"` mutates → block."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'node -e "require(\\"fs\\").writeFileSync(\\"x\\",\\"y\\")"'},
+        },
+        cwd=fake_repo,
+    )
     assert rc == 2
 
 
-def test_bash_perl_e_blocked(fake_repo: Path) -> None:
-    rc, _, _ = _run(
+def test_bash_perl_e_print_allowed(fake_repo: Path) -> None:
+    """`perl -e 'print 1'` is read-only."""
+    rc, _, stderr = _run(
         {"tool_name": "Bash", "tool_input": {"command": "perl -e 'print 1'"}},
         cwd=fake_repo,
     )
-    assert rc == 2
+    assert rc == 0, f"perl print was blocked: {stderr}"
 
 
-def test_bash_ruby_e_blocked(fake_repo: Path) -> None:
-    rc, _, _ = _run(
+def test_bash_ruby_e_puts_allowed(fake_repo: Path) -> None:
+    """`ruby -e 'puts 1'` is read-only."""
+    rc, _, stderr = _run(
         {"tool_name": "Bash", "tool_input": {"command": "ruby -e 'puts 1'"}},
         cwd=fake_repo,
     )
+    assert rc == 0, f"ruby puts was blocked: {stderr}"
+
+
+def test_bash_perl_e_mutation_blocked(fake_repo: Path) -> None:
+    """`perl -e 'open(F,">x"); print F "y"'` mutates → block via `>` redirect."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'perl -e \'open(F,">x.py"); print F "y"\''},
+        },
+        cwd=fake_repo,
+    )
     assert rc == 2
+
+
+# -------------------------------------------------------------------------
+# Round-2 PR #194 review fixes:
+#   * Cursor HIGH (line 308) — `>` comparison in python -c must not block.
+#   * Cursor MEDIUM (line 276) — `str.replace()` must not block.
+#   * Qodo HIGH (line 652) — `sudo cp` / wrapped + absolute-path cp/mv MUST block.
+# -------------------------------------------------------------------------
+
+
+def test_bash_python_dash_c_with_greater_than_comparison_allowed(fake_repo: Path) -> None:
+    """`python -c "print(1 > 0)"` is a comparison, NOT a shell redirect.
+
+    Cursor PR #194 HIGH: the `>` redirect regex matched `> 0)` inside Python
+    code and false-blocked read-only one-liners that used `>` for comparison.
+    Fix splits shell context (bash -c) from language context (python -c) and
+    only applies the `>` regex to shell context.
+    """
+    rc, _, stderr = _run(
+        {"tool_name": "Bash", "tool_input": {"command": "python -c 'print(1 > 0)'"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"python -c comparison was wrongly blocked: {stderr}"
+
+
+def test_bash_perl_e_with_greater_than_comparison_allowed(fake_repo: Path) -> None:
+    """Cursor PR #194 HIGH also called out perl: `perl -e 'print 1 if $x > 5'`."""
+    rc, _, stderr = _run(
+        {"tool_name": "Bash", "tool_input": {"command": "perl -e 'print 1 if $x > 5'"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"perl -e comparison was wrongly blocked: {stderr}"
+
+
+def test_bash_python_dash_c_str_replace_allowed(fake_repo: Path) -> None:
+    """`python -c "print('hello'.replace('h','H'))"` is a string method, not a
+    file mutation. Cursor PR #194 MEDIUM: dropped `\\.replace\\s*\\(` from the
+    mutation regex; ``os.replace`` users still gated via the os.* alternation."""
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'python -c \'print("hello".replace("h","H"))\''},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"str.replace was wrongly blocked: {stderr}"
+
+
+def test_bash_python_dash_c_os_replace_blocked(fake_repo: Path) -> None:
+    """Companion: `os.replace()` IS a file mutation → still blocks."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'python -c \'import os; os.replace("a","b")\''},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_bash_dash_c_shell_redirect_still_blocks(fake_repo: Path) -> None:
+    """Companion: in SHELL context (`bash -c`), `>` redirect IS shell mutation."""
+    rc, _, _ = _run(
+        {"tool_name": "Bash", "tool_input": {"command": 'bash -c "echo x > /tmp/y.py"'}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_sudo_cp_into_scripts_blocked(fake_repo: Path) -> None:
+    """Qodo PR #194 HIGH/Security: `sudo cp` must be detected and blocked.
+
+    Prior gate only matched cp as the LEADING token, so `sudo cp foo
+    scripts/bar.py` slipped past — the gate's purpose is forcing memory-
+    grounding before mutations, regardless of which wrapper invokes them.
+    """
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "sudo cp /tmp/payload.py scripts/bar.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"sudo cp not detected: {stderr}"
+    assert "BLOCK" in stderr
+
+
+def test_bash_env_cp_into_scripts_blocked(fake_repo: Path) -> None:
+    """`env cp …` — same wrapper bypass class."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "env cp /tmp/payload.py scripts/bar.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_env_with_vars_then_cp_blocked(fake_repo: Path) -> None:
+    """`env FOO=bar cp …` — env accepts VAR=value before the command name."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "env FOO=bar BAZ=qux cp /tmp/x scripts/y.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_absolute_path_cp_into_scripts_blocked(fake_repo: Path) -> None:
+    """`/bin/cp …` — absolute-path invocation matches via basename."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "/bin/cp /tmp/payload.py scripts/bar.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_sudo_mv_into_scripts_blocked(fake_repo: Path) -> None:
+    """`sudo -E mv …` — wrapper with flags."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "sudo -E mv /tmp/x scripts/y.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_compound_sudo_cp_in_second_segment_blocked(fake_repo: Path) -> None:
+    """Compound: `cd /tmp && sudo cp foo scripts/bar` still caught."""
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "cd /tmp && sudo cp foo scripts/bar.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+# -------------------------------------------------------------------------
+# Round-3 PR #194 review fix: Cursor MEDIUM — `re.compile()` false-positive.
+# `\bcompile\s*\(` fires between `.` and `c` in `re.compile(`. Negative
+# lookbehind `(?<!\.)` distinguishes the builtin `compile()` (bare) from the
+# method form `re.compile()` (preceded by `.`).
+# -------------------------------------------------------------------------
+
+
+def test_bash_python_dash_c_re_compile_allowed(fake_repo: Path) -> None:
+    """`python -c "import re; re.compile(r'\\d+').match('123')"` is a read-only
+    Python idiom. Cursor PR #194 round-3 MEDIUM: must not false-block."""
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": 'python -c \'import re; print(re.compile(r"\\d+").match("123"))\''
+            },
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"re.compile was false-blocked: {stderr}"
+
+
+def test_bash_python_dash_c_bare_compile_blocked(fake_repo: Path) -> None:
+    """Companion: the BUILTIN `compile()` (bare, no leading `.`) still blocks.
+
+    `compile(source, file, mode)` is the dynamic-exec primitive — typically
+    chained with `exec(compile(...))` to evade Edit/Write tools.
+    """
+    rc, _, _ = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'python -c \'exec(compile("x=1","<s>","exec"))\''},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_bash_python_dash_c_bare_eval_blocked(fake_repo: Path) -> None:
+    """The BUILTIN `eval()` (bare) still blocks."""
+    rc, _, _ = _run(
+        {"tool_name": "Bash", "tool_input": {"command": "python -c 'eval(\"1+1\")'"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2
+
+
+def test_lang_mutation_regex_lookbehind_distinguishes_method_from_builtin() -> None:
+    """Direct unit test of the lookbehind on `compile`/`eval`/`exec` —
+    distinguishes the builtin (bare, no `.`) from the method form (preceded by
+    `.`). Avoids subprocess + shell-quoting complexity that the integration
+    tests bring; pins the regex semantics directly for the Cursor PR #194
+    MEDIUM finding.
+    """
+    import sys
+    from pathlib import Path as _Path
+
+    sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
+    from hook_memory_gate import _indirect_exec_is_mutation
+
+    # Bare builtins → mutation (still gated).
+    assert _indirect_exec_is_mutation('python -c \'compile("x","<s>","exec")\'')
+    assert _indirect_exec_is_mutation("python -c 'eval(\"1+1\")'")
+    assert _indirect_exec_is_mutation("python -c 'exec(\"x=1\")'")
+    # Method form (preceded by `.`) → NOT mutation, lookbehind suppresses.
+    assert not _indirect_exec_is_mutation('python -c "re.compile(\\"x\\")"')
+    assert not _indirect_exec_is_mutation('python -c "df.eval(\\"a+1\\")"')
+    assert not _indirect_exec_is_mutation('python -c "engine.execute(\\"q\\")"')
+    # Also tolerate whitespace variants `re.compile (` and tab.
+    assert not _indirect_exec_is_mutation('python -c "re.compile (r\\"\\\\d+\\")"')
 
 
 def test_bash_curl_pipe_bash_blocked(fake_repo: Path) -> None:
@@ -708,9 +1001,17 @@ def test_bash_harmless_python_script_run_allowed(fake_repo: Path) -> None:
 
 
 def test_bash_indirect_exec_with_kill_switch(fake_repo: Path) -> None:
-    """CLAUDE_MEMORY_GATE=0 still bypasses indirect-exec patterns."""
+    """CLAUDE_MEMORY_GATE=0 still bypasses indirect-exec patterns even when MUTATING.
+
+    Uses a mutating command so the bypass is genuinely exercised (a read-only
+    one-liner is allowed without the kill switch under the council #180/#188
+    policy).
+    """
     rc, _, _ = _run(
-        {"tool_name": "Bash", "tool_input": {"command": "python -c 'open(\"x\")'"}},
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": 'python -c \'open("x.py","w").write("y")\''},
+        },
         cwd=fake_repo,
         env={"CLAUDE_MEMORY_GATE": "0"},
     )
@@ -801,3 +1102,272 @@ def test_bash_sed_inplace_on_doc_allowed(fake_repo: Path) -> None:
         cwd=fake_repo,
     )
     assert rc == 0
+
+
+# -------------------------------------------------------------------------
+# cp/mv false-positive coverage (#180 / #188 hardening — drop the loose
+# `\b(?:cp|mv)\b` substring regex; rely on the shlex-based segment parser).
+# -------------------------------------------------------------------------
+
+
+def test_bash_cp_substring_in_jq_filter_does_not_block(fake_repo: Path) -> None:
+    """`gh api --jq '... "cp" ...'` must NOT false-trigger the gate.
+
+    The previous `\\b(?:cp|mv)\\b` matched at quote boundaries inside argument
+    strings, blocking benign read commands. Compound-aware shlex parsing
+    distinguishes cp/mv as a leading command vs. cp/mv mentioned in args.
+    """
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": (
+                    'gh api graphql -f q="x" --jq ".data | select(.body | test(\\"cp|mv\\"))"'
+                )
+            },
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"unexpected block (over-fire on cp/mv substring): {stderr}"
+
+
+def test_bash_cp_mentioned_in_quoted_arg_does_not_block(fake_repo: Path) -> None:
+    """`echo "cp foo bar"` is a read-only echo, not a copy."""
+    rc, _, stderr = _run(
+        {"tool_name": "Bash", "tool_input": {"command": 'echo "cp foo bar"'}},
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"unexpected block on echo of cp-string: {stderr}"
+
+
+def test_bash_compound_cp_after_cd_is_caught(fake_repo: Path) -> None:
+    """`cd /tmp && cp foo scripts/bar` MUST block (cp is in the second segment).
+
+    Regression guard: dropping the loose verb regex relies on segment-aware
+    parsing to keep catching cp/mv outside the leading-command slot.
+    """
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "cd /tmp && cp foo scripts/bar.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"compound cp not caught: {stderr}"
+    assert "BLOCK" in stderr
+
+
+def test_bash_compound_mv_with_pipe_is_caught(fake_repo: Path) -> None:
+    """A mv after a pipe is still gated."""
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls -la | head && mv /tmp/x scripts/y.py"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"compound mv not caught: {stderr}"
+
+
+# -------------------------------------------------------------------------
+# Worktree-aware classification (#180 / Codex P1 — absolute paths inside a
+# linked git worktree must be classified against THEIR OWN worktree root,
+# not the main checkout's root, or `_to_repo_relative` falls back to the
+# absolute string and `_classify` returns "other" → gate bypass.
+# -------------------------------------------------------------------------
+
+
+def test_absolute_path_in_linked_worktree_is_classified_as_code(tmp_path: Path) -> None:
+    """An Edit on ``<linked-worktree>/scripts/foo.py`` MUST block, even when
+    the gate's main root is a different directory.
+
+    Reproduces ``agent-factory#308 / template-repo#182`` for the memory gate:
+    Claude Code in a ``.claude/worktrees/<name>/`` checkout would send absolute
+    paths under that worktree; the gate normalized root to the main checkout
+    (correct for the shared lockfile), but then classified the absolute file
+    path against the main root — ``_to_repo_relative`` failed (not under main),
+    so ``_classify`` saw the absolute string and returned ``"other"``,
+    silently allowing a code edit without a stamp.
+    """
+    main = tmp_path / "main"
+    main.mkdir()
+    (main / ".git").mkdir()
+    (main / ".scratch").mkdir()
+    # Linked worktree — its .git is a FILE (gitdir pointer), which
+    # `worktree_root_for` walks ancestors to find via `.exists()`.
+    wt = tmp_path / "worktrees" / "feature-x"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: " + str(main / ".git" / "worktrees" / "feature-x"))
+    (wt / "scripts").mkdir()
+    target = wt / "scripts" / "foo.py"
+    target.write_text("# placeholder")
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": str(target)}},
+        cwd=main,
+    )
+    assert rc == 2, f"worktree code edit not classified as code: {stderr}"
+    assert "BLOCK" in stderr
+
+
+# -------------------------------------------------------------------------
+# Per-repo code-dir allowlist via ops/memory_manifest.yml (#180 council
+# fix — moves the allowlist out of code so propagation can't clobber each
+# child's project-specific code dirs).
+# -------------------------------------------------------------------------
+
+
+def _write_repo_block(root: Path, *, code_dirs: list[str] | None = None) -> None:
+    (root / "ops").mkdir(exist_ok=True)
+    lines = ["repo:"]
+    if code_dirs is not None:
+        lines.append("  code_dirs:")
+        for d in code_dirs:
+            lines.append(f'    - "{d}"')
+    lines.append("hosts: []\n")
+    (root / "ops" / "memory_manifest.yml").write_text("\n".join(lines), encoding="utf-8")
+
+
+def test_per_repo_code_dirs_override_classifies_child_dir_as_code(
+    fake_repo: Path,
+) -> None:
+    """A child repo's ``agent/`` dir must classify as ``"code"`` when the manifest
+    declares it, even though it's NOT in template defaults.
+
+    Reproduces the #180 regression scenario: Alpaca, court-fillings, and
+    mcp-servers have project-specific runtime dirs (``agent/``, ``core/``,
+    ``court_filing_pipeline/``, ``packages/``) that template's hardcoded
+    allowlist excluded — the wave propagation then clobbered each child's
+    custom gate, so edits to those dirs bypassed memory enforcement entirely.
+    Moving the allowlist into manifest DATA fixes this: each repo declares
+    its own code_dirs in ops/memory_manifest.yml, and propagation never
+    touches that per-repo file.
+    """
+    _write_repo_block(fake_repo, code_dirs=["src", "scripts", "agent", "core"])
+    # No stamp; manifest declares agent/ as code → gate must BLOCK the edit.
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "agent/streaming/service.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"manifest-declared agent/ not classified as code: {stderr}"
+    assert "BLOCK" in stderr
+
+
+def test_per_repo_code_dirs_override_removes_default_when_replaced(
+    fake_repo: Path,
+) -> None:
+    """The override REPLACES defaults (not additive). If a repo's manifest
+    declares only ``["custom_pkg"]``, then ``scripts/foo.py`` is NOT classified
+    as code. Tests narrow the contract: child repos must enumerate everything
+    they want gated (no implicit template default inheritance to avoid the
+    silent-divergence trap Kimi flagged for shared-package model).
+    """
+    _write_repo_block(fake_repo, code_dirs=["custom_pkg"])
+    # scripts/ no longer in the per-repo allowlist → treated as "other" → allow.
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 0, f"narrowed allowlist failed: {stderr}"
+
+
+def test_per_repo_manifest_absent_falls_back_to_template_defaults(
+    fake_repo: Path,
+) -> None:
+    """No manifest at all → use template default allowlist. ``scripts/foo.py`` blocks."""
+    # No manifest file — use defaults.
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": "scripts/foo.py"}},
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"defaults not used when manifest absent: {stderr}"
+
+
+def test_ops_memory_manifest_always_gated_even_when_overrides_exclude_ops(
+    fake_repo: Path,
+) -> None:
+    """Qodo PR #194 security HIGH: per-repo ``code_dirs`` REPLACES defaults, so
+    a child that sets e.g. ``code_dirs: ["src"]`` (omitting ``ops/``) could
+    make ``ops/memory_manifest.yml`` editable without a stamp — the EXACT
+    Mistral "shrink the allowlist" bypass, reintroduced via overrides.
+
+    The fix: ``_ALWAYS_GATED_PATHS`` overrides per-repo classification for the
+    gate's own config — `ops/memory_manifest.yml` always classifies as code
+    regardless of what `code_dirs` declares.
+    """
+    # Manifest deliberately excludes `ops/` from code_dirs.
+    _write_repo_block(fake_repo, code_dirs=["src", "scripts"])
+    # No stamp; editing ops/memory_manifest.yml MUST still block (the gate's
+    # own config is non-overridable).
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "ops/memory_manifest.yml"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"ops/memory_manifest.yml became editable via override: {stderr}"
+
+
+def test_github_workflows_always_gated_regardless_of_overrides(
+    fake_repo: Path,
+) -> None:
+    """CI workflow files (``.github/workflows/*``) are non-overridable — an
+    attacker can't shrink the allowlist to bypass review of CI changes."""
+    _write_repo_block(fake_repo, code_dirs=["src"])  # no .github/
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": ".github/workflows/ci.yml"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f".github/workflows/ became editable via override: {stderr}"
+
+
+def test_editing_manifest_itself_requires_stamp_gate_the_config(
+    fake_repo: Path,
+) -> None:
+    """Mistral's adversarial review (#180/#192): an agent must not be able to
+    shrink the allowlist by editing the manifest behind the gate's back.
+
+    Because the per-repo block lives in ``ops/memory_manifest.yml``, and
+    ``ops/`` is itself in the code-dir allowlist (template default), editing
+    the manifest requires a fresh substrate stamp — the gate gates its own
+    config. This test pins that property as a regression guard so any future
+    change that exempts ``ops/`` from the gate (e.g. moving it to docs) will
+    fail loudly.
+    """
+    # No stamp; editing the manifest must BLOCK.
+    rc, _, stderr = _run(
+        {
+            "tool_name": "Edit",
+            "tool_input": {"file_path": "ops/memory_manifest.yml"},
+        },
+        cwd=fake_repo,
+    )
+    assert rc == 2, f"editing the gate's own config bypassed the gate: {stderr}"
+    assert "BLOCK" in stderr
+
+
+def test_absolute_path_in_linked_worktree_doc_is_allowed(tmp_path: Path) -> None:
+    """Companion: an Edit on ``<linked-worktree>/docs/foo.md`` must NOT block.
+
+    Worktree-aware classification routes ``docs/`` to the doc branch via the
+    worktree's own root, not as ``.claude/worktrees/.../docs/foo.md`` relative
+    to the main checkout (which matched no doc prefix in the buggy version).
+    """
+    main = tmp_path / "main"
+    main.mkdir()
+    (main / ".git").mkdir()
+    (main / ".scratch").mkdir()
+    wt = tmp_path / "worktrees" / "feature-x"
+    wt.mkdir(parents=True)
+    (wt / ".git").write_text("gitdir: " + str(main / ".git" / "worktrees" / "feature-x"))
+    (wt / "docs").mkdir()
+    target = wt / "docs" / "foo.md"
+    target.write_text("# doc")
+    rc, _, stderr = _run(
+        {"tool_name": "Edit", "tool_input": {"file_path": str(target)}},
+        cwd=main,
+    )
+    assert rc == 0, f"worktree doc edit was wrongly blocked: {stderr}"

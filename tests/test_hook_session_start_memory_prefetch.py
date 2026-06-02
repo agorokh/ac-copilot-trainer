@@ -142,6 +142,167 @@ def _load_prefetch_module():
     return mod
 
 
+def test_prefetch_resolves_via_tier3_workspace_id(tmp_path: Path) -> None:
+    """Kimi #180 council: ``repo.tier3_workspace_id`` is THIS repo's canonical
+    Tier-3 workspace and wins over basename / vault_root matching.
+
+    Template-repo's manifest declares ``tier3_workspace_id: agent_factory_steward``
+    — verified live 2026-06-01 that template-repo memory lives in that
+    workspace, not in a (never-provisioned) ``template_repo`` placeholder.
+    """
+    repo = _setup_repo(tmp_path / "template-repo", manifest=None)
+    prefetch = _load_prefetch_module()
+    tracked = {
+        "repo": {"tier3_workspace_id": "agent_factory_steward"},
+        "hosts": [
+            {
+                "workspaces": [
+                    {"name": "agent_factory_steward", "endpoint": "http://x/1"},
+                    {"name": "template_repo", "endpoint": "http://x/2"},
+                ]
+            }
+        ],
+    }
+    ws = prefetch._resolve_workspace(repo, tracked, None)
+    assert ws is not None
+    assert ws["name"] == "agent_factory_steward"
+
+
+def test_prefetch_tier3_workspace_id_local_wins(tmp_path: Path) -> None:
+    """Local manifest's ``repo.tier3_workspace_id`` wins over tracked, mirroring
+    the ``resolution_exceptions`` precedence settled in PR #175 (Qodo review)."""
+    repo = _setup_repo(tmp_path / "some-repo", manifest=None)
+    prefetch = _load_prefetch_module()
+    tracked = {
+        "repo": {"tier3_workspace_id": "tracked_ws"},
+        "hosts": [
+            {
+                "workspaces": [
+                    {"name": "tracked_ws", "endpoint": "http://x/t"},
+                    {"name": "local_ws", "endpoint": "http://x/l"},
+                ]
+            }
+        ],
+    }
+    local = {"repo": {"tier3_workspace_id": "local_ws"}}
+    ws = prefetch._resolve_workspace(repo, tracked, local)
+    assert ws is not None
+    assert ws["name"] == "local_ws"
+
+
+def test_prefetch_tier3_workspace_id_unknown_returns_none(tmp_path: Path) -> None:
+    """Declared but no matching workspace row → return None so SessionStart
+    surfaces the standard 'no workspace registered' warning rather than
+    silently falling through to basename match and resolving to a wrong row."""
+    repo = _setup_repo(tmp_path / "some-repo", manifest=None)
+    prefetch = _load_prefetch_module()
+    tracked = {
+        "repo": {"tier3_workspace_id": "ghost_not_in_manifest"},
+        "hosts": [{"workspaces": [{"name": "some_repo", "endpoint": "http://x/1"}]}],
+    }
+    ws = prefetch._resolve_workspace(repo, tracked, None)
+    assert ws is None
+
+
+def test_prefetch_missing_backend_defaults_to_lightrag(tmp_path: Path) -> None:
+    """Qodo PR #194 / #192 Part 5: per the manifest contract, a workspace row
+    that omits ``backend`` MUST be treated as ``lightrag`` (canonical online
+    substrate). The prior 'skip prefetch, treat as empty' bricked v1-manifest
+    workspaces that didn't yet have the field."""
+    manifest = textwrap.dedent("""\
+        manifest_version: 1
+        hosts:
+          - id: test-host
+            workspaces:
+              - name: "my_repo"
+                endpoint: "http://127.0.0.1:1"
+                vault_root: "/nowhere"
+        """)
+    repo = _setup_repo(tmp_path / "my_repo", manifest=manifest)
+    proc = _run(repo)
+    assert proc.returncode == 0
+    # No 'omits backend' warn on stderr — the default kicks in silently.
+    assert "omits backend" not in proc.stderr
+    # The workspace IS registered + treated as lightrag → prefetch runs and
+    # fails to reach loopback:1 → writes a registered-workspace missing marker
+    # (the gate then surfaces the unreachable substrate).
+    missing = repo / ".scratch" / ".last_memory_query.missing"
+    assert missing.is_file(), proc.stdout + proc.stderr
+    data = json.loads(missing.read_text(encoding="utf-8"))
+    assert data["workspace"] == "my_repo"
+
+
+def test_prefetch_unwraps_dict_bridge_provenance_envelope(tmp_path: Path) -> None:
+    """Qodo PR #194 / #192 Part 6: when the MCP envelope's ``result`` is a
+    decoded dict (not a JSON string), it MUST be unwrapped — otherwise the
+    outer envelope leaks through with no ``visible_workspace_ids`` and the
+    bridge-mismatch check silently skips, allowing the prefetch to query the
+    wrong workspace.
+    """
+    prefetch = _load_prefetch_module()
+    # MCP envelope where `result` is already a dict (newer servers return this).
+    envelope = {
+        "result": {
+            "visible_workspace_ids": ["alpaca_trading"],
+            "disabled_workspace_ids": [],
+            "registry_path": "/tmp/test-registry.toml",
+        }
+    }
+    prov_file = tmp_path / "prov.json"
+    prov_file.write_text(json.dumps(envelope), encoding="utf-8")
+    import os as _os
+
+    _os.environ["AGENTIC_MEMORY_BRIDGE_PROVENANCE_FILE"] = str(prov_file)
+    try:
+        data = prefetch._load_bridge_provenance()
+    finally:
+        _os.environ.pop("AGENTIC_MEMORY_BRIDGE_PROVENANCE_FILE", None)
+    assert data is not None, "dict-form result envelope was not unwrapped"
+    assert data.get("visible_workspace_ids") == ["alpaca_trading"]
+
+
+def test_prefetch_unwraps_string_bridge_provenance_envelope(tmp_path: Path) -> None:
+    """Backward-compat: older servers return ``result`` as a JSON string; still
+    unwrapped correctly."""
+    prefetch = _load_prefetch_module()
+    inner = {
+        "visible_workspace_ids": ["foo_ws"],
+        "disabled_workspace_ids": [],
+        "registry_path": "/tmp/x.toml",
+    }
+    envelope = {"result": json.dumps(inner)}
+    prov_file = tmp_path / "prov.json"
+    prov_file.write_text(json.dumps(envelope), encoding="utf-8")
+    import os as _os
+
+    _os.environ["AGENTIC_MEMORY_BRIDGE_PROVENANCE_FILE"] = str(prov_file)
+    try:
+        data = prefetch._load_bridge_provenance()
+    finally:
+        _os.environ.pop("AGENTIC_MEMORY_BRIDGE_PROVENANCE_FILE", None)
+    assert data is not None
+    assert data.get("visible_workspace_ids") == ["foo_ws"]
+
+
+def test_prefetch_falls_back_to_name_match_without_tier3_id(tmp_path: Path) -> None:
+    """No ``tier3_workspace_id`` → existing basename-match logic fires."""
+    repo = _setup_repo(tmp_path / "alpaca_trading", manifest=None)
+    prefetch = _load_prefetch_module()
+    tracked = {
+        "hosts": [
+            {
+                "workspaces": [
+                    {"name": "other_ws", "endpoint": "http://x/o"},
+                    {"name": "alpaca_trading", "endpoint": "http://x/a"},
+                ]
+            }
+        ]
+    }
+    ws = prefetch._resolve_workspace(repo, tracked, None)
+    assert ws is not None
+    assert ws["name"] == "alpaca_trading"
+
+
 def test_tracked_workspace_wins_over_local_same_name(tmp_path: Path) -> None:
     # Qodo "Precedence Rules": when tracked and local both define the same
     # workspace name, the tracked row must win (no surprising local override).
@@ -391,7 +552,15 @@ def test_unknown_backend_writes_missing_marker(tmp_path: Path) -> None:
     assert missing.is_file()
 
 
-def test_missing_backend_skips_prefetch(tmp_path: Path) -> None:
+def test_missing_backend_defaults_to_lightrag_and_attempts_prefetch(
+    tmp_path: Path,
+) -> None:
+    """Qodo PR #194 / #192 Part 5 — updated from the prior 'skip prefetch +
+    warn' behavior. Per the manifest contract, omitted ``backend`` MUST default
+    to ``lightrag`` (canonical online substrate); the prefetch then attempts
+    the HTTP query like any other lightrag row. The unreachable endpoint here
+    fails → stamps the registered-workspace missing marker so the gate
+    surfaces the outage."""
     ws_name = tmp_path.name.lower().replace("-", "_")
     manifest = textwrap.dedent(f"""\
         manifest_version: 2
@@ -409,7 +578,8 @@ def test_missing_backend_skips_prefetch(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path, manifest=manifest)
     proc = _run(repo)
     assert proc.returncode == 0
-    assert "omits backend" in proc.stderr
+    # Per the new contract: no 'omits backend' warning — default kicks in.
+    assert "omits backend" not in proc.stderr
     missing = repo / ".scratch" / ".last_memory_query.missing"
     assert missing.is_file(), proc.stdout + proc.stderr
     assert not (repo / ".scratch" / ".last_memory_query").exists()

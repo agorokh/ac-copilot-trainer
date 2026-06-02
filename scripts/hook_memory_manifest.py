@@ -1,4 +1,17 @@
-"""Shared manifest loading for deterministic memory hook scripts."""
+"""Shared manifest loading for deterministic memory hook scripts.
+
+Owns the canonical default code-dir allowlist (``DEFAULT_CODE_PATH_PREFIXES`` /
+``DEFAULT_CODE_PATH_TOP_LEVEL`` / ``DEFAULT_CODE_DIR_TOP_LEVEL``) so the gate and
+the prefetch can't drift on what counts as a code path, and exposes
+``repo_code_path_prefixes`` / ``repo_code_path_top_level`` /
+``repo_code_dir_top_level`` / ``repo_tier3_workspace_id`` for the per-repo
+``repo:`` block in ``ops/memory_manifest.yml``. Council #180 fix: hardcoding the
+allowlist in the gate let propagation copy template's defaults over each child's
+project-specific code dirs (regression — child production edits bypassed the
+gate). Per-repo manifest data is gated by being under ``ops/``, so editing it
+still requires a fresh substrate stamp (closes Mistral's "shrink the allowlist"
+bypass).
+"""
 
 from __future__ import annotations
 
@@ -8,6 +21,35 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# ---------------------------------------------------------------------------
+# Canonical default code-path classification — single source of truth.
+# Both the gate and the contract docs reference these. Children override via
+# the per-repo ``repo:`` block in ``ops/memory_manifest.yml``.
+# ---------------------------------------------------------------------------
+DEFAULT_CODE_PATH_PREFIXES: tuple[str, ...] = (
+    "src/",
+    "scripts/",
+    "tests/",
+    "ops/",
+    ".github/workflows/",
+    ".github/actions/",
+    "tools/",
+)
+DEFAULT_CODE_PATH_TOP_LEVEL: frozenset[str] = frozenset(
+    {
+        "pyproject.toml",
+        "Makefile",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
+        "requirements-dev.txt",
+        ".pre-commit-config.yaml",
+    }
+)
+DEFAULT_CODE_DIR_TOP_LEVEL: frozenset[str] = frozenset(
+    {"src", "scripts", "tests", "ops", "tools", ".github"}
+)
 
 
 def _yaml_scalar(value: str) -> str:
@@ -41,11 +83,24 @@ def _apply_field(row: dict[str, Any], text: str) -> str | None:
 
 
 def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
-    """Parse the manifest subset needed by hooks when PyYAML is unavailable."""
+    """Parse the manifest subset needed by hooks when PyYAML is unavailable.
 
+    Covers:
+    * ``hosts: [- workspaces: [- name/backend/endpoint/vault_root/match_repo_basenames]]``
+    * Top-level ``repo:`` block with ``code_dirs`` / ``code_top_level`` lists
+      and ``tier3_workspace_id`` scalar (Qodo PR #194 HIGH: without this, the
+      per-repo override silently drops in PyYAML-missing hook runtimes and the
+      gate falls back to template defaults — re-introducing the wave-introduced
+      clobber regression for repos relying on the override).
+    """
     hosts: list[dict[str, Any]] = []
+    repo_block: dict[str, Any] = {}
     in_hosts = False
     hosts_indent = -1
+    in_repo = False
+    repo_indent = -1
+    repo_list_key: str | None = None
+    repo_list_indent = -1
     current_host: dict[str, Any] | None = None
     host_indent: int | None = None
     in_workspaces = False
@@ -61,11 +116,54 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
         current = None
         current_list_key = None
 
+    def exit_repo() -> None:
+        nonlocal in_repo, repo_indent, repo_list_key, repo_list_indent
+        in_repo = False
+        repo_indent = -1
+        repo_list_key = None
+        repo_list_indent = -1
+
     for raw_line in text.splitlines():
         if not raw_line.strip() or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip())
         stripped = raw_line.strip()
+
+        # Exit repo: block when we hit another top-level (indent <= repo_indent).
+        if in_repo and indent <= repo_indent:
+            exit_repo()
+
+        # Top-level `repo:` block.
+        if re.match(r"repo:\s*(?:#.*)?$", stripped):
+            finish_current()
+            in_hosts = False
+            in_workspaces = False
+            in_repo = True
+            repo_indent = indent
+            repo_list_key = None
+            continue
+
+        if in_repo and indent > repo_indent:
+            # A scalar key or the start of a list (`code_dirs:`, `code_top_level:`,
+            # `tier3_workspace_id: "..."`).
+            scalar_m = re.match(r"(code_dirs|code_top_level|tier3_workspace_id):\s*(.*)$", stripped)
+            if scalar_m:
+                key = scalar_m.group(1)
+                raw_value = scalar_m.group(2).strip()
+                if not raw_value or raw_value.startswith("#"):
+                    # Block scalar with list to follow.
+                    repo_block[key] = []
+                    repo_list_key = key
+                    repo_list_indent = indent
+                else:
+                    repo_block[key] = _yaml_scalar(raw_value)
+                    repo_list_key = None
+                continue
+            if repo_list_key and stripped.startswith("- ") and indent > repo_list_indent:
+                repo_block.setdefault(repo_list_key, []).append(_yaml_scalar(stripped[2:].strip()))
+                continue
+            # Unrecognized line inside repo: — ignore (forward-compat with new keys).
+            continue
 
         if re.match(r"hosts:\s*(?:#.*)?$", stripped):
             finish_current()
@@ -128,7 +226,10 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
             current_list_key = _apply_field(current, stripped)
 
     finish_current()
-    return {"hosts": hosts}
+    out: dict[str, Any] = {"hosts": hosts}
+    if repo_block:
+        out["repo"] = repo_block
+    return out
 
 
 def load_manifest(root: Path, *, warn_missing_pyyaml: bool = False) -> dict[str, Any] | None:
@@ -212,6 +313,23 @@ def resolve_workspace(root: Path, manifest: dict[str, Any] | None) -> dict[str, 
     if not candidates:
         return None
 
+    # Kimi #180 council: workspace resolution is template-relative — must live
+    # in per-repo data, not copied logic. If the manifest declares
+    # `repo.tier3_workspace_id`, that's THIS repo's canonical workspace name
+    # (e.g. template-repo → "agent_factory_steward", verified live via
+    # mcp__agentic-memory 2026-06-01). Wins over name/vault_root/basename match.
+    tier3_id = repo_tier3_workspace_id(manifest)
+    if tier3_id:
+        id_keys = name_match_keys(tier3_id)
+        for workspace in candidates:
+            name = workspace_name(workspace)
+            if name and name_match_keys(name) & id_keys:
+                return workspace
+        # tier3_id declared but no matching workspace row → return None and let
+        # SessionStart surface the standard "no workspace registered" warning
+        # rather than silently degrade to a wrong workspace.
+        return None
+
     vault_matches: list[dict[str, Any]] = []
     for workspace in candidates:
         vault_root = workspace.get("vault_root")
@@ -253,6 +371,187 @@ def online_workspace_name_for_failure(root: Path) -> str | None:
     if not workspace or workspace_backend(workspace) == "graphiti":
         return None
     return workspace_name(workspace) or None
+
+
+# ---------------------------------------------------------------------------
+# Per-repo classification & workspace-resolution data (council #180 fix).
+#
+# A top-level ``repo:`` block in ``ops/memory_manifest.yml`` holds per-repo
+# configuration the gate consumes. Schema:
+#
+#     repo:
+#       # Optional. Overrides DEFAULT_CODE_PATH_PREFIXES — when present,
+#       # REPLACES the defaults (each entry normalized to trailing "/").
+#       code_dirs:
+#         - "src"
+#         - "scripts"
+#         - "agent"         # child override: this repo's runtime code lives here
+#         - "core"
+#
+#       # Optional. Overrides DEFAULT_CODE_PATH_TOP_LEVEL (exact filenames).
+#       code_top_level:
+#         - "pyproject.toml"
+#         - "Justfile"      # child override
+#
+#       # Optional. The Tier-3 workspace this repo's memory canonically lives in,
+#       # when it differs from the repo basename. E.g. template-repo's memory
+#       # lives in "agent_factory_steward" (fleet/template governance workspace).
+#       tier3_workspace_id: "agent_factory_steward"
+#
+# Why: hardcoding these in scripts/ meant the propagation wave copied template's
+# code_dirs onto every child and clobbered each child's project-specific dirs —
+# child production code then bypassed the gate (the regression we shipped).
+# Putting them in per-repo manifest data means propagation updates LOGIC
+# (scripts/hook_memory_gate.py) but never the per-repo classification surface.
+# Mistral's adversarial review: editing this config to shrink the allowlist
+# would re-introduce the bypass — but ``ops/`` is itself a code path, so
+# editing ``ops/memory_manifest.yml`` requires a fresh substrate stamp
+# (verified in tests/test_hook_memory_gate.py).
+# ---------------------------------------------------------------------------
+
+
+def load_repo_section(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the top-level ``repo:`` block, or an empty dict."""
+    if not isinstance(manifest, dict):
+        return {}
+    repo = manifest.get("repo")
+    return repo if isinstance(repo, dict) else {}
+
+
+def repo_code_path_prefixes(manifest: dict[str, Any] | None) -> tuple[str, ...]:
+    """Per-repo code-dir prefixes; absent block/key → ``DEFAULT_CODE_PATH_PREFIXES``.
+
+    Each entry is normalized to a trailing-slash POSIX prefix
+    (``"agent"`` → ``"agent/"``).
+    """
+    repo = load_repo_section(manifest)
+    raw = repo.get("code_dirs")
+    if not isinstance(raw, list) or not raw:
+        return DEFAULT_CODE_PATH_PREFIXES
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        s = item.strip().replace("\\", "/").lstrip("/")
+        if not s:
+            continue
+        if not s.endswith("/"):
+            s = s + "/"
+        out.append(s)
+    return tuple(out) if out else DEFAULT_CODE_PATH_PREFIXES
+
+
+def repo_code_path_top_level(manifest: dict[str, Any] | None) -> frozenset[str]:
+    """Per-repo top-level code filenames; absent → ``DEFAULT_CODE_PATH_TOP_LEVEL``."""
+    repo = load_repo_section(manifest)
+    raw = repo.get("code_top_level")
+    if not isinstance(raw, list) or not raw:
+        return DEFAULT_CODE_PATH_TOP_LEVEL
+    out = {s.strip() for s in raw if isinstance(s, str) and s.strip()}
+    return frozenset(out) if out else DEFAULT_CODE_PATH_TOP_LEVEL
+
+
+def repo_code_dir_top_level(manifest: dict[str, Any] | None) -> frozenset[str]:
+    """Per-repo top-level code DIR names; derived from ``code_dirs`` first segments.
+
+    Absent → ``DEFAULT_CODE_DIR_TOP_LEVEL``. Used to classify bare top-level
+    references like ``Edit("scripts")`` (the directory itself) as code.
+    """
+    repo = load_repo_section(manifest)
+    raw = repo.get("code_dirs")
+    if isinstance(raw, list) and raw:
+        out: set[str] = set()
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            first = item.strip().replace("\\", "/").lstrip("/").split("/", 1)[0]
+            if first:
+                out.add(first)
+        if out:
+            return frozenset(out)
+    return DEFAULT_CODE_DIR_TOP_LEVEL
+
+
+def repo_tier3_workspace_id(manifest: dict[str, Any] | None) -> str | None:
+    """The Tier-3 workspace this repo's memory canonically lives in (per-repo data).
+
+    Returns ``None`` when the ``repo:`` block omits ``tier3_workspace_id`` — in
+    that case the prefetch's existing name/vault-root resolver fires. Set this
+    when the canonical workspace name differs from the repo basename — e.g.
+    template-repo's memory lives in ``agent_factory_steward`` (the fleet
+    governance workspace, verified live via mcp__agentic-memory queries
+    2026-06-01); the bare ``template_repo`` workspace row is a dead placeholder.
+    """
+    repo = load_repo_section(manifest)
+    val = repo.get("tier3_workspace_id")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Oracle / consumer-contract checker (Kimi #180 council — walk-back loop cure)
+#
+# Asserts that the gate's CLASSIFIER (the proposed code change) is consistent
+# with the manifest's DECLARED code_dirs/code_top_level (the per-repo data).
+# Catches: a propagation that changes gate logic in a way that breaks a
+# child's declared dirs — surfaced at CI/merge, not by human review after.
+# ---------------------------------------------------------------------------
+
+
+def oracle_classification_failures(
+    manifest: dict[str, Any] | None,
+    # callable signature:
+    #   (path, *, root, code_prefixes, code_top_level, code_dir_top_level) -> str
+    classify_fn: Any,
+    root: Path | None = None,
+) -> list[str]:
+    """Run the consumer-contract oracle for the manifest+classifier pair.
+
+    For every declared ``code_dir`` and ``code_top_level``, synthesize a sample
+    path and assert ``classify_fn(sample) == "code"``. Returns a list of
+    failure strings (empty list == oracle PASS). Callers should assert
+    ``len(failures) == 0`` and surface failures in the assertion message so
+    the operator sees exactly which declaration the gate broke.
+
+    Intra-repo use: load this repo's manifest, pass the gate's ``_classify``,
+    fail at pytest time if classification drifts from declaration.
+
+    Cross-repo (CI) use: a workflow can fetch each child's manifest, run this
+    against the proposed gate code, fail the wave PR if any child's
+    declarations are no longer honored — this is the walk-back loop cure
+    (Kimi #180: catch the regression at CI/merge, not in human review).
+    """
+    prefixes = repo_code_path_prefixes(manifest)
+    top_level = repo_code_path_top_level(manifest)
+    dir_top = repo_code_dir_top_level(manifest)
+
+    def _check(path: str) -> str:
+        return classify_fn(
+            path,
+            root=root,
+            code_prefixes=prefixes,
+            code_top_level=top_level,
+            code_dir_top_level=dir_top,
+        )
+
+    failures: list[str] = []
+    for prefix in prefixes:
+        sample = prefix + "oracle_sample_file.py"
+        kind = _check(sample)
+        if kind != "code":
+            failures.append(
+                f"code_dir '{prefix}' declared in ops/memory_manifest.yml "
+                f"but '{sample}' classifies as '{kind}' (expected 'code')"
+            )
+    for top in sorted(top_level):
+        kind = _check(top)
+        if kind != "code":
+            failures.append(
+                f"code_top_level '{top}' declared in ops/memory_manifest.yml "
+                f"but classifies as '{kind}' (expected 'code')"
+            )
+    return failures
 
 
 # ---------------------------------------------------------------------------
