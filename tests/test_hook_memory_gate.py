@@ -29,6 +29,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "hook_memory_gate.py"
 
+# #338 SHIM RECONCILIATION: when SCRIPT is a governance-hub shim, the gate LOGIC and its full
+# suite were migrated into the hub (governance-hub/tests/test_hook_memory_gate.py). Subprocess-
+# running the shim here exercises the thin delegator, not the calibrated behaviour this suite
+# asserts — skip; the hub owns the coverage (and re-runs it on every guard change for every spoke).
+if "governance shim" in SCRIPT.read_text(encoding="utf-8"):
+    pytest.skip(
+        "hook_memory_gate.py is a governance-hub shim; gate coverage lives in the hub.",
+        allow_module_level=True,
+    )
+
 
 def _now_minus(seconds: int) -> str:
     return (datetime.now(UTC) - timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -24,6 +24,9 @@ htmlcov/
 .scratch/
 tools/_scratch/
 
+# Local backups of pre-shim governance hook bodies (issue #338 hub-and-spoke migration).
+scripts/.governance-vendored-bak/
+
 # Local Windows AC install symlink (machine-specific Steam path); keep out of git
 scripts/create_symlink.ps1
 

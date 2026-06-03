@@ -1,621 +1,219 @@
-"""stdin: Claude hook JSON; exit 0 allow, 2 block. Invoked by hook_protect_main.sh."""
+#!/usr/bin/env python3
+"""Generic governance shim — reference, don't vendor.
+
+This file is installed into a spoke repo's ``scripts/<hook_name>.py`` IN PLACE of
+the vendored hook logic. It carries NO guard logic itself: it resolves the
+canonical implementation in the fleet governance hub (by its own filename) and
+delegates, running it with the spoke repo as ``CLAUDE_PROJECT_DIR``. A fix lands
+ONCE in the hub and every spoke picks it up; security scanners see one copy.
+
+Resolution order for the hub (TRUSTED, configured locations only):
+  1. ``$FLEET_GOVERNANCE_ROOT`` (explicit operator config)
+  2. ``~/.fleet-governance`` (host-level canonical clone)
+
+SECURITY (2026-06-03 Cloud Security scan): the previous ``../agent-factory``
+sibling-directory fallback was REMOVED. ``runpy``-executing a hook resolved by
+directory-layout convention let any code dropped at a sibling path run as the
+governance hook on every tool call (untrusted-code execution). The shim now only
+executes canonical implementations from a configured, trusted root.
+
+Fail posture (Council 2026-06-03, ADR adr-2026-06-02 + adr-2026-06-03; degraded-mode
+hardening Council 2026-06-03 round-3):
+
+  Hub MISSING:
+    * HARD gates (``hook_memory_gate.py``, ``hook_protect_main_impl.py``) fail CLOSED — exit 2 —
+      EXCEPT a tiny, fixed, anchored RECOVERY allowlist (clone the hub + read-only navigation) so the
+      documented one-step recovery is actually reachable on a fresh host. Every recovery hit is
+      audited.
+    * ADVISORY hooks (prefetch, block-git-stash, …) fail OPEN — exit 0.
+
+  Hub PRESENT but the canonical hook ERRORS at runtime (uncaught exception during delegation):
+    * HARD gates fail CLOSED — exit 2 + audit (the security boundary must not silently drop on a bug).
+    * ADVISORY hooks fail OPEN — exit 0 + audit (restoring the vendored ``except Exception: exit(0)``
+      contract; a bad central advisory hook must never brick benign commands).
+
+Break-glass: ``EMERGENCY_BYPASS_GOVERNANCE=1`` makes EVERY governance hook exit 0 (allow / skip).
+Human-only escape for the "global brick" — a bad central hook must never block the humans who need to
+fix it. Use is loud (stderr) and auditable.
+"""
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
-import shlex
-import subprocess
+import runpy
 import sys
+from pathlib import Path
 
-PROTECTED = {"main", "master", "refs/heads/main", "refs/heads/master"}
-ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_WRAPPER_ONE_OFF = frozenset(
+# Hooks that MUST fail closed (block) when the canonical implementation is absent or errors.
+# These are the hard gates; everything else is advisory and fails open.
+_FAIL_CLOSED_HOOKS = frozenset(
     {
-        "-i",
-        "--ignore-environment",
-        "-E",
-        "-H",
-        "-P",
-        "-S",
-        "-n",
-        "-A",
-        "-b",
-        "--preserve-env",
-        "--login",
+        "hook_memory_gate.py",
+        "hook_protect_main_impl.py",
     }
 )
-# ``&`` alone is background; ``2>&1`` stays one shlex token. ``&&`` is a distinct token.
-_CHAIN_TOKENS = frozenset({"&&", "||", "|", ";", "&"})
-# ``bash -c 'git push …'`` must be inspected (Codex / PR #92).
-_SHELL_BOOTSTRAP = frozenset({"bash", "sh", "dash", "zsh"})
-_MAX_TEXT_DEPTH = 5
-# Stay below outer hook budget (typically 5000ms) so symbolic-ref can finish cleanly.
-_GIT_HEAD_TIMEOUT_SEC = 3
-# ``echo ok;git`` / ``ok&&git`` / ``ok||git`` → one shlex token; split before path/git suffix.
-_GLUE_BEFORE_GIT = re.compile(r"(?:;|\|\||&&)(?=.*\bgit\b)")
-# Mid-argv bare ``git`` is a real command only when glued to prior text (not ``echo git`` words).
-_LINE_GLUES_TO_GIT = re.compile(r"(?:;|\|\||&&)\s*git\b")
-# ``bash -xc '…'`` == ``bash -x -c '…'``; ``-c`` must not require a standalone argv token.
-_BUNDLED_SHELL_C = re.compile(r"^-[A-Za-z]*c$")
+
+# RECOVERY allowlist for the hub-MISSING hard-gate branch (Council 2026-06-03 round-3). EXACT,
+# anchored matches only — NO substring matching, NO shell metacharacters, NO chaining/redirection,
+# NO alternate destination or env-controlled URL. The sole purpose is to let an agent/operator
+# install the hub (the "bootloader" for governance itself) and look around; everything else still
+# fails closed. Every match is audited.
+_RECOVERY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # git clone of the EXACT governance-hub URL into the canonical destination.
+    re.compile(
+        r"^git\s+clone\s+https://github\.com/agorokh/governance-hub(?:\.git)?"
+        r"\s+(?:~|\$HOME)/\.fleet-governance/?$"
+    ),
+    # Read-only navigation / inspection with no metacharacters (no | & ; < > ` $ ( ) newline).
+    re.compile(r"^(?:pwd|ls|cd|echo|cat|git status|git --version)(?:[ \t]+[^|&;<>`$()\n]*)?$"),
+)
 
 
-def _shell_git_executable_peeled(tok: str) -> str:
-    r"""Strip subshell ``(``, ``$(``, or backtick-wrapped command starts so argv0 can be ``git``."""
-    t = tok.strip().lstrip("(")
-    if t.startswith("$("):
-        t = t[2:].lstrip().lstrip("(")
-    elif t.startswith("`"):
-        t = t[1:].lstrip().lstrip("(")
-    return t
+def _canonical(name: str) -> Path | None:
+    """Resolve the canonical hook from a TRUSTED, configured location only."""
+    here = Path(__file__).resolve()
+    bases: list[Path] = []
+    env_root = os.environ.get("FLEET_GOVERNANCE_ROOT", "").strip()
+    if env_root:
+        bases.append(Path(env_root).expanduser())
+    bases.append(Path.home() / ".fleet-governance")
+    for base in bases:
+        for sub in ("hooks", "scripts"):  # hub layout, then legacy layout
+            p = base / sub / name
+            if p.is_file() and p.resolve() != here:
+                return p
+    return None
 
 
-def _normalize_shell_git_argv_edges(args: list[str]) -> None:
-    r"""Normalize shlex edges for ``(git …)``, ``$(git …)``, and backtick-wrapped ``git``."""
-    if not args:
-        return
-    args[0] = _shell_git_executable_peeled(args[0])
-    args[-1] = args[-1].rstrip(")").rstrip("`")
-
-
-def _apply_export_segment(tokens: list[str], env: dict[str, str]) -> bool:
-    """Handle ``export VAR=val`` segments so later ``git`` sees the same env (Codex)."""
-    if not tokens or tokens[0] != "export":
-        return False
-    for raw in tokens[1:]:
-        if raw in ("-n", "-p", "-f"):
-            continue
-        if ASSIGN_RE.match(raw):
-            k, _, v = raw.partition("=")
-            env[k] = v
-    return True
-
-
-def _odd_trailing_backslashes(line: str) -> bool:
-    """True when the line ends with an odd count of ``\\`` (last one escapes the newline)."""
-    s = line.rstrip()
-    k = 0
-    while s.endswith("\\"):
-        s = s[:-1]
-        k += 1
-    return k % 2 == 1
-
-
-def _merge_shell_continuations(text: str) -> str:
-    """Join bash line continuations; even trailing ``\\`` means no join (Codex)."""
-    parts = text.splitlines()
-    out: list[str] = []
-    i = 0
-    while i < len(parts):
-        cur = parts[i]
-        while _odd_trailing_backslashes(cur) and i + 1 < len(parts):
-            i += 1
-            cur = cur.rstrip()[:-1] + parts[i].lstrip()
-        out.append(cur)
-        i += 1
-    return "\n".join(out)
-
-
-def _logical_shell_lines(text: str) -> list[str]:
-    """Split on newlines outside quotes so ``bash -c '…\\n…'`` stays one line (Codex)."""
-    lines: list[str] = []
-    buf: list[str] = []
-    i, n = 0, len(text)
-    in_single = in_double = False
-    escape = False
-    while i < n:
-        ch = text[i]
-        if escape:
-            buf.append(ch)
-            escape = False
-            i += 1
-            continue
-        if in_single:
-            buf.append(ch)
-            if ch == "'":
-                in_single = False
-            i += 1
-            continue
-        if in_double:
-            if ch == "\\":
-                escape = True
-                buf.append(ch)
-                i += 1
-                continue
-            buf.append(ch)
-            if ch == '"':
-                in_double = False
-            i += 1
-            continue
-        if ch == "'":
-            in_single = True
-            buf.append(ch)
-        elif ch == '"':
-            in_double = True
-            buf.append(ch)
-        elif ch == "\n":
-            piece = "".join(buf).strip()
-            if piece:
-                lines.append(piece)
-            buf.clear()
+def _audit(event: str, name: str, reason: str) -> None:
+    """Best-effort append to the governance audit log + stderr. Self-contained (the hub may be
+    absent, which is exactly when this fires), so it cannot import hub modules."""
+    sys.stderr.write(f"AUDIT[governance-shim] {event}: {name} — {reason}\n")
+    try:
+        env = os.environ.get("FLEET_GOVERNANCE_AUDIT_LOG", "").strip()
+        if env:
+            path = Path(env).expanduser()
+        elif sys.platform == "darwin":
+            path = (
+                Path.home()
+                / "Library"
+                / "Application Support"
+                / "fleet-governance"
+                / "overrides.jsonl"
+            )
         else:
-            buf.append(ch)
-        i += 1
-    tail = "".join(buf).strip()
-    if tail:
-        lines.append(tail)
-    return lines
+            xdg = os.environ.get("XDG_STATE_HOME")
+            base = Path(xdg) if xdg else Path.home() / ".local" / "state"
+            path = base / "fleet-governance" / "overrides.jsonl"
+        if str(path) == os.devnull:
+            return
+        entry = {
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "guard": "governance-shim",
+            "action": event,
+            "hook": name,
+            "reason": reason,
+            "repo": os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+            "session": os.environ.get("CLAUDE_SESSION_ID", ""),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass  # audit is best-effort; never crash the shim on a write error
 
 
-def _expand_glue_before_git_tokens(tokens: list[str]) -> list[str]:
-    """Split tokens where ``;``, ``&&``, or ``||`` hides a later ``…git…`` path (Codex / Bugbot)."""
-    out: list[str] = []
-    for t in tokens:
-        if not _GLUE_BEFORE_GIT.search(t):
-            out.append(t)
-            continue
-        start = 0
-        for m in _GLUE_BEFORE_GIT.finditer(t):
-            chunk = t[start : m.start()].strip()
-            if chunk:
-                try:
-                    out.extend(shlex.split(chunk))
-                except ValueError:
-                    out.append(chunk)
-            start = m.end()
-        tail = t[start:].lstrip()
-        if tail:
-            try:
-                out.extend(shlex.split(tail))
-            except ValueError:
-                out.append(tail)
-    return out
+def _recovery_command_from_stdin() -> str | None:
+    """Return the Bash command from the PreToolUse payload IFF it matches the recovery allowlist.
 
-
-def _peel_shell_prefix(tokens: list[str], env: dict[str, str]) -> list[str]:
-    """Interleaved VAR=value, env/sudo wrappers, and common flags until argv0 is `git`."""
-    t = list(tokens)
-    while t:
-        if ASSIGN_RE.match(t[0]):
-            k, _, v = t[0].partition("=")
-            env[k] = v
-            t.pop(0)
-            continue
-        if t[0] in ("sudo", "nice", "env", "command", "time"):
-            t.pop(0)
-            continue
-        if t[0] in ("-u", "--user") and len(t) >= 2:
-            t = t[2:]
-            continue
-        if t[0] in _WRAPPER_ONE_OFF:
-            t.pop(0)
-            continue
-        break
-    return t
-
-
-def _shell_argv0_basename(argv0: str) -> str:
-    return os.path.basename(argv0).lower()
-
-
-def _token_looks_like_git_executable(tok: str) -> bool:
-    r"""True when token is (or begins with) a ``git`` executable after shell peels."""
-    t = _shell_git_executable_peeled(tok).rstrip(")").rstrip("`")
-    return _shell_argv0_basename(t) == "git"
-
-
-def _shell_command_segments(tokens: list[str]) -> list[list[str]]:
-    """Split shlex tokens on common shell chain operators (one segment ≈ one command)."""
-    segs: list[list[str]] = []
-    buf: list[str] = []
-
-    def flush() -> None:
-        if buf:
-            segs.append(buf[:])
-            buf.clear()
-
-    for t in tokens:
-        if t in _CHAIN_TOKENS:
-            flush()
-            continue
-        # Do not split on ``;`` inside a single shlex token (quoted ``git -c "a;b"``).
-        # Only peel ``word;`` glue (e.g. ``echo hi;`` → ``hi`` then break segment).
-        if len(t) > 1 and t.endswith(";"):
-            piece = t[:-1].strip()
-            if piece:
-                buf.append(piece)
-            flush()
-            continue
-        buf.append(t)
-    flush()
-    return [s for s in segs if s]
-
-
-def _after_git_globals(args: list[str], git_idx: int) -> int:
-    j = git_idx + 1
-    n = len(args)
-    while j < n:
-        tok = args[j]
-        if tok in ("-C", "-c"):
-            if j + 1 >= n:
-                return j
-            j += 2
-            continue
-        if tok.startswith("-C") and len(tok) > 2:
-            j += 1
-            continue
-        if tok.startswith("-c") and len(tok) > 2:
-            j += 1
-            continue
-        if tok.startswith(("--git-dir=", "--work-tree=", "--namespace=")):
-            j += 1
-            continue
-        if tok in ("--git-dir", "--work-tree", "--namespace"):
-            if j + 1 >= n:
-                return j
-            j += 2
-            continue
-        if tok.startswith("-"):
-            j += 1
-            continue
-        break
-    return j
-
-
-def _push_refs_start(tail: list[str]) -> int:
-    """Skip git-push options; return index of first ref-ish token."""
-    i = 0
-    n = len(tail)
-    while i < n:
-        a = tail[i]
-        if a == "--":
-            return i + 1
-        if not a.startswith("-"):
-            break
-        if "=" in a:
-            i += 1
-            continue
-        # Value-taking options that exist on `git push` (avoid phantom flags).
-        if a in ("-o", "--push-option", "--repo") and i + 1 < n:
-            i += 2
-            continue
-        i += 1
-    return i
-
-
-def _first_token_is_remote_repository(refs: list[str]) -> bool:
-    """True when argv shape is ``git push <remote> <refspec>...`` (not all-refspec form).
-
-    A remote named ``main``/``master`` must not be scanned as a push target; only
-    refspec tokens after the repository token are checked for protected refs.
-    """
-    if len(refs) < 2:
-        return False
-    first = refs[0]
-    if ":" not in first:
-        return True
-    if "://" in first or first.startswith("git@"):
-        return True
-    return False
-
-
-def _single_arg_is_repository_without_refspec(tok: str) -> bool:
-    """True for lone ``git push git@host:path`` / ``https://...`` (not ``src:dst`` refspec)."""
-    if "://" in tok or tok.startswith("git@"):
-        return True
-    if tok.endswith(".git") and (tok.startswith(("./", "../", "/", "~/")) or "/" in tok):
-        return True
-    return False
-
-
-def _git_argv_has_alias_c(args: list[str], end: int) -> bool:
-    """True when a ``-c`` value defines an ``alias.*`` (Codex)."""
-    i = 1
-    while i < end:
-        if args[i] == "-c" and i + 1 < end:
-            if "alias." in args[i + 1]:
-                return True
-            i += 2
-            continue
-        tok = args[i]
-        if tok.startswith("-c") and len(tok) > 2 and "alias." in tok[2:]:
-            return True
-        i += 1
-    return False
-
-
-def _remoteish_git_push_target(tok: str) -> bool:
-    return tok in ("origin", "upstream") or "://" in tok or tok.startswith("git@")
-
-
-def _resolve_git_sub_with_inline_aliases(
-    args: list[str], j: int, sub: str, tail: list[str]
-) -> tuple[str, list[str]]:
-    """Map ``git -c alias.*=…`` onto real subcommands for gating (Codex)."""
-    if not _git_argv_has_alias_c(args, j):
-        return sub, tail
-    if sub in ("commit", "push"):
-        return sub, tail
-    if tail and (
-        "-m" in tail
-        or "--amend" in tail
-        or "--no-edit" in tail
-        or "--fixup" in tail
-        or "--squash" in tail
-    ):
-        return "commit", tail
-    if len(tail) >= 2 and not tail[0].startswith("-") and not tail[1].startswith("-"):
-        return "push", tail
-    if len(tail) >= 2 and _remoteish_git_push_target(tail[0]):
-        return "push", tail
-    return sub, tail
-
-
-def _push_refspec_uncertain(tok: str) -> bool:
-    """True when refspec may expand via shell, globs, or braces (Codex / #92)."""
-    if "://" in tok or tok.startswith("git@"):
-        return "$" in tok or "{" in tok
-    if any(ch in tok for ch in "*?[{"):
-        return True
-    if "$" in tok or "{" in tok or "}" in tok:
-        return True
-    return False
-
-
-def _inspect_one_shell_command(tokens: list[str], depth: int, shell_env: dict[str, str]) -> int:
-    """Return 2 if this command segment must be blocked; 0 otherwise."""
-    if depth > _MAX_TEXT_DEPTH:
-        return 0
-    args = _peel_shell_prefix(tokens, shell_env)
-    if not args:
-        return 0
-    _normalize_shell_git_argv_edges(args)
-    if not args or not args[0]:
-        return 0
-
-    base = _shell_argv0_basename(args[0])
-    if base in _SHELL_BOOTSTRAP:
-        for i in range(1, len(args) - 1):
-            tok = args[i]
-            if tok == "-c" or (
-                tok.startswith("-") and not tok.startswith("--") and _BUNDLED_SHELL_C.match(tok)
-            ):
-                return _inspect_command_text(args[i + 1], depth=depth + 1, shell_env=shell_env)
-        return 0
-
-    if base != "git":
-        return 0
-
-    j = _after_git_globals(args, 0)
-    if j >= len(args):
-        return 0
-    sub = args[j]
-    tail = args[j + 1 :]
-    if "$" in sub:
-        sys.stderr.write(
-            "BLOCK: refusing git with shell-expanded subcommand token (cannot resolve argv)\n"
-        )
-        return 2
-    sub, tail = _resolve_git_sub_with_inline_aliases(args, j, sub, tail)
-
-    git_head_argv = args[0:j] + ["symbolic-ref", "--short", "HEAD"]
+    Only called in the hub-MISSING hard-gate branch, where there is no delegation — so consuming
+    stdin here cannot starve a downstream hook. Returns None when stdin is not a Bash payload, is
+    unreadable, or the command is not an exact recovery command."""
     try:
-        r = subprocess.run(
-            git_head_argv,
-            capture_output=True,
-            text=True,
-            timeout=_GIT_HEAD_TIMEOUT_SEC,
-            env=shell_env,
-        )
-    except (FileNotFoundError, OSError) as exc:
-        sys.stderr.write(
-            f"BLOCK: unable to run git for HEAD probe ({exc}); refusing guarded git {sub}\n"
-        )
-        return 2
-    branch = r.stdout.strip() if r.returncode == 0 else ""
-
-    if branch in ("main", "master") and sub in ("commit", "push"):
-        sys.stderr.write(f"BLOCK: refusing git {sub} while HEAD is on protected branch {branch}\n")
-        return 2
-
-    if sub != "push":
-        return 0
-
-    if any(f in tail for f in ("--all", "--mirror")):
-        sys.stderr.write("BLOCK: refusing push with --all/--mirror (may update main/master)\n")
-        return 2
-
-    i = _push_refs_start(tail)
-    refs = tail[i:]
-
-    if not refs:
-        sys.stderr.write("BLOCK: refusing git push without explicit destination refs\n")
-        return 2
-    if len(refs) == 1:
-        r0 = refs[0]
-        if ":" not in r0:
-            sys.stderr.write(
-                "BLOCK: refusing git push with a single remote-only ref (no explicit refspec)\n"
-            )
-            return 2
-        if _single_arg_is_repository_without_refspec(r0):
-            sys.stderr.write(
-                "BLOCK: refusing git push with only a repository (no explicit refspec)\n"
-            )
-            return 2
-
-    push_refs = refs[1:] if _first_token_is_remote_repository(refs) else refs
-    for arg in push_refs:
-        if _push_refspec_uncertain(arg):
-            sys.stderr.write(
-                "BLOCK: refusing push refspec with glob or shell variable "
-                "(cannot prove destination is not main/master)\n"
-            )
-            return 2
-        src, sep, dst = arg.partition(":")
-        target = (dst if dst else src).lstrip("+")
-        if target in PROTECTED:
-            sys.stderr.write("BLOCK: refusing push targeting protected branch main/master\n")
-            return 2
-
-    return 0
-
-
-def _segment_targets_git_commit(tokens: list[str], shell_env: dict[str, str], depth: int) -> bool:
-    """True when this argv segment is (or recursively invokes) ``git … commit``."""
-    if depth > _MAX_TEXT_DEPTH:
-        return False
-    args = _peel_shell_prefix(list(tokens), shell_env)
-    if not args:
-        return False
-    _normalize_shell_git_argv_edges(args)
-    if not args or not args[0]:
-        return False
-    base = _shell_argv0_basename(args[0])
-    if base in _SHELL_BOOTSTRAP:
-        for i in range(1, len(args) - 1):
-            tok = args[i]
-            if tok == "-c" or (
-                tok.startswith("-") and not tok.startswith("--") and _BUNDLED_SHELL_C.match(tok)
-            ):
-                return command_includes_git_commit_intent(
-                    args[i + 1], depth=depth + 1, shell_env=shell_env
-                )
-        return False
-    if base != "git":
-        return False
-    j = _after_git_globals(args, 0)
-    if j >= len(args):
-        return False
-    sub = args[j]
-    tail = args[j + 1 :]
-    sub, _tail = _resolve_git_sub_with_inline_aliases(args, j, sub, tail)
-    return sub == "commit"
-
-
-def _may_contain_embedded_git_invoke(seg: list[str]) -> bool:
-    """True when argv0 can spawn nested commands (shell, git, etc.)."""
-    if not seg:
-        return False
-    t0 = _shell_git_executable_peeled(seg[0]).rstrip(")").rstrip("`")
-    p0 = _shell_argv0_basename(t0)
-    return p0 in _SHELL_BOOTSTRAP or p0 == "git"
-
-
-def _line_has_glued_git_command(line: str) -> bool:
-    if _LINE_GLUES_TO_GIT.search(line):
-        return True
-    if "$(git" in line or "`git" in line:
-        return True
-    return False
-
-
-def _git_token_needs_mid_invoke_scan(tok: str) -> bool:
-    """Bare ``git`` as an argument to ``echo`` is not a command; ``$(git`` is (Codex)."""
-    if not _token_looks_like_git_executable(tok):
-        return False
-    tn = tok.strip().strip("'\"")
-    if tn == "git":
-        return False
-    return True
-
-
-def command_includes_git_commit_intent(
-    cmd: str, *, depth: int = 0, shell_env: dict[str, str] | None = None
-) -> bool:
-    """Orchestrator helper: true only when parsed argv includes a ``git commit`` (Qodo / #92)."""
-    if depth > _MAX_TEXT_DEPTH:
-        return False
-    if shell_env is None:
-        shell_env = dict(os.environ)
-    cmd = _merge_shell_continuations(cmd)
-    lines = _logical_shell_lines(cmd)
-    if not lines:
-        return False
-    for line in lines:
-        try:
-            tokens = _expand_glue_before_git_tokens(shlex.split(line))
-        except Exception:
-            if "git" in line.casefold():
-                sys.stderr.write(
-                    "hook_protect_main: shlex.split failed (fail-open); command contains 'git'\n"
-                )
-            continue
-        glued_git = _line_has_glued_git_command(line)
-        for seg in _shell_command_segments(tokens):
-            if _apply_export_segment(seg, shell_env):
-                continue
-            if _segment_targets_git_commit(seg, shell_env, depth):
-                return True
-            for i in range(1, len(seg)):
-                if not _token_looks_like_git_executable(seg[i]):
-                    continue
-                if not (
-                    _may_contain_embedded_git_invoke(seg)
-                    or _git_token_needs_mid_invoke_scan(seg[i])
-                    or (glued_git and _shell_argv0_basename(seg[i]) == "git")
-                ):
-                    continue
-                if _segment_targets_git_commit(seg[i:], shell_env, depth):
-                    return True
-    return False
-
-
-def _inspect_command_text(
-    cmd: str, *, depth: int = 0, shell_env: dict[str, str] | None = None
-) -> int:
-    """Walk logical lines and segments; block if any subshell command hits protected git."""
-    if depth > _MAX_TEXT_DEPTH:
-        return 0
-    if shell_env is None:
-        shell_env = dict(os.environ)
-    cmd = _merge_shell_continuations(cmd)
-    lines = _logical_shell_lines(cmd)
-    if not lines:
-        return 0
-    for line in lines:
-        try:
-            tokens = _expand_glue_before_git_tokens(shlex.split(line))
-        except Exception:
-            if "git" in line.casefold():
-                sys.stderr.write(
-                    "hook_protect_main: shlex.split failed (fail-open); command contains 'git'\n"
-                )
-            continue
-        glued_git = _line_has_glued_git_command(line)
-        for seg in _shell_command_segments(tokens):
-            if _apply_export_segment(seg, shell_env):
-                continue
-            rc = _inspect_one_shell_command(seg, depth, shell_env)
-            if rc == 2:
-                return rc
-            for i in range(1, len(seg)):
-                if not _token_looks_like_git_executable(seg[i]):
-                    continue
-                if not (
-                    _may_contain_embedded_git_invoke(seg)
-                    or _git_token_needs_mid_invoke_scan(seg[i])
-                    or (glued_git and _shell_argv0_basename(seg[i]) == "git")
-                ):
-                    continue
-                rc2 = _inspect_one_shell_command(seg[i:], depth, shell_env)
-                if rc2 == 2:
-                    return rc2
-    return 0
-
-
-def main() -> int:
-    raw = sys.stdin.read()
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return None
+    if not raw.strip():
+        return None
     try:
-        d = json.loads(raw)
-    except Exception:
-        return 0
-    cmd = (d.get("tool_input") or {}).get("command") or ""
-    if not cmd:
-        return 0
-    return _inspect_command_text(cmd, depth=0)
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    tool_input = payload.get("tool_input") or payload.get("toolInput") or {}
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return None
+    cmd = command.strip()
+    for pattern in _RECOVERY_PATTERNS:
+        if pattern.match(cmd):
+            return cmd
+    return None
+
+
+def _delegate(canonical: Path, name: str) -> None:
+    """Run the canonical hook. Propagate its intended exit code (SystemExit). On a NON-SystemExit
+    runtime error (hub present but the hook is buggy/incompatible), restore the fail posture:
+    HARD gates fail closed (exit 2), ADVISORY hooks fail open (exit 0). Always audited — never a
+    silent bypass, never a silent block."""
+    try:
+        runpy.run_path(str(canonical), run_name="__main__")
+    except SystemExit:
+        raise  # the hook's own exit code (0 allow / 2 block) is authoritative.
+    except Exception as exc:  # noqa: BLE001 — degraded-mode contract below.
+        detail = f"{type(exc).__name__}: {exc}"
+        if name in _FAIL_CLOSED_HOOKS:
+            _audit("hub-runtime-error-failclosed", name, detail)
+            sys.stderr.write(
+                f"BLOCK: governance-shim — canonical {name} errored at runtime; failing CLOSED "
+                "(hard gate). Fix the hub hook or use EMERGENCY_BYPASS_GOVERNANCE=1.\n"
+            )
+            sys.exit(2)
+        _audit("hub-runtime-error-failopen", name, detail)
+        sys.stderr.write(
+            f"governance-shim: canonical {name} errored at runtime (advisory hook); fail-open.\n"
+        )
+        sys.exit(0)
+
+
+def _run() -> None:
+    """Delegate to the canonical hook. Guarded by ``__main__`` so IMPORTING this shim
+    (e.g. a test that imports the spoke's ``scripts/<hook>.py``) does NOT execute the
+    delegation or call ``sys.exit`` — only running it as the hook does."""
+    name = Path(__file__).name
+    if os.environ.get("EMERGENCY_BYPASS_GOVERNANCE", "").strip() == "1":
+        _audit("emergency-bypass", name, "EMERGENCY_BYPASS_GOVERNANCE=1 (human break-glass)")
+        sys.exit(0)
+    canonical = _canonical(name)
+    if canonical is not None:
+        _delegate(canonical, name)
+        return
+    # Hub not found.
+    if name in _FAIL_CLOSED_HOOKS:
+        recovery = _recovery_command_from_stdin()
+        if recovery is not None:
+            # The bootloader exception: permit the small, fixed surface needed to INSTALL the hub so
+            # the documented recovery is reachable on a fresh host. Audited; everything else blocks.
+            _audit("recovery-allowed", name, f"hub missing; recovery command permitted: {recovery}")
+            return  # exit 0 (allow the recovery command to run)
+        _audit("fail-closed-block", name, "governance hub not found (hard gate)")
+        sys.stderr.write(
+            f"BLOCK: governance-shim — canonical {name} not found; failing CLOSED (hard gate).\n"
+            "  Expected the hub at $FLEET_GOVERNANCE_ROOT or ~/.fleet-governance.\n"
+            "  Recover:  git clone https://github.com/agorokh/governance-hub ~/.fleet-governance\n"
+            "            (this exact command is allow-listed even while the gate is failing closed)\n"
+            "  Break-glass (human only): EMERGENCY_BYPASS_GOVERNANCE=1 <your command>\n"
+        )
+        sys.exit(2)
+    # Advisory hook: fail open so a missing hub never bricks a session.
+    sys.stderr.write(
+        f"governance-shim: canonical {name} not found (advisory hook); fail-open. "
+        "Clone the hub to ~/.fleet-governance to restore it.\n"
+    )
+    sys.exit(0)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _run()
