@@ -51,6 +51,16 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "mcp__agentic-memory__query_knowledge_graph",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/bin/python3\"; [ -x \"$PY\" ] || PY=python3; \"$PY\" \"$root/scripts/hook_memory_query_stamp.py\" || true",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "PreToolUse": [

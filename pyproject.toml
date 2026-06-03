@@ -68,6 +68,22 @@ include = ["ac_copilot_trainer*", "tools*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Governance hooks under scripts/ are thin SHIMS into the fleet governance hub
+# (reference-not-vendor, issue #338). Each is byte-identical to the hub's canonical shim — enforced
+# by the conformance checker, NOT by style — and is hub-owned: the spoke does not own its formatting.
+# Exclude them from the spoke's lint+format so style churn can never fight byte-identity conformance.
+# force-exclude so the exclusion applies even when `make ci-fast` passes scripts/ explicitly.
+force-exclude = true
+extend-exclude = [
+  "scripts/hook_session_start_memory_prefetch.py",
+  "scripts/hook_memory_gate.py",
+  "scripts/hook_protect_main_impl.py",
+  "scripts/hook_memory_query_stamp.py",
+  # Gitignored local backups of pre-shim hook bodies kept during the #338 migration; not
+  # repo-owned and never style-gated (ruff's force-exclude otherwise descends into the dotted dir
+  # when scripts/ is passed explicitly).
+  "scripts/.governance-vendored-bak/",
+]
 
 [tool.ruff.format]
 line-ending = "lf"

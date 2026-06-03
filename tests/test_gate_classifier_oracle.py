@@ -27,8 +27,19 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+# #338 SHIM RECONCILIATION: when hook_memory_gate.py is a governance-hub shim, the classifier
+# (`_classify`) lives in the hub, not in the thin delegator — the import below would fail and the
+# oracle would exercise nothing local. The hub owns and re-runs this oracle for every spoke; skip.
+if "governance shim" in (REPO_ROOT / "scripts" / "hook_memory_gate.py").read_text(encoding="utf-8"):
+    pytest.skip(
+        "hook_memory_gate.py is a governance-hub shim; classifier oracle lives in the hub.",
+        allow_module_level=True,
+    )
 
 from hook_memory_gate import _classify  # noqa: E402
 from hook_memory_manifest import (  # noqa: E402

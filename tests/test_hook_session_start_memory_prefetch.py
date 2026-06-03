@@ -18,8 +18,19 @@ import textwrap
 import time
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "hook_session_start_memory_prefetch.py"
+
+# #338 SHIM RECONCILIATION: when SCRIPT is a governance-hub shim, the prefetch LOGIC and its full
+# suite were migrated into the hub. Subprocess-running the shim here exercises the thin delegator,
+# not the calibrated behaviour this suite asserts — skip; the hub owns and re-runs the coverage.
+if "governance shim" in SCRIPT.read_text(encoding="utf-8"):
+    pytest.skip(
+        "memory-prefetch hook is a governance-hub shim; coverage lives in the hub.",
+        allow_module_level=True,
+    )
 
 
 def _run(cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

@@ -5,16 +5,50 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
 
+def _canonical_impl_path() -> Path | None:
+    """Resolve the hub's ``hook_protect_main_impl.py`` from a trusted location.
+
+    Mirrors ``governance_shim._canonical``: ``$FLEET_GOVERNANCE_ROOT`` first, then
+    ``~/.fleet-governance``; hub ``hooks/`` layout, then legacy ``scripts/``.
+    """
+    bases: list[Path] = []
+    env_root = os.environ.get("FLEET_GOVERNANCE_ROOT", "").strip()
+    if env_root:
+        bases.append(Path(env_root).expanduser())
+    bases.append(Path.home() / ".fleet-governance")
+    for base in bases:
+        for sub in ("hooks", "scripts"):
+            p = base / sub / "hook_protect_main_impl.py"
+            if p.is_file():
+                return p
+    return None
+
+
 def _load_impl():
+    """Load ``hook_protect_main_impl``.
+
+    #338 hub-and-spoke: when the local ``hook_protect_main_impl.py`` is a thin governance
+    shim it no longer carries ``command_includes_git_commit_intent``; resolve the canonical
+    hub impl instead. If the local copy is a shim and the hub is absent, raise a clear error
+    rather than fail with an opaque ``AttributeError``.
+    """
     here = Path(__file__).resolve().parent
-    spec = importlib.util.spec_from_file_location(
-        "hook_protect_main_impl",
-        here / "hook_protect_main_impl.py",
-    )
+    local = here / "hook_protect_main_impl.py"
+    target = local
+    if local.is_file() and "governance shim" in local.read_text(encoding="utf-8"):
+        canonical = _canonical_impl_path()
+        if canonical is None:
+            raise RuntimeError(
+                "hook_protect_main_impl.py is a governance shim but the fleet-governance hub "
+                "is unavailable; clone it to ~/.fleet-governance or set FLEET_GOVERNANCE_ROOT."
+            )
+        target = canonical
+    spec = importlib.util.spec_from_file_location("hook_protect_main_impl", target)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader
     spec.loader.exec_module(mod)
