@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit|StrReplace|apply_patch|create_file|edit_file", "hooks": [ { "type": "command", "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; cd \"$root\" || exit 0; python3 \"$root/scripts/hook_memory_gate.py\"", "timeout": 10000 } ] },
+      { "matcher": "Bash|Shell|run_command|run_shell_command", "hooks": [ { "type": "command", "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; bash \"$root/scripts/hook_bash_pre_tool.sh\"", "timeout": 10000 } ] }
+    ]
+  }
+}
