@@ -112,16 +112,6 @@
             "type": "command",
             "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/session_debrief.py\" 2>/dev/null || true",
             "timeout": 15000
-          },
-          {
-            "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_stop_drift_audit.py\" \"$root\" 2>/dev/null || true",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_stop_save_reminder.py\" \"$root\" || true",
-            "timeout": 5000
           }
         ]
       }

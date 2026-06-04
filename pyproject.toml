@@ -79,6 +79,9 @@ extend-exclude = [
   "scripts/hook_memory_gate.py",
   "scripts/hook_protect_main_impl.py",
   "scripts/hook_memory_query_stamp.py",
+  # Hub-owned helpers (byte-identical to hub; spoke does not own their formatting).
+  "scripts/hook_repo_root.py",
+  "scripts/hook_memory_manifest.py",
   # Gitignored local backups of pre-shim hook bodies kept during the #338 migration; not
   # repo-owned and never style-gated (ruff's force-exclude otherwise descends into the dotted dir
   # when scripts/ is passed explicitly).

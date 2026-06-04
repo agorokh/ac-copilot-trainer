@@ -1255,129 +1255,6 @@ def test_sql_guard_malformed_json_fails_open() -> None:
 
 
 # ---------------------------------------------------------------------------
-# hook_stop_save_reminder.py — deterministic replacement for type:"agent" Stop
-# ---------------------------------------------------------------------------
-
-STOP_REMINDER = SCRIPTS / "hook_stop_save_reminder.py"
-
-
-def _run_stop_reminder(
-    cwd: Path, env_extra: dict[str, str] | None = None
-) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["LC_ALL"] = "C"
-    env["CLAUDE_PROJECT_DIR"] = str(cwd)
-    env.pop("CLAUDE_DISABLE_STOP_SAVE_REMINDER", None)
-    if env_extra:
-        env.update(env_extra)
-    return subprocess.run(
-        [sys.executable, str(STOP_REMINDER)],
-        input="",
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=10,
-    )
-
-
-def test_stop_reminder_plain_when_no_marker(tmp_path: Path) -> None:
-    r = _run_stop_reminder(tmp_path)
-    assert r.returncode == 0
-    assert "SAVE reminder" in r.stdout
-    # Plain (no-marker) branch: must not surface the vault-dirty handoff line.
-    assert "Next Session Handoff.md" not in r.stdout
-
-
-def test_stop_reminder_vault_dirty_message_when_marker(tmp_path: Path) -> None:
-    scratch = tmp_path / ".scratch"
-    scratch.mkdir()
-    (scratch / "vault-dirty").write_text("")
-    r = _run_stop_reminder(tmp_path)
-    assert r.returncode == 0
-    assert "vault-dirty" in r.stdout
-    assert "Next Session Handoff.md" in r.stdout
-    # Marker should be cleared after the hook surfaces the reminder.
-    assert not (scratch / "vault-dirty").exists()
-
-
-def test_stop_reminder_kill_switch_is_silent(tmp_path: Path) -> None:
-    r = _run_stop_reminder(tmp_path, env_extra={"CLAUDE_DISABLE_STOP_SAVE_REMINDER": "1"})
-    assert r.returncode == 0
-    assert r.stdout == ""
-
-
-def test_stop_reminder_kill_switch_clears_vault_dirty_marker(tmp_path: Path) -> None:
-    scratch = tmp_path / ".scratch"
-    scratch.mkdir()
-    (scratch / "vault-dirty").write_text("")
-    r = _run_stop_reminder(tmp_path, env_extra={"CLAUDE_DISABLE_STOP_SAVE_REMINDER": "1"})
-    assert r.returncode == 0
-    assert r.stdout == ""
-    assert not (scratch / "vault-dirty").exists()
-
-
-def test_stop_reminder_kill_switch_drains_stdin(tmp_path: Path) -> None:
-    """Kill-switch must still consume stdin so the parent is not left blocked."""
-    env = os.environ.copy()
-    env["LC_ALL"] = "C"
-    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
-    env["CLAUDE_DISABLE_STOP_SAVE_REMINDER"] = "1"
-    r = subprocess.run(
-        [sys.executable, str(STOP_REMINDER)],
-        input='{"hook": "payload"}\n',
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=10,
-    )
-    assert r.returncode == 0
-    assert r.stdout == ""
-
-
-def test_stop_reminder_argv_root_overrides_cwd(tmp_path: Path) -> None:
-    """Explicit argv[1] repo root matches the settings.base.json Stop wrapper."""
-    scratch = tmp_path / ".scratch"
-    scratch.mkdir()
-    (scratch / "vault-dirty").write_text("")
-    nested = tmp_path / "nested"
-    nested.mkdir()
-    env = os.environ.copy()
-    env["LC_ALL"] = "C"
-    env.pop("CLAUDE_PROJECT_DIR", None)
-    r = subprocess.run(
-        [sys.executable, str(STOP_REMINDER), str(tmp_path)],
-        cwd=str(nested),
-        input="",
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=10,
-    )
-    assert r.returncode == 0
-    assert "Next Session Handoff.md" in r.stdout
-    assert not (scratch / "vault-dirty").exists()
-
-
-def test_stop_reminder_always_exits_zero_even_on_garbage_stdin(tmp_path: Path) -> None:
-    env = os.environ.copy()
-    env["LC_ALL"] = "C"
-    env["CLAUDE_PROJECT_DIR"] = str(tmp_path)
-    r = subprocess.run(
-        [sys.executable, str(STOP_REMINDER)],
-        input="\x00\x01garbage",
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        timeout=10,
-    )
-    assert r.returncode == 0
-
-
-# ---------------------------------------------------------------------------
 # Invariant: no LLM-bearing hook types anywhere in the merged template config
 # ---------------------------------------------------------------------------
 
@@ -1441,7 +1318,7 @@ def test_invariant_stop_hooks_are_command_only() -> None:
 
     The 120s `type: "agent"` SAVE hook was an active brown-out source: under
     upstream model outages the sub-agent itself hung, extending the
-    user-visible session-stop window. Replaced by hook_stop_save_reminder.py."""
+    user-visible session-stop window (removed in the slim-down ADR)."""
     base = REPO_ROOT / ".claude" / "settings.base.json"
     data = json.loads(base.read_text(encoding="utf-8"))
     offenders = [
