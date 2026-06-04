@@ -70,9 +70,14 @@ def test_claude_settings_wire_memory_gate() -> None:
     assert "hook_memory_gate" in blob, "PreToolUse must wire hook_memory_gate (first-try gate)"
 
 
-def test_tracked_harness_configs_wire_gate() -> None:
-    """Each harness config present in the tree must wire the memory gate (fresh-clone coverage)."""
+def test_tracked_harness_configs_present_and_wire_gate() -> None:
+    """Required harness configs must be TRACKED (present) AND wire the memory gate, so a fresh clone
+    in that harness gets the first-try gate. Asserting presence (not `if present`) means DELETING a
+    harness config is caught — not just mutation (agent-factory#350 falsification: closes the
+    deletion blind spot)."""
     for rel in (".cursor/hooks.json", ".codex/hooks.json"):
         p = REPO_ROOT / rel
-        if p.is_file():
-            assert _wires_gate(p), f"{rel} present but does not wire hook_memory_gate"
+        assert p.is_file(), (
+            f"{rel} missing — fresh-clone agents in that harness would build blind (first-try gap)"
+        )
+        assert _wires_gate(p), f"{rel} present but does not wire hook_memory_gate"
