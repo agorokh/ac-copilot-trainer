@@ -1,0 +1,259 @@
+"""Instruction-surface coherence guards — agent-factory#350 audit (Council-reviewed 2026-06-04).
+
+Goal: an autonomous coding agent must not be able to read CONTRADICTORY governance instructions.
+These are CURATED phrase/anchor checks (NOT AI-complete NL contradiction detection, per the Council)
+plus negative controls that prove each guard fires. Historical trees (`01_Decisions/`,
+`02_Investigations/`) are excluded from phrase scans — they legitimately narrate old decisions.
+
+Guards:
+  1 polarity            — no surface says local hooks are advisory/optional or server is primary
+  2 headless-claim      — codex exec / agy --print never described as proven local enforcement
+  3 hub-status          — governance-hub never described as an active local-gate gap
+  4 workspace-provision — MEMORY_CONTRACT forbids faking a stamp from a neighboring workspace
+  5 graphql-threads     — resolve-pr mandates GraphQL reviewThreads (REST insufficient)
+  6 protected-data      — resolve-pr requires snapshot-before + STOP on missing protected path
+  7 cross-repo-gate     — gate defines pilot = PRE-MERGE PR-branch CI; no blind fleet sweeps
+  8 precedence          — INSTRUCTION_SURFACE_PRECEDENCE.md declares the reading order + polarity
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[1]
+HISTORICAL = ("/01_Decisions/", "/02_Investigations/")
+LIVE_GLOBS = (
+    "CLAUDE.md",
+    "AGENTS.md",
+    "GEMINI.md",
+    "README.md",
+    "AGENT_CORE_PRINCIPLES.md",
+    "docs/00_Core/*.md",
+    "docs/01_Vault/*/00_System/*.md",
+    "docs/01_Vault/*/00_System/invariants/*.md",
+    ".claude/agents/*.md",
+    ".claude/skills/*/SKILL.md",
+    ".claude/rules/*.md",
+)
+
+
+def _live_files():
+    out = set()
+    for g in LIVE_GLOBS:
+        for p in REPO.glob(g):
+            if p.is_file() and not any(h in p.as_posix() for h in HISTORICAL):
+                out.add(p)
+    return sorted(out)
+
+
+def _scan(patterns, allow=None):
+    """Return [rel:line: text] for lines matching any banned pattern and NOT the allow pattern."""
+    hits = []
+    for p in _live_files():
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if any(rx.search(line) for rx in patterns) and not (allow and allow.search(line)):
+                hits.append(f"{p.relative_to(REPO)}:{i}: {line.strip()[:110]}")
+    return hits
+
+
+def _line_flags(line, patterns, allow=None):
+    return any(rx.search(line) for rx in patterns) and not (allow and allow.search(line))
+
+
+# ---- 1. polarity ---------------------------------------------------------------------------
+POLARITY_BANNED = [
+    re.compile(r"client hooks are advisory", re.I),
+    re.compile(r"\b(local|client)\b.{0,30}hooks? (are|is) (optional|advisory|just ux)", re.I),
+    re.compile(r"real\s+enforcement is the server", re.I),
+    re.compile(r"server[-\s]?side .{0,25}\b(real|primary)\b enforcement", re.I),
+    re.compile(r"server (rulesets?|side) (are|is) (the )?primary", re.I),
+]
+POLARITY_ALLOW = re.compile(r"\bnot\b|must never|forbidden|never (say|state|imply)|BACKSTOP", re.I)
+
+
+def test_polarity_local_primary_server_backstop() -> None:
+    hits = _scan(POLARITY_BANNED, POLARITY_ALLOW)
+    assert not hits, (
+        "Enforcement-polarity inversion (local hooks are PRIMARY; server is BACKSTOP):\n  - "
+        + "\n  - ".join(hits)
+    )
+
+
+# ---- 2. headless-claim ---------------------------------------------------------------------
+HEADLESS_BANNED = [
+    re.compile(
+        r"(codex exec|agy --print|headless).{0,60}(proven|live enforcement|enforces|enforced)",
+        re.I,
+    )
+]
+HEADLESS_ALLOW = re.compile(
+    r"accepted|registered|debt|not proven|backstop|cannot|do not|no (per-repo )?hook|fire no hook"
+    r"|contract|blocked",
+    re.I,
+)
+
+
+def test_headless_not_described_as_proven_enforcement() -> None:
+    hits = _scan(HEADLESS_BANNED, HEADLESS_ALLOW)
+    assert not hits, (
+        "Headless mode described as proven local-hook enforcement (it is accepted debt):\n  - "
+        + "\n  - ".join(hits)
+    )
+
+
+# ---- 3. hub-status -------------------------------------------------------------------------
+HUB_BANNED = [
+    re.compile(
+        r"(governance-hub|the hub).{0,60}(intentionally unsupported|no local (gate|first-try)|active conceptual gap|server-belt-only)",  # noqa: E501
+        re.I,
+    )
+]
+HUB_ALLOW = re.compile(r"was|were|resolved|closed|no longer|self-gat|REMOV|SUPERSED|#361|#15", re.I)
+
+
+def test_hub_not_described_as_active_gap() -> None:
+    hits = _scan(HUB_BANNED, HUB_ALLOW)
+    assert not hits, (
+        "governance-hub described as an active local-gate gap (it self-gates now, #361):\n  - "
+        + "\n  - ".join(hits)
+    )
+
+
+# ---- 4. workspace-provisioning -------------------------------------------------------------
+def test_memory_contract_forbids_neighbor_workspace_faking() -> None:
+    # The anti-faking rule may live in MEMORY_CONTRACT.md (canonical) OR the precedence doc (the
+    # portable copy propagated to spokes). Pass if either carries it.
+    texts = ""
+    for rel in (
+        "docs/00_Core/MEMORY_CONTRACT.md",
+        "docs/00_Core/INSTRUCTION_SURFACE_PRECEDENCE.md",
+    ):
+        p = REPO / rel
+        if p.is_file():
+            texts += p.read_text(encoding="utf-8").lower()
+    assert "neighboring" in texts and "manufacture a stamp" in texts, (
+        "MEMORY_CONTRACT.md or the precedence doc must forbid querying a neighboring workspace "
+        "to fake a stamp (R6)."
+    )
+
+
+# ---- 5. graphql reviewThreads (workflow-specific: skip where resolve-pr is not present) -----
+_RESOLVE_PR = REPO / ".claude/skills/resolve-pr/SKILL.md"
+
+
+def test_resolve_pr_mandates_graphql_reviewthreads() -> None:
+    if not _RESOLVE_PR.is_file():
+        pytest.skip("no resolve-pr skill in this repo")
+    t = _RESOLVE_PR.read_text(encoding="utf-8")
+    assert "reviewThreads" in t and "REST alone" in t, (
+        "resolve-pr must mandate GraphQL reviewThreads and state REST is insufficient."
+    )
+
+
+# ---- 6. protected-data (only where the repo has protected data: a `make snapshot` target) ----
+def _has_protected_data() -> bool:
+    mk = REPO / "Makefile"
+    return (
+        mk.is_file()
+        and re.search(r"^snapshot\s*:", mk.read_text(encoding="utf-8"), re.M) is not None
+    )
+
+
+def test_resolve_pr_requires_snapshot_and_stop_on_missing() -> None:
+    if not _RESOLVE_PR.is_file():
+        pytest.skip("no resolve-pr skill in this repo")
+    if not _has_protected_data():
+        pytest.skip("repo declares no protected data (no `make snapshot` target)")
+    t = _RESOLVE_PR.read_text(encoding="utf-8").lower()
+    assert "snapshot" in t and "protected" in t and ("stop" in t and "missing" in t), (
+        "resolve-pr must require snapshot-before + STOP on a missing protected path."
+    )
+
+
+# ---- 7. cross-repo change gate -------------------------------------------------------------
+SWEEP_BANNED = [
+    re.compile(r"(sweep (all|the fleet|every repo))|fleet-wide (rewrite|cleanup|fix)", re.I)
+]
+SWEEP_ALLOW = re.compile(
+    r"\bnot\b|never|without|under the gate|requires the gate|no (fleet|blind)|do not", re.I
+)
+
+
+def test_cross_repo_gate_defined_and_no_blind_sweep() -> None:
+    # The sweep phrase-scan runs in EVERY repo. The invariant-content checks run only where the
+    # cross-repo-change-gate invariant exists (control plane); globbed by vault key for portability.
+    invs = list(REPO.glob("docs/01_Vault/*/00_System/invariants/cross-repo-change-gate.md"))
+    if invs:
+        inv = invs[0].read_text(encoding="utf-8")
+        assert re.search(r"pre-merge", inv, re.I) and re.search(r"PR[-\s]?branch", inv, re.I), (
+            "cross-repo gate must define pilot CI-green as PRE-MERGE PR-branch CI (R11)."
+        )
+        for kw in ("inventory", "rollback", "council", "pilot"):
+            assert kw.lower() in inv.lower(), f"cross-repo gate missing required element: {kw}"
+    hits = _scan(SWEEP_BANNED, SWEEP_ALLOW)
+    assert not hits, (
+        "A live surface encourages a blind fleet sweep without the change gate:\n  - "
+        + "\n  - ".join(hits)
+    )
+
+
+# ---- 8. precedence -------------------------------------------------------------------------
+def test_precedence_declaration_exists() -> None:
+    p = REPO / "docs/00_Core/INSTRUCTION_SURFACE_PRECEDENCE.md"
+    assert p.is_file(), "INSTRUCTION_SURFACE_PRECEDENCE.md must exist (declares the reading order)."
+    t = p.read_text(encoding="utf-8")
+    assert "Reading order" in t and "Active handoff" in t and "PRIMARY" in t and "BACKSTOP" in t, (
+        "precedence doc must declare the reading order + the local-PRIMARY/server-BACKSTOP polarity."  # noqa: E501
+    )
+
+
+# ============================ NEGATIVE CONTROLS ============================
+def test_negcontrol_polarity_flags_inversion() -> None:
+    assert _line_flags(
+        "Client hooks are advisory; the real enforcement is the server-side floor.",
+        POLARITY_BANNED,
+        POLARITY_ALLOW,
+    )
+    assert not _line_flags(
+        "Local hooks are PRIMARY; the server ruleset is the BACKSTOP.",
+        POLARITY_BANNED,
+        POLARITY_ALLOW,
+    )
+
+
+def test_negcontrol_headless_flags_proven_claim() -> None:
+    assert _line_flags(
+        "codex exec enforcement is proven and live in every repo.", HEADLESS_BANNED, HEADLESS_ALLOW
+    )
+    assert not _line_flags(
+        "codex exec fires no hooks — accepted registered debt, not proven.",
+        HEADLESS_BANNED,
+        HEADLESS_ALLOW,
+    )
+
+
+def test_negcontrol_hub_flags_gap_claim() -> None:
+    assert _line_flags(
+        "governance-hub is intentionally unsupported for local first-try gating.",
+        HUB_BANNED,
+        HUB_ALLOW,
+    )
+    assert not _line_flags(
+        "governance-hub was an active conceptual gap; resolved by #361 (self-gates now).",
+        HUB_BANNED,
+        HUB_ALLOW,
+    )
+
+
+def test_negcontrol_sweep_flags_blind_sweep() -> None:
+    assert _line_flags(
+        "Then sweep all repos and fix the deprecated hook in one wave.", SWEEP_BANNED, SWEEP_ALLOW
+    )
+    assert not _line_flags(
+        "Never sweep the fleet without the change gate (one repo per PR).",
+        SWEEP_BANNED,
+        SWEEP_ALLOW,
+    )
