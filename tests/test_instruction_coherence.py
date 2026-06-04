@@ -311,6 +311,95 @@ def test_no_dangling_skill_or_hook_references() -> None:
     )
 
 
+# ---- 10. deprecated-name guard (map-driven): REMOVED names must not appear live (bare/NL) ----
+_MAP = REPO / "docs/00_Core/deprecation_map.yml"
+
+
+def _removed_names():
+    if not _MAP.is_file():
+        return []
+    out, txt = [], _MAP.read_text(encoding="utf-8")
+    # crude block parse: collect `old:` where the same block has `status: REMOVED`
+    blocks = re.split(r"\n\s*-\s+old:", txt)
+    for b in blocks[1:]:
+        name = b.splitlines()[0].strip()
+        if "REMOVED" in b.split("status:", 1)[-1].splitlines()[0] if "status:" in b else False:
+            out.append(name)
+    return out
+
+
+def _deprecated_surfaces():
+    # actionable surfaces; exclude the map + guard test files (which legitimately name them)
+    skip = ("deprecation_map.yml", "test_instruction_coherence.py", "test_no_stale_hook_refs.py")
+    return [p for p in _dangling_surfaces() if not any(k in p.name for k in skip)]
+
+
+def test_no_deprecated_name_as_current() -> None:
+    names = _removed_names()
+    if not names:
+        pytest.skip("no deprecation map in this repo")
+    bad = []
+    for p in _deprecated_surfaces():
+        for i, line in enumerate(p.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if _REF_ALLOW.search(line):
+                continue
+            for nm in names:
+                if nm in line:
+                    bad.append(f"{p.relative_to(REPO)}:{i}: deprecated name '{nm}' used as current")
+    assert not bad, (
+        "Deprecated agent/hook names used as CURRENT in a live surface (deprecation_map.yml). "
+        "Use the successor skill or mark removed/historical:\n  - " + "\n  - ".join(bad)
+    )
+
+
+# ---- 11. undeclared-memory-alias guard: obsidian + vault memory cannot both ship undeclared ----
+def test_no_undeclared_memory_alias() -> None:
+    sk = _existing_skills()
+    if not ("obsidian-memory" in sk and "vault-memory" in sk):
+        return  # no collision
+    policy = _MAP.read_text(encoding="utf-8") if _MAP.is_file() else ""
+    if "vault_memory_alias: ALIAS_RETAINED" in policy:
+        return  # explicitly retained
+    raise AssertionError(
+        "Both obsidian-memory and vault-memory skills ship here, but the alias is not declared "
+        "ALIAS_RETAINED in deprecation_map.yml. Remove the orphan vault-memory dir (0 refs) or "
+        "declare the alias with a removal deadline."
+    )
+
+
+def test_negcontrol_deprecated_name_logic() -> None:
+    # a removal-marked line is allowed; a current-tense line is not
+    assert _REF_ALLOW.search("formerly the pr-resolution-follow-up agent (REMOVED #350)")
+    assert not _REF_ALLOW.search("delegate to the pr-resolution-follow-up agent now")
+
+
+# ---- 12. mirror-completeness: each canonical core skill must be PRESENT in each mirror ----
+_CORE = ("orchestrate", "resolve-pr", "post-merge", "learner", "start-task", "dependency-review")
+
+
+def test_core_skill_mirrors_complete() -> None:
+    # An agent on Cursor/Codex/.agents that hits a missing core skill gets "unknown command" while
+    # references resolve and CI passes (Council: the mirror-completeness gap). Each mirror root that
+    # EXISTS must carry every core skill the canonical .claude has.
+    canon = _existing_skills()
+    core_here = [c for c in _CORE if c in canon]
+    if not core_here:
+        pytest.skip("repo has no core workflow skills (e.g. governance-hub)")
+    missing = []
+    for mroot in (".cursor/skills", ".codex/skills", ".agents/skills"):
+        d = REPO / mroot
+        if not d.is_dir():
+            continue  # repo does not support this harness mirror
+        present = {x.name for x in d.glob("*") if x.is_dir()}
+        for c in core_here:
+            if c not in present:
+                missing.append(f"{mroot}/{c} (in .claude, missing in mirror)")
+    assert not missing, (
+        "Core-skill mirror INCOMPLETE — skill in .claude but absent from a mirror "
+        "(agent there hits 'unknown command'):\n  - " + "\n  - ".join(missing)
+    )
+
+
 # ============================ NEGATIVE CONTROLS ============================
 def test_negcontrol_dangling_ref_exclusions() -> None:
     # template variables and legacy/removed contexts are NOT flagged (false-positive guards)

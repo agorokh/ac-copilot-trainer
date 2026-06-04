@@ -1,0 +1,66 @@
+# Canonical deprecation / alias map for the agentic-coding surface (Phase 6, ecosystem normalization).
+# Machine-readable source of truth. Enforced by tests/test_instruction_coherence.py
+# (deprecated-name guard + alias guard + NL-delegation guard).
+#
+# status: REMOVED | ALIAS_RETAINED | HISTORICAL_ONLY | MIGRATED
+# A REMOVED name may appear in a live surface ONLY on a line carrying a removal marker
+# (REMOVED/DELETED/SUPERSEDED/deprecated/legacy/former/historical/invalid + strikethrough).
+version: 1
+updated: "2026-06-04"
+
+deprecations:
+  - old: issue-driven-coding-orchestrator
+    new: orchestrate
+    type: agent
+    status: REMOVED
+    forbidden_contexts: ["subagent_type", ".claude/agents path", "delegation", "natural-language"]
+    enforcement: tests/test_instruction_coherence.py::test_no_dangling_skill_or_hook_references
+  - old: pr-resolution-follow-up
+    new: resolve-pr
+    type: agent
+    status: REMOVED
+    forbidden_contexts: ["subagent_type", ".claude/agents path", "delegation", "natural-language"]
+    enforcement: tests/test_instruction_coherence.py::test_no_deprecated_name_as_current
+  - old: post-merge-steward
+    new: post-merge
+    type: agent
+    status: REMOVED
+    forbidden_contexts: ["subagent_type", ".claude/agents path", "delegation"]
+    enforcement: tests/test_instruction_coherence.py::test_no_deprecated_name_as_current
+  - old: hook_stop_save_reminder.py
+    new: null
+    type: hook
+    status: REMOVED
+    note: slim-down ADR (#205)
+    enforcement: tests/test_no_stale_hook_refs.py
+  - old: hook_stop_drift_audit.py
+    new: null
+    type: hook
+    status: REMOVED
+    note: slim-down ADR (#205)
+    enforcement: tests/test_no_stale_hook_refs.py
+
+# Memory/vault skill canonical name policy. A repo declaring `obsidian-memory` as canonical must
+# NOT also ship `vault-memory` unless ALIAS_RETAINED is declared here with a removal deadline.
+memory_skill_policy:
+  canonical_by_default: vault-memory
+  repos_using_obsidian_memory: [case_operations, court-fillings-processing, Alpaca_trading]
+  vault_memory_alias: REMOVE          # orphan dirs (0 references) -> remove, do not retain
+  enforcement: tests/test_instruction_coherence.py::test_no_undeclared_memory_alias
+
+# Agents that legitimately exist (the only valid subagent_type values besides Cursor builtins)
+live_agents: [account-intake-overview, mcp-harvest-ingestion]
+
+# Repos with no core workflow skills by design (not a normalization gap)
+core_stack_exempt: [governance-hub]
+
+# Monitored debt (Council 2026-06-04): mirror BODY-divergence (non-dangling) — a mirror's workflow
+# STEPS could diverge from canonical .claude without any dangling ref. The coherence guards catch the
+# dangerous dangling/deprecated/completeness subset; full semantic step-equivalence is the next
+# guard (option b': required sections/steps per core skill). Trigger: a confirmed cross-harness
+# behavior divergence incident, OR before a Hermes autonomous coordinator goes multi-harness GA.
+mirror_body_divergence:
+  status: ACCEPTED_DEBT
+  covered_now: [dangling, deprecated-name, mirror-completeness]
+  not_covered: [step-order-divergence, section-omission-without-dangling]
+  next_guard: semantic-consistency (required sections/steps per core skill)
