@@ -47,7 +47,6 @@ Collapsing Tier 3 into "vault" misses the point. The vault is human-readable mar
 - **`scripts/hook_session_start_memory_redirect.py`** physically marks the auto-memory directory as deprecated on every session start.
 - **`scripts/hook_session_start_memory_prefetch.py`** stamps `.scratch/.last_memory_query` after a Tier-3 query (HTTP to the workspace endpoint resolved from `ops/memory_manifest.yml`).
 - **`scripts/hook_memory_gate.py`** (`PreToolUse` on `Edit | Write | Bash`) blocks code-path edits when the Tier-3 stamp is missing or stale. This is what catches **prompt-drift** (an agent that ignores the LOAD requirement in its system prompt cannot bypass the runtime check).
-- **`scripts/hook_stop_save_reminder.py`** appends per-session records to `.scratch/memory_audit.jsonl` and surfaces an advisory when the stamp was never refreshed during a substantive session.
 - **Routing rule** in [`AGENT_CORE_PRINCIPLES.md`](../../../../../AGENT_CORE_PRINCIPLES.md) § Architectural invariant gap: agents that catch themselves writing to a side channel must stop, file an `architectural-invariant-gap` issue against `template-repo`, and migrate the content to the appropriate tier.
 
 ## Rationale (postmortem)
