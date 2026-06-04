@@ -42,9 +42,9 @@ Do **not** infer across domains. If multiple unrelated workspaces are visible, p
 
 | Trigger / issue type | Primary agent | Secondary (handoff) | Skills & tools (load as needed) |
 |----------------------|---------------|---------------------|-----------------------------------|
-| Implement feature / docs / refactor from an Issue | **This orchestrator** | `.claude/agents/pr-resolution-follow-up.md` once a PR exists | `vault-memory` (session + handoff); `project-conventions` when workflow/style is ambiguous; else `AGENTS.md` + `10_Agent_Protocol.md`; explore/review subagents for cross-cutting unknowns |
-| Green CI + resolve bot/human review threads on an open PR | `pr-resolution-follow-up` | — | Same PR agent doc; optional `ci-check` skill when diagnosing failures |
-| Dependabot / deps-only / workflows / `.mcp.json` / `security.yml` bumps | `dependency-review` | `pr-resolution-follow-up` for `sleep 600` + GraphQL `reviewThreads` loop | Read touched files only; do not duplicate the PR loop in `dependency-review` |
+| Implement feature / docs / refactor from an Issue | **This orchestrator** | `.claude/skills/resolve-pr/SKILL.md` once a PR exists | `vault-memory` (session + handoff); `project-conventions` when workflow/style is ambiguous; else `AGENTS.md` + `10_Agent_Protocol.md`; explore/review subagents for cross-cutting unknowns |
+| Green CI + resolve bot/human review threads on an open PR | `resolve-pr` | — | Same PR agent doc; optional `ci-check` skill when diagnosing failures |
+| Dependabot / deps-only / workflows / `.mcp.json` / `security.yml` bumps | `dependency-review` | `resolve-pr` for `sleep 600` + GraphQL `reviewThreads` loop | Read touched files only; do not duplicate the PR loop in `dependency-review` |
 | New repo from template | Human or `new-project-setup` skill | — | `new-project-setup` |
 | Maintainer release blurb / tag notes | Human | — | `release-notes` skill; see `docs/00_Core/MAINTAINING_THE_TEMPLATE.md` § Versioning |
 | Post-merge learnings extraction (optional) | `learner` | — | `vault-memory`; updates `AGENTS.md` tier-1 + small vault nodes |
@@ -54,7 +54,7 @@ Do **not** infer across domains. If multiple unrelated workspaces are visible, p
 
 - One **primary** owner per goal; secondaries are **handoffs**, not parallel owners of the same branch.
 - **Skills** are shortcuts—link `.claude/skills/<name>/SKILL.md` rather than pasting long procedures into chat.
-- **Delegate** explicitly: in **Claude Code**, use the **Task** tool with `subagent_type` **`pr-resolution-follow-up`**, **`dependency-review`**, or **`learner`** when the host supports it. **In Cursor**, Task only accepts **`generalPurpose`**, **`explore`**, **`shell`**, **`best-of-n-runner`** — use **`generalPurpose`** with the same checklist embedded from the linked `.claude/agents/*.md`, or follow that markdown step-for-step inline (see `.cursor/rules/cursor-task-delegation.mdc`).
+- **Delegate** explicitly by invoking the workflow skill directly — **`/resolve-pr`**, **`/dependency-review`**, or **`/learner`**. Skills are invoked via `/<skill-name>` on **all** hosts (Claude Code, Cursor, Codex, Antigravity); the body is mirrored to `.cursor/.codex/.agents`. Only the 2 remaining `.claude/agents/` (`account-intake-overview`, `mcp-harvest-ingestion`) use `Task(subagent_type=…)`.
 
 ## Context discipline (tokens)
 
@@ -75,8 +75,8 @@ Do **not** infer across domains. If multiple unrelated workspaces are visible, p
 8. Read vault `00_System/invariants/_index.md` and load targeted invariant nodes before touching core modules.
 9. Run `make ci-fast` before marking ready for review.
 10. **Mark the PR ready for review:** use pull request number **P** (from the PR you opened; it can differ from issue **N**): `gh pr ready <P> --repo <owner/repo>` (exits draft state so reviewers and bots are notified).
-11. **Wait for async bots before handoff:** follow **§ Mandatory wait after each push** in `.claude/agents/pr-resolution-follow-up.md`—use the same **`sleep 600`** cooldown after `gh pr ready` as after a `git push` (that section owns the normative wait; do not skip it).
-12. Hand off to **PR resolution** using the same pull request number **P** as in step 10: in Claude Code invoke **`Task(subagent_type="pr-resolution-follow-up", …)`**; in Cursor use **`Task(subagent_type="generalPurpose", …)`** with the **pr-resolution-follow-up** checklist from `.claude/agents/pr-resolution-follow-up.md`, or execute that file’s steps inline until CI is green and bot threads are addressed.
+11. **Wait for async bots before handoff:** follow **§ Mandatory wait after each push** in `.claude/skills/resolve-pr/SKILL.md`—use the same **`sleep 600`** cooldown after `gh pr ready` as after a `git push` (that section owns the normative wait; do not skip it).
+12. Hand off to **PR resolution** by invoking **`/resolve-pr`** (the workflow skill — same on every host) with the pull request number **P** from step 10, until CI is green and bot review threads are addressed.
 13. **Fresh file reads before edits:** before substantive **Edit**/**Write** on paths you will change, load current contents for those targets (in Claude Code use **`query_file_patterns`** with those paths; in other tools use an equivalent bulk read) so patches apply to the latest revisions.
 
 ## Planning

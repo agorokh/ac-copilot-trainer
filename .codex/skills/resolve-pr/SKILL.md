@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 
 # PR Resolution Follow-Up
 
-**Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing.
+**Canonical routing matrix:** `.claude/skills/orchestrate/SKILL.md` § Routing.
 
 **This agent owns** the only detailed procedure for **`sleep 600`**, **GraphQL `reviewThreads`**, and **check polling**. Other agents must **link here**, not copy those steps.
 
@@ -49,7 +49,7 @@ Do **not** infer across domains. If multiple unrelated workspaces are visible, p
 
 ## When to involve other agents
 
-- If the PR diff is **only** dependencies, GitHub Actions, `.mcp.json`, or `security.yml` CVE tooling, run **`dependency-review`** first (Task `subagent_type=dependency-review` in Claude Code, or **`generalPurpose`** + `.claude/agents/dependency-review.md` in Cursor — see `.cursor/rules/cursor-task-delegation.mdc`) for **risk summary + merge order**, then return here for the CI/bot loop.
+- If the PR diff is **only** dependencies, GitHub Actions, `.mcp.json`, or `security.yml` CVE tooling, run **`/dependency-review`** first (the workflow skill, same on every host) for **risk summary + merge order**, then return here for the CI/bot loop.
 - For **ambiguous repo policy** (branch naming, where files go), skim **`project-conventions`** or read **`AGENTS.md`** / **`10_Agent_Protocol.md`** before wide search.
 
 ## Context discipline

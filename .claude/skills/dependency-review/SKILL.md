@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 
 # Dependency review
 
-**Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing.
+**Canonical routing matrix:** `.claude/skills/orchestrate/SKILL.md` § Routing.
 
 ## Tier-3 Substrate Query (mandatory first step)
 
@@ -44,7 +44,7 @@ mcp__agentic-memory__query_knowledge_graph(
 
 1. **Risk summary** — supply chain, breaking majors, workflow permission changes
 2. **Merge order** — note if this PR should land before/after other open PRs (e.g. overlapping workflows)
-3. **Hand off** — for **`sleep 600`**, required checks, and GraphQL **`reviewThreads`**, run **`.claude/agents/pr-resolution-follow-up.md`** or **`Task(subagent_type="pr-resolution-follow-up", …)`** (Claude Code); in Cursor use **`generalPurpose`** + that file’s checklist (`.cursor/rules/cursor-task-delegation.mdc`). Do **not** duplicate that loop here.
+3. **Hand off** — for **`sleep 600`**, required checks, and GraphQL **`reviewThreads`**, invoke **`/resolve-pr`** (the workflow skill, same on every host). Do **not** duplicate that loop here.
 
 ## Context discipline
 

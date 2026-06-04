@@ -37,6 +37,10 @@ LIVE_GLOBS = (
     ".claude/agents/*.md",
     ".claude/skills/*/SKILL.md",
     ".claude/rules/*.md",
+    ".cursor/skills/*/SKILL.md",
+    ".codex/skills/*/SKILL.md",
+    ".agents/skills/*/SKILL.md",
+    ".cursor/rules/*.mdc",
 )
 
 
@@ -226,9 +230,19 @@ _REF_ALLOW = re.compile(
 _HUB_HELPERS = {"hook_memory_manifest.py", "hook_repo_root.py"}
 
 
+_AGENT_REF = re.compile(r"\.claude/agents/([a-z0-9][a-z0-9_-]+)")
+_SUBAGENT = re.compile(r"subagent_type[\"'\s=:]+([a-z0-9_-]+)", re.I)
+_CURSOR_BUILTINS = {"generalpurpose", "explore", "shell", "best-of-n-runner"}
+
+
 def _existing_skills():
     d = REPO / ".claude/skills"
     return {p.name for p in d.glob("*") if p.is_dir()} if d.is_dir() else set()
+
+
+def _existing_agents():
+    d = REPO / ".claude/agents"
+    return {p.stem for p in d.glob("*.md")} if d.is_dir() else set()
 
 
 def _dangling_surfaces():
@@ -243,6 +257,10 @@ def _dangling_surfaces():
         ".claude/skills/*/SKILL.md",
         ".claude/rules/*.md",
         ".claude/agents/*.md",
+        ".cursor/skills/*/SKILL.md",
+        ".codex/skills/*/SKILL.md",
+        ".agents/skills/*/SKILL.md",
+        ".cursor/rules/*.mdc",
     ):
         out += [p for p in REPO.glob(g) if p.is_file()]
     return sorted(set(out))
@@ -250,6 +268,7 @@ def _dangling_surfaces():
 
 def _dangling_refs():
     skills = _existing_skills()
+    agents = _existing_agents()
     bad = []
     for p in _dangling_surfaces():
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
@@ -262,6 +281,22 @@ def _dangling_refs():
                 if hk not in _HUB_HELPERS and not (REPO / "scripts" / hk).is_file():
                     bad.append(
                         f"{p.relative_to(REPO)}:{i}: hook 'scripts/{hk}' referenced but missing"
+                    )
+            for ag in _AGENT_REF.findall(line):
+                if ag not in agents:
+                    bad.append(f"{p.relative_to(REPO)}:{i}: agent '{ag}' referenced but missing")
+            # github-issue-creator documents a custom multi-agent design (operator-provided
+            # sub-agents); its subagent_type names are a separate domain concern, not core drift.
+            ghic = "github-issue-creator" in p.as_posix()
+            for st in _SUBAGENT.findall(line):
+                if (
+                    not ghic
+                    and st.lower() not in _CURSOR_BUILTINS
+                    and st not in agents
+                    and st not in skills
+                ):
+                    bad.append(
+                        f"{p.relative_to(REPO)}:{i}: subagent_type '{st}' not an agent/builtin"
                     )
     return bad
 

@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 
 # Learner
 
-**Canonical routing matrix:** `.claude/agents/issue-driven-coding-orchestrator.md` § Routing.
+**Canonical routing matrix:** `.claude/skills/orchestrate/SKILL.md` § Routing.
 
 ## Tier-3 Substrate Query (mandatory first step)
 
@@ -31,7 +31,7 @@ mcp__agentic-memory__query_knowledge_graph(
 ## When to run
 
 - After a **merged** PR when the team wants **Post-merge learnings extraction**: durable takeaways such as repeated fixes, new conventions, or template-worthy improvements.
-- Optional follow-up to **`pr-resolution-follow-up`** once CI and review threads are fully closed.
+- Optional follow-up to **`resolve-pr`** once CI and review threads are fully closed.
 
 ## Outputs
 
