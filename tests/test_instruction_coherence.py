@@ -210,7 +210,82 @@ def test_precedence_declaration_exists() -> None:
     )
 
 
+# ---- 9. dangling references: a referenced skill/hook must EXIST (referenced != exists) ------
+_SKILL_REF = re.compile(r"\.claude/skills/([a-z0-9][a-z0-9_-]+)")
+_HOOK_REF = re.compile(r"scripts/(hook_[a-z0-9_]+\.py)")
+# exclude: removal/historical context, legacy aliases, and template/shell variables (e.g. ${CONCEPT})  # noqa: E501
+_REF_ALLOW = re.compile(
+    r"REMOV|DELET|deleted|removed|slim-down|deprecat|no longer|SUPERSED|legacy|alias|former"
+    r"|\$\{|\$[A-Z]",
+    re.I,
+)
+
+
+# hub-owned helpers are resolved from the installed hub (~/.fleet-governance), not vendored per repo —  # noqa: E501
+# referencing them is not "dangling".
+_HUB_HELPERS = {"hook_memory_manifest.py", "hook_repo_root.py"}
+
+
+def _existing_skills():
+    d = REPO / ".claude/skills"
+    return {p.name for p in d.glob("*") if p.is_dir()} if d.is_dir() else set()
+
+
+def _dangling_surfaces():
+    # ACTIONABLE instruction surfaces an agent follows as current (NOT the vault, which accumulates
+    # historical handoff file-lists). This is the post-merge "skill that does not exist" class.
+    out = []
+    for f in ("AGENTS.md", "CLAUDE.md", "GEMINI.md"):
+        if (REPO / f).is_file():
+            out.append(REPO / f)
+    for g in (
+        "docs/00_Core/*.md",
+        ".claude/skills/*/SKILL.md",
+        ".claude/rules/*.md",
+        ".claude/agents/*.md",
+    ):
+        out += [p for p in REPO.glob(g) if p.is_file()]
+    return sorted(set(out))
+
+
+def _dangling_refs():
+    skills = _existing_skills()
+    bad = []
+    for p in _dangling_surfaces():
+        for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            if _REF_ALLOW.search(line):
+                continue
+            for sk in _SKILL_REF.findall(line):
+                if sk not in skills:
+                    bad.append(f"{p.relative_to(REPO)}:{i}: skill '{sk}' referenced but missing")
+            for hk in _HOOK_REF.findall(line):
+                if hk not in _HUB_HELPERS and not (REPO / "scripts" / hk).is_file():
+                    bad.append(
+                        f"{p.relative_to(REPO)}:{i}: hook 'scripts/{hk}' referenced but missing"
+                    )
+    return bad
+
+
+def test_no_dangling_skill_or_hook_references() -> None:
+    bad = _dangling_refs()
+    assert not bad, (
+        "Dangling references — a skill/hook is NAMED as current in a live\n"
+        "instruction surface but does NOT exist here (the post-merge 'skill\n"
+        "that does not exist' class). Fix the reference or mark it removed:\n  - "
+        + "\n  - ".join(bad)
+    )
+
+
 # ============================ NEGATIVE CONTROLS ============================
+def test_negcontrol_dangling_ref_exclusions() -> None:
+    # template variables and legacy/removed contexts are NOT flagged (false-positive guards)
+    assert _REF_ALLOW.search('[ ! -d ".claude/skills/learn-${CONCEPT}" ]')
+    assert _REF_ALLOW.search("legacy alias `.claude/skills/vault-memory`")
+    assert _REF_ALLOW.search("`scripts/hook_stop_drift_audit.py` was removed in #205")
+    # a plain current-tense reference to a non-existent target is NOT excluded → would be flagged
+    assert not _REF_ALLOW.search("run `.claude/skills/does-not-exist/SKILL.md` now")
+
+
 def test_negcontrol_polarity_flags_inversion() -> None:
     assert _line_flags(
         "Client hooks are advisory; the real enforcement is the server-side floor.",
