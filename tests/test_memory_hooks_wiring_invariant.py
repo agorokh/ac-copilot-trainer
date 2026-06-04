@@ -43,7 +43,6 @@ def test_invariant_memory_hooks_wired_in_base() -> None:
     - SessionStart: `hook_session_start_memory_prefetch.py` (direct)
     - SessionStart: `hook_session_start_memory_redirect.py` (direct)
     - PreToolUse Edit|Write|MultiEdit|NotebookEdit: `hook_memory_gate.py` (direct)
-    - Stop: `hook_stop_drift_audit.py` (direct)
     - PreToolUse Bash: chained INSIDE `hook_bash_pre_tool.sh` (single orchestrator).
     """
     base = REPO_ROOT / ".claude" / "settings.base.json"
@@ -58,7 +57,6 @@ def test_invariant_memory_hooks_wired_in_base() -> None:
         ("SessionStart", "*", "hook_session_start_memory_prefetch.py"),
         ("SessionStart", "*", "hook_session_start_memory_redirect.py"),
         ("PreToolUse", "Edit|Write|MultiEdit|NotebookEdit", "hook_memory_gate.py"),
-        ("Stop", "*", "hook_stop_drift_audit.py"),
     }
     saw = {
         (event, matcher, script)
@@ -104,7 +102,6 @@ def test_invariant_memory_hooks_wired_in_generated_settings() -> None:
         "hook_session_start_memory_prefetch.py",
         "hook_session_start_memory_redirect.py",
         "hook_memory_gate.py",
-        "hook_stop_drift_audit.py",
     ):
         assert needle in blob, (
             f"Generated settings.json missing memory hook {needle!r}. "

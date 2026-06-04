@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# OWNER: @agorokh
+# ALLOWLIST: #320 | imported helper, not hook entrypoint | @agorokh | 2026-07-01
 """Shared manifest loading for deterministic memory hook scripts.
 
 Owns the canonical default code-dir allowlist (``DEFAULT_CODE_PATH_PREFIXES`` /
@@ -155,11 +158,24 @@ def _fallback_manifest_from_text(text: str) -> dict[str, Any]:
                     repo_block[key] = []
                     repo_list_key = key
                     repo_list_indent = indent
+                elif raw_value.startswith("["):
+                    # SECURITY (#10, 2026-06-03 scan): a FLOW sequence (`code_dirs: [a, b]`) is
+                    # valid YAML but used to land here as an opaque scalar string, silently
+                    # dropping the repo's code-dir allowlist so the gate reverted to defaults and
+                    # stopped gating custom dirs. Parse it as a list.
+                    inner = raw_value[1 : raw_value.rfind("]")] if "]" in raw_value else raw_value[1:]
+                    repo_block[key] = [
+                        _yaml_scalar(item.strip()) for item in inner.split(",") if item.strip()
+                    ]
+                    repo_list_key = None
                 else:
                     repo_block[key] = _yaml_scalar(raw_value)
                     repo_list_key = None
                 continue
-            if repo_list_key and stripped.startswith("- ") and indent > repo_list_indent:
+            # SECURITY (#10): accept block-sequence items indented at the SAME column as the key
+            # (`>=`), not only strictly deeper (`>`). Same-indent `-` items are valid YAML and
+            # were previously dropped, reverting the code-dir allowlist to permissive defaults.
+            if repo_list_key and stripped.startswith("- ") and indent >= repo_list_indent:
                 repo_block.setdefault(repo_list_key, []).append(_yaml_scalar(stripped[2:].strip()))
                 continue
             # Unrecognized line inside repo: — ignore (forward-compat with new keys).
@@ -808,7 +824,29 @@ def resolve_memory_endpoints(
             # Skip closed-loopback placeholder rows (e.g. http://127.0.0.1:1):
             # they are never reachable and must not seed base_port or candidates.
             if parsed and parsed[2] not in _PLACEHOLDER_PORTS:
-                raw.append((40, "manifest", *parsed))
+                mf_scheme, mf_host, mf_port = parsed
+                if _is_loopback_host(mf_host):
+                    # SECURITY (#7 SSRF, 2026-06-03 scan): the manifest ``endpoint`` is read
+                    # from the OPERATED repo's tree (attacker-controllable). A loopback host
+                    # otherwise short-circuits the allowlist, so a repo could point the
+                    # SessionStart prefetch at ``http://127.0.0.1:<any-port>`` to probe local
+                    # services and reflect responses into the agent context. Trust a
+                    # manifest-named loopback endpoint ONLY on a registry-known loopback port
+                    # (from trusted ~/.config registries, collected above) or the default
+                    # substrate port — never an arbitrary port the repo names.
+                    allowed_loopback_ports = {
+                        port for (_pri, _lbl, _sch, _h, port) in raw if _is_loopback_host(_h)
+                    } | {_DEFAULT_SUBSTRATE_PORT}
+                    if mf_port in allowed_loopback_ports:
+                        raw.append((40, "manifest", *parsed))
+                    else:
+                        sys.stderr.write(
+                            "WARN  hook_memory_manifest: ignoring manifest loopback endpoint on "
+                            f"untrusted port {mf_port} (not registry-known); SSRF guard (#7)\n"
+                        )
+                else:
+                    # Non-loopback: validated later by the registry/bridge allowlist + HTTPS.
+                    raw.append((40, "manifest", *parsed))
 
     bridge = (env.get("AGENTIC_MEMORY_BRIDGE_HOST") or "").strip().lower()
     bridge_allowed = (
