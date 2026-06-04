@@ -10,7 +10,7 @@
 
 ## Memory-first — every named agent starts with a Tier-3 substrate query
 
-Every named agent in `.claude/agents/*.md` (issue-driven orchestrator, PR-resolution follow-up, post-merge steward, dependency review, learner) opens with a `## Tier-3 Substrate Query (mandatory first step)` section. The agent **must** issue at least one `mcp__agentic-memory__query_knowledge_graph` call with a task-specific prompt **before** any other action (routing, branch creation, classification, scoring, extraction). The runtime gate (`scripts/hook_memory_gate.py`) blocks code-path edits without a fresh, file-relevant Tier-3 stamp; the Stop drift audit (`scripts/hook_stop_drift_audit.py`) scores conversational drift post-hoc and feeds the next session via super-ego prefix. Read the canonical contract at [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md). Both Cursor and Claude Code load the same `.claude/agents/*.md` files — the procedure is unified across hosts.
+Every named agent in `.claude/agents/*.md` (issue-driven orchestrator, PR-resolution follow-up, post-merge steward, dependency review, learner) opens with a `## Tier-3 Substrate Query (mandatory first step)` section. The agent **must** issue at least one `mcp__agentic-memory__query_knowledge_graph` call with a task-specific prompt **before** any other action (routing, branch creation, classification, scoring, extraction). The runtime gate (`scripts/hook_memory_gate.py`) blocks code-path edits without a fresh, file-relevant Tier-3 stamp. Read the canonical contract at [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md). Both Cursor and Claude Code load the same `.claude/agents/*.md` files — the procedure is unified across hosts.
 
 ---
 

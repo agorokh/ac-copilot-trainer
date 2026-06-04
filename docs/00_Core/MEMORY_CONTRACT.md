@@ -17,7 +17,7 @@ Memory in this project lives in **exactly three tiers** — `AGENTS.md` (Tier 1,
 2. **Write to the right tier at SAVE.** Short operational facts → `AGENTS.md`. Structured knowledge (decisions, investigations, invariants, glossary, handoffs) → vault as small linked nodes. **Tier 3 is read-mostly from the agent surface** — it is rebuilt by re-ingesting Tier-2 on cadence; agents do not write to it directly.
 3. **Never write outside the three tiers.** The Claude Code per-user auto-memory directory (`~/.claude/projects/.../memory/`) is **deprecated for this project**. Scratch DBs, ad-hoc files, and direct substrate-store writes that bypass the vault → ingest pipeline are all side channels ([invariant](../01_Vault/AcCopilotTrainer/00_System/invariants/memory-three-tiers.md)).
 
-These rules are enforced by deterministic hooks (`scripts/hook_session_start_memory_prefetch.py`, `scripts/hook_memory_gate.py`, `scripts/hook_stop_save_reminder.py`) — not by trust in the agent's prompt-following. Failure modes are explicit and surfaced to the human.
+These rules are enforced by the deterministic PreToolUse gate (`scripts/hook_memory_gate.py`) — the only mechanism with measurable adherence (slim-down ADR, issue #205). Failure modes are explicit and surfaced to the operator at the tool-call boundary, not via Stop-hook reminders that agents learn to ignore.
 
 Simplicity policy (2026-05-24): prefer deterministic, in-band controls that directly affect execution behavior; avoid adding template-core report-only health-check layers that are frequently skipped by non-agent and human paths.
 
@@ -57,7 +57,7 @@ At session end (Stop hook) or before a Phase-C vault commit:
 
 1. **Vault SAVE** — Update `Next Session Handoff.md`. Add or update small linked nodes for any new investigation, decision, or convention per [`00_Graph_Schema.md`](../01_Vault/00_Graph_Schema.md). Prefer **new small files** over appending to monoliths.
 2. **Tier-3 substrate write** — *agents never write to the substrate directly.* No MCP write tool is exposed; the substrate is rebuilt by re-ingesting Tier-2 vault notes on cadence. Material findings (architectural decisions, recurring failure patterns, fleet-wide invariant violations) become Tier-3-discoverable by being written as Tier-2 vault nodes (small linked markdown). For `lightrag` workspaces (canonical online), the ingest-audit launchd unit picks up new vault notes within `stale_after_hours`. Operational/audit events that don't merit a knowledge node go to JSONL audit logs alongside the vault (e.g. `docs/01_Vault/<ProjectKey>/_inbox/cycles/steward-events.jsonl`).
-3. **Stop audit** — `scripts/hook_stop_save_reminder.py` logs whether (a) the session touched code paths and (b) a vault or Tier-3 write occurred. Mismatches surface to the human as a one-line reminder; they are **not blocking** (template invariant: no LLM in hooks; the audit script is deterministic but advisory).
+3. **Stop audit** — REMOVED 2026-05-20 (issue #205). Stop-hook advisory reminders cannot block per Anthropic spec, and the 2026 research in the slim-down ADR found prose-equivalent hooks emit text the agent learns to ignore. The PreToolUse gate is now the only enforcement point; LOAD-side discipline is mandatory, SAVE-side is honor-system.
 
 ---
 
@@ -120,43 +120,11 @@ Do **not** write the same fact in both vault and substrate via separate paths. T
 
 ---
 
-## Conversational drift audit (honest enforcement limit)
+## Conversational drift audit (removed 2026-05-20, issue #205)
 
-The runtime gate enforces memory grounding for **file mutations**. It has **no surface to fire on conversational responses** — when an agent answers a question, plans, or synthesizes findings, no tool call gets gated, so the substrate has no opportunity to compel memory consultation. In 2026 Claude Code architecture, there is no `PreResponse` hook to inject memory or block ungrounded responses.
+The Stop drift-audit hook (`scripts/hook_stop_drift_audit.py`) was DELETED in the slim-down sweep. Prose-equivalent hooks that emit advisory text and exit 0 do not measurably change agent behavior — they generate alarm fatigue and a "super-ego" warning the next session ignores at the same rate (slim-down ADR, issue #205).
 
-**This is a known limit.** The substrate covers file-mutation agents (Claude Code coding sessions, Cursor coding agents, Hermes Coder profile) well; it covers conversational/research/planning agents only by encouragement, not by force.
-
-To make the limit **measurable**, `scripts/hook_stop_drift_audit.py` runs as a Stop hook (advisory, never blocking — Stop hooks are command-only per template invariant) and:
-
-1. Reads the session transcript via `transcript_path` from the Stop hook payload.
-2. Filters to **substantive** assistant messages (≥ 30 words by default).
-3. For each substantive message, checks whether it cites substrate-derived content — vault paths (`docs/01_Vault/`), MCP tool calls (`mcp__agentic-memory__`), and at least two overlapping substantive tokens from the Tier-3 `.scratch/.last_memory_query` **response_body** only (common English stop-words excluded; prompt/workspace excluded to avoid false positives).
-4. Computes `drift_score = 1 - (cited / total_substantive)` in `[0.0, 1.0]`.
-5. Appends one record per session to `.scratch/memory_audit.jsonl` and emits a one-line operator advisory to stdout.
-6. **Log bounds:** SessionStart reads only the last 64 KiB of the audit log; on append, logs above 1 MiB are truncated to the last 512 KiB. Internal hook failures append a non-secret line to `.scratch/memory_drift_audit_errors.jsonl` and emit a one-line stdout advisory (Stop hook still exits 0).
-
-**The "super-ego" feedback loop** — the NEXT session's `hook_session_start_memory_prefetch.py` reads the most recent `"reason": "scored"` record from the audit log. If `drift_score ≥ CLAUDE_MEMORY_DRIFT_WARNING_THRESHOLD` (default `0.5`), it prepends a WARNING block to turn-1 stdout so the agent enters the session aware of the prior drift:
-
-```
-WARNING: previous session memory-drift audit:
-  drift_score: 0.7 (threshold 0.5) — 1/5 substantive responses cited substrate content
-  recorded: <timestamp>
-  This session: explicitly cite substrate findings (vault paths,
-  mcp__agentic-memory__ tool results, MEMORY_CONTRACT.md) in
-  substantive responses so the next audit reflects grounded reasoning.
-```
-
-This is the only feedback path that exists in 2026 Claude Code's hook architecture without a PreResponse hook (council reconciliation, 2026-05-17). It does not *force* citation. It *measures* drift and surfaces it to the next session.
-
-Knobs:
-
-- `CLAUDE_MEMORY_DRIFT_AUDIT=0` — disable the audit (silent exit).
-- `CLAUDE_MEMORY_DRIFT_AUDIT_MIN_WORDS` — substantive-message threshold (default 30).
-- `CLAUDE_MEMORY_DRIFT_AUDIT_MIN_SAMPLE` — minimum substantive count to score (default 3).
-- `CLAUDE_MEMORY_DRIFT_WARNING_THRESHOLD` — drift_score above which to warn next session (default 0.5).
-
-Heuristic accuracy: the citation check is substring-match — an agent that happens to mention `MEMORY_CONTRACT.md` in passing scores as "cited" even if the response isn't substantively grounded. Conversely, an agent that paraphrases substrate findings without naming them may score as drift. The audit is **a feedback signal, not a verdict**. Operators should review the `memory_audit.jsonl` records over multiple sessions to decide whether the substrate is working in practice for their fleet.
-
+The enforcement that survives is the **PreToolUse memory gate** (`scripts/hook_memory_gate.py`) — the only deterministic block in the chain. Honest limit (unchanged): 2026 Claude Code has no `PreResponse` hook, so purely conversational drift on file-mutation-free sessions cannot be gated. We accept that limit rather than fake it with a Stop-hook advisory.
 ## Workspace lifecycle: declared ≠ registered ≠ provisioned
 
 A Tier-3 workspace moves through **three distinct states**. Conflating them is
