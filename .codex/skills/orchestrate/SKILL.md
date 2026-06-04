@@ -48,7 +48,7 @@ Do **not** infer across domains. If multiple unrelated workspaces are visible, p
 | New repo from template | Human or `new-project-setup` skill | — | `new-project-setup` |
 | Maintainer release blurb / tag notes | Human | — | `release-notes` skill; see `docs/00_Core/MAINTAINING_THE_TEMPLATE.md` § Versioning |
 | Post-merge learnings extraction (optional) | `learner` | — | `vault-memory`; updates `AGENTS.md` tier-1 + small vault nodes |
-| Post-merge: sync, classify, vault update | `post-merge-steward` | — | `vault-memory`; `scripts/post_merge_sync.sh`, `scripts/post_merge_classify.py` |
+| Post-merge: sync, classify, vault update | `/post-merge` | — | `vault-memory`; `scripts/post_merge_sync.sh`, `scripts/post_merge_classify.py` |
 
 **Rules**
 
