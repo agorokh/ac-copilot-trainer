@@ -1,0 +1,16 @@
+name: governance-conformance
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest
+      # Public self-contained governance conformance (no private hub action available to this public repo).
+      - run: python -m pytest tests/test_public_governance_conformance.py -q
