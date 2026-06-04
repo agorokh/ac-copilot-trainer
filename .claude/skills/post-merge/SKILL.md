@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 
 # Post-merge steward
 
-**Goal:** Close the delivery gap after `pr-resolution-follow-up` exits: local repo matches `main`, branches are tidy, humans see migration/env/deps hints, and vault session files reflect what shipped — **without** the agent ever pushing to `main` directly.
+**Goal:** Close the delivery gap after `resolve-pr` exits: local repo matches `main`, branches are tidy, humans see migration/env/deps hints, and vault session files reflect what shipped — **without** the agent ever pushing to `main` directly.
 
 ## Tier-3 Substrate Query (mandatory first step)
 
@@ -121,7 +121,7 @@ mcp__agentic-memory__query_knowledge_graph(
 
 ## Routing
 
-Listed in `.claude/agents/issue-driven-coding-orchestrator.md` § Routing as the owner for post-merge sync/classify/vault updates.
+Listed in `.claude/skills/orchestrate/SKILL.md` § Routing as the owner for post-merge sync/classify/vault updates.
 
 <!-- memory-contract:start -->
 <!-- DO NOT EDIT BY HAND. Re-render with: python3 scripts/merge_memory_contract.py -->
