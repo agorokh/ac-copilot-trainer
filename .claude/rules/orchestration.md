@@ -13,7 +13,7 @@ paths:
 |------|------------|
 | Issue → branch → Draft PR → implement → `make ci-fast` | `.claude/skills/orchestrate/SKILL.md` |
 | Green CI + GraphQL `reviewThreads` + `sleep 600` | `.claude/skills/resolve-pr/SKILL.md` |
-| Dependabot / workflows / `.mcp.json` risk + merge order | `.claude/skills/dependency-review/SKILL.md` → then **pr-resolution-follow-up** for the bot loop |
+| Dependabot / workflows / `.mcp.json` risk + merge order | `.claude/skills/dependency-review/SKILL.md` → then **resolve-pr** for the bot loop |
 | Post-merge pattern extraction (optional) | `.claude/skills/learner/SKILL.md` |
 | After merge: sync main, classify diff, vault handoff | `.claude/skills/post-merge/SKILL.md` |
 
