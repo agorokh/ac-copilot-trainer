@@ -1,0 +1,11 @@
+name: governance-conformance
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: agorokh/governance-hub/.github/actions/check-conformance@main
