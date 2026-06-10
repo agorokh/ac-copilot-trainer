@@ -24,7 +24,7 @@ mcp__agentic-memory__query_knowledge_graph(
 
 **Refinement** (encouraged): after Phase B (`post_merge_classify.py`) prints the classification, issue follow-up queries naming the specific changed paths (e.g. *"prior post-merge handoff entries for `scripts/hook_*` changes"*) so Phase C SAVE matches established style.
 
-**Workspace resolution**: read `ops/memory_manifest.yml`; match the workspace whose `name` matches this repo's basename. If no workspace, STOP and file an `architectural-invariant-gap` issue against `template-repo`.
+**Workspace resolution**: do **not** resolve by manifest-basename match alone — use this repo's canonical **workspace-resolution ladder** verbatim (the one `scripts/hook_session_start_memory_prefetch.py` and [`docs/00_Core/MEMORY_CONTRACT.md`](../../../docs/00_Core/MEMORY_CONTRACT.md) define): (1) this repo's explicit `repo.tier3_workspace_id` when set; (2) else match the workspace whose `name` matches this repo's basename in `ops/memory_manifest.yml`; (3) else the `ops/memory_manifest.local.yml` overlay; (4) else `mcp__agentic-memory__list_workspaces` bridge visibility; (5) else a `resolution_exceptions` entry. If the ladder still yields none and the workspace is merely **declared-not-registered**, degrade to the documented warn-only bootstrap path (ground on Tier-2 vault; proceed without requiring a substrate stamp). **Only a genuine gap** still **STOP**s and files an `architectural-invariant-gap` issue against `template-repo` — when docs assert the workspace is already provisioned yet nothing resolves, or provisioning is observably overdue.
 
 **Surfacing**: include the substrate response under `## Pre-loaded substrate context` in your first reply, before invoking Phase A. Gives Phase C the conventions baseline.
 
