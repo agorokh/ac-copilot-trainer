@@ -17,7 +17,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Agent
 ```
 mcp__agentic-memory__query_knowledge_graph(
     prompt="post-merge classification patterns | prior <scripts|migrations|env|deps|workflows> classifications | vault handoff conventions for this repo",
-    workspace="<resolved from ops/memory_manifest.yml by repo basename>",
+    workspace="<resolved via the canonical workspace-resolution ladder — see below>",
     limit=80,
 )
 ```
