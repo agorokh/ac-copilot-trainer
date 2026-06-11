@@ -3,7 +3,7 @@
 **Status:** Template  
 **Category:** Core
 
-All agents working in this repository should treat a session as three explicit phases. This integrates with the **vault knowledge graph** ([`docs/01_Vault/00_Graph_Schema.md`](../01_Vault/00_Graph_Schema.md)) and `.claude/skills/vault-memory/SKILL.md`.
+All agents working in this repository should treat a session as three explicit phases. This integrates with the **vault knowledge graph** ([`docs/01_Vault/00_Graph_Schema.md`](../01_Vault/00_Graph_Schema.md)) and `~/.agents/skills/vault-memory/SKILL.md`.
 
 ## LOAD
 
@@ -27,7 +27,7 @@ Always run SAVE before ending a session or abandoning a thread — including aft
 
 ### Vault-only updates (labeled PR + auto-merge)
 
-**Default flow as of `template-2026.04`:** Post-merge vault handoff (and similar meta-docs under `docs/01_Vault/`) ships via a **`vault/post-merge-pr<N>`** branch labeled **`vault-only`**. The `.github/workflows/vault-automerge.yml` workflow validates that the PR's diff is strictly under `docs/01_Vault/**` and enables GitHub auto-merge. The agent **never** pushes to `main` directly. See `.claude/skills/post-merge/SKILL.md` for the full procedure and exit-code contract.
+**Default flow as of `template-2026.04`:** Post-merge vault handoff (and similar meta-docs under `docs/01_Vault/`) ships via a **`vault/post-merge-pr<N>`** branch labeled **`vault-only`**. The `.github/workflows/vault-automerge.yml` workflow validates that the PR's diff is strictly under `docs/01_Vault/**` and enables GitHub auto-merge. The agent **never** pushes to `main` directly. See `~/.agents/skills/post-merge/SKILL.md` for the full procedure and exit-code contract.
 
 If branch protection blocks the bot from auto-merging, the workflow comments on the PR and a human with merge rights lands it. Do not stack additional vault-only PRs for the same handoff while one is open — fix the existing PR.
 

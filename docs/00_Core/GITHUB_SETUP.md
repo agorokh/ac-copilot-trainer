@@ -37,7 +37,7 @@ Pushes that touch `.github/workflows/` need a token with **`workflow`** scope (e
 
 ## Claude Code: GitHub MCP
 
-The repo ships **`.mcp.json`** and **`.cursor/mcp.json`** with the **official** [GitHub MCP Server](https://github.com/github/github-mcp-server) via **Docker** (`docker run …`). The image reference is pinned by **digest** (immutable). Refresh the digest in both files when intentionally bumping the server image. Set **`GITHUB_PERSONAL_ACCESS_TOKEN`** in your environment before starting Claude Code so the container receives it — never commit the token; see `.env.example` and [TOOLCHAIN.md](TOOLCHAIN.md). Skill **`.claude/skills/new-project-setup`** walks through bootstrap including this step.
+The repo ships **`.mcp.json`** and **`.cursor/mcp.json`** with the **official** [GitHub MCP Server](https://github.com/github/github-mcp-server) via **Docker** (`docker run …`). The image reference is pinned by **digest** (immutable). Refresh the digest in both files when intentionally bumping the server image. Set **`GITHUB_PERSONAL_ACCESS_TOKEN`** in your environment before starting Claude Code so the container receives it — never commit the token; see `.env.example` and [TOOLCHAIN.md](TOOLCHAIN.md). Skill **`~/.agents/skills/new-project-setup`** walks through bootstrap including this step.
 
 **Deprecation note:** Do not use the npm package `@modelcontextprotocol/server-github` (deprecated as of April 2025 per upstream).
 

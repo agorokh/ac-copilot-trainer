@@ -41,7 +41,7 @@ If you did not use Copier, complete these manually:
 - [ ] Global find-replace `AcCopilotTrainer` → `<YourProjectKey>` in:
   - `CLAUDE.md`
   - `docs/01_Vault/00_Graph_Schema.md` (especially `relates_to` entries such as `AcCopilotTrainer/00_System/...`)
-  - `.claude/skills/vault-memory/SKILL.md` and `.cursor/skills/vault-memory/SKILL.md`
+  - (the `vault-memory` skill is machine-level at `~/.agents/skills/` and generic — do **not** edit it during bootstrap; it resolves the project key from the repo's vault layout)
   - `.claude/rules/memory.md`, `.claude/rules/invariants.md`
   - `.claude/settings.json` (Stop / hook reminder paths)
   - `.cursor/rules/invariants.mdc`, `.cursor/BUGBOT.md`

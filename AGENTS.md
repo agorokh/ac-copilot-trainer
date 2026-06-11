@@ -25,9 +25,9 @@ Every named agent in `.claude/agents/*.md` (issue-driven orchestrator, PR-resolu
 
 **Agent mesh (Claude Code):** [CLAUDE.md](CLAUDE.md) § Orchestration gives the overview. **Cursor** users: the Task tool cannot use Claude Code agent names as `subagent_type`; use `generalPurpose` + `.claude/agents/*.md` checklists per [`.cursor/rules/cursor-task-delegation.mdc`](.cursor/rules/cursor-task-delegation.mdc). Key locations:
 
-- **Routing table:** `.claude/skills/orchestrate/SKILL.md` § Routing
-- **PR/bot loop:** `/resolve-pr` owns the `sleep 600` + GraphQL `reviewThreads` procedure (see `.claude/skills/resolve-pr/SKILL.md`)
-- **Dependency/tooling PRs:** `dependency-review` fronts, then hands off to `/resolve-pr` (see `.claude/skills/dependency-review/SKILL.md`)
+- **Routing table:** `~/.agents/skills/orchestrate/SKILL.md` § Routing
+- **PR/bot loop:** `/resolve-pr` owns the `sleep 600` + GraphQL `reviewThreads` procedure (see `~/.agents/skills/resolve-pr/SKILL.md`)
+- **Dependency/tooling PRs:** `dependency-review` fronts, then hands off to `/resolve-pr` (see `~/.agents/skills/dependency-review/SKILL.md`)
 
 ---
 
@@ -80,9 +80,9 @@ Treat automated review comments as blocking unless:
 | 2 | `docs/01_Vault/AcCopilotTrainer/` (+ `docs/01_Vault/00_Graph_Schema.md`) | Linked graph: ADRs, invariants, glossary, investigations, session handoff |
 | 3 | Semantic substrate per [`ops/memory_manifest.yml`](ops/memory_manifest.yml) | **Read at LOAD** via `mcp__agentic-memory__query_knowledge_graph`; written indirectly via vault → ingest (see [`docs/00_Core/MEMORY_CONTRACT.md`](docs/00_Core/MEMORY_CONTRACT.md)) |
 
-Skill: `.claude/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`). Session protocol: `docs/00_Core/SESSION_LIFECYCLE.md`.
+Skill: `~/.agents/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/`). Session protocol: `docs/00_Core/SESSION_LIFECYCLE.md`.
 
-**Bootstrap (new copy of this template):** `.claude/skills/new-project-setup/SKILL.md` (mirrored under `.cursor/skills/`) — `/new-project-setup`.
+**Bootstrap (new copy of this template):** `~/.agents/skills/new-project-setup/SKILL.md` (mirrored under `.cursor/skills/`) — `/new-project-setup`.
 
 ---
 
