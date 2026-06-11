@@ -1,28 +1,9 @@
 {
   "mcpServers": {
-    "context7": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ]
-    },
-    "github": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "-e",
-        "GITHUB_PERSONAL_ACCESS_TOKEN",
-        "ghcr.io/github/github-mcp-server@sha256:a9dd39eec67f09ded51631c79641dd72acb4945c6391df47824fa2d508b5431b"
-      ]
-    },
     "repo-knowledge": {
-      "command": "python",
+      "command": "bash",
       "args": [
-        "-m",
-        "tools.repo_knowledge.mcp_server"
+        "scripts/mcp/repo-knowledge.sh"
       ],
       "env": {
         "REPO_KNOWLEDGE_DB": ".cache/repo_knowledge/knowledge.db"
