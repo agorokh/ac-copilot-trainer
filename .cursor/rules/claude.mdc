@@ -6,5 +6,5 @@ alwaysApply: true
 
 - Read [AGENTS.md](../AGENTS.md), [CLAUDE.md](../CLAUDE.md), and [AGENT_CORE_PRINCIPLES.md](../AGENT_CORE_PRINCIPLES.md) before substantive edits.
 - Vault memory: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap).
-- Orchestration agents: `~/~/~/.agents/skills/orchestrate/SKILL.md`, `~/~/~/.agents/skills/resolve-pr/SKILL.md`.
+- Orchestration agents: `~/~/.agents/skills/orchestrate/SKILL.md`, `~/~/.agents/skills/resolve-pr/SKILL.md`.
 - Run `make ci-fast` before claiming work is complete.
