@@ -11,4 +11,4 @@ When editing these files:
 3. **Indexes** — Link new nodes from the appropriate `_index.md` or via `relates_to` from a hub file.
 4. **Anchors** — Keep `relates_to` paths consistent with the graph schema (vault root under `docs/01_Vault/`).
 
-See also `.claude/rules/vault-editing.md` and `~/~/.agents/skills/vault-memory/SKILL.md`.
+See also `.claude/rules/vault-editing.md` and `~/.agents/skills/vault-memory/SKILL.md`.

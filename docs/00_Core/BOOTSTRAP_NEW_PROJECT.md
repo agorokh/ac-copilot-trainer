@@ -41,7 +41,7 @@ If you did not use Copier, complete these manually:
 - [ ] Global find-replace `AcCopilotTrainer` → `<YourProjectKey>` in:
   - `CLAUDE.md`
   - `docs/01_Vault/00_Graph_Schema.md` (especially `relates_to` entries such as `AcCopilotTrainer/00_System/...`)
-  - `~/~/.agents/skills/vault-memory/SKILL.md` and `~/.agents/skills/vault-memory/SKILL.md`
+  - `~/.agents/skills/vault-memory/SKILL.md` and `~/.agents/skills/vault-memory/SKILL.md`
   - `.claude/rules/memory.md`, `.claude/rules/invariants.md`
   - `.claude/settings.json` (Stop / hook reminder paths)
   - `.cursor/rules/invariants.mdc`, `.cursor/BUGBOT.md`

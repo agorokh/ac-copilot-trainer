@@ -31,7 +31,7 @@ Personal overrides: root **`.claude.local.md`** (gitignored) for preferences not
 
 ## Persistent memory (two-tier)
 
-See `~/~/.agents/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE.md`** for LOAD/SAVE.
+See `~/.agents/skills/vault-memory/SKILL.md` and **`docs/00_Core/SESSION_LIFECYCLE.md`** for LOAD/SAVE.
 
 - **Tier 1** — `AGENTS.md` (quick facts, changelog block at bottom).
 - **Tier 2** — Obsidian vault graph: `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap); schema at `docs/01_Vault/00_Graph_Schema.md` (outside the renamed folder).
@@ -87,7 +87,7 @@ Operational detail: **[docs/10_Development/10_Agent_Protocol.md](docs/10_Develop
 
 ## Orchestration
 
-Routing tables, agent roles, skills map, and delegation patterns live in **`.claude/rules/orchestration.md`** (loaded when working under `.claude/agents/` or agent docs). The canonical matrix remains **`~/~/.agents/skills/orchestrate/SKILL.md`**.
+Routing tables, agent roles, skills map, and delegation patterns live in **`.claude/rules/orchestration.md`** (loaded when working under `.claude/agents/` or agent docs). The canonical matrix remains **`~/.agents/skills/orchestrate/SKILL.md`**.
 
 ### Delegation (Cursor)
 
