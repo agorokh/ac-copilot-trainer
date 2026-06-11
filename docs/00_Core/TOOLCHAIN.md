@@ -6,7 +6,7 @@ This template assumes **multiple surfaces** for the same repo. Policies in `AGEN
 
 - **Path:** `docs/01_Vault/AcCopilotTrainer/` (rename on bootstrap).
 - **Why:** Structured ADRs, invariants, handoffs, and investigations do not belong scattered in chat logs.
-- Open the folder as an Obsidian vault so humans can browse; agents follow `~/~/.agents/skills/vault-memory/SKILL.md`.
+- Open the folder as an Obsidian vault so humans can browse; agents follow `~/~/~/.agents/skills/vault-memory/SKILL.md`.
 
 ## Cursor
 
