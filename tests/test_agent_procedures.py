@@ -37,13 +37,7 @@ SKILLS_DIR = REPO_ROOT / ".claude" / "skills"
 AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 
 # Workflow skills (collapsed 2026-05-26).
-REQUIRED_SKILLS = {
-    "orchestrate",
-    "resolve-pr",
-    "post-merge",
-    "dependency-review",
-    "learner",
-}
+REQUIRED_SKILLS: set[str] = set()  # workflow skills moved to governance-hub skills/ @ skills-v1.1.0 (machine-level ~/.agents/skills; gov-hub#24 wave-2 sweep)
 
 # The 2 remaining agents (account-intake-overview, mcp-harvest-ingestion) are
 # excluded from this strict structural contract: account-intake-overview is
