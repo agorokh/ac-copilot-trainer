@@ -312,12 +312,13 @@ def workspace_match_repo_basenames(workspace: dict[str, Any]) -> set[str]:
     return names
 
 
-def resolve_workspace(root: Path, manifest: dict[str, Any] | None) -> dict[str, Any] | None:
+def _gather_workspace_rows(manifest: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Flatten ``hosts[].workspaces`` rows from one manifest dict."""
     if not isinstance(manifest, dict):
-        return None
+        return []
     hosts = manifest.get("hosts") or []
     if not isinstance(hosts, list):
-        return None
+        return []
     candidates: list[dict[str, Any]] = []
     for host in hosts:
         if not isinstance(host, dict):
@@ -326,6 +327,27 @@ def resolve_workspace(root: Path, manifest: dict[str, Any] | None) -> dict[str, 
         if not isinstance(rows, list):
             continue
         candidates.extend(row for row in rows if isinstance(row, dict))
+    return candidates
+
+
+def resolve_workspace(
+    root: Path,
+    manifest: dict[str, Any] | None,
+    local_manifest: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """THE workspace resolver — the single implementation both the gate and the
+    SessionStart prefetch use (governance-hub#28 finding 1: the prefetch carried
+    its own copy whose basename-vs-vault_root rung order disagreed with this
+    one, so the stamp and the gate could resolve different workspaces on repos
+    without an explicit ``tier3_workspace_id``).
+
+    ``local_manifest`` is the operator-owned ``ops/memory_manifest.local.yml``
+    extension: its workspace rows are appended as candidates and its
+    ``repo.tier3_workspace_id`` overrides the tracked one (PR #175 precedence).
+    Rows keyed ``id:`` / ``workspace:`` instead of ``name:`` resolve too —
+    matching goes through ``workspace_name()``.
+    """
+    candidates = _gather_workspace_rows(manifest) + _gather_workspace_rows(local_manifest)
     if not candidates:
         return None
 
@@ -334,7 +356,17 @@ def resolve_workspace(root: Path, manifest: dict[str, Any] | None) -> dict[str, 
     # `repo.tier3_workspace_id`, that's THIS repo's canonical workspace name
     # (e.g. template-repo → "agent_factory_steward", verified live via
     # mcp__agentic-memory 2026-06-01). Wins over name/vault_root/basename match.
-    tier3_id = repo_tier3_workspace_id(manifest)
+    # A local-manifest value overrides the tracked one when both are set.
+    tier3_id: str | None = None
+    for man in (local_manifest, manifest):  # local wins
+        if not isinstance(man, dict):
+            continue
+        repo_block = man.get("repo")
+        if isinstance(repo_block, dict):
+            val = repo_block.get("tier3_workspace_id")
+            if isinstance(val, str) and val.strip():
+                tier3_id = val.strip()
+                break
     if tier3_id:
         id_keys = name_match_keys(tier3_id)
         for workspace in candidates:
@@ -345,6 +377,23 @@ def resolve_workspace(root: Path, manifest: dict[str, Any] | None) -> dict[str, 
         # SessionStart surface the standard "no workspace registered" warning
         # rather than silently degrade to a wrong workspace.
         return None
+
+    # Name/alias matching comes BEFORE the vault_root fallback — this is the
+    # documented contract ("match the workspace whose name matches this repo's
+    # basename", MEMORY_CONTRACT + the skills ladder) and the high-traffic
+    # SessionStart order. The old gate-side vault_root-first order was the
+    # outlier the unification removes (PR #33 review, codex P2): the template
+    # ships a generic tracked row with a RELATIVE vault_root that resolves
+    # inside EVERY child checkout, so vault_root-first would steal resolution
+    # from an operator's local basename row.
+    basename_keys = name_match_keys(root.name)
+    for workspace in candidates:
+        name = workspace_name(workspace)
+        if name and name_match_keys(name) & basename_keys:
+            return workspace
+    for workspace in candidates:
+        if workspace_match_repo_basenames(workspace) & basename_keys:
+            return workspace
 
     vault_matches: list[dict[str, Any]] = []
     for workspace in candidates:
@@ -358,15 +407,6 @@ def resolve_workspace(root: Path, manifest: dict[str, Any] | None) -> dict[str, 
             pass
     if len(vault_matches) == 1:
         return vault_matches[0]
-
-    basename_keys = name_match_keys(root.name)
-    for workspace in candidates:
-        name = workspace_name(workspace)
-        if name and name_match_keys(name) & basename_keys:
-            return workspace
-    for workspace in candidates:
-        if workspace_match_repo_basenames(workspace) & basename_keys:
-            return workspace
     return None
 
 
