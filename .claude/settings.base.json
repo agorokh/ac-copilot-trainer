@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/knowledge_session_summary.py\" 2>/dev/null || true"
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/knowledge_session_summary.py\" 2>/dev/null || true"
           },
           {
             "type": "command",
@@ -22,11 +22,11 @@
           },
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/bin/python3\"; [ -x \"$PY\" ] || PY=python3; \"$PY\" \"$root/scripts/hook_session_start_memory_prefetch.py\" || true"
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_session_start_memory_prefetch.py\" || true"
           },
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_session_start_memory_redirect.py\" 2>/dev/null || true"
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_session_start_memory_redirect.py\" 2>/dev/null || true"
           }
         ]
       }
@@ -37,7 +37,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "input=$(cat); file_path=$(echo \"$input\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))\" 2>/dev/null); root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); [ -z \"$file_path\" ] && exit 0; case \"$file_path\" in *docs/01_Vault/*) mkdir -p \"$root/.scratch\" && touch \"$root/.scratch/vault-dirty\";; esac; exit 0",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null || pwd); PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; input=$(cat); file_path=$(echo \"$input\" | \"$PY\" -c \"import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))\" 2>/dev/null); [ -z \"$file_path\" ] && exit 0; case \"$file_path\" in *docs/01_Vault/*) mkdir -p \"$root/.scratch\" && touch \"$root/.scratch/vault-dirty\";; esac; exit 0",
             "timeout": 5000
           }
         ]
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_post_bash_failure_hint.py\"",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_post_bash_failure_hint.py\"",
             "timeout": 5000
           }
         ]
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/bin/python3\"; [ -x \"$PY\" ] || PY=python3; \"$PY\" \"$root/scripts/hook_memory_query_stamp.py\" || true",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_memory_query_stamp.py\" || true",
             "timeout": 5000
           }
         ]
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_sql_ddl_guard.py\"",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_sql_ddl_guard.py\"",
             "timeout": 5000
           }
         ]
@@ -99,7 +99,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/hook_memory_gate.py\"",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/hook_memory_gate.py\"",
             "timeout": 5000
           }
         ]
@@ -110,7 +110,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; python3 \"$root/scripts/session_debrief.py\" 2>/dev/null || true",
+            "command": "root=\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}\"; PY=\"$root/.venv/Scripts/python.exe\"; [ -x \"$PY\" ] || PY=\"$root/.venv/bin/python\"; [ -x \"$PY\" ] || PY=\"$(command -v python3 || command -v python)\"; \"$PY\" \"$root/scripts/session_debrief.py\" 2>/dev/null || true",
             "timeout": 15000
           }
         ]
