@@ -72,7 +72,35 @@ local function probeField(struct, name)
   return true, luaType(val)
 end
 
---- Minimal JSON-ish serializer (CSP has no json.encode guarantee across builds).
+--- Escape a string for JSON: backslash first, then quote and the common control chars,
+--- so a description/path containing `"` or `\` cannot produce malformed JSON (gemini).
+local function escapeStr(s)
+  s = tostring(s)
+  s = s:gsub("\\", "\\\\")
+  s = s:gsub('"', '\\"')
+  s = s:gsub("\n", "\\n")
+  s = s:gsub("\r", "\\r")
+  s = s:gsub("\t", "\\t")
+  return s
+end
+
+--- Encode a scalar (non-table) value with the correct JSON type — numbers, booleans, and
+--- nil are NOT quoted (quoting them would emit `"true"` / `"123"`, which is wrong JSON).
+local function encodeScalar(v)
+  local tv = type(v)
+  if tv == "number" then
+    return tostring(v)
+  elseif tv == "boolean" then
+    return v and "true" or "false"
+  elseif v == nil then
+    return "null"
+  end
+  return '"' .. escapeStr(v) .. '"'
+end
+
+--- Minimal pretty-printing JSON serializer (CSP has no json.encode guarantee across
+--- builds). Type-aware scalars + escaped string keys/values; stable key order for a
+--- clean diff.
 local function encode(tbl, indent)
   indent = indent or ""
   local nextIndent = indent .. "  "
@@ -89,9 +117,9 @@ local function encode(tbl, indent)
     if type(v) == "table" then
       encoded = encode(v, nextIndent)
     else
-      encoded = '"' .. tostring(v) .. '"'
+      encoded = encodeScalar(v)
     end
-    parts[#parts + 1] = nextIndent .. '"' .. tostring(k) .. '": ' .. encoded
+    parts[#parts + 1] = nextIndent .. '"' .. escapeStr(k) .. '": ' .. encoded
   end
   return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
 end
