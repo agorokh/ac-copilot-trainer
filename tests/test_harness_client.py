@@ -141,6 +141,15 @@ def test_run_inject_unknown_scenario_returns_2() -> None:
     assert "unknown scenario" in detail["reason"]
 
 
+def test_run_inject_connect_failure_returns_1() -> None:
+    """A still-dead sidecar exhausts the retry budget and reports a clean failure (Cursor)."""
+    code, detail = asyncio.run(
+        run_inject("ws://127.0.0.1:1/", connect_retries=2, connect_retry_delay=0.01)
+    )
+    assert code == 1
+    assert "could not connect" in detail["reason"]
+
+
 def test_main_baseline_exit_zero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

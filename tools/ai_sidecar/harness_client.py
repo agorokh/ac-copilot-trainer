@@ -110,9 +110,12 @@ class HarnessClient:
     async def connect(self, *, retries: int = 1, retry_delay: float = 0.25) -> None:
         """Open the socket and start the background receive loop.
 
-        Retries the initial connect on a refused/unreachable socket so a harness launched
-        immediately after the sidecar process does not race the listen() (see
-        scripts/baseline_copilot_check.sh).
+        Pass ``retries > 1`` to tolerate a refused/unreachable socket (e.g. a sidecar still
+        booting): the connect is re-attempted ``retries`` times, ``retry_delay`` seconds
+        apart. The default (``retries=1``) is a single attempt, suited to tests that connect
+        to an already-listening sidecar; ``run_inject`` — the CLI / ``ci-drive`` path that
+        races a just-spawned sidecar — passes a generous budget so the script's fixed sleep
+        is only a head start, not the correctness guard.
         """
         from websockets.asyncio.client import connect as ws_connect
 
@@ -247,12 +250,28 @@ def evaluate_baseline_rubric(
 
 
 async def run_inject(
-    url: str, *, token: str | None = None, scenario: str = "baseline", timeout: float = 8.0
+    url: str,
+    *,
+    token: str | None = None,
+    scenario: str = "baseline",
+    timeout: float = 8.0,
+    connect_retries: int = 40,
+    connect_retry_delay: float = 0.25,
 ) -> tuple[int, dict[str, Any]]:
-    """Connect, inject ``scenario``, evaluate the rubric. Returns ``(exit_code, detail)``."""
+    """Connect, inject ``scenario``, evaluate the rubric. Returns ``(exit_code, detail)``.
+
+    Uses a generous connect-retry budget (default ~10s) so the CLI / ``ci-drive`` path is
+    robust against a sidecar that is still booting — the fixed sleep in
+    ``baseline_copilot_check.sh`` is only a head start, not the correctness guard.
+    """
     if scenario != "baseline":
         return 2, {"reason": f"unknown scenario: {scenario!r}"}
-    async with HarnessClient(url, token=token) as hc:
+    hc = HarnessClient(url, token=token)
+    try:
+        await hc.connect(retries=connect_retries, retry_delay=connect_retry_delay)
+    except OSError as exc:
+        return 1, {"reason": f"could not connect to sidecar: {exc}"}
+    try:
         ack = await hc.hello(timeout=timeout)
         if ack is None:
             return 1, {"reason": "no hello_ack from sidecar"}
@@ -264,6 +283,8 @@ async def run_inject(
                 responses.append(resp)
         ok, detail = evaluate_baseline_rubric(responses)
         return (0 if ok else 1), detail
+    finally:
+        await hc.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -275,9 +296,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--token", default=None, help="X-AC-Copilot-Token for non-loopback binds")
     p.add_argument("--inject", default="baseline", choices=["baseline"], help="scenario to inject")
     p.add_argument("--timeout", type=float, default=8.0, help="per-step timeout seconds")
+    p.add_argument(
+        "--connect-retries",
+        type=int,
+        default=40,
+        help="initial-connect attempts (~0.25s apart) to tolerate a still-booting sidecar",
+    )
     args = p.parse_args(argv)
     code, detail = asyncio.run(
-        run_inject(args.url, token=args.token, scenario=args.inject, timeout=args.timeout)
+        run_inject(
+            args.url,
+            token=args.token,
+            scenario=args.inject,
+            timeout=args.timeout,
+            connect_retries=args.connect_retries,
+        )
     )
     print(json.dumps({"pass": code == 0, "detail": detail}, indent=2))
     return code
