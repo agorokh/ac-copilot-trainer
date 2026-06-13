@@ -25,6 +25,12 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-12 — EPIC #154 filed: autonomous self-test harness)
+
+**New strategic EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154)** — let the agent test-drive the trainer with **no human in the loop** (the manual "drive a lap to validate" loop is the repo's #1 cost). Researched via 12-direction fan-out + 7 adversarial verdicts + council (Gemini/Kimi/Perplexity). ADR: [`01_Decisions/autonomous-self-test-harness.md`](../01_Decisions/autonomous-self-test-harness.md). Evidence: `.scratch/ac-selftest-grounding.md`.
+
+**Key results:** trainer is input-source-agnostic (`ac.getCar(0)`); the `ai_sidecar` WS is already a headless tap; **CSP "Custom AI" mmap** drives car 0 at 333 Hz (the in-sim driver); AC **replay ≠ re-simulation** (byte-exact stays off-sim); the 5 declared WS topics have **no producers** (false-green trap); **Tailscale SSH unsupported on Windows** → control channel must be an in-session daemon. Council pulled an **in-sim L1.5 probe + Schema Reflection forward** ("pain drops at L1.5, not L1"). Pyramid: L0 lupa → L1 WS-tap → L1.5 in-sim sequence probe → L2 daemon+CSP-Custom-AI+vision-oracle → L3 human smoke. **Operator-gated:** open a control channel onto `pc` (100.75.251.87), set it auto-login/unlocked/Steam-logged-in, confirm OneDrive AC user-data path, record ~10 human laps as fixtures. **Next:** Parts A+B+C (`phase-1`, no AC PC needed) ship the human-free logic regression first; then Part E pre-req replay probe + carcsw. Vault changes (ADR + index + this handoff) are uncommitted in the working tree — land via a `vault-only` PR.
+
 ## Resume here (2026-05-31 — PR #129 on `main`)
 
 Continue from **`main`** @ [`9454235`](https://github.com/agorokh/ac-copilot-trainer/commit/945423580ef4f5de2df4c4ad908cabb4724beab3) or newer. Local `main` fast-forwarded by post-merge steward; PR head branch deleted.
