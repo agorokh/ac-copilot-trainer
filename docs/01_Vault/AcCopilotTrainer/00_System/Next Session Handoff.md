@@ -25,6 +25,25 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-13 — EPIC #154 Parts C + A delivered + merged)
+
+**Two Mac-side foundation parts of EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) are MERGED, verified, on `main`:**
+
+| Part | PR | What it delivers |
+|------|----|------------------|
+| **C — L1 sidecar WS-tap harness** | [#157](https://github.com/agorokh/ac-copilot-trainer/pull/157) (`b4f9716`) | Headless `HarnessClient` drives a running `ai_sidecar` and asserts the deterministic coaching contract (golden == wire == pure fn). `make ci-drive` + `tools/ai_sidecar/harness_client.py`. |
+| **A — L0 off-sim lupa trace-replay** | [#158](https://github.com/agorokh/ac-copilot-trainer/pull/158) (`c435024`) | Real coaching modules under `lupa` vs synthetic traces; clean-lap false-positive guard; **schema-gated** mock (anti-hallucination); `tools/ac_harness/{trace_replay.py,dump_schema.lua,ac_schema.json}` + `tests/test_lua_trace_replay.py`. |
+
+Both layers were proven able to FAIL (planted bugs caught: atan2-shim removal, injected brake). Vault planning PR [#155](https://github.com/agorokh/ac-copilot-trainer/pull/155) (ADR + lupa-testability investigation) also merged. **~90% of the coaching-LOGIC surface is now agent-verifiable with NO game / NO human** (CI + `make ci-drive` on a Mac).
+
+**Remaining Parts D/E/F/G are OPERATOR-GATED** — their real acceptance needs the running game, which needs a control channel onto the AC PC the agent CANNOT open (Tailscale SSH is unsupported on Windows; the agent key is rejected by `pc`). Shipping the in-game Lua (Part D `publishTopic` producers, Parts E–G) without in-sim verification would violate this EPIC's own anti-false-green ethos, so it is deferred until the channel exists. **To unblock the in-game pain reduction, the operator must:**
+1. **Open an agent→`pc` (100.75.251.87) control channel** — the in-session "AC harness daemon" (#154 Part F) or an equivalent working channel.
+2. **Configure `pc` as a dedicated rig** — auto-login, lock/screensaver OFF, no RDP-disconnect, Steam stays logged in (DRM).
+3. **Confirm the OneDrive-redirected AC user-data path** + capture one ground-truth `cfg/race.ini`.
+4. **Record ~10 varied human laps** → deterministic L0/L1 fixtures (ties #115/#79).
+
+Once (1) lands, resume: Part E replay-probe → carcsw in-sim driver + **L1.5 sequence probe** (where the operator's pain actually drops) → Part D live topics → Part F daemon → Part G full loop. Open follow-up: [#156](https://github.com/agorokh/ac-copilot-trainer/issues/156) (pre-existing local-only test-isolation; CI-green).
+
 ## Resume here (2026-06-12 — EPIC #154 filed: autonomous self-test harness)
 
 **New strategic EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154)** — let the agent test-drive the trainer with **no human in the loop** (the manual "drive a lap to validate" loop is the repo's #1 cost). Researched via 12-direction fan-out + 7 adversarial verdicts + council (Gemini/Kimi/Perplexity). ADR: [`01_Decisions/autonomous-self-test-harness.md`](../01_Decisions/autonomous-self-test-harness.md). Evidence: `.scratch/ac-selftest-grounding.md`.
