@@ -94,6 +94,13 @@ line-ending = "lf"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC", "DTZ"]
 
+[tool.ruff.lint.per-file-ignores]
+# ASYNC109: the headless test-harness client (issue #154 Part C) deliberately exposes a
+# `timeout=` kwarg — `expect_coaching_response(timeout=...)` is the ergonomic API a test
+# wants; the rule's suggested asyncio.timeout wrapper would force every caller to wrap
+# each call for no real benefit. Internals still use asyncio.wait_for for the deadline.
+"tools/ai_sidecar/harness_client.py" = ["ASYNC109"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"

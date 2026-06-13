@@ -1,4 +1,4 @@
-.PHONY: all clean ci-fast ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety doppler-doctor memory-contract memory-contract-check init-knowledge bootstrap-knowledge merge-settings format lint test hooks-install hooks-run
+.PHONY: all clean ci-fast ci-conventional ci-format ci-lint ci-test ci-security ci-secrets ci-policy ci-agent-proof ci-csp-api ci-csp-ui-safety ci-drive doppler-doctor memory-contract memory-contract-check init-knowledge bootstrap-knowledge merge-settings format lint test hooks-install hooks-run
 
 PYTHON ?= python3
 
@@ -64,6 +64,13 @@ lint:
 	$(PYTHON) -m ruff check --fix src tests tools scripts
 
 test: ci-test
+
+# Layer-1 autonomous self-test (issue #154): boot a loopback sidecar and drive it with
+# the headless harness client; asserts the deterministic coaching rubric. Integration
+# smoke — kept OUT of ci-fast (which stays game-free and millisecond-fast); the same
+# logic is gated deterministically by tests/test_harness_client.py inside ci-test.
+ci-drive:
+	bash scripts/baseline_copilot_check.sh
 
 hooks-install:
 	pre-commit install
