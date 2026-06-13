@@ -26,9 +26,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The harness client retries the initial connect, so no explicit readiness probe is
-# needed; a brief head start just keeps the logs tidy.
+# run_inject retries the initial connect, so no explicit readiness probe is needed for the
+# *timing* race; a brief head start just keeps the logs tidy.
 sleep 0.5
+
+# Fail fast if the sidecar we spawned already died — e.g. the port was occupied by a stale
+# process, in which case our process exits and the harness could otherwise connect to that
+# pre-existing listener and report a misleading PASS without testing this process (Codex).
+if ! kill -0 "${SIDECAR_PID}" 2>/dev/null; then
+  echo "[baseline] FAIL: sidecar (pid ${SIDECAR_PID}) is not running — is port ${PORT} already in use?"
+  exit 1
+fi
 
 echo "[baseline] injecting scenario via harness client"
 if "${PYTHON}" -m tools.ai_sidecar.harness_client --url "${URL}" --inject baseline; then

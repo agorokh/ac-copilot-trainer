@@ -170,8 +170,8 @@ def test_evaluate_baseline_rubric_pass() -> None:
             "event": "coaching_response",
             "lap": 2,
             "improvementRanking": [
-                {"corner": 1, "priority": 0.12},
-                {"corner": 2, "priority": 0.03},
+                {"corner": 1, "metric": "min_speed_kmh", "priority": 0.12},
+                {"corner": 2, "metric": "apex_speed_kmh", "priority": 0.03},
             ],
         },
     ]
@@ -205,6 +205,35 @@ def test_evaluate_baseline_rubric_failures() -> None:
         [{"lap": 1}, {"lap": 2, "improvementRanking": [{"priority": 0.1}, {"priority": 0.9}]}]
     )
     assert not ok
+    # Non-empty + sorted but the WRONG corner/metric ranked first must fail (Codex): a
+    # single {corner: 99} item would otherwise pass and hide a ranking regression.
+    ok, _ = evaluate_baseline_rubric(
+        [
+            {"lap": 1},
+            {
+                "lap": 2,
+                "improvementRanking": [{"corner": 99, "metric": "min_speed_kmh", "priority": 0.9}],
+            },
+        ]
+    )
+    assert not ok
+
+
+def test_wait_for_preserves_out_of_order_frames() -> None:
+    """A frame that arrives before the one we're waiting for is buffered, not discarded."""
+
+    async def _run() -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        hc = HarnessClient("ws://127.0.0.1:1/")
+        await hc._queue.put({"event": "B", "n": 1})  # arrives first
+        await hc._queue.put({"event": "A", "n": 2})  # arrives second
+        # Ask for A first: B must be buffered so the later wait still finds it.
+        a = await hc.wait_for(lambda f: f.get("event") == "A", timeout=1.0)
+        b = await hc.wait_for(lambda f: f.get("event") == "B", timeout=1.0)
+        return a, b
+
+    a, b = asyncio.run(_run())
+    assert a is not None and a["n"] == 2
+    assert b is not None and b["n"] == 1
 
 
 def test_harness_send_without_connect_raises() -> None:

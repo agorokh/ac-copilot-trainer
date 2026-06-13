@@ -97,6 +97,9 @@ class HarnessClient:
             self._headers[AUTH_HEADER] = token
         self.frames: list[dict[str, Any]] = []
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Frames pulled from the queue that an earlier wait_for() did not match are kept
+        # here so a later expect_*() can still find them (out-of-order arrival robustness).
+        self._pending: list[dict[str, Any]] = []
         self._ws: Any = None
         self._recv_task: asyncio.Task[None] | None = None
 
@@ -182,7 +185,15 @@ class HarnessClient:
     async def wait_for(
         self, predicate: Callable[[dict[str, Any]], bool], *, timeout: float = 5.0
     ) -> dict[str, Any] | None:
-        """Return the next received frame matching ``predicate``, or ``None`` on timeout."""
+        """Return the next frame matching ``predicate``, or ``None`` on timeout.
+
+        Frames already received but not matched by an earlier wait are searched first and
+        consumed on match; new non-matching frames are buffered (not discarded) so a later
+        ``expect_*`` can still find a response that arrived out of order (ChatGPT Codex).
+        """
+        for i, frame in enumerate(self._pending):
+            if predicate(frame):
+                return self._pending.pop(i)
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while True:
@@ -195,6 +206,7 @@ class HarnessClient:
                 return None
             if predicate(frame):
                 return frame
+            self._pending.append(frame)
 
     async def expect_coaching_response(
         self, *, lap: int | None = None, timeout: float = 5.0
@@ -244,7 +256,15 @@ def evaluate_baseline_rubric(
     if priorities != sorted(priorities, reverse=True):
         detail["reason"] = "improvementRanking not ordered by descending priority"
         return False, detail
-    detail["top"] = ranking[0]
+    # The baseline frames are deterministic: corner 1 loses the most min-speed, so it must
+    # rank first. Asserting the exact top item makes ci-drive catch ranking regressions —
+    # a non-empty-but-wrong ranking (e.g. corner 99 first) otherwise passes (ChatGPT Codex).
+    top = ranking[0]
+    if top.get("corner") != 1 or top.get("metric") != "min_speed_kmh":
+        detail["reason"] = f"top-ranked item is not the expected corner-1 min_speed_kmh: {top}"
+        detail["top"] = top
+        return False, detail
+    detail["top"] = top
     detail["ranking_len"] = len(ranking)
     return True, detail
 
