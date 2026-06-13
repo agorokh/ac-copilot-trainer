@@ -428,3 +428,10 @@ def test_make_car_vec3_scalar_passthrough(harness: TraceReplayHarness) -> None:
     car = harness.make_car(speedKmh=50.0, look=lua_vec)
     # look is the same passthrough table; reading x works (ungated passthrough).
     assert harness.lua.eval("function(c) return c.look.x end")(car) == pytest.approx(1.0)
+
+
+def test_clean_lap_rejects_degenerate_n() -> None:
+    """synthesize_trace('clean_lap', n=1) raises a clear ValueError, not ZeroDivisionError
+    (Cursor): a single-frame trace cannot span the spline so i/(n-1) would divide by zero."""
+    with pytest.raises(ValueError, match="n >= 2"):
+        synthesize_trace("clean_lap", n=1)

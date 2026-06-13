@@ -125,6 +125,11 @@ local function encode(tbl, indent)
 end
 
 local _done = false
+-- Bounded retry on write failure: retry a few frames (the app-data folder may not be ready
+-- on the very first frame) then give up, so a permanently-bad path neither marks done with
+-- no file nor spams ac.log every frame forever (Cursor).
+local MAX_WRITE_ATTEMPTS = 30
+local _writeAttempts = 0
 
 local function dumpSchema()
   local car = ac.getCar(0)
@@ -174,13 +179,22 @@ local function dumpSchema()
   if fh then
     fh:write(encode(schema))
     fh:close()
+    _done = true
     if ac and ac.log then
       ac.log("[ac_harness] wrote schema to " .. out)
     end
-  elseif ac and ac.log then
-    ac.log("[ac_harness] FAILED to open " .. out .. " for writing")
+    return
   end
-  _done = true
+  -- Write failed: leave _done false so script.update retries on later frames, but stop after
+  -- MAX_WRITE_ATTEMPTS so a permanently-bad path gives up cleanly instead of looping (Cursor).
+  _writeAttempts = _writeAttempts + 1
+  if _writeAttempts >= MAX_WRITE_ATTEMPTS then
+    _done = true
+    if ac and ac.log then
+      ac.log(string.format(
+        "[ac_harness] FAILED to open %s for writing after %d attempts", out, _writeAttempts))
+    end
+  end
 end
 
 -- CSP app entry points. update() is called each frame; we run once.

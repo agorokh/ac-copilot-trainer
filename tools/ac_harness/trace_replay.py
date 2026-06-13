@@ -307,6 +307,8 @@ def _clean_lap(n: int = CLEAN_LAP_FRAMES) -> list[TraceFrame]:
     and realtime_coaching has nothing urgent to say (the false-positive guard).
     Speed is a gentle sinusoid well above the in-corner thresholds.
     """
+    if n < 2:
+        raise ValueError(f"_clean_lap needs n >= 2 to span the spline, got {n}")
     frames: list[TraceFrame] = []
     for i in range(n):
         sp = i / (n - 1)
