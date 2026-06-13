@@ -111,4 +111,11 @@ omit = [
   "tools/process_miner/run.py",
   "tools/repo_knowledge/mcp_server.py",
   "tools/ai_sidecar/__main__.py",
+  # Opt-in semantic-clustering module: imports sentence-transformers / sklearn
+  # (the ".[mining-semantic]" extra, NOT in ".[dev]"). Its entire test file is
+  # importorskip-gated on sklearn, so in the default ci-test venv it is
+  # structurally 0%-coverable -- same class as mcp_server.py above. Omit so the
+  # deps-gated module does not drag the aggregate floor below 80% when the
+  # optional ML stack is absent (it was already pulling ci-test under 80 on main).
+  "tools/process_miner/semantic_cluster.py",
 ]

@@ -1,0 +1,105 @@
+{
+  "_note": "CODE-DERIVED BOOTSTRAP schema, pending an on-box dump_schema.lua refresh. The car.* / sim.* field sets below were collected by grepping src/ac_copilot_trainer/modules/*.lua (and the entry script) for the fields the trainer ACTUALLY reads off ac.getCar(0) / ac.getSim(). It is intentionally a SUBSET of the full CSP ac.StateCar / ac.StateSim API: only fields the coaching brain consumes. The mock car/sim in tools/ac_harness/trace_replay.py is gated against this set so a test that drifts onto a hallucinated field fails loudly. To refresh against the real CSP API, run tools/ac_harness/dump_schema.lua in a live AC session (requires the Windows AC PC) and let it overwrite this file.",
+  "_source": "grep of src/ac_copilot_trainer/modules/*.lua and src/ac_copilot_trainer/ac_copilot_trainer.lua",
+  "_generated_by": "manual code-derivation (bootstrap); refresh via tools/ac_harness/dump_schema.lua on the AC PC",
+  "lua_runtime_note": "CSP runs LuaJIT (Lua 5.1); the harness runs lupa (Lua 5.5). See tests/fixtures/csp_luajit_parity.lua.",
+  "car": {
+    "speedKmh": {
+      "type": "number",
+      "read_by": ["telemetry.lua", "brake_detection.lua", "entry"],
+      "note": "Current speed in km/h."
+    },
+    "brake": {
+      "type": "number",
+      "read_by": ["telemetry.lua", "brake_detection.lua", "corner_analysis(via trace)"],
+      "note": "Brake pedal 0..1."
+    },
+    "gas": {
+      "type": "number",
+      "read_by": ["telemetry.lua"],
+      "note": "Throttle pedal 0..1 (stored as 'throttle' in the trace)."
+    },
+    "steer": {
+      "type": "number",
+      "read_by": ["telemetry.lua"],
+      "note": "Steering input. NOTE: car.steering does NOT exist on the C-struct and throws -- telemetry.lua uses car.steer."
+    },
+    "gear": {
+      "type": "number",
+      "read_by": ["telemetry.lua"],
+      "note": "Current gear (floored to integer)."
+    },
+    "splinePosition": {
+      "type": "number",
+      "read_by": ["telemetry.lua", "brake_detection.lua", "entry"],
+      "note": "Normalized track position 0..1."
+    },
+    "look": {
+      "type": "vec3",
+      "fields": {
+        "x": "number",
+        "y": "number",
+        "z": "number"
+      },
+      "read_by": ["brake_detection.lua"],
+      "note": "Heading vector; brake_detection uses look.x/look.z for math.atan2 heading."
+    },
+    "velocity": {
+      "type": "vec3",
+      "fields": {
+        "x": "number",
+        "y": "number",
+        "z": "number"
+      },
+      "read_by": ["brake_detection.lua"],
+      "note": "Fallback heading source (may throw on the C-struct -- read under pcall)."
+    },
+    "position": {
+      "type": "vec3",
+      "fields": {
+        "x": "number",
+        "y": "number",
+        "z": "number"
+      },
+      "read_by": ["telemetry.lua", "brake_detection.lua"],
+      "note": "World position; px/py/pz columns of the trace."
+    }
+  },
+  "sim": {
+    "isInMainMenu": {
+      "type": "boolean",
+      "read_by": ["telemetry.lua"],
+      "note": "When true, telemetry:update is a no-op."
+    },
+    "gameTime": {
+      "type": "number",
+      "read_by": ["csp_helpers.lua (simSeconds)"],
+      "note": "Preferred sim clock (seconds). simSeconds reads it under pcall."
+    },
+    "time": {
+      "type": "number",
+      "read_by": ["csp_helpers.lua (simSeconds)"],
+      "note": "Fallback sim clock if gameTime is absent."
+    },
+    "trackLengthM": {
+      "type": "number",
+      "read_by": ["lap_archive.lua", "entry"],
+      "note": "Track length in meters; used to convert spline deltas to meters."
+    },
+    "trackGripLevel": {
+      "type": "number",
+      "read_by": ["lap_archive.lua"],
+      "note": "Grip 0..1 (session metadata)."
+    },
+    "ambientTemperature": {
+      "type": "number",
+      "read_by": ["lap_archive.lua"],
+      "note": "Ambient temp (session metadata)."
+    },
+    "trackTemperature": {
+      "type": "number",
+      "read_by": ["lap_archive.lua"],
+      "note": "Track temp (session metadata)."
+    }
+  }
+}
