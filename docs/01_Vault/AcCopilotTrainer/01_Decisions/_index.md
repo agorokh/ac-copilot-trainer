@@ -20,3 +20,4 @@ Architecture Decision Records for this vault.
 - [screen-ui-stack-lvgl-touch](screen-ui-stack-lvgl-touch.md) — LVGL 8.3 + AXS15231B touch + SquareLine for the rig screen UI.
 - [screen-and-csp-apps-integration](screen-and-csp-apps-integration.md) — bridge the rig screen to Pocket Technician + Setup Exchange via same-VM API replication, not cross-VM bridging.
 - [dashboard-visual-design-figma](dashboard-visual-design-figma.md) — Figma file is source of truth for both HUD (shipped) and rig touchscreen (Phase 2); design tokens + cockpit-UX rules captured here.
+- [autonomous-self-test-harness](autonomous-self-test-harness.md) — agent test-drives the trainer with no human in the loop; layered pyramid (L0 lupa / L1 WS-tap / L1.5 in-sim probe / L2 daemon+CSP Custom AI / L3 human smoke); EPIC #154.
