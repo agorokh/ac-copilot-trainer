@@ -10,7 +10,12 @@
 set -euo pipefail
 
 PYTHON="${PYTHON:-python3}"
-PORT="${AC_HARNESS_PORT:-8771}"
+# Pick a free ephemeral port unless the operator pins one. A guaranteed-free port makes a
+# stale-listener collision impossible — otherwise, if a pre-existing sidecar held the port,
+# our spawned process would exit and the harness could connect to that stale listener and
+# report a misleading PASS (ChatGPT Codex). The kill -0 check below still catches a sidecar
+# that failed to start for any other reason.
+PORT="${AC_HARNESS_PORT:-$("${PYTHON}" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')}"
 URL="ws://127.0.0.1:${PORT}"
 
 # Deterministic coaching: keep the Ollama debrief OFF so the wire payload is stable.
@@ -30,11 +35,10 @@ trap cleanup EXIT
 # *timing* race; a brief head start just keeps the logs tidy.
 sleep 0.5
 
-# Fail fast if the sidecar we spawned already died — e.g. the port was occupied by a stale
-# process, in which case our process exits and the harness could otherwise connect to that
-# pre-existing listener and report a misleading PASS without testing this process (Codex).
+# Fail fast if the sidecar we spawned already died (failed import, bad args, etc.) so we
+# never inject against a dead/wrong listener and report a misleading PASS (ChatGPT Codex).
 if ! kill -0 "${SIDECAR_PID}" 2>/dev/null; then
-  echo "[baseline] FAIL: sidecar (pid ${SIDECAR_PID}) is not running — is port ${PORT} already in use?"
+  echo "[baseline] FAIL: sidecar (pid ${SIDECAR_PID}) did not stay up on port ${PORT}"
   exit 1
 fi
 
