@@ -1,0 +1,45 @@
+{
+  "protocol": 1,
+  "event": "coaching_response",
+  "lap": 2,
+  "hints": [
+    {
+      "kind": "general",
+      "text": "Sidecar v1: ack lap 2"
+    }
+  ],
+  "improvementRanking": [
+    {
+      "corner": 1,
+      "metric": "min_speed_kmh",
+      "last": 48.0,
+      "reference": 55.0,
+      "priority": 0.1273,
+      "suggestion": "Corner 1: carry more minimum speed (last 48.0 km/h vs reference 55.0 km/h)."
+    },
+    {
+      "corner": 1,
+      "metric": "apex_speed_kmh",
+      "last": 88.0,
+      "reference": 95.0,
+      "priority": 0.0737,
+      "suggestion": "Corner 1: raise apex speed (last 88.0 km/h vs reference 95.0 km/h)."
+    },
+    {
+      "corner": 2,
+      "metric": "min_speed_kmh",
+      "last": 58.0,
+      "reference": 60.0,
+      "priority": 0.0333,
+      "suggestion": "Corner 2: carry more minimum speed (last 58.0 km/h vs reference 60.0 km/h)."
+    },
+    {
+      "corner": 2,
+      "metric": "apex_speed_kmh",
+      "last": 99.0,
+      "reference": 102.0,
+      "priority": 0.0294,
+      "suggestion": "Corner 2: raise apex speed (last 99.0 km/h vs reference 102.0 km/h)."
+    }
+  ]
+}
