@@ -127,11 +127,17 @@ _resolve_python() {
     _resolve_command_executable "${candidate}"
     return $?
   fi
+  if [[ -n "${MCP_ROOT:-}" && -x "${MCP_ROOT}/.venv/Scripts/python.exe" ]]; then
+    # Windows venv layout (git-bash): interpreter lives under Scripts/, not bin/.
+    printf '%s' "${MCP_ROOT}/.venv/Scripts/python.exe"
+    return 0
+  fi
   if [[ -n "${MCP_ROOT:-}" && -x "${MCP_ROOT}/.venv/bin/python" ]]; then
     printf '%s' "${MCP_ROOT}/.venv/bin/python"
     return 0
   fi
-  _resolve_command_executable python3
+  # Windows has `python`, not `python3`; prefer whichever resolves.
+  _resolve_command_executable python3 || _resolve_command_executable python
 }
 
 MCP_ROOT="$(_resolve_root "AGENTIC_MEMORY_MCP_SERVERS_ROOT" "${AGENTIC_MEMORY_MCP_SERVERS_ROOT:-}" "${CHILD_REPO_ROOT}/../mcp-servers")" || exit 1
