@@ -247,3 +247,61 @@ def test_dg309_section_matcher_is_precise_and_fence_aware() -> None:
     )
     secs = _dg309_h2_section_bodies(doc)
     assert [h for h, _ in secs] == ["## Rule"], secs
+
+
+# --- All-invariant frontmatter coverage (template-repo#311) ---------------------
+# The module docstring claims every node under 00_System/invariants/ is frontmatter-
+# validated, but the legacy parametrized check only covers a fixed REQUIRED_INVARIANTS
+# set — extra on-disk nodes (e.g. session-boundary-hygiene.md) were never schema-checked.
+# This self-contained, structure-agnostic check closes that gap: it globs the single
+# invariants dir and validates the frontmatter schema of EVERY *.md node (except _index.md).
+# Self-locating + Path-only so the same block runs in the template and every renamed child.
+def _dg311_invariants_dir() -> Path:
+    vault_root = Path(__file__).resolve().parents[1] / "docs" / "01_Vault"
+    cands = sorted(p for p in vault_root.glob("*/00_System/invariants") if p.is_dir())
+    assert len(cands) == 1, (
+        f"expected exactly one vault project under {vault_root}, found "
+        f"{[str(p.relative_to(vault_root)) for p in cands]}"
+    )
+    return cands[0]
+
+
+def _dg311_read_frontmatter(path: Path) -> dict[str, str]:
+    """Tiny top-level YAML frontmatter parser — no PyYAML dependency."""
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end < 0:
+        return {}
+    out: dict[str, str] = {}
+    for line in text[4:end].splitlines():
+        if ":" not in line or line.startswith((" ", "-")):
+            continue
+        k, _, v = line.partition(":")
+        out[k.strip()] = v.strip().strip('"')
+    return out
+
+
+def _dg311_all_invariant_nodes() -> list[Path]:
+    return sorted(p for p in _dg311_invariants_dir().glob("*.md") if p.name != "_index.md")
+
+
+@pytest.mark.parametrize("node", _dg311_all_invariant_nodes(), ids=lambda p: p.name)
+def test_all_invariant_nodes_frontmatter_valid(node: Path) -> None:
+    """EVERY on-disk invariant node (not only REQUIRED_INVARIANTS) carries valid frontmatter
+    (template-repo#311). Makes the module docstring's "every node" claim true and catches a
+    malformed extra invariant before it ships."""
+    fm = _dg311_read_frontmatter(node)
+    text = node.read_text(encoding="utf-8")
+    assert fm.get("type") == "invariant", (
+        f"{node.name}: type must be 'invariant', got {fm.get('type')!r}"
+    )
+    assert fm.get("status") in {"active", "draft", "superseded"}, (
+        f"{node.name}: status must be active|draft|superseded, got {fm.get('status')!r}"
+    )
+    assert fm.get("created"), f"{node.name}: missing 'created'"
+    assert fm.get("updated"), f"{node.name}: missing 'updated'"
+    assert "part_of" in fm or "relates_to" in text, (
+        f"{node.name}: must declare part_of or relates_to"
+    )
