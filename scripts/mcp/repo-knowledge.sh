@@ -51,12 +51,16 @@ _validate_python_path() {
 if [[ -n "${REPO_KNOWLEDGE_PYTHON:-}" ]]; then
   PYTHON="$(_expand_home "${REPO_KNOWLEDGE_PYTHON}")"
   _validate_python_path "${PYTHON}" 1
+elif [[ -x "${ROOT_DIR}/.venv/Scripts/python.exe" ]]; then
+  # Windows venv layout (git-bash): interpreter lives under Scripts/, not bin/.
+  PYTHON="${ROOT_DIR}/.venv/Scripts/python.exe"
 elif [[ -x "${ROOT_DIR}/.venv/bin/python" ]]; then
   PYTHON="${ROOT_DIR}/.venv/bin/python"
 else
-  PYTHON="python3"
-  if [[ ! -x "$(command -v "${PYTHON}" 2>/dev/null)" ]]; then
-    echo "repo-knowledge.sh: Neither .venv python nor system python3 is executable" >&2
+  # Windows has `python`, not `python3`; prefer whichever resolves.
+  PYTHON="$(command -v python3 || command -v python || true)"
+  if [[ -z "${PYTHON}" ]]; then
+    echo "repo-knowledge.sh: Neither .venv python nor system python/python3 is executable" >&2
     exit 1
   fi
 fi
