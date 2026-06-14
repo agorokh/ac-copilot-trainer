@@ -38,9 +38,11 @@ ac = { log = function() end, getFolder = function() return "" end, FolderID = { 
 os = os or {}
 web = {}
 _ws_on_recv = nil
+_ws_on_open = nil
 _ws_sent = 0
 function web.socket(_u, cb, _p)
   _ws_on_recv = cb
+  _ws_on_open = _p and _p.onOpen or nil
   local s = { close = function() end }
   setmetatable(s, { __call = function(_, _data) _ws_sent = _ws_sent + 1 end })
   return s
@@ -144,5 +146,28 @@ def test_legacy_protocol_frame_does_not_unblock_v1_publish():
     )
     assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is False
     # Only a v1 hello_ack opens the v1 publish path.
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
+
+
+def test_reconnect_via_onopen_rearms_handshake():
+    # CodeRabbit Major on PR #171: with reconnect=true, CSP auto-reconnects by
+    # firing onOpen WITHOUT calling tryOpen. The handshake gating must re-arm on
+    # that new transport session, or a stale externalHelloAcked would suppress the
+    # hello retry and leave us unregistered with the sidecar's new connection.
+    rt = _runtime()
+    _open(rt)
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
+
+    # Simulate a CSP auto-reconnect: onOpen fires on the new socket, no tryOpen.
+    assert rt.eval("_ws_on_open ~= nil"), "ws_bridge must register an onOpen callback"
+    sent_before = int(rt.eval("_ws_sent"))
+    rt.execute("_ws_on_open()")
+    # Re-armed: publishing is gated again until a fresh hello_ack...
+    assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is False
+    # ...and a hello was re-announced on the new session.
+    assert int(rt.eval("_ws_sent")) > sent_before
+    # A fresh hello_ack re-registers us.
     _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
     assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True

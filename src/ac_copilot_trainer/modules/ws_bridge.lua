@@ -477,6 +477,17 @@ tryOpen = function()
   local opened = nil
   local params = {
     onOpen = function()
+      -- Re-arm v1 (and legacy) registration gating on every transport open. With
+      -- `reconnect = true` CSP auto-reconnects on a transient drop by firing this
+      -- callback WITHOUT going through `tryOpen`, so the tryOpen resets are skipped;
+      -- a stale `externalHelloAcked = true` would then suppress the hello retry on
+      -- the new socket and leave us unregistered with the sidecar's new connection
+      -- (CodeRabbit Major on PR #171).
+      sidecarProtocolReady = false
+      externalHelloAcked = false
+      externalHelloPending = true
+      helloRetryFrames = 0
+      helloSendCount = 0
       -- Always announce hello on onOpen. The previous "inline hello + dedup"
       -- pattern silently dropped the registration when the inline send fired
       -- before the socket was actually open: sendJson returned false, and
