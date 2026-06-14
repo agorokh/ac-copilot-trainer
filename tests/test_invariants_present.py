@@ -153,3 +153,97 @@ def test_issue_template_present() -> None:
     assert "Architectural invariant gap" in body
     assert "Propagation map" in body
     assert "Validation plan" in body
+
+
+# --- Required body-section contract (fleet-propagated template-repo#308 / #309) ---
+# A propagated invariant clause (e.g. secrets-from-doppler.md's "## Scope
+# (cross-repo boundary)") can be silently dropped by a later edit. template-repo#309
+# added this guard canonically, but by its charter it checks only the template's own
+# vault; test_invariants_present.py is template-propagated, so each repo must carry the
+# guard to catch drift in ITS OWN vault. This is the fleet-propagated, structure-agnostic
+# form: it self-locates the single invariants dir under docs/01_Vault/*/00_System/invariants
+# (works in the template and every renamed child) and asserts the named sections are present
+# and non-empty. It reads ONLY this repo's own vault and knows nothing of other repos.
+_DG309_REQUIRED_SECTIONS: dict[str, tuple[str, ...]] = {
+    "secrets-from-doppler.md": ("## Rule", "## Scope"),
+}
+
+
+def _dg309_invariants_dir() -> Path:
+    """Resolve the single ``<ProjectKey>/00_System/invariants`` dir under the vault by
+    globbing, so this same block runs in the template and every renamed child."""
+    vault_root = Path(__file__).resolve().parents[1] / "docs" / "01_Vault"
+    cands = sorted(p for p in vault_root.glob("*/00_System/invariants") if p.is_dir())
+    assert len(cands) == 1, (
+        f"expected exactly one vault project under {vault_root}, found "
+        f"{[str(p.relative_to(vault_root)) for p in cands]}"
+    )
+    return cands[0]
+
+
+def _dg309_heading_satisfies(heading: str, required: str) -> bool:
+    """Exact match or the required token followed by a space (allowing a trailing
+    parenthetical) — so ``## Scope (cross-repo boundary)`` counts for ``## Scope`` while
+    pluralised near-misses like ``## Scopes`` / ``## Rules`` do not."""
+    return heading == required or heading.startswith(required + " ")
+
+
+def _dg309_h2_section_bodies(text: str) -> list[tuple[str, str]]:
+    """Return ``[(heading_line, body_text), ...]`` for each ``## `` (H2) section. Lines
+    inside fenced code blocks (``` or ~~~) are body, never headings, so a ``## `` inside a
+    fence cannot cause a false section split."""
+    sections: list[tuple[str, list[str]]] = []
+    in_fence = False
+    fence_marker = ""
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marker = stripped[:3]
+            if not in_fence:
+                in_fence, fence_marker = True, marker
+            elif marker == fence_marker:
+                in_fence, fence_marker = False, ""
+            if sections:
+                sections[-1][1].append(line)
+            continue
+        if not in_fence and line.startswith("## "):
+            sections.append((line.rstrip(), []))
+        elif sections:
+            sections[-1][1].append(line)
+    return [(heading, "\n".join(body).strip()) for heading, body in sections]
+
+
+@pytest.mark.parametrize("name", sorted(_DG309_REQUIRED_SECTIONS))
+def test_required_invariant_sections_present(name: str) -> None:
+    """Each named invariant carries its required ``## `` sections with a non-empty body
+    (fleet-propagated template-repo#308 / #309 drift-guard). Guards against the silent
+    loss of a propagated clause such as secrets-from-doppler.md's ``## Scope`` cross-repo
+    boundary; present-but-empty also fails (an empty section is a silent-drift false-pass)."""
+    path = _dg309_invariants_dir() / name
+    assert path.is_file(), f"{name}: not found under {path.parent} (#308 guard)"
+    sections = _dg309_h2_section_bodies(path.read_text(encoding="utf-8"))
+    for required in _DG309_REQUIRED_SECTIONS[name]:
+        match = next(((h, b) for h, b in sections if _dg309_heading_satisfies(h, required)), None)
+        assert match is not None, (
+            f"{name}: required section {required!r} is missing "
+            "(template-repo#308 — do not drop propagated invariant sections)"
+        )
+        assert match[1], (
+            f"{name}: required section {required!r} is present but its body is empty "
+            "(an empty section is a silent-drift false-pass; #308)"
+        )
+
+
+def test_dg309_section_matcher_is_precise_and_fence_aware() -> None:
+    """The matcher rejects pluralised prefix near-misses; the parser ignores ``## `` lines
+    inside fenced code blocks (mirrors template-repo#309's own hardening test)."""
+    assert _dg309_heading_satisfies("## Scope (cross-repo boundary)", "## Scope")
+    assert _dg309_heading_satisfies("## Rule", "## Rule")
+    assert not _dg309_heading_satisfies("## Scopes", "## Scope")
+    assert not _dg309_heading_satisfies("## Rules", "## Rule")
+    doc = (
+        "# Invariant: x\n\n## Rule\n\nreal body\n\n"
+        "```sh\n## not a heading inside a fence\n```\n\nstill rule body\n"
+    )
+    secs = _dg309_h2_section_bodies(doc)
+    assert [h for h, _ in secs] == ["## Rule"], secs
