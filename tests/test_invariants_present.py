@@ -253,21 +253,25 @@ def test_dg309_section_matcher_is_precise_and_fence_aware() -> None:
 # The module docstring claims every node under 00_System/invariants/ is frontmatter-
 # validated, but the legacy parametrized check only covers a fixed REQUIRED_INVARIANTS
 # set — extra on-disk nodes (e.g. session-boundary-hygiene.md) were never schema-checked.
-# This self-contained, structure-agnostic check closes that gap: it globs the single
-# invariants dir and validates the frontmatter schema of EVERY *.md node (except _index.md).
-# Self-locating + Path-only so the same block runs in the template and every renamed child.
-def _dg311_invariants_dir() -> Path:
+# This self-contained, structure-agnostic check closes that gap: it globs every *.md node
+# under the vault's invariants dir (except _index.md) and validates the frontmatter schema.
+# Self-locating + Path-only so the same block runs in the template and every renamed child;
+# graph-edge and ISO-date checks read PARSED frontmatter (not body substrings).
+def _dg311_all_invariant_nodes() -> list[Path]:
+    """Every on-disk invariant node across the (single) vault project. Globbed at
+    collection time WITHOUT asserting, so a malformed/absent vault layout degrades to an
+    empty parametrization rather than erroring the whole module at collection — the
+    directory's existence is already asserted by the sibling structural tests."""
     vault_root = Path(__file__).resolve().parents[1] / "docs" / "01_Vault"
-    cands = sorted(p for p in vault_root.glob("*/00_System/invariants") if p.is_dir())
-    assert len(cands) == 1, (
-        f"expected exactly one vault project under {vault_root}, found "
-        f"{[str(p.relative_to(vault_root)) for p in cands]}"
+    return sorted(
+        p for p in vault_root.glob("*/00_System/invariants/*.md") if p.name != "_index.md"
     )
-    return cands[0]
 
 
 def _dg311_read_frontmatter(path: Path) -> dict[str, str]:
-    """Tiny top-level YAML frontmatter parser — no PyYAML dependency."""
+    """Tiny top-level YAML frontmatter parser — no PyYAML dependency. Block-list keys
+    (e.g. ``relates_to:`` followed by ``  - ...`` items) are captured as the key with an
+    empty value, so ``"relates_to" in fm`` correctly detects the frontmatter key."""
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         return {}
@@ -283,25 +287,39 @@ def _dg311_read_frontmatter(path: Path) -> dict[str, str]:
     return out
 
 
-def _dg311_all_invariant_nodes() -> list[Path]:
-    return sorted(p for p in _dg311_invariants_dir().glob("*.md") if p.name != "_index.md")
+def _dg311_is_iso_date(value: str) -> bool:
+    """True for a ``YYYY-MM-DD`` date (optionally with a trailing time component)."""
+    parts = value.split("-")
+    return (
+        len(parts) == 3
+        and len(parts[0]) == 4
+        and parts[0].isdigit()
+        and len(parts[1]) == 2
+        and parts[1].isdigit()
+        and len(parts[2]) >= 2
+        and parts[2][:2].isdigit()
+    )
 
 
 @pytest.mark.parametrize("node", _dg311_all_invariant_nodes(), ids=lambda p: p.name)
 def test_all_invariant_nodes_frontmatter_valid(node: Path) -> None:
     """EVERY on-disk invariant node (not only REQUIRED_INVARIANTS) carries valid frontmatter
-    (template-repo#311). Makes the module docstring's "every node" claim true and catches a
-    malformed extra invariant before it ships."""
+    (template-repo#311): type, status, ISO created/updated, and a graph edge (part_of or
+    relates_to) declared in PARSED FRONTMATTER — not merely mentioned in the body. Makes the
+    module docstring's "every node" claim true and catches a malformed extra invariant."""
     fm = _dg311_read_frontmatter(node)
-    text = node.read_text(encoding="utf-8")
     assert fm.get("type") == "invariant", (
         f"{node.name}: type must be 'invariant', got {fm.get('type')!r}"
     )
     assert fm.get("status") in {"active", "draft", "superseded"}, (
         f"{node.name}: status must be active|draft|superseded, got {fm.get('status')!r}"
     )
-    assert fm.get("created"), f"{node.name}: missing 'created'"
-    assert fm.get("updated"), f"{node.name}: missing 'updated'"
-    assert "part_of" in fm or "relates_to" in text, (
-        f"{node.name}: must declare part_of or relates_to"
+    for field in ("created", "updated"):
+        val = fm.get(field, "")
+        assert val, f"{node.name}: missing {field!r}"
+        assert _dg311_is_iso_date(val), (
+            f"{node.name}: {field} must be an ISO date (YYYY-MM-DD), got {val!r}"
+        )
+    assert "part_of" in fm or "relates_to" in fm, (
+        f"{node.name}: must declare part_of or relates_to in frontmatter (not just body text)"
     )
