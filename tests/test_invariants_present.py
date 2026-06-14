@@ -256,7 +256,8 @@ def test_dg309_section_matcher_is_precise_and_fence_aware() -> None:
 # This self-contained, structure-agnostic check closes that gap: it globs every *.md node
 # under the vault's invariants dir (except _index.md) and validates the frontmatter schema.
 # Self-locating + Path-only so the same block runs in the template and every renamed child;
-# graph-edge and ISO-date checks read PARSED frontmatter (not body substrings).
+# graph-edge reads PARSED frontmatter (not body substrings); dates are real calendar dates;
+# the parser tolerates a UTF-8 BOM and CRLF line endings.
 def _dg311_all_invariant_nodes() -> list[Path]:
     """Every on-disk invariant node across the (single) vault project. Globbed at
     collection time WITHOUT asserting, so a malformed/absent vault layout degrades to an
@@ -269,10 +270,11 @@ def _dg311_all_invariant_nodes() -> list[Path]:
 
 
 def _dg311_read_frontmatter(path: Path) -> dict[str, str]:
-    """Tiny top-level YAML frontmatter parser — no PyYAML dependency. Block-list keys
-    (e.g. ``relates_to:`` followed by ``  - ...`` items) are captured as the key with an
-    empty value, so ``"relates_to" in fm`` correctly detects the frontmatter key."""
-    text = path.read_text(encoding="utf-8")
+    """Tiny top-level YAML frontmatter parser — no PyYAML dependency. Tolerates a UTF-8
+    BOM and CRLF line endings. Block-list keys (e.g. ``relates_to:`` followed by ``  - ...``
+    items) are captured as the key with an empty value, so ``"relates_to" in fm`` correctly
+    detects the frontmatter key."""
+    text = path.read_text(encoding="utf-8").lstrip("﻿").replace("\r\n", "\n")
     if not text.startswith("---\n"):
         return {}
     end = text.find("\n---", 4)
@@ -288,23 +290,21 @@ def _dg311_read_frontmatter(path: Path) -> dict[str, str]:
 
 
 def _dg311_is_iso_date(value: str) -> bool:
-    """True for a ``YYYY-MM-DD`` date (optionally with a trailing time component)."""
-    parts = value.split("-")
-    return (
-        len(parts) == 3
-        and len(parts[0]) == 4
-        and parts[0].isdigit()
-        and len(parts[1]) == 2
-        and parts[1].isdigit()
-        and len(parts[2]) >= 2
-        and parts[2][:2].isdigit()
-    )
+    """True for a real ``YYYY-MM-DD`` calendar date — rejects impossible months/days
+    (e.g. ``2026-13-45``) — tolerating an optional trailing time component (``...THH:MM``)."""
+    from datetime import date
+
+    try:
+        date.fromisoformat(value[:10])
+    except ValueError:
+        return False
+    return len(value) == 10 or value[10:11] in ("T", " ")
 
 
-@pytest.mark.parametrize("node", _dg311_all_invariant_nodes(), ids=lambda p: p.name)
+@pytest.mark.parametrize("node", _dg311_all_invariant_nodes(), ids=lambda p: "/".join(p.parts[-4:]))
 def test_all_invariant_nodes_frontmatter_valid(node: Path) -> None:
     """EVERY on-disk invariant node (not only REQUIRED_INVARIANTS) carries valid frontmatter
-    (template-repo#311): type, status, ISO created/updated, and a graph edge (part_of or
+    (template-repo#311): type, status, real-ISO created/updated, and a graph edge (part_of or
     relates_to) declared in PARSED FRONTMATTER — not merely mentioned in the body. Makes the
     module docstring's "every node" claim true and catches a malformed extra invariant."""
     fm = _dg311_read_frontmatter(node)
@@ -318,7 +318,7 @@ def test_all_invariant_nodes_frontmatter_valid(node: Path) -> None:
         val = fm.get(field, "")
         assert val, f"{node.name}: missing {field!r}"
         assert _dg311_is_iso_date(val), (
-            f"{node.name}: {field} must be an ISO date (YYYY-MM-DD), got {val!r}"
+            f"{node.name}: {field} must be a real ISO calendar date (YYYY-MM-DD), got {val!r}"
         )
     assert "part_of" in fm or "relates_to" in fm, (
         f"{node.name}: must declare part_of or relates_to in frontmatter (not just body text)"
