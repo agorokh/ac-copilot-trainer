@@ -56,12 +56,17 @@ reader + a stdlib live-probe CLI. Subtleties locked in by adversarial review + a
 - **Open-existing-only** (not `mmap.mmap(-1, tagname=…)`, which would page-file-*create* the
   section, read zeros when AC is down, and risk clobbering AC's own telemetry).
 
-## Verified on the rig (operator-grade)
-Live-probe opened the real `Local\acpmf_graphics`/`acpmf_physics` (they persist stale after a
-session), decoded `status=OFF` + plausible packet ids, and the detector correctly refused to
-declare driving on the frozen packets, closing cleanly. **Still pending one live drive:**
-confirm `IsInPit` flips true→false at offset 160 and `AC_STATUS` flips 3→2. The agent cannot
-launch AC itself (elevated-harness/Steam-integrity constraint) → operator-gated.
+## Verified on the rig (operator-grade) — DONE, live
+First the open/parse/detect/close path was validated against the real (stale, `status=OFF`)
+sections. Then a long-lived live-probe **captured the operator's actual drive**: `AC_STATUS`
+OFF(0)→LIVE(2), packets RESET+advanced (gfx 11734→17→209, phys 37311→101→768 = fresh session,
+real 333 Hz physics), and `DrivingEntryDetector` accumulated clear 1/5→5/5 → `driving=True`.
+The observed-advancement guard worked against real frozen-then-advancing packets. `IsInPit`
+(offset 160) read `False` on track (decodes sanely). **One residual:** `IsInPit==True` (in
+pit) not yet captured (operator drove not-in-pit) — offset still grounded in 2 sources + correct
+on-track behavior. Concurrently, a sidecar WS tap (`.scratch/tap_probe.py`) received 253×
+`coaching.snapshot` with advancing telemetry — positive confirmation of the #170 fix live.
+Evidence: `.scratch/live-verification-2026-06-14.md`.
 
 ## Follow-up
 - **#177** — the ACTUATOR half (detect-and-retry launcher). Operator decision surfaced there:
