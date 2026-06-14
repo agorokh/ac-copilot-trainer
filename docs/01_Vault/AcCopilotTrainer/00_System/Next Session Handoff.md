@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-05-31T03:30:00Z
+last_updated: 2026-06-13T00:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -24,6 +24,12 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-13 — PR #165 fleet drift-guard merged; active focus UNCHANGED)
+
+**Post-merge steward sync only.** PR [#165](https://github.com/agorokh/ac-copilot-trainer/pull/165) **MERGED** `2026-06-14T01:26:41Z` as squash [`1a08d45`](https://github.com/agorokh/ac-copilot-trainer/commit/1a08d45787e96e16cc660b1b5dd9fb3e4f27e598) (branch `chore/dg309-invariant-section-guard`, deleted on sync). Single test file `tests/test_invariants_present.py` (+94 / −0): fleet-propagates the [`secrets-from-doppler`](invariants/secrets-from-doppler.md) **Scope-clause drift-guard** ([template-repo#308](https://github.com/agorokh/template-repo/issues/308) / [#309](https://github.com/agorokh/template-repo/issues/309); pilot precedent workstation-ops#510) so this repo's own CI now fails on Scope-clause drift in its vault. **No linked issues.** Post-merge classification (`post_merge_classify.py --pr 165`): **no migration / env / deps / workflow flags** — nothing to run. Local `main` fast-forwarded `b7caa5d → 1a08d45`; 7 stale gone-branches pruned.
+
+**This does NOT move the active focus.** The strategic blocker is still EPIC #154 (operator-gated) — see the resume block immediately below.
 
 ## Resume here (2026-06-13 — EPIC #154 Parts C + A delivered + merged)
 
@@ -75,6 +81,12 @@ Post-merge classification: **`post_merge_classify.py --pr 111`** (and #99/#100) 
 **Prior infra (still on `main`):** PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) template-2026.05 deterministic hooks (`5d3019e`). Operator notes: regenerate `.claude/settings.json` via `python scripts/merge_settings.py --no-local` when `settings.base.json` changes; commit-time pre-commit only (no PostToolUse ruff hooks).
 
 ---
+
+## What was delivered (PR #165 — 2026-06-13)
+
+| Area | Artefact |
+|------|----------|
+| Invariant CI guard | PR [#165](https://github.com/agorokh/ac-copilot-trainer/pull/165) merged at [`1a08d45`](https://github.com/agorokh/ac-copilot-trainer/commit/1a08d45787e96e16cc660b1b5dd9fb3e4f27e598) — `tests/test_invariants_present.py` now asserts the [`secrets-from-doppler`](invariants/secrets-from-doppler.md) **Scope clause** is present, so CI reds on Scope-clause drift in this repo's own vault. Fleet-propagated from template-repo#308/#309 (pilot workstation-ops#510). Test-only; no source/runtime change. |
 
 ## What was delivered (PR #91 — 2026-04-29)
 

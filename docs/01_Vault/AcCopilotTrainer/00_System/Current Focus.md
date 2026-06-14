@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-05-20T05:00:00Z
+last_updated: 2026-06-13T00:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -63,6 +63,7 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-13** — PR [#165](https://github.com/agorokh/ac-copilot-trainer/pull/165) **MERGED** at `1a08d45` — fleet-propagated `secrets-from-doppler` Scope-clause CI drift-guard (`tests/test_invariants_present.py`; template-repo#308/#309). Infra only; does not move Stream A / EPIC #154.
 - **2026-05-17** — PR [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) **MERGED** at `ac810c0` — PT row BB chip refresh (LVGL + Lua `chipInt` + firmware JSON int path); closes [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93).
 - **2026-05-17** — PR [#99](https://github.com/agorokh/ac-copilot-trainer/pull/99) **MERGED** at `ebdef7e` — `tools/session_journal.py` loader hardening + tests; closes [#97](https://github.com/agorokh/ac-copilot-trainer/issues/97).
 - **2026-04-29** — PR [#91](https://github.com/agorokh/ac-copilot-trainer/pull/91) **MERGED** at `35d770c` — Phase-2 LVGL rig screen Parts A–D (launcher, AC Copilot mirror, Pocket Technician, trainer/sidecar plumbing).
