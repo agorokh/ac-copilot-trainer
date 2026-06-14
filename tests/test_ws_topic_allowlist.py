@@ -49,18 +49,47 @@ _DEF_RE = re.compile(r"\bfunction\s+[\w.]*\w$")
 _STR_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
 
 
+def _strip_lua_comments(text: str) -> str:
+    """Drop Lua `--` line comments, honoring string literals (a `--` inside a string
+    is not a comment, and an escaped quote doesn't end one). This is done ONCE up
+    front so neither a commented-out call nor a commented-out `NAME = "..."` decoy
+    assignment can be mistaken for live code. Block comments (`--[[ ]]`) are out of
+    scope — no producer wraps a publishTopic call in one.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        i, in_str, cut = 0, None, None
+        while i < len(line):
+            c = line[i]
+            if in_str is not None:
+                if c == "\\":
+                    i += 1  # skip the escaped char
+                elif c == in_str:
+                    in_str = None
+            elif c in ("'", '"'):
+                in_str = c
+            elif c == "-" and line[i + 1 : i + 2] == "-":
+                cut = i
+                break
+            i += 1
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
 def _resolve_calls(text: str) -> tuple[set[str], list[str]]:
     """Return ({topics}, [unresolved]) for `.publishTopic(` CALLS in one Lua blob.
 
-    Resolves each call's first argument to a string literal: direct
-    ('"coaching.snapshot"') or via a `local NAME = "..."` / `NAME = "..."`
-    assignment in the same blob (covers coaching_publisher's `TOPIC` constant).
-    Skips the `function M.publishTopic(...)` definition and commented-out calls;
-    string literals are stripped from the line prefix first so a `--`/`function`
-    inside a string can't false-trigger those checks. A first-arg that cannot be
-    resolved to a literal is reported as unresolved so the guard fails loud rather
-    than silently passing a producer it can't verify.
+    Comments are stripped first (`_strip_lua_comments`), so commented calls and
+    commented decoy assignments are gone before parsing. Each call's first arg is
+    resolved to a string literal: direct ('"coaching.snapshot"') or via a
+    `local NAME = "..."` / `NAME = "..."` assignment in the same blob (covers
+    coaching_publisher's `TOPIC` constant). The `function M.publishTopic(...)`
+    definition is excluded via `_DEF_RE` (string literals stripped from the prefix
+    so a `function` inside a string can't false-trigger it). A first-arg that
+    cannot be resolved to a literal is reported as unresolved so the guard fails
+    loud rather than silently passing a producer it can't verify.
     """
+    text = _strip_lua_comments(text)
     topics: set[str] = set()
     unresolved: list[str] = []
     for m in _CALL_RE.finditer(text):
@@ -68,8 +97,6 @@ def _resolve_calls(text: str) -> tuple[set[str], list[str]]:
         line_end = text.find("\n", m.start())
         line = text[line_start : line_end if line_end != -1 else len(text)]
         prefix = _STR_RE.sub("", line[: m.start() - line_start])
-        if "--" in prefix:  # commented-out call (Lua --)
-            continue
         if _DEF_RE.search(prefix):  # the `function M.publishTopic(...)` definition, not a call
             continue
         arg = m.group(1)
@@ -100,8 +127,9 @@ def test_drift_guard_resolves_calls_and_skips_noise():
     """Pin the static-analysis edge cases the guard must handle (gemini/cursor on #173)."""
     text = "\n".join(
         [
+            '-- TOPIC = "decoy_wrong"',  # commented decoy assignment must NOT resolve
             'local TOPIC = "coaching.snapshot"',
-            "wsBridge.publishTopic(TOPIC, {})",  # const-resolved
+            "wsBridge.publishTopic(TOPIC, {})",  # const-resolved (to the real, non-decoy value)
             'wsBridge.publishTopic("setup.active", {})',  # inline literal
             'pcall(function() wsBridge.publishTopic("delta", {}) end)',  # call on a function() line
             'local s = "--"  wsBridge.publishTopic("session", {})',  # -- inside a string literal
@@ -112,6 +140,7 @@ def test_drift_guard_resolves_calls_and_skips_noise():
     topics, unresolved = _resolve_calls(text)
     assert unresolved == []
     assert topics == {"coaching.snapshot", "setup.active", "delta", "session"}
+    assert "decoy_wrong" not in topics and "commented_out" not in topics
 
 
 @pytest.mark.parametrize("topic", sorted(KNOWN_TOPICS))
