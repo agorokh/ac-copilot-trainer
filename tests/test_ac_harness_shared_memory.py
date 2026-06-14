@@ -70,7 +70,7 @@ def test_parse_graphics_decodes_in_pit_true():
 
 
 @pytest.mark.parametrize(
-    "raw,expected",
+    ("raw", "expected"),
     [
         (0, AcGameStatus.OFF),
         (1, AcGameStatus.REPLAY),
@@ -145,18 +145,15 @@ def test_detector_never_drives_while_in_pit():
         det.observe(_g(AcGameStatus.LIVE, in_pit=True), _phys(i), now=now)
         now += 0.03
     assert det.driving is False
-    # LIVE and physics advancing, just in the pit box -> not "stuck in menu".
-    assert det.stuck_in_menu is False
 
 
-def test_detector_never_drives_while_paused_and_reports_stuck():
+def test_detector_never_drives_while_paused():
     det = DrivingEntryDetector(required_live_reads=3)
     now = 0.0
     for i in range(10):
         det.observe(_g(AcGameStatus.PAUSE), _phys(i), now=now)
         now += 0.03
     assert det.driving is False
-    assert det.stuck_in_menu is True  # not LIVE -> stuck
 
 
 def test_detector_resets_consecutive_on_interruption():
@@ -185,7 +182,6 @@ def test_detector_stagnant_physics_blocks_driving_even_when_status_live():
     det.observe(g, _phys(2), now=0.10)  # frozen 0.07s > 0.05 -> stagnant, not clear
     assert det.consecutive_clear_reads == 0
     assert det.driving is False
-    assert det.stuck_in_menu is True
 
 
 def test_detector_advancing_physics_recovers_after_a_freeze():
@@ -213,7 +209,6 @@ def test_detector_never_declares_driving_on_frozen_first_physics_even_with_fast_
         now += 0.01
     assert det.consecutive_clear_reads == 0
     assert det.driving is False
-    assert det.stuck_in_menu is True
 
 
 def test_detector_tolerates_missing_physics_page():
@@ -255,21 +250,26 @@ def test_detector_stagnation_boundary_is_inclusive():
     just_over.observe(g, _phys(2), now=0.10)
     just_over.observe(g, _phys(2), now=0.1501)  # 0.0501 > 0.05 -> stagnant
     assert just_over.driving is False
-    assert just_over.stuck_in_menu is True
 
 
-def test_detector_stuck_false_once_driving():
+def test_detector_drives_after_baseline_then_change():
     det = DrivingEntryDetector(required_live_reads=1)
     g = _g(AcGameStatus.LIVE)
     det.observe(g, _phys(1), now=0.0)  # baseline (not clear yet)
+    assert det.driving is False
     det.observe(g, _phys(2), now=0.03)  # advances -> clear=1 -> driving
     assert det.driving is True
-    assert det.stuck_in_menu is False
 
 
-@pytest.mark.parametrize("kwargs", [{"required_live_reads": 0}, {"stagnation_seconds": 0.0}])
-def test_detector_validates_constructor_args(kwargs: dict):
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"required_live_reads": 0}, "required_live_reads must be >= 1"),
+        ({"stagnation_seconds": 0.0}, "stagnation_seconds must be > 0"),
+    ],
+)
+def test_detector_validates_constructor_args(kwargs: dict, match: str):
+    with pytest.raises(ValueError, match=match):
         DrivingEntryDetector(**kwargs)
 
 

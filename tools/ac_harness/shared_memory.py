@@ -212,7 +212,6 @@ class DrivingEntryDetector:
         # required_live_reads frozen-but-LIVE frames inside the stagnation window and falsely
         # declare driving on a stalled sim.
         self._last_packet_change: float | None = None
-        self._last_stuck = False
 
     @property
     def consecutive_clear_reads(self) -> int:
@@ -257,24 +256,18 @@ class DrivingEntryDetector:
         advancing = self._physics_advancing(now, physics_present)
         clear = graphics.is_live and not graphics.is_in_pit and advancing
         self._consecutive_clear = self._consecutive_clear + 1 if clear else 0
-        # "Stuck" reflects THIS frame (for a future actuator's "re-issue Drive while stuck"):
-        # not LIVE, or LIVE-but-physics-present-and-not-advancing (the frozen-menu case).
-        self._last_stuck = (not graphics.is_live) or (physics_present and not advancing)
 
     @property
     def driving(self) -> bool:
         """True once LIVE+not-pit+advancing has held for ``required_live_reads`` polls."""
         return self._consecutive_clear >= self.required_live_reads
 
-    @property
-    def stuck_in_menu(self) -> bool:
-        """True when the last observed frame looks like menu/pause/stall and we're not driving.
-
-        Reflects the most recent :meth:`observe` (not a separately-passed frame) so it cannot
-        disagree with the accumulator or use stale physics state. For a future detect-and-retry
-        actuator ("re-issue Drive while stuck").
-        """
-        return not self.driving and self._last_stuck
+    # NOTE: a `stuck_in_menu` signal ("not entered; re-issue Drive") is intentionally NOT
+    # exposed here. Its contract ("is the sim on the pre-drive menu vs. merely LIVE-in-pit
+    # with frozen physics?") is genuinely ambiguous and only matters to the detect-and-retry
+    # actuator, so it is deferred to #177 where it can be designed against real actuator use
+    # rather than guessed at here. This PR's detector contract is observe / driving /
+    # consecutive_clear_reads.
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +418,7 @@ class SharedMemoryReader:  # pragma: no cover - Windows/rig-only; validated via 
 
 
 def _open_reader_with_retry(  # pragma: no cover - rig-only live-probe helper
-    *, attempts: int, interval: float, clock: Callable[[], float], sleep: Callable[[float], None]
+    *, attempts: int, interval: float, sleep: Callable[[float], None]
 ) -> SharedMemoryReader:
     """Retry-open the reader until acs.exe has created the sections (live-probe helper)."""
     last_err: Exception | None = None
@@ -450,7 +443,7 @@ def _live_probe(args: argparse.Namespace) -> int:  # pragma: no cover - rig-only
     clock = time.monotonic
     try:
         reader = _open_reader_with_retry(
-            attempts=args.open_attempts, interval=args.interval, clock=clock, sleep=time.sleep
+            attempts=args.open_attempts, interval=args.interval, sleep=time.sleep
         )
     except SharedMemoryUnavailable as err:
         print(f"[probe] {err}", file=sys.stderr)
@@ -474,7 +467,7 @@ def _live_probe(args: argparse.Namespace) -> int:  # pragma: no cover - rig-only
                 f"[{i:4d}] status={status_name:<6} in_pit={g.is_in_pit!s:<5} "
                 f"gfx_pkt={g.packet_id:<8} phys_pkt={(p.packet_id if p else '—'):<8} "
                 f"clear={detector.consecutive_clear_reads}/{args.required_reads} "
-                f"driving={detector.driving} stuck={detector.stuck_in_menu}"
+                f"driving={detector.driving}"
             )
             if detector.driving:
                 print("[probe] DRIVING DETECTED — on track, out of pits.", file=sys.stderr)
