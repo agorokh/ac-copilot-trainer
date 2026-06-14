@@ -84,6 +84,13 @@ local lastCornerQueryAt = {}  ---@type table<string, number>
 local _recvQueue = {}
 --- True after first inbound JSON with matching `protocol` (CodeRabbit #78).
 local sidecarProtocolReady = false
+-- v1-registration flag: true ONLY once a non-error v1 frame (hello_ack, or a
+-- fanned action/config/state) arrives, proving the sidecar added us to its v1
+-- `_external_peers`. Deliberately SEPARATE from `sidecarProtocolReady`, which the
+-- legacy `protocol=1` recv path also sets — a legacy reply (e.g. corner_advice)
+-- must NOT unblock the v1 `state.snapshot` publish path or stop the hello retry
+-- before the v1 handshake actually completes (chatgpt-codex P1 on PR #171).
+local externalHelloAcked = false
 --- Hello-retry state for the v1 external surface: some CSP builds don't fire
 --- params.onOpen reliably on the first connect. Without a hello we never
 --- register as a v1 peer with the sidecar, and `state.snapshot` frames are
@@ -457,6 +464,7 @@ tryOpen = function()
   -- sidecar's v1 hello_ack arrives) — this is the only reliable signal that
   -- our hello landed and we're registered as an external peer.
   externalHelloPending = true
+  externalHelloAcked = false
   helloRetryFrames = 0
   helloSendCount = 0
   local function announceExternalHello()
@@ -622,6 +630,11 @@ function M.pollInbound(maxPerTick)
         -- AG_PC delivering #170 / EPIC #154 (off-sim L0/L1 can't see this).
         if t ~= "error" then
           sidecarProtocolReady = true
+          -- A non-error v1 frame proves the sidecar registered us as a v1 peer
+          -- (hello_ack, or a fanned action/config/state). This — not the
+          -- legacy-inclusive `sidecarProtocolReady` — gates the v1 publish path
+          -- and the hello-retry stop (chatgpt-codex P1 on PR #171).
+          externalHelloAcked = true
         end
         if t == "error" then
           if ac and type(ac.log) == "function" then
@@ -860,7 +873,7 @@ function M.tick(simTime)
     -- hello until we observe a v1 frame back from the sidecar (which sets
     -- `sidecarProtocolReady`), at which point we stop retrying. The sidecar's
     -- `_external_peers.add()` is idempotent so duplicate hellos are no-ops.
-    if externalHelloPending and not sidecarProtocolReady then
+    if externalHelloPending and not externalHelloAcked then
       -- Frame-paced retry (see EXTERNAL_HELLO_RETRY_FRAMES note above): immune to
       -- the frozen pit-menu sim clock that previously let the hello be attempted
       -- only once.
@@ -881,7 +894,7 @@ function M.tick(simTime)
             .. " try=" .. tostring(helloSendCount))
         end
       end
-    elseif sidecarProtocolReady then
+    elseif externalHelloAcked then
       externalHelloPending = false
     end
     return
@@ -950,11 +963,14 @@ end
 ---@return boolean
 function M.publishTopic(topic, payload)
   if type(topic) ~= "string" or topic == "" then return false end
-  -- Only publish after the v1 hello handshake completes (hello_ack seen, so we
-  -- are a registered peer). Sending a state.snapshot before registration makes
-  -- the sidecar reject it ("peer must send hello before other frame types") and
-  -- never fan it out — the in-sim failure mode found on AG_PC (#170 / #154).
-  if not M.sidecarConnected() then return false end
+  -- Only publish after the v1 hello handshake completes (a non-error v1 frame
+  -- seen, so we are in the sidecar's v1 `_external_peers`). Gate on the
+  -- v1-specific `externalHelloAcked`, NOT `sidecarConnected()`/`sidecarProtocolReady`
+  -- — the latter is also set by the legacy `protocol=1` flow, and a legacy reply
+  -- arriving before hello_ack would otherwise unblock this v1 publish path while
+  -- we are still unregistered, so the sidecar would reject the snapshot
+  -- ("peer must send hello before other frame types") (chatgpt-codex P1, PR #171).
+  if not (sock and externalHelloAcked) then return false end
   return M.sendJson({
     v = PROTOCOL_VERSION,
     type = "state.snapshot",

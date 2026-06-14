@@ -128,3 +128,21 @@ def test_hello_ack_registers_and_unblocks_publish():
     assert _connected(rt) is True
     # With the handshake complete, coaching.snapshot publishing resumes.
     assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
+
+
+def test_legacy_protocol_frame_does_not_unblock_v1_publish():
+    # chatgpt-codex P1 on PR #171: the v1 publish path must require the v1 hello
+    # handshake, not just any-protocol readiness. A legacy protocol=1 reply (e.g.
+    # corner_advice) sets the legacy `sidecarProtocolReady` but NOT v1 registration
+    # — publishTopic must stay blocked until the real v1 hello_ack arrives, else
+    # the sidecar (which only fans to v1 _external_peers) rejects the snapshot.
+    rt = _runtime()
+    _open(rt)
+    _inject(
+        rt,
+        {"protocol": 1, "event": "corner_advice", "corner": "T1", "text": "lift", "lap": 0},
+    )
+    assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is False
+    # Only a v1 hello_ack opens the v1 publish path.
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
