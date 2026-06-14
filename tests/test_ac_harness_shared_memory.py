@@ -106,76 +106,119 @@ def test_parse_physics_rejects_short_buffer():
 
 
 # --------------------------------------------------------------------------- detector
-def test_detector_declares_driving_after_required_consecutive_reads():
+# With a physics page present, the detector requires an *observed* packetId CHANGE before a
+# frame counts as "clear" (one sample can't tell advancing from frozen). So the first observe
+# is a baseline (never clear) and N consecutive clears need N+1 advancing observes.
+def _phys(packet_id: int) -> PhysicsSnapshot:
+    return PhysicsSnapshot(packet_id=packet_id)
+
+
+def test_detector_declares_driving_after_required_consecutive_clears():
     det = DrivingEntryDetector(required_live_reads=5)
-    now = 0.0
-    for i in range(4):  # one short of the threshold
-        det.observe(_g(AcGameStatus.LIVE), PhysicsSnapshot(packet_id=i), now=now)
+    det.observe(_g(AcGameStatus.LIVE), _phys(0), now=0.0)  # baseline: no change observed yet
+    assert det.consecutive_clear_reads == 0
+    now, pkt = 0.0, 0
+    for _ in range(5):
         now += 0.03
-        assert det.driving is False
-    det.observe(_g(AcGameStatus.LIVE), PhysicsSnapshot(packet_id=99), now=now)
+        pkt += 1
+        det.observe(_g(AcGameStatus.LIVE), _phys(pkt), now=now)  # each advances the packet
     assert det.consecutive_clear_reads == 5
     assert det.driving is True
+
+
+def test_detector_one_short_of_threshold_is_not_driving():
+    det = DrivingEntryDetector(required_live_reads=5)
+    det.observe(_g(AcGameStatus.LIVE), _phys(0), now=0.0)  # baseline
+    now, pkt = 0.0, 0
+    for _ in range(4):  # one advancing clear short of the threshold
+        now += 0.03
+        pkt += 1
+        det.observe(_g(AcGameStatus.LIVE), _phys(pkt), now=now)
+    assert det.consecutive_clear_reads == 4
+    assert det.driving is False
 
 
 def test_detector_never_drives_while_in_pit():
     det = DrivingEntryDetector(required_live_reads=3)
     now = 0.0
     for i in range(10):
-        det.observe(_g(AcGameStatus.LIVE, in_pit=True), PhysicsSnapshot(packet_id=i), now=now)
+        det.observe(_g(AcGameStatus.LIVE, in_pit=True), _phys(i), now=now)
         now += 0.03
     assert det.driving is False
     # LIVE and physics advancing, just in the pit box -> not "stuck in menu".
-    assert det.stuck_in_menu(_g(AcGameStatus.LIVE, in_pit=True), now=now) is False
+    assert det.stuck_in_menu is False
 
 
 def test_detector_never_drives_while_paused_and_reports_stuck():
     det = DrivingEntryDetector(required_live_reads=3)
     now = 0.0
-    g = _g(AcGameStatus.PAUSE)
     for i in range(10):
-        det.observe(g, PhysicsSnapshot(packet_id=i), now=now)
+        det.observe(_g(AcGameStatus.PAUSE), _phys(i), now=now)
         now += 0.03
     assert det.driving is False
-    assert det.stuck_in_menu(g, now=now) is True  # not LIVE -> stuck
+    assert det.stuck_in_menu is True  # not LIVE -> stuck
 
 
 def test_detector_resets_consecutive_on_interruption():
     det = DrivingEntryDetector(required_live_reads=5)
-    now = 0.0
-    for i in range(3):
-        det.observe(_g(AcGameStatus.LIVE), PhysicsSnapshot(packet_id=i), now=now)
+    det.observe(_g(AcGameStatus.LIVE), _phys(0), now=0.0)  # baseline
+    now, pkt = 0.0, 0
+    for _ in range(3):
         now += 0.03
+        pkt += 1
+        det.observe(_g(AcGameStatus.LIVE), _phys(pkt), now=now)
     assert det.consecutive_clear_reads == 3
     # A single in-pit frame (e.g. respawn to pits) resets the accumulator.
-    det.observe(_g(AcGameStatus.LIVE, in_pit=True), PhysicsSnapshot(packet_id=3), now=now)
+    det.observe(_g(AcGameStatus.LIVE, in_pit=True), _phys(pkt + 1), now=now + 0.03)
     assert det.consecutive_clear_reads == 0
     assert det.driving is False
 
 
 def test_detector_stagnant_physics_blocks_driving_even_when_status_live():
-    # AC sometimes leaves Status==LIVE on a frozen frame; the packetId-stagnation guard
-    # (CM's documented trick) must veto "driving" in that case.
+    # AC sometimes leaves Status==LIVE on a frozen frame; once advancement HAS been seen, a
+    # freeze past the window must veto "driving" (CM's documented packetId-stagnation trick).
     det = DrivingEntryDetector(required_live_reads=2, stagnation_seconds=0.05)
     g = _g(AcGameStatus.LIVE)
-    det.observe(g, PhysicsSnapshot(packet_id=1), now=0.0)  # clear=1, last change @0.0
-    det.observe(g, PhysicsSnapshot(packet_id=1), now=0.10)  # frozen 0.10s > 0.05 -> not clear
+    det.observe(g, _phys(1), now=0.0)  # baseline
+    det.observe(g, _phys(2), now=0.03)  # advanced -> clear, change @0.03
+    assert det.consecutive_clear_reads == 1
+    det.observe(g, _phys(2), now=0.10)  # frozen 0.07s > 0.05 -> stagnant, not clear
     assert det.consecutive_clear_reads == 0
     assert det.driving is False
-    assert det.stuck_in_menu(g, now=0.10) is True
+    assert det.stuck_in_menu is True
 
 
-def test_detector_advancing_physics_is_not_stagnant():
+def test_detector_advancing_physics_recovers_after_a_freeze():
+    # Non-vacuous: advance -> freeze (stagnant, resets) -> advance again (recovers to driving).
     det = DrivingEntryDetector(required_live_reads=2, stagnation_seconds=0.05)
     g = _g(AcGameStatus.LIVE)
-    det.observe(g, PhysicsSnapshot(packet_id=1), now=0.0)
-    det.observe(g, PhysicsSnapshot(packet_id=2), now=0.10)  # advanced -> change time updated
+    det.observe(g, _phys(1), now=0.0)  # baseline
+    det.observe(g, _phys(2), now=0.03)  # clear=1
+    det.observe(g, _phys(2), now=0.10)  # frozen -> stagnant -> reset to 0
+    assert det.consecutive_clear_reads == 0
+    det.observe(g, _phys(3), now=0.11)  # advances again -> clear=1
+    det.observe(g, _phys(4), now=0.13)  # clear=2 -> driving
     assert det.driving is True
 
 
+def test_detector_never_declares_driving_on_frozen_first_physics_even_with_fast_poll():
+    # Regression (review finding): if AC is LIVE-but-stalled before the first read and we poll
+    # FASTER than the stagnation window, a packet that has NEVER advanced must never count as
+    # clear — otherwise required_live_reads frozen frames inside the window declare false driving.
+    det = DrivingEntryDetector(required_live_reads=5, stagnation_seconds=0.05)
+    g = _g(AcGameStatus.LIVE)  # status LIVE, not in pit, but physics frozen at one value
+    now = 0.0
+    for _ in range(12):  # 12 reads at 10ms << 50ms window
+        det.observe(g, _phys(7), now=now)
+        now += 0.01
+    assert det.consecutive_clear_reads == 0
+    assert det.driving is False
+    assert det.stuck_in_menu is True
+
+
 def test_detector_tolerates_missing_physics_page():
-    # If only the graphics page maps, the stagnation guard is skipped and the detector
-    # relies on status + pit state alone.
+    # If only the graphics page maps, the stagnation guard is skipped and the detector relies
+    # on status + pit alone (so the first read can already be clear).
     det = DrivingEntryDetector(required_live_reads=3)
     now = 0.0
     for _ in range(3):
@@ -184,12 +227,44 @@ def test_detector_tolerates_missing_physics_page():
     assert det.driving is True
 
 
+def test_detector_tolerates_physics_becoming_unavailable():
+    # Regression (review finding): physics present -> driving, then the physics page disappears.
+    # A stale last-change timestamp must NOT wedge the detector into false stagnation.
+    det = DrivingEntryDetector(required_live_reads=3, stagnation_seconds=0.05)
+    g = _g(AcGameStatus.LIVE)
+    det.observe(g, _phys(1), now=0.0)  # baseline
+    det.observe(g, _phys(2), now=0.03)  # clear=1
+    det.observe(g, _phys(3), now=0.06)  # clear=2
+    det.observe(g, _phys(4), now=0.09)  # clear=3 -> driving
+    assert det.driving is True
+    det.observe(g, None, now=0.50)  # physics gone, huge gap; must stay clear via status+pit
+    assert det.driving is True
+
+
+def test_detector_stagnation_boundary_is_inclusive():
+    # Elapsed == stagnation_seconds still counts as advancing (<=); just over it stagnates.
+    at_boundary = DrivingEntryDetector(required_live_reads=2, stagnation_seconds=0.05)
+    g = _g(AcGameStatus.LIVE)
+    at_boundary.observe(g, _phys(1), now=0.0)  # baseline
+    at_boundary.observe(g, _phys(2), now=0.10)  # advanced -> clear, change @0.10
+    at_boundary.observe(g, _phys(2), now=0.15)  # frozen exactly 0.05 later -> still advancing
+    assert at_boundary.driving is True
+
+    just_over = DrivingEntryDetector(required_live_reads=2, stagnation_seconds=0.05)
+    just_over.observe(g, _phys(1), now=0.0)
+    just_over.observe(g, _phys(2), now=0.10)
+    just_over.observe(g, _phys(2), now=0.1501)  # 0.0501 > 0.05 -> stagnant
+    assert just_over.driving is False
+    assert just_over.stuck_in_menu is True
+
+
 def test_detector_stuck_false_once_driving():
     det = DrivingEntryDetector(required_live_reads=1)
     g = _g(AcGameStatus.LIVE)
-    det.observe(g, PhysicsSnapshot(packet_id=1), now=0.0)
+    det.observe(g, _phys(1), now=0.0)  # baseline (not clear yet)
+    det.observe(g, _phys(2), now=0.03)  # advances -> clear=1 -> driving
     assert det.driving is True
-    assert det.stuck_in_menu(g, now=0.0) is False
+    assert det.stuck_in_menu is False
 
 
 @pytest.mark.parametrize("kwargs", [{"required_live_reads": 0}, {"stagnation_seconds": 0.0}])

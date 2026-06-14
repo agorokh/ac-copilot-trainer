@@ -171,9 +171,7 @@ def parse_graphics(buf: bytes) -> GraphicsSnapshot:
 def parse_physics(buf: bytes) -> PhysicsSnapshot:
     """Decode an ``acpmf_physics`` byte buffer into a :class:`PhysicsSnapshot` (pure)."""
     if len(buf) < PHYSICS_MIN_BYTES:
-        raise ValueError(
-            f"acpmf_physics buffer too short: {len(buf)} < {PHYSICS_MIN_BYTES} bytes"
-        )
+        raise ValueError(f"acpmf_physics buffer too short: {len(buf)} < {PHYSICS_MIN_BYTES} bytes")
     packet_id = struct.unpack_from("<i", buf, PHYSICS_PACKET_ID_OFFSET)[0]
     return PhysicsSnapshot(packet_id=packet_id)
 
@@ -207,18 +205,35 @@ class DrivingEntryDetector:
         self.stagnation_seconds = stagnation_seconds
         self._consecutive_clear = 0
         self._last_physics_packet: int | None = None
+        # Time of the last *observed* physics packetId change. None until a change has been
+        # seen: a single sample is not evidence of advancement (a packet frozen on the
+        # pre-drive menu reads as one unchanging value), so physics counts as "confirmed
+        # advancing" only once it has actually moved — otherwise a fast poll could accumulate
+        # required_live_reads frozen-but-LIVE frames inside the stagnation window and falsely
+        # declare driving on a stalled sim.
         self._last_packet_change: float | None = None
+        self._last_stuck = False
 
     @property
     def consecutive_clear_reads(self) -> int:
         """How many consecutive LIVE+not-pit+advancing polls have been seen (debug/probe)."""
         return self._consecutive_clear
 
-    def _packet_stagnant(self, now: float) -> bool:
-        # Unknown before the first physics observation -> not yet stagnant.
+    def _physics_advancing(self, now: float, physics_present: bool) -> bool:
+        """Whether physics is confirmed advancing *this* frame.
+
+        True when there is no physics page to gate on (``physics_present`` is False) — the
+        detector then degrades to status+pit only, so a physics page that disappears
+        mid-session cannot wedge the detector via a stale timestamp. When physics IS present
+        it must have been observed to change at least once AND that change must be within
+        ``stagnation_seconds``: a packet that has never moved, or has frozen past the window,
+        is not advancing.
+        """
+        if not physics_present:
+            return True
         if self._last_packet_change is None:
             return False
-        return (now - self._last_packet_change) > self.stagnation_seconds
+        return (now - self._last_packet_change) <= self.stagnation_seconds
 
     def observe(
         self,
@@ -228,36 +243,38 @@ class DrivingEntryDetector:
         now: float,
     ) -> None:
         """Feed one poll. ``physics`` may be ``None`` if only the graphics page mapped."""
-        # Track physics packetId advancement for the stagnation guard.
-        if physics is not None:
-            if physics.packet_id != self._last_physics_packet:
+        physics_present = physics is not None
+        if physics_present:
+            if self._last_physics_packet is None:
+                # First physics sample: record the baseline but do NOT mark a change — one
+                # sample cannot tell "advancing" from "frozen".
+                self._last_physics_packet = physics.packet_id
+            elif physics.packet_id != self._last_physics_packet:
                 self._last_physics_packet = physics.packet_id
                 self._last_packet_change = now
-            elif self._last_packet_change is None:
-                # First observation of a (possibly already-static) packet id.
-                self._last_packet_change = now
+            # else: unchanged packet -> leave _last_packet_change so it can go stale.
 
-        clear = (
-            graphics.is_live
-            and not graphics.is_in_pit
-            and not self._packet_stagnant(now)
-        )
+        advancing = self._physics_advancing(now, physics_present)
+        clear = graphics.is_live and not graphics.is_in_pit and advancing
         self._consecutive_clear = self._consecutive_clear + 1 if clear else 0
+        # "Stuck" reflects THIS frame (for a future actuator's "re-issue Drive while stuck"):
+        # not LIVE, or LIVE-but-physics-present-and-not-advancing (the frozen-menu case).
+        self._last_stuck = (not graphics.is_live) or (physics_present and not advancing)
 
     @property
     def driving(self) -> bool:
         """True once LIVE+not-pit+advancing has held for ``required_live_reads`` polls."""
         return self._consecutive_clear >= self.required_live_reads
 
-    def stuck_in_menu(self, graphics: GraphicsSnapshot, *, now: float) -> bool:
-        """True when not driving and the latest frame looks like menu/pause/stall.
+    @property
+    def stuck_in_menu(self) -> bool:
+        """True when the last observed frame looks like menu/pause/stall and we're not driving.
 
-        Useful for a future actuator loop ("re-issue Drive while stuck"); independent of the
-        consecutive-read accumulator so a single bad frame reports stuck immediately.
+        Reflects the most recent :meth:`observe` (not a separately-passed frame) so it cannot
+        disagree with the accumulator or use stale physics state. For a future detect-and-retry
+        actuator ("re-issue Drive while stuck").
         """
-        if self.driving:
-            return False
-        return (not graphics.is_live) or self._packet_stagnant(now)
+        return not self.driving and self._last_stuck
 
 
 # ---------------------------------------------------------------------------
@@ -324,9 +341,16 @@ def _win_open_existing(name: str, length: int) -> _MappedSection:  # pragma: no 
     kernel32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
     kernel32.MapViewOfFile.restype = wintypes.LPVOID
     kernel32.MapViewOfFile.argtypes = [
-        wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, ctypes.c_size_t
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_size_t,
     ]
 
+    # restype=HANDLE/LPVOID (both c_void_p) makes ctypes return a Python int for a valid
+    # pointer and None for NULL — so `if handle` / `if not address` is the correct, portable
+    # NULL check (a wrapped `.value` would not exist here; verified on this build).
     handle = None
     for tag in (name, f"Local\\{name}"):
         handle = kernel32.OpenFileMappingW(file_map_read, False, tag)
@@ -360,6 +384,10 @@ class SharedMemoryReader:  # pragma: no cover - Windows/rig-only; validated via 
                 self._physics = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
             except SharedMemoryUnavailable:
                 self._physics = None  # degrade gracefully; detector tolerates physics=None
+            except BaseException:
+                # Any unexpected failure opening physics must not leak the graphics handle.
+                self._graphics.close()
+                raise
 
     def read_graphics(self) -> GraphicsSnapshot:
         return parse_graphics(self._graphics.read(GRAPHICS_MIN_BYTES))
@@ -431,7 +459,7 @@ def _live_probe(args: argparse.Namespace) -> int:  # pragma: no cover - rig-only
                 f"[{i:4d}] status={status_name:<6} in_pit={g.is_in_pit!s:<5} "
                 f"gfx_pkt={g.packet_id:<8} phys_pkt={(p.packet_id if p else '—'):<8} "
                 f"clear={detector.consecutive_clear_reads}/{args.required_reads} "
-                f"driving={detector.driving} stuck={detector.stuck_in_menu(g, now=now)}"
+                f"driving={detector.driving} stuck={detector.stuck_in_menu}"
             )
             if detector.driving:
                 print("[probe] DRIVING DETECTED — on track, out of pits.", file=sys.stderr)
