@@ -21,6 +21,7 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from tools.ai_sidecar import observability
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
@@ -169,8 +170,10 @@ async def _send_ollama_followup(
         raise
     except Exception as e:
         logger.info("ollama followup raised: %s", e)
+        observability.METRICS.record_ollama_followup_error()
         return
     if followup is None:
+        observability.METRICS.record_ollama_followup_error()
         return
     await _safe_send(websocket, followup)
 
@@ -227,6 +230,64 @@ def make_token_check(token: str | None):
         return None
 
     return _check
+
+
+def _http_response(connection: Any, status: HTTPStatus, body: str, content_type: str) -> Any:
+    """Build a plain HTTP response on the WS connection with a SINGLE, correct
+    Content-Type.
+
+    ``connection.respond(status, text)`` hardcodes ``Content-Type: text/plain;
+    charset=utf-8`` and ``Headers.__setitem__`` APPENDS rather than replaces
+    (websockets 16.0, verified), so a naive ``resp.headers["Content-Type"] = …``
+    yields TWO Content-Type headers and a strict Prometheus scraper / JSON client
+    mis-parses the body. Delete the default header first, then set ours.
+    """
+    response = connection.respond(status, body)
+    try:
+        del response.headers["Content-Type"]
+    except KeyError:  # pragma: no cover - defensive across websockets versions
+        pass
+    response.headers["Content-Type"] = content_type
+    return response
+
+
+def make_process_request(token: str | None):
+    """Build the websockets ``process_request`` hook.
+
+    Serves ``GET /health`` and ``GET /metrics`` as plain HTTP on the SAME port as
+    the WebSocket (short-circuiting the upgrade so they never enter ``_handler``),
+    then falls through to the optional token gate (``make_token_check``) for a real
+    WS upgrade. Installed UNCONDITIONALLY so the endpoints work even in the default
+    no-token loopback deployment. Read-only ``/health`` and ``/metrics`` carry no
+    secrets and are intentionally not token-gated; the WS upgrade keeps the gate.
+    """
+    token_check = make_token_check(token)
+
+    def _process_request(connection: Any, request: Any) -> Any:
+        path = (getattr(request, "path", "") or "").split("?", 1)[0]
+        if path in ("/health", "/healthz"):
+            return _http_response(
+                connection,
+                HTTPStatus.OK,
+                observability.build_health_json(len(_external_peers)),
+                observability.HEALTH_CONTENT_TYPE,
+            )
+        if path == "/metrics":
+            return _http_response(
+                connection,
+                HTTPStatus.OK,
+                observability.build_metrics_text(len(_external_peers)),
+                observability.PROM_CONTENT_TYPE,
+            )
+        # A rig-screen sighting rides on the WS upgrade (the client header is on
+        # the upgrade request), then the token gate applies if one is configured.
+        if request.headers.get(CLIENT_HEADER):
+            observability.METRICS.note_screen_seen()
+        if token_check is not None:
+            return token_check(connection, request)
+        return None
+
+    return _process_request
 
 
 async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
@@ -383,8 +444,13 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             # Route any envelope-like payload through external validation so
             # malformed `{v,type}` frames get explicit protocol errors.
             if ENVELOPE_KEY in data or TYPE_KEY in data:
+                observability.METRICS.record_message("type", str(data.get(TYPE_KEY, "?")))
                 await _handle_external_frame(websocket, data)
                 continue
+
+            event_name = data.get("event")
+            if event_name is not None:
+                observability.METRICS.record_message("event", str(event_name))
 
             if data.get("event") == "lap_complete":
                 hints = data.get("coachingHints") or []
@@ -475,7 +541,7 @@ async def _run(host: str, port: int, reply_coaching: bool, token: str | None) ->
     except ImportError as e:
         raise SystemExit('websockets is required. Install: pip install -e ".[coaching]"') from e
 
-    process_request = make_token_check(token)
+    process_request = make_process_request(token)
     _external_peers.clear()
     try:
         async with websockets.serve(
