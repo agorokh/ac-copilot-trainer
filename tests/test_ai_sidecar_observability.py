@@ -88,7 +88,12 @@ def test_metrics_endpoint_single_content_type_and_core_series() -> None:
     assert "ac_sidecar_connected_peers 0" in body
 
 
-def test_ws_upgrade_still_works_and_counts_messages() -> None:
+def test_ws_upgrade_still_works_and_counts_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Isolate the process-global counters so the exact-count assertion below is
+    # deterministic under the full suite (other tests also drive hello frames
+    # through the shared METRICS singleton, which would push the count past 1).
+    monkeypatch.setattr(obs, "METRICS", obs.SidecarMetrics())
+
     async def _run() -> str:
         async with _running_sidecar() as port:
             async with ws_connect(f"ws://127.0.0.1:{port}") as client:
