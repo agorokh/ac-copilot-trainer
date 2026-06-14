@@ -25,6 +25,19 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-14 latest — #175 VERIFIED LIVE + #170 confirmed during a real drive; Part D step 2 (#180) teed up)
+
+**Operator-grade LIVE verification (captured during the operator's actual drive; evidence in `.scratch/live-verification-2026-06-14.md`):**
+- **#175 shared-memory oracle — VERIFIED (gate met).** The armed live-probe captured the real session: `AC_STATUS` OFF(0,stale)→LIVE(2); packets RESET+advanced (gfx 11734→17→209, phys 37311→101→768 = fresh session, real 333 Hz physics); `DrivingEntryDetector` accumulated clear 1/5→5/5 → `driving=True`. The **observed-advancement logic (review finding #8 fix) worked against real frozen-then-advancing packets.** `IsInPit` (offset 160) read `False` on track (decodes sanely). **One residual:** `IsInPit==True` (in pit) not yet captured (operator drove not-in-pit); offset still grounded in 2 sources + correct on-track behavior.
+- **#170 — CONFIRMED POSITIVE.** `.scratch/tap_probe.py 25` → 255 frames, **253 × `coaching.snapshot`** received (trainer publishes → sidecar fans out → tap receives), payload advancing (`current_speed_kmh` 14→158→105), state `placeholder/no_reference` (fresh session, no ref lap). Earlier #170 was only confirmed by *absence* of the rejection storm; now confirmed by *receipt*.
+- **#173 allow-list working live:** tap got `error: unknown topic: 'coaching'` (non-canonical rejected) while `coaching.snapshot` still arrived (topic-agnostic fan-out).
+
+**Next deliverable — Part D step 2 / [#180](https://github.com/agorokh/ac-copilot-trainer/issues/180) (FILED, branch `feat/issue-180-wire-topic-producers` created):** wire the 5 declared-but-silent topic producers (`connection/session/lap/delta/tire_temps`). Live tap confirmed the gap (only `coaching.snapshot` flows). **Design (from reading the wiring):** model on `modules/coaching_publisher.lua` (rate-limited `publishIfDue` → `wsBridge.publishTopic`); wire into `ac_copilot_trainer.lua` `script.update` next to the `coachingPublisher.publishIfDue` call at **line ~1616** (context: `car`, `sim`, `rtView`, `dt`, `wsBridge`, `state`); the **`lap`** producer hooks the existing lap boundary at **line ~1766** (`lc > state.lastLapCount`; use `car.previousLapTimeMs`); **`delta`** reuses `delta.deltaSecondsAtSpline(state.bestSortedTrace, sp, currentElapsedMs)`; **`tire_temps`** reuses the `tire_monitor.new()` instance temps. **Gate:** headless lupa tests now, but **hold as DRAFT until in-game verification** — re-tap a drive (`.scratch/tap_probe.py`) and confirm all 5 topics flow (needs an operator AC relaunch to pick up the new symlinked producer code, then a drive). Anti-false-green ethos.
+
+**Also filed:** [#177](https://github.com/agorokh/ac-copilot-trainer/issues/177) actuator half (operator decision: ViGEm vs pit-normalization), [#179](https://github.com/agorokh/ac-copilot-trainer/issues/179) `vault/` ci-policy papercut.
+
+---
+
 ## Resume here (2026-06-14 late — #175 shared-memory oracle MERGED; menu-skip CRACKED as a race, not a setting)
 
 **This iteration's merge:** **[#175](https://github.com/agorokh/ac-copilot-trainer/issues/175) / PR [#176](https://github.com/agorokh/ac-copilot-trainer/pull/176) MERGED (squash `c13d425`)** — the EPIC #154 L2 **"shared-memory oracle"** (`tools/ac_harness/shared_memory.py`): pure `acpmf_graphics`/`acpmf_physics` parsers + a `DrivingEntryDetector` state machine (CI-tested, any OS) + a Windows `OpenFileMappingW` reader + a stdlib live-probe CLI. 24 tests, module cov 97%. Hardened by a 5-lens adversarial review + a rig smoke test (which caught a 64-bit ctypes `OverflowError` in `close()` CI never could).
