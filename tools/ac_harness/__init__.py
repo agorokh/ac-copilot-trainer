@@ -11,6 +11,16 @@ synthesizer, and the schema-gated mock ``ac``/``car``/``sim`` tables.
 
 from __future__ import annotations
 
+from tools.ac_harness.shared_memory import (
+    AcGameStatus,
+    DrivingEntryDetector,
+    GraphicsSnapshot,
+    PhysicsSnapshot,
+    SharedMemoryReader,
+    SharedMemoryUnavailable,
+    parse_graphics,
+    parse_physics,
+)
 from tools.ac_harness.trace_replay import (
     AcSchema,
     SchemaViolationError,
@@ -20,9 +30,19 @@ from tools.ac_harness.trace_replay import (
 )
 
 __all__ = [
+    # L0 off-sim trace-replay harness.
     "AcSchema",
     "SchemaViolationError",
     "TraceReplayHarness",
     "load_schema",
     "synthesize_trace",
+    # L2 in-sim shared-memory oracle (on-track-entry detector).
+    "AcGameStatus",
+    "DrivingEntryDetector",
+    "GraphicsSnapshot",
+    "PhysicsSnapshot",
+    "SharedMemoryReader",
+    "SharedMemoryUnavailable",
+    "parse_graphics",
+    "parse_physics",
 ]
