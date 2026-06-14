@@ -44,42 +44,74 @@ _CALL_RE = re.compile(r"\.publishTopic\s*\(\s*([^\s,)]+)")
 # A definition's receiver is immediately preceded by `function ` (e.g.
 # `function M.publishTopic(`); a call's receiver is not.
 _DEF_RE = re.compile(r"\bfunction\s+[\w.]*\w$")
+# Lua string literals, stripped from a line prefix before the comment/definition
+# checks so a `--` or `function` INSIDE a string can't false-trigger them (cursor #173).
+_STR_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+
+
+def _resolve_calls(text: str) -> tuple[set[str], list[str]]:
+    """Return ({topics}, [unresolved]) for `.publishTopic(` CALLS in one Lua blob.
+
+    Resolves each call's first argument to a string literal: direct
+    ('"coaching.snapshot"') or via a `local NAME = "..."` / `NAME = "..."`
+    assignment in the same blob (covers coaching_publisher's `TOPIC` constant).
+    Skips the `function M.publishTopic(...)` definition and commented-out calls;
+    string literals are stripped from the line prefix first so a `--`/`function`
+    inside a string can't false-trigger those checks. A first-arg that cannot be
+    resolved to a literal is reported as unresolved so the guard fails loud rather
+    than silently passing a producer it can't verify.
+    """
+    topics: set[str] = set()
+    unresolved: list[str] = []
+    for m in _CALL_RE.finditer(text):
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        line_end = text.find("\n", m.start())
+        line = text[line_start : line_end if line_end != -1 else len(text)]
+        prefix = _STR_RE.sub("", line[: m.start() - line_start])
+        if "--" in prefix:  # commented-out call (Lua --)
+            continue
+        if _DEF_RE.search(prefix):  # the `function M.publishTopic(...)` definition, not a call
+            continue
+        arg = m.group(1)
+        if arg[:1] in ("'", '"'):
+            topics.add(arg.strip("'\""))
+            continue
+        vm = re.search(rf"\b{re.escape(arg)}\s*=\s*['\"]([^'\"]+)['\"]", text)
+        if vm:
+            topics.add(vm.group(1))
+        else:
+            unresolved.append(f"publishTopic({arg}) — first arg not a resolvable string literal")
+    return topics, unresolved
 
 
 def _produced_topics() -> tuple[dict[str, str], list[str]]:
-    """Return ({topic: 'file'} , [unresolved-call descriptions]).
-
-    Resolves the first argument of each `.publishTopic(` CALL to a string literal:
-    direct ('"coaching.snapshot"') or via a `local NAME = "..."` / `NAME = "..."`
-    assignment in the same file (covers coaching_publisher's `TOPIC` constant).
-    A first-arg that cannot be resolved to a literal is reported as unresolved so
-    the guard fails loud rather than silently passing a producer it can't verify.
-    """
+    """Aggregate `_resolve_calls` across every Lua source → ({topic: file}, [unresolved])."""
     topics: dict[str, str] = {}
     unresolved: list[str] = []
     for f in sorted(LUA_SRC.rglob("*.lua")):
-        text = f.read_text(encoding="utf-8")
-        for m in _CALL_RE.finditer(text):
-            line_start = text.rfind("\n", 0, m.start()) + 1
-            line_end = text.find("\n", m.start())
-            line = text[line_start : line_end if line_end != -1 else len(text)]
-            prefix = line[: m.start() - line_start]  # line text before this `.publishTopic(`
-            if "--" in prefix:  # commented-out call (Lua --)
-                continue
-            if _DEF_RE.search(prefix):  # the `function M.publishTopic(...)` definition, not a call
-                continue
-            arg = m.group(1)
-            if arg[:1] in ("'", '"'):
-                topics[arg.strip("'\"")] = f.name
-                continue
-            vm = re.search(rf"\b{re.escape(arg)}\s*=\s*['\"]([^'\"]+)['\"]", text)
-            if vm:
-                topics[vm.group(1)] = f.name
-            else:
-                unresolved.append(
-                    f"{f.name}: publishTopic({arg}) — first arg not a resolvable string literal"
-                )
+        found, unres = _resolve_calls(f.read_text(encoding="utf-8"))
+        for topic in found:
+            topics[topic] = f.name
+        unresolved += [f"{f.name}: {u}" for u in unres]
     return topics, unresolved
+
+
+def test_drift_guard_resolves_calls_and_skips_noise():
+    """Pin the static-analysis edge cases the guard must handle (gemini/cursor on #173)."""
+    text = "\n".join(
+        [
+            'local TOPIC = "coaching.snapshot"',
+            "wsBridge.publishTopic(TOPIC, {})",  # const-resolved
+            'wsBridge.publishTopic("setup.active", {})',  # inline literal
+            'pcall(function() wsBridge.publishTopic("delta", {}) end)',  # call on a function() line
+            'local s = "--"  wsBridge.publishTopic("session", {})',  # -- inside a string literal
+            '-- wsBridge.publishTopic("commented_out", {})',  # commented-out call
+            "function M.publishTopic(topic, payload) end",  # the definition
+        ]
+    )
+    topics, unresolved = _resolve_calls(text)
+    assert unresolved == []
+    assert topics == {"coaching.snapshot", "setup.active", "delta", "session"}
 
 
 @pytest.mark.parametrize("topic", sorted(KNOWN_TOPICS))
