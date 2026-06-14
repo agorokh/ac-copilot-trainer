@@ -25,6 +25,21 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-14 late — #175 shared-memory oracle MERGED; menu-skip CRACKED as a race, not a setting)
+
+**This iteration's merge:** **[#175](https://github.com/agorokh/ac-copilot-trainer/issues/175) / PR [#176](https://github.com/agorokh/ac-copilot-trainer/pull/176) MERGED (squash `c13d425`)** — the EPIC #154 L2 **"shared-memory oracle"** (`tools/ac_harness/shared_memory.py`): pure `acpmf_graphics`/`acpmf_physics` parsers + a `DrivingEntryDetector` state machine (CI-tested, any OS) + a Windows `OpenFileMappingW` reader + a stdlib live-probe CLI. 24 tests, module cov 97%. Hardened by a 5-lens adversarial review + a rig smoke test (which caught a 64-bit ctypes `OverflowError` in `close()` CI never could).
+
+**⚠️ SUPERSEDES the prior "the unlock = enable CM 'start session immediately' ONCE" claim below.** Research (workflow `wojtj94jq`, cross-confirmed vs CM open source + CSP changelogs) proved the pre-drive menu-skip is a **timing/state RACE, not a setting** — there is **NO CSP/CM config knob**, and with CSP active CM *delegates* the skip to CSP's new-menu system (so the toggle, already ON, does nothing more). It flips run-to-run on the same car/track and **depends on prior pit state** (operator hunch CONFIRMED). Full write-up: [`03_Investigations/menu-skip-race-and-shared-memory-oracle-2026-06-14`](../03_Investigations/menu-skip-race-and-shared-memory-oracle-2026-06-14.md). **Deterministic fix = detect-and-retry keyed on `acpmf_graphics` (AC_STATUS PAUSE→LIVE + IsInPit=false, packetId advancing)** mirroring CM's `ImmediateStart.SetSharedListener`. #175 is the DETECT half.
+
+**Operator levers / decisions surfaced (non-blocking):**
+- **Immediate workaround (no code):** end the prior race by returning to pits / fully quit AC between runs → consistent entry state.
+- **Rig verification PENDING (operator-gated):** on the next drive run `python tools/ac_harness/shared_memory.py` while AC sits on the pre-drive menu then drives — confirm `status` flips 3→2 and `is_in_pit` true→false at offset 160. (Agent can't launch AC: elevated-harness/Steam-integrity constraint. Probe already validated open+parse+detect+close against the real stale sections.)
+- **[#177](https://github.com/agorokh/ac-copilot-trainer/issues/177) filed — the ACTUATOR half** (detect-and-retry launcher). Decision: ViGEm `__CM_START_SESSION` pulse (vault flags ViGEm "last resort") vs. pit-state normalization + cold restart. Recommend (A) normalization first, add ViGEm only if insufficient. `stuck_in_menu` intentionally NOT shipped in #175 (ambiguous; belongs with the actuator).
+
+**Still open:** Part D step 2 (wire the 5 declared topic producers) — deferred until in-game verification is reliable; the oracle is the enabler. Part E (carcsw in-sim driver + L1.5).
+
+---
+
 ## Resume here (2026-06-14 — autonomous run ON the rig AG_PC; #170 handshake fix + Part D step-1 MERGED; EPIC #154 rig-local unlock)
 
 **This run's merges:** #171 (#170 trainer v1 hello handshake), #172 (vault SAVE), #173 (Part D step 1 — WS topic allow-list reconciliation + `publishTopic` drift-guard, squash `c093aa1`). All on `main`, CI-green, bot threads resolved.
