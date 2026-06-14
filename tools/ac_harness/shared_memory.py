@@ -287,6 +287,37 @@ class DrivingEntryDetector:
 # before acs.exe and interfering with AC's own telemetry. Open-existing-only fails cleanly
 # when AC is not running and never touches AC's section other than to read it.
 # ---------------------------------------------------------------------------
+def _kernel32():  # pragma: no cover - rig-only
+    """A kernel32 handle with ALL used functions' argtypes/restype declared.
+
+    Declaring argtypes is mandatory on 64-bit: without them ctypes defaults each argument to
+    C ``int``, and passing a 64-bit pointer (HANDLE / mapped address) overflows it
+    (``OverflowError: int too long to convert``) — which previously crashed ``close()`` and
+    the error-path ``CloseHandle``. restype=HANDLE/LPVOID (both ``c_void_p``) also makes ctypes
+    return a Python ``int`` for a valid pointer and ``None`` for NULL, so ``if handle`` /
+    ``if not address`` is the correct, portable NULL check.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenFileMappingW.restype = wintypes.HANDLE
+    k.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+    k.MapViewOfFile.restype = wintypes.LPVOID
+    k.MapViewOfFile.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_size_t,
+    ]
+    k.UnmapViewOfFile.restype = wintypes.BOOL
+    k.UnmapViewOfFile.argtypes = [wintypes.LPCVOID]
+    k.CloseHandle.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    return k
+
+
 class _MappedSection:  # pragma: no cover - Windows ctypes view; validated on the rig
     """A read-only view of an existing Windows named section (held until :meth:`close`)."""
 
@@ -305,9 +336,7 @@ class _MappedSection:  # pragma: no cover - Windows ctypes view; validated on th
     def close(self) -> None:
         if self._address is None and self._handle is None:
             return
-        import ctypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32 = _kernel32()
         if self._address is not None:
             kernel32.UnmapViewOfFile(self._address)
             self._address = None
@@ -333,24 +362,10 @@ def open_shared_memory(name: str, length: int) -> _MappedSection:
 def _win_open_existing(name: str, length: int) -> _MappedSection:  # pragma: no cover - rig-only
     """Windows ctypes ``OpenFileMappingW`` + ``MapViewOfFile`` (open-existing-only)."""
     import ctypes
-    from ctypes import wintypes
 
     file_map_read = 0x0004
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.OpenFileMappingW.restype = wintypes.HANDLE
-    kernel32.OpenFileMappingW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
-    kernel32.MapViewOfFile.restype = wintypes.LPVOID
-    kernel32.MapViewOfFile.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.c_size_t,
-    ]
+    kernel32 = _kernel32()
 
-    # restype=HANDLE/LPVOID (both c_void_p) makes ctypes return a Python int for a valid
-    # pointer and None for NULL — so `if handle` / `if not address` is the correct, portable
-    # NULL check (a wrapped `.value` would not exist here; verified on this build).
     handle = None
     for tag in (name, f"Local\\{name}"):
         handle = kernel32.OpenFileMappingW(file_map_read, False, tag)
