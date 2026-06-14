@@ -35,10 +35,15 @@ from tools.ai_sidecar.external_protocol import (
 REPO = pathlib.Path(__file__).resolve().parent.parent
 LUA_SRC = REPO / "src" / "ac_copilot_trainer"
 
-# A call site: `<recv>.publishTopic(<first-arg>` — the leading dot excludes the
-# `function M.publishTopic(topic, payload)` definition (no dot) and the
-# `type(wsBridge.publishTopic)` guard (no `(` after the name).
+# A call site: `<recv>.publishTopic(<first-arg>`. The leading dot + the required `(`
+# already exclude the `type(wsBridge.publishTopic)` guard (no `(` after the name). The
+# `function M.publishTopic(...)` DEFINITION is excluded separately via `_DEF_RE` — a
+# broad `"function" in line` test would wrongly skip a real call sharing a line with
+# `pcall(function() ... )` (cursor bugbot on #173).
 _CALL_RE = re.compile(r"\.publishTopic\s*\(\s*([^\s,)]+)")
+# A definition's receiver is immediately preceded by `function ` (e.g.
+# `function M.publishTopic(`); a call's receiver is not.
+_DEF_RE = re.compile(r"\bfunction\s+[\w.]*\w$")
 
 
 def _produced_topics() -> tuple[dict[str, str], list[str]]:
@@ -58,9 +63,10 @@ def _produced_topics() -> tuple[dict[str, str], list[str]]:
             line_start = text.rfind("\n", 0, m.start()) + 1
             line_end = text.find("\n", m.start())
             line = text[line_start : line_end if line_end != -1 else len(text)]
-            if "function" in line:  # the definition, not a call
+            prefix = line[: m.start() - line_start]  # line text before this `.publishTopic(`
+            if "--" in prefix:  # commented-out call (Lua --)
                 continue
-            if "--" in line[: m.start() - line_start]:  # commented-out call (Lua --)
+            if _DEF_RE.search(prefix):  # the `function M.publishTopic(...)` definition, not a call
                 continue
             arg = m.group(1)
             if arg[:1] in ("'", '"'):
