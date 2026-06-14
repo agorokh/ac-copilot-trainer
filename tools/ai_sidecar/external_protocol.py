@@ -67,14 +67,25 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 )
 
 # Topics a client may `state.subscribe` to. Same rule as actions: the Lua side
-# is the producer; the sidecar fans out snapshots.
+# is the producer; the sidecar fans out snapshots. This allow-list must be the
+# single source of truth for EVERY topic the trainer publishes — fan-out itself
+# is topic-agnostic (`_broadcast_external`), so an omission here doesn't drop
+# frames, it only makes a real topic unsubscribable. `coaching.snapshot` and
+# `setup.active` were produced (coaching_publisher.lua / ac_copilot_trainer.lua)
+# but missing here, so a client could never legitimately subscribe to them — the
+# "produced-but-unsubscribable" sibling of the #170 handshake bug. The
+# `test_ws_topic_allowlist` drift-guard asserts every produced topic is listed.
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
+        # Declared topics (EPIC #154 Part D wires producers for these).
         "connection",
         "session",
         "lap",
         "delta",
         "tire_temps",
+        # Already-produced topics (made subscribable; were missing).
+        "coaching.snapshot",
+        "setup.active",
     }
 )
 
