@@ -60,6 +60,8 @@ def _produced_topics() -> tuple[dict[str, str], list[str]]:
             line = text[line_start : line_end if line_end != -1 else len(text)]
             if "function" in line:  # the definition, not a call
                 continue
+            if "--" in line[: m.start() - line_start]:  # commented-out call (Lua --)
+                continue
             arg = m.group(1)
             if arg[:1] in ("'", '"'):
                 topics[arg.strip("'\"")] = f.name
