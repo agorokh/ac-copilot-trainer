@@ -156,6 +156,35 @@ function Mon:update(car, dt, spline)
   end
 end
 
+--- Current per-wheel core temps {fl, fr, rl, rr}, read live from `car.wheels` (issue #180
+--- `tire_temps` producer). Read-only; each value is a number or nil if unavailable. Reuses the
+--- same `readWheelTemp` fallback chain and wheel order (1=fl,2=fr,3=rl,4=rr) as :update, so the
+--- streamed temps agree with the lap aggregates. pcall-guards every `car.wheels` access.
+---@param car any
+---@return table  {fl, fr, rl, rr}
+function Mon:currentTemps(car)
+  local out = { fl = nil, fr = nil, rl = nil, rr = nil }
+  if not car then
+    return out
+  end
+  local okW, wheels = pcall(function()
+    return car.wheels
+  end)
+  if not okW or wheels == nil then
+    return out
+  end
+  local keys = { "fl", "fr", "rl", "rr" }
+  for i = 1, 4 do
+    local oki, one = pcall(function()
+      return wheels[i]
+    end)
+    if oki and one ~= nil then
+      out[keys[i]] = readWheelTemp(one)
+    end
+  end
+  return out
+end
+
 ---@return string|nil
 function Mon:lapSummaryLine()
   local a, amin, amax = summarizeTemps(self.lapTemps.fl)

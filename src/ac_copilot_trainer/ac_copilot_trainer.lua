@@ -37,6 +37,7 @@ local realtimeCoaching = require("realtime_coaching")
 -- Issue #86 Part C/D: rig-screen-driven features.
 local coachingPublisher = require("coaching_publisher")
 local lifecyclePublisher = require("lifecycle_publisher")
+local telemetryPublisher = require("telemetry_publisher")
 local setupLibrary = require("setup_library")
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
@@ -1102,6 +1103,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: re-emit `session` after a reset (else stale key suppresses it)
+  telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
   hud.reset()
@@ -1135,6 +1137,7 @@ local function resetRollingDrivingState()
   hud.reset()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
+  telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -1736,6 +1739,29 @@ function script.update(dt)
       appVersion = APP_VERSION_UI,
     })
     lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+  end)
+
+  -- Issue #180 Part D step 2: telemetry topics (continuous streams, no ordering contract).
+  -- `delta` is published only once a reference lap exists (state.bestSortedTrace) using the
+  -- same delta.deltaSecondsAtSpline computation the HUD uses; `tire_temps` streams current
+  -- per-wheel core temps. Both rate-limited internally and no-op when the WS isn't open.
+  pcall(function()
+    if state.bestSortedTrace and tel:lapStartTime() then
+      local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
+      local spNow = car.splinePosition or 0
+      local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)
+      telemetryPublisher.publishDeltaIfDue({
+        dt = dt,
+        deltaS = rawDelta,
+        spline = spNow,
+        wsBridge = wsBridge,
+      })
+    end
+    telemetryPublisher.publishTireTempsIfDue({
+      dt = dt,
+      temps = tires:currentTemps(car),
+      wsBridge = wsBridge,
+    })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
