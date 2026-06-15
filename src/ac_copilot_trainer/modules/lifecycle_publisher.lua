@@ -209,10 +209,14 @@ end
 
 
 --- Reset rate-limiter + change-detector + stint-best (call on session/stint reset).
+--- Deliberately does NOT touch `_lastConnOk`: that tracks the WS connection (owned by the
+--- connection heartbeat), and a stint reset does not drop the WS. Resetting it here made the
+--- next heartbeat falsely detect a reconnect, clear the key again, and emit a DUPLICATE
+--- `session` ~1s after the intended one (Cursor on #182). `_lastSessionKey = nil` already
+--- re-emits `session` exactly once, which is the intent.
 function M.reset()
   _connAccum = 0.0
   _lastSessionKey = nil
-  _lastConnOk = false
   _stintBest = nil
 end
 

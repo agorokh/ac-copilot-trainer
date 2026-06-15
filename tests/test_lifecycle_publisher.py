@@ -284,6 +284,35 @@ def test_session_reemits_on_ws_reconnect():
     assert out["r3"] is True  # reconnect re-armed -> session re-emitted
 
 
+def test_stint_reset_emits_session_once_not_duplicate():
+    # Regression (Cursor on #182 r2-fix): a stint reset with the WS still up must re-emit
+    # `session` exactly once. The earlier code reset _lastConnOk=false, so the next heartbeat
+    # falsely detected a reconnect and emitted a SECOND (duplicate) session ~1s later.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("lifecycle_publisher"); M.reset()
+          local ws = make_ws()
+          local sim0 = { currentSessionIndex = 0 }
+          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- initial connect
+          M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- session #1
+          M.reset()  -- stint reset (WS still up)
+          M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- session #2 (intended re-emit)
+          -- a due heartbeat (WS still up, not a reconnect) must NOT clear the key:
+          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })
+          M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- must be SUPPRESSED (no dup)
+          local sessions = 0
+          for _, c in ipairs(ws._calls) do
+            if c.topic == "session" then sessions = sessions + 1 end
+          end
+          return { sessions = sessions }
+        end)()
+        """
+    )
+    assert out["sessions"] == 2  # one initial + one post-reset; NOT a third spurious duplicate
+
+
 def test_all_producers_noop_when_ws_down():
     rt = _runtime()
     out = rt.eval(
