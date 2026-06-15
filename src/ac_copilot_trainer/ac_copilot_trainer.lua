@@ -1773,16 +1773,17 @@ function script.update(dt)
     local lcNow = car.lapCount or 0
     local spNow = car.splinePosition or 0
     local atLapCountChange = (state.lastLapCount or -1) >= 0 and lcNow ~= state.lastLapCount
-    local splineReset = delta.isBackwardSplineReset(state.lastSplinePos, spNow)
-    -- `teleported` (computed once above via the guarded resetCounter read) covers a wrap-shaped
-    -- rewind the spline heuristic excludes (likelyWrap) — a teleport/return-to-garage/pit reset
-    -- that lands near the start with lapCount unchanged. Skip delta on it; the end-of-update reset
-    -- reuses the same signal to clear rolling state (codex on #185).
+    -- For the delta SKIP we use the LIBERAL isBackwardSplineJump (includes wrap-shaped jumps):
+    -- skipping a delta frame is harmless, and since this only runs with lapCount unchanged
+    -- (`not atLapCountChange`), any backward jump here is a reset/teleport, not a lap wrap. This
+    -- also covers builds where resetCounter is unavailable, so a wrap-shaped same-lap teleport
+    -- never leaks a bogus delta even when `teleported` can't be determined (codex on #185).
+    local splineJump = delta.isBackwardSplineJump(state.lastSplinePos, spNow)
     if
       state.bestSortedTrace
       and tel:lapStartTime()
       and not atLapCountChange
-      and not splineReset
+      and not splineJump
       and not teleported
     then
       local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
@@ -1853,8 +1854,11 @@ function script.update(dt)
     state.lastLapCount = lc
   end
 
-  -- Lap boundary: finalize trace before appending this frame's sample.
-  if state.lastLapCount >= 0 and lc > state.lastLapCount then
+  -- Lap boundary: finalize trace before appending this frame's sample. Skip on a teleport frame
+  -- (`teleported`, the guarded resetCounter signal computed above): a return-to-garage/pit reset
+  -- can coincide with a lapCount increase, and finalizing/publishing/archiving here would record a
+  -- bogus lap from the abandoned stint before the end-of-update rolling reset runs (codex on #185).
+  if state.lastLapCount >= 0 and lc > state.lastLapCount and not teleported then
     -- Last frame of the completed lap may still carry invalidation (CSP `ac.StateCar`).
     if carLapInvalidatedFlag(car) then
       state.lapInvalidatedThisLap = true

@@ -102,23 +102,40 @@ function M.deltaSecondsAtSpline(sortedTrace, splinePos, currentElapsedMs)
   return (currentElapsedMs - bestE) / 1000
 end
 
---- True when the spline jumped backward far enough to indicate a pit/session reset rather than a
---- normal lap wrap. Shared by the live `delta` producer's skip guard and the end-of-update
---- `resetRollingDrivingState` detection so the two cannot drift on the discontinuity threshold
---- (Cursor + codex on #185: a same-lap spline rewind would otherwise emit one bogus delta against
---- the prior stint's lap clock + reference trace before the reset fires). A lap *wrap* (prev spline
---- near 1.0, now near 0.0) is excluded — that is a forward lap completion, not a reset.
+local SPLINE_REWIND_THRESHOLD = -0.2  -- a backward spline delta past this = discontinuity, not jitter
+
+--- True when the spline jumped backward past the rewind threshold — ANY shape, INCLUDING a
+--- wrap-shaped jump (prev near 1.0 -> now near 0.0). Use this where over-triggering is HARMLESS:
+--- the `delta` producer's skip guard. Both producer callers run only with lapCount unchanged
+--- (atLapCountChange already excludes real lap wraps), so a wrap-shaped backward jump there is a
+--- teleport/return-to-garage/pit reset, not a lap completion — and skipping a delta frame on it is
+--- always safe even on CSP builds where resetCounter is unavailable (codex on #185).
 ---@param prevSpline number|nil  previous frame's car.splinePosition (nil before the first frame)
 ---@param spline number          this frame's car.splinePosition
 ---@return boolean
-function M.isBackwardSplineReset(prevSpline, spline)
+function M.isBackwardSplineJump(prevSpline, spline)
   if prevSpline == nil then
     return false
   end
-  spline = spline or 0
-  local d = spline - prevSpline
-  local likelyWrap = prevSpline > 0.8 and spline < 0.25
-  return d < -0.2 and not likelyWrap
+  return ((spline or 0) - prevSpline) < SPLINE_REWIND_THRESHOLD
+end
+
+--- True when the spline jumped backward in a way that should CLEAR rolling driving state (lap
+--- clock, coaching, aggregates) via resetRollingDrivingState. CONSERVATIVE: excludes a lap *wrap*
+--- (prev near 1.0 -> now near 0.0), because over-triggering here is NOT harmless — a false positive
+--- at the start/finish line would wipe coaching/session every lap if CSP ever exposes spline before
+--- the matching lapCount increment. Use this where the cost of a false reset is high (the
+--- end-of-update reset). Teleports are caught unambiguously by car.resetCounter; this is the
+--- spline-only fallback for genuine backward driving (Cursor + codex on #185).
+---@param prevSpline number|nil
+---@param spline number
+---@return boolean
+function M.isBackwardSplineReset(prevSpline, spline)
+  if not M.isBackwardSplineJump(prevSpline, spline) then
+    return false
+  end
+  local likelyWrap = prevSpline > 0.8 and (spline or 0) < 0.25
+  return not likelyWrap
 end
 
 --- Sector durations (ms) for three spline thirds: [0,1/3), [1/3,2/3), [2/3,1).
