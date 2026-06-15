@@ -1626,29 +1626,6 @@ function script.update(dt)
       })
     end)
 
-    -- Issue #180 Part D step 2: lifecycle topics. `session` fires only on
-    -- track/car/session change; `connection` is a ~1 Hz heartbeat. Both no-op
-    -- when the WS isn't open. (`lap` is published at the lap boundary below.)
-    pcall(function()
-      -- Per-frame WS-reconnect detection: on a sidecar (re)connect, re-arm `session` so it
-      -- re-emits THIS frame — before any subsequent `lap` — without waiting on the heartbeat
-      -- and without resetting the stint best (#180 review: avoids the duplicate / 1 s-delay
-      -- edges of coupling reconnect detection to the heartbeat).
-      local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
-      if wsConn and not state._wsPrevConnected then
-        lifecyclePublisher.rearmSession()
-      end
-      state._wsPrevConnected = wsConn
-      lifecyclePublisher.publishConnectionIfDue({
-        dt = dt,
-        car = car,
-        sim = sim,
-        wsBridge = wsBridge,
-        appVersion = APP_VERSION_UI,
-      })
-      lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
-    end)
-
     -- Periodic [RT-DIAG] log (every 3 sec) to verify what the engine sees
     -- live. Issue #75 round 3: prove the in-corner / brake-distance pipeline.
     state._rtDiagT = (state._rtDiagT or 0) + (dt or 0)
@@ -1736,6 +1713,30 @@ function script.update(dt)
     wsBridge.configure(pendingWsSidecarUrl)
     pendingWsSidecarUrl = nil
   end
+
+  -- Issue #180 Part D step 2: lifecycle topics, published AFTER wsBridge.tick()/pollInbound()
+  -- so they observe the CURRENT-frame WS state and always precede the `lap` boundary below
+  -- (Cursor HIGH on #182: publishing before the tick let a mid-frame-ready WS send `lap`
+  -- without a preceding `session`). `session` fires only on track/car/session change;
+  -- `connection` is a ~1 Hz heartbeat; both no-op when the WS isn't open. (`car` is non-nil
+  -- here — guaranteed by the `if not car then return end` guard above.)
+  pcall(function()
+    -- Per-frame WS-reconnect detection: on a sidecar (re)connect, re-arm `session` so it
+    -- re-emits THIS frame — before any subsequent `lap` — without resetting the stint best.
+    local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
+    if wsConn and not state._wsPrevConnected then
+      lifecyclePublisher.rearmSession()
+    end
+    state._wsPrevConnected = wsConn
+    lifecyclePublisher.publishConnectionIfDue({
+      dt = dt,
+      car = car,
+      sim = sim,
+      wsBridge = wsBridge,
+      appVersion = APP_VERSION_UI,
+    })
+    lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+  end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
   -- consuming it — we walk known corner labels from trackSegments and copy.
