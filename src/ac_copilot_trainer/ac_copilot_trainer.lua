@@ -1746,7 +1746,14 @@ function script.update(dt)
   -- same delta.deltaSecondsAtSpline computation the HUD uses; `tire_temps` streams current
   -- per-wheel core temps. Both rate-limited internally and no-op when the WS isn't open.
   pcall(function()
-    if state.bestSortedTrace and tel:lapStartTime() then
+    -- Skip `delta` on the lap-boundary frame: there `tel:lapStartTime()` still belongs to the
+    -- finished lap (it's reset by beginLapClock in the boundary handler BELOW) while
+    -- car.splinePosition has already wrapped to ~0, so deltaSecondsAtSpline would emit a bogus
+    -- ~full-lap delta once per crossing (Cursor on #185). Use the same boundary condition the
+    -- handler uses; `state.lastLapCount` here still holds the pre-boundary value.
+    local lcNow = car.lapCount or 0
+    local atLapBoundary = (state.lastLapCount or -1) >= 0 and lcNow > state.lastLapCount
+    if state.bestSortedTrace and tel:lapStartTime() and not atLapBoundary then
       local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
       local spNow = car.splinePosition or 0
       local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)
