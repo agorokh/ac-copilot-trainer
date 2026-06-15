@@ -821,6 +821,11 @@ state = {
   -- car.resetCounter from the previous frame; a change = teleport/return-to-garage/pit reset (a
   -- wrap-shaped rewind the spline heuristic can't classify). Drives delta-skip + rolling reset (#185).
   lastResetCounter = nil,
+  -- True after a backward spline discontinuity (teleport/reset) until the next clean lap boundary
+  -- re-arms the lap clock. While set, the `delta` producer stays silent: a one-frame skip is not
+  -- enough because tel:lapStartTime() stays stale on CSP builds lacking resetCounter, so delta would
+  -- otherwise leak bogus values against the abandoned stint's clock all stint (codex on #185).
+  deltaRefStale = false,
   bestLapTrace = {},
   --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
   bestReferenceLapMs = nil,
@@ -1053,6 +1058,7 @@ local function resetRuntimeAfterLeavingTrack()
   lastDriveSim = nil
   state.lastSplinePos = nil
   state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
+  state.deltaRefStale = false  -- clean slate on re-entry; first lap boundary keeps it armed
   state.bestLapTrace = {}
   state.bestReferenceLapMs = nil
   state.bestSortedTrace = nil
@@ -1779,12 +1785,19 @@ function script.update(dt)
     -- also covers builds where resetCounter is unavailable, so a wrap-shaped same-lap teleport
     -- never leaks a bogus delta even when `teleported` can't be determined (codex on #185).
     local splineJump = delta.isBackwardSplineJump(state.lastSplinePos, spNow)
+    if splineJump or teleported then
+      -- Mark the reference clock stale until a clean lap boundary re-arms it (cleared at
+      -- beginLapClock). Without this, delta resumes the very next frame against the abandoned
+      -- stint's lap clock — the leak codex flagged on resetCounter-less builds (#185 / #188).
+      state.deltaRefStale = true
+    end
     if
       state.bestSortedTrace
       and tel:lapStartTime()
       and not atLapCountChange
       and not splineJump
       and not teleported
+      and not state.deltaRefStale
     then
       local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
       local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)
@@ -1866,6 +1879,7 @@ function script.update(dt)
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
+    state.deltaRefStale = false  -- clean lap clock re-armed at the s/f line: delta valid again (#185)
     -- car.previousLapTimeMs is valid; car.lastLapTimeMs may not exist on the C-struct (throws, not nil).
     local lastMs = car.previousLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
