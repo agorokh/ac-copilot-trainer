@@ -91,48 +91,38 @@ function Mon:update(car, dt, spline)
     return
   end
   wheels = wobj
-  local n = 4
-  local okN, nn = pcall(function()
-    return #wheels
-  end)
-  if okN and type(nn) == "number" and nn > 0 then
-    n = math.min(nn, 4)
-  end
   local anySlip = false
   local maxHold = 0
   local hold = self.slipHoldPerWheel
-  for i = 1, n do
+  -- CSP `car.wheels` is 0-indexed per `ac.Wheel` (0=FL,1=FR,2=RL,3=RR); shipped CSP apps iterate
+  -- `for i=0,3`. Read at the 0-based wheel index `wi`, map to the 1-based internal state slot
+  -- (lapTemps/lapPeakSlip/hold) so the lap aggregates stay labeled FL/FR/RL/RR correctly. A car
+  -- always has exactly 4 wheels, so we cover all four slots (no `#wheels` probe — unreliable on a
+  -- 0-indexed CSP array) and reset a slot's lockup hold when its wheel is unreadable this frame.
+  local lapBuckets = { self.lapTemps.fl, self.lapTemps.fr, self.lapTemps.rl, self.lapTemps.rr }
+  for wi = 0, 3 do
+    local slot = wi + 1
     local oki, one = pcall(function()
-      return wheels[i]
+      return wheels[wi]
     end)
     if oki and one ~= nil then
-      local temp = readWheelTemp(one)
-      if i == 1 then
-        pushTemp(self.lapTemps.fl, temp)
-      elseif i == 2 then
-        pushTemp(self.lapTemps.fr, temp)
-      elseif i == 3 then
-        pushTemp(self.lapTemps.rl, temp)
-      else
-        pushTemp(self.lapTemps.rr, temp)
-      end
+      pushTemp(lapBuckets[slot], readWheelTemp(one))
       local slip = readWheelSlip(one)
-      if math.abs(slip) > math.abs(self.lapPeakSlip[i] or 0) then
-        self.lapPeakSlip[i] = slip
+      if math.abs(slip) > math.abs(self.lapPeakSlip[slot] or 0) then
+        self.lapPeakSlip[slot] = slip
       end
       if math.abs(slip) >= LOCKUP_SLIP then
         anySlip = true
-        hold[i] = hold[i] + d
-        if hold[i] > maxHold then
-          maxHold = hold[i]
+        hold[slot] = hold[slot] + d
+        if hold[slot] > maxHold then
+          maxHold = hold[slot]
         end
       else
-        hold[i] = 0
+        hold[slot] = 0
       end
+    else
+      hold[slot] = 0
     end
-  end
-  for i = n + 1, 4 do
-    hold[i] = 0
   end
   if not anySlip then
     self.lockupRearm = true
@@ -158,8 +148,13 @@ end
 
 --- Current per-wheel core temps {fl, fr, rl, rr}, read live from `car.wheels` (issue #180
 --- `tire_temps` producer). Read-only; each value is a number or nil if unavailable. Reuses the
---- same `readWheelTemp` fallback chain and wheel order (1=fl,2=fr,3=rl,4=rr) as :update, so the
+--- same `readWheelTemp` fallback chain and wheel order (0=fl,1=fr,2=rl,3=rr) as :update, so the
 --- streamed temps agree with the lap aggregates. pcall-guards every `car.wheels` access.
+---
+--- CSP `car.wheels` is **0-indexed** per `ac.Wheel` (FrontLeft=0, FrontRight=1, RearLeft=2,
+--- RearRight=3). Shipped CSP apps iterate `for i=0,3` (e.g. CMRT-Essential-HUD). The earlier
+--- 1-based read (`wheels[1..4]`) shifted every corner by one and read an out-of-bounds zero-
+--- struct for RR — the live `tire_temps.rr=0` regression confirmed against the AC physics oracle.
 ---@param car any
 ---@return table  {fl, fr, rl, rr}
 function Mon:currentTemps(car)
@@ -173,8 +168,8 @@ function Mon:currentTemps(car)
   if not okW or wheels == nil then
     return out
   end
-  local keys = { "fl", "fr", "rl", "rr" }
-  for i = 1, 4 do
+  local keys = { [0] = "fl", [1] = "fr", [2] = "rl", [3] = "rr" }
+  for i = 0, 3 do
     local oki, one = pcall(function()
       return wheels[i]
     end)

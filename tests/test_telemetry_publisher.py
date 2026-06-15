@@ -211,6 +211,9 @@ def test_producers_return_false_without_wsbridge():
 
 # --------------------------------------------------------------------------- tire_monitor accessor
 def test_mon_current_temps_reads_four_wheels():
+    # CSP `car.wheels` is 0-indexed per `ac.Wheel` (FrontLeft=0 .. RearRight=3) — the table is
+    # keyed [0..3], NOT a 1-based list. A 1-based read (`wheels[1..4]`) would shift every corner
+    # by one and return rr=0 from the out-of-bounds slot (the live regression this fix closes).
     rt = _runtime()
     out = rt.eval(
         r"""
@@ -218,18 +221,70 @@ def test_mon_current_temps_reads_four_wheels():
           local TM = require("tire_monitor")
           local mon = TM.new()
           local car = { wheels = {
-            { temperature = 85 },
-            { temperature = 86 },
-            { temperature = 83 },
-            { temperature = { average = 84 } },
+            [0] = { temperature = 85 },
+            [1] = { temperature = 86 },
+            [2] = { temperature = 83 },
+            [3] = { temperature = { average = 84 } },
           } }
           local t = mon:currentTemps(car)
           return { fl = t.fl, fr = t.fr, rl = t.rl, rr = t.rr }
         end)()
         """
     )
-    # order fl,fr,rl,rr; the rr wheel uses the {average=...} table form (readWheelTemp unwraps it)
+    # order fl,fr,rl,rr; the rr wheel (index 3) uses the {average=...} form (readWheelTemp unwraps)
     assert (out["fl"], out["fr"], out["rl"], out["rr"]) == (85, 86, 83, 84)
+
+
+def test_mon_current_temps_fl_read_from_index_zero():
+    # Pin the fix directly: FL must come from wheel index 0 (a 1-based read would miss [0] and
+    # instead pull [1..4], shifting every corner and reading rr from an out-of-bounds slot).
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local TM = require("tire_monitor")
+          local mon = TM.new()
+          local car = { wheels = {
+            [0] = { temperature = 60 },
+            [1] = { temperature = 61 },
+            [2] = { temperature = 62 },
+            [3] = { temperature = 63 },
+          } }
+          local t = mon:currentTemps(car)
+          return { fl = t.fl, rr = t.rr }
+        end)()
+        """
+    )
+    assert out["fl"] == 60  # index 0 -> fl (the corner a 1-based read would drop)
+    assert out["rr"] == 63  # index 3 -> rr (was reading the out-of-bounds 0 before the fix)
+
+
+def test_mon_update_lap_summary_uses_zero_indexed_wheels():
+    # Mon:update shares the wheel-order contract with currentTemps; its lap aggregates must be
+    # labeled from the same 0-based read so the summary line's FL/FR/RL/RR match reality.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local TM = require("tire_monitor")
+          local mon = TM.new()
+          local car = { wheels = {
+            [0] = { temperature = 70, slipRatio = 0 },
+            [1] = { temperature = 71, slipRatio = 0 },
+            [2] = { temperature = 80, slipRatio = 0 },
+            [3] = { temperature = 81, slipRatio = 0 },
+          } }
+          mon:update(car, 0.1, 0.5)
+          return mon:lapSummaryLine()
+        end)()
+        """
+    )
+    assert out is not None
+    # FL=70 (idx0), FR=71 (idx1), RL=80 (idx2), RR=81 (idx3) — corner labels follow the enum order.
+    assert "FL 70" in out
+    assert "FR 71" in out
+    assert "RL 80" in out
+    assert "RR 81" in out
 
 
 def test_mon_current_temps_nil_car_is_all_nil():
