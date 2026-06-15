@@ -821,11 +821,13 @@ state = {
   -- car.resetCounter from the previous frame; a change = teleport/return-to-garage/pit reset (a
   -- wrap-shaped rewind the spline heuristic can't classify). Drives delta-skip + rolling reset (#185).
   lastResetCounter = nil,
-  -- True after a backward spline discontinuity (teleport/reset) until the next clean lap boundary
-  -- re-arms the lap clock. While set, the `delta` producer stays silent: a one-frame skip is not
-  -- enough because tel:lapStartTime() stays stale on CSP builds lacking resetCounter, so delta would
-  -- otherwise leak bogus values against the abandoned stint's clock all stint (codex on #185).
-  deltaRefStale = false,
+  -- True while the lap clock is NOT aligned to a clean start/finish boundary, so `delta` (elapsed
+  -- vs the reference lap's elapsed-at-spline, both measured from s/f) would be misaligned. The
+  -- `delta` producer stays SILENT while set. Cleared ONLY when beginLapClock fires at a real lap
+  -- boundary (lapCount increment at the s/f line); SET on init, reset/teleport, backward jump, and
+  -- any mid-track clock seed (app load/reload mid-lap, post-reset re-arm) — Cursor + codex on #185.
+  -- Defaults true: no delta until the first clean lap is started (an out-lap clock is mid-track).
+  deltaRefStale = true,
   bestLapTrace = {},
   --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
   bestReferenceLapMs = nil,
@@ -1058,7 +1060,7 @@ local function resetRuntimeAfterLeavingTrack()
   lastDriveSim = nil
   state.lastSplinePos = nil
   state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
-  state.deltaRefStale = false  -- clean slate on re-entry; first lap boundary keeps it armed
+  state.deltaRefStale = true  -- re-entry: no boundary-aligned clock yet, delta silent until first lap
   state.bestLapTrace = {}
   state.bestReferenceLapMs = nil
   state.bestSortedTrace = nil
@@ -1148,6 +1150,7 @@ local function resetRollingDrivingState()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
+  state.deltaRefStale = true  -- #180/#185: clock reset; delta silent until the next clean lap boundary
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -2129,6 +2132,10 @@ function script.update(dt)
   if tel:lapStartTime() == nil and not sim.isInMainMenu and state.lastLapCount >= 0 then
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
+    -- This is a MID-TRACK seed (app load/reload or post-reset re-arm), NOT a start/finish boundary,
+    -- so the clock is not aligned to s/f: keep delta silent until the next real lap boundary clears
+    -- this. Publishing now would give subscribers elapsed-from-reload vs reference-from-s/f (codex on #185).
+    state.deltaRefStale = true
     state.sectorStartSimT = ch.simSeconds(sim)
     state.sectorIndex = 1
     state.lastSplineSector = sp
