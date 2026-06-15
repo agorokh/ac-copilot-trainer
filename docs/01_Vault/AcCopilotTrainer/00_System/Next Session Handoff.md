@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-15T23:20:00Z
+last_updated: 2026-06-15T23:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -37,7 +37,10 @@ relates_to:
 
 **Follow-up filed:** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) — rolling-state reset on a wrap-shaped same-lap teleport on CSP builds lacking `car.resetCounter` (low-severity; first action: confirm resetCounter is present on the rig, likely mooting it). The delta-leak half is already fixed.
 
-**Next deliverable (Part E):** carcsw in-sim driver + L1.5 sequence probe — and notably the **autonomous in-sim driver is the unblock for self-verification without the operator** (drive the car → cross s/f → verify delta/tire_temps without a human). That is the EPIC #154 throughline.
+**Next deliverable (Part E) — STARTED:** [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) filed (carcsw Custom-AI-mmap driver + L1.5 probe, grounded plan).
+- **L1.5 sequence probe — DRAFT [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) (`tools/ac_harness/sequence_probe.py`, branch `feat/issue-190-l15-sequence-probe`).** Pure `evaluate_sequence()` asserts the declared-topic presence (connection/session/lap/delta/tire_temps/coaching.snapshot) + the session-before-lap ordering (#182 contract); 9 off-sim synthetic tests pass, ruff clean. **DON'T rebuild it.** It's DRAFT pending in-sim observation — on the next drive run `python -m tools.ac_harness.sequence_probe` (taps 20 s) to verify all 5 producers end-to-end, alongside `.scratch/diag_wheels.py`.
+- **Remaining Part E (NOT built):** the `carcsw` **Custom AI mmap writer** — the actuation keystone that lets the agent drive car 0 itself (no operator lap). Build-time research needed: `cai_car_data`/`cai_wheel_data` struct layout + mmap name from cup.acstuff.club/docs/csp/other-things/custom-ai. Off-sim-testable like #175's reader; in-sim driving gated. **This is the unblock for self-verification without the operator** — the EPIC #154 throughline.
+- **Constraint:** the agent CANNOT launch AC (Steam-integrity). L1.5 still needs ONE operator action (launch AC + sit on track), then the agent drives+asserts. Full hands-off (L2) needs the operator-gated control-channel daemon.
 
 ---
 
