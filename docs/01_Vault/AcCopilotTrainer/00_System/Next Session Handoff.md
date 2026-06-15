@@ -25,6 +25,23 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-15 — Part D step 2 LIFECYCLE producers (connection/session/lap) MERGED + verified live; delta/tire_temps next)
+
+**[#180](https://github.com/agorokh/ac-copilot-trainer/issues/180) lifecycle subset / PR [#182](https://github.com/agorokh/ac-copilot-trainer/pull/182) MERGED (squash `b14f5c0`).** New `modules/lifecycle_publisher.lua` produces the three lifecycle topics the L1.5 sequence assertions need: `connection` (~1 Hz heartbeat with `{app_version,session_index,car_id,track_id}`), `session` (event on track/car/session change), `lap` (at the `car.lapCount` boundary, stint-scoped `best_lap_ms`). **Verified LIVE** during a real drive (all three flowed with correct payloads — `lap={lap:1,last_lap_ms:108667,...}`), then hardened over **7 adversarial review rounds**. Key design (read before extending):
+- `session`/`connection` publish in `script.update` **after `wsBridge.tick()`+`pollInbound()`** and **before the lap boundary** (Cursor HIGH r5: publishing before the tick let a mid-frame-ready WS send `lap` without `session`).
+- Reconnect re-arm is **per-frame in the entry script** via `wsBridge.sidecarConnected()` (false→true) → `lifecyclePublisher.rearmSession()` (clears only the session key); **not** coupled to the heartbeat (that spawned duplicate/delay edges r2–r4).
+- `session` records its dedup key, and `lap` commits `_stintBest`, **only on a successful publish** (publish-then-record symmetry) so neither reflects an undelivered frame.
+- `M.reset()` (stint reset) re-emits `session` + rescopes the stint best; wired into both reset paths in `ac_copilot_trainer.lua` next to `realtimeCoaching.reset()`.
+
+**Next (remaining #180):** `delta` + `tire_temps` producers.
+- **`delta`** is easy: reuse `delta.deltaSecondsAtSpline(state.bestSortedTrace, sp, eMs)` — already computed at `ac_copilot_trainer.lua` ~line 1343 (`eMs = (now - tel:lapStartTime())*1000`); only meaningful once a reference lap exists. ~10 Hz, follow the `coaching_publisher`/`lifecycle_publisher` pattern.
+- **`tire_temps`** needs the per-wheel CURRENT temps — read from `car.wheels[i]` (the `tire_monitor` instance keeps only lap aggregates, not current); confirm the CSP wheel-temp field. Publish after `tires:update`.
+- Verify both **in-game on the next drive** via the patient detector (`.scratch/wait_lifecycle.py`, extend its TARGET set) — anti-false-green: draft until observed.
+
+**Follow-ups filed:** [#183](https://github.com/agorokh/ac-copilot-trainer/issues/183) socket-open-epoch reconnect re-arm in `ws_bridge` (reliable sub-frame reconnect detection; 1 Hz heartbeat is the interim identity backstop). [#177](https://github.com/agorokh/ac-copilot-trainer/issues/177) actuator half (operator decision: ViGEm vs pit-normalization). [#179](https://github.com/agorokh/ac-copilot-trainer/issues/179) `vault/` ci-policy papercut.
+
+---
+
 ## Resume here (2026-06-14 latest — #175 VERIFIED LIVE + #170 confirmed during a real drive; Part D step 2 (#180) teed up)
 
 **Operator-grade LIVE verification (captured during the operator's actual drive; evidence in `.scratch/live-verification-2026-06-14.md`):**
