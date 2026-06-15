@@ -87,7 +87,7 @@ function M.publishDeltaIfDue(opts)
   end
   return wsBridge.publishTopic(TOPIC_DELTA, {
     delta_s = deltaS,
-    spline = tonumber(opts.spline),
+    spline = _finite(opts.spline),  -- omit a non-finite spline rather than emit unserializable JSON (#185)
   }) == true
 end
 

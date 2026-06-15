@@ -197,6 +197,27 @@ def test_tire_temps_noop_when_all_non_finite():
     assert out["n"] == 0
 
 
+def test_delta_omits_non_finite_spline():
+    # delta_s finite but spline non-finite (corrupt/reset frame): the spline field must be omitted,
+    # not emitted as unserializable JSON (codex on #185). The frame still publishes.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local r = M.publishDeltaIfDue({ dt = 1.0, deltaS = -0.3, spline = 1/0, wsBridge = ws })
+          local p = ws._calls[1] and ws._calls[1].payload
+          return { r = r, n = #ws._calls, ds = p and p.delta_s, has_spline = p and p.spline ~= nil }
+        end)()
+        """
+    )
+    assert out["r"] is True
+    assert out["n"] == 1
+    assert out["ds"] == -0.3
+    assert out["has_spline"] is False  # +inf spline omitted
+
+
 def test_delta_noop_on_non_finite():
     # A non-finite delta_s (e.g. degenerate reference trace) is unserializable -> skip the frame.
     rt = _runtime()

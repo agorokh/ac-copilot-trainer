@@ -818,6 +818,9 @@ state = {
   },
   recording = true,
   lastSplinePos = nil,
+  -- car.resetCounter from the previous frame; a change = teleport/return-to-garage/pit reset (a
+  -- wrap-shaped rewind the spline heuristic can't classify). Drives delta-skip + rolling reset (#185).
+  lastResetCounter = nil,
   bestLapTrace = {},
   --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
   bestReferenceLapMs = nil,
@@ -1049,6 +1052,7 @@ local function resetRuntimeAfterLeavingTrack()
   lastDriveCar = nil
   lastDriveSim = nil
   state.lastSplinePos = nil
+  state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
   state.bestLapTrace = {}
   state.bestReferenceLapMs = nil
   state.bestSortedTrace = nil
@@ -1760,7 +1764,18 @@ function script.update(dt)
     local spNow = car.splinePosition or 0
     local atLapCountChange = (state.lastLapCount or -1) >= 0 and lcNow ~= state.lastLapCount
     local splineReset = delta.isBackwardSplineReset(state.lastSplinePos, spNow)
-    if state.bestSortedTrace and tel:lapStartTime() and not atLapCountChange and not splineReset then
+    -- A teleport/return-to-garage/pit reset bumps car.resetCounter and can land the car back near
+    -- the start line with lapCount unchanged — a wrap-shaped rewind the spline heuristic above
+    -- excludes (likelyWrap). resetCounter is the unambiguous teleport signal, so skip delta on it
+    -- too; the end-of-update reset uses the same signal to clear rolling state (codex on #185).
+    local teleported = state.lastResetCounter ~= nil and (car.resetCounter or 0) ~= state.lastResetCounter
+    if
+      state.bestSortedTrace
+      and tel:lapStartTime()
+      and not atLapCountChange
+      and not splineReset
+      and not teleported
+    then
       local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
       local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)
       telemetryPublisher.publishDeltaIfDue({
@@ -2154,7 +2169,12 @@ function script.update(dt)
     state.focusPracticeHudSummarySig = nil
   end
 
-  if state.lastLapCount >= 0 and lc < state.lastLapCount then
+  local resetCounterNow = car.resetCounter or 0
+  local teleported = state.lastResetCounter ~= nil and resetCounterNow ~= state.lastResetCounter
+  if teleported or (state.lastLapCount >= 0 and lc < state.lastLapCount) then
+    -- Teleport/return-to-garage/pit reset (resetCounter bumped) OR a lap-counter rollback: the
+    -- prior stint's rolling state (lap clock, coaching, aggregates) is stale. The teleport case
+    -- also covers a wrap-shaped same-lap rewind the spline heuristic below cannot (codex on #185).
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
     -- Same-lap backward spline jump = pit/session reset (shared with the `delta` producer's skip
@@ -2167,6 +2187,7 @@ function script.update(dt)
   state.lastLapCount = lc
   state.lastSplinePos = sp
   state.lastSplineSector = sp
+  state.lastResetCounter = resetCounterNow
 end
 
 function script.onWindowHide()
