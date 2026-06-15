@@ -36,6 +36,7 @@ local hudSettings = require("hud_settings")
 local realtimeCoaching = require("realtime_coaching")
 -- Issue #86 Part C/D: rig-screen-driven features.
 local coachingPublisher = require("coaching_publisher")
+local lifecyclePublisher = require("lifecycle_publisher")
 local setupLibrary = require("setup_library")
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
@@ -1100,6 +1101,7 @@ local function resetRuntimeAfterLeavingTrack()
   wsBridge.reset()
   renderDiag.reset()
   realtimeCoaching.reset()
+  lifecyclePublisher.reset()  -- #180: re-emit `session` after a reset (else stale key suppresses it)
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
   hud.reset()
@@ -1132,6 +1134,7 @@ local function resetRollingDrivingState()
   )
   hud.reset()
   realtimeCoaching.reset()
+  lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -1710,6 +1713,30 @@ function script.update(dt)
     wsBridge.configure(pendingWsSidecarUrl)
     pendingWsSidecarUrl = nil
   end
+
+  -- Issue #180 Part D step 2: lifecycle topics, published AFTER wsBridge.tick()/pollInbound()
+  -- so they observe the CURRENT-frame WS state and always precede the `lap` boundary below
+  -- (Cursor HIGH on #182: publishing before the tick let a mid-frame-ready WS send `lap`
+  -- without a preceding `session`). `session` fires only on track/car/session change;
+  -- `connection` is a ~1 Hz heartbeat; both no-op when the WS isn't open. (`car` is non-nil
+  -- here — guaranteed by the `if not car then return end` guard above.)
+  pcall(function()
+    -- Per-frame WS-reconnect detection: on a sidecar (re)connect, re-arm `session` so it
+    -- re-emits THIS frame — before any subsequent `lap` — without resetting the stint best.
+    local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
+    if wsConn and not state._wsPrevConnected then
+      lifecyclePublisher.rearmSession()
+    end
+    state._wsPrevConnected = wsConn
+    lifecyclePublisher.publishConnectionIfDue({
+      dt = dt,
+      car = car,
+      sim = sim,
+      wsBridge = wsBridge,
+      appVersion = APP_VERSION_UI,
+    })
+    lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+  end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
   -- consuming it — we walk known corner labels from trackSegments and copy.
@@ -1805,6 +1832,20 @@ function script.update(dt)
       segBrakes = state.brakingPoints.best
     end
     state.lapsCompleted = (state.lapsCompleted or 0) + 1
+    -- Issue #180 Part D step 2: publish the `lap` topic once at the boundary. No-op when
+    -- the WS isn't open. Review-fixes: `lap`/`laps_completed` both use the app's completed
+    -- counter (not car.lapCount) so they agree; `best_lap_ms` folds in THIS lap so a new PB
+    -- / the first lap isn't reported stale; an untimed boundary (out-lap,
+    -- previousLapTimeMs == 0) sends `last_lap_ms = nil` rather than a misleading 0.
+    pcall(function()
+      lifecyclePublisher.publishLap({
+        lap = state.lapsCompleted,
+        lastLapMs = lastMs,  -- raw; the producer treats <=0 as untimed and tracks the stint best
+        lapsCompleted = state.lapsCompleted,
+        valid = not state.lapInvalidatedThisLap,
+        wsBridge = wsBridge,
+      })
+    end)
     local spanForAnalytics = 0
     if #completedTrace >= 2 then
       spanForAnalytics = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
