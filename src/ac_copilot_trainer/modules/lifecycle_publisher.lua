@@ -60,10 +60,20 @@ end
 
 
 local function _trackId()
-  if ac and type(ac.getTrackID) == "function" then
-    local ok, v = pcall(ac.getTrackID)
-    if ok and type(v) == "string" and v ~= "" then
-      return v
+  if ac then
+    -- Prefer the full id (track/layout) so multi-layout tracks (e.g. a GP vs national
+    -- layout) are distinguished; fall back to the bare track id.
+    if type(ac.getTrackFullID) == "function" then
+      local ok, v = pcall(ac.getTrackFullID, "/")
+      if ok and type(v) == "string" and v ~= "" then
+        return v
+      end
+    end
+    if type(ac.getTrackID) == "function" then
+      local ok, v = pcall(ac.getTrackID)
+      if ok and type(v) == "string" and v ~= "" then
+        return v
+      end
     end
   end
   return nil

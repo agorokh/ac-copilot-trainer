@@ -1101,6 +1101,7 @@ local function resetRuntimeAfterLeavingTrack()
   wsBridge.reset()
   renderDiag.reset()
   realtimeCoaching.reset()
+  lifecyclePublisher.reset()  -- #180: re-emit `session` after a reset (else stale key suppresses it)
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
   hud.reset()
@@ -1133,6 +1134,7 @@ local function resetRollingDrivingState()
   )
   hud.reset()
   realtimeCoaching.reset()
+  lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -1820,16 +1822,24 @@ function script.update(dt)
       segBrakes = state.brakingPoints.best
     end
     state.lapsCompleted = (state.lapsCompleted or 0) + 1
-    -- Issue #180 Part D step 2: publish the `lap` topic once at the boundary.
-    -- No-op when the WS isn't open. `lastMs` is car.previousLapTimeMs (read above);
-    -- validity reflects whether this just-completed lap was invalidated.
+    -- Issue #180 Part D step 2: publish the `lap` topic once at the boundary. No-op when
+    -- the WS isn't open. Review-fixes: `lap`/`laps_completed` both use the app's completed
+    -- counter (not car.lapCount) so they agree; `best_lap_ms` folds in THIS lap so a new PB
+    -- / the first lap isn't reported stale; an untimed boundary (out-lap,
+    -- previousLapTimeMs == 0) sends `last_lap_ms = nil` rather than a misleading 0.
     pcall(function()
+      local lapValid = not state.lapInvalidatedThisLap
+      local timedMs = (lastMs and lastMs > 0) and lastMs or nil
+      local bestSoFar = state.bestLapMs
+      if lapValid and timedMs and (not bestSoFar or timedMs < bestSoFar) then
+        bestSoFar = timedMs
+      end
       lifecyclePublisher.publishLap({
-        lap = lc,
-        lastLapMs = lastMs,
-        bestLapMs = state.bestLapMs,
+        lap = state.lapsCompleted,
+        lastLapMs = timedMs,
+        bestLapMs = bestSoFar,
         lapsCompleted = state.lapsCompleted,
-        valid = not state.lapInvalidatedThisLap,
+        valid = lapValid,
         wsBridge = wsBridge,
       })
     end)

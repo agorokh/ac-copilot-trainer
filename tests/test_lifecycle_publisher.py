@@ -134,6 +134,49 @@ def test_session_retries_after_ws_recovers():
     assert out["topic"] == "session"
 
 
+def test_session_reemits_after_reset():
+    # Regression (Cursor/CodeRabbit/codex P1): a same-session/stint restart calls
+    # M.reset(), after which the unchanged session identity must be re-published
+    # (else the harness's session->lap sequence misses the restart's session frame).
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("lifecycle_publisher"); M.reset()
+          local ws = make_ws()
+          local opts = { sim = { currentSessionIndex = 0 }, wsBridge = ws }
+          local r1 = M.publishSessionIfChanged(opts)  -- publish
+          local r2 = M.publishSessionIfChanged(opts)  -- same key -> suppressed
+          M.reset()
+          local r3 = M.publishSessionIfChanged(opts)  -- re-published after reset
+          return { r1 = r1, r2 = r2, r3 = r3, n = #ws._calls }
+        end)()
+        """
+    )
+    assert out["r1"] is True
+    assert out["r2"] is False
+    assert out["r3"] is True
+    assert out["n"] == 2
+
+
+def test_trackid_prefers_full_id_for_layout():
+    # codex P2: multi-layout tracks must be distinguished -> prefer ac.getTrackFullID
+    # (track/layout) over the bare ac.getTrackID.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          ac.getTrackFullID = function(_sep) return "ks_brands_hatch/gp" end
+          local M = require("lifecycle_publisher"); M.reset()
+          local ws = make_ws()
+          M.publishSessionIfChanged({ sim = { currentSessionIndex = 0 }, wsBridge = ws })
+          return { track = ws._calls[1] and ws._calls[1].payload.track_id }
+        end)()
+        """
+    )
+    assert out["track"] == "ks_brands_hatch/gp"
+
+
 def test_lap_publishes_payload_with_validity():
     rt = _runtime()
     out = rt.eval(
