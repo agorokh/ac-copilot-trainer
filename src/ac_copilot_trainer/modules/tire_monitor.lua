@@ -68,7 +68,15 @@ local function readWheelTemp(one)
   if type(temp) == "table" and temp.average ~= nil then
     temp = temp.average
   end
-  return tonumber(temp)
+  local n = tonumber(temp)
+  -- Reject non-finite reads (NaN / ±inf): a CSP field can be present but non-finite, and a NaN
+  -- would survive the `== nil` guards downstream and serialize as invalid JSON in `tire_temps`
+  -- (codex on #185). The lap aggregator's pushTemp already rejects NaN; mirror that at the source
+  -- so the live `currentTemps` path is finite-only too. (NaN ~= itself; ±inf == math.huge.)
+  if n == nil or n ~= n or n == math.huge or n == -math.huge then
+    return nil
+  end
+  return n
 end
 
 local function readWheelSlip(one)

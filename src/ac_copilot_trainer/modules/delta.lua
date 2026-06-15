@@ -102,6 +102,25 @@ function M.deltaSecondsAtSpline(sortedTrace, splinePos, currentElapsedMs)
   return (currentElapsedMs - bestE) / 1000
 end
 
+--- True when the spline jumped backward far enough to indicate a pit/session reset rather than a
+--- normal lap wrap. Shared by the live `delta` producer's skip guard and the end-of-update
+--- `resetRollingDrivingState` detection so the two cannot drift on the discontinuity threshold
+--- (Cursor + codex on #185: a same-lap spline rewind would otherwise emit one bogus delta against
+--- the prior stint's lap clock + reference trace before the reset fires). A lap *wrap* (prev spline
+--- near 1.0, now near 0.0) is excluded — that is a forward lap completion, not a reset.
+---@param prevSpline number|nil  previous frame's car.splinePosition (nil before the first frame)
+---@param spline number          this frame's car.splinePosition
+---@return boolean
+function M.isBackwardSplineReset(prevSpline, spline)
+  if prevSpline == nil then
+    return false
+  end
+  spline = spline or 0
+  local d = spline - prevSpline
+  local likelyWrap = prevSpline > 0.8 and spline < 0.25
+  return d < -0.2 and not likelyWrap
+end
+
 --- Sector durations (ms) for three spline thirds: [0,1/3), [1/3,2/3), [2/3,1).
 ---@param sortedTrace LapTraceSample[]|nil
 ---@return number[]|nil three cumulative boundaries ms at 1/3 and 2/3, and lap end

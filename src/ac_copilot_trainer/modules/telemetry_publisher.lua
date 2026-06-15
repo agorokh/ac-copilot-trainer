@@ -35,6 +35,18 @@ local function _wsReady(opts)
 end
 
 
+--- Coerce to a FINITE number, or nil. Rejects NaN and ±inf so a non-finite value never reaches
+--- the wire (JSON cannot represent them). Defense-in-depth at the publish boundary: the wheel
+--- reader already filters non-finite temps, but the publisher must not trust its caller (#185).
+local function _finite(v)
+  v = tonumber(v)
+  if v == nil or v ~= v or v == math.huge or v == -math.huge then
+    return nil
+  end
+  return v
+end
+
+
 --- Advance an accumulator by dt (capped at one interval so a long pause/resume doesn't burst),
 --- returning true + the carried-over remainder when a publish is due. Mirrors coaching_publisher.
 local function _due(accum, dt, interval)
@@ -64,9 +76,9 @@ function M.publishDeltaIfDue(opts)
   if not wsBridge then
     return false
   end
-  local deltaS = tonumber(opts.deltaS)
+  local deltaS = _finite(opts.deltaS)
   if deltaS == nil then
-    return false  -- no reference lap yet / delta unavailable: nothing meaningful to send
+    return false  -- no reference lap yet / delta unavailable / non-finite: nothing to send
   end
   local due, accum = _due(_deltaAccum, tonumber(opts.dt) or 0, DELTA_INTERVAL_SEC)
   _deltaAccum = accum
@@ -96,10 +108,10 @@ function M.publishTireTempsIfDue(opts)
   if type(temps) ~= "table" then
     return false
   end
-  local fl = tonumber(temps.fl)
-  local fr = tonumber(temps.fr)
-  local rl = tonumber(temps.rl)
-  local rr = tonumber(temps.rr)
+  local fl = _finite(temps.fl)
+  local fr = _finite(temps.fr)
+  local rl = _finite(temps.rl)
+  local rr = _finite(temps.rr)
   if fl == nil and fr == nil and rl == nil and rr == nil then
     -- No wheel temp resolvable on this CSP build/car: treat the sample as UNAVAILABLE rather
     -- than publishing an empty {} every interval (Lua drops nil-valued keys), which would

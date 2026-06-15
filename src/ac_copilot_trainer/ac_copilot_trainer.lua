@@ -1752,11 +1752,16 @@ function script.update(dt)
     -- deltaSecondsAtSpline would emit a bogus cross-lap/cross-stint delta (Cursor + codex on
     -- #185). `state.lastLapCount` here still holds the pre-handler value; `~=` covers both the
     -- forward crossing (reset by beginLapClock below) and the rollback (reset later this frame).
+    -- Also skip a SAME-LAP pit/session reset: the spline jumps backward without a lap-count
+    -- change, and the end-of-update reset guard detects it AFTER this block runs. Mirror that
+    -- discontinuity test via the shared delta.isBackwardSplineReset so producer and reset guard
+    -- cannot drift; otherwise one bogus delta leaks out against the rewound spline (codex on #185).
     local lcNow = car.lapCount or 0
+    local spNow = car.splinePosition or 0
     local atLapCountChange = (state.lastLapCount or -1) >= 0 and lcNow ~= state.lastLapCount
-    if state.bestSortedTrace and tel:lapStartTime() and not atLapCountChange then
+    local splineReset = delta.isBackwardSplineReset(state.lastSplinePos, spNow)
+    if state.bestSortedTrace and tel:lapStartTime() and not atLapCountChange and not splineReset then
       local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
-      local spNow = car.splinePosition or 0
       local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)
       telemetryPublisher.publishDeltaIfDue({
         dt = dt,
@@ -2152,10 +2157,9 @@ function script.update(dt)
   if state.lastLapCount >= 0 and lc < state.lastLapCount then
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
-    local lastSp = state.lastSplinePos
-    local d = sp - lastSp
-    local likelyWrap = lastSp > 0.8 and sp < 0.25
-    if d < -0.2 and not likelyWrap then
+    -- Same-lap backward spline jump = pit/session reset (shared with the `delta` producer's skip
+    -- guard via delta.isBackwardSplineReset so the discontinuity threshold can't drift — #185).
+    if delta.isBackwardSplineReset(state.lastSplinePos, sp) then
       resetRollingDrivingState()
     end
   end

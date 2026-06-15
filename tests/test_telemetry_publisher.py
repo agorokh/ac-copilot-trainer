@@ -152,6 +152,91 @@ def test_tire_temps_noop_when_all_temps_nil():
     assert out["n"] == 0
 
 
+def test_tire_temps_drops_non_finite_values():
+    # A non-finite wheel temp (NaN / ±inf) must never reach the wire — JSON can't represent it.
+    # The finite wheels still publish; the bad ones are omitted (codex on #185).
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local r = M.publishTireTempsIfDue({
+            dt = 1.0, temps = { fl = 80, fr = 0/0, rl = 1/0, rr = 84 }, wsBridge = ws,
+          })
+          local p = ws._calls[1] and ws._calls[1].payload
+          return { r = r, n = #ws._calls, fl = p and p.fl,
+                   has_fr = p and p.fr ~= nil, has_rl = p and p.rl ~= nil, rr = p and p.rr }
+        end)()
+        """
+    )
+    assert out["r"] is True
+    assert out["n"] == 1
+    assert out["fl"] == 80
+    assert out["has_fr"] is False  # NaN dropped
+    assert out["has_rl"] is False  # +inf dropped
+    assert out["rr"] == 84
+
+
+def test_tire_temps_noop_when_all_non_finite():
+    # Every wheel non-finite -> treat the sample as unavailable, don't publish an empty frame.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local r = M.publishTireTempsIfDue({
+            dt = 1.0, temps = { fl = 0/0, fr = 1/0, rl = -1/0 }, wsBridge = ws,
+          })
+          return { r = r, n = #ws._calls }
+        end)()
+        """
+    )
+    assert out["r"] is False
+    assert out["n"] == 0
+
+
+def test_delta_noop_on_non_finite():
+    # A non-finite delta_s (e.g. degenerate reference trace) is unserializable -> skip the frame.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local r = M.publishDeltaIfDue({ dt = 1.0, deltaS = 0/0, spline = 0.5, wsBridge = ws })
+          return { r = r, n = #ws._calls }
+        end)()
+        """
+    )
+    assert out["r"] is False
+    assert out["n"] == 0
+
+
+def test_mon_current_temps_drops_nan_wheel():
+    # readWheelTemp must reject a non-finite field at the source so currentTemps is finite-only.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local TM = require("tire_monitor")
+          local mon = TM.new()
+          local car = { wheels = {
+            [0] = { temperature = 0/0 },
+            [1] = { temperature = 70 },
+            [2] = { temperature = 71 },
+            [3] = { temperature = 72 },
+          } }
+          local t = mon:currentTemps(car)
+          return { has_fl = t.fl ~= nil, fr = t.fr, rl = t.rl, rr = t.rr }
+        end)()
+        """
+    )
+    assert out["has_fl"] is False  # NaN at index 0 -> fl unavailable
+    assert (out["fr"], out["rl"], out["rr"]) == (70, 71, 72)
+
+
 def test_tire_temps_publishes_with_partial_temps():
     # At least one resolvable temp -> still a meaningful sample, publish it.
     rt = _runtime()
