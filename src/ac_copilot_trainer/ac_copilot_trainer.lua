@@ -1746,14 +1746,15 @@ function script.update(dt)
   -- same delta.deltaSecondsAtSpline computation the HUD uses; `tire_temps` streams current
   -- per-wheel core temps. Both rate-limited internally and no-op when the WS isn't open.
   pcall(function()
-    -- Skip `delta` on the lap-boundary frame: there `tel:lapStartTime()` still belongs to the
-    -- finished lap (it's reset by beginLapClock in the boundary handler BELOW) while
-    -- car.splinePosition has already wrapped to ~0, so deltaSecondsAtSpline would emit a bogus
-    -- ~full-lap delta once per crossing (Cursor on #185). Use the same boundary condition the
-    -- handler uses; `state.lastLapCount` here still holds the pre-boundary value.
+    -- Skip `delta` on ANY lap-count change frame (forward boundary OR a session/pit-restart
+    -- rollback). On such a frame `tel:lapStartTime()` and the reference trace still belong to
+    -- the prior lap/stint while car state has moved on (spline wrapped, or car reset), so
+    -- deltaSecondsAtSpline would emit a bogus cross-lap/cross-stint delta (Cursor + codex on
+    -- #185). `state.lastLapCount` here still holds the pre-handler value; `~=` covers both the
+    -- forward crossing (reset by beginLapClock below) and the rollback (reset later this frame).
     local lcNow = car.lapCount or 0
-    local atLapBoundary = (state.lastLapCount or -1) >= 0 and lcNow > state.lastLapCount
-    if state.bestSortedTrace and tel:lapStartTime() and not atLapBoundary then
+    local atLapCountChange = (state.lastLapCount or -1) >= 0 and lcNow ~= state.lastLapCount
+    if state.bestSortedTrace and tel:lapStartTime() and not atLapCountChange then
       local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
       local spNow = car.splinePosition or 0
       local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)

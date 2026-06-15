@@ -134,6 +134,44 @@ def test_tire_temps_noop_without_temps_table():
     assert out["n"] == 0
 
 
+def test_tire_temps_noop_when_all_temps_nil():
+    # No wheel temp resolvable (CSP build/car) -> empty {} payload would mask the failure;
+    # treat the sample as unavailable and don't publish (codex on #185).
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local r = M.publishTireTempsIfDue({ dt = 1.0, temps = {}, wsBridge = ws })
+          return { r = r, n = #ws._calls }
+        end)()
+        """
+    )
+    assert out["r"] is False
+    assert out["n"] == 0
+
+
+def test_tire_temps_publishes_with_partial_temps():
+    # At least one resolvable temp -> still a meaningful sample, publish it.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local r = M.publishTireTempsIfDue({ dt = 1.0, temps = { fl = 80 }, wsBridge = ws })
+          local p = ws._calls[1] and ws._calls[1].payload
+          return { r = r, n = #ws._calls, fl = p and p.fl, fr = p and p.fr }
+        end)()
+        """
+    )
+    assert out["r"] is True
+    assert out["n"] == 1
+    assert out["fl"] == 80
+    assert out["fr"] is None  # unresolved wheels stay absent
+
+
 # --------------------------------------------------------------------------- contracts
 def test_both_noop_when_ws_down():
     rt = _runtime()

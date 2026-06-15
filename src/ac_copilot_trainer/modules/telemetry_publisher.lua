@@ -96,16 +96,26 @@ function M.publishTireTempsIfDue(opts)
   if type(temps) ~= "table" then
     return false
   end
+  local fl = tonumber(temps.fl)
+  local fr = tonumber(temps.fr)
+  local rl = tonumber(temps.rl)
+  local rr = tonumber(temps.rr)
+  if fl == nil and fr == nil and rl == nil and rr == nil then
+    -- No wheel temp resolvable on this CSP build/car: treat the sample as UNAVAILABLE rather
+    -- than publishing an empty {} every interval (Lua drops nil-valued keys), which would
+    -- mask the data-source failure as apparently-live-but-empty samples (codex on #185).
+    return false
+  end
   local due, accum = _due(_tireAccum, tonumber(opts.dt) or 0, TIRE_INTERVAL_SEC)
   _tireAccum = accum
   if not due then
     return false
   end
   return wsBridge.publishTopic(TOPIC_TIRE_TEMPS, {
-    fl = tonumber(temps.fl),
-    fr = tonumber(temps.fr),
-    rl = tonumber(temps.rl),
-    rr = tonumber(temps.rr),
+    fl = fl,
+    fr = fr,
+    rl = rl,
+    rr = rr,
   }) == true
 end
 
