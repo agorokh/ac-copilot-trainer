@@ -37,6 +37,7 @@ local realtimeCoaching = require("realtime_coaching")
 -- Issue #86 Part C/D: rig-screen-driven features.
 local coachingPublisher = require("coaching_publisher")
 local lifecyclePublisher = require("lifecycle_publisher")
+local telemetryPublisher = require("telemetry_publisher")
 local setupLibrary = require("setup_library")
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
@@ -817,6 +818,16 @@ state = {
   },
   recording = true,
   lastSplinePos = nil,
+  -- car.resetCounter from the previous frame; a change = teleport/return-to-garage/pit reset (a
+  -- wrap-shaped rewind the spline heuristic can't classify). Drives delta-skip + rolling reset (#185).
+  lastResetCounter = nil,
+  -- True while the lap clock is NOT aligned to a clean start/finish boundary, so `delta` (elapsed
+  -- vs the reference lap's elapsed-at-spline, both measured from s/f) would be misaligned. The
+  -- `delta` producer stays SILENT while set. Cleared ONLY when beginLapClock fires at a real lap
+  -- boundary (lapCount increment at the s/f line); SET on init, reset/teleport, backward jump, and
+  -- any mid-track clock seed (app load/reload mid-lap, post-reset re-arm) — Cursor + codex on #185.
+  -- Defaults true: no delta until the first clean lap is started (an out-lap clock is mid-track).
+  deltaRefStale = true,
   bestLapTrace = {},
   --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
   bestReferenceLapMs = nil,
@@ -1048,6 +1059,8 @@ local function resetRuntimeAfterLeavingTrack()
   lastDriveCar = nil
   lastDriveSim = nil
   state.lastSplinePos = nil
+  state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
+  state.deltaRefStale = true  -- re-entry: no boundary-aligned clock yet, delta silent until first lap
   state.bestLapTrace = {}
   state.bestReferenceLapMs = nil
   state.bestSortedTrace = nil
@@ -1102,6 +1115,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: re-emit `session` after a reset (else stale key suppresses it)
+  telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
   hud.reset()
@@ -1135,6 +1149,8 @@ local function resetRollingDrivingState()
   hud.reset()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
+  telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
+  state.deltaRefStale = true  -- #180/#185: clock reset; delta silent until the next clean lap boundary
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -1701,6 +1717,16 @@ function script.update(dt)
   lastDriveSim = sim
   state.wasDriving = true
 
+  -- car.resetCounter is NOT a confirmed-safe StateCar field (csp-api-field-safety decision /
+  -- issue #24: unknown StateCar fields THROW, and this read runs outside the pcall blocks below
+  -- as well). Read it ONCE through the guarded helper and reuse `teleported` for both the
+  -- delta-skip and the end-of-update rolling reset. nil on builds lacking the field => teleport
+  -- detection is gracefully off (the spline heuristic + lap-count rollback still apply). (#185)
+  local resetCounterNow = ch.safeCarField(car, "resetCounter")
+  local teleported = state.lastResetCounter ~= nil
+    and resetCounterNow ~= nil
+    and resetCounterNow ~= state.lastResetCounter
+
   if not state.initialized then
     tryLoadDisk()
   end
@@ -1736,6 +1762,60 @@ function script.update(dt)
       appVersion = APP_VERSION_UI,
     })
     lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+  end)
+
+  -- Issue #180 Part D step 2: telemetry topics (continuous streams, no ordering contract).
+  -- `delta` is published only once a reference lap exists (state.bestSortedTrace) using the
+  -- same delta.deltaSecondsAtSpline computation the HUD uses; `tire_temps` streams current
+  -- per-wheel core temps. Both rate-limited internally and no-op when the WS isn't open.
+  pcall(function()
+    -- Skip `delta` on ANY lap-count change frame (forward boundary OR a session/pit-restart
+    -- rollback). On such a frame `tel:lapStartTime()` and the reference trace still belong to
+    -- the prior lap/stint while car state has moved on (spline wrapped, or car reset), so
+    -- deltaSecondsAtSpline would emit a bogus cross-lap/cross-stint delta (Cursor + codex on
+    -- #185). `state.lastLapCount` here still holds the pre-handler value; `~=` covers both the
+    -- forward crossing (reset by beginLapClock below) and the rollback (reset later this frame).
+    -- Also skip a SAME-LAP pit/session reset: the spline jumps backward without a lap-count
+    -- change, and the end-of-update reset guard detects it AFTER this block runs. Mirror that
+    -- discontinuity test via the shared delta.isBackwardSplineReset so producer and reset guard
+    -- cannot drift; otherwise one bogus delta leaks out against the rewound spline (codex on #185).
+    local lcNow = car.lapCount or 0
+    local spNow = car.splinePosition or 0
+    local atLapCountChange = (state.lastLapCount or -1) >= 0 and lcNow ~= state.lastLapCount
+    -- For the delta SKIP we use the LIBERAL isBackwardSplineJump (includes wrap-shaped jumps):
+    -- skipping a delta frame is harmless, and since this only runs with lapCount unchanged
+    -- (`not atLapCountChange`), any backward jump here is a reset/teleport, not a lap wrap. This
+    -- also covers builds where resetCounter is unavailable, so a wrap-shaped same-lap teleport
+    -- never leaks a bogus delta even when `teleported` can't be determined (codex on #185).
+    local splineJump = delta.isBackwardSplineJump(state.lastSplinePos, spNow)
+    if splineJump or teleported then
+      -- Mark the reference clock stale until a clean lap boundary re-arms it (cleared at
+      -- beginLapClock). Without this, delta resumes the very next frame against the abandoned
+      -- stint's lap clock — the leak codex flagged on resetCounter-less builds (#185 / #188).
+      state.deltaRefStale = true
+    end
+    if
+      state.bestSortedTrace
+      and tel:lapStartTime()
+      and not atLapCountChange
+      and not splineJump
+      and not teleported
+      and not state.deltaRefStale
+    then
+      local eMs = (ch.simSeconds(sim) - tel:lapStartTime()) * 1000
+      local rawDelta = delta.deltaSecondsAtSpline(state.bestSortedTrace, spNow, eMs)
+      telemetryPublisher.publishDeltaIfDue({
+        dt = dt,
+        deltaS = rawDelta,
+        spline = spNow,
+        wsBridge = wsBridge,
+      })
+    end
+    telemetryPublisher.publishTireTempsIfDue({
+      dt = dt,
+      temps = tires:currentTemps(car),
+      wsBridge = wsBridge,
+    })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without
@@ -1790,8 +1870,11 @@ function script.update(dt)
     state.lastLapCount = lc
   end
 
-  -- Lap boundary: finalize trace before appending this frame's sample.
-  if state.lastLapCount >= 0 and lc > state.lastLapCount then
+  -- Lap boundary: finalize trace before appending this frame's sample. Skip on a teleport frame
+  -- (`teleported`, the guarded resetCounter signal computed above): a return-to-garage/pit reset
+  -- can coincide with a lapCount increase, and finalizing/publishing/archiving here would record a
+  -- bogus lap from the abandoned stint before the end-of-update rolling reset runs (codex on #185).
+  if state.lastLapCount >= 0 and lc > state.lastLapCount and not teleported then
     -- Last frame of the completed lap may still carry invalidation (CSP `ac.StateCar`).
     if carLapInvalidatedFlag(car) then
       state.lapInvalidatedThisLap = true
@@ -1799,6 +1882,7 @@ function script.update(dt)
     local completedTrace = tel:finalizeLapTrace()
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
+    state.deltaRefStale = false  -- clean lap clock re-armed at the s/f line: delta valid again (#185)
     -- car.previousLapTimeMs is valid; car.lastLapTimeMs may not exist on the C-struct (throws, not nil).
     local lastMs = car.previousLapTimeMs or 0
     state.lastLapMs = lastMs > 0 and lastMs or state.lastLapMs
@@ -2048,6 +2132,10 @@ function script.update(dt)
   if tel:lapStartTime() == nil and not sim.isInMainMenu and state.lastLapCount >= 0 then
     tel:beginLapClock(ch.simSeconds(sim))
     resetDeltaSmoother()
+    -- This is a MID-TRACK seed (app load/reload or post-reset re-arm), NOT a start/finish boundary,
+    -- so the clock is not aligned to s/f: keep delta silent until the next real lap boundary clears
+    -- this. Publishing now would give subscribers elapsed-from-reload vs reference-from-s/f (codex on #185).
+    state.deltaRefStale = true
     state.sectorStartSimT = ch.simSeconds(sim)
     state.sectorIndex = 1
     state.lastSplineSector = sp
@@ -2115,13 +2203,16 @@ function script.update(dt)
     state.focusPracticeHudSummarySig = nil
   end
 
-  if state.lastLapCount >= 0 and lc < state.lastLapCount then
+  if teleported or (state.lastLapCount >= 0 and lc < state.lastLapCount) then
+    -- Teleport/return-to-garage/pit reset (guarded resetCounter bumped, computed above) OR a
+    -- lap-counter rollback: the prior stint's rolling state (lap clock, coaching, aggregates) is
+    -- stale. The teleport case also covers a wrap-shaped same-lap rewind the spline heuristic
+    -- below cannot (codex on #185).
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
-    local lastSp = state.lastSplinePos
-    local d = sp - lastSp
-    local likelyWrap = lastSp > 0.8 and sp < 0.25
-    if d < -0.2 and not likelyWrap then
+    -- Same-lap backward spline jump = pit/session reset (shared with the `delta` producer's skip
+    -- guard via delta.isBackwardSplineReset so the discontinuity threshold can't drift — #185).
+    if delta.isBackwardSplineReset(state.lastSplinePos, sp) then
       resetRollingDrivingState()
     end
   end
@@ -2129,6 +2220,7 @@ function script.update(dt)
   state.lastLapCount = lc
   state.lastSplinePos = sp
   state.lastSplineSector = sp
+  state.lastResetCounter = resetCounterNow
 end
 
 function script.onWindowHide()
