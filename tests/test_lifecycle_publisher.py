@@ -177,45 +177,111 @@ def test_trackid_prefers_full_id_for_layout():
     assert out["track"] == "ks_brands_hatch/gp"
 
 
-def test_lap_publishes_payload_with_validity():
+def test_lap_payload_and_stint_best_tracking():
+    # best_lap_ms is the producer-tracked min of valid timed laps THIS stint (not the
+    # caller's value), and an invalid lap does not update it.
     rt = _runtime()
     out = rt.eval(
         r"""
         (function()
           local M = require("lifecycle_publisher"); M.reset()
           local ws = make_ws()
-          local r = M.publishLap({ lap = 3, lastLapMs = 91234, bestLapMs = 90000,
-                                   lapsCompleted = 2, valid = false, wsBridge = ws })
-          local p = ws._calls[1] and ws._calls[1].payload
-          return { r = r, n = #ws._calls, topic = ws._calls[1] and ws._calls[1].topic,
-                   lap = p and p.lap, last = p and p.last_lap_ms, best = p and p.best_lap_ms,
-                   done = p and p.laps_completed, valid = p and p.valid }
+          local function lap(n, ms, valid)
+            M.publishLap({
+              lap = n, lastLapMs = ms, lapsCompleted = n, valid = valid, wsBridge = ws,
+            })
+          end
+          lap(1, 110000, true)   -- best -> 110000
+          lap(2, 105000, true)   -- faster -> best 105000
+          lap(3, 108000, true)   -- slower -> best stays 105000
+          lap(4, 100000, false)  -- invalid -> best stays 105000, last=100000
+          local function best(i) return ws._calls[i].payload.best_lap_ms end
+          local p4 = ws._calls[4].payload
+          return { topic = ws._calls[1].topic, b1 = best(1), b2 = best(2), b3 = best(3),
+                   b4 = best(4), last4 = p4.last_lap_ms, valid4 = p4.valid,
+                   lap4 = p4.lap, done4 = p4.laps_completed }
         end)()
         """
     )
-    assert out["r"] is True
-    assert out["n"] == 1
     assert out["topic"] == "lap"
-    assert out["lap"] == 3
-    assert out["last"] == 91234
-    assert out["best"] == 90000
-    assert out["done"] == 2
-    assert out["valid"] is False
+    assert out["b1"] == 110000
+    assert out["b2"] == 105000
+    assert out["b3"] == 105000
+    assert out["b4"] == 105000  # invalid lap didn't lower the stint best
+    assert out["last4"] == 100000
+    assert out["valid4"] is False
+    assert out["lap4"] == 4
+    assert out["done4"] == 4
 
 
-def test_lap_defaults_to_valid_when_unspecified():
+def test_lap_untimed_boundary_sends_nil_last_lap():
     rt = _runtime()
     out = rt.eval(
         r"""
         (function()
           local M = require("lifecycle_publisher"); M.reset()
           local ws = make_ws()
-          M.publishLap({ lap = 1, wsBridge = ws })
-          return { valid = ws._calls[1].payload.valid }
+          M.publishLap({ lap = 1, lastLapMs = 0, lapsCompleted = 1, wsBridge = ws })  -- out-lap
+          local p = ws._calls[1].payload
+          return { last = p.last_lap_ms, best = p.best_lap_ms, valid = p.valid }
         end)()
         """
     )
-    assert out["valid"] is True  # missing `valid` -> treated as a valid lap
+    assert out["last"] is None  # untimed -> nil, not a fake 0
+    assert out["best"] is None  # no valid timed lap yet
+    assert out["valid"] is True
+
+
+def test_lap_stint_best_resets_on_reset():
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("lifecycle_publisher"); M.reset()
+          local ws = make_ws()
+          local function lap(ms)
+            M.publishLap({
+              lap = 1, lastLapMs = ms, lapsCompleted = 1, valid = true, wsBridge = ws,
+            })
+          end
+          lap(105000)
+          M.reset()  -- new stint
+          lap(112000)
+          return { b1 = ws._calls[1].payload.best_lap_ms, b2 = ws._calls[2].payload.best_lap_ms }
+        end)()
+        """
+    )
+    assert out["b1"] == 105000
+    assert out["b2"] == 112000  # stint best reset -> the new (slower) lap is the new best
+
+
+def test_session_reemits_on_ws_reconnect():
+    # Regression (codex P2): after a WS down->up reconnect (same identity), the connection
+    # heartbeat re-arms `session` so a reconnected tap sees `session` before any `lap`.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local up = { v = true }
+          local ws = { _calls = {} }
+          ws.publishTopic = function(t, _p) ws._calls[#ws._calls + 1] = t; return up.v end
+          local M = require("lifecycle_publisher"); M.reset()
+          local sim0 = { currentSessionIndex = 0 }
+          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- initial up
+          local r1 = M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- publishes
+          local r2 = M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- suppressed
+          up.v = false
+          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- WS down
+          up.v = true
+          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- reconnect -> re-arm
+          local r3 = M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- re-emits
+          return { r1 = r1, r2 = r2, r3 = r3 }
+        end)()
+        """
+    )
+    assert out["r1"] is True
+    assert out["r2"] is False  # same identity, still connected -> suppressed
+    assert out["r3"] is True  # reconnect re-armed -> session re-emitted
 
 
 def test_all_producers_noop_when_ws_down():

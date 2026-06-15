@@ -28,6 +28,14 @@ local TOPIC_LAP = "lap"
 -- session change so a new session re-emits `session` and the heartbeat re-aligns.
 local _connAccum = 0.0
 local _lastSessionKey = nil
+-- Result of the last connection-heartbeat publish — a down->up transition means a fresh /
+-- reconnected WS, on which `session` must re-emit (else a tap that joined after the original
+-- `session` sees `lap` with no preceding `session`).
+local _lastConnOk = false
+-- Best timed lap of THIS stint. Tracked here (reset by M.reset) so `best_lap_ms` stays
+-- consistent with `laps_completed`, which also resets per stint — instead of seeding from
+-- the trainer's session-persistent `state.bestLapMs`.
+local _stintBest = nil
 
 
 local function _wsReady(opts)
@@ -117,12 +125,20 @@ function M.publishConnectionIfDue(opts)
   if _connAccum < 0 then
     _connAccum = 0.0
   end
-  return wsBridge.publishTopic(TOPIC_CONNECTION, {
+  local ok = wsBridge.publishTopic(TOPIC_CONNECTION, {
     car_id = _carId(opts.car),
     track_id = _trackId(),
     session_index = _sessionIndex(opts.sim),
     app_version = (opts.appVersion ~= nil) and tostring(opts.appVersion) or nil,
   }) == true
+  -- Reconnect detection: a fresh/reconnected WS (down->up) re-arms `session` so a tap that
+  -- joined after the original `session` still gets one before any `lap`. The 1 Hz heartbeat
+  -- is the reliable observation point (it always calls publishTopic when due).
+  if ok and not _lastConnOk then
+    _lastSessionKey = nil
+  end
+  _lastConnOk = ok
+  return ok
 end
 
 
@@ -161,7 +177,9 @@ end
 
 
 --- Publish `lap` once, at a `car.lapCount` boundary (caller detects the boundary).
----@param opts table  {lap?, lastLapMs?, bestLapMs?, lapsCompleted?, valid?:boolean, wsBridge}
+--- `best_lap_ms` is derived here as the best timed lap of the current stint (see `_stintBest`),
+--- not taken from the caller, so it resets with the stint alongside `laps_completed`.
+---@param opts table  {lap?, lastLapMs?, lapsCompleted?, valid?:boolean, wsBridge}
 ---@return boolean  true if a frame was actually published this call
 function M.publishLap(opts)
   if type(opts) ~= "table" then
@@ -171,21 +189,31 @@ function M.publishLap(opts)
   if not wsBridge then
     return false
   end
+  local valid = opts.valid ~= false
+  local timedMs = tonumber(opts.lastLapMs)
+  if timedMs and timedMs <= 0 then
+    timedMs = nil  -- untimed boundary (e.g. out-lap): no valid lap time, don't send a fake 0
+  end
+  if valid and timedMs and (not _stintBest or timedMs < _stintBest) then
+    _stintBest = timedMs
+  end
   return wsBridge.publishTopic(TOPIC_LAP, {
     lap = tonumber(opts.lap),
-    last_lap_ms = tonumber(opts.lastLapMs),
-    best_lap_ms = tonumber(opts.bestLapMs),
+    last_lap_ms = timedMs,
+    best_lap_ms = _stintBest,
     laps_completed = tonumber(opts.lapsCompleted),
     -- Treat missing as valid; only an explicit false marks an invalidated lap.
-    valid = opts.valid ~= false,
+    valid = valid,
   }) == true
 end
 
 
---- Reset rate-limiter + change-detector (call on session change).
+--- Reset rate-limiter + change-detector + stint-best (call on session/stint reset).
 function M.reset()
   _connAccum = 0.0
   _lastSessionKey = nil
+  _lastConnOk = false
+  _stintBest = nil
 end
 
 

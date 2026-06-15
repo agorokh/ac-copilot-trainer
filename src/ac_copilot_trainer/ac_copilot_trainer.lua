@@ -1630,7 +1630,8 @@ function script.update(dt)
     -- track/car/session change; `connection` is a ~1 Hz heartbeat. Both no-op
     -- when the WS isn't open. (`lap` is published at the lap boundary below.)
     pcall(function()
-      lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+      -- Connection first: its heartbeat detects a WS reconnect and re-arms `session`
+      -- re-emission, so `session` re-publishes in this same frame after a reconnect.
       lifecyclePublisher.publishConnectionIfDue({
         dt = dt,
         car = car,
@@ -1638,6 +1639,7 @@ function script.update(dt)
         wsBridge = wsBridge,
         appVersion = APP_VERSION_UI,
       })
+      lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
     end)
 
     -- Periodic [RT-DIAG] log (every 3 sec) to verify what the engine sees
@@ -1828,18 +1830,11 @@ function script.update(dt)
     -- / the first lap isn't reported stale; an untimed boundary (out-lap,
     -- previousLapTimeMs == 0) sends `last_lap_ms = nil` rather than a misleading 0.
     pcall(function()
-      local lapValid = not state.lapInvalidatedThisLap
-      local timedMs = (lastMs and lastMs > 0) and lastMs or nil
-      local bestSoFar = state.bestLapMs
-      if lapValid and timedMs and (not bestSoFar or timedMs < bestSoFar) then
-        bestSoFar = timedMs
-      end
       lifecyclePublisher.publishLap({
         lap = state.lapsCompleted,
-        lastLapMs = timedMs,
-        bestLapMs = bestSoFar,
+        lastLapMs = lastMs,  -- raw; the producer treats <=0 as untimed and tracks the stint best
         lapsCompleted = state.lapsCompleted,
-        valid = lapValid,
+        valid = not state.lapInvalidatedThisLap,
         wsBridge = wsBridge,
       })
     end)
