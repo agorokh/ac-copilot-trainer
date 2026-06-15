@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-13T00:00:00Z
+last_updated: 2026-06-15T23:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -24,6 +24,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-15 latest — #180 Part D step 2 COMPLETE in code: all 5 WS producers merged (#185, `64a127e`); in-game tire_temps.rr verification is the ONLY open gate)
+
+**[#185](https://github.com/agorokh/ac-copilot-trainer/pull/185) MERGED (squash `64a127e`).** The final two declared producers — `delta` + `tire_temps` (`modules/telemetry_publisher.lua`) — plus a real bug fix surfaced by operator-grade live verification. **All 5 KNOWN_TOPICS producers now exist** (connection/session/lap from #182; delta/tire_temps from #185; coaching.snapshot/setup.active pre-existing).
+
+**The rr=0 bug (why this PR grew to 7 review rounds):** live `tire_temps` showed `rr=0` while the AC physics oracle (`acpmf_physics.tyreCoreTemperature[FL,FR,RL,RR]`) read all four non-zero. Root cause: **CSP `car.wheels` is 0-indexed** per `ac.Wheel` (FrontLeft=0..RearRight=3) — `tire_monitor.lua` read `wheels[1..4]`, shifting every corner and reading an out-of-bounds zero for RR. Fixed `Mon:currentTemps` + `Mon:update`. Triangulated against the `ac.Wheel` enum, the shipped CMRT-Essential-HUD (`for i=0,3`), and the physics oracle. See [`03_Investigations/csp-car-wheels-0-indexed-2026-06-15`](../03_Investigations/csp-car-wheels-0-indexed-2026-06-15.md) (reusable CSP gotcha).
+
+**Other hardening (11 review threads, Cursor + CodeRabbit + codex):** delta now publishes **only when the lap clock is start/finish-aligned** ([`01_Decisions/delta-clock-boundary-alignment`](../01_Decisions/delta-clock-boundary-alignment.md)) — no bogus delta across lap boundaries, spline-only resets, teleports (guarded `car.resetCounter` via new `csp_helpers.safeCarField`), or mid-track clock seeds. Lap-boundary finalize gated on `not teleported`. Non-finite (NaN/inf) temps + delta_s/spline filtered. 48 lua tests.
+
+**THE OPEN GATE (anti-false-green):** in-game reconcile `tire_temps {fl,fr,rl,rr}` vs the physics oracle on the next live drive — `rr` must be **non-zero** and all four aligned. Harness ready: `python .scratch/diag_wheels.py` (emits PASS/FAIL; needs AC live + ON TRACK). The module is symlinked into AC apps → live on next relaunch. Until observed, #180 Part D is NOT "fully operational."
+
+**Follow-up filed:** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) — rolling-state reset on a wrap-shaped same-lap teleport on CSP builds lacking `car.resetCounter` (low-severity; first action: confirm resetCounter is present on the rig, likely mooting it). The delta-leak half is already fixed.
+
+**Next deliverable (Part E):** carcsw in-sim driver + L1.5 sequence probe — and notably the **autonomous in-sim driver is the unblock for self-verification without the operator** (drive the car → cross s/f → verify delta/tire_temps without a human). That is the EPIC #154 throughline.
+
+---
 
 ## Resume here (2026-06-15 — Part D step 2 LIFECYCLE producers (connection/session/lap) MERGED + verified live; delta/tire_temps next)
 
