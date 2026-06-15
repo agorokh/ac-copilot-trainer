@@ -186,17 +186,25 @@ function M.publishLap(opts)
   if timedMs and timedMs <= 0 then
     timedMs = nil  -- untimed boundary (e.g. out-lap): no valid lap time, don't send a fake 0
   end
-  if valid and timedMs and (not _stintBest or timedMs < _stintBest) then
-    _stintBest = timedMs
+  -- Compute the candidate stint best INCLUDING this lap for the payload, but COMMIT it only
+  -- after a successful publish — mirrors `session`'s publish-then-record, so `best_lap_ms`
+  -- never reflects a lap whose frame was not delivered (WS down/not acked) (Cursor on #182).
+  local candidateBest = _stintBest
+  if valid and timedMs and (not candidateBest or timedMs < candidateBest) then
+    candidateBest = timedMs
   end
-  return wsBridge.publishTopic(TOPIC_LAP, {
+  local ok = wsBridge.publishTopic(TOPIC_LAP, {
     lap = tonumber(opts.lap),
     last_lap_ms = timedMs,
-    best_lap_ms = _stintBest,
+    best_lap_ms = candidateBest,
     laps_completed = tonumber(opts.lapsCompleted),
     -- Treat missing as valid; only an explicit false marks an invalidated lap.
     valid = valid,
   }) == true
+  if ok then
+    _stintBest = candidateBest
+  end
+  return ok
 end
 
 

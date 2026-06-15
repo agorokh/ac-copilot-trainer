@@ -255,6 +255,29 @@ def test_lap_stint_best_resets_on_reset():
     assert out["b2"] == 112000  # stint best reset -> the new (slower) lap is the new best
 
 
+def test_lap_best_not_committed_on_failed_publish():
+    # Mirrors session's publish-then-record: a lap whose frame fails to send (WS down) must NOT
+    # advance the stint best, so a later DELIVERED lap reports a best among delivered laps only.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("lifecycle_publisher"); M.reset()
+          local down = make_ws_closed()
+          M.publishLap({
+            lap = 1, lastLapMs = 104000, lapsCompleted = 1, valid = true, wsBridge = down,
+          })
+          local up = make_ws()
+          M.publishLap({
+            lap = 2, lastLapMs = 110000, lapsCompleted = 2, valid = true, wsBridge = up,
+          })
+          return { best = up._calls[1].payload.best_lap_ms }
+        end)()
+        """
+    )
+    assert out["best"] == 110000  # the dropped faster lap (104000) was not committed
+
+
 def test_rearm_session_reemits_for_unchanged_identity():
     # The entry script calls M.rearmSession() on a WS reconnect; the next publishSessionIfChanged
     # must re-emit `session` even though the identity is unchanged (so a reconnected tap sees
