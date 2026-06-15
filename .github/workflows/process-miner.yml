@@ -62,8 +62,13 @@ jobs:
 
       - name: Open PR with learned rules
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_PAT is not configured for this repo — cannot open a PR (default GITHUB_TOKEN is blocked by policy)."
+            exit 1
+          fi
           BRANCH="miner/weekly-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
           git checkout -b "$BRANCH"
           git add .claude/rules/learned .cursor/rules/learned reports/process_miner AGENTS.md || true
@@ -73,8 +78,14 @@ jobs:
           fi
           git commit -m "chore: weekly process miner — learned rules"
           git push --set-upstream origin "$BRANCH"
-          gh pr create \
+          if gh pr create \
             --base main \
             --head "$BRANCH" \
             --title "chore: weekly miner rules" \
-            --body "Auto-generated from process miner. Refs #14. Review learned rules before merging."
+            --body "Auto-generated from process miner. Refs #14. Review learned rules before merging."; then
+            echo "Opened PR for $BRANCH."
+          else
+            echo "::error::Could not open a PR for $BRANCH; deleting the orphan branch so it does not accumulate."
+            git push origin --delete "$BRANCH" || true
+            exit 1
+          fi

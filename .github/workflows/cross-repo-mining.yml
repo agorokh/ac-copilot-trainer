@@ -91,10 +91,19 @@ jobs:
           MINING_EMIT_LEARNED: "1"
         run: python scripts/cross_repo_aggregate.py
 
+      - name: Verify GH_PAT is configured
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "${GH_PAT:-}" ]; then
+            echo "::error::GH_PAT is not configured — cannot open a PR with the default token (blocked by repo policy)."
+            exit 1
+          fi
+
       - name: Create pull request
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
           commit-message: "chore(mining): cross-repo learned rules (process-miner)"
           branch: process-miner/learned-rules-${{ github.run_id }}
           delete-branch: true
