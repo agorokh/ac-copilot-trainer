@@ -36,6 +36,7 @@ local hudSettings = require("hud_settings")
 local realtimeCoaching = require("realtime_coaching")
 -- Issue #86 Part C/D: rig-screen-driven features.
 local coachingPublisher = require("coaching_publisher")
+local lifecyclePublisher = require("lifecycle_publisher")
 local setupLibrary = require("setup_library")
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
@@ -1623,6 +1624,20 @@ function script.update(dt)
       })
     end)
 
+    -- Issue #180 Part D step 2: lifecycle topics. `session` fires only on
+    -- track/car/session change; `connection` is a ~1 Hz heartbeat. Both no-op
+    -- when the WS isn't open. (`lap` is published at the lap boundary below.)
+    pcall(function()
+      lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+      lifecyclePublisher.publishConnectionIfDue({
+        dt = dt,
+        car = car,
+        sim = sim,
+        wsBridge = wsBridge,
+        appVersion = APP_VERSION_UI,
+      })
+    end)
+
     -- Periodic [RT-DIAG] log (every 3 sec) to verify what the engine sees
     -- live. Issue #75 round 3: prove the in-corner / brake-distance pipeline.
     state._rtDiagT = (state._rtDiagT or 0) + (dt or 0)
@@ -1805,6 +1820,19 @@ function script.update(dt)
       segBrakes = state.brakingPoints.best
     end
     state.lapsCompleted = (state.lapsCompleted or 0) + 1
+    -- Issue #180 Part D step 2: publish the `lap` topic once at the boundary.
+    -- No-op when the WS isn't open. `lastMs` is car.previousLapTimeMs (read above);
+    -- validity reflects whether this just-completed lap was invalidated.
+    pcall(function()
+      lifecyclePublisher.publishLap({
+        lap = lc,
+        lastLapMs = lastMs,
+        bestLapMs = state.bestLapMs,
+        lapsCompleted = state.lapsCompleted,
+        valid = not state.lapInvalidatedThisLap,
+        wsBridge = wsBridge,
+      })
+    end)
     local spanForAnalytics = 0
     if #completedTrace >= 2 then
       spanForAnalytics = completedTrace[#completedTrace].eMs - completedTrace[1].eMs
