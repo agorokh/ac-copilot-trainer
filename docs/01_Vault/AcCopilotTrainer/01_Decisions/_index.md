@@ -21,3 +21,4 @@ Architecture Decision Records for this vault.
 - [screen-and-csp-apps-integration](screen-and-csp-apps-integration.md) — bridge the rig screen to Pocket Technician + Setup Exchange via same-VM API replication, not cross-VM bridging.
 - [dashboard-visual-design-figma](dashboard-visual-design-figma.md) — Figma file is source of truth for both HUD (shipped) and rig touchscreen (Phase 2); design tokens + cockpit-UX rules captured here.
 - [autonomous-self-test-harness](autonomous-self-test-harness.md) — agent test-drives the trainer with no human in the loop; layered pyramid (L0 lupa / L1 WS-tap / L1.5 in-sim probe / L2 daemon+CSP Custom AI / L3 human smoke); EPIC #154.
+- [delta-clock-boundary-alignment](delta-clock-boundary-alignment.md) — the `delta` WS topic publishes only when the lap clock is start/finish-aligned (`deltaRefStale`); WS is stricter than the HUD; teleport via guarded `car.resetCounter` (PR #185, #188 residual).
