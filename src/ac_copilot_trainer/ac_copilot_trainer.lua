@@ -1708,6 +1708,16 @@ function script.update(dt)
   lastDriveSim = sim
   state.wasDriving = true
 
+  -- car.resetCounter is NOT a confirmed-safe StateCar field (csp-api-field-safety decision /
+  -- issue #24: unknown StateCar fields THROW, and this read runs outside the pcall blocks below
+  -- as well). Read it ONCE through the guarded helper and reuse `teleported` for both the
+  -- delta-skip and the end-of-update rolling reset. nil on builds lacking the field => teleport
+  -- detection is gracefully off (the spline heuristic + lap-count rollback still apply). (#185)
+  local resetCounterNow = ch.safeCarField(car, "resetCounter")
+  local teleported = state.lastResetCounter ~= nil
+    and resetCounterNow ~= nil
+    and resetCounterNow ~= state.lastResetCounter
+
   if not state.initialized then
     tryLoadDisk()
   end
@@ -1764,11 +1774,10 @@ function script.update(dt)
     local spNow = car.splinePosition or 0
     local atLapCountChange = (state.lastLapCount or -1) >= 0 and lcNow ~= state.lastLapCount
     local splineReset = delta.isBackwardSplineReset(state.lastSplinePos, spNow)
-    -- A teleport/return-to-garage/pit reset bumps car.resetCounter and can land the car back near
-    -- the start line with lapCount unchanged — a wrap-shaped rewind the spline heuristic above
-    -- excludes (likelyWrap). resetCounter is the unambiguous teleport signal, so skip delta on it
-    -- too; the end-of-update reset uses the same signal to clear rolling state (codex on #185).
-    local teleported = state.lastResetCounter ~= nil and (car.resetCounter or 0) ~= state.lastResetCounter
+    -- `teleported` (computed once above via the guarded resetCounter read) covers a wrap-shaped
+    -- rewind the spline heuristic excludes (likelyWrap) — a teleport/return-to-garage/pit reset
+    -- that lands near the start with lapCount unchanged. Skip delta on it; the end-of-update reset
+    -- reuses the same signal to clear rolling state (codex on #185).
     if
       state.bestSortedTrace
       and tel:lapStartTime()
@@ -2169,12 +2178,11 @@ function script.update(dt)
     state.focusPracticeHudSummarySig = nil
   end
 
-  local resetCounterNow = car.resetCounter or 0
-  local teleported = state.lastResetCounter ~= nil and resetCounterNow ~= state.lastResetCounter
   if teleported or (state.lastLapCount >= 0 and lc < state.lastLapCount) then
-    -- Teleport/return-to-garage/pit reset (resetCounter bumped) OR a lap-counter rollback: the
-    -- prior stint's rolling state (lap clock, coaching, aggregates) is stale. The teleport case
-    -- also covers a wrap-shaped same-lap rewind the spline heuristic below cannot (codex on #185).
+    -- Teleport/return-to-garage/pit reset (guarded resetCounter bumped, computed above) OR a
+    -- lap-counter rollback: the prior stint's rolling state (lap clock, coaching, aggregates) is
+    -- stale. The teleport case also covers a wrap-shaped same-lap rewind the spline heuristic
+    -- below cannot (codex on #185).
     resetRollingDrivingState()
   elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
     -- Same-lap backward spline jump = pit/session reset (shared with the `delta` producer's skip

@@ -70,6 +70,28 @@ function M.sanitizeId(s, fallback)
   return s
 end
 
+--- pcall-guarded read of a possibly-unconfirmed `ac.StateCar` field. CSP StateCar throws on
+--- unknown fields (csp-api-field-safety decision / issue #24), so risky fields not on the
+--- confirmed-valid list (e.g. `resetCounter`) MUST be read through this rather than directly.
+--- Returns the field value, or `default` (nil if omitted) when `car` is nil, the field is absent,
+--- or the read throws — so callers degrade gracefully on builds lacking the field.
+---@param car any
+---@param key string
+---@param default any
+---@return any
+function M.safeCarField(car, key, default)
+  if car == nil then
+    return default
+  end
+  local ok, v = pcall(function()
+    return car[key]
+  end)
+  if ok and v ~= nil then
+    return v
+  end
+  return default
+end
+
 function M.safeCarIdRaw()
   if not ac or type(ac.getCarID) ~= "function" then
     return nil
