@@ -31,6 +31,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
 
       - uses: actions/setup-python@v6
         with:
@@ -71,11 +72,15 @@ jobs:
 
       - name: Create sync PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           VCS_REF: ${{ steps.ref.outputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_PAT is not configured for this repo — cannot open a PR (default GITHUB_TOKEN is blocked by policy)."
+            exit 1
+          fi
           # Include untracked files (git diff alone misses new files from the template).
           if [ -z "$(git status --porcelain)" ]; then
             echo "No changes after copier update."
