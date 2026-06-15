@@ -255,39 +255,59 @@ def test_lap_stint_best_resets_on_reset():
     assert out["b2"] == 112000  # stint best reset -> the new (slower) lap is the new best
 
 
-def test_session_reemits_on_ws_reconnect():
-    # Regression (codex P2): after a WS down->up reconnect (same identity), the connection
-    # heartbeat re-arms `session` so a reconnected tap sees `session` before any `lap`.
+def test_rearm_session_reemits_for_unchanged_identity():
+    # The entry script calls M.rearmSession() on a WS reconnect; the next publishSessionIfChanged
+    # must re-emit `session` even though the identity is unchanged (so a reconnected tap sees
+    # `session` before any `lap`). Reconnect detection lives in the entry script (per-frame via
+    # ws_bridge.sidecarConnected()), not in this producer.
     rt = _runtime()
     out = rt.eval(
         r"""
         (function()
-          local up = { v = true }
-          local ws = { _calls = {} }
-          ws.publishTopic = function(t, _p) ws._calls[#ws._calls + 1] = t; return up.v end
           local M = require("lifecycle_publisher"); M.reset()
-          local sim0 = { currentSessionIndex = 0 }
-          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- initial up
-          local r1 = M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- publishes
-          local r2 = M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- suppressed
-          up.v = false
-          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- WS down
-          up.v = true
-          M.publishConnectionIfDue({ dt = 1.0, sim = sim0, wsBridge = ws })  -- reconnect -> re-arm
-          local r3 = M.publishSessionIfChanged({ sim = sim0, wsBridge = ws })  -- re-emits
-          return { r1 = r1, r2 = r2, r3 = r3 }
+          local ws = make_ws()
+          local opts = { sim = { currentSessionIndex = 0 }, wsBridge = ws }
+          local r1 = M.publishSessionIfChanged(opts)  -- publishes
+          local r2 = M.publishSessionIfChanged(opts)  -- same key -> suppressed
+          M.rearmSession()                            -- WS reconnect re-arm
+          local r3 = M.publishSessionIfChanged(opts)  -- re-emits, identity unchanged
+          return { r1 = r1, r2 = r2, r3 = r3, n = #ws._calls }
         end)()
         """
     )
     assert out["r1"] is True
-    assert out["r2"] is False  # same identity, still connected -> suppressed
-    assert out["r3"] is True  # reconnect re-armed -> session re-emitted
+    assert out["r2"] is False
+    assert out["r3"] is True
+    assert out["n"] == 2
+
+
+def test_rearm_session_does_not_reset_stint_best():
+    # rearmSession() (WS reconnect) must NOT clear the stint best — only M.reset() (stint) does.
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("lifecycle_publisher"); M.reset()
+          local ws = make_ws()
+          local function lap(n, ms)
+            M.publishLap({
+              lap = n, lastLapMs = ms, lapsCompleted = n, valid = true, wsBridge = ws,
+            })
+          end
+          lap(1, 104000)
+          M.rearmSession()  -- reconnect: stint best must survive
+          lap(2, 109000)
+          return { b2 = ws._calls[2].payload.best_lap_ms }
+        end)()
+        """
+    )
+    assert out["b2"] == 104000  # stint best preserved across a reconnect re-arm
 
 
 def test_stint_reset_emits_session_once_not_duplicate():
-    # Regression (Cursor on #182 r2-fix): a stint reset with the WS still up must re-emit
-    # `session` exactly once. The earlier code reset _lastConnOk=false, so the next heartbeat
-    # falsely detected a reconnect and emitted a SECOND (duplicate) session ~1s later.
+    # The connection heartbeat must NOT touch the session change-detector key: after a stint
+    # reset (WS still up) `session` re-emits exactly once, and a subsequent due heartbeat does
+    # not produce a duplicate. (Reconnect re-arm is the entry script's job, not the heartbeat's.)
     rt = _runtime()
     out = rt.eval(
         r"""

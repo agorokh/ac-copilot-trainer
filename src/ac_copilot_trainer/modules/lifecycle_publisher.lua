@@ -24,14 +24,14 @@ local TOPIC_CONNECTION = "connection"
 local TOPIC_SESSION = "session"
 local TOPIC_LAP = "lap"
 
--- Module-level rate-limiter / change-detector state. Reset via M.reset() on
--- session change so a new session re-emits `session` and the heartbeat re-aligns.
+-- Module-level rate-limiter / change-detector state.
+-- `session` is a pure CHANGE event: published when track/car/session-index changes, and
+-- re-armed by M.rearmSession() (WS reconnect) / M.reset() (stint reset). It is deliberately
+-- NOT coupled to the connection heartbeat — doing so spawned reconnect edge cases (duplicate
+-- on reset; ~1s re-emit delay). Reconnect re-arm is driven per-frame by the entry script via
+-- ws_bridge.sidecarConnected(), so `session` re-emits immediately (before any `lap`).
 local _connAccum = 0.0
 local _lastSessionKey = nil
--- Result of the last connection-heartbeat publish — a down->up transition means a fresh /
--- reconnected WS, on which `session` must re-emit (else a tap that joined after the original
--- `session` sees `lap` with no preceding `session`).
-local _lastConnOk = false
 -- Best timed lap of THIS stint. Tracked here (reset by M.reset) so `best_lap_ms` stays
 -- consistent with `laps_completed`, which also resets per stint — instead of seeding from
 -- the trainer's session-persistent `state.bestLapMs`.
@@ -125,20 +125,12 @@ function M.publishConnectionIfDue(opts)
   if _connAccum < 0 then
     _connAccum = 0.0
   end
-  local ok = wsBridge.publishTopic(TOPIC_CONNECTION, {
+  return wsBridge.publishTopic(TOPIC_CONNECTION, {
     car_id = _carId(opts.car),
     track_id = _trackId(),
     session_index = _sessionIndex(opts.sim),
     app_version = (opts.appVersion ~= nil) and tostring(opts.appVersion) or nil,
   }) == true
-  -- Reconnect detection: a fresh/reconnected WS (down->up) re-arms `session` so a tap that
-  -- joined after the original `session` still gets one before any `lap`. The 1 Hz heartbeat
-  -- is the reliable observation point (it always calls publishTopic when due).
-  if ok and not _lastConnOk then
-    _lastSessionKey = nil
-  end
-  _lastConnOk = ok
-  return ok
 end
 
 
@@ -208,12 +200,18 @@ function M.publishLap(opts)
 end
 
 
---- Reset rate-limiter + change-detector + stint-best (call on session/stint reset).
---- Deliberately does NOT touch `_lastConnOk`: that tracks the WS connection (owned by the
---- connection heartbeat), and a stint reset does not drop the WS. Resetting it here made the
---- next heartbeat falsely detect a reconnect, clear the key again, and emit a DUPLICATE
---- `session` ~1s after the intended one (Cursor on #182). `_lastSessionKey = nil` already
---- re-emits `session` exactly once, which is the intent.
+--- Re-arm ONLY the `session` change-detector so the next call re-emits `session` for the
+--- current identity. Driven per-frame by the entry script on a WS reconnect (via
+--- ws_bridge.sidecarConnected() false->true) so a reconnected tap gets `session` immediately
+--- — before any subsequent `lap` — without disturbing the stint best or the heartbeat.
+function M.rearmSession()
+  _lastSessionKey = nil
+end
+
+
+--- Reset rate-limiter + change-detector + stint-best (call on session/STINT reset, not on a
+--- mere WS reconnect — use M.rearmSession() for that). `_lastSessionKey = nil` re-emits
+--- `session` once for the new stint; `_stintBest = nil` rescopes `best_lap_ms` to the stint.
 function M.reset()
   _connAccum = 0.0
   _lastSessionKey = nil

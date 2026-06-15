@@ -1630,8 +1630,15 @@ function script.update(dt)
     -- track/car/session change; `connection` is a ~1 Hz heartbeat. Both no-op
     -- when the WS isn't open. (`lap` is published at the lap boundary below.)
     pcall(function()
-      -- Connection first: its heartbeat detects a WS reconnect and re-arms `session`
-      -- re-emission, so `session` re-publishes in this same frame after a reconnect.
+      -- Per-frame WS-reconnect detection: on a sidecar (re)connect, re-arm `session` so it
+      -- re-emits THIS frame — before any subsequent `lap` — without waiting on the heartbeat
+      -- and without resetting the stint best (#180 review: avoids the duplicate / 1 s-delay
+      -- edges of coupling reconnect detection to the heartbeat).
+      local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
+      if wsConn and not state._wsPrevConnected then
+        lifecyclePublisher.rearmSession()
+      end
+      state._wsPrevConnected = wsConn
       lifecyclePublisher.publishConnectionIfDue({
         dt = dt,
         car = car,
