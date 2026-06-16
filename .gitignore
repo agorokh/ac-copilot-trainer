@@ -23,6 +23,16 @@ htmlcov/
 # Scratch / local experiments
 .scratch/
 tools/_scratch/
+.tmp/
+
+# Operator-local config backups (e.g. ACC config snapshots) — local data, never committed.
+backups/
+
+# Stray machine-local tooling (e.g. MOZA R3 profile script) — not repo source.
+tools/acc/
+
+# Ephemeral scheduled-tasks lock (local runtime state)
+.claude/scheduled_tasks.lock
 
 # Local backups of pre-shim governance hook bodies (issue #338 hub-and-spoke migration).
 scripts/.governance-vendored-bak/
