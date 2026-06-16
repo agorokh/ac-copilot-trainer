@@ -34,6 +34,7 @@ from tools.ac_harness.entry_launcher import (
     classify_entry_phase,
     normalize_race_ini_spawn_set,
 )
+from tools.ac_harness.lap_driver import DriveFrame, LapDriver
 from tools.ac_harness.shared_memory import (
     AcGameStatus,
     DrivingEntryDetector,
@@ -89,4 +90,7 @@ __all__ = [
     "car_controls_name",
     "car_data_name",
     "parse_car_data",
+    # Autonomous lap driver (orchestrates pure-pursuit + actuator into clean laps).
+    "DriveFrame",
+    "LapDriver",
 ]
