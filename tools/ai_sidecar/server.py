@@ -17,6 +17,8 @@ import ipaddress
 import json
 import logging
 import secrets
+import time
+from collections.abc import Callable
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -25,8 +27,12 @@ from tools.ai_sidecar import observability
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
+    CLIENT_CLASS_EXTERNAL,
+    CLIENT_CLASS_KEY,
     CLIENT_HEADER,
     ENVELOPE_KEY,
+    HAPTIC_CLIENT_CLASSES,
+    PHYSICAL_CLIENT_CLASSES,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
     TYPE_CONFIG_ACK,
@@ -34,6 +40,7 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_CONFIG_SET,
     TYPE_CONFIG_VALUE,
     TYPE_ERROR,
+    TYPE_HAPTIC_EVENT,
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
@@ -44,6 +51,7 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_STATE_SNAPSHOT,
     TYPE_STATE_SUBSCRIBE,
     TYPE_STATE_UNSUBSCRIBE,
+    TYPE_TELEMETRY_TICK,
     make_error,
     make_hello_ack,
     validate_inbound,
@@ -70,6 +78,10 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 # Connected external-protocol peers (any client that has spoken a `{v,type}`
 # frame, including the Lua loopback client). Used for hub-style fan-out.
 _external_peers: set[Any] = set()
+_external_peer_classes: dict[Any, str] = {}
+
+TELEMETRY_TICK_MAX_HZ = 20.0
+HAPTIC_EVENT_MAX_HZ = 25.0
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 CLIENT_TO_SERVER_TYPES = frozenset(
@@ -97,11 +109,42 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_ACTION_ACK,
         TYPE_STATE_SNAPSHOT,
         TYPE_ERROR,
+        # Issue #118: emitted by the loopback Lua peer / sidecar toward
+        # physical peripherals only, never echoed back to Lua.
+        TYPE_TELEMETRY_TICK,
+        TYPE_HAPTIC_EVENT,
         # Issue #86 Part D: replies the Lua peer sends back to the screen.
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
     }
 )
+
+
+class _RateLimiter:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._last_sent: dict[tuple[str, ...], float] = {}
+
+    def reset(self) -> None:
+        self._last_sent.clear()
+
+    def allow(self, key: tuple[str, ...], max_hz: float) -> bool:
+        now = self._clock()
+        min_interval = 1.0 / max_hz
+        last = self._last_sent.get(key)
+        if last is not None and now - last < min_interval:
+            return False
+        self._last_sent[key] = now
+        return True
+
+
+_peripheral_rate_limiter = _RateLimiter()
+
+
+def _reset_external_state() -> None:
+    _external_peers.clear()
+    _external_peer_classes.clear()
+    _peripheral_rate_limiter.reset()
 
 
 def _get_ollama_followup_sem() -> asyncio.Semaphore:
@@ -292,12 +335,15 @@ def make_process_request(token: str | None):
 
 async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     """Forward a ``{v,type}`` frame to every external peer except ``exclude``."""
-    if not _external_peers:
-        return
-    payload = json.dumps(frame, separators=(",", ":"))
     targets = [p for p in _external_peers if p is not exclude]
+    await _broadcast_targets(frame, targets=targets)
+
+
+async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
+    """Forward a v1 frame to an explicit peer list."""
     if not targets:
         return
+    payload = json.dumps(frame, separators=(",", ":"))
     results = await asyncio.gather(*[_safe_send_raw(p, payload) for p in targets])
     for p, err in zip(targets, results, strict=True):
         if err is not None:
@@ -305,6 +351,7 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
                 "broadcast send failed peer=%s err=%s", getattr(p, "remote_address", None), err
             )
             _external_peers.discard(p)
+            _external_peer_classes.pop(p, None)
 
 
 def _has_loopback_target(*, exclude: Any) -> bool:
@@ -314,6 +361,78 @@ def _has_loopback_target(*, exclude: Any) -> bool:
         if _is_loopback_peer(peer):
             return True
     return False
+
+
+def _peer_class(peer: Any) -> str:
+    return _external_peer_classes.get(peer, CLIENT_CLASS_EXTERNAL)
+
+
+def _targets_for_classes(*, exclude: Any, classes: frozenset[str]) -> list[Any]:
+    return [
+        peer for peer in _external_peers if peer is not exclude and _peer_class(peer) in classes
+    ]
+
+
+def _clamp_01(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return default
+    return max(0.0, min(1.0, float(value)))
+
+
+def _build_haptic_events_from_telemetry(frame: dict[str, Any]) -> list[dict[str, Any]]:
+    payload = frame.get("payload")
+    if not isinstance(payload, dict):
+        return []
+
+    events: list[dict[str, Any]] = []
+    ts_sim = frame.get("ts_sim")
+    if payload.get("abs_active") or payload.get("brake_lock") or payload.get("wheel_lock"):
+        events.append(
+            {
+                "v": 1,
+                "type": TYPE_HAPTIC_EVENT,
+                "event": "pedal_rumble",
+                "channel": "pedal",
+                "intensity": max(0.2, _clamp_01(payload.get("brake"))),
+                "duration_ms": 80,
+                "ts_sim": ts_sim,
+                "source": "sidecar.telemetry_tick",
+            }
+        )
+
+    slip = payload.get("slip")
+    if not isinstance(slip, bool) and isinstance(slip, int | float) and abs(float(slip)) >= 0.2:
+        events.append(
+            {
+                "v": 1,
+                "type": TYPE_HAPTIC_EVENT,
+                "event": "slip_buzz",
+                "channel": "pedal",
+                "intensity": _clamp_01(abs(float(slip))),
+                "duration_ms": 60,
+                "ts_sim": ts_sim,
+                "source": "sidecar.telemetry_tick",
+            }
+        )
+    return events
+
+
+async def _route_peripheral_frame(
+    frame: dict[str, Any],
+    *,
+    exclude: Any,
+    classes: frozenset[str],
+    rate_key: tuple[str, ...],
+    max_hz: float,
+) -> None:
+    targets = _targets_for_classes(exclude=exclude, classes=classes)
+    if not targets:
+        logger.debug("no peripheral targets for type=%s classes=%s", frame.get(TYPE_KEY), classes)
+        return
+    if not _peripheral_rate_limiter.allow(rate_key, max_hz):
+        logger.debug("peripheral frame rate-limited type=%s key=%s", frame.get(TYPE_KEY), rate_key)
+        return
+    await _broadcast_targets(frame, targets=targets)
 
 
 async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
@@ -338,10 +457,15 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t == TYPE_HELLO:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
+        client_class = data.get(CLIENT_CLASS_KEY)
+        if not isinstance(client_class, str):
+            client_class = CLIENT_CLASS_EXTERNAL
+        _external_peer_classes[websocket] = client_class
         logger.info(
-            "external hello accepted peer=%s client=%s peers=%d",
+            "external hello accepted peer=%s client=%s class=%s peers=%d",
             peer,
             data.get("client", "?"),
+            client_class,
             len(_external_peers),
         )
         await _safe_send(websocket, make_hello_ack())
@@ -363,6 +487,36 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         return
     if t not in CLIENT_TO_SERVER_TYPES and t not in SERVER_TO_CLIENT_TYPES:
         await _safe_send(websocket, make_error(f"unsupported type: {t!r}", ref_type=t))
+        return
+    if t == TYPE_TELEMETRY_TICK:
+        await _route_peripheral_frame(
+            data,
+            exclude=websocket,
+            classes=PHYSICAL_CLIENT_CLASSES,
+            rate_key=(TYPE_TELEMETRY_TICK,),
+            max_hz=TELEMETRY_TICK_MAX_HZ,
+        )
+        for event in _build_haptic_events_from_telemetry(data):
+            event_err = validate_inbound(event)
+            if event_err is not None:
+                logger.warning("generated haptic_event invalid: %s", event_err)
+                continue
+            await _route_peripheral_frame(
+                event,
+                exclude=websocket,
+                classes=HAPTIC_CLIENT_CLASSES,
+                rate_key=(TYPE_HAPTIC_EVENT, event["event"], event["channel"]),
+                max_hz=HAPTIC_EVENT_MAX_HZ,
+            )
+        return
+    if t == TYPE_HAPTIC_EVENT:
+        await _route_peripheral_frame(
+            data,
+            exclude=websocket,
+            classes=HAPTIC_CLIENT_CLASSES,
+            rate_key=(TYPE_HAPTIC_EVENT, str(data.get("event")), str(data.get("channel"))),
+            max_hz=HAPTIC_EVENT_MAX_HZ,
+        )
         return
     if (
         t in CLIENT_TO_SERVER_TYPES
@@ -528,6 +682,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     bg_task.add_done_callback(_followup_done)
     finally:
         _external_peers.discard(websocket)
+        _external_peer_classes.pop(websocket, None)
         for t in list(pending_followups):
             if not t.done():
                 t.cancel()
@@ -542,7 +697,7 @@ async def _run(host: str, port: int, reply_coaching: bool, token: str | None) ->
         raise SystemExit('websockets is required. Install: pip install -e ".[coaching]"') from e
 
     process_request = make_process_request(token)
-    _external_peers.clear()
+    _reset_external_state()
     try:
         async with websockets.serve(
             lambda ws: _handler(ws, reply_coaching),
@@ -560,7 +715,7 @@ async def _run(host: str, port: int, reply_coaching: bool, token: str | None) ->
             )
             await asyncio.Future()
     finally:
-        _external_peers.clear()
+        _reset_external_state()
 
 
 def _is_loopback(host: str) -> bool:

@@ -11,6 +11,7 @@ All frames are JSON objects. Unknown ``type`` values are rejected by
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 # Envelope key that identifies a v1 external-client frame.
@@ -18,6 +19,30 @@ ENVELOPE_KEY = "v"
 ENVELOPE_VERSION = 1
 TYPE_KEY = "type"
 SERVER_VERSION = "1.0.0"
+CLIENT_CLASS_KEY = "client_class"
+
+# Optional client classes advertised in `hello`. Existing clients that omit the
+# field keep working as generic external peers.
+CLIENT_CLASS_EXTERNAL = "external"
+CLIENT_CLASS_LUA = "lua"
+CLIENT_CLASS_SCREEN = "screen"
+CLIENT_CLASS_HAPTICS = "haptics"
+CLIENT_CLASS_PHYSICAL = "physical"
+CLIENT_CLASS_BROWSER = "browser"
+KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
+    {
+        CLIENT_CLASS_EXTERNAL,
+        CLIENT_CLASS_LUA,
+        CLIENT_CLASS_SCREEN,
+        CLIENT_CLASS_HAPTICS,
+        CLIENT_CLASS_PHYSICAL,
+        CLIENT_CLASS_BROWSER,
+    }
+)
+PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
+    {CLIENT_CLASS_SCREEN, CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL}
+)
+HAPTIC_CLIENT_CLASSES: frozenset[str] = frozenset({CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL})
 
 # Client → server.
 TYPE_HELLO = "hello"
@@ -43,6 +68,32 @@ TYPE_ERROR = "error"
 # Issue #86 Part D: replies to the screen for setup operations.
 TYPE_SETUP_LIST_RESULT = "setup.list.result"
 TYPE_SETUP_LOAD_ACK = "setup.load.ack"
+# Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
+# from the Lua loopback peer to physical clients; the sidecar can derive and
+# route `haptic_event` frames to haptic-class clients.
+TYPE_TELEMETRY_TICK = "telemetry_tick"
+TYPE_HAPTIC_EVENT = "haptic_event"
+
+KNOWN_HAPTIC_EVENTS: frozenset[str] = frozenset(
+    {
+        "pedal_rumble",
+        "slip_buzz",
+        "lateral_g",
+        "wind",
+        "gear_shift",
+    }
+)
+KNOWN_HAPTIC_CHANNELS: frozenset[str] = frozenset(
+    {
+        "pedal",
+        "pedal_left",
+        "pedal_right",
+        "seat_left",
+        "seat_right",
+        "fan",
+        "shaker",
+    }
+)
 
 # Capabilities advertised in `hello_ack` so clients can branch on optional
 # server features without a v2 bump.
@@ -51,6 +102,8 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_CONFIG_SET,
     TYPE_ACTION,
     TYPE_STATE_SUBSCRIBE,
+    TYPE_TELEMETRY_TICK,
+    TYPE_HAPTIC_EVENT,
 )
 
 # Names a client may invoke via `action`. Mirrors the Lua dispatcher in
@@ -114,6 +167,126 @@ def make_error(message: str, *, ref_type: str | None = None) -> dict[str, Any]:
     return out
 
 
+def _is_finite_number(value: Any) -> bool:
+    return (
+        not isinstance(value, bool)
+        and isinstance(value, int | float)
+        and math.isfinite(float(value))
+    )
+
+
+def _validate_number(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> str | None:
+    value = payload.get(key)
+    if not _is_finite_number(value):
+        return f"{key} requires a finite number"
+    f_value = float(value)
+    if min_value is not None and f_value < min_value:
+        return f"{key} must be >= {min_value:g}"
+    if max_value is not None and f_value > max_value:
+        return f"{key} must be <= {max_value:g}"
+    return None
+
+
+def _validate_optional_number(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    min_value: float | None = None,
+    max_value: float | None = None,
+) -> str | None:
+    if key not in payload:
+        return None
+    return _validate_number(payload, key, min_value=min_value, max_value=max_value)
+
+
+def _validate_corner_number_map(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return f"{key} requires an object"
+    for corner in ("fl", "fr", "rl", "rr"):
+        if corner not in value:
+            return f"{key} requires '{corner}'"
+        if not _is_finite_number(value[corner]):
+            return f"{key}.{corner} requires a finite number"
+    return None
+
+
+def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
+    err = _validate_optional_number(frame, "ts_sim", min_value=0)
+    if err is not None:
+        return err
+    seq = frame.get("seq")
+    if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 0):
+        return "seq must be a non-negative integer"
+    payload = frame.get("payload")
+    if not isinstance(payload, dict):
+        return "telemetry_tick requires object 'payload'"
+    required_ranges = {
+        "speed_kmh": (0, None),
+        "rpm": (0, None),
+        "throttle": (0, 1),
+        "brake": (0, 1),
+        "steer": (-1, 1),
+        "lat_g": (None, None),
+        "long_g": (None, None),
+    }
+    for key, (min_value, max_value) in required_ranges.items():
+        err = _validate_number(payload, key, min_value=min_value, max_value=max_value)
+        if err is not None:
+            return err
+    gear = payload.get("gear")
+    if isinstance(gear, bool) or not isinstance(gear, int | str):
+        return "gear requires an integer or string"
+    for key in ("lap_time_ms", "slip"):
+        err = _validate_optional_number(payload, key, min_value=0)
+        if err is not None:
+            return err
+    for key in ("tyre_temps_c", "tyre_pressures_psi"):
+        err = _validate_corner_number_map(payload, key)
+        if err is not None:
+            return err
+    for key in ("abs_active", "brake_lock", "wheel_lock"):
+        if key in payload and not isinstance(payload[key], bool):
+            return f"{key} must be a boolean"
+    return None
+
+
+def _validate_haptic_event(frame: dict[str, Any]) -> str | None:
+    err = _validate_optional_number(frame, "ts_sim", min_value=0)
+    if err is not None:
+        return err
+    event = frame.get("event")
+    if not isinstance(event, str) or not event:
+        return "haptic_event requires non-empty 'event'"
+    if event not in KNOWN_HAPTIC_EVENTS:
+        return f"unknown haptic event: {event!r}"
+    channel = frame.get("channel")
+    if not isinstance(channel, str) or not channel:
+        return "haptic_event requires non-empty 'channel'"
+    if channel not in KNOWN_HAPTIC_CHANNELS:
+        return f"unknown haptic channel: {channel!r}"
+    err = _validate_number(frame, "intensity", min_value=0, max_value=1)
+    if err is not None:
+        return err
+    duration_ms = frame.get("duration_ms")
+    if (
+        isinstance(duration_ms, bool)
+        or not isinstance(duration_ms, int)
+        or duration_ms < 1
+        or duration_ms > 1000
+    ):
+        return "duration_ms must be an integer between 1 and 1000"
+    return None
+
+
 def validate_inbound(frame: dict[str, Any]) -> str | None:
     """Return ``None`` if ``frame`` is structurally valid, else an error string."""
     version = frame.get(ENVELOPE_KEY)
@@ -125,6 +298,10 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
     if t == TYPE_HELLO:
         if not isinstance(frame.get("client"), str) or not frame["client"]:
             return "hello requires non-empty 'client'"
+        client_class = frame.get(CLIENT_CLASS_KEY)
+        if client_class is not None:
+            if not isinstance(client_class, str) or client_class not in KNOWN_CLIENT_CLASSES:
+                return f"unknown client_class: {client_class!r}"
         return None
     if t == TYPE_CONFIG_GET:
         if not isinstance(frame.get("key"), str) or not frame["key"]:
@@ -161,6 +338,10 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
     if t in (TYPE_SETUP_LIST_RESULT, TYPE_SETUP_LOAD_ACK):
         # Server-to-client replies forwarded from the Lua peer — accept silently.
         return None
+    if t == TYPE_TELEMETRY_TICK:
+        return _validate_telemetry_tick(frame)
+    if t == TYPE_HAPTIC_EVENT:
+        return _validate_haptic_event(frame)
     if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE):
         topics = frame.get("topics")
         if not isinstance(topics, list) or not topics:
