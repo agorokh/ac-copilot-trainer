@@ -24,26 +24,12 @@ THIS repo on every PR.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
+from conftest import load_script_module
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_script_module(module_name: str, path: Path):
-    cached = sys.modules.get(module_name)
-    if cached is not None:
-        return cached
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
 
 # #338 SHIM RECONCILIATION: when hook_memory_gate.py is a governance-hub shim, the classifier
 # (`_classify`) lives in the hub, not in the thin delegator — the import below would fail and the
@@ -54,9 +40,9 @@ if "governance shim" in (REPO_ROOT / "scripts" / "hook_memory_gate.py").read_tex
         allow_module_level=True,
     )
 
-_gate = _load_script_module("_test_hook_memory_gate", REPO_ROOT / "scripts" / "hook_memory_gate.py")
-_manifest = _load_script_module(
-    "_test_gate_hook_memory_manifest", REPO_ROOT / "scripts" / "hook_memory_manifest.py"
+_gate = load_script_module("_test_hook_memory_gate", REPO_ROOT / "scripts" / "hook_memory_gate.py")
+_manifest = load_script_module(
+    "_test_hook_memory_manifest", REPO_ROOT / "scripts" / "hook_memory_manifest.py"
 )
 
 _classify = _gate._classify

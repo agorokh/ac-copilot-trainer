@@ -2,30 +2,17 @@
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
+from conftest import load_script_module
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _load_hook_repo_root():
-    module_name = "_test_hook_repo_root"
-    cached = sys.modules.get(module_name)
-    if cached is not None:
-        return cached
-    spec = importlib.util.spec_from_file_location(
-        module_name, REPO_ROOT / "scripts" / "hook_repo_root.py"
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_hook_repo_root = _load_hook_repo_root()
+_hook_repo_root = load_script_module(
+    "_test_hook_repo_root", REPO_ROOT / "scripts" / "hook_repo_root.py"
+)
 worktree_root_for = _hook_repo_root.worktree_root_for
 
 
