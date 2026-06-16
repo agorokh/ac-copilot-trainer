@@ -86,6 +86,10 @@ def _connected(rt) -> bool:
     return bool(rt.eval('require("ws_bridge").sidecarConnected()'))
 
 
+def _epoch(rt) -> int:
+    return int(rt.eval('require("ws_bridge").openEpoch()'))
+
+
 def test_publish_is_gated_until_hello_ack():
     rt = _runtime()
     _open(rt)
@@ -171,3 +175,29 @@ def test_reconnect_via_onopen_rearms_handshake():
     # A fresh hello_ack re-registers us.
     _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
     assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
+
+
+def test_open_epoch_detects_subframe_reconnect_while_connected_boolean_stays_true():
+    # Issue #183: the entry script samples sidecarConnected() once per frame.
+    # A CSP auto-reconnect can fire onOpen and receive hello_ack between samples,
+    # leaving the boolean true before and after. openEpoch must still advance so
+    # script.update can re-arm lifecycle `session`.
+    rt = _runtime()
+    _open(rt)
+    assert _epoch(rt) == 0
+
+    assert rt.eval("_ws_on_open ~= nil"), "ws_bridge must register an onOpen callback"
+    rt.execute("_ws_on_open()")
+    assert _epoch(rt) == 1
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert _connected(rt) is True
+    connected_before = _connected(rt)
+    epoch_before = _epoch(rt)
+
+    # Entire reconnect + hello_ack sequence happens between two app update polls.
+    rt.execute("_ws_on_open()")
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+
+    assert connected_before is True
+    assert _connected(rt) is True
+    assert _epoch(rt) == epoch_before + 1
