@@ -120,6 +120,7 @@ def evaluate_sequence(
     *,
     continuous_topics: tuple[str, ...] = DEFAULT_CONTINUOUS_TOPICS,
     strict_lifecycle: bool = False,
+    require_lap: bool = False,
 ) -> SequenceResult:
     """Evaluate a frame stream against the L1.5 contract (pure).
 
@@ -129,6 +130,10 @@ def evaluate_sequence(
 
     ``strict_lifecycle=True`` (controlled tap from session start): also require ``session`` and
     ``lap`` present and strictly enforce session-before-lap. ``delta`` stays a note in both modes.
+
+    ``require_lap=True``: require a ``lap`` even outside strict mode — used with ``--wait-lap``,
+    where the caller explicitly waited for a lap, so a timed-out/absent lap must FAIL rather than
+    silently pass as a note (codex on #191).
     """
     ordered = _ordered_topics(frames)
     first_index: dict[str, int] = {}
@@ -152,14 +157,21 @@ def evaluate_sequence(
     for topic in continuous_topics:
         checks.append(_presence(topic))
 
-    # 2) session / lap: required under strict_lifecycle; otherwise informational notes.
-    for topic in STRICT_LIFECYCLE_TOPICS:
-        if strict_lifecycle:
-            checks.append(_presence(topic))
-        else:
-            notes.append(_conditional_note(topic, first_index, counts))
+    # 2) session: required under strict_lifecycle; otherwise an informational note.
+    if strict_lifecycle:
+        checks.append(_presence("session"))
+    else:
+        notes.append(_conditional_note("session", first_index, counts))
 
-    # 3) delta: always a note (needs a reference lap + an s/f-aligned clock) — never required.
+    # 3) lap: required under strict_lifecycle OR require_lap. With --wait-lap the caller explicitly
+    #    waited for a lap, so a timed-out/absent lap must FAIL the check rather than pass as a note
+    #    (codex on #191); otherwise it is an informational note.
+    if strict_lifecycle or require_lap:
+        checks.append(_presence("lap"))
+    else:
+        notes.append(_conditional_note("lap", first_index, counts))
+
+    # 4) delta: always a note (needs a reference lap + an s/f-aligned clock) — never required.
     notes.append(_conditional_note("delta", first_index, counts))
 
     # 4) ordering: the first `session` precedes the first `lap` (#182 lifecycle contract).
@@ -254,7 +266,8 @@ async def tap_frames(
 
 async def _amain(args: argparse.Namespace) -> int:
     frames = await tap_frames(seconds=args.seconds, wait_for_lap=args.wait_lap)
-    result = evaluate_sequence(frames, strict_lifecycle=args.strict)
+    # --wait-lap explicitly waited for a lap, so require it: a timed-out wait must FAIL, not pass.
+    result = evaluate_sequence(frames, strict_lifecycle=args.strict, require_lap=args.wait_lap)
     print(result.summary())
     return 0 if result.ok else 1
 

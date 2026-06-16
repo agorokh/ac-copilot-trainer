@@ -162,6 +162,23 @@ def test_strict_does_not_require_delta():
     assert any(n.startswith("delta:") for n in r.notes)
 
 
+# ------------------------------------------------------------------- require_lap (--wait-lap)
+def test_require_lap_fails_when_lap_absent():
+    # --wait-lap waited for a lap; if it timed out (lap absent) the probe must FAIL, not pass with
+    # lap as a note — otherwise --wait-lap could false-green the lap producer (codex on #191).
+    frames = [_f("connection"), _f("tire_temps"), _f("coaching.snapshot")]
+    r = evaluate_sequence(frames, require_lap=True)
+    assert r.ok is False
+    lap = next(c for c in r.checks if c.name == "present:lap")
+    assert lap.ok is False
+
+
+def test_require_lap_passes_when_lap_present():
+    r = evaluate_sequence(_good_stream(), require_lap=True)
+    assert r.ok is True
+    assert any(c.name == "present:lap" and c.ok for c in r.checks)
+
+
 # --------------------------------------------------------------------------- jsonl loader
 def test_frames_from_jsonl_round_trip(tmp_path):
     p = tmp_path / "frames.jsonl"
