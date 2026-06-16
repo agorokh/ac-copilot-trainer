@@ -116,7 +116,7 @@ def test_brake_corner_uses_full_tail_when_brake_never_releases() -> None:
     corner = record["corners"][0]
     assert corner["exitSpeed"] == pytest.approx(100.0)
     assert corner["minSpeed"] == pytest.approx(100.0)
-    assert corner["trailBrakeRatio"] == pytest.approx(1.0)
+    assert corner["trailBrakeRatio"] == pytest.approx(0.75)
 
 
 def test_validator_rejects_trace_field_order_drift() -> None:

@@ -109,16 +109,18 @@ def _first_brake_corner(rows: Sequence[Sequence[float]]) -> dict[str, Any] | Non
                 break
         window = braking[:release_offset]
         speeds = [candidate[speed_idx] for candidate in window]
+        brake_values = [candidate[brake_idx] for candidate in window]
         steer_values = [candidate[steer_idx] for candidate in window]
         throttle_values = [candidate[throttle_idx] for candidate in window]
+        max_brake = max(brake_values)
+        avg_brake = sum(brake_values) / len(brake_values)
         return {
             "label": "T1",
             "entrySpeed": row[speed_idx],
             "minSpeed": min(speeds),
             "exitSpeed": speeds[-1],
             "brakePointSpline": row[spline_idx],
-            "trailBrakeRatio": sum(1 for candidate in window if candidate[brake_idx] > 0.1)
-            / len(window),
+            "trailBrakeRatio": 0.0 if max_brake <= 1e-6 else min(1.0, avg_brake / max_brake),
             "throttleAvg": sum(throttle_values) / len(throttle_values),
             "steerReversals": 0,
             "tractionCircleProxy": max(abs(value) for value in steer_values),
