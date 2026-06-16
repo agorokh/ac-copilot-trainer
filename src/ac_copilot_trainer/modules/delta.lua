@@ -175,7 +175,10 @@ function M.rollingResetDecision(opts)
   end
 
   if pendingWrapLapCount ~= nil then
-    if type(lapCount) == "number" and lapCount > pendingWrapLapCount then
+    if type(lapCount) ~= "number" then
+      return { reset = false, pendingWrapLapCount = pendingWrapLapCount }
+    end
+    if lapCount > pendingWrapLapCount then
       return { reset = false, pendingWrapLapCount = nil }
     end
     return { reset = true, pendingWrapLapCount = nil }

@@ -145,6 +145,12 @@ def test_rolling_reset_decision_resets_deferred_wrap_when_lap_count_stays_same()
     assert out["pending"] is None
 
 
+def test_rolling_reset_decision_keeps_deferred_wrap_when_lap_count_unavailable():
+    out = _decision(pending="5", prev="0.05", cur="0.08", last_lap="5", lap="nil")
+    assert out["reset"] is False
+    assert out["pending"] == 5
+
+
 def test_rolling_reset_decision_immediate_for_non_wrap_same_lap_rewind():
     out = _decision(prev="0.62", cur="0.05", last_lap="5", lap="5")
     assert out["reset"] is True
