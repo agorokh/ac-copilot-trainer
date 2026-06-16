@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T11:13:39Z
+last_updated: 2026-06-16T22:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -17,6 +17,8 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Active focus (2026-06-16):** [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED** — EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) Part E (carcsw driver + L1.5 sequence probe + session replay) is on `main` and live-verified. **Next EPIC thread:** Part F harness daemon for full L2 hands-off (operator-gated control channel). Parallel hot path unchanged: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
@@ -65,6 +67,7 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-16** — **#190 CLOSED** — EPIC #154 Part E complete. Merged PRs: [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) L1.5 probe, [#209](https://github.com/agorokh/ac-copilot-trainer/pull/209)/[#221](https://github.com/agorokh/ac-copilot-trainer/pull/221)/[#222](https://github.com/agorokh/ac-copilot-trainer/pull/222)/[#223](https://github.com/agorokh/ac-copilot-trainer/pull/223) carcsw driver, [#201](https://github.com/agorokh/ac-copilot-trainer/pull/201) session replay for late taps. Live-verified autonomous lap + coaching on Magione. Next EPIC thread: Part F harness daemon.
 - **2026-06-16** — PR [#206](https://github.com/agorokh/ac-copilot-trainer/pull/206) **MERGED** at `7d87f96` — closed [#114](https://github.com/agorokh/ac-copilot-trainer/issues/114) with setup experiment tracking and suggestions. Adds `tools.ai_sidecar.setup_optimizer`, JSONL experiment rebuild/live recording from lap archives, setup A/B comparison, deterministic expected-improvement suggestion, CLI + v1 websocket frames, Lua store registration/recording, path safety, corrupt-store/missing-dir guards, and docs in [`13_Setup_Experiments`](../../../10_Development/13_Setup_Experiments.md). Classification: no post-merge flags. Active focus remains #190.
 - **2026-06-16** — PR [#204](https://github.com/agorokh/ac-copilot-trainer/pull/204) **MERGED** at `dc93b1b` — closed [#115](https://github.com/agorokh/ac-copilot-trainer/issues/115) with `tools.lap_archive_export`, a streamed lap-archive CSV exporter plus deterministic MoTeC-shaped CSV bridge, documented in [`13_Lap_Archive_Export`](../../../10_Development/13_Lap_Archive_Export.md). Output paths are contained under cwd, invalid laps are skipped by default, mixed MoTeC inputs are rejected, and post-merge classification found no flags. Active focus remains #190.
 - **2026-06-16** — PR [#202](https://github.com/agorokh/ac-copilot-trainer/pull/202) **MERGED** at `d71bca3` — closed [#156](https://github.com/agorokh/ac-copilot-trainer/issues/156) by removing `scripts/` `sys.path` pollution from hook/manifest tests and adding `tools.testing.script_imports`, a path-aware file loader with sibling-script support that does not expose `scripts/mcp` as a namespace package. Classification: no post-merge flags. Active focus remains #190.
