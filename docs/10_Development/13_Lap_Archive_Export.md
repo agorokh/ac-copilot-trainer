@@ -20,7 +20,8 @@ python -m tools.lap_archive_export --output exports/laps.csv /path/to/journal/la
 
 Directories are expanded to sorted `lap_*.json` files. Laps with
 `lap.is_valid=false` are skipped by default; pass `--include-invalid` when you
-want to inspect invalidated laps.
+want to inspect invalidated laps. Analysis CSV exports stream archive files one
+at a time and replace the output only after the export completes.
 
 Stable columns:
 
@@ -59,6 +60,16 @@ Position X/Y/Z (m), Lap Number (none), Lap Time (s), Valid Lap (none)
 Compatibility limits:
 
 - The exporter does not write native MoTeC `.ld` files.
+- `journal/laps` is an app-wide archive directory. `motec-csv` exports reject
+  mixed `session_uuid`, car, track, or track-layout inputs because the output
+  header describes one continuous outing. Export broad history with the
+  analysis CSV format, or pass a narrowed set of lap files that belong to one
+  compatible outing.
+- MoTeC header stats are computed with a bounded pre-scan over the selected
+  paths, then rows are streamed during the write. Beacon markers are based on
+  emitted sample time so marker values stay inside the exported log range;
+  the `Lap Time` channel still carries recorded `lap.lap_ms` when it is
+  present.
 - MoTeC's public support guidance says the CSV format is exacting rather than
   fully documented: every field should remain quoted, and beacon marker values
   are seconds from the start of the log separated by spaces. See MoTeC forum

@@ -213,17 +213,19 @@ def iter_csv_rows(
             yield row
 
 
-def _loaded_archives(
+def _iter_loaded_archives(
     inputs: Iterable[str | Path],
     *,
     include_invalid: bool,
-) -> list[tuple[Path, dict[str, Any]]]:
-    archives: list[tuple[Path, dict[str, Any]]] = []
+) -> Iterator[tuple[Path, dict[str, Any]]]:
     for path in iter_lap_archive_paths(inputs):
         record = load_lap_archive(path)
         if include_invalid or lap_is_valid(record):
-            archives.append((path, record))
-    return archives
+            yield path, record
+
+
+def _temporary_output_path(output_path: Path) -> Path:
+    return output_path.with_name(f".{output_path.name}.tmp")
 
 
 def export_csv(
@@ -233,16 +235,22 @@ def export_csv(
     include_invalid: bool = False,
 ) -> int:
     """Write stable analysis CSV rows. Returns rows written."""
-    archives = _loaded_archives(inputs, include_invalid=include_invalid)
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _temporary_output_path(output_path)
     rows_written = 0
-    with output_path.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, lineterminator="\n")
-        writer.writeheader()
-        for row in iter_csv_rows(archives):
-            writer.writerow({column: _format_cell(row.get(column)) for column in CSV_COLUMNS})
-            rows_written += 1
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, lineterminator="\n")
+            writer.writeheader()
+            archives = _iter_loaded_archives(inputs, include_invalid=include_invalid)
+            for row in iter_csv_rows(archives):
+                writer.writerow({column: _format_cell(row.get(column)) for column in CSV_COLUMNS})
+                rows_written += 1
+        tmp_path.replace(output_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return rows_written
 
 
@@ -257,17 +265,17 @@ def _parse_exported_at(record: dict[str, Any]) -> datetime | None:
 
 
 def _motec_header(
-    archives: Sequence[tuple[Path, dict[str, Any]]], stats: dict[str, Any]
+    first_archive: tuple[Path, dict[str, Any]] | None, stats: dict[str, Any]
 ) -> list[list[Any]]:
-    first = archives[0][1] if archives else {}
-    first_meta = _metadata(first, archives[0][0]) if archives else {}
+    first = first_archive[1] if first_archive else {}
+    first_meta = _metadata(first, first_archive[0]) if first_archive else {}
     first_dt = _parse_exported_at(first)
     log_date = first_dt.strftime("%d/%m/%Y") if first_dt else ""
     log_time = first_dt.strftime("%I:%M:%S %p") if first_dt else ""
     end_time = _as_finite_float(stats.get("end_time_s")) or 0.0
     end_distance = _as_finite_float(stats.get("end_distance_m")) or 0.0
     sample_rate = _as_finite_float(stats.get("sample_rate_hz"))
-    beacon_markers = _beacon_markers(archives)
+    beacon_markers = stats.get("beacon_markers", [])
     return [
         ["Driver", "AC Copilot Trainer", "", "", "Vehicle ID", first_meta.get("car_id") or ""],
         ["Device", "AC Copilot Trainer"],
@@ -296,24 +304,42 @@ def _motec_header(
     ]
 
 
-def _beacon_markers(archives: Sequence[tuple[Path, dict[str, Any]]]) -> list[float]:
-    markers: list[float] = []
-    offset = 0.0
-    for _, record in archives:
-        duration_s = _lap_duration_s(record)
-        if duration_s <= 0:
-            continue
-        offset += duration_s
-        markers.append(offset)
-    return markers
+_MOTEC_GROUP_FIELDS = ("session_uuid", "car_id", "track_id", "track_layout")
 
 
-def _lap_duration_s(record: dict[str, Any]) -> float:
-    lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
-    lap_ms = _as_finite_float(lap.get("lap_ms"))
-    if lap_ms is not None and lap_ms > 0:
-        return lap_ms / 1000.0
+def _motec_group_key(record: dict[str, Any]) -> tuple[Any, Any, Any, Any]:
+    car = record.get("car") if isinstance(record.get("car"), dict) else {}
+    track = record.get("track") if isinstance(record.get("track"), dict) else {}
+    return (
+        record.get("session_uuid"),
+        car.get("id"),
+        track.get("id"),
+        track.get("layout"),
+    )
 
+
+def _format_motec_group_key(key: tuple[Any, Any, Any, Any]) -> str:
+    return ", ".join(
+        f"{name}={_format_cell(value) or '<blank>'}"
+        for name, value in zip(_MOTEC_GROUP_FIELDS, key, strict=True)
+    )
+
+
+def _validate_motec_group(
+    path: Path,
+    key: tuple[Any, Any, Any, Any],
+    expected: tuple[Any, Any, Any, Any],
+) -> None:
+    if key == expected:
+        return
+    raise LapArchiveExportError(
+        f"{path}: motec-csv inputs must contain one session/car/track; "
+        f"first archive is {_format_motec_group_key(expected)}, "
+        f"this archive is {_format_motec_group_key(key)}"
+    )
+
+
+def _trace_duration_s(record: dict[str, Any]) -> float:
     fields = _field_map(record)
     samples = record.get("trace", {}).get("samples", [])
     max_elapsed_ms = max(
@@ -329,28 +355,56 @@ def _lap_duration_s(record: dict[str, Any]) -> float:
     return max_elapsed_ms / 1000.0
 
 
+def _lap_duration_s(record: dict[str, Any]) -> float:
+    lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
+    lap_ms = _as_finite_float(lap.get("lap_ms"))
+    if lap_ms is not None and lap_ms > 0:
+        return lap_ms / 1000.0
+    return _trace_duration_s(record)
+
+
+def _lap_export_duration_s(record: dict[str, Any]) -> float:
+    trace_duration_s = _trace_duration_s(record)
+    if trace_duration_s > 0:
+        return trace_duration_s
+    return _lap_duration_s(record)
+
+
+def _iter_motec_archive_rows(
+    archive: tuple[Path, dict[str, Any]],
+    *,
+    offset_s: float,
+) -> Iterator[dict[str, Any]]:
+    record = archive[1]
+    lap_time_s = _lap_duration_s(record)
+    for row in iter_csv_rows([archive]):
+        motec = dict(row)
+        raw_time = _as_finite_float(row.get("time_s"))
+        motec["time_s"] = (offset_s + raw_time) if raw_time is not None else offset_s
+        brake = _as_finite_float(row.get("brake"))
+        throttle = _as_finite_float(row.get("throttle"))
+        motec["brake_pct"] = brake * 100.0 if brake is not None else None
+        motec["throttle_pct"] = throttle * 100.0 if throttle is not None else None
+        motec["lap_time_s"] = lap_time_s if lap_time_s > 0 else None
+        motec["valid_lap"] = 1 if row.get("is_valid") is True else 0
+        yield motec
+
+
 def _iter_motec_rows(
-    archives: Sequence[tuple[Path, dict[str, Any]]],
+    archives: Iterable[tuple[Path, dict[str, Any]]],
 ) -> Iterator[dict[str, Any]]:
     offset_s = 0.0
     for archive in archives:
         record = archive[1]
-        duration_s = _lap_duration_s(record)
-        for row in iter_csv_rows([archive]):
-            motec = dict(row)
-            raw_time = _as_finite_float(row.get("time_s"))
-            motec["time_s"] = (offset_s + raw_time) if raw_time is not None else offset_s
-            brake = _as_finite_float(row.get("brake"))
-            throttle = _as_finite_float(row.get("throttle"))
-            motec["brake_pct"] = brake * 100.0 if brake is not None else None
-            motec["throttle_pct"] = throttle * 100.0 if throttle is not None else None
-            motec["lap_time_s"] = duration_s if duration_s > 0 else None
-            motec["valid_lap"] = 1 if row.get("is_valid") is True else 0
-            yield motec
-        offset_s += duration_s
+        yield from _iter_motec_archive_rows(archive, offset_s=offset_s)
+        offset_s += _lap_export_duration_s(record)
 
 
-def _motec_stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+def _scan_motec_archives(archives: Iterable[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
+    first_archive: tuple[Path, dict[str, Any]] | None = None
+    expected_key: tuple[Any, Any, Any, Any] | None = None
+    beacon_markers: list[float] = []
+    offset_s = 0.0
     row_count = 0
     finite_time_count = 0
     first_time_s: float | None = None
@@ -358,18 +412,32 @@ def _motec_stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     end_time_s = 0.0
     end_distance_m = 0.0
 
-    for row in rows:
-        row_count += 1
-        time_s = _as_finite_float(row.get("time_s"))
-        if time_s is not None:
-            if first_time_s is None:
-                first_time_s = time_s
-            last_time_s = time_s
-            end_time_s = max(end_time_s, time_s)
-            finite_time_count += 1
-        distance_m = _as_finite_float(row.get("lap_distance_m"))
-        if distance_m is not None:
-            end_distance_m = max(end_distance_m, distance_m)
+    for archive in archives:
+        path, record = archive
+        key = _motec_group_key(record)
+        if expected_key is None:
+            expected_key = key
+            first_archive = archive
+        else:
+            _validate_motec_group(path, key, expected_key)
+
+        for row in _iter_motec_archive_rows(archive, offset_s=offset_s):
+            row_count += 1
+            time_s = _as_finite_float(row.get("time_s"))
+            if time_s is not None:
+                if first_time_s is None:
+                    first_time_s = time_s
+                last_time_s = time_s
+                end_time_s = max(end_time_s, time_s)
+                finite_time_count += 1
+            distance_m = _as_finite_float(row.get("lap_distance_m"))
+            if distance_m is not None:
+                end_distance_m = max(end_distance_m, distance_m)
+
+        duration_s = _lap_export_duration_s(record)
+        if duration_s > 0:
+            beacon_markers.append(offset_s + duration_s)
+        offset_s += duration_s
 
     sample_rate_hz = None
     if (
@@ -381,10 +449,12 @@ def _motec_stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         sample_rate_hz = (finite_time_count - 1) / (last_time_s - first_time_s)
 
     return {
+        "first_archive": first_archive,
         "row_count": row_count,
         "end_time_s": end_time_s,
         "end_distance_m": end_distance_m,
         "sample_rate_hz": sample_rate_hz,
+        "beacon_markers": beacon_markers,
     }
 
 
@@ -400,20 +470,28 @@ def export_motec_csv(
     the public i2 CSV-import conventions: metadata rows, a channel row, a units
     row, and quoted fields.
     """
-    archives = _loaded_archives(inputs, include_invalid=include_invalid)
-    stats = _motec_stats(_iter_motec_rows(archives))
+    paths = list(iter_lap_archive_paths(inputs))
+    stats = _scan_motec_archives(_iter_loaded_archives(paths, include_invalid=include_invalid))
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = _temporary_output_path(output_path)
     rows_written = 0
-    with output_path.open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.writer(fh, quoting=csv.QUOTE_ALL, lineterminator="\n")
-        for header_row in _motec_header(archives, stats):
-            writer.writerow([_format_cell(value) for value in header_row])
-        writer.writerow([name for name, _, _ in _MOTEC_CHANNELS])
-        writer.writerow([unit for _, unit, _ in _MOTEC_CHANNELS])
-        for row in _iter_motec_rows(archives):
-            writer.writerow([_format_cell(row.get(key)) for _, _, key in _MOTEC_CHANNELS])
-            rows_written += 1
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh, quoting=csv.QUOTE_ALL, lineterminator="\n")
+            first_archive = stats.get("first_archive")
+            for header_row in _motec_header(first_archive, stats):
+                writer.writerow([_format_cell(value) for value in header_row])
+            writer.writerow([name for name, _, _ in _MOTEC_CHANNELS])
+            writer.writerow([unit for _, unit, _ in _MOTEC_CHANNELS])
+            archives = _iter_loaded_archives(paths, include_invalid=include_invalid)
+            for row in _iter_motec_rows(archives):
+                writer.writerow([_format_cell(row.get(key)) for _, _, key in _MOTEC_CHANNELS])
+                rows_written += 1
+        tmp_path.replace(output_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
     return rows_written
 
 

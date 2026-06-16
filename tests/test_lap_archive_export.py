@@ -14,6 +14,40 @@ def _rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
+def _write_archive(
+    path: Path,
+    *,
+    lap_uuid: str,
+    session_uuid: str = "session-fallback",
+    car_id: str = "ks_abarth500_assetto_corse",
+    track_id: str = "magione",
+    lap_n: int = 1,
+    lap_ms: int | None = None,
+    fields: list[str] | None = None,
+    samples: list[list[float | int]] | None = None,
+) -> None:
+    lap: dict[str, object] = {"lap_n": lap_n, "is_valid": True}
+    if lap_ms is not None:
+        lap["lap_ms"] = lap_ms
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lap_uuid": lap_uuid,
+                "session_uuid": session_uuid,
+                "car": {"id": car_id},
+                "track": {"id": track_id},
+                "lap": lap,
+                "trace": {
+                    "fields": fields or ["eMs", "speed"],
+                    "samples": samples or [[0, 80.0]],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_csv_export_produces_stable_columns_from_fixture(tmp_path: Path) -> None:
     out = tmp_path / "lap.csv"
     count = lap_archive_export.export_csv([_FIXTURES / "lap_archive_valid.json"], out)
@@ -93,35 +127,18 @@ def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path) -> 
     second = tmp_path / "lap_002.json"
     out = tmp_path / "fallback_motec.csv"
 
-    first.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "lap_uuid": "lap-without-ms-1",
-                "session_uuid": "session-fallback",
-                "lap": {"lap_n": 1, "is_valid": True},
-                "trace": {
-                    "fields": ["eMs", "speed"],
-                    "samples": [[0, 80.0], [1000, 100.0], [3000, 110.0]],
-                },
-            }
-        ),
-        encoding="utf-8",
+    _write_archive(
+        first,
+        lap_uuid="lap-without-ms-1",
+        lap_n=1,
+        samples=[[0, 80.0], [1000, 100.0], [3000, 110.0]],
     )
-    second.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "lap_uuid": "lap-without-ms-2",
-                "session_uuid": "session-fallback",
-                "lap": {"lap_n": 2, "lap_ms": 0, "is_valid": True},
-                "trace": {
-                    "fields": ["eMs", "speed"],
-                    "samples": [[0, 90.0], [2000, 120.0]],
-                },
-            }
-        ),
-        encoding="utf-8",
+    _write_archive(
+        second,
+        lap_uuid="lap-without-ms-2",
+        lap_n=2,
+        lap_ms=0,
+        samples=[[0, 90.0], [2000, 120.0]],
     )
 
     count = lap_archive_export.export_motec_csv([first, second], out)
@@ -133,6 +150,55 @@ def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path) -> 
     data_rows = rows[11:]
     assert [row[0] for row in data_rows] == ["0", "1", "3", "3", "5"]
     assert [row[12] for row in data_rows] == ["3", "3", "3", "2", "2"]
+
+
+def test_motec_csv_beacons_follow_exported_sample_range(tmp_path: Path) -> None:
+    first = tmp_path / "lap_001.json"
+    second = tmp_path / "lap_002.json"
+    out = tmp_path / "sparse_motec.csv"
+    _write_archive(
+        first,
+        lap_uuid="complete-lap",
+        lap_n=1,
+        lap_ms=3000,
+        samples=[[0, 80.0], [3000, 100.0]],
+    )
+    _write_archive(
+        second,
+        lap_uuid="sparse-lap",
+        lap_n=2,
+        lap_ms=91000,
+        samples=[[0, 90.0], [5000, 120.0]],
+    )
+
+    count = lap_archive_export.export_motec_csv([first, second], out)
+
+    assert count == 4
+    with out.open("r", encoding="utf-8", newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[5][5] == "8"
+    assert rows[6][1] == "8"
+    assert rows[8] == ["Beacon Markers", "3 8"]
+    data_rows = rows[11:]
+    assert [row[0] for row in data_rows] == ["0", "3", "3", "8"]
+    assert [row[12] for row in data_rows] == ["3", "3", "91", "91"]
+
+
+def test_motec_csv_rejects_mixed_session_inputs(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    first = tmp_path / "lap_001.json"
+    second = tmp_path / "lap_002.json"
+    out = tmp_path / "mixed_motec.csv"
+    _write_archive(first, lap_uuid="session-a-lap", session_uuid="session-a")
+    _write_archive(second, lap_uuid="session-b-lap", session_uuid="session-b")
+
+    rc = lap_archive_export.main(
+        ["--format", "motec-csv", "--output", str(out), str(first), str(second)]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "motec-csv inputs must contain one session/car/track" in captured.err
+    assert not out.exists()
 
 
 def test_cli_writes_csv(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
