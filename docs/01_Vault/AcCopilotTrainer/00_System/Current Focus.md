@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T08:56:40Z
+last_updated: 2026-06-16T09:07:30Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -63,6 +63,8 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-16** — PR [#200](https://github.com/agorokh/ac-copilot-trainer/pull/200) **MERGED** at `ee25118` — detect-and-retry AC entry launcher; closes [#177](https://github.com/agorokh/ac-copilot-trainer/issues/177). Adds `tools/ac_harness/entry_launcher.py`, a pluggable `EntryLauncher`, default `ColdRestartActuator`, atomic `race.ini` `SPAWN_SET=PIT` normalization, retry/relaunch loop around `DrivingEntryDetector`, and CLI timing knobs. Classification: no post-merge flags. Mac-side verification is complete; live Windows/AC rig verification remains the next runtime smoke. Active focus remains #190.
+- **2026-06-16** — PR [#207](https://github.com/agorokh/ac-copilot-trainer/pull/207) **MERGED** at `0c637e3` — MoTeC CSV reference-lap importer plus opt-in imported-reference activation; closes [#79](https://github.com/agorokh/ac-copilot-trainer/issues/79). Imported laps write schema-v1 `source="imported"` / `import_format="motec_csv"` archive JSON and can drive realtime coaching only when faster than the local PB, without overwriting local PB persistence. Classification: no post-merge flags. Active focus remains #190.
 - **2026-06-16** — PR [#198](https://github.com/agorokh/ac-copilot-trainer/pull/198) **MERGED** at `4a8ab98` — CI policy now accepts documented `vault/post-merge-pr<N>` handoff branches via `vault/`; closes [#179](https://github.com/agorokh/ac-copilot-trainer/issues/179). Classification: `scripts/` changed; no runtime/migration action. Active focus remains #190.
 - **2026-06-16** — PR [#197](https://github.com/agorokh/ac-copilot-trainer/pull/197) **MERGED** at `392a868` — `ws_bridge.openEpoch()` reconnect re-arm for lifecycle `session` emission; closes [#183](https://github.com/agorokh/ac-copilot-trainer/issues/183). No migration/env/deps/script/workflow post-merge flags; active focus remains #190.
 - **2026-06-13** — PR [#165](https://github.com/agorokh/ac-copilot-trainer/pull/165) **MERGED** at `1a08d45` — fleet-propagated `secrets-from-doppler` Scope-clause CI drift-guard (`tests/test_invariants_present.py`; template-repo#308/#309). Infra only; does not move Stream A / EPIC #154.
