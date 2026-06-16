@@ -104,6 +104,9 @@ local externalHelloAcked = false
 local externalHelloPending = false
 local helloRetryFrames = 0
 local helloSendCount = 0
+--- Monotonic transport-open counter. Incremented only from CSP's `onOpen`
+--- callback, including auto-reconnects that do not pass through `tryOpen`.
+local socketOpenEpoch = 0
 --- Resend hello every N M.tick frames (~0.2 s at 60 Hz) until hello_ack flips
 --- `sidecarProtocolReady`. Frame-paced so a frozen sim clock cannot stall it.
 local EXTERNAL_HELLO_RETRY_FRAMES = 12
@@ -308,6 +311,13 @@ function M.sidecarConnected()
   return sock ~= nil and sidecarProtocolReady
 end
 
+--- Public read-only transport-open epoch. The entry script uses this to detect
+--- reconnects that close/open/hello_ack between two per-frame boolean samples.
+---@return number
+function M.openEpoch()
+  return socketOpenEpoch
+end
+
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
 function M.reset()
   close_socket_if_any(sock)
@@ -486,6 +496,11 @@ tryOpen = function()
   local opened = nil
   local params = {
     onOpen = function()
+      -- Ignore stale onOpen from a socket handle replaced by configure/reset.
+      if opened ~= nil and sock ~= opened then
+        return
+      end
+      socketOpenEpoch = socketOpenEpoch + 1
       -- Re-arm v1 (and legacy) registration gating on every transport open. With
       -- `reconnect = true` CSP auto-reconnects on a transient drop by firing this
       -- callback WITHOUT going through `tryOpen`, so the tryOpen resets are skipped;

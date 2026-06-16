@@ -94,6 +94,8 @@ local CONFIG_DEFAULTS = {
   lapArchiveEnabled = true,
   --- Hard cap on archive disk usage in MB. Oldest files deleted first.
   lapArchiveMaxMB = 500,
+  --- Issue #79: imported MoTeC laps are reference candidates only when explicitly enabled.
+  useImportedReference = false,
 }
 
 --- Shallow copy so `CONFIG_DEFAULTS` is never aliased or mutated by `ac.storage()` (review #58).
@@ -117,6 +119,7 @@ local _wsUrlStorage = nil
 local _approachMetersStorage = nil
 local _lapArchiveEnabledStorage = nil
 local _lapArchiveMaxMBStorage = nil
+local _useImportedReferenceStorage = nil
 if ac and type(ac.storage) == "function" then
   local ok1, sv1 = pcall(ac.storage, "ac_copilot_trainer.wsSidecarUrl_v1", "")
   if ok1 and sv1 and type(sv1.get) == "function" then
@@ -135,6 +138,10 @@ if ac and type(ac.storage) == "function" then
   if ok4 and sv4 and type(sv4.get) == "function" then
     _lapArchiveMaxMBStorage = sv4
   end
+  local ok5, sv5 = pcall(ac.storage, "ac_copilot_trainer.useImportedReference_v1", 0)
+  if ok5 and sv5 and type(sv5.get) == "function" then
+    _useImportedReferenceStorage = sv5
+  end
 end
 
 local function isDedicatedPerKeyConfig(key)
@@ -142,6 +149,7 @@ local function isDedicatedPerKeyConfig(key)
     or key == "approachMeters"
     or key == "lapArchiveEnabled"
     or key == "lapArchiveMaxMB"
+    or key == "useImportedReference"
 end
 
 local function coercePersistedConfigValue(defaultValue, storedValue)
@@ -274,6 +282,15 @@ local function loadConfig()
       end
     end
   end
+  if _useImportedReferenceStorage and type(_useImportedReferenceStorage.get) == "function" then
+    local ok, val = pcall(function() return _useImportedReferenceStorage:get() end)
+    if ok and val ~= nil then
+      local n = tonumber(val)
+      if n ~= nil then
+        cfg.useImportedReference = (n ~= 0)
+      end
+    end
+  end
   cfg.lapArchiveMaxMB = lapArchive.clampArchiveCapMB(cfg.lapArchiveMaxMB)
   return cfg
 end
@@ -289,6 +306,8 @@ local SESSION_UUID = string.format(
   math.random(0, 0xFFFF),
   math.random(0, 0xFFFF)
 )
+
+local refreshActiveReference
 
 --- Persist `approachMeters` to per-key storage and log the change so we can
 --- verify the slider is wired correctly (issue #75 round 5: user reported the
@@ -320,6 +339,17 @@ local function setLapArchiveMaxMBAndPersist(mb)
   config.lapArchiveMaxMB = m
   if _lapArchiveMaxMBStorage and type(_lapArchiveMaxMBStorage.set) == "function" then
     pcall(function() _lapArchiveMaxMBStorage:set(m) end)
+  end
+end
+
+local function setUseImportedReferenceAndPersist(enabled)
+  config.useImportedReference = enabled and true or false
+  local v = config.useImportedReference and 1 or 0
+  if _useImportedReferenceStorage and type(_useImportedReferenceStorage.set) == "function" then
+    pcall(function() _useImportedReferenceStorage:set(v) end)
+  end
+  if refreshActiveReference then
+    pcall(refreshActiveReference)
   end
 end
 
@@ -578,6 +608,11 @@ local function applyExternalConfigSet(key, value)
     setLapArchiveMaxMBAndPersist(n)
     return true, nil
   end
+  if key == "useImportedReference" then
+    if type(value) ~= "boolean" then return false, "value must be boolean" end
+    setUseImportedReferenceAndPersist(value)
+    return true, nil
+  end
   if key == "wsSidecarUrl" then
     if type(value) ~= "string" then
       return false, "value must be string"
@@ -752,6 +787,94 @@ local function cloneCornerFeats(f)
   return out
 end
 
+local function cloneSegments(segs)
+  if not segs or type(segs) ~= "table" then
+    return {}
+  end
+  local out = {}
+  for i = 1, #segs do
+    local s = segs[i]
+    if type(s) == "table" then
+      local row = {}
+      for k, v in pairs(s) do
+        row[k] = v
+      end
+      out[#out + 1] = row
+    end
+  end
+  return out
+end
+
+local function speedAtSpline(trace, spline)
+  if type(trace) ~= "table" or #trace == 0 or type(spline) ~= "number" then
+    return 0
+  end
+  local best = trace[1]
+  local bestD = math.huge
+  for i = 1, #trace do
+    local sp = tonumber(trace[i].spline)
+    if sp ~= nil then
+      local d = math.abs(sp - spline)
+      d = math.min(d, 1 - d)
+      if d < bestD then
+        bestD = d
+        best = trace[i]
+      end
+    end
+  end
+  return tonumber(best and best.speed) or 0
+end
+
+local function brakePointsFromTrace(trace)
+  local out = {}
+  if type(trace) ~= "table" then
+    return out
+  end
+  local braking = false
+  for i = 1, #trace do
+    local p = trace[i]
+    local b = tonumber(p and p.brake) or 0
+    if b > 0.12 and not braking then
+      out[#out + 1] = {
+        spline = tonumber(p.spline) or 0,
+        px = tonumber(p.px) or 0,
+        py = tonumber(p.py) or 0,
+        pz = tonumber(p.pz) or 0,
+        entrySpeed = tonumber(p.speed) or 0,
+        heading = 0,
+      }
+      braking = true
+    elseif b < 0.04 then
+      braking = false
+    end
+  end
+  return out
+end
+
+local function brakePointsFromSegments(trace, segments)
+  local out = {}
+  if type(segments) ~= "table" then
+    return out
+  end
+  for i = 1, #segments do
+    local seg = segments[i]
+    if type(seg) == "table" and seg.kind == "corner" then
+      local sp = tonumber(seg.brakeSpline) or tonumber(seg.s0)
+      if sp ~= nil then
+        out[#out + 1] = {
+          spline = sp,
+          px = 0,
+          py = 0,
+          pz = 0,
+          entrySpeed = speedAtSpline(trace, sp),
+          heading = 0,
+        }
+      end
+    end
+  end
+  return out
+end
+
 --- Build ``telemetry.corners`` for sidecar ranking / debrief (issues #49, #46).
 local function buildSidecarTelemetryCorners(feats)
   if not feats or type(feats) ~= "table" or #feats == 0 then
@@ -835,8 +958,19 @@ state = {
   -- Defaults true: no delta until the first clean lap is started (an out-lap clock is mid-track).
   deltaRefStale = true,
   bestLapTrace = {},
+  -- Local in-game PB/reference snapshot. When an imported reference is active,
+  -- realtime code still reads `bestLapTrace`, but persistence saves these local fields.
+  localBestLapTrace = {},
+  localBestBrakePoints = {},
+  localBestTrackSegments = {},
+  localBestCornerFeatures = {},
+  localBestReferenceLapMs = nil,
   --- Lap time (ms) for the lap that produced `bestLapTrace`; used to omit stale trace from saves when PB improves without a new reference trace.
   bestReferenceLapMs = nil,
+  activeReferenceSource = nil,
+  activeReferenceFormat = nil,
+  activeReferenceLapMs = nil,
+  activeReferencePath = nil,
   bestSortedTrace = nil,
   bestSectorMs = { 0, 0, 0 },
   sectorIndex = 1,
@@ -964,6 +1098,86 @@ local function rebuildBestReference()
   state.cornerSteerSideCacheKey = nil
 end
 
+local function cacheLocalReferenceState()
+  state.localBestLapTrace = copyTrace(state.bestLapTrace or {})
+  state.localBestBrakePoints = copyBpList(state.brakingPoints.best or {})
+  state.localBestTrackSegments = cloneSegments(state.trackSegments or {})
+  state.localBestCornerFeatures = cloneCornerFeats(state.bestCornerFeatures or {})
+  state.localBestReferenceLapMs = state.bestReferenceLapMs
+end
+
+local function restoreLocalReferenceState()
+  state.bestLapTrace = copyTrace(state.localBestLapTrace or {})
+  state.brakingPoints.best = copyBpList(state.localBestBrakePoints or {})
+  state.trackSegments = cloneSegments(state.localBestTrackSegments or {})
+  state.bestCornerFeatures = cloneCornerFeats(state.localBestCornerFeatures or {})
+  state.bestReferenceLapMs = state.localBestReferenceLapMs
+  if state.bestLapTrace and #state.bestLapTrace >= 2 then
+    state.racingBestLine = racingLine.traceToLine(state.bestLapTrace)
+  else
+    state.racingBestLine = {}
+  end
+  state.activeReferenceSource = (#(state.bestLapTrace or {}) >= 2) and "in_game" or nil
+  state.activeReferenceFormat = nil
+  state.activeReferenceLapMs = state.bestReferenceLapMs or state.bestLapMs
+  state.activeReferencePath = nil
+  rebuildBestReference()
+  realtimeCoaching.rebuildSegmentIndex(state.trackSegments or {})
+end
+
+local function applyImportedReference(imported)
+  if type(imported) ~= "table" or type(imported.trace) ~= "table" or #imported.trace < 2 then
+    return false
+  end
+  local trace = copyTrace(imported.trace)
+  local brakesForImport = brakePointsFromTrace(trace)
+  local segments = cornerAnalysis.buildSegments(trace, brakesForImport)
+  if #brakesForImport == 0 then
+    brakesForImport = brakePointsFromSegments(trace, segments)
+  end
+  local feats = cornerAnalysis.cornerFeaturesForLap(trace, segments)
+  state.bestLapTrace = trace
+  state.bestReferenceLapMs = tonumber(imported.lapMs)
+  state.brakingPoints.best = brakesForImport
+  state.trackSegments = segments
+  state.bestCornerFeatures = feats
+  state.racingBestLine = racingLine.traceToLine(trace)
+  state.activeReferenceSource = "imported"
+  state.activeReferenceFormat = imported.importFormat or "motec_csv"
+  state.activeReferenceLapMs = tonumber(imported.lapMs)
+  state.activeReferencePath = imported.path
+  rebuildBestReference()
+  realtimeCoaching.rebuildSegmentIndex(segments)
+  if ac and type(ac.log) == "function" then
+    ac.log(string.format(
+      "[COPILOT][REFERENCE] activated imported %s reference lap %.0f ms (%d trace, %d brakes, %d segs)",
+      tostring(state.activeReferenceFormat),
+      tonumber(imported.lapMs) or 0,
+      #trace,
+      #brakesForImport,
+      #segments
+    ))
+  end
+  return true
+end
+
+refreshActiveReference = function()
+  if not state then
+    return
+  end
+  restoreLocalReferenceState()
+  local imported = persistence.chooseImportedReference(
+    state.bestLapMs,
+    persistence.bestImportedReference(car, sim),
+    config.useImportedReference == true
+  )
+  if imported then
+    applyImportedReference(imported)
+  elseif ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][REFERENCE] active reference: " .. tostring(state.activeReferenceSource or "none"))
+  end
+end
+
 local function applyLoaded(data)
   if not data or type(data) ~= "table" then
     return
@@ -1011,21 +1225,26 @@ local function applyLoaded(data)
   if data.bestCornerFeatures and type(data.bestCornerFeatures) == "table" then
     state.bestCornerFeatures = data.bestCornerFeatures
   end
+  state.activeReferenceSource = (#(state.bestLapTrace or {}) >= 2) and "in_game" or nil
+  state.activeReferenceFormat = nil
+  state.activeReferenceLapMs = state.bestReferenceLapMs or state.bestLapMs
+  state.activeReferencePath = nil
 end
 
 local function persistPayload()
   -- Always persist non-empty `bestLapTrace` together with `bestReferenceLapMs` so a new PB time
   -- does not erase a still-valid reference trace when the span guard rejected the new lap's trace.
+  local useLocalSnapshot = state.activeReferenceSource == "imported"
   return {
     bestLapMs = state.bestLapMs,
-    bestBrakePoints = state.brakingPoints.best,
-    bestLapTrace = state.bestLapTrace,
-    bestReferenceLapMs = state.bestReferenceLapMs,
-    trackSegments = state.trackSegments,
+    bestBrakePoints = useLocalSnapshot and state.localBestBrakePoints or state.brakingPoints.best,
+    bestLapTrace = useLocalSnapshot and state.localBestLapTrace or state.bestLapTrace,
+    bestReferenceLapMs = useLocalSnapshot and state.localBestReferenceLapMs or state.bestReferenceLapMs,
+    trackSegments = useLocalSnapshot and state.localBestTrackSegments or state.trackSegments,
     lapFeatureHistory = state.lapFeatureHistory,
     setupHash = state.setupHash,
     setupSnapshot = state.lastSetupSnap,
-    bestCornerFeatures = state.bestCornerFeatures,
+    bestCornerFeatures = useLocalSnapshot and state.localBestCornerFeatures or state.bestCornerFeatures,
   }
 end
 
@@ -1068,7 +1287,16 @@ local function resetRuntimeAfterLeavingTrack()
   state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
   state.deltaRefStale = true  -- re-entry: no boundary-aligned clock yet, delta silent until first lap
   state.bestLapTrace = {}
+  state.localBestLapTrace = {}
+  state.localBestBrakePoints = {}
+  state.localBestTrackSegments = {}
+  state.localBestCornerFeatures = {}
+  state.localBestReferenceLapMs = nil
   state.bestReferenceLapMs = nil
+  state.activeReferenceSource = nil
+  state.activeReferenceFormat = nil
+  state.activeReferenceLapMs = nil
+  state.activeReferencePath = nil
   state.bestSortedTrace = nil
   state.bestSectorMs = { 0, 0, 0 }
   state.sectorIndex = 1
@@ -1180,6 +1408,8 @@ local function tryLoadDisk()
     return
   end
   applyLoaded(persistence.load(car, sim))
+  cacheLocalReferenceState()
+  refreshActiveReference()
   state.initialized = true
 end
 
@@ -1424,6 +1654,31 @@ function script.windowMain(_dt)
   })
 end
 
+local function formatReferenceLapMs(ms)
+  local n = tonumber(ms)
+  if not n or n <= 0 then
+    return "n/a"
+  end
+  local total = math.floor(n + 0.5)
+  local minutes = math.floor(total / 60000)
+  local seconds = math.floor((total % 60000) / 1000)
+  local millis = total % 1000
+  return string.format("%d:%02d.%03d", minutes, seconds, millis)
+end
+
+local function referenceStatusLine()
+  if state.activeReferenceSource == "imported" then
+    return "Active reference: imported "
+      .. tostring(state.activeReferenceFormat or "motec_csv")
+      .. " "
+      .. formatReferenceLapMs(state.activeReferenceLapMs)
+  end
+  if state.activeReferenceSource == "in_game" then
+    return "Active reference: your PB " .. formatReferenceLapMs(state.activeReferenceLapMs)
+  end
+  return "Active reference: none"
+end
+
 function script.windowSettings(_dt)
   sim = ac.getSim()
   if not sim or sim.isInMainMenu then
@@ -1456,9 +1711,13 @@ function script.windowSettings(_dt)
     -- Issue #77 Part C: lap archive stats for Settings UI.
     lapArchiveStats = lapArchive.stats,
     lapArchiveClampCapMB = lapArchive.clampArchiveCapMB,
+    referenceStatus = referenceStatusLine(),
+    referenceLapsDir = persistence.lapArchiveDir(),
     setApproachMeters = setApproachMetersAndPersist,
     setLapArchiveEnabled = setLapArchiveEnabledAndPersist,
     setLapArchiveMaxMB = setLapArchiveMaxMBAndPersist,
+    setUseImportedReference = setUseImportedReferenceAndPersist,
+    openReferenceLapsFolder = persistence.openLapArchiveDir,
   })
   if config.enableRenderDiagnostics then
     renderDiag.drawUI()
@@ -1755,11 +2014,21 @@ function script.update(dt)
   pcall(function()
     -- Per-frame WS-reconnect detection: on a sidecar (re)connect, re-arm `session` so it
     -- re-emits THIS frame — before any subsequent `lap` — without resetting the stint best.
+    -- The boolean catches normal false->true connects; openEpoch catches a CSP auto-reconnect
+    -- that opens and drains hello_ack between two script.update samples, leaving the boolean
+    -- true on both samples (#183).
     local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
-    if wsConn and not state._wsPrevConnected then
+    local wsEpoch = type(wsBridge.openEpoch) == "function" and wsBridge.openEpoch() or nil
+    local wsEpochChanged = wsEpoch ~= nil
+      and state._wsPrevOpenEpoch ~= nil
+      and wsEpoch ~= state._wsPrevOpenEpoch
+    if wsConn and (not state._wsPrevConnected or wsEpochChanged) then
       lifecyclePublisher.rearmSession()
     end
     state._wsPrevConnected = wsConn
+    if wsEpoch ~= nil then
+      state._wsPrevOpenEpoch = wsEpoch
+    end
     lifecyclePublisher.publishConnectionIfDue({
       dt = dt,
       car = car,
@@ -2032,7 +2301,11 @@ function script.update(dt)
     local isPbThisLap = lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
 
     local prevBestBp = copyBpList(state.brakingPoints.best)
+    local localBestChanged = false
     if lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs) then
+      if state.activeReferenceSource == "imported" then
+        restoreLocalReferenceState()
+      end
       state.bestLapMs = lastMs
       state.brakingPoints.best = copyBpList(state.brakingPoints.session)
       if traceAnalyticsOk and #feats > 0 then
@@ -2050,6 +2323,11 @@ function script.update(dt)
       end
       -- Guards failed: keep prior `bestLapTrace` / `bestReferenceLapMs`; persist still saves both with `bestReferenceLapMs`.
       rebuildBestReference()
+      localBestChanged = true
+    end
+    if localBestChanged then
+      cacheLocalReferenceState()
+      refreshActiveReference()
     end
     state.brakingPoints.last = copyBpList(state.brakingPoints.session)
     state.brakingPoints.session = {}
