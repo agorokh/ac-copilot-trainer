@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T09:47:56Z
+last_updated: 2026-06-16T11:13:39Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -26,6 +26,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 - #114 / PR #206 setup experiment tracking)
+
+**[#114](https://github.com/agorokh/ac-copilot-trainer/issues/114) CLOSED / PR [#206](https://github.com/agorokh/ac-copilot-trainer/pull/206) MERGED** `2026-06-16T11:10:51Z` as squash [`7d87f96`](https://github.com/agorokh/ac-copilot-trainer/commit/7d87f96ea6179d8d39f3610db49678c25752d632). The trainer now has a setup experiment layer: lap archives can be rebuilt into a JSONL experiment store, compared as old-vs-new setup A/B evidence, and queried for deterministic expected-improvement setup suggestions.
+
+**Shipped behavior:** `tools.ai_sidecar.setup_optimizer` extracts schema-v1 lap archives into `journal/setup_experiments/experiments.jsonl`, records live lap archives idempotently, deduplicates rebuilds by `experiment_id`, rejects corrupt stores, and refuses missing lap directories before rewriting any store. The sidecar exposes CLI and v1 websocket surfaces for `setup.experiment.store`, `setup.experiment.record`, `setup.compare`, and `setup.suggest`; blocking file/stat work is offloaded from the async websocket loop and handler failures return structured `{ok:false,error}` frames. Lua registers the canonical store path after the v1 handshake, records newly archived laps, retries failed store registration from `tick()` with backoff, and does not send path-bearing setup frames to non-loopback websocket URLs.
+
+**Verification:** local focused suites passed (`44 passed` across `tests/test_ai_sidecar_external.py`, `tests/test_setup_optimizer.py`, and `tests/test_ws_bridge_hello_handshake.py`; final Lua handshake file `11 passed`). Final local parity after all review hardening passed with `make ci-fast PYTHON=.venv/bin/python` (`935 passed, 74 skipped`, coverage 81.21%; ruff, bandit, docs policy, CSP API/UI checks complete). GitHub checks on PR #206 were green on head `07be4cc` (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery/Gemini quota-limited as comments only). GraphQL `reviewThreads` returned no unresolved non-outdated threads before merge. Post-merge classification: no migration/env/deps/script/workflow flags.
+
+**What remains:** no #114 follow-up is required. This was verified off-sim through CLI, websocket, and Lupa harnesses from macOS; the next Windows/AC rig pass should smoke that real lap archives advance the experiment store and `setup.suggest` returns only after rows exist. Active focus remains #190 / carcsw productionization.
 
 ## What was delivered (2026-06-16 - #115 / PR #204 lap telemetry export)
 
