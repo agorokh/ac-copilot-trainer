@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T09:45:00Z
+last_updated: 2026-06-16T09:47:56Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -26,6 +26,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 - #115 / PR #204 lap telemetry export)
+
+**[#115](https://github.com/agorokh/ac-copilot-trainer/issues/115) CLOSED / PR [#204](https://github.com/agorokh/ac-copilot-trainer/pull/204) MERGED** `2026-06-16T09:44:11Z` as squash [`dc93b1b`](https://github.com/agorokh/ac-copilot-trainer/commit/dc93b1be5b78ea16067cdfef9ab42a77bf058d62). Archived lap JSON can now be exported with `python -m tools.lap_archive_export`, either as a stable generic CSV or as a deterministic MoTeC-shaped CSV bridge file.
+
+**Shipped behavior:** the exporter streams generic CSV rows from one or more archive files/directories, skips invalid laps by default, supports `--include-invalid`, and writes stable columns covering lap identity plus sample telemetry. `--format motec-csv` emits quoted MoTeC-style metadata/channel/unit/data rows with beacon markers, rejects mixed session/car/track/layout inputs, preserves recorded `lap_ms` where present, and falls back to trace timing when needed. Output writes are constrained to relative paths under the current working directory, reject absolute or escaping paths, and replace the final file through a unique temporary sibling. Usage and MoTeC import caveats live in [`10_Development/13_Lap_Archive_Export`](../../../10_Development/13_Lap_Archive_Export.md).
+
+**Verification:** focused exporter tests passed after final hardening (`12 passed` in `tests/test_lap_archive_export.py`). Full local parity passed on the merged branch with `make ci-fast PYTHON=.venv/bin/python` (`930 passed, 74 skipped`, coverage 81.56%; ruff, bandit, docs policy, root allowlist warnings, CSP API/UI checks all completed). Observed CLI proof produced a 4-row generic CSV and a 3-row MoTeC CSV under `.scratch/issue-115/`; absolute output and `..` escape attempts were rejected without creating files; mixed-session MoTeC input was rejected without a partial output. GitHub checks for PR #204 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery skipped/rate-limited). GraphQL `reviewThreads` audit found no current unresolved blocking threads before merge. Post-merge classification: no migration/env/deps/script/workflow flags.
+
+**What remains:** no #115 follow-up is required. This was an off-sim archive/export utility; no live Windows AC/CSP rig verification is required for the shipped behavior. Active focus remains #190 / carcsw productionization.
 
 ## What was delivered (2026-06-16 — #156 / PR #202 optional MCP smoke isolation)
 
