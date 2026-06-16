@@ -11,6 +11,16 @@ synthesizer, and the schema-gated mock ``ac``/``car``/``sim`` tables.
 
 from __future__ import annotations
 
+from tools.ac_harness.custom_ai import (
+    CarControls,
+    CarData,
+    CustomAIController,
+    SimState,
+    SimStateController,
+    car_controls_name,
+    car_data_name,
+    parse_car_data,
+)
 from tools.ac_harness.entry_launcher import (
     ActuatorEvent,
     ColdRestartActuator,
@@ -70,4 +80,13 @@ __all__ = [
     "SharedMemoryUnavailable",
     "parse_graphics",
     "parse_physics",
+    # Custom-AI external-control actuator (autonomous drive of car 0).
+    "CarControls",
+    "CarData",
+    "CustomAIController",
+    "SimState",
+    "SimStateController",
+    "car_controls_name",
+    "car_data_name",
+    "parse_car_data",
 ]
