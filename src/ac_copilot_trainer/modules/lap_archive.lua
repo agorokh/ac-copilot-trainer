@@ -59,7 +59,7 @@ local TRACE_FIELDS = {
 }
 
 local function lapArchiveDir()
-  return persistence.dataDir() .. "/journal/laps"
+  return persistence.lapArchiveDir()
 end
 
 --- Settings UI calls `stats()` every frame; cache full-directory scan for a short TTL (Gemini #78).

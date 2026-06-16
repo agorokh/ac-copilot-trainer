@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-04-29
+updated: 2026-06-16
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -34,3 +34,4 @@ Technical deep-dives and root-cause analyses from development sessions.
 | [csp-car-wheels-0-indexed-2026-06-15.md](csp-car-wheels-0-indexed-2026-06-15.md) | CSP `car.wheels` is **0-indexed** (FL=0..RR=3) per `ac.Wheel`; reading `[1..4]` shifts every corner + reads an out-of-bounds zero for RR (the #185 `tire_temps.rr=0` bug). Always use `[0..3]`. |
 | [csp-custom-ai-mmap-interface-2026-06-16.md](csp-custom-ai-mmap-interface-2026-06-16.md) | The `carcsw` driver foundation (Part E #190): CSP Custom AI mmap names (`AcTools.CSP.NewBehaviour.CustomAI.CarControls<N>.v0` write / `.Car<N>.v0` read / `.SimState.v0`), cai_car_controls fields, create-CarControls→CSP-creates-Car signaling, 333 Hz, activation ini flags. Byte offsets need build-time verification. |
 | [autonomous-drive-live-verified-2026-06-16.md](autonomous-drive-live-verified-2026-06-16.md) | **EPIC #154 L2 ACHIEVED.** Agent drove a full clean lap (no human) via carcsw + pure-pursuit; trainer captured a reference + coached it live. LIVE-VERIFIED offsets (gear 0=R/1=N/2=1st; autoclutch launch; teleport@40 reset; pos@88/look@64; spline@448 GARBAGE; steer sign OK). `restart_session`=poison; menu-skip race retry; minimize Claude to click CM; hotlap counts only VALID laps. |
+| [pr-207-motec-reference-import.md](pr-207-motec-reference-import.md) | MoTeC CSV importer for schema-v1 `source=imported` lap archive records + opt-in imported-reference activation that never overwrites local PB persistence. |

@@ -73,29 +73,18 @@ _known_bots_cache: frozenset[str] | None = None
 def _load_extra_bots(config_path: str = _DEFAULT_PAIN_CONFIG) -> frozenset[str]:
     """Return the `extra_bot_logins` set from `.github/pr-pain-config.yml`.
 
-    Empty set if the file is absent, malformed, or PyYAML isn't installed —
-    the caller transparently falls back to ``_BUILTIN_KNOWN_BOTS`` so the
-    function never raises during scoring. Bot detection inflates score by
-    3x per missed bot (0.1 → 0.3 weight), so making this list extensible
-    without a code change is a maintainability win.
+    Empty set if the file is absent or malformed; the caller transparently
+    falls back to ``_BUILTIN_KNOWN_BOTS`` so the function never raises during
+    scoring. Bot detection inflates score by 3x per missed bot (0.1 → 0.3
+    weight), so making this list extensible without a code change is a
+    maintainability win.
     """
     try:
-        import yaml  # type: ignore[import-not-found]
-    except ImportError:
-        return frozenset()
-    from pathlib import Path as _Path
+        from tools.pr_pain.config import load_pain_config
 
-    p = _Path(config_path)
-    if not p.is_file():
+        return frozenset(bot.lower() for bot in load_pain_config(config_path)["extra_bot_logins"])
+    except (OSError, ValueError):
         return frozenset()
-    try:
-        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
-        return frozenset()
-    extras = data.get("extra_bot_logins") if isinstance(data, dict) else None
-    if not isinstance(extras, list):
-        return frozenset()
-    return frozenset(str(x).lower() for x in extras if isinstance(x, str))
 
 
 def _known_bots() -> frozenset[str]:

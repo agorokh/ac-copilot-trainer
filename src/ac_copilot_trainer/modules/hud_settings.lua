@@ -20,6 +20,8 @@ local M = {}
 ---@field focusPracticeUi table|nil
 ---@field setLapArchiveEnabled fun(boolean)|nil
 ---@field setLapArchiveMaxMB fun(number)|nil
+---@field setUseImportedReference fun(boolean)|nil
+---@field openReferenceLapsFolder fun():boolean,string|nil
 
 ---@param mode "strictTrue"|"notFalse"
 --- `strictTrue`: matches `if not config.k` / `if config.k then` (only explicit `true` is on).
@@ -264,6 +266,40 @@ function M.draw(vm)
       if ok and count and mb then
         ui.text(string.format("Archived: %d laps, %.1f MB", count, mb))
       end
+    end
+  end
+
+  ui.separator()
+  ui.textColored("Reference lap", rgbm(0.78, 0.8, 0.88, 1))
+  do
+    ui.text(tostring(vm.referenceStatus or "Active reference: none"))
+    local cur = cfg.useImportedReference == true
+    if type(ui.checkbox) ~= "function" then
+      ui.text("Prefer imported reference over local PB: " .. (cur and "on" or "off"))
+    else
+      pcall(function()
+        if ui.checkbox("Prefer imported reference over local PB", cur) then
+          local enabled = not cur
+          if vm.setUseImportedReference and type(vm.setUseImportedReference) == "function" then
+            pcall(vm.setUseImportedReference, enabled)
+          else
+            cfg.useImportedReference = enabled
+          end
+        end
+      end)
+    end
+    local dir = tostring(vm.referenceLapsDir or "")
+    if ui.button ~= nil then
+      pcall(function()
+        if ui.button("Open reference laps folder") then
+          if vm.openReferenceLapsFolder and type(vm.openReferenceLapsFolder) == "function" then
+            pcall(vm.openReferenceLapsFolder)
+          end
+        end
+      end)
+    end
+    if dir ~= "" then
+      textWrappedMaybe(dir)
     end
   end
 
