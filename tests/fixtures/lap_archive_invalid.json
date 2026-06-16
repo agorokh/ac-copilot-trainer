@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "source": "in_game",
+  "import_format": null,
+  "lap_uuid": "lap-invalid",
+  "session_uuid": "session-a",
+  "exported_at": "2026-06-16T10:12:12Z",
+  "car": {
+    "id": "ks_abarth500_assetto_corse",
+    "displayName": null
+  },
+  "track": {
+    "id": "magione",
+    "layout": null,
+    "lengthM": 2525
+  },
+  "conditions": {},
+  "lap": {
+    "lap_n": 5,
+    "lap_ms": 88000,
+    "is_pb": false,
+    "is_valid": false
+  },
+  "setup": {
+    "hash": "abc123",
+    "snapshot": {}
+  },
+  "trace": {
+    "samples_count": 1,
+    "fields": ["spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz"],
+    "samples": [
+      [0.25, 90.0, 20000, 0.4, 0.6, 0.2, 3, 11.0, 0.1, 21.0]
+    ]
+  },
+  "corners": [],
+  "coaching": {
+    "rules_hints": []
+  }
+}

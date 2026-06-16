@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "source": "in_game",
+  "import_format": null,
+  "lap_uuid": "lap-valid",
+  "session_uuid": "session-a",
+  "exported_at": "2026-06-16T10:11:12Z",
+  "car": {
+    "id": "ks_abarth500_assetto_corse",
+    "displayName": null
+  },
+  "track": {
+    "id": "magione",
+    "layout": null,
+    "lengthM": 2525
+  },
+  "conditions": {
+    "trackGripLevel": 0.98,
+    "ambientTempC": 22,
+    "trackTempC": 30,
+    "weatherType": null
+  },
+  "lap": {
+    "lap_n": 4,
+    "lap_ms": 90000,
+    "is_pb": true,
+    "is_valid": true
+  },
+  "setup": {
+    "hash": "abc123",
+    "path": "C:/AssettoCorsa/Documents/setups/setup.ini",
+    "snapshot": {
+      "TYRES.PRESSURE_FRONT": "27.5"
+    }
+  },
+  "trace": {
+    "samples_count": 3,
+    "fields": ["spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz"],
+    "samples": [
+      [0.0, 100.0, 0, 1.0, 0.0, 0.0, 2, 10.0, 0.1, 20.0],
+      [0.5, 150.5, 45000, 0.7, 0.2, -0.05, 4, 20.0, 0.2, 30.0],
+      [1.0, 120.0, 90000, 0.3, 0.0, 0.1, 3, 30.0, 0.3, 40.0]
+    ]
+  },
+  "corners": [],
+  "coaching": {
+    "rules_hints": [],
+    "sidecar_debrief": null,
+    "corner_advice_used": null
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "source": "in_game",
+  "import_format": null,
+  "lap_uuid": "lap-missing-fields",
+  "session_uuid": "session-b",
+  "exported_at": "2026-06-16T10:13:12Z",
+  "car": {
+    "id": "ks_abarth500_assetto_corse"
+  },
+  "track": {
+    "id": "magione"
+  },
+  "conditions": {},
+  "lap": {
+    "lap_n": 6,
+    "lap_ms": 91000,
+    "is_pb": false,
+    "is_valid": true
+  },
+  "setup": {
+    "hash": "",
+    "snapshot": {}
+  },
+  "trace": {
+    "samples_count": 1,
+    "fields": ["spline", "speed", "eMs"],
+    "samples": [
+      [0.4, 88.0, 5000]
+    ]
+  },
+  "corners": [],
+  "coaching": {
+    "rules_hints": []
+  }
+}
