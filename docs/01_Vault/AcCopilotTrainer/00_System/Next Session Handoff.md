@@ -2,10 +2,11 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T02:15:00Z
+last_updated: 2026-06-16T08:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/03_Investigations/autonomous-drive-live-verified-2026-06-16.md
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/00_System/Architecture Invariants.md
   - AcCopilotTrainer/00_System/glossary/rig-network.md
@@ -25,7 +26,36 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-15 latest — #180 Part D step 2 DONE: all 5 WS producers merged (#185, `64a127e`) AND tire_temps VERIFIED operator-grade in-game)
+## Resume here (2026-06-16 — EPIC #154 L2 ACHIEVED: agent drove the car autonomously; trainer captured a reference + COACHED it, no human at the wheel)
+
+**The autonomous self-test works end-to-end, verified operator-grade on screen.** Via the CSP
+Custom-AI mmap (`carcsw`) + a pure-pursuit controller on Kunos's `fast_lane.ai`, the agent drove
+the player car a **full clean lap of Magione** (2,525 m, returned to start, zero crashes) with NO
+human input, and **the AC Copilot Trainer captured a reference lap from that drive and coached the
+car in real time** (HUD `Best/Last 6:27.316`; coaching widget `T1 — ON PACE`, `TARGET ENTRY 41 ·
+CURRENT 43 KMH · DISTANCE TO BRAKING POINT 392 M`). Full detail + all verified facts:
+[`03_Investigations/autonomous-drive-live-verified-2026-06-16`](../03_Investigations/autonomous-drive-live-verified-2026-06-16.md).
+
+**Verified live** (promote into the #190 PR): gear encoding **0=R/1=N/2=1st**; launch needs gear≥2
++ `autoclutch_on_start`+`autoclutch_on_change` (never write clutch@8); controls gas@0/brake@4/
+steer@12/gear_up@20/gear_dn@21/autoclutch@41,42/**teleport_to@40=1=pits** (the safe reset); Car0
+reads pos@88/look@64/gear@28/rpm@32/speed@36 == physics; **`spline@448` is GARBAGE** (drop it);
+PurePursuit steer sign already correct (steer>0=right). **`restart_session()` is POISON** (opens
+AC's modal menu; OS input into AC menus is dead → needs a CM relaunch). Menu-skip is a CM
+timing-race even with "Start race immediately" ON → **retry launches**; minimize the Claude window
+so CM is clickable. **Lap detection:** hotlap mode only counts VALID laps in `completedLaps@132`
+(curb-clip invalidates) → use position-return / `normalizedCarPosition`.
+
+**Next session (banking):** productionize `carcsw` (`tools/ac_harness/custom_ai.py` + `ai_line.py`)
+into the **#190 PR** — mark verified offsets CONFIRMED, drop/fix `spline@448`, add the gear+
+autoclutch launch recipe + steer-sign + position-return lap detection + the `auto_lap*.py` driver
+logic. Then restore `content/tracks/magione/data/surfaces.ini` (extended-physics +
+`[_EXTRA_PERMISSIONS]` edit; backup at `surfaces.ini.bak-precustomai`). Driver/probe artifacts are
+in gitignored `.scratch/` (`auto_lap4.py` = clean full lap; `auto_lap5/6.py`; `VERIFIED_FINDINGS.md`).
+
+---
+
+## Resume here (2026-06-15 — #180 Part D step 2 DONE: all 5 WS producers merged (#185, `64a127e`) AND tire_temps VERIFIED operator-grade in-game)
 
 **[#185](https://github.com/agorokh/ac-copilot-trainer/pull/185) MERGED (squash `64a127e`).** The final two declared producers — `delta` + `tire_temps` (`modules/telemetry_publisher.lua`) — plus a real bug fix surfaced by operator-grade live verification. **All 5 KNOWN_TOPICS producers now exist** (connection/session/lap from #182; delta/tire_temps from #185; coaching.snapshot/setup.active pre-existing).
 
