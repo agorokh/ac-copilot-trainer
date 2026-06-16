@@ -11,6 +11,18 @@ synthesizer, and the schema-gated mock ``ac``/``car``/``sim`` tables.
 
 from __future__ import annotations
 
+from tools.ac_harness.entry_launcher import (
+    ActuatorEvent,
+    ColdRestartActuator,
+    EntryActuator,
+    EntryLauncher,
+    EntryLauncherConfig,
+    EntryLaunchResult,
+    EntryOutcome,
+    EntryPhase,
+    classify_entry_phase,
+    normalize_race_ini_spawn_set,
+)
 from tools.ac_harness.shared_memory import (
     AcGameStatus,
     DrivingEntryDetector,
@@ -36,6 +48,17 @@ __all__ = [
     "TraceReplayHarness",
     "load_schema",
     "synthesize_trace",
+    # L2 detect-and-retry entry actuator loop.
+    "ActuatorEvent",
+    "ColdRestartActuator",
+    "EntryActuator",
+    "EntryLauncher",
+    "EntryLauncherConfig",
+    "EntryLaunchResult",
+    "EntryOutcome",
+    "EntryPhase",
+    "classify_entry_phase",
+    "normalize_race_ini_spawn_set",
     # L2 in-sim shared-memory oracle (on-track-entry detector).
     "AcGameStatus",
     "DrivingEntryDetector",
