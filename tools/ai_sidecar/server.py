@@ -196,6 +196,36 @@ def _run_setup_suggest(store_path: str, car_id: str | None, track_id: str | None
     print(json.dumps(out, indent=2, sort_keys=True))
 
 
+def _setup_store_record_count(store_path: str | Path) -> int:
+    return len(load_records(store_path))
+
+
+def _record_lap_archive_safe(archive_path: str) -> dict[str, Any]:
+    return record_lap_archive(archive_path, require_safe_path=True)
+
+
+def _compare_setup_store(
+    store_path: str | Path,
+    *,
+    baseline_setup: str,
+    candidate_setup: str,
+) -> dict[str, Any]:
+    return compare_setups(
+        load_records(store_path),
+        baseline_setup=baseline_setup,
+        candidate_setup=candidate_setup,
+    )
+
+
+def _suggest_setup_store(
+    store_path: str | Path,
+    *,
+    car_id: str | None,
+    track_id: str | None,
+) -> dict[str, Any]:
+    return suggest_next_setup(load_records(store_path), car_id=car_id, track_id=track_id)
+
+
 def _peer_host(connection: Any) -> str | None:
     peer = getattr(connection, "remote_address", None)
     if isinstance(peer, tuple) and peer:
@@ -429,6 +459,10 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
             )
             return
         _setup_experiment_store_path = Path(store_path_text)
+        records_count = await asyncio.to_thread(
+            _setup_store_record_count,
+            _setup_experiment_store_path,
+        )
         await _safe_send(
             websocket,
             {
@@ -436,7 +470,7 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
                 "ok": True,
                 "store_path": str(_setup_experiment_store_path),
-                "records": len(load_records(_setup_experiment_store_path)),
+                "records": records_count,
             },
         )
         return
@@ -455,7 +489,7 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
             return
         archive_path = str(data.get("archive_path") or data.get("path") or "")
         try:
-            out = record_lap_archive(archive_path, require_safe_path=True)
+            out = await asyncio.to_thread(_record_lap_archive_safe, archive_path)
         except SetupExperimentError as e:
             await _safe_send(
                 websocket,
@@ -497,8 +531,9 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
     if t == TYPE_SETUP_COMPARE:
-        out = compare_setups(
-            load_records(store_path),
+        out = await asyncio.to_thread(
+            _compare_setup_store,
+            store_path,
             baseline_setup=str(data.get("baseline_setup") or ""),
             candidate_setup=str(data.get("candidate_setup") or ""),
         )
@@ -514,8 +549,9 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
     if t == TYPE_SETUP_SUGGEST:
-        out = suggest_next_setup(
-            load_records(store_path),
+        out = await asyncio.to_thread(
+            _suggest_setup_store,
+            store_path,
             car_id=data.get("car_id"),
             track_id=data.get("track_id"),
         )
@@ -528,6 +564,7 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 **out,
             },
         )
+        return
 
 
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
