@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("mcp")
+pytest.importorskip("mcp.server.fastmcp")
 
 
 def test_mcp_server_module_imports() -> None:
