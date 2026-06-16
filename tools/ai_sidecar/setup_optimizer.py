@@ -255,16 +255,21 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
+        for line_no, line in enumerate(fh, start=1):
             text = line.strip()
             if not text:
                 continue
             try:
                 item = json.loads(text)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(item, dict):
-                out.append(item)
+            except json.JSONDecodeError as e:
+                raise SetupExperimentError(
+                    f"invalid experiment store JSON at {path}:{line_no}: {e.msg}"
+                ) from e
+            if not isinstance(item, dict):
+                raise SetupExperimentError(
+                    f"invalid experiment store record at {path}:{line_no}: expected object"
+                )
+            out.append(item)
     return out
 
 

@@ -6,12 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from tools.ai_sidecar.server import (
     _run_setup_compare,
     _run_setup_rebuild,
     _run_setup_suggest,
 )
 from tools.ai_sidecar.setup_optimizer import (
+    SetupExperimentError,
     _candidate_grid,
     compare_setups,
     load_records,
@@ -179,6 +182,14 @@ def test_record_lap_archive_upserts_without_duplicates(tmp_path: Path) -> None:
     assert first["inserted"] == 1
     assert second["updated"] == 1
     assert len(load_records(store)) == 1
+
+
+def test_load_records_rejects_corrupt_store(tmp_path: Path) -> None:
+    store = tmp_path / "experiments.jsonl"
+    store.write_text('{"ok": true}\nnot-json\n', encoding="utf-8")
+
+    with pytest.raises(SetupExperimentError, match=r"experiments\.jsonl:2"):
+        load_records(store)
 
 
 def test_rebuild_experiments_deduplicates_experiment_ids(tmp_path: Path) -> None:
