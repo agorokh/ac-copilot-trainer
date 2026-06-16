@@ -212,14 +212,23 @@ def test_gas_and_brake_never_both_active():
 
 
 def test_corner_lowers_target_speed_vs_straight():
-    """A tight corner should brake earlier (lower target) than a straight at the same speed."""
+    """A tight corner must brake earlier (lower target) than a straight at the same speed.
+
+    Two things this test guards against (both real defects a prior version had — Bugbot/Sourcery):
+    (1) the car is placed MID-BEND, not at the arc tail where the curvature look-ahead runs off the
+    open synthetic line and reads ~0 (making the corner invisible); (2) the assertion is STRICT
+    ``<`` so deleting the corner-braking term would FAIL it, instead of passing on a 0.5==0.5 tie.
+    A small ``curvature_lookahead_m`` keeps the window inside the short synthetic arc.
+    """
+    curve_line = _right_turn_line()
     straight = PurePursuit(_straight_line_along_x(), target_speed_kmh=90.0)
-    curve = PurePursuit(_right_turn_line(), target_speed_kmh=90.0, min_corner_speed_kmh=45.0)
-    # At the same actual speed just below the cap, the curve's target is lower, so it asks for
-    # less gas (or brake) than the straight in the bend region.
+    curve = PurePursuit(
+        curve_line, target_speed_kmh=90.0, min_corner_speed_kmh=45.0, curvature_lookahead_m=8.0
+    )
+    mid = curve_line[28]  # a point in the middle of the quarter-arc (indices 20..43)
     s_out = straight.control((10.0, 5.0, 0.0), (1.0, 0.0, 0.0), speed_kmh=80.0)
-    c_out = curve.control((44.0, 5.0, 18.0), (0.0, 0.0, 1.0), speed_kmh=80.0)
-    assert c_out.gas <= s_out.gas
+    c_out = curve.control((mid[0], 5.0, mid[2]), (0.0, 0.0, 1.0), speed_kmh=80.0)
+    assert c_out.gas < s_out.gas
 
 
 def test_control_output_unpacks_as_tuple():

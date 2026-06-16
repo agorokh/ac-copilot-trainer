@@ -169,5 +169,50 @@ def test_steer_sign_matches_pure_pursuit_right_positive() -> None:
     assert f_left.steer < 0.0
 
 
+def test_stuck_recovery_fires_in_out_phase_low_throttle() -> None:
+    # Regression (Bugbot): OUT phase floors gas at out_gas=0.30, which is BELOW the old gas>0.4
+    # trigger, so a car stuck while driving out of the pits never recovered. stuck_throttle=0.1
+    # (< out_gas) fixes it.
+    d = _driver(
+        out_gas=0.30,
+        stuck_throttle=0.1,
+        stuck_speed_kmh=3.0,
+        stuck_seconds=5.0,
+        merge_distance_m=9.0,
+    )
+    # Zero look vector -> PurePursuit creeps at gas 0.30 (the exact low-throttle case Bugbot named);
+    # far off-line so it stays OUT. gas lands in (0.1, 0.4], which the OLD gas>0.4 trigger missed.
+    pose = ((40.0, 0.0, 50.0), (0.0, 0.0, 0.0))
+    f0 = d.step(*pose, speed_kmh=0.0, rpm=4000, gear=2, now=0.0)
+    assert f0.phase == PHASE_OUT and 0.1 < f0.gas <= 0.4 and f0.needs_recovery is False
+    assert d.step(*pose, speed_kmh=0.0, rpm=4000, gear=2, now=4.9).needs_recovery is False
+    assert d.step(*pose, speed_kmh=0.0, rpm=4000, gear=2, now=5.2).needs_recovery is True
+
+
+def test_upshift_gated_by_speed() -> None:
+    # Gear speed-gate (workflow finding): high RPM at low speed must NOT upshift (don't shift up
+    # while wheels spin against a standstill); above 20 km/h it does.
+    blocked = _driver(rpm_up=7800.0, max_gear=4).step(
+        (0.5, 0.0, 50.0), (0.0, 0.0, 1.0), speed_kmh=15.0, rpm=8200, gear=2, now=1.0
+    )
+    assert blocked.gear_up is False
+    allowed = _driver(rpm_up=7800.0, max_gear=4).step(
+        (0.5, 0.0, 50.0), (0.0, 0.0, 1.0), speed_kmh=25.0, rpm=8200, gear=2, now=1.0
+    )
+    assert allowed.gear_up is True
+
+
+def test_downshift_gated_by_speed() -> None:
+    # Low RPM but near-standstill (<5 km/h) must NOT downshift; above 5 km/h it does.
+    blocked = _driver(rpm_dn=3200.0).step(
+        (0.5, 0.0, 50.0), (0.0, 0.0, 1.0), speed_kmh=4.0, rpm=2800, gear=3, now=3.0
+    )
+    assert blocked.gear_dn is False
+    allowed = _driver(rpm_dn=3200.0).step(
+        (0.5, 0.0, 50.0), (0.0, 0.0, 1.0), speed_kmh=6.0, rpm=2800, gear=3, now=3.0
+    )
+    assert allowed.gear_dn is True
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

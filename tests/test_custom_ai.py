@@ -229,3 +229,13 @@ def test_section_name_templates_use_car_index():
     assert car_data_name(0) == "AcTools.CSP.NewBehaviour.CustomAI.Car0.v0"
     assert car_controls_name(3) == "AcTools.CSP.NewBehaviour.CustomAI.CarControls3.v0"
     assert car_data_name(3) == "AcTools.CSP.NewBehaviour.CustomAI.Car3.v0"
+
+
+def test_section_name_rejects_negative_car_index():
+    # A negative index would silently produce an invalid section name (e.g. CarControls-1.v0)
+    # that fails obscurely later; the builders reject it up front (CodeRabbit).
+    for bad in (-1, -5):
+        with pytest.raises(ValueError, match="car_index"):
+            car_controls_name(bad)
+        with pytest.raises(ValueError, match="car_index"):
+            car_data_name(bad)

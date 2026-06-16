@@ -96,6 +96,7 @@ class LapDriver:
         shift_cooldown_s: float = 0.35,
         stuck_speed_kmh: float = 3.0,
         stuck_seconds: float = 5.0,
+        stuck_throttle: float = 0.1,
         min_lap_m: float = 1800.0,
         return_radius_m: float = 12.0,
     ) -> None:
@@ -117,6 +118,7 @@ class LapDriver:
         self.shift_cooldown_s = shift_cooldown_s
         self.stuck_speed_kmh = stuck_speed_kmh
         self.stuck_seconds = stuck_seconds
+        self.stuck_throttle = stuck_throttle
         self.min_lap_m = min_lap_m
         self.return_radius_m = return_radius_m
 
@@ -196,8 +198,11 @@ class LapDriver:
 
         gear_up, gear_dn = self._gear_pulse(rpm, gear, speed_kmh, now)
 
+        # Stuck = barely moving while we are commanding meaningful throttle. The threshold must sit
+        # BELOW out_gas (OUT-phase floors gas at 0.30) and the PurePursuit zero-look creep (0.30),
+        # or a car stuck in OUT phase would never trip recovery (Bugbot).
         needs_recovery = False
-        if speed_kmh < self.stuck_speed_kmh and gas > 0.4:
+        if speed_kmh < self.stuck_speed_kmh and gas > self.stuck_throttle:
             if self._stuck_since is None:
                 self._stuck_since = now
             elif now - self._stuck_since > self.stuck_seconds:
@@ -239,9 +244,11 @@ class LapDriver:
         import time
 
         laps = 0
-        t0 = time.time()
+        # monotonic(): immune to wall-clock/NTP jumps that would corrupt elapsed-time + the
+        # stuck/cooldown timers fed to step() (CodeRabbit).
+        t0 = time.monotonic()
         try:
-            while time.time() - t0 < seconds:
+            while time.monotonic() - t0 < seconds:
                 cd = controller.read_car_data()
                 if not cd:
                     time.sleep(0.02)
@@ -252,7 +259,7 @@ class LapDriver:
                     cd["speed_kmh"],
                     cd["rpm"],
                     cd["gear"],
-                    time.time() - t0,
+                    time.monotonic() - t0,
                 )
                 if frame.needs_recovery:
                     for _ in range(5):

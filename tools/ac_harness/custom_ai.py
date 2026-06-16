@@ -263,14 +263,22 @@ class SimState:
         return bytes(buf)
 
 
+def _validate_car_index(car_index: int) -> int:
+    """Reject a negative ``car_index`` early. Otherwise it silently produces an invalid section
+    name (e.g. ``CarControls-1.v0``) that fails later in a non-obvious way (CodeRabbit)."""
+    if car_index < 0:
+        raise ValueError(f"car_index must be >= 0 (0 == player car), got {car_index}")
+    return car_index
+
+
 def car_controls_name(car_index: int) -> str:
     """Name of the WRITE (controls) section for ``car_index`` (0 == player)."""
-    return CAR_CONTROLS_NAME_TEMPLATE.format(index=car_index)
+    return CAR_CONTROLS_NAME_TEMPLATE.format(index=_validate_car_index(car_index))
 
 
 def car_data_name(car_index: int) -> str:
     """Name of the READ (car-state) section CSP creates for ``car_index`` (0 == player)."""
-    return CAR_DATA_NAME_TEMPLATE.format(index=car_index)
+    return CAR_DATA_NAME_TEMPLATE.format(index=_validate_car_index(car_index))
 
 
 # ---------------------------------------------------------------------------

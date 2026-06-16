@@ -241,7 +241,6 @@ class PurePursuit:
         not need three near-collinear points (which produce numerically noisy circumcircles).
         Returned unsigned: corner *tightness* sets the speed target, direction does not.
         """
-        n = len(self._plane)
         mid = self._advance(start_index, self.curvature_lookahead_m * 0.5)
         end = self._advance(start_index, self.curvature_lookahead_m)
         p0 = self._plane[start_index]
@@ -263,8 +262,10 @@ class PurePursuit:
         arc = in_len + out_len
         if arc < 1e-6:
             return 0.0
-        # discard the wrap segment's spurious length if the walk wrapped past start (rare).
-        _ = n
+        # NOTE: on a *closed* line shorter than ``curvature_lookahead_m`` the advance walk wraps
+        # past start and folds the in/out headings, degrading this estimate; real ``fast_lane``
+        # tracks are km-scale so it never triggers in production. Clamping the window to the line
+        # length is a tracked follow-up (#190).
         return turn / arc
 
     def control(
