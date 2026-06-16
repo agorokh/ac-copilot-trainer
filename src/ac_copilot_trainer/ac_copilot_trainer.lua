@@ -951,6 +951,9 @@ state = {
   -- any mid-track clock seed (app load/reload mid-lap, post-reset re-arm) — Cursor + codex on #185.
   -- Defaults true: no delta until the first clean lap is started (an out-lap clock is mid-track).
   deltaRefStale = true,
+  -- One-frame confirmation for wrap-shaped same-lap spline jumps on CSP builds without
+  -- resetCounter: if lapCount does not catch up on the next frame, reset rolling state (#188).
+  pendingWrapResetLapCount = nil,
   bestLapTrace = {},
   -- Local in-game PB/reference snapshot. When an imported reference is active,
   -- realtime code still reads `bestLapTrace`, but persistence saves these local fields.
@@ -1280,6 +1283,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.lastSplinePos = nil
   state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
   state.deltaRefStale = true  -- re-entry: no boundary-aligned clock yet, delta silent until first lap
+  state.pendingWrapResetLapCount = nil
   state.bestLapTrace = {}
   state.localBestLapTrace = {}
   state.localBestBrakePoints = {}
@@ -1379,6 +1383,7 @@ local function resetRollingDrivingState()
   lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   state.deltaRefStale = true  -- #180/#185: clock reset; delta silent until the next clean lap boundary
+  state.pendingWrapResetLapCount = nil
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -2481,18 +2486,19 @@ function script.update(dt)
     state.focusPracticeHudSummarySig = nil
   end
 
-  if teleported or (state.lastLapCount >= 0 and lc < state.lastLapCount) then
-    -- Teleport/return-to-garage/pit reset (guarded resetCounter bumped, computed above) OR a
-    -- lap-counter rollback: the prior stint's rolling state (lap clock, coaching, aggregates) is
-    -- stale. The teleport case also covers a wrap-shaped same-lap rewind the spline heuristic
-    -- below cannot (codex on #185).
+  local resetDecision = delta.rollingResetDecision({
+    pendingWrapLapCount = state.pendingWrapResetLapCount,
+    lastLapCount = state.lastLapCount,
+    lapCount = lc,
+    prevSpline = state.lastSplinePos,
+    spline = sp,
+    teleported = teleported,
+  })
+  state.pendingWrapResetLapCount = resetDecision.pendingWrapLapCount
+  if resetDecision.reset then
+    -- Teleport/resetCounter, lap rollback, non-wrap same-lap spline rewind, or a deferred
+    -- wrap-shaped same-lap jump whose lapCount did not catch up on the following frame (#188).
     resetRollingDrivingState()
-  elseif state.lastLapCount >= 0 and lc == state.lastLapCount and state.lastSplinePos then
-    -- Same-lap backward spline jump = pit/session reset (shared with the `delta` producer's skip
-    -- guard via delta.isBackwardSplineReset so the discontinuity threshold can't drift — #185).
-    if delta.isBackwardSplineReset(state.lastSplinePos, sp) then
-      resetRollingDrivingState()
-    end
   end
 
   state.lastLapCount = lc
