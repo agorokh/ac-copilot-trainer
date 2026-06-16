@@ -29,6 +29,7 @@ from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
     CLIENT_CLASS_EXTERNAL,
     CLIENT_CLASS_KEY,
+    CLIENT_CLASS_SCREEN,
     CLIENT_HEADER,
     ENVELOPE_KEY,
     HAPTIC_CLIENT_CLASSES,
@@ -82,6 +83,7 @@ _external_peer_classes: dict[Any, str] = {}
 
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
+LEGACY_SCREEN_CLIENT_PREFIXES = ("ac-copilot-screen",)
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 CLIENT_TO_SERVER_TYPES = frozenset(
@@ -367,6 +369,16 @@ def _peer_class(peer: Any) -> str:
     return _external_peer_classes.get(peer, CLIENT_CLASS_EXTERNAL)
 
 
+def _client_class_from_hello(data: dict[str, Any]) -> str:
+    client_class = data.get(CLIENT_CLASS_KEY)
+    if isinstance(client_class, str):
+        return client_class
+    client = data.get("client")
+    if isinstance(client, str) and client.startswith(LEGACY_SCREEN_CLIENT_PREFIXES):
+        return CLIENT_CLASS_SCREEN
+    return CLIENT_CLASS_EXTERNAL
+
+
 def _targets_for_classes(*, exclude: Any, classes: frozenset[str]) -> list[Any]:
     return [
         peer for peer in _external_peers if peer is not exclude and _peer_class(peer) in classes
@@ -387,33 +399,33 @@ def _build_haptic_events_from_telemetry(frame: dict[str, Any]) -> list[dict[str,
     events: list[dict[str, Any]] = []
     ts_sim = frame.get("ts_sim")
     if payload.get("abs_active") or payload.get("brake_lock") or payload.get("wheel_lock"):
-        events.append(
-            {
-                "v": 1,
-                "type": TYPE_HAPTIC_EVENT,
-                "event": "pedal_rumble",
-                "channel": "pedal",
-                "intensity": max(0.2, _clamp_01(payload.get("brake"))),
-                "duration_ms": 80,
-                "ts_sim": ts_sim,
-                "source": "sidecar.telemetry_tick",
-            }
-        )
+        event: dict[str, Any] = {
+            "v": 1,
+            "type": TYPE_HAPTIC_EVENT,
+            "event": "pedal_rumble",
+            "channel": "pedal",
+            "intensity": max(0.2, _clamp_01(payload.get("brake"))),
+            "duration_ms": 80,
+            "source": "sidecar.telemetry_tick",
+        }
+        if ts_sim is not None:
+            event["ts_sim"] = ts_sim
+        events.append(event)
 
     slip = payload.get("slip")
     if not isinstance(slip, bool) and isinstance(slip, int | float) and abs(float(slip)) >= 0.2:
-        events.append(
-            {
-                "v": 1,
-                "type": TYPE_HAPTIC_EVENT,
-                "event": "slip_buzz",
-                "channel": "pedal",
-                "intensity": _clamp_01(abs(float(slip))),
-                "duration_ms": 60,
-                "ts_sim": ts_sim,
-                "source": "sidecar.telemetry_tick",
-            }
-        )
+        event = {
+            "v": 1,
+            "type": TYPE_HAPTIC_EVENT,
+            "event": "slip_buzz",
+            "channel": "pedal",
+            "intensity": _clamp_01(abs(float(slip))),
+            "duration_ms": 60,
+            "source": "sidecar.telemetry_tick",
+        }
+        if ts_sim is not None:
+            event["ts_sim"] = ts_sim
+        events.append(event)
     return events
 
 
@@ -457,9 +469,7 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t == TYPE_HELLO:
         # Track this peer for fan-out and acknowledge directly.
         _external_peers.add(websocket)
-        client_class = data.get(CLIENT_CLASS_KEY)
-        if not isinstance(client_class, str):
-            client_class = CLIENT_CLASS_EXTERNAL
+        client_class = _client_class_from_hello(data)
         _external_peer_classes[websocket] = client_class
         logger.info(
             "external hello accepted peer=%s client=%s class=%s peers=%d",

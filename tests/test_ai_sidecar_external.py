@@ -134,6 +134,8 @@ def test_validate_inbound_accepts_known_types() -> None:
     assert ep.validate_inbound({"v": 1, "type": "action", "name": "toggleFocusPractice"}) is None
     assert ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
     assert ep.validate_inbound(_telemetry_tick()) is None
+    assert ep.validate_inbound(_telemetry_tick(slip=-0.35)) is None
+    assert ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": 74.1})) is None
     assert ep.validate_inbound(_haptic_event()) is None
 
 
@@ -157,6 +159,18 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "payload" in (ep.validate_inbound({"v": 1, "type": "telemetry_tick"}) or "")
     assert "throttle must be <= 1" in (ep.validate_inbound(_telemetry_tick(throttle=1.2)) or "")
+    assert "lap_time_ms must be >= 0" in (
+        ep.validate_inbound(_telemetry_tick(lap_time_ms=-1)) or ""
+    )
+    assert "requires at least one corner" in (
+        ep.validate_inbound(_telemetry_tick(tyre_temps_c={})) or ""
+    )
+    assert "not a known corner" in (
+        ep.validate_inbound(_telemetry_tick(tyre_temps_c={"front_left": 74.1})) or ""
+    )
+    assert "tyre_temps_c.fl requires a finite number" in (
+        ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": "hot"})) or ""
+    )
     assert "intensity must be <= 1" in (ep.validate_inbound(_haptic_event(intensity=1.4)) or "")
     assert "unknown type" in (ep.validate_inbound({"v": 1, "type": "explode"}) or "")
 
@@ -385,7 +399,7 @@ def test_telemetry_tick_routes_to_physical_clients_and_generates_haptic_event() 
                 ws_connect(f"ws://127.0.0.1:{port}/") as haptics,
             ):
                 await _hello(lua, "trainer-lua", ep.CLIENT_CLASS_LUA)
-                await _hello(screen, "screen-01", ep.CLIENT_CLASS_SCREEN)
+                await _hello(screen, "ac-copilot-screen-01")
                 await _hello(haptics, "uno-haptics-01", ep.CLIENT_CLASS_HAPTICS)
 
                 await lua.send(json.dumps(_telemetry_tick(), separators=(",", ":")))
@@ -405,6 +419,40 @@ def test_telemetry_tick_routes_to_physical_clients_and_generates_haptic_event() 
     assert haptics_second["channel"] == "pedal"
     assert haptics_second["intensity"] == pytest.approx(0.84)
     assert ep.validate_inbound(haptics_second) is None
+
+
+def test_telemetry_tick_without_ts_sim_still_generates_haptic_event() -> None:
+    """Derived haptic events omit absent timestamps instead of failing validation."""
+
+    async def _hello(ws, client: str, client_class: str) -> None:
+        await ws.send(
+            json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
+        )
+        await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with (
+                ws_connect(f"ws://127.0.0.1:{port}/") as lua,
+                ws_connect(f"ws://127.0.0.1:{port}/") as haptics,
+            ):
+                await _hello(lua, "trainer-lua", ep.CLIENT_CLASS_LUA)
+                await _hello(haptics, "uno-haptics-01", ep.CLIENT_CLASS_HAPTICS)
+                frame = _telemetry_tick(abs_active=False, brake=0.0, slip=-0.35)
+                frame.pop("ts_sim")
+
+                await lua.send(json.dumps(frame, separators=(",", ":")))
+                haptics_first = json.loads(await asyncio.wait_for(haptics.recv(), timeout=2.0))
+                haptics_second = json.loads(await asyncio.wait_for(haptics.recv(), timeout=2.0))
+                assert haptics_first["type"] == ep.TYPE_TELEMETRY_TICK
+                return haptics_second
+
+    event = asyncio.run(_run())
+    assert event["type"] == ep.TYPE_HAPTIC_EVENT
+    assert event["event"] == "slip_buzz"
+    assert event["intensity"] == pytest.approx(0.35)
+    assert "ts_sim" not in event
+    assert ep.validate_inbound(event) is None
 
 
 def test_haptic_event_routes_only_to_haptics_class_clients() -> None:

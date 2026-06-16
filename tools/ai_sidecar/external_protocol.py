@@ -206,14 +206,17 @@ def _validate_optional_number(
 
 
 def _validate_corner_number_map(payload: dict[str, Any], key: str) -> str | None:
-    value = payload.get(key)
-    if value is None:
+    if key not in payload:
         return None
+    value = payload[key]
     if not isinstance(value, dict):
         return f"{key} requires an object"
-    for corner in ("fl", "fr", "rl", "rr"):
-        if corner not in value:
-            return f"{key} requires '{corner}'"
+    if not value:
+        return f"{key} requires at least one corner"
+    known_corners = frozenset({"fl", "fr", "rl", "rr"})
+    for corner in value:
+        if corner not in known_corners:
+            return f"{key}.{corner} is not a known corner"
         if not _is_finite_number(value[corner]):
             return f"{key}.{corner} requires a finite number"
     return None
@@ -245,10 +248,12 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     gear = payload.get("gear")
     if isinstance(gear, bool) or not isinstance(gear, int | str):
         return "gear requires an integer or string"
-    for key in ("lap_time_ms", "slip"):
-        err = _validate_optional_number(payload, key, min_value=0)
-        if err is not None:
-            return err
+    err = _validate_optional_number(payload, "lap_time_ms", min_value=0)
+    if err is not None:
+        return err
+    err = _validate_optional_number(payload, "slip")
+    if err is not None:
+        return err
     for key in ("tyre_temps_c", "tyre_pressures_psi"):
         err = _validate_corner_number_map(payload, key)
         if err is not None:

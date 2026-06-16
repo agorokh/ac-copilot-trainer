@@ -2,7 +2,7 @@
 type: decision
 status: active
 created: 2026-04-21
-updated: 2026-04-21
+updated: 2026-06-16
 relates_to:
   - AcCopilotTrainer/03_Investigations/csp-web-socket-api.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
@@ -39,11 +39,12 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
    | Lua/sidecar → haptics | `haptic_event` | `{ event, channel, intensity, duration_ms, ts_sim? }` |
 
    `client_class` is optional for backward compatibility. Known classes:
-   `external`, `lua`, `screen`, `haptics`, `physical`, `browser`. The
-   sidecar uses classes only for high-rate physical-peripheral routing:
-   `telemetry_tick` goes to `screen`, `haptics`, and `physical`; `haptic_event`
-   goes to `haptics` and `physical`. Neither message is echoed back to the Lua
-   peer.
+   `external`, `lua`, `screen`, `haptics`, `physical`, `browser`. Legacy
+   firmware clients whose `client` starts with `ac-copilot-screen` are treated
+   as `screen` even when they omit `client_class`. The sidecar uses classes only
+   for high-rate physical-peripheral routing: `telemetry_tick` goes to `screen`,
+   `haptics`, and `physical`; `haptic_event` goes to `haptics` and `physical`.
+   Neither message is echoed back to the Lua peer.
 
 3. **Physical peripheral payloads.**
 
@@ -52,7 +53,8 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
    `speed_kmh`, `rpm`, `gear`, `throttle` (0-1), `brake` (0-1), `steer`
    (-1..1), `lat_g`, and `long_g`. Optional fields include `lap_time_ms`,
    `slip`, `abs_active`, `brake_lock`, `wheel_lock`, `tyre_temps_c`, and
-   `tyre_pressures_psi`; tyre maps use `fl`, `fr`, `rl`, `rr`.
+   `tyre_pressures_psi`; tyre maps may include any non-empty subset of `fl`,
+   `fr`, `rl`, `rr`.
 
    `haptic_event` is a bounded actuator command for a haptic peripheral.
    Expected cadence: event-driven, capped by the sidecar at 25 Hz per
