@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T09:36:28Z
+last_updated: 2026-06-16T09:41:26Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -65,6 +65,7 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-16** — PR [#202](https://github.com/agorokh/ac-copilot-trainer/pull/202) **MERGED** at `d71bca3` — closed [#156](https://github.com/agorokh/ac-copilot-trainer/issues/156) by removing `scripts/` `sys.path` pollution from hook/manifest tests and adding `tools.testing.script_imports`, a path-aware file loader with sibling-script support that does not expose `scripts/mcp` as a namespace package. Classification: no post-merge flags. Active focus remains #190.
 - **2026-06-16** — PR [#205](https://github.com/agorokh/ac-copilot-trainer/pull/205) **MERGED** at `6d0ddc8` — generated reference-lap prototype for [#116](https://github.com/agorokh/ac-copilot-trainer/issues/116). Adds stdlib-only `tools.ac_harness.reference_lap`, schema-v1 `generated_reference_v1` archive emission, trainer-state bridge preserving driver PBs, validator hardening, and ADR [`rl-reference-lap-generation`](../01_Decisions/rl-reference-lap-generation.md) deferring RL runtime dependencies. Classification: no post-merge flags. Active focus remains #190.
 - **2026-06-16** — PR [#214](https://github.com/agorokh/ac-copilot-trainer/pull/214) **MERGED** at `3e9c927` — removed the PyYAML runtime dependency from the PR-pain allowlist gate after PR #198 exposed a failing post-merge `score` run. Adds `tools/pr_pain/config.py`, routes `.github/workflows/pr-pain-detection.yml` through it, and reuses it for `extra_bot_logins`. Classification: `.github/workflows/` changed; post-merge `PR pain detection / score` succeeded on the merge commit. Active focus remains #190.
 - **2026-06-16** — PR [#200](https://github.com/agorokh/ac-copilot-trainer/pull/200) **MERGED** at `ee25118` — detect-and-retry AC entry launcher; closes [#177](https://github.com/agorokh/ac-copilot-trainer/issues/177). Adds `tools/ac_harness/entry_launcher.py`, a pluggable `EntryLauncher`, default `ColdRestartActuator`, atomic `race.ini` `SPAWN_SET=PIT` normalization, retry/relaunch loop around `DrivingEntryDetector`, and CLI timing knobs. Classification: no post-merge flags. Mac-side verification is complete; live Windows/AC rig verification remains the next runtime smoke. Active focus remains #190.
