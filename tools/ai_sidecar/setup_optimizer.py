@@ -343,18 +343,29 @@ def rebuild_experiments(
 ) -> dict[str, Any]:
     root = Path(lap_dir)
     store = Path(store_path) if store_path is not None else default_store_path_for_lap_dir(root)
-    records: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    duplicates: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
     for path in sorted(root.glob("lap_*.json")):
         try:
-            records.append(record_from_lap_archive(load_lap_archive(path), source_path=path))
+            rec = record_from_lap_archive(load_lap_archive(path), source_path=path)
         except SetupExperimentError as exc:
             skipped.append({"path": str(path), "error": str(exc)})
+            continue
+        rid = _as_nonempty_str(rec.get("experiment_id"))
+        if rid is None:
+            skipped.append({"path": str(path), "error": "missing experiment_id"})
+            continue
+        if rid in by_id:
+            duplicates.append({"path": str(path), "experiment_id": rid})
+        by_id[rid] = rec
+    records = list(by_id.values())
     save_records(records, store)
     return {
         "ok": True,
         "store_path": str(store),
         "records": len(records),
+        "duplicates": duplicates,
         "skipped": skipped,
     }
 

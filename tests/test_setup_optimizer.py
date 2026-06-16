@@ -181,6 +181,47 @@ def test_record_lap_archive_upserts_without_duplicates(tmp_path: Path) -> None:
     assert len(load_records(store)) == 1
 
 
+def test_rebuild_experiments_deduplicates_experiment_ids(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "journal" / "laps"
+    lap_dir.mkdir(parents=True)
+    (lap_dir / "lap_20260616-000001_first.json").write_text(
+        json.dumps(
+            _lap(
+                lap_uuid="lap-d1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        encoding="utf-8",
+    )
+    (lap_dir / "lap_20260616-000002_second.json").write_text(
+        json.dumps(
+            _lap(
+                lap_uuid="lap-d1",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=66,
+                rear_wing=9,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    summary = rebuild_experiments(lap_dir)
+    records = load_records(summary["store_path"])
+
+    assert summary["records"] == 1
+    assert summary["duplicates"] == [
+        {"path": str(lap_dir / "lap_20260616-000002_second.json"), "experiment_id": "lap-d1"}
+    ]
+    assert len(records) == 1
+    assert records[0]["setup"]["hash"] == "new"
+
+
 def test_setup_optimizer_cli_smoke(tmp_path: Path, capsys) -> None:
     lap_dir = tmp_path / "journal" / "laps"
     _write_laps(lap_dir)

@@ -801,6 +801,9 @@ function M.pollInbound(maxPerTick)
           -- Sidecar-local setup optimizer replies. Lua only initiates record
           -- store registration and record ingestion; compare/suggest are for
           -- external clients, so accept these quietly if fanned back.
+          if t == "setup.experiment.store.ack" and data.ok == false then
+            setupExperimentStoreSent = false
+          end
           if (t == "setup.experiment.store.ack" or t == "setup.experiment.record.ack")
               and data.ok == false
               and ac and type(ac.log) == "function" then
