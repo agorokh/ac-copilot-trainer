@@ -57,6 +57,10 @@ TYPE_STATE_UNSUBSCRIBE = "state.unsubscribe"
 # the Lua side enforces the in-pits gate and does the actual ac.loadSetup().
 TYPE_SETUP_LIST = "setup.list"
 TYPE_SETUP_LOAD = "setup.load"
+TYPE_SETUP_EXPERIMENT_STORE = "setup.experiment.store"
+TYPE_SETUP_EXPERIMENT_RECORD = "setup.experiment.record"
+TYPE_SETUP_COMPARE = "setup.compare"
+TYPE_SETUP_SUGGEST = "setup.suggest"
 
 # Server → client.
 TYPE_HELLO_ACK = "hello_ack"
@@ -68,6 +72,10 @@ TYPE_ERROR = "error"
 # Issue #86 Part D: replies to the screen for setup operations.
 TYPE_SETUP_LIST_RESULT = "setup.list.result"
 TYPE_SETUP_LOAD_ACK = "setup.load.ack"
+TYPE_SETUP_EXPERIMENT_STORE_ACK = "setup.experiment.store.ack"
+TYPE_SETUP_EXPERIMENT_RECORD_ACK = "setup.experiment.record.ack"
+TYPE_SETUP_COMPARE_RESULT = "setup.compare.result"
+TYPE_SETUP_SUGGEST_RESULT = "setup.suggest.result"
 # Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
 # from the Lua loopback peer to physical clients; the sidecar can derive and
 # route `haptic_event` frames to haptic-class clients.
@@ -102,6 +110,8 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_CONFIG_SET,
     TYPE_ACTION,
     TYPE_STATE_SUBSCRIBE,
+    TYPE_SETUP_COMPARE,
+    TYPE_SETUP_SUGGEST,
     TYPE_TELEMETRY_TICK,
     TYPE_HAPTIC_EVENT,
 )
@@ -340,8 +350,38 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         if not (name_ok or path_ok):
             return "setup.load requires non-empty 'name' or 'path'"
         return None
+    if t == TYPE_SETUP_EXPERIMENT_STORE:
+        store_path = frame.get("store_path") or frame.get("path")
+        if not isinstance(store_path, str) or not store_path:
+            return "setup.experiment.store requires non-empty 'store_path'"
+        return None
+    if t == TYPE_SETUP_EXPERIMENT_RECORD:
+        archive_path = frame.get("archive_path") or frame.get("path")
+        if not isinstance(archive_path, str) or not archive_path:
+            return "setup.experiment.record requires non-empty 'archive_path'"
+        return None
+    if t == TYPE_SETUP_COMPARE:
+        baseline = frame.get("baseline_setup")
+        candidate = frame.get("candidate_setup")
+        if not isinstance(baseline, str) or not baseline:
+            return "setup.compare requires non-empty 'baseline_setup'"
+        if not isinstance(candidate, str) or not candidate:
+            return "setup.compare requires non-empty 'candidate_setup'"
+        return None
+    if t == TYPE_SETUP_SUGGEST:
+        for key in ("car_id", "track_id"):
+            if key in frame and not isinstance(frame.get(key), str):
+                return f"setup.suggest optional '{key}' must be a string"
+        return None
     if t in (TYPE_SETUP_LIST_RESULT, TYPE_SETUP_LOAD_ACK):
         # Server-to-client replies forwarded from the Lua peer — accept silently.
+        return None
+    if t in (
+        TYPE_SETUP_EXPERIMENT_STORE_ACK,
+        TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+        TYPE_SETUP_COMPARE_RESULT,
+        TYPE_SETUP_SUGGEST_RESULT,
+    ):
         return None
     if t == TYPE_TELEMETRY_TICK:
         return _validate_telemetry_tick(frame)

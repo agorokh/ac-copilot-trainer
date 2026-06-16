@@ -138,6 +138,86 @@ def test_hello_ack_registers_and_unblocks_publish():
     assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
 
 
+def test_setup_store_registration_failure_is_backed_off():
+    rt = _runtime()
+    _open(rt)
+    rt.execute(
+        'require("ws_bridge").setSetupExperimentStorePath('
+        '"C:/Assetto Corsa/apps/lua/ac_copilot_trainer/journal/setup_experiments/experiments.jsonl"'
+        ")"
+    )
+    sent_before = int(rt.eval("_ws_sent"))
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    sent_after_registration = int(rt.eval("_ws_sent"))
+    assert sent_after_registration == sent_before + 1
+
+    _inject(
+        rt,
+        {
+            "v": 1,
+            "type": "setup.experiment.store.ack",
+            "ok": False,
+            "error": "permission denied",
+        },
+    )
+    sent_after_failed_ack = int(rt.eval("_ws_sent"))
+    for _ in range(20):
+        _inject(rt, {"v": 1, "type": "state.snapshot", "topic": "session", "payload": {}})
+
+    assert int(rt.eval("_ws_sent")) == sent_after_failed_ack
+
+
+def test_setup_store_registration_retries_after_backoff_without_inbound_frames():
+    rt = _runtime()
+    _open(rt)
+    rt.execute(
+        'require("ws_bridge").setSetupExperimentStorePath('
+        '"C:/Assetto Corsa/apps/lua/ac_copilot_trainer/journal/setup_experiments/experiments.jsonl"'
+        ")"
+    )
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    _inject(
+        rt,
+        {
+            "v": 1,
+            "type": "setup.experiment.store.ack",
+            "ok": False,
+            "error": "permission denied",
+        },
+    )
+    sent_after_failed_ack = int(rt.eval("_ws_sent"))
+
+    rt.execute('local wb = require("ws_bridge"); for _ = 1, 300 do wb.tick(0) end')
+    assert int(rt.eval("_ws_sent")) == sent_after_failed_ack
+
+    rt.execute('require("ws_bridge").tick(0)')
+    assert int(rt.eval("_ws_sent")) == sent_after_failed_ack + 1
+
+
+def test_setup_path_frames_require_loopback_url():
+    rt = _runtime()
+    rt.execute('local wb = require("ws_bridge"); wb.configure("ws://192.0.2.10:8765"); wb.tick(0)')
+    assert rt.eval("_ws_on_recv ~= nil"), "socket should have opened on first tick"
+    rt.execute(
+        'require("ws_bridge").setSetupExperimentStorePath('
+        '"C:/Assetto Corsa/apps/lua/ac_copilot_trainer/journal/setup_experiments/experiments.jsonl"'
+        ")"
+    )
+    sent_before = int(rt.eval("_ws_sent"))
+
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+
+    assert int(rt.eval("_ws_sent")) == sent_before
+    assert (
+        rt.eval(
+            'require("ws_bridge").sendSetupExperimentRecord('
+            '"C:/Assetto Corsa/apps/lua/ac_copilot_trainer/journal/laps/lap_1.json")'
+        )
+        is False
+    )
+    assert int(rt.eval("_ws_sent")) == sent_before
+
+
 def test_legacy_protocol_frame_does_not_unblock_v1_publish():
     # chatgpt-codex P1 on PR #171: the v1 publish path must require the v1 hello
     # handshake, not just any-protocol readiness. A legacy protocol=1 reply (e.g.

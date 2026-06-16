@@ -83,6 +83,24 @@ Lua currently ignores this event (logging only in Python); future versions may s
 
 **Fixture ranking (issue #49):** `python -m tools.ai_sidecar --compare-laps slower.json reference.json` prints JSON for corner-level improvement suggestions (requires `telemetry.corners` in both files).
 
+**Setup optimization (issue #114):**
+
+- Lua → sidecar: `{"v":1,"type":"setup.experiment.store","store_path":".../journal/setup_experiments/experiments.jsonl"}` registers the canonical store after handshake so compare/suggest can use rebuilt rows immediately after sidecar restart.
+- Lua → sidecar: `{"v":1,"type":"setup.experiment.record","archive_path":".../journal/laps/lap_...json"}` ingests one PR #78 lap archive into `journal/setup_experiments/experiments.jsonl`.
+- client → sidecar: `{"v":1,"type":"setup.compare","baseline_setup":"old","candidate_setup":"new"}` returns `setup.compare.result` with A/B improvement, confidence, and significance.
+- client → sidecar: `{"v":1,"type":"setup.suggest","car_id":"...","track_id":"..."}` returns `setup.suggest.result` with the next setup candidate and rationale.
+
+CLI equivalents:
+
+```bash
+python -m tools.ai_sidecar --setup-rebuild-experiments "<...>/journal/laps"
+python -m tools.ai_sidecar --setup-store "<...>/experiments.jsonl" --setup-compare old new
+python -m tools.ai_sidecar --setup-store "<...>/experiments.jsonl" --setup-suggest
+python -m tools.ai_sidecar --setup-store "<...>/experiments.jsonl" --host 127.0.0.1 --port 8765
+```
+
+See [13_Setup_Experiments.md](13_Setup_Experiments.md) for data location, reset, and rebuild.
+
 ## Tests
 
 `tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`). `tests/test_llm_coach.py` — Ollama debrief helpers with mocked HTTP (issue **#46**).

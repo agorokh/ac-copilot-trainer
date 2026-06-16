@@ -415,6 +415,12 @@ local pendingWsSidecarUrl = nil
 local state
 
 wsBridge.configure(config.wsSidecarUrl or "")
+if wsBridge.setSetupExperimentStorePath then
+  pcall(function()
+    wsBridge.setSetupExperimentStorePath(
+      persistence.dataDir() .. "/journal/setup_experiments/experiments.jsonl")
+  end)
+end
 
 -- Issue #81: external WS clients (rig touchscreen) drive these via the sidecar.
 -- Each handler returns (applied:boolean, reason:string|nil); the bridge fans an
@@ -2399,6 +2405,12 @@ function script.update(dt)
           else
             ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
           end
+        end
+        if ok and type(pathOrErr) == "string"
+            and wsBridge and type(wsBridge.sendSetupExperimentRecord) == "function" then
+          pcall(function()
+            wsBridge.sendSetupExperimentRecord(pathOrErr)
+          end)
         end
       end
     end

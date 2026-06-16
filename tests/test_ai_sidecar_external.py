@@ -19,6 +19,7 @@ import json
 import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 
@@ -34,6 +35,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _reset_external_state,
     make_token_check,
 )
+from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
 
 
 def _free_port() -> int:
@@ -43,6 +45,41 @@ def _free_port() -> int:
         return s.getsockname()[1]
     finally:
         s.close()
+
+
+def _write_setup_lap(
+    lap_dir: Path,
+    name: str,
+    setup_hash: str,
+    lap_ms: int,
+    front_bias: int,
+) -> Path:
+    lap_dir.mkdir(parents=True, exist_ok=True)
+    path = lap_dir / f"lap_20260616-000000_{name}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lap_uuid": name,
+                "session_uuid": "sess",
+                "exported_at": "2026-06-16T00:00:00Z",
+                "car": {"id": "ks_porsche_911_gt3_r_2016"},
+                "track": {"id": "magione"},
+                "conditions": {"trackGripLevel": 0.98},
+                "lap": {"lap_n": 1, "lap_ms": lap_ms, "is_valid": True},
+                "setup": {
+                    "hash": setup_hash,
+                    "path": f"C:/setups/{setup_hash}.ini",
+                    "snapshot": {
+                        "FRONT_BIAS.VALUE": str(front_bias),
+                        "WING_2.VALUE": "9",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 @asynccontextmanager
@@ -133,6 +170,34 @@ def test_validate_inbound_accepts_known_types() -> None:
     )
     assert ep.validate_inbound({"v": 1, "type": "action", "name": "toggleFocusPractice"}) is None
     assert ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
+    assert (
+        ep.validate_inbound(
+            {"v": 1, "type": "setup.experiment.record", "archive_path": "journal/laps/lap_1.json"}
+        )
+        is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.experiment.store",
+                "store_path": "journal/setup_experiments/experiments.jsonl",
+            }
+        )
+        is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.compare",
+                "baseline_setup": "old",
+                "candidate_setup": "new",
+            }
+        )
+        is None
+    )
+    assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
     assert ep.validate_inbound(_telemetry_tick()) is None
     assert ep.validate_inbound(_telemetry_tick(slip=-0.35)) is None
     assert ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": 74.1})) is None
@@ -157,6 +222,11 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "unknown topic" in (
         ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["pit_window"]}) or ""
     )
+    assert "archive_path" in (
+        ep.validate_inbound({"v": 1, "type": "setup.experiment.record"}) or ""
+    )
+    assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
+    assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
     assert "payload" in (ep.validate_inbound({"v": 1, "type": "telemetry_tick"}) or "")
     assert "throttle must be <= 1" in (ep.validate_inbound(_telemetry_tick(throttle=1.2)) or "")
     assert "lap_time_ms must be >= 0" in (
@@ -329,6 +399,245 @@ def test_external_request_errors_when_no_loopback_lua_peer() -> None:
     err = asyncio.run(_run())
     assert err["type"] == ep.TYPE_ERROR
     assert "no loopback Lua peer connected" in err["message"]
+
+
+def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 64)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 66)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(json.dumps({"v": 1, "type": "setup.suggest"}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                return json.loads(raw)
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
+    assert result["ok"] is True
+    assert result["candidate"]["changed_params"]
+
+
+def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) -> None:
+    async def _run() -> tuple[dict, dict]:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 64)
+        _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 66)
+        rebuilt = rebuild_experiments(lap_dir)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.store",
+                            "store_path": rebuilt["store_path"],
+                        }
+                    )
+                )
+                store_ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(json.dumps({"v": 1, "type": "setup.suggest"}))
+                suggest = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return store_ack, suggest
+
+    store_ack, suggest = asyncio.run(_run())
+    assert store_ack["type"] == ep.TYPE_SETUP_EXPERIMENT_STORE_ACK
+    assert store_ack["ok"] is True
+    assert store_ack["records"] == 2
+    assert suggest["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
+    assert suggest["ok"] is True
+    assert suggest["candidate"]["changed_params"]
+
+
+def test_setup_store_registration_returns_error_when_count_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(_store_path: Path) -> int:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(srv, "_setup_store_record_count", _boom)
+    store = tmp_path / "journal" / "setup_experiments" / "experiments.jsonl"
+
+    async def _run() -> dict:
+        srv._setup_experiment_store_path = None
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.store",
+                            "store_path": str(store),
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+
+    assert result["type"] == ep.TYPE_SETUP_EXPERIMENT_STORE_ACK
+    assert result["ok"] is False
+    assert "permission denied" in result["error"]
+
+
+def test_setup_record_returns_error_when_store_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(_archive_path: str) -> dict:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(srv, "_record_lap_archive_safe", _boom)
+    lap_path = tmp_path / "journal" / "laps" / "lap_20260616-000001_lap-a.json"
+
+    async def _run() -> dict:
+        srv._setup_experiment_store_path = None
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.record",
+                            "archive_path": str(lap_path),
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+
+    assert result["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+    assert result["ok"] is False
+    assert "disk full" in result["error"]
+
+
+def test_setup_record_preserves_seeded_store_for_suggest(tmp_path: Path) -> None:
+    from tools.ai_sidecar import server as srv
+
+    seed_dir = tmp_path / "seed" / "journal" / "laps"
+    _write_setup_lap(seed_dir, "seed-a", "old", 100_000, 64)
+    _write_setup_lap(seed_dir, "seed-b", "new", 98_000, 66)
+    seeded = rebuild_experiments(seed_dir)
+    seeded_store = Path(seeded["store_path"])
+
+    live_lap = _write_setup_lap(
+        tmp_path / "live" / "journal" / "laps", "live-a", "live", 99_000, 65
+    )
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            srv._setup_experiment_store_path = seeded_store
+            srv._setup_experiment_store_seeded = True
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.record",
+                            "archive_path": str(live_lap),
+                        }
+                    )
+                )
+                record_ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(json.dumps({"v": 1, "type": "setup.suggest"}))
+                suggest = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return record_ack, suggest
+
+    try:
+        record_ack, suggest = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+        srv._setup_experiment_store_seeded = False
+
+    assert record_ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+    assert record_ack["ok"] is True
+    assert record_ack["active_store_path"] == str(seeded_store)
+    assert record_ack["store_path"] != str(seeded_store)
+    assert suggest["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
+    assert suggest["ok"] is True
+    assert suggest["experiments_used"] == 2
+
+
+def test_setup_compare_returns_error_when_store_load_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(_store_path: Path, **_kwargs: object) -> dict:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(srv, "_compare_setup_store", _boom)
+
+    async def _run() -> dict:
+        srv._setup_experiment_store_path = (
+            tmp_path / "journal" / "setup_experiments" / "experiments.jsonl"
+        )
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.compare",
+                            "baseline_setup": "old",
+                            "candidate_setup": "new",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+
+    assert result["type"] == ep.TYPE_SETUP_COMPARE_RESULT
+    assert result["ok"] is False
+    assert "permission denied" in result["error"]
 
 
 def test_config_set_round_trip_via_hub() -> None:
