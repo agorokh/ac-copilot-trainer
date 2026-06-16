@@ -19,6 +19,7 @@ import json
 import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 
@@ -42,6 +43,41 @@ def _free_port() -> int:
         return s.getsockname()[1]
     finally:
         s.close()
+
+
+def _write_setup_lap(
+    lap_dir: Path,
+    name: str,
+    setup_hash: str,
+    lap_ms: int,
+    front_bias: int,
+) -> Path:
+    lap_dir.mkdir(parents=True, exist_ok=True)
+    path = lap_dir / f"lap_20260616-000000_{name}.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lap_uuid": name,
+                "session_uuid": "sess",
+                "exported_at": "2026-06-16T00:00:00Z",
+                "car": {"id": "ks_porsche_911_gt3_r_2016"},
+                "track": {"id": "magione"},
+                "conditions": {"trackGripLevel": 0.98},
+                "lap": {"lap_n": 1, "lap_ms": lap_ms, "is_valid": True},
+                "setup": {
+                    "hash": setup_hash,
+                    "path": f"C:/setups/{setup_hash}.ini",
+                    "snapshot": {
+                        "FRONT_BIAS.VALUE": str(front_bias),
+                        "WING_2.VALUE": "9",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 @asynccontextmanager
@@ -83,6 +119,24 @@ def test_validate_inbound_accepts_known_types() -> None:
     )
     assert ep.validate_inbound({"v": 1, "type": "action", "name": "toggleFocusPractice"}) is None
     assert ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["lap"]}) is None
+    assert (
+        ep.validate_inbound(
+            {"v": 1, "type": "setup.experiment.record", "archive_path": "journal/laps/lap_1.json"}
+        )
+        is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.compare",
+                "baseline_setup": "old",
+                "candidate_setup": "new",
+            }
+        )
+        is None
+    )
+    assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
 
 
 def test_validate_inbound_rejects_invalid() -> None:
@@ -99,6 +153,10 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "unknown topic" in (
         ep.validate_inbound({"v": 1, "type": "state.subscribe", "topics": ["pit_window"]}) or ""
     )
+    assert "archive_path" in (
+        ep.validate_inbound({"v": 1, "type": "setup.experiment.record"}) or ""
+    )
+    assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
     assert "unknown type" in (ep.validate_inbound({"v": 1, "type": "explode"}) or "")
 
 
@@ -256,6 +314,41 @@ def test_external_request_errors_when_no_loopback_lua_peer() -> None:
     err = asyncio.run(_run())
     assert err["type"] == ep.TYPE_ERROR
     assert "no loopback Lua peer connected" in err["message"]
+
+
+def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 64)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 66)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(json.dumps({"v": 1, "type": "setup.suggest"}))
+                raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
+                return json.loads(raw)
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
+    assert result["ok"] is True
+    assert result["candidate"]["changed_params"]
 
 
 def test_config_set_round_trip_via_hub() -> None:

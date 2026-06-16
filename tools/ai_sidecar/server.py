@@ -27,6 +27,7 @@ from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
     CLIENT_HEADER,
     ENVELOPE_KEY,
+    ENVELOPE_VERSION,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
     TYPE_CONFIG_ACK,
@@ -37,10 +38,16 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SETUP_COMPARE,
+    TYPE_SETUP_COMPARE_RESULT,
+    TYPE_SETUP_EXPERIMENT_RECORD,
+    TYPE_SETUP_EXPERIMENT_RECORD_ACK,
     TYPE_SETUP_LIST,
     TYPE_SETUP_LIST_RESULT,
     TYPE_SETUP_LOAD,
     TYPE_SETUP_LOAD_ACK,
+    TYPE_SETUP_SUGGEST,
+    TYPE_SETUP_SUGGEST_RESULT,
     TYPE_STATE_SNAPSHOT,
     TYPE_STATE_SUBSCRIBE,
     TYPE_STATE_UNSUBSCRIBE,
@@ -57,6 +64,14 @@ from tools.ai_sidecar.protocol import (
     prepare_outbound_message,
 )
 from tools.ai_sidecar.session import LapComparisonState
+from tools.ai_sidecar.setup_optimizer import (
+    SetupExperimentError,
+    compare_setups,
+    load_records,
+    rebuild_experiments,
+    record_lap_archive,
+    suggest_next_setup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +85,7 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 # Connected external-protocol peers (any client that has spoken a `{v,type}`
 # frame, including the Lua loopback client). Used for hub-style fan-out.
 _external_peers: set[Any] = set()
+_setup_experiment_store_path: Path | None = None
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 CLIENT_TO_SERVER_TYPES = frozenset(
@@ -87,6 +103,9 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         # "Loading…" forever.
         TYPE_SETUP_LIST,
         TYPE_SETUP_LOAD,
+        TYPE_SETUP_EXPERIMENT_RECORD,
+        TYPE_SETUP_COMPARE,
+        TYPE_SETUP_SUGGEST,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -100,6 +119,16 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         # Issue #86 Part D: replies the Lua peer sends back to the screen.
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
+        TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+        TYPE_SETUP_COMPARE_RESULT,
+        TYPE_SETUP_SUGGEST_RESULT,
+    }
+)
+SIDECAR_LOCAL_TYPES = frozenset(
+    {
+        TYPE_SETUP_EXPERIMENT_RECORD,
+        TYPE_SETUP_COMPARE,
+        TYPE_SETUP_SUGGEST,
     }
 )
 
@@ -130,6 +159,35 @@ def _run_compare_laps(last_path: str, ref_path: str) -> None:
         extract_corner_table(ref),
     )
     print(json.dumps(ranked, indent=2))
+
+
+def _run_setup_record_lap(lap_path: str, store_path: str | None) -> None:
+    """CLI harness: one lap archive JSON → upsert one setup experiment row."""
+    try:
+        out = record_lap_archive(lap_path, store_path=store_path)
+    except SetupExperimentError as e:
+        raise SystemExit(f"setup-record-lap: {e}") from e
+    print(json.dumps(out, indent=2, sort_keys=True))
+
+
+def _run_setup_rebuild(lap_dir: str, store_path: str | None) -> None:
+    """CLI harness: rebuild the setup experiment table from lap archive files."""
+    out = rebuild_experiments(lap_dir, store_path=store_path)
+    print(json.dumps(out, indent=2, sort_keys=True))
+
+
+def _run_setup_compare(store_path: str, baseline: str, candidate: str) -> None:
+    out = compare_setups(
+        load_records(store_path),
+        baseline_setup=baseline,
+        candidate_setup=candidate,
+    )
+    print(json.dumps(out, indent=2, sort_keys=True))
+
+
+def _run_setup_suggest(store_path: str, car_id: str | None, track_id: str | None) -> None:
+    out = suggest_next_setup(load_records(store_path), car_id=car_id, track_id=track_id)
+    print(json.dumps(out, indent=2, sort_keys=True))
 
 
 def _peer_host(connection: Any) -> str | None:
@@ -325,6 +383,106 @@ async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
     return None
 
 
+async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -> None:
+    """Handle setup optimizer frames in the sidecar itself.
+
+    The Lua app sends ``setup.experiment.record`` after writing a lap archive.
+    External clients can then ask the same sidecar for ``setup.compare`` or
+    ``setup.suggest`` without inventing another daemon.  Arbitrary file reads
+    stay loopback-only: only the Lua peer may provide ``archive_path``.
+    """
+    global _setup_experiment_store_path
+
+    t = data.get(TYPE_KEY)
+    if t == TYPE_SETUP_EXPERIMENT_RECORD:
+        if not _is_loopback_peer(websocket):
+            await _safe_send(
+                websocket,
+                {
+                    ENVELOPE_KEY: ENVELOPE_VERSION,
+                    TYPE_KEY: TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+                    "ok": False,
+                    "error": "setup experiment recording is loopback-only",
+                },
+            )
+            return
+        archive_path = str(data.get("archive_path") or data.get("path") or "")
+        try:
+            out = record_lap_archive(archive_path, require_safe_path=True)
+        except SetupExperimentError as e:
+            await _safe_send(
+                websocket,
+                {
+                    ENVELOPE_KEY: ENVELOPE_VERSION,
+                    TYPE_KEY: TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+                    "ok": False,
+                    "archive_path": archive_path,
+                    "error": str(e),
+                },
+            )
+            return
+        _setup_experiment_store_path = Path(out["store_path"])
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+                **out,
+            },
+        )
+        return
+
+    store_path = _setup_experiment_store_path
+    if store_path is None:
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: (
+                    TYPE_SETUP_COMPARE_RESULT
+                    if t == TYPE_SETUP_COMPARE
+                    else TYPE_SETUP_SUGGEST_RESULT
+                ),
+                "ok": False,
+                "error": "no setup experiment store is loaded yet",
+            },
+        )
+        return
+
+    if t == TYPE_SETUP_COMPARE:
+        out = compare_setups(
+            load_records(store_path),
+            baseline_setup=str(data.get("baseline_setup") or ""),
+            candidate_setup=str(data.get("candidate_setup") or ""),
+        )
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_COMPARE_RESULT,
+                "store_path": str(store_path),
+                **out,
+            },
+        )
+        return
+
+    if t == TYPE_SETUP_SUGGEST:
+        out = suggest_next_setup(
+            load_records(store_path),
+            car_id=data.get("car_id"),
+            track_id=data.get("track_id"),
+        )
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_SUGGEST_RESULT,
+                "store_path": str(store_path),
+                **out,
+            },
+        )
+
+
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
     peer = getattr(websocket, "remote_address", None)
@@ -351,6 +509,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             websocket,
             make_error("peer must send hello before other frame types", ref_type=t),
         )
+        return
+    if t in SIDECAR_LOCAL_TYPES:
+        await _handle_setup_experiment_frame(websocket, data)
         return
     if t in SERVER_TO_CLIENT_TYPES and not _is_loopback_peer(websocket):
         await _safe_send(
@@ -536,6 +697,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
 
 
 async def _run(host: str, port: int, reply_coaching: bool, token: str | None) -> None:
+    global _setup_experiment_store_path
     try:
         import websockets
     except ImportError as e:
@@ -543,6 +705,7 @@ async def _run(host: str, port: int, reply_coaching: bool, token: str | None) ->
 
     process_request = make_process_request(token)
     _external_peers.clear()
+    _setup_experiment_store_path = None
     try:
         async with websockets.serve(
             lambda ws: _handler(ws, reply_coaching),
@@ -604,6 +767,40 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--setup-record-lap",
+        metavar="LAP_JSON",
+        help="Upsert one setup experiment row from a PR #78 lap archive JSON and exit.",
+    )
+    p.add_argument(
+        "--setup-rebuild-experiments",
+        metavar="LAP_DIR",
+        help="Rebuild setup experiment JSONL from a journal/laps directory and exit.",
+    )
+    p.add_argument(
+        "--setup-store",
+        metavar="EXPERIMENTS_JSONL",
+        help="Experiment JSONL path for setup record/rebuild/compare/suggest commands.",
+    )
+    p.add_argument(
+        "--setup-compare",
+        nargs=2,
+        metavar=("BASELINE_SETUP", "CANDIDATE_SETUP"),
+        help="Compare two setup identifiers from --setup-store and exit.",
+    )
+    p.add_argument(
+        "--setup-suggest",
+        action="store_true",
+        help="Return the next setup candidate from --setup-store and exit.",
+    )
+    p.add_argument(
+        "--setup-car-id", default=None, help="Optional car id filter for --setup-suggest."
+    )
+    p.add_argument(
+        "--setup-track-id",
+        default=None,
+        help="Optional track id filter for --setup-suggest.",
+    )
+    p.add_argument(
         "--no-reply",
         action="store_true",
         help=(
@@ -614,6 +811,22 @@ def main() -> None:
     args = p.parse_args()
     if args.compare_laps:
         _run_compare_laps(args.compare_laps[0], args.compare_laps[1])
+        return
+    if args.setup_record_lap:
+        _run_setup_record_lap(args.setup_record_lap, args.setup_store)
+        return
+    if args.setup_rebuild_experiments:
+        _run_setup_rebuild(args.setup_rebuild_experiments, args.setup_store)
+        return
+    if args.setup_compare:
+        if not args.setup_store:
+            raise SystemExit("--setup-compare requires --setup-store")
+        _run_setup_compare(args.setup_store, args.setup_compare[0], args.setup_compare[1])
+        return
+    if args.setup_suggest:
+        if not args.setup_store:
+            raise SystemExit("--setup-suggest requires --setup-store")
+        _run_setup_suggest(args.setup_store, args.setup_car_id, args.setup_track_id)
         return
     reply = not args.no_reply
 

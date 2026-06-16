@@ -767,6 +767,16 @@ function M.pollInbound(maxPerTick)
           -- Sidecar / trainer lifecycle frames — intentionally ignored here
           -- (see comment after the generic-dispatch block). Do not route them
           -- through the request-handler `else` or they spam diagnostics.
+        elseif t == "setup.experiment.record.ack"
+            or t == "setup.compare.result"
+            or t == "setup.suggest.result" then
+          -- Sidecar-local setup optimizer replies. Lua only initiates record
+          -- ingestion after archive writes; compare/suggest are for external
+          -- clients, so accept these quietly if the sidecar fans them back.
+          if t == "setup.experiment.record.ack" and data.ok == false
+              and ac and type(ac.log) == "function" then
+            pcall(ac.log, "[COPILOT][SETUP-OPT] record failed: " .. tostring(data.error))
+          end
         elseif type(t) == "string" and t:sub(1, 6) == "state." then
           -- Passive telemetry envelopes (`state.snapshot`, etc.) are fanned by
           -- the sidecar to peers; Lua does not register handlers for them.
@@ -987,6 +997,21 @@ function M.publishTopic(topic, payload)
     type = "state.snapshot",
     topic = topic,
     payload = payload or {},
+  })
+end
+
+--- Notify the Python sidecar that a PR #78 lap archive is available for setup
+--- experiment ingestion. Best-effort: if the v1 sidecar registration is not
+--- ready, the offline rebuild command can still recover from `journal/laps`.
+---@param archivePath string|nil
+---@return boolean
+function M.sendSetupExperimentRecord(archivePath)
+  if type(archivePath) ~= "string" or archivePath == "" then return false end
+  if not (sock and externalHelloAcked) then return false end
+  return M.sendJson({
+    v = PROTOCOL_VERSION,
+    type = "setup.experiment.record",
+    archive_path = archivePath,
   })
 end
 

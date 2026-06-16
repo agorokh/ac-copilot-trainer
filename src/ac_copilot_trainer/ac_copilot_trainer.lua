@@ -2117,6 +2117,12 @@ function script.update(dt)
             ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
           end
         end
+        if ok and type(pathOrErr) == "string"
+            and wsBridge and type(wsBridge.sendSetupExperimentRecord) == "function" then
+          pcall(function()
+            wsBridge.sendSetupExperimentRecord(pathOrErr)
+          end)
+        end
       end
     end
 
