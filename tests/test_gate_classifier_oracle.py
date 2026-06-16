@@ -27,7 +27,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import load_script_module
+
+from tools.testing.script_imports import load_script_module
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from conftest import load_script_module
+from tools.testing.script_imports import load_script_module
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
