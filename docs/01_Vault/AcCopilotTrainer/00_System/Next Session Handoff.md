@@ -45,6 +45,16 @@ The CSP app now has an opt-in Settings flag, **Prefer imported reference over lo
 
 **Verification:** local `make ci-fast PYTHON=.venv/bin/python` passed (`890 passed, 74 skipped`, coverage 80.58%, CSP API/safety checks green). Artifact CLI smoke produced a schema-v1 imported lap JSON with 2000 samples. GitHub checks for PR #207 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery skipped/rate-limited). GraphQL `reviewThreads` returned no unresolved threads. Post-merge classification: no migration/env/deps/script/workflow flags. **Focus remains #190**.
 
+## What was delivered (2026-06-16 — #118 / PR #203 peripheral telemetry/haptics)
+
+**[#118](https://github.com/agorokh/ac-copilot-trainer/issues/118) / PR [#203](https://github.com/agorokh/ac-copilot-trainer/pull/203) MERGED** `2026-06-16T08:53:54Z` as squash [`e5103be`](https://github.com/agorokh/ac-copilot-trainer/commit/e5103be29965b118efa309ee6f3a97a29cb329af). The sidecar external protocol now includes high-rate physical-peripheral frames: `telemetry_tick` from loopback Lua to physical clients (`screen`, `haptics`, `physical`) and `haptic_event` to haptic-capable clients, with per-type rate limiting and no echo back to Lua. The sidecar also derives bounded haptic cues from telemetry (`pedal_rumble`, `slip_buzz`).
+
+**Review hardening shipped before merge:** generated haptic events omit absent `ts_sim` instead of validating as `null`; signed negative `slip` values are valid and can drive `slip_buzz`; optional tyre maps accept non-empty partial corner sets; legacy firmware clients whose `client` starts with `ac-copilot-screen` route as `screen` even when they omit `client_class`.
+
+**Verification:** targeted local routing tests passed (`tests/test_ai_sidecar_external.py` + `tests/test_ws_topic_allowlist.py`, 31 passed); branch local parity passed (`make ci-fast`, 897 passed, 71 skipped, coverage 83.95%); GitHub PR checks passed (build, canonical docs, conformance, CodeRabbit, Cursor Bugbot; Sourcery skipped by service rate limit); GraphQL audit showed all 6 review threads resolved before merge. Post-merge `main` parity passed again after sync (`make ci-fast`, 911 passed, 71 skipped, coverage 84.16%). Post-merge classification for PR #203: no migration/env/deps/script/workflow flags. Issue #118 was manually closed because GitHub did not auto-link it from the PR title.
+
+**What remains:** no #118 follow-up is required from the protocol/test surface. Hardware/on-rig actuator consumption is still downstream physical-rig work; continue #190 / carcsw productionization as the active next thread.
+
 ## What was delivered (2026-06-16 — #179 / PR #198 vault-branch CI policy papercut)
 
 **[#179](https://github.com/agorokh/ac-copilot-trainer/issues/179) / PR [#198](https://github.com/agorokh/ac-copilot-trainer/pull/198) MERGED** `2026-06-16T08:54:58Z` as squash [`4a8ab98`](https://github.com/agorokh/ac-copilot-trainer/commit/4a8ab9888cf0996799160e7c78aa26e38fd8c085). `scripts/ci_policy.py` now allows documented `vault/post-merge-pr<N>` branches via the `vault/` prefix, and `tests/test_ci_policy.py` covers both direct branch validation and pull-request event handling for that branch shape.
@@ -230,6 +240,12 @@ Post-merge classification: **`post_merge_classify.py --pr 111`** (and #99/#100) 
 **Prior infra (still on `main`):** PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) template-2026.05 deterministic hooks (`5d3019e`). Operator notes: regenerate `.claude/settings.json` via `python scripts/merge_settings.py --no-local` when `settings.base.json` changes; commit-time pre-commit only (no PostToolUse ruff hooks).
 
 ---
+
+## What was delivered (PR #203 — 2026-06-16)
+
+| Area | Artefact |
+|------|----------|
+| Physical peripheral protocol | PR [#203](https://github.com/agorokh/ac-copilot-trainer/pull/203) merged at [`e5103be`](https://github.com/agorokh/ac-copilot-trainer/commit/e5103be29965b118efa309ee6f3a97a29cb329af) — adds `telemetry_tick` + `haptic_event` validation/routing, derived haptic cues, physical-client rate limiting, legacy `ac-copilot-screen-*` routing, signed slip, partial tyre maps, and protocol docs. Closes [#118](https://github.com/agorokh/ac-copilot-trainer/issues/118). |
 
 ## What was delivered (PR #197 — 2026-06-16)
 
