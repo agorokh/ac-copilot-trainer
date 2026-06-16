@@ -84,8 +84,12 @@ def iter_lap_archive_paths(inputs: Iterable[str | Path]) -> Iterator[Path]:
         path = Path(raw)
         if path.is_dir():
             yield from sorted(path.glob("lap_*.json"))
-        else:
+        elif path.is_file():
             yield path
+        else:
+            raise LapArchiveExportError(
+                f"{path}: input path does not exist or is not a file/directory"
+            )
 
 
 def _as_finite_float(value: Any) -> float | None:
@@ -253,19 +257,16 @@ def _parse_exported_at(record: dict[str, Any]) -> datetime | None:
 
 
 def _motec_header(
-    archives: Sequence[tuple[Path, dict[str, Any]]], rows: list[dict[str, Any]]
+    archives: Sequence[tuple[Path, dict[str, Any]]], stats: dict[str, Any]
 ) -> list[list[Any]]:
     first = archives[0][1] if archives else {}
     first_meta = _metadata(first, archives[0][0]) if archives else {}
     first_dt = _parse_exported_at(first)
     log_date = first_dt.strftime("%d/%m/%Y") if first_dt else ""
     log_time = first_dt.strftime("%I:%M:%S %p") if first_dt else ""
-    end_time = max((_as_finite_float(row.get("time_s")) or 0.0 for row in rows), default=0.0)
-    end_distance = max(
-        (_as_finite_float(row.get("lap_distance_m")) or 0.0 for row in rows),
-        default=0.0,
-    )
-    sample_rate = _sample_rate_hz(rows)
+    end_time = _as_finite_float(stats.get("end_time_s")) or 0.0
+    end_distance = _as_finite_float(stats.get("end_distance_m")) or 0.0
+    sample_rate = _as_finite_float(stats.get("sample_rate_hz"))
     beacon_markers = _beacon_markers(archives)
     return [
         ["Driver", "AC Copilot Trainer", "", "", "Vehicle ID", first_meta.get("car_id") or ""],
@@ -295,38 +296,46 @@ def _motec_header(
     ]
 
 
-def _sample_rate_hz(rows: Sequence[dict[str, Any]]) -> float | None:
-    times = [_as_finite_float(row.get("time_s")) for row in rows]
-    finite = [time for time in times if time is not None]
-    if len(finite) < 2:
-        return None
-    duration = finite[-1] - finite[0]
-    if duration <= 0:
-        return None
-    return (len(finite) - 1) / duration
-
-
 def _beacon_markers(archives: Sequence[tuple[Path, dict[str, Any]]]) -> list[float]:
     markers: list[float] = []
     offset = 0.0
     for _, record in archives:
-        lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
-        lap_ms = _as_finite_float(lap.get("lap_ms"))
-        if lap_ms is None or lap_ms <= 0:
+        duration_s = _lap_duration_s(record)
+        if duration_s <= 0:
             continue
-        offset += lap_ms / 1000.0
+        offset += duration_s
         markers.append(offset)
     return markers
 
 
-def _rows_for_motec(archives: Sequence[tuple[Path, dict[str, Any]]]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _lap_duration_s(record: dict[str, Any]) -> float:
+    lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
+    lap_ms = _as_finite_float(lap.get("lap_ms"))
+    if lap_ms is not None and lap_ms > 0:
+        return lap_ms / 1000.0
+
+    fields = _field_map(record)
+    samples = record.get("trace", {}).get("samples", [])
+    max_elapsed_ms = max(
+        (
+            value
+            for sample in samples
+            if (value := _sample_value(sample, fields, "eMs")) is not None
+        ),
+        default=None,
+    )
+    if max_elapsed_ms is None or max_elapsed_ms <= 0:
+        return 0.0
+    return max_elapsed_ms / 1000.0
+
+
+def _iter_motec_rows(
+    archives: Sequence[tuple[Path, dict[str, Any]]],
+) -> Iterator[dict[str, Any]]:
     offset_s = 0.0
     for archive in archives:
         record = archive[1]
-        lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
-        lap_ms = _as_finite_float(lap.get("lap_ms"))
-        lap_s = lap_ms / 1000.0 if lap_ms is not None else None
+        duration_s = _lap_duration_s(record)
         for row in iter_csv_rows([archive]):
             motec = dict(row)
             raw_time = _as_finite_float(row.get("time_s"))
@@ -335,12 +344,48 @@ def _rows_for_motec(archives: Sequence[tuple[Path, dict[str, Any]]]) -> list[dic
             throttle = _as_finite_float(row.get("throttle"))
             motec["brake_pct"] = brake * 100.0 if brake is not None else None
             motec["throttle_pct"] = throttle * 100.0 if throttle is not None else None
-            motec["lap_time_s"] = lap_s
+            motec["lap_time_s"] = duration_s if duration_s > 0 else None
             motec["valid_lap"] = 1 if row.get("is_valid") is True else 0
-            rows.append(motec)
-        if lap_s is not None and lap_s > 0:
-            offset_s += lap_s
-    return rows
+            yield motec
+        offset_s += duration_s
+
+
+def _motec_stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    row_count = 0
+    finite_time_count = 0
+    first_time_s: float | None = None
+    last_time_s: float | None = None
+    end_time_s = 0.0
+    end_distance_m = 0.0
+
+    for row in rows:
+        row_count += 1
+        time_s = _as_finite_float(row.get("time_s"))
+        if time_s is not None:
+            if first_time_s is None:
+                first_time_s = time_s
+            last_time_s = time_s
+            end_time_s = max(end_time_s, time_s)
+            finite_time_count += 1
+        distance_m = _as_finite_float(row.get("lap_distance_m"))
+        if distance_m is not None:
+            end_distance_m = max(end_distance_m, distance_m)
+
+    sample_rate_hz = None
+    if (
+        first_time_s is not None
+        and last_time_s is not None
+        and finite_time_count >= 2
+        and last_time_s > first_time_s
+    ):
+        sample_rate_hz = (finite_time_count - 1) / (last_time_s - first_time_s)
+
+    return {
+        "row_count": row_count,
+        "end_time_s": end_time_s,
+        "end_distance_m": end_distance_m,
+        "sample_rate_hz": sample_rate_hz,
+    }
 
 
 def export_motec_csv(
@@ -356,18 +401,20 @@ def export_motec_csv(
     row, and quoted fields.
     """
     archives = _loaded_archives(inputs, include_invalid=include_invalid)
-    rows = _rows_for_motec(archives)
+    stats = _motec_stats(_iter_motec_rows(archives))
     output_path = Path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    rows_written = 0
     with output_path.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh, quoting=csv.QUOTE_ALL, lineterminator="\n")
-        for header_row in _motec_header(archives, rows):
+        for header_row in _motec_header(archives, stats):
             writer.writerow([_format_cell(value) for value in header_row])
         writer.writerow([name for name, _, _ in _MOTEC_CHANNELS])
         writer.writerow([unit for _, unit, _ in _MOTEC_CHANNELS])
-        for row in rows:
+        for row in _iter_motec_rows(archives):
             writer.writerow([_format_cell(row.get(key)) for _, _, key in _MOTEC_CHANNELS])
-    return len(rows)
+            rows_written += 1
+    return rows_written
 
 
 def _build_parser() -> argparse.ArgumentParser:

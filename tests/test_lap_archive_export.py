@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 from tools import lap_archive_export
@@ -87,6 +88,53 @@ def test_motec_csv_export_writes_quoted_header_units_and_rows(tmp_path: Path) ->
     assert rows[12][3] == "70"
 
 
+def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path) -> None:
+    first = tmp_path / "lap_001.json"
+    second = tmp_path / "lap_002.json"
+    out = tmp_path / "fallback_motec.csv"
+
+    first.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lap_uuid": "lap-without-ms-1",
+                "session_uuid": "session-fallback",
+                "lap": {"lap_n": 1, "is_valid": True},
+                "trace": {
+                    "fields": ["eMs", "speed"],
+                    "samples": [[0, 80.0], [1000, 100.0], [3000, 110.0]],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    second.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "lap_uuid": "lap-without-ms-2",
+                "session_uuid": "session-fallback",
+                "lap": {"lap_n": 2, "lap_ms": 0, "is_valid": True},
+                "trace": {
+                    "fields": ["eMs", "speed"],
+                    "samples": [[0, 90.0], [2000, 120.0]],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    count = lap_archive_export.export_motec_csv([first, second], out)
+
+    assert count == 5
+    with out.open("r", encoding="utf-8", newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[8] == ["Beacon Markers", "3 5"]
+    data_rows = rows[11:]
+    assert [row[0] for row in data_rows] == ["0", "1", "3", "3", "5"]
+    assert [row[12] for row in data_rows] == ["3", "3", "3", "2", "2"]
+
+
 def test_cli_writes_csv(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     out = tmp_path / "cli.csv"
 
@@ -96,3 +144,15 @@ def test_cli_writes_csv(tmp_path: Path, capsys) -> None:  # type: ignore[no-unty
     assert rc == 0
     assert "wrote 3 sample rows" in captured.out
     assert _rows(out)[0]["lap_uuid"] == "lap-valid"
+
+
+def test_cli_rejects_missing_input_path(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+    out = tmp_path / "cli.csv"
+    missing = tmp_path / "missing.json"
+
+    rc = lap_archive_export.main(["--output", str(out), str(missing)])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "input path does not exist" in captured.err
+    assert not out.exists()
