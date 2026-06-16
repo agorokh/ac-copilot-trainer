@@ -11,7 +11,7 @@
 --   {
 --     schema_version = 1,
 --     source = "in_game" | "imported",
---     import_format = nil | "motec_csv" | "ibt" | "delta",
+--     import_format = nil | "motec_csv" | "ibt" | "delta" | "generated_reference_v1",
 --     lap_uuid, session_uuid, exported_at,
 --     car = { id, displayName? },
 --     track = { id, layout?, lengthM? },

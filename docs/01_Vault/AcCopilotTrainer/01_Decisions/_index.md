@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-03-28
-updated: 2026-04-22
+updated: 2026-06-16
 relates_to:
   - AcCopilotTrainer/00_System/Architecture Invariants.md
   - 00_Graph_Schema.md
@@ -22,3 +22,4 @@ Architecture Decision Records for this vault.
 - [dashboard-visual-design-figma](dashboard-visual-design-figma.md) — Figma file is source of truth for both HUD (shipped) and rig touchscreen (Phase 2); design tokens + cockpit-UX rules captured here.
 - [autonomous-self-test-harness](autonomous-self-test-harness.md) — agent test-drives the trainer with no human in the loop; layered pyramid (L0 lupa / L1 WS-tap / L1.5 in-sim probe / L2 daemon+CSP Custom AI / L3 human smoke); EPIC #154.
 - [delta-clock-boundary-alignment](delta-clock-boundary-alignment.md) — the `delta` WS topic publishes only when the lap clock is start/finish-aligned (`deltaRefStale`); WS is stricter than the HUD; teleport via guarded `car.resetCounter` (PR #185, #188 residual).
+- [rl-reference-lap-generation](rl-reference-lap-generation.md) — issue #116 go/no-go: defer RL runtime, pursue stdlib/off-sim generated reference laps in archive schema v1 with a persistence-payload bridge.
