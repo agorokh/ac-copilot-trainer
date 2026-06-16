@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T08:44:44Z
+last_updated: 2026-06-16T08:56:40Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,6 +25,14 @@ relates_to:
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 — #179 / PR #198 vault-branch CI policy papercut)
+
+**[#179](https://github.com/agorokh/ac-copilot-trainer/issues/179) / PR [#198](https://github.com/agorokh/ac-copilot-trainer/pull/198) MERGED** `2026-06-16T08:54:58Z` as squash [`4a8ab98`](https://github.com/agorokh/ac-copilot-trainer/commit/4a8ab9888cf0996799160e7c78aa26e38fd8c085). `scripts/ci_policy.py` now allows documented `vault/post-merge-pr<N>` branches via the `vault/` prefix, and `tests/test_ci_policy.py` covers both direct branch validation and pull-request event handling for that branch shape.
+
+**Review-driven hardening included:** `tests/test_repo_knowledge/test_mcp_server_import.py` now skips only when the optional `[knowledge]` MCP package is genuinely absent or shadowed by this repo's local `scripts/mcp` namespace; when `[knowledge]` is installed, it still imports `tools.repo_knowledge.mcp_server` and fails if `mcp.server.fastmcp` is missing. This closed Codex's review thread without letting CI mask an incompatible installed MCP package.
+
+**Verification:** local `make ci-fast PYTHON=.venv/bin/python` passed after the final patch (`882 passed, 74 skipped`, coverage 80.08%, bandit/policy/CSP checks green). GitHub Actions for PR #198 were green on the final SHA (`build`, `conformance`, `Canonical docs exist`, CodeRabbit, Cursor Bugbot; Sourcery review skipped/rate-limited as a completed check). GraphQL `reviewThreads` showed no current blocking unresolved threads; the only unresolved thread was outdated. Post-merge classification: `scripts/` changed, no migration/env/deps work to run. **Focus remains #190**.
 
 ## Resume here (2026-06-16 — #183 socket-open epoch follow-up MERGED; focus stays on #190)
 
