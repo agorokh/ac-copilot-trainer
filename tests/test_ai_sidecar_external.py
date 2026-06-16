@@ -550,6 +550,55 @@ def test_setup_record_returns_error_when_store_write_fails(
     assert "disk full" in result["error"]
 
 
+def test_setup_record_preserves_seeded_store_for_suggest(tmp_path: Path) -> None:
+    from tools.ai_sidecar import server as srv
+
+    seed_dir = tmp_path / "seed" / "journal" / "laps"
+    _write_setup_lap(seed_dir, "seed-a", "old", 100_000, 64)
+    _write_setup_lap(seed_dir, "seed-b", "new", 98_000, 66)
+    seeded = rebuild_experiments(seed_dir)
+    seeded_store = Path(seeded["store_path"])
+
+    live_lap = _write_setup_lap(
+        tmp_path / "live" / "journal" / "laps", "live-a", "live", 99_000, 65
+    )
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            srv._setup_experiment_store_path = seeded_store
+            srv._setup_experiment_store_seeded = True
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.record",
+                            "archive_path": str(live_lap),
+                        }
+                    )
+                )
+                record_ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(json.dumps({"v": 1, "type": "setup.suggest"}))
+                suggest = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return record_ack, suggest
+
+    try:
+        record_ack, suggest = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+        srv._setup_experiment_store_seeded = False
+
+    assert record_ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+    assert record_ack["ok"] is True
+    assert record_ack["active_store_path"] == str(seeded_store)
+    assert record_ack["store_path"] != str(seeded_store)
+    assert suggest["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
+    assert suggest["ok"] is True
+    assert suggest["experiments_used"] == 2
+
+
 def test_setup_compare_returns_error_when_store_load_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

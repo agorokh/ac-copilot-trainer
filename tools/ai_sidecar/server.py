@@ -98,6 +98,7 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 # frame, including the Lua loopback client). Used for hub-style fan-out.
 _external_peers: set[Any] = set()
 _setup_experiment_store_path: Path | None = None
+_setup_experiment_store_seeded = False
 _external_peer_classes: dict[Any, str] = {}
 
 TELEMETRY_TICK_MAX_HZ = 20.0
@@ -559,7 +560,7 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
     without inventing another daemon. Arbitrary file reads stay loopback-only:
     only the Lua peer may provide filesystem paths.
     """
-    global _setup_experiment_store_path
+    global _setup_experiment_store_path, _setup_experiment_store_seeded
 
     t = data.get(TYPE_KEY)
     if t == TYPE_SETUP_EXPERIMENT_STORE:
@@ -590,25 +591,31 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
             )
             return
         candidate_store_path = Path(store_path_text)
+        active_store_path = (
+            _setup_experiment_store_path
+            if _setup_experiment_store_seeded and _setup_experiment_store_path is not None
+            else candidate_store_path
+        )
         try:
             records_count = await asyncio.to_thread(
                 _setup_store_record_count,
-                candidate_store_path,
+                active_store_path,
             )
         except Exception as e:
-            logger.info("setup store registration failed store=%s err=%s", candidate_store_path, e)
+            logger.info("setup store registration failed store=%s err=%s", active_store_path, e)
             await _safe_send(
                 websocket,
                 {
                     ENVELOPE_KEY: ENVELOPE_VERSION,
                     TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
                     "ok": False,
-                    "store_path": str(candidate_store_path),
+                    "store_path": str(active_store_path),
                     "error": str(e),
                 },
             )
             return
-        _setup_experiment_store_path = candidate_store_path
+        if not _setup_experiment_store_seeded:
+            _setup_experiment_store_path = candidate_store_path
         await _safe_send(
             websocket,
             {
@@ -616,6 +623,8 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
                 "ok": True,
                 "store_path": str(_setup_experiment_store_path),
+                "requested_store_path": str(candidate_store_path),
+                "seeded": _setup_experiment_store_seeded,
                 "records": records_count,
             },
         )
@@ -649,12 +658,16 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 },
             )
             return
-        _setup_experiment_store_path = Path(out["store_path"])
+        if not _setup_experiment_store_seeded:
+            _setup_experiment_store_path = Path(out["store_path"])
         await _safe_send(
             websocket,
             {
                 ENVELOPE_KEY: ENVELOPE_VERSION,
                 TYPE_KEY: TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+                "active_store_path": str(_setup_experiment_store_path)
+                if _setup_experiment_store_path is not None
+                else None,
                 **out,
             },
         )
@@ -976,7 +989,7 @@ async def _run(
     token: str | None,
     setup_store: str | None = None,
 ) -> None:
-    global _setup_experiment_store_path
+    global _setup_experiment_store_path, _setup_experiment_store_seeded
     try:
         import websockets
     except ImportError as e:
@@ -985,6 +998,7 @@ async def _run(
     process_request = make_process_request(token)
     _reset_external_state()
     _setup_experiment_store_path = Path(setup_store) if setup_store else None
+    _setup_experiment_store_seeded = setup_store is not None
     try:
         async with websockets.serve(
             lambda ws: _handler(ws, reply_coaching),

@@ -113,11 +113,13 @@ local EXTERNAL_HELLO_RETRY_FRAMES = 12
 --- Emit at most one hello-retry diagnostic per this many actual sends so a
 --- (briefly) unresponsive sidecar cannot spam the CSP console (Qodo on PR #91).
 local EXTERNAL_HELLO_LOG_EVERY_SENDS = 10
+local SETUP_EXPERIMENT_STORE_RETRY_FRAMES = 300
 --- Canonical setup experiment JSONL path, registered with the trusted local
 --- sidecar after each v1 handshake so compare/suggest can read rebuilt rows
 --- immediately after sidecar restart.
 local setupExperimentStorePath = nil
 local setupExperimentStoreSent = false
+local setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
 
@@ -147,6 +149,7 @@ function M.configure(u)
   spawnAbandonUntilT = -1e9
   lastBackoffTryOpenT = -1e9
   setupExperimentStoreSent = false
+  setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 end
 
 --- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
@@ -177,6 +180,7 @@ function M.startSidecarIfNeeded(appDir)
     lastTry = -RECONNECT_SEC
     sidecarProtocolReady = false
     setupExperimentStoreSent = false
+    setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
     -- One-shot zombie cleanup: do not keep closing a user-opened manual socket (Codex #78).
     sidecarChildEverLaunched = false
   end
@@ -337,6 +341,7 @@ function M.reset()
   spawnAbandonUntilT = -1e9
   lastBackoffTryOpenT = -1e9
   setupExperimentStoreSent = false
+  setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
@@ -478,6 +483,7 @@ tryOpen = function()
   _recvQueue = {}
   sidecarProtocolReady = false
   setupExperimentStoreSent = false
+  setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
   -- Mark that we owe the sidecar a hello on this socket. The actual send is
   -- retried from M.tick() until `sidecarProtocolReady` flips (set when the
   -- sidecar's v1 hello_ack arrives) — this is the only reliable signal that
@@ -511,6 +517,7 @@ tryOpen = function()
       externalHelloAcked = false
       externalHelloPending = true
       setupExperimentStoreSent = false
+      setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
       helloRetryFrames = 0
       helloSendCount = 0
       -- Always announce hello on onOpen. The previous "inline hello + dedup"
@@ -538,6 +545,7 @@ tryOpen = function()
         lastTry = -RECONNECT_SEC
         sidecarProtocolReady = false
         setupExperimentStoreSent = false
+        setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
       end
     end,
     encoding = "utf8",
@@ -803,6 +811,7 @@ function M.pollInbound(maxPerTick)
           -- external clients, so accept these quietly if fanned back.
           if t == "setup.experiment.store.ack" and data.ok == false then
             setupExperimentStoreSent = false
+            setupExperimentStoreRetryFrames = 0
           end
           if (t == "setup.experiment.store.ack" or t == "setup.experiment.record.ack")
               and data.ok == false
@@ -1002,6 +1011,7 @@ function M.sendJson(payload)
     lastTry = -RECONNECT_SEC
     sidecarProtocolReady = false
     setupExperimentStoreSent = false
+    setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
     return false
   end
   return true
@@ -1040,6 +1050,7 @@ function M.setSetupExperimentStorePath(storePath)
   if type(storePath) ~= "string" or storePath == "" then return false end
   setupExperimentStorePath = storePath
   setupExperimentStoreSent = false
+  setupExperimentStoreRetryFrames = SETUP_EXPERIMENT_STORE_RETRY_FRAMES
   if sock and externalHelloAcked then
     return M.sendSetupExperimentStorePath()
   end
@@ -1052,6 +1063,10 @@ function M.sendSetupExperimentStorePath()
   if type(setupExperimentStorePath) ~= "string" or setupExperimentStorePath == "" then return false end
   if setupExperimentStoreSent then return true end
   if not (sock and externalHelloAcked) then return false end
+  if setupExperimentStoreRetryFrames < SETUP_EXPERIMENT_STORE_RETRY_FRAMES then
+    setupExperimentStoreRetryFrames = setupExperimentStoreRetryFrames + 1
+    return false
+  end
   local ok = M.sendJson({
     v = PROTOCOL_VERSION,
     type = "setup.experiment.store",
@@ -1059,6 +1074,7 @@ function M.sendSetupExperimentStorePath()
   })
   if ok then
     setupExperimentStoreSent = true
+    setupExperimentStoreRetryFrames = 0
   end
   return ok
 end
