@@ -472,6 +472,47 @@ def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) 
     assert suggest["candidate"]["changed_params"]
 
 
+def test_setup_compare_returns_error_when_store_load_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(_store_path: Path, **_kwargs: object) -> dict:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(srv, "_compare_setup_store", _boom)
+
+    async def _run() -> dict:
+        srv._setup_experiment_store_path = (
+            tmp_path / "journal" / "setup_experiments" / "experiments.jsonl"
+        )
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.compare",
+                            "baseline_setup": "old",
+                            "candidate_setup": "new",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+
+    assert result["type"] == ep.TYPE_SETUP_COMPARE_RESULT
+    assert result["ok"] is False
+    assert "permission denied" in result["error"]
+
+
 def test_config_set_round_trip_via_hub() -> None:
     """Two peers: A sends config.set, B receives it; B's ack reaches A."""
 

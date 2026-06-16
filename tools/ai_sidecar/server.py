@@ -662,12 +662,16 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
     if t == TYPE_SETUP_COMPARE:
-        out = await asyncio.to_thread(
-            _compare_setup_store,
-            store_path,
-            baseline_setup=str(data.get("baseline_setup") or ""),
-            candidate_setup=str(data.get("candidate_setup") or ""),
-        )
+        try:
+            out = await asyncio.to_thread(
+                _compare_setup_store,
+                store_path,
+                baseline_setup=str(data.get("baseline_setup") or ""),
+                candidate_setup=str(data.get("candidate_setup") or ""),
+            )
+        except Exception as e:
+            logger.info("setup compare failed store=%s err=%s", store_path, e)
+            out = {"ok": False, "error": str(e)}
         await _safe_send(
             websocket,
             {
@@ -680,12 +684,16 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
     if t == TYPE_SETUP_SUGGEST:
-        out = await asyncio.to_thread(
-            _suggest_setup_store,
-            store_path,
-            car_id=data.get("car_id"),
-            track_id=data.get("track_id"),
-        )
+        try:
+            out = await asyncio.to_thread(
+                _suggest_setup_store,
+                store_path,
+                car_id=data.get("car_id"),
+                track_id=data.get("track_id"),
+            )
+        except Exception as e:
+            logger.info("setup suggest failed store=%s err=%s", store_path, e)
+            out = {"ok": False, "error": str(e)}
         await _safe_send(
             websocket,
             {
