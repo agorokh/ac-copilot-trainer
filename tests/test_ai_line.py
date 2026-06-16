@@ -42,6 +42,19 @@ def _right_turn_line() -> list[tuple[float, float, float]]:
     return pts
 
 
+def _closed_loop_square(side: float = 10.0) -> list[tuple[float, float, float]]:
+    """A 4-point CLOSED circuit: a ``side``×``side`` square on the ground plane (y=5).
+
+    Unlike ``_straight_line_along_x`` / ``_right_turn_line`` (both OPEN), this is a genuine
+    closed loop. The controller treats the line as cyclic — the implicit last->first segment
+    closes it — so this fixture is what exercises the wrap paths the open fixtures never reach:
+    the closing entry in ``_seg_len``, the ``% n`` wrap in ``_advance``, and ``_curvature_ahead``
+    detecting a corner that lies across the start/finish line. With ``side=10`` the corners are
+    at (0,0)->(10,0)->(10,10)->(0,10) in the (x, z) plane and every segment is exactly ``side`` m.
+    """
+    return [(0.0, 5.0, 0.0), (side, 5.0, 0.0), (side, 5.0, side), (0.0, 5.0, side)]
+
+
 def _fast_lane_bytes(points: list[tuple[float, float, float]]) -> bytes:
     """Assemble a minimal but structurally valid version-7 fast_lane.ai buffer.
 
@@ -229,6 +242,58 @@ def test_corner_lowers_target_speed_vs_straight():
     s_out = straight.control((10.0, 5.0, 0.0), (1.0, 0.0, 0.0), speed_kmh=80.0)
     c_out = curve.control((mid[0], 5.0, mid[2]), (0.0, 0.0, 1.0), speed_kmh=80.0)
     assert c_out.gas < s_out.gas
+
+
+# --------------------------------------------------------------------------- closed loop (cyclic)
+# The controller's docstrings (and EPIC #154 driving a real lap) treat the racing line as a
+# CLOSED circuit: ``_seg_len`` includes the last->first closing segment and ``_advance`` wraps
+# ``% n`` so the look-ahead crosses start/finish. The open fixtures above never make any of that
+# fire (their wrap only triggered incidentally, on an artificial 60 m closing segment, where the
+# curvature collapsed to 0). These tests pin the cyclic behaviour directly on a 4-point square.
+def test_seg_len_includes_closing_segment():
+    """``_seg_len`` closes the loop: a 4-point square has 4 segments (not 3), each one side long.
+
+    ``_seg_len[i]`` is the length of ``point[i] -> point[(i + 1) % n]``, so the final entry is
+    the last->first closing segment that an open line would omit. For a 10 m square every side —
+    including the closing left edge (0,10)->(0,0) — is 10 m, so the cyclic perimeter is 40 m.
+    """
+    pp = PurePursuit(_closed_loop_square(side=10.0))
+    assert len(pp._seg_len) == 4
+    for seg in pp._seg_len:
+        assert seg == pytest.approx(10.0)
+
+
+def test_advance_wraps_across_start_finish():
+    """``_advance`` walks the cyclic line and wraps past index 0 at the start/finish line.
+
+    Square perimeter = 40 m (4 × 10 m). Walking from index 0:
+      * 25 m -> index 3 (third corner; no wrap yet)
+      * 35 m -> index 0 (walked 0->1->2->3->0: the look-ahead crossed start/finish)
+    From index 3 a 5 m step lands on index 0 via the closing segment. A budget beyond one full
+    perimeter (45 m > 40 m) hits the one-lap guard and returns the point just behind the start
+    (``(start + n - 1) % n``) rather than looping forever — the degenerate/over-budget backstop.
+    """
+    pp = PurePursuit(_closed_loop_square(side=10.0))
+    assert pp._advance(0, 25.0) == 3
+    assert pp._advance(0, 35.0) == 0  # wrapped across start/finish
+    assert pp._advance(3, 5.0) == 0  # closing segment wraps to the start
+    assert pp._advance(0, 45.0) == 3  # > perimeter -> one-lap fallback, never an infinite loop
+
+
+def test_curvature_ahead_sees_corner_across_wrap():
+    """Curvature look-ahead detects a corner whose window straddles the start/finish line.
+
+    From index 3 the default 30 m curvature window walks 3->0->1->2 (mid = ``_advance(3, 15)`` = 1,
+    end = ``_advance(3, 30)`` = 2), so the three sample points (p0=idx3, p1=idx1, p2=idx2) bracket a
+    corner that sits *across* index 0. A non-cyclic ``_advance`` would instead clamp mid and end at
+    the last index (3 == start), collapsing the in-vector to zero so ``_curvature_ahead`` returns
+    0.0 — i.e. a non-zero result here is only possible because the look-ahead wraps. Hand value:
+    turn = atan2(100, -100) = 3π/4 over arc = √200 + 10 ≈ 24.14 m, giving ≈ 0.0976 m⁻¹.
+    """
+    pp = PurePursuit(_closed_loop_square(side=10.0))
+    curv = pp._curvature_ahead(3)
+    assert curv > 0.0  # the corner across start/finish is seen, not masked as a straight
+    assert curv == pytest.approx(0.0976, abs=1e-3)
 
 
 def test_control_output_unpacks_as_tuple():
