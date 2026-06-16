@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T08:00:00Z
+last_updated: 2026-06-16T08:44:44Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,6 +25,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-16 — #183 socket-open epoch follow-up MERGED; focus stays on #190)
+
+**[#183](https://github.com/agorokh/ac-copilot-trainer/issues/183) / PR [#197](https://github.com/agorokh/ac-copilot-trainer/pull/197) MERGED** `2026-06-16T08:43:39Z` as squash [`392a868`](https://github.com/agorokh/ac-copilot-trainer/commit/392a8688d716a33dffad20cbf2a38a0c7ea17b90). The trainer now tracks a monotonic `ws_bridge.openEpoch()` incremented from CSP `web.socket` `onOpen`, ignores stale `onOpen` callbacks from replaced sockets, and re-arms `lifecycle_publisher` when the epoch changes even if `sidecarConnected()` stayed true across an auto-reconnect.
+
+**Verification:** targeted Lupa tests passed (`tests/test_ws_bridge_hello_handshake.py` + `tests/test_lifecycle_publisher.py`, 22 passed); full local parity passed with `make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python` (894 passed, 71 skipped, coverage 83.69%); GitHub PR checks were green for build, canonical docs, conformance, Cursor Bugbot, and CodeRabbit. Review-thread audit left only outdated Gemini threads against pre-fix code. Post-merge classification for PR #197: no migration/env/deps/script/workflow flags.
+
+**Runtime caveat:** this was not re-verified inside Assetto Corsa/CSP from the macOS worktree; the issue acceptance target was the off-sim Lupa reconnect regression. On the next Windows/AC rig pass, a useful smoke is to force a sidecar/CSP auto-reconnect and observe a fresh `session` re-emit without relying on the 1 Hz heartbeat identity backstop.
+
+**What remains:** continue #190 / carcsw productionization from the next block. No #183 follow-up is required unless the in-game reconnect smoke finds a CSP-specific callback ordering edge.
 
 ## Resume here (2026-06-16 — EPIC #154 L2 ACHIEVED: agent drove the car autonomously; trainer captured a reference + COACHED it, no human at the wheel)
 
@@ -193,6 +203,12 @@ Post-merge classification: **`post_merge_classify.py --pr 111`** (and #99/#100) 
 **Prior infra (still on `main`):** PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) template-2026.05 deterministic hooks (`5d3019e`). Operator notes: regenerate `.claude/settings.json` via `python scripts/merge_settings.py --no-local` when `settings.base.json` changes; commit-time pre-commit only (no PostToolUse ruff hooks).
 
 ---
+
+## What was delivered (PR #197 — 2026-06-16)
+
+| Area | Artefact |
+|------|----------|
+| WS lifecycle reconnect | PR [#197](https://github.com/agorokh/ac-copilot-trainer/pull/197) merged at [`392a868`](https://github.com/agorokh/ac-copilot-trainer/commit/392a8688d716a33dffad20cbf2a38a0c7ea17b90) — `ws_bridge.openEpoch()` exposes CSP socket-open epochs, stale `onOpen` callbacks are ignored, and `ac_copilot_trainer.lua` re-arms lifecycle `session` emission on epoch changes even when the connected boolean remains true. Closes [#183](https://github.com/agorokh/ac-copilot-trainer/issues/183). |
 
 ## What was delivered (PR #165 — 2026-06-13)
 
