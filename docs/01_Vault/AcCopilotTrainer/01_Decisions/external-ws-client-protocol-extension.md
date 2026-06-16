@@ -2,7 +2,7 @@
 type: decision
 status: active
 created: 2026-04-21
-updated: 2026-04-21
+updated: 2026-06-16
 relates_to:
   - AcCopilotTrainer/03_Investigations/csp-web-socket-api.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
@@ -25,7 +25,7 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
 
    | Direction | Type | Body |
    |---|---|---|
-   | client → server | `hello` | `{ client }` |
+   | client → server | `hello` | `{ client, client_class? }` |
    | server → client | `hello_ack` | `{ server_version, capabilities[] }` |
    | client → server | `config.get` | `{ key }` |
    | server → client | `config.value` | `{ key, value }` |
@@ -35,14 +35,41 @@ We want a **second** WS client — the rig-mounted ESP32 touchscreen — to read
    | server → client | `action.ack` | `{ name, applied: bool, reason?: string }` |
    | client → server | `state.subscribe` / `state.unsubscribe` | `{ topics: [...] }` |
    | server → client | `state.snapshot` | `{ topic, payload, ts_sim }` |
+   | Lua/sidecar → peripheral | `telemetry_tick` | `{ seq?, ts_sim?, payload }` |
+   | Lua/sidecar → haptics | `haptic_event` | `{ event, channel, intensity, duration_ms, ts_sim? }` |
 
-3. **Auth and binding.**
+   `client_class` is optional for backward compatibility. Known classes:
+   `external`, `lua`, `screen`, `haptics`, `physical`, `browser`. Legacy
+   firmware clients whose `client` starts with `ac-copilot-screen` are treated
+   as `screen` even when they omit `client_class`. The sidecar uses classes only
+   for high-rate physical-peripheral routing: `telemetry_tick` goes to `screen`,
+   `haptics`, and `physical`; `haptic_event` goes to `haptics` and `physical`.
+   Neither message is echoed back to the Lua peer.
+
+3. **Physical peripheral payloads.**
+
+   `telemetry_tick` is the normalized sim sample for physical clients. Expected
+   cadence: 10-20 Hz, capped by the sidecar at 20 Hz. Required payload fields:
+   `speed_kmh`, `rpm`, `gear`, `throttle` (0-1), `brake` (0-1), `steer`
+   (-1..1), `lat_g`, and `long_g`. Optional fields include `lap_time_ms`,
+   `slip`, `abs_active`, `brake_lock`, `wheel_lock`, `tyre_temps_c`, and
+   `tyre_pressures_psi`; tyre maps may include any non-empty subset of `fl`,
+   `fr`, `rl`, `rr`.
+
+   `haptic_event` is a bounded actuator command for a haptic peripheral.
+   Expected cadence: event-driven, capped by the sidecar at 25 Hz per
+   `(event, channel)`. Required fields: `event` (`pedal_rumble`, `slip_buzz`,
+   `lateral_g`, `wind`, `gear_shift`), `channel` (`pedal`, `pedal_left`,
+   `pedal_right`, `seat_left`, `seat_right`, `fan`, `shaker`), `intensity`
+   (0-1), and `duration_ms` (1-1000).
+
+4. **Auth and binding.**
    - Default sidecar bind stays `127.0.0.1:8765`. **No regression** for users who never connect an external client.
    - New sidecar CLI flag `--external-bind <host>` (e.g. `0.0.0.0`) requires `--token <secret>` for non-loopback binds, or the sidecar refuses to start.
    - External clients must send `X-AC-Copilot-Token: <secret>` on the WS upgrade request. Missing/wrong token → 401 and immediate close.
    - Token lives in `firmware/screen/secrets/sidecar.h` (gitignored) on the ESP32 side; the sidecar reads it from `--token`.
 
-4. **Config key surface.** Expose the existing `CONFIG_DEFAULTS` keys through the new messages. No new storage — reuse the per-key `ac.storage("<key>_v1", default)` pattern already in `ac_copilot_trainer.lua`. The Lua side handler in `ws_bridge.pollInbound` writes via the existing wrappers.
+5. **Config key surface.** Expose the existing `CONFIG_DEFAULTS` keys through the new messages. No new storage — reuse the per-key `ac.storage("<key>_v1", default)` pattern already in `ac_copilot_trainer.lua`. The Lua side handler in `ws_bridge.pollInbound` writes via the existing wrappers.
 
 ## Consequences
 
