@@ -6,10 +6,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from tools.testing.script_imports import load_script_module
 
-from hook_repo_root import worktree_root_for  # noqa: E402
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_hook_repo_root = load_script_module(
+    "_test_hook_repo_root", REPO_ROOT / "scripts" / "hook_repo_root.py"
+)
+worktree_root_for = _hook_repo_root.worktree_root_for
 
 
 def _git(cwd: Path, *args: str) -> None:

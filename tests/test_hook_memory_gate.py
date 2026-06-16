@@ -935,11 +935,10 @@ def test_lang_mutation_regex_lookbehind_distinguishes_method_from_builtin() -> N
     tests bring; pins the regex semantics directly for the Cursor PR #194
     MEDIUM finding.
     """
-    import sys
-    from pathlib import Path as _Path
+    from tools.testing.script_imports import load_script_module
 
-    sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "scripts"))
-    from hook_memory_gate import _indirect_exec_is_mutation
+    hook_memory_gate = load_script_module("_test_hook_memory_gate_regex", SCRIPT)
+    _indirect_exec_is_mutation = hook_memory_gate._indirect_exec_is_mutation
 
     # Bare builtins → mutation (still gated).
     assert _indirect_exec_is_mutation('python -c \'compile("x","<s>","exec")\'')

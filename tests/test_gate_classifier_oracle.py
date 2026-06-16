@@ -24,13 +24,13 @@ THIS repo on every PR.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
+from tools.testing.script_imports import load_script_module
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 # #338 SHIM RECONCILIATION: when hook_memory_gate.py is a governance-hub shim, the classifier
 # (`_classify`) lives in the hub, not in the thin delegator — the import below would fail and the
@@ -41,14 +41,17 @@ if "governance shim" in (REPO_ROOT / "scripts" / "hook_memory_gate.py").read_tex
         allow_module_level=True,
     )
 
-from hook_memory_gate import _classify  # noqa: E402
-from hook_memory_manifest import (  # noqa: E402
-    DEFAULT_CODE_PATH_PREFIXES,
-    DEFAULT_CODE_PATH_TOP_LEVEL,
-    load_manifest,
-    oracle_classification_failures,
-    repo_code_path_prefixes,
+_gate = load_script_module("_test_hook_memory_gate", REPO_ROOT / "scripts" / "hook_memory_gate.py")
+_manifest = load_script_module(
+    "_test_hook_memory_manifest", REPO_ROOT / "scripts" / "hook_memory_manifest.py"
 )
+
+_classify = _gate._classify
+DEFAULT_CODE_PATH_PREFIXES = _manifest.DEFAULT_CODE_PATH_PREFIXES
+DEFAULT_CODE_PATH_TOP_LEVEL = _manifest.DEFAULT_CODE_PATH_TOP_LEVEL
+load_manifest = _manifest.load_manifest
+oracle_classification_failures = _manifest.oracle_classification_failures
+repo_code_path_prefixes = _manifest.repo_code_path_prefixes
 
 
 def test_oracle_repo_manifest_classifies_declared_dirs_as_code() -> None:

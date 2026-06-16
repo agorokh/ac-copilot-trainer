@@ -6,22 +6,23 @@ per-repo manifest data so propagation can't clobber child code dirs.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from tools.testing.script_imports import load_script_module
 
-from hook_memory_manifest import (  # noqa: E402 — sys.path tweak above
-    DEFAULT_CODE_DIR_TOP_LEVEL,
-    DEFAULT_CODE_PATH_PREFIXES,
-    DEFAULT_CODE_PATH_TOP_LEVEL,
-    load_repo_section,
-    repo_code_dir_top_level,
-    repo_code_path_prefixes,
-    repo_code_path_top_level,
-    repo_tier3_workspace_id,
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+_manifest = load_script_module(
+    "_test_hook_memory_manifest", REPO_ROOT / "scripts" / "hook_memory_manifest.py"
 )
+DEFAULT_CODE_DIR_TOP_LEVEL = _manifest.DEFAULT_CODE_DIR_TOP_LEVEL
+DEFAULT_CODE_PATH_PREFIXES = _manifest.DEFAULT_CODE_PATH_PREFIXES
+DEFAULT_CODE_PATH_TOP_LEVEL = _manifest.DEFAULT_CODE_PATH_TOP_LEVEL
+load_repo_section = _manifest.load_repo_section
+repo_code_dir_top_level = _manifest.repo_code_dir_top_level
+repo_code_path_prefixes = _manifest.repo_code_path_prefixes
+repo_code_path_top_level = _manifest.repo_code_path_top_level
+repo_tier3_workspace_id = _manifest.repo_tier3_workspace_id
 
 # ---------------------------------------------------------------------------
 # load_repo_section
@@ -147,7 +148,7 @@ def test_tier3_workspace_id_ignores_empty_string() -> None:
 # ---------------------------------------------------------------------------
 
 
-from hook_memory_manifest import resolve_workspace  # noqa: E402
+resolve_workspace = _manifest.resolve_workspace
 
 
 def _manifest_with_workspaces(*names: str) -> dict:
@@ -216,7 +217,7 @@ def test_resolve_workspace_tier3_id_hyphen_underscore_tolerant(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
-from hook_memory_manifest import _fallback_manifest_from_text  # noqa: E402
+_fallback_manifest_from_text = _manifest._fallback_manifest_from_text
 
 
 def test_fallback_parser_preserves_repo_code_dirs_list() -> None:
