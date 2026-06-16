@@ -589,11 +589,26 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 },
             )
             return
-        _setup_experiment_store_path = Path(store_path_text)
-        records_count = await asyncio.to_thread(
-            _setup_store_record_count,
-            _setup_experiment_store_path,
-        )
+        candidate_store_path = Path(store_path_text)
+        try:
+            records_count = await asyncio.to_thread(
+                _setup_store_record_count,
+                candidate_store_path,
+            )
+        except Exception as e:
+            logger.info("setup store registration failed store=%s err=%s", candidate_store_path, e)
+            await _safe_send(
+                websocket,
+                {
+                    ENVELOPE_KEY: ENVELOPE_VERSION,
+                    TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
+                    "ok": False,
+                    "store_path": str(candidate_store_path),
+                    "error": str(e),
+                },
+            )
+            return
+        _setup_experiment_store_path = candidate_store_path
         await _safe_send(
             websocket,
             {
@@ -621,7 +636,8 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         archive_path = str(data.get("archive_path") or data.get("path") or "")
         try:
             out = await asyncio.to_thread(_record_lap_archive_safe, archive_path)
-        except SetupExperimentError as e:
+        except Exception as e:
+            logger.info("setup experiment record failed archive=%s err=%s", archive_path, e)
             await _safe_send(
                 websocket,
                 {

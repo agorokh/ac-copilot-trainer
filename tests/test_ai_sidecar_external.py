@@ -472,6 +472,84 @@ def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) 
     assert suggest["candidate"]["changed_params"]
 
 
+def test_setup_store_registration_returns_error_when_count_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(_store_path: Path) -> int:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(srv, "_setup_store_record_count", _boom)
+    store = tmp_path / "journal" / "setup_experiments" / "experiments.jsonl"
+
+    async def _run() -> dict:
+        srv._setup_experiment_store_path = None
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.store",
+                            "store_path": str(store),
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+
+    assert result["type"] == ep.TYPE_SETUP_EXPERIMENT_STORE_ACK
+    assert result["ok"] is False
+    assert "permission denied" in result["error"]
+
+
+def test_setup_record_returns_error_when_store_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(_archive_path: str) -> dict:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(srv, "_record_lap_archive_safe", _boom)
+    lap_path = tmp_path / "journal" / "laps" / "lap_20260616-000001_lap-a.json"
+
+    async def _run() -> dict:
+        srv._setup_experiment_store_path = None
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.record",
+                            "archive_path": str(lap_path),
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        srv._setup_experiment_store_path = None
+
+    assert result["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+    assert result["ok"] is False
+    assert "disk full" in result["error"]
+
+
 def test_setup_compare_returns_error_when_store_load_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
