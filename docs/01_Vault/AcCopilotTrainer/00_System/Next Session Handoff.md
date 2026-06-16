@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-15T23:50:00Z
+last_updated: 2026-06-16T02:15:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -38,8 +38,8 @@ relates_to:
 **Follow-up filed:** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) — rolling-state reset on a wrap-shaped same-lap teleport on CSP builds lacking `car.resetCounter` (low-severity; first action: confirm resetCounter is present on the rig, likely mooting it). The delta-leak half is already fixed.
 
 **Next deliverable (Part E) — STARTED:** [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) filed (carcsw Custom-AI-mmap driver + L1.5 probe, grounded plan).
-- **L1.5 sequence probe — DRAFT [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) (`tools/ac_harness/sequence_probe.py`, branch `feat/issue-190-l15-sequence-probe`).** Pure `evaluate_sequence()` checks CONTINUOUS-stream presence (connection/tire_temps/coaching.snapshot) + session-before-lap ordering; lifecycle topics (session/lap/delta) are conditional notes by default, required under `strict_lifecycle=True`. 12 off-sim tests, ruff clean. **DON'T rebuild it.** **Run by file path** (`python tools/ac_harness/sequence_probe.py`, NOT `-m` — the `tools` package doesn't resolve via `-m`); it taps 20 s. **Partially live-validated** 2026-06-15: a mid-session tap confirmed the pipeline (delta=198 etc.); running it live surfaced + fixed a probe flaw (mid-session taps miss the `session` event → now a note, not a fail). Remaining: a clean live PASS over an active-driving window (the operator stopped between taps).
-- **Remaining Part E (NOT built):** the `carcsw` **Custom AI mmap writer** — the actuation keystone that lets the agent drive car 0 itself (no operator lap). Build-time research needed: `cai_car_data`/`cai_wheel_data` struct layout + mmap name from cup.acstuff.club/docs/csp/other-things/custom-ai. Off-sim-testable like #175's reader; in-sim driving gated. **This is the unblock for self-verification without the operator** — the EPIC #154 throughline.
+- **L1.5 sequence probe — MERGED [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) (`2f092da`, `tools/ac_harness/sequence_probe.py`).** Pure `evaluate_sequence()` checks CONTINUOUS-stream presence (connection/tire_temps/coaching.snapshot) + session-before-lap ordering; session/lap conditional notes (required under `--strict`/`--wait-lap`), delta always a note (reference-lap-dependent). 16 tests, hardened through 11 review threads. **LIVE-VALIDATED** 2026-06-15: clean PASS on a real drive (connection=31, tire_temps=153, coaching.snapshot=305; earlier window caught lap=1, delta=198). **CLI:** `python tools/ac_harness/sequence_probe.py [--wait-lap] [--strict] [--seconds N]` (now sys.path-bootstrapped, so file-path OR `-m` both work; `--wait-lap` waits for + requires a lap; `--strict` requires session+lap from session start). Use it to verify the producer pipeline on any future drive.
+- **Remaining Part E (NOT built):** (1) the `carcsw` **Custom AI mmap writer** — the actuation keystone that lets the agent drive car 0 itself (no operator lap). Build-time research needed: `cai_car_data`/`cai_wheel_data` struct layout + mmap name from cup.acstuff.club/docs/csp/other-things/custom-ai. Off-sim-testable like #175's reader; in-sim driving gated. **This is the unblock for self-verification without the operator** — the EPIC #154 throughline. (2) Trainer-side **`session` re-emit to late-attaching taps** (noted on #190) so a mid-session probe gets a deterministic session→lap sequence without restarting the session.
 - **Constraint:** the agent CANNOT launch AC (Steam-integrity). L1.5 still needs ONE operator action (launch AC + sit on track), then the agent drives+asserts. Full hands-off (L2) needs the operator-gated control-channel daemon.
 
 ---
