@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T08:56:40Z
+last_updated: 2026-06-16T09:07:30Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -20,11 +20,30 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/screen-debugging-journey-2026-04-21.md
   - AcCopilotTrainer/03_Investigations/cowork-session-retrospective-2026-04-21.md
   - AcCopilotTrainer/03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md
+  - AcCopilotTrainer/03_Investigations/pr-207-motec-reference-import.md
   - AcCopilotTrainer/03_Investigations/pr-75-ollama-corner-coaching-protocol.md
   - AcCopilotTrainer/03_Investigations/template-sync-pr87-2026-04-24.md
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 — #177 / PR #200 detect-and-retry entry launcher)
+
+**[#177](https://github.com/agorokh/ac-copilot-trainer/issues/177) CLOSED / PR [#200](https://github.com/agorokh/ac-copilot-trainer/pull/200) MERGED** `2026-06-16T08:59:16Z` as squash [`ee25118`](https://github.com/agorokh/ac-copilot-trainer/commit/ee25118f86326f9bd68211e8ab8565a621330ef6). The harness now has `tools/ac_harness/entry_launcher.py`: a pluggable `EntryLauncher` that normalizes prior state, launches AC, polls `DrivingEntryDetector`, triggers an actuator while stuck, and falls back to quit+relaunch when the default actuator cannot press Drive.
+
+The conservative default path is `ColdRestartActuator`: resolve `acs.exe` / `race.ini` to absolute paths, kill any existing `acs.exe`, atomically rewrite `[RACE] SPAWN_SET=PIT`, launch with `cwd=acs.exe.parent`, and reapply normalization before every relaunch. The module is exported from `tools.ac_harness` and includes a CLI: `python -m tools.ac_harness.entry_launcher --acs-exe <path> --race-ini <path>` plus timing knobs (`--max-launches`, `--attempt-timeout`, `--poll-interval`, `--trigger-after`, `--trigger-interval`, `--max-drive-triggers-per-launch`, `--required-live-reads`, `--stagnation-seconds`).
+
+**Verification:** local targeted harness checks passed (`44 passed` across `tests/test_ac_harness_entry_launcher.py` and `tests/test_ac_harness_shared_memory.py`); full local `make ci-fast` passed with `911 passed, 71 skipped`, coverage 83.73%; GitHub checks on PR #200 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery/Gemini rate-limited as comments only). GraphQL review-thread audit ended with every Cursor/Gemini thread resolved. Post-merge classification: no migration/env/deps/script/workflow flags.
+
+**Runtime caveat:** this was not live-verified against Windows AC/Content Manager from the macOS worktree. Next rig pass should run the CLI against the real `acs.exe` and `Documents/Assetto Corsa/cfg/race.ini`, observe `SPAWN_SET=PIT` normalization, and confirm the loop gives AC enough time for shared memory creation instead of rapid relaunching. Active focus remains #190; PR #200 supplies the reusable launcher layer that #190/carcsw can compose with.
+
+## What was delivered (2026-06-16 — #79 / PR #207 MoTeC reference-lap import)
+
+**[#79](https://github.com/agorokh/ac-copilot-trainer/issues/79) / PR [#207](https://github.com/agorokh/ac-copilot-trainer/pull/207) MERGED** `2026-06-16T08:55:47Z` as squash [`0c637e3`](https://github.com/agorokh/ac-copilot-trainer/commit/0c637e3bf3f648e75b40e6b760ceff097ac9a241). The repo now has `python -m tools.import_motec <input.csv> --car <car_id> --track <track_id> [--layout <layout>]`, which heuristically maps MoTeC CSV channels, normalizes units, resamples to 2000 schema-v1 samples, and writes `source="imported"`, `import_format="motec_csv"` lap archive JSON under `journal/laps/`.
+
+The CSP app now has an opt-in Settings flag, **Prefer imported reference over local PB** (`useImportedReference=false` by default). On load or toggle it scans `journal/laps/` for imported MoTeC laps matching the active car/track, activates a faster imported lap as the realtime reference, re-derives braking points / segments / corner features from that imported trace, and preserves the user's local PB persistence separately. Imported laps never overwrite local PB files. See [`03_Investigations/pr-207-motec-reference-import`](../03_Investigations/pr-207-motec-reference-import.md).
+
+**Verification:** local `make ci-fast PYTHON=.venv/bin/python` passed (`890 passed, 74 skipped`, coverage 80.58%, CSP API/safety checks green). Artifact CLI smoke produced a schema-v1 imported lap JSON with 2000 samples. GitHub checks for PR #207 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery skipped/rate-limited). GraphQL `reviewThreads` returned no unresolved threads. Post-merge classification: no migration/env/deps/script/workflow flags. **Focus remains #190**.
 
 ## What was delivered (2026-06-16 — #179 / PR #198 vault-branch CI policy papercut)
 
