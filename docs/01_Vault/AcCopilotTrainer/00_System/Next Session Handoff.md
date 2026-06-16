@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T09:14:30Z
+last_updated: 2026-06-16T09:19:15Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -26,6 +26,12 @@ relates_to:
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 — PR #214 PR-pain PyYAML-free allowlist follow-up)
+
+**PR [#214](https://github.com/agorokh/ac-copilot-trainer/pull/214) MERGED** `2026-06-16T09:18:15Z` as squash [`3e9c927`](https://github.com/agorokh/ac-copilot-trainer/commit/3e9c9277d867c52b6f78e8b61fe8b437895f9691). This was an owned follow-up from the #179 closeout: PR #198's post-merge `PR pain detection / score` job failed because GitHub's Python 3.11 runner did not include PyYAML. The workflow now calls `python3 -m tools.pr_pain.config` instead of importing PyYAML inline, using a repo-local parser for the owned `.github/pr-pain-config.yml` top-level list shape. `tools.pr_pain.pain_score._load_extra_bots` reuses the same parser for `extra_bot_logins`.
+
+**Verification:** local `make ci-fast PYTHON=/Users/arseny_gorokh/.codex/worktrees/issue-179/ac-copilot-trainer/.venv/bin/python` passed (`920 passed, 74 skipped`, coverage 81.10%). GitHub checks on PR #214 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery/Gemini/Codex review bots were quota-limited as comments only). GraphQL `reviewThreads` returned no nodes. The real post-merge proof also passed: PR #214's merge-triggered `PR pain detection / score` run succeeded on Ubuntu 24.04 / Python 3.11 and logged the expected allowlist skip for `agorokh/ac-copilot-trainer` without PyYAML. Post-merge classification: `.github/workflows/` changed; review triggers/permissions/secrets touched only by replacing the allowlist parser call. **Focus remains #190**.
 
 ## What was delivered (2026-06-16 — #177 / PR #200 detect-and-retry entry launcher)
 
