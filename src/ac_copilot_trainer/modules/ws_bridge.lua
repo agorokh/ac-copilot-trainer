@@ -107,6 +107,10 @@ local helloSendCount = 0
 --- Monotonic transport-open counter. Incremented only from CSP's `onOpen`
 --- callback, including auto-reconnects that do not pass through `tryOpen`.
 local socketOpenEpoch = 0
+--- One-shot flag set when a late external tap subscribes to `session`.
+--- The entry script consumes it and re-arms lifecycle_publisher so the current
+--- event-driven session is replayed without making the sidecar topic-aware (#190).
+local sessionReplayRequested = false
 --- Resend hello every N M.tick frames (~0.2 s at 60 Hz) until hello_ack flips
 --- `sidecarProtocolReady`. Frame-paced so a frozen sim clock cannot stall it.
 local EXTERNAL_HELLO_RETRY_FRAMES = 12
@@ -322,6 +326,14 @@ function M.openEpoch()
   return socketOpenEpoch
 end
 
+--- One-shot signal: did an external client just subscribe to `session`?
+---@return boolean
+function M.consumeSessionReplayRequest()
+  local out = sessionReplayRequested
+  sessionReplayRequested = false
+  return out
+end
+
 --- Clear socket state (e.g. leaving track / new session). URL unchanged.
 function M.reset()
   close_socket_if_any(sock)
@@ -334,6 +346,7 @@ function M.reset()
   lastLaunchAttemptT = -1e9
   _recvQueue = {}
   sidecarProtocolReady = false
+  sessionReplayRequested = false
   -- Do not clear `spawnedAlive`: the console child can outlive this reset; clearing it risks a second spawn on port 8765 (Cursor #78).
   sidecarChildEverLaunched = false
   spawnFailStreak = 0
@@ -818,6 +831,18 @@ function M.pollInbound(maxPerTick)
               and ac and type(ac.log) == "function" then
             pcall(ac.log, "[COPILOT][SETUP-OPT] sidecar ack failed: " .. tostring(data.error))
           end
+        elseif t == "state.subscribe" then
+          local topics = data.topics
+          if type(topics) == "table" then
+            for _, topic in ipairs(topics) do
+              if topic == "session" then
+                sessionReplayRequested = true
+                break
+              end
+            end
+          end
+          -- Passive subscription envelope; sidecar owns fan-out. Lua only uses
+          -- a session subscription as a replay hint for the event-driven producer.
         elseif type(t) == "string" and t:sub(1, 6) == "state." then
           -- Passive telemetry envelopes (`state.snapshot`, etc.) are fanned by
           -- the sidecar to peers; Lua does not register handlers for them.

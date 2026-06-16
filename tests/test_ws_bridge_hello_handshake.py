@@ -59,10 +59,17 @@ def _runtime() -> lupa.LuaRuntime:
     rt.execute(f'package.path = package.path .. ";{p}/?.lua"')
     g = rt.globals()
 
+    def _to_lua(value):
+        if isinstance(value, dict):
+            return rt.table_from({k: _to_lua(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return rt.table_from({i + 1: _to_lua(v) for i, v in enumerate(value)})
+        return value
+
     def _parse(s):
         if not isinstance(s, str):
             s = str(s)
-        return rt.table_from(json.loads(s))
+        return _to_lua(json.loads(s))
 
     def _stringify(t, pretty=False):
         # Content is irrelevant to these tests (we assert on state + return
@@ -306,3 +313,29 @@ def test_stale_onopen_from_replaced_socket_is_ignored():
 
     assert _epoch(rt) == epoch_before
     assert int(rt.eval("_ws_sent")) == sent_before
+
+
+def test_state_subscribe_session_sets_one_shot_replay_request():
+    # Issue #190: a late-attaching sequence probe subscribes mid-session. The
+    # sidecar is topic-agnostic, so Lua must treat a `session` subscription as a
+    # request to re-emit the current event-driven session snapshot.
+    rt = _runtime()
+    _open(rt)
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert rt.eval('require("ws_bridge").consumeSessionReplayRequest()') is False
+
+    _inject(rt, {"v": 1, "type": "state.subscribe", "topics": ["connection", "session"]})
+
+    assert rt.eval('require("ws_bridge").consumeSessionReplayRequest()') is True
+    assert rt.eval('require("ws_bridge").consumeSessionReplayRequest()') is False
+
+
+def test_state_subscribe_without_session_does_not_request_replay():
+    rt = _runtime()
+    _open(rt)
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+
+    _inject(rt, {"v": 1, "type": "state.subscribe", "topics": ["connection", "tire_temps"]})
+    _inject(rt, {"v": 1, "type": "state.unsubscribe", "topics": ["session"]})
+
+    assert rt.eval('require("ws_bridge").consumeSessionReplayRequest()') is False

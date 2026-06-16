@@ -79,6 +79,19 @@ Use `--output-dir` to target a specific `journal/laps` directory, or set
 Settings to use a faster imported lap as the active coaching reference. Imported laps never count
 as the user's local PB.
 
+### Autonomous harness
+
+The in-sim harness tools live under `tools/ac_harness/`:
+
+```bash
+python -m tools.ac_harness.sequence_probe --wait-lap --strict
+python -m tools.ac_harness.custom_ai --car-index 0 probe
+```
+
+`custom_ai` creates CSP's `CarControls<N>.v0` mmap and waits for the matching
+`Car<N>.v0` readback. It does not drive in `probe` mode; use the explicit
+`drive` subcommand only on the AC rig after Custom AI is enabled for the track.
+
 ## Architecture
 
 See [docs/01_Vault/AcCopilotTrainer/00_System/Architecture Invariants.md](docs/01_Vault/AcCopilotTrainer/00_System/Architecture%20Invariants.md)

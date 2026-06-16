@@ -15,11 +15,10 @@ diagnostic/client frame that merely carries a ``topic`` key cannot satisfy the c
 
 CONDITIONAL topics are present only under specific circumstances, so a short or mid-session tap may
 legitimately miss them — this is NOT a producer fault:
-  * ``session`` — an EVENT (session start / track-car change / reconnect). A tap that connects
-    mid-session misses it: sidecar fan-out is topic-agnostic and `publishSessionIfChanged`
-    suppresses the same key until a reconnect/change, so subscribing does not replay it. To assert
-    ``session`` / session-before-lap, tap from session start (``--strict --wait-lap``) or, as a
-    future enhancement, have the trainer re-emit ``session`` to late-attaching subscribers.
+  * ``session`` — an EVENT (session start / track-car change / reconnect). As of #190, a late
+    tap subscribing to ``session`` asks the trainer to re-emit the unchanged current session.
+    Older recordings, or captures that did not send ``state.subscribe``, can still miss it, so
+    window mode keeps it conditional while strict mode requires it.
   * ``lap``   — needs a lap boundary in the window (use ``--wait-lap``).
   * ``delta`` — needs a reference lap (``state.bestSortedTrace``) AND an s/f-aligned clock, so it is
     ALWAYS reported as a note (never required) — requiring it would false-fail a healthy
