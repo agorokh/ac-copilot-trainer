@@ -27,6 +27,16 @@ relates_to:
 
 # Next session handoff
 
+## What was delivered (2026-06-16 — #156 / PR #202 optional MCP smoke isolation)
+
+**[#156](https://github.com/agorokh/ac-copilot-trainer/issues/156) CLOSED / PR [#202](https://github.com/agorokh/ac-copilot-trainer/pull/202) MERGED** `2026-06-16T09:38:49Z` as squash [`d71bca3`](https://github.com/agorokh/ac-copilot-trainer/commit/d71bca31f3db221bfc9c78273f84477c6bf372a5). The full local suite without `[knowledge]` no longer fails the optional MCP server smoke because hook/manifest tests no longer leak `scripts/` onto `sys.path` during collection.
+
+**Shipped behavior:** hook and manifest tests now import repo scripts through `tools.testing.script_imports.load_script_module` instead of `sys.path.insert(.../scripts)`. The helper is path-aware, fails closed on module-name/path collisions, and supports same-directory sibling `.py` imports through a temporary meta-path finder without leaving `scripts/` globally visible or exposing `scripts/mcp/` as a top-level namespace package. The current `main` FastMCP availability guard for `tests/test_repo_knowledge/test_mcp_server_import.py` was preserved during rebase.
+
+**Verification:** no-knowledge regression group passed (`70 passed, 3 skipped` across `tests/test_script_imports.py`, hook/manifest tests, and `tests/test_repo_knowledge/`); knowledge-enabled smoke passed with `/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python -m pytest tests/test_repo_knowledge/test_mcp_server_import.py -q` (`1 passed`); final-base local `make ci-fast PYTHON=.scratch/venv-issue156/bin/python` passed (`928 passed, 75 skipped`, coverage 81.16%). GitHub checks on PR #202 were green on the final merged head (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery skipped/rate-limited). GraphQL `reviewThreads` returned no active threads. Post-merge classification: no migration/env/deps/script/workflow flags.
+
+**What remains:** no #156 follow-up is required. Active focus remains #190 / carcsw productionization.
+
 ## What was delivered (2026-06-16 — #116 / PR #205 generated reference-lap prototype)
 
 **[#116](https://github.com/agorokh/ac-copilot-trainer/issues/116) CLOSED / PR [#205](https://github.com/agorokh/ac-copilot-trainer/pull/205) MERGED** `2026-06-16T09:34:53Z` as squash [`6d0ddc8`](https://github.com/agorokh/ac-copilot-trainer/commit/6d0ddc845570ca973b9a2d88cce20dda4def4a30). The repo now has a stdlib-only generated reference-lap adapter, `python -m tools.ac_harness.reference_lap`, that emits lap archive schema v1 records with `source="imported"` / `import_format="generated_reference_v1"` and can also emit a trainer-state persistence fragment for `bestReferenceLapMs`, `bestLapTrace`, `bestBrakePoints`, and `bestCornerFeatures` while preserving the driver's `bestLapMs`.
