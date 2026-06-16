@@ -348,6 +348,8 @@ def rebuild_experiments(
 ) -> dict[str, Any]:
     root = Path(lap_dir)
     store = Path(store_path) if store_path is not None else default_store_path_for_lap_dir(root)
+    if not root.is_dir():
+        raise SetupExperimentError(f"lap_dir must be an existing directory: {root}")
     by_id: dict[str, dict[str, Any]] = {}
     duplicates: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []

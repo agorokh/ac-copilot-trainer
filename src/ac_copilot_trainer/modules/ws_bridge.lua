@@ -1059,10 +1059,20 @@ end
 
 --- Send the setup experiment store path after the v1 sidecar handshake.
 ---@return boolean
+local function setupExperimentPathFramesAllowed()
+  local u = tostring(url or ""):lower()
+  local host = u:match("^wss?://%[([^%]]+)%]") or u:match("^wss?://([^:/]+)")
+  if host == "localhost" or host == "::1" then
+    return true
+  end
+  return type(host) == "string" and host:match("^127%.%d+%.%d+%.%d+$") ~= nil
+end
+
 function M.sendSetupExperimentStorePath()
   if type(setupExperimentStorePath) ~= "string" or setupExperimentStorePath == "" then return false end
   if setupExperimentStoreSent then return true end
   if not (sock and externalHelloAcked) then return false end
+  if not setupExperimentPathFramesAllowed() then return false end
   if setupExperimentStoreRetryFrames < SETUP_EXPERIMENT_STORE_RETRY_FRAMES then
     setupExperimentStoreRetryFrames = setupExperimentStoreRetryFrames + 1
     return false
@@ -1087,6 +1097,7 @@ end
 function M.sendSetupExperimentRecord(archivePath)
   if type(archivePath) ~= "string" or archivePath == "" then return false end
   if not (sock and externalHelloAcked) then return false end
+  if not setupExperimentPathFramesAllowed() then return false end
   return M.sendJson({
     v = PROTOCOL_VERSION,
     type = "setup.experiment.record",

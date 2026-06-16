@@ -192,6 +192,19 @@ def test_load_records_rejects_corrupt_store(tmp_path: Path) -> None:
         load_records(store)
 
 
+def test_rebuild_experiments_rejects_missing_lap_dir_without_rewriting_store(
+    tmp_path: Path,
+) -> None:
+    store = tmp_path / "experiments.jsonl"
+    original = '{"sentinel": true}\n'
+    store.write_text(original, encoding="utf-8")
+
+    with pytest.raises(SetupExperimentError, match="existing directory"):
+        rebuild_experiments(tmp_path / "missing" / "laps", store_path=store)
+
+    assert store.read_text(encoding="utf-8") == original
+
+
 def test_rebuild_experiments_deduplicates_experiment_ids(tmp_path: Path) -> None:
     lap_dir = tmp_path / "journal" / "laps"
     lap_dir.mkdir(parents=True)
