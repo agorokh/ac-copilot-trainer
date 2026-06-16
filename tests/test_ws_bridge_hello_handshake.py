@@ -39,10 +39,12 @@ os = os or {}
 web = {}
 _ws_on_recv = nil
 _ws_on_open = nil
+_ws_on_opens = {}
 _ws_sent = 0
 function web.socket(_u, cb, _p)
   _ws_on_recv = cb
   _ws_on_open = _p and _p.onOpen or nil
+  _ws_on_opens[#_ws_on_opens + 1] = _ws_on_open
   local s = { close = function() end }
   setmetatable(s, { __call = function(_, _data) _ws_sent = _ws_sent + 1 end })
   return s
@@ -201,3 +203,26 @@ def test_open_epoch_detects_subframe_reconnect_while_connected_boolean_stays_tru
     assert connected_before is True
     assert _connected(rt) is True
     assert _epoch(rt) == epoch_before + 1
+
+
+def test_stale_onopen_from_replaced_socket_is_ignored():
+    # CodeRabbit on #197: onClose already ignores stale callbacks from replaced
+    # handles. onOpen needs the same guard, or a late callback can bump the epoch
+    # and reset readiness for the active socket.
+    rt = _runtime()
+    _open(rt)
+    rt.execute("_ws_on_open()")
+    _inject(rt, {"v": 1, "type": "hello_ack", "server_version": "1.0.0"})
+    assert _connected(rt) is True
+    assert _epoch(rt) == 1
+
+    # Reconfigure onto a replacement socket, then invoke the original callback.
+    rt.execute('local wb = require("ws_bridge"); wb.configure("ws://127.0.0.1:9876"); wb.tick(0)')
+    assert int(rt.eval("#_ws_on_opens")) == 2
+    epoch_before = _epoch(rt)
+    sent_before = int(rt.eval("_ws_sent"))
+
+    rt.execute("_ws_on_opens[1]()")
+
+    assert _epoch(rt) == epoch_before
+    assert int(rt.eval("_ws_sent")) == sent_before

@@ -487,6 +487,10 @@ tryOpen = function()
   local opened = nil
   local params = {
     onOpen = function()
+      -- Ignore stale onOpen from a socket handle replaced by configure/reset.
+      if opened ~= nil and sock ~= opened then
+        return
+      end
       socketOpenEpoch = socketOpenEpoch + 1
       -- Re-arm v1 (and legacy) registration gating on every transport open. With
       -- `reconnect = true` CSP auto-reconnects on a transient drop by firing this

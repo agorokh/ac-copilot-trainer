@@ -1753,13 +1753,7 @@ function script.update(dt)
     -- that opens and drains hello_ack between two script.update samples, leaving the boolean
     -- true on both samples (#183).
     local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
-    local wsEpoch = nil
-    if type(wsBridge.openEpoch) == "function" then
-      local okEpoch, gotEpoch = pcall(wsBridge.openEpoch)
-      if okEpoch then
-        wsEpoch = tonumber(gotEpoch)
-      end
-    end
+    local wsEpoch = type(wsBridge.openEpoch) == "function" and wsBridge.openEpoch() or nil
     local wsEpochChanged = wsEpoch ~= nil
       and state._wsPrevOpenEpoch ~= nil
       and wsEpoch ~= state._wsPrevOpenEpoch
