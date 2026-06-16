@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tools.pr_pain import config as pain_config
 from tools.pr_pain import file_issue, pain_score
 
 # ---------------------------------------------------------------------------
@@ -821,6 +822,39 @@ def test_load_extra_bots_merges_yaml_into_known_set(
     assert pain_score._is_bot("coderabbitai", None) is True
     # Unknown logins still treated as human.
     assert pain_score._is_bot("regular-human", "User") is False
+
+
+def test_load_pain_config_parses_workflow_allowlists_without_pyyaml(tmp_path: Path) -> None:
+    cfg = tmp_path / "pr-pain-config.yml"
+    cfg.write_text(
+        """
+enabled_repos:
+  - agorokh/template-repo
+  # - agorokh/disabled-repo
+dry_run_repos: [agorokh/ac-copilot-trainer]
+extra_bot_logins:
+  - Exotic-Review-Bot
+""",
+        encoding="utf-8",
+    )
+
+    parsed = pain_config.load_pain_config(cfg)
+
+    assert parsed["enabled_repos"] == frozenset({"agorokh/template-repo"})
+    assert parsed["dry_run_repos"] == frozenset({"agorokh/ac-copilot-trainer"})
+    assert parsed["extra_bot_logins"] == frozenset({"Exotic-Review-Bot"})
+
+
+def test_pain_config_main_emits_github_outputs(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    cfg = tmp_path / "pr-pain-config.yml"
+    cfg.write_text("enabled_repos: []\ndry_run_repos:\n  - agorokh/ac-copilot-trainer\n")
+
+    rc = pain_config.main(["--config", str(cfg), "--repo", "agorokh/ac-copilot-trainer"])
+
+    assert rc == 0
+    assert capsys.readouterr().out == "enabled=false\ndry_run=true\n"
 
 
 def test_load_extra_bots_handles_missing_or_malformed_config(

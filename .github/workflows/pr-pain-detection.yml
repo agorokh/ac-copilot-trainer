@@ -121,38 +121,9 @@ jobs:
           SOURCE_REPO: ${{ steps.resolve.outputs.repo }}
         run: |
           set -euo pipefail
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          # PyYAML is preinstalled on ubuntu-latest runners; if it ever
-          # disappears (alternate runner image, fork running this on a
-          # custom-runner repo, etc.) fail loudly per repo
-          # `errors-silent-fallbacks` policy. Auto-`pip install` would
-          # introduce network variability into a workflow path designed
-          # to be deterministic — Qodo round-15 finding.
-          import os, sys, pathlib, json
-          try:
-              import yaml
-          except ImportError:
-              print(
-                  "::error::PyYAML is required for the allowlist parser but not "
-                  "installed on this runner. On ubuntu-latest it ships in the "
-                  "default Python; on alternate images add `pip install pyyaml` "
-                  "to a setup step before this job (do NOT silently install it "
-                  "here — keep this workflow deterministic).",
-                  file=sys.stderr,
-              )
-              raise SystemExit(1)
-          cfg_path = pathlib.Path(".github/pr-pain-config.yml")
-          if not cfg_path.exists():
-              print("enabled=false")
-              print("dry_run=false")
-              raise SystemExit(0)
-          cfg = yaml.safe_load(cfg_path.read_text()) or {}
-          repo = os.environ["SOURCE_REPO"]
-          enabled = repo in (cfg.get("enabled_repos") or [])
-          dry_run = repo in (cfg.get("dry_run_repos") or [])
-          print(f"enabled={'true' if enabled else 'false'}")
-          print(f"dry_run={'true' if dry_run else 'false'}")
-          PY
+          python3 -m tools.pr_pain.config \
+            --config .github/pr-pain-config.yml \
+            --repo "$SOURCE_REPO" >> "$GITHUB_OUTPUT"
 
       - name: Score PR
         id: score
