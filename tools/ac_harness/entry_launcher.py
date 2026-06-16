@@ -51,6 +51,10 @@ class EntryOutcome(StrEnum):
     FAILED = "failed"
 
 
+class EntryLaunchUnsupported(RuntimeError):
+    """Raised when an actuator cannot run on the current host/platform."""
+
+
 @dataclass(frozen=True)
 class ActuatorEvent:
     """One actuator action taken by the launcher."""
@@ -228,7 +232,7 @@ class ColdRestartActuator:
 
     def launch(self) -> ActuatorEvent:
         if sys.platform != "win32":
-            raise SharedMemoryUnavailable("ColdRestartActuator launch is Windows-only")
+            raise EntryLaunchUnsupported("ColdRestartActuator launch is Windows-only")
         if not self.acs_exe.exists():
             raise FileNotFoundError(f"acs.exe not found: {self.acs_exe}")
         cmd = [str(self.acs_exe), *self.launch_args]
@@ -243,9 +247,11 @@ class ColdRestartActuator:
         )
 
     def relaunch(self) -> ActuatorEvent:
-        kill_detail = self._kill_existing()
+        normalized = self.normalize_prior_state()
         launch = self.launch()
-        return ActuatorEvent("relaunch", f"{kill_detail}; {launch.detail}")
+        if normalized is None:
+            return ActuatorEvent("relaunch", launch.detail)
+        return ActuatorEvent("relaunch", f"{normalized.detail}; {launch.detail}")
 
     def _kill_existing(self) -> str:
         if sys.platform != "win32":
@@ -334,7 +340,7 @@ class EntryLauncher:
         events: list[ActuatorEvent] = []
         polls = 0
         phase: EntryPhase | None = None
-        drive_triggers = 0
+        drive_trigger_attempts = 0
         stop_reason = "attempt timed out"
         attempt_start = self.clock()
         next_trigger_at = attempt_start + self.config.trigger_after
@@ -379,15 +385,15 @@ class EntryLauncher:
                     phase in {EntryPhase.STUCK_IN_MENU, EntryPhase.IN_PIT}
                     and now >= next_trigger_at
                 ):
-                    if drive_triggers >= self.config.max_drive_triggers_per_launch:
+                    if drive_trigger_attempts >= self.config.max_drive_triggers_per_launch:
                         stop_reason = "drive trigger budget exhausted"
                         break
+                    drive_trigger_attempts += 1
                     event = self.actuator.trigger_drive()
                     events.append(event)
                     if not event.supported:
                         stop_reason = f"actuator requested relaunch: {event.detail}"
                         break
-                    drive_triggers += 1
                     next_trigger_at = now + self.config.trigger_interval
 
                 self.sleep(self.config.poll_interval)
@@ -413,6 +419,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attempt-timeout", type=float, default=30.0)
     parser.add_argument("--poll-interval", type=float, default=0.03)
     parser.add_argument("--trigger-after", type=float, default=3.0)
+    parser.add_argument("--trigger-interval", type=float, default=1.0)
+    parser.add_argument("--max-drive-triggers-per-launch", type=int, default=5)
+    parser.add_argument("--required-live-reads", type=int, default=5)
+    parser.add_argument("--stagnation-seconds", type=float, default=0.05)
     return parser
 
 
@@ -426,6 +436,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
             attempt_timeout=args.attempt_timeout,
             poll_interval=args.poll_interval,
             trigger_after=args.trigger_after,
+            trigger_interval=args.trigger_interval,
+            max_drive_triggers_per_launch=args.max_drive_triggers_per_launch,
+            required_live_reads=args.required_live_reads,
+            stagnation_seconds=args.stagnation_seconds,
         ),
     )
     result = launcher.run()

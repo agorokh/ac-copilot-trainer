@@ -322,6 +322,39 @@ def test_cold_restart_normalize_kills_even_without_race_ini(monkeypatch, tmp_pat
     assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
 
 
+def test_cold_restart_relaunch_reapplies_race_ini_normalization(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    acs_exe = tmp_path / "acs.exe"
+    acs_exe.write_text("", encoding="utf-8")
+    race_ini = tmp_path / "race.ini"
+    race_ini.write_text("[SESSION_0]\nSPAWN_SET=HOTLAP\n", encoding="utf-8")
+    killed: list[list[str]] = []
+    launched: list[list[str]] = []
+
+    def runner(cmd, **kwargs):
+        killed.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def popen(cmd, **kwargs):
+        launched.append(cmd)
+        return object()
+
+    actuator = ColdRestartActuator(
+        acs_exe=acs_exe,
+        race_ini=race_ini,
+        runner=runner,
+        popen=popen,
+    )
+
+    event = actuator.relaunch()
+
+    assert "SPAWN_SET=PIT" in race_ini.read_text(encoding="utf-8")
+    assert killed == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
+    assert launched == [[str(acs_exe.resolve())]]
+    assert event.action == "relaunch"
+    assert "SPAWN_SET=PIT" in event.detail
+
+
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [
