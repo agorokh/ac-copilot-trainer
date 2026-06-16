@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T20:05:00Z
+last_updated: 2026-06-16T22:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -26,6 +26,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-16 — #190 CLOSED; EPIC #154 Part E complete)
+
+**[#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) CLOSED.** All Part E deliverables are merged on `main` and verified:
+
+| Deliverable | PR(s) | Verification |
+|-------------|-------|--------------|
+| L1.5 WS sequence probe | [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) (`2f092da`) | 16+ unit tests; **live PASS** on real drive (2026-06-15) |
+| carcsw Custom-AI mmap driver + PurePursuit + LapDriver | [#209](https://github.com/agorokh/ac-copilot-trainer/pull/209), [#221](https://github.com/agorokh/ac-copilot-trainer/pull/221), [#222](https://github.com/agorokh/ac-copilot-trainer/pull/222), [#223](https://github.com/agorokh/ac-copilot-trainer/pull/223) | 61+ pure tests; **live full lap + trainer coaching** on Magione (2026-06-16) — see [`autonomous-drive-live-verified-2026-06-16`](../03_Investigations/autonomous-drive-live-verified-2026-06-16.md) |
+| Session replay for late-attaching L1.5 taps | [#201](https://github.com/agorokh/ac-copilot-trainer/pull/201) (`f6f2ed5`) | Lupa regression (`test_state_subscribe_session_sets_one_shot_replay_request`); in-sim smoke deferred to next rig pass |
+
+**This session (autonomous-deliver):** `make ci-fast` on `main` @ `f6f2ed5` → **935 passed, 74 skipped**, coverage 81%+; focused #190 suites → **114 passed**. Rig SSH from macOS unavailable (no key); live gates already satisfied by prior AG_PC session.
+
+**Next (EPIC #154):** Part F — in-session harness daemon (auto-login + unlocked desktop + AC launch without operator) for full L2 hands-off. Until then, the working loop is: operator launches AC once → agent runs `lap_driver` / `sequence_probe` autonomously. Latent follow-up: live smoke that mid-session `state.subscribe` to `session` triggers replay (low priority; off-sim covered).
+
+---
 
 ## What was delivered (2026-06-16 — EPIC #154 Part E: carcsw driver PRODUCTIONIZED + merged)
 
