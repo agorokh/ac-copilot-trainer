@@ -27,9 +27,10 @@ The control offsets we actually drive with (gas@0, brake@4, clutch@8, steer@12, 
 gear_dn@21, autoclutch_on_start@41, autoclutch_on_change@42, teleport_to@40) and the Car<N>
 read offsets (gear@28, rpm@32, speed_kmh@36, look@64, position@88) were confirmed against
 ``acpmf_physics`` ground truth and by observing the car drive a full clean lap. Two caveats from
-that verification: (1) **``spline_position`` (DATA_SPLINE_POSITION_OFFSET=448) reads GARBAGE**
-(values like -5..+10, not 0..1) — do NOT trust it; use ``acpmf_graphics`` ``normalizedCarPosition``
-/ position-return for lap progress instead. (2) The engine only drives the wheels when the car is
+that verification: (1) **``spline_position``** is now read at the LIVE-PROBED offset 240 (the old
+doc-extracted 448 read garbage); it tracks lap progress 0..1 but stays OFF the drive path — lap
+progress uses ``acpmf_graphics`` ``normalizedCarPosition`` / position-return — so a residual error
+here cannot affect driving. (2) The engine only drives the wheels when the car is
 in a real gear (AC ``gear`` encoding: **0=Reverse, 1=NEUTRAL, 2=1st**) AND ``autoclutch_on_start``
 + ``autoclutch_on_change`` are set; a manually-written clutch value FIGHTS the autoclutch and kills
 drive, so leave ``clutch`` at 0. See the vault investigation
@@ -75,7 +76,11 @@ CTRL_GAS_OFFSET = 0  # f32, 0..1            VERIFY LIVE
 CTRL_BRAKE_OFFSET = 4  # f32, 0..1          VERIFY LIVE
 CTRL_CLUTCH_OFFSET = 8  # f32, 0..1         VERIFY LIVE
 CTRL_STEER_OFFSET = 12  # f32, -1..1        VERIFY LIVE
-CTRL_HANDBRAKE_OFFSET = 16  # f32, 0..1     VERIFY LIVE
+# handbrake: UNVERIFIED — the doc lists it as a BOOL in the bool group (after kers), not an f32 at
+# 16, so bytes 16..19 are doc-unconfirmed. We always write 0.0 (handbrake unused), which drove for
+# hours with no ill effect, so the current pack is empirically harmless; but VERIFY this offset (or
+# rewire to the bool field) before ever commanding a non-zero handbrake.  VERIFY LIVE
+CTRL_HANDBRAKE_OFFSET = 16  # f32, 0..1     VERIFY LIVE (write 0.0 only; see note)
 CTRL_GEAR_UP_OFFSET = 20  # bool (1 byte)   VERIFY LIVE
 CTRL_GEAR_DN_OFFSET = 21  # bool (1 byte)   VERIFY LIVE
 CTRL_DRS_OFFSET = 22  # bool (1 byte)       VERIFY LIVE
@@ -116,12 +121,15 @@ DATA_SPEED_KMH_OFFSET = 36  # f32                        VERIFY LIVE
 DATA_VELOCITY_OFFSET = 40  # float3                      VERIFY LIVE
 DATA_LOOK_OFFSET = 64  # float3 (forward unit vector)    VERIFY LIVE
 DATA_POSITION_OFFSET = 88  # float3 (world x, y, z)      VERIFY LIVE
-DATA_SPLINE_POSITION_OFFSET = 448  # f32 — WRONG/GARBAGE LIVE (read -5..+10, not 0..1). DO NOT
-# USE. Kept only to document the bad offset; lap progress comes from acpmf_graphics
-# normalizedCarPosition / position-return. TODO(#190): find the real offset or drop this field.
+DATA_SPLINE_POSITION_OFFSET = 240  # f32, 0..1 around the lap. LIVE-PROBED 2026-06-16: 448 (the
+# old doc-extracted guess) read garbage (-5..+10); offset 240 tracks lap progress monotonically
+# (0.00 -> 0.24 over a quarter-lap drive). Offsets 360/480 alias the same value. Full 0->1->wrap
+# range not yet exercised, and it stays OFF the drive path (lap progress uses position-return), so
+# a residual error here cannot affect driving.
 
-# Bytes that must be readable to decode every field we parse (spline_position + its 4 bytes).
-CAR_DATA_MIN_BYTES = DATA_SPLINE_POSITION_OFFSET + 4  # 452
+# Bytes that must be readable to decode every field we parse. position@88 (+12) is the furthest
+# *control* field; spline_position@240 (+4) sets the floor. Keep a generous margin.
+CAR_DATA_MIN_BYTES = DATA_SPLINE_POSITION_OFFSET + 4  # 244
 # Doc says allocate 512 to read the full struct; we map that so an offset that is slightly
 # off (pre-verification) still lands inside the mapped view rather than over-reading.
 CAR_DATA_BUFFER_BYTES = 512
