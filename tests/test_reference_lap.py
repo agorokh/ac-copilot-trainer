@@ -9,6 +9,7 @@ from tools.ac_harness.reference_lap import (
     TRACE_FIELDS,
     LapArchiveSchemaError,
     archive_trace_to_object_trace,
+    build_archive_record,
     build_archive_record_from_scenario,
     build_trainer_reference_payload,
     main,
@@ -63,6 +64,59 @@ def test_trainer_reference_payload_bridges_generated_archive_to_live_persistence
     assert payload["bestBrakePoints"][0]["entrySpeed"] == pytest.approx(BRAKE_ENTRY_SPEED_KMH)
     assert payload["bestBrakePoints"][0]["label"] == "T1"
     assert payload["bestCornerFeatures"] == record["corners"]
+
+
+def test_brake_corner_uses_full_tail_when_brake_never_releases() -> None:
+    frames = [
+        {
+            "spline": 0.0,
+            "speed": 160.0,
+            "eMs": 0.0,
+            "throttle": 1.0,
+            "brake": 0.0,
+            "steer": 0.0,
+            "gear": 4,
+            "px": 0.0,
+            "py": 0.0,
+            "pz": 0.0,
+        },
+        {
+            "spline": 0.2,
+            "speed": 140.0,
+            "eMs": 1000.0,
+            "throttle": 0.0,
+            "brake": 1.0,
+            "steer": 0.1,
+            "gear": 4,
+            "px": 1.0,
+            "py": 0.0,
+            "pz": 0.0,
+        },
+        {
+            "spline": 0.3,
+            "speed": 100.0,
+            "eMs": 2000.0,
+            "throttle": 0.2,
+            "brake": 0.5,
+            "steer": 0.3,
+            "gear": 3,
+            "px": 2.0,
+            "py": 0.0,
+            "pz": 0.0,
+        },
+    ]
+
+    record = build_archive_record(
+        frames,
+        car_id="ks_mazda_miata",
+        track_id="magione",
+        exported_at="2026-06-16T00:00:00Z",
+    )
+
+    corner = record["corners"][0]
+    assert corner["exitSpeed"] == pytest.approx(100.0)
+    assert corner["minSpeed"] == pytest.approx(100.0)
+    assert corner["trailBrakeRatio"] == pytest.approx(1.0)
 
 
 def test_validator_rejects_trace_field_order_drift() -> None:

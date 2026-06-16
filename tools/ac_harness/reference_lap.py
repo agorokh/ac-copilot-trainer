@@ -102,11 +102,12 @@ def _first_brake_corner(rows: Sequence[Sequence[float]]) -> dict[str, Any] | Non
         if row[brake_idx] < 0.3:
             continue
         braking = rows[i:]
-        release_offset = 0
-        for release_offset, candidate in enumerate(braking):
-            if candidate[brake_idx] < 0.1 and release_offset > 0:
+        release_offset = len(braking)
+        for candidate_offset, candidate in enumerate(braking[1:], start=1):
+            if candidate[brake_idx] < 0.1:
+                release_offset = candidate_offset
                 break
-        window = braking[: max(1, release_offset)]
+        window = braking[:release_offset]
         speeds = [candidate[speed_idx] for candidate in window]
         steer_values = [candidate[steer_idx] for candidate in window]
         throttle_values = [candidate[throttle_idx] for candidate in window]
