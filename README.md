@@ -45,6 +45,19 @@ pip install -e ".[dev]"
 make ci-fast
 ```
 
+## Lap Archive Export
+
+Completed laps are archived as JSON under the trainer data root at
+`journal/laps/lap_*.json`. Export them to stable analysis CSV:
+
+```bash
+python -m tools.lap_archive_export --output exports/laps.csv /path/to/journal/laps
+```
+
+For MoTeC i2 workflows, use `--format motec-csv`. See
+[docs/10_Development/13_Lap_Archive_Export.md](docs/10_Development/13_Lap_Archive_Export.md)
+for supported channels and compatibility limits.
+
 ## Architecture
 
 See [docs/01_Vault/AcCopilotTrainer/00_System/Architecture Invariants.md](docs/01_Vault/AcCopilotTrainer/00_System/Architecture%20Invariants.md)
