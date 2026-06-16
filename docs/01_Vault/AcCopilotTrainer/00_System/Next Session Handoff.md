@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T09:19:15Z
+last_updated: 2026-06-16T09:45:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -26,6 +26,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 — #188 / PR #199 defensive wrap-shaped teleport reset)
+
+**[#199](https://github.com/agorokh/ac-copilot-trainer/pull/199) MERGED** `2026-06-16T09:31:34Z` as squash [`f03dea6`](https://github.com/agorokh/ac-copilot-trainer/commit/f03dea6c094fefee947d52b7a7b38b7172833d2d). This is the defensive code branch for [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188): CSP builds lacking `car.resetCounter` now defer wrap-shaped same-lap spline rewinds by one frame instead of treating them as definitely-normal lap wraps.
+
+**Shipped behavior:** `delta.rollingResetDecision()` owns the end-of-update rolling reset decision. It resets immediately on `resetCounter`/teleport, lap rollback, or non-wrap same-lap spline rewind; it defers a wrap-shaped same-lap jump (`prevSpline` near 1.0 -> `spline` near 0.0), clears it if `lapCount` catches up on the next frame, and otherwise resets the abandoned stint. Qodo's edge-case note was addressed too: if `lapCount` is non-numeric/unavailable while pending, the decision remains pending rather than forcing a reset. The trainer stores this as `state.pendingWrapResetLapCount` and clears it on runtime/stint resets.
+
+**Verification:** local final-base `PYTHON=.venv/bin/python make ci-fast` passed (`926 passed, 75 skipped`, 81.12% coverage); targeted `tests/test_delta.py tests/test_csp_helpers.py tests/test_repo_knowledge/test_mcp_server_import.py` passed (`22 passed, 1 skipped`); GitHub build/conformance/docs/CodeRabbit/Cursor Bugbot all green; GraphQL `reviewThreads` returned zero nodes; `post_merge_classify.py --pr 199` reported no post-merge flags.
+
+**Honest residual:** this macOS checkout did not have a live AC/CSP rig, so the issue's empirical rig question is still unproven: whether the rig's CSP exposes `car.resetCounter`, and whether non-teleport lap wraps ever show `splinePosition` high->low with unchanged `lapCount`. Leave [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) open until a rig pass confirms that reality. If `resetCounter` is present, the issue can likely close as defensive hardening shipped. If `lapCount` can lag by more than one frame at s/f, extend the deferral window with live evidence.
 
 ## What was delivered (2026-06-16 — PR #214 PR-pain PyYAML-free allowlist follow-up)
 
