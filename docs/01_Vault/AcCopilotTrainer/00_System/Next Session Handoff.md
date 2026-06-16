@@ -27,6 +27,18 @@ relates_to:
 
 # Next session handoff
 
+## What was delivered (2026-06-16 — #116 / PR #205 generated reference-lap prototype)
+
+**[#116](https://github.com/agorokh/ac-copilot-trainer/issues/116) CLOSED / PR [#205](https://github.com/agorokh/ac-copilot-trainer/pull/205) MERGED** `2026-06-16T09:34:53Z` as squash [`6d0ddc8`](https://github.com/agorokh/ac-copilot-trainer/commit/6d0ddc845570ca973b9a2d88cce20dda4def4a30). The repo now has a stdlib-only generated reference-lap adapter, `python -m tools.ac_harness.reference_lap`, that emits lap archive schema v1 records with `source="imported"` / `import_format="generated_reference_v1"` and can also emit a trainer-state persistence fragment for `bestReferenceLapMs`, `bestLapTrace`, `bestBrakePoints`, and `bestCornerFeatures` while preserving the driver's `bestLapMs`.
+
+**Decision captured:** [`01_Decisions/rl-reference-lap-generation`](../01_Decisions/rl-reference-lap-generation.md) chooses deterministic/off-sim generated references now and defers RL runtime dependencies (TUMFTM/CommonRoad/Gym/SB3) until there is a proven importer path and real acceptance need. Future solver output should enter through the same object-frame list passed to `build_archive_record`, not leak solver schemas into the trainer.
+
+**Review hardening shipped before merge:** generated brake windows include unreleased braking tails; the bridge no longer overwrites driver PBs; the validator requires `corners`, rejects `lap.lap_ms` / final-trace `eMs` mismatches, and keeps `trailBrakeRatio` aligned with live `corner_analysis` (`avgBrake / maxBrake`).
+
+**Verification:** local focused `tests/test_reference_lap.py` passed (`10 passed`); full merged-branch local `make ci-fast PYTHON=.venv/bin/python` passed (`929 passed, 75 skipped`, coverage 81.32%); GitHub checks on PR #205 were green on the merged head (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery skipped). GraphQL `reviewThreads` showed every thread resolved before merge. Generated artifact smoke emitted both archive JSON and trainer-state JSON under `.scratch/`. Post-merge classification: no migration/env/deps/script/workflow flags.
+
+**Runtime caveat:** this is intentionally off-sim and does not prove an RL agent or external optimizer can produce a faster lap in AC. The next real integration step is an importer/activation path that consumes generated archive records the same way PR #207 consumes MoTeC imports. Active focus remains #190 / carcsw productionization.
+
 ## What was delivered (2026-06-16 — #188 / PR #199 defensive wrap-shaped teleport reset)
 
 **[#199](https://github.com/agorokh/ac-copilot-trainer/pull/199) MERGED** `2026-06-16T09:31:34Z` as squash [`f03dea6`](https://github.com/agorokh/ac-copilot-trainer/commit/f03dea6c094fefee947d52b7a7b38b7172833d2d). This is the defensive code branch for [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188): CSP builds lacking `car.resetCounter` now defer wrap-shaped same-lap spline rewinds by one frame instead of treating them as definitely-normal lap wraps.
