@@ -2,11 +2,12 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T22:30:00Z
+last_updated: 2026-06-16T23:15:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-live-verified-2026-06-16.md
+  - AcCopilotTrainer/03_Investigations/issue-188-wrap-skew-rig-verification.md
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/00_System/Architecture Invariants.md
   - AcCopilotTrainer/00_System/glossary/rig-network.md
@@ -26,6 +27,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-16 — #188 rig verification OPEN; #190 CLOSED)
+
+**Active:** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) — defensive wrap-reset code shipped in [#199](https://github.com/agorokh/ac-copilot-trainer/pull/199); **empirical rig question still open**. Runbook: [`03_Investigations/issue-188-wrap-skew-rig-verification`](../03_Investigations/issue-188-wrap-skew-rig-verification.md). Blockers from macOS: Tailscale ping to `pc` OK; SSH auth denied; sidecar down. Pending: ≥2-lap rig grep for `resetCounter` + wrap-skew frames (optional branch `feat/issue-188-rig-skew-probe` for `WRAP-SKEW-PROBE` logging).
+
+**Closed:** [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) — Part E complete (see table below + vault PR [#226](https://github.com/agorokh/ac-copilot-trainer/pull/226)).
+
+**Infra landed:** PR [#225](https://github.com/agorokh/ac-copilot-trainer/pull/225) (`b8f92ef`) — `.gitignore` for local-only noise (`.tmp/`, `backups/`, `tools/acc/`, `.claude/scheduled_tasks.lock`). Post-merge classification: no flags.
+
+---
 
 ## Resume here (2026-06-16 — #190 CLOSED; EPIC #154 Part E complete)
 
@@ -111,6 +122,8 @@ shipped as four merged PRs (all refs #190):
 **Verification:** local final-base `PYTHON=.venv/bin/python make ci-fast` passed (`926 passed, 75 skipped`, 81.12% coverage); targeted `tests/test_delta.py tests/test_csp_helpers.py tests/test_repo_knowledge/test_mcp_server_import.py` passed (`22 passed, 1 skipped`); GitHub build/conformance/docs/CodeRabbit/Cursor Bugbot all green; GraphQL `reviewThreads` returned zero nodes; `post_merge_classify.py --pr 199` reported no post-merge flags.
 
 **Honest residual:** this macOS checkout did not have a live AC/CSP rig, so the issue's empirical rig question is still unproven: whether the rig's CSP exposes `car.resetCounter`, and whether non-teleport lap wraps ever show `splinePosition` high->low with unchanged `lapCount`. Leave [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) open until a rig pass confirms that reality. If `resetCounter` is present, the issue can likely close as defensive hardening shipped. If `lapCount` can lag by more than one frame at s/f, extend the deferral window with live evidence.
+
+**2026-06-16 autonomous-deliver pass:** Tailscale reachability to `pc` (`100.75.251.87`) confirmed; SSH auth blocked from macOS; sidecar `:8765` down. Runbook: [`03_Investigations/issue-188-wrap-skew-rig-verification`](../03_Investigations/issue-188-wrap-skew-rig-verification.md). Issue comment: [#188#issuecomment-4723875486](https://github.com/agorokh/ac-copilot-trainer/issues/188#issuecomment-4723875486). Pending: ≥2-lap rig grep for `resetCounter` + wrap-skew frames.
 
 ## What was delivered (2026-06-16 — PR #214 PR-pain PyYAML-free allowlist follow-up)
 

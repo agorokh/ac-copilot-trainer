@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T22:30:00Z
+last_updated: 2026-06-16T23:15:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -18,7 +18,7 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-06-16):** [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED** — EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) Part E (carcsw driver + L1.5 sequence probe + session replay) is on `main` and live-verified. **Next EPIC thread:** Part F harness daemon for full L2 hands-off (operator-gated control channel). Parallel hot path unchanged: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
+**Active focus (2026-06-16):** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) rig verification — `resetCounter` presence + s/f wrap-skew probe on `pc` (code in [#199](https://github.com/agorokh/ac-copilot-trainer/pull/199) already on `main`). [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. Next EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) thread after #188: Part F harness daemon. Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
