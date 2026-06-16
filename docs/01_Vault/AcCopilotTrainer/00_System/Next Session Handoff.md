@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T11:13:39Z
+last_updated: 2026-06-16T20:05:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -26,6 +26,23 @@ relates_to:
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 — EPIC #154 Part E: carcsw driver PRODUCTIONIZED + merged)
+
+**The autonomous in-sim driver is on `main`.** The work proven live (see
+[`03_Investigations/autonomous-drive-live-verified-2026-06-16`](../03_Investigations/autonomous-drive-live-verified-2026-06-16.md))
+shipped as four merged PRs (all refs #190):
+
+- **[#209](https://github.com/agorokh/ac-copilot-trainer/pull/209) (`b573cc9`)** — `tools/ac_harness/custom_ai.py` (CSP Custom-AI mmap actuator/reader) + `ai_line.py` (fast_lane parser + `PurePursuit`) + `lap_driver.py` (`LapDriver`: pit-out OUT-phase, gear mgmt, position-return lap detection, stuck→teleport recovery). 61 pure tests. Reviewed by CodeRabbit + Cursor Bugbot + a **12-agent adversarial verification workflow**; review fixes folded in (car_index guard, `time.monotonic`, stuck-recovery throttle threshold, dead-code, stronger corner/gear tests).
+- **[#221](https://github.com/agorokh/ac-copilot-trainer/pull/221) (`402e326`)** — `spline_position` offset 448→**240** (live byte-probed; 448 was garbage), handbrake@16 documented as unverified (write-0.0-only), `PurePursuit`/`load_ai_line`/`ControlOutput` exported at package level.
+- **[#222](https://github.com/agorokh/ac-copilot-trainer/pull/222) (`31ffd4a`)** — ai_line cyclic closed-loop wrap coverage (the gap the verification workflow flagged + spun off as a task).
+- **[#223](https://github.com/agorokh/ac-copilot-trainer/pull/223)** — `.gitattributes`: force `scripts/hook_*.py` to LF (the governed shims are byte-identity-gated against an LF canonical; Windows CRLF checkout made `test_public_governance_conformance` fail locally — the "drift" was a CRLF artifact, **not** a tampered shim; the pin `d28fab` is correct).
+
+**Gear answer (operator Q):** the overnight 1st-gear-only was the conservative ~50 km/h cap holding rpm ~3,900, below the ~7,800-rpm (≈80 km/h) upshift point — demoed live (1st→2nd at rpm 7,763). Not a bug.
+
+**Rig restored:** Magione `surfaces.ini` reverted to stock (byte-identical to `surfaces.ini.bak-precustomai`); the offline-hash edit is gone. `new_behaviour.ini [CUSTOM_AI] ENABLED=1` left (harmless dormant toggle).
+
+**Tracked follow-up (latent, low priority):** clamp `PurePursuit._curvature_ahead` window to line length — only bites on closed lines shorter than the lookahead (~40 m); real km-scale `fast_lane` tracks never produce one.
 
 ## What was delivered (2026-06-16 - #114 / PR #206 setup experiment tracking)
 
