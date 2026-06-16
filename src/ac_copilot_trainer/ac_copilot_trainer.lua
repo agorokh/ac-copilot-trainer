@@ -1749,11 +1749,21 @@ function script.update(dt)
   pcall(function()
     -- Per-frame WS-reconnect detection: on a sidecar (re)connect, re-arm `session` so it
     -- re-emits THIS frame — before any subsequent `lap` — without resetting the stint best.
+    -- The boolean catches normal false->true connects; openEpoch catches a CSP auto-reconnect
+    -- that opens and drains hello_ack between two script.update samples, leaving the boolean
+    -- true on both samples (#183).
     local wsConn = type(wsBridge.sidecarConnected) == "function" and wsBridge.sidecarConnected()
-    if wsConn and not state._wsPrevConnected then
+    local wsEpoch = type(wsBridge.openEpoch) == "function" and wsBridge.openEpoch() or nil
+    local wsEpochChanged = wsEpoch ~= nil
+      and state._wsPrevOpenEpoch ~= nil
+      and wsEpoch ~= state._wsPrevOpenEpoch
+    if wsConn and (not state._wsPrevConnected or wsEpochChanged) then
       lifecyclePublisher.rearmSession()
     end
     state._wsPrevConnected = wsConn
+    if wsEpoch ~= nil then
+      state._wsPrevOpenEpoch = wsEpoch
+    end
     lifecyclePublisher.publishConnectionIfDue({
       dt = dt,
       car = car,
