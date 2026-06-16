@@ -228,6 +228,7 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
         "setup",
         "trace",
         "coaching",
+        "corners",
     ):
         if key not in record:
             raise LapArchiveSchemaError(f"missing top-level key: {key}")
@@ -248,6 +249,8 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     samples = trace.get("samples")
     if not isinstance(samples, list):
         raise LapArchiveSchemaError("trace.samples must be a list")
+    if len(samples) < 2:
+        raise LapArchiveSchemaError("trace.samples must contain at least two rows")
     if trace.get("samples_count") != len(samples):
         raise LapArchiveSchemaError("trace.samples_count must equal len(trace.samples)")
     last_elapsed = -math.inf
@@ -264,6 +267,12 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
                 if parsed < last_elapsed:
                     raise LapArchiveSchemaError("trace eMs must be monotonic nondecreasing")
                 last_elapsed = parsed
+    if abs(lap_ms - round(last_elapsed)) > 1.0:
+        raise LapArchiveSchemaError("lap.lap_ms must match final trace eMs")
+
+    corners = record["corners"]
+    if not isinstance(corners, list):
+        raise LapArchiveSchemaError("corners must be a list")
 
 
 def archive_trace_to_object_trace(record: Mapping[str, Any]) -> list[dict[str, float]]:
@@ -328,7 +337,6 @@ def build_trainer_reference_payload(record: Mapping[str, Any]) -> dict[str, Any]
     lap_ms = int(round(_finite_float(lap.get("lap_ms"), "lap.lap_ms")))
     corners = record.get("corners", [])
     return {
-        "bestLapMs": lap_ms,
         "bestReferenceLapMs": lap_ms,
         "bestLapTrace": frames,
         "bestBrakePoints": _brake_points_from_corners(record, frames),

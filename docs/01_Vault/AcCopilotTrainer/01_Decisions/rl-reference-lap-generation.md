@@ -44,7 +44,8 @@ Pursue a deterministic generated-reference path first:
    `import_format: "generated_reference_v1"`.
 2. Keep the prototype stdlib-only and off-sim under `tools/ac_harness/reference_lap.py`.
 3. Provide an explicit bridge from archive rows to the live trainer persistence fragment:
-   `bestLapTrace`, `bestReferenceLapMs`, `bestLapMs`, `bestBrakePoints`, and `bestCornerFeatures`.
+   `bestLapTrace`, `bestReferenceLapMs`, `bestBrakePoints`, and `bestCornerFeatures`
+   while preserving the driver's existing `bestLapMs`.
 4. Treat future TUMFTM/CommonRoad output as another producer of the same object-frame list passed to
    `build_archive_record`; do not let solver-specific schemas leak into the trainer.
 

@@ -56,7 +56,7 @@ def test_trainer_reference_payload_bridges_generated_archive_to_live_persistence
     record = build_archive_record_from_scenario("brake_too_late")
     payload = build_trainer_reference_payload(record)
 
-    assert payload["bestLapMs"] == record["lap"]["lap_ms"]
+    assert "bestLapMs" not in payload
     assert payload["bestReferenceLapMs"] == record["lap"]["lap_ms"]
     assert payload["bestLapTrace"][0]["spline"] == pytest.approx(0.0)
     assert payload["bestLapTrace"][-1]["spline"] <= 1.0
@@ -135,6 +135,22 @@ def test_validator_rejects_non_monotonic_elapsed_time() -> None:
         validate_lap_archive_record(record)
 
 
+def test_validator_requires_corners_key() -> None:
+    record = build_archive_record_from_scenario("clean_lap")
+    del record["corners"]
+
+    with pytest.raises(LapArchiveSchemaError, match="missing top-level key: corners"):
+        validate_lap_archive_record(record)
+
+
+def test_validator_rejects_lap_time_that_does_not_match_trace_elapsed() -> None:
+    record = build_archive_record_from_scenario("clean_lap")
+    record["lap"]["lap_ms"] += 5000
+
+    with pytest.raises(LapArchiveSchemaError, match="lap.lap_ms must match final trace eMs"):
+        validate_lap_archive_record(record)
+
+
 def test_cli_emits_schema_valid_archive_json(tmp_path) -> None:
     output = tmp_path / "generated_ref.json"
     rc = main(
@@ -164,7 +180,6 @@ def test_cli_can_emit_trainer_state_payload(tmp_path) -> None:
     assert rc == 0
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert set(payload) == {
-        "bestLapMs",
         "bestReferenceLapMs",
         "bestLapTrace",
         "bestBrakePoints",
