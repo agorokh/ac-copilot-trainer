@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T08:00:00Z
+last_updated: 2026-06-16T09:14:30Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -20,11 +20,58 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/screen-debugging-journey-2026-04-21.md
   - AcCopilotTrainer/03_Investigations/cowork-session-retrospective-2026-04-21.md
   - AcCopilotTrainer/03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md
+  - AcCopilotTrainer/03_Investigations/pr-207-motec-reference-import.md
   - AcCopilotTrainer/03_Investigations/pr-75-ollama-corner-coaching-protocol.md
   - AcCopilotTrainer/03_Investigations/template-sync-pr87-2026-04-24.md
 ---
 
 # Next session handoff
+
+## What was delivered (2026-06-16 — #177 / PR #200 detect-and-retry entry launcher)
+
+**[#177](https://github.com/agorokh/ac-copilot-trainer/issues/177) CLOSED / PR [#200](https://github.com/agorokh/ac-copilot-trainer/pull/200) MERGED** `2026-06-16T08:59:16Z` as squash [`ee25118`](https://github.com/agorokh/ac-copilot-trainer/commit/ee25118f86326f9bd68211e8ab8565a621330ef6). The harness now has `tools/ac_harness/entry_launcher.py`: a pluggable `EntryLauncher` that normalizes prior state, launches AC, polls `DrivingEntryDetector`, triggers an actuator while stuck, and falls back to quit+relaunch when the default actuator cannot press Drive.
+
+The conservative default path is `ColdRestartActuator`: resolve `acs.exe` / `race.ini` to absolute paths, kill any existing `acs.exe`, atomically rewrite `[RACE] SPAWN_SET=PIT`, launch with `cwd=acs.exe.parent`, and reapply normalization before every relaunch. The module is exported from `tools.ac_harness` and includes a CLI: `python -m tools.ac_harness.entry_launcher --acs-exe <path> --race-ini <path>` plus timing knobs (`--max-launches`, `--attempt-timeout`, `--poll-interval`, `--trigger-after`, `--trigger-interval`, `--max-drive-triggers-per-launch`, `--required-live-reads`, `--stagnation-seconds`).
+
+**Verification:** local targeted harness checks passed (`44 passed` across `tests/test_ac_harness_entry_launcher.py` and `tests/test_ac_harness_shared_memory.py`); full local `make ci-fast` passed with `911 passed, 71 skipped`, coverage 83.73%; GitHub checks on PR #200 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery/Gemini rate-limited as comments only). GraphQL review-thread audit ended with every Cursor/Gemini thread resolved. Post-merge classification: no migration/env/deps/script/workflow flags.
+
+**Runtime caveat:** this was not live-verified against Windows AC/Content Manager from the macOS worktree. Next rig pass should run the CLI against the real `acs.exe` and `Documents/Assetto Corsa/cfg/race.ini`, observe `SPAWN_SET=PIT` normalization, and confirm the loop gives AC enough time for shared memory creation instead of rapid relaunching. Active focus remains #190; PR #200 supplies the reusable launcher layer that #190/carcsw can compose with.
+
+## What was delivered (2026-06-16 — #79 / PR #207 MoTeC reference-lap import)
+
+**[#79](https://github.com/agorokh/ac-copilot-trainer/issues/79) / PR [#207](https://github.com/agorokh/ac-copilot-trainer/pull/207) MERGED** `2026-06-16T08:55:47Z` as squash [`0c637e3`](https://github.com/agorokh/ac-copilot-trainer/commit/0c637e3bf3f648e75b40e6b760ceff097ac9a241). The repo now has `python -m tools.import_motec <input.csv> --car <car_id> --track <track_id> [--layout <layout>]`, which heuristically maps MoTeC CSV channels, normalizes units, resamples to 2000 schema-v1 samples, and writes `source="imported"`, `import_format="motec_csv"` lap archive JSON under `journal/laps/`.
+
+The CSP app now has an opt-in Settings flag, **Prefer imported reference over local PB** (`useImportedReference=false` by default). On load or toggle it scans `journal/laps/` for imported MoTeC laps matching the active car/track, activates a faster imported lap as the realtime reference, re-derives braking points / segments / corner features from that imported trace, and preserves the user's local PB persistence separately. Imported laps never overwrite local PB files. See [`03_Investigations/pr-207-motec-reference-import`](../03_Investigations/pr-207-motec-reference-import.md).
+
+**Verification:** local `make ci-fast PYTHON=.venv/bin/python` passed (`890 passed, 74 skipped`, coverage 80.58%, CSP API/safety checks green). Artifact CLI smoke produced a schema-v1 imported lap JSON with 2000 samples. GitHub checks for PR #207 were green (`build`, `Canonical docs exist`, `conformance`, CodeRabbit, Cursor Bugbot; Sourcery skipped/rate-limited). GraphQL `reviewThreads` returned no unresolved threads. Post-merge classification: no migration/env/deps/script/workflow flags. **Focus remains #190**.
+
+## What was delivered (2026-06-16 — #118 / PR #203 peripheral telemetry/haptics)
+
+**[#118](https://github.com/agorokh/ac-copilot-trainer/issues/118) / PR [#203](https://github.com/agorokh/ac-copilot-trainer/pull/203) MERGED** `2026-06-16T08:53:54Z` as squash [`e5103be`](https://github.com/agorokh/ac-copilot-trainer/commit/e5103be29965b118efa309ee6f3a97a29cb329af). The sidecar external protocol now includes high-rate physical-peripheral frames: `telemetry_tick` from loopback Lua to physical clients (`screen`, `haptics`, `physical`) and `haptic_event` to haptic-capable clients, with per-type rate limiting and no echo back to Lua. The sidecar also derives bounded haptic cues from telemetry (`pedal_rumble`, `slip_buzz`).
+
+**Review hardening shipped before merge:** generated haptic events omit absent `ts_sim` instead of validating as `null`; signed negative `slip` values are valid and can drive `slip_buzz`; optional tyre maps accept non-empty partial corner sets; legacy firmware clients whose `client` starts with `ac-copilot-screen` route as `screen` even when they omit `client_class`.
+
+**Verification:** targeted local routing tests passed (`tests/test_ai_sidecar_external.py` + `tests/test_ws_topic_allowlist.py`, 31 passed); branch local parity passed (`make ci-fast`, 897 passed, 71 skipped, coverage 83.95%); GitHub PR checks passed (build, canonical docs, conformance, CodeRabbit, Cursor Bugbot; Sourcery skipped by service rate limit); GraphQL audit showed all 6 review threads resolved before merge. Post-merge `main` parity passed again after sync (`make ci-fast`, 911 passed, 71 skipped, coverage 84.16%). Post-merge classification for PR #203: no migration/env/deps/script/workflow flags. Issue #118 was manually closed because GitHub did not auto-link it from the PR title.
+
+**What remains:** no #118 follow-up is required from the protocol/test surface. Hardware/on-rig actuator consumption is still downstream physical-rig work; continue #190 / carcsw productionization as the active next thread.
+
+## What was delivered (2026-06-16 — #179 / PR #198 vault-branch CI policy papercut)
+
+**[#179](https://github.com/agorokh/ac-copilot-trainer/issues/179) / PR [#198](https://github.com/agorokh/ac-copilot-trainer/pull/198) MERGED** `2026-06-16T08:54:58Z` as squash [`4a8ab98`](https://github.com/agorokh/ac-copilot-trainer/commit/4a8ab9888cf0996799160e7c78aa26e38fd8c085). `scripts/ci_policy.py` now allows documented `vault/post-merge-pr<N>` branches via the `vault/` prefix, and `tests/test_ci_policy.py` covers both direct branch validation and pull-request event handling for that branch shape.
+
+**Review-driven hardening included:** `tests/test_repo_knowledge/test_mcp_server_import.py` now skips only when the optional `[knowledge]` MCP package is genuinely absent or shadowed by this repo's local `scripts/mcp` namespace; when `[knowledge]` is installed, it still imports `tools.repo_knowledge.mcp_server` and fails if `mcp.server.fastmcp` is missing. This closed Codex's review thread without letting CI mask an incompatible installed MCP package.
+
+**Verification:** local `make ci-fast PYTHON=.venv/bin/python` passed after the final patch (`882 passed, 74 skipped`, coverage 80.08%, bandit/policy/CSP checks green). GitHub Actions for PR #198 were green on the final SHA (`build`, `conformance`, `Canonical docs exist`, CodeRabbit, Cursor Bugbot; Sourcery review skipped/rate-limited as a completed check). GraphQL `reviewThreads` showed no current blocking unresolved threads; the only unresolved thread was outdated. Post-merge classification: `scripts/` changed, no migration/env/deps work to run. **Focus remains #190**.
+
+## Resume here (2026-06-16 — #183 socket-open epoch follow-up MERGED; focus stays on #190)
+
+**[#183](https://github.com/agorokh/ac-copilot-trainer/issues/183) / PR [#197](https://github.com/agorokh/ac-copilot-trainer/pull/197) MERGED** `2026-06-16T08:43:39Z` as squash [`392a868`](https://github.com/agorokh/ac-copilot-trainer/commit/392a8688d716a33dffad20cbf2a38a0c7ea17b90). The trainer now tracks a monotonic `ws_bridge.openEpoch()` incremented from CSP `web.socket` `onOpen`, ignores stale `onOpen` callbacks from replaced sockets, and re-arms `lifecycle_publisher` when the epoch changes even if `sidecarConnected()` stayed true across an auto-reconnect.
+
+**Verification:** targeted Lupa tests passed (`tests/test_ws_bridge_hello_handshake.py` + `tests/test_lifecycle_publisher.py`, 22 passed); full local parity passed with `make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python` (894 passed, 71 skipped, coverage 83.69%); GitHub PR checks were green for build, canonical docs, conformance, Cursor Bugbot, and CodeRabbit. Review-thread audit left only outdated Gemini threads against pre-fix code. Post-merge classification for PR #197: no migration/env/deps/script/workflow flags.
+
+**Runtime caveat:** this was not re-verified inside Assetto Corsa/CSP from the macOS worktree; the issue acceptance target was the off-sim Lupa reconnect regression. On the next Windows/AC rig pass, a useful smoke is to force a sidecar/CSP auto-reconnect and observe a fresh `session` re-emit without relying on the 1 Hz heartbeat identity backstop.
+
+**What remains:** continue #190 / carcsw productionization from the next block. No #183 follow-up is required unless the in-game reconnect smoke finds a CSP-specific callback ordering edge.
 
 ## Resume here (2026-06-16 — EPIC #154 L2 ACHIEVED: agent drove the car autonomously; trainer captured a reference + COACHED it, no human at the wheel)
 
@@ -193,6 +240,18 @@ Post-merge classification: **`post_merge_classify.py --pr 111`** (and #99/#100) 
 **Prior infra (still on `main`):** PR [#96](https://github.com/agorokh/ac-copilot-trainer/pull/96) template-2026.05 deterministic hooks (`5d3019e`). Operator notes: regenerate `.claude/settings.json` via `python scripts/merge_settings.py --no-local` when `settings.base.json` changes; commit-time pre-commit only (no PostToolUse ruff hooks).
 
 ---
+
+## What was delivered (PR #203 — 2026-06-16)
+
+| Area | Artefact |
+|------|----------|
+| Physical peripheral protocol | PR [#203](https://github.com/agorokh/ac-copilot-trainer/pull/203) merged at [`e5103be`](https://github.com/agorokh/ac-copilot-trainer/commit/e5103be29965b118efa309ee6f3a97a29cb329af) — adds `telemetry_tick` + `haptic_event` validation/routing, derived haptic cues, physical-client rate limiting, legacy `ac-copilot-screen-*` routing, signed slip, partial tyre maps, and protocol docs. Closes [#118](https://github.com/agorokh/ac-copilot-trainer/issues/118). |
+
+## What was delivered (PR #197 — 2026-06-16)
+
+| Area | Artefact |
+|------|----------|
+| WS lifecycle reconnect | PR [#197](https://github.com/agorokh/ac-copilot-trainer/pull/197) merged at [`392a868`](https://github.com/agorokh/ac-copilot-trainer/commit/392a8688d716a33dffad20cbf2a38a0c7ea17b90) — `ws_bridge.openEpoch()` exposes CSP socket-open epochs, stale `onOpen` callbacks are ignored, and `ac_copilot_trainer.lua` re-arms lifecycle `session` emission on epoch changes even when the connected boolean remains true. Closes [#183](https://github.com/agorokh/ac-copilot-trainer/issues/183). |
 
 ## What was delivered (PR #165 — 2026-06-13)
 

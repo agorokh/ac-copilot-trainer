@@ -59,6 +59,19 @@ session/car/track. See
 [docs/10_Development/13_Lap_Archive_Export.md](docs/10_Development/13_Lap_Archive_Export.md)
 for supported channels and compatibility limits.
 
+## MoTeC Reference Lap Import
+
+Convert a MoTeC CSV export into the trainer's `journal/laps/` schema-v1 archive:
+
+```bash
+python -m tools.import_motec sample.csv --car <car_id> --track <track_id> --track-length <meters>
+```
+
+Use `--output-dir` to target a specific `journal/laps` directory, or set
+`AC_COPILOT_LAP_ARCHIVE_DIR`. In-game, enable **Prefer imported reference over local PB** in
+Settings to use a faster imported lap as the active coaching reference. Imported laps never count
+as the user's local PB.
+
 ## Architecture
 
 See [docs/01_Vault/AcCopilotTrainer/00_System/Architecture Invariants.md](docs/01_Vault/AcCopilotTrainer/00_System/Architecture%20Invariants.md)

@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-13T00:00:00Z
+last_updated: 2026-06-16T09:14:30Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -51,6 +51,8 @@ Surface map of both apps lives in `[csp-app-pocket-tech-setup-exchange-2026-04-2
 
 **New discovery**: `[10_Rig/physical-rig-integration-epic-59.md](../10_Rig/physical-rig-integration-epic-59.md)` captures the full scope — Arduino UNO (fan + OLED + seat vibration motors + pedal haptics), ESP32 touch dashboard (**Stream A is this**), Dayton BST-1 under-seat shaker (**done as Phase 1R**), salvaged Xbox controller motors for pedal haptics, full pin map.
 
+**Protocol update (2026-06-16):** PR [#203](https://github.com/agorokh/ac-copilot-trainer/pull/203) delivered the sidecar `telemetry_tick` / `haptic_event` route for physical peripherals, including legacy rig-screen classification and haptics-only fan-out. Downstream hardware firmware can now consume a stable sidecar contract; active dev focus still stays on #190 / carcsw productionization.
+
 Stream A is the first slice of this epic. Phase 3b (side bolster motors) and Phase 4 (pedal haptics) land after Phase 2 screen is fully wired.
 
 ## Stream D — PR #75 in-game smoke test (carried-over)
@@ -63,6 +65,11 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-16** — PR [#200](https://github.com/agorokh/ac-copilot-trainer/pull/200) **MERGED** at `ee25118` — detect-and-retry AC entry launcher; closes [#177](https://github.com/agorokh/ac-copilot-trainer/issues/177). Adds `tools/ac_harness/entry_launcher.py`, a pluggable `EntryLauncher`, default `ColdRestartActuator`, atomic `race.ini` `SPAWN_SET=PIT` normalization, retry/relaunch loop around `DrivingEntryDetector`, and CLI timing knobs. Classification: no post-merge flags. Mac-side verification is complete; live Windows/AC rig verification remains the next runtime smoke. Active focus remains #190.
+- **2026-06-16** — PR [#207](https://github.com/agorokh/ac-copilot-trainer/pull/207) **MERGED** at `0c637e3` — MoTeC CSV reference-lap importer plus opt-in imported-reference activation; closes [#79](https://github.com/agorokh/ac-copilot-trainer/issues/79). Imported laps write schema-v1 `source="imported"` / `import_format="motec_csv"` archive JSON and can drive realtime coaching only when faster than the local PB, without overwriting local PB persistence. Classification: no post-merge flags. Active focus remains #190.
+- **2026-06-16** — PR [#203](https://github.com/agorokh/ac-copilot-trainer/pull/203) **MERGED** at `e5103be` — sidecar physical-peripheral protocol (`telemetry_tick`, `haptic_event`), derived haptic cues, haptics/screen routing, signed slip, partial tyre maps, legacy `ac-copilot-screen-*` classification; closes [#118](https://github.com/agorokh/ac-copilot-trainer/issues/118). No migration/env/deps/script/workflow post-merge flags; active focus remains #190.
+- **2026-06-16** — PR [#198](https://github.com/agorokh/ac-copilot-trainer/pull/198) **MERGED** at `4a8ab98` — CI policy now accepts documented `vault/post-merge-pr<N>` handoff branches via `vault/`; closes [#179](https://github.com/agorokh/ac-copilot-trainer/issues/179). Classification: `scripts/` changed; no runtime/migration action. Active focus remains #190.
+- **2026-06-16** — PR [#197](https://github.com/agorokh/ac-copilot-trainer/pull/197) **MERGED** at `392a868` — `ws_bridge.openEpoch()` reconnect re-arm for lifecycle `session` emission; closes [#183](https://github.com/agorokh/ac-copilot-trainer/issues/183). No migration/env/deps/script/workflow post-merge flags; active focus remains #190.
 - **2026-06-13** — PR [#165](https://github.com/agorokh/ac-copilot-trainer/pull/165) **MERGED** at `1a08d45` — fleet-propagated `secrets-from-doppler` Scope-clause CI drift-guard (`tests/test_invariants_present.py`; template-repo#308/#309). Infra only; does not move Stream A / EPIC #154.
 - **2026-05-17** — PR [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) **MERGED** at `ac810c0` — PT row BB chip refresh (LVGL + Lua `chipInt` + firmware JSON int path); closes [#93](https://github.com/agorokh/ac-copilot-trainer/issues/93).
 - **2026-05-17** — PR [#99](https://github.com/agorokh/ac-copilot-trainer/pull/99) **MERGED** at `ebdef7e` — `tools/session_journal.py` loader hardening + tests; closes [#97](https://github.com/agorokh/ac-copilot-trainer/issues/97).
@@ -78,4 +85,3 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 - **2026-04-14** — PR [#75](https://github.com/agorokh/ac-copilot-trainer/pull/75) Ollama corner coaching + CSP cdata-callable fixes.
 - **2026-04-07** — PR [#73](https://github.com/agorokh/ac-copilot-trainer/pull/73) Phase-5 HUD rebuild + bundled Michroma/Montserrat/Syncopate fonts + `FIXED_SIZE` manifest.
 - **2026-04-06** — PR [#70](https://github.com/agorokh/ac-copilot-trainer/pull/70) visual design match with Figma spec.
-

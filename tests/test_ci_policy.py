@@ -33,6 +33,7 @@ def ci_policy_mod():
         "dependabot/pip/foo",
         "cursor/feat_issue-1_x",
         "renovate/configure",
+        "vault/post-merge-pr176",
     ],
 )
 def test_validate_branch_accepts_allowed(ci_policy_mod, branch: str) -> None:
@@ -154,6 +155,22 @@ def test_main_pull_request_valid(
         "pull_request": {
             "title": "chore: do something",
             "head": {"ref": "chore/issue-99-x"},
+        }
+    }
+    p = tmp_path / "event.json"
+    p.write_text(json.dumps(ev), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(p))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    assert ci_policy_mod.main() == 0
+
+
+def test_main_pull_request_vault_branch_valid(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ci_policy_mod
+) -> None:
+    ev = {
+        "pull_request": {
+            "title": "docs(vault): post-merge handoff for PR #176",
+            "head": {"ref": "vault/post-merge-pr176"},
         }
     }
     p = tmp_path / "event.json"
