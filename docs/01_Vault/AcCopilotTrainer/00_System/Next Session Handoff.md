@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-15T23:35:00Z
+last_updated: 2026-06-15T23:50:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -25,7 +25,7 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-15 latest — #180 Part D step 2 COMPLETE in code: all 5 WS producers merged (#185, `64a127e`); in-game tire_temps.rr verification is the ONLY open gate)
+## Resume here (2026-06-15 latest — #180 Part D step 2 DONE: all 5 WS producers merged (#185, `64a127e`) AND tire_temps VERIFIED operator-grade in-game)
 
 **[#185](https://github.com/agorokh/ac-copilot-trainer/pull/185) MERGED (squash `64a127e`).** The final two declared producers — `delta` + `tire_temps` (`modules/telemetry_publisher.lua`) — plus a real bug fix surfaced by operator-grade live verification. **All 5 KNOWN_TOPICS producers now exist** (connection/session/lap from #182; delta/tire_temps from #185; coaching.snapshot/setup.active pre-existing).
 
@@ -33,12 +33,12 @@ relates_to:
 
 **Other hardening (11 review threads, Cursor + CodeRabbit + codex):** delta now publishes **only when the lap clock is start/finish-aligned** ([`01_Decisions/delta-clock-boundary-alignment`](../01_Decisions/delta-clock-boundary-alignment.md)) — no bogus delta across lap boundaries, spline-only resets, teleports (guarded `car.resetCounter` via new `csp_helpers.safeCarField`), or mid-track clock seeds. Lap-boundary finalize gated on `not teleported`. Non-finite (NaN/inf) temps + delta_s/spline filtered. 48 lua tests.
 
-**THE OPEN GATE (anti-false-green):** in-game reconcile `tire_temps {fl,fr,rl,rr}` vs the physics oracle on the next live drive — `rr` must be **non-zero** and all four aligned. Harness ready: `python .scratch/diag_wheels.py` (emits PASS/FAIL; needs AC live + ON TRACK). The module is symlinked into AC apps → live on next relaunch. Until observed, #180 Part D is NOT "fully operational."
+**GATE CLOSED — VERIFIED operator-grade (2026-06-15, live drive).** `.scratch/diag_wheels.py` reconciled the trainer's `tire_temps` against the physics oracle wheel-by-wheel: **FL 48.92 vs 49.0 · FR 42.33 vs 42.4 · RL 57.18 vs 57.2 · RR 48.59 vs 48.7** — all four within ~0.1 °C and **RR non-zero** (was 0 pre-fix). The 0-indexed-wheels fix is correct against reality. A 20 s mid-session tap also confirmed the broader pipeline live: connection=19, lap=1, **delta=198**, tire_temps=99, coaching.snapshot=198. **#180 Part D step 2 is fully operational.** (Operator note: AC was running the whole time — my earlier "AC down" reads were a bad process check (`acs` vs the full set); the only real gate was being on track.)
 
 **Follow-up filed:** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) — rolling-state reset on a wrap-shaped same-lap teleport on CSP builds lacking `car.resetCounter` (low-severity; first action: confirm resetCounter is present on the rig, likely mooting it). The delta-leak half is already fixed.
 
 **Next deliverable (Part E) — STARTED:** [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) filed (carcsw Custom-AI-mmap driver + L1.5 probe, grounded plan).
-- **L1.5 sequence probe — DRAFT [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) (`tools/ac_harness/sequence_probe.py`, branch `feat/issue-190-l15-sequence-probe`).** Pure `evaluate_sequence()` asserts the declared-topic presence (connection/session/lap/delta/tire_temps/coaching.snapshot) + the session-before-lap ordering (#182 contract); 9 off-sim synthetic tests pass, ruff clean. **DON'T rebuild it.** It's DRAFT pending in-sim observation — on the next drive run `python -m tools.ac_harness.sequence_probe` (taps 20 s) to verify all 5 producers end-to-end, alongside `.scratch/diag_wheels.py`.
+- **L1.5 sequence probe — DRAFT [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) (`tools/ac_harness/sequence_probe.py`, branch `feat/issue-190-l15-sequence-probe`).** Pure `evaluate_sequence()` checks CONTINUOUS-stream presence (connection/tire_temps/coaching.snapshot) + session-before-lap ordering; lifecycle topics (session/lap/delta) are conditional notes by default, required under `strict_lifecycle=True`. 12 off-sim tests, ruff clean. **DON'T rebuild it.** **Run by file path** (`python tools/ac_harness/sequence_probe.py`, NOT `-m` — the `tools` package doesn't resolve via `-m`); it taps 20 s. **Partially live-validated** 2026-06-15: a mid-session tap confirmed the pipeline (delta=198 etc.); running it live surfaced + fixed a probe flaw (mid-session taps miss the `session` event → now a note, not a fail). Remaining: a clean live PASS over an active-driving window (the operator stopped between taps).
 - **Remaining Part E (NOT built):** the `carcsw` **Custom AI mmap writer** — the actuation keystone that lets the agent drive car 0 itself (no operator lap). Build-time research needed: `cai_car_data`/`cai_wheel_data` struct layout + mmap name from cup.acstuff.club/docs/csp/other-things/custom-ai. Off-sim-testable like #175's reader; in-sim driving gated. **This is the unblock for self-verification without the operator** — the EPIC #154 throughline.
 - **Constraint:** the agent CANNOT launch AC (Steam-integrity). L1.5 still needs ONE operator action (launch AC + sit on track), then the agent drives+asserts. Full hands-off (L2) needs the operator-gated control-channel daemon.
 
