@@ -958,6 +958,7 @@ function M.tick(simTime)
       end
     elseif externalHelloAcked then
       externalHelloPending = false
+      M.sendSetupExperimentStorePath()
     end
     return
   end
