@@ -18,10 +18,12 @@ Run from the repository root:
 python -m tools.lap_archive_export --output exports/laps.csv /path/to/journal/laps
 ```
 
-Directories are expanded to sorted `lap_*.json` files. Laps with
-`lap.is_valid=false` are skipped by default; pass `--include-invalid` when you
-want to inspect invalidated laps. Analysis CSV exports stream archive files one
-at a time and replace the output only after the export completes.
+Directories are expanded to sorted `lap_*.json` files. Output paths are
+relative to the current working directory; absolute paths and `..` escapes are
+rejected. Laps with `lap.is_valid=false` are skipped by default; pass
+`--include-invalid` when you want to inspect invalidated laps. Analysis CSV
+exports stream archive files one at a time and replace the output only after
+the export completes.
 
 Stable columns:
 

@@ -39,8 +39,8 @@ def _write_archive(
                 "track": {"id": track_id},
                 "lap": lap,
                 "trace": {
-                    "fields": fields or ["eMs", "speed"],
-                    "samples": samples or [[0, 80.0]],
+                    "fields": ["eMs", "speed"] if fields is None else fields,
+                    "samples": [[0, 80.0]] if samples is None else samples,
                 },
             }
         ),
@@ -48,8 +48,9 @@ def _write_archive(
     )
 
 
-def test_csv_export_produces_stable_columns_from_fixture(tmp_path: Path) -> None:
-    out = tmp_path / "lap.csv"
+def test_csv_export_produces_stable_columns_from_fixture(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    out = Path("lap.csv")
     count = lap_archive_export.export_csv([_FIXTURES / "lap_archive_valid.json"], out)
 
     rows = _rows(out)
@@ -69,9 +70,12 @@ def test_csv_export_produces_stable_columns_from_fixture(tmp_path: Path) -> None
     assert rows[1]["position_z_m"] == "30"
 
 
-def test_invalid_laps_are_filtered_by_default_and_can_be_included(tmp_path: Path) -> None:
-    default_out = tmp_path / "default.csv"
-    include_out = tmp_path / "include.csv"
+def test_invalid_laps_are_filtered_by_default_and_can_be_included(
+    tmp_path: Path, monkeypatch
+) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    default_out = Path("default.csv")
+    include_out = Path("include.csv")
     inputs = [
         _FIXTURES / "lap_archive_valid.json",
         _FIXTURES / "lap_archive_invalid.json",
@@ -86,8 +90,9 @@ def test_invalid_laps_are_filtered_by_default_and_can_be_included(tmp_path: Path
     assert {row["lap_uuid"] for row in _rows(include_out)} == {"lap-valid", "lap-invalid"}
 
 
-def test_missing_trace_fields_export_as_blank_cells(tmp_path: Path) -> None:
-    out = tmp_path / "missing.csv"
+def test_missing_trace_fields_export_as_blank_cells(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    out = Path("missing.csv")
 
     count = lap_archive_export.export_csv([_FIXTURES / "lap_archive_missing_fields.json"], out)
 
@@ -104,8 +109,9 @@ def test_missing_trace_fields_export_as_blank_cells(tmp_path: Path) -> None:
     assert row["lap_distance_m"] == ""
 
 
-def test_motec_csv_export_writes_quoted_header_units_and_rows(tmp_path: Path) -> None:
-    out = tmp_path / "lap_motec.csv"
+def test_motec_csv_export_writes_quoted_header_units_and_rows(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    out = Path("lap_motec.csv")
 
     count = lap_archive_export.export_motec_csv([_FIXTURES / "lap_archive_valid.json"], out)
 
@@ -122,10 +128,11 @@ def test_motec_csv_export_writes_quoted_header_units_and_rows(tmp_path: Path) ->
     assert rows[12][3] == "70"
 
 
-def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path) -> None:
+def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
     first = tmp_path / "lap_001.json"
     second = tmp_path / "lap_002.json"
-    out = tmp_path / "fallback_motec.csv"
+    out = Path("fallback_motec.csv")
 
     _write_archive(
         first,
@@ -152,10 +159,11 @@ def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path) -> 
     assert [row[12] for row in data_rows] == ["3", "3", "3", "2", "2"]
 
 
-def test_motec_csv_beacons_follow_exported_sample_range(tmp_path: Path) -> None:
+def test_motec_csv_beacons_follow_exported_sample_range(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
     first = tmp_path / "lap_001.json"
     second = tmp_path / "lap_002.json"
-    out = tmp_path / "sparse_motec.csv"
+    out = Path("sparse_motec.csv")
     _write_archive(
         first,
         lap_uuid="complete-lap",
@@ -184,10 +192,41 @@ def test_motec_csv_beacons_follow_exported_sample_range(tmp_path: Path) -> None:
     assert [row[12] for row in data_rows] == ["3", "3", "91", "91"]
 
 
-def test_motec_csv_rejects_mixed_session_inputs(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
+def test_motec_csv_ignores_empty_trace_for_beacons_and_offsets(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
     first = tmp_path / "lap_001.json"
     second = tmp_path / "lap_002.json"
-    out = tmp_path / "mixed_motec.csv"
+    out = Path("empty_trace_motec.csv")
+    _write_archive(
+        first,
+        lap_uuid="empty-trace-lap",
+        lap_n=1,
+        lap_ms=90000,
+        samples=[],
+    )
+    _write_archive(
+        second,
+        lap_uuid="timed-lap",
+        lap_n=2,
+        lap_ms=3000,
+        samples=[[0, 90.0], [3000, 120.0]],
+    )
+
+    count = lap_archive_export.export_motec_csv([first, second], out)
+
+    assert count == 2
+    with out.open("r", encoding="utf-8", newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[5][5] == "3"
+    assert rows[8] == ["Beacon Markers", "3"]
+    assert [row[0] for row in rows[11:]] == ["0", "3"]
+
+
+def test_motec_csv_rejects_mixed_session_inputs(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    first = tmp_path / "lap_001.json"
+    second = tmp_path / "lap_002.json"
+    out = Path("mixed_motec.csv")
     _write_archive(first, lap_uuid="session-a-lap", session_uuid="session-a")
     _write_archive(second, lap_uuid="session-b-lap", session_uuid="session-b")
 
@@ -201,8 +240,9 @@ def test_motec_csv_rejects_mixed_session_inputs(tmp_path: Path, capsys) -> None:
     assert not out.exists()
 
 
-def test_cli_writes_csv(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
-    out = tmp_path / "cli.csv"
+def test_cli_writes_csv(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    out = Path("cli.csv")
 
     rc = lap_archive_export.main(["--output", str(out), str(_FIXTURES / "lap_archive_valid.json")])
 
@@ -212,9 +252,10 @@ def test_cli_writes_csv(tmp_path: Path, capsys) -> None:  # type: ignore[no-unty
     assert _rows(out)[0]["lap_uuid"] == "lap-valid"
 
 
-def test_cli_rejects_missing_input_path(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
-    out = tmp_path / "cli.csv"
-    missing = tmp_path / "missing.json"
+def test_cli_rejects_missing_input_path(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    out = Path("cli.csv")
+    missing = Path("missing.json")
 
     rc = lap_archive_export.main(["--output", str(out), str(missing)])
 
@@ -222,3 +263,29 @@ def test_cli_rejects_missing_input_path(tmp_path: Path, capsys) -> None:  # type
     assert rc == 2
     assert "input path does not exist" in captured.err
     assert not out.exists()
+
+
+def test_cli_rejects_absolute_output_path(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    out = tmp_path / "absolute.csv"
+
+    rc = lap_archive_export.main(["--output", str(out), str(_FIXTURES / "lap_archive_valid.json")])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "output path must be relative" in captured.err
+    assert not out.exists()
+
+
+def test_cli_rejects_escaping_output_path(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    escaped = tmp_path.parent / "escaped-laps.csv"
+
+    rc = lap_archive_export.main(
+        ["--output", "../escaped-laps.csv", str(_FIXTURES / "lap_archive_valid.json")]
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "output path must stay within" in captured.err
+    assert not escaped.exists()

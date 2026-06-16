@@ -12,6 +12,7 @@ import csv
 import json
 import math
 import sys
+import tempfile
 from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -224,8 +225,32 @@ def _iter_loaded_archives(
             yield path, record
 
 
-def _temporary_output_path(output_path: Path) -> Path:
-    return output_path.with_name(f".{output_path.name}.tmp")
+def _resolve_output_path(output: str | Path) -> Path:
+    raw_path = Path(output)
+    if raw_path.is_absolute():
+        raise LapArchiveExportError(f"{raw_path}: output path must be relative")
+
+    base_dir = Path.cwd().resolve()
+    output_path = (base_dir / raw_path).resolve()
+    try:
+        output_path.relative_to(base_dir)
+    except ValueError as exc:
+        raise LapArchiveExportError(f"{raw_path}: output path must stay within {base_dir}") from exc
+    if output_path.exists() and output_path.is_dir():
+        raise LapArchiveExportError(f"{raw_path}: output path must be a file")
+    return output_path
+
+
+def _open_temporary_output(output_path: Path) -> tempfile._TemporaryFileWrapper[str]:
+    return tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        newline="",
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
 
 
 def export_csv(
@@ -235,21 +260,24 @@ def export_csv(
     include_invalid: bool = False,
 ) -> int:
     """Write stable analysis CSV rows. Returns rows written."""
-    output_path = Path(output)
+    output_path = _resolve_output_path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _temporary_output_path(output_path)
+    tmp_path: Path | None = None
     rows_written = 0
     try:
-        with tmp_path.open("w", encoding="utf-8", newline="") as fh:
+        with _open_temporary_output(output_path) as fh:
+            tmp_path = Path(fh.name)
             writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS, lineterminator="\n")
             writer.writeheader()
             archives = _iter_loaded_archives(inputs, include_invalid=include_invalid)
             for row in iter_csv_rows(archives):
                 writer.writerow({column: _format_cell(row.get(column)) for column in CSV_COLUMNS})
                 rows_written += 1
+        assert tmp_path is not None
         tmp_path.replace(output_path)
     except Exception:
-        tmp_path.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
         raise
     return rows_written
 
@@ -364,10 +392,7 @@ def _lap_duration_s(record: dict[str, Any]) -> float:
 
 
 def _lap_export_duration_s(record: dict[str, Any]) -> float:
-    trace_duration_s = _trace_duration_s(record)
-    if trace_duration_s > 0:
-        return trace_duration_s
-    return _lap_duration_s(record)
+    return _trace_duration_s(record)
 
 
 def _iter_motec_archive_rows(
@@ -380,7 +405,9 @@ def _iter_motec_archive_rows(
     for row in iter_csv_rows([archive]):
         motec = dict(row)
         raw_time = _as_finite_float(row.get("time_s"))
-        motec["time_s"] = (offset_s + raw_time) if raw_time is not None else offset_s
+        if raw_time is None:
+            continue
+        motec["time_s"] = offset_s + raw_time
         brake = _as_finite_float(row.get("brake"))
         throttle = _as_finite_float(row.get("throttle"))
         motec["brake_pct"] = brake * 100.0 if brake is not None else None
@@ -435,7 +462,7 @@ def _scan_motec_archives(archives: Iterable[tuple[Path, dict[str, Any]]]) -> dic
                 end_distance_m = max(end_distance_m, distance_m)
 
         duration_s = _lap_export_duration_s(record)
-        if duration_s > 0:
+        if duration_s > 0 and row_count > 0:
             beacon_markers.append(offset_s + duration_s)
         offset_s += duration_s
 
@@ -472,12 +499,13 @@ def export_motec_csv(
     """
     paths = list(iter_lap_archive_paths(inputs))
     stats = _scan_motec_archives(_iter_loaded_archives(paths, include_invalid=include_invalid))
-    output_path = Path(output)
+    output_path = _resolve_output_path(output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = _temporary_output_path(output_path)
+    tmp_path: Path | None = None
     rows_written = 0
     try:
-        with tmp_path.open("w", encoding="utf-8", newline="") as fh:
+        with _open_temporary_output(output_path) as fh:
+            tmp_path = Path(fh.name)
             writer = csv.writer(fh, quoting=csv.QUOTE_ALL, lineterminator="\n")
             first_archive = stats.get("first_archive")
             for header_row in _motec_header(first_archive, stats):
@@ -488,9 +516,11 @@ def export_motec_csv(
             for row in _iter_motec_rows(archives):
                 writer.writerow([_format_cell(row.get(key)) for _, _, key in _MOTEC_CHANNELS])
                 rows_written += 1
+        assert tmp_path is not None
         tmp_path.replace(output_path)
     except Exception:
-        tmp_path.unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
         raise
     return rows_written
 
