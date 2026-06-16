@@ -152,6 +152,13 @@ def is_supported_lap_archive_path(path: str | os.PathLike[str]) -> bool:
     return "/journal/laps/" in low and name.startswith("lap_") and name.endswith(".json")
 
 
+def is_supported_experiment_store_path(path: str | os.PathLike[str]) -> bool:
+    """Conservative guard for Lua-registered setup experiment store paths."""
+    low = str(path).replace("\\", "/").lower()
+    suffix = "journal/setup_experiments/experiments.jsonl"
+    return low == suffix or low.endswith("/" + suffix)
+
+
 def load_lap_archive(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
         raw = Path(path).read_text(encoding="utf-8")

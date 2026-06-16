@@ -110,6 +110,11 @@ local EXTERNAL_HELLO_RETRY_FRAMES = 12
 --- Emit at most one hello-retry diagnostic per this many actual sends so a
 --- (briefly) unresponsive sidecar cannot spam the CSP console (Qodo on PR #91).
 local EXTERNAL_HELLO_LOG_EVERY_SENDS = 10
+--- Canonical setup experiment JSONL path, registered with the trusted local
+--- sidecar after each v1 handshake so compare/suggest can read rebuilt rows
+--- immediately after sidecar restart.
+local setupExperimentStorePath = nil
+local setupExperimentStoreSent = false
 --- Forward declaration — assigned where `tryOpen` is defined (used before spawn).
 local tryOpen
 
@@ -138,6 +143,7 @@ function M.configure(u)
   nonzeroExitStreak = 0
   spawnAbandonUntilT = -1e9
   lastBackoffTryOpenT = -1e9
+  setupExperimentStoreSent = false
 end
 
 --- Issue #77 Part A: spawn the Python sidecar if it isn't already listening.
@@ -167,6 +173,7 @@ function M.startSidecarIfNeeded(appDir)
     sock = nil
     lastTry = -RECONNECT_SEC
     sidecarProtocolReady = false
+    setupExperimentStoreSent = false
     -- One-shot zombie cleanup: do not keep closing a user-opened manual socket (Codex #78).
     sidecarChildEverLaunched = false
   end
@@ -319,6 +326,7 @@ function M.reset()
   nonzeroExitStreak = 0
   spawnAbandonUntilT = -1e9
   lastBackoffTryOpenT = -1e9
+  setupExperimentStoreSent = false
 end
 
 --- Drop queued sidecar response without closing the socket (e.g. lap counter reset).
@@ -459,6 +467,7 @@ tryOpen = function()
   end
   _recvQueue = {}
   sidecarProtocolReady = false
+  setupExperimentStoreSent = false
   -- Mark that we owe the sidecar a hello on this socket. The actual send is
   -- retried from M.tick() until `sidecarProtocolReady` flips (set when the
   -- sidecar's v1 hello_ack arrives) — this is the only reliable signal that
@@ -486,6 +495,7 @@ tryOpen = function()
       sidecarProtocolReady = false
       externalHelloAcked = false
       externalHelloPending = true
+      setupExperimentStoreSent = false
       helloRetryFrames = 0
       helloSendCount = 0
       -- Always announce hello on onOpen. The previous "inline hello + dedup"
@@ -512,6 +522,7 @@ tryOpen = function()
         sock = nil
         lastTry = -RECONNECT_SEC
         sidecarProtocolReady = false
+        setupExperimentStoreSent = false
       end
     end,
     encoding = "utf8",
@@ -646,6 +657,7 @@ function M.pollInbound(maxPerTick)
           -- legacy-inclusive `sidecarProtocolReady` — gates the v1 publish path
           -- and the hello-retry stop (chatgpt-codex P1 on PR #171).
           externalHelloAcked = true
+          M.sendSetupExperimentStorePath()
         end
         if t == "error" then
           if ac and type(ac.log) == "function" then
@@ -767,15 +779,17 @@ function M.pollInbound(maxPerTick)
           -- Sidecar / trainer lifecycle frames — intentionally ignored here
           -- (see comment after the generic-dispatch block). Do not route them
           -- through the request-handler `else` or they spam diagnostics.
-        elseif t == "setup.experiment.record.ack"
+        elseif t == "setup.experiment.store.ack"
+            or t == "setup.experiment.record.ack"
             or t == "setup.compare.result"
             or t == "setup.suggest.result" then
           -- Sidecar-local setup optimizer replies. Lua only initiates record
-          -- ingestion after archive writes; compare/suggest are for external
-          -- clients, so accept these quietly if the sidecar fans them back.
-          if t == "setup.experiment.record.ack" and data.ok == false
+          -- store registration and record ingestion; compare/suggest are for
+          -- external clients, so accept these quietly if fanned back.
+          if (t == "setup.experiment.store.ack" or t == "setup.experiment.record.ack")
+              and data.ok == false
               and ac and type(ac.log) == "function" then
-            pcall(ac.log, "[COPILOT][SETUP-OPT] record failed: " .. tostring(data.error))
+            pcall(ac.log, "[COPILOT][SETUP-OPT] sidecar ack failed: " .. tostring(data.error))
           end
         elseif type(t) == "string" and t:sub(1, 6) == "state." then
           -- Passive telemetry envelopes (`state.snapshot`, etc.) are fanned by
@@ -969,6 +983,7 @@ function M.sendJson(payload)
     sock = nil
     lastTry = -RECONNECT_SEC
     sidecarProtocolReady = false
+    setupExperimentStoreSent = false
     return false
   end
   return true
@@ -998,6 +1013,36 @@ function M.publishTopic(topic, payload)
     topic = topic,
     payload = payload or {},
   })
+end
+
+--- Register the canonical setup experiment JSONL path with the sidecar.
+---@param storePath string|nil
+---@return boolean
+function M.setSetupExperimentStorePath(storePath)
+  if type(storePath) ~= "string" or storePath == "" then return false end
+  setupExperimentStorePath = storePath
+  setupExperimentStoreSent = false
+  if sock and externalHelloAcked then
+    return M.sendSetupExperimentStorePath()
+  end
+  return true
+end
+
+--- Send the setup experiment store path after the v1 sidecar handshake.
+---@return boolean
+function M.sendSetupExperimentStorePath()
+  if type(setupExperimentStorePath) ~= "string" or setupExperimentStorePath == "" then return false end
+  if setupExperimentStoreSent then return true end
+  if not (sock and externalHelloAcked) then return false end
+  local ok = M.sendJson({
+    v = PROTOCOL_VERSION,
+    type = "setup.experiment.store",
+    store_path = setupExperimentStorePath,
+  })
+  if ok then
+    setupExperimentStoreSent = true
+  end
+  return ok
 end
 
 --- Notify the Python sidecar that a PR #78 lap archive is available for setup

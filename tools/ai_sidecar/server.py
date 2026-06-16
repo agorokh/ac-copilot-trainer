@@ -42,6 +42,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SETUP_COMPARE_RESULT,
     TYPE_SETUP_EXPERIMENT_RECORD,
     TYPE_SETUP_EXPERIMENT_RECORD_ACK,
+    TYPE_SETUP_EXPERIMENT_STORE,
+    TYPE_SETUP_EXPERIMENT_STORE_ACK,
     TYPE_SETUP_LIST,
     TYPE_SETUP_LIST_RESULT,
     TYPE_SETUP_LOAD,
@@ -67,6 +69,7 @@ from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
     SetupExperimentError,
     compare_setups,
+    is_supported_experiment_store_path,
     load_records,
     rebuild_experiments,
     record_lap_archive,
@@ -103,6 +106,7 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         # "Loading…" forever.
         TYPE_SETUP_LIST,
         TYPE_SETUP_LOAD,
+        TYPE_SETUP_EXPERIMENT_STORE,
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
@@ -119,6 +123,7 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         # Issue #86 Part D: replies the Lua peer sends back to the screen.
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
+        TYPE_SETUP_EXPERIMENT_STORE_ACK,
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
@@ -126,6 +131,7 @@ SERVER_TO_CLIENT_TYPES = frozenset(
 )
 SIDECAR_LOCAL_TYPES = frozenset(
     {
+        TYPE_SETUP_EXPERIMENT_STORE,
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
@@ -386,14 +392,55 @@ async def _safe_send_raw(websocket: Any, payload: str) -> Exception | None:
 async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Handle setup optimizer frames in the sidecar itself.
 
-    The Lua app sends ``setup.experiment.record`` after writing a lap archive.
-    External clients can then ask the same sidecar for ``setup.compare`` or
-    ``setup.suggest`` without inventing another daemon.  Arbitrary file reads
-    stay loopback-only: only the Lua peer may provide ``archive_path``.
+    The Lua app sends ``setup.experiment.store`` after the v1 handshake and
+    ``setup.experiment.record`` after writing a lap archive. External clients
+    can then ask the same sidecar for ``setup.compare`` or ``setup.suggest``
+    without inventing another daemon. Arbitrary file reads stay loopback-only:
+    only the Lua peer may provide filesystem paths.
     """
     global _setup_experiment_store_path
 
     t = data.get(TYPE_KEY)
+    if t == TYPE_SETUP_EXPERIMENT_STORE:
+        if not _is_loopback_peer(websocket):
+            await _safe_send(
+                websocket,
+                {
+                    ENVELOPE_KEY: ENVELOPE_VERSION,
+                    TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
+                    "ok": False,
+                    "error": "setup experiment store registration is loopback-only",
+                },
+            )
+            return
+        store_path_text = str(data.get("store_path") or data.get("path") or "")
+        if not is_supported_experiment_store_path(store_path_text):
+            await _safe_send(
+                websocket,
+                {
+                    ENVELOPE_KEY: ENVELOPE_VERSION,
+                    TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
+                    "ok": False,
+                    "store_path": store_path_text,
+                    "error": (
+                        "store_path must point to journal/setup_experiments/experiments.jsonl"
+                    ),
+                },
+            )
+            return
+        _setup_experiment_store_path = Path(store_path_text)
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_EXPERIMENT_STORE_ACK,
+                "ok": True,
+                "store_path": str(_setup_experiment_store_path),
+                "records": len(load_records(_setup_experiment_store_path)),
+            },
+        )
+        return
+
     if t == TYPE_SETUP_EXPERIMENT_RECORD:
         if not _is_loopback_peer(websocket):
             await _safe_send(
@@ -696,7 +743,13 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             await asyncio.gather(*pending_followups, return_exceptions=True)
 
 
-async def _run(host: str, port: int, reply_coaching: bool, token: str | None) -> None:
+async def _run(
+    host: str,
+    port: int,
+    reply_coaching: bool,
+    token: str | None,
+    setup_store: str | None = None,
+) -> None:
     global _setup_experiment_store_path
     try:
         import websockets
@@ -705,7 +758,7 @@ async def _run(host: str, port: int, reply_coaching: bool, token: str | None) ->
 
     process_request = make_process_request(token)
     _external_peers.clear()
-    _setup_experiment_store_path = None
+    _setup_experiment_store_path = Path(setup_store) if setup_store else None
     try:
         async with websockets.serve(
             lambda ws: _handler(ws, reply_coaching),
@@ -779,7 +832,10 @@ def main() -> None:
     p.add_argument(
         "--setup-store",
         metavar="EXPERIMENTS_JSONL",
-        help="Experiment JSONL path for setup record/rebuild/compare/suggest commands.",
+        help=(
+            "Experiment JSONL path for setup record/rebuild/compare/suggest commands; "
+            "also seeds WS compare/suggest when serving."
+        ),
     )
     p.add_argument(
         "--setup-compare",
@@ -843,7 +899,7 @@ def main() -> None:
         raise SystemExit("--token is required for non-loopback bind addresses")
 
     try:
-        asyncio.run(_run(host, args.port, reply, args.token))
+        asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))
     except KeyboardInterrupt:
         logger.info("sidecar stopped")
 

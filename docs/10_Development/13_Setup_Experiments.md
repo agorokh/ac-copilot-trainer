@@ -29,8 +29,16 @@ After a lap archive is written, Lua sends a best-effort v1 sidecar message:
 {"v":1,"type":"setup.experiment.record","archive_path":".../journal/laps/lap_...json"}
 ```
 
-The sidecar reads that archived lap and upserts one experiment row. If the
-sidecar was disconnected, no lap data is lost; rebuild from `journal/laps`.
+After the v1 sidecar handshake, Lua also registers the canonical store path:
+
+```json
+{"v":1,"type":"setup.experiment.store","store_path":".../journal/setup_experiments/experiments.jsonl"}
+```
+
+The sidecar reads archived laps and upserts experiment rows. If the sidecar was
+disconnected, no lap data is lost; rebuild from `journal/laps`. The store
+registration lets WebSocket compare/suggest requests use rebuilt rows
+immediately after sidecar restart.
 
 ## Rebuild And Reset
 
@@ -45,6 +53,13 @@ Use a custom store path for tests or exports:
 ```bash
 python -m tools.ai_sidecar --setup-rebuild-experiments "<...>/journal/laps" \
   --setup-store /tmp/ac-copilot-experiments.jsonl
+```
+
+Manual server launches can seed WebSocket compare/suggest from an existing
+store:
+
+```bash
+python -m tools.ai_sidecar --setup-store "<...>/experiments.jsonl"
 ```
 
 Reset experiments by deleting `journal/setup_experiments/experiments.jsonl`, or

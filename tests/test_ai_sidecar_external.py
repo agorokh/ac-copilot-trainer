@@ -34,6 +34,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _is_loopback,
     make_token_check,
 )
+from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
 
 
 def _free_port() -> int:
@@ -129,6 +130,16 @@ def test_validate_inbound_accepts_known_types() -> None:
         ep.validate_inbound(
             {
                 "v": 1,
+                "type": "setup.experiment.store",
+                "store_path": "journal/setup_experiments/experiments.jsonl",
+            }
+        )
+        is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
                 "type": "setup.compare",
                 "baseline_setup": "old",
                 "candidate_setup": "new",
@@ -156,6 +167,7 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "archive_path" in (
         ep.validate_inbound({"v": 1, "type": "setup.experiment.record"}) or ""
     )
+    assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
     assert "unknown type" in (ep.validate_inbound({"v": 1, "type": "explode"}) or "")
 
@@ -349,6 +361,42 @@ def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:
     assert result["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
     assert result["ok"] is True
     assert result["candidate"]["changed_params"]
+
+
+def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) -> None:
+    async def _run() -> tuple[dict, dict]:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 64)
+        _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 66)
+        rebuilt = rebuild_experiments(lap_dir)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.experiment.store",
+                            "store_path": rebuilt["store_path"],
+                        }
+                    )
+                )
+                store_ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(json.dumps({"v": 1, "type": "setup.suggest"}))
+                suggest = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return store_ack, suggest
+
+    store_ack, suggest = asyncio.run(_run())
+    assert store_ack["type"] == ep.TYPE_SETUP_EXPERIMENT_STORE_ACK
+    assert store_ack["ok"] is True
+    assert store_ack["records"] == 2
+    assert suggest["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
+    assert suggest["ok"] is True
+    assert suggest["candidate"]["changed_params"]
 
 
 def test_config_set_round_trip_via_hub() -> None:

@@ -385,6 +385,12 @@ local pendingWsSidecarUrl = nil
 local state
 
 wsBridge.configure(config.wsSidecarUrl or "")
+if wsBridge.setSetupExperimentStorePath then
+  pcall(function()
+    wsBridge.setSetupExperimentStorePath(
+      persistence.dataDir() .. "/journal/setup_experiments/experiments.jsonl")
+  end)
+end
 
 -- Issue #81: external WS clients (rig touchscreen) drive these via the sidecar.
 -- Each handler returns (applied:boolean, reason:string|nil); the bridge fans an
