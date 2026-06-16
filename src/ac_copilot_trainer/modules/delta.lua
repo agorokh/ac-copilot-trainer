@@ -120,6 +120,18 @@ function M.isBackwardSplineJump(prevSpline, spline)
   return ((spline or 0) - prevSpline) < SPLINE_REWIND_THRESHOLD
 end
 
+local function isLikelyLapWrap(prevSpline, spline)
+  return prevSpline ~= nil and prevSpline > 0.8 and (spline or 0) < 0.25
+end
+
+--- True when a backward jump has the same shape as a normal lap wrap.
+---@param prevSpline number|nil
+---@param spline number
+---@return boolean
+function M.isWrapShapedBackwardSplineJump(prevSpline, spline)
+  return M.isBackwardSplineJump(prevSpline, spline) and isLikelyLapWrap(prevSpline, spline)
+end
+
 --- True when the spline jumped backward in a way that should CLEAR rolling driving state (lap
 --- clock, coaching, aggregates) via resetRollingDrivingState. CONSERVATIVE: excludes a lap *wrap*
 --- (prev near 1.0 -> now near 0.0), because over-triggering here is NOT harmless — a false positive
@@ -134,8 +146,55 @@ function M.isBackwardSplineReset(prevSpline, spline)
   if not M.isBackwardSplineJump(prevSpline, spline) then
     return false
   end
-  local likelyWrap = prevSpline > 0.8 and (spline or 0) < 0.25
-  return not likelyWrap
+  return not isLikelyLapWrap(prevSpline, spline)
+end
+
+--- Decide whether the end-of-update rolling state should reset.
+---
+--- Wrap-shaped same-lap jumps are ambiguous on CSP builds without `car.resetCounter`: they might
+--- be a real lap wrap exposed one frame before `lapCount`, or a return-to-pits teleport landing
+--- near the start line. Defer exactly one frame; if `lapCount` advances, it was a lap wrap; if it
+--- does not, clear rolling state for the abandoned stint (#188).
+---@param opts table
+---@return table { reset: boolean, pendingWrapLapCount: number|nil }
+function M.rollingResetDecision(opts)
+  opts = opts or {}
+  local pendingWrapLapCount = opts.pendingWrapLapCount
+  local lastLapCount = opts.lastLapCount
+  local lapCount = opts.lapCount
+
+  if opts.teleported then
+    return { reset = true, pendingWrapLapCount = nil }
+  end
+
+  if type(lastLapCount) == "number"
+      and type(lapCount) == "number"
+      and lastLapCount >= 0
+      and lapCount < lastLapCount then
+    return { reset = true, pendingWrapLapCount = nil }
+  end
+
+  if pendingWrapLapCount ~= nil then
+    if type(lapCount) == "number" and lapCount > pendingWrapLapCount then
+      return { reset = false, pendingWrapLapCount = nil }
+    end
+    return { reset = true, pendingWrapLapCount = nil }
+  end
+
+  if type(lastLapCount) == "number"
+      and type(lapCount) == "number"
+      and lastLapCount >= 0
+      and lapCount == lastLapCount
+      and opts.prevSpline ~= nil then
+    if M.isBackwardSplineReset(opts.prevSpline, opts.spline) then
+      return { reset = true, pendingWrapLapCount = nil }
+    end
+    if M.isWrapShapedBackwardSplineJump(opts.prevSpline, opts.spline) then
+      return { reset = false, pendingWrapLapCount = lapCount }
+    end
+  end
+
+  return { reset = false, pendingWrapLapCount = nil }
 end
 
 --- Sector durations (ms) for three spline thirds: [0,1/3), [1/3,2/3), [2/3,1).
