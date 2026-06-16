@@ -2034,6 +2034,12 @@ function script.update(dt)
     if wsEpoch ~= nil then
       state._wsPrevOpenEpoch = wsEpoch
     end
+    if type(wsBridge.consumeSessionReplayRequest) == "function" then
+      local okReplay, replayRequested = pcall(wsBridge.consumeSessionReplayRequest)
+      if okReplay and replayRequested == true then
+        lifecyclePublisher.rearmSession()
+      end
+    end
     lifecyclePublisher.publishConnectionIfDue({
       dt = dt,
       car = car,
