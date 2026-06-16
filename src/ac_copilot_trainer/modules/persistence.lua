@@ -83,12 +83,16 @@ function M.dataDir()
   return base .. "/" .. APP_SUBDIR
 end
 
+function M.lapArchiveDir()
+  return M.dataDir() .. "/journal/laps"
+end
+
 function M.dataPath(car, sim)
   return M.dataDir() .. "/" .. M.sessionKey(car, sim) .. ".json"
 end
 
 local function jsonEncode(t)
-  if JSON and type(JSON.stringify) == "function" then
+  if JSON and JSON.stringify ~= nil then
     local ok, out = pcall(JSON.stringify, t, true)
     if ok and type(out) == "string" then
       return out
@@ -99,7 +103,7 @@ end
 
 --- One-line JSON for JSONL append (no pretty-print newlines).
 local function jsonEncodeCompact(t)
-  if JSON and type(JSON.stringify) == "function" then
+  if JSON and JSON.stringify ~= nil then
     local ok, out = pcall(JSON.stringify, t, false)
     if ok and type(out) == "string" then
       return out
@@ -116,7 +120,7 @@ local function jsonDecode(s)
   if not s or s == "" then
     return nil
   end
-  if JSON and type(JSON.parse) == "function" then
+  if JSON and JSON.parse ~= nil then
     local ok, out = pcall(JSON.parse, s)
     if ok and type(out) == "table" then
       return out
@@ -242,6 +246,37 @@ function M.ensureParentDirForFile(path)
   ensureDir(path)
 end
 
+--- Open the shared lap archive folder in Windows Explorer when CSP exposes a process launcher.
+---@return boolean ok, string message
+function M.openLapArchiveDir()
+  local dir = M.lapArchiveDir()
+  M.ensureParentDirForFile(dir .. "/_dummy")
+  if type(os) == "table" and type(os.runConsoleProcess) == "function" then
+    local ok, accepted, err = pcall(function()
+      return os.runConsoleProcess({
+        filename = "explorer.exe",
+        arguments = { dir },
+        workingDirectory = dir,
+        timeout = 0,
+        terminateWithScript = false,
+        inheritEnvironment = true,
+      }, function() end)
+    end)
+    if ok and accepted ~= false and accepted ~= nil then
+      return true, dir
+    end
+    return false, tostring(err or accepted or "runConsoleProcess returned nil")
+  end
+  if package and package.config and package.config:sub(1, 1) == "\\" and pathSafeForShell(dir) then
+    local winDir = dir:gsub("/", "\\")
+    local ok = pcall(os.execute, 'start "" "' .. winDir .. '"')
+    if ok then
+      return true, dir
+    end
+  end
+  return false, "folder opener unavailable"
+end
+
 --- Serialize a table to JSON when CSP `JSON.stringify` is available.
 ---@param t table
 ---@return string|nil
@@ -261,6 +296,158 @@ end
 ---@return table|nil
 function M.decodeJson(s)
   return jsonDecode(s)
+end
+
+local function archiveRecordCarTrackMatches(rec, car, sim)
+  if type(rec) ~= "table" then
+    return false
+  end
+  local recCar = rec.car and rec.car.id
+  local recTrack = rec.track and rec.track.id
+  if type(recCar) ~= "string" or recCar == "" or type(recTrack) ~= "string" or recTrack == "" then
+    return false
+  end
+  local carId = M.archiveCarIdFromCar(car) or ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = M.archiveTrackIdFromSim(sim) or ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  if recCar ~= carId or recTrack ~= trackId then
+    return false
+  end
+  local recLayout = rec.track and rec.track.layout
+  if type(recLayout) == "string" and recLayout ~= "" then
+    local curLayout = ch.safeTrackLayoutRaw()
+    if type(curLayout) == "string" and curLayout ~= "" and recLayout ~= ch.sanitizeId(curLayout, "") then
+      return false
+    end
+  end
+  return true
+end
+
+local function archiveTraceToObjects(rec)
+  if type(rec) ~= "table" or type(rec.trace) ~= "table" then
+    return {}
+  end
+  local fields = rec.trace.fields
+  local samples = rec.trace.samples
+  if type(fields) ~= "table" or type(samples) ~= "table" then
+    return {}
+  end
+  local idx = {}
+  for i = 1, #fields do
+    if type(fields[i]) == "string" then
+      idx[fields[i]] = i
+    end
+  end
+  if not idx.spline or not idx.speed or not idx.eMs then
+    return {}
+  end
+  local out = {}
+  for i = 1, #samples do
+    local row = samples[i]
+    if type(row) == "table" then
+      local spline = tonumber(row[idx.spline])
+      local speed = tonumber(row[idx.speed])
+      local eMs = tonumber(row[idx.eMs])
+      if spline ~= nil and speed ~= nil and eMs ~= nil then
+        out[#out + 1] = {
+          spline = spline,
+          speed = speed,
+          eMs = eMs,
+          throttle = tonumber(row[idx.throttle]) or 0,
+          brake = tonumber(row[idx.brake]) or 0,
+          steer = tonumber(row[idx.steer]) or 0,
+          gear = tonumber(row[idx.gear]) or 0,
+          px = tonumber(row[idx.px]) or 0,
+          py = tonumber(row[idx.py]) or 0,
+          pz = tonumber(row[idx.pz]) or 0,
+        }
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    return (a.spline or 0) < (b.spline or 0)
+  end)
+  return out
+end
+
+M.archiveTraceToObjects = archiveTraceToObjects
+
+local function readLapRecord(path)
+  local f = io.open(path, "r")
+  if not f then
+    return nil
+  end
+  local raw = f:read("*a")
+  f:close()
+  return jsonDecode(raw)
+end
+
+--- Find the fastest valid imported MoTeC reference lap for the current car/track.
+---@param car ac.StateCar|nil
+---@param sim ac.StateSim|nil
+---@return table|nil reference
+function M.bestImportedReference(car, sim)
+  local dir = M.lapArchiveDir()
+  local best = nil
+  pcall(function()
+    if not (io and type(io.scanDir) == "function") then
+      return
+    end
+    local files = io.scanDir(dir, "lap_*.json")
+    if type(files) ~= "table" then
+      return
+    end
+    for i = 1, #files do
+      local name = files[i]
+      if type(name) == "string" then
+        local path = dir .. "/" .. name
+        local rec = readLapRecord(path)
+        local lap = rec and rec.lap
+        local lapMs = lap and tonumber(lap.lap_ms)
+        if rec
+            and rec.schema_version == 1
+            and rec.source == "imported"
+            and rec.import_format == "motec_csv"
+            and type(lap) == "table"
+            and lap.is_valid ~= false
+            and lapMs ~= nil
+            and lapMs > 0
+            and archiveRecordCarTrackMatches(rec, car, sim) then
+          local trace = archiveTraceToObjects(rec)
+          if #trace >= 2 and (best == nil or lapMs < best.lapMs) then
+            best = {
+              source = "imported",
+              importFormat = rec.import_format,
+              lapMs = lapMs,
+              trace = trace,
+              path = path,
+              record = rec,
+            }
+          end
+        end
+      end
+    end
+  end)
+  return best
+end
+
+--- Apply the user-facing import preference without mutating the user's local PB.
+---@param localBestMs number|nil
+---@param importedRef table|nil
+---@param enabled boolean
+---@return table|nil
+function M.chooseImportedReference(localBestMs, importedRef, enabled)
+  if enabled ~= true or type(importedRef) ~= "table" then
+    return nil
+  end
+  local importedMs = tonumber(importedRef.lapMs)
+  if importedMs == nil or importedMs <= 0 then
+    return nil
+  end
+  local localMs = tonumber(localBestMs)
+  if localMs ~= nil and localMs > 0 and importedMs >= localMs then
+    return nil
+  end
+  return importedRef
 end
 
 ---@return table|nil
