@@ -10,19 +10,35 @@ within the Tailscale trust boundary (registry-named host or ``*.ts.net`` /
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-from hook_memory_manifest import (  # noqa: E402
-    EndpointCandidate,
-    _is_tailnet_shaped,
-    _split_endpoint,
-    resolve_memory_endpoints,
-)
+
+def _load_hook_memory_manifest():
+    module_name = "_test_hook_memory_manifest_endpoint"
+    cached = sys.modules.get(module_name)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(
+        module_name, REPO_ROOT / "scripts" / "hook_memory_manifest.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_manifest = _load_hook_memory_manifest()
+EndpointCandidate = _manifest.EndpointCandidate
+_is_tailnet_shaped = _manifest._is_tailnet_shaped
+_split_endpoint = _manifest._split_endpoint
+resolve_memory_endpoints = _manifest.resolve_memory_endpoints
 
 WORKSPACE = "agent_factory_steward"
 TSNET_HOST = "m2pro.tail31ce1b.ts.net"

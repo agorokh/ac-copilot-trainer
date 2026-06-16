@@ -2,14 +2,31 @@
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from hook_repo_root import worktree_root_for  # noqa: E402
+
+def _load_hook_repo_root():
+    module_name = "_test_hook_repo_root"
+    cached = sys.modules.get(module_name)
+    if cached is not None:
+        return cached
+    spec = importlib.util.spec_from_file_location(
+        module_name, REPO_ROOT / "scripts" / "hook_repo_root.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_hook_repo_root = _load_hook_repo_root()
+worktree_root_for = _hook_repo_root.worktree_root_for
 
 
 def _git(cwd: Path, *args: str) -> None:
