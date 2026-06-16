@@ -107,6 +107,10 @@ class EntryLauncherConfig:
             raise ValueError("trigger_interval must be > 0")
         if self.max_drive_triggers_per_launch < 0:
             raise ValueError("max_drive_triggers_per_launch must be >= 0")
+        if self.required_live_reads < 1:
+            raise ValueError("required_live_reads must be >= 1")
+        if self.stagnation_seconds <= 0:
+            raise ValueError("stagnation_seconds must be > 0")
 
 
 @dataclass(frozen=True)
@@ -157,8 +161,6 @@ def classify_entry_phase(
         return EntryPhase.STUCK_IN_MENU
     if graphics.is_live and graphics.is_in_pit:
         return EntryPhase.IN_PIT
-    if graphics.is_live and detector.consecutive_clear_reads == 0:
-        return EntryPhase.STUCK_IN_MENU
     return EntryPhase.STARTING
 
 
@@ -184,8 +186,15 @@ def normalize_race_ini_spawn_set(
     if not parser.has_section(section):
         parser.add_section(section)
     parser.set(section, "SPAWN_SET", spawn_set)
-    with race_ini.open("w", encoding="utf-8", newline="\n") as fh:
-        parser.write(fh, space_around_delimiters=False)
+    tmp_path = race_ini.with_suffix(f"{race_ini.suffix}.tmp" if race_ini.suffix else ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="\n") as fh:
+            parser.write(fh, space_around_delimiters=False)
+        tmp_path.replace(race_ini)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 class ColdRestartActuator:
@@ -201,21 +210,21 @@ class ColdRestartActuator:
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         popen: Callable[..., subprocess.Popen] = subprocess.Popen,
     ) -> None:
-        self.acs_exe = Path(acs_exe)
-        self.race_ini = Path(race_ini) if race_ini is not None else None
+        self.acs_exe = Path(acs_exe).expanduser().resolve(strict=False)
+        self.race_ini = (
+            Path(race_ini).expanduser().resolve(strict=False) if race_ini is not None else None
+        )
         self.launch_args = tuple(launch_args)
         self.process_name = process_name
         self._runner = runner
         self._popen = popen
 
     def normalize_prior_state(self) -> ActuatorEvent | None:
+        kill_detail = self._kill_existing()
         if self.race_ini is None:
-            return None
+            return ActuatorEvent("normalize", kill_detail)
         normalize_race_ini_spawn_set(self.race_ini, spawn_set="PIT")
-        self._kill_existing()
-        return ActuatorEvent(
-            "normalize", f"{self.race_ini}: SPAWN_SET=PIT; killed {self.process_name}"
-        )
+        return ActuatorEvent("normalize", f"{kill_detail}; {self.race_ini}: SPAWN_SET=PIT")
 
     def launch(self) -> ActuatorEvent:
         if sys.platform != "win32":
@@ -234,19 +243,24 @@ class ColdRestartActuator:
         )
 
     def relaunch(self) -> ActuatorEvent:
-        self._kill_existing()
+        kill_detail = self._kill_existing()
         launch = self.launch()
-        return ActuatorEvent("relaunch", launch.detail)
+        return ActuatorEvent("relaunch", f"{kill_detail}; {launch.detail}")
 
-    def _kill_existing(self) -> None:
+    def _kill_existing(self) -> str:
         if sys.platform != "win32":
-            return
-        self._runner(
+            return f"{self.process_name} kill skipped on {sys.platform}"
+        result = self._runner(
             ["taskkill", "/IM", self.process_name, "/F", "/T"],
             check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
         )
+        if result.returncode == 0:
+            return f"killed {self.process_name}"
+        detail = (result.stderr or result.stdout or "").strip()
+        suffix = f": {detail}" if detail else " (process may not have been running)"
+        return f"taskkill {self.process_name} exited {result.returncode}{suffix}"
 
 
 class EntryLauncher:
@@ -273,6 +287,7 @@ class EntryLauncher:
         events: list[ActuatorEvent] = []
         polls = 0
         last_phase: EntryPhase | None = None
+        last_reason = ""
 
         normalized = self.actuator.normalize_prior_state()
         if normalized is not None:
@@ -288,6 +303,7 @@ class EntryLauncher:
             polls += attempt.polls
             events.extend(attempt.events)
             last_phase = attempt.last_phase
+            last_reason = attempt.reason
             if attempt.outcome is EntryOutcome.DRIVING:
                 return EntryLaunchResult(
                     EntryOutcome.DRIVING,
@@ -304,7 +320,10 @@ class EntryLauncher:
             polls=polls,
             last_phase=last_phase,
             events=tuple(events),
-            reason=f"not driving after {self.config.max_launches} launch attempt(s)",
+            reason=(
+                f"not driving after {self.config.max_launches} launch attempt(s)"
+                + (f"; last attempt: {last_reason}" if last_reason else "")
+            ),
         )
 
     def _poll_one_launch(self) -> EntryLaunchResult:
@@ -316,17 +335,33 @@ class EntryLauncher:
         polls = 0
         phase: EntryPhase | None = None
         drive_triggers = 0
+        stop_reason = "attempt timed out"
         attempt_start = self.clock()
         next_trigger_at = attempt_start + self.config.trigger_after
         deadline = attempt_start + self.config.attempt_timeout
         reader: SnapshotReader | None = None
+        last_unavailable = ""
 
         try:
-            reader = self.reader_factory()
             while self.clock() <= deadline:
                 now = self.clock()
-                graphics = reader.read_graphics()
-                physics = reader.read_physics()
+                if reader is None:
+                    try:
+                        reader = self.reader_factory()
+                    except SharedMemoryUnavailable as err:
+                        last_unavailable = str(err)
+                        self.sleep(self.config.poll_interval)
+                        continue
+                try:
+                    graphics = reader.read_graphics()
+                    physics = reader.read_physics()
+                except SharedMemoryUnavailable as err:
+                    last_unavailable = str(err)
+                    reader.close()
+                    reader = None
+                    self.sleep(self.config.poll_interval)
+                    continue
+
                 detector.observe(graphics, physics, now=now)
                 polls += 1
                 phase = classify_entry_phase(graphics, detector=detector)
@@ -345,24 +380,17 @@ class EntryLauncher:
                     and now >= next_trigger_at
                 ):
                     if drive_triggers >= self.config.max_drive_triggers_per_launch:
+                        stop_reason = "drive trigger budget exhausted"
                         break
                     event = self.actuator.trigger_drive()
                     events.append(event)
                     if not event.supported:
+                        stop_reason = f"actuator requested relaunch: {event.detail}"
                         break
                     drive_triggers += 1
                     next_trigger_at = now + self.config.trigger_interval
 
                 self.sleep(self.config.poll_interval)
-        except SharedMemoryUnavailable as err:
-            return EntryLaunchResult(
-                EntryOutcome.FAILED,
-                launches=1,
-                polls=polls,
-                last_phase=phase,
-                events=tuple(events),
-                reason=str(err),
-            )
         finally:
             if reader is not None:
                 reader.close()
@@ -373,7 +401,7 @@ class EntryLauncher:
             polls=polls,
             last_phase=phase,
             events=tuple(events),
-            reason="attempt timed out or actuator requested relaunch",
+            reason=last_unavailable if polls == 0 and last_unavailable else stop_reason,
         )
 
 

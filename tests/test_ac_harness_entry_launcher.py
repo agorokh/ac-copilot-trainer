@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
+from tools.ac_harness import entry_launcher
 from tools.ac_harness.entry_launcher import (
     ActuatorEvent,
+    ColdRestartActuator,
     EntryActuator,
     EntryLauncher,
     EntryLauncherConfig,
@@ -74,6 +77,22 @@ class ReaderFactory:
 
 
 @dataclass
+class WarmingReaderFactory:
+    failures_before_ready: int
+    frames: list[tuple[GraphicsSnapshot, PhysicsSnapshot | None]]
+    calls: int = 0
+    readers: list[FakeReader] = field(default_factory=list)
+
+    def __call__(self) -> FakeReader:
+        self.calls += 1
+        if self.calls <= self.failures_before_ready:
+            raise SharedMemoryUnavailable("shared memory warming up")
+        reader = FakeReader(self.frames)
+        self.readers.append(reader)
+        return reader
+
+
+@dataclass
 class FakeActuator(EntryActuator):
     trigger_supported: bool = True
     calls: list[str] = field(default_factory=list)
@@ -134,6 +153,7 @@ def test_normalize_race_ini_sets_spawn_set_to_pit(tmp_path: Path):
     assert "[SESSION_0]" in text
     assert "TYPE=3" in text
     assert "SPAWN_SET=PIT" in text
+    assert not race_ini.with_suffix(".ini.tmp").exists()
 
 
 def test_normalize_race_ini_creates_session_section(tmp_path: Path):
@@ -151,6 +171,7 @@ def test_classify_entry_phase_distinguishes_menu_pit_and_driving():
     assert (
         classify_entry_phase(_g(AcGameStatus.LIVE, in_pit=True), detector=det) is EntryPhase.IN_PIT
     )
+    assert classify_entry_phase(_g(AcGameStatus.LIVE), detector=det) is EntryPhase.STARTING
 
     det.observe(_g(AcGameStatus.LIVE), _p(1), now=0.0)  # baseline
     det.observe(_g(AcGameStatus.LIVE), _p(2), now=0.01)  # clear -> driving
@@ -180,6 +201,29 @@ def test_launcher_succeeds_without_retry_when_detector_observes_driving():
     assert result.polls == 3
     assert actuator.calls == ["normalize", "launch"]
     assert factory.readers[0].closed is True
+
+
+def test_launcher_waits_for_shared_memory_to_appear_after_launch():
+    frames = [
+        (_g(AcGameStatus.LIVE), _p(1)),
+        (_g(AcGameStatus.LIVE), _p(2)),
+        (_g(AcGameStatus.LIVE), _p(3)),
+    ]
+    factory = WarmingReaderFactory(failures_before_ready=3, frames=frames)
+    actuator = FakeActuator()
+    clock = FakeClock()
+
+    result = EntryLauncher(
+        actuator,
+        reader_factory=factory,
+        config=_config(required_live_reads=2),
+        clock=clock,
+        sleep=clock.sleep,
+    ).run()
+
+    assert result.ok is True
+    assert factory.calls == 4
+    assert result.reason == "shared-memory detector observed sustained driving"
 
 
 def test_launcher_triggers_drive_when_current_actuator_supports_in_session_retry():
@@ -257,7 +301,25 @@ def test_launcher_fails_after_capped_relaunches():
     assert result.ok is False
     assert result.launches == 2
     assert result.last_phase is EntryPhase.STUCK_IN_MENU
+    assert "last attempt: actuator requested relaunch" in result.reason
     assert actuator.calls == ["normalize", "launch", "trigger_drive", "relaunch", "trigger_drive"]
+
+
+def test_cold_restart_normalize_kills_even_without_race_ini(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    calls: list[list[str]] = []
+
+    def runner(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    actuator = ColdRestartActuator(acs_exe=tmp_path / "acs.exe", runner=runner)
+
+    event = actuator.normalize_prior_state()
+
+    assert event is not None
+    assert event.detail == "killed acs.exe"
+    assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
 
 
 @pytest.mark.parametrize(
@@ -269,6 +331,8 @@ def test_launcher_fails_after_capped_relaunches():
         ({"trigger_after": -1.0}, "trigger_after"),
         ({"trigger_interval": 0.0}, "trigger_interval"),
         ({"max_drive_triggers_per_launch": -1}, "max_drive_triggers"),
+        ({"required_live_reads": 0}, "required_live_reads"),
+        ({"stagnation_seconds": 0.0}, "stagnation_seconds"),
     ],
 )
 def test_launcher_config_validates_retry_budget(kwargs: dict, match: str):
