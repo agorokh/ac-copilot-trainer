@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-17T04:00:00Z
+last_updated: 2026-06-17T06:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -18,7 +18,7 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-06-16):** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) **CLOSED** — on-rig probe confirmed `car.resetCounter` is **present** (`value=2`); closed as moot (the #199 wrap-deferral is defensive-only for resetCounter-less builds). [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. Next EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) thread: **Part F harness daemon (#228)** — note `feat/issue-228-harness-daemon` has uncommitted local WIP and `origin` diverged (+5). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
+**Active focus (2026-06-17):** EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) — **Part F harness daemon shipped** ([#228](https://github.com/agorokh/ac-copilot-trainer/issues/228)/PR #229) and its on-rig launch gap fixed ([#232](https://github.com/agorokh/ac-copilot-trainer/issues/232) **CLOSED** / PR [#233](https://github.com/agorokh/ac-copilot-trainer/pull/233) **MERGED** `c556dfe`): the daemon now launches AC **de-elevated via Content Manager** (`--launch-mode cm`), live-verified hands-off on `AG_PC` (`/session/start`→driving, `/sidecar/start`→WS `hello_ack`). [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188)/[#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. **Next #154 thread: Part G** — compose the full unattended loop + screenshot/vision HUD oracle + determinism-lock + false-green KPI (<5%). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 

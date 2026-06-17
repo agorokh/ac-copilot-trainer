@@ -2,10 +2,11 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-17T04:20:00Z
+last_updated: 2026-06-17T06:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/03_Investigations/cm-url-deelevated-launch-2026-06-16.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-live-verified-2026-06-16.md
   - AcCopilotTrainer/03_Investigations/issue-188-wrap-skew-rig-verification.md
   - AcCopilotTrainer/00_System/invariants/_index.md
@@ -27,6 +28,46 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-17 — EPIC #154 #232/#233 MERGED: de-elevated CM launch — hands-off L2 keystone landed)
+
+**Ran autonomous-deliver on the rig `AG_PC` (elevated agent shell).** Found and closed the live gap
+in the merged Part F daemon (#229): it launched `acs.exe` **directly**, which trips the Steam-integrity
+mismatch from the elevated shell (Steam + CM run **non-elevated**). The EPIC spec'd a CM-URL launch;
+the merge took an `acs.exe` shortcut.
+
+**[#232](https://github.com/agorokh/ac-copilot-trainer/issues/232) CLOSED / PR
+[#233](https://github.com/agorokh/ac-copilot-trainer/pull/233) MERGED** (squash `c556dfe`). New
+`ContentManagerActuator` (`tools/ac_harness/entry_launcher.py`) launches via
+`Content Manager.exe "acmanager://race/quick?presetFile=<abs preset>"` → CM-IPC forwards to the
+running **non-elevated** CM → `acs.exe` starts **non-elevated**. `make_actuator(mode)` + daemon
+`--launch-mode {cm,acs}` (default **cm** on Windows), `--cm-exe`, `--cm-preset`. Reuses the shipped
+detect-and-retry loop; `trigger_drive` is unsupported so the loop cold-relaunches on the menu-skip
+race. Full method + gotchas: [`03_Investigations/cm-url-deelevated-launch-2026-06-16`](../03_Investigations/cm-url-deelevated-launch-2026-06-16.md).
+
+**Operator-grade live verification (PASS, observed):** daemon in elevated shell →
+`POST /session/start` (cm) → `outcome:"driving"` (shared-mem detector, sustained); `acs.exe`
+**non-elevated**; on track in ~3 s; physics ~333 Hz; AC rendered on track (screenshot inspected).
+`POST /sidecar/start` → external WS `hello_ack`. Guard: `/sidecar/start` before session → 409.
+Off-sim: 15 new tests, ruff-clean; CI green; 6 bot threads (cursor/sourcery/coderabbit) all resolved
+(fail-fast CLI validation, platform-aware defaults, absolute-path resolution).
+
+**Next (EPIC #154 — toward fully hands-off L2):** all chain pieces now exist (launch ✓ via #233,
+sidecar ✓, carcsw drive ✓ #190, asserts ✓ L1.5/oracle). Remaining **Part G**: (1) compose the full
+unattended loop into one harness command (launch→sidecar→carcsw drive a lap→assert→reset); (2)
+**screenshot/vision HUD oracle** (most rig-uniquely verifiable; "if you're not screenshotting it, it's
+not delivered"); (3) determinism-lock preset + CSP precondition assert; (4) false-green-rate KPI < 5%.
+For a real carcsw drive on magione, re-apply the track `surfaces.ini` Custom-AI permission (reverted to
+stock) + create a magione `.cmpreset` (the `base test.cmpreset` used here is Porsche@Spa).
+
+**Rig-local nit (not filed):** `tests/test_import_motec.py::test_default_output_dir_precedence` FAILS on
+any box with a real AC install (incl. this rig) — `default_output_dir` discovers the live AC CSP state
+dir, so the test's cwd-fallback assertion doesn't hold. Pre-existing, local-only (green on clean CI);
+the test should monkeypatch the AC-state-dir lookup to be hermetic.
+
+**Local `main` divergence (unchanged, intentional):** `dd5c613` (untrack local-baked `.cursor/hooks.json`)
+is the operator's deliberately-unpushed Windows-Cursor adaptation — left as-is; vault/feature work branches
+off `origin/main`. The merged `feat/issue-228` WIP was confirmed stale and discarded.
 
 ## Resume here (2026-06-16 LATER — #188 CLOSED on the rig; ran on AG_PC directly)
 
