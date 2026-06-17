@@ -36,6 +36,7 @@ from tools.ac_harness.entry_launcher import (
     EntryLauncher,
     EntryLauncherConfig,
     EntryLaunchResult,
+    EntryOutcome,
 )
 from tools.ac_harness.shared_memory import (
     DrivingEntryDetector,
@@ -82,6 +83,8 @@ class HarnessDaemonState:
     session_started: bool = False
     session_result: EntryLaunchResult | None = None
     sidecar_proc: subprocess.Popen[Any] | None = None
+    launch_generation: int = 0
+    launching: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -196,22 +199,52 @@ class HarnessDaemon:
 
         self._launcher_factory = launcher_factory or _default_launcher_factory
         self._sidecar_starter = sidecar_starter or _default_sidecar_starter
+        self._start_lock = threading.Lock()
 
     def start_session(self) -> EntryLaunchResult:
         """Run the entry launcher and record session state."""
-        with self.state.lock:
-            stop_processes(sidecar_proc=self.state.sidecar_proc)
-            self.state.sidecar_proc = None
-        launcher = self._launcher_factory()
-        result = launcher.run()
-        with self.state.lock:
-            self.state.session_result = result
-            self.state.session_started = result.ok
-        return result
+        if not self._start_lock.acquire(blocking=False):
+            return EntryLaunchResult(
+                EntryOutcome.FAILED,
+                launches=0,
+                polls=0,
+                last_phase=None,
+                reason="session start already in progress",
+            )
+        try:
+            with self.state.lock:
+                stop_processes(sidecar_proc=self.state.sidecar_proc)
+                self.state.sidecar_proc = None
+                self.state.launch_generation += 1
+                generation = self.state.launch_generation
+                self.state.launching = True
+                self.state.session_started = False
+                self.state.session_result = None
+            try:
+                result = self._launcher_factory().run()
+            finally:
+                with self.state.lock:
+                    self.state.launching = False
+            with self.state.lock:
+                if self.state.launch_generation != generation:
+                    return EntryLaunchResult(
+                        EntryOutcome.FAILED,
+                        launches=result.launches,
+                        polls=result.polls,
+                        last_phase=result.last_phase,
+                        reason="session start cancelled",
+                    )
+                self.state.session_result = result
+                self.state.session_started = result.ok
+            return result
+        finally:
+            self._start_lock.release()
 
     def start_sidecar(self) -> subprocess.Popen[Any]:
         """Spawn the sidecar; requires a successful prior session start."""
         with self.state.lock:
+            if self.state.launching:
+                raise RuntimeError("session start in progress")
             if not self.state.session_started:
                 raise RuntimeError("session not started — call POST /session/start first")
             if self.state.sidecar_proc is not None and self.state.sidecar_proc.poll() is None:
@@ -223,6 +256,8 @@ class HarnessDaemon:
     def stop_session(self) -> None:
         """Terminate sidecar and AC; clear session flags."""
         with self.state.lock:
+            self.state.launch_generation += 1
+            self.state.launching = False
             stop_processes(sidecar_proc=self.state.sidecar_proc)
             self.state.sidecar_proc = None
             self.state.session_started = False
@@ -243,6 +278,7 @@ class HarnessDaemon:
                 }
             return {
                 "session_started": self.state.session_started,
+                "session_launching": self.state.launching,
                 "sidecar_running": sidecar_running,
                 "session": session,
                 "oracle": read_status_oracle(),

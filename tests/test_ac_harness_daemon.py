@@ -135,6 +135,77 @@ def test_sidecar_start_rejects_without_session() -> None:
         daemon.start_sidecar()
 
 
+def test_sidecar_start_rejects_during_launch() -> None:
+    daemon = HarnessDaemon(HarnessDaemonConfig(token="secret"))
+    daemon.state.launching = True
+    daemon.state.session_started = True
+    with pytest.raises(RuntimeError, match="session start in progress"):
+        daemon.start_sidecar()
+
+
+def test_stop_during_start_does_not_resurrect_session() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowLauncher:
+        @staticmethod
+        def run() -> EntryLaunchResult:
+            started.set()
+            release.wait(timeout=2)
+            return EntryLaunchResult(
+                EntryOutcome.DRIVING,
+                launches=1,
+                polls=1,
+                last_phase=EntryPhase.DRIVING,
+            )
+
+    daemon = HarnessDaemon(
+        HarnessDaemonConfig(token="secret"),
+        launcher_factory=lambda: SlowLauncher(),
+    )
+    result_holder: list[EntryLaunchResult] = []
+
+    def run_start() -> None:
+        result_holder.append(daemon.start_session())
+
+    thread = threading.Thread(target=run_start)
+    thread.start()
+    assert started.wait(timeout=2)
+    daemon.stop_session()
+    release.set()
+    thread.join(timeout=2)
+    assert result_holder[0].ok is False
+    assert result_holder[0].reason == "session start cancelled"
+    assert daemon.state.session_started is False
+
+
+def test_concurrent_start_second_returns_busy() -> None:
+    release = threading.Event()
+
+    class SlowLauncher:
+        @staticmethod
+        def run() -> EntryLaunchResult:
+            release.wait(timeout=2)
+            return EntryLaunchResult(
+                EntryOutcome.DRIVING,
+                launches=1,
+                polls=1,
+                last_phase=EntryPhase.DRIVING,
+            )
+
+    daemon = HarnessDaemon(
+        HarnessDaemonConfig(token="secret"),
+        launcher_factory=lambda: SlowLauncher(),
+    )
+    first = threading.Thread(target=daemon.start_session)
+    first.start()
+    busy = daemon.start_session()
+    release.set()
+    first.join(timeout=2)
+    assert busy.reason == "session start already in progress"
+    assert daemon.state.session_started is True
+
+
 def test_sidecar_start_after_session() -> None:
     result = EntryLaunchResult(
         EntryOutcome.DRIVING,
