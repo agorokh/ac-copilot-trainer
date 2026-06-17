@@ -94,7 +94,8 @@ def test_start_sidecar_process_invokes_module(tmp_path, monkeypatch) -> None:
     assert calls[0][calls[0].index("--token") + 1] == "tok"
 
 
-def test_stop_processes_terminates_sidecar_and_acs() -> None:
+def test_stop_processes_terminates_sidecar_and_acs(monkeypatch) -> None:
+    monkeypatch.setattr("tools.ac_harness.daemon.sys.platform", "win32")
     proc = FakePopen()
     calls: list[list[str]] = []
 
@@ -104,7 +105,7 @@ def test_stop_processes_terminates_sidecar_and_acs() -> None:
 
     stop_processes(sidecar_proc=proc, runner=fake_run)
     assert proc.terminated is True
-    assert calls == [["taskkill", "/F", "/IM", "acs.exe"]]
+    assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
 
 
 def test_harness_daemon_requires_token() -> None:

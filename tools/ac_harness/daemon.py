@@ -157,7 +157,12 @@ def stop_processes(
             sidecar_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             sidecar_proc.kill()
-    runner(["taskkill", "/F", "/IM", process_name], check=False, capture_output=True)
+    if sys.platform == "win32":
+        runner(
+            ["taskkill", "/IM", process_name, "/F", "/T"],
+            check=False,
+            capture_output=True,
+        )
 
 
 class HarnessDaemon:
@@ -197,11 +202,12 @@ class HarnessDaemon:
         with self.state.lock:
             stop_processes(sidecar_proc=self.state.sidecar_proc)
             self.state.sidecar_proc = None
-            launcher = self._launcher_factory()
-            result = launcher.run()
+        launcher = self._launcher_factory()
+        result = launcher.run()
+        with self.state.lock:
             self.state.session_result = result
             self.state.session_started = result.ok
-            return result
+        return result
 
     def start_sidecar(self) -> subprocess.Popen[Any]:
         """Spawn the sidecar; requires a successful prior session start."""
