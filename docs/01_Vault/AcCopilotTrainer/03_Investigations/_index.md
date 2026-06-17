@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [cm-url-deelevated-launch-2026-06-16.md](cm-url-deelevated-launch-2026-06-16.md) | De-elevated `acmanager://race/quick` launch (CM-IPC forward) gets AC on track non-elevated from the elevated agent shell — the hands-off L2 keystone (#232/#233). |
 | [csp-cdata-callable-guards.md](csp-cdata-callable-guards.md) | `type(vec2)` returns "cdata" not "function" in CSP/LuaJIT — use nil-checks |
 | [csp-web-socket-api.md](csp-web-socket-api.md) | CSP web.socket is callback-based; sock(data) to send; reconnect:true required |
 | [ac-storage-persistence.md](ac-storage-persistence.md) | ac.storage table-form silently fails; use per-key form for persistence |
