@@ -472,6 +472,16 @@ def test_make_actuator_validates_mode(mode: str, kwargs: dict, match: str):
         make_actuator(mode, **kwargs)
 
 
+def test_cli_acs_mode_requires_acs_exe():
+    with pytest.raises(SystemExit):
+        entry_launcher._main(["--launch-mode", "acs"])
+
+
+def test_cli_cm_mode_requires_preset():
+    with pytest.raises(SystemExit):
+        entry_launcher._main(["--launch-mode", "cm"])
+
+
 @pytest.mark.parametrize(
     ("kwargs", "match"),
     [

@@ -548,7 +548,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _main(argv: Sequence[str] | None = None) -> int:
-    args = _build_arg_parser().parse_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.launch_mode == "acs" and args.acs_exe is None:
+        parser.error("--launch-mode acs requires --acs-exe")
+    if args.launch_mode == "cm" and args.cm_preset is None:
+        parser.error("--launch-mode cm requires --cm-preset (path to a Quick Drive .cmpreset)")
     actuator = make_actuator(
         args.launch_mode,
         acs_exe=args.acs_exe,
