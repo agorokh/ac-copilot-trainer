@@ -19,6 +19,7 @@ import configparser
 import subprocess
 import sys
 import time
+import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -201,6 +202,27 @@ def normalize_race_ini_spawn_set(
         raise
 
 
+def _taskkill(
+    process_name: str,
+    runner: Callable[..., subprocess.CompletedProcess],
+) -> str:
+    """Best-effort ``taskkill`` of a process tree; returns a human-readable detail string."""
+
+    if sys.platform != "win32":
+        return f"{process_name} kill skipped on {sys.platform}"
+    result = runner(
+        ["taskkill", "/IM", process_name, "/F", "/T"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return f"killed {process_name}"
+    detail = (result.stderr or result.stdout or "").strip()
+    suffix = f": {detail}" if detail else " (process may not have been running)"
+    return f"taskkill {process_name} exited {result.returncode}{suffix}"
+
+
 class ColdRestartActuator:
     """Default no-new-dependency actuator: normalize state, kill, relaunch AC."""
 
@@ -254,19 +276,104 @@ class ColdRestartActuator:
         return ActuatorEvent("relaunch", f"{normalized.detail}; {launch.detail}")
 
     def _kill_existing(self) -> str:
+        return _taskkill(self.process_name, self._runner)
+
+
+class ContentManagerActuator:
+    """Content Manager IPC actuator — de-elevated on-track launch via the ``acmanager://`` URL.
+
+    Spawning ``Content Manager.exe "acmanager://race/quick?presetFile=<preset>"`` hands the URL to
+    the already-running (non-elevated) Content Manager through its single-instance IPC; CM runs the
+    Quick Drive preset (``QuickDrive.RunAsync``) and launches ``acs.exe`` as **its own** child —
+    i.e. non-elevated. That survives the rig's elevation split (elevated agent/daemon shell vs
+    non-elevated Steam + CM) that makes a direct ``acs.exe`` launch trip the Steam-integrity
+    mismatch. Verified live on ``AG_PC``: car on track in ~3 s, physics advancing at ~333 Hz
+    (EPIC #154 #232).
+
+    CM owns the immediate-start handshake, so there is no in-attempt Drive re-trigger:
+    :meth:`trigger_drive` reports ``supported=False`` and :class:`EntryLauncher` cold-relaunches
+    when the (genuinely non-deterministic) pre-drive menu-skip race loses.
+    """
+
+    DEFAULT_CM_EXE = Path(r"C:\Program Files (x86)\ContentManager\Content Manager.exe")
+
+    def __init__(
+        self,
+        *,
+        preset: str | Path,
+        cm_exe: str | Path | None = None,
+        process_name: str = "acs.exe",
+        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+    ) -> None:
+        self.preset = Path(preset).expanduser()
+        self.cm_exe = Path(cm_exe).expanduser() if cm_exe is not None else self.DEFAULT_CM_EXE
+        self.process_name = process_name
+        self._runner = runner
+        self._popen = popen
+
+    def quick_drive_url(self) -> str:
+        """``acmanager://race/quick?presetFile=<url-encoded preset path>`` (CM runs the preset)."""
+        return "acmanager://race/quick?presetFile=" + urllib.parse.quote(str(self.preset), safe="")
+
+    def normalize_prior_state(self) -> ActuatorEvent | None:
+        # Cold-start the menu-skip race: kill any stale acs.exe so each launch is deterministic.
+        return ActuatorEvent("normalize", _taskkill(self.process_name, self._runner))
+
+    def launch(self) -> ActuatorEvent:
         if sys.platform != "win32":
-            return f"{self.process_name} kill skipped on {sys.platform}"
-        result = self._runner(
-            ["taskkill", "/IM", self.process_name, "/F", "/T"],
-            check=False,
-            capture_output=True,
-            text=True,
+            raise EntryLaunchUnsupported("ContentManagerActuator launch is Windows-only")
+        if not self.cm_exe.exists():
+            raise FileNotFoundError(f"Content Manager not found: {self.cm_exe}")
+        if not self.preset.exists():
+            raise FileNotFoundError(f"Quick Drive preset not found: {self.preset}")
+        url = self.quick_drive_url()
+        self._popen([str(self.cm_exe), url])
+        return ActuatorEvent("launch", url)
+
+    def trigger_drive(self) -> ActuatorEvent:
+        return ActuatorEvent(
+            "trigger_drive",
+            "Content Manager owns immediate-start; relaunch on menu-skip-race timeout",
+            supported=False,
         )
-        if result.returncode == 0:
-            return f"killed {self.process_name}"
-        detail = (result.stderr or result.stdout or "").strip()
-        suffix = f": {detail}" if detail else " (process may not have been running)"
-        return f"taskkill {self.process_name} exited {result.returncode}{suffix}"
+
+    def relaunch(self) -> ActuatorEvent:
+        normalized = self.normalize_prior_state()
+        launch = self.launch()
+        if normalized is None:
+            return ActuatorEvent("relaunch", launch.detail)
+        return ActuatorEvent("relaunch", f"{normalized.detail}; {launch.detail}")
+
+
+LAUNCH_MODES = ("cm", "acs")
+
+
+def make_actuator(
+    launch_mode: str,
+    *,
+    acs_exe: str | Path | None = None,
+    race_ini: str | Path | None = None,
+    cm_exe: str | Path | None = None,
+    cm_preset: str | Path | None = None,
+) -> EntryActuator:
+    """Build the entry actuator for ``launch_mode``.
+
+    ``"cm"`` → :class:`ContentManagerActuator` (de-elevated CM-URL launch; needs ``cm_preset``).
+    ``"acs"`` → :class:`ColdRestartActuator` (direct ``acs.exe`` launch; needs ``acs_exe``).
+    """
+
+    if launch_mode == "cm":
+        if cm_preset is None:
+            raise ValueError(
+                "launch_mode='cm' requires a Content Manager Quick Drive preset (cm_preset)"
+            )
+        return ContentManagerActuator(preset=cm_preset, cm_exe=cm_exe)
+    if launch_mode == "acs":
+        if acs_exe is None:
+            raise ValueError("launch_mode='acs' requires acs_exe")
+        return ColdRestartActuator(acs_exe=acs_exe, race_ini=race_ini)
+    raise ValueError(f"unknown launch_mode: {launch_mode!r} (expected one of {LAUNCH_MODES})")
 
 
 class EntryLauncher:
@@ -413,8 +520,22 @@ class EntryLauncher:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AC detect-and-retry entry launcher")
-    parser.add_argument("--acs-exe", required=True, help="Path to Assetto Corsa acs.exe")
+    parser.add_argument(
+        "--launch-mode",
+        choices=LAUNCH_MODES,
+        default="acs",
+        help="cm = de-elevated Content Manager URL launch; acs = direct acs.exe (default)",
+    )
+    parser.add_argument("--acs-exe", help="Path to acs.exe (required for --launch-mode acs)")
     parser.add_argument("--race-ini", help="Path to Documents/Assetto Corsa/cfg/race.ini")
+    parser.add_argument(
+        "--cm-exe",
+        help="Path to Content Manager.exe (default: standard install; --launch-mode cm)",
+    )
+    parser.add_argument(
+        "--cm-preset",
+        help="Path to a Quick Drive .cmpreset (required for --launch-mode cm)",
+    )
     parser.add_argument("--max-launches", type=int, default=3)
     parser.add_argument("--attempt-timeout", type=float, default=30.0)
     parser.add_argument("--poll-interval", type=float, default=0.03)
@@ -428,7 +549,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def _main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
-    actuator = ColdRestartActuator(acs_exe=args.acs_exe, race_ini=args.race_ini)
+    actuator = make_actuator(
+        args.launch_mode,
+        acs_exe=args.acs_exe,
+        race_ini=args.race_ini,
+        cm_exe=args.cm_exe,
+        cm_preset=args.cm_preset,
+    )
     launcher = EntryLauncher(
         actuator,
         config=EntryLauncherConfig(

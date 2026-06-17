@@ -114,6 +114,27 @@ def test_harness_daemon_requires_token() -> None:
         HarnessDaemon(HarnessDaemonConfig(token=""))
 
 
+def test_daemon_default_factory_selects_actuator_by_launch_mode(tmp_path) -> None:
+    from tools.ac_harness.entry_launcher import ColdRestartActuator, ContentManagerActuator
+
+    cm_daemon = HarnessDaemon(
+        HarnessDaemonConfig(
+            token="secret",
+            launch_mode="cm",
+            cm_preset=tmp_path / "drive.cmpreset",
+            cm_exe=tmp_path / "Content Manager.exe",
+        )
+    )
+    cm_launcher = cm_daemon._launcher_factory()
+    assert isinstance(cm_launcher.actuator, ContentManagerActuator)
+
+    acs_daemon = HarnessDaemon(
+        HarnessDaemonConfig(token="secret", launch_mode="acs", acs_exe=tmp_path / "acs.exe")
+    )
+    acs_launcher = acs_daemon._launcher_factory()
+    assert isinstance(acs_launcher.actuator, ColdRestartActuator)
+
+
 def test_serve_forever_shutdown_skips_stop_when_idle(monkeypatch) -> None:
     calls: list[str] = []
     daemon = HarnessDaemon(HarnessDaemonConfig(token="secret"))

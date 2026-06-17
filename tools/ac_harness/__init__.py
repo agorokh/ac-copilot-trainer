@@ -23,8 +23,10 @@ from tools.ac_harness.custom_ai import (
     parse_car_data,
 )
 from tools.ac_harness.entry_launcher import (
+    LAUNCH_MODES,
     ActuatorEvent,
     ColdRestartActuator,
+    ContentManagerActuator,
     EntryActuator,
     EntryLauncher,
     EntryLauncherConfig,
@@ -33,6 +35,7 @@ from tools.ac_harness.entry_launcher import (
     EntryOutcome,
     EntryPhase,
     classify_entry_phase,
+    make_actuator,
     normalize_race_ini_spawn_set,
 )
 from tools.ac_harness.lap_driver import DriveFrame, LapDriver
@@ -62,8 +65,10 @@ __all__ = [
     "load_schema",
     "synthesize_trace",
     # L2 detect-and-retry entry actuator loop.
+    "LAUNCH_MODES",
     "ActuatorEvent",
     "ColdRestartActuator",
+    "ContentManagerActuator",
     "EntryActuator",
     "EntryLauncher",
     "EntryLauncherConfig",
@@ -72,6 +77,7 @@ __all__ = [
     "EntryOutcome",
     "EntryPhase",
     "classify_entry_phase",
+    "make_actuator",
     "normalize_race_ini_spawn_set",
     # L2 in-sim shared-memory oracle (on-track-entry detector).
     "AcGameStatus",
