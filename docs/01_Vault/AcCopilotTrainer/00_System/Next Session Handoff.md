@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T23:15:00Z
+last_updated: 2026-06-17T04:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -28,7 +28,34 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-16 — #188 rig verification OPEN; #190 CLOSED)
+## Resume here (2026-06-16 LATER — #188 CLOSED on the rig; ran on AG_PC directly)
+
+**[#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) CLOSED.** Autonomous-deliver ran
+**on the rig itself** (`AG_PC`) — the empirical question is answered: **`car.resetCounter` is PRESENT**
+on this CSP build (live probe `[COPILOT][WRAP-SKEW-PROBE] resetCounter present=true value=2`).
+Per the operator's own decision tree, present → close as moot; the #199 wrap-deferral is defensive-only
+for resetCounter-less builds. Close comment:
+[#188#issuecomment-4725615887](https://github.com/agorokh/ac-copilot-trainer/issues/188#issuecomment-4725615887).
+Full evidence + Q2-moot reasoning: [`03_Investigations/issue-188-wrap-skew-rig-verification`](../03_Investigations/issue-188-wrap-skew-rig-verification.md).
+
+**New rig-ops learning (saves ~20 min next time):** AC "Steam API has failed to initialize" was a
+**Steam(elevated)/Content-Manager(non-elevated) integrity mismatch** (`ActiveProcess pid=0`). Fix =
+`steam -shutdown` then relaunch Steam **non-elevated** via `explorer.exe` (auto-login, no creds).
+Runbook: [`03_Investigations/steam-elevation-mismatch-ac-launch-2026-06-16`](../03_Investigations/steam-elevation-mismatch-ac-launch-2026-06-16.md).
+**The agent shell on the rig is elevated → never launch `acs.exe` from it; always go through CM.**
+
+**Rig launch path that works (proven this session):** Steam non-elevated + logged in → Content
+Manager → Drive (Quick/HOTLAP, Porsche 911 GT3 R + Magione already configured) → **Go!** → car on
+track in ~40s; the symlinked trainer auto-loads with `LAZY=PARTIAL` (its windows were already open,
+so `script.update` ticks; CSP `ac.log` lands in `logs/custom_shaders_patch.log`, **not** `log.txt`).
+
+**WIP untouched:** branch `feat/issue-228-harness-daemon` has uncommitted local edits
+(`.cursor/mcp.json`, `tools/ac_harness/daemon.py`) — left as-is; `origin/feat/issue-228` advanced 5
+commits (diverged), needs the operator's attention separately.
+
+---
+
+## Resume here (2026-06-16 — #188 rig verification OPEN; #190 CLOSED) [SUPERSEDED — #188 now closed above]
 
 **Active:** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) — defensive wrap-reset code shipped in [#199](https://github.com/agorokh/ac-copilot-trainer/pull/199); **empirical rig question still open**. Runbook: [`03_Investigations/issue-188-wrap-skew-rig-verification`](../03_Investigations/issue-188-wrap-skew-rig-verification.md). Blockers from macOS: Tailscale ping to `pc` OK; SSH auth denied; sidecar down. Pending: ≥2-lap rig grep for `resetCounter` + wrap-skew frames (optional branch `feat/issue-188-rig-skew-probe` for `WRAP-SKEW-PROBE` logging).
 
