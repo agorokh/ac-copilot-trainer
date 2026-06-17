@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-17T04:00:00Z
+last_updated: 2026-06-17T04:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -49,9 +49,19 @@ Manager → Drive (Quick/HOTLAP, Porsche 911 GT3 R + Magione already configured)
 track in ~40s; the symlinked trainer auto-loads with `LAZY=PARTIAL` (its windows were already open,
 so `script.update` ticks; CSP `ac.log` lands in `logs/custom_shaders_patch.log`, **not** `log.txt`).
 
-**WIP untouched:** branch `feat/issue-228-harness-daemon` has uncommitted local edits
-(`.cursor/mcp.json`, `tools/ac_harness/daemon.py`) — left as-is; `origin/feat/issue-228` advanced 5
-commits (diverged), needs the operator's attention separately.
+**Post-merge reconcile (operator action — surfaced during /post-merge of #230):**
+- **EPIC #154 Part F SHIPPED.** PR [#229](https://github.com/agorokh/ac-copilot-trainer/pull/229)
+  *(in-session AC harness daemon)* **MERGED** to `main` (`4c8afd8`). So the local
+  `feat/issue-228-harness-daemon` branch + its uncommitted WIP (`tools/ac_harness/daemon.py`,
+  `.cursor/mcp.json`) is **STALE/superseded** — the working-tree `daemon.py` is an *older, pre-review*
+  version (missing the merged length-check / `launch_generation` / double-read hardening), and
+  `mcp.json` has a divergent local edit (context7/github servers removed). Recommend discarding the
+  stale WIP and deleting the local branch once the operator confirms nothing there is wanted.
+- **Local `main` is DIVERGED** from `origin/main` (1 ahead / 2 behind): local-only commit
+  `dd5c613` *"untrack local-baked .cursor/hooks.json"* is **not** on `origin/main` (which still tracks
+  the file). `git pull --ff-only` therefore fails (post-merge sync exit 10). **Human reconcile:** decide
+  whether to drop `dd5c613` (`git reset --hard origin/main` on a clean `main`) or land it via a PR,
+  then sync. This is why local `main` could not be auto-synced this session.
 
 ---
 
