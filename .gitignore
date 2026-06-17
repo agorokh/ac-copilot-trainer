@@ -64,3 +64,6 @@ scripts/create_symlink.ps1
 
 # Operator-local memory manifest (replaces ops/memory_manifest.yml in operator overlay)
 ops/memory_manifest.local.yml
+
+# Cursor hooks are baked per-OS by install.sh / install.ps1 (governance-hub #46) — not tracked
+.cursor/hooks.json
