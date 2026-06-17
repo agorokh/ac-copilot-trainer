@@ -74,7 +74,11 @@ class HarnessDaemonConfig:
     bind_port: int = 9876
     token: str = ""
     repo_root: Path = field(default_factory=lambda: Path.cwd())
-    launch_mode: str = "acs"
+    # Default to the de-elevated CM launch on the Windows rig (the only path that survives the
+    # elevated-shell / non-elevated-Steam split); acs.exe-direct elsewhere. Kept consistent with
+    # the CLI default so programmatic and CLI callers behave the same. ``cm`` mode requires a
+    # ``cm_preset`` — ``make_actuator`` raises if it is missing.
+    launch_mode: str = field(default_factory=lambda: "cm" if sys.platform == "win32" else "acs")
     acs_exe: Path | None = None
     race_ini: Path | None = None
     cm_exe: Path | None = None
@@ -428,7 +432,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _main(argv: Sequence[str] | None = None) -> int:
-    args = _build_arg_parser().parse_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.launch_mode == "cm" and args.cm_preset is None:
+        parser.error("--launch-mode cm requires --cm-preset (path to a Quick Drive .cmpreset)")
     config = HarnessDaemonConfig(
         bind_host=args.bind,
         bind_port=args.port,
