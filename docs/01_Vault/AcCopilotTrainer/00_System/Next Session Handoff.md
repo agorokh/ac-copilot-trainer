@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-17T07:00:00Z
+last_updated: 2026-06-17T08:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -28,6 +28,36 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-17 — EPIC #154 #238/#239 MERGED: vision-oracle "eyes" (HUD capture) — LIVE-VERIFIED)
+
+**[#238](https://github.com/agorokh/ac-copilot-trainer/issues/238) CLOSED / PR
+[#239](https://github.com/agorokh/ac-copilot-trainer/pull/239) MERGED** (squash `3e677c7`). New
+`tools/ac_harness/hud_capture.py` — the vision oracle's eyes: a **stdlib `ctypes` GDI** desktop grab
+(**no new dependency**) + pure helpers (BGRA→RGB, named region crop full/left/coaching, a stdlib PNG
+encoder, a mean/distinct **render-liveness** score that flags black/frozen frames). CLI
+`python -m tools.ac_harness.hud_capture --out hud.png --region coaching` saves a PNG for agent-vision
+HUD assertion and exits non-zero on a black frame. 15 unit tests; ruff-clean.
+
+**Operator-grade LIVE verification (PASS, `AG_PC`):** launched AC on track via the daemon (cm) →
+captured hands-off → liveness **RENDERING** (full: mean=25.7/distinct=230; coaching: mean=84.3/
+distinct=61). **Inspected the PNGs**: AC live **in-cockpit at Spa** (wheel/dash/track; trainer overlay
+top-left); coaching crop legible (`Practice`, `Drive/Setup/Exit` sidebar, `Session information`). The
+agent-vision assertion path works. **Capture mechanism note (reusable):** AC runs borderless-windowed
+→ a full-desktop GDI grab captures it (NOT black); per-window BitBlt of a fullscreen game returns black.
+
+**The autonomous self-test now has launch + pipeline-assert + eyes — all hands-off, all live-verified.**
+
+**Next (EPIC #154 Part G remainder — harder / data-dependent, deliberate next-session work):**
+1. **carcsw drive into the self-test loop** (`self_test --drive`): re-apply the magione `surfaces.ini`
+   Custom-AI permission (reverted to stock) + a magione `.cmpreset`, then `lap_driver` drives a real
+   lap and the loop asserts coaching on it. *(The drive itself is the flakiest piece — menu-skip race +
+   curb-clip lap invalidation; see [[autonomous-drive-live-verified-2026-06-16]].)*
+2. **Wire `hud_capture` into `self_test`** as evidence on each run (capture + liveness alongside the WS
+   assert; attach the PNG).
+3. **Determinism-lock preset** + a CSP-side precondition assert (in-game Lua — needs rig verification).
+4. **False-green-rate KPI (<5%)** — needs a human-vs-agent shadow corpus that does not exist yet; this
+   is a measurement-framework + data-collection effort, not a pure code change.
 
 ## Resume here (2026-06-17 LATER — EPIC #154 #235/#236 MERGED: one-command autonomous self-test runner — LIVE PASS)
 
