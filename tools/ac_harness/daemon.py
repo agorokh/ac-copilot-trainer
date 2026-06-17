@@ -58,6 +58,8 @@ def _extract_bearer_token(header_value: str | None) -> str | None:
 def _token_ok(supplied: str | None, expected: str) -> bool:
     if supplied is None:
         return False
+    if len(supplied) != len(expected):
+        return False
     return secrets.compare_digest(supplied, expected)
 
 

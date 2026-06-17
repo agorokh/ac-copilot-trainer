@@ -59,6 +59,7 @@ def test_extract_bearer_token() -> None:
 def test_token_ok_uses_compare_digest() -> None:
     assert _token_ok("abc", "abc") is True
     assert _token_ok("abc", "abd") is False
+    assert _token_ok("abc", "abcd") is False
     assert _token_ok(None, "abc") is False
 
 
