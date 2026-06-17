@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-17T06:00:00Z
+last_updated: 2026-06-17T07:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -28,6 +28,30 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-17 LATER — EPIC #154 #235/#236 MERGED: one-command autonomous self-test runner — LIVE PASS)
+
+**[#235](https://github.com/agorokh/ac-copilot-trainer/issues/235) CLOSED / PR
+[#236](https://github.com/agorokh/ac-copilot-trainer/pull/236) MERGED** (squash `d051096`). New
+`tools/ac_harness/self_test.py` (`python -m tools.ac_harness.self_test --token …`) drives the harness
+daemon **hands-off**: `/session/start` (cm) → wait driving → `/sidecar/start` → tap the sidecar WS →
+assert the L1.5 producer contract (`sequence_probe`) → structured PASS/FAIL → `/session/stop`. `http`
+and `tap` are injectable → 10 unit tests, no game. Builds on #233 (cm launch) + #191 (probe) + #157
+(client).
+
+**Operator-grade LIVE verification (PASS, `AG_PC`):** one command, no human at the wheel →
+`outcome=driving` → sidecar up → **the trainer produced the live coaching pipeline**:
+`coaching.snapshot=335, tire_temps=168, connection=34, session=1` over 35 s; L1.5 asserted OK
+(`lap`/`delta` correctly conditional notes). EXIT 0. This exercises the full #170/#180/#182/#185
+producer pipeline end-to-end, hands-off — the autonomous self-test the EPIC set out to build.
+
+**Next (EPIC #154 Part G remainder):** (1) **screenshot/vision HUD oracle** — the "eyes"; capture the
+AC framebuffer (full-desktop grab works for the fullscreen game; per-window BitBlt returns black) and
+vision-assert the HUD render vs the WS numbers. (2) carcsw drive INTO the self-test loop (`--drive`):
+re-apply the magione `surfaces.ini` Custom-AI permission + a magione `.cmpreset`, assert coaching on a
+real lap. (3) determinism-lock preset + CSP precondition assert. (4) false-green-rate KPI < 5% (shadow
+vs human). The launch + sidecar + pipeline-assert chain is now one command; the drive + vision + KPI
+are what remain.
 
 ## Resume here (2026-06-17 — EPIC #154 #232/#233 MERGED: de-elevated CM launch — hands-off L2 keystone landed)
 
