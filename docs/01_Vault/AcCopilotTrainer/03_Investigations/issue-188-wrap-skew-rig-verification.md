@@ -10,18 +10,52 @@ relates_to:
   - AcCopilotTrainer/01_Decisions/delta-clock-boundary-alignment.md
   - AcCopilotTrainer/01_Decisions/csp-api-field-safety.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-live-verified-2026-06-16.md
+  - AcCopilotTrainer/03_Investigations/steam-elevation-mismatch-ac-launch-2026-06-16.md
 ---
 
 # Issue #188 — wrap-shaped same-lap teleport / lapCount–spline atomicity (rig verification)
 
-## Status (2026-06-16 autonomous-deliver pass)
+## RESOLVED — issue #188 CLOSED 2026-06-16 (rig: `car.resetCounter` is PRESENT)
+
+Ran the empirical pass **directly on the rig** (`AG_PC` / `100.75.251.87`) in an
+autonomous-deliver session running on the rig itself — no SSH needed. Instrumented a one-time
+`WRAP-SKEW-PROBE` in the live (symlinked) trainer, launched AC into a Magione HOTLAP via Content
+Manager, and read live CSP `ac.StateCar`:
+
+```
+2026-06-16T20:21:48 [Lua: app] [COPILOT][WRAP-SKEW-PROBE] resetCounter present=true value=2
+```
+
+**`car.resetCounter` is present on this rig's CSP build** (`csp_helpers.safeCarField(car,"resetCounter")`
+→ `2`, a real number). Trainer confirmed live alongside the probe (`RT-DIAG primary=ON PACE`,
+`trace=2000`, `trackLen=2456`; coaching/timing/tyre overlays rendered on-screen).
+
+**Decision (per the operator's [own criterion](https://github.com/agorokh/ac-copilot-trainer/issues/188#issuecomment-4713106661)):**
+resetCounter present → teleports fully handled by the `teleported` signal → **close as moot.**
+The one-frame deferred `delta.rollingResetDecision()` path from #199 is **defensive-only** for
+hypothetical resetCounter-less CSP builds; it is dormant on this rig. Close comment:
+[#188#issuecomment-4725615887](https://github.com/agorokh/ac-copilot-trainer/issues/188#issuecomment-4725615887).
+
+**Q2 (frame-level spline/lapCount skew) is MOOT here** and was intentionally NOT pursued: it only
+governs the resetCounter-less fallback, which does not execute on this rig — and there is no
+resetCounter-less build here to characterize the skew against. If a future resetCounter-less build
+ever shows `lapCount` lagging a wrap-shaped spline rewind by **>1 frame**, file a fresh follow-up to
+widen `pendingWrapResetLapCount`.
+
+The probe was a throwaway diagnostic (reverted after capture — not shipped). To re-run on a future
+build, re-add the one-time `ac.log` after `resetCounterNow` is computed in
+`ac_copilot_trainer.lua` `script.update`.
+
+---
+
+## Historical context (pre-resolution, kept for the record)
 
 **Code path: SHIPPED** in PR [#199](https://github.com/agorokh/ac-copilot-trainer/pull/199)
 (`delta.rollingResetDecision`, `state.pendingWrapResetLapCount`). The defensive branch for
 CSP builds lacking `car.resetCounter` is on `main`.
 
-**Empirical rig question: STILL OPEN.** This macOS agent session could not observe live
-AC/CSP:
+**Empirical rig question (was open until 2026-06-16 on-rig pass).** Prior macOS sessions could
+not observe live AC/CSP:
 
 | Check attempted | Result |
 |-----------------|--------|

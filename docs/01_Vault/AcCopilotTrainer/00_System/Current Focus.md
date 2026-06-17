@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-16T23:15:00Z
+last_updated: 2026-06-17T04:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -18,7 +18,7 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-06-16):** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) rig verification — `resetCounter` presence + s/f wrap-skew probe on `pc` (code in [#199](https://github.com/agorokh/ac-copilot-trainer/pull/199) already on `main`). [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. Next EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) thread after #188: Part F harness daemon. Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
+**Active focus (2026-06-16):** [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188) **CLOSED** — on-rig probe confirmed `car.resetCounter` is **present** (`value=2`); closed as moot (the #199 wrap-deferral is defensive-only for resetCounter-less builds). [#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. Next EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) thread: **Part F harness daemon (#228)** — note `feat/issue-228-harness-daemon` has uncommitted local WIP and `origin` diverged (+5). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
@@ -67,6 +67,7 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-16** — **#188 CLOSED** (on the rig, autonomous-deliver). Direct probe on `AG_PC`: `car.resetCounter` **present** (`[COPILOT][WRAP-SKEW-PROBE] resetCounter present=true value=2`) → teleports fully handled → closed as moot ([close comment](https://github.com/agorokh/ac-copilot-trainer/issues/188#issuecomment-4725615887)). No code change (the #199 defensive deferral stays). New rig-ops node: [steam-elevation-mismatch-ac-launch-2026-06-16](../03_Investigations/steam-elevation-mismatch-ac-launch-2026-06-16.md).
 - **2026-06-16** — **#190 CLOSED** — EPIC #154 Part E complete. Merged PRs: [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) L1.5 probe, [#209](https://github.com/agorokh/ac-copilot-trainer/pull/209)/[#221](https://github.com/agorokh/ac-copilot-trainer/pull/221)/[#222](https://github.com/agorokh/ac-copilot-trainer/pull/222)/[#223](https://github.com/agorokh/ac-copilot-trainer/pull/223) carcsw driver, [#201](https://github.com/agorokh/ac-copilot-trainer/pull/201) session replay for late taps. Live-verified autonomous lap + coaching on Magione. Next EPIC thread: Part F harness daemon.
 - **2026-06-16** — PR [#206](https://github.com/agorokh/ac-copilot-trainer/pull/206) **MERGED** at `7d87f96` — closed [#114](https://github.com/agorokh/ac-copilot-trainer/issues/114) with setup experiment tracking and suggestions. Adds `tools.ai_sidecar.setup_optimizer`, JSONL experiment rebuild/live recording from lap archives, setup A/B comparison, deterministic expected-improvement suggestion, CLI + v1 websocket frames, Lua store registration/recording, path safety, corrupt-store/missing-dir guards, and docs in [`13_Setup_Experiments`](../../../10_Development/13_Setup_Experiments.md). Classification: no post-merge flags. Active focus remains #190.
 - **2026-06-16** — PR [#204](https://github.com/agorokh/ac-copilot-trainer/pull/204) **MERGED** at `dc93b1b` — closed [#115](https://github.com/agorokh/ac-copilot-trainer/issues/115) with `tools.lap_archive_export`, a streamed lap-archive CSV exporter plus deterministic MoTeC-shaped CSV bridge, documented in [`13_Lap_Archive_Export`](../../../10_Development/13_Lap_Archive_Export.md). Output paths are contained under cwd, invalid laps are skipped by default, mixed MoTeC inputs are rejected, and post-merge classification found no flags. Active focus remains #190.
