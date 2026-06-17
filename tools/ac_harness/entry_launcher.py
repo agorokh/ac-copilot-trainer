@@ -306,8 +306,11 @@ class ContentManagerActuator:
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
         popen: Callable[..., subprocess.Popen] = subprocess.Popen,
     ) -> None:
-        self.preset = Path(preset).expanduser()
-        self.cm_exe = Path(cm_exe).expanduser() if cm_exe is not None else self.DEFAULT_CM_EXE
+        # Resolve to absolute: the URL is read by a *separate* CM process with its own cwd, so a
+        # relative presetFile would break `File.ReadAllText`. Mirrors ColdRestartActuator.
+        self.preset = Path(preset).expanduser().resolve(strict=False)
+        cm = Path(cm_exe).expanduser() if cm_exe is not None else self.DEFAULT_CM_EXE
+        self.cm_exe = cm.resolve(strict=False)
         self.process_name = process_name
         self._runner = runner
         self._popen = popen

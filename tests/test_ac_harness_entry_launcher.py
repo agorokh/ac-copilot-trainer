@@ -369,6 +369,13 @@ def test_content_manager_quick_drive_url_encodes_preset_path():
     assert " " not in url  # no raw spaces survive into the URL
 
 
+def test_content_manager_resolves_relative_preset_to_absolute():
+    # A separate CM process reads presetFile with its own cwd, so it must be absolute.
+    actuator = ContentManagerActuator(preset="drive.cmpreset", cm_exe="cm.exe")
+    assert actuator.preset.is_absolute()
+    assert "drive.cmpreset" in actuator.quick_drive_url()
+
+
 def test_content_manager_launch_spawns_cm_with_url(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
     cm_exe = tmp_path / "Content Manager.exe"
@@ -385,7 +392,7 @@ def test_content_manager_launch_spawns_cm_with_url(monkeypatch, tmp_path: Path):
     event = actuator.launch()
 
     assert event.action == "launch"
-    assert launched == [[str(cm_exe), actuator.quick_drive_url()]]
+    assert launched == [[str(actuator.cm_exe), actuator.quick_drive_url()]]
     assert event.detail == actuator.quick_drive_url()
 
 
@@ -443,7 +450,7 @@ def test_content_manager_relaunch_kills_then_relaunches(monkeypatch, tmp_path: P
     event = actuator.relaunch()
 
     assert killed == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
-    assert launched == [[str(cm_exe), actuator.quick_drive_url()]]
+    assert launched == [[str(actuator.cm_exe), actuator.quick_drive_url()]]
     assert event.action == "relaunch"
     assert "killed acs.exe" in event.detail
 
