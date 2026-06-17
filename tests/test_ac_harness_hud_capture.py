@@ -51,6 +51,13 @@ def test_liveness_thresholds_configurable():
     assert score.is_rendering(min_distinct=20) is False
 
 
+def test_liveness_score_samples_large_buffer():
+    # > 50000 bytes exercises the step>1 sampling path (a full-screen capture is ~20 MB).
+    big_content = bytes(range(256)) * 400  # 102_400 bytes -> step = 2
+    assert liveness_score(big_content).is_rendering() is True
+    assert liveness_score(bytes(102_400)).is_rendering() is False  # all-black, sampled
+
+
 def test_bgra_to_rgb_swaps_channels():
     out_w, out_h, rgb = bgra_to_rgb(2, 2, BGRA_2x2)
     assert (out_w, out_h) == (2, 2)
@@ -67,6 +74,11 @@ def test_bgra_to_rgb_downsamples_by_stride():
 def test_bgra_to_rgb_rejects_bad_stride():
     with pytest.raises(ValueError, match="stride"):
         bgra_to_rgb(2, 2, BGRA_2x2, stride=0)
+
+
+def test_bgra_to_rgb_rejects_short_buffer():
+    with pytest.raises(ValueError, match="bgra length"):
+        bgra_to_rgb(2, 2, BGRA_2x2[:-4])  # one pixel short
 
 
 def test_encode_png_is_valid_and_carries_dims():

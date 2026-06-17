@@ -73,6 +73,8 @@ def bgra_to_rgb(w: int, h: int, bgra: bytes, *, stride: int = 1) -> tuple[int, i
     """Convert a top-down BGRA buffer to packed RGB, optionally downsampling by ``stride``."""
     if stride < 1:
         raise ValueError("stride must be >= 1")
+    if len(bgra) < w * h * 4:
+        raise ValueError(f"bgra length {len(bgra)} < {w * h * 4} for {w}x{h} BGRA")
     out_w, out_h = w // stride, h // stride
     out = bytearray(out_w * out_h * 3)
     mv = memoryview(bgra)
@@ -142,11 +144,16 @@ def capture_bgra(x: int = 0, y: int = 0, w: int | None = None, h: int | None = N
     if h is None:
         h = user32.GetSystemMetrics(_SM_CYSCREEN)
     hdc = user32.GetDC(0)
+    if not hdc:
+        raise RuntimeError("GetDC failed")
     mdc = gdi32.CreateCompatibleDC(hdc)
     bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
-    gdi32.SelectObject(mdc, bmp)
     try:
-        gdi32.BitBlt(mdc, 0, 0, w, h, hdc, x, y, _SRCCOPY)
+        if not mdc or not bmp:
+            raise RuntimeError("CreateCompatibleDC/Bitmap failed")
+        gdi32.SelectObject(mdc, bmp)
+        if not gdi32.BitBlt(mdc, 0, 0, w, h, hdc, x, y, _SRCCOPY):
+            raise RuntimeError("BitBlt failed")
         bmi = _BMIH()
         bmi.biSize = ctypes.sizeof(_BMIH)
         bmi.biWidth = w
@@ -155,7 +162,8 @@ def capture_bgra(x: int = 0, y: int = 0, w: int | None = None, h: int | None = N
         bmi.biBitCount = 32
         bmi.biCompression = 0  # BI_RGB
         buf = (ctypes.c_char * (w * h * 4))()
-        gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bmi), _DIB_RGB_COLORS)
+        if gdi32.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bmi), _DIB_RGB_COLORS) == 0:
+            raise RuntimeError("GetDIBits failed")
         return w, h, bytes(buf)
     finally:
         gdi32.DeleteObject(bmp)
