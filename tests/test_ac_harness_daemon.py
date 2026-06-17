@@ -114,6 +114,26 @@ def test_harness_daemon_requires_token() -> None:
         HarnessDaemon(HarnessDaemonConfig(token=""))
 
 
+def test_serve_forever_shutdown_skips_stop_when_idle(monkeypatch) -> None:
+    calls: list[str] = []
+    daemon = HarnessDaemon(HarnessDaemonConfig(token="secret"))
+    monkeypatch.setattr(daemon, "stop_session", lambda: calls.append("stop"))
+
+    class InstantServer:
+        def serve_forever(self) -> None:
+            return
+
+        def server_close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        "tools.ac_harness.daemon.ThreadingHTTPServer",
+        lambda *args, **kwargs: InstantServer(),
+    )
+    daemon.serve_forever()
+    assert calls == []
+
+
 def test_session_start_records_success() -> None:
     result = EntryLaunchResult(
         EntryOutcome.DRIVING,

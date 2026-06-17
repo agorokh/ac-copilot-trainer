@@ -108,6 +108,10 @@ def read_status_oracle() -> dict[str, Any]:
         graphics = reader.read_graphics()
         physics = reader.read_physics()
         detector = DrivingEntryDetector(required_live_reads=1)
+        now = time.monotonic()
+        detector.observe(graphics, physics, now=now)
+        graphics = reader.read_graphics()
+        physics = reader.read_physics()
         detector.observe(graphics, physics, now=time.monotonic())
         return {
             "graphics_status": graphics.status.name,
@@ -370,7 +374,17 @@ class HarnessDaemon:
             server.serve_forever()
         finally:
             server.server_close()
-            self.stop_session()
+            with self.state.lock:
+                managed = (
+                    self.state.session_started
+                    or self.state.launching
+                    or (
+                        self.state.sidecar_proc is not None
+                        and self.state.sidecar_proc.poll() is None
+                    )
+                )
+            if managed:
+                self.stop_session()
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
