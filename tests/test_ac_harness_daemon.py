@@ -16,6 +16,7 @@ from tools.ac_harness.daemon import (
     HarnessDaemon,
     HarnessDaemonConfig,
     _extract_bearer_token,
+    _main,
     _token_ok,
     read_status_oracle,
     start_sidecar_process,
@@ -112,6 +113,40 @@ def test_stop_processes_terminates_sidecar_and_acs(monkeypatch) -> None:
 def test_harness_daemon_requires_token() -> None:
     with pytest.raises(ValueError, match="token"):
         HarnessDaemon(HarnessDaemonConfig(token=""))
+
+
+def test_config_default_launch_mode_matches_platform() -> None:
+    import sys
+
+    expected = "cm" if sys.platform == "win32" else "acs"
+    assert HarnessDaemonConfig(token="t").launch_mode == expected
+
+
+def test_cli_cm_mode_requires_preset() -> None:
+    # argparse error() raises SystemExit before constructing/serving the daemon.
+    with pytest.raises(SystemExit):
+        _main(["--token", "t", "--launch-mode", "cm"])
+
+
+def test_daemon_default_factory_selects_actuator_by_launch_mode(tmp_path) -> None:
+    from tools.ac_harness.entry_launcher import ColdRestartActuator, ContentManagerActuator
+
+    cm_daemon = HarnessDaemon(
+        HarnessDaemonConfig(
+            token="secret",
+            launch_mode="cm",
+            cm_preset=tmp_path / "drive.cmpreset",
+            cm_exe=tmp_path / "Content Manager.exe",
+        )
+    )
+    cm_launcher = cm_daemon._launcher_factory()
+    assert isinstance(cm_launcher.actuator, ContentManagerActuator)
+
+    acs_daemon = HarnessDaemon(
+        HarnessDaemonConfig(token="secret", launch_mode="acs", acs_exe=tmp_path / "acs.exe")
+    )
+    acs_launcher = acs_daemon._launcher_factory()
+    assert isinstance(acs_launcher.actuator, ColdRestartActuator)
 
 
 def test_serve_forever_shutdown_skips_stop_when_idle(monkeypatch) -> None:

@@ -8,7 +8,9 @@ HTTP API. Shared-memory snapshots from :mod:`shared_memory` are the on-track ora
 
 Endpoints (all except ``GET /health`` require ``Authorization: Bearer <token>``):
 
-* ``POST /session/start`` — cold-launch AC via :class:`EntryLauncher`
+* ``POST /session/start`` — launch AC via :class:`EntryLauncher`. ``launch_mode="cm"`` (default
+  on Windows) drives the de-elevated Content Manager URL path so ``acs.exe`` starts non-elevated
+  even when the daemon runs in an elevated shell; ``"acs"`` cold-launches ``acs.exe`` directly.
 * ``POST /sidecar/start`` — spawn ``python -m tools.ai_sidecar --external-bind …`` (requires
   a successful session start first)
 * ``GET /status`` — daemon + shared-memory oracle
@@ -32,11 +34,12 @@ from pathlib import Path
 from typing import Any
 
 from tools.ac_harness.entry_launcher import (
-    ColdRestartActuator,
+    LAUNCH_MODES,
     EntryLauncher,
     EntryLauncherConfig,
     EntryLaunchResult,
     EntryOutcome,
+    make_actuator,
 )
 from tools.ac_harness.shared_memory import (
     DrivingEntryDetector,
@@ -71,8 +74,15 @@ class HarnessDaemonConfig:
     bind_port: int = 9876
     token: str = ""
     repo_root: Path = field(default_factory=lambda: Path.cwd())
+    # Default to the de-elevated CM launch on the Windows rig (the only path that survives the
+    # elevated-shell / non-elevated-Steam split); acs.exe-direct elsewhere. Kept consistent with
+    # the CLI default so programmatic and CLI callers behave the same. ``cm`` mode requires a
+    # ``cm_preset`` — ``make_actuator`` raises if it is missing.
+    launch_mode: str = field(default_factory=lambda: "cm" if sys.platform == "win32" else "acs")
     acs_exe: Path | None = None
     race_ini: Path | None = None
+    cm_exe: Path | None = None
+    cm_preset: Path | None = None
     sidecar_host: str = "0.0.0.0"
     sidecar_port: int = 8765
     launcher_config: EntryLauncherConfig = field(default_factory=EntryLauncherConfig)
@@ -192,7 +202,13 @@ class HarnessDaemon:
         race_ini = config.race_ini or _default_race_ini()
 
         def _default_launcher_factory() -> EntryLauncher:
-            actuator = ColdRestartActuator(acs_exe=acs, race_ini=race_ini)
+            actuator = make_actuator(
+                config.launch_mode,
+                acs_exe=acs,
+                race_ini=race_ini,
+                cm_exe=config.cm_exe,
+                cm_preset=config.cm_preset,
+            )
             return EntryLauncher(actuator, config=config.launcher_config)
 
         def _default_sidecar_starter() -> subprocess.Popen[Any]:
@@ -397,22 +413,39 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repo-root", type=Path, default=Path.cwd(), help="Repo root (sidecar cwd)"
     )
-    parser.add_argument("--acs-exe", type=Path, help="Path to acs.exe")
-    parser.add_argument("--race-ini", type=Path, help="Path to race.ini")
+    parser.add_argument(
+        "--launch-mode",
+        choices=LAUNCH_MODES,
+        default="cm" if sys.platform == "win32" else "acs",
+        help=(
+            "cm = de-elevated Content Manager URL launch (default on Windows; survives the "
+            "elevated-shell/non-elevated-Steam split); acs = direct acs.exe launch"
+        ),
+    )
+    parser.add_argument("--acs-exe", type=Path, help="Path to acs.exe (--launch-mode acs)")
+    parser.add_argument("--race-ini", type=Path, help="Path to race.ini (--launch-mode acs)")
+    parser.add_argument("--cm-exe", type=Path, help="Path to Content Manager.exe (cm mode)")
+    parser.add_argument("--cm-preset", type=Path, help="Path to a Quick Drive .cmpreset (cm mode)")
     parser.add_argument("--sidecar-bind", default="0.0.0.0", help="Sidecar external bind host")
     parser.add_argument("--sidecar-port", type=int, default=8765, help="Sidecar port")
     return parser
 
 
 def _main(argv: Sequence[str] | None = None) -> int:
-    args = _build_arg_parser().parse_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    if args.launch_mode == "cm" and args.cm_preset is None:
+        parser.error("--launch-mode cm requires --cm-preset (path to a Quick Drive .cmpreset)")
     config = HarnessDaemonConfig(
         bind_host=args.bind,
         bind_port=args.port,
         token=args.token,
         repo_root=args.repo_root.resolve(),
+        launch_mode=args.launch_mode,
         acs_exe=args.acs_exe,
         race_ini=args.race_ini,
+        cm_exe=args.cm_exe,
+        cm_preset=args.cm_preset,
         sidecar_host=args.sidecar_bind,
         sidecar_port=args.sidecar_port,
     )

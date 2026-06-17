@@ -12,12 +12,15 @@ from tools.ac_harness import entry_launcher
 from tools.ac_harness.entry_launcher import (
     ActuatorEvent,
     ColdRestartActuator,
+    ContentManagerActuator,
     EntryActuator,
     EntryLauncher,
     EntryLauncherConfig,
+    EntryLaunchUnsupported,
     EntryOutcome,
     EntryPhase,
     classify_entry_phase,
+    make_actuator,
     normalize_race_ini_spawn_set,
 )
 from tools.ac_harness.shared_memory import (
@@ -353,6 +356,137 @@ def test_cold_restart_relaunch_reapplies_race_ini_normalization(monkeypatch, tmp
     assert launched == [[str(acs_exe.resolve())]]
     assert event.action == "relaunch"
     assert "SPAWN_SET=PIT" in event.detail
+
+
+def test_content_manager_quick_drive_url_encodes_preset_path():
+    preset = r"C:\Quick Drive\base test.cmpreset"
+    actuator = ContentManagerActuator(preset=preset, cm_exe="cm.exe")
+    url = actuator.quick_drive_url()
+
+    assert url.startswith("acmanager://race/quick?presetFile=")
+    assert "%20" in url  # spaces encoded
+    assert "%3A" in url  # colon encoded
+    assert " " not in url  # no raw spaces survive into the URL
+
+
+def test_content_manager_resolves_relative_preset_to_absolute():
+    # A separate CM process reads presetFile with its own cwd, so it must be absolute.
+    actuator = ContentManagerActuator(preset="drive.cmpreset", cm_exe="cm.exe")
+    assert actuator.preset.is_absolute()
+    assert "drive.cmpreset" in actuator.quick_drive_url()
+
+
+def test_content_manager_launch_spawns_cm_with_url(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    cm_exe = tmp_path / "Content Manager.exe"
+    cm_exe.write_text("", encoding="utf-8")
+    preset = tmp_path / "drive.cmpreset"
+    preset.write_text("{}", encoding="utf-8")
+    launched: list[list[str]] = []
+
+    def popen(cmd, **kwargs):
+        launched.append(cmd)
+        return object()
+
+    actuator = ContentManagerActuator(preset=preset, cm_exe=cm_exe, popen=popen)
+    event = actuator.launch()
+
+    assert event.action == "launch"
+    assert launched == [[str(actuator.cm_exe), actuator.quick_drive_url()]]
+    assert event.detail == actuator.quick_drive_url()
+
+
+def test_content_manager_launch_requires_windows(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "linux")
+    actuator = ContentManagerActuator(preset=tmp_path / "x.cmpreset", cm_exe=tmp_path / "cm.exe")
+
+    with pytest.raises(EntryLaunchUnsupported, match="Windows-only"):
+        actuator.launch()
+
+
+def test_content_manager_launch_missing_files(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    # Missing CM exe.
+    actuator = ContentManagerActuator(
+        preset=tmp_path / "x.cmpreset", cm_exe=tmp_path / "missing.exe"
+    )
+    with pytest.raises(FileNotFoundError, match="Content Manager not found"):
+        actuator.launch()
+
+    # CM present but preset missing.
+    cm_exe = tmp_path / "cm.exe"
+    cm_exe.write_text("", encoding="utf-8")
+    actuator = ContentManagerActuator(preset=tmp_path / "missing.cmpreset", cm_exe=cm_exe)
+    with pytest.raises(FileNotFoundError, match="preset not found"):
+        actuator.launch()
+
+
+def test_content_manager_trigger_drive_unsupported_requests_relaunch():
+    actuator = ContentManagerActuator(preset="x.cmpreset", cm_exe="cm.exe")
+    event = actuator.trigger_drive()
+
+    assert event.supported is False
+    assert "relaunch" in event.detail
+
+
+def test_content_manager_relaunch_kills_then_relaunches(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    cm_exe = tmp_path / "cm.exe"
+    cm_exe.write_text("", encoding="utf-8")
+    preset = tmp_path / "drive.cmpreset"
+    preset.write_text("{}", encoding="utf-8")
+    killed: list[list[str]] = []
+    launched: list[list[str]] = []
+
+    def runner(cmd, **kwargs):
+        killed.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def popen(cmd, **kwargs):
+        launched.append(cmd)
+        return object()
+
+    actuator = ContentManagerActuator(preset=preset, cm_exe=cm_exe, runner=runner, popen=popen)
+    event = actuator.relaunch()
+
+    assert killed == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
+    assert launched == [[str(actuator.cm_exe), actuator.quick_drive_url()]]
+    assert event.action == "relaunch"
+    assert "killed acs.exe" in event.detail
+
+
+def test_make_actuator_cm_builds_content_manager_actuator(tmp_path: Path):
+    actuator = make_actuator("cm", cm_preset=tmp_path / "d.cmpreset", cm_exe=tmp_path / "cm.exe")
+    assert isinstance(actuator, ContentManagerActuator)
+    assert actuator.quick_drive_url().startswith("acmanager://race/quick?presetFile=")
+
+
+def test_make_actuator_acs_builds_cold_restart(tmp_path: Path):
+    actuator = make_actuator("acs", acs_exe=tmp_path / "acs.exe")
+    assert isinstance(actuator, ColdRestartActuator)
+
+
+@pytest.mark.parametrize(
+    ("mode", "kwargs", "match"),
+    [
+        ("cm", {}, "cm_preset"),
+        ("acs", {}, "acs_exe"),
+        ("nope", {"cm_preset": "x", "acs_exe": "y"}, "unknown launch_mode"),
+    ],
+)
+def test_make_actuator_validates_mode(mode: str, kwargs: dict, match: str):
+    with pytest.raises(ValueError, match=match):
+        make_actuator(mode, **kwargs)
+
+
+def test_cli_acs_mode_requires_acs_exe():
+    with pytest.raises(SystemExit):
+        entry_launcher._main(["--launch-mode", "acs"])
+
+
+def test_cli_cm_mode_requires_preset():
+    with pytest.raises(SystemExit):
+        entry_launcher._main(["--launch-mode", "cm"])
 
 
 @pytest.mark.parametrize(
