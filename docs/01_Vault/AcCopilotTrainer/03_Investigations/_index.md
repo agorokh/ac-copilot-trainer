@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [racing-driver-and-controller-2026-06-17.md](racing-driver-and-controller-2026-06-17.md) | Racing driver follows `fast_lane.ai`'s embedded speed profile (braking points/trail braking); gear bug fixed (limiter below shift point); the wall is STEERING (pure-pursuit cuts apexes → invalid laps); human-lap telemetry is the path (#241/#242/#244). |
 | [cm-url-deelevated-launch-2026-06-16.md](cm-url-deelevated-launch-2026-06-16.md) | De-elevated `acmanager://race/quick` launch (CM-IPC forward) gets AC on track non-elevated from the elevated agent shell — the hands-off L2 keystone (#232/#233). |
 | [csp-cdata-callable-guards.md](csp-cdata-callable-guards.md) | `type(vec2)` returns "cdata" not "function" in CSP/LuaJIT — use nil-checks |
 | [csp-web-socket-api.md](csp-web-socket-api.md) | CSP web.socket is callback-based; sock(data) to send; reconnect:true required |
