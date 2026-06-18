@@ -2,10 +2,11 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-17T08:00:00Z
+last_updated: 2026-06-18T00:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/03_Investigations/racing-driver-and-controller-2026-06-17.md
   - AcCopilotTrainer/03_Investigations/cm-url-deelevated-launch-2026-06-16.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-live-verified-2026-06-16.md
   - AcCopilotTrainer/03_Investigations/issue-188-wrap-skew-rig-verification.md
@@ -28,6 +29,37 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-18 — HANDOFF: racing driver built; STEERING is the wall; human-lap data is next)
+
+**Read [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244) first — it is the cold-start
+handoff.** Account changeover mid-effort; this is the resume pointer.
+
+**Where it stands.** The hands-off self-test scaffolding is merged (#233 CM launch, #236 self-test
+runner, #239 HUD capture). The **racing driver** is OPEN in
+[PR #242](https://github.com/agorokh/ac-copilot-trainer/pull/242) (branch `feat/issue-241-racing-driver`,
+review-clean — merge or keep iterating):
+- `tools/ac_harness/racing_driver.py` follows `fast_lane.ai`'s embedded speed profile with braking
+  points / trail braking / traction throttle (12 tests).
+- **Gear bug fixed** (`04feea2`): 1st gear's limiter (~7400 rpm) sat below the old 7600 shift point →
+  car was **stuck in 1st** at 80 km/h. Now shifts **1→4**, **146 km/h** (was 52), range 12–146.
+- `tools/ac_harness/racing_telemetry.py` (`5fc71a1`) — **human-lap recorder** (CSV of
+  inputs+dynamics+lap/position).
+
+**The wall = STEERING (not the racing logic).** `PurePursuit` cuts apexes / understeers → corners
+crawl, lap scored **INVALID** → no `lap`/`delta` telemetry / no clean coaching reference. The input
+channel is fully racing-capable (333 Hz, 1.48 g brake, wheelspin — proven). Full write-up:
+[`03_Investigations/racing-driver-and-controller-2026-06-17`](../03_Investigations/racing-driver-and-controller-2026-06-17.md).
+
+**Next (the plan in #244).** Operator can drive 5–10 real laps → record with
+`python -m tools.ac_harness.racing_telemetry --out human_laps.csv --laps 10` → derive the human speed
+profile / braking points / corner speeds / grip envelope → build a path-tracking steering controller
+(Stanley/MPC) at the human's pace, replacing pure-pursuit. Acceptance: a VALID lap at ≳100 km/h avg
+with `lap`/`delta` telemetry flowing.
+
+**Rig:** AC currently down; daemon down; magione `surfaces.ini` Custom-AI edit was restored to stock
+(re-apply per #244 for the carcsw controller; not needed for human driving). Gear encoding: AC
+`gear` 0=R/1=N/2=1st (log `gear-1`). Live drivers/probes in `.scratch/part-g/`.
 
 ## Resume here (2026-06-17 — EPIC #154 #238/#239 MERGED: vision-oracle "eyes" (HUD capture) — LIVE-VERIFIED)
 
