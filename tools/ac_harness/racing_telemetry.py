@@ -32,6 +32,8 @@ _PHYS_BYTES = 160
 # acpmf_graphics: int packetId@0, int status@4; completedLaps@132, normalizedCarPosition@156
 #   (offsets ground-truthed live this project — see custom_ai / shared_memory).
 _GFX_BYTES = 256
+# Minimum bytes needed: norm_pos at offset 156 is a 4-byte float.
+_GFX_MIN_BYTES = 160
 
 CSV_HEADER = (
     "lap,t_s,norm_pos,speed_kmh,gear,rpm,gas,brake,steer,accg_lat,accg_lon,"
@@ -76,8 +78,8 @@ def parse_physics(buf: bytes) -> PhysFrame:
 
 def parse_graphics(buf: bytes) -> GfxFrame:
     """Parse an ``acpmf_graphics`` buffer (pure)."""
-    if len(buf) < 160:
-        raise ValueError(f"graphics buffer too short: {len(buf)} < 160")
+    if len(buf) < _GFX_MIN_BYTES:
+        raise ValueError(f"graphics buffer too short: {len(buf)} < {_GFX_MIN_BYTES}")
     packet_id = struct.unpack_from("<i", buf, 0)[0]
     status = struct.unpack_from("<i", buf, 4)[0]
     completed_laps = struct.unpack_from("<i", buf, 132)[0]
@@ -101,54 +103,60 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
     """
     if sys.platform != "win32":
         raise RuntimeError("racing_telemetry recording is Windows-only (AC shared memory)")
-    phys = open_shared_memory(SHM_PHYSICS, _PHYS_BYTES)
-    gfx = open_shared_memory(SHM_GRAPHICS, _GFX_BYTES)
-    fh = open(out_path, "w", encoding="utf-8", newline="\n")
-    fh.write(CSV_HEADER + "\n")
-
+    phys = gfx = None
     laps = 0
     rows = 0
-    last_packet = -1
-    base_laps: int | None = None
-    lap_start_t = 0.0
-    lap_min = 1e9
-    lap_max = 0.0
-    t0 = time.monotonic()
-    print(f"recording to {out_path} — drive! (Ctrl-C or {max_laps} laps to stop)", flush=True)
     try:
-        while time.monotonic() - t0 < max_seconds and laps < max_laps:
-            pbuf = phys.read(_PHYS_BYTES)
-            p = parse_physics(pbuf)
-            if p.packet_id == last_packet:
-                time.sleep(0.003)
-                continue
-            last_packet = p.packet_id
-            g = parse_graphics(gfx.read(_GFX_BYTES))
-            if base_laps is None:
-                base_laps = g.completed_laps
-                lap_start_t = time.monotonic()
-            lap = g.completed_laps - base_laps
-            fh.write(csv_row(lap, time.monotonic() - t0, p, g) + "\n")
-            rows += 1
-            lap_min = min(lap_min, p.speed_kmh)
-            lap_max = max(lap_max, p.speed_kmh)
-            if lap > laps:  # crossed start/finish -> a lap completed
-                lt = time.monotonic() - lap_start_t
-                print(
-                    f"  LAP {laps + 1} done: {lt:6.1f}s  speed {lap_min:5.1f}-{lap_max:5.1f} km/h "
-                    f"({rows} frames)",
-                    flush=True,
-                )
-                laps = lap
-                lap_start_t = time.monotonic()
-                lap_min, lap_max = 1e9, 0.0
-            time.sleep(0.004)
-    except KeyboardInterrupt:
-        print("\nstopped.", flush=True)
+        phys = open_shared_memory(SHM_PHYSICS, _PHYS_BYTES)
+        gfx = open_shared_memory(SHM_GRAPHICS, _GFX_BYTES)
+        with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(CSV_HEADER + "\n")
+
+            last_packet = -1
+            base_laps: int | None = None
+            lap_start_t = 0.0
+            lap_min = 1e9
+            lap_max = 0.0
+            t0 = time.monotonic()
+            print(
+                f"recording to {out_path} — drive! (Ctrl-C or {max_laps} laps to stop)",
+                flush=True,
+            )
+            try:
+                while time.monotonic() - t0 < max_seconds and laps < max_laps:
+                    pbuf = phys.read(_PHYS_BYTES)
+                    p = parse_physics(pbuf)
+                    if p.packet_id == last_packet:
+                        time.sleep(0.003)
+                        continue
+                    last_packet = p.packet_id
+                    g = parse_graphics(gfx.read(_GFX_BYTES))
+                    if base_laps is None:
+                        base_laps = g.completed_laps
+                        lap_start_t = time.monotonic()
+                    lap = g.completed_laps - base_laps
+                    fh.write(csv_row(lap, time.monotonic() - t0, p, g) + "\n")
+                    rows += 1
+                    lap_min = min(lap_min, p.speed_kmh)
+                    lap_max = max(lap_max, p.speed_kmh)
+                    if lap > laps:  # crossed start/finish -> a lap completed
+                        lt = time.monotonic() - lap_start_t
+                        print(
+                            f"  LAP {laps + 1} done: {lt:6.1f}s  speed "
+                            f"{lap_min:5.1f}-{lap_max:5.1f} km/h ({rows} frames)",
+                            flush=True,
+                        )
+                        laps = lap
+                        lap_start_t = time.monotonic()
+                        lap_min, lap_max = 1e9, 0.0
+                    time.sleep(0.004)
+            except KeyboardInterrupt:
+                print("\nstopped.", flush=True)
     finally:
-        fh.close()
-        phys.close()
-        gfx.close()
+        if gfx is not None:
+            gfx.close()
+        if phys is not None:
+            phys.close()
     print(f"\nwrote {rows} frames over {laps} completed lap(s) -> {out_path}", flush=True)
     return laps
 

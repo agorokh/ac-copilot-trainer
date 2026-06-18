@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+from typing import Any
 
 import pytest
 
@@ -16,7 +17,7 @@ from tools.ac_harness.racing_telemetry import (
 )
 
 
-def _phys_buf(**kw) -> bytes:
+def _phys_buf(**kw: Any) -> bytes:
     b = bytearray(200)
     struct.pack_into("<i", b, 0, kw.get("packet", 7))
     struct.pack_into("<2f", b, 4, kw.get("gas", 0.8), kw.get("brake", 0.0))
@@ -27,7 +28,7 @@ def _phys_buf(**kw) -> bytes:
     return bytes(b)
 
 
-def _gfx_buf(**kw) -> bytes:
+def _gfx_buf(**kw: Any) -> bytes:
     b = bytearray(256)
     struct.pack_into("<i", b, 0, kw.get("packet", 11))
     struct.pack_into("<i", b, 4, kw.get("status", 2))
