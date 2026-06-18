@@ -59,6 +59,19 @@ def test_backward_pass_creates_a_braking_point_before_a_slow_corner():
     assert d.profile[25] < 80.0  # the high straight speed was pulled down by the upcoming corner
 
 
+def test_backward_pass_wraps_cyclically_around_slow_corner_at_start():
+    # Slow corner at index 0: backward pass wraps so speeds at the end of the lap are also capped.
+    n = 40
+    line = _straight_line(n, ds=5.0)
+    speeds = [80.0] * n
+    speeds[0] = 8.0
+    d = RacingDriver(line, speeds, pace=1.0, max_speed_kmh=400.0, brake_g=1.0)
+    assert d.profile[0] == pytest.approx(8.0, abs=0.5)
+    assert d.profile[-1] < 80.0
+    assert d.profile[-1] > d.profile[0]
+    assert d.profile[-2] > d.profile[-1]
+
+
 def test_longitudinal_brakes_hard_when_well_over_target():
     line = _straight_line(20)
     d = RacingDriver(line, [30.0] * 20, pace=1.0, max_speed_kmh=400.0, brake_g=5.0)  # ~flat 30 m/s
