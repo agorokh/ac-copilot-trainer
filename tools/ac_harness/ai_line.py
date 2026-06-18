@@ -203,6 +203,19 @@ class PurePursuit:
             b = self._plane[(i + 1) % n]
             self._seg_len.append(math.hypot(b[0] - a[0], b[1] - a[1]))
 
+    @property
+    def segment_lengths(self) -> tuple[float, ...]:
+        """Planar segment length from each point to the next (cyclic wrap at ``i+1 mod n``)."""
+        return tuple(self._seg_len)
+
+    def plane_position(self, index: int) -> tuple[float, float]:
+        """Horizontal ``(x, z)`` position of line point ``index``."""
+        return self._plane[index]
+
+    def advance_index(self, start_index: int, distance_m: float) -> int:
+        """Walk ``distance_m`` along the cyclic line from ``start_index``; return the aim index."""
+        return self._advance(start_index, distance_m)
+
     def nearest_index(self, position: tuple[float, float]) -> int:
         """Index of the line point planar-closest to ``position`` (full scan; pure)."""
         best_i = 0

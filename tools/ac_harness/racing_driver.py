@@ -36,6 +36,8 @@ from tools.ac_harness.lap_driver import PHASE_LAP, PHASE_OUT, DriveFrame
 _HEADER_SIZE = 16
 _POINT_SIZE = 20
 _EXTRA_STRIDE = 72
+# Repeated cyclic backward sweeps; 4 passes propagate brake-feasible caps across km-scale lines.
+_BACKWARD_PASS_PASSES = 4
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -179,23 +181,24 @@ class RacingDriver:
         so the constraint propagates across the start/finish wrap of the closed line.
         """
         a = brake_g * 9.81
-        seg = self.pursuit._seg_len
+        seg = self.pursuit.segment_lengths
         n = self.n
         out = list(v)
-        for _ in range(4):
+        for _ in range(_BACKWARD_PASS_PASSES):
             for j in range(n):
                 i = (n - 1 - j) % n
                 nxt = (i + 1) % n
                 ds = seg[i]
                 cap = math.sqrt(out[nxt] * out[nxt] + 2.0 * a * ds)
-                if out[i] > cap:
-                    out[i] = cap
+                out[i] = min(out[i], cap)
         return out
 
     def target_speed_kmh(self, idx: int, speed_kmh: float) -> float:
         """Brake-feasible target (km/h) at ``idx`` with a speed-scaled look-ahead margin."""
         v_cur = speed_kmh / 3.6
-        look_idx = self.pursuit._advance(idx, max(self.lookahead_m, v_cur * self.lookahead_time_s))
+        look_idx = self.pursuit.advance_index(
+            idx, max(self.lookahead_m, v_cur * self.lookahead_time_s)
+        )
         return min(self.profile[idx], self.profile[look_idx]) * 3.6
 
     def _longitudinal(self, idx: int, speed_kmh: float, steer: float) -> tuple[float, float]:
@@ -263,9 +266,8 @@ class RacingDriver:
         """Pure: one racing control decision from the live pose + monotonic clock ``now`` (s)."""
         car = _horizontal(position_xyz)
         idx = self.pursuit.nearest_index(car)
-        dist_to_line = math.hypot(
-            self.pursuit._plane[idx][0] - car[0], self.pursuit._plane[idx][1] - car[1]
-        )
+        line_pt = self.pursuit.plane_position(idx)
+        dist_to_line = math.hypot(line_pt[0] - car[0], line_pt[1] - car[1])
         if (
             self.phase == PHASE_OUT
             and dist_to_line < self.merge_distance_m

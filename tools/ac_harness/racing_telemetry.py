@@ -126,7 +126,10 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
                 flush=True,
             )
             try:
-                while time.monotonic() - t0 < max_seconds and laps < max_laps:
+                while True:
+                    now = time.monotonic()
+                    if now - t0 >= max_seconds or laps >= max_laps:
+                        break
                     gbuf = gfx.read(_GFX_BYTES)
                     g = parse_graphics(gbuf)
                     if last_gfx_packet is not None and g.packet_id <= last_gfx_packet:
@@ -142,22 +145,22 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
                     last_phys_packet = p.packet_id
                     if base_laps is None:
                         base_laps = g.completed_laps
-                        lap_start_t = time.monotonic()
+                        lap_start_t = now
                     lap = g.completed_laps - base_laps
-                    fh.write(csv_row(lap, time.monotonic() - t0, p, g) + "\n")
+                    fh.write(csv_row(lap, now - t0, p, g) + "\n")
                     rows += 1
                     lap_rows += 1
                     lap_min = min(lap_min, p.speed_kmh)
                     lap_max = max(lap_max, p.speed_kmh)
                     if lap > laps:  # crossed start/finish -> a lap completed
-                        lt = time.monotonic() - lap_start_t
+                        lt = now - lap_start_t
                         print(
                             f"  LAP {laps + 1} done: {lt:6.1f}s  speed "
                             f"{lap_min:5.1f}-{lap_max:5.1f} km/h ({lap_rows} frames)",
                             flush=True,
                         )
                         laps = lap
-                        lap_start_t = time.monotonic()
+                        lap_start_t = now
                         lap_min, lap_max = 1e9, 0.0
                         lap_rows = 0
                     time.sleep(0.004)
