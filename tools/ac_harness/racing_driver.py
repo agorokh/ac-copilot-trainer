@@ -94,9 +94,9 @@ class RacingDriver:
         lookahead_time_s: float = 0.5,
         max_steer_curvature: float = 0.20,
         wheelbase_m: float = 2.5,
-        brake_band_ms: float = 0.5,
-        brake_scale_ms: float = 4.0,
-        throttle_scale_ms: float = 6.0,
+        brake_band_mps: float = 0.5,
+        brake_scale_mps: float = 4.0,
+        throttle_scale_mps: float = 6.0,
         base_gas: float = 0.05,
         trail_release: float = 0.7,
         trail_min: float = 0.2,
@@ -123,8 +123,8 @@ class RacingDriver:
             raise ValueError("pace must be in (0, 1]")
         if max_speed_kmh <= 0 or min_speed_kmh <= 0 or min_speed_kmh > max_speed_kmh:
             raise ValueError("require 0 < min_speed_kmh <= max_speed_kmh")
-        if brake_g <= 0 or brake_scale_ms <= 0 or throttle_scale_ms <= 0:
-            raise ValueError("brake_g, brake_scale_ms, throttle_scale_ms must be > 0")
+        if brake_g <= 0 or brake_scale_mps <= 0 or throttle_scale_mps <= 0:
+            raise ValueError("brake_g, brake_scale_mps, throttle_scale_mps must be > 0")
 
         self.pursuit = PurePursuit(
             fast_line,
@@ -137,9 +137,9 @@ class RacingDriver:
         self.n = len(fast_line)
         self.lookahead_m = lookahead_m
         self.lookahead_time_s = lookahead_time_s
-        self.brake_band_ms = brake_band_ms
-        self.brake_scale_ms = brake_scale_ms
-        self.throttle_scale_ms = throttle_scale_ms
+        self.brake_band_mps = brake_band_mps
+        self.brake_scale_mps = brake_scale_mps
+        self.throttle_scale_mps = throttle_scale_mps
         self.base_gas = base_gas
         self.trail_release = trail_release
         self.trail_min = trail_min
@@ -204,13 +204,13 @@ class RacingDriver:
         target = self.target_speed_kmh(idx, speed_kmh) / 3.6
         lat = abs(steer)  # cornering load proxy (steer fraction)
         err = v_cur - target
-        if err > self.brake_band_ms:
-            brake = _clamp((err - self.brake_band_ms) / self.brake_scale_ms, 0.0, 1.0)
+        if err > self.brake_band_mps:
+            brake = _clamp((err - self.brake_band_mps) / self.brake_scale_mps, 0.0, 1.0)
             # trail braking: bleed brake off as steering loads the front, but keep some mid-corner.
             brake *= max(self.trail_min, 1.0 - self.trail_release * lat)
             return 0.0, brake
         # Under/at target: throttle toward it, lifting as steering loads the car (anti-wheelspin).
-        gas = _clamp((target - v_cur) / self.throttle_scale_ms + self.base_gas, 0.0, 1.0)
+        gas = _clamp((target - v_cur) / self.throttle_scale_mps + self.base_gas, 0.0, 1.0)
         gas *= max(0.0, 1.0 - self.traction_lift * lat)
         return gas, 0.0
 

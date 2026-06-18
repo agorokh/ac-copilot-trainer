@@ -98,8 +98,9 @@ def csv_row(lap: int, t: float, p: PhysFrame, g: GfxFrame) -> str:
 def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) -> int:
     """Record physics+graphics frames to ``out_path`` (CSV) until ``max_laps`` or ``max_seconds``.
 
-    Windows/rig-only. Dedupes on the physics packetId, segments laps on ``completedLaps``, and
-    prints a per-lap summary (time, min/max speed). Returns the number of completed laps.
+    Windows/rig-only. Dedupes on physics and graphics packetId (avoids mismatched pairs),
+    segments laps on ``completedLaps``, and prints a per-lap summary (time, min/max speed).
+    Returns the number of completed laps.
     """
     if sys.platform != "win32":
         raise RuntimeError("racing_telemetry recording is Windows-only (AC shared memory)")
@@ -112,7 +113,8 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
         with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(CSV_HEADER + "\n")
 
-            last_packet = -1
+            last_phys_packet: int | None = None
+            last_gfx_packet: int | None = None
             base_laps: int | None = None
             lap_start_t = 0.0
             lap_min = 1e9
@@ -124,13 +126,19 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
             )
             try:
                 while time.monotonic() - t0 < max_seconds and laps < max_laps:
-                    pbuf = phys.read(_PHYS_BYTES)
-                    p = parse_physics(pbuf)
-                    if p.packet_id == last_packet:
+                    gbuf = gfx.read(_GFX_BYTES)
+                    g = parse_graphics(gbuf)
+                    if last_gfx_packet is not None and g.packet_id <= last_gfx_packet:
                         time.sleep(0.003)
                         continue
-                    last_packet = p.packet_id
-                    g = parse_graphics(gfx.read(_GFX_BYTES))
+                    last_gfx_packet = g.packet_id
+
+                    pbuf = phys.read(_PHYS_BYTES)
+                    p = parse_physics(pbuf)
+                    if last_phys_packet is not None and p.packet_id <= last_phys_packet:
+                        time.sleep(0.003)
+                        continue
+                    last_phys_packet = p.packet_id
                     if base_laps is None:
                         base_laps = g.completed_laps
                         lap_start_t = time.monotonic()
