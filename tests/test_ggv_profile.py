@@ -214,3 +214,57 @@ def test_from_ggv_profile_length_mismatch_raises():
     line = _circle(50.0, 100)
     with pytest.raises(ValueError):
         RacingDriver.from_ggv_profile(line, [30.0] * 50)
+
+
+# --- Stage 2: slip ratio + slip limiter + ax feedforward -------------------
+def test_slip_ratio_sign_and_deadzone():
+    from tools.ac_harness.racing_driver import slip_ratio
+
+    r, v = 0.33, 30.0
+    omega_match = v / r  # wheel surface speed == body speed -> ~0 slip
+    assert abs(slip_ratio(omega_match, r, v)) < 1e-6
+    assert slip_ratio(omega_match * 1.2, r, v) > 0.1  # wheelspin
+    assert slip_ratio(omega_match * 0.8, r, v) < -0.1  # locking
+    assert slip_ratio(omega_match, r, 0.1) == 0.0  # near-stationary deadzone
+
+
+def test_slip_limited_controls_clamps_only():
+    from tools.ac_harness.racing_driver import slip_limited_controls
+
+    # below thresholds: untouched
+    g, b = slip_limited_controls(1.0, 0.0, 0.05, 0.0)
+    assert g == 1.0
+    # wheelspin: gas cut, never raised
+    g2, _ = slip_limited_controls(1.0, 0.0, 0.40, 0.0, accel_slip_target=0.16, cut_gain=4.0)
+    assert 0.0 <= g2 < 1.0
+    # lockup: brake cut
+    _, b2 = slip_limited_controls(0.0, 1.0, 0.0, -0.40, brake_slip_target=0.16, cut_gain=4.0)
+    assert 0.0 <= b2 < 1.0
+    # extreme slip drives the command toward zero, never negative
+    g3, b3 = slip_limited_controls(1.0, 1.0, 2.0, -2.0)
+    assert g3 == 0.0 and b3 == 0.0
+
+
+def test_profile_ax_feedforward_sign():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 100)
+    d = RacingDriver.from_ggv_profile(line, [30.0] * 100)
+    assert abs(d._profile_ax(10)) < 1e-6  # constant profile -> no demanded accel
+    d.profile[11] = 20.0
+    assert d._profile_ax(10) < 0  # next point slower -> decelerate
+    d.profile[11] = 40.0
+    assert d._profile_ax(10) > 0  # next point faster -> accelerate
+
+
+def test_ff_adds_braking_when_profile_decelerates():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 100)
+    d_ff = RacingDriver.from_ggv_profile(line, [30.0] * 100, ax_feedforward=True)
+    d_no = RacingDriver.from_ggv_profile(line, [30.0] * 100, ax_feedforward=False)
+    d_ff.profile[11] = 10.0
+    d_no.profile[11] = 10.0
+    _, b_ff = d_ff._longitudinal(10, 30.0 * 3.6, 0.0)
+    _, b_no = d_no._longitudinal(10, 30.0 * 3.6, 0.0)
+    assert b_ff >= b_no  # feedforward brakes at least as hard into the decel

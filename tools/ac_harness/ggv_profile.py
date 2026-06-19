@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import csv
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 G = 9.81
@@ -348,16 +348,25 @@ def build_ggv_speed_profile(
     v_top_kmh: float = 232.0,
     smooth_win: int = 3,
     span: int = 3,
+    accel_peak_g: float | None = None,
 ) -> tuple[list[float], GGVModel, dict]:
     """End-to-end offline build: fit GGV from telemetry, compute the QSS profile on ``fast_line``.
 
     Returns (v_target_mps aligned to fast_line points, GGVModel, summary dict). The v_target list is
     drop-in for :class:`RacingDriver` (one m/s target per line point).
+
+    ``accel_peak_g`` overrides the (under-driven, human-fit) drive accel with a traction-shaped
+    curve peaking at ``accel_peak_g`` low-speed and fading with speed. The human barely used the gas
+    (0.24-0.97 g), so the fitted accel is far below the car's capability; an aggressive accel target
+    is made TC-off-safe live by ``slip_limited_controls``. Braking/lateral are left as fitted.
     """
     plane = [(p[0], p[2]) for p in fast_line]
     seg = seg_lengths(plane)
     kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
     ggv = ggv_from_telemetry(_read_csv(human_csv))
+    if accel_peak_g is not None:
+        # traction-shaped accel: peak low-speed, ~0.4 g by 60 m/s (power/drag fade)
+        ggv = replace(ggv, drive_b0_g=accel_peak_g, drive_b1=-(accel_peak_g - 0.4) / 60.0)
     v, ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
     total = sum(seg)
     laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))

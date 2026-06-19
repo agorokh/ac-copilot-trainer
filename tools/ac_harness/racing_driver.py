@@ -262,6 +262,44 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
 
+def slip_ratio(wheel_omega: float, wheel_radius_m: float, v_body_mps: float) -> float:
+    """Longitudinal slip ratio ``(omega*r - v) / v`` for one wheel.
+
+    >0 = the wheel is spinning faster than the ground (wheelspin under power); <0 = the wheel is
+    slower (locking under braking). Computed from ``wheelAngularSpeed`` (rad/s) read from
+    ``acpmf_physics`` — NOT AC's ``wheelSlip`` field, which is a combined Pacejka NDslip magnitude
+    on a different scale (red-team #B fix).
+    """
+    if v_body_mps < 0.5:
+        return 0.0
+    return (wheel_omega * wheel_radius_m - v_body_mps) / v_body_mps
+
+
+def slip_limited_controls(
+    gas: float,
+    brake: float,
+    drive_slip: float,
+    min_slip: float,
+    *,
+    accel_slip_target: float = 0.16,
+    brake_slip_target: float = 0.16,
+    cut_gain: float = 4.0,
+) -> tuple[float, float]:
+    """Software TC/ABS: clamp gas/brake from measured slip ratios (the TC-off-safe enabler).
+
+    ``drive_slip`` is the driven (rear) wheels' slip ratio; ``min_slip`` is the most-negative slip
+    over all wheels (lockup indicator). These are PURE CLAMPS — they can only reduce gas/brake, so
+    they make the car safer/slower, never command more (red-team: ship clamps first). Above
+    ``accel_slip_target`` gas is cut proportionally (kill wheelspin); below ``-brake_slip_target``
+    brake is released (anti-lock). Returns the limited ``(gas, brake)``.
+    """
+    if drive_slip > accel_slip_target:
+        gas *= max(0.0, 1.0 - cut_gain * (drive_slip - accel_slip_target))
+    if min_slip < -brake_slip_target:
+        brake *= max(0.0, 1.0 - cut_gain * (-min_slip - brake_slip_target))
+    return _clamp(gas, 0.0, 1.0), _clamp(brake, 0.0, 1.0)
+
+
 class RacingDriver:
     """Drive ``fast_line`` at racing dynamics from any starting state (pits, off-line, on-line).
 
@@ -326,6 +364,14 @@ class RacingDriver:
         kwargs.setdefault("brake_scale_mps", 2.5)
         kwargs.setdefault("throttle_scale_mps", 4.0)
         kwargs.setdefault("base_gas", 0.1)
+        # Stage 2 infra (ax feedforward) is OFF by default: live-verified that enabling it on the
+        # Stanley lateral controller REGRESSES (95.3s -> 104-110s) — the more aggressive longitudinal
+        # carries more speed into corners than Stanley can hold (steer saturates). Unlocked once
+        # Stage 3 (curvature-feedforward lateral) lands. Opt in with ax_feedforward=True.
+        kwargs.setdefault("ax_feedforward", False)
+        kwargs.setdefault("ff_gain", 1.0)
+        kwargs.setdefault("ff_drive_g", 1.0)
+        kwargs.setdefault("ff_brake_g", 2.2)
         return cls(fast_line, list(v_target_mps), **kwargs)
 
     def __init__(
@@ -368,6 +414,10 @@ class RacingDriver:
         min_lap_m: float = 1800.0,
         return_radius_m: float = 12.0,
         profile_is_final: bool = False,
+        ax_feedforward: bool = False,
+        ff_gain: float = 1.0,
+        ff_drive_g: float = 1.0,
+        ff_brake_g: float = 2.0,
     ) -> None:
         if len(fast_line) != len(speed_profile):
             raise ValueError(
@@ -400,6 +450,10 @@ class RacingDriver:
         )
         self.n = len(fast_line)
         self.steering_mode = steering_mode
+        self.ax_feedforward = ax_feedforward
+        self.ff_gain = ff_gain
+        self.ff_drive_g = ff_drive_g
+        self.ff_brake_g = ff_brake_g
         self.lookahead_m = lookahead_m
         self.lookahead_time_s = lookahead_time_s
         self.brake_band_mps = brake_band_mps
@@ -477,19 +531,57 @@ class RacingDriver:
         )
         return min(self.profile[idx], self.profile[look_idx]) * 3.6
 
+    def _profile_ax(self, idx: int) -> float:
+        """Acceleration (m/s^2, signed) the profile itself demands from ``idx`` to the next point.
+
+        ``a = (v_next^2 - v_idx^2) / (2 ds)`` along the cyclic line — this is the feedforward term:
+        in a braking zone it is strongly negative, on corner exit strongly positive. Tracking it
+        directly (instead of only chasing the speed error) removes the ~one-step lag that left the
+        Stage-1 controller ~10% below its own minimum-time profile.
+        """
+        nxt = (idx + 1) % self.n
+        ds = self.pursuit.segment_lengths[idx]
+        if ds <= 1e-6:
+            return 0.0
+        return (self.profile[nxt] * self.profile[nxt] - self.profile[idx] * self.profile[idx]) / (
+            2.0 * ds
+        )
+
     def _longitudinal(self, idx: int, speed_kmh: float, steer: float) -> tuple[float, float]:
-        """Racing throttle/brake toward the brake-feasible profile (trail braking + traction)."""
+        """Racing throttle/brake toward the profile: speed-error feedback + optional ax feedforward.
+
+        With ``ax_feedforward`` the profile's demanded accel (:meth:`_profile_ax`) drives a baseline
+        gas/brake via a coarse inverse model (``ff_drive_g``/``ff_brake_g`` caps); the speed error
+        term only trims the residual. Without it, the original proportional law is unchanged.
+        """
         v_cur = speed_kmh / 3.6
         target = self.target_speed_kmh(idx, speed_kmh) / 3.6
         lat = min(abs(steer), 1.0)  # cornering load proxy (steer fraction, saturated)
         err = v_cur - target
-        if err > self.brake_band_mps:
-            brake = _clamp((err - self.brake_band_mps) / self.brake_scale_mps, 0.0, 1.0)
+        ax_ff = self.ff_gain * self._profile_ax(idx) if self.ax_feedforward else 0.0
+        # Braking demand = MAX of (overspeed feedback) and (profile-decel feedforward) — never their
+        # SUM (summing double-brakes -> over-slow into corners). The FF term anticipates the braking
+        # point, but is gated off when the car is already well below target (don't brake when slow).
+        fb_brake = (
+            _clamp((err - self.brake_band_mps) / self.brake_scale_mps, 0.0, 1.0)
+            if err > self.brake_band_mps
+            else 0.0
+        )
+        ff_brake = (
+            _clamp(-ax_ff / (self.ff_brake_g * 9.81), 0.0, 1.0)
+            if (ax_ff < 0.0 and err > -self.brake_band_mps)
+            else 0.0
+        )
+        brake = max(fb_brake, ff_brake)
+        if brake > 0.0:
             # trail braking: bleed brake off as steering loads the front, but keep some mid-corner.
             brake *= max(self.trail_min, 1.0 - self.trail_release * lat)
             return 0.0, brake
-        # Under/at target: throttle toward it, lifting as steering loads the car (anti-wheelspin).
-        gas = _clamp((target - v_cur) / self.throttle_scale_mps + self.base_gas, 0.0, 1.0)
+        # Under/at target: throttle toward it + accel feedforward, lifting as steering loads grip.
+        gas = (target - v_cur) / self.throttle_scale_mps + self.base_gas
+        if ax_ff > 0.0:
+            gas += ax_ff / (self.ff_drive_g * 9.81)
+        gas = _clamp(gas, 0.0, 1.0)
         gas *= max(0.0, 1.0 - self.traction_lift * lat)
         return gas, 0.0
 
