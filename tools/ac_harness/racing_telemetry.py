@@ -31,7 +31,7 @@ from tools.ac_harness.shared_memory import SHM_GRAPHICS, SHM_PHYSICS, open_share
 #   float wheelAngularSpeed[4]@104, ...
 _PHYS_BYTES = 160
 # acpmf_graphics: int packetId@0, int status@4; completedLaps@132, normalizedCarPosition@248
-#   (@248 ground-truthed live by scanning for the only changing in-range float; @156=distanceTraveled)
+#   (@248 ground-truthed live by scanning for the changing in-range float; @156=distanceTraveled)
 _GFX_BYTES = 256
 # Minimum bytes needed: norm_pos at offset 248 is a 4-byte float.
 _GFX_MIN_BYTES = 252
