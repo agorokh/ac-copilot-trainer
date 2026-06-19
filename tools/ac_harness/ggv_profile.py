@@ -440,7 +440,7 @@ def build_ggv_speed_profile(
         ggv = replace(ggv, drive_b0_g=accel_peak_g, drive_b1=-(accel_peak_g - 0.4) / 60.0)
     if lat_grip_g is not None:
         # grip self-play: the relaxed human under-corners (~1.2 g), a real GT3 R does ~1.5 g. Push
-        # the lateral envelope up to raise apex speeds; kept honest live by validity (back off if cut).
+        # the lateral envelope up to raise apex speeds; kept honest live by validity.
         ggv = replace(ggv, mu_lat_g=lat_grip_g, ay_cap_g=max(ggv.ay_cap_g, lat_grip_g + 0.1))
     v, ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
     total = sum(seg)
