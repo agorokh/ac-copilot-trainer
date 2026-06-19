@@ -1,0 +1,216 @@
+"""Tests for the GGV friction-circle minimum-time speed profiler (tools.ac_harness.ggv_profile).
+
+Pure-math, no game. Covers the red-team-mandated guards: curvature accuracy, friction-ellipse
+corners, forward-backward correctness/feasibility on a synthetic track, GGV de-contamination
+(straight-line high-speed bins must not poison lateral grip), and build determinism.
+"""
+
+from __future__ import annotations
+
+import math
+
+from tools.ac_harness.ggv_profile import (
+    GGVModel,
+    build_ggv_speed_profile,
+    curvature_profile,
+    forward_backward_profile,
+    ggv_from_telemetry,
+    menger_curvature,
+    seg_lengths,
+)
+
+G = 9.81
+
+
+def _circle(radius: float, n: int) -> list[tuple[float, float, float]]:
+    return [
+        (radius * math.cos(2 * math.pi * i / n), 0.0, radius * math.sin(2 * math.pi * i / n))
+        for i in range(n)
+    ]
+
+
+def _flat_ggv(mu=1.0, brake=1.0, drive=1.0, n=2.0) -> GGVModel:
+    return GGVModel(
+        mu_lat_g=mu,
+        k_aero_lat=0.0,
+        brake_b0_g=brake,
+        brake_b1=0.0,
+        drive_b0_g=drive,
+        drive_b1=0.0,
+        drive_min_g=0.3,
+        ellipse_n=n,
+    )
+
+
+# --- curvature -------------------------------------------------------------
+def test_menger_curvature_circle():
+    r = 50.0
+    pts = [(r * math.cos(a), r * math.sin(a)) for a in (0.0, 0.1, 0.2)]
+    assert abs(menger_curvature(*pts) - 1.0 / r) < 1e-3
+
+
+def test_curvature_profile_constant_on_circle():
+    r = 40.0
+    plane = [(p[0], p[2]) for p in _circle(r, 400)]
+    kappa = curvature_profile(plane, smooth_win=2, span=3)
+    # interior points: curvature ~ 1/r within a few percent
+    mid = kappa[50:350]
+    assert all(abs(k - 1.0 / r) < 0.05 * (1.0 / r) for k in mid), (min(mid), max(mid), 1 / r)
+
+
+def test_curvature_zero_on_straight():
+    plane = [(float(i), 0.0) for i in range(50)] + [(49.0 - i, 5.0) for i in range(50)]
+    kappa = curvature_profile(plane, smooth_win=1, span=2)
+    assert kappa[20] < 1e-3  # mid-straight
+
+
+# --- friction ellipse ------------------------------------------------------
+def test_ellipse_corners():
+    ggv = _flat_ggv(mu=1.2, brake=2.0, n=2.0)
+    v = 30.0
+    # no lateral -> full braking
+    assert abs(ggv.ax_brake_avail(0.0, v) - ggv.ax_brake_max(v)) < 1e-6
+    # at the lateral limit -> ~zero braking left
+    assert ggv.ax_brake_avail(ggv.ay_max(v), v) < 1e-3
+    # interior is between, monotone decreasing in lateral usage
+    a_lo = ggv.ax_brake_avail(0.3 * ggv.ay_max(v), v)
+    a_hi = ggv.ax_brake_avail(0.7 * ggv.ay_max(v), v)
+    assert ggv.ax_brake_max(v) > a_lo > a_hi > 0.0
+
+
+def test_aero_braking_rises_with_speed():
+    ggv = GGVModel(
+        mu_lat_g=1.2,
+        k_aero_lat=0.0,
+        brake_b0_g=0.9,
+        brake_b1=0.025,
+        drive_b0_g=0.8,
+        drive_b1=0.0,
+        drive_min_g=0.3,
+        ellipse_n=1.5,
+    )
+    assert ggv.ax_brake_max(60.0) > ggv.ax_brake_max(10.0)  # downforce
+
+
+# --- forward-backward profile ---------------------------------------------
+def test_profile_constant_on_circle_equals_apex():
+    r = 60.0
+    plane = [(p[0], p[2]) for p in _circle(r, 600)]
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=2, span=3)
+    ggv = _flat_ggv(mu=1.0)
+    v, _ = forward_backward_profile(kappa, seg, ggv, v_top_ms=200.0, v_floor_ms=1.0)
+    apex = math.sqrt(ggv.ay_max(0.0) * r)  # sqrt(mu*g*R)
+    mid = v[100:500]
+    assert all(abs(x - apex) < 0.06 * apex for x in mid), (min(mid), max(mid), apex)
+
+
+def test_profile_brakes_into_corner_and_respects_vtop():
+    # long straight (kappa 0) into a tight arc: speed must fall toward the arc apex before it
+    n_straight, r, n_arc = 300, 25.0, 120
+    straight = [(float(i) * 3.0, 0.0) for i in range(n_straight)]
+    cx = straight[-1][0]
+    arc = [
+        (cx + r * math.sin(a), r - r * math.cos(a))
+        for a in (math.pi * 2 * i / (n_arc * 4) for i in range(n_arc))
+    ]
+    plane = straight + arc
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=1, span=2)
+    ggv = _flat_ggv(mu=1.1, brake=1.3)
+    v, _ = forward_backward_profile(kappa, seg, ggv, v_top_ms=80.0, v_floor_ms=2.0)
+    assert max(v) <= 80.0 + 1e-6  # v_top respected
+    assert v[n_straight + n_arc // 2] < v[50]  # slowed in the arc vs early straight
+    # braking happened on the straight before the arc (speed decreasing approaching the corner)
+    assert v[n_straight - 5] < v[n_straight - 60]
+
+
+def test_profile_deterministic():
+    r = 45.0
+    plane = [(p[0], p[2]) for p in _circle(r, 300)]
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=2, span=3)
+    ggv = _flat_ggv()
+    a, _ = forward_backward_profile(kappa, seg, ggv)
+    b, _ = forward_backward_profile(kappa, seg, ggv)
+    assert a == b
+
+
+# --- GGV de-contamination from telemetry ----------------------------------
+def _rows(speed_kmh, lat_max, lon_brake_max, n):
+    # deterministic spread 0..max via index fraction
+    out = []
+    for i in range(n):
+        f = (i % 100) / 99.0
+        out.append(
+            {
+                "speed_kmh": str(speed_kmh),
+                "accg_lat": str(lat_max * f),
+                "accg_lon": str(-lon_brake_max * f),
+            }
+        )
+    return out
+
+
+def test_ggv_decontamination_lateral_not_poisoned_by_straights():
+    # mid-speed bin: real hard cornering (up to 1.3g). high-speed bin: straight-line only (0.1g lat)
+    rows = _rows(60, 1.3, 1.2, 1500) + _rows(210, 0.1, 2.6, 1500)
+    ggv = ggv_from_telemetry(rows, min_samples=50)
+    # lateral grip reflects the cornering bin (~1.2-1.3g), NOT dragged toward 0.1
+    assert ggv.mu_lat_g > 1.0, ggv.provenance["lat_model"]
+    # high-speed bin tagged as non-cornering; mid-speed bin tagged cornering
+    bins = ggv.provenance["bins"]
+    assert bins[60]["cornered"] is True
+    assert bins[210]["cornered"] is False
+    # braking grip rises with speed (aero) — fitted slope positive
+    assert ggv.ax_brake_max(55.0) > ggv.ax_brake_max(15.0)
+
+
+def test_ggv_no_aero_lateral_extrapolation():
+    rows = _rows(60, 1.3, 1.2, 1500) + _rows(210, 0.1, 2.6, 1500)
+    ggv = ggv_from_telemetry(rows, min_samples=50)
+    assert ggv.k_aero_lat == 0.0  # honest: no high-speed cornering data -> no aero-lateral claim
+    assert ggv.ay_max(10.0) == ggv.ay_max(58.0)  # flat lateral grip
+
+
+# --- end-to-end build determinism on a synthetic line ----------------------
+def test_build_ggv_speed_profile_deterministic_and_capped(tmp_path):
+    import csv as _csv
+
+    csvp = tmp_path / "tele.csv"
+    with csvp.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["speed_kmh", "accg_lat", "accg_lon"])
+        for r in _rows(60, 1.3, 1.2, 1500) + _rows(200, 0.1, 2.6, 1500):
+            w.writerow([r["speed_kmh"], r["accg_lat"], r["accg_lon"]])
+    line = _circle(50.0, 400)
+    v1, g1, s1 = build_ggv_speed_profile(line, csvp, v_top_kmh=180.0)
+    v2, g2, s2 = build_ggv_speed_profile(line, csvp, v_top_kmh=180.0)
+    assert v1 == v2 and s1 == s2
+    assert max(v1) <= 180.0 / 3.6 + 1e-6
+    assert len(v1) == len(line)
+
+
+# --- RacingDriver.from_ggv_profile wiring ----------------------------------
+def test_from_ggv_profile_uses_target_verbatim_and_steps():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 400)
+    vt = [30.0] * len(line)  # constant 30 m/s target
+    d = RacingDriver.from_ggv_profile(line, vt, steering_mode="stanley")
+    assert d.profile == vt  # FINAL profile used verbatim: no cap, no fixed-brake_g backward pass
+    f = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 100.0, 6000.0, 4, 1.0)
+    assert 0.0 <= f.gas <= 1.0 and 0.0 <= f.brake <= 1.0 and -1.0 <= f.steer <= 1.0
+    # over the 30 m/s target at 100 km/h (27.8 m/s)? 100km/h=27.8 < 30 so should not be max-braking
+    f2 = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 200.0, 6000.0, 5, 2.0)  # 55 m/s >> 30 target
+    assert f2.brake > 0.5  # well over target -> braking
+
+
+def test_from_ggv_profile_length_mismatch_raises():
+    import pytest
+
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 100)
+    with pytest.raises(ValueError):
+        RacingDriver.from_ggv_profile(line, [30.0] * 50)

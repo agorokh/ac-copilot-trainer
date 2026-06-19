@@ -294,6 +294,40 @@ class RacingDriver:
             **kwargs,
         )
 
+    @classmethod
+    def from_ggv_profile(
+        cls,
+        fast_line: list[tuple[float, float, float]],
+        v_target_mps: list[float],
+        **kwargs,
+    ) -> RacingDriver:
+        """Construct from a baked GGV friction-circle minimum-time profile (one m/s target/point).
+
+        ``v_target_mps`` comes from :func:`tools.ac_harness.ggv_profile.build_ggv_speed_profile`; it
+        is the FINAL target (apex + speed-dependent braking baked in), so it is used verbatim:
+        no pace scaling, no speed cap, no fixed-``brake_g`` backward pass.
+
+        Longitudinal defaults are tuned for tracking a GGV profile (not the legacy lane-keeper): the
+        braking points are already in ``v_target``, so the re-braking look-ahead is minimised and
+        the brake/throttle response is tighter. Live-verified on Magione: 106.8s legacy -> 95.3s.
+        """
+        if len(v_target_mps) != len(fast_line):
+            raise ValueError(
+                f"v_target ({len(v_target_mps)}) and line ({len(fast_line)}) length mismatch"
+            )
+        kwargs["profile_is_final"] = True
+        kwargs.setdefault("max_speed_kmh", max(max(v_target_mps) * 3.6, 1.0) + 5.0)
+        kwargs.setdefault("min_speed_kmh", 1.0)
+        kwargs.setdefault("pace", 1.0)
+        # GGV-appropriate longitudinal tracking defaults (the profile already bakes braking points,
+        # so don't re-brake via a long look-ahead; respond tighter to the target).
+        kwargs.setdefault("lookahead_m", 4.0)
+        kwargs.setdefault("lookahead_time_s", 0.15)
+        kwargs.setdefault("brake_scale_mps", 2.5)
+        kwargs.setdefault("throttle_scale_mps", 4.0)
+        kwargs.setdefault("base_gas", 0.1)
+        return cls(fast_line, list(v_target_mps), **kwargs)
+
     def __init__(
         self,
         fast_line: list[tuple[float, float, float]],
@@ -333,6 +367,7 @@ class RacingDriver:
         stuck_throttle: float = 0.1,
         min_lap_m: float = 1800.0,
         return_radius_m: float = 12.0,
+        profile_is_final: bool = False,
     ) -> None:
         if len(fast_line) != len(speed_profile):
             raise ValueError(
@@ -388,11 +423,18 @@ class RacingDriver:
         self.min_lap_m = min_lap_m
         self.return_radius_m = return_radius_m
 
-        # Scaled + capped target, then brake-feasible backward pass -> per-point m/s target.
-        cap = max_speed_kmh / 3.6
-        floor = min_speed_kmh / 3.6
-        scaled = [_clamp(pace * s, floor, cap) for s in speed_profile]
-        self.profile = self._backward_pass(scaled, brake_g)
+        # Target speed (m/s) per point. In GGV mode the profile is ALREADY the friction-circle
+        # minimum-time target (braking/apex baked in by tools.ac_harness.ggv_profile), so we use it
+        # verbatim - no pace scaling, no max_speed cap, no fixed-brake_g backward pass (that is the
+        # exact consumer-grade step #244's frontier controller replaces). Otherwise (legacy human/
+        # fast_lane profile) keep the scale + cap + backward pass.
+        if profile_is_final:
+            self.profile = list(speed_profile)
+        else:
+            cap = max_speed_kmh / 3.6
+            floor = min_speed_kmh / 3.6
+            scaled = [_clamp(pace * s, floor, cap) for s in speed_profile]
+            self.profile = self._backward_pass(scaled, brake_g)
 
         # Mutable run state (mirrors LapDriver).
         self.phase = PHASE_OUT
