@@ -427,7 +427,9 @@ class StanleySteering:
 
     def project(self, position: tuple[float, float]) -> PathProjection:
         """Project ``position`` to the nearest point on any cyclic line segment."""
-        best: PathProjection | None = None
+        best_i: int | None = None
+        best_t = 0.0
+        best_proj = (0.0, 0.0)
         best_d2 = float("inf")
         n = len(self._plane)
         for i in range(n):
@@ -444,22 +446,29 @@ class StanleySteering:
             d2 = off[0] * off[0] + off[1] * off[1]
             if d2 >= best_d2:
                 continue
-            seg_len = math.sqrt(seg2)
-            tangent = (dx / seg_len, dz / seg_len)
-            right = (-tangent[1], tangent[0])
-            signed = off[0] * right[0] + off[1] * right[1]
-            best = PathProjection(
-                segment_index=i,
-                t=t,
-                point=proj,
-                tangent=tangent,
-                signed_cross_track_m=signed,
-                distance_m=math.sqrt(d2),
-            )
+            best_i = i
+            best_t = t
+            best_proj = proj
             best_d2 = d2
-        if best is None:  # construction rejects all-zero lines; this is defensive.
+        if best_i is None:  # construction rejects all-zero lines; this is defensive.
             raise ValueError("Stanley steering line has no projectable segment")
-        return best
+        a = self._plane[best_i]
+        b = self._plane[(best_i + 1) % n]
+        dx = b[0] - a[0]
+        dz = b[1] - a[1]
+        seg_len = math.hypot(dx, dz)
+        tangent = (dx / seg_len, dz / seg_len)
+        right = (-tangent[1], tangent[0])
+        off = (best_proj[0] - position[0], best_proj[1] - position[1])
+        signed = off[0] * right[0] + off[1] * right[1]
+        return PathProjection(
+            segment_index=best_i,
+            t=best_t,
+            point=best_proj,
+            tangent=tangent,
+            signed_cross_track_m=signed,
+            distance_m=math.sqrt(best_d2),
+        )
 
     def steer(
         self,

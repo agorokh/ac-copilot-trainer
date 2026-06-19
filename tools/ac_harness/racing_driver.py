@@ -130,20 +130,23 @@ def load_human_profile(path: str | Path) -> list[HumanProfilePoint]:
             raise ValueError(f"human profile missing required column(s): {cols}")
         for line_no, row in enumerate(reader, start=2):
             try:
-                norm_pos = float(row["norm_pos"]) % 1.0
+                raw_norm_pos = float(row["norm_pos"])
                 speed_kmh = float(row["speed_kmh"])
                 brake = float(row["brake"])
                 gas = float(row["gas"])
                 min_speed_kmh = float(row.get("min_speed_kmh") or speed_kmh)
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"human profile line {line_no} has non-numeric data") from exc
-            values = (norm_pos, speed_kmh, brake, gas, min_speed_kmh)
+            values = (raw_norm_pos, speed_kmh, brake, gas, min_speed_kmh)
             if not all(math.isfinite(v) for v in values):
                 raise ValueError(f"human profile line {line_no} has non-finite data")
+            if not 0.0 <= raw_norm_pos <= 1.0:
+                raise ValueError(f"human profile line {line_no} norm_pos out of range 0..1")
             if speed_kmh < 0 or min_speed_kmh < 0:
                 raise ValueError(f"human profile line {line_no} has negative speed")
             if not 0.0 <= brake <= 1.0 or not 0.0 <= gas <= 1.0:
                 raise ValueError(f"human profile line {line_no} gas/brake out of range 0..1")
+            norm_pos = 0.0 if raw_norm_pos == 1.0 else raw_norm_pos
             rows.append(
                 HumanProfilePoint(
                     norm_pos=norm_pos,
@@ -162,9 +165,13 @@ def load_human_profile(path: str | Path) -> list[HumanProfilePoint]:
     return rows
 
 
-def _cyclic_interpolate(points: list[HumanProfilePoint], norm_pos: float, field: str) -> float:
+def _cyclic_interpolate(
+    points: list[HumanProfilePoint],
+    norms: list[float],
+    norm_pos: float,
+    field: str,
+) -> float:
     """Interpolate a profile field on the cyclic ``0..1`` normalized track domain."""
-    norms = [p.norm_pos for p in points]
     target = norm_pos % 1.0
     idx = bisect_right(norms, target)
     if idx == 0:
@@ -191,18 +198,64 @@ def _cyclic_interpolate(points: list[HumanProfilePoint], norm_pos: float, field:
     return left_value + frac * (right_value - left_value)
 
 
-def human_profile_speed_profile(points: list[HumanProfilePoint], point_count: int) -> list[float]:
+def _line_normalized_positions(fast_line: list[tuple[float, float, float]]) -> list[float]:
+    """Return each racing-line point's distance fraction around the cyclic lap."""
+    if len(fast_line) < 2:
+        raise ValueError("fast_line needs at least two points")
+    plane = [_horizontal(p) for p in fast_line]
+    cumulative = [0.0]
+    total = 0.0
+    for i in range(1, len(plane)):
+        prev = plane[i - 1]
+        cur = plane[i]
+        total += math.hypot(cur[0] - prev[0], cur[1] - prev[1])
+        cumulative.append(total)
+    first = plane[0]
+    last = plane[-1]
+    total += math.hypot(first[0] - last[0], first[1] - last[1])
+    if total <= 1e-9:
+        raise ValueError("fast_line has zero cyclic length")
+    return [0.0 if total - d <= 1e-9 else d / total for d in cumulative]
+
+
+def human_profile_speed_profile(
+    points: list[HumanProfilePoint],
+    point_count: int,
+    *,
+    norm_positions: list[float] | None = None,
+) -> list[float]:
     """Resample a human profile to one target speed per racing-line point."""
     if point_count <= 0:
         raise ValueError("point_count must be > 0")
     if len(points) < 2:
         raise ValueError("human profile needs at least two rows")
-    return [_cyclic_interpolate(points, i / point_count, "speed_mps") for i in range(point_count)]
+    if norm_positions is None:
+        norm_positions = [i / point_count for i in range(point_count)]
+    if len(norm_positions) != point_count:
+        raise ValueError("norm_positions length must equal point_count")
+    for pos in norm_positions:
+        if not math.isfinite(pos) or not 0.0 <= pos < 1.0:
+            raise ValueError("norm_positions must be finite fractions in [0, 1)")
+    norms = [p.norm_pos for p in points]
+    return [_cyclic_interpolate(points, norms, pos, "speed_mps") for pos in norm_positions]
 
 
 def load_human_speed_profile(path: str | Path, point_count: int) -> list[float]:
     """Load and resample a human-lap CSV into a ``RacingDriver`` speed profile."""
     return human_profile_speed_profile(load_human_profile(path), point_count)
+
+
+def load_human_speed_profile_for_line(
+    path: str | Path,
+    fast_line: list[tuple[float, float, float]],
+) -> list[float]:
+    """Load a human-lap CSV and align it by distance fraction to ``fast_line`` points."""
+    profile = load_human_profile(path)
+    return human_profile_speed_profile(
+        profile,
+        len(fast_line),
+        norm_positions=_line_normalized_positions(fast_line),
+    )
 
 
 def _clamp(x: float, lo: float, hi: float) -> float:
@@ -231,7 +284,15 @@ class RacingDriver:
         kwargs.setdefault("pace", 1.0)
         kwargs.setdefault("max_speed_kmh", max(p.speed_mps for p in profile) * 3.6)
         kwargs.setdefault("min_speed_kmh", max(min(p.min_speed_mps for p in profile) * 3.6, 1.0))
-        return cls(fast_line, human_profile_speed_profile(profile, len(fast_line)), **kwargs)
+        return cls(
+            fast_line,
+            human_profile_speed_profile(
+                profile,
+                len(fast_line),
+                norm_positions=_line_normalized_positions(fast_line),
+            ),
+            **kwargs,
+        )
 
     def __init__(
         self,

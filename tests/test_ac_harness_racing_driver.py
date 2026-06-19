@@ -14,6 +14,7 @@ from tools.ac_harness.racing_driver import (
     load_ai_profile,
     load_human_profile,
     load_human_speed_profile,
+    load_human_speed_profile_for_line,
     load_speed_profile,
 )
 
@@ -97,6 +98,61 @@ def test_load_human_profile_parses_and_resamples_cyclically(tmp_path: Path):
     assert points[0].speed_mps == pytest.approx(20.0)
     assert points[1].brake == pytest.approx(0.5)
     assert speeds == pytest.approx([30.0, 20.0, 30.0, 40.0])  # m/s, wrapping across 1.0->0.0
+
+
+def test_load_human_profile_rejects_out_of_range_norm_pos(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "-0.25,72.0,0.000,1.000,60.0\n"
+        "0.75,144.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="norm_pos out of range"):
+        load_human_profile(f)
+
+
+def test_load_human_speed_profile_for_line_uses_distance_fraction(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "0.00,0.0,0.000,1.000,0.0\n"
+        "0.50,180.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+    # Cyclic segment lengths: 10, 30, 10, 30 -> point distance fractions 0, .125, .5, .625.
+    line = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (10.0, 0.0, 30.0),
+        (0.0, 0.0, 30.0),
+    ]
+
+    speeds_kmh = [s * 3.6 for s in load_human_speed_profile_for_line(f, line)]
+
+    assert speeds_kmh == pytest.approx([0.0, 45.0, 180.0, 135.0])
+
+
+def test_racing_driver_from_human_profile_uses_line_distance_fraction(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "0.00,36.0,0.000,1.000,1.0\n"
+        "0.50,180.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+    line = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (10.0, 0.0, 30.0),
+        (0.0, 0.0, 30.0),
+    ]
+
+    d = RacingDriver.from_human_profile(line, f, brake_g=1000.0)
+    speeds_kmh = [s * 3.6 for s in d.profile]
+
+    assert speeds_kmh == pytest.approx([36.0, 72.0, 180.0, 144.0])
 
 
 def test_real_magione_human_fixture_has_racing_pace():
