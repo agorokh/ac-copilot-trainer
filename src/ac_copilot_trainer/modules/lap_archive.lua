@@ -62,6 +62,34 @@ local function lapArchiveDir()
   return persistence.lapArchiveDir()
 end
 
+local function traceSampleToColumnRow(s)
+  if type(s) ~= "table" or type(s.spline) ~= "number" then
+    return nil
+  end
+  local row = {}
+  for fi = 1, #TRACE_FIELDS do
+    local fname = TRACE_FIELDS[fi]
+    if fname == "spline" then
+      row[fi] = s.spline
+    else
+      row[fi] = tonumber(s[fname]) or 0
+    end
+  end
+  return row
+end
+
+local function countTraceRows(trace)
+  if type(trace) ~= "table" then return 0 end
+  local n = 0
+  for i = 1, #trace do
+    local s = trace[i]
+    if type(s) == "table" and type(s.spline) == "number" then
+      n = n + 1
+    end
+  end
+  return n
+end
+
 --- Settings UI calls `stats()` every frame; cache full-directory scan for a short TTL (Gemini #78).
 --- Uses `os.time` (wall-ish seconds), not `os.clock` (CPU time can stall the TTL — Cursor #78).
 local _statsCacheT = -1e9
@@ -110,17 +138,8 @@ local function traceToColumns(trace)
   if type(trace) ~= "table" then return {} end
   local out = {}
   for i = 1, #trace do
-    local s = trace[i]
-    if type(s) == "table" and type(s.spline) == "number" then
-      local row = {}
-      for fi = 1, #TRACE_FIELDS do
-        local fname = TRACE_FIELDS[fi]
-        if fname == "spline" then
-          row[fi] = s.spline
-        else
-          row[fi] = tonumber(s[fname]) or 0
-        end
-      end
+    local row = traceSampleToColumnRow(trace[i])
+    if row then
       out[#out + 1] = row
     end
   end
@@ -158,7 +177,7 @@ end
 ---  opts.rules_hints (string list), opts.sidecar_debrief (string|nil),
 ---  opts.corner_advice (table label->text|nil)
 ---@return table|nil
-function M.buildRecord(opts)
+local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   if type(opts) ~= "table" then return nil end
   if not opts.lap_n or not opts.lap_ms or opts.lap_ms <= 0 then return nil end
 
@@ -188,7 +207,8 @@ function M.buildRecord(opts)
   local trackTemp = nil
   pcall(function() trackTemp = tonumber(sim and sim.trackTemperature) end)
 
-  local samplesColumnar = traceToColumns(opts.trace)
+  samplesColumnar = samplesColumnar or {}
+  samplesCount = tonumber(samplesCount) or #samplesColumnar
   local cornersOut = {}
   if type(opts.corners) == "table" then
     for i = 1, #opts.corners do
@@ -263,7 +283,7 @@ function M.buildRecord(opts)
       snapshot = flattenSetupSnapshot(opts.setup_snap),
     },
     trace = {
-      samples_count = #samplesColumnar,
+      samples_count = samplesCount,
       fields = traceFieldNames,
       samples = samplesColumnar,
     },
@@ -276,6 +296,11 @@ function M.buildRecord(opts)
           and opts.corner_advice or nil,
     },
   }
+end
+
+function M.buildRecord(opts)
+  local samplesColumnar = traceToColumns(type(opts) == "table" and opts.trace or nil)
+  return buildRecordEnvelope(opts, samplesColumnar, #samplesColumnar)
 end
 
 --- Walk archive dir, sum file sizes, delete oldest until total <= capMB.
@@ -356,15 +381,8 @@ function M.rotate(capMB)
   return #files - deleted, total / (1024 * 1024), deleted
 end
 
---- Write a record to disk. Returns (true, path) on success, (false, errmsg) on failure.
----@param rec table
----@param capMB number|nil
----@return boolean, string
-function M.write(rec, capMB)
-  if type(rec) ~= "table" then return false, "not a table" end
-  capMB = M.clampArchiveCapMB(capMB)
+local function archivePathForRecord(rec)
   local dir = lapArchiveDir()
-  persistence.ensureParentDirForFile(dir .. "/_dummy")  -- create dir
   local lapMs = (rec.lap and tonumber(rec.lap.lap_ms)) or 0
   local lapN = (rec.lap and tonumber(rec.lap.lap_n)) or 0
   local sessShort = tostring(rec.session_uuid or "x"):gsub("[^%w]", ""):sub(1, 8)
@@ -377,7 +395,19 @@ function M.write(rec, capMB)
   end
   local fname = string.format("lap_%s_%s_%d_%d_%s.json",
     fileTimestampUtc(), sessShort, lapN, lapMs, lapKey)
-  local path = dir .. "/" .. fname
+  return dir .. "/" .. fname
+end
+
+--- Write a record to disk. Returns (true, path) on success, (false, errmsg) on failure.
+---@param rec table
+---@param capMB number|nil
+---@return boolean, string
+function M.write(rec, capMB)
+  if type(rec) ~= "table" then return false, "not a table" end
+  capMB = M.clampArchiveCapMB(capMB)
+  local dir = lapArchiveDir()
+  persistence.ensureParentDirForFile(dir .. "/_dummy")  -- create dir
+  local path = archivePathForRecord(rec)
   -- Large trace arrays: compact JSON avoids pretty-print whitespace blowing the cap (Cursor #78).
   local raw = persistence.encodeJsonCompact(rec)
   if not raw then return false, "encodeJsonCompact returned nil" end
@@ -407,6 +437,210 @@ function M.write(rec, capMB)
   pcall(function() M.rotate(capMB) end)
   bustStatsCache()
   return true, path
+end
+
+local function jsonValue(value, label)
+  local raw = persistence.encodeJsonCompact(value)
+  if not raw then
+    return nil, "encodeJsonCompact returned nil for " .. tostring(label)
+  end
+  return raw, nil
+end
+
+--- Create a budgeted lap-archive write job.
+---
+--- This keeps the completed-lap frame from compact-encoding and flushing a
+--- whole trace on CSP's render thread. Call `job:step(maxRows)` once per frame;
+--- it writes at most `maxRows` trace rows, then returns `(done, ok, pathOrErr)`.
+---@param opts table
+---@param capMB number|nil
+---@return table|nil, string|nil
+function M.createWriteJob(opts, capMB)
+  if type(opts) ~= "table" then
+    return nil, "opts must be a table"
+  end
+  local samplesCount = countTraceRows(opts.trace)
+  local rec = buildRecordEnvelope(opts, {}, samplesCount)
+  if not rec then
+    return nil, "invalid archive record options"
+  end
+
+  capMB = M.clampArchiveCapMB(capMB)
+  local path = archivePathForRecord(rec)
+  local job = {
+    _state = "open",
+    _file = nil,
+    _path = path,
+    _tmpPath = path .. ".tmp",
+    _rec = rec,
+    _trace = opts.trace or {},
+    _sampleIndex = 1,
+    _samplesWritten = 0,
+    samplesCount = samplesCount,
+    done = false,
+    ok = nil,
+    result = nil,
+  }
+
+  function job:_write(chunk)
+    if chunk == nil or chunk == "" then return true, nil end
+    if not self._file then return false, "archive temp file is not open" end
+    local writeOk, writeRes = pcall(function() return self._file:write(chunk) end)
+    if not writeOk or not writeRes then
+      local msg = (not writeOk) and tostring(writeRes) or "write returned nil"
+      return false, "write failed: " .. msg
+    end
+    return true, nil
+  end
+
+  function job:_flush()
+    if not self._file then return true, nil end
+    local flushOk, flushRes = pcall(function() return self._file:flush() end)
+    if not flushOk or not flushRes then
+      local msg = (not flushOk) and tostring(flushRes) or "flush returned nil"
+      return false, "flush failed: " .. msg
+    end
+    return true, nil
+  end
+
+  function job:_fail(message)
+    if self._file then
+      pcall(function() self._file:close() end)
+      self._file = nil
+    end
+    pcall(os.remove, self._tmpPath)
+    self.done = true
+    self.ok = false
+    self.result = tostring(message or "archive job failed")
+    return true, false, self.result
+  end
+
+  function job:_writeField(name, value)
+    if value == nil then return true, nil end
+    local raw, encErr = jsonValue(value, name)
+    if not raw then return false, encErr end
+    local prefix = self._fieldWritten and "," or ""
+    local ok, err = self:_write(prefix .. "\"" .. name .. "\":" .. raw)
+    if not ok then return false, err end
+    self._fieldWritten = true
+    return true, nil
+  end
+
+  function job:_open()
+    persistence.ensureParentDirForFile(lapArchiveDir() .. "/_dummy")
+    local f, ferr = io.open(self._tmpPath, "w")
+    if not f then
+      return self:_fail("open failed: " .. tostring(ferr))
+    end
+    self._file = f
+    self._fieldWritten = false
+
+    local ok, err = self:_write("{")
+    if not ok then return self:_fail(err) end
+    local fields = {
+      { "schema_version", self._rec.schema_version },
+      { "source", self._rec.source },
+      { "import_format", self._rec.import_format },
+      { "lap_uuid", self._rec.lap_uuid },
+      { "session_uuid", self._rec.session_uuid },
+      { "exported_at", self._rec.exported_at },
+      { "car", self._rec.car },
+      { "track", self._rec.track },
+      { "conditions", self._rec.conditions },
+      { "lap", self._rec.lap },
+      { "setup", self._rec.setup },
+    }
+    for i = 1, #fields do
+      ok, err = self:_writeField(fields[i][1], fields[i][2])
+      if not ok then return self:_fail(err) end
+    end
+
+    local traceFieldsRaw
+    traceFieldsRaw, err = jsonValue(self._rec.trace.fields, "trace.fields")
+    if not traceFieldsRaw then return self:_fail(err) end
+    local prefix = self._fieldWritten and "," or ""
+    ok, err = self:_write(prefix
+      .. "\"trace\":{\"samples_count\":" .. tostring(self.samplesCount)
+      .. ",\"fields\":" .. traceFieldsRaw
+      .. ",\"samples\":[")
+    if not ok then return self:_fail(err) end
+    self._fieldWritten = true
+    self._state = "samples"
+    return false, nil, nil
+  end
+
+  function job:_finish()
+    local ok, err = self:_write("]}")
+    if not ok then return self:_fail(err) end
+    ok, err = self:_writeField("corners", self._rec.corners)
+    if not ok then return self:_fail(err) end
+    ok, err = self:_writeField("coaching", self._rec.coaching)
+    if not ok then return self:_fail(err) end
+    ok, err = self:_write("}")
+    if not ok then return self:_fail(err) end
+
+    local flushOk, flushRes = pcall(function() return self._file:flush() end)
+    if not flushOk or not flushRes then
+      local msg = (not flushOk) and tostring(flushRes) or "flush returned nil"
+      return self:_fail("flush failed: " .. msg)
+    end
+    local closeOk, closeRes = pcall(function() return self._file:close() end)
+    self._file = nil
+    if not closeOk or not closeRes then
+      local msg = (not closeOk) and tostring(closeRes) or "close returned nil"
+      return self:_fail("close failed: " .. msg)
+    end
+    local renameOk, renameRes = pcall(os.rename, self._tmpPath, self._path)
+    if not renameOk or renameRes == nil or renameRes == false then
+      local msg = (not renameOk) and tostring(renameRes) or "rename returned nil"
+      return self:_fail("rename failed: " .. msg)
+    end
+    pcall(function() M.rotate(capMB) end)
+    bustStatsCache()
+    self.done = true
+    self.ok = true
+    self.result = self._path
+    return true, true, self._path
+  end
+
+  function job:step(maxRows)
+    if self.done then
+      return true, self.ok == true, self.result
+    end
+    local rowsBudget = math.max(1, math.floor(tonumber(maxRows) or 64))
+    if self._state == "open" then
+      local done, ok, res = self:_open()
+      if done then return done, ok, res end
+    end
+    if self._state == "samples" then
+      local processed = 0
+      while self._sampleIndex <= #self._trace and processed < rowsBudget do
+        local row = traceSampleToColumnRow(self._trace[self._sampleIndex])
+        self._sampleIndex = self._sampleIndex + 1
+        processed = processed + 1
+        if row then
+          local raw, encErr = jsonValue(row, "trace.sample")
+          if not raw then return self:_fail(encErr) end
+          local prefix = self._samplesWritten > 0 and "," or ""
+          local ok, err = self:_write(prefix .. raw)
+          if not ok then return self:_fail(err) end
+          self._samplesWritten = self._samplesWritten + 1
+        end
+      end
+      if self._sampleIndex <= #self._trace then
+        local ok, err = self:_flush()
+        if not ok then return self:_fail(err) end
+        return false, nil, nil
+      end
+      self._state = "finish"
+    end
+    if self._state == "finish" then
+      return self:_finish()
+    end
+    return false, nil, nil
+  end
+
+  return job, nil
 end
 
 --- Lightweight stats for the Settings UI: count + total MB used.
