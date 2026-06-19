@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,12 +22,33 @@ from typing import Any
 from tools.process_miner.analyze import more_severe_severity
 from tools.process_miner.schemas import AnalysisResult, CommentCluster
 
+
+def _fleet_governance_runtime_path() -> Path:
+    raw_root = os.environ.get("FLEET_GOVERNANCE_ROOT", "").strip()
+    root = Path(raw_root).expanduser() if raw_root else Path.home() / ".fleet-governance"
+    return root if (root / "inference_egress").is_dir() else root / "runtime"
+
+
+_EGRESS_RUNTIME = _fleet_governance_runtime_path()
+if str(_EGRESS_RUNTIME) not in sys.path:
+    sys.path.insert(0, str(_EGRESS_RUNTIME))
+
+try:
+    import inference_egress as _egress
+except ModuleNotFoundError as e:
+    if e.name != "inference_egress":
+        raise
+    raise RuntimeError(
+        "governance-hub inference egress client is required. Install governance-hub at "
+        "$FLEET_GOVERNANCE_ROOT or ~/.fleet-governance so runtime/inference_egress is importable."
+    ) from e
+
 # Selects cache path segment and validator contract (``distill_cache_path`` /
 # ``_validate_distill_cluster_entries``). Live ``run_distillation`` always sends
 # the v2 structured JSON prompt; ``distill-v1`` remains for reading legacy caches.
 DISTILL_PROMPT_VERSION = os.environ.get("DISTILL_PROMPT_VERSION", "distill-v2")
 
-DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_BASE_URL = _egress.DEFAULT_BASE_URL
 # Sonnet is the cost-effective default; set DISTILL_MODEL=anthropic/claude-opus-4.6
 # for higher-quality distillation on premium runs. OpenRouter slugs use dotted
 # versions (e.g. anthropic/claude-sonnet-4.6), not hyphenated 4-6 (Bugbot/CodeRabbit #81).
@@ -34,56 +56,28 @@ DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
 
 
 def _normalized_distill_base_url(explicit: str | None = None) -> str:
-    """Strip and default ``DISTILL_BASE_URL``; prepend ``https://`` when scheme is omitted.
-
-    Keeps :func:`distill_api_key` hostname resolution consistent with
-    :func:`_resolved_base_url` (CodeRabbit #81).
-    """
-    raw = (
-        explicit if explicit is not None else os.environ.get("DISTILL_BASE_URL")
-    ) or DEFAULT_BASE_URL
-    raw = raw.strip()
-    if not raw:
-        return DEFAULT_BASE_URL
-    if "://" not in raw:
-        raw = "https://" + raw
-    return raw
+    """Delegate distill base-url normalization to the governance-hub egress client."""
+    return _egress.normalized_base_url(explicit, base_url_env="DISTILL_BASE_URL")
 
 
-def _distill_api_hostname() -> str:
-    """Lowercase hostname for ``DISTILL_BASE_URL`` (or default), empty if unparseable."""
-    raw = _normalized_distill_base_url(None)
-    try:
-        return (urllib.parse.urlparse(raw).hostname or "").lower()
-    except ValueError:
-        return ""
-
-
-def distill_api_key() -> str | None:
+def distill_api_key(base_url: str | None = None) -> str | None:
     """Resolve API key from env, matching key to the target endpoint.
 
     ``DISTILL_API_KEY`` is checked first (explicit override). After that, the resolved
     base URL determines which provider key to prefer — ``OPENROUTER_API_KEY`` for
-    OpenRouter endpoints, ``OPENAI_API_KEY`` for OpenAI endpoints. Unrecognized hosts
-    return ``None`` so provider keys are never sent to arbitrary third-party URLs
-    (use ``DISTILL_API_KEY`` for custom endpoints).
+    OpenRouter endpoints, ``OPENAI_API_KEY`` for OpenAI endpoints, and project-scoped
+    DIAL keys for the governed gateway. Unrecognized hosts return ``None`` so provider
+    keys are never sent to arbitrary third-party URLs (use ``DISTILL_API_KEY`` for
+    custom endpoints).
     """
-    # Explicit override — always wins regardless of endpoint
-    v = os.environ.get("DISTILL_API_KEY", "").strip()
-    if v:
-        return v
-    # Match key to endpoint to prevent cross-provider credential leak.
-    # No fallback loop: if the endpoint-matched key is absent, return None rather
-    # than silently sending a different provider's credential (Sourcery #81).
-    # Provider list is intentionally tiny; add explicit hostname branches for new hosts.
-    host = _distill_api_hostname()
-    # Require registrable boundary so ``evilopenrouter.ai`` does not match (Bugbot #81).
-    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
-        return os.environ.get("OPENROUTER_API_KEY", "").strip() or None
-    if host == "api.openai.com" or host.endswith(".openai.com"):
-        return os.environ.get("OPENAI_API_KEY", "").strip() or None
-    # Unknown host — do not guess provider keys (CodeRabbit/Sourcery #81).
-    return None
+    return _egress.resolve_api_key(
+        _normalized_distill_base_url(base_url),
+        global_key_env="DISTILL_API_KEY",
+        openrouter_env="OPENROUTER_API_KEY",
+        openai_env="OPENAI_API_KEY",
+        dial_project_env="DIAL_API_KEY_PROJECT",
+        dial_env="DIAL_API_KEY",
+    )
 
 
 def _payload_fingerprint(payload: list[dict[str, Any]]) -> str:
@@ -171,7 +165,7 @@ _JSON_OBJECT_COMPAT_HOST_MARKERS: tuple[str, ...] = (
     "together.ai",
     "fireworks.ai",
     "deepinfra.com",
-    "openrouter.ai",
+    "openrouter.ai",  # allow-direct-egress: response_format compatibility marker only
     "perplexity.ai",
     "x.ai",
 )
@@ -184,12 +178,10 @@ def _endpoint_supports_json_object_mode(chat_completions_url: str) -> bool:
         return False
     if raw in ("1", "true", "yes", "on", "force"):
         return True
-    host = (urllib.parse.urlparse(chat_completions_url).hostname or "").lower()
-
-    def host_allows_marker(m: str) -> bool:
-        return host == m or host.endswith("." + m)
-
-    return any(host_allows_marker(m) for m in _JSON_OBJECT_COMPAT_HOST_MARKERS)
+    host = _egress.safe_url_hostname(chat_completions_url)
+    return any(
+        _egress.host_matches_marker(host, marker) for marker in _JSON_OBJECT_COMPAT_HOST_MARKERS
+    )
 
 
 def read_distill_cache(path: Path) -> dict[str, Any] | None:
@@ -444,10 +436,7 @@ def run_distillation(
         url,
         data=body,
         method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
+        headers=_egress.request_headers(url, api_key, label_env="DISTILL_APP_LABEL"),
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:

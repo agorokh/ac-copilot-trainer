@@ -30,6 +30,15 @@ proof is still blocked: Tailscale ping reaches `pc` / `100.75.251.87`, but harne
 probes on `9876` and `8765` time out, and SSH denies access. Keep #244 and #154 open until the Windows
 rig proves a VALID Magione lap at human-comparable pace with `lap`/`delta` telemetry/HUD evidence.
 
+**Parallel runtime hotfix (2026-06-19) — #246 / PR #249 MERGED; issue remains open for live proof:**
+PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) merged at
+[`4e2a310`](https://github.com/agorokh/ac-copilot-trainer/commit/4e2a310232beb19ae6c261ca024411512185379a)
+and moves lap-archive writes off the lap-complete/SF frame. Archive JSON now streams through a bounded
+per-frame write job with temp-file finalization; setup-experiment record notifications retry after WS
+tick/poll until the sidecar send succeeds. Local `ci-fast` and GitHub build/conformance passed; review
+threads resolved. [#246](https://github.com/agorokh/ac-copilot-trainer/issues/246) is still open
+because the remaining proof is a Windows AC lap-crossing run showing the visual freeze is gone.
+
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
 ## Stream A — Rig screen Phase-2 UI (PR #91 merged — Parts A–D on `main`)
@@ -77,6 +86,12 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-19** — PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) **MERGED** at
+  `4e2a310` — mitigates [#246](https://github.com/agorokh/ac-copilot-trainer/issues/246) by replacing
+  synchronous lap-complete archive writes with a queued per-frame `lapArchive.createWriteJob`, temp-file
+  streaming/finalization, and retrying `setup.experiment.record` notifications after WS tick/poll.
+  Classification: no post-merge flags. **Issue #246 remains open until live AC rig proof confirms the
+  S/F render freeze is gone.**
 - **2026-06-19** — PR [#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) **MERGED** at `372156a` — closed [#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) with `tools/ac_harness/racing_driver.py` (speed-profile following, braking points, trail braking, traction throttle; 12 tests) + `tools/ac_harness/racing_telemetry.py` (human-lap CSV recorder). Gear bug fixed (1→4 shifts, 146 km/h). Classification: no post-merge flags. **Next:** human-lap capture + path-tracking steering controller ([#244](https://github.com/agorokh/ac-copilot-trainer/issues/244)).
 - **2026-06-16** — **#188 CLOSED** (on the rig, autonomous-deliver). Direct probe on `AG_PC`: `car.resetCounter` **present** (`[COPILOT][WRAP-SKEW-PROBE] resetCounter present=true value=2`) → teleports fully handled → closed as moot ([close comment](https://github.com/agorokh/ac-copilot-trainer/issues/188#issuecomment-4725615887)). No code change (the #199 defensive deferral stays). New rig-ops node: [steam-elevation-mismatch-ac-launch-2026-06-16](../03_Investigations/steam-elevation-mismatch-ac-launch-2026-06-16.md).
 - **2026-06-16** — **#190 CLOSED** — EPIC #154 Part E complete. Merged PRs: [#191](https://github.com/agorokh/ac-copilot-trainer/pull/191) L1.5 probe, [#209](https://github.com/agorokh/ac-copilot-trainer/pull/209)/[#221](https://github.com/agorokh/ac-copilot-trainer/pull/221)/[#222](https://github.com/agorokh/ac-copilot-trainer/pull/222)/[#223](https://github.com/agorokh/ac-copilot-trainer/pull/223) carcsw driver, [#201](https://github.com/agorokh/ac-copilot-trainer/pull/201) session replay for late taps. Live-verified autonomous lap + coaching on Magione. Next EPIC thread: Part F harness daemon.

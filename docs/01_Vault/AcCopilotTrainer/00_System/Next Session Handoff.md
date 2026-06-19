@@ -59,6 +59,37 @@ but harness daemon health/TCP probes on ports `9876` and `8765` timed out, and S
 the Windows rig daemon is reachable and this branch proves a VALID Magione lap at human-comparable
 pace with `lap`/`delta` telemetry/HUD evidence captured.
 
+## Resume here (2026-06-19 — #246 / PR #249 MERGED: lap archive writes moved off the S/F frame; live freeze proof pending)
+
+**[#246](https://github.com/agorokh/ac-copilot-trainer/issues/246) remains OPEN pending live
+Windows/AC proof.** PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) **MERGED**
+`2026-06-19T08:05:01Z` as squash
+[`4e2a310`](https://github.com/agorokh/ac-copilot-trainer/commit/4e2a310232beb19ae6c261ca024411512185379a).
+The PR title used `#246` rather than a closing keyword, so GitHub did not auto-close it. Leave it
+open until a rig run proves the freeze is gone, then close with evidence.
+
+**What changed.** The lap-complete boundary no longer builds and writes the full lap archive on the
+render/CSP script frame. It now queues `lapArchive.createWriteJob(...)`; the app pumps a bounded
+`LAP_ARCHIVE_ROWS_PER_FRAME = 64` slice after `wsBridge.tick()` / `wsBridge.pollInbound()`. Archive
+records stream schema-v1 JSON to `*.tmp`, flush/close, atomically rename to final `*.json`, rotate the
+archive, and then queue setup-experiment notification. `setup.experiment.record` paths are retained
+and retried until `sendSetupExperimentRecord()` returns true, covering sidecar startup/reconnect.
+
+**Verification completed off-rig.** Local `make ci-fast PYTHON=.scratch/venv-test/bin/python` passed
+(`1117 passed, 75 skipped`, coverage 82.51%). Focused archive regression
+`tests/test_lap_archive_async.py` proves multi-step temp-file streaming and asserts the lap boundary
+queues work instead of calling `lapArchive.write` / `lapArchive.buildRecord`; it also asserts archive
+pumping happens after WS tick/poll and before notification retry. GitHub build + conformance passed;
+GraphQL review threads resolved; CodeRabbit confirmed the final fix. Post-merge classification: no
+migration/env/deps/script/workflow flags.
+
+**Live proof still needed.** On `AG_PC` / Windows AC, drive a lap crossing at Magione (human driving
+is fine) and confirm the old ~2 s visual freeze at S/F is gone. Also confirm the completed archive
+still lands and the sidecar receives `setup.experiment.record` after reconnect/startup. If PASS, close
+[#246](https://github.com/agorokh/ac-copilot-trainer/issues/246) with the merge commit, lap-crossing
+observation, archive path, and sidecar notification evidence. If FAIL, keep #246 open and file the
+remaining hot path separately.
+
 ## Resume here (2026-06-19 — #241/#242 MERGED: racing driver on `main`; STEERING is the wall; human-lap data is next)
 
 **Read [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244) first — it is the cold-start

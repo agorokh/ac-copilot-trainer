@@ -408,11 +408,69 @@ local brakes = newBrakes()
 local td = throttleDet.new()
 local tires = tireMonitor.new()
 local pendingWsSidecarUrl = nil
+local pendingLapArchiveJobs = {}
+local pendingLapArchiveRecordPaths = {}
+local LAP_ARCHIVE_ROWS_PER_FRAME = 64
 
 -- Forward-declare so closures registered with wsBridge below capture the
 -- main state table as an upvalue (Lua resolves locals lexically at compile
 -- time; without this they would compile to globals and stay nil — issue #81).
 local state
+
+local function queueLapArchiveJob(archiveOpts)
+  local job, err = lapArchive.createWriteJob(
+    archiveOpts,
+    lapArchive.clampArchiveCapMB(config.lapArchiveMaxMB)
+  )
+  if not job then
+    if ac and type(ac.log) == "function" then
+      ac.log("[COPILOT][ARCHIVE] queue failed: " .. tostring(err))
+    end
+    return
+  end
+  pendingLapArchiveJobs[#pendingLapArchiveJobs + 1] = job
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][ARCHIVE] queued async write samples=" .. tostring(job.samplesCount or 0)
+      .. " queue=" .. tostring(#pendingLapArchiveJobs))
+  end
+end
+
+local function pumpLapArchiveJobs()
+  local job = pendingLapArchiveJobs[1]
+  if not job then return end
+  local done, ok, pathOrErr = job:step(LAP_ARCHIVE_ROWS_PER_FRAME)
+  if not done then return end
+  table.remove(pendingLapArchiveJobs, 1)
+  if ac and type(ac.log) == "function" then
+    if ok then
+      ac.log("[COPILOT][ARCHIVE] wrote " .. tostring(pathOrErr))
+    else
+      ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
+    end
+  end
+  if ok and type(pathOrErr) == "string" then
+    pendingLapArchiveRecordPaths[#pendingLapArchiveRecordPaths + 1] = pathOrErr
+  end
+end
+
+local function pumpLapArchiveNotifications()
+  if not (wsBridge and type(wsBridge.sendSetupExperimentRecord) == "function") then
+    return
+  end
+  while #pendingLapArchiveRecordPaths > 0 do
+    local path = pendingLapArchiveRecordPaths[1]
+    local sent = false
+    pcall(function()
+      sent = wsBridge.sendSetupExperimentRecord(path) == true
+    end)
+    if sent then
+      table.remove(pendingLapArchiveRecordPaths, 1)
+    else
+      -- Keep the path queued; handshake/reconnect can become ready on a later frame.
+      return
+    end
+  end
+end
 
 wsBridge.configure(config.wsSidecarUrl or "")
 if wsBridge.setSetupExperimentStorePath then
@@ -2009,6 +2067,8 @@ function script.update(dt)
     wsBridge.configure(pendingWsSidecarUrl)
     pendingWsSidecarUrl = nil
   end
+  pumpLapArchiveJobs()
+  pumpLapArchiveNotifications()
 
   -- Issue #180 Part D step 2: lifecycle topics, published AFTER wsBridge.tick()/pollInbound()
   -- so they observe the CURRENT-frame WS state and always precede the `lap` boundary below
@@ -2376,10 +2436,9 @@ function script.update(dt)
       wsBridge.sendJson(lapPayload)
     end
 
-    -- Issue #77 Part C: archive this lap (trace + setup + corners + coaching).
-    -- Runs INDEPENDENTLY of sidecar / coaching success. Captures the dataset
-    -- for future RAG / classifier / fine-tune work. Forward-compatible schema
-    -- so imported MoTeC CSVs (Initiative B) drop into the same shape.
+    -- Issue #77 Part C / #246: archive this lap (trace + setup + corners + coaching).
+    -- Runs independently of sidecar / coaching success, but queue the file work
+    -- instead of compact-encoding/flushing the full trace on the S/F render frame.
     if config.lapArchiveEnabled ~= false and lastMs > 0 then
       local archiveOpts = {
         session_uuid = SESSION_UUID,
@@ -2402,23 +2461,7 @@ function script.update(dt)
         -- (Codex + Cursor Bugbot #78 post-5f0ce39).
         corner_advice = wsBridge.cornerAdvisorySnapshotForLap((state.lapsCompleted or 0) - 1),
       }
-      local rec = lapArchive.buildRecord(archiveOpts)
-      if rec then
-        local ok, pathOrErr = lapArchive.write(rec, lapArchive.clampArchiveCapMB(config.lapArchiveMaxMB))
-        if ac and type(ac.log) == "function" then
-          if ok then
-            ac.log("[COPILOT][ARCHIVE] wrote " .. tostring(pathOrErr))
-          else
-            ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
-          end
-        end
-        if ok and type(pathOrErr) == "string"
-            and wsBridge and type(wsBridge.sendSetupExperimentRecord) == "function" then
-          pcall(function()
-            wsBridge.sendSetupExperimentRecord(pathOrErr)
-          end)
-        end
-      end
+      queueLapArchiveJob(archiveOpts)
     end
 
     state.lapInvalidatedThisLap = false
