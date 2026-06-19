@@ -365,9 +365,9 @@ class RacingDriver:
         kwargs.setdefault("throttle_scale_mps", 4.0)
         kwargs.setdefault("base_gas", 0.1)
         # Stage 2 infra (ax feedforward) is OFF by default: live-verified that enabling it on the
-        # Stanley lateral controller REGRESSES (95.3s -> 104-110s) — the more aggressive longitudinal
-        # carries more speed into corners than Stanley can hold (steer saturates). Unlocked once
-        # Stage 3 (curvature-feedforward lateral) lands. Opt in with ax_feedforward=True.
+        # Stanley lateral controller REGRESSES (95.3s -> 104-110s) — aggressive longitudinal carries
+        # more speed into corners than Stanley can hold (steer saturates). Unlocked once Stage 3
+        # (curvature-feedforward lateral) lands. Opt in with ax_feedforward=True.
         kwargs.setdefault("ax_feedforward", False)
         kwargs.setdefault("ff_gain", 1.0)
         kwargs.setdefault("ff_drive_g", 1.0)
