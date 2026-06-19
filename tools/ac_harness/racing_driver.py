@@ -229,7 +229,11 @@ class RacingDriver:
         return out
 
     def target_speed_kmh(self, idx: int, speed_kmh: float) -> float:
-        """Brake-feasible target (km/h) at ``idx`` with a speed-scaled look-ahead margin."""
+        """Brake-feasible target (km/h) at ``idx`` with a speed-scaled look-ahead margin.
+
+        ``min(profile[idx], profile[look_idx])`` intentionally caps the target when a slower
+        corner lies ahead along the cyclic line (braking-point semantics).
+        """
         v_cur = speed_kmh / 3.6
         look_idx = self.pursuit.advance_index(
             idx, max(self.lookahead_m, v_cur * self.lookahead_time_s)
@@ -256,7 +260,8 @@ class RacingDriver:
         """One-frame shift: out of neutral, up past ``rpm_up`` while moving, down at ``rpm_dn``."""
         if now - self._last_shift_s <= self.shift_cooldown_s:
             return (False, False)
-        if gear < 2:
+        # AC encoding: 0=reverse, 1=neutral, 2=1st — shift up from R/N only (never while in forward).
+        if gear <= 1:
             self._last_shift_s = now
             return (True, False)
         if rpm > self.rpm_up and gear < self.max_gear and speed_kmh > 20.0:

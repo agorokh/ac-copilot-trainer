@@ -163,14 +163,24 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
                     if now - t0 >= max_seconds or laps >= max_laps:
                         break
                     pbuf = phys.read(_PHYS_BYTES)
-                    p = parse_physics(pbuf)
+                    try:
+                        p = parse_physics(pbuf)
+                    except ValueError as exc:
+                        print(f"  skip physics frame: {exc}", flush=True)
+                        time.sleep(0.003)
+                        continue
                     if last_phys_packet is not None and p.packet_id <= last_phys_packet:
                         time.sleep(0.003)
                         continue
                     last_phys_packet = p.packet_id
 
                     gbuf = gfx.read(_GFX_BYTES)
-                    g = parse_graphics(gbuf)
+                    try:
+                        g = parse_graphics(gbuf)
+                    except ValueError as exc:
+                        print(f"  skip graphics frame: {exc}", flush=True)
+                        time.sleep(0.003)
+                        continue
                     if base_laps is None:
                         base_laps = g.completed_laps
                         lap_start_t = now
