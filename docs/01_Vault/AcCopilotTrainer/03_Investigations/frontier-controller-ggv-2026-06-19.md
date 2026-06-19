@@ -14,6 +14,33 @@ relates_to:
 
 # Frontier racing controller — GGV friction-circle profiler (EPIC #154 Part G, #244)
 
+## UPDATE 2026-06-19 NIGHT — HUMAN BEATEN: 90.7s → 83.5s (Stage 3 + grip self-play)
+
+Live on AG_PC, repeatable, all AC-valid (sidecar `lap.valid=true` + `delta` streaming):
+
+| controller | flying lap |
+|---|---|
+| old Stanley | 106.8s |
+| Stage 1 GGV profile | 95.3s |
+| + Stage 3 curvature-FF lateral | 91.8s |
+| + Stage 2 ax-FF + slip limiter (1.2g) | 90.28s (beats human) |
+| + grip self-play 1.35g / 1.5g | 86.4s / **83.5s** |
+| human (relaxed) | 90.7s |
+
+- **Stage 3 = `CurvatureFeedforwardSteering`**: FF supplies the steady-state wheel angle for the line
+  curvature (calibrated `fit_steer_feedforward`, ~96% of steer variance; sign from
+  `corr(human_steer, line_kappa)=+0.93` → `ff_sign=-1` for Magione). Stanley alone saturated at racing
+  pace; with FF it only trims → the car holds the line. This unlocked Stage 2 (ax-FF + slip limiter,
+  which had regressed on bare Stanley).
+- **Grip self-play (`lat_grip_g`)**: relaxed human used ~1.2g lateral; pushed the envelope —
+  **1.5g is the verified ceiling** (1.6g fails: 6 teleports, car can't hold). Keep-last-valid.
+- **Winning config**: `steering_mode="curvature_ff"`, `ff_sign=-1`, `ax_feedforward=True`,
+  `accel_peak_g≈1.1`, `lat_grip_g=1.5`, slip limiter (r_eff 0.347). Live driver
+  `.scratch/part-g/race_drive_ff.py`. PR [#256](https://github.com/agorokh/ac-copilot-trainer/pull/256).
+- **Path to ~70s (Stage 4)**: at 1.5g the apexes are LINE-limited (stock `fast_lane` tighter than
+  optimal). Min-curvature optimized line (TUMFTM QP, bounded by the human no-cut envelope) → QSS ~78s
+  and below. Optional: speed-dependent aero lateral grip for fast corners.
+
 Push from consumer-grade to RESEARCHER-grade pace, grounded in a 15-agent deep-research workflow +
 adversarial red-team + multi-model council (Gemini) + empirical plant-ID from `human_laps.csv`.
 PR [#256](https://github.com/agorokh/ac-copilot-trainer/pull/256) (branch
