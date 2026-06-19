@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-18T00:00:00Z
+last_updated: 2026-06-19T06:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -30,21 +30,23 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-18 — HANDOFF: racing driver built; STEERING is the wall; human-lap data is next)
+## Resume here (2026-06-19 — #241/#242 MERGED: racing driver on `main`; STEERING is the wall; human-lap data is next)
 
 **Read [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244) first — it is the cold-start
 handoff.** Account changeover mid-effort; this is the resume pointer.
 
 **Where it stands.** The hands-off self-test scaffolding is merged (#233 CM launch, #236 self-test
-runner, #239 HUD capture). The **racing driver** is OPEN in
-[PR #242](https://github.com/agorokh/ac-copilot-trainer/pull/242) (branch `feat/issue-241-racing-driver`,
-review-clean — merge or keep iterating):
+runner, #239 HUD capture). The **racing driver** shipped in
+[#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) / PR
+[#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) **MERGED** `2026-06-19T06:25:05Z` as
+squash [`372156a`](https://github.com/agorokh/ac-copilot-trainer/commit/372156a0a91926165677b7444f81d5a48572d9ab):
 - `tools/ac_harness/racing_driver.py` follows `fast_lane.ai`'s embedded speed profile with braking
   points / trail braking / traction throttle (12 tests).
-- **Gear bug fixed** (`04feea2`): 1st gear's limiter (~7400 rpm) sat below the old 7600 shift point →
-  car was **stuck in 1st** at 80 km/h. Now shifts **1→4**, **146 km/h** (was 52), range 12–146.
-- `tools/ac_harness/racing_telemetry.py` (`5fc71a1`) — **human-lap recorder** (CSV of
-  inputs+dynamics+lap/position).
+- **Gear bug fixed**: 1st gear's limiter (~7400 rpm) sat below the old 7600 shift point → car was
+  **stuck in 1st** at 80 km/h. Now shifts **1→4**, **146 km/h** (was 52), range 12–146.
+- `tools/ac_harness/racing_telemetry.py` — **human-lap recorder** (CSV of inputs+dynamics+lap/position).
+
+Post-merge classification: **no migration/env/deps/script/workflow flags.**
 
 **The wall = STEERING (not the racing logic).** `PurePursuit` cuts apexes / understeers → corners
 crawl, lap scored **INVALID** → no `lap`/`delta` telemetry / no clean coaching reference. The input
@@ -60,6 +62,25 @@ with `lap`/`delta` telemetry flowing.
 **Rig:** AC currently down; daemon down; magione `surfaces.ini` Custom-AI edit was restored to stock
 (re-apply per #244 for the carcsw controller; not needed for human driving). Gear encoding: AC
 `gear` 0=R/1=N/2=1st (log `gear-1`). Live drivers/probes in `.scratch/part-g/`.
+
+## What was delivered (2026-06-19 — #241 / PR #242 racing driver MERGED)
+
+**[#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) CLOSED / PR
+[#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) MERGED** `2026-06-19T06:25:05Z` as squash
+[`372156a`](https://github.com/agorokh/ac-copilot-trainer/commit/372156a0a91926165677b7444f81d5a48572d9ab).
+EPIC #154 Part G racing driver on `main`:
+
+| Deliverable | Detail |
+|-------------|--------|
+| `tools/ac_harness/racing_driver.py` | Speed-profile following from `fast_lane.ai` with backward-pass braking points, trail braking, traction-limited throttle, gear management (12 unit tests) |
+| `tools/ac_harness/racing_telemetry.py` | Human-lap CSV recorder (physics+graphics shared mem, deduped packet IDs) |
+| Gear fix | 1st-gear limiter below shift point → stuck in 1st at 80 km/h; now 1→4, 146 km/h peak |
+| Fixture | `tests/fixtures/racing_human_profile_magione.csv` |
+
+**Verification:** GitHub CI green on head `d3587fc`; GraphQL `reviewThreads` 0 unresolved; 7 bot threads
+all resolved (CodeRabbit + Sourcery). Post-merge classification: no flags.
+
+**What remains:** steering controller from human-lap data ([#244](https://github.com/agorokh/ac-copilot-trainer/issues/244)) — PurePursuit understeers → INVALID laps → no `lap`/`delta` telemetry.
 
 ## Resume here (2026-06-17 — EPIC #154 #238/#239 MERGED: vision-oracle "eyes" (HUD capture) — LIVE-VERIFIED)
 
