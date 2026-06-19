@@ -1,0 +1,338 @@
+"""Tests for the GGV friction-circle minimum-time speed profiler (tools.ac_harness.ggv_profile).
+
+Pure-math, no game. Covers the red-team-mandated guards: curvature accuracy, friction-ellipse
+corners, forward-backward correctness/feasibility on a synthetic track, GGV de-contamination
+(straight-line high-speed bins must not poison lateral grip), and build determinism.
+"""
+
+from __future__ import annotations
+
+import math
+
+from tools.ac_harness.ggv_profile import (
+    CurvatureFeedforwardSteering,
+    GGVModel,
+    build_ggv_speed_profile,
+    curvature_profile,
+    fit_steer_feedforward,
+    forward_backward_profile,
+    ggv_from_telemetry,
+    menger_curvature,
+    seg_lengths,
+    signed_curvature_profile,
+)
+
+G = 9.81
+
+
+def _circle(radius: float, n: int) -> list[tuple[float, float, float]]:
+    return [
+        (radius * math.cos(2 * math.pi * i / n), 0.0, radius * math.sin(2 * math.pi * i / n))
+        for i in range(n)
+    ]
+
+
+def _flat_ggv(mu=1.0, brake=1.0, drive=1.0, n=2.0) -> GGVModel:
+    return GGVModel(
+        mu_lat_g=mu,
+        k_aero_lat=0.0,
+        brake_b0_g=brake,
+        brake_b1=0.0,
+        drive_b0_g=drive,
+        drive_b1=0.0,
+        drive_min_g=0.3,
+        ellipse_n=n,
+    )
+
+
+# --- curvature -------------------------------------------------------------
+def test_menger_curvature_circle():
+    r = 50.0
+    pts = [(r * math.cos(a), r * math.sin(a)) for a in (0.0, 0.1, 0.2)]
+    assert abs(menger_curvature(*pts) - 1.0 / r) < 1e-3
+
+
+def test_curvature_profile_constant_on_circle():
+    r = 40.0
+    plane = [(p[0], p[2]) for p in _circle(r, 400)]
+    kappa = curvature_profile(plane, smooth_win=2, span=3)
+    # interior points: curvature ~ 1/r within a few percent
+    mid = kappa[50:350]
+    assert all(abs(k - 1.0 / r) < 0.05 * (1.0 / r) for k in mid), (min(mid), max(mid), 1 / r)
+
+
+def test_curvature_zero_on_straight():
+    plane = [(float(i), 0.0) for i in range(50)] + [(49.0 - i, 5.0) for i in range(50)]
+    kappa = curvature_profile(plane, smooth_win=1, span=2)
+    assert kappa[20] < 1e-3  # mid-straight
+
+
+# --- friction ellipse ------------------------------------------------------
+def test_ellipse_corners():
+    ggv = _flat_ggv(mu=1.2, brake=2.0, n=2.0)
+    v = 30.0
+    # no lateral -> full braking
+    assert abs(ggv.ax_brake_avail(0.0, v) - ggv.ax_brake_max(v)) < 1e-6
+    # at the lateral limit -> ~zero braking left
+    assert ggv.ax_brake_avail(ggv.ay_max(v), v) < 1e-3
+    # interior is between, monotone decreasing in lateral usage
+    a_lo = ggv.ax_brake_avail(0.3 * ggv.ay_max(v), v)
+    a_hi = ggv.ax_brake_avail(0.7 * ggv.ay_max(v), v)
+    assert ggv.ax_brake_max(v) > a_lo > a_hi > 0.0
+
+
+def test_aero_braking_rises_with_speed():
+    ggv = GGVModel(
+        mu_lat_g=1.2,
+        k_aero_lat=0.0,
+        brake_b0_g=0.9,
+        brake_b1=0.025,
+        drive_b0_g=0.8,
+        drive_b1=0.0,
+        drive_min_g=0.3,
+        ellipse_n=1.5,
+    )
+    assert ggv.ax_brake_max(60.0) > ggv.ax_brake_max(10.0)  # downforce
+
+
+# --- forward-backward profile ---------------------------------------------
+def test_profile_constant_on_circle_equals_apex():
+    r = 60.0
+    plane = [(p[0], p[2]) for p in _circle(r, 600)]
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=2, span=3)
+    ggv = _flat_ggv(mu=1.0)
+    v, _ = forward_backward_profile(kappa, seg, ggv, v_top_ms=200.0, v_floor_ms=1.0)
+    apex = math.sqrt(ggv.ay_max(0.0) * r)  # sqrt(mu*g*R)
+    mid = v[100:500]
+    assert all(abs(x - apex) < 0.06 * apex for x in mid), (min(mid), max(mid), apex)
+
+
+def test_profile_brakes_into_corner_and_respects_vtop():
+    # long straight (kappa 0) into a tight arc: speed must fall toward the arc apex before it
+    n_straight, r, n_arc = 300, 25.0, 120
+    straight = [(float(i) * 3.0, 0.0) for i in range(n_straight)]
+    cx = straight[-1][0]
+    arc = [
+        (cx + r * math.sin(a), r - r * math.cos(a))
+        for a in (math.pi * 2 * i / (n_arc * 4) for i in range(n_arc))
+    ]
+    plane = straight + arc
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=1, span=2)
+    ggv = _flat_ggv(mu=1.1, brake=1.3)
+    v, _ = forward_backward_profile(kappa, seg, ggv, v_top_ms=80.0, v_floor_ms=2.0)
+    assert max(v) <= 80.0 + 1e-6  # v_top respected
+    assert v[n_straight + n_arc // 2] < v[50]  # slowed in the arc vs early straight
+    # braking happened on the straight before the arc (speed decreasing approaching the corner)
+    assert v[n_straight - 5] < v[n_straight - 60]
+
+
+def test_profile_deterministic():
+    r = 45.0
+    plane = [(p[0], p[2]) for p in _circle(r, 300)]
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=2, span=3)
+    ggv = _flat_ggv()
+    a, _ = forward_backward_profile(kappa, seg, ggv)
+    b, _ = forward_backward_profile(kappa, seg, ggv)
+    assert a == b
+
+
+# --- GGV de-contamination from telemetry ----------------------------------
+def _rows(speed_kmh, lat_max, lon_brake_max, n):
+    # deterministic spread 0..max via index fraction
+    out = []
+    for i in range(n):
+        f = (i % 100) / 99.0
+        out.append(
+            {
+                "speed_kmh": str(speed_kmh),
+                "accg_lat": str(lat_max * f),
+                "accg_lon": str(-lon_brake_max * f),
+            }
+        )
+    return out
+
+
+def test_ggv_decontamination_lateral_not_poisoned_by_straights():
+    # mid-speed bin: real hard cornering (up to 1.3g). high-speed bin: straight-line only (0.1g lat)
+    rows = _rows(60, 1.3, 1.2, 1500) + _rows(210, 0.1, 2.6, 1500)
+    ggv = ggv_from_telemetry(rows, min_samples=50)
+    # lateral grip reflects the cornering bin (~1.2-1.3g), NOT dragged toward 0.1
+    assert ggv.mu_lat_g > 1.0, ggv.provenance["lat_model"]
+    # high-speed bin tagged as non-cornering; mid-speed bin tagged cornering
+    bins = ggv.provenance["bins"]
+    assert bins[60]["cornered"] is True
+    assert bins[210]["cornered"] is False
+    # braking grip rises with speed (aero) — fitted slope positive
+    assert ggv.ax_brake_max(55.0) > ggv.ax_brake_max(15.0)
+
+
+def test_ggv_no_aero_lateral_extrapolation():
+    rows = _rows(60, 1.3, 1.2, 1500) + _rows(210, 0.1, 2.6, 1500)
+    ggv = ggv_from_telemetry(rows, min_samples=50)
+    assert ggv.k_aero_lat == 0.0  # honest: no high-speed cornering data -> no aero-lateral claim
+    assert ggv.ay_max(10.0) == ggv.ay_max(58.0)  # flat lateral grip
+
+
+# --- end-to-end build determinism on a synthetic line ----------------------
+def test_build_ggv_speed_profile_deterministic_and_capped(tmp_path):
+    import csv as _csv
+
+    csvp = tmp_path / "tele.csv"
+    with csvp.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["speed_kmh", "accg_lat", "accg_lon"])
+        for r in _rows(60, 1.3, 1.2, 1500) + _rows(200, 0.1, 2.6, 1500):
+            w.writerow([r["speed_kmh"], r["accg_lat"], r["accg_lon"]])
+    line = _circle(50.0, 400)
+    v1, g1, s1 = build_ggv_speed_profile(line, csvp, v_top_kmh=180.0)
+    v2, g2, s2 = build_ggv_speed_profile(line, csvp, v_top_kmh=180.0)
+    assert v1 == v2 and s1 == s2
+    assert max(v1) <= 180.0 / 3.6 + 1e-6
+    assert len(v1) == len(line)
+
+
+def test_lat_grip_override_raises_apex_and_overrides_model(tmp_path):
+    import csv as _csv
+
+    csvp = tmp_path / "tele.csv"
+    with csvp.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["speed_kmh", "accg_lat", "accg_lon"])
+        for r in _rows(60, 1.3, 1.2, 1500) + _rows(200, 0.1, 2.6, 1500):
+            w.writerow([r["speed_kmh"], r["accg_lat"], r["accg_lon"]])
+    line = _circle(50.0, 400)
+    lo, glo, _ = build_ggv_speed_profile(line, csvp, v_top_kmh=300.0)
+    hi, ghi, _ = build_ggv_speed_profile(line, csvp, v_top_kmh=300.0, lat_grip_g=1.6)
+    assert ghi.mu_lat_g == 1.6 and ghi.mu_lat_g > glo.mu_lat_g
+    assert max(hi) > max(lo)  # higher lateral grip -> higher apex speed on the circle
+
+
+# --- RacingDriver.from_ggv_profile wiring ----------------------------------
+def test_from_ggv_profile_uses_target_verbatim_and_steps():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 400)
+    vt = [30.0] * len(line)  # constant 30 m/s target
+    d = RacingDriver.from_ggv_profile(line, vt, steering_mode="stanley")
+    assert d.profile == vt  # FINAL profile used verbatim: no cap, no fixed-brake_g backward pass
+    f = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 100.0, 6000.0, 4, 1.0)
+    assert 0.0 <= f.gas <= 1.0 and 0.0 <= f.brake <= 1.0 and -1.0 <= f.steer <= 1.0
+    # over the 30 m/s target at 100 km/h (27.8 m/s)? 100km/h=27.8 < 30 so should not be max-braking
+    f2 = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 200.0, 6000.0, 5, 2.0)  # 55 m/s >> 30 target
+    assert f2.brake > 0.5  # well over target -> braking
+
+
+def test_from_ggv_profile_length_mismatch_raises():
+    import pytest
+
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 100)
+    with pytest.raises(ValueError):
+        RacingDriver.from_ggv_profile(line, [30.0] * 50)
+
+
+# --- Stage 2: slip ratio + slip limiter + ax feedforward -------------------
+def test_slip_ratio_sign_and_deadzone():
+    from tools.ac_harness.racing_driver import slip_ratio
+
+    r, v = 0.33, 30.0
+    omega_match = v / r  # wheel surface speed == body speed -> ~0 slip
+    assert abs(slip_ratio(omega_match, r, v)) < 1e-6
+    assert slip_ratio(omega_match * 1.2, r, v) > 0.1  # wheelspin
+    assert slip_ratio(omega_match * 0.8, r, v) < -0.1  # locking
+    assert slip_ratio(omega_match, r, 0.1) == 0.0  # near-stationary deadzone
+
+
+def test_slip_limited_controls_clamps_only():
+    from tools.ac_harness.racing_driver import slip_limited_controls
+
+    # below thresholds: untouched
+    g, b = slip_limited_controls(1.0, 0.0, 0.05, 0.0)
+    assert g == 1.0
+    # wheelspin: gas cut, never raised
+    g2, _ = slip_limited_controls(1.0, 0.0, 0.40, 0.0, accel_slip_target=0.16, cut_gain=4.0)
+    assert 0.0 <= g2 < 1.0
+    # lockup: brake cut
+    _, b2 = slip_limited_controls(0.0, 1.0, 0.0, -0.40, brake_slip_target=0.16, cut_gain=4.0)
+    assert 0.0 <= b2 < 1.0
+    # extreme slip drives the command toward zero, never negative
+    g3, b3 = slip_limited_controls(1.0, 1.0, 2.0, -2.0)
+    assert g3 == 0.0 and b3 == 0.0
+
+
+def test_profile_ax_feedforward_sign():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 100)
+    d = RacingDriver.from_ggv_profile(line, [30.0] * 100)
+    assert abs(d._profile_ax(10)) < 1e-6  # constant profile -> no demanded accel
+    d.profile[11] = 20.0
+    assert d._profile_ax(10) < 0  # next point slower -> decelerate
+    d.profile[11] = 40.0
+    assert d._profile_ax(10) > 0  # next point faster -> accelerate
+
+
+def test_ff_adds_braking_when_profile_decelerates():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 100)
+    d_ff = RacingDriver.from_ggv_profile(line, [30.0] * 100, ax_feedforward=True)
+    d_no = RacingDriver.from_ggv_profile(line, [30.0] * 100, ax_feedforward=False)
+    d_ff.profile[11] = 10.0
+    d_no.profile[11] = 10.0
+    _, b_ff = d_ff._longitudinal(10, 30.0 * 3.6, 0.0)
+    _, b_no = d_no._longitudinal(10, 30.0 * 3.6, 0.0)
+    assert b_ff >= b_no  # feedforward brakes at least as hard into the decel
+
+
+# --- Stage 3: signed curvature + steer feedforward fit + lateral controller ---
+def test_signed_curvature_consistent_sign_on_circle():
+    plane = [(p[0], p[2]) for p in _circle(40.0, 400)]
+    sk = signed_curvature_profile(plane, smooth_win=2, span=3)
+    mid = sk[50:350]
+    assert all((x > 0) == (mid[0] > 0) for x in mid)  # one consistent turn direction
+    assert all(abs(abs(x) - 1.0 / 40.0) < 0.05 / 40.0 for x in mid)  # magnitude ~ 1/R
+
+
+def test_fit_steer_feedforward_recovers_coeffs():
+    # synthetic: steer = 4.0*kappa + 0.002*(v^2*kappa) exactly
+    c1_true, c2_true = 4.0, 0.002
+    rows = []
+    for i in range(400):
+        v = 20.0 + 0.2 * i  # m/s spread
+        kappa = 0.01 + 0.00005 * (i % 50)
+        ay = v * v * kappa
+        steer = c1_true * kappa + c2_true * ay
+        rows.append({"speed_kmh": str(v * 3.6), "accg_lat": str(ay / G), "steer": str(steer)})
+    c1, c2, rms, n = fit_steer_feedforward(rows, min_lat_g=0.0, min_kmh=0.0)
+    assert abs(c1 - c1_true) < 0.05 and abs(c2 - c2_true) < 1e-4
+    assert rms < 0.02 and n == 400
+
+
+def test_curvature_ff_steering_in_range_and_uses_curvature():
+    line = _circle(50.0, 400)
+    cff = CurvatureFeedforwardSteering(
+        line, c1=5.0, c2=0.0, ff_sign=1.0, fb_weight=0.0, preview_m=2.0
+    )
+    # facing along +x at a point on the circle; FF should command a nonzero, in-range steer
+    s = cff.steer((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 80.0)
+    assert -1.0 <= s <= 1.0
+    # zero coefficients + zero feedback -> zero steer (pure FF off)
+    flat = CurvatureFeedforwardSteering(line, c1=0.0, c2=0.0, ff_sign=1.0, fb_weight=0.0)
+    assert abs(flat.steer((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 80.0)) < 1e-9
+
+
+def test_racing_driver_curvature_ff_mode_steps():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 200)
+    d = RacingDriver.from_ggv_profile(
+        line, [30.0] * 200, steering_mode="curvature_ff", ff_c1=5.0, ff_c2=0.002
+    )
+    assert d.cff is not None
+    f = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 100.0, 6000.0, 4, 1.0)
+    assert -1.0 <= f.steer <= 1.0
