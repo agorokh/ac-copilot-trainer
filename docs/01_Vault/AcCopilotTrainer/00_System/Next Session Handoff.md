@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T19:45:00Z
+last_updated: 2026-06-19T22:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -30,6 +31,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-19 NIGHT — #244 FRONTIER controller: GGV profiler LIVE 95.3s; Stage 3 lateral is the wall to beat human 90.7s)
+
+**Operator asked for RESEARCHER-grade frontier (beat human, toward ~70s).** Drove a 15-agent
+deep-research workflow + multi-model council (Gemini) + empirical plant-ID, then built + live-verified
+a GGV friction-circle controller on `AG_PC`. Full write-up: [[frontier-controller-ggv-2026-06-19]].
+Branch `feat/issue-244-frontier-racing-controller`, draft PR
+[#256](https://github.com/agorokh/ac-copilot-trainer/pull/256).
+
+**Delivered + LIVE-VERIFIED — Stage 1 (`tools/ac_harness/ggv_profile.py` + `RacingDriver.from_ggv_profile`):**
+forward-backward QSS min-time speed profile vs a de-contaminated GGV fitted from `human_laps.csv`
+(aero-rising braking `0.95+0.0215·v_ms` g; lateral 1.2g mech peak; fitted ellipse n), arc-length
+Menger curvature, baked `v_target` tracked verbatim. **old Stanley 106.8s → GGV 95.3s** flying lap,
+AC-valid, 0 stuck, 216 km/h. QSS ceiling 86.2s. 17 unit tests, ruff clean.
+
+**Built but OFF by default — Stage 2 (FF + slip limiter):** `_profile_ax` feedforward (max-not-sum,
+gated) + pure `slip_ratio`/`slip_limited_controls` (from `acpmf_physics wheelAngularSpeed@104`, not AC
+`wheelSlip`) + `accel_peak_g`. **LIVE FINDING: enabling FF+aggressive accel on Stanley REGRESSES
+95.3s→104-110s** — Stanley can't hold the line at the higher corner speeds (steer saturates →
+overshoot). So `ax_feedforward` defaults OFF; shipped controller = verified 95.3s. r_eff≈0.347.
+
+**THE WALL → Stage 3 (next session, to beat human 90.7s):** Stanley is the binding constraint.
+Implement **curvature feedforward + velocity-scheduled feedback lateral** (Kapania/Gerdes:
+`δ = wheelbase·κ + K_ug·v²κ + k·e_lookahead`); fit steer-per-radian + `K_ug` from `human_laps.csv`
+(steer vs v²κ). THEN re-enable Stage 2 FF (longitudinal gains unlock once the line holds), then
+Stage 4 min-curvature optimized line (stock fast_lane is tighter than the human line → apex-limited).
+Rig recipe + drivers in `.scratch/part-g/` (`race_drive_ggv.py`, `race_drive_ggv2.py`), surfaces edit
+saved at `.scratch/part-g/surfaces_customai.ini`. Rig left clean (surfaces stock, daemon/AC stopped).
 
 ## Resume here (2026-06-19 LATER — #244 PR #248 MERGED + LIVE-VERIFIED on the rig: steering wall broken; pace residual remains)
 
