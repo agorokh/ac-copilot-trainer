@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T19:35:00Z
+last_updated: 2026-06-19T19:45:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/00_System/Current Focus.md
@@ -58,9 +58,13 @@ wall-break + telemetry milestone as Part-G-core-done (pace tracked), or hold #24
 `[_EXTRA_PERMISSIONS] ALLOW_CUSTOM_AI_MANIPULATION=1`) was **restored to stock** from
 `surfaces.ini.bak-precustomai`; AC/sidecar/daemon stopped. Live driver: `.scratch/part-g/race_drive_stanley.py`.
 
-**#246 (lap-freeze) note:** archives still land off-frame (5 lap archives written during the drive) and
-the delta stream stayed continuous across S/F crossings — supportive but NOT a rigorous freeze
-measurement; #246 still needs a focused render-timing capture at S/F.
+**#246 (lap-freeze) — CLOSED this session (LIVE-VERIFIED).** Timestamped tap of the script-frame
+`coaching.snapshot` stream (`.scratch/part-g/freeze_probe.py`) over a 250 s drive: median gap 103 ms,
+max **255 ms**; at both S/F crossings the max stall was **217 ms / 255 ms** (not ~2 s). Archives still
+land off-frame (`lap_*_1_128111_*.json`, `lap_*_2_106859_*.json`, both `valid=True`). PR #249 (`4e2a310`)
+confirmed; closed with evidence ([#246#issuecomment-4754133099](https://github.com/agorokh/ac-copilot-trainer/issues/246#issuecomment-4754133099)).
+`setup.experiment.record` is a trainer→sidecar internal frame (not tap-visible); its retry path stays
+covered by `tests/test_lap_archive_async.py`.
 
 ## Resume here (2026-06-19 — #244 / PR #248 [SUPERSEDED — now MERGED + live-verified above]: Stanley steering built; rig daemon blocks live proof)
 

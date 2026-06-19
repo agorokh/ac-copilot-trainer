@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T19:35:00Z
+last_updated: 2026-06-19T19:45:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -36,14 +36,13 @@ merged defaults are near-optimal. The last ~15% is separable controller-sophisti
 stay OPEN** for the pace bar; operator decides whether the wall-break + telemetry milestone closes
 Part-G-core. Full write-up: [`stanley-steering-live-verified-2026-06-19`](../03_Investigations/stanley-steering-live-verified-2026-06-19.md).
 
-**Parallel runtime hotfix (2026-06-19) — #246 / PR #249 MERGED; issue remains open for live proof:**
-PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) merged at
-[`4e2a310`](https://github.com/agorokh/ac-copilot-trainer/commit/4e2a310232beb19ae6c261ca024411512185379a)
-and moves lap-archive writes off the lap-complete/SF frame. Archive JSON now streams through a bounded
-per-frame write job with temp-file finalization; setup-experiment record notifications retry after WS
-tick/poll until the sidecar send succeeds. Local `ci-fast` and GitHub build/conformance passed; review
-threads resolved. [#246](https://github.com/agorokh/ac-copilot-trainer/issues/246) is still open
-because the remaining proof is a Windows AC lap-crossing run showing the visual freeze is gone.
+**Runtime hotfix (2026-06-19) — #246 / PR #249 MERGED + CLOSED (live-verified):**
+PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) (`4e2a310`) moved lap-archive writes
+off the lap-complete/SF frame. **[#246](https://github.com/agorokh/ac-copilot-trainer/issues/246)
+CLOSED** on the rig this session: timestamped tap of the script-frame `coaching.snapshot` stream
+showed max gap **255 ms** (at S/F: 217 ms / 255 ms, not ~2 s); archives still land off-frame, laps
+`valid=True`. The ~2 s render freeze is gone. Evidence:
+[#246#issuecomment-4754133099](https://github.com/agorokh/ac-copilot-trainer/issues/246#issuecomment-4754133099).
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
