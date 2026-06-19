@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T10:35:00Z
+last_updated: 2026-06-19T19:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
   - AcCopilotTrainer/03_Investigations/racing-driver-and-controller-2026-06-17.md
@@ -30,7 +31,38 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-19 — #244 / PR #248 DRAFT: Stanley steering built; rig daemon blocks live proof)
+## Resume here (2026-06-19 LATER — #244 PR #248 MERGED + LIVE-VERIFIED on the rig: steering wall broken; pace residual remains)
+
+**Ran `/autonomous-deliver 244` ON the rig (`AG_PC`)** — the prior "Mac can't reach the rig" blocker
+was moot. PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) **MERGED** (`88249bf`).
+Full write-up: [[stanley-steering-live-verified-2026-06-19]]. Evidence comment:
+[#244#issuecomment-4754057626](https://github.com/agorokh/ac-copilot-trainer/issues/244#issuecomment-4754057626).
+
+**PROVEN live (the wall is broken).** Merged `RacingDriver.from_human_profile(...)` Stanley controller
+drove car 0 around Magione via carcsw, no human → **3 AC VALID laps** (`completedLaps` 0→3, trainer
+`lap` frames `valid:true`), best flying lap **106.8 s**, max **207.6 km/h**, gears 1–6, 0 stuck. Sidecar
+tap: **`delta=2935`** live delta-to-reference + `coaching.snapshot=3797` — the lap/delta telemetry that
+was missing now flows. The trainer captured the agent's lap as its coaching reference
+(`journal/laps/lap_*_106813_*.json` + persisted `ks_porsche_911_gt3_r_2016__magione.json`). Screenshots
+inspected (`.scratch/part-g/stanley_*.png`).
+
+**Residual (why #244/#154 stay OPEN).** Best clean lap 106.8 s / avg ~83.5 km/h = ~85% of the human's
+relaxed laps (90.7 s / 98.7 km/h, `.scratch/part-g/human_laps.csv`). The literal `avg ≳100 km/h` bar is
+**not met**; an aggressive-throttle tuning pass REGRESSED to 124.6 s (TC-off wheelspin) → merged defaults
+are near the controller's stable optimum. Closing the last ~15% is separable controller-sophistication
+(use human gas/brake trace directly, or MPC) and touches `racing_driver.py` (#244's file group), so it
+stays as remaining Part-G scope on #244 — **not** a new overlapping issue. Operator decision: accept the
+wall-break + telemetry milestone as Part-G-core-done (pace tracked), or hold #244 for the pace bar.
+
+**Rig state left:** `surfaces.ini` Custom-AI edit (`[SURFACE_0] WAV_PITCH=extended-0` +
+`[_EXTRA_PERMISSIONS] ALLOW_CUSTOM_AI_MANIPULATION=1`) was **restored to stock** from
+`surfaces.ini.bak-precustomai`; AC/sidecar/daemon stopped. Live driver: `.scratch/part-g/race_drive_stanley.py`.
+
+**#246 (lap-freeze) note:** archives still land off-frame (5 lap archives written during the drive) and
+the delta stream stayed continuous across S/F crossings — supportive but NOT a rigorous freeze
+measurement; #246 still needs a focused render-timing capture at S/F.
+
+## Resume here (2026-06-19 — #244 / PR #248 [SUPERSEDED — now MERGED + live-verified above]: Stanley steering built; rig daemon blocks live proof)
 
 **Read [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244) and draft PR
 [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) first.** This is EPIC
