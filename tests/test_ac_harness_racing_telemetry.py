@@ -10,6 +10,7 @@ import pytest
 from tools.ac_harness import racing_telemetry
 from tools.ac_harness.racing_telemetry import (
     CSV_HEADER,
+    csv_display_gear,
     csv_row,
     parse_graphics,
     parse_physics,
@@ -67,13 +68,19 @@ def test_parsers_reject_short_buffers():
 
 
 def test_csv_row_converts_to_real_gear_and_matches_header_width():
-    p = parse_physics(_phys_buf(gear=4))  # raw 4 -> real 3rd
+    p = parse_physics(_phys_buf(gear=4))  # raw 4 -> 3rd forward gear
     g = parse_graphics(_gfx_buf())
     row = csv_row(2, 12.5, p, g)
     cols = row.split(",")
     assert len(cols) == len(CSV_HEADER.split(","))
     assert cols[0] == "2"  # lap
-    assert cols[4] == "3"  # real gear (raw 4 - 1)
+    assert cols[4] == "3"  # 3rd gear (AC raw 4)
+
+
+def test_csv_display_gear_maps_neutral_and_reverse():
+    assert csv_display_gear(0) == -1
+    assert csv_display_gear(1) == 0
+    assert csv_display_gear(4) == 3
 
 
 def test_record_requires_windows(monkeypatch, tmp_path):

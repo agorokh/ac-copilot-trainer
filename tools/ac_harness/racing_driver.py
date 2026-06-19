@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import math
 import struct
+from dataclasses import dataclass
 from pathlib import Path
 
 from tools.ac_harness.ai_line import PurePursuit, _horizontal
@@ -36,25 +37,29 @@ from tools.ac_harness.lap_driver import PHASE_LAP, PHASE_OUT, DriveFrame
 _HEADER_SIZE = 16
 _POINT_SIZE = 20
 _EXTRA_STRIDE = 72
+_EXPECTED_VERSION = 7
 # Repeated cyclic backward sweeps; 4 passes propagate brake-feasible caps across km-scale lines.
 _BACKWARD_PASS_PASSES = 4
 
 
-def _clamp(x: float, lo: float, hi: float) -> float:
-    return lo if x < lo else hi if x > hi else x
+@dataclass(frozen=True)
+class AiPointProfile:
+    """Per-point AiPointExtra signals from ``fast_lane.ai`` (speed + gas + brake)."""
+
+    speed_mps: float
+    gas: float
+    brake: float
 
 
-def load_speed_profile(path: str | Path) -> list[float]:
-    """Parse the per-point target SPEED (m/s) the game AI drives, from ``fast_lane.ai``.
-
-    Returns one speed per main point, ordered along the racing direction (same length/order as
-    :func:`ai_line.load_ai_line`). Raises :class:`ValueError` if the extra block is missing or its
-    ``extraCount`` cross-check fails.
-    """
-    data = Path(path).read_bytes()
+def _parse_fast_lane_extra(data: bytes) -> list[AiPointProfile]:
+    """Shared header/extra-block parser for ``fast_lane.ai`` profile loaders."""
     if len(data) < _HEADER_SIZE:
         raise ValueError(f"fast_lane.ai too short: {len(data)} bytes")
-    _version, count, _lap, _samp = struct.unpack_from("<4i", data, 0)
+    version, count, _lap, _samp = struct.unpack_from("<4i", data, 0)
+    if version != _EXPECTED_VERSION:
+        raise ValueError(
+            f"fast_lane.ai version {version} unsupported (expected {_EXPECTED_VERSION})"
+        )
     if count <= 0:
         raise ValueError(f"fast_lane.ai non-positive count: {count}")
     main_end = _HEADER_SIZE + count * _POINT_SIZE
@@ -69,9 +74,31 @@ def load_speed_profile(path: str | Path) -> list[float]:
             f"AiPointExtra block needs {extra_start + count * _EXTRA_STRIDE} bytes, "
             f"file is {len(data)}"
         )
-    return [
-        struct.unpack_from("<f", data, extra_start + i * _EXTRA_STRIDE)[0] for i in range(count)
-    ]
+    out: list[AiPointProfile] = []
+    for i in range(count):
+        base = extra_start + i * _EXTRA_STRIDE
+        speed, gas, brake = struct.unpack_from("<3f", data, base)
+        out.append(AiPointProfile(speed_mps=speed, gas=gas, brake=brake))
+    return out
+
+
+def load_ai_profile(path: str | Path) -> list[AiPointProfile]:
+    """Parse per-point speed/gas/brake from the AiPointExtra block in ``fast_lane.ai``."""
+    return _parse_fast_lane_extra(Path(path).read_bytes())
+
+
+def load_speed_profile(path: str | Path) -> list[float]:
+    """Parse the per-point target SPEED (m/s) the game AI drives, from ``fast_lane.ai``.
+
+    Returns one speed per main point, ordered along the racing direction (same length/order as
+    :func:`ai_line.load_ai_line`). Raises :class:`ValueError` if the extra block is missing or its
+    ``extraCount`` cross-check fails. For gas/brake too, use :func:`load_ai_profile`.
+    """
+    return [p.speed_mps for p in load_ai_profile(path)]
+
+
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return lo if x < lo else hi if x > hi else x
 
 
 class RacingDriver:

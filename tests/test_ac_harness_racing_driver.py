@@ -8,22 +8,26 @@ from pathlib import Path
 import pytest
 
 from tools.ac_harness.lap_driver import PHASE_LAP
-from tools.ac_harness.racing_driver import RacingDriver, load_speed_profile
+from tools.ac_harness.racing_driver import (
+    RacingDriver,
+    load_ai_profile,
+    load_speed_profile,
+)
 
 
 def _straight_line(n: int, ds: float = 5.0) -> list[tuple[float, float, float]]:
     return [(i * ds, 0.0, 0.0) for i in range(n)]
 
 
-def _ai_blob(speeds: list[float]) -> bytes:
+def _ai_blob(speeds: list[float], *, gas: float = 0.0, brake: float = 0.0) -> bytes:
     """Build a minimal version-7 fast_lane.ai with the given per-point speeds in the extra block."""
     n = len(speeds)
     out = bytearray(struct.pack("<4i", 7, n, 0, 0))
     for i in range(n):  # main points: x,y,z,length,id
         out += struct.pack("<3f f i", float(i * 5), 0.0, 0.0, float(i * 5), i)
     out += struct.pack("<i", n)  # extraCount
-    for s in speeds:  # AiPointExtra: speed@0 + 17 filler floats = 72 bytes
-        out += struct.pack("<f", s) + struct.pack("<17f", *([0.0] * 17))
+    for s in speeds:  # AiPointExtra: speed@0, gas@4, brake@8 + filler = 72 bytes
+        out += struct.pack("<3f", s, gas, brake) + struct.pack("<15f", *([0.0] * 15))
     return bytes(out)
 
 
@@ -32,6 +36,27 @@ def test_load_speed_profile_parses_extra_speeds(tmp_path: Path):
     f = tmp_path / "fast_lane.ai"
     f.write_bytes(_ai_blob(speeds))
     assert load_speed_profile(f) == pytest.approx(speeds)
+
+
+def test_load_ai_profile_parses_speed_gas_brake(tmp_path: Path):
+    speeds = [10.0, 20.0]
+    f = tmp_path / "fast_lane.ai"
+    f.write_bytes(_ai_blob(speeds, gas=0.7, brake=0.2))
+    profile = load_ai_profile(f)
+    assert len(profile) == 2
+    assert profile[0].speed_mps == pytest.approx(10.0)
+    assert profile[1].speed_mps == pytest.approx(20.0)
+    assert profile[0].gas == pytest.approx(0.7)
+    assert profile[0].brake == pytest.approx(0.2)
+
+
+def test_load_ai_profile_rejects_unsupported_version(tmp_path: Path):
+    blob = bytearray(_ai_blob([10.0]))
+    struct.pack_into("<i", blob, 0, 99)
+    f = tmp_path / "bad_version.ai"
+    f.write_bytes(bytes(blob))
+    with pytest.raises(ValueError, match="version 99 unsupported"):
+        load_ai_profile(f)
 
 
 def test_load_speed_profile_rejects_bad_extra_count(tmp_path: Path):

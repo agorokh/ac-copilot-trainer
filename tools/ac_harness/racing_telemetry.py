@@ -87,9 +87,21 @@ def parse_graphics(buf: bytes) -> GfxFrame:
     return GfxFrame(packet_id, status, completed_laps, norm_pos)
 
 
+def csv_display_gear(raw: int) -> int:
+    """Map AC physics gear index to CSV gear (0=neutral, -1=reverse, 1..N forward).
+
+    Live-probed encoding: 0=reverse, 1=neutral, 2=1st … (see vault autonomous-drive note).
+    """
+    if raw == 0:
+        return -1
+    if raw == 1:
+        return 0
+    return raw - 1
+
+
 def csv_row(lap: int, t: float, p: PhysFrame, g: GfxFrame) -> str:
     return (
-        f"{lap},{t:.3f},{g.norm_pos:.5f},{p.speed_kmh:.2f},{p.gear - 1},{p.rpm},"
+        f"{lap},{t:.3f},{g.norm_pos:.5f},{p.speed_kmh:.2f},{csv_display_gear(p.gear)},{p.rpm},"
         f"{p.gas:.3f},{p.brake:.3f},{p.steer:.4f},{p.accg_lat:.3f},{p.accg_lon:.3f},"
         f"{p.slip[0]:.3f},{p.slip[1]:.3f},{p.slip[2]:.3f},{p.slip[3]:.3f}"
     )
