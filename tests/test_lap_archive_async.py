@@ -171,3 +171,14 @@ def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
     assert "queueLapArchiveJob(archiveOpts)" in block
     assert "lapArchive.write" not in block
     assert "lapArchive.buildRecord" not in block
+
+    ws_match = re.search(
+        r"wsBridge\.tick\(ch\.simSeconds\(sim\)\).*?-- Issue #180 Part D step 2",
+        src,
+        flags=re.S,
+    )
+    assert ws_match is not None
+    ws_block = ws_match.group(0)
+    assert ws_block.index("wsBridge.pollInbound(8)") < ws_block.index("pumpLapArchiveJobs()")
+    assert ws_block.index("pumpLapArchiveJobs()") < ws_block.index("pumpLapArchiveNotifications()")
+    assert "pendingLapArchiveRecordPaths" in src

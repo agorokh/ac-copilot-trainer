@@ -409,6 +409,7 @@ local td = throttleDet.new()
 local tires = tireMonitor.new()
 local pendingWsSidecarUrl = nil
 local pendingLapArchiveJobs = {}
+local pendingLapArchiveRecordPaths = {}
 local LAP_ARCHIVE_ROWS_PER_FRAME = 64
 
 -- Forward-declare so closures registered with wsBridge below capture the
@@ -447,11 +448,26 @@ local function pumpLapArchiveJobs()
       ac.log("[COPILOT][ARCHIVE] write failed: " .. tostring(pathOrErr))
     end
   end
-  if ok and type(pathOrErr) == "string"
-      and wsBridge and type(wsBridge.sendSetupExperimentRecord) == "function" then
+  if ok and type(pathOrErr) == "string" then
+    pendingLapArchiveRecordPaths[#pendingLapArchiveRecordPaths + 1] = pathOrErr
+  end
+end
+
+local function pumpLapArchiveNotifications()
+  if not (wsBridge and type(wsBridge.sendSetupExperimentRecord) == "function") then
+    return
+  end
+  while #pendingLapArchiveRecordPaths > 0 do
+    local path = pendingLapArchiveRecordPaths[1]
+    local sent = false
     pcall(function()
-      wsBridge.sendSetupExperimentRecord(pathOrErr)
+      sent = wsBridge.sendSetupExperimentRecord(path) == true
     end)
+    if sent then
+      table.remove(pendingLapArchiveRecordPaths, 1)
+    else
+      return
+    end
   end
 end
 
@@ -1909,7 +1925,6 @@ function script.update(dt)
   car = ac.getCar(0)
 
   autoPlaceOnce()
-  pumpLapArchiveJobs()
 
   -- Live-frame coaching tick (issue #72 rebuild).
   -- Inputs are LIVE FRAME values and persisted reference data, NOT lap aggregates.
@@ -2051,6 +2066,8 @@ function script.update(dt)
     wsBridge.configure(pendingWsSidecarUrl)
     pendingWsSidecarUrl = nil
   end
+  pumpLapArchiveJobs()
+  pumpLapArchiveNotifications()
 
   -- Issue #180 Part D step 2: lifecycle topics, published AFTER wsBridge.tick()/pollInbound()
   -- so they observe the CURRENT-frame WS state and always precede the `lap` boundary below
