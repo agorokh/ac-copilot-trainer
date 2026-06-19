@@ -11,7 +11,13 @@ synthesizer, and the schema-gated mock ``ac``/``car``/``sim`` tables.
 
 from __future__ import annotations
 
-from tools.ac_harness.ai_line import ControlOutput, PurePursuit, load_ai_line
+from tools.ac_harness.ai_line import (
+    ControlOutput,
+    PathProjection,
+    PurePursuit,
+    StanleySteering,
+    load_ai_line,
+)
 from tools.ac_harness.custom_ai import (
     CarControls,
     CarData,
@@ -102,6 +108,8 @@ __all__ = [
     "LapDriver",
     # Racing line loader + pure-pursuit controller.
     "ControlOutput",
+    "PathProjection",
     "PurePursuit",
+    "StanleySteering",
     "load_ai_line",
 ]

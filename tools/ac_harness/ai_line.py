@@ -131,6 +131,18 @@ class ControlOutput:
         yield self.steer
 
 
+@dataclass(frozen=True)
+class PathProjection:
+    """Nearest projected point on the cyclic racing line."""
+
+    segment_index: int
+    t: float
+    point: tuple[float, float]
+    tangent: tuple[float, float]
+    signed_cross_track_m: float
+    distance_m: float
+
+
 def _horizontal(p: tuple[float, float, float]) -> tuple[float, float]:
     """Project an ``(x, y, z)`` point to the ground plane ``(x, z)`` (drop vertical ``y``)."""
     return (p[0], p[2])
@@ -367,6 +379,121 @@ class PurePursuit:
             return (_clamp(error / 20.0, 0.0, 1.0), 0.0)
         # Above target: brake scaled by excess, full brake once ~15 km/h+ over.
         return (0.0, _clamp(-error / 15.0, 0.0, 1.0))
+
+
+class StanleySteering:
+    """Stanley-style lateral path tracker over the same cyclic ``fast_lane.ai`` geometry.
+
+    Pure pursuit aims at a look-ahead point, which is stable at conservative speed but cuts apexes
+    when the controller starts carrying racing pace. Stanley steering uses the local path tangent
+    plus signed cross-track error instead: heading error points the nose along the path and the
+    cross-track term pulls the car back to the line, scaled down at speed.
+
+    ``steer > 0`` preserves the harness convention: command a right turn.
+    """
+
+    def __init__(
+        self,
+        line: list[tuple[float, float, float]],
+        *,
+        cross_track_gain: float = 0.75,
+        heading_gain: float = 1.0,
+        speed_softening_mps: float = 5.0,
+        max_steer_rad: float = 0.65,
+        max_cross_track_m: float = 10.0,
+    ) -> None:
+        if len(line) < 2:
+            raise ValueError("Stanley steering needs at least 2 line points")
+        if cross_track_gain <= 0 or heading_gain <= 0:
+            raise ValueError("cross_track_gain and heading_gain must be > 0")
+        if speed_softening_mps < 0 or max_steer_rad <= 0 or max_cross_track_m <= 0:
+            raise ValueError("speed_softening_mps, max_steer_rad, max_cross_track_m invalid")
+
+        self._plane = [_horizontal(p) for p in line]
+        self.cross_track_gain = cross_track_gain
+        self.heading_gain = heading_gain
+        self.speed_softening_mps = speed_softening_mps
+        self.max_steer_rad = max_steer_rad
+        self.max_cross_track_m = max_cross_track_m
+
+        has_nonzero_segment = False
+        for i, a in enumerate(self._plane):
+            b = self._plane[(i + 1) % len(self._plane)]
+            if math.hypot(b[0] - a[0], b[1] - a[1]) > 1e-9:
+                has_nonzero_segment = True
+                break
+        if not has_nonzero_segment:
+            raise ValueError("Stanley steering line has no non-zero segments")
+
+    def project(self, position: tuple[float, float]) -> PathProjection:
+        """Project ``position`` to the nearest point on any cyclic line segment."""
+        best: PathProjection | None = None
+        best_d2 = float("inf")
+        n = len(self._plane)
+        for i in range(n):
+            a = self._plane[i]
+            b = self._plane[(i + 1) % n]
+            dx = b[0] - a[0]
+            dz = b[1] - a[1]
+            seg2 = dx * dx + dz * dz
+            if seg2 <= 1e-18:
+                continue
+            t = _clamp(((position[0] - a[0]) * dx + (position[1] - a[1]) * dz) / seg2, 0.0, 1.0)
+            proj = (a[0] + t * dx, a[1] + t * dz)
+            off = (proj[0] - position[0], proj[1] - position[1])
+            d2 = off[0] * off[0] + off[1] * off[1]
+            if d2 >= best_d2:
+                continue
+            seg_len = math.sqrt(seg2)
+            tangent = (dx / seg_len, dz / seg_len)
+            right = (-tangent[1], tangent[0])
+            signed = off[0] * right[0] + off[1] * right[1]
+            best = PathProjection(
+                segment_index=i,
+                t=t,
+                point=proj,
+                tangent=tangent,
+                signed_cross_track_m=signed,
+                distance_m=math.sqrt(d2),
+            )
+            best_d2 = d2
+        if best is None:  # construction rejects all-zero lines; this is defensive.
+            raise ValueError("Stanley steering line has no projectable segment")
+        return best
+
+    def steer(
+        self,
+        position_xyz: tuple[float, float, float],
+        look_dir_xyz: tuple[float, float, float],
+        speed_kmh: float,
+    ) -> float:
+        """Return a steering fraction in ``[-1, 1]`` from pose + speed."""
+        car = _horizontal(position_xyz)
+        fwd = _horizontal(look_dir_xyz)
+        fwd_len = math.hypot(fwd[0], fwd[1])
+        if fwd_len < 1e-9:
+            return 0.0
+        fwd_unit = (fwd[0] / fwd_len, fwd[1] / fwd_len)
+
+        projection = self.project(car)
+        tangent = projection.tangent
+        dot = _clamp(fwd_unit[0] * tangent[0] + fwd_unit[1] * tangent[1], -1.0, 1.0)
+        # Positive cross means the path heading lies to the car's right.
+        cross = fwd_unit[0] * tangent[1] - fwd_unit[1] * tangent[0]
+        heading_error = math.atan2(cross, dot)
+
+        cte = _clamp(
+            projection.signed_cross_track_m,
+            -self.max_cross_track_m,
+            self.max_cross_track_m,
+        )
+        speed_mps = max(speed_kmh, 0.0) / 3.6
+        cross_track_term = math.atan2(
+            self.cross_track_gain * cte,
+            speed_mps + self.speed_softening_mps,
+        )
+        wheel_angle = self.heading_gain * heading_error + cross_track_term
+        return _clamp(wheel_angle / self.max_steer_rad, -1.0, 1.0)
 
 
 def _clamp(value: float, low: float, high: float) -> float:
