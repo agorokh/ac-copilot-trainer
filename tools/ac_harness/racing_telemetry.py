@@ -16,6 +16,7 @@ CLI:  python -m tools.ac_harness.racing_telemetry --out human_laps.csv --laps 10
 from __future__ import annotations
 
 import argparse
+import math
 import struct
 import sys
 import time
@@ -73,6 +74,18 @@ def parse_physics(buf: bytes) -> PhysFrame:
     steer, speed = struct.unpack_from("<2f", buf, 24)
     accg = struct.unpack_from("<3f", buf, 44)  # [lateral, vertical, longitudinal]
     slip = struct.unpack_from("<4f", buf, 56)
+    _require_finite(
+        gas=gas,
+        brake=brake,
+        steer=steer,
+        speed=speed,
+        accg_lat=accg[0],
+        accg_lon=accg[2],
+        slip_fl=slip[0],
+        slip_fr=slip[1],
+        slip_rl=slip[2],
+        slip_rr=slip[3],
+    )
     return PhysFrame(packet_id, gas, brake, gear, rpm, steer, speed, accg[0], accg[2], slip)
 
 
@@ -84,7 +97,14 @@ def parse_graphics(buf: bytes) -> GfxFrame:
     status = struct.unpack_from("<i", buf, 4)[0]
     completed_laps = struct.unpack_from("<i", buf, 132)[0]
     norm_pos = struct.unpack_from("<f", buf, 156)[0]
+    _require_finite(norm_pos=norm_pos)
     return GfxFrame(packet_id, status, completed_laps, norm_pos)
+
+
+def _require_finite(**fields: float) -> None:
+    bad = [name for name, value in fields.items() if not math.isfinite(value)]
+    if bad:
+        raise ValueError(f"non-finite shared-memory fields: {', '.join(bad)}")
 
 
 def csv_display_gear(raw: int) -> int:

@@ -240,7 +240,7 @@ class RacingDriver:
         """Racing throttle/brake toward the brake-feasible profile (trail braking + traction)."""
         v_cur = speed_kmh / 3.6
         target = self.target_speed_kmh(idx, speed_kmh) / 3.6
-        lat = abs(steer)  # cornering load proxy (steer fraction)
+        lat = min(abs(steer), 1.0)  # cornering load proxy (steer fraction, saturated)
         err = v_cur - target
         if err > self.brake_band_mps:
             brake = _clamp((err - self.brake_band_mps) / self.brake_scale_mps, 0.0, 1.0)

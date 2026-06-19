@@ -60,6 +60,17 @@ def test_parse_graphics_reads_lap_and_position():
     assert g.norm_pos == pytest.approx(0.4231, abs=1e-4)
 
 
+def test_parsers_reject_non_finite_values():
+    bad = bytearray(_phys_buf())
+    struct.pack_into("<f", bad, 28, float("nan"))
+    with pytest.raises(ValueError, match="non-finite"):
+        parse_physics(bytes(bad))
+    gbad = bytearray(_gfx_buf())
+    struct.pack_into("<f", gbad, 156, float("inf"))
+    with pytest.raises(ValueError, match="non-finite"):
+        parse_graphics(bytes(gbad))
+
+
 def test_parsers_reject_short_buffers():
     with pytest.raises(ValueError, match="physics buffer too short"):
         parse_physics(b"\x00" * 16)
