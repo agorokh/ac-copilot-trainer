@@ -62,10 +62,15 @@ local function lapArchiveDir()
   return persistence.lapArchiveDir()
 end
 
+local function isTraceSampleArchivable(s)
+  return type(s) == "table" and type(s.spline) == "number"
+end
+
 local function traceSampleToColumnRow(s)
-  if type(s) ~= "table" or type(s.spline) ~= "number" then
+  if not isTraceSampleArchivable(s) then
     return nil
   end
+  ---@cast s table
   local row = {}
   for fi = 1, #TRACE_FIELDS do
     local fname = TRACE_FIELDS[fi]
@@ -82,8 +87,7 @@ local function countTraceRows(trace)
   if type(trace) ~= "table" then return 0 end
   local n = 0
   for i = 1, #trace do
-    local s = trace[i]
-    if type(s) == "table" and type(s.spline) == "number" then
+    if isTraceSampleArchivable(trace[i]) then
       n = n + 1
     end
   end
@@ -566,6 +570,8 @@ function M.createWriteJob(opts, capMB)
     if not ok then return self:_fail(err) end
     self._fieldWritten = true
     self._state = "samples"
+    -- Fall through to sample writes in the same step so a new job does useful
+    -- bounded work immediately after opening the temp file.
     return false, nil, nil
   end
 
@@ -579,20 +585,18 @@ function M.createWriteJob(opts, capMB)
     ok, err = self:_write("}")
     if not ok then return self:_fail(err) end
 
-    local flushOk, flushRes = pcall(function() return self._file:flush() end)
-    if not flushOk or not flushRes then
-      local msg = (not flushOk) and tostring(flushRes) or "flush returned nil"
-      return self:_fail("flush failed: " .. msg)
-    end
+    ok, err = self:_flush()
+    if not ok then return self:_fail(err) end
     local closeOk, closeRes = pcall(function() return self._file:close() end)
     self._file = nil
     if not closeOk or not closeRes then
       local msg = (not closeOk) and tostring(closeRes) or "close returned nil"
       return self:_fail("close failed: " .. msg)
     end
-    local renameOk, renameRes = pcall(os.rename, self._tmpPath, self._path)
-    if not renameOk or renameRes == nil or renameRes == false then
-      local msg = (not renameOk) and tostring(renameRes) or "rename returned nil"
+    local renameOk, renameRes, renameErr = pcall(os.rename, self._tmpPath, self._path)
+    if not renameOk or not renameRes then
+      local msg = (not renameOk) and tostring(renameRes)
+        or tostring(renameErr or "rename returned nil")
       return self:_fail("rename failed: " .. msg)
     end
     pcall(function() M.rotate(capMB) end)

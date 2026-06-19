@@ -466,6 +466,7 @@ local function pumpLapArchiveNotifications()
     if sent then
       table.remove(pendingLapArchiveRecordPaths, 1)
     else
+      -- Keep the path queued; handshake/reconnect can become ready on a later frame.
       return
     end
   end

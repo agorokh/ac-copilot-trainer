@@ -160,6 +160,9 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
 
 
 def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
+    # This is an intentional source-structure regression test: if the lap
+    # boundary or WS pump sections are refactored, update these regex anchors
+    # with the implementation so the architectural guard remains meaningful.
     src = ENTRY.read_text(encoding="utf-8")
     match = re.search(
         r"-- Issue #77 Part C / #246: archive this lap.*?state\.lapInvalidatedThisLap = false",
