@@ -260,7 +260,7 @@ class RacingDriver:
         """One-frame shift: out of neutral, up past ``rpm_up`` while moving, down at ``rpm_dn``."""
         if now - self._last_shift_s <= self.shift_cooldown_s:
             return (False, False)
-        # AC encoding: 0=reverse, 1=neutral, 2=1st — shift up from R/N only (never while in forward).
+        # AC gear: 0=reverse, 1=neutral, 2=1st — upshift from R/N only.
         if gear <= 1:
             self._last_shift_s = now
             return (True, False)
