@@ -419,6 +419,7 @@ def build_ggv_speed_profile(
     smooth_win: int = 3,
     span: int = 3,
     accel_peak_g: float | None = None,
+    lat_grip_g: float | None = None,
 ) -> tuple[list[float], GGVModel, dict]:
     """End-to-end offline build: fit GGV from telemetry, compute the QSS profile on ``fast_line``.
 
@@ -437,6 +438,10 @@ def build_ggv_speed_profile(
     if accel_peak_g is not None:
         # traction-shaped accel: peak low-speed, ~0.4 g by 60 m/s (power/drag fade)
         ggv = replace(ggv, drive_b0_g=accel_peak_g, drive_b1=-(accel_peak_g - 0.4) / 60.0)
+    if lat_grip_g is not None:
+        # grip self-play: the relaxed human under-corners (~1.2 g); a real GT3 R does ~1.5 g. Push the
+        # lateral envelope up to raise apex speeds, kept honest live by validity (back off if it cuts).
+        ggv = replace(ggv, mu_lat_g=lat_grip_g, ay_cap_g=max(ggv.ay_cap_g, lat_grip_g + 0.1))
     v, ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
     total = sum(seg)
     laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))

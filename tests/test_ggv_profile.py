@@ -194,6 +194,22 @@ def test_build_ggv_speed_profile_deterministic_and_capped(tmp_path):
     assert len(v1) == len(line)
 
 
+def test_lat_grip_override_raises_apex_and_overrides_model(tmp_path):
+    import csv as _csv
+
+    csvp = tmp_path / "tele.csv"
+    with csvp.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["speed_kmh", "accg_lat", "accg_lon"])
+        for r in _rows(60, 1.3, 1.2, 1500) + _rows(200, 0.1, 2.6, 1500):
+            w.writerow([r["speed_kmh"], r["accg_lat"], r["accg_lon"]])
+    line = _circle(50.0, 400)
+    lo, glo, _ = build_ggv_speed_profile(line, csvp, v_top_kmh=300.0)
+    hi, ghi, _ = build_ggv_speed_profile(line, csvp, v_top_kmh=300.0, lat_grip_g=1.6)
+    assert ghi.mu_lat_g == 1.6 and ghi.mu_lat_g > glo.mu_lat_g
+    assert max(hi) > max(lo)  # higher lateral grip -> higher apex speed on the circle
+
+
 # --- RacingDriver.from_ggv_profile wiring ----------------------------------
 def test_from_ggv_profile_uses_target_verbatim_and_steps():
     from tools.ac_harness.racing_driver import RacingDriver
