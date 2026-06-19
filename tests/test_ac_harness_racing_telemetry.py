@@ -66,7 +66,7 @@ def test_parsers_reject_non_finite_values():
     with pytest.raises(ValueError, match="non-finite"):
         parse_physics(bytes(bad))
     gbad = bytearray(_gfx_buf())
-    struct.pack_into("<f", gbad, 156, float("inf"))
+    struct.pack_into("<f", gbad, 248, float("inf"))  # normalizedCarPosition @248
     with pytest.raises(ValueError, match="non-finite"):
         parse_graphics(bytes(gbad))
 
