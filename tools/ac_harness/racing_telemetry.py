@@ -110,8 +110,9 @@ def csv_row(lap: int, t: float, p: PhysFrame, g: GfxFrame) -> str:
 def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) -> int:
     """Record physics+graphics frames to ``out_path`` (CSV) until ``max_laps`` or ``max_seconds``.
 
-    Windows/rig-only. Dedupes on physics and graphics packetId (avoids mismatched pairs),
-    segments laps on ``completedLaps``, and prints a per-lap summary (time, min/max speed).
+    Windows/rig-only. Physics-led pairing: a row is emitted only when the physics packetId
+    advances, with graphics read immediately afterward (minimizes time-skew). Segments laps on
+    ``completedLaps``, and prints a per-lap summary (time, min/max speed).
     Returns the number of completed laps.
     """
     if sys.platform != "win32":
@@ -126,7 +127,6 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
             fh.write(CSV_HEADER + "\n")
 
             last_phys_packet: int | None = None
-            last_gfx_packet: int | None = None
             lap_rows = 0
             base_laps: int | None = None
             lap_start_t = 0.0
@@ -142,19 +142,15 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
                     now = time.monotonic()
                     if now - t0 >= max_seconds or laps >= max_laps:
                         break
-                    gbuf = gfx.read(_GFX_BYTES)
-                    g = parse_graphics(gbuf)
-                    if last_gfx_packet is not None and g.packet_id <= last_gfx_packet:
-                        time.sleep(0.003)
-                        continue
-                    last_gfx_packet = g.packet_id
-
                     pbuf = phys.read(_PHYS_BYTES)
                     p = parse_physics(pbuf)
                     if last_phys_packet is not None and p.packet_id <= last_phys_packet:
                         time.sleep(0.003)
                         continue
                     last_phys_packet = p.packet_id
+
+                    gbuf = gfx.read(_GFX_BYTES)
+                    g = parse_graphics(gbuf)
                     if base_laps is None:
                         base_laps = g.completed_laps
                         lap_start_t = now

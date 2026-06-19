@@ -78,6 +78,12 @@ def _parse_fast_lane_extra(data: bytes) -> list[AiPointProfile]:
     for i in range(count):
         base = extra_start + i * _EXTRA_STRIDE
         speed, gas, brake = struct.unpack_from("<3f", data, base)
+        if not all(math.isfinite(x) for x in (speed, gas, brake)):
+            raise ValueError(f"AiPointExtra[{i}] non-finite speed/gas/brake")
+        if speed < 0:
+            raise ValueError(f"AiPointExtra[{i}] negative speed: {speed}")
+        if not 0.0 <= gas <= 1.0 or not 0.0 <= brake <= 1.0:
+            raise ValueError(f"AiPointExtra[{i}] gas/brake out of range 0..1: {gas}, {brake}")
         out.append(AiPointProfile(speed_mps=speed, gas=gas, brake=brake))
     return out
 
@@ -216,6 +222,8 @@ class RacingDriver:
                 i = (n - 1 - j) % n
                 nxt = (i + 1) % n
                 ds = seg[i]
+                if ds <= 1e-6:
+                    continue
                 cap = math.sqrt(out[nxt] * out[nxt] + 2.0 * a * ds)
                 out[i] = min(out[i], cap)
         return out

@@ -59,6 +59,15 @@ def test_load_ai_profile_rejects_unsupported_version(tmp_path: Path):
         load_ai_profile(f)
 
 
+def test_load_ai_profile_rejects_non_finite_speed(tmp_path: Path):
+    blob = bytearray(_ai_blob([10.0]))
+    struct.pack_into("<f", blob, 16 + 20 + 4, float("nan"))
+    f = tmp_path / "bad_speed.ai"
+    f.write_bytes(bytes(blob))
+    with pytest.raises(ValueError, match="non-finite"):
+        load_ai_profile(f)
+
+
 def test_load_speed_profile_rejects_bad_extra_count(tmp_path: Path):
     blob = bytearray(_ai_blob([10.0, 20.0]))
     # corrupt the extraCount int32 (right after the 2 main points).
