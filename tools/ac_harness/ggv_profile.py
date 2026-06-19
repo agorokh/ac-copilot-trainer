@@ -30,6 +30,8 @@ import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from tools.ac_harness.ai_line import StanleySteering, _horizontal
+
 G = 9.81
 
 
@@ -263,6 +265,74 @@ def curvature_profile(
     return [menger_curvature(p[(i - span) % n], p[i], p[(i + span) % n]) for i in range(n)]
 
 
+def signed_curvature_profile(
+    plane: list[tuple[float, float]], *, smooth_win: int = 3, span: int = 3
+) -> list[float]:
+    """Per-point SIGNED curvature (1/m) of a cyclic line: magnitude = Menger, sign = turn direction.
+
+    Sign is the planar cross product of consecutive chords (``> 0`` one way, ``< 0`` the other). The
+    absolute mapping to "left/right" depends on the (x, z) handedness and is reconciled live by the
+    controller's ``ff_sign`` flag; what matters here is that the sign is consistent along the line.
+    """
+    p = _smooth_cyclic(plane, smooth_win)
+    n = len(p)
+    out = []
+    for i in range(n):
+        a = p[(i - span) % n]
+        b = p[i]
+        c = p[(i + span) % n]
+        mag = menger_curvature(a, b, c)
+        v1x, v1z = b[0] - a[0], b[1] - a[1]
+        v2x, v2z = c[0] - b[0], c[1] - b[1]
+        cross = v1x * v2z - v1z * v2x
+        out.append(mag if cross >= 0 else -mag)
+    return out
+
+
+def fit_steer_feedforward(
+    rows: list[dict], *, min_lat_g: float = 0.3, min_kmh: float = 15.0
+) -> tuple[float, float, float, int]:
+    """Calibrate a bicycle-model steer feedforward from human telemetry.
+
+    Fits the normalized steer command ``steer ≈ c1*kappa + c2*(v^2*kappa)`` where the human's own
+    instantaneous curvature ``kappa = a_y / v^2`` and ``a_y = accg_lat*g`` (signed). ``c1`` is the
+    geometric (Ackermann) term ``L/steer_scale``; ``c2`` the understeer term ``K_ug/steer_scale``
+    (both absorb the unknown rad-per-unit-steer of the actuator). Returns ``(c1, c2, rms_frac, n)``;
+    ``rms_frac`` is the residual RMS as a fraction of the steer RMS (lower = better calibrated).
+    """
+    x11 = x12 = x22 = y1 = y2 = 0.0
+    samples: list[tuple[float, float, float]] = []
+    for r in rows:
+        try:
+            v = float(r["speed_kmh"]) / 3.6
+            ay = float(r["accg_lat"]) * G
+            st = float(r["steer"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if v < min_kmh / 3.6 or abs(float(r["accg_lat"])) < min_lat_g:
+            continue
+        kappa = ay / (v * v)
+        x1, x2 = kappa, ay  # x2 == v^2 * kappa
+        x11 += x1 * x1
+        x12 += x1 * x2
+        x22 += x2 * x2
+        y1 += x1 * st
+        y2 += x2 * st
+        samples.append((x1, x2, st))
+    n = len(samples)
+    if n < 50:
+        return (0.0, 0.0, 1.0, n)
+    det = x11 * x22 - x12 * x12
+    if abs(det) < 1e-12:
+        return (0.0, 0.0, 1.0, n)
+    c1 = (y1 * x22 - y2 * x12) / det
+    c2 = (x11 * y2 - x12 * y1) / det
+    sse = sum((c1 * a + c2 * b - s) ** 2 for a, b, s in samples)
+    sst = sum(s * s for _, _, s in samples)
+    rms_frac = (sse / sst) ** 0.5 if sst > 0 else 1.0
+    return (c1, c2, rms_frac, n)
+
+
 def seg_lengths(plane: list[tuple[float, float]]) -> list[float]:
     n = len(plane)
     return [
@@ -381,3 +451,73 @@ def build_ggv_speed_profile(
         "ggv": ggv.provenance,
     }
     return v, ggv, summ
+
+
+class CurvatureFeedforwardSteering:
+    """Curvature-feedforward + Stanley-feedback lateral controller (Stage 3).
+
+    ``delta = ff_sign*(c1*kappa + c2*v^2*kappa)``  (feedforward from the LINE's signed curvature,
+    with ``v^2*kappa`` a_y-capped) ``+ fb_weight * Stanley(cross-track + heading)`` (feedback).
+
+    Bare Stanley only corrects error; at racing corner speeds it saturates and the car runs wide.
+    The feedforward supplies the steady-state wheel angle the curve needs (calibrated from human
+    telemetry via :func:`fit_steer_feedforward`), so Stanley only trims the residual — the car can
+    carry the GGV profile's corner speeds. ``ff_sign`` reconciles the line curvature sign convention
+    with the actuator's ``steer>0=right`` live (flip if the car veers off on the first corner).
+    """
+
+    def __init__(
+        self,
+        line: list[tuple[float, float, float]],
+        *,
+        c1: float,
+        c2: float,
+        ff_sign: float = 1.0,
+        ay_cap_mps2: float = 14.0,
+        preview_m: float = 6.0,
+        fb_weight: float = 0.6,
+        smooth_win: int = 3,
+        span: int = 3,
+        **stanley_kwargs,
+    ) -> None:
+        self._plane = [(p[0], p[2]) for p in line]
+        self._kappa = signed_curvature_profile(self._plane, smooth_win=smooth_win, span=span)
+        self._seg = seg_lengths(self._plane)
+        self.n = len(self._plane)
+        self.c1 = c1
+        self.c2 = c2
+        self.ff_sign = ff_sign
+        self.ay_cap = ay_cap_mps2
+        self.preview_m = preview_m
+        self.fb_weight = fb_weight
+        self._stanley = StanleySteering(line, **stanley_kwargs)
+
+    def _nearest(self, car: tuple[float, float]) -> int:
+        best_i, best = 0, float("inf")
+        for i, p in enumerate(self._plane):
+            d = (p[0] - car[0]) ** 2 + (p[1] - car[1]) ** 2
+            if d < best:
+                best, best_i = d, i
+        return best_i
+
+    def _advance(self, idx: int, dist_m: float) -> int:
+        rem, i = dist_m, idx
+        for _ in range(self.n):
+            s = self._seg[i]
+            if s >= rem:
+                return (i + 1) % self.n
+            rem -= s
+            i = (i + 1) % self.n
+        return idx
+
+    def steer(self, position_xyz, look_dir_xyz, speed_kmh: float) -> float:
+        """Return steering in ``[-1, 1]`` (``>0`` = right) from pose + speed."""
+        car = _horizontal(position_xyz)
+        look = self._advance(self._nearest(car), self.preview_m)
+        k = self._kappa[look]
+        v = max(speed_kmh, 0.0) / 3.6
+        ay = min(v * v * abs(k), self.ay_cap)  # cap a_y (grip-bounded understeer term)
+        ff = self.ff_sign * (self.c1 * k + self.c2 * (ay if k >= 0 else -ay))
+        fb = self._stanley.steer(position_xyz, look_dir_xyz, speed_kmh)
+        out = ff + self.fb_weight * fb
+        return -1.0 if out < -1.0 else 1.0 if out > 1.0 else out

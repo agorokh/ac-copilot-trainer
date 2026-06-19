@@ -10,13 +10,16 @@ from __future__ import annotations
 import math
 
 from tools.ac_harness.ggv_profile import (
+    CurvatureFeedforwardSteering,
     GGVModel,
     build_ggv_speed_profile,
     curvature_profile,
+    fit_steer_feedforward,
     forward_backward_profile,
     ggv_from_telemetry,
     menger_curvature,
     seg_lengths,
+    signed_curvature_profile,
 )
 
 G = 9.81
@@ -268,3 +271,52 @@ def test_ff_adds_braking_when_profile_decelerates():
     _, b_ff = d_ff._longitudinal(10, 30.0 * 3.6, 0.0)
     _, b_no = d_no._longitudinal(10, 30.0 * 3.6, 0.0)
     assert b_ff >= b_no  # feedforward brakes at least as hard into the decel
+
+
+# --- Stage 3: signed curvature + steer feedforward fit + lateral controller ---
+def test_signed_curvature_consistent_sign_on_circle():
+    plane = [(p[0], p[2]) for p in _circle(40.0, 400)]
+    sk = signed_curvature_profile(plane, smooth_win=2, span=3)
+    mid = sk[50:350]
+    assert all((x > 0) == (mid[0] > 0) for x in mid)  # one consistent turn direction
+    assert all(abs(abs(x) - 1.0 / 40.0) < 0.05 / 40.0 for x in mid)  # magnitude ~ 1/R
+
+
+def test_fit_steer_feedforward_recovers_coeffs():
+    # synthetic: steer = 4.0*kappa + 0.002*(v^2*kappa) exactly
+    c1_true, c2_true = 4.0, 0.002
+    rows = []
+    for i in range(400):
+        v = 20.0 + 0.2 * i  # m/s spread
+        kappa = 0.01 + 0.00005 * (i % 50)
+        ay = v * v * kappa
+        steer = c1_true * kappa + c2_true * ay
+        rows.append({"speed_kmh": str(v * 3.6), "accg_lat": str(ay / G), "steer": str(steer)})
+    c1, c2, rms, n = fit_steer_feedforward(rows, min_lat_g=0.0, min_kmh=0.0)
+    assert abs(c1 - c1_true) < 0.05 and abs(c2 - c2_true) < 1e-4
+    assert rms < 0.02 and n == 400
+
+
+def test_curvature_ff_steering_in_range_and_uses_curvature():
+    line = _circle(50.0, 400)
+    cff = CurvatureFeedforwardSteering(
+        line, c1=5.0, c2=0.0, ff_sign=1.0, fb_weight=0.0, preview_m=2.0
+    )
+    # facing along +x at a point on the circle; FF should command a nonzero, in-range steer
+    s = cff.steer((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 80.0)
+    assert -1.0 <= s <= 1.0
+    # zero coefficients + zero feedback -> zero steer (pure FF off)
+    flat = CurvatureFeedforwardSteering(line, c1=0.0, c2=0.0, ff_sign=1.0, fb_weight=0.0)
+    assert abs(flat.steer((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 80.0)) < 1e-9
+
+
+def test_racing_driver_curvature_ff_mode_steps():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    line = _circle(50.0, 200)
+    d = RacingDriver.from_ggv_profile(
+        line, [30.0] * 200, steering_mode="curvature_ff", ff_c1=5.0, ff_c2=0.002
+    )
+    assert d.cff is not None
+    f = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 100.0, 6000.0, 4, 1.0)
+    assert -1.0 <= f.steer <= 1.0

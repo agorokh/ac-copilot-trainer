@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tools.ac_harness.ai_line import PurePursuit, StanleySteering, _horizontal
+from tools.ac_harness.ggv_profile import CurvatureFeedforwardSteering
 from tools.ac_harness.lap_driver import PHASE_LAP, PHASE_OUT, DriveFrame
 
 # fast_lane.ai AiPointExtra block: speed@0, gas@4, brake@8 — 72-byte stride. Ground-truthed live
@@ -418,6 +419,12 @@ class RacingDriver:
         ff_gain: float = 1.0,
         ff_drive_g: float = 1.0,
         ff_brake_g: float = 2.0,
+        ff_c1: float = 0.0,
+        ff_c2: float = 0.0,
+        ff_sign: float = 1.0,
+        cff_preview_m: float = 6.0,
+        cff_fb_weight: float = 0.6,
+        cff_ay_cap_mps2: float = 14.0,
     ) -> None:
         if len(fast_line) != len(speed_profile):
             raise ValueError(
@@ -429,8 +436,8 @@ class RacingDriver:
             raise ValueError("require 0 < min_speed_kmh <= max_speed_kmh")
         if brake_g <= 0 or brake_scale_mps <= 0 or throttle_scale_mps <= 0:
             raise ValueError("brake_g, brake_scale_mps, throttle_scale_mps must be > 0")
-        if steering_mode not in {"stanley", "pure_pursuit"}:
-            raise ValueError("steering_mode must be 'stanley' or 'pure_pursuit'")
+        if steering_mode not in {"stanley", "pure_pursuit", "curvature_ff"}:
+            raise ValueError("steering_mode must be 'stanley', 'pure_pursuit', or 'curvature_ff'")
 
         self.pursuit = PurePursuit(
             fast_line,
@@ -447,6 +454,24 @@ class RacingDriver:
             speed_softening_mps=stanley_speed_softening_mps,
             max_steer_rad=stanley_max_steer_rad,
             max_cross_track_m=stanley_max_cross_track_m,
+        )
+        self.cff = (
+            CurvatureFeedforwardSteering(
+                fast_line,
+                c1=ff_c1,
+                c2=ff_c2,
+                ff_sign=ff_sign,
+                ay_cap_mps2=cff_ay_cap_mps2,
+                preview_m=cff_preview_m,
+                fb_weight=cff_fb_weight,
+                cross_track_gain=stanley_cross_track_gain,
+                heading_gain=stanley_heading_gain,
+                speed_softening_mps=stanley_speed_softening_mps,
+                max_steer_rad=stanley_max_steer_rad,
+                max_cross_track_m=stanley_max_cross_track_m,
+            )
+            if steering_mode == "curvature_ff"
+            else None
         )
         self.n = len(fast_line)
         self.steering_mode = steering_mode
@@ -644,7 +669,9 @@ class RacingDriver:
         ):
             self.phase = PHASE_LAP
 
-        if self.steering_mode == "stanley":
+        if self.steering_mode == "curvature_ff":
+            steer = self.cff.steer(position_xyz, look_dir_xyz, speed_kmh)
+        elif self.steering_mode == "stanley":
             steer = self.stanley.steer(position_xyz, look_dir_xyz, speed_kmh)
         else:
             steer = self.pursuit.control(position_xyz, look_dir_xyz, speed_kmh).steer
