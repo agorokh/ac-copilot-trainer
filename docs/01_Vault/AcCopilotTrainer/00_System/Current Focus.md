@@ -3,10 +3,11 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T10:35:00Z
+last_updated: 2026-06-19T19:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
   - AcCopilotTrainer/10_Rig/physical-rig-integration-epic-59.md
   - AcCopilotTrainer/01_Decisions/external-ws-client-protocol-extension.md
@@ -22,13 +23,18 @@ relates_to:
 
 **Active focus (2026-06-19) — HANDOFF, see [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244):** Part G **racing driver** **MERGED** ([#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) / PR [#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) `372156a`): follows `fast_lane.ai`'s embedded speed profile with braking points/trail braking; **gear bug fixed** (was stuck in 1st — limiter below shift point) → now shifts 1→4, **146 km/h** (was 52). `tools/ac_harness/racing_telemetry.py` records human laps. **The wall is STEERING** (pure-pursuit cuts apexes → corners crawl, lap INVALID → no `lap`/`delta` telemetry). **Next:** record 5–10 human GT3 laps → build a path-tracking steering controller from real corner speeds/braking points. Full state: [`racing-driver-and-controller-2026-06-17`](../03_Investigations/racing-driver-and-controller-2026-06-17.md). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
 
-**Active focus update (2026-06-19) — #244 / draft PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248):**
-Stanley steering and human-profile replay support are built and off-sim verified (`uv run --extra dev
-make ci-fast` passed: `1131 passed, 75 skipped`, coverage `82.67%`). Review fixes are included:
-human-profile samples now align to fast-line lap-distance fractions, not ordinal point index. Runtime
-proof is still blocked: Tailscale ping reaches `pc` / `100.75.251.87`, but harness daemon health/TCP
-probes on `9876` and `8765` time out, and SSH denies access. Keep #244 and #154 open until the Windows
-rig proves a VALID Magione lap at human-comparable pace with `lap`/`delta` telemetry/HUD evidence.
+**Active focus update (2026-06-19 LATER) — #244 / PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) MERGED + LIVE-VERIFIED on the rig:**
+Ran `/autonomous-deliver 244` **on `AG_PC` itself** (prior Mac→rig blocker moot). The merged Stanley
+controller from the human profile drove Magione via carcsw, no human → **3 AC VALID laps** (best
+**106.8 s**, max **207.6 km/h**, gears 1–6, 0 stuck), and the sidecar tap showed **`delta=2935`** live
+delta-to-reference + `coaching.snapshot=3797` — **the `lap`/`delta` telemetry wall is broken**. The
+trainer captured the agent's lap as its coaching reference (lap archives written). **Residual:** best
+clean lap is ~85% of the human's relaxed pace (106.8 s vs 90.7 s / 83.5 vs 98.7 km/h); the literal
+`avg ≳100 km/h` bar is unmet and an aggressive-throttle tuning pass REGRESSED (TC-off wheelspin), so the
+merged defaults are near-optimal. The last ~15% is separable controller-sophistication on
+`racing_driver.py` → stays as remaining Part-G scope on #244 (no new overlapping issue). **#244 + #154
+stay OPEN** for the pace bar; operator decides whether the wall-break + telemetry milestone closes
+Part-G-core. Full write-up: [`stanley-steering-live-verified-2026-06-19`](../03_Investigations/stanley-steering-live-verified-2026-06-19.md).
 
 **Parallel runtime hotfix (2026-06-19) — #246 / PR #249 MERGED; issue remains open for live proof:**
 PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) merged at
@@ -86,6 +92,13 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-19** — PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) **MERGED** at
+  `88249bf` — Stanley steering + `RacingDriver.from_human_profile` ([#244](https://github.com/agorokh/ac-copilot-trainer/issues/244)).
+  **LIVE-VERIFIED on `AG_PC`**: 3 AC VALID laps via carcsw (best 106.8 s, 207.6 km/h, gears 1–6),
+  sidecar `delta=2935` + `coaching.snapshot=3797`, agent lap captured as trainer reference. The
+  steering/telemetry wall is broken. Residual: pace ~85% of human (`avg ≳100 km/h` bar unmet; defaults
+  near-optimal, aggressive tuning regressed) → remaining Part-G scope on #244. #244/#154 stay OPEN.
+  See [`stanley-steering-live-verified-2026-06-19`](../03_Investigations/stanley-steering-live-verified-2026-06-19.md).
 - **2026-06-19** — PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) **MERGED** at
   `4e2a310` — mitigates [#246](https://github.com/agorokh/ac-copilot-trainer/issues/246) by replacing
   synchronous lap-complete archive writes with a queued per-frame `lapArchive.createWriteJob`, temp-file
