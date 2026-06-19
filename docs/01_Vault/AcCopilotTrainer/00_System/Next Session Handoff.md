@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T22:30:00Z
+last_updated: 2026-06-20T01:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
@@ -31,6 +31,28 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-20 — #244 FRONTIER: HUMAN BEATEN 90.7s→83.5s; Stage 4 line is the path to ~70s)
+
+**The autonomous controller now beats the human and is repeatable + AC-valid.** Live on AG_PC, GT3 R,
+carcsw: **106.8s (old) → 95.3 (GGV) → 91.8 (curvature-FF) → 90.28 (Stage 2, 1.2g) → 86.4 (1.35g) →
+83.5s (1.5g, real-GT3 grip)**; human relaxed = 90.7s. Every lap `lap.valid=true` with `delta`
+telemetry (sidecar tap). Branch `feat/issue-244-frontier-racing-controller`, draft PR
+[#256](https://github.com/agorokh/ac-copilot-trainer/pull/256) (Stages 1–3 + grip self-play, 25
+tests, ruff clean). Evidence: [#244#issuecomment-4754911396](https://github.com/agorokh/ac-copilot-trainer/issues/244#issuecomment-4754911396).
+Full write-up: [[frontier-controller-ggv-2026-06-19]] (UPDATE section).
+
+**Winning live config** (`.scratch/part-g/race_drive_ff.py`): `steering_mode="curvature_ff"`,
+`ff_sign=-1` (Magione; from `corr(human_steer, line_kappa)=+0.93`), `ax_feedforward=True`,
+`accel_peak_g≈1.1`, `lat_grip_g=1.5`, slip limiter `r_eff=0.347`. Curvature-FF holds the line so
+Stanley only trims (Stanley alone saturated); that unlocked Stage 2; grip self-play found 1.5g is the
+ceiling (1.6g fails — keep-last-valid).
+
+**Next → Stage 4 (toward ~70s):** at 1.5g the apexes are LINE-limited (stock `fast_lane` tighter than
+optimal). Build an offline min-curvature optimized line (TUMFTM-style QP, corridor bounded by the
+human no-cut envelope), re-run the GGV profiler on it, bake `(x,y,kappa,v_target)`. QSS ceiling on the
+current line is ~78s at 1.5g; a better line + speed-dependent aero lateral grip push toward ~70s.
+**Rig left clean** (surfaces stock, daemon/AC stopped). Merge PR #256 when CI/bots green.
 
 ## Resume here (2026-06-19 NIGHT — #244 FRONTIER controller: GGV profiler LIVE 95.3s; Stage 3 lateral is the wall to beat human 90.7s)
 
