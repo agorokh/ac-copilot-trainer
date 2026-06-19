@@ -24,10 +24,11 @@ relates_to:
 
 **Active focus update (2026-06-19) — #244 / draft PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248):**
 Stanley steering and human-profile replay support are built and off-sim verified (`uv run --extra dev
-make ci-fast` passed: `1128 passed, 75 skipped`, coverage `82.64%`). Runtime proof is still blocked:
-Tailscale ping reaches `pc` / `100.75.251.87`, but harness daemon health/TCP probes on `9876` and
-`8765` time out, and SSH denies access. Keep #244 and #154 open until the Windows rig proves a VALID
-Magione lap at human-comparable pace with `lap`/`delta` telemetry/HUD evidence.
+make ci-fast` passed: `1131 passed, 75 skipped`, coverage `82.67%`). Review fixes are included:
+human-profile samples now align to fast-line lap-distance fractions, not ordinal point index. Runtime
+proof is still blocked: Tailscale ping reaches `pc` / `100.75.251.87`, but harness daemon health/TCP
+probes on `9876` and `8765` time out, and SSH denies access. Keep #244 and #154 open until the Windows
+rig proves a VALID Magione lap at human-comparable pace with `lap`/`delta` telemetry/HUD evidence.
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 

@@ -45,10 +45,13 @@ human-lap fixture landed.
 `RacingDriver.from_human_profile(...)` so the captured human speed profile can drive the controller.
 Exports were added from `tools.ac_harness`.
 
-**Verification completed off-sim.** Targeted tests passed (`57 passed`), ruff format/check passed, and
-`uv run --extra dev make ci-fast` passed (`1128 passed, 75 skipped`, coverage `82.64%`). GitHub build,
-conformance, canonical-docs, and CodeRabbit checks passed on the draft PR; Cursor Bugbot was still
-pending when this handoff was written.
+**Verification completed off-sim.** Targeted tests passed (`60 passed`), ruff format/check passed, and
+`uv run --extra dev make ci-fast` passed (`1131 passed, 75 skipped`, coverage `82.67%`). Gemini/Codex
+review threads were addressed and resolved: Stanley projection now computes segment geometry once for
+the final nearest segment, human-profile interpolation precomputes `norms`, and
+`RacingDriver.from_human_profile(...)` samples by fast-line lap-distance fraction instead of ordinal
+point index. GitHub build, conformance, canonical-docs, and CodeRabbit checks passed on the draft PR;
+Cursor Bugbot was still pending when this handoff was written.
 
 **Runtime gate still open.** Mac-side rig probes reached Tailscale node `pc` / `100.75.251.87` by ping,
 but harness daemon health/TCP probes on ports `9876` and `8765` timed out, and SSH denied access
