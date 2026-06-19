@@ -132,6 +132,27 @@ def test_distill_api_key_scheme_less_openrouter_host(monkeypatch) -> None:
     assert distill_api_key() == "sk-or-schemeless"
 
 
+def test_distill_api_key_dial_prefers_project_key(monkeypatch) -> None:
+    monkeypatch.delenv("DISTILL_API_KEY", raising=False)
+    monkeypatch.setenv(
+        "DISTILL_BASE_URL",
+        "https://ai-proxy.lab.epam.com/openai/deployments/gpt-4o/chat/completions",
+    )
+    monkeypatch.setenv("DIAL_API_KEY_PROJECT", "dial-project-key")  # pragma: allowlist secret
+    monkeypatch.setenv("DIAL_API_KEY", "dial-personal-key")  # pragma: allowlist secret
+    assert distill_api_key() == "dial-project-key"
+
+
+def test_distill_api_key_dial_falls_back_to_personal_key(monkeypatch) -> None:
+    monkeypatch.delenv("DISTILL_API_KEY", raising=False)
+    monkeypatch.setenv(
+        "DISTILL_BASE_URL", "https://ai-proxy.lab.epam.com/openai/deployments/gpt-4o"
+    )
+    monkeypatch.delenv("DIAL_API_KEY_PROJECT", raising=False)
+    monkeypatch.setenv("DIAL_API_KEY", "dial-personal-key")  # pragma: allowlist secret
+    assert distill_api_key() == "dial-personal-key"
+
+
 def test_resolved_base_url_prepends_https_when_scheme_missing(monkeypatch) -> None:
     from tools.process_miner.distill import _resolved_base_url
 
@@ -476,6 +497,68 @@ def test_run_distillation_adds_json_object_for_openrouter(monkeypatch) -> None:
         base_url="https://openrouter.ai/api/v1",
     )
     assert bodies[0].get("response_format") == {"type": "json_object"}
+
+
+def test_run_distillation_uses_canonical_dial_headers(monkeypatch) -> None:
+    monkeypatch.setenv("DISTILL_APP_LABEL", "ac-copilot-trainer-test")
+    headers: dict[str, str] = {}
+
+    class Inner:
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "clusters": {
+                                            "k": {
+                                                "verdict": "noise",
+                                                "confidence": 0.1,
+                                                "lesson": "",
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode()
+
+    class Ctx:
+        def __enter__(self) -> Inner:
+            return Inner()
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _tb: TracebackType | None,
+        ) -> None:
+            return None
+
+    def capture_urlopen(req: object, timeout: float = 0) -> Ctx:
+        assert req is not None
+        header_items = getattr(req, "header_items", None)
+        assert callable(header_items)
+        headers.update({key.lower(): value for key, value in header_items()})
+        return Ctx()
+
+    monkeypatch.setattr(
+        "tools.process_miner.distill.urllib.request.urlopen",
+        capture_urlopen,
+    )
+    run_distillation(
+        [{"title_key": "k"}],
+        api_key="dial-api-key",  # pragma: allowlist secret
+        base_url="https://ai-proxy.lab.epam.com/openai/deployments/gpt-4o",
+    )
+    assert headers["api-key"] == "dial-api-key"
+    assert "authorization" not in headers
+    assert headers["x-app-label"] == "ac-copilot-trainer-test"
+    assert headers["content-type"] == "application/json"
 
 
 def _minimal_distill_payload() -> list[dict]:

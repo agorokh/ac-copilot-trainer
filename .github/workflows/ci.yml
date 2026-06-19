@@ -20,6 +20,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      FLEET_GOVERNANCE_ROOT: ${{ github.workspace }}/.fleet-governance
     steps:
       - name: Reject PRs whose head branch is main
         if: github.event_name == 'pull_request'
@@ -34,6 +36,23 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Verify GH_PAT for governance-hub checkout
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "${GH_PAT:-}" ]; then
+            echo "::error::GH_PAT is not configured — cannot checkout private governance-hub runtime."
+            exit 1
+          fi
+
+      - name: Checkout governance-hub runtime
+        uses: actions/checkout@v6
+        with:
+          repository: agorokh/governance-hub
+          ref: main
+          path: .fleet-governance
+          token: ${{ secrets.GH_PAT }}
 
       - uses: actions/setup-python@v6
         with:
