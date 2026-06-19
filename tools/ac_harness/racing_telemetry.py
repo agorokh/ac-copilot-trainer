@@ -30,11 +30,11 @@ from tools.ac_harness.shared_memory import SHM_GRAPHICS, SHM_PHYSICS, open_share
 #   float wheelSlip[4]@56, float wheelLoad[4]@72, float wheelsPressure[4]@88,
 #   float wheelAngularSpeed[4]@104, ...
 _PHYS_BYTES = 160
-# acpmf_graphics: int packetId@0, int status@4; completedLaps@132, normalizedCarPosition@156
-#   (offsets ground-truthed live this project — see custom_ai / shared_memory).
+# acpmf_graphics: int packetId@0, int status@4; completedLaps@132, normalizedCarPosition@248
+#   (@248 ground-truthed live by scanning for the only changing in-range float; @156 = distanceTraveled).
 _GFX_BYTES = 256
-# Minimum bytes needed: norm_pos at offset 156 is a 4-byte float.
-_GFX_MIN_BYTES = 160
+# Minimum bytes needed: norm_pos at offset 248 is a 4-byte float.
+_GFX_MIN_BYTES = 252
 
 CSV_HEADER = (
     "lap,t_s,norm_pos,speed_kmh,gear,rpm,gas,brake,steer,accg_lat,accg_lon,"
@@ -96,7 +96,7 @@ def parse_graphics(buf: bytes) -> GfxFrame:
     packet_id = struct.unpack_from("<i", buf, 0)[0]
     status = struct.unpack_from("<i", buf, 4)[0]
     completed_laps = struct.unpack_from("<i", buf, 132)[0]
-    norm_pos = struct.unpack_from("<f", buf, 156)[0]
+    norm_pos = struct.unpack_from("<f", buf, 248)[0]
     _require_finite(norm_pos=norm_pos)
     return GfxFrame(packet_id, status, completed_laps, norm_pos)
 

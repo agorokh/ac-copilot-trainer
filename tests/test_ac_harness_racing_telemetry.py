@@ -34,7 +34,7 @@ def _gfx_buf(**kw: Any) -> bytes:
     struct.pack_into("<i", b, 0, kw.get("packet", 11))
     struct.pack_into("<i", b, 4, kw.get("status", 2))
     struct.pack_into("<i", b, 132, kw.get("completed_laps", 3))
-    struct.pack_into("<f", b, 156, kw.get("norm_pos", 0.4231))
+    struct.pack_into("<f", b, 248, kw.get("norm_pos", 0.4231))  # normalizedCarPosition @248
     return bytes(b)
 
 
