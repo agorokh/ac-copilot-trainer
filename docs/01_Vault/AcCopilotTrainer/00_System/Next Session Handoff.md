@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T08:15:00Z
+last_updated: 2026-06-19T10:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -29,6 +29,35 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-19 — #244 / PR #248 DRAFT: Stanley steering built; rig daemon blocks live proof)
+
+**Read [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244) and draft PR
+[#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) first.** This is EPIC
+[#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) Part G continuation after the
+human-lap fixture landed.
+
+**Delivered in PR #248.** `tools/ac_harness/ai_line.py` now has cyclic path projection plus a
+`StanleySteering` controller that preserves the harness sign convention (`steer > 0` turns right).
+`tools/ac_harness/racing_driver.py` defaults to Stanley steering, keeps
+`steering_mode="pure_pursuit"` for comparison, loads/resamples the committed
+`tests/fixtures/racing_human_profile_magione.csv`, and exposes
+`RacingDriver.from_human_profile(...)` so the captured human speed profile can drive the controller.
+Exports were added from `tools.ac_harness`.
+
+**Verification completed off-sim.** Targeted tests passed (`60 passed`), ruff format/check passed, and
+`uv run --extra dev make ci-fast` passed (`1131 passed, 75 skipped`, coverage `82.67%`). Gemini/Codex
+review threads were addressed and resolved: Stanley projection now computes segment geometry once for
+the final nearest segment, human-profile interpolation precomputes `norms`, and
+`RacingDriver.from_human_profile(...)` samples by fast-line lap-distance fraction instead of ordinal
+point index. GitHub build, conformance, canonical-docs, and CodeRabbit checks passed on the draft PR;
+Cursor Bugbot was still pending when this handoff was written.
+
+**Runtime gate still open.** Mac-side rig probes reached Tailscale node `pc` / `100.75.251.87` by ping,
+but harness daemon health/TCP probes on ports `9876` and `8765` timed out, and SSH denied access
+(`Permission denied (publickey,keyboard-interactive)`). Do **not** close #244 or the #154 epic until
+the Windows rig daemon is reachable and this branch proves a VALID Magione lap at human-comparable
+pace with `lap`/`delta` telemetry/HUD evidence captured.
 
 ## Resume here (2026-06-19 — #246 / PR #249 MERGED: lap archive writes moved off the S/F frame; live freeze proof pending)
 

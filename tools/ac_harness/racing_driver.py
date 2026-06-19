@@ -14,22 +14,21 @@ Where :mod:`lap_driver` is a ~50 km/h lane-keeper that *never brakes*, this driv
   so it does not just spin the wheels on corner exit;
 * **trail braking** — bleed the brake off as steering increases (coupled brake+steer).
 
-Steering reuses :class:`ai_line.PurePursuit`. The decision logic (:meth:`RacingDriver.step`) is pure
-and deterministic — CI-verified with synthetic lines, exactly like :class:`lap_driver.LapDriver`. A
-``pace`` fraction + ``max_speed_kmh`` cap scale the optimal profile into pure-pursuit's stable
-steering envelope; the *dynamics* (hard braking, trail braking, real corner-vs-straight speeds, full
-gearbox) are real racing — closing the gap to optimal pace needs a stronger steering controller
-(tracked follow-up, see #241).
+Steering defaults to :class:`ai_line.StanleySteering`, which tracks path tangent + cross-track error
+instead of cutting to a look-ahead point. The decision logic (:meth:`RacingDriver.step`) is pure and
+deterministic — CI-verified with synthetic lines, exactly like :class:`lap_driver.LapDriver`.
 """
 
 from __future__ import annotations
 
+import csv
 import math
 import struct
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.ac_harness.ai_line import PurePursuit, _horizontal
+from tools.ac_harness.ai_line import PurePursuit, StanleySteering, _horizontal
 from tools.ac_harness.lap_driver import PHASE_LAP, PHASE_OUT, DriveFrame
 
 # fast_lane.ai AiPointExtra block: speed@0, gas@4, brake@8 — 72-byte stride. Ground-truthed live
@@ -49,6 +48,17 @@ class AiPointProfile:
     speed_mps: float
     gas: float
     brake: float
+
+
+@dataclass(frozen=True)
+class HumanProfilePoint:
+    """Per-normalized-track-position target distilled from human laps."""
+
+    norm_pos: float
+    speed_mps: float
+    brake: float
+    gas: float
+    min_speed_mps: float
 
 
 def _parse_fast_lane_extra(data: bytes) -> list[AiPointProfile]:
@@ -103,6 +113,151 @@ def load_speed_profile(path: str | Path) -> list[float]:
     return [p.speed_mps for p in load_ai_profile(path)]
 
 
+def load_human_profile(path: str | Path) -> list[HumanProfilePoint]:
+    """Parse the human-lap profile CSV produced from ``racing_telemetry`` captures.
+
+    The committed Magione fixture is keyed by ``normalizedCarPosition`` and carries the human
+    speed/brake/gas targets used for #244. Values are returned sorted by ``norm_pos`` and speeds
+    are converted to m/s so they can feed :class:`RacingDriver` directly.
+    """
+    rows: list[HumanProfilePoint] = []
+    with Path(path).open("r", encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        required = {"norm_pos", "speed_kmh", "brake", "gas"}
+        missing = required.difference(reader.fieldnames or ())
+        if missing:
+            cols = ", ".join(sorted(missing))
+            raise ValueError(f"human profile missing required column(s): {cols}")
+        for line_no, row in enumerate(reader, start=2):
+            try:
+                raw_norm_pos = float(row["norm_pos"])
+                speed_kmh = float(row["speed_kmh"])
+                brake = float(row["brake"])
+                gas = float(row["gas"])
+                min_speed_kmh = float(row.get("min_speed_kmh") or speed_kmh)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"human profile line {line_no} has non-numeric data") from exc
+            values = (raw_norm_pos, speed_kmh, brake, gas, min_speed_kmh)
+            if not all(math.isfinite(v) for v in values):
+                raise ValueError(f"human profile line {line_no} has non-finite data")
+            if not 0.0 <= raw_norm_pos <= 1.0:
+                raise ValueError(f"human profile line {line_no} norm_pos out of range 0..1")
+            if speed_kmh < 0 or min_speed_kmh < 0:
+                raise ValueError(f"human profile line {line_no} has negative speed")
+            if not 0.0 <= brake <= 1.0 or not 0.0 <= gas <= 1.0:
+                raise ValueError(f"human profile line {line_no} gas/brake out of range 0..1")
+            norm_pos = 0.0 if raw_norm_pos == 1.0 else raw_norm_pos
+            rows.append(
+                HumanProfilePoint(
+                    norm_pos=norm_pos,
+                    speed_mps=speed_kmh / 3.6,
+                    brake=brake,
+                    gas=gas,
+                    min_speed_mps=min_speed_kmh / 3.6,
+                )
+            )
+    if len(rows) < 2:
+        raise ValueError("human profile needs at least two rows")
+    rows.sort(key=lambda p: p.norm_pos)
+    for prev, cur in zip(rows, rows[1:], strict=False):
+        if abs(cur.norm_pos - prev.norm_pos) < 1e-9:
+            raise ValueError(f"human profile duplicate norm_pos: {cur.norm_pos:.6f}")
+    return rows
+
+
+def _cyclic_interpolate(
+    points: list[HumanProfilePoint],
+    norms: list[float],
+    norm_pos: float,
+    field: str,
+) -> float:
+    """Interpolate a profile field on the cyclic ``0..1`` normalized track domain."""
+    target = norm_pos % 1.0
+    idx = bisect_right(norms, target)
+    if idx == 0:
+        left = points[-1]
+        right = points[0]
+        left_norm = left.norm_pos - 1.0
+        right_norm = right.norm_pos
+    elif idx == len(points):
+        left = points[-1]
+        right = points[0]
+        left_norm = left.norm_pos
+        right_norm = right.norm_pos + 1.0
+    else:
+        left = points[idx - 1]
+        right = points[idx]
+        left_norm = left.norm_pos
+        right_norm = right.norm_pos
+    span = right_norm - left_norm
+    if span <= 1e-12:
+        return float(getattr(left, field))
+    frac = (target - left_norm) / span
+    left_value = float(getattr(left, field))
+    right_value = float(getattr(right, field))
+    return left_value + frac * (right_value - left_value)
+
+
+def _line_normalized_positions(fast_line: list[tuple[float, float, float]]) -> list[float]:
+    """Return each racing-line point's distance fraction around the cyclic lap."""
+    if len(fast_line) < 2:
+        raise ValueError("fast_line needs at least two points")
+    plane = [_horizontal(p) for p in fast_line]
+    cumulative = [0.0]
+    total = 0.0
+    for i in range(1, len(plane)):
+        prev = plane[i - 1]
+        cur = plane[i]
+        total += math.hypot(cur[0] - prev[0], cur[1] - prev[1])
+        cumulative.append(total)
+    first = plane[0]
+    last = plane[-1]
+    total += math.hypot(first[0] - last[0], first[1] - last[1])
+    if total <= 1e-9:
+        raise ValueError("fast_line has zero cyclic length")
+    return [0.0 if total - d <= 1e-9 else d / total for d in cumulative]
+
+
+def human_profile_speed_profile(
+    points: list[HumanProfilePoint],
+    point_count: int,
+    *,
+    norm_positions: list[float] | None = None,
+) -> list[float]:
+    """Resample a human profile to one target speed per racing-line point."""
+    if point_count <= 0:
+        raise ValueError("point_count must be > 0")
+    if len(points) < 2:
+        raise ValueError("human profile needs at least two rows")
+    if norm_positions is None:
+        norm_positions = [i / point_count for i in range(point_count)]
+    if len(norm_positions) != point_count:
+        raise ValueError("norm_positions length must equal point_count")
+    for pos in norm_positions:
+        if not math.isfinite(pos) or not 0.0 <= pos < 1.0:
+            raise ValueError("norm_positions must be finite fractions in [0, 1)")
+    norms = [p.norm_pos for p in points]
+    return [_cyclic_interpolate(points, norms, pos, "speed_mps") for pos in norm_positions]
+
+
+def load_human_speed_profile(path: str | Path, point_count: int) -> list[float]:
+    """Load and resample a human-lap CSV into a ``RacingDriver`` speed profile."""
+    return human_profile_speed_profile(load_human_profile(path), point_count)
+
+
+def load_human_speed_profile_for_line(
+    path: str | Path,
+    fast_line: list[tuple[float, float, float]],
+) -> list[float]:
+    """Load a human-lap CSV and align it by distance fraction to ``fast_line`` points."""
+    profile = load_human_profile(path)
+    return human_profile_speed_profile(
+        profile,
+        len(fast_line),
+        norm_positions=_line_normalized_positions(fast_line),
+    )
+
+
 def _clamp(x: float, lo: float, hi: float) -> float:
     return lo if x < lo else hi if x > hi else x
 
@@ -113,8 +268,31 @@ class RacingDriver:
     ``speed_profile`` is the per-point target speed (m/s) from :func:`load_speed_profile` (same
     length as ``fast_line``). The optimal profile is scaled by ``pace`` and capped at
     ``max_speed_kmh`` (pure-pursuit's stable steering envelope), then a backward pass at ``brake_g``
-    bakes in the braking points.
+    bakes in the braking points. Steering defaults to a Stanley cross-track controller so racing
+    pace does not aim through apexes the way look-ahead pure pursuit did.
     """
+
+    @classmethod
+    def from_human_profile(
+        cls,
+        fast_line: list[tuple[float, float, float]],
+        profile_csv: str | Path,
+        **kwargs,
+    ) -> RacingDriver:
+        """Construct from a normalized-position human-lap profile CSV."""
+        profile = load_human_profile(profile_csv)
+        kwargs.setdefault("pace", 1.0)
+        kwargs.setdefault("max_speed_kmh", max(p.speed_mps for p in profile) * 3.6)
+        kwargs.setdefault("min_speed_kmh", max(min(p.min_speed_mps for p in profile) * 3.6, 1.0))
+        return cls(
+            fast_line,
+            human_profile_speed_profile(
+                profile,
+                len(fast_line),
+                norm_positions=_line_normalized_positions(fast_line),
+            ),
+            **kwargs,
+        )
 
     def __init__(
         self,
@@ -136,6 +314,12 @@ class RacingDriver:
         trail_release: float = 0.7,
         trail_min: float = 0.2,
         traction_lift: float = 0.6,
+        steering_mode: str = "stanley",
+        stanley_cross_track_gain: float = 0.75,
+        stanley_heading_gain: float = 1.0,
+        stanley_speed_softening_mps: float = 5.0,
+        stanley_max_steer_rad: float = 0.65,
+        stanley_max_cross_track_m: float = 10.0,
         rpm_up: float = 7000.0,
         rpm_dn: float = 4200.0,
         max_gear: int = 7,
@@ -160,6 +344,8 @@ class RacingDriver:
             raise ValueError("require 0 < min_speed_kmh <= max_speed_kmh")
         if brake_g <= 0 or brake_scale_mps <= 0 or throttle_scale_mps <= 0:
             raise ValueError("brake_g, brake_scale_mps, throttle_scale_mps must be > 0")
+        if steering_mode not in {"stanley", "pure_pursuit"}:
+            raise ValueError("steering_mode must be 'stanley' or 'pure_pursuit'")
 
         self.pursuit = PurePursuit(
             fast_line,
@@ -169,7 +355,16 @@ class RacingDriver:
             max_steer_curvature=max_steer_curvature,
             wheelbase_m=wheelbase_m,
         )
+        self.stanley = StanleySteering(
+            fast_line,
+            cross_track_gain=stanley_cross_track_gain,
+            heading_gain=stanley_heading_gain,
+            speed_softening_mps=stanley_speed_softening_mps,
+            max_steer_rad=stanley_max_steer_rad,
+            max_cross_track_m=stanley_max_cross_track_m,
+        )
         self.n = len(fast_line)
+        self.steering_mode = steering_mode
         self.lookahead_m = lookahead_m
         self.lookahead_time_s = lookahead_time_s
         self.brake_band_mps = brake_band_mps
@@ -315,7 +510,10 @@ class RacingDriver:
         ):
             self.phase = PHASE_LAP
 
-        steer = self.pursuit.control(position_xyz, look_dir_xyz, speed_kmh).steer
+        if self.steering_mode == "stanley":
+            steer = self.stanley.steer(position_xyz, look_dir_xyz, speed_kmh)
+        else:
+            steer = self.pursuit.control(position_xyz, look_dir_xyz, speed_kmh).steer
         if self.phase == PHASE_OUT:
             gas, brake = self.out_gas, 0.0
             steer = _clamp(steer, -self.out_steer_clamp, self.out_steer_clamp)

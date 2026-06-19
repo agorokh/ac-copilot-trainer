@@ -10,7 +10,11 @@ import pytest
 from tools.ac_harness.lap_driver import PHASE_LAP
 from tools.ac_harness.racing_driver import (
     RacingDriver,
+    human_profile_speed_profile,
     load_ai_profile,
+    load_human_profile,
+    load_human_speed_profile,
+    load_human_speed_profile_for_line,
     load_speed_profile,
 )
 
@@ -76,6 +80,107 @@ def test_load_speed_profile_rejects_bad_extra_count(tmp_path: Path):
     f.write_bytes(bytes(blob))
     with pytest.raises(ValueError, match="AiPointExtra count"):
         load_speed_profile(f)
+
+
+def test_load_human_profile_parses_and_resamples_cyclically(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "0.25,72.0,0.000,1.000,60.0\n"
+        "0.75,144.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+
+    points = load_human_profile(f)
+    speeds = human_profile_speed_profile(points, 4)
+
+    assert len(points) == 2
+    assert points[0].speed_mps == pytest.approx(20.0)
+    assert points[1].brake == pytest.approx(0.5)
+    assert speeds == pytest.approx([30.0, 20.0, 30.0, 40.0])  # m/s, wrapping across 1.0->0.0
+
+
+def test_load_human_profile_rejects_out_of_range_norm_pos(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "-0.25,72.0,0.000,1.000,60.0\n"
+        "0.75,144.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="norm_pos out of range"):
+        load_human_profile(f)
+
+
+def test_load_human_speed_profile_for_line_uses_distance_fraction(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "0.00,0.0,0.000,1.000,0.0\n"
+        "0.50,180.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+    # Cyclic segment lengths: 10, 30, 10, 30 -> point distance fractions 0, .125, .5, .625.
+    line = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (10.0, 0.0, 30.0),
+        (0.0, 0.0, 30.0),
+    ]
+
+    speeds_kmh = [s * 3.6 for s in load_human_speed_profile_for_line(f, line)]
+
+    assert speeds_kmh == pytest.approx([0.0, 45.0, 180.0, 135.0])
+
+
+def test_racing_driver_from_human_profile_uses_line_distance_fraction(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "0.00,36.0,0.000,1.000,1.0\n"
+        "0.50,180.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+    line = [
+        (0.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (10.0, 0.0, 30.0),
+        (0.0, 0.0, 30.0),
+    ]
+
+    d = RacingDriver.from_human_profile(line, f, brake_g=1000.0)
+    speeds_kmh = [s * 3.6 for s in d.profile]
+
+    assert speeds_kmh == pytest.approx([36.0, 72.0, 180.0, 144.0])
+
+
+def test_real_magione_human_fixture_has_racing_pace():
+    fixture = Path(__file__).parent / "fixtures" / "racing_human_profile_magione.csv"
+    speeds = load_human_speed_profile(fixture, 200)
+    speeds_kmh = [s * 3.6 for s in speeds]
+
+    assert len(speeds) == 200
+    assert max(speeds_kmh) > 220.0
+    assert min(speeds_kmh) < 45.0
+    assert 115.0 < sum(speeds_kmh) / len(speeds_kmh) < 130.0
+
+
+def test_racing_driver_from_human_profile_defaults_to_stanley(tmp_path: Path):
+    f = tmp_path / "human_profile.csv"
+    f.write_text(
+        "norm_pos,speed_kmh,brake,gas,min_speed_kmh\n"
+        "0.00,72.0,0.000,1.000,60.0\n"
+        "0.50,108.0,0.500,0.000,80.0\n",
+        encoding="utf-8",
+    )
+
+    line = _straight_line(10)
+    d = RacingDriver.from_human_profile(line, f)
+
+    assert d.steering_mode == "stanley"
+    assert len(d.profile) == len(line)
+    assert max(d.profile) * 3.6 > 90.0
 
 
 def test_backward_pass_creates_a_braking_point_before_a_slow_corner():
@@ -182,6 +287,15 @@ def test_step_lap_phase_brakes_over_profile():
     assert frame.gas == 0.0
 
 
+def test_step_lap_phase_uses_stanley_steering_by_default():
+    line = _straight_line(30)
+    d = RacingDriver(line, [30.0] * 30, pace=1.0, max_speed_kmh=120.0, brake_g=5.0)
+    d.phase = PHASE_LAP
+    frame = d.step((10.0, 0.0, -3.0), (1.0, 0.0, 0.0), speed_kmh=60.0, rpm=6000, gear=4, now=1.0)
+    assert d.steering_mode == "stanley"
+    assert frame.steer > 0.0
+
+
 def test_constructor_validates():
     line = _straight_line(10)
     with pytest.raises(ValueError, match="length mismatch"):
@@ -190,3 +304,5 @@ def test_constructor_validates():
         RacingDriver(line, [40.0] * 10, pace=1.5)
     with pytest.raises(ValueError, match="min_speed_kmh"):
         RacingDriver(line, [40.0] * 10, max_speed_kmh=30.0, min_speed_kmh=40.0)
+    with pytest.raises(ValueError, match="steering_mode"):
+        RacingDriver(line, [40.0] * 10, steering_mode="lookahead")

@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T08:15:00Z
+last_updated: 2026-06-19T10:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -21,6 +21,14 @@ relates_to:
 **Active focus (2026-06-17):** EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) — **Part F harness daemon shipped** ([#228](https://github.com/agorokh/ac-copilot-trainer/issues/228)/PR #229) and its on-rig launch gap fixed ([#232](https://github.com/agorokh/ac-copilot-trainer/issues/232) **CLOSED** / PR [#233](https://github.com/agorokh/ac-copilot-trainer/pull/233) **MERGED** `c556dfe`): the daemon now launches AC **de-elevated via Content Manager** (`--launch-mode cm`), live-verified hands-off on `AG_PC`. The autonomous self-test is now **one command** ([#235](https://github.com/agorokh/ac-copilot-trainer/issues/235) **CLOSED** / PR [#236](https://github.com/agorokh/ac-copilot-trainer/pull/236) **MERGED** `d051096`): `python -m tools.ac_harness.self_test` drives the daemon hands-off and asserts the live coaching pipeline — **LIVE PASS** (`coaching.snapshot=335, tire_temps=168, connection=34`, no human at the wheel). The vision-oracle **"eyes"** also landed ([#238](https://github.com/agorokh/ac-copilot-trainer/issues/238) **CLOSED** / PR [#239](https://github.com/agorokh/ac-copilot-trainer/pull/239) **MERGED** `3e677c7`): `tools.ac_harness.hud_capture` (stdlib ctypes GDI, no new dep) captures the live AC HUD hands-off with a render-liveness check — **LIVE-VERIFIED** (in-cockpit at Spa, HUD text legible). [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188)/[#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. **The autonomous self-test now has launch + pipeline-assert + eyes, all hands-off + live-verified.**
 
 **Active focus (2026-06-19) — HANDOFF, see [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244):** Part G **racing driver** **MERGED** ([#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) / PR [#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) `372156a`): follows `fast_lane.ai`'s embedded speed profile with braking points/trail braking; **gear bug fixed** (was stuck in 1st — limiter below shift point) → now shifts 1→4, **146 km/h** (was 52). `tools/ac_harness/racing_telemetry.py` records human laps. **The wall is STEERING** (pure-pursuit cuts apexes → corners crawl, lap INVALID → no `lap`/`delta` telemetry). **Next:** record 5–10 human GT3 laps → build a path-tracking steering controller from real corner speeds/braking points. Full state: [`racing-driver-and-controller-2026-06-17`](../03_Investigations/racing-driver-and-controller-2026-06-17.md). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
+
+**Active focus update (2026-06-19) — #244 / draft PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248):**
+Stanley steering and human-profile replay support are built and off-sim verified (`uv run --extra dev
+make ci-fast` passed: `1131 passed, 75 skipped`, coverage `82.67%`). Review fixes are included:
+human-profile samples now align to fast-line lap-distance fractions, not ordinal point index. Runtime
+proof is still blocked: Tailscale ping reaches `pc` / `100.75.251.87`, but harness daemon health/TCP
+probes on `9876` and `8765` time out, and SSH denies access. Keep #244 and #154 open until the Windows
+rig proves a VALID Magione lap at human-comparable pace with `lap`/`delta` telemetry/HUD evidence.
 
 **Parallel runtime hotfix (2026-06-19) — #246 / PR #249 MERGED; issue remains open for live proof:**
 PR [#249](https://github.com/agorokh/ac-copilot-trainer/pull/249) merged at

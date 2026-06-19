@@ -12,13 +12,16 @@ aims the car to its right.
 
 from __future__ import annotations
 
+import math
 import struct
 
 import pytest
 
 from tools.ac_harness.ai_line import (
     ControlOutput,
+    PathProjection,
     PurePursuit,
+    StanleySteering,
     load_ai_line,
 )
 
@@ -33,7 +36,6 @@ def _right_turn_line() -> list[tuple[float, float, float]]:
     """A line that goes +x then curves toward +z (a right-hand turn for a +x-facing car)."""
     pts: list[tuple[float, float, float]] = [(i * 2.0, 5.0, 0.0) for i in range(20)]
     # quarter arc bending toward +z
-    import math
 
     cx, cz = pts[-1][0], pts[-1][2] + 20.0  # arc centre to the car's right (+z)
     for k in range(1, 25):
@@ -304,6 +306,84 @@ def test_control_output_unpacks_as_tuple():
         pytest.approx(pp.control((10.0, 5.0, 0.0), (1.0, 0.0, 0.0), 50.0).brake),
         pytest.approx(pp.control((10.0, 5.0, 0.0), (1.0, 0.0, 0.0), 50.0).steer),
     )
+
+
+# --------------------------------------------------------------------------- Stanley steering
+def test_stanley_projection_reports_signed_cross_track_error():
+    st = StanleySteering(_straight_line_along_x())
+
+    projection = st.project((5.0, -3.0))
+
+    assert isinstance(projection, PathProjection)
+    assert projection.segment_index == 2  # segment x=4 -> x=6
+    assert projection.t == pytest.approx(0.5)
+    assert projection.point == pytest.approx((5.0, 0.0))
+    assert projection.signed_cross_track_m == pytest.approx(3.0)
+    assert projection.distance_m == pytest.approx(3.0)
+
+
+def test_stanley_steer_zero_on_straight_when_aligned():
+    st = StanleySteering(_straight_line_along_x())
+    assert st.steer((10.0, 5.0, 0.0), (1.0, 0.0, 0.0), speed_kmh=80.0) == pytest.approx(0.0)
+
+
+def test_stanley_steers_right_when_line_is_to_car_right():
+    st = StanleySteering(_straight_line_along_x())
+    steer = st.steer((10.0, 5.0, -3.0), (1.0, 0.0, 0.0), speed_kmh=60.0)
+    assert steer > 0.0
+
+
+def test_stanley_steers_left_when_line_is_to_car_left():
+    st = StanleySteering(_straight_line_along_x())
+    steer = st.steer((10.0, 5.0, 3.0), (1.0, 0.0, 0.0), speed_kmh=60.0)
+    assert steer < 0.0
+
+
+def test_stanley_cross_track_term_softens_at_speed():
+    st = StanleySteering(_straight_line_along_x())
+    slow = st.steer((10.0, 5.0, -2.0), (1.0, 0.0, 0.0), speed_kmh=20.0)
+    fast = st.steer((10.0, 5.0, -2.0), (1.0, 0.0, 0.0), speed_kmh=160.0)
+    assert 0.0 < fast < slow
+
+
+def test_stanley_heading_error_turns_toward_path_tangent():
+    line = _right_turn_line()
+    st = StanleySteering(line)
+    mid_arc = line[28]
+    steer = st.steer(mid_arc, (1.0, 0.0, 0.0), speed_kmh=80.0)
+    assert steer > 0.0
+
+
+def test_stanley_heading_error_wraps_across_pi_boundary():
+    path_heading = math.radians(175.0)
+    car_heading = math.radians(-175.0)
+    line = [
+        (0.0, 5.0, 0.0),
+        (20.0 * math.cos(path_heading), 5.0, 20.0 * math.sin(path_heading)),
+    ]
+    st = StanleySteering(line)
+
+    steer = st.steer(
+        (0.0, 5.0, 0.0),
+        (math.cos(car_heading), 0.0, math.sin(car_heading)),
+        speed_kmh=80.0,
+    )
+
+    assert steer == pytest.approx(math.radians(-10.0) / st.max_steer_rad, abs=1e-3)
+    assert abs(steer) < 0.5
+
+
+def test_stanley_projection_uses_cyclic_closing_segment():
+    st = StanleySteering(_closed_loop_square(side=10.0))
+    projection = st.project((-1.0, 5.0))
+    assert projection.segment_index == 3  # closing segment (0,10) -> (0,0)
+    assert projection.t == pytest.approx(0.5)
+    assert projection.point == pytest.approx((0.0, 5.0))
+
+
+def test_stanley_rejects_degenerate_lines():
+    with pytest.raises(ValueError, match="no non-zero segments"):
+        StanleySteering([(0.0, 0.0, 0.0), (0.0, 5.0, 0.0)])
 
 
 # --------------------------------------------------------------------------- nearest / determinism
