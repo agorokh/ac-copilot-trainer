@@ -60,6 +60,14 @@ jobs:
           set -euo pipefail
           auto_log="$(mktemp)"
           if ! gh pr merge "$PR_NUMBER" --repo "$REPO" --squash --auto --delete-branch 2>&1 | tee "$auto_log"; then
+            # Benign race: GitHub is already squash-merging this PR (or it just
+            # merged). `mergePullRequest` returns "Merge already in progress" /
+            # "already merged" — the PR lands fine, so this is success, not a red check.
+            if grep -qiE '(merge already in progress|already in progress|already( been)? merged)' "$auto_log"; then
+              echo "::notice::Squash merge already in progress (or PR already merged); GitHub will complete it. Treating as success."
+              rm -f "$auto_log"
+              exit 0
+            fi
             if grep -qiE '(not enabled|disabled|protected|required)' "$auto_log"; then
               echo "::warning::Auto-merge could not be enabled (likely branch protection / required reviews missing). A human must merge."
               gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
