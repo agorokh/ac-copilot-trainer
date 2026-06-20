@@ -37,6 +37,9 @@ class LapTrace:
     lap_ms: float | None = None
     car_id: str | None = None
     track_id: str | None = None
+    # optional Tier-B live channels (per sample, 4 wheels [FL, FR, RL, RR]); None when not persisted
+    wheel_omega: list[list[float]] | None = None  # wheelAngularSpeed rad/s
+    wheel_slip: list[list[float]] | None = None  # AC wheelSlip (Pacejka NDslip; secondary)
     # lazily derived
     _kappa: list[float] | None = field(default=None, repr=False)
     _lat_g: list[float] | None = field(default=None, repr=False)
@@ -69,12 +72,37 @@ class LapTrace:
             self._long_g = _derivative(self.v_ms, self.t_s, scale=1.0 / G)
         return self._long_g
 
+    @property
+    def has_wheel_data(self) -> bool:
+        """True when per-wheel angular speed (the Tier-B channel) is persisted in this lap."""
+        return self.wheel_omega is not None
+
 
 def _idx(fields: list[str], *names: str) -> int | None:
     for n in names:
         if n in fields:
             return fields.index(n)
     return None
+
+
+_WHEELS = ("fl", "fr", "rl", "rr")
+
+
+def _wheel_cols(fields: list[str], samples: list, base: str, n: int) -> list[list[float]] | None:
+    """Read a 4-wheel channel (``<base>_fl/fr/rl/rr``) into N rows of [FL, FR, RL, RR], or None."""
+    idxs = [_idx(fields, f"{base}_{w}") for w in _WHEELS]
+    if any(i is None for i in idxs):
+        return None
+    out: list[list[float]] = []
+    for row in samples:
+        vals = []
+        for i in idxs:
+            try:
+                vals.append(float(row[i]))
+            except (TypeError, ValueError, IndexError):
+                vals.append(0.0)
+        out.append(vals)
+    return out if len(out) == n else out
 
 
 def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
@@ -133,6 +161,10 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
     else:
         t_s = _time_from_positions(x_col, z_col, [v / 3.6 for v in v_kmh])
 
+    # optional Tier-B per-wheel channels (FL, FR, RL, RR); present only when persisted (#266)
+    wheel_omega = _wheel_cols(fields, samples, "wheelAngularSpeed", n)
+    wheel_slip = _wheel_cols(fields, samples, "wheelSlip", n)
+
     car = archive.get("car") if isinstance(archive.get("car"), dict) else {}
     track = archive.get("track") if isinstance(archive.get("track"), dict) else {}
     lap = archive.get("lap") if isinstance(archive.get("lap"), dict) else {}
@@ -144,6 +176,8 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
         throttle=col(i_th),
         steer=col(i_st),
         gear=col(i_g),
+        wheel_omega=wheel_omega,
+        wheel_slip=wheel_slip,
         x=x_col,
         z=z_col,
         lap_ms=_finite(lap.get("lap_ms")),
