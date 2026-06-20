@@ -531,6 +531,8 @@ def ggv_speed_profile_from_model(
     Use this when the GGV is known (e.g. a hand-built / scaled model) rather than fitting from raw
     telemetry. Returns (v_target_mps per fast_line point, summary dict).
     """
+    if len(fast_line) < 3:
+        raise ValueError("ggv_speed_profile_from_model requires at least 3 points")
     plane = [(p[0], p[2]) for p in fast_line]
     seg = seg_lengths(plane)
     kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
