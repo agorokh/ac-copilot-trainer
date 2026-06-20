@@ -366,3 +366,16 @@ def test_min_curvature_offset_zero_when_corridor_closed():
     opt, alpha = min_curvature_line(plane, z, z, margin_m=1.0, iters=300, damp=0.5)
     assert all(abs(a) < 1e-9 for a in alpha)
     assert opt == plane
+
+
+def test_ggv_speed_profile_from_model_and_aero_raises_apex():
+    from tools.ac_harness.ggv_profile import GGVModel, ggv_speed_profile_from_model
+
+    line = _circle(60.0, 300)
+    flat = GGVModel(1.5, 0.0, 0.955, 0.0214, 1.1, -0.0117, 0.35, 1.55, ay_cap_g=3.5)
+    aero = GGVModel(1.5, 0.0005, 0.955, 0.0214, 1.1, -0.0117, 0.35, 1.55, ay_cap_g=3.5)
+    v_flat, s_flat = ggv_speed_profile_from_model(line, flat, v_top_kmh=300.0)
+    v_aero, s_aero = ggv_speed_profile_from_model(line, aero, v_top_kmh=300.0)
+    assert len(v_flat) == len(line)
+    assert max(v_aero) >= max(v_flat)  # aero grip lets the constant-radius apex carry more speed
+    assert s_aero["qss_laptime_s"] <= s_flat["qss_laptime_s"]  # ...so the lap is no slower

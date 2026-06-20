@@ -499,6 +499,37 @@ def _read_csv(path: str | Path) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def ggv_speed_profile_from_model(
+    fast_line: list[tuple[float, float, float]],
+    ggv: GGVModel,
+    *,
+    v_top_kmh: float = 232.0,
+    smooth_win: int = 3,
+    span: int = 3,
+) -> tuple[list[float], dict]:
+    """Compute the forward-backward QSS profile from a GGVModel directly (no telemetry CSV).
+
+    Use this when the GGV is known (e.g. a hand-built / scaled model) rather than fitting from raw
+    telemetry. Returns (v_target_mps per fast_line point, summary dict).
+    """
+    plane = [(p[0], p[2]) for p in fast_line]
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
+    v, _ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
+    total = sum(seg)
+    laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))
+    summ = {
+        "points": len(v),
+        "length_m": round(total, 1),
+        "qss_laptime_s": round(laptime, 2),
+        "qss_avg_kmh": round(total / laptime * 3.6, 1),
+        "vmax_kmh": round(max(v) * 3.6, 1),
+        "vmin_kmh": round(min(v) * 3.6, 1),
+        "max_kappa": round(max(kappa), 4),
+    }
+    return v, summ
+
+
 def build_ggv_speed_profile(
     fast_line: list[tuple[float, float, float]],
     human_csv: str | Path,
@@ -508,6 +539,7 @@ def build_ggv_speed_profile(
     span: int = 3,
     accel_peak_g: float | None = None,
     lat_grip_g: float | None = None,
+    lat_aero_k: float | None = None,
 ) -> tuple[list[float], GGVModel, dict]:
     """End-to-end offline build: fit GGV from telemetry, compute the QSS profile on ``fast_line``.
 
@@ -519,9 +551,6 @@ def build_ggv_speed_profile(
     (0.24-0.97 g), so the fitted accel is far below the car's capability; an aggressive accel target
     is made TC-off-safe live by ``slip_limited_controls``. Braking/lateral are left as fitted.
     """
-    plane = [(p[0], p[2]) for p in fast_line]
-    seg = seg_lengths(plane)
-    kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
     ggv = ggv_from_telemetry(_read_csv(human_csv))
     if accel_peak_g is not None:
         # traction-shaped accel: peak low-speed, ~0.4 g by 60 m/s (power/drag fade)
@@ -530,19 +559,14 @@ def build_ggv_speed_profile(
         # grip self-play: the relaxed human under-corners (~1.2 g), a real GT3 R does ~1.5 g. Push
         # the lateral envelope up to raise apex speeds; kept honest live by validity.
         ggv = replace(ggv, mu_lat_g=lat_grip_g, ay_cap_g=max(ggv.ay_cap_g, lat_grip_g + 0.1))
-    v, ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
-    total = sum(seg)
-    laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))
-    summ = {
-        "points": len(v),
-        "length_m": round(total, 1),
-        "qss_laptime_s": round(laptime, 2),
-        "qss_avg_kmh": round(total / laptime * 3.6, 1),
-        "vmax_kmh": round(max(v) * 3.6, 1),
-        "vmin_kmh": round(min(v) * 3.6, 1),
-        "max_kappa": round(max(kappa), 4),
-        "ggv": ggv.provenance,
-    }
+    if lat_aero_k is not None:
+        # speed-dependent aero lateral grip: a real GT3 R gains downforce grip with speed, so fast
+        # corners hold > mechanical 1.5 g. ay_max(v) = mu + k*v^2. Lifts the aero ceiling cap too.
+        ggv = replace(ggv, k_aero_lat=lat_aero_k, ay_cap_g=max(ggv.ay_cap_g, 3.0))
+    v, summ = ggv_speed_profile_from_model(
+        fast_line, ggv, v_top_kmh=v_top_kmh, smooth_win=smooth_win, span=span
+    )
+    summ["ggv"] = ggv.provenance
     return v, ggv, summ
 
 
