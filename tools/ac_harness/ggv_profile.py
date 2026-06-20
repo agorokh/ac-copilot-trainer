@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import csv
 import math
+import struct
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -263,6 +264,93 @@ def curvature_profile(
     p = _smooth_cyclic(plane, smooth_win)
     n = len(p)
     return [menger_curvature(p[(i - span) % n], p[i], p[(i + span) % n]) for i in range(n)]
+
+
+def load_track_widths(path: str | Path) -> tuple[list[float], list[float]]:
+    """Read per-point track-edge distances (sideLeft, sideRight, metres) from ``fast_lane.ai``.
+
+    The AiPointExtra block (72-byte stride) carries the corridor: ``sideLeft@20``, ``sideRight@24``
+    after ``speed@0/gas@4/brake@8/obsLatG@12/radius@16``. This is the on-file track width used to
+    bound the min-curvature optimizer so the line stays on track (AC-valid) by construction.
+    """
+    data = Path(path).read_bytes()
+    _ver, count, _lap, _samp = struct.unpack_from("<4i", data, 0)
+    es = 16 + count * 20 + 4
+    left: list[float] = []
+    right: list[float] = []
+    for i in range(count):
+        sl, sr = struct.unpack_from("<2f", data, es + i * 72 + 20)
+        left.append(sl)
+        right.append(sr)
+    return left, right
+
+
+def _unit_normals(plane: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Left-hand unit normal at each point (perpendicular to the local tangent, cyclic)."""
+    n = len(plane)
+    out = []
+    for i in range(n):
+        a = plane[(i - 1) % n]
+        b = plane[(i + 1) % n]
+        tx, tz = b[0] - a[0], b[1] - a[1]
+        ln = math.hypot(tx, tz) or 1.0
+        out.append((-tz / ln, tx / ln))
+    return out
+
+
+def min_curvature_line(
+    plane: list[tuple[float, float]],
+    side_left: list[float],
+    side_right: list[float],
+    *,
+    margin_m: float = 1.2,
+    iters: int = 2000,
+    damp: float = 0.5,
+) -> tuple[list[tuple[float, float]], list[float]]:
+    """Minimum-curvature racing line within the track corridor (TUMFTM-style, pure-Python).
+
+    Moves each point along its lateral normal by ``alpha_i`` bounded to ``[-(sideRight-margin),
+    +(sideLeft-margin)]`` (margin keeps the car half-width off the edge -> AC-valid). Minimizes the
+    PATH curvature ``sum (kappa_ref_i + alpha''_i)^2`` where ``kappa_ref`` is the base-line signed
+    curvature and ``alpha'' ~= (a_{i-1} - 2 a_i + a_{i+1}) / ds^2`` is the curvature the offset adds
+    (small-offset linearization). The base curvature drives the offset to flatten corners (bow
+    out → larger radius → higher apex speed) up to the corridor. Damped in-place Gauss-Seidel keeps
+    the stiff 4th-order operator stable. Returns (optimized plane points, alpha offsets).
+    """
+    n = len(plane)
+    nrm = _unit_normals(plane)
+    kref = signed_curvature_profile(plane, smooth_win=1, span=2)
+    ds = (sum(seg_lengths(plane)) / n) or 1.0
+    ds2 = ds * ds
+    lo = [min(0.0, -(side_right[i] - margin_m)) for i in range(n)]
+    hi = [max(0.0, side_left[i] - margin_m) for i in range(n)]
+    alpha = [0.0] * n
+
+    def resid(k: int) -> float:
+        return kref[k] + (alpha[(k - 1) % n] - 2 * alpha[k] + alpha[(k + 1) % n]) / ds2
+
+    for _ in range(iters):
+        for i in range(n):
+            res2 = resid((i - 1) % n) - 2 * resid(i) + resid((i + 1) % n)
+            a = alpha[i] - damp * ds2 * res2 / 6.0
+            alpha[i] = lo[i] if a < lo[i] else hi[i] if a > hi[i] else a
+    return [
+        (plane[i][0] + alpha[i] * nrm[i][0], plane[i][1] + alpha[i] * nrm[i][1]) for i in range(n)
+    ], alpha
+
+
+def optimize_fast_line(
+    fast_line: list[tuple[float, float, float]],
+    width_path: str | Path,
+    *,
+    margin_m: float = 1.2,
+    iters: int = 1200,
+) -> list[tuple[float, float, float]]:
+    """Min-curvature-optimized (x, y, z) line within the track corridor (y carried through)."""
+    plane = [(p[0], p[2]) for p in fast_line]
+    sl, sr = load_track_widths(width_path)
+    opt, _alpha = min_curvature_line(plane, sl, sr, margin_m=margin_m, iters=iters)
+    return [(opt[i][0], fast_line[i][1], opt[i][1]) for i in range(len(fast_line))]
 
 
 def signed_curvature_profile(

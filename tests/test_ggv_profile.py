@@ -336,3 +336,33 @@ def test_racing_driver_curvature_ff_mode_steps():
     assert d.cff is not None
     f = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 100.0, 6000.0, 4, 1.0)
     assert -1.0 <= f.steer <= 1.0
+
+
+# --- Stage 4: min-curvature optimized line --------------------------------
+def test_min_curvature_reduces_perturbation_and_respects_corridor():
+    from tools.ac_harness.ggv_profile import min_curvature_line
+
+    r, n = 40.0, 200
+    base = [
+        (r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n)) for i in range(n)
+    ]
+    base[50] = (base[50][0] * 1.08, base[50][1] * 1.08)  # bump one point outward
+    sl = [3.0] * n
+    sr = [3.0] * n
+    k0 = sum(x * x for x in curvature_profile(base, smooth_win=1, span=2))
+    opt, alpha = min_curvature_line(base, sl, sr, margin_m=0.5, iters=1500, damp=0.5)
+    k1 = sum(x * x for x in curvature_profile(opt, smooth_win=1, span=2))
+    assert k1 <= k0 + 1e-9  # curvature not increased (the bump is smoothed)
+    # every offset stays inside the corridor (margin off each edge)
+    assert all(-(sr[i] - 0.5) - 1e-6 <= alpha[i] <= (sl[i] - 0.5) + 1e-6 for i in range(n))
+    assert len(opt) == n
+
+
+def test_min_curvature_offset_zero_when_corridor_closed():
+    from tools.ac_harness.ggv_profile import min_curvature_line
+
+    plane = [(p[0], p[2]) for p in _circle(30.0, 120)]
+    z = [0.0] * 120  # zero-width corridor (margin >= width) -> no movement allowed
+    opt, alpha = min_curvature_line(plane, z, z, margin_m=1.0, iters=300, damp=0.5)
+    assert all(abs(a) < 1e-9 for a in alpha)
+    assert opt == plane
