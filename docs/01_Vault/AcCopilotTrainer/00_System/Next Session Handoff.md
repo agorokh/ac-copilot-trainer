@@ -41,9 +41,15 @@ gotcha), I live-tested the remaining ~70s hypotheses to conclusion:
 - **aero lateral grip = LIVE-DISPROVEN**: k=0.0003 → 96s (regressed), k=0.0001 → spins out (5 teleports).
   The GT3 R cannot hold >~1.5g in Magione's corners in AC, so the offline ~70-73s QSS is NOT
   realizable — the model was over-optimistic about *realizable* grip.
-- **Verdict: ~82.7s is the controllable ceiling** (human +8s, old controller +24s). ~70s needs grip
-  the car spins at; closing it needs a fundamentally different controller (learned / MPC + validated
-  tire model), NOT more grip-scaling. Full conclusion: [#244#issuecomment-4756663814](https://github.com/agorokh/ac-copilot-trainer/issues/244#issuecomment-4756663814).
+- **Verdict: ~82.5s is the CAR'S PHYSICAL FLOOR (TC off), not a controller gap.** Instrumented a clean
+  lap: the 5.6s QSS-gap is ~5.9s **longitudinal** (under 95% of v_target 66% of the lap); **lateral is
+  already near-perfect (0.43 m mean cross-track)**. Pushing exit throttle to close it **spins the car**
+  (TC-off traction limit). So an LQR/MPC controller would gain ~nothing — there is no slack; the binding
+  constraints are mechanical grip (1.5g; 1.6g spins) + TC-off traction. **Do NOT build a learned/MPC
+  controller to chase pace — proven it won't help.** Only paths past ~82.5s change the *problem*: enable
+  TC, a higher-grip/power car, or a faster track. Diagnostic conclusion:
+  [#244#issuecomment-4756727418](https://github.com/agorokh/ac-copilot-trainer/issues/244#issuecomment-4756727418).
+  Live-relaunch recipe that works: minimize all windows (foreground-steal) before `/session/start`.
 
 **Merge state:** human-beating controller MERGED (#256). Stage-4 optimized line + CSV-free builder +
 ceiling analysis = PR [#259](https://github.com/agorokh/ac-copilot-trainer/pull/259) (open, 25 tests,
