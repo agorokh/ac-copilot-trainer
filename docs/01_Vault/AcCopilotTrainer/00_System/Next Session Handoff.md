@@ -32,7 +32,26 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-20 — #244 FRONTIER: human beaten 83.5s (merged); ~70s path offline-proven; live aero blocked by rig state)
+## Resume here (2026-06-20 FINAL — #244 FRONTIER closed: verified ceiling 82.7s (human +8s); ~70s grip-bound-unreachable, aero LIVE-DISPROVEN)
+
+**Investigation CLOSED with the empirical ceiling found.** After unblocking the rig (Steam
+elevation-mismatch fix + **minimize windows so CM auto-start clicks land** — the foreground-steal
+gotcha), I live-tested the remaining ~70s hypotheses to conclusion:
+- **optimized line + 1.5g = 82.7s** (confirmed ~0.8s vs 83.5s stock — the min-curvature line works).
+- **aero lateral grip = LIVE-DISPROVEN**: k=0.0003 → 96s (regressed), k=0.0001 → spins out (5 teleports).
+  The GT3 R cannot hold >~1.5g in Magione's corners in AC, so the offline ~70-73s QSS is NOT
+  realizable — the model was over-optimistic about *realizable* grip.
+- **Verdict: ~82.7s is the controllable ceiling** (human +8s, old controller +24s). ~70s needs grip
+  the car spins at; closing it needs a fundamentally different controller (learned / MPC + validated
+  tire model), NOT more grip-scaling. Full conclusion: [#244#issuecomment-4756663814](https://github.com/agorokh/ac-copilot-trainer/issues/244#issuecomment-4756663814).
+
+**Merge state:** human-beating controller MERGED (#256). Stage-4 optimized line + CSV-free builder +
+ceiling analysis = PR [#259](https://github.com/agorokh/ac-copilot-trainer/pull/259) (open, 25 tests,
+ruff clean) — merge when CI/bots green. `lat_aero_k` stays an off-by-default experimental knob
+(live-disproven, documented). Do NOT re-chase aero grip-scaling — it spins. Rig left clean (surfaces
+stock, daemon/AC stopped). Launch recipe that works: minimize windows before /session/start.
+
+## Resume here (2026-06-20 — #244 FRONTIER: human beaten 83.5s (merged); ~70s path offline-proven; live aero blocked by rig state) [SUPERSEDED — aero live-disproven above]
 
 **Headline (MERGED to main, PR #256, squash `158a796`):** the autonomous controller beats the human —
 **106.8s → 95.3 (GGV) → 91.8 (curvature-FF) → 90.28 → 86.4 → 83.5s (1.5g)**; human relaxed = 90.7s.
