@@ -549,8 +549,7 @@ def ggv_speed_profile_from_model(
     v, _ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
     if len(seg) != len(v) or len(seg) != len(kappa):
         raise ValueError(
-            "profile arrays length mismatch: "
-            f"seg={len(seg)}, kappa={len(kappa)}, v={len(v)}"
+            f"profile arrays length mismatch: seg={len(seg)}, kappa={len(kappa)}, v={len(v)}"
         )
     total = sum(seg)
     laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))
