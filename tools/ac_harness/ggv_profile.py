@@ -33,6 +33,14 @@ from pathlib import Path
 
 from tools.ac_harness.ai_line import StanleySteering, _horizontal
 
+# fast_lane.ai binary layout (AiLine header + AiPoint blocks + AiPointExtra)
+_FAST_LANE_HEADER_BYTES = 16  # 4 * int32: version, count, lap, samp
+_FAST_LANE_MIN_BYTES = 20
+_AI_POINT_STRIDE_BYTES = 20
+_LAP_EXTRA_BYTES = 4
+_AI_EXTRA_STRIDE_BYTES = 72
+_AI_EXTRA_SIDELEFT_OFFSET_BYTES = 20
+
 G = 9.81
 
 
@@ -274,13 +282,13 @@ def load_track_widths(path: str | Path) -> tuple[list[float], list[float]]:
     bound the min-curvature optimizer so the line stays on track (AC-valid) by construction.
     """
     data = Path(path).read_bytes()
-    if len(data) < 20:
+    if len(data) < _FAST_LANE_MIN_BYTES:
         raise ValueError(f"{path} is too small to be a fast_lane.ai file")
     _ver, count, _lap, _samp = struct.unpack_from("<4i", data, 0)
     if count <= 0:
         raise ValueError(f"{path} has invalid AI point count: {count}")
-    es = 16 + count * 20 + 4
-    needed = es + count * 72
+    es = _FAST_LANE_HEADER_BYTES + count * _AI_POINT_STRIDE_BYTES + _LAP_EXTRA_BYTES
+    needed = es + count * _AI_EXTRA_STRIDE_BYTES
     if len(data) < needed:
         raise ValueError(
             f"{path} is truncated: expected at least {needed} bytes for {count} AI extras, "
@@ -289,7 +297,9 @@ def load_track_widths(path: str | Path) -> tuple[list[float], list[float]]:
     left: list[float] = []
     right: list[float] = []
     for i in range(count):
-        sl, sr = struct.unpack_from("<2f", data, es + i * 72 + 20)
+        sl, sr = struct.unpack_from(
+            "<2f", data, es + i * _AI_EXTRA_STRIDE_BYTES + _AI_EXTRA_SIDELEFT_OFFSET_BYTES
+        )
         left.append(sl)
         right.append(sr)
     return left, right
@@ -537,6 +547,11 @@ def ggv_speed_profile_from_model(
     seg = seg_lengths(plane)
     kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
     v, _ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
+    if len(seg) != len(v) or len(seg) != len(kappa):
+        raise ValueError(
+            "profile arrays length mismatch: "
+            f"seg={len(seg)}, kappa={len(kappa)}, v={len(v)}"
+        )
     total = sum(seg)
     laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))
     summ = {
