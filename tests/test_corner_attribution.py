@@ -335,6 +335,20 @@ def test_live_signals_feed_confirmed_braking_attribution():
     assert any("FRONT" in c for c in braking.setup_causes)
 
 
+def test_braking_stays_suspected_when_channel_present_but_no_braking_observed():
+    # gemini #268: wheelAngularSpeed present but corner has NO braking -> lock_axle is never
+    # computed, so the verdict must stay a SUSPICION, not falsely confirm.
+    extra = {"wheelAngularSpeed": True}  # marker present, but no lock_axle key
+    ctx = CornerContext(
+        sig=_sig(peak_brake_g=1.1, brake_point_spline=0.4),
+        setup=SETUP,
+        delta=_delta(delta_s=0.3),
+        extra=extra,
+    )
+    braking = next(a for a in attribute_corner(ctx) if a.key == "braking_phase_loss")
+    assert braking.advisory is True  # not confirmed — no axle signal was computed
+
+
 def test_live_signals_no_lock_routes_to_technique():
     # per-wheel data present but NO lock -> braking loss is technique, not bias
     lap, sig = _wheel_lap(lock_axle=None, wheelspin=False)

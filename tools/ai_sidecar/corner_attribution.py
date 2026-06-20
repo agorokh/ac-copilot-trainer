@@ -655,8 +655,9 @@ RULES: list[DiagnosticRule] = [
         symptom="time lost under braking",
         phase="braking",
         tier="A",
-        # wheelAngularSpeed gives true per-wheel slip -> attributes the lockup to an axle
-        channels_needed=("wheelAngularSpeed",),
+        # 'lock_axle' is the COMPUTED signal (from wheelAngularSpeed) — present only when braking
+        # was actually observed here, so confirmation never outruns the data (gemini #268).
+        channels_needed=("lock_axle",),
         test=_r_braking_phase_loss,
         setup_causes=_braking_setup_causes,
         technique_causes=(
@@ -669,8 +670,9 @@ RULES: list[DiagnosticRule] = [
         symptom="slow back to power on exit",
         phase="exit",
         tier="A",
-        # wheelAngularSpeed separates wheelspin from a TC cut / diff push
-        channels_needed=("wheelAngularSpeed",),
+        # 'wheelspin' is the COMPUTED signal (from wheelAngularSpeed) — present only when throttle
+        # was actually observed on exit, so confirmation never outruns the data (gemini #268).
+        channels_needed=("wheelspin",),
         test=_r_exit_traction,
         setup_causes=_exit_setup_causes,
         technique_causes=(
