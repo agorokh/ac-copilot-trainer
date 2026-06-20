@@ -280,6 +280,11 @@ def load_track_widths(path: str | Path) -> tuple[list[float], list[float]]:
     The AiPointExtra block (72-byte stride) carries the corridor: ``sideLeft@20``, ``sideRight@24``
     after ``speed@0/gas@4/brake@8/obsLatG@12/radius@16``. This is the on-file track width used to
     bound the min-curvature optimizer so the line stays on track (AC-valid) by construction.
+
+    NOTE: this AiPointExtra layout drifts across CSP / track-tool versions (``ai_line.py`` declines
+    to parse it for that reason). The stride/offsets here are validated against this rig's Magione
+    ``fast_lane.ai``; the size guards below catch truncation but NOT a same-size layout change. If
+    ``sideLeft``/``sideRight`` read as absurd widths on a re-baked AI line, re-derive the layout.
     """
     data = Path(path).read_bytes()
     if len(data) < _FAST_LANE_MIN_BYTES:
@@ -595,8 +600,12 @@ def build_ggv_speed_profile(
         # the lateral envelope up to raise apex speeds; kept honest live by validity.
         ggv = replace(ggv, mu_lat_g=lat_grip_g, ay_cap_g=max(ggv.ay_cap_g, lat_grip_g + 0.1))
     if lat_aero_k is not None:
-        # speed-dependent aero lateral grip: a real GT3 R gains downforce grip with speed, so fast
-        # corners hold > mechanical 1.5 g. ay_max(v) = mu + k*v^2. Lifts the aero ceiling cap too.
+        # speed-dependent aero lateral grip: ay_max(v) = mu + k*v^2. Lifts the aero ceiling cap too.
+        # CAUTION (live-disproven at Magione 2026-06-19): this is an OFFLINE model UPPER BOUND, not
+        # an achievable target. The QSS it predicts (e.g. k=0.0005 -> ~70.9s) was NOT reproduced
+        # live: the GT3 R lacks this much downforce-lateral grip at Magione speeds -- k>=0.0003 made
+        # the car spin out (96s with teleports; k=0.0001 also spun). Use only as a what-if ceiling;
+        # do NOT feed an aero-inflated v_target to a live controller. See issue #244.
         ggv = replace(ggv, k_aero_lat=lat_aero_k, ay_cap_g=max(ggv.ay_cap_g, 3.0))
     v, summ = ggv_speed_profile_from_model(
         fast_line, ggv, v_top_kmh=v_top_kmh, smooth_win=smooth_win, span=span
