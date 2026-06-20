@@ -27,10 +27,19 @@ from __future__ import annotations
 
 import csv
 import math
+import struct
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from tools.ac_harness.ai_line import StanleySteering, _horizontal
+
+# fast_lane.ai binary layout (AiLine header + AiPoint blocks + AiPointExtra)
+_FAST_LANE_HEADER_BYTES = 16  # 4 * int32: version, count, lap, samp
+_FAST_LANE_MIN_BYTES = 20
+_AI_POINT_STRIDE_BYTES = 20
+_LAP_EXTRA_BYTES = 4
+_AI_EXTRA_STRIDE_BYTES = 72
+_AI_EXTRA_SIDELEFT_OFFSET_BYTES = 20
 
 G = 9.81
 
@@ -265,6 +274,114 @@ def curvature_profile(
     return [menger_curvature(p[(i - span) % n], p[i], p[(i + span) % n]) for i in range(n)]
 
 
+def load_track_widths(path: str | Path) -> tuple[list[float], list[float]]:
+    """Read per-point track-edge distances (sideLeft, sideRight, metres) from ``fast_lane.ai``.
+
+    The AiPointExtra block (72-byte stride) carries the corridor: ``sideLeft@20``, ``sideRight@24``
+    after ``speed@0/gas@4/brake@8/obsLatG@12/radius@16``. This is the on-file track width used to
+    bound the min-curvature optimizer so the line stays on track (AC-valid) by construction.
+    """
+    data = Path(path).read_bytes()
+    if len(data) < _FAST_LANE_MIN_BYTES:
+        raise ValueError(f"{path} is too small to be a fast_lane.ai file")
+    _ver, count, _lap, _samp = struct.unpack_from("<4i", data, 0)
+    if count <= 0:
+        raise ValueError(f"{path} has invalid AI point count: {count}")
+    es = _FAST_LANE_HEADER_BYTES + count * _AI_POINT_STRIDE_BYTES + _LAP_EXTRA_BYTES
+    needed = es + count * _AI_EXTRA_STRIDE_BYTES
+    if len(data) < needed:
+        raise ValueError(
+            f"{path} is truncated: expected at least {needed} bytes for {count} AI extras, "
+            f"got {len(data)}"
+        )
+    left: list[float] = []
+    right: list[float] = []
+    for i in range(count):
+        sl, sr = struct.unpack_from(
+            "<2f", data, es + i * _AI_EXTRA_STRIDE_BYTES + _AI_EXTRA_SIDELEFT_OFFSET_BYTES
+        )
+        left.append(sl)
+        right.append(sr)
+    return left, right
+
+
+def _unit_normals(plane: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Left-hand unit normal at each point (perpendicular to the local tangent, cyclic)."""
+    n = len(plane)
+    out = []
+    for i in range(n):
+        a = plane[(i - 1) % n]
+        b = plane[(i + 1) % n]
+        tx, tz = b[0] - a[0], b[1] - a[1]
+        ln = math.hypot(tx, tz) or 1.0
+        out.append((-tz / ln, tx / ln))
+    return out
+
+
+def min_curvature_line(
+    plane: list[tuple[float, float]],
+    side_left: list[float],
+    side_right: list[float],
+    *,
+    margin_m: float = 1.2,
+    iters: int = 2000,
+    damp: float = 0.5,
+) -> tuple[list[tuple[float, float]], list[float]]:
+    """Minimum-curvature racing line within the track corridor (TUMFTM-style, pure-Python).
+
+    Moves each point along its lateral normal by ``alpha_i`` bounded to ``[-(sideRight-margin),
+    +(sideLeft-margin)]`` (margin keeps the car half-width off the edge -> AC-valid). Minimizes the
+    PATH curvature ``sum (kappa_ref_i + alpha''_i)^2`` where ``kappa_ref`` is the base-line signed
+    curvature and ``alpha'' ~= (a_{i-1} - 2 a_i + a_{i+1}) / ds^2`` is the curvature the offset adds
+    (small-offset linearization). The base curvature drives the offset to flatten corners (bow
+    out → larger radius → higher apex speed) up to the corridor. Damped in-place Gauss-Seidel keeps
+    the stiff 4th-order operator stable. Returns (optimized plane points, alpha offsets).
+    """
+    n = len(plane)
+    if n < 3:
+        raise ValueError("min_curvature_line requires at least 3 cyclic points")
+    if len(side_left) != n or len(side_right) != n:
+        raise ValueError(
+            "corridor width arrays must match plane length: "
+            f"plane={n}, side_left={len(side_left)}, side_right={len(side_right)}"
+        )
+    if margin_m < 0:
+        raise ValueError("margin_m must be non-negative")
+    nrm = _unit_normals(plane)
+    kref = signed_curvature_profile(plane, smooth_win=1, span=2)
+    ds = (sum(seg_lengths(plane)) / n) or 1.0
+    ds2 = ds * ds
+    lo = [min(0.0, -(side_right[i] - margin_m)) for i in range(n)]
+    hi = [max(0.0, side_left[i] - margin_m) for i in range(n)]
+    alpha = [0.0] * n
+
+    def resid(k: int) -> float:
+        return kref[k] + (alpha[(k - 1) % n] - 2 * alpha[k] + alpha[(k + 1) % n]) / ds2
+
+    for _ in range(iters):
+        for i in range(n):
+            res2 = resid((i - 1) % n) - 2 * resid(i) + resid((i + 1) % n)
+            a = alpha[i] - damp * ds2 * res2 / 6.0
+            alpha[i] = lo[i] if a < lo[i] else hi[i] if a > hi[i] else a
+    return [
+        (plane[i][0] + alpha[i] * nrm[i][0], plane[i][1] + alpha[i] * nrm[i][1]) for i in range(n)
+    ], alpha
+
+
+def optimize_fast_line(
+    fast_line: list[tuple[float, float, float]],
+    width_path: str | Path,
+    *,
+    margin_m: float = 1.2,
+    iters: int = 1200,
+) -> list[tuple[float, float, float]]:
+    """Min-curvature-optimized (x, y, z) line within the track corridor (y carried through)."""
+    plane = [(p[0], p[2]) for p in fast_line]
+    sl, sr = load_track_widths(width_path)
+    opt, _alpha = min_curvature_line(plane, sl, sr, margin_m=margin_m, iters=iters)
+    return [(opt[i][0], fast_line[i][1], opt[i][1]) for i in range(len(fast_line))]
+
+
 def signed_curvature_profile(
     plane: list[tuple[float, float]], *, smooth_win: int = 3, span: int = 3
 ) -> list[float]:
@@ -411,6 +528,43 @@ def _read_csv(path: str | Path) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def ggv_speed_profile_from_model(
+    fast_line: list[tuple[float, float, float]],
+    ggv: GGVModel,
+    *,
+    v_top_kmh: float = 232.0,
+    smooth_win: int = 3,
+    span: int = 3,
+) -> tuple[list[float], dict]:
+    """Compute the forward-backward QSS profile from a GGVModel directly (no telemetry CSV).
+
+    Use this when the GGV is known (e.g. a hand-built / scaled model) rather than fitting from raw
+    telemetry. Returns (v_target_mps per fast_line point, summary dict).
+    """
+    if len(fast_line) < 3:
+        raise ValueError("ggv_speed_profile_from_model requires at least 3 points")
+    plane = [(p[0], p[2]) for p in fast_line]
+    seg = seg_lengths(plane)
+    kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
+    v, _ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
+    if len(seg) != len(v) or len(seg) != len(kappa):
+        raise ValueError(
+            f"profile arrays length mismatch: seg={len(seg)}, kappa={len(kappa)}, v={len(v)}"
+        )
+    total = sum(seg)
+    laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))
+    summ = {
+        "points": len(v),
+        "length_m": round(total, 1),
+        "qss_laptime_s": round(laptime, 2),
+        "qss_avg_kmh": round(total / laptime * 3.6, 1),
+        "vmax_kmh": round(max(v) * 3.6, 1),
+        "vmin_kmh": round(min(v) * 3.6, 1),
+        "max_kappa": round(max(kappa), 4),
+    }
+    return v, summ
+
+
 def build_ggv_speed_profile(
     fast_line: list[tuple[float, float, float]],
     human_csv: str | Path,
@@ -420,6 +574,7 @@ def build_ggv_speed_profile(
     span: int = 3,
     accel_peak_g: float | None = None,
     lat_grip_g: float | None = None,
+    lat_aero_k: float | None = None,
 ) -> tuple[list[float], GGVModel, dict]:
     """End-to-end offline build: fit GGV from telemetry, compute the QSS profile on ``fast_line``.
 
@@ -431,9 +586,6 @@ def build_ggv_speed_profile(
     (0.24-0.97 g), so the fitted accel is far below the car's capability; an aggressive accel target
     is made TC-off-safe live by ``slip_limited_controls``. Braking/lateral are left as fitted.
     """
-    plane = [(p[0], p[2]) for p in fast_line]
-    seg = seg_lengths(plane)
-    kappa = curvature_profile(plane, smooth_win=smooth_win, span=span)
     ggv = ggv_from_telemetry(_read_csv(human_csv))
     if accel_peak_g is not None:
         # traction-shaped accel: peak low-speed, ~0.4 g by 60 m/s (power/drag fade)
@@ -442,19 +594,14 @@ def build_ggv_speed_profile(
         # grip self-play: the relaxed human under-corners (~1.2 g), a real GT3 R does ~1.5 g. Push
         # the lateral envelope up to raise apex speeds; kept honest live by validity.
         ggv = replace(ggv, mu_lat_g=lat_grip_g, ay_cap_g=max(ggv.ay_cap_g, lat_grip_g + 0.1))
-    v, ax = forward_backward_profile(kappa, seg, ggv, v_top_ms=v_top_kmh / 3.6)
-    total = sum(seg)
-    laptime = sum(seg[i] / max(0.5, 0.5 * (v[i] + v[(i + 1) % len(v)])) for i in range(len(v)))
-    summ = {
-        "points": len(v),
-        "length_m": round(total, 1),
-        "qss_laptime_s": round(laptime, 2),
-        "qss_avg_kmh": round(total / laptime * 3.6, 1),
-        "vmax_kmh": round(max(v) * 3.6, 1),
-        "vmin_kmh": round(min(v) * 3.6, 1),
-        "max_kappa": round(max(kappa), 4),
-        "ggv": ggv.provenance,
-    }
+    if lat_aero_k is not None:
+        # speed-dependent aero lateral grip: a real GT3 R gains downforce grip with speed, so fast
+        # corners hold > mechanical 1.5 g. ay_max(v) = mu + k*v^2. Lifts the aero ceiling cap too.
+        ggv = replace(ggv, k_aero_lat=lat_aero_k, ay_cap_g=max(ggv.ay_cap_g, 3.0))
+    v, summ = ggv_speed_profile_from_model(
+        fast_line, ggv, v_top_kmh=v_top_kmh, smooth_win=smooth_win, span=span
+    )
+    summ["ggv"] = ggv.provenance
     return v, ggv, summ
 
 

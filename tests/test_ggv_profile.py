@@ -336,3 +336,47 @@ def test_racing_driver_curvature_ff_mode_steps():
     assert d.cff is not None
     f = d.step((50.0, 0.0, 0.0), (0.0, 0.0, 1.0), 100.0, 6000.0, 4, 1.0)
     assert -1.0 <= f.steer <= 1.0
+
+
+# --- Stage 4: min-curvature optimized line --------------------------------
+def test_min_curvature_reduces_perturbation_and_respects_corridor():
+    from tools.ac_harness.ggv_profile import min_curvature_line
+
+    r, n = 40.0, 200
+    base = [
+        (r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n)) for i in range(n)
+    ]
+    base[50] = (base[50][0] * 1.08, base[50][1] * 1.08)  # bump one point outward
+    sl = [3.0] * n
+    sr = [3.0] * n
+    k0 = sum(x * x for x in curvature_profile(base, smooth_win=1, span=2))
+    opt, alpha = min_curvature_line(base, sl, sr, margin_m=0.5, iters=1500, damp=0.5)
+    k1 = sum(x * x for x in curvature_profile(opt, smooth_win=1, span=2))
+    assert k1 < k0 - 1e-6  # curvature is reduced; no-op output should fail
+    assert max(abs(a) for a in alpha) > 1e-6
+    # every offset stays inside the corridor (margin off each edge)
+    assert all(-(sr[i] - 0.5) - 1e-6 <= alpha[i] <= (sl[i] - 0.5) + 1e-6 for i in range(n))
+    assert len(opt) == n
+
+
+def test_min_curvature_offset_zero_when_corridor_closed():
+    from tools.ac_harness.ggv_profile import min_curvature_line
+
+    plane = [(p[0], p[2]) for p in _circle(30.0, 120)]
+    z = [0.0] * 120  # zero-width corridor (margin >= width) -> no movement allowed
+    opt, alpha = min_curvature_line(plane, z, z, margin_m=1.0, iters=300, damp=0.5)
+    assert all(abs(a) < 1e-9 for a in alpha)
+    assert opt == plane
+
+
+def test_ggv_speed_profile_from_model_and_aero_raises_apex():
+    from tools.ac_harness.ggv_profile import GGVModel, ggv_speed_profile_from_model
+
+    line = _circle(60.0, 300)
+    flat = GGVModel(1.5, 0.0, 0.955, 0.0214, 1.1, -0.0117, 0.35, 1.55, ay_cap_g=3.5)
+    aero = GGVModel(1.5, 0.0005, 0.955, 0.0214, 1.1, -0.0117, 0.35, 1.55, ay_cap_g=3.5)
+    v_flat, s_flat = ggv_speed_profile_from_model(line, flat, v_top_kmh=300.0)
+    v_aero, s_aero = ggv_speed_profile_from_model(line, aero, v_top_kmh=300.0)
+    assert len(v_flat) == len(line)
+    assert max(v_aero) >= max(v_flat)  # aero grip lets the constant-radius apex carry more speed
+    assert s_aero["qss_laptime_s"] <= s_flat["qss_laptime_s"]  # ...so the lap is no slower
