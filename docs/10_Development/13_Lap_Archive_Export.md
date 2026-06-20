@@ -39,6 +39,17 @@ archive trace. `lap_distance_m` is derived from `spline * track.lengthM` when
 track length is present; otherwise it is blank. Missing trace fields export as
 blank cells so downstream notebooks can distinguish "missing" from zero.
 
+### Optional Tier-B per-wheel channels (#266)
+
+When present, the trace may also carry per-wheel channels named
+`wheelAngularSpeed_{fl,fr,rl,rr}` (rad/s) and `wheelSlip_{fl,fr,rl,rr}` (AC's
+combined Pacejka NDslip). These are **optional** — older laps omit them and the
+loader degrades gracefully. The setup-coaching engine
+(`tools/ai_sidecar/corner_attribution.py`) uses `wheelAngularSpeed` to compute
+true longitudinal slip per wheel, which upgrades brake-lockup and exit-wheelspin
+attributions from a *suspicion* to a *confirmed* axle-level verdict (which axle
+locks → brake bias; rear wheelspin → traction/TC/diff). Order is `[FL, FR, RL, RR]`.
+
 ## MoTeC-Shaped CSV
 
 Run:

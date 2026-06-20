@@ -192,6 +192,31 @@ def test_real_fixture_too_short_yields_no_corners():
     assert segment_corners(lap) == []
 
 
+def test_reads_optional_per_wheel_channels():
+    arch = _make_corner_archive()
+    # append wheelAngularSpeed_{fl,fr,rl,rr} columns (Tier-B channels, #266)
+    extra = [
+        "wheelAngularSpeed_fl",
+        "wheelAngularSpeed_fr",
+        "wheelAngularSpeed_rl",
+        "wheelAngularSpeed_rr",
+    ]
+    arch["trace"]["fields"].extend(extra)
+    for row in arch["trace"]["samples"]:
+        row.extend([120.0, 121.0, 119.0, 118.0])
+    lap = lap_trace_from_archive(arch)
+    assert lap.has_wheel_data is True
+    assert lap.wheel_omega is not None
+    assert lap.wheel_omega[0] == [120.0, 121.0, 119.0, 118.0]
+    assert lap.wheel_slip is None  # not provided
+
+
+def test_no_wheel_channels_means_no_wheel_data():
+    lap = lap_trace_from_archive(_make_corner_archive())
+    assert lap.has_wheel_data is False
+    assert lap.wheel_omega is None
+
+
 def test_spline_derived_from_positions_when_channel_missing():
     arch = _make_corner_archive()
     fi = arch["trace"]["fields"].index("spline")

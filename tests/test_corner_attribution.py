@@ -5,12 +5,14 @@ from __future__ import annotations
 import math
 
 from tools.ai_sidecar.corner_attribution import (
+    WHEEL_RADIUS_M,
     CornerContext,
     CornerDelta,
     analyze_balance,
     attribute_corner,
     coach_lap,
     compare_laps,
+    corner_live_signals,
 )
 from tools.ai_sidecar.lap_dynamics import CornerSignature, LapTrace
 from tools.ai_sidecar.setup_knowledge import (
@@ -192,16 +194,21 @@ def test_braking_phase_loss_suspected_then_confirmed_with_slip():
         if a.key == "braking_phase_loss"
     )
     assert susp.advisory is True
+    # supplying the confirming channel (+ a confirmed axle) flips advisory -> verdict
     conf = next(
         a
         for a in attribute_corner(
             CornerContext(
-                sig=sig, setup=SETUP, delta=d, extra={"wheelSlip": [0.1, 0.1, 0.02, 0.02]}
+                sig=sig,
+                setup=SETUP,
+                delta=d,
+                extra={"wheelAngularSpeed": True, "lock_axle": "front", "front_lock": -0.18},
             )
         )
         if a.key == "braking_phase_loss"
     )
     assert conf.advisory is False
+    assert any("FRONT" in c for c in conf.setup_causes)  # names the confirmed axle
 
 
 def test_braking_phase_loss_mentions_911_bias_window():
@@ -248,6 +255,99 @@ def test_balance_routes_low_speed_saturation_to_mechanical():
     f = analyze_balance(LapTrace([], [], [], [], [], [], [], [], []), sigs, grip_ceiling_g=1.5)
     assert f.verdict == "mechanical_all_speed"
     assert f.lever_class == MECHANICAL
+
+
+# --- Tier-B confirmed attribution from per-wheel data -----------------------
+def _wheel_lap(*, lock_axle: str | None, wheelspin: bool) -> tuple[LapTrace, CornerSignature]:
+    """Construct a LapTrace with wheelAngularSpeed encoding a braking lock + an exit wheelspin."""
+    r = WHEEL_RADIUS_M
+    n = 20
+    v_ms = [50.0] * 11 + [30.0] * 9  # decel into apex@10, slow exit
+    brake = [0.0] * 5 + [0.8] * 6 + [0.0] * 9  # braking samples 5..10
+    throttle = [0.0] * 12 + [1.0] * 8  # throttle samples 12..19
+
+    def omega(slip: float, v: float) -> float:
+        return v * (1.0 + slip) / r  # invert slip = (omega*r - v)/v
+
+    wheel_omega = []
+    for i in range(n):
+        v = v_ms[i]
+        fl = fr = rl = rr = v / r  # free-rolling default
+        if brake[i] > 0.05 and lock_axle == "front":
+            fl = fr = omega(-0.18, v)  # fronts locked
+        elif brake[i] > 0.05 and lock_axle == "rear":
+            rl = rr = omega(-0.18, v)  # rears locked
+        if throttle[i] > 0.2 and wheelspin:
+            rl = rr = omega(0.22, v)  # rears spinning
+        wheel_omega.append([fl, fr, rl, rr])
+    lap = LapTrace(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=v_ms,
+        brake=brake,
+        throttle=throttle,
+        steer=[0.3] * n,
+        gear=[4] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        wheel_omega=wheel_omega,
+    )
+    sig = _sig(entry_i=4, apex_i=10, exit_i=19, apex_spline=0.5)
+    return lap, sig
+
+
+def test_corner_live_signals_detects_front_lock():
+    lap, sig = _wheel_lap(lock_axle="front", wheelspin=False)
+    s = corner_live_signals(lap, sig)
+    assert s["wheelAngularSpeed"] is True
+    assert s["lock_axle"] == "front"
+    assert s["front_lock"] < -0.06
+    assert s["wheelspin"] is False
+
+
+def test_corner_live_signals_detects_rear_lock_and_wheelspin():
+    lap, sig = _wheel_lap(lock_axle="rear", wheelspin=True)
+    s = corner_live_signals(lap, sig)
+    assert s["lock_axle"] == "rear"
+    assert s["wheelspin"] is True
+    assert s["rear_exit_slip"] > 0.1
+
+
+def test_corner_live_signals_empty_without_wheel_data():
+    lap, sig = _wheel_lap(lock_axle="front", wheelspin=False)
+    lap.wheel_omega = None
+    assert corner_live_signals(lap, sig) == {}
+
+
+def test_live_signals_feed_confirmed_braking_attribution():
+    # computed live signals + a braking-phase time loss -> CONFIRMED front-axle verdict
+    lap, sig = _wheel_lap(lock_axle="front", wheelspin=False)
+    extra = corner_live_signals(lap, sig)
+    ctx = CornerContext(
+        sig=_sig(peak_brake_g=1.1, brake_point_spline=0.4),
+        setup=SETUP,
+        delta=_delta(delta_s=0.3),
+        extra=extra,
+    )
+    braking = next(a for a in attribute_corner(ctx) if a.key == "braking_phase_loss")
+    assert braking.advisory is False  # confirmed, not suspected
+    assert "rearward" in braking.coaching  # front lock -> move bias rearward
+    assert any("FRONT" in c for c in braking.setup_causes)
+
+
+def test_live_signals_no_lock_routes_to_technique():
+    # per-wheel data present but NO lock -> braking loss is technique, not bias
+    lap, sig = _wheel_lap(lock_axle=None, wheelspin=False)
+    extra = corner_live_signals(lap, sig)
+    ctx = CornerContext(
+        sig=_sig(peak_brake_g=1.1, brake_point_spline=0.4),
+        setup=SETUP,
+        delta=_delta(delta_s=0.3),
+        extra=extra,
+    )
+    braking = next(a for a in attribute_corner(ctx) if a.key == "braking_phase_loss")
+    assert braking.advisory is False
+    assert any("NO axle lock" in c or "TECHNIQUE" in c for c in braking.setup_causes)
 
 
 def test_balance_negative_grip_ceiling_is_ignored():

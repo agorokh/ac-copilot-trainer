@@ -352,12 +352,16 @@ def coach_lap(
     by_idx = {d.index: d for d in deltas}
     out: list[CornerCoaching] = []
     for sig in sigs:
+        # explicit caller-supplied signals win; else auto-compute Tier-B signals from per-wheel data
+        extra = (extra_by_corner or {}).get(sig.index)
+        if extra is None:
+            extra = corner_live_signals(lap, sig) if lap.has_wheel_data else {}
         ctx = CornerContext(
             sig=sig,
             setup=setup,
             delta=by_idx.get(sig.index),
             grip_ceiling_g=grip_ceiling_g,
-            extra=(extra_by_corner or {}).get(sig.index, {}),
+            extra=extra,
         )
         attrs = attribute_corner(ctx, rules)
         out.append(
@@ -389,6 +393,64 @@ def _grip_used_frac(ctx: CornerContext) -> float | None:
     if ctx.grip_ceiling_g is None or ctx.grip_ceiling_g <= 0:
         return None
     return ctx.sig.peak_lat_g / ctx.grip_ceiling_g
+
+
+# --- Tier-B live signals: turn per-wheel data into CONFIRMED attribution ------
+WHEEL_RADIUS_M = 0.347  # GT3 R effective rolling radius (session plant-ID)
+
+
+def _slip(omega: float, r: float, v: float) -> float:
+    """Longitudinal slip ratio (omega*r - v)/v: <0 = lock (braking), >0 = spin (power)."""
+    return 0.0 if v < 0.5 else (omega * r - v) / v
+
+
+def corner_live_signals(
+    lap: LapTrace,
+    sig: CornerSignature,
+    *,
+    wheel_radius_m: float = WHEEL_RADIUS_M,
+    brake_thresh: float = 0.05,
+    throttle_thresh: float = 0.2,
+    lock_thresh: float = -0.06,
+    spin_thresh: float = 0.10,
+) -> dict[str, Any]:
+    """Per-corner Tier-B signals from ``wheelAngularSpeed`` — which axle locks, exit wheelspin.
+
+    Returns ``{}`` when the lap has no per-wheel data. When present, returns a dict carrying the
+    confirming channel marker(s) plus ``lock_axle`` ('front'|'rear'|'both'|None) and ``wheelspin``,
+    so the braking/exit rules graduate from a suspicion to a confirmed verdict. Slip is computed
+    from angular speed (the canonical longitudinal signal), not AC's combined ``wheelSlip``.
+    """
+    if lap.wheel_omega is None:
+        return {}
+    extra: dict[str, Any] = {"wheelAngularSpeed": True}
+    if lap.wheel_slip is not None:
+        extra["wheelSlip"] = True
+    # braking phase (turn-in..apex with brake on): which axle reaches lock first?
+    front, rear = [], []
+    for k in range(sig.entry_i, sig.apex_i + 1):
+        if lap.brake[k] > brake_thresh:
+            v, om = lap.v_ms[k], lap.wheel_omega[k]
+            front.append(min(_slip(om[0], wheel_radius_m, v), _slip(om[1], wheel_radius_m, v)))
+            rear.append(min(_slip(om[2], wheel_radius_m, v), _slip(om[3], wheel_radius_m, v)))
+    if front:
+        fl, rl = min(front), min(rear)
+        extra["front_lock"], extra["rear_lock"] = round(fl, 3), round(rl, 3)
+        if min(fl, rl) <= lock_thresh:
+            extra["lock_axle"] = "front" if fl < rl - 0.02 else "rear" if rl < fl - 0.02 else "both"
+        else:
+            extra["lock_axle"] = None
+    # exit phase (apex..exit with throttle on): rear wheelspin?
+    spins = []
+    for k in range(sig.apex_i, sig.exit_i + 1):
+        if lap.throttle[k] > throttle_thresh:
+            v, om = lap.v_ms[k], lap.wheel_omega[k]
+            spins.append(max(_slip(om[2], wheel_radius_m, v), _slip(om[3], wheel_radius_m, v)))
+    if spins:
+        rmax = max(spins)
+        extra["rear_exit_slip"] = round(rmax, 3)
+        extra["wheelspin"] = rmax >= spin_thresh
+    return extra
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +504,23 @@ def _r_turn_in_lag(ctx: CornerContext) -> float:
 
 
 def _exit_setup_causes(ctx: CornerContext) -> list[str]:
+    spin = ctx.extra.get("wheelspin")
+    if spin is True:  # CONFIRMED by per-wheel slip
+        rs = ctx.extra.get("rear_exit_slip")
+        out = [
+            f"CONFIRMED rear wheelspin on exit (slip {rs}) → it's a TRACTION problem: squeeze the "
+            "throttle later/softer, raise TC, or reduce DIFF_POWER lock.",
+        ]
+        if ctx.setup.tc_level is not None:
+            out.append(f"TC is {ctx.setup.tc_level:.0f} — a notch up would catch this spin.")
+        out.append("Rear wing only if the spin is at genuinely HIGH exit speed.")
+        return out
+    if spin is False:  # channel present, NO spin -> NOT traction
+        return [
+            "Per-wheel slip shows NO rear wheelspin — the exit loss is DIFF/TECHNIQUE, not "
+            "traction: get to power earlier; if it pushes wide on power, open DIFF_POWER a touch.",
+        ]
+    # no per-wheel data -> ranked suspicion (the honest archive default)
     out = [
         "Lead with throttle technique + DIFF_POWER (on-throttle lock) — these dominate exit drive.",
         "Rear springs/dampers next; ARB_REAR matters mid-corner, not once you're straightening.",
@@ -456,17 +535,77 @@ def _exit_setup_causes(ctx: CornerContext) -> list[str]:
 
 
 def _braking_setup_causes(ctx: CornerContext) -> list[str]:
-    out = [
-        "Investigate brake bias + brake modulation. Archive localizes the loss to the braking "
-        "zone but CANNOT prove which axle locks — that needs per-wheel slip.",
-    ]
     bias = ctx.setup.brake_bias_pct
-    if bias is None:
-        out.append("Brake bias not in this setup snapshot.")
-    else:
-        note = " (a rear-engine 911 GT3 R usually wants ~50-56%)" if bias > 58 else ""
-        out.append(f"FRONT_BIAS is {bias:.0f}% front{note}.")
-    return out
+    bias_txt = (
+        f"FRONT_BIAS is {bias:.0f}% front"
+        + (
+            " (a rear-engine 911 GT3 R usually wants ~50-56%)"
+            if bias is not None and bias > 58
+            else ""
+        )
+        if bias is not None
+        else "brake bias not in this setup snapshot"
+    )
+    axle = ctx.extra.get("lock_axle", "__none__")
+    if axle == "front":
+        return [
+            f"CONFIRMED: the FRONT axle locks first (slip {ctx.extra.get('front_lock')}) → bias is "
+            f"too far forward. Move FRONT_BIAS rearward — {bias_txt}.",
+        ]
+    if axle == "rear":
+        return [
+            f"CONFIRMED: the REAR axle locks first (slip {ctx.extra.get('rear_lock')}) → bias is "
+            f"too far rearward (snap-spin risk). Move FRONT_BIAS forward — {bias_txt}.",
+        ]
+    if axle in ("both", None):  # per-wheel data present, lock state known
+        if axle == "both":
+            return [
+                f"CONFIRMED: both axles lock → reduce BRAKE_POWER_MULT / brake softer ({bias_txt})."
+            ]
+        return [
+            "Per-wheel slip shows NO axle lock — the braking loss is a braking-POINT/modulation "
+            f"TECHNIQUE issue, not bias ({bias_txt}).",
+        ]
+    # no per-wheel data -> honest suspicion
+    return [
+        "Investigate brake bias + brake modulation. Archive localizes the loss to the braking zone "
+        "but CANNOT prove which axle locks — that needs per-wheel slip.",
+        f"{bias_txt[0].upper()}{bias_txt[1:]}.",
+    ]
+
+
+def _braking_coaching(ctx: CornerContext) -> str:
+    axle = ctx.extra.get("lock_axle", "__none__")
+    if axle == "front":
+        return "Front locking under braking (confirmed) — move brake bias rearward."
+    if axle == "rear":
+        return "Rear locking under braking (confirmed) — move brake bias forward."
+    if axle == "both":
+        return "Both axles lock (confirmed) — brake softer / lower brake power."
+    if axle is None:
+        return (
+            "No axle lock (confirmed) — it's the braking POINT/modulation, not bias. Brake later."
+        )
+    return (
+        "Losing time braking — investigate brake bias + modulation. Add live per-wheel slip to "
+        "confirm which axle locks."
+    )
+
+
+def _exit_coaching(ctx: CornerContext) -> str:
+    spin = ctx.extra.get("wheelspin")
+    a2t = ctx.sig.apex_to_throttle_m or 0.0
+    if spin is True:
+        return "Rear wheelspin on exit (confirmed) — squeeze later/softer, raise TC or open diff."
+    if spin is False:
+        return (
+            f"No wheelspin (confirmed) — {a2t:.0f} m apex-to-throttle is technique; "
+            "get to power earlier."
+        )
+    return (
+        f"{a2t:.0f} m from apex to throttle — get back to power earlier. Live per-wheel slip "
+        "separates wheelspin from a TC cut from a diff push."
+    )
 
 
 RULES: list[DiagnosticRule] = [
@@ -516,32 +655,28 @@ RULES: list[DiagnosticRule] = [
         symptom="time lost under braking",
         phase="braking",
         tier="A",
-        channels_needed=("wheelSlip",),  # per-wheel slip attributes the lockup to an axle
+        # wheelAngularSpeed gives true per-wheel slip -> attributes the lockup to an axle
+        channels_needed=("wheelAngularSpeed",),
         test=_r_braking_phase_loss,
         setup_causes=_braking_setup_causes,
         technique_causes=(
             "Threshold-brake: press harder at the top of the zone, then trail off smoothly.",
         ),
-        coaching=lambda c: (
-            "Losing time braking here — investigate brake bias + modulation. Add live per-wheel "
-            "slip to confirm whether the front or rear axle is locking."
-        ),
+        coaching=_braking_coaching,
     ),
     DiagnosticRule(
         key="exit_traction",
         symptom="slow back to power on exit",
         phase="exit",
         tier="A",
-        channels_needed=("wheelSlip",),  # confirms wheelspin vs TC-cut vs diff
+        # wheelAngularSpeed separates wheelspin from a TC cut / diff push
+        channels_needed=("wheelAngularSpeed",),
         test=_r_exit_traction,
         setup_causes=_exit_setup_causes,
         technique_causes=(
             "Squeeze the throttle progressively from the apex — pick the car up, then full power.",
         ),
-        coaching=lambda c: (
-            f"{c.sig.apex_to_throttle_m:.0f} m from apex to throttle — get back to power earlier. "
-            "Live per-wheel slip separates wheelspin from a TC cut from a diff push."
-        ),
+        coaching=_exit_coaching,
     ),
     DiagnosticRule(
         key="turn_in_lag",
