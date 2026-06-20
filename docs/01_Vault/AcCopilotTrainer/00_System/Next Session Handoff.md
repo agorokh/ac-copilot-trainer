@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-20T01:30:00Z
+last_updated: 2026-06-20T04:00:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
@@ -31,6 +31,40 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-20 — #244 FRONTIER: human beaten 83.5s (merged); ~70s path offline-proven; live aero blocked by rig state)
+
+**Headline (MERGED to main, PR #256, squash `158a796`):** the autonomous controller beats the human —
+**106.8s → 95.3 (GGV) → 91.8 (curvature-FF) → 90.28 → 86.4 → 83.5s (1.5g)**; human relaxed = 90.7s.
+Repeatable, AC-valid (lap.valid=true + delta telemetry). Curvature-FF lateral (`ff_sign=-1` from
+corr(human_steer, line_κ)=+0.93) holds the line so Stanley only trims; grip self-play ceiling = 1.5g
+(1.6g spins).
+
+**Stage 4 (PR [#259](https://github.com/agorokh/ac-copilot-trainer/pull/259), open, 25 tests, ruff
+clean):** `load_track_widths` + `min_curvature_line` (TUMFTM) + `optimize_fast_line` (line is already
+near-optimal → only ~1s). **The real ~70s lever = speed-dependent AERO lateral grip** (`lat_aero_k`,
+`ggv_speed_profile_from_model` is CSV-free): on the optimized line, QSS **72.96s @k=0.0003**, **70.91s
+@k=0.0005** (physically ~2.4-3g lateral @200km/h, which the GT3 R has). Only 22% of Magione is
+aero-irrelevant slow corners → the ceiling genuinely reaches ~70-73s QSS → live ~76-79s.
+
+**LIVE aero verification = BLOCKED by rig state this session (not the method):**
+1. **Steam elevation mismatch** ("Steam API failed to initialize") — FIXED per runbook (`steam
+   -shutdown` + non-elevated relaunch via `explorer.exe`).
+2. Then the **menu-skip race stuck** (acs frozen at pre-drive menu every attempt; CM auto-start clicks
+   not landing — the agent-window foreground-steal gotcha); Windows GUI MCP went unresponsive.
+3. **`.scratch/part-g/` was WIPED mid-session** (raw `human_laps.csv` + live drivers lost). Recovered
+   by making the GGV path CSV-free + hardcoding the verified fits.
+
+**NEXT SESSION — to land ~70s live (clean rig):**
+- Reconstruct/launch: re-apply `surfaces.ini` (`[SURFACE_0] WAV_PITCH=extended-0` + `[_EXTRA_PERMISSIONS]
+  ALLOW_CUSTOM_AI_MANIPULATION=1`); ensure Steam is **non-elevated** (explorer launch); **minimize the
+  agent window** so CM auto-start clicks land (foreground-steal fix); daemon `--launch-mode cm`.
+- Run `.scratch/part-g/race_drive_aero.py <dur> <k_aero> <accel_peak> 1 <cff_ay_cap_g>` (self-contained,
+  curvature-FF + ax-FF + slip limiter + optimized line + aero grip). Self-play k_aero 0.0003 → up until
+  validity breaks (tap lap.valid). Constants baked: FF c1=-5.1 c2=-0.0033 ff_sign=-1, r_eff=0.347, GGV
+  brake 0.955+0.0214v, ellipse 1.55.
+- Physics note: at 1.5g (flat, no aero) the lap is grip-bound ~82-83s live; aero grip in fast/medium
+  corners is the only lever left to ~70-78s. The line is near-optimal (~1s).
 
 ## Resume here (2026-06-20 — #244 FRONTIER: HUMAN BEATEN 90.7s→83.5s; Stage 4 line is the path to ~70s)
 
