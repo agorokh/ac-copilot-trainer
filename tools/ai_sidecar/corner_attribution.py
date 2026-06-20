@@ -134,12 +134,16 @@ def analyze_balance(
     deltas: list[CornerDelta] | None = None,
     grip_ceiling_g: float | None = None,
     speed_split_kmh: float = 120.0,
+    saturation: float = 0.90,
 ) -> BalanceFinding:
-    """Bin corners by apex speed and route any limitation to the aero vs mechanical lever class.
+    """Bin corners by apex speed and route a grip LIMITATION to the aero vs mechanical lever class.
 
-    Uses grip-utilization (peak_lat_g / ceiling) and, when a reference is supplied, time lost per
-    band. Robust because it relies only on the speed-gating of the deficit, not on a noisy archive
-    estimate of understeer-vs-oversteer direction.
+    Primary signal is grip *saturation* (peak_lat_g / ceiling near 1.0 = the car is AT its limit in
+    that band). The band that saturates sets the lever class: saturating in HIGH-speed corners → the
+    limit is downforce-set → AERO; saturating in LOW-speed corners (aero negligible) → MECHANICAL.
+    If a band is NOT saturated the car has grip in hand, so a deficit is technique, not balance.
+    Time-loss per band is reported as context and is the fallback when no grip ceiling is given.
+    Robust because it never asserts the (yaw-dependent) under-vs-oversteer direction.
     """
     if sigs is None:
         sigs = corner_signatures(lap)
@@ -168,35 +172,52 @@ def analyze_balance(
             "Need corners in both speed bands to separate aero from mechanical.", caveat,
         )
 
-    # prefer time-loss signal when a reference exists; else grip utilization (lower = more limited)
-    high_worse = mech_worse = False
-    if ht is not None and lt is not None:
-        high_worse = ht > lt + 0.05
-        mech_worse = lt > ht + 0.05
-    elif hu is not None and lu is not None:
-        high_worse = hu < lu - 0.04  # using less grip in fast corners = aero-limited
-        mech_worse = lu < hu - 0.04
+    def finding(verdict: str, lever: str, coaching: str) -> BalanceFinding:
+        return BalanceFinding(verdict, lever, lu, hu, lt, ht, len(low), len(high), coaching, caveat)
 
-    if high_worse:
-        return BalanceFinding(
-            "aero_limited_high_speed", AERO, lu, hu, lt, ht, len(low), len(high),
-            "Limitation concentrated in HIGH-speed corners → aero. Adjust wings for an unambiguous "
-            "front/rear shift (front wing up cuts high-speed understeer; rear wing up cuts "
-            "high-speed snap). Rake also shifts it but the direction is car-dependent.",
-            caveat,
+    # primary: which band is the car grip-limited (saturated) in?
+    if lu is not None and hu is not None:
+        low_sat, high_sat = lu >= saturation, hu >= saturation
+        if high_sat and not low_sat:
+            return finding(
+                "aero_limited_high_speed", AERO,
+                "Car is grip-limited in HIGH-speed corners (low-speed has grip in hand) → the "
+                "limit is downforce-set. Use wings for an unambiguous shift (front wing up cuts "
+                "high-speed understeer; rear wing up cuts high-speed snap); rake is car-dependent.",
+            )
+        if low_sat and not high_sat:
+            return finding(
+                "mechanical_all_speed", MECHANICAL,
+                "Car is grip-limited in LOW-speed corners (aero negligible) → the limit is "
+                "mechanical. If you're AT the limit there, use ARB/springs/diff (softer front cuts "
+                "understeer; softer rear aids rotation/exit) — not wings. If you're NOT at the "
+                "limit, it's technique (see the per-corner notes).",
+            )
+        if low_sat and high_sat:
+            return finding(
+                "grip_limited_all_speed", "",
+                "Car reaches its grip limit across the speed range — well balanced; gains need "
+                "more overall grip (tyres/compound/pressures) or driving closer to the limit.",
+            )
+        return finding(
+            "not_grip_limited", "",
+            "Grip is in hand in both speed bands — the time is in TECHNIQUE, not balance (carry "
+            "more speed / brake later / get to power sooner — see per-corner notes).",
         )
-    if mech_worse:
-        return BalanceFinding(
-            "mechanical_all_speed", MECHANICAL, lu, hu, lt, ht, len(low), len(high),
-            "Limitation shows in LOW-speed corners (aero near zero) → mechanical. Use ARB (softer "
-            "front cuts understeer; softer rear cuts oversteer / aids exit traction), springs, or "
-            "diff — NOT wings.",
-            caveat,
-        )
-    return BalanceFinding(
-        "balanced", "", lu, hu, lt, ht, len(low), len(high),
-        "No clear speed-gating — the car is reasonably balanced across the speed range.", caveat,
-    )
+
+    # fallback (no grip ceiling): use time-loss localization only, clearly hedged
+    if ht is not None and lt is not None:
+        if ht > lt + 0.05:
+            return finding("time_lost_high_speed", AERO,
+                           "Most time lost in HIGH-speed corners (no grip ceiling given, so this "
+                           "is localization, not a grip-limit verdict). Suspect aero if at limit.")
+        if lt > ht + 0.05:
+            return finding("time_lost_low_speed", MECHANICAL,
+                           "Most time lost in LOW-speed corners (no grip ceiling given). Suspect "
+                           "mechanical/technique; supply a grip ceiling to separate them.")
+    return finding("balanced", "",
+                   "No clear speed-gating of the deficit. Supply a grip ceiling for a grip-limit "
+                   "verdict.")
 
 
 # --- diagnostic engine ------------------------------------------------------

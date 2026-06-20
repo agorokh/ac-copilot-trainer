@@ -168,28 +168,41 @@ def test_exit_traction_leads_with_technique_and_diff():
 
 
 # --- analyze_balance (the master discriminator) -----------------------------
-def test_balance_routes_high_speed_deficit_to_aero():
+def test_balance_routes_high_speed_saturation_to_aero():
+    # grip-limited (saturated) in HIGH-speed corners, grip in hand at low speed -> aero
     sigs = [
-        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.5),   # low-speed: full grip
-        _sig(index=1, min_speed_kmh=85.0, peak_lat_g=1.48),
-        _sig(index=2, min_speed_kmh=170.0, peak_lat_g=1.2),  # high-speed: under-gripped -> aero
-        _sig(index=3, min_speed_kmh=165.0, peak_lat_g=1.18),
+        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.1),   # low-speed: grip in hand
+        _sig(index=1, min_speed_kmh=85.0, peak_lat_g=1.05),
+        _sig(index=2, min_speed_kmh=170.0, peak_lat_g=1.5),  # high-speed: at the limit -> aero
+        _sig(index=3, min_speed_kmh=165.0, peak_lat_g=1.48),
     ]
     f = analyze_balance(LapTrace([], [], [], [], [], [], [], [], []), sigs, grip_ceiling_g=1.5)
     assert f.verdict == "aero_limited_high_speed"
     assert f.lever_class == AERO
 
 
-def test_balance_routes_low_speed_deficit_to_mechanical():
+def test_balance_routes_low_speed_saturation_to_mechanical():
+    # grip-limited (saturated) in LOW-speed corners, grip in hand at high speed -> mechanical
     sigs = [
-        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.2),
-        _sig(index=1, min_speed_kmh=85.0, peak_lat_g=1.18),
-        _sig(index=2, min_speed_kmh=170.0, peak_lat_g=1.5),
-        _sig(index=3, min_speed_kmh=165.0, peak_lat_g=1.48),
+        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.5),
+        _sig(index=1, min_speed_kmh=85.0, peak_lat_g=1.48),
+        _sig(index=2, min_speed_kmh=170.0, peak_lat_g=1.1),
+        _sig(index=3, min_speed_kmh=165.0, peak_lat_g=1.05),
     ]
     f = analyze_balance(LapTrace([], [], [], [], [], [], [], [], []), sigs, grip_ceiling_g=1.5)
     assert f.verdict == "mechanical_all_speed"
     assert f.lever_class == MECHANICAL
+
+
+def test_balance_not_grip_limited_is_technique():
+    # grip in hand in BOTH bands -> the deficit is technique, not balance
+    sigs = [
+        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.0),
+        _sig(index=1, min_speed_kmh=170.0, peak_lat_g=1.0),
+    ]
+    f = analyze_balance(LapTrace([], [], [], [], [], [], [], [], []), sigs, grip_ceiling_g=1.5)
+    assert f.verdict == "not_grip_limited"
+    assert f.lever_class == ""
 
 
 def test_balance_insufficient_when_one_band_missing():
