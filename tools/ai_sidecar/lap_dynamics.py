@@ -118,14 +118,20 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
                 out.append(default)
         return out
 
-    spline = col(i_sp)
     v_kmh = col(i_v)
+    x_col = col(i_x)
+    z_col = col(i_z)
+    spline = col(i_sp)
+    # spline drives corner windows + time-loss localization; if absent (or flat) derive it from
+    # cumulative distance rather than silently zero-filling (which would collapse every window).
+    if i_sp is None or (max(spline) - min(spline) <= 1e-9):
+        spline = _spline_from_positions(x_col, z_col)
     t_ms = col(i_t)
     # time: prefer recorded eMs; else integrate from distance/speed; else uniform index
     if i_t is not None and any(t_ms):
         t_s = [t / 1000.0 for t in t_ms]
     else:
-        t_s = _time_from_positions(col(i_x), col(i_z), [v / 3.6 for v in v_kmh])
+        t_s = _time_from_positions(x_col, z_col, [v / 3.6 for v in v_kmh])
 
     car = archive.get("car") if isinstance(archive.get("car"), dict) else {}
     track = archive.get("track") if isinstance(archive.get("track"), dict) else {}
@@ -138,8 +144,8 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
         throttle=col(i_th),
         steer=col(i_st),
         gear=col(i_g),
-        x=col(i_x),
-        z=col(i_z),
+        x=x_col,
+        z=z_col,
         lap_ms=_finite(lap.get("lap_ms")),
         car_id=car.get("id") if isinstance(car, dict) else None,
         track_id=track.get("id") if isinstance(track, dict) else None,
@@ -269,7 +275,7 @@ def _signature(
     # trail-brake: entry samples (turn-in..apex) with brake and steer both active
     entry_seg = range(entry_i, apex_i + 1)
     tb = [k for k in entry_seg if lap.brake[k] > brake_thresh and abs(lap.steer[k]) > steer_thresh]
-    trail_frac = len(tb) / max(1, len(list(entry_seg)))
+    trail_frac = len(tb) / max(1, len(entry_seg))
     steers = [lap.steer[k] for k in seg]
     max_abs_steer = max((abs(s) for s in steers), default=0.0)
     mean_steer = sum(steers) / max(1, len(steers))
@@ -376,6 +382,20 @@ def _first_after(sig: list[float], apex_i: int, ceil_i: int, thresh: float) -> i
         if sig[k] > thresh:
             return k
     return None
+
+
+def _spline_from_positions(x: list[float], z: list[float]) -> list[float]:
+    """Normalized 0..1 lap position from cumulative arc length (used when no spline channel)."""
+    n = len(x)
+    if n == 0:
+        return []
+    dist = [0.0] * n
+    for i in range(1, n):
+        dist[i] = dist[i - 1] + math.hypot(x[i] - x[i - 1], z[i] - z[i - 1])
+    total = dist[-1]
+    if total <= 1e-9:
+        return [i / max(1, n - 1) for i in range(n)]
+    return [d / total for d in dist]
 
 
 def _time_from_positions(x: list[float], z: list[float], v_ms: list[float]) -> list[float]:

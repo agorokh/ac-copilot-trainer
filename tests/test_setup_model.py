@@ -152,6 +152,13 @@ def test_from_lap_archive_missing_setup_is_empty_not_error():
     assert s.tunables() == {}
 
 
+def test_from_lap_archive_non_dict_degrades_to_empty():
+    for bad in (None, "nope", [1, 2, 3], 42):
+        s = from_lap_archive(bad)  # type: ignore[arg-type]
+        assert isinstance(s, CarSetup)
+        assert s.tunables() == {}
+
+
 def test_from_spinners_live_read_path():
     spinners = [
         {"name": "FRONT_BIAS", "value": 62, "min": 50, "max": 70, "step": 1},

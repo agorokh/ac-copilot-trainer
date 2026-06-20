@@ -250,6 +250,14 @@ def test_balance_routes_low_speed_saturation_to_mechanical():
     assert f.lever_class == MECHANICAL
 
 
+def test_balance_negative_grip_ceiling_is_ignored():
+    # a nonsensical negative ceiling must not produce a negative grip fraction / misroute
+    sigs = [_sig(index=0, min_speed_kmh=80.0), _sig(index=1, min_speed_kmh=170.0)]
+    f = analyze_balance(LapTrace([], [], [], [], [], [], [], [], []), sigs, grip_ceiling_g=-1.0)
+    assert f.low_band_grip_used is None and f.high_band_grip_used is None
+    assert f.verdict in ("balanced", "insufficient")
+
+
 def test_balance_not_grip_limited_is_technique():
     # grip in hand in BOTH bands -> the deficit is technique, not balance
     sigs = [

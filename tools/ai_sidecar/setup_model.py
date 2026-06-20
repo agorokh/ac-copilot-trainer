@@ -438,7 +438,9 @@ def from_snapshot(
 
 def from_lap_archive(lap_archive: dict[str, Any]) -> CarSetup:
     """Extract the :class:`CarSetup` from a lap-archive dict (its ``setup.snapshot``)."""
-    setup = lap_archive.get("setup") if isinstance(lap_archive, dict) else None
+    if not isinstance(lap_archive, dict):
+        return CarSetup()
+    setup = lap_archive.get("setup")
     snapshot = setup.get("snapshot") if isinstance(setup, dict) else None
     if not isinstance(snapshot, dict):
         snapshot = {}

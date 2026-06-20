@@ -190,3 +190,17 @@ def test_real_fixture_too_short_yields_no_corners():
     # 3-sample fixture: loader works, but too short to segment corners
     assert len(lap) == 3
     assert segment_corners(lap) == []
+
+
+def test_spline_derived_from_positions_when_channel_missing():
+    arch = _make_corner_archive()
+    fi = arch["trace"]["fields"].index("spline")
+    arch["trace"]["fields"].pop(fi)
+    for row in arch["trace"]["samples"]:
+        row.pop(fi)
+    lap = lap_trace_from_archive(arch)
+    # derived from cumulative distance -> monotone 0..1, not zero-filled
+    assert lap.spline[0] == pytest.approx(0.0)
+    assert lap.spline[-1] == pytest.approx(1.0)
+    assert all(lap.spline[i] <= lap.spline[i + 1] + 1e-9 for i in range(len(lap) - 1))
+    assert max(lap.spline) - min(lap.spline) > 0.5  # not collapsed

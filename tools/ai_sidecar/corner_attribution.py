@@ -159,7 +159,7 @@ def analyze_balance(
     dmap = {d.index: d for d in (deltas or [])}
 
     def grip_used(group: list[CornerSignature]) -> float | None:
-        if not group or not grip_ceiling_g:
+        if not group or grip_ceiling_g is None or grip_ceiling_g <= 0:
             return None
         return round(sum(s.peak_lat_g for s in group) / len(group) / grip_ceiling_g, 3)
 
@@ -297,10 +297,10 @@ def attribute_corner(
         rules = RULES
     out: list[Attribution] = []
     for rule in rules:
-        try:
-            conf = float(rule.test(ctx))
-        except Exception:  # a rule must never break the debrief
-            conf = 0.0
+        # Let a rule's exceptions propagate (repo Rule 14: explicit errors over silent fallbacks).
+        # Rules are pure functions over a well-typed CornerContext; a raise is a defect to fix, not
+        # to hide behind a 0.0 confidence that would mask an incomplete diagnosis.
+        conf = float(rule.test(ctx))
         if conf < min_confidence:
             continue
         have_channels = bool(rule.channels_needed) and all(
@@ -455,6 +455,20 @@ def _exit_setup_causes(ctx: CornerContext) -> list[str]:
     return out
 
 
+def _braking_setup_causes(ctx: CornerContext) -> list[str]:
+    out = [
+        "Investigate brake bias + brake modulation. Archive localizes the loss to the braking "
+        "zone but CANNOT prove which axle locks — that needs per-wheel slip.",
+    ]
+    bias = ctx.setup.brake_bias_pct
+    if bias is None:
+        out.append("Brake bias not in this setup snapshot.")
+    else:
+        note = " (a rear-engine 911 GT3 R usually wants ~50-56%)" if bias > 58 else ""
+        out.append(f"FRONT_BIAS is {bias:.0f}% front{note}.")
+    return out
+
+
 RULES: list[DiagnosticRule] = [
     DiagnosticRule(
         key="grip_limited",
@@ -504,19 +518,7 @@ RULES: list[DiagnosticRule] = [
         tier="A",
         channels_needed=("wheelSlip",),  # per-wheel slip attributes the lockup to an axle
         test=_r_braking_phase_loss,
-        setup_causes=lambda c: [
-            "Investigate brake bias + brake modulation. Archive localizes the loss to the braking "
-            "zone but CANNOT prove which axle locks — that needs per-wheel slip.",
-            f"FRONT_BIAS is {c.setup.brake_bias_pct:.0f}% front"
-            + (
-                " (a rear-engine 911 GT3 R usually wants ~50-56%)"
-                if c.setup.brake_bias_pct and c.setup.brake_bias_pct > 58
-                else ""
-            )
-            + "."
-            if c.setup.brake_bias_pct is not None
-            else "Brake bias not in this snapshot.",
-        ],
+        setup_causes=_braking_setup_causes,
         technique_causes=(
             "Threshold-brake: press harder at the top of the zone, then trail off smoothly.",
         ),
