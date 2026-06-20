@@ -274,8 +274,18 @@ def load_track_widths(path: str | Path) -> tuple[list[float], list[float]]:
     bound the min-curvature optimizer so the line stays on track (AC-valid) by construction.
     """
     data = Path(path).read_bytes()
+    if len(data) < 20:
+        raise ValueError(f"{path} is too small to be a fast_lane.ai file")
     _ver, count, _lap, _samp = struct.unpack_from("<4i", data, 0)
+    if count <= 0:
+        raise ValueError(f"{path} has invalid AI point count: {count}")
     es = 16 + count * 20 + 4
+    needed = es + count * 72
+    if len(data) < needed:
+        raise ValueError(
+            f"{path} is truncated: expected at least {needed} bytes for {count} AI extras, "
+            f"got {len(data)}"
+        )
     left: list[float] = []
     right: list[float] = []
     for i in range(count):
@@ -318,6 +328,15 @@ def min_curvature_line(
     the stiff 4th-order operator stable. Returns (optimized plane points, alpha offsets).
     """
     n = len(plane)
+    if n < 3:
+        raise ValueError("min_curvature_line requires at least 3 cyclic points")
+    if len(side_left) != n or len(side_right) != n:
+        raise ValueError(
+            "corridor width arrays must match plane length: "
+            f"plane={n}, side_left={len(side_left)}, side_right={len(side_right)}"
+        )
+    if margin_m < 0:
+        raise ValueError("margin_m must be non-negative")
     nrm = _unit_normals(plane)
     kref = signed_curvature_profile(plane, smooth_win=1, span=2)
     ds = (sum(seg_lengths(plane)) / n) or 1.0

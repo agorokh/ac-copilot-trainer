@@ -352,7 +352,8 @@ def test_min_curvature_reduces_perturbation_and_respects_corridor():
     k0 = sum(x * x for x in curvature_profile(base, smooth_win=1, span=2))
     opt, alpha = min_curvature_line(base, sl, sr, margin_m=0.5, iters=1500, damp=0.5)
     k1 = sum(x * x for x in curvature_profile(opt, smooth_win=1, span=2))
-    assert k1 <= k0 + 1e-9  # curvature not increased (the bump is smoothed)
+    assert k1 < k0 - 1e-6  # curvature is reduced; no-op output should fail
+    assert max(abs(a) for a in alpha) > 1e-6
     # every offset stays inside the corridor (margin off each edge)
     assert all(-(sr[i] - 0.5) - 1e-6 <= alpha[i] <= (sl[i] - 0.5) + 1e-6 for i in range(n))
     assert len(opt) == n
