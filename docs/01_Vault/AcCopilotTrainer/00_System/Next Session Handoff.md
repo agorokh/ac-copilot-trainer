@@ -32,7 +32,43 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-20 FINAL — #244 FRONTIER closed: verified ceiling 82.7s (human +8s); ~70s grip-bound-unreachable, aero LIVE-DISPROVEN)
+## Resume here (2026-06-20 — SETUP-AWARE PRO COACHING shipped; #259 merged; #244 closed)
+
+**New capability (#264 → PR [#265](https://github.com/agorokh/ac-copilot-trainer/pull/265)):** the
+harness can now comprehend a car setup and attribute a corner's pace to **setup vs technique** — the
+pro-race-engineer brain. Four stdlib-only modules under `tools/ai_sidecar/`:
+- `setup_model.py` — typed semantic `CarSetup` (brake bias %, ABS/TC, pressures+splits, ARB balance,
+  wings, diff, compound) from `.ini` / `setup.snapshot` / live `ac.getSetupSpinners()`.
+- `setup_knowledge.py` — **adversarially-verified** GT3 knowledge (17 params; `speed_dependence`
+  AERO/MECHANICAL/NEUTRAL + `car_dependent` flags; Tier-B live-channel map).
+- `lap_dynamics.py` — lat g = v²·κ, long g = dv/dt from the trace; corner segmentation; signatures.
+- `corner_attribution.py` — `compare_laps`, `analyze_balance` (the #1 discriminator: speed-bin a grip
+  limitation → aero vs mechanical lever class), diagnostic engine (setup vs technique). `coach_report.py`
+  renders the debrief + CLI.
+
+**Verified physics (red-team-corrected, do NOT simplify away):** aero is speed-gated (∝v²),
+mechanical is speed-flat → grip *saturation* in high-speed corners=aero, low-speed=mechanical; rake
+direction is car-dependent (prefer wings); the rear-engine 911 GT3 R wants LOWER front bias (~50-56%).
+**Honest data split:** archive trace (`spline/speed/throttle/brake/steer/gear/position`) localizes a
+loss to a phase+speed band; axle-lockup (brake bias) / pressure / TC attributions are *suspicions*
+until live channels are supplied — then verdicts. Built on adversarially-verified research:
+[`03_Investigations/setup-aware-coaching-2026-06-20.md`](../03_Investigations/setup-aware-coaching-2026-06-20.md).
+
+**Verified on real Magione geometry** (fast_lane.ai 1754 pts, GGV 77.84s): student-vs-optimal debrief
+correctly split "carried too little apex speed → TECHNIQUE" from "at the grip limit → SETUP". 51 tests.
+
+**Next:** (a) **#266 — persist `wheelSlip[4]` + `wheelAngularSpeed[4]`** to lap archives (research's #1
+lever: promotes 8/14 rules suspicion→verdict; the live harness already reads them). (b) close the loop
+to `setup_optimizer.suggest_next_setup` + live `ac.setSetupSpinnerValue` (auto-apply a suggested change
+and re-test — EPIC #86 surface). (c) coach a REAL captured lap on the rig once #266 lands the channels.
+
+**Merge state:** #259 (Stage-4 line + ceiling analysis) MERGED (squash `8cd3112`); integrity caveat
+#263 MERGED (aero knob live-disproven, AiPointExtra version-fragile). PR #265 (setup coaching) open,
+51 tests, ruff-format clean — merge when CI/bots green. Rig left clean (surfaces stock, AC stopped).
+
+---
+
+## Prior (2026-06-20 FINAL — #244 FRONTIER closed: verified ceiling 82.7s (human +8s); ~70s grip-bound-unreachable, aero LIVE-DISPROVEN)
 
 **Investigation CLOSED with the empirical ceiling found.** After unblocking the rig (Steam
 elevation-mismatch fix + **minimize windows so CM auto-start clicks land** — the foreground-steal
