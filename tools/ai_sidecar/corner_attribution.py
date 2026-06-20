@@ -94,12 +94,19 @@ def compare_laps(
         r_t = _interp_time(reference, hi) - _interp_time(reference, lo)
         c_min = _min_speed_in_window(candidate, lo, hi)
         r_min = _min_speed_in_window(reference, lo, hi)
-        out.append(CornerDelta(
-            index=idx, spline_lo=round(lo, 4), spline_hi=round(hi, 4),
-            cand_time_s=round(c_t, 3), ref_time_s=round(r_t, 3), delta_s=round(c_t - r_t, 3),
-            cand_min_kmh=round(c_min, 1), ref_min_kmh=round(r_min, 1),
-            min_speed_delta_kmh=round(c_min - r_min, 1),
-        ))
+        out.append(
+            CornerDelta(
+                index=idx,
+                spline_lo=round(lo, 4),
+                spline_hi=round(hi, 4),
+                cand_time_s=round(c_t, 3),
+                ref_time_s=round(r_t, 3),
+                delta_s=round(c_t - r_t, 3),
+                cand_min_kmh=round(c_min, 1),
+                ref_min_kmh=round(r_min, 1),
+                min_speed_delta_kmh=round(c_min - r_min, 1),
+            )
+        )
     return out
 
 
@@ -168,8 +175,16 @@ def analyze_balance(
     )
     if not low or not high:
         return BalanceFinding(
-            "insufficient", "", lu, hu, lt, ht, len(low), len(high),
-            "Need corners in both speed bands to separate aero from mechanical.", caveat,
+            "insufficient",
+            "",
+            lu,
+            hu,
+            lt,
+            ht,
+            len(low),
+            len(high),
+            "Need corners in both speed bands to separate aero from mechanical.",
+            caveat,
         )
 
     def finding(verdict: str, lever: str, coaching: str) -> BalanceFinding:
@@ -180,14 +195,16 @@ def analyze_balance(
         low_sat, high_sat = lu >= saturation, hu >= saturation
         if high_sat and not low_sat:
             return finding(
-                "aero_limited_high_speed", AERO,
+                "aero_limited_high_speed",
+                AERO,
                 "Car is grip-limited in HIGH-speed corners (low-speed has grip in hand) → the "
                 "limit is downforce-set. Use wings for an unambiguous shift (front wing up cuts "
                 "high-speed understeer; rear wing up cuts high-speed snap); rake is car-dependent.",
             )
         if low_sat and not high_sat:
             return finding(
-                "mechanical_all_speed", MECHANICAL,
+                "mechanical_all_speed",
+                MECHANICAL,
                 "Car is grip-limited in LOW-speed corners (aero negligible) → the limit is "
                 "mechanical. If you're AT the limit there, use ARB/springs/diff (softer front cuts "
                 "understeer; softer rear aids rotation/exit) — not wings. If you're NOT at the "
@@ -195,12 +212,14 @@ def analyze_balance(
             )
         if low_sat and high_sat:
             return finding(
-                "grip_limited_all_speed", "",
+                "grip_limited_all_speed",
+                "",
                 "Car reaches its grip limit across the speed range — well balanced; gains need "
                 "more overall grip (tyres/compound/pressures) or driving closer to the limit.",
             )
         return finding(
-            "not_grip_limited", "",
+            "not_grip_limited",
+            "",
             "Grip is in hand in both speed bands — the time is in TECHNIQUE, not balance (carry "
             "more speed / brake later / get to power sooner — see per-corner notes).",
         )
@@ -208,16 +227,24 @@ def analyze_balance(
     # fallback (no grip ceiling): use time-loss localization only, clearly hedged
     if ht is not None and lt is not None:
         if ht > lt + 0.05:
-            return finding("time_lost_high_speed", AERO,
-                           "Most time lost in HIGH-speed corners (no grip ceiling given, so this "
-                           "is localization, not a grip-limit verdict). Suspect aero if at limit.")
+            return finding(
+                "time_lost_high_speed",
+                AERO,
+                "Most time lost in HIGH-speed corners (no grip ceiling given, so this "
+                "is localization, not a grip-limit verdict). Suspect aero if at limit.",
+            )
         if lt > ht + 0.05:
-            return finding("time_lost_low_speed", MECHANICAL,
-                           "Most time lost in LOW-speed corners (no grip ceiling given). Suspect "
-                           "mechanical/technique; supply a grip ceiling to separate them.")
-    return finding("balanced", "",
-                   "No clear speed-gating of the deficit. Supply a grip ceiling for a grip-limit "
-                   "verdict.")
+            return finding(
+                "time_lost_low_speed",
+                MECHANICAL,
+                "Most time lost in LOW-speed corners (no grip ceiling given). Suspect "
+                "mechanical/technique; supply a grip ceiling to separate them.",
+            )
+    return finding(
+        "balanced",
+        "",
+        "No clear speed-gating of the deficit. Supply a grip ceiling for a grip-limit verdict.",
+    )
 
 
 # --- diagnostic engine ------------------------------------------------------
@@ -280,12 +307,19 @@ def attribute_corner(
             c in ctx.extra for c in rule.channels_needed
         )
         advisory = bool(rule.channels_needed) and not have_channels
-        out.append(Attribution(
-            key=rule.key, symptom=rule.symptom, phase=rule.phase, tier=rule.tier,
-            confidence=round(min(1.0, conf), 3),
-            setup_causes=rule.setup_causes(ctx), technique_causes=list(rule.technique_causes),
-            coaching=rule.coaching(ctx), advisory=advisory,
-        ))
+        out.append(
+            Attribution(
+                key=rule.key,
+                symptom=rule.symptom,
+                phase=rule.phase,
+                tier=rule.tier,
+                confidence=round(min(1.0, conf), 3),
+                setup_causes=rule.setup_causes(ctx),
+                technique_causes=list(rule.technique_causes),
+                coaching=rule.coaching(ctx),
+                advisory=advisory,
+            )
+        )
     out.sort(key=lambda a: a.confidence, reverse=True)
     return out
 
@@ -319,15 +353,23 @@ def coach_lap(
     out: list[CornerCoaching] = []
     for sig in sigs:
         ctx = CornerContext(
-            sig=sig, setup=setup, delta=by_idx.get(sig.index), grip_ceiling_g=grip_ceiling_g,
+            sig=sig,
+            setup=setup,
+            delta=by_idx.get(sig.index),
+            grip_ceiling_g=grip_ceiling_g,
             extra=(extra_by_corner or {}).get(sig.index, {}),
         )
         attrs = attribute_corner(ctx, rules)
-        out.append(CornerCoaching(
-            index=sig.index, apex_spline=sig.apex_spline, min_speed_kmh=round(sig.min_speed_kmh, 1),
-            delta_s=ctx.delta.delta_s if ctx.delta else None,
-            headline=_headline(ctx, attrs), attributions=attrs,
-        ))
+        out.append(
+            CornerCoaching(
+                index=sig.index,
+                apex_spline=sig.apex_spline,
+                min_speed_kmh=round(sig.min_speed_kmh, 1),
+                delta_s=ctx.delta.delta_s if ctx.delta else None,
+                headline=_headline(ctx, attrs),
+                attributions=attrs,
+            )
+        )
     return out
 
 
@@ -424,8 +466,11 @@ RULES: list[DiagnosticRule] = [
         setup_causes=lambda c: [
             "Mechanical/aero grip is the ceiling — gains come from SETUP, not the line:",
             "tyre pressures toward the optimal hot window, a softer compound"
-            + (f" (current idx {int(c.setup.compound_index)})"
-               if c.setup.compound_index is not None else "")
+            + (
+                f" (current idx {int(c.setup.compound_index)})"
+                if c.setup.compound_index is not None
+                else ""
+            )
             + ", or more wing for fast corners.",
         ],
         technique_causes=("Driver is already using the available grip — little to gain here.",),
@@ -447,7 +492,9 @@ RULES: list[DiagnosticRule] = [
         ),
         coaching=lambda c: (
             f"Apex {(-c.delta.min_speed_delta_kmh):.0f} km/h down with grip in hand — brake later "
-            "and carry more speed in." if c.delta else "Grip available at apex — carry more speed."
+            "and carry more speed in."
+            if c.delta
+            else "Grip available at apex — carry more speed."
         ),
     ),
     DiagnosticRule(
@@ -461,9 +508,14 @@ RULES: list[DiagnosticRule] = [
             "Investigate brake bias + brake modulation. Archive localizes the loss to the braking "
             "zone but CANNOT prove which axle locks — that needs per-wheel slip.",
             f"FRONT_BIAS is {c.setup.brake_bias_pct:.0f}% front"
-            + (" (a rear-engine 911 GT3 R usually wants ~50-56%)"
-               if c.setup.brake_bias_pct and c.setup.brake_bias_pct > 58 else "")
-            + "." if c.setup.brake_bias_pct is not None else "Brake bias not in this snapshot.",
+            + (
+                " (a rear-engine 911 GT3 R usually wants ~50-56%)"
+                if c.setup.brake_bias_pct and c.setup.brake_bias_pct > 58
+                else ""
+            )
+            + "."
+            if c.setup.brake_bias_pct is not None
+            else "Brake bias not in this snapshot.",
         ],
         technique_causes=(
             "Threshold-brake: press harder at the top of the zone, then trail off smoothly.",

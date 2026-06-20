@@ -68,8 +68,18 @@ def _make_corner_archive(
     spline = [(ds * i) / total for i in range(n)]
     fields = ["spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz"]
     samples = [
-        [spline[i], v[i] * 3.6, t_ms[i], throttle[i], brake[i], steer[i],
-         gear[i], xs[i], 0.0, zs[i]]
+        [
+            spline[i],
+            v[i] * 3.6,
+            t_ms[i],
+            throttle[i],
+            brake[i],
+            steer[i],
+            gear[i],
+            xs[i],
+            0.0,
+            zs[i],
+        ]
         for i in range(n)
     ]
     return {

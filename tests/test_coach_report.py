@@ -39,15 +39,30 @@ def _corner_archive(*, degrade: float = 0.0) -> dict:
         t_ms.append(t_ms[-1] + ds / max(0.5, 0.5 * (v[i] + v[i - 1])) * 1000.0)
     total = ds * (n - 1)
     spline = [(ds * i) / total for i in range(n)]
-    samples = [[spline[i], v[i] * 3.6, t_ms[i], throttle[i], brake[i], steer[i],
-                4, xs[i], 0.0, zs[i]] for i in range(n)]
+    samples = [
+        [spline[i], v[i] * 3.6, t_ms[i], throttle[i], brake[i], steer[i], 4, xs[i], 0.0, zs[i]]
+        for i in range(n)
+    ]
     return {
         "car": {"id": "ks_porsche_911_gt3_r_2016"},
         "track": {"id": "magione", "lengthM": total},
         "lap": {"lap_ms": int(t_ms[-1]), "is_valid": True},
         "setup": {"snapshot": {"FRONT_BIAS.VALUE": "66", "TRACTION_CONTROL.VALUE": "4"}},
-        "trace": {"fields": ["spline", "speed", "eMs", "throttle", "brake", "steer", "gear",
-                             "px", "py", "pz"], "samples": samples},
+        "trace": {
+            "fields": [
+                "spline",
+                "speed",
+                "eMs",
+                "throttle",
+                "brake",
+                "steer",
+                "gear",
+                "px",
+                "py",
+                "pz",
+            ],
+            "samples": samples,
+        },
     }
 
 

@@ -23,13 +23,15 @@ from tools.ai_sidecar.setup_knowledge import (
 )
 from tools.ai_sidecar.setup_model import from_snapshot
 
-SETUP = from_snapshot({
-    "FRONT_BIAS.VALUE": "66",
-    "ABS.VALUE": "3",
-    "TRACTION_CONTROL.VALUE": "4",
-    "TYRES.VALUE": "1",
-    "PRESSURE_LF.VALUE": "27.5",
-})
+SETUP = from_snapshot(
+    {
+        "FRONT_BIAS.VALUE": "66",
+        "ABS.VALUE": "3",
+        "TRACTION_CONTROL.VALUE": "4",
+        "TYRES.VALUE": "1",
+        "PRESSURE_LF.VALUE": "27.5",
+    }
+)
 
 
 # --- setup_knowledge --------------------------------------------------------
@@ -61,10 +63,24 @@ def test_tier_b_channels_name_the_key_unlocks():
 # --- helpers ----------------------------------------------------------------
 def _sig(**kw) -> CornerSignature:
     base = dict(
-        index=0, entry_i=0, apex_i=5, exit_i=10, apex_spline=0.5, min_speed_kmh=100.0,
-        entry_speed_kmh=180.0, exit_speed_kmh=150.0, peak_lat_g=1.2, peak_brake_g=1.0,
-        peak_accel_g=0.5, brake_point_spline=0.40, brake_to_apex_m=60.0, throttle_on_spline=0.55,
-        apex_to_throttle_m=10.0, trail_brake_frac=0.2, max_abs_steer=0.4, direction="right",
+        index=0,
+        entry_i=0,
+        apex_i=5,
+        exit_i=10,
+        apex_spline=0.5,
+        min_speed_kmh=100.0,
+        entry_speed_kmh=180.0,
+        exit_speed_kmh=150.0,
+        peak_lat_g=1.2,
+        peak_brake_g=1.0,
+        peak_accel_g=0.5,
+        brake_point_spline=0.40,
+        brake_to_apex_m=60.0,
+        throttle_on_spline=0.55,
+        apex_to_throttle_m=10.0,
+        trail_brake_frac=0.2,
+        max_abs_steer=0.4,
+        direction="right",
     )
     base.update(kw)
     return CornerSignature(**base)
@@ -72,8 +88,15 @@ def _sig(**kw) -> CornerSignature:
 
 def _delta(**kw) -> CornerDelta:
     base = dict(
-        index=0, spline_lo=0.4, spline_hi=0.6, cand_time_s=2.5, ref_time_s=2.0, delta_s=0.5,
-        cand_min_kmh=92.0, ref_min_kmh=100.0, min_speed_delta_kmh=-8.0,
+        index=0,
+        spline_lo=0.4,
+        spline_hi=0.6,
+        cand_time_s=2.5,
+        ref_time_s=2.0,
+        delta_s=0.5,
+        cand_min_kmh=92.0,
+        ref_min_kmh=100.0,
+        min_speed_delta_kmh=-8.0,
     )
     base.update(kw)
     return CornerDelta(**base)
@@ -95,8 +118,17 @@ def test_compare_laps_localizes_lost_time():
     cand_v = [40.0 if 40 <= i <= 60 else 50.0 for i in range(n)]
 
     def mk(t, vv):
-        return LapTrace(spline=spline, t_s=t, v_ms=vv, brake=[0.0] * n, throttle=[0.0] * n,
-                        steer=[0.0] * n, gear=[4] * n, x=x, z=z)
+        return LapTrace(
+            spline=spline,
+            t_s=t,
+            v_ms=vv,
+            brake=[0.0] * n,
+            throttle=[0.0] * n,
+            steer=[0.0] * n,
+            gear=[4] * n,
+            x=x,
+            z=z,
+        )
 
     deltas = compare_laps(mk(cand_t, cand_v), mk(ref_t, v), corners=[(40, 50, 60)])
     assert len(deltas) == 1
@@ -115,15 +147,23 @@ def test_grip_limited_fires_and_is_advisory_without_pressure():
 
 
 def test_grip_limited_confirmed_with_live_pressure():
-    ctx = CornerContext(sig=_sig(peak_lat_g=1.5), setup=SETUP, grip_ceiling_g=1.5,
-                        extra={"wheelsPressure": [28, 28, 27, 27]})
+    ctx = CornerContext(
+        sig=_sig(peak_lat_g=1.5),
+        setup=SETUP,
+        grip_ceiling_g=1.5,
+        extra={"wheelsPressure": [28, 28, 27, 27]},
+    )
     grip = next(a for a in attribute_corner(ctx) if a.key == "grip_limited")
     assert grip.advisory is False  # live pressure present -> verdict
 
 
 def test_entry_speed_left_is_technique_verdict():
-    ctx = CornerContext(sig=_sig(peak_lat_g=1.1), setup=SETUP, grip_ceiling_g=1.5,
-                        delta=_delta(min_speed_delta_kmh=-8.0))
+    ctx = CornerContext(
+        sig=_sig(peak_lat_g=1.1),
+        setup=SETUP,
+        grip_ceiling_g=1.5,
+        delta=_delta(min_speed_delta_kmh=-8.0),
+    )
     attrs = attribute_corner(ctx)
     esl = next(a for a in attrs if a.key == "entry_speed_left")
     assert esl.advisory is False  # pure kinematics, no live channel needed
@@ -132,8 +172,12 @@ def test_entry_speed_left_is_technique_verdict():
 
 def test_grip_limited_suppresses_entry_speed_when_at_limit():
     # at the grip limit, "carry more speed" is wrong advice -> entry_speed_left must not fire
-    ctx = CornerContext(sig=_sig(peak_lat_g=1.5), setup=SETUP, grip_ceiling_g=1.5,
-                        delta=_delta(min_speed_delta_kmh=-8.0))
+    ctx = CornerContext(
+        sig=_sig(peak_lat_g=1.5),
+        setup=SETUP,
+        grip_ceiling_g=1.5,
+        delta=_delta(min_speed_delta_kmh=-8.0),
+    )
     keys = {a.key for a in attribute_corner(ctx)}
     assert "grip_limited" in keys
     assert "entry_speed_left" not in keys
@@ -142,20 +186,32 @@ def test_grip_limited_suppresses_entry_speed_when_at_limit():
 def test_braking_phase_loss_suspected_then_confirmed_with_slip():
     sig = _sig(peak_brake_g=1.1, brake_point_spline=0.40)
     d = _delta(delta_s=0.3)
-    susp = next(a for a in attribute_corner(CornerContext(sig=sig, setup=SETUP, delta=d))
-               if a.key == "braking_phase_loss")
+    susp = next(
+        a
+        for a in attribute_corner(CornerContext(sig=sig, setup=SETUP, delta=d))
+        if a.key == "braking_phase_loss"
+    )
     assert susp.advisory is True
-    conf = next(a for a in attribute_corner(
-        CornerContext(sig=sig, setup=SETUP, delta=d, extra={"wheelSlip": [0.1, 0.1, 0.02, 0.02]}))
-        if a.key == "braking_phase_loss")
+    conf = next(
+        a
+        for a in attribute_corner(
+            CornerContext(
+                sig=sig, setup=SETUP, delta=d, extra={"wheelSlip": [0.1, 0.1, 0.02, 0.02]}
+            )
+        )
+        if a.key == "braking_phase_loss"
+    )
     assert conf.advisory is False
 
 
 def test_braking_phase_loss_mentions_911_bias_window():
     sig = _sig(peak_brake_g=1.1)
     d = _delta(delta_s=0.3)
-    a = next(x for x in attribute_corner(CornerContext(sig=sig, setup=SETUP, delta=d))
-             if x.key == "braking_phase_loss")
+    a = next(
+        x
+        for x in attribute_corner(CornerContext(sig=sig, setup=SETUP, delta=d))
+        if x.key == "braking_phase_loss"
+    )
     assert any("50-56" in c for c in a.setup_causes)  # 66% front flagged vs 911 window
 
 
@@ -171,7 +227,7 @@ def test_exit_traction_leads_with_technique_and_diff():
 def test_balance_routes_high_speed_saturation_to_aero():
     # grip-limited (saturated) in HIGH-speed corners, grip in hand at low speed -> aero
     sigs = [
-        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.1),   # low-speed: grip in hand
+        _sig(index=0, min_speed_kmh=80.0, peak_lat_g=1.1),  # low-speed: grip in hand
         _sig(index=1, min_speed_kmh=85.0, peak_lat_g=1.05),
         _sig(index=2, min_speed_kmh=170.0, peak_lat_g=1.5),  # high-speed: at the limit -> aero
         _sig(index=3, min_speed_kmh=165.0, peak_lat_g=1.48),
@@ -212,8 +268,9 @@ def test_balance_insufficient_when_one_band_missing():
 
 
 # --- coach_lap end-to-end ---------------------------------------------------
-def _corner_lap_trace(radius=30.0, ds=2.0, n_pre=40, n_arc=30, n_post=40,
-                      v_straight=55.0, v_apex=25.0) -> LapTrace:
+def _corner_lap_trace(
+    radius=30.0, ds=2.0, n_pre=40, n_arc=30, n_post=40, v_straight=55.0, v_apex=25.0
+) -> LapTrace:
     n = n_pre + n_arc + n_post
     kappa = [0.0] * n_pre + [1.0 / radius] * n_arc + [0.0] * n_post
     theta, x, z = 0.0, 0.0, 0.0
@@ -243,8 +300,17 @@ def _corner_lap_trace(radius=30.0, ds=2.0, n_pre=40, n_arc=30, n_post=40,
     for i in range(1, n):
         t_s.append(t_s[-1] + ds / max(0.5, 0.5 * (v[i] + v[i - 1])))
     spline = [(ds * i) / (ds * (n - 1)) for i in range(n)]
-    return LapTrace(spline=spline, t_s=t_s, v_ms=v, brake=brake, throttle=throttle, steer=steer,
-                    gear=[4] * n, x=xs, z=zs)
+    return LapTrace(
+        spline=spline,
+        t_s=t_s,
+        v_ms=v,
+        brake=brake,
+        throttle=throttle,
+        steer=steer,
+        gear=[4] * n,
+        x=xs,
+        z=zs,
+    )
 
 
 def test_coach_lap_produces_per_corner_verdicts():

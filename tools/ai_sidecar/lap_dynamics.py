@@ -238,14 +238,23 @@ def corner_signatures(
         corners = segment_corners(lap)
     sigs: list[CornerSignature] = []
     for idx, (entry_i, apex_i, exit_i) in enumerate(corners):
-        sigs.append(_signature(lap, idx, entry_i, apex_i, exit_i,
-                               brake_thresh, throttle_thresh, steer_thresh))
+        sigs.append(
+            _signature(
+                lap, idx, entry_i, apex_i, exit_i, brake_thresh, throttle_thresh, steer_thresh
+            )
+        )
     return sigs
 
 
 def _signature(
-    lap: LapTrace, idx: int, entry_i: int, apex_i: int, exit_i: int,
-    brake_thresh: float, throttle_thresh: float, steer_thresh: float,
+    lap: LapTrace,
+    idx: int,
+    entry_i: int,
+    apex_i: int,
+    exit_i: int,
+    brake_thresh: float,
+    throttle_thresh: float,
+    steer_thresh: float,
 ) -> CornerSignature:
     seg = range(entry_i, exit_i + 1)
     peak_lat = max(abs(lap.lat_g[k]) for k in seg)
@@ -264,8 +273,13 @@ def _signature(
     steers = [lap.steer[k] for k in seg]
     max_abs_steer = max((abs(s) for s in steers), default=0.0)
     mean_steer = sum(steers) / max(1, len(steers))
-    direction = "right" if mean_steer > steer_thresh else "left" if mean_steer < -steer_thresh \
+    direction = (
+        "right"
+        if mean_steer > steer_thresh
+        else "left"
+        if mean_steer < -steer_thresh
         else "straightish"
+    )
     return CornerSignature(
         index=idx,
         entry_i=entry_i,

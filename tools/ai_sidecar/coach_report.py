@@ -41,8 +41,10 @@ def format_debrief(
         out.extend("  " + line for line in setup.human_summary())
     if balance is not None:
         out.append("\nBalance (aero vs mechanical):")
-        out.append(f"  verdict: {balance.verdict}"
-                   + (f" → {balance.lever_class} levers" if balance.lever_class else ""))
+        out.append(
+            f"  verdict: {balance.verdict}"
+            + (f" → {balance.lever_class} levers" if balance.lever_class else "")
+        )
         out.append(f"  {balance.coaching}")
         gu = []
         if balance.low_band_grip_used is not None:
@@ -54,13 +56,19 @@ def format_debrief(
         out.append(f"  caveat: {balance.caveat}")
     lost = [c for c in corners if c.delta_s is not None and c.delta_s > 0.03]
     total_lost = sum(c.delta_s for c in lost if c.delta_s)
-    out.append(f"\nPer-corner ({len(corners)} corners"
-               + (f", {len(lost)} losing time, {total_lost:.2f}s total" if lost else "") + "):")
+    out.append(
+        f"\nPer-corner ({len(corners)} corners"
+        + (f", {len(lost)} losing time, {total_lost:.2f}s total" if lost else "")
+        + "):"
+    )
     for c in corners:
         out.append("  " + c.headline)
         for a in c.attributions[:2]:
-            kind = "SETUP" if a.setup_causes and not a.technique_causes else (
-                "TECHNIQUE" if a.technique_causes and not a.setup_causes else "SETUP+TECH")
+            kind = (
+                "SETUP"
+                if a.setup_causes and not a.technique_causes
+                else ("TECHNIQUE" if a.technique_causes and not a.setup_causes else "SETUP+TECH")
+            )
             flag = " [suspected]" if a.advisory else ""
             out.append(f"      - [{kind}{flag}] {a.symptom} (conf {a.confidence:.0%})")
     return "\n".join(out)
@@ -85,8 +93,12 @@ def build_debrief(
     sigs = corner_signatures(lap, segment_corners(lap))
     deltas = compare_laps(lap, ref) if ref is not None else None
     balance = analyze_balance(lap, sigs, deltas=deltas, grip_ceiling_g=grip_ceiling_g)
-    return format_debrief(report, balance, setup,
-                          title=f"Coaching debrief — {lap.car_id or '?'} @ {lap.track_id or '?'}")
+    return format_debrief(
+        report,
+        balance,
+        setup,
+        title=f"Coaching debrief — {lap.car_id or '?'} @ {lap.track_id or '?'}",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,13 +106,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("lap", help="lap archive JSON to coach")
     p.add_argument("--reference", help="reference lap archive JSON (e.g. a faster lap)")
     p.add_argument("--setup", help="setup .ini to use instead of the lap's snapshot")
-    p.add_argument("--grip-ceiling-g", type=float, default=None,
-                   help="lateral grip ceiling in g (separates grip-limited from technique)")
+    p.add_argument(
+        "--grip-ceiling-g",
+        type=float,
+        default=None,
+        help="lateral grip ceiling in g (separates grip-limited from technique)",
+    )
     args = p.parse_args(argv)
     setup = load_setup_file(args.setup) if args.setup else None
     ref = _load_archive(args.reference) if args.reference else None
-    print(build_debrief(_load_archive(args.lap), reference_archive=ref, setup=setup,
-                        grip_ceiling_g=args.grip_ceiling_g))
+    print(
+        build_debrief(
+            _load_archive(args.lap),
+            reference_archive=ref,
+            setup=setup,
+            grip_ceiling_g=args.grip_ceiling_g,
+        )
+    )
     return 0
 
 
