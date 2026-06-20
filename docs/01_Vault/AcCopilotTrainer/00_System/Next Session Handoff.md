@@ -32,7 +32,28 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-20 — SETUP-AWARE PRO COACHING shipped; #259 merged; #244 closed)
+## Resume here (2026-06-20 — CONFIRMED setup attribution shipped (#268); coaching brain complete)
+
+**#268 MERGED — confirmed axle/wheelspin attribution.** The coaching engine now CONSUMES optional
+per-wheel channels (`wheelAngularSpeed_{fl,fr,rl,rr}` / `wheelSlip_{...}` in the trace) and upgrades
+brake-bias / exit-traction from a *suspicion* to a **confirmed verdict** naming the cause: e.g.
+"FRONT axle locks first (slip −0.18) → bias 66% too forward (911 wants ~50-56%); move it rearward"
+and "rear wheelspin (slip 0.22) → raise TC / reduce DIFF_POWER". Keyed on the COMPUTED signal
+(`lock_axle`/`wheelspin`), so confirmation never outruns the data; with no per-wheel data it stays an
+honest archive suspicion. `tools/ai_sidecar/corner_attribution.py::corner_live_signals` + `coach_lap`
+auto-inject. 62 coaching tests.
+
+**ONLY remaining piece — [#266](https://github.com/agorokh/ac-copilot-trainer/issues/266) capture half (RIG-VERIFIED):** write `wheelAngularSpeed`/`wheelSlip`
+per-frame into the Lua trace (`src/ac_copilot_trainer/modules/lap_archive.lua` + the per-frame sample
+build in `ac_copilot_trainer.lua` ~L2555 region) + bump the DUAL `TRACE_FIELDS` (Lua `lap_archive.lua`
+L58 **and** Python `tools/ac_harness/reference_lap.py` — `test_reference_lap` asserts they match) +
+drive ONE live lap to verify captured values. Offsets are known (live drivers already read
+`wheelAngularSpeed` via `slip_ratio`). Then run `python -m tools.ai_sidecar.coach_report LAP.json`
+on the real lap → a CONFIRMED debrief = the operator's "cleanly distinguish why a turn was fast."
+
+---
+
+## Prior (2026-06-20 — SETUP-AWARE PRO COACHING shipped; #259 merged; #244 closed)
 
 **New capability (#264 → PR [#265](https://github.com/agorokh/ac-copilot-trainer/pull/265)):** the
 harness can now comprehend a car setup and attribute a corner's pace to **setup vs technique** — the
