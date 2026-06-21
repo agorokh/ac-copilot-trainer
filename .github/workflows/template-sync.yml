@@ -28,10 +28,18 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Mint GitHub App token (PR creation)
+        # Short-lived installation token from fleet-automation-bot; replaces the
+        # static GH_PAT (projected per-repo from Doppler). governance-hub#76.
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: actions/setup-python@v6
         with:
@@ -72,7 +80,7 @@ jobs:
 
       - name: Create sync PR
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           VCS_REF: ${{ steps.ref.outputs.ref }}
         shell: bash
         run: |
