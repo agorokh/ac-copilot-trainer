@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,3 +83,62 @@ def test_tracked_harness_configs_present_and_wire_gate() -> None:
             f"{rel} missing — fresh-clone agents in that harness would build blind (first-try gap)"
         )
         assert _wires_gate(p), f"{rel} present but does not wire hook_memory_gate"
+
+
+# Internal-infra domain a PUBLIC repo must never disclose (assembled from fragments so this guard does
+# NOT itself carry the literal — it scans its own source). NOT the public epam.com / www.epam.com site.
+_INFRA_SUFFIX = "lab." + "epam" + ".com"
+_INFRA_RE = re.compile(r"(?<![\w.-])(?:[A-Za-z0-9-]+\.)*" + re.escape(_INFRA_SUFFIX) + r"\b", re.IGNORECASE)
+_DISCLOSURE_SKIP_DIRS = frozenset(
+    {
+        ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "env", "__pycache__",
+        ".mypy_cache", ".ruff_cache", ".pytest_cache", ".tox", "dist", "build", ".next", ".cache",
+    }
+)
+_DISCLOSURE_BINARY_EXTS = frozenset(
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".pdf", ".zip", ".gz", ".whl", ".so",
+        ".dylib", ".dll", ".woff", ".woff2", ".ttf", ".otf", ".mp4", ".mp3", ".pyc", ".bin", ".dat",
+        ".pkl", ".npy", ".npz", ".parquet", ".pt", ".pth", ".h5", ".safetensors",
+    }
+)
+
+
+def test_no_internal_hostname_disclosure() -> None:
+    """No internal EPAM infra hostname may be DISCLOSED in this PUBLIC repo's source (governance-hub#80).
+
+    A PUBLIC spoke must never carry the internal DIAL proxy host (or any host in the internal lab.epam
+    infra domain) — the leak that reached this repo via a templated test was remediated in #270; this is
+    the regression guard that closes the gap. It is a self-contained mirror of the hub-canonical
+    scripts/check_public_source_no_internal_hostname.py (a PUBLIC repo cannot import the PRIVATE hub).
+    It scans ALL text files (incl. tests/ + docs — where the leak was), skipping VCS/cache dirs, nested
+    git worktrees, and binary/NUL files. A public spoke must have ZERO occurrences (no escape hatch).
+    """
+    hits: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        base = Path(dirpath)
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in _DISCLOSURE_SKIP_DIRS
+            and not (base / d != REPO_ROOT and (base / d / ".git").exists())
+        ]
+        for fn in filenames:
+            p = base / fn
+            if p.suffix.lower() in _DISCLOSURE_BINARY_EXTS:
+                continue
+            try:
+                if p.stat().st_size > 2_000_000:
+                    continue
+                data = p.read_bytes()
+            except OSError:
+                continue
+            if b"\x00" in data[:8192]:
+                continue
+            for n, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+                if _INFRA_RE.search(line):
+                    hits.append(f"{p.relative_to(REPO_ROOT).as_posix()}:{n}")
+    assert not hits, (
+        "internal infra hostname disclosed in PUBLIC source (governance-hub#80) — scrub to a "
+        "placeholder (dial.example.com) + env:\n  - " + "\n  - ".join(hits)
+    )
