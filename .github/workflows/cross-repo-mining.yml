@@ -72,6 +72,14 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - name: Mint GitHub App token (PR creation)
+        # Short-lived installation token from fleet-automation-bot; replaces the
+        # static GH_PAT (projected per-repo from Doppler). governance-hub#76.
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v6
 
       - uses: actions/setup-python@v6
@@ -93,7 +101,7 @@ jobs:
 
       - name: Verify GH_PAT is configured
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ steps.app-token.outputs.token }}
         run: |
           if [ -z "${GH_PAT:-}" ]; then
             echo "::error::GH_PAT is not configured — cannot open a PR with the default token (blocked by repo policy)."
@@ -103,7 +111,7 @@ jobs:
       - name: Create pull request
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ steps.app-token.outputs.token }}
           commit-message: "chore(mining): cross-repo learned rules (process-miner)"
           branch: process-miner/learned-rules-${{ github.run_id }}
           delete-branch: true
