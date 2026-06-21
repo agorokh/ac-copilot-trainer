@@ -34,6 +34,10 @@ ALLOWED_TOPLEVEL_DIRS = {
     # mirrors the canonical agent doc into .codex/skills/post-merge/SKILL.md
     # for Codex parity.
     ".codex",
+    # Vendored inference-egress runtime (governance-hub#75): runtime/inference_egress/ pinned
+    # byte-identical to the hub (tests/test_vendored_egress_pin.py). CI points
+    # FLEET_GOVERNANCE_ROOT here so this PUBLIC repo needs no private-hub checkout / GH_PAT.
+    ".fleet-governance-vendor",
 }
 
 # Tracked files at repository root (single path segment). Warnings only if not listed.
