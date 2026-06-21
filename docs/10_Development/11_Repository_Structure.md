@@ -19,6 +19,7 @@ These align with `scripts/check_agent_forbidden.py` for the unspecialized templa
 | `tests/` | Automated tests |
 | `scripts/` | Checked-in automation |
 | `tools/` | Optional Python tooling (e.g. `process_miner`, `repo_knowledge`); extras `[mining]` / `[knowledge]` |
+| `.fleet-governance-vendor/` | Vendored inference-egress runtime (`runtime/inference_egress/`), SHA-256-pinned byte-identical to governance-hub; CI points `FLEET_GOVERNANCE_ROOT` here so this PUBLIC repo needs no private-hub checkout / `GH_PAT` for egress ([governance-hub#75](https://github.com/agorokh/governance-hub/issues/75)) |
 
 When you add top-level directories (`apps/`, `data/`, etc.), update **both** this document and `ALLOWED_TOPLEVEL_DIRS` in `scripts/check_agent_forbidden.py`.
 

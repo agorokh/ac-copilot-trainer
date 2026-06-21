@@ -134,9 +134,12 @@ def test_distill_api_key_scheme_less_openrouter_host(monkeypatch) -> None:
 
 def test_distill_api_key_dial_prefers_project_key(monkeypatch) -> None:
     monkeypatch.delenv("DISTILL_API_KEY", raising=False)
+    # Vendored egress client is hostname-clean (#78); declare the DIAL host via $DIAL_PROXY_HOST
+    # (placeholder host - no internal infra hostname in this PUBLIC repo).
+    monkeypatch.setenv("DIAL_PROXY_HOST", "dial.example.com")
     monkeypatch.setenv(
         "DISTILL_BASE_URL",
-        "https://ai-proxy.lab.epam.com/openai/deployments/gpt-4o/chat/completions",
+        "https://dial.example.com/openai/deployments/gpt-4o/chat/completions",
     )
     monkeypatch.setenv("DIAL_API_KEY_PROJECT", "dial-project-key")  # pragma: allowlist secret
     monkeypatch.setenv("DIAL_API_KEY", "dial-personal-key")  # pragma: allowlist secret
@@ -146,8 +149,9 @@ def test_distill_api_key_dial_prefers_project_key(monkeypatch) -> None:
 def test_distill_api_key_dial_falls_back_to_personal_key(monkeypatch) -> None:
     monkeypatch.delenv("DISTILL_API_KEY", raising=False)
     monkeypatch.setenv(
-        "DISTILL_BASE_URL", "https://ai-proxy.lab.epam.com/openai/deployments/gpt-4o"
-    )
+        "DIAL_PROXY_HOST", "dial.example.com"
+    )  # hostname-clean vendored client (#78)
+    monkeypatch.setenv("DISTILL_BASE_URL", "https://dial.example.com/openai/deployments/gpt-4o")
     monkeypatch.delenv("DIAL_API_KEY_PROJECT", raising=False)
     monkeypatch.setenv("DIAL_API_KEY", "dial-personal-key")  # pragma: allowlist secret
     assert distill_api_key() == "dial-personal-key"
@@ -550,10 +554,13 @@ def test_run_distillation_uses_canonical_dial_headers(monkeypatch) -> None:
         "tools.process_miner.distill.urllib.request.urlopen",
         capture_urlopen,
     )
+    monkeypatch.setenv(
+        "DIAL_PROXY_HOST", "dial.example.com"
+    )  # hostname-clean vendored client (#78)
     run_distillation(
         [{"title_key": "k"}],
         api_key="dial-api-key",  # pragma: allowlist secret
-        base_url="https://ai-proxy.lab.epam.com/openai/deployments/gpt-4o",
+        base_url="https://dial.example.com/openai/deployments/gpt-4o",
     )
     assert headers["api-key"] == "dial-api-key"
     assert "authorization" not in headers
