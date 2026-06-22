@@ -124,6 +124,8 @@ def test_late_brake_fires_once_when_coasting_past_brake_point():
     late = [a for a in fired if a.kind == "late_brake"]
     assert len(late) == 1  # exactly once per pass, not per frame
     assert late[0].corner == r.index and late[0].urgency == "act"
+    # user-facing label is 1-based: corner index 0 -> "T1", never "T0" (codex #294)
+    assert "T1" in late[0].message and "T0" not in late[0].message
 
 
 def test_lap_wrap_resets_pass_state():
@@ -158,6 +160,47 @@ def test_trail_brake_before_brake_point_is_not_flagged_late():
     ]
     fired = [a for f in frames for a in obs.observe(f)]
     assert [a for a in fired if a.kind == "late_brake"] == []
+
+
+def test_same_lap_rewind_is_not_graded_as_a_wrap():
+    # a teleport/pit/replay rewind (prev 0.62 -> 0.05, NOT a start/finish wrap) inside a corner must
+    # clear state WITHOUT emitting a spurious apex-deficit for the abandoned stint (codex #294)
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.65,
+        spline_lo=0.60,
+        spline_hi=0.70,
+        optimal_apex_kmh=120.0,
+        best_observed_apex_kmh=120.0,
+        best_brake_point_spline=0.58,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+    obs.observe({"spline": 0.62, "speed": 80.0, "brake": 0.5})  # inside, slow
+    rewind = obs.observe({"spline": 0.05, "speed": 90.0, "brake": 0.0})  # backward jump, NOT a wrap
+    assert [a for a in rewind if a.kind == "apex_deficit"] == []
+
+
+def test_ggv_only_reference_is_labelled_ggv_not_corpus():
+    # a reference with NO corpus best (GGV theoretical optimum only) must NOT be mislabelled
+    # "corpus_best" — the project's named over-claim failure mode (adversarial review #294)
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.5,
+        spline_lo=0.4,
+        spline_hi=0.6,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=None,  # GGV ceiling only
+        best_brake_point_spline=None,
+        n_corpus=0,
+    )
+    obs = RealtimeObserver([ref])
+    obs.observe({"spline": 0.5, "speed": 70.0, "brake": 0.4})
+    out = obs.observe({"spline": 0.7, "speed": 90.0, "brake": 0.0})
+    deficits = [a for a in out if a.kind == "apex_deficit"]
+    assert deficits
+    assert deficits[0].detail["source"] == "ggv_optimum"
+    assert "GGV" in deficits[0].message
 
 
 def test_final_corner_graded_at_lap_wrap():

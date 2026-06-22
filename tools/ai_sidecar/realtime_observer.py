@@ -31,12 +31,26 @@ from tools.ai_sidecar.track_reference import (
     build_references,
 )
 
-#: Spline drop between consecutive frames that we treat as a new lap (start/finish wrap).
+#: Spline drop between consecutive frames that signals a backward jump (wrap OR same-lap rewind).
 _LAP_WRAP_DROP = 0.5
+#: A backward jump is a true start/finish wrap only if it crosses the line: prev high, current low.
+#: Other big backward jumps (teleport / pit reset / replay rewind) are NOT a lap completion, so we
+#: clear state WITHOUT grading the abandoned corner (mirrors delta.lua's wrap-vs-rolling-reset).
+_WRAP_PREV_MIN = 0.8
+_WRAP_CUR_MAX = 0.25
 #: km/h a corner exit must be under the target before it's worth an advisory.
 _DEFICIT_MARGIN_KMH = 2.0
 #: brake pedal fraction above which we consider the driver "on the brakes".
 _BRAKE_ON = 0.05
+
+
+def _target_source(ref: CornerReference) -> str:
+    """Honest provenance of a corner's target apex (mirrors track_reference.score_lap).
+
+    The realistic, demonstrated corpus best when one exists; otherwise the GGV theoretical optimum
+    (a *ceiling*, not a guaranteed-achievable number). Never label a GGV optimum as corpus-observed.
+    """
+    return "corpus_best" if ref.best_observed_apex_kmh is not None else "ggv_optimum"
 
 
 @dataclass
@@ -133,16 +147,19 @@ class RealtimeObserver:
             return []
 
         out: list[Advisory] = []
-        # lap wrap: spline jumps backward across start/finish → new lap. Grade any corner still in
-        # progress BEFORE clearing state, so a final corner that ends at the wrap (e.g. spline_hi
-        # ~0.99) is not silently dropped without its apex-deficit advisory (codex #294).
+        # A backward spline jump is either a true start/finish wrap or a same-lap rewind
+        # (teleport / pit / replay). Only a true wrap (prev high → current low) completes the lap
+        # and earns end-of-lap grading of a corner that ends at the line (spline_hi ~0.99); a
+        # rewind abandons the stint, so clear state WITHOUT a spurious apex-deficit (codex #294).
         if self._last_spline is not None and self._last_spline - spline > _LAP_WRAP_DROP:
-            for ref in self._refs:
-                st = self._passes[ref.index]
-                if st.inside and not st.exit_emitted:
-                    a = self._apex_deficit(ref, st)
-                    if a is not None:
-                        out.append(a)
+            true_wrap = self._last_spline >= _WRAP_PREV_MIN and spline <= _WRAP_CUR_MAX
+            if true_wrap:
+                for ref in self._refs:
+                    st = self._passes[ref.index]
+                    if st.inside and not st.exit_emitted:
+                        a = self._apex_deficit(ref, st)
+                        if a is not None:
+                            out.append(a)
             self.reset()
         self._last_spline = spline
 
@@ -186,17 +203,18 @@ class RealtimeObserver:
                 corner=ref.index,
                 spline=round(spline, 4),
                 urgency="act",
-                message=f"Past your brake point for T{ref.index} and still coasting — brake.",
+                # +1: CornerReference.index is 0-based; user-facing turn labels are 1-based (T1..)
+                message=f"Past your brake point for T{ref.index + 1} and still coasting — brake.",
                 detail={
                     "brake_point_spline": round(bp, 4),
                     "current_kmh": round(speed, 1),
-                    "source": "corpus_best",
+                    "source": _target_source(ref),
                 },
             )
         return None
 
     def _apex_deficit(self, ref: CornerReference, st: _CornerPass) -> Advisory | None:
-        """On corner exit, compare the min speed carried to the corpus-best target apex."""
+        """On corner exit, compare the min speed carried to the target apex (corpus best / GGV)."""
         st.exit_emitted = True
         if st.min_speed_kmh is None:
             return None
@@ -204,20 +222,24 @@ class RealtimeObserver:
         deficit = round(target - st.min_speed_kmh, 1)
         if deficit < self._deficit_margin:
             return None
+        source = _target_source(ref)
+        # be honest about what the target IS: a demonstrated corpus best vs a GGV theoretical
+        # ceiling (which the live TC-off car may not reach — see the #244 frontier diagnostics).
+        target_label = "the best lap" if source == "corpus_best" else "the GGV optimum (a ceiling)"
         return Advisory(
             kind="apex_deficit",
             corner=ref.index,
             spline=round(ref.apex_spline, 4),
             urgency="info",
             message=(
-                f"T{ref.index}: carried {deficit:.0f} km/h under target apex "
+                f"T{ref.index + 1}: carried {deficit:.0f} km/h under {target_label} "
                 f"({st.min_speed_kmh:.0f} vs {target:.0f}) — more entry speed if grip allows."
             ),
             detail={
                 "min_speed_kmh": round(st.min_speed_kmh, 1),
                 "target_apex_kmh": round(target, 1),
                 "deficit_kmh": deficit,
-                "source": "corpus_best",
+                "source": source,
             },
         )
 
