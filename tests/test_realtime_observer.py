@@ -10,7 +10,7 @@ from tools.ai_sidecar.realtime_observer import (
     _frames_from_lap_trace,
     build_observer_from_reference,
 )
-from tools.ai_sidecar.track_reference import add_corpus_lap, build_references
+from tools.ai_sidecar.track_reference import CornerReference, add_corpus_lap, build_references
 
 
 def _corner_archive(*, degrade: float = 0.0) -> dict:
@@ -137,9 +137,80 @@ def test_lap_wrap_resets_pass_state():
     assert [a for a in second if a.kind == "apex_deficit"], "lap 2 should advise again after wrap"
 
 
+def test_trail_brake_before_brake_point_is_not_flagged_late():
+    # driver brakes EARLY (inside the window, before the corpus brake point) then releases before
+    # apex — normal trail-brake / rotation; must NOT draw a "late brake" cue (codex #294)
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+    frames = [
+        {"spline": 0.42, "speed": 120.0, "brake": 0.6},  # braked EARLY (in window, before bp 0.45)
+        {"spline": 0.47, "speed": 95.0, "brake": 0.0},  # released, now past bp before apex
+        {"spline": 0.49, "speed": 92.0, "brake": 0.0},
+    ]
+    fired = [a for f in frames for a in obs.observe(f)]
+    assert [a for a in fired if a.kind == "late_brake"] == []
+
+
+def test_final_corner_graded_at_lap_wrap():
+    # a corner whose window ends just before the start/finish line must still be graded at the wrap
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.95,
+        spline_lo=0.90,
+        spline_hi=0.99,
+        optimal_apex_kmh=120.0,
+        best_observed_apex_kmh=120.0,
+        best_brake_point_spline=0.88,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+    obs.observe({"spline": 0.92, "speed": 100.0, "brake": 0.5})  # inside, slow (deficit ~20)
+    obs.observe({"spline": 0.97, "speed": 100.0, "brake": 0.0})  # still inside, never exits > hi
+    wrap = obs.observe({"spline": 0.02, "speed": 150.0, "brake": 0.0})  # lap wraps
+    deficits = [a for a in wrap if a.kind == "apex_deficit"]
+    assert deficits, "the final corner must be graded when the lap wraps"
+    assert deficits[0].corner == 0
+    assert deficits[0].detail["deficit_kmh"] > 0
+
+
+def test_accepts_live_telemetry_tick_payload_shape():
+    # the real telemetry_tick frame nests channels under payload with speed named speed_kmh
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.5,
+        spline_lo=0.4,
+        spline_hi=0.6,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.38,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+    # payload-nested in-window slow sample, then exit → apex deficit
+    obs.observe(
+        {"type": "telemetry_tick", "payload": {"spline": 0.5, "speed_kmh": 70.0, "brake": 0.4}}
+    )
+    out = obs.observe(
+        {"type": "telemetry_tick", "payload": {"spline": 0.7, "speed_kmh": 90.0, "brake": 0.0}}
+    )
+    deficits = [a for a in out if a.kind == "apex_deficit"]
+    assert deficits and deficits[0].detail["deficit_kmh"] == 30.0  # 100 target - 70 carried
+
+
 def test_malformed_frames_are_ignored():
     obs = build_observer_from_reference(_corner_archive())
     assert obs is not None
     assert obs.observe({}) == []
     assert obs.observe({"spline": "nope", "speed": None}) == []
     assert obs.observe({"spline": float("nan"), "speed": 100.0}) == []
+    # telemetry_tick with no spline in payload (current high-rate contract) → can't locate → ignored
+    assert obs.observe({"payload": {"speed_kmh": 100.0, "brake": 0.0}}) == []

@@ -57,6 +57,7 @@ class _CornerPass:
 
     inside: bool = False
     min_speed_kmh: float | None = None
+    has_braked: bool = False  # any braking seen this pass — suppresses a false late-brake cue
     late_brake_emitted: bool = False
     exit_emitted: bool = False
 
@@ -70,6 +71,31 @@ def _num(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return f if f == f and abs(f) != float("inf") else None
+
+
+def _normalize_frame(frame: dict[str, Any]) -> tuple[float | None, float | None, float]:
+    """Extract ``(spline, speed_kmh, brake)`` from either the offline replay shape or the live
+    ``telemetry_tick`` shape.
+
+    The replay/test shape carries ``spline``/``speed``/``brake`` at the top level; the live
+    high-rate frame (``external_protocol._validate_telemetry_tick``) nests values under ``payload``
+    with speed named ``speed_kmh``. We accept both so the #277 wiring can hand us the real frame
+    without a translation shim. NB: the current high-rate contract does not yet carry ``spline`` —
+    that wiring (#277) must add it to the payload, since corner location requires it.
+    """
+    payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
+
+    def pick(*keys: str) -> Any:
+        for src in (frame, payload):
+            for k in keys:
+                if k in src:
+                    return src[k]
+        return None
+
+    spline = _num(pick("spline", "normalizedSplinePosition"))
+    speed = _num(pick("speed", "speed_kmh"))
+    brake = _num(pick("brake")) or 0.0
+    return spline, speed, brake
 
 
 class RealtimeObserver:
@@ -102,18 +128,24 @@ class RealtimeObserver:
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
-        spline = _num(frame.get("spline"))
-        speed = _num(frame.get("speed"))
+        spline, speed, brake = _normalize_frame(frame)
         if spline is None or speed is None:
             return []
-        brake = _num(frame.get("brake")) or 0.0
 
-        # lap wrap: spline jumps backward across start/finish → new lap, reset passes
+        out: list[Advisory] = []
+        # lap wrap: spline jumps backward across start/finish → new lap. Grade any corner still in
+        # progress BEFORE clearing state, so a final corner that ends at the wrap (e.g. spline_hi
+        # ~0.99) is not silently dropped without its apex-deficit advisory (codex #294).
         if self._last_spline is not None and self._last_spline - spline > _LAP_WRAP_DROP:
+            for ref in self._refs:
+                st = self._passes[ref.index]
+                if st.inside and not st.exit_emitted:
+                    a = self._apex_deficit(ref, st)
+                    if a is not None:
+                        out.append(a)
             self.reset()
         self._last_spline = spline
 
-        out: list[Advisory] = []
         for ref in self._refs:
             st = self._passes[ref.index]
             in_window = ref.spline_lo <= spline <= ref.spline_hi
@@ -122,6 +154,8 @@ class RealtimeObserver:
                 st.min_speed_kmh = (
                     speed if st.min_speed_kmh is None else min(st.min_speed_kmh, speed)
                 )
+                if brake >= self._brake_on:
+                    st.has_braked = True  # record braking so a later release isn't "late to brake"
                 a = self._late_brake(ref, st, spline, speed, brake)
                 if a is not None:
                     out.append(a)
@@ -136,9 +170,14 @@ class RealtimeObserver:
     def _late_brake(
         self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
     ) -> Advisory | None:
-        """Fire once if the car is past the brake point, before apex, and still not braking."""
+        """Fire once if the car is past the brake point, before apex, and has not braked at all.
+
+        Suppressed once the driver has braked anywhere in this pass (``has_braked``): braking early
+        and trailing off before the apex — normal trail-brake / rotation — is not "late to brake"
+        and must not draw an urgent cue (codex #294).
+        """
         bp = ref.best_brake_point_spline
-        if bp is None or st.late_brake_emitted:
+        if bp is None or st.late_brake_emitted or st.has_braked:
             return None
         if spline >= bp and spline < ref.apex_spline and brake < self._brake_on:
             st.late_brake_emitted = True
