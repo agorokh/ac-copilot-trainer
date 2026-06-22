@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 _WHEELS = ("fl", "fr", "rl", "rr")
+#: Our front-corner wheel key (fl) → AC setup INI's side-corner key (LF). AC uses LF/RF/LR/RR.
+_AC_CORNER = {"fl": "LF", "fr": "RF", "rl": "LR", "rr": "RR"}
 
 # --- verified parameters (°C core, bulk-average) ---------------------------
 #: Optimal core-temp window per compound key. "slick" is the generic fallback when compound is
@@ -33,8 +35,17 @@ COMPOUND_WINDOWS: dict[str, tuple[float, float]] = {
     "slick": (75.0, 105.0),  # generic slick fallback (medium-ish)
 }
 GRIP_ONSET_C = 40.0  # below ~35-45: too cold to make meaningful grip
-DEG_WARN_C = 103.0  # 100-105 degradation-onset band (grip roll-off region)
-CRITICAL_C = 115.0  # >115 soft / ~130-140 hard: thermal-risk back-off trigger
+DEG_WARN_C = 103.0  # 100-105 degradation-onset band (grip roll-off region; soft/medium)
+#: Critical (thermal-risk back-off) core temp is COMPOUND-DEPENDENT: soft fails ~115°C, hard not
+#: until ~130-140°C. Using one 115°C limit would false-flag a hard tyre that is still fine.
+COMPOUND_CRITICAL_C: dict[str, float] = {
+    "soft": 115.0,
+    "medium": 125.0,
+    "hard": 135.0,
+    "wet": 100.0,
+    "slick": 120.0,
+}
+CRITICAL_C = COMPOUND_CRITICAL_C["soft"]  # back-compat default (most conservative)
 
 # pressure↔core coupling (ideal gas, constant V): ~+1 psi per 10 °C at GT3 pressures
 PRESSURE_PSI_PER_DEGC = 0.12
@@ -80,7 +91,9 @@ class TyreReport:
     findings: list[TyreFinding] = field(default_factory=list)
 
     def headline(self) -> str:
-        bad = [w for w, s in self.status.items() if s in ("overheat", "critical", "cold")]
+        bad = [
+            w for w, s in self.status.items() if s in ("overheat", "critical", "cold", "warming")
+        ]
         if any(self.status[w] == "critical" for w in self.status):
             return (
                 f"TYRES CRITICAL: {', '.join(w.upper() for w in bad)} over-temp — back off / box."
@@ -92,9 +105,9 @@ class TyreReport:
         return f"Tyres in window ({self.compound}, mean core {self.mean_core:.0f}°C)."
 
 
-def _status_for(core: float, window: tuple[float, float]) -> str:
+def _status_for(core: float, window: tuple[float, float], critical_c: float) -> str:
     lo, hi = window
-    if core >= CRITICAL_C:
+    if core >= critical_c:
         return "critical"
     if core > hi:
         return "overheat"
@@ -130,8 +143,9 @@ def analyze_tyres(
     """
     comp = (compound or "slick").lower()
     window = COMPOUND_WINDOWS.get(comp, COMPOUND_WINDOWS["slick"])
+    critical_c = COMPOUND_CRITICAL_C.get(comp, COMPOUND_CRITICAL_C["slick"])
     core = {w: float(core[w]) for w in _WHEELS if w in core and core[w] is not None}
-    status = {w: _status_for(core[w], window) for w in core}
+    status = {w: _status_for(core[w], window, critical_c) for w in core}
     present = list(core.values())
     mean_core = round(_mean(present), 1)
     spread = round(max(present) - min(present), 1) if present else 0.0
@@ -162,7 +176,9 @@ def analyze_tyres(
         and (rising_fast or early or laps_since_start is None)
     )
 
-    findings = _build_findings(core, status, window, comp, mean_core, fmr, lmr, spread, hot_est)
+    findings = _build_findings(
+        core, status, window, comp, critical_c, mean_core, fmr, lmr, spread, hot_est
+    )
     return TyreReport(
         compound=comp,
         window=window,
@@ -183,6 +199,7 @@ def _build_findings(
     status: dict[str, str],
     window: tuple[float, float],
     comp: str,
+    critical_c: float,
     mean_core: float,
     fmr: float | None,
     lmr: float | None,
@@ -193,15 +210,30 @@ def _build_findings(
     crit = [w for w, s in status.items() if s == "critical"]
     over = [w for w, s in status.items() if s == "overheat"]
     cold = [w for w, s in status.items() if s in ("cold", "warming")]
+    # degradation-onset band: in-window but past DEG_WARN (grip roll-off region, not yet overheat)
+    degrading = [w for w, s in status.items() if s == "in_window" and core[w] >= DEG_WARN_C]
     if crit:
         out.append(
             TyreFinding(
                 "critical",
-                f"{', '.join(w.upper() for w in crit)} core ≥ {CRITICAL_C:.0f}°C",
+                f"{', '.join(w.upper() for w in crit)} core ≥ {critical_c:.0f}°C ({comp} limit)",
                 "act",
                 True,
                 "Thermal-risk band — back off significantly or box. (A risk trigger, not a "
                 "blistering diagnosis: core is a bulk average.)",
+                "low",
+            )
+        )
+    if degrading and not over and not crit:
+        out.append(
+            TyreFinding(
+                "degradation_onset",
+                f"{', '.join(w.upper() for w in degrading)} in the {DEG_WARN_C:.0f}°C+ "
+                "degradation-onset band (top of the window)",
+                "caution",
+                True,
+                "Grip roll-off region — ease thermal load (smoother inputs) to hold the window; "
+                "watch for a lap-time creep over the next laps.",
                 "low",
             )
         )
@@ -347,10 +379,14 @@ def tyres_from_lap_archive(archive: dict) -> TyreReport | None:
     snap = setup.get("snapshot") if isinstance(setup.get("snapshot"), dict) else {}
     cold = {}
     for w in _WHEELS:
-        key = f"PRESSURE_{w.upper()}.VALUE"
+        # AC setup INI uses side-corner keys PRESSURE_LF/RF/LR/RR — wheel 'fl' maps to 'LF'.
+        key = f"PRESSURE_{_AC_CORNER[w]}.VALUE"
         if key in snap:
             try:
                 cold[w] = float(snap[key])
             except (TypeError, ValueError):
                 pass
-    return analyze_tyres(core, cold or None)
+    lap = archive.get("lap") if isinstance(archive.get("lap"), dict) else {}
+    lap_n = lap.get("lap_n")
+    laps_since = int(lap_n) if isinstance(lap_n, (int, float)) else None
+    return analyze_tyres(core, cold or None, laps_since_start=laps_since)

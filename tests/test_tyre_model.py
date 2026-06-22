@@ -39,7 +39,8 @@ def test_overheat_flagged():
 
 
 def test_critical_triggers_backoff():
-    r = analyze_tyres(_core(CRITICAL_C + 3, 100, 100, 100), laps_since_start=8)
+    # CRITICAL_C is the soft limit (115); pin compound=soft so the threshold matches.
+    r = analyze_tyres(_core(CRITICAL_C + 3, 100, 100, 100), compound="soft", laps_since_start=8)
     assert r.status["fl"] == "critical"
     assert "CRITICAL" in r.headline()
     assert any(f.key == "critical" and f.severity == "act" for f in r.findings)
@@ -49,6 +50,29 @@ def test_unknown_compound_falls_back_to_slick():
     r = analyze_tyres(_core(90, 90, 90, 90))
     assert r.compound == "slick"
     assert r.window == COMPOUND_WINDOWS["slick"]
+
+
+def test_critical_is_compound_dependent():
+    # 120°C is critical for SOFT (limit 115) but only overheat for HARD (limit 135) — codex #281.
+    soft = analyze_tyres(_core(120, 100, 100, 100), compound="soft", laps_since_start=6)
+    hard = analyze_tyres(_core(120, 100, 100, 100), compound="hard", laps_since_start=6)
+    assert soft.status["fl"] == "critical"
+    assert hard.status["fl"] == "overheat"
+    assert not any(f.key == "critical" for f in hard.findings)
+
+
+def test_degradation_onset_finding_in_window():
+    # medium window 75-105; 104°C is in-window but past the 103°C degradation band (codex #281).
+    r = analyze_tyres(_core(104, 104, 100, 100), compound="medium", laps_since_start=6)
+    assert r.status["fl"] == "in_window"
+    assert any(f.key == "degradation_onset" for f in r.findings)
+
+
+def test_warming_tyre_in_off_window_headline():
+    # a late lap where tyres are below window (warming status) but not flagged "warming" rising —
+    # the headline must still say off-window, not "in window" (codex #281).
+    r = analyze_tyres(_core(60, 60, 58, 58), compound="medium", laps_since_start=8)
+    assert "in window" not in r.headline().lower()
 
 
 # --- imbalance --------------------------------------------------------------
@@ -125,14 +149,16 @@ def _archive_with_temps(temps_per_wheel: dict[str, float]) -> dict:
         for i in range(5)
     ]
     return {
+        # AC setup INI uses side-corner order: LF/RF/LR/RR (NOT FL/FR/...).
         "setup": {
             "snapshot": {
-                "PRESSURE_FL.VALUE": "27.5",
-                "PRESSURE_FR.VALUE": "27.5",
-                "PRESSURE_RL.VALUE": "26.5",
+                "PRESSURE_LF.VALUE": "27.5",
+                "PRESSURE_RF.VALUE": "27.5",
+                "PRESSURE_LR.VALUE": "26.5",
                 "PRESSURE_RR.VALUE": "26.5",
             }
         },
+        "lap": {"lap_n": 5},
         "trace": {"fields": fields, "samples": samples},
     }
 
