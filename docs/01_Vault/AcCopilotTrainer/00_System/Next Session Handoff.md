@@ -32,7 +32,50 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-20 — CONFIRMED setup attribution shipped (#268); coaching brain complete)
+## Resume here (2026-06-21 — FRONTIER COACHING PROGRAM: foundation + brain-wiring shipped; tyre model next)
+
+**Autonomous program toward the north star (real-time AI coach > human at mechanics/tyres/conditions/
+technique).** An Understand workflow mapped the platform and found the decisive fact: the full
+setup-vs-technique attribution **brain already existed + was tested but ORPHANED** — the live path
+used only shallow min/apex-speed ranking. So the high-leverage moves were *capture* + *wiring*, not
+reinvention. Both shipped tonight:
+
+- **#266 / PR #274 MERGED — telemetry capture (schema v2 foundation):** per-wheel
+  `wheelAngularSpeed`/`wheelSlip`/`tyreCoreTemp` persisted to the lap trace via a shared
+  `wheel_read.lua`; TRACE_FIELDS 10→22 (byte-identical Lua/Python); old 10-field archives still
+  validate + convert; all-zero + partial-wheel-read guards prevent false lockups. Survived 3 bot
+  passes (6 real fixes).
+- **#275 / PR #276 MERGED — brain wired into the live path:** `coach_report.build_structured_debrief`
+  (machine-readable {text, corners[cause_class/confidence/advisory/coaching], balance}) +
+  `protocol.build_brain_followup` (resolves inline trace OR safe `archivePath` + optional
+  `referenceArchivePath`; traversal-hardened) + `server._send_brain_followup` (non-blocking
+  follow-up). Live debriefs now use full setup-vs-technique attribution, not min/apex ranking.
+
+**Remaining program (dependency-ordered, from the gap analysis — all offline-testable except where noted):**
+1. **`tyre_model.py` (NEXT, build-ready):** optimal-window/warm-up/degradation/imbalance + modelled
+   hot pressure. Verified physics already banked:
+   [`tyre-thermal-knowledge-2026-06-21.md`](../03_Investigations/tyre-thermal-knowledge-2026-06-21.md)
+   (compound windows, gas-law-correct ~+1 psi/10°C coupling, imbalance thresholds, honest core-only
+   limits). Mirror `setup_knowledge.py` data + the Tier-A/Tier-B honesty split. Consumes #266 temps.
+2. **`conditions_model.py`** — `conditions{ambient/track temp, trackGripLevel, weather}` (already
+   archived) → grip modifier + cross-session delta normalization.
+3. **`track_reference.py`** — per-corner optimal entry/apex/exit-g envelope from GGV QSS + the human
+   corpus.
+4. **Structured coach-handoff protocol** — versioned per-corner verdict message for an RL/agentic
+   coach (cornerAnalysis already emits the shape).
+5. **Real-time observer** — streaming grip/tyre-fade observer in the sidecar.
+6. **Live brain-grounded advisories (RIG):** [#277](https://github.com/agorokh/ac-copilot-trainer/issues/277)
+   — deliver `archivePath` on lap_complete + render `debriefSource==brain` in `ws_bridge.lua`; drive
+   a real lap to confirm CONFIRMED per-wheel attribution end-to-end.
+
+**Other open follow-ups:** [#278](https://github.com/agorokh/ac-copilot-trainer/issues/278) (lupa
+replay-wheels test fidelity). Branch hygiene: a `wip/prior-session-leftovers` branch holds older
+uncommitted vault/architecture drafts. Local `main` had 1 stray unpushed chore (b620a06) — left
+alone (protect-main); branch all work from `origin/main`.
+
+---
+
+## Prior (2026-06-20 — CONFIRMED setup attribution shipped (#268); coaching brain complete)
 
 **#268 MERGED — confirmed axle/wheelspin attribution.** The coaching engine now CONSUMES optional
 per-wheel channels (`wheelAngularSpeed_{fl,fr,rl,rr}` / `wheelSlip_{...}` in the trace) and upgrades
