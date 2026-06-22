@@ -48,3 +48,22 @@ def test_normalize_path_list_dedupes_equivalent_paths() -> None:
 def test_normalize_path_list_normalizes_backslashes() -> None:
     paths = normalize_path_list([r"src\bar\baz.py"])
     assert paths == ["src/bar/baz.py"]
+
+
+def test_normalize_path_list_rejects_absolute_on_any_platform() -> None:
+    """Absolute paths are skipped regardless of host OS flavour.
+
+    Regression: ``WindowsPath('/etc/passwd').is_absolute()`` is ``False`` (no
+    drive), so a host-native ``is_absolute()`` check let POSIX-absolute paths
+    through the guard on Windows. The guard now tests both pure flavours.
+    """
+    assert normalize_path_list(["/etc/passwd"]) == []
+    assert normalize_path_list(["C:/Windows/System32/config"]) == []
+    # A mixed list drops only the absolute entry; the relative one survives.
+    assert normalize_path_list(["/etc/passwd", "src/app.py"]) == ["src/app.py"]
+
+
+def test_normalize_path_list_rejects_unc_path_without_repo_root() -> None:
+    """UNC-style absolute paths are skipped when no ``repo_root`` is supplied."""
+    assert normalize_path_list([r"\\server\share"]) == []
+    assert normalize_path_list([r"\\server\share\secret.txt"]) == []

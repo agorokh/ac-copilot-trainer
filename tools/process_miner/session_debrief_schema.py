@@ -8,7 +8,7 @@ tolerate unknown keys and missing optional fields (best-effort ingest).
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, TypedDict
 
 # Bump when breaking or extending required semantics for consumers.
@@ -36,6 +36,19 @@ class SessionDebriefRecord(TypedDict, total=False):
     session_debrief_patterns: list[str] | str
 
 
+def _is_absolute_any_platform(s: str) -> bool:
+    """Whether ``s`` is absolute under POSIX *or* Windows path semantics.
+
+    ``Path.is_absolute()`` is host-specific: on Windows
+    ``WindowsPath('/etc/passwd').is_absolute()`` is ``False`` (no drive letter),
+    so a host-native check lets POSIX-style absolute paths slip through the
+    absolute-path / traversal guard. Testing both pure flavours catches a leading
+    ``/`` or ``\\``, drive letters (``C:/...``), and UNC prefixes
+    (``//server/share``) regardless of the host OS.
+    """
+    return PurePosixPath(s).is_absolute() or PureWindowsPath(s).is_absolute()
+
+
 def normalize_path_list(value: Any, *, repo_root: Path | None = None) -> list[str]:
     """Turn ``session_debrief_files`` env/record value into repo-relative posix paths."""
     raw: list[Any]
@@ -53,16 +66,19 @@ def normalize_path_list(value: Any, *, repo_root: Path | None = None) -> list[st
     for item in raw:
         if not isinstance(item, str) or not item.strip():
             continue
-        p = Path(item.strip().replace("\\", "/"))
-        if p.is_absolute():
+        # Normalize separators first so the absolute-path check below sees a
+        # single, OS-independent form (e.g. ``\\server\share`` -> ``//server/share``).
+        normalized = item.strip().replace("\\", "/")
+        if _is_absolute_any_platform(normalized):
             if root is None:
                 continue
             try:
-                rel = p.resolve().relative_to(root)
+                rel = Path(normalized).resolve().relative_to(root)
                 out.append(rel.as_posix())
             except ValueError:
                 continue
             continue
+        p = Path(normalized)
         if ".." in p.parts:
             continue
         posix = p.as_posix()
