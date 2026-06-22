@@ -196,12 +196,33 @@ def _final_corner_ref() -> CornerReference:
 
 
 def test_wrap_shaped_pit_return_with_known_lap_is_not_graded():
-    # wrap-SHAPED jump (0.92 -> 0.03) but the lap counter did NOT advance => pit/teleport, not a lap
-    # completion; must clear state WITHOUT an end-of-lap apex-deficit (codex #294 @155)
+    # wrap-SHAPED jump (0.92 -> 0.03) but the lap counter NEVER advances => pit/teleport; once the
+    # car drives on past the wrap zone the deferred grading is discarded (codex #294 @155/@165)
     obs = RealtimeObserver([_final_corner_ref()])
     obs.observe({"spline": 0.92, "speed": 90.0, "brake": 0.5, "lap": 1})  # inside, slow
-    out = obs.observe({"spline": 0.03, "speed": 60.0, "brake": 0.0, "lap": 1})  # same lap -> pit
+    out = []
+    out += obs.observe({"spline": 0.03, "speed": 60.0, "brake": 0.0, "lap": 1})  # same lap -> defer
+    out += obs.observe({"spline": 0.10, "speed": 70.0, "brake": 0.0, "lap": 1})  # still no advance
+    out += obs.observe(
+        {"spline": 0.40, "speed": 90.0, "brake": 0.0, "lap": 1}
+    )  # drove on -> discard
     assert [a for a in out if a.kind == "apex_deficit"] == []
+
+
+def test_wrap_with_delayed_lapcount_is_graded_on_the_next_frame():
+    # CSP can expose the wrap-shaped spline drop ONE frame before lapCount advances. The drop frame
+    # defers; the next frame (counter now advanced) must emit the held grading, not lose it (@165).
+    obs = RealtimeObserver([_final_corner_ref()])
+    obs.observe(
+        {"spline": 0.92, "speed": 90.0, "brake": 0.5, "lap": 1}
+    )  # inside, slow (deficit 30)
+    drop = obs.observe(
+        {"spline": 0.02, "speed": 150.0, "brake": 0.0, "lap": 1}
+    )  # drop, counter lags
+    nxt = obs.observe({"spline": 0.04, "speed": 150.0, "brake": 0.0, "lap": 2})  # counter advances
+    assert [a for a in drop if a.kind == "apex_deficit"] == []  # deferred, not emitted yet
+    deficits = [a for a in nxt if a.kind == "apex_deficit"]
+    assert deficits and deficits[0].corner == 0 and deficits[0].detail["deficit_kmh"] > 0
 
 
 def test_real_lap_completion_with_lap_advance_is_graded():

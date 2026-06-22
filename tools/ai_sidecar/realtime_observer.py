@@ -139,11 +139,17 @@ class RealtimeObserver:
         self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
         self._last_spline: float | None = None
         self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
+        # end-of-lap grading held across the wrap when a known lapCount may lag the spline drop by
+        # a frame (delta.lua defers); confirmed on a later counter advance, discarded on drive-on.
+        self._pending_wrap: list[Advisory] = []
+        self._pending_pre_lap: float | None = None
 
     def reset(self) -> None:
         """Clear per-corner pass state (start of a fresh lap). The lap counter persists."""
         self._passes = {r.index: _CornerPass() for r in self._refs}
         self._last_spline = None
+        self._pending_wrap = []
+        self._pending_pre_lap = None
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
@@ -152,24 +158,45 @@ class RealtimeObserver:
             return []
 
         out: list[Advisory] = []
+        # Resolve a wrap whose grading we deferred (a true wrap's lapCount can lag the drop by a
+        # frame). Confirm the moment the counter advances; discard once the car has driven on past
+        # the wrap zone without an advance (that was a pit/teleport, not a lap).
+        if self._pending_wrap:
+            if (
+                lap is not None
+                and self._pending_pre_lap is not None
+                and lap > self._pending_pre_lap
+            ):
+                out.extend(self._pending_wrap)
+                self._pending_wrap = []
+                self._pending_pre_lap = None
+            elif spline > _WRAP_CUR_MAX:
+                self._pending_wrap = []
+                self._pending_pre_lap = None
         # A backward spline jump is either a true start/finish wrap or a same-lap rewind
         # (pit/teleport/replay). Shape alone is ambiguous — a return-to-pits also lands near the
         # line — so grade end-of-lap ONLY on real lap-completion evidence: an authoritative
         # lap-counter advance, or, when no counter is supplied, a wrap-shaped jump. A wrap-shaped
-        # jump with a KNOWN, non-advancing counter is a pit/teleport, so clear state WITHOUT a
-        # spurious apex-deficit (codex #294, mirroring delta.lua's lap-count gate).
+        # jump with a KNOWN counter that hasn't advanced YET is deferred (the advance may arrive a
+        # frame late, per delta.lua); a real pit/teleport never advances it and is discarded above.
         if self._last_spline is not None and self._last_spline - spline > _LAP_WRAP_DROP:
             lap_known = lap is not None and self._last_lap is not None
             lap_advanced = lap_known and lap > self._last_lap
             wrap_shaped = self._last_spline >= _WRAP_PREV_MIN and spline <= _WRAP_CUR_MAX
-            if lap_advanced or (wrap_shaped and not lap_known):
-                for ref in self._refs:
-                    st = self._passes[ref.index]
-                    if st.inside and not st.exit_emitted:
-                        a = self._apex_deficit(ref, st)
-                        if a is not None:
-                            out.append(a)
+            graded: list[Advisory] = []
+            for ref in self._refs:
+                st = self._passes[ref.index]
+                if st.inside and not st.exit_emitted:
+                    a = self._apex_deficit(ref, st)
+                    if a is not None:
+                        graded.append(a)
+            pre_lap = self._last_lap
             self.reset()
+            if lap_advanced or (wrap_shaped and not lap_known):
+                out.extend(graded)  # definite lap completion → grade now
+            elif wrap_shaped and lap_known:
+                self._pending_wrap = graded  # ambiguous → defer until the counter advances
+                self._pending_pre_lap = pre_lap
         self._last_spline = spline
         if lap is not None:
             self._last_lap = lap
