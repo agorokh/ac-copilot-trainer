@@ -138,3 +138,29 @@ def test_brain_followup_rejects_unsafe_archive_path(tmp_path, monkeypatch):
 def test_brain_followup_disabled_when_feature_off(monkeypatch):
     monkeypatch.delenv(_ENABLE, raising=False)
     assert build_brain_followup(_corner_archive()) is None
+
+
+def test_brain_followup_rejects_traversal_archive_path(tmp_path, monkeypatch):
+    # codex #276: a path with `..` that RESOLVES outside journal/laps must be rejected, even though
+    # the raw string contains "/journal/laps/" + "lap_*.json".
+    monkeypatch.setenv(_ENABLE, "1")
+    (tmp_path / "evil").mkdir()
+    (tmp_path / "evil" / "lap_evil.json").write_text(
+        json.dumps(_corner_archive()), encoding="utf-8"
+    )
+    (tmp_path / "journal" / "laps").mkdir(parents=True)
+    traversal = tmp_path / "journal" / "laps" / ".." / ".." / "evil" / "lap_evil.json"
+    assert build_brain_followup({"archivePath": str(traversal)}) is None
+
+
+def test_brain_followup_uses_reference_for_time_loss(tmp_path, monkeypatch):
+    # codex #276: with a reference archive, delta-based rules fire (per-corner time_loss_s set).
+    monkeypatch.setenv(_ENABLE, "1")
+    laps = tmp_path / "journal" / "laps"
+    laps.mkdir(parents=True)
+    ref_file = laps / "lap_ref.json"
+    ref_file.write_text(json.dumps(_corner_archive(degrade=0.0)), encoding="utf-8")
+    student = _corner_archive(degrade=8.0) | {"referenceArchivePath": str(ref_file)}
+    out = build_brain_followup(student)
+    assert out is not None
+    assert any(c["time_loss_s"] is not None for c in out["cornerAnalysis"])

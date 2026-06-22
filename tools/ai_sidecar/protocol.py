@@ -36,34 +36,45 @@ EVENT_CORNER_ADVICE = "corner_advice"
 _MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 
 
-def _resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
-    """Resolve a full lap-archive dict (with a trace) for the brain, or None.
+def _load_safe_archive_path(raw_path: Any) -> dict[str, Any] | None:
+    """Load a lap-archive dict from a path, or None — with traversal-safe validation.
 
-    Prefers an inline ``trace`` on the message; otherwise loads ``archivePath`` IF it is a safe
-    ``.../journal/laps/lap_*.json`` path that exists and parses. Never raises — returns None so the
-    caller falls back to the shallow rules debrief.
+    NORMALIZES the path first (``Path.resolve`` collapses ``..`` / symlinks) and only then checks it
+    is a ``.../journal/laps/lap_*.json`` path, so a traversal like
+    ``/x/journal/laps/../../etc/lap_evil.json`` is rejected on its resolved form. Size + existence
+    guarded. Never raises.
     """
-    trace = inbound.get("trace")
-    if isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]:
-        return inbound
-    raw_path = inbound.get("archivePath")
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
     # Defer the import so protocol.py stays importable without the coaching extra installed.
     from tools.ai_sidecar.setup_optimizer import is_supported_lap_archive_path
 
-    if not is_supported_lap_archive_path(raw_path):
+    try:
+        resolved = Path(raw_path).resolve()
+    except (OSError, ValueError, RuntimeError):
+        return None
+    if not is_supported_lap_archive_path(str(resolved)):
         logger.debug("brain: archivePath rejected (not a journal/laps/lap_*.json): %r", raw_path)
         return None
     try:
-        p = Path(raw_path)
-        if not p.is_file() or p.stat().st_size > _MAX_ARCHIVE_BYTES:
+        if not resolved.is_file() or resolved.stat().st_size > _MAX_ARCHIVE_BYTES:
             return None
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         logger.info("brain: could not load archivePath %r: %s", raw_path, exc)
         return None
     return data if isinstance(data, dict) else None
+
+
+def _resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve a full lap-archive dict (with a trace) for the brain, or None.
+
+    Prefers an inline ``trace`` on the message; else loads a safe ``archivePath``. Never raises.
+    """
+    trace = inbound.get("trace")
+    if isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]:
+        return inbound
+    return _load_safe_archive_path(inbound.get("archivePath"))
 
 
 def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
@@ -82,10 +93,16 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         return None
     # optional per-car lateral grip ceiling (g) lets the brain separate grip-limited from technique
     grip_ceiling_g = _as_float(inbound.get("gripCeilingG"))
+    # optional reference lap (e.g. the driver's best): unlocks the delta-based rules (time lost per
+    # corner, "carried too little apex speed"). Without it the brain still emits grip/balance/exit/
+    # braking attributions, just no time-loss deltas.
+    reference = _load_safe_archive_path(inbound.get("referenceArchivePath"))
     try:
         from tools.ai_sidecar.coach_report import build_structured_debrief
 
-        structured = build_structured_debrief(archive, grip_ceiling_g=grip_ceiling_g)
+        structured = build_structured_debrief(
+            archive, reference_archive=reference, grip_ceiling_g=grip_ceiling_g
+        )
     except Exception as exc:  # the brain must never break the coaching socket
         logger.info("brain debrief raised: %s", exc)
         return None
