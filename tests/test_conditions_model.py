@@ -65,6 +65,16 @@ def test_normalizer_is_track_grip_clamped():
     assert analyze_conditions(_cond(grip=2.0)).normalizer() == 1.05  # clamped to sane ceiling
 
 
+def test_grip_delta_skipped_across_mismatched_regimes():
+    # codex #283: dry current vs WET reference — a trackGripLevel delta is meaningless, so skip it.
+    r = analyze_conditions(
+        _cond(grip=0.97, weather="dry"),
+        reference_conditions=_cond(grip=0.90, weather="rain"),
+    )
+    assert r.grip_level_delta is None
+    assert not any(f.key == "grip_vs_reference" for f in r.findings)
+
+
 def test_grip_vs_reference_is_labeled_approximate():
     r = analyze_conditions(_cond(grip=0.94), reference_conditions=_cond(grip=0.99))
     assert r.grip_level_delta is not None and r.grip_level_delta < 0

@@ -132,7 +132,15 @@ def analyze_conditions(
     ref = reference_conditions or {}
     ref_grip = _num(ref.get("trackGripLevel"))
     ref_track_t = _num(ref.get("trackTempC"))
-    grip_delta = round(grip - ref_grip, 4) if grip is not None and ref_grip is not None else None
+    # Cross-regime comparison is apples-to-oranges (a dry lap vs a WET reference): trackGripLevel
+    # doesn't explain the gap. Only emit a grip delta when current + reference are the SAME regime.
+    ref_regime = _regime(ref.get("weatherType"))
+    same_regime = regime == ref_regime
+    grip_delta = (
+        round(grip - ref_grip, 4)
+        if grip is not None and ref_grip is not None and same_regime
+        else None
+    )
 
     findings = _build_findings(
         regime, grip, band, track_t, ambient_t, weather, grip_delta, ref_grip, ref_track_t
