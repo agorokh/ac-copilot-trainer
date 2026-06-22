@@ -273,8 +273,13 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if not isinstance(trace, Mapping):
         raise LapArchiveSchemaError("trace must be an object")
     fields = trace.get("fields")
-    if fields != list(TRACE_FIELDS):
-        raise LapArchiveSchemaError(f"trace.fields must be {list(TRACE_FIELDS)!r}")
+    # Accept the pre-#266 10-field trace AND the per-wheel-extended set: SCHEMA_VERSION is still 1
+    # and existing archives carry only the required columns. A valid trace is the required columns,
+    # optionally followed by the #266 per-wheel channels (exact, in order).
+    if fields not in (list(_REQUIRED_TRACE_FIELDS), list(TRACE_FIELDS)):
+        raise LapArchiveSchemaError(
+            f"trace.fields must be {list(_REQUIRED_TRACE_FIELDS)!r} or {list(TRACE_FIELDS)!r}"
+        )
     samples = trace.get("samples")
     if not isinstance(samples, list):
         raise LapArchiveSchemaError("trace.samples must be a list")

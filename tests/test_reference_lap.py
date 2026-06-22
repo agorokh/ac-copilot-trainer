@@ -42,6 +42,18 @@ def test_generated_reference_archive_matches_lap_archive_schema_v1() -> None:
     assert record["corners"][0]["entrySpeed"] == pytest.approx(BRAKE_ENTRY_SPEED_KMH)
 
 
+def test_validator_accepts_old_10_field_schema_v1_trace() -> None:
+    # codex #274: SCHEMA_VERSION is still 1 and old archives carry only the 10 required columns.
+    # The validator must still accept them (per-wheel channels are an optional extension).
+    record = build_archive_record_from_scenario("brake_too_late")
+    full = record["trace"]["fields"]
+    keep = list(full[:10])
+    idxs = list(range(10))
+    record["trace"]["fields"] = keep
+    record["trace"]["samples"] = [[row[i] for i in idxs] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)  # must not raise
+
+
 def test_generated_archive_carries_per_wheel_channels() -> None:
     # #266: a generated reference archive must include the per-wheel columns with physically
     # plausible synthetic values (free-rolling omega = v/radius, zero slip, warm tyres).
