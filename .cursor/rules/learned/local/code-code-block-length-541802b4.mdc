@@ -1,0 +1,75 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - ".github/**/*"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 541802b4e0cfed93
+mined_from: 4 review comments across 2 PRs
+last_updated: 2026-06-22
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Code_Block Length (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _⚠️ Potential issue_ | _🔴 Critical_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+#!/bin/bash
+# Description: Verify _MappedSection has __enter__ and __exit__ for context...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+# Check if the file exists and examine lines around 28
+cat -n .github/workflows/process-mi...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+cat -n .github/workflows/template-sync.yml | sed -n '30,45p'
+```
+
+Repository: agorokh/ac-c...
+- _⚠️ Potential issue_ | _🟠 Major_
+
+<details>
+<summary>🧩 Analysis chain</summary>
+
+🏁 Script executed:
+
+```shell
+cat -n .github/workflows/template-sync.yml
+```
+
+Repository: agorokh/ac-copilot-trainer
+
+Le...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

@@ -1,0 +1,40 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 61c4c14e78060598
+mined_from: 5 review comments across 3 PRs
+last_updated: 2026-06-22
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: architecture
+---
+
+# Code Loop This (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **issue (bug_risk):** Validate BGRA buffer length before indexing to avoid crashes on mismatch.
+
+If `bgra` is shorter than `w * h * 4`, this loop will raise an `IndexError` when indexing the `memoryvi...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+In `project`, the expensive calculations of `math.sqrt(seg2)`, `math.sqrt(d2)`, `tangent`, `right`, and `signed` are performed i...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+In `_cyclic_interpolate`, the list comprehension `norms = [p.norm_pos for p in points]` is executed on every single call. Since ...
+- **suggestion (performance):** The Gauss–Seidel loop recomputes `resid` multiple times per point; consider restructuring for cheaper iterations or early stopping.
+
+Each `resid` call recomputes the disc...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

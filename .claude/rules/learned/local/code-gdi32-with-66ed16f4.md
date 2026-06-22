@@ -1,0 +1,41 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tools/**/*"
+  - "docs/**/*"
+source: process-miner
+rule_fingerprint: 66ed16f4f62e5175
+mined_from: 7 review comments across 4 PRs
+last_updated: 2026-06-22
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: guideline
+---
+
+# Code Gdi32 With (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+When implementing the capture half for `#266`, please note that simply bumping `TRACE_FIELDS` in `lap_archive.lua` and `referenc...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Capture weather before modeling it**
+
+This says `weather` is already archived for `conditions_model.py`, but the...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Include warming tyres in off-window headline**
+
+For a late lap where all tyres are below the compound window but...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Pass archive lap count into tyre analysis**
+
+Lap archives include `lap.lap_n`, but this integration discards it ...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
