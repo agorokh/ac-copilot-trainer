@@ -108,6 +108,8 @@ def _grip_band(grip: float | None) -> str:
 
 
 def _num(value: Any) -> float | None:
+    if isinstance(value, bool):  # float(True)==1.0 would silently misclassify a malformed field
+        return None
     try:
         f = float(value)
     except (TypeError, ValueError):
@@ -138,14 +140,16 @@ def analyze_conditions(
     ref_grip = _num(ref.get("trackGripLevel"))
     ref_track_t = _num(ref.get("trackTempC"))
     ref_regime = _regime(ref.get("weatherType"))
-    # A reference comparison is only meaningful when current + reference are the SAME, DRY regime
-    # (wet trackGripLevel/temp don't transfer) and both grip scalars are in the sane band. Otherwise
-    # both the grip delta AND the reference-temperature note are apples-to-oranges (codex #283).
-    comparable_ref = (
-        regime != "wet" and ref_regime == regime and _sane_grip(grip) and _sane_grip(ref_grip)
+    # Reference comparisons are only meaningful DRY-to-DRY (wet/unknown conditions don't transfer).
+    same_dry = regime == "dry" and ref_regime == "dry"
+    # The grip delta ADDITIONALLY needs both scalars in the sane band; the track-temperature note
+    # is independent of grip validity, so it gates on regime only (codex/copilot #283).
+    grip_delta = (
+        round(grip - ref_grip, 4)
+        if same_dry and _sane_grip(grip) and _sane_grip(ref_grip)
+        else None
     )
-    grip_delta = round(grip - ref_grip, 4) if comparable_ref else None
-    ref_track_for_note = ref_track_t if comparable_ref else None
+    ref_track_for_note = ref_track_t if same_dry else None
 
     findings = _build_findings(
         regime, grip, band, track_t, ambient_t, weather, grip_delta, ref_grip, ref_track_for_note
@@ -224,11 +228,11 @@ def _build_findings(
 
     # cross-session grip normalization — APPROXIMATE, trackGripLevel only
     if grip_delta is not None and abs(grip_delta) >= 0.005:
-        hotter = "higher" if grip_delta > 0 else "lower"
+        grip_dir = "higher" if grip_delta > 0 else "lower"
         out.append(
             ConditionsFinding(
                 "grip_vs_reference",
-                f"track grip {hotter} than reference by {abs(grip_delta):.3f}",
+                f"track grip {grip_dir} than reference by {abs(grip_delta):.3f}",
                 f"Part of the laptime gap is track grip ({ref_grip:.3f} → {grip:.3f}), not you — "
                 "this normalization is APPROXIMATE; ideally compare laps in the same grip band.",
                 "medium",

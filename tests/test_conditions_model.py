@@ -98,6 +98,22 @@ def test_reference_temp_note_gated_by_regime():
     assert not any(f.key == "track_temp_vs_reference" for f in r.findings)
 
 
+def test_bool_grip_is_rejected_not_treated_as_1():
+    # copilot #283: float(True)==1.0 would misclassify a malformed field — bools must be rejected.
+    r = analyze_conditions(_cond(grip=True))
+    assert r.grip_level is None
+
+
+def test_temp_note_independent_of_grip_sanity():
+    # codex #283: an out-of-range grip scalar must NOT suppress the (grip-independent) temp note.
+    r = analyze_conditions(
+        _cond(grip=0.5, track=20.0, weather="dry"),
+        reference_conditions=_cond(grip=0.99, track=34.0, weather="dry"),
+    )
+    assert r.grip_level_delta is None  # grip out of range -> no grip delta
+    assert any(f.key == "track_temp_vs_reference" for f in r.findings)  # temp note still fires
+
+
 def test_grip_vs_reference_is_labeled_approximate():
     r = analyze_conditions(_cond(grip=0.94), reference_conditions=_cond(grip=0.99))
     assert r.grip_level_delta is not None and r.grip_level_delta < 0
