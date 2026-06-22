@@ -42,24 +42,19 @@ archive trace. `lap_distance_m` is derived from `spline * track.lengthM` when
 track length is present; otherwise it is blank. Missing trace fields export as
 blank cells so downstream notebooks can distinguish "missing" from zero.
 
-The **per-wheel channels** (issue #266) carry, per corner FL/FR/RL/RR:
-`wheelAngularSpeed_*` (rad/s — the canonical longitudinal signal the analysis
-layer derives slip from, to attribute which axle locks / exit wheelspin),
-`wheelSlip_*` (AC `ndSlip`, secondary), and `tyreCoreTemp_*` (degC — feeds the
-tyre thermal model). Archives written before #266 lack these and export blank.
-The trace field set is a hard contract kept byte-identical between
-`lap_archive.lua::TRACE_FIELDS` and `reference_lap.py::TRACE_FIELDS`.
-
 ### Optional Tier-B per-wheel channels (#266)
 
-When present, the trace may also carry per-wheel channels named
-`wheelAngularSpeed_{fl,fr,rl,rr}` (rad/s) and `wheelSlip_{fl,fr,rl,rr}` (AC's
-combined Pacejka NDslip). These are **optional** — older laps omit them and the
-loader degrades gracefully. The setup-coaching engine
-(`tools/ai_sidecar/corner_attribution.py`) uses `wheelAngularSpeed` to compute
-true longitudinal slip per wheel, which upgrades brake-lockup and exit-wheelspin
-attributions from a *suspicion* to a *confirmed* axle-level verdict (which axle
-locks → brake bias; rear wheelspin → traction/TC/diff). Order is `[FL, FR, RL, RR]`.
+When present, the trace also carries per-wheel channels, order `[FL, FR, RL, RR]`:
+`wheelAngularSpeed_{fl,fr,rl,rr}` (rad/s — the canonical longitudinal signal),
+`wheelSlip_{fl,fr,rl,rr}` (AC's combined Pacejka NDslip, secondary), and
+`tyreCoreTemp_{fl,fr,rl,rr}` (degC — feeds the tyre thermal model). These are
+**optional**: archives written before #266 omit them and the loader / exporter degrade
+gracefully (they export as blank cells). The setup-coaching engine
+(`tools/ai_sidecar/corner_attribution.py`) derives true longitudinal slip per wheel from
+`wheelAngularSpeed`, which upgrades brake-lockup and exit-wheelspin attributions from a
+*suspicion* to a *confirmed* axle-level verdict (which axle locks → brake bias; rear
+wheelspin → traction/TC/diff). The trace field set is a hard contract kept byte-identical
+between `lap_archive.lua::TRACE_FIELDS` and `reference_lap.py::TRACE_FIELDS`.
 
 ## MoTeC-Shaped CSV
 

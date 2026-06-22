@@ -91,8 +91,11 @@ def _normalize_trace_frame(frame: Mapping[str, Any], index: int) -> dict[str, fl
     out: dict[str, float] = {}
     for field in TRACE_FIELDS:
         raw = frame.get(field)
+        # Optional per-wheel channels default to 0.0 whether absent OR explicitly null — both mean
+        # "no reading this frame", the desired graceful degradation. A REQUIRED field that is
+        # absent/None still falls through to _finite_float, which raises (a real schema violation).
         if raw is None and field not in _REQUIRED_TRACE_FIELDS:
-            out[field] = 0.0  # optional per-wheel channel absent on this frame
+            out[field] = 0.0
         else:
             out[field] = _finite_float(raw, f"trace[{index}].{field}")
     if out["spline"] < 0.0 or out["spline"] > 1.0:
