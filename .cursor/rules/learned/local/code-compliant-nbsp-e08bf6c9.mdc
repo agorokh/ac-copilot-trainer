@@ -1,0 +1,58 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: e08bf6c94bcc1c48
+mined_from: 6 review comments across 6 PRs
+last_updated: 2026-06-22
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: security
+preventability: guideline
+---
+
+# Code Compliant Nbsp (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ## PR Reviewer Guide 🔍
+
+#### (Review updated until commit https://github.com/agorokh/ac-copilot-trainer/commit/d3587fcf28046814dfb3d6f145180445836a3fea)
+
+
+> [!WARNING]
+> `/review` is deprecated. Use `...
+- ## PR Reviewer Guide 🔍
+
+#### (Review updated until commit https://github.com/agorokh/ac-copilot-trainer/commit/e3885c770608b3079e0a83383242ff5aed585247)
+
+
+> [!WARNING]
+> `/review` is deprecated. Use `...
+- ## PR Reviewer Guide 🔍
+
+#### (Review updated until commit https://github.com/agorokh/ac-copilot-trainer/commit/78ebad0dc9f3f7106533c7093aedbd045385fd3c)
+
+
+> [!WARNING]
+> `/review` is deprecated. Use `...
+- ## PR Reviewer Guide 🔍
+
+> [!WARNING]
+> `/review` is deprecated. Use `/agentic_review` instead (removal date not yet scheduled).
+
+Here are some key observations to aid the review process:
+
+<table>
+<tr>...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

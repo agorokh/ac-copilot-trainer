@@ -106,6 +106,10 @@ Stable operational principles derived from real usage across projects. Agents: r
 - **Propagate universal improvements upstream.** When a domain-agnostic workflow principle is improved in any child repo, propagate it back to template-repo so all future projects inherit it. See AGENT_CORE_PRINCIPLES.md "Upstream template sync."
 
 ## Learned Workspace Facts
+<!-- process-miner:learned:start -->
+- (process-miner) New learned rule file(s): .claude/rules/learned/local/code-code-block-ensure-5aa72c5b.md, .claude/rules/learned/local/code-code-block-length-541802b4.md, .claude/rules/learned/local/code-compliant-nbsp-e08bf6c9.md, .claude/rules/learned/local/code-gdi32-with-66ed16f4.md, .claude/rules/learned/local/code-loop-this-61c4c14e.md, .claude/rules/learned/local/handoff-next-focus-b2022aba.md, .claude/rules/learned/local/persistent-review-updated-4e38b694.md, .claude/rules/learned/local/review-action-performed-f1c5416f.md, .claude/rules/learned/local/sorry-agorokh-have-42f9a5c8.md, .claude/rules/learned/local/your-warning-have-ff16f579.md, .cursor/rules/learned/local/code-code-block-ensure-5aa72c5b.mdc, .cursor/rules/learned/local/code-code-block-length-541802b4.mdc, .cursor/rules/learned/local/code-compliant-nbsp-e08bf6c9.mdc, .cursor/rules/learned/local/code-gdi32-with-66ed16f4.mdc, .cursor/rules/learned/local/code-loop-this-61c4c14e.mdc, .cursor/rules/learned/local/handoff-next-focus-b2022aba.mdc, .cursor/rules/learned/local/persistent-review-updated-4e38b694.mdc, .cursor/rules/learned/local/review-action-performed-f1c5416f.mdc, .cursor/rules/learned/local/sorry-agorokh-have-42f9a5c8.mdc, .cursor/rules/learned/local/your-warning-have-ff16f579.mdc
+<!-- process-miner:learned:end -->
+
 
 <!-- Append project-specific operational facts here after bootstrap. -->
 <!-- Example: "Pipeline venv at .venv/bin/python", "Gmail expanded to N threads on DATE" -->

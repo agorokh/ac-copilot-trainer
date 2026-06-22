@@ -1,0 +1,52 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: b2022abaa96f5ad6
+mined_from: 4 review comments across 4 PRs
+last_updated: 2026-06-22
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: test
+---
+
+# Handoff Next Focus (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): post-merge handoff for PR #236 one-command self-test runner
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo.ai/wp...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): refresh handoff + current focus after PR #239 HUD capture merge
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-co...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): Post-merge handoff updates for PR #242
+<code>📝 Documentation</code> <code>🕐 Less than 5 minutes</code>
+
+<img src="https://www.qodo.ai/wp-content/uploads/2025/...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): add post-merge handoff notes for PR #249 / issue #246
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo.ai/wp-conte...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
