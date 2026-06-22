@@ -34,6 +34,7 @@ def ci_policy_mod():
         "cursor/feat_issue-1_x",
         "renovate/configure",
         "vault/post-merge-pr176",
+        "miner/weekly-legacy",
     ],
 )
 def test_validate_branch_accepts_allowed(ci_policy_mod, branch: str) -> None:
@@ -46,6 +47,7 @@ def test_validate_branch_accepts_allowed(ci_policy_mod, branch: str) -> None:
         ("main", "must not be 'main'"),
         ("wrong-branch", "must start with one of"),
         ("feature/foo", "must start with one of"),
+        ("miner/not-weekly", "must start with one of"),
         ("", "must not be empty"),
     ],
 )
