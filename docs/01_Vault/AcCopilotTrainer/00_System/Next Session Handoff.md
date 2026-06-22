@@ -32,7 +32,45 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-21 — FRONTIER COACHING PROGRAM: foundation + brain-wiring shipped; tyre model next)
+## Resume here (2026-06-22 — FRONTIER COACHING PROGRAM: 6 deliverables shipped; real-time path is next)
+
+**Five offline pillars MERGED + a 6th in PR. Remaining: the real-time path (the north star).**
+Shipped this run (each through full multi-bot review, every real finding fixed):
+- **#266 telemetry capture** (per-wheel omega/slip/tyre-temp, schema v2) ·
+  **#275 brain wired into the live lap_complete path** (`build_structured_debrief` +
+  `build_brain_followup` + `_send_brain_followup`) ·
+  **#280 tyre thermal model** (`tyre_model.py`: window/warm-up/degradation/imbalance/hot-pressure,
+  compound-aware) · **#282 conditions→grip model** (`conditions_model.py`: trackGripLevel
+  normalization + regime gating + qualitative temp) · **#286 per-corner track reference**
+  (`track_reference.py`: GGV optimal + corpus best, PR open).
+- Verified-knowledge nodes banked: `tyre-thermal-knowledge-2026-06-21.md`,
+  `conditions-grip-knowledge-2026-06-21.md`, `setup-aware-coaching-2026-06-20.md`.
+- **Discipline that held:** Understand-first (found the brain orphaned → wired not rebuilt); every
+  physics layer adversarially red-teamed (killed an impossible gas-law coupling, fabricated °C→grip%,
+  archive over-claims); ~30 bot threads resolved; every model ships its honest data-limits.
+
+**REMAINING program (dependency-ordered — the real-time coach is the north star):**
+1. **Structured coach-handoff protocol** — a versioned per-corner verdict message
+   `{corner, time_loss_s, cause_class (setup|technique|grip), confidence, suggested_setup_delta}`
+   for an RL/agentic coach. `cornerAnalysis` (from #275) already emits the shape; formalize + wire
+   `setup_optimizer.suggest_next_setup` into the delta.
+2. **Real-time observer** (`realtime_observer.py`) — streaming grip/tyre-fade observer in the sidecar
+   consuming the high-rate telemetry; updates the grip envelope + flags fade/lockup/cold-tyre live.
+3. **Live brain-grounded advisories (RIG):** [#277](https://github.com/agorokh/ac-copilot-trainer/issues/277) —
+   deliver `archivePath` on lap_complete + render `debriefSource==brain` in `ws_bridge.lua`; drive a
+   real lap to confirm CONFIRMED per-wheel attribution end-to-end. THE in-the-ear coach.
+4. **Integrate tyre/conditions/track models into the debrief** — add their sections to
+   `build_structured_debrief` (thin wiring; the models exist + are tested).
+
+**Open follow-ups:** [#277](https://github.com/agorokh/ac-copilot-trainer/issues/277) (live activation, rig),
+[#278](https://github.com/agorokh/ac-copilot-trainer/issues/278) (lupa replay-wheels test fidelity).
+**Process-miner noise (file an issue):** the learned-rules miner is mining bot BOILERPLATE
+(rate-limit/quota/"Persistent review updated"/"Action performed" comments) into
+`.claude/rules/learned/local/*.md` — its noise filter should drop non-substantive bot comments.
+
+---
+
+## Prior (2026-06-21 — foundation + brain-wiring shipped)
 
 **Autonomous program toward the north star (real-time AI coach > human at mechanics/tyres/conditions/
 technique).** An Understand workflow mapped the platform and found the decisive fact: the full
