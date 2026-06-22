@@ -62,10 +62,40 @@ def test_critical_is_compound_dependent():
 
 
 def test_degradation_onset_finding_in_window():
-    # medium window 75-105; 104°C is in-window but past the 103°C degradation band (codex #281).
+    # medium window 75-105; 104°C is in-window but in the top-3°C roll-off band (codex #281).
     r = analyze_tyres(_core(104, 104, 100, 100), compound="medium", laps_since_start=6)
     assert r.status["fl"] == "in_window"
     assert any(f.key == "degradation_onset" for f in r.findings)
+
+
+def test_degradation_onset_is_compound_aware():
+    # 104°C is degrading for MEDIUM (window top 105) but NOT for HARD (window top 110) — codex #281.
+    med = analyze_tyres(_core(104, 104, 100, 100), compound="medium", laps_since_start=6)
+    hard = analyze_tyres(_core(104, 104, 100, 100), compound="hard", laps_since_start=6)
+    assert any(f.key == "degradation_onset" for f in med.findings)
+    assert not any(f.key == "degradation_onset" for f in hard.findings)
+
+
+def test_headline_precedence_overheat_over_warming():
+    # one overheat wheel + others cold: headline says overheating (not warming), listing ONLY FL.
+    r = analyze_tyres(_core(112, 60, 60, 60), compound="medium", laps_since_start=8)
+    h = r.headline()
+    assert "overheating" in h.lower()
+    assert "FL" in h and "FR" not in h
+
+
+def test_archive_rejects_nonfinite_temps_and_lap_n():
+    # a NaN sample must be ignored (not poison the mean); NaN lap_n must not crash — codex #281.
+    fields = ["spline", "tyreCoreTemp_fl", "tyreCoreTemp_fr", "tyreCoreTemp_rl", "tyreCoreTemp_rr"]
+    samples = [
+        [0.0, 90.0, 90.0, 88.0, 88.0],
+        [0.5, float("nan"), 91.0, 89.0, 89.0],
+        [1.0, 92.0, 92.0, 90.0, 90.0],
+    ]
+    archive = {"lap": {"lap_n": float("nan")}, "trace": {"fields": fields, "samples": samples}}
+    r = tyres_from_lap_archive(archive)
+    assert r is not None
+    assert r.core["fl"] == 91.0  # mean of 90 and 92 (the NaN row skipped)
 
 
 def test_warming_tyre_in_off_window_headline():
