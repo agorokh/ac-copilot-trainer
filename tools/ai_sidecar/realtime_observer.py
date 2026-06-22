@@ -87,15 +87,18 @@ def _num(value: Any) -> float | None:
     return f if f == f and abs(f) != float("inf") else None
 
 
-def _normalize_frame(frame: dict[str, Any]) -> tuple[float | None, float | None, float]:
-    """Extract ``(spline, speed_kmh, brake)`` from either the offline replay shape or the live
+def _normalize_frame(
+    frame: dict[str, Any],
+) -> tuple[float | None, float | None, float, float | None]:
+    """Extract ``(spline, speed_kmh, brake, lap)`` from the offline replay or the live
     ``telemetry_tick`` shape.
 
     The replay/test shape carries ``spline``/``speed``/``brake`` at the top level; the live
     high-rate frame (``external_protocol._validate_telemetry_tick``) nests values under ``payload``
     with speed named ``speed_kmh``. We accept both so the #277 wiring can hand us the real frame
     without a translation shim. NB: the current high-rate contract does not yet carry ``spline`` —
-    that wiring (#277) must add it to the payload, since corner location requires it.
+    that wiring (#277) must add it to the payload, since corner location requires it. ``lap`` (the
+    completed-lap counter, when present) disambiguates a real lap completion from a pit/teleport.
     """
     payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
 
@@ -109,7 +112,8 @@ def _normalize_frame(frame: dict[str, Any]) -> tuple[float | None, float | None,
     spline = _num(pick("spline", "normalizedSplinePosition"))
     speed = _num(pick("speed", "speed_kmh"))
     brake = _num(pick("brake")) or 0.0
-    return spline, speed, brake
+    lap = _num(pick("lap", "lapCount", "lap_count", "completedLaps"))
+    return spline, speed, brake, lap
 
 
 class RealtimeObserver:
@@ -134,26 +138,31 @@ class RealtimeObserver:
         self._brake_on = brake_on
         self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
         self._last_spline: float | None = None
+        self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
 
     def reset(self) -> None:
-        """Clear all per-corner pass state (start of a fresh lap)."""
+        """Clear per-corner pass state (start of a fresh lap). The lap counter persists."""
         self._passes = {r.index: _CornerPass() for r in self._refs}
         self._last_spline = None
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
-        spline, speed, brake = _normalize_frame(frame)
+        spline, speed, brake, lap = _normalize_frame(frame)
         if spline is None or speed is None:
             return []
 
         out: list[Advisory] = []
         # A backward spline jump is either a true start/finish wrap or a same-lap rewind
-        # (teleport / pit / replay). Only a true wrap (prev high → current low) completes the lap
-        # and earns end-of-lap grading of a corner that ends at the line (spline_hi ~0.99); a
-        # rewind abandons the stint, so clear state WITHOUT a spurious apex-deficit (codex #294).
+        # (pit/teleport/replay). Shape alone is ambiguous — a return-to-pits also lands near the
+        # line — so grade end-of-lap ONLY on real lap-completion evidence: an authoritative
+        # lap-counter advance, or, when no counter is supplied, a wrap-shaped jump. A wrap-shaped
+        # jump with a KNOWN, non-advancing counter is a pit/teleport, so clear state WITHOUT a
+        # spurious apex-deficit (codex #294, mirroring delta.lua's lap-count gate).
         if self._last_spline is not None and self._last_spline - spline > _LAP_WRAP_DROP:
-            true_wrap = self._last_spline >= _WRAP_PREV_MIN and spline <= _WRAP_CUR_MAX
-            if true_wrap:
+            lap_known = lap is not None and self._last_lap is not None
+            lap_advanced = lap_known and lap > self._last_lap
+            wrap_shaped = self._last_spline >= _WRAP_PREV_MIN and spline <= _WRAP_CUR_MAX
+            if lap_advanced or (wrap_shaped and not lap_known):
                 for ref in self._refs:
                     st = self._passes[ref.index]
                     if st.inside and not st.exit_emitted:
@@ -162,9 +171,21 @@ class RealtimeObserver:
                             out.append(a)
             self.reset()
         self._last_spline = spline
+        if lap is not None:
+            self._last_lap = lap
 
         for ref in self._refs:
             st = self._passes[ref.index]
+            # Braking-evaluation region: from the (corpus/GGV) brake point to the apex — which may
+            # begin UPSTREAM of the lateral-g corner window, so a driver coasting past the real
+            # brake point is cued there, not only once the window starts (codex #294 @176).
+            bp = ref.best_brake_point_spline
+            if bp is not None and bp <= spline <= ref.apex_spline:
+                if brake >= self._brake_on:
+                    st.has_braked = True  # so a later release before apex isn't "late to brake"
+                a = self._late_brake(ref, st, spline, speed, brake)
+                if a is not None:
+                    out.append(a)
             in_window = ref.spline_lo <= spline <= ref.spline_hi
             if in_window:
                 st.inside = True
@@ -172,10 +193,7 @@ class RealtimeObserver:
                     speed if st.min_speed_kmh is None else min(st.min_speed_kmh, speed)
                 )
                 if brake >= self._brake_on:
-                    st.has_braked = True  # record braking so a later release isn't "late to brake"
-                a = self._late_brake(ref, st, spline, speed, brake)
-                if a is not None:
-                    out.append(a)
+                    st.has_braked = True
             elif st.inside and spline > ref.spline_hi and not st.exit_emitted:
                 # just left the corner (downstream of exit) → grade the apex
                 a = self._apex_deficit(ref, st)

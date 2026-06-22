@@ -162,6 +162,61 @@ def test_trail_brake_before_brake_point_is_not_flagged_late():
     assert [a for a in fired if a.kind == "late_brake"] == []
 
 
+def test_late_brake_fires_upstream_of_corner_window():
+    # brake point upstream of turn-in (bp 0.30 < spline_lo 0.40): a driver coasting past the real
+    # brake point must be cued THERE, not delayed until the corner window begins (codex #294)
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.45,
+        spline_lo=0.40,
+        spline_hi=0.55,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.30,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+    out = obs.observe({"spline": 0.32, "speed": 150.0, "brake": 0.0})  # past bp, before the window
+    late = [a for a in out if a.kind == "late_brake"]
+    assert late and late[0].corner == 0
+    assert late[0].spline < ref.spline_lo  # cued upstream of turn-in
+
+
+def _final_corner_ref() -> CornerReference:
+    return CornerReference(
+        index=0,
+        apex_spline=0.95,
+        spline_lo=0.90,
+        spline_hi=0.99,
+        optimal_apex_kmh=120.0,
+        best_observed_apex_kmh=120.0,
+        best_brake_point_spline=0.88,
+        n_corpus=1,
+    )
+
+
+def test_wrap_shaped_pit_return_with_known_lap_is_not_graded():
+    # wrap-SHAPED jump (0.92 -> 0.03) but the lap counter did NOT advance => pit/teleport, not a lap
+    # completion; must clear state WITHOUT an end-of-lap apex-deficit (codex #294 @155)
+    obs = RealtimeObserver([_final_corner_ref()])
+    obs.observe({"spline": 0.92, "speed": 90.0, "brake": 0.5, "lap": 1})  # inside, slow
+    out = obs.observe({"spline": 0.03, "speed": 60.0, "brake": 0.0, "lap": 1})  # same lap -> pit
+    assert [a for a in out if a.kind == "apex_deficit"] == []
+
+
+def test_real_lap_completion_with_lap_advance_is_graded():
+    # same wrap shape, but the lap counter advanced 1 -> 2 => a real lap completion; grade the
+    # final corner that ended at the line (codex #294 @155)
+    obs = RealtimeObserver([_final_corner_ref()])
+    obs.observe(
+        {"spline": 0.92, "speed": 90.0, "brake": 0.5, "lap": 1}
+    )  # inside, slow (deficit 30)
+    out = obs.observe({"spline": 0.03, "speed": 150.0, "brake": 0.0, "lap": 2})  # lap advanced
+    deficits = [a for a in out if a.kind == "apex_deficit"]
+    assert deficits and deficits[0].corner == 0
+    assert deficits[0].detail["deficit_kmh"] > 0
+
+
 def test_same_lap_rewind_is_not_graded_as_a_wrap():
     # a teleport/pit/replay rewind (prev 0.62 -> 0.05, NOT a start/finish wrap) inside a corner must
     # clear state WITHOUT emitting a spurious apex-deficit for the abandoned stint (codex #294)
