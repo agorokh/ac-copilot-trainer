@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-20T04:00:00Z
+last_updated: 2026-06-22T22:05:00Z
 relates_to:
+  - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/00_System/Current Focus.md
@@ -32,7 +33,53 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-22 — FRONTIER COACHING PROGRAM: 6 deliverables shipped; real-time path is next)
+## Resume here (2026-06-22 LATER — REAL-TIME COACHING PATH: 3 more deliverables MERGED; only the RIG step (#277) remains)
+
+**The offline real-time-coaching upgrade is DONE — all three offline-buildable pieces merged this run**
+(each through multi-bot review **+ a 12-agent adversarial pre-merge workflow**; every real finding fixed-forward):
+
+- **#289 / PR #290 MERGED — structured coach-handoff protocol** (`tools/ai_sidecar/coach_handoff.py`):
+  versioned per-corner verdict envelope `{v, lap, car_id, track_id, total_time_lost_s,
+  top_focus_corner, balance, corners[corner, time_loss_s, cause_class, confidence, advisory, symptom,
+  coaching, suggested_setup_delta]}` for a downstream RL/agentic coach. `suggested_setup_delta` is
+  cause- AND car- AND confidence-gated: technique corners → no change; braking/exit deltas fire only
+  while SUSPECTED and defer to the confirmed per-wheel verdict; 911-bias advice gated to the
+  rear-engine 911. Full `cause_class` enum documented (incl. `setup+technique`); the delta
+  self-describes its `advisory`/`confidence`.
+- **#291 / PR #292 MERGED — tyre/conditions/track-reference integrated into the debrief**
+  (`coach_report.py` + `protocol.py`): `build_structured_debrief` now emits `tyres`/`conditions`/
+  `corner_reference` (text + JSON), forwarded to live clients by `build_brain_followup`
+  (`tyres`/`conditions`/`cornerReference`). Honest by construction — tyre block suppressed in the wet
+  (slick model invalid); conditions surfaced from temps alone; a slower reference is never published
+  as a target; reference labeled corpus-best, never a fabricated GGV optimum; inline lap_complete
+  lap-number normalized into `lap.lap_n` for tyre warm-up classification.
+- **#293 / PR #294 MERGED — real-time observer core** (`tools/ai_sidecar/realtime_observer.py`):
+  `RealtimeObserver` streams live frames → grounded `late_brake` + `apex_deficit` advisories vs the
+  per-corner reference. Lap detection matches in-sim `delta.lua` (true wrap vs pit/teleport vs
+  **deferred-lapCount**); trail-brake-aware (no false "brake!" when the driver braked early); brake
+  eval spans **upstream** of turn-in; honest corpus-vs-GGV source label; 1-based turn labels.
+  Pure-stdlib, replay-tested; verified on real demo laps. Live wiring is **#277** (rig-gated).
+
+**Discipline that held (again):** every output honest about its data limits — confirmed-axle
+deference, GGV-vs-corpus labeling, wet-tyre suppression, lap-count gating. ~20 bot threads across 4–6
+rounds per PR, **plus** a 12-agent adversarial workflow that caught the GGV-vs-corpus mislabel the bots
+missed. Filed a spawn-task chip for a real Windows path-guard bug in `tools/process_miner/`
+(`normalize_path_list` uses `Path.is_absolute()`, which misses `/etc/passwd` on Windows).
+
+**THE remaining north-star step — [#277](https://github.com/agorokh/ac-copilot-trainer/issues/277) (RIG):**
+wire `RealtimeObserver` into the sidecar's live `telemetry_tick` stream (the observer already
+normalizes that payload shape; the high-rate contract must add `spline`), deliver `archivePath` on
+lap_complete, render `debriefSource==brain` + the live advisories in `ws_bridge.lua`, and drive a real
+lap to confirm the in-the-ear coach end-to-end. THE in-the-ear coach.
+
+**Housekeeping:** local `main` still carries one stray prior-session chore (`b620a06`,
+`.cursor/hooks.json` untrack) not on `origin` — branch all work from `origin/main`; a post-merge
+steward should reconcile it. The process-miner is still mining bot BOILERPLATE into
+`.claude/rules/learned/local/*.md` (noise filter needed).
+
+---
+
+## Prior (2026-06-22 — FRONTIER COACHING PROGRAM: 6 deliverables shipped; real-time path is next)
 
 **Five offline pillars MERGED + a 6th in PR. Remaining: the real-time path (the north star).**
 Shipped this run (each through full multi-bot review, every real finding fixed):
