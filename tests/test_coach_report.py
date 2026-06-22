@@ -192,3 +192,14 @@ def test_slower_reference_corners_are_not_published_as_targets():
     d = build_structured_debrief(fast, reference_archive=slow_ref, grip_ceiling_g=2.5)
     # every corner's "target" is below the driven speed -> all dropped -> block omitted
     assert d["corner_reference"] is None
+
+
+def test_trail_braking_block_in_structured_debrief():
+    # the trail-braking analyzer's per-corner read flows into the structured debrief + text (#296)
+    d = build_structured_debrief(_corner_archive(), grip_ceiling_g=2.5)
+    tb = d["trail_braking"]
+    assert tb is not None and tb  # the corner brakes, so it produces a finding
+    entry = tb[0]
+    assert "classification" in entry and "trail_overlap" in entry and "coaching" in entry
+    # the square-brake fixture is a non-"good" technique → surfaces in the text section
+    assert "Trail braking" in d["text"]

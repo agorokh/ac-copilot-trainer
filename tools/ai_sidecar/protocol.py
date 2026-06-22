@@ -137,6 +137,8 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         response["conditions"] = structured["conditions"]
     if structured.get("corner_reference") is not None:
         response["cornerReference"] = structured["corner_reference"]
+    if structured.get("trail_braking") is not None:
+        response["trailBraking"] = structured["trail_braking"]
     return response
 
 

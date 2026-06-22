@@ -43,6 +43,7 @@ from tools.ai_sidecar.track_reference import (
     build_references,
     score_lap,
 )
+from tools.ai_sidecar.trail_brake import TrailBrakeFinding, analyze_trail_braking
 from tools.ai_sidecar.tyre_model import TyreReport, tyres_from_lap_archive
 
 
@@ -95,6 +96,7 @@ def format_debrief(
     tyres: TyreReport | None = None,
     conditions: ConditionsReport | None = None,
     corner_reference: list[CornerScore] | None = None,
+    trail_braking: list[TrailBrakeFinding] | None = None,
 ) -> str:
     """Render the full debrief as text."""
     out: list[str] = [f"=== {title} ==="]
@@ -156,6 +158,11 @@ def format_debrief(
             out.append("  " + s.headline)
             for fnd in s.findings[:1]:
                 out.append(f"      - {fnd}")
+    flagged = [f for f in (trail_braking or []) if f.classification != "good_trail_brake"]
+    if flagged:
+        out.append(f"\nTrail braking ({len(flagged)} corner(s) to work on):")
+        for f in flagged:
+            out.append(f"  T{f.corner + 1} ({f.classification}): {f.coaching}")
     return "\n".join(out)
 
 
@@ -259,6 +266,28 @@ def _corner_reference_struct(scores: list[CornerScore] | None) -> list[dict] | N
     ]
 
 
+def _trail_braking_struct(findings: list[TrailBrakeFinding] | None) -> list[dict] | None:
+    """JSON-serializable per-corner trail-braking block, or None when no corner braked.
+
+    Inferred from brake+steer overlap + decel (no direct load-transfer measurement) — a technique
+    read, not a proof of tyre state; the analyzer's docstring carries that caveat.
+    """
+    if not findings:
+        return None
+    return [
+        {
+            "corner": f.corner,
+            "apex_spline": round(f.apex_spline, 4),
+            "classification": f.classification,
+            "trail_overlap": f.trail_overlap,
+            "brake_off_rel": f.brake_off_rel,
+            "release_abruptness": f.release_abruptness,
+            "coaching": f.coaching,
+        }
+        for f in findings
+    ]
+
+
 def _analyze(
     lap_archive: dict,
     *,
@@ -286,6 +315,8 @@ def _analyze(
     if tyres is not None and not conditions.slick_model_valid:
         tyres = None
     corner_reference = _corner_reference_scores(ref, lap)
+    # trail-braking technique read, per corner (only corners that actually braked surface a finding)
+    trail_braking = [f for f in analyze_trail_braking(lap) if f.classification != "no_braking"]
     return {
         "lap": lap,
         "setup": setup,
@@ -294,6 +325,7 @@ def _analyze(
         "tyres": tyres,
         "conditions": conditions,
         "corner_reference": corner_reference,
+        "trail_braking": trail_braking,
     }
 
 
@@ -332,6 +364,7 @@ def build_structured_debrief(
         tyres=a["tyres"],
         conditions=a["conditions"],
         corner_reference=a["corner_reference"],
+        trail_braking=a["trail_braking"],
     )
     corners = [
         {
@@ -372,6 +405,7 @@ def build_structured_debrief(
         "tyres": _tyres_struct(a["tyres"]),
         "conditions": _conditions_struct(a["conditions"]),
         "corner_reference": _corner_reference_struct(a["corner_reference"]),
+        "trail_braking": _trail_braking_struct(a["trail_braking"]),
     }
 
 
@@ -398,6 +432,7 @@ def build_debrief(
         tyres=a["tyres"],
         conditions=a["conditions"],
         corner_reference=a["corner_reference"],
+        trail_braking=a["trail_braking"],
     )
 
 

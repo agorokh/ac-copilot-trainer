@@ -105,6 +105,9 @@ def test_brain_followup_from_inline_trace(monkeypatch):
     assert out["debriefSource"] == "brain"
     assert out["cornerAnalysis"]
     assert "balance" in out
+    # trail-braking findings are forwarded to live clients (#296/#299)
+    assert out.get("trailBraking")
+    assert "classification" in out["trailBraking"][0]
 
 
 def test_brain_followup_from_archive_path(tmp_path, monkeypatch):
