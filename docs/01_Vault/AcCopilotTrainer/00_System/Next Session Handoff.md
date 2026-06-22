@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-22T22:26:00Z
+last_updated: 2026-06-22T22:45:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
@@ -51,8 +51,25 @@ Capability → module (all merged): **mechanics** `setup_model` · **setup→sym
 corner scores trail overlap (brake∩steer), brake-off-vs-apex (corner-fraction), and release smoothness
 → classifies `good_trail_brake`/`brakes_early_then_coasts`/`trails_too_deep`/`abrupt_release`/
 `straight_braking`/`no_braking` with coaching. Honest: inferred from brake+steer overlap + decel, no
-direct load-transfer measurement. 8 tests; verified on real demo laps. **Follow-up:** fold the
-trail-brake signal into `corner_attribution`/`coach_handoff` (a new issue; touches those files).
+direct load-transfer measurement. 8 tests; verified on real demo laps.
+
+**Trail-braking wired into the coaching output — #299 / PR #300 MERGED:** `build_structured_debrief`
+now emits a per-corner `trail_braking` block (text + JSON), `format_debrief` renders a
+"Trail braking (N corner(s) to work on)" section, and `protocol.build_brain_followup` forwards it to
+live clients as `trailBraking` — mirroring the #291 tyre/conditions/track integration. So **every
+named capability is now both built AND flowing into the coaching output.** Verified on real demo laps
+(T2/T4/T5 abrupt-release surfaced).
+
+**Open follow-ups (all tracked, none blocking):**
+[#277](https://github.com/agorokh/ac-copilot-trainer/issues/277) — RIG live activation (the one
+remaining north-star step; needs AG_PC + AC) ·
+[#301](https://github.com/agorokh/ac-copilot-trainer/issues/301) — optionally fold trail-braking into
+`coach_handoff`/`corner_attribution` (enhancement; data already consumable via `trail_braking`) ·
+[#278](https://github.com/agorokh/ac-copilot-trainer/issues/278) — lupa replay-wheels test fidelity ·
+a Windows path-guard bug in `process_miner.normalize_path_list` (filed as a spawn-task chip) ·
+process-miner still mining bot boilerplate into `.claude/rules/learned/local/*.md` (noise filter).
+**Housekeeping:** local `main` carries a stray prior-session chore (`b620a06`) not on `origin` —
+branch all work from `origin/main`.
 
 ---
 
