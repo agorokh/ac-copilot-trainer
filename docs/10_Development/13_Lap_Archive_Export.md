@@ -31,13 +31,24 @@ Stable columns:
 source_file, lap_uuid, session_uuid, car_id, track_id, lap_n, lap_ms,
 is_valid, sample_index, time_s, elapsed_ms, spline, lap_distance_m,
 speed_kmh, brake, throttle, steering, gear,
-position_x_m, position_y_m, position_z_m
+position_x_m, position_y_m, position_z_m,
+wheelAngularSpeed_fl, wheelAngularSpeed_fr, wheelAngularSpeed_rl, wheelAngularSpeed_rr,
+wheelSlip_fl, wheelSlip_fr, wheelSlip_rl, wheelSlip_rr,
+tyreCoreTemp_fl, tyreCoreTemp_fr, tyreCoreTemp_rl, tyreCoreTemp_rr
 ```
 
 `brake`, `throttle`, and `steering` preserve the normalized CSP values from the
 archive trace. `lap_distance_m` is derived from `spline * track.lengthM` when
 track length is present; otherwise it is blank. Missing trace fields export as
 blank cells so downstream notebooks can distinguish "missing" from zero.
+
+The **per-wheel channels** (issue #266) carry, per corner FL/FR/RL/RR:
+`wheelAngularSpeed_*` (rad/s — the canonical longitudinal signal the analysis
+layer derives slip from, to attribute which axle locks / exit wheelspin),
+`wheelSlip_*` (AC `ndSlip`, secondary), and `tyreCoreTemp_*` (degC — feeds the
+tyre thermal model). Archives written before #266 lack these and export blank.
+The trace field set is a hard contract kept byte-identical between
+`lap_archive.lua::TRACE_FIELDS` and `reference_lap.py::TRACE_FIELDS`.
 
 ### Optional Tier-B per-wheel channels (#266)
 

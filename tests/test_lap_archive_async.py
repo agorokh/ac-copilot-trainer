@@ -153,6 +153,19 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
         "px",
         "py",
         "pz",
+        # per-wheel channels (issue #266)
+        "wheelAngularSpeed_fl",
+        "wheelAngularSpeed_fr",
+        "wheelAngularSpeed_rl",
+        "wheelAngularSpeed_rr",
+        "wheelSlip_fl",
+        "wheelSlip_fr",
+        "wheelSlip_rl",
+        "wheelSlip_rr",
+        "tyreCoreTemp_fl",
+        "tyreCoreTemp_fr",
+        "tyreCoreTemp_rl",
+        "tyreCoreTemp_rr",
     ]
     assert record["setup"]["hash"] == "hash1234"
     assert record["coaching"]["rules_hints"] == ["Brake earlier at T1"]

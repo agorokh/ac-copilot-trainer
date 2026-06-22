@@ -42,6 +42,21 @@ def test_generated_reference_archive_matches_lap_archive_schema_v1() -> None:
     assert record["corners"][0]["entrySpeed"] == pytest.approx(BRAKE_ENTRY_SPEED_KMH)
 
 
+def test_generated_archive_carries_per_wheel_channels() -> None:
+    # #266: a generated reference archive must include the per-wheel columns with physically
+    # plausible synthetic values (free-rolling omega = v/radius, zero slip, warm tyres).
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    for name in ("wheelAngularSpeed_fl", "wheelSlip_rr", "tyreCoreTemp_fl"):
+        assert name in fields
+    frames = archive_trace_to_object_trace(record)
+    f0 = frames[0]
+    speed_ms = f0["speed"] / 3.6
+    assert f0["wheelAngularSpeed_fl"] == pytest.approx(speed_ms / 0.347, rel=1e-6)
+    assert f0["wheelSlip_fl"] == pytest.approx(0.0)
+    assert f0["tyreCoreTemp_rr"] == pytest.approx(80.0)
+
+
 def test_archive_trace_converts_to_live_best_lap_trace_shape() -> None:
     record = build_archive_record_from_scenario("brake_too_late")
     frames = archive_trace_to_object_trace(record)

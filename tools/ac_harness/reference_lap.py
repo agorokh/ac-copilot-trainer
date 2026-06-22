@@ -36,6 +36,21 @@ TRACE_FIELDS: tuple[str, ...] = (
     "px",
     "py",
     "pz",
+    # Per-wheel channels (issue #266) — MUST stay identical to lap_archive.lua::TRACE_FIELDS.
+    # Order: FL, FR, RL, RR. angularSpeed (rad/s) is the canonical longitudinal slip source;
+    # slip (AC ndSlip) is secondary; tyre core temp (degC) feeds the tyre thermal model.
+    "wheelAngularSpeed_fl",
+    "wheelAngularSpeed_fr",
+    "wheelAngularSpeed_rl",
+    "wheelAngularSpeed_rr",
+    "wheelSlip_fl",
+    "wheelSlip_fr",
+    "wheelSlip_rl",
+    "wheelSlip_rr",
+    "tyreCoreTemp_fl",
+    "tyreCoreTemp_fr",
+    "tyreCoreTemp_rl",
+    "tyreCoreTemp_rr",
 )
 
 SCHEMA_VERSION = 1
@@ -67,10 +82,19 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+#: The original required trace columns. Fields beyond these (the per-wheel #266 channels) are
+#: OPTIONAL and default to 0.0 when a frame omits them, so hand-built / pre-#266 traces stay valid.
+_REQUIRED_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
+
+
 def _normalize_trace_frame(frame: Mapping[str, Any], index: int) -> dict[str, float]:
     out: dict[str, float] = {}
     for field in TRACE_FIELDS:
-        out[field] = _finite_float(frame.get(field), f"trace[{index}].{field}")
+        raw = frame.get(field)
+        if raw is None and field not in _REQUIRED_TRACE_FIELDS:
+            out[field] = 0.0  # optional per-wheel channel absent on this frame
+        else:
+            out[field] = _finite_float(raw, f"trace[{index}].{field}")
     if out["spline"] < 0.0 or out["spline"] > 1.0:
         raise LapArchiveSchemaError(f"trace[{index}].spline must be in [0, 1]")
     return out

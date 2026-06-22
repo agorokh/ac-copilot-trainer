@@ -217,6 +217,25 @@ def test_no_wheel_channels_means_no_wheel_data():
     assert lap.wheel_omega is None
 
 
+def test_all_zero_omega_columns_treated_as_no_wheel_data():
+    # #266: schema-v2 always WRITES the wheel columns; a real lap whose wheels were unreadable
+    # persists all zeros. A zero omega would compute slip = -1 (full lock) every sample and falsely
+    # confirm a lockup, so an all-zero column must be treated as "no live wheel data".
+    arch = _make_corner_archive()
+    cols = [
+        "wheelAngularSpeed_fl",
+        "wheelAngularSpeed_fr",
+        "wheelAngularSpeed_rl",
+        "wheelAngularSpeed_rr",
+    ]
+    arch["trace"]["fields"].extend(cols)
+    for row in arch["trace"]["samples"]:
+        row.extend([0.0, 0.0, 0.0, 0.0])
+    lap = lap_trace_from_archive(arch)
+    assert lap.has_wheel_data is False
+    assert lap.wheel_omega is None
+
+
 def test_spline_derived_from_positions_when_channel_missing():
     arch = _make_corner_archive()
     fi = arch["trace"]["fields"].index("spline")

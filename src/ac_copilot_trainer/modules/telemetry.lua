@@ -1,6 +1,7 @@
 -- Rolling telemetry buffer plus per-lap trace (downsampled on finalize, max ~2000 samples).
 
 local ch = require("csp_helpers")
+local wheel_read = require("wheel_read")
 
 local M = {}
 
@@ -172,6 +173,12 @@ function Telemetry:update(dt, car, sim)
   if self.lapT0 ~= nil then
     local eMs = (t - self.lapT0) * 1000
     self.lapN = self.lapN + 1
+    -- Per-wheel channels (issue #266): angular speed is the canonical longitudinal signal the
+    -- analysis layer derives slip from (which axle locks / exit wheelspin); slip + tyre core temp
+    -- ride along for the tyre model. nil reads serialize as 0 via traceSampleToColumnRow; the
+    -- Python loader treats an all-zero omega column as "no live wheel data" so it never confirms a
+    -- false lockup when wheels are unreadable.
+    local w = wheel_read.readPerWheel(car)
     ---@type LapTraceSample
     local lp = {
       spline = car.splinePosition or 0,
@@ -184,6 +191,18 @@ function Telemetry:update(dt, car, sim)
       px = px,
       py = py,
       pz = pz,
+      wheelAngularSpeed_fl = w.omega.fl,
+      wheelAngularSpeed_fr = w.omega.fr,
+      wheelAngularSpeed_rl = w.omega.rl,
+      wheelAngularSpeed_rr = w.omega.rr,
+      wheelSlip_fl = w.slip.fl,
+      wheelSlip_fr = w.slip.fr,
+      wheelSlip_rl = w.slip.rl,
+      wheelSlip_rr = w.slip.rr,
+      tyreCoreTemp_fl = w.temp.fl,
+      tyreCoreTemp_fr = w.temp.fr,
+      tyreCoreTemp_rl = w.temp.rl,
+      tyreCoreTemp_rr = w.temp.rr,
     }
     self.lapBuf[self.lapN] = lp
     if self.lapN > MAX_LAP_RAW then

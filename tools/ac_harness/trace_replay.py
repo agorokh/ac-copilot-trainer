@@ -273,6 +273,13 @@ CLEAN_LAP_FRAMES = 240
 DT_S = 0.05  # 20 Hz synthetic sampling
 
 
+# Synthetic per-wheel defaults: free-rolling wheels (omega = v / radius, zero slip) at a warm tyre
+# temperature. Keeps generated reference traces physically plausible and the per-wheel TRACE_FIELDS
+# populated (issue #266) without claiming a lockup/wheelspin the scenario didn't model.
+_SYNTH_WHEEL_RADIUS_M = 0.347
+_SYNTH_TYRE_TEMP_C = 80.0
+
+
 def _base_frame(
     *,
     spline: float,
@@ -286,6 +293,7 @@ def _base_frame(
     py: float = 0.0,
     pz: float = 0.0,
 ) -> TraceFrame:
+    omega = (speed / 3.6) / _SYNTH_WHEEL_RADIUS_M  # free-rolling (no slip)
     return {
         "spline": spline,
         "speed": speed,
@@ -297,6 +305,18 @@ def _base_frame(
         "px": px,
         "py": py,
         "pz": pz,
+        "wheelAngularSpeed_fl": omega,
+        "wheelAngularSpeed_fr": omega,
+        "wheelAngularSpeed_rl": omega,
+        "wheelAngularSpeed_rr": omega,
+        "wheelSlip_fl": 0.0,
+        "wheelSlip_fr": 0.0,
+        "wheelSlip_rl": 0.0,
+        "wheelSlip_rr": 0.0,
+        "tyreCoreTemp_fl": _SYNTH_TYRE_TEMP_C,
+        "tyreCoreTemp_fr": _SYNTH_TYRE_TEMP_C,
+        "tyreCoreTemp_rl": _SYNTH_TYRE_TEMP_C,
+        "tyreCoreTemp_rr": _SYNTH_TYRE_TEMP_C,
     }
 
 
