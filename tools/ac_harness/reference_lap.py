@@ -312,8 +312,8 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
 def archive_trace_to_object_trace(record: Mapping[str, Any]) -> list[dict[str, float]]:
     """Convert archive column rows into the live trainer's ``bestLapTrace`` shape."""
     validate_lap_archive_record(record)
-    # Iterate the DECLARED fields, not TRACE_FIELDS: a pre-#266 archive declares only the 10 required
-    # columns, so indexing all 22 here would IndexError. Old records degrade to 10-field frames.
+    # Iterate the DECLARED fields, not TRACE_FIELDS: a pre-#266 archive declares only the 10
+    # required columns, so indexing all 22 would IndexError. Old records degrade to 10-field frames.
     fields = list(record["trace"]["fields"])
     rows = record["trace"]["samples"]
     frames: list[dict[str, float]] = []
