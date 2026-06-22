@@ -288,16 +288,16 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if trace.get("samples_count") != len(samples):
         raise LapArchiveSchemaError("trace.samples_count must equal len(trace.samples)")
     last_elapsed = -math.inf
+    # Row width must match the DECLARED fields (10 pre-#266, 22 with per-wheel channels).
+    n_cols = len(fields)
     for row_index, row in enumerate(samples):
-        if not isinstance(row, list) or len(row) != len(TRACE_FIELDS):
-            raise LapArchiveSchemaError(
-                f"trace.samples[{row_index}] must have {len(TRACE_FIELDS)} columns"
-            )
+        if not isinstance(row, list) or len(row) != n_cols:
+            raise LapArchiveSchemaError(f"trace.samples[{row_index}] must have {n_cols} columns")
         for field_index, value in enumerate(row):
             parsed = _finite_float(value, f"trace.samples[{row_index}][{field_index}]")
-            if TRACE_FIELDS[field_index] == "spline" and (parsed < 0.0 or parsed > 1.0):
+            if fields[field_index] == "spline" and (parsed < 0.0 or parsed > 1.0):
                 raise LapArchiveSchemaError(f"trace.samples[{row_index}].spline must be in [0, 1]")
-            if TRACE_FIELDS[field_index] == "eMs":
+            if fields[field_index] == "eMs":
                 if parsed < last_elapsed:
                     raise LapArchiveSchemaError("trace eMs must be monotonic nondecreasing")
                 last_elapsed = parsed
