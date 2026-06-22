@@ -115,6 +115,11 @@ def _num(value: Any) -> float | None:
     return f if f == f and abs(f) != float("inf") else None
 
 
+def _sane_grip(grip: float | None) -> bool:
+    """True when a trackGripLevel is present and within the sane band (else not comparable)."""
+    return grip is not None and SANE_GRIP[0] <= grip <= SANE_GRIP[1]
+
+
 def analyze_conditions(
     conditions: dict[str, Any] | None,
     *,
@@ -132,18 +137,18 @@ def analyze_conditions(
     ref = reference_conditions or {}
     ref_grip = _num(ref.get("trackGripLevel"))
     ref_track_t = _num(ref.get("trackTempC"))
-    # Cross-regime comparison is apples-to-oranges (a dry lap vs a WET reference): trackGripLevel
-    # doesn't explain the gap. Only emit a grip delta when current + reference are the SAME regime.
     ref_regime = _regime(ref.get("weatherType"))
-    same_regime = regime == ref_regime
-    grip_delta = (
-        round(grip - ref_grip, 4)
-        if grip is not None and ref_grip is not None and same_regime
-        else None
+    # A reference comparison is only meaningful when current + reference are the SAME, DRY regime
+    # (wet trackGripLevel/temp don't transfer) and both grip scalars are in the sane band. Otherwise
+    # both the grip delta AND the reference-temperature note are apples-to-oranges (codex #283).
+    comparable_ref = (
+        regime != "wet" and ref_regime == regime and _sane_grip(grip) and _sane_grip(ref_grip)
     )
+    grip_delta = round(grip - ref_grip, 4) if comparable_ref else None
+    ref_track_for_note = ref_track_t if comparable_ref else None
 
     findings = _build_findings(
-        regime, grip, band, track_t, ambient_t, weather, grip_delta, ref_grip, ref_track_t
+        regime, grip, band, track_t, ambient_t, weather, grip_delta, ref_grip, ref_track_for_note
     )
     return ConditionsReport(
         regime=regime,

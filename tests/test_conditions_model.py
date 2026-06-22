@@ -75,6 +75,29 @@ def test_grip_delta_skipped_across_mismatched_regimes():
     assert not any(f.key == "grip_vs_reference" for f in r.findings)
 
 
+def test_wet_to_wet_grip_delta_suppressed():
+    # codex #283: trackGripLevel comparison doesn't transfer in the wet, even wet-vs-wet.
+    r = analyze_conditions(
+        _cond(grip=0.95, weather="rain"), reference_conditions=_cond(grip=0.92, weather="rain")
+    )
+    assert r.grip_level_delta is None
+
+
+def test_out_of_range_grip_skips_delta():
+    # codex #283: if either grip scalar is outside the sane band, the delta is unreliable -> skip.
+    r = analyze_conditions(_cond(grip=0.5), reference_conditions=_cond(grip=0.99))
+    assert r.grip_level_delta is None
+
+
+def test_reference_temp_note_gated_by_regime():
+    # codex #283: a dry-current vs WET-reference track-temp comparison must not fire.
+    r = analyze_conditions(
+        _cond(track=20.0, weather="dry"),
+        reference_conditions=_cond(track=34.0, weather="rain"),
+    )
+    assert not any(f.key == "track_temp_vs_reference" for f in r.findings)
+
+
 def test_grip_vs_reference_is_labeled_approximate():
     r = analyze_conditions(_cond(grip=0.94), reference_conditions=_cond(grip=0.99))
     assert r.grip_level_delta is not None and r.grip_level_delta < 0
