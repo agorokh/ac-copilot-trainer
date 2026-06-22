@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-22T22:05:00Z
+last_updated: 2026-06-22T22:26:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
@@ -33,7 +33,30 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-22 LATER — REAL-TIME COACHING PATH: 3 more deliverables MERGED; only the RIG step (#277) remains)
+## Resume here (2026-06-22 FINAL — OFFLINE FRONTIER-COACHING PROGRAM COMPLETE; only the RIG step (#277) remains)
+
+**Every north-star coaching capability the operator named is now built + merged.** The lone remaining
+step toward the in-the-ear coach is the rig-gated live activation
+[#277](https://github.com/agorokh/ac-copilot-trainer/issues/277) — it needs the physical rig (AG_PC +
+AC), so it could not be done/verified this autonomous run.
+
+Capability → module (all merged): **mechanics** `setup_model` · **setup→symptom** `setup_knowledge` +
+`corner_attribution` · **tyres/compounds** `tyre_model` · **weather/track condition** `conditions_model`
+· **track nuances** `track_reference` · **brake-bias effect** `corner_attribution`/`coach_handoff` ·
+**trail-braking methodics** `trail_brake` (#296/PR #297) · **machine handoff** `coach_handoff` (#289) ·
+**live observer core** `realtime_observer` (#293) · **debrief integration + live forwarding**
+`coach_report`/`protocol` (#291).
+
+**Newest merge — #296 / PR #297 — trail-braking analyzer** (`tools/ai_sidecar/trail_brake.py`): per
+corner scores trail overlap (brake∩steer), brake-off-vs-apex (corner-fraction), and release smoothness
+→ classifies `good_trail_brake`/`brakes_early_then_coasts`/`trails_too_deep`/`abrupt_release`/
+`straight_braking`/`no_braking` with coaching. Honest: inferred from brake+steer overlap + decel, no
+direct load-transfer measurement. 8 tests; verified on real demo laps. **Follow-up:** fold the
+trail-brake signal into `corner_attribution`/`coach_handoff` (a new issue; touches those files).
+
+---
+
+## Prior (2026-06-22 LATER — REAL-TIME COACHING PATH: 3 deliverables MERGED)
 
 **The offline real-time-coaching upgrade is DONE — all three offline-buildable pieces merged this run**
 (each through multi-bot review **+ a 12-agent adversarial pre-merge workflow**; every real finding fixed-forward):
