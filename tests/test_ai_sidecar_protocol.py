@@ -4,16 +4,84 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 
 import pytest
 
+import tools.ai_sidecar.protocol as proto
 from tools.ai_sidecar.protocol import (
     EVENT_ANALYSIS_ERROR,
     EVENT_COACHING_RESPONSE,
     EVENT_CORNER_ADVICE,
     PROTOCOL_VERSION,
+    build_brain_followup,
     prepare_outbound_message,
 )
+
+
+def _rich_corner_archive() -> dict:
+    """A single-corner lap archive with per-wheel tyre temps + a conditions block (inline trace)."""
+    radius, ds, n_pre, n_arc, n_post = 30.0, 2.0, 40, 30, 40
+    n = n_pre + n_arc + n_post
+    kappa = [0.0] * n_pre + [1.0 / radius] * n_arc + [0.0] * n_post
+    theta, x, z, xs, zs = 0.0, 0.0, 0.0, [], []
+    for i in range(n):
+        xs.append(x)
+        zs.append(z)
+        theta += kappa[i] * ds
+        x += ds * math.cos(theta)
+        z += ds * math.sin(theta)
+    apex_i = n_pre + n_arc // 2
+    v = [55.0 if i < 25 else (25.0 if apex_i - 3 <= i <= apex_i + 3 else 45.0) for i in range(n)]
+    brake = [0.8 if 25 <= i < apex_i else 0.0 for i in range(n)]
+    throttle = [1.0 if i >= apex_i + 1 else 0.0 for i in range(n)]
+    steer = [0.4 if n_pre <= i < n_pre + n_arc else 0.0 for i in range(n)]
+    t_ms = [0.0]
+    for i in range(1, n):
+        t_ms.append(t_ms[-1] + ds / max(0.5, 0.5 * (v[i] + v[i - 1])) * 1000.0)
+    spline = [(ds * i) / (ds * (n - 1)) for i in range(n)]
+    fields = ["spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz"]
+    fields += ["tyreCoreTemp_fl", "tyreCoreTemp_fr", "tyreCoreTemp_rl", "tyreCoreTemp_rr"]
+    samples = [
+        [
+            spline[i],
+            v[i] * 3.6,
+            t_ms[i],
+            throttle[i],
+            brake[i],
+            steer[i],
+            4,
+            xs[i],
+            0.0,
+            zs[i],
+            35.0,
+            35.0,
+            35.0,
+            35.0,
+        ]
+        for i in range(n)
+    ]
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "event": "lap_complete",
+        "lap": 9,
+        "car": {"id": "ks_porsche_911_gt3_r_2016"},
+        "track": {"id": "magione"},
+        "conditions": {"trackGripLevel": 0.90, "weatherType": "clear"},
+        "trace": {"fields": fields, "samples": samples},
+    }
+
+
+def test_brain_followup_forwards_structured_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proto, "debrief_feature_enabled", lambda: True)
+    out = build_brain_followup(_rich_corner_archive())
+    assert out is not None
+    assert out["debriefSource"] == "brain"
+    # the integrated understanding blocks must reach live clients, not just the prose debrief
+    assert out.get("tyres") is not None
+    assert set(out["tyres"]["status"]) == {"fl", "fr", "rl", "rr"}
+    assert out.get("conditions") is not None
+    assert out["conditions"]["grip_band"] == "green"
 
 
 def test_prepare_rejects_bad_protocol() -> None:

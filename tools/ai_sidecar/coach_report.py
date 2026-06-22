@@ -47,9 +47,19 @@ from tools.ai_sidecar.tyre_model import TyreReport, tyres_from_lap_archive
 
 
 def _conditions_meaningful(report: ConditionsReport | None) -> bool:
-    """True when the conditions report carries something worth surfacing (not all-unknown)."""
+    """True when the conditions report carries real data worth surfacing (not all-unknown).
+
+    Temperatures alone count: ``conditions_model`` produces qualitative cold/hot-track coaching from
+    ``trackTempC`` / ``ambientTempC`` even with no grip or weather (codex #292). We key on concrete
+    inputs, not on ``findings`` — an archive with NO conditions block still yields a "no track-grip
+    data" finding, and surfacing a block that only says "no data" would be noise.
+    """
     return report is not None and (
-        report.regime != "unknown" or report.grip_level is not None or report.weather is not None
+        report.regime != "unknown"
+        or report.grip_level is not None
+        or report.weather is not None
+        or report.track_temp_c is not None
+        or report.ambient_temp_c is not None
     )
 
 

@@ -108,7 +108,7 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not structured or not structured.get("corners"):
         return None
-    return {
+    response: dict[str, Any] = {
         "protocol": PROTOCOL_VERSION,
         "event": EVENT_COACHING_RESPONSE,
         "lap": inbound.get("lap"),
@@ -118,6 +118,15 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         "cornerAnalysis": structured["corners"],
         "balance": structured["balance"],
     }
+    # Forward the machine-readable understanding blocks when the archive carried the data, so live
+    # clients (and the coach-handoff path) get tyres/conditions/reference, not just prose.
+    if structured.get("tyres") is not None:
+        response["tyres"] = structured["tyres"]
+    if structured.get("conditions") is not None:
+        response["conditions"] = structured["conditions"]
+    if structured.get("corner_reference") is not None:
+        response["cornerReference"] = structured["corner_reference"]
+    return response
 
 
 _CORNER_LABEL_MAX_LEN = 64

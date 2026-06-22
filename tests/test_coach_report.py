@@ -157,3 +157,18 @@ def test_debrief_text_includes_tyre_and_conditions_sections():
     text = build_debrief(_rich_archive(), grip_ceiling_g=2.5)
     assert "Tyres (thermal)" in text
     assert "Conditions (track/weather)" in text
+
+
+def test_conditions_block_present_with_temps_only():
+    # only track/ambient temps known (no grip, no weather) -> still meaningful (codex #292)
+    a = _corner_archive()
+    a["conditions"] = {
+        "trackGripLevel": None,
+        "weatherType": None,
+        "trackTempC": 41.0,
+        "ambientTempC": 30.0,
+    }
+    d = build_structured_debrief(a, grip_ceiling_g=2.5)
+    assert d["conditions"] is not None
+    assert d["conditions"]["track_temp_c"] == 41.0
+    assert d["conditions"]["grip_level"] is None
