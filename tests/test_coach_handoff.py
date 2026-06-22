@@ -44,23 +44,59 @@ def test_envelope_is_versioned_and_well_formed_even_when_empty():
 
 
 def test_braking_loss_suggests_front_bias_rearward_for_911():
+    # real brain output for braking is "setup+technique" (both causes present) — use the real value
     corners = [
         {
             "index": 0,
             "apex_spline": 0.3,
             "time_loss_s": 0.4,
             "headline": "C0",
-            "attributions": [_attr("braking_phase_loss", "setup", advisory=True)],
+            "attributions": [_attr("braking_phase_loss", "setup+technique", advisory=True)],
         }
     ]
     h = build_coach_handoff(_structured(corners), setup=SETUP)
     c = h["corners"][0]
-    assert c["cause_class"] == "setup"
+    assert c["cause_class"] == "setup+technique"  # mixed class forwarded verbatim (v1 enum)
     d = c["suggested_setup_delta"]
     assert d["section"] == "FRONT_BIAS"
-    assert d["direction"] == "decrease"  # 66% > 58% -> rearward
+    assert d["direction"] == "decrease"  # suspected + 911 + 66% > 58% -> rearward
     assert "50-56" in d["rationale"]
     assert c["advisory"] is True
+
+
+def test_braking_bias_decrease_is_gated_to_the_911():
+    # a non-911 car with the same high bias must NOT get the 911-specific rearward advice
+    corners = [
+        {
+            "index": 0,
+            "apex_spline": 0.3,
+            "time_loss_s": 0.4,
+            "headline": "C0",
+            "attributions": [_attr("braking_phase_loss", "setup+technique", advisory=True)],
+        }
+    ]
+    h = build_coach_handoff(_structured(corners, car="ferrari_488_gt3"), setup=SETUP)
+    d = h["corners"][0]["suggested_setup_delta"]
+    assert d["section"] == "FRONT_BIAS"
+    assert d["direction"] == "investigate"  # not "decrease" — car-specific target
+    assert "50-56" not in d["rationale"]
+
+
+def test_confirmed_braking_defers_to_the_brain_not_the_bias_number():
+    # advisory=False -> per-wheel slip confirmed the axle; do NOT guess "decrease" from bias alone
+    corners = [
+        {
+            "index": 0,
+            "apex_spline": 0.3,
+            "time_loss_s": 0.4,
+            "headline": "C0",
+            "attributions": [_attr("braking_phase_loss", "setup+technique", advisory=False)],
+        }
+    ]
+    h = build_coach_handoff(_structured(corners), setup=SETUP)  # 911, bias 66 > 58
+    d = h["corners"][0]["suggested_setup_delta"]
+    assert d["direction"] == "investigate"  # respects the confirmed diagnosis
+    assert "FORWARD" in d["rationale"] or "follow" in d["rationale"].lower()
 
 
 def test_technique_corner_suggests_no_setup_change():
@@ -129,6 +165,7 @@ def test_braking_loss_without_setup_is_investigate():
         },
     ]
     # no CarSetup supplied -> can't read bias -> "investigate", not a specific direction
+    corners[0]["attributions"][0]["advisory"] = True  # suspected, but no bias data
     d = build_coach_handoff(_structured(corners))["corners"][0]["suggested_setup_delta"]
     assert d["section"] == "FRONT_BIAS"
     assert d["direction"] == "investigate"
