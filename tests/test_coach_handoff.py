@@ -99,6 +99,43 @@ def test_confirmed_braking_defers_to_the_brain_not_the_bias_number():
     assert "FORWARD" in d["rationale"] or "follow" in d["rationale"].lower()
 
 
+def test_suspected_exit_traction_suggests_diff_power_context():
+    corners = [
+        {
+            "index": 4,
+            "apex_spline": 0.6,
+            "time_loss_s": 0.3,
+            "headline": "C4",
+            "attributions": [_attr("exit_traction", "setup+technique", advisory=True)],
+        }
+    ]
+    d = build_coach_handoff(_structured(corners), setup=SETUP)["corners"][0][
+        "suggested_setup_delta"
+    ]
+    assert d["section"] == "DIFF_POWER"
+    assert d["direction"] == "context"
+
+
+def test_confirmed_exit_traction_defers_to_brain():
+    # advisory=False -> per-wheel slip resolved it; don't push DIFF_POWER/TC blind (could be
+    # "late to power" technique, not wheelspin)
+    corners = [
+        {
+            "index": 4,
+            "apex_spline": 0.6,
+            "time_loss_s": 0.3,
+            "headline": "C4",
+            "attributions": [_attr("exit_traction", "setup+technique", advisory=False)],
+        }
+    ]
+    d = build_coach_handoff(_structured(corners), setup=SETUP)["corners"][0][
+        "suggested_setup_delta"
+    ]
+    assert d["section"] == "DIFF_POWER"
+    assert d["direction"] == "investigate"  # deferred, not a blind "context" push
+    assert "wheelspin" in d["rationale"].lower()
+
+
 def test_technique_corner_suggests_no_setup_change():
     corners = [
         {

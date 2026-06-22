@@ -97,12 +97,24 @@ def _setup_delta(
             "and live per-wheel slip confirms which axle locks.",
         }
     if key == "exit_traction":
+        if not bool(attr.get("advisory")):
+            # confirmed by per-wheel slip: the brain knows whether it was wheelspin (diff/TC
+            # relevant) or simply late to power (technique) — defer, don't push a setup lever blind.
+            return {
+                "section": "DIFF_POWER",
+                "direction": "investigate",
+                "from": setup.diff_power if setup else None,
+                "rationale": "the brain confirmed exit traction from live per-wheel slip — follow "
+                "its corner coaching; only touch DIFF_POWER/TC if it was actually wheelspin, not "
+                "if the loss was getting to power late (technique).",
+            }
         return {
             "section": "DIFF_POWER",
             "direction": "context",
             "from": setup.diff_power if setup else None,
-            "rationale": "lead with throttle technique + DIFF_POWER (on-throttle lock); lower TC "
-            "if it is cutting power — needs live RPM/slip to tell a cut from over-throttle.",
+            "rationale": "suspected exit traction — lead with throttle technique + DIFF_POWER "
+            "(on-throttle lock); lower TC if it is cutting power — needs live RPM/slip to tell a "
+            "cut from over-throttle.",
         }
     if key == "grip_limited":
         return {
