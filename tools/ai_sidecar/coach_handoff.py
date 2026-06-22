@@ -142,6 +142,13 @@ def build_coach_handoff(
     for c in corners_in:
         attrs = c.get("attributions") or []
         top = attrs[0] if attrs else None
+        delta = _setup_delta(top, setup, car_id) if top else None
+        if delta is not None and top is not None:
+            # Stamp the uncertainty onto the delta object itself so a consumer that branches on
+            # `direction` (without re-parsing the prose rationale) still sees that a suspected
+            # (advisory) directive is a hypothesis, not a confirmed verdict (review #289).
+            delta.setdefault("advisory", bool(top.get("advisory")))
+            delta.setdefault("confidence", top.get("confidence", 0.0))
         corners_out.append(
             {
                 "corner": c.get("index"),
@@ -152,7 +159,7 @@ def build_coach_handoff(
                 "advisory": bool(top.get("advisory")) if top else False,
                 "symptom": top.get("symptom") if top else "on pace",
                 "coaching": top.get("coaching") if top else c.get("headline", ""),
-                "suggested_setup_delta": _setup_delta(top, setup, car_id) if top else None,
+                "suggested_setup_delta": delta,
             }
         )
     losers = [

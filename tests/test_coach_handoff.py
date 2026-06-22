@@ -41,6 +41,7 @@ def test_envelope_is_versioned_and_well_formed_even_when_empty():
     assert h["corners"] == []
     assert h["total_time_lost_s"] is None
     assert h["top_focus_corner"] is None
+    assert h["balance"] is None  # nothing to forward from an empty/None structured input
 
 
 def test_braking_loss_suggests_front_bias_rearward_for_911():
@@ -62,6 +63,17 @@ def test_braking_loss_suggests_front_bias_rearward_for_911():
     assert d["direction"] == "decrease"  # suspected + 911 + 66% > 58% -> rearward
     assert "50-56" in d["rationale"]
     assert c["advisory"] is True
+    # the delta self-describes its uncertainty (a suspicion, not a confirmed verdict)
+    assert d["advisory"] is True
+    assert d["confidence"] == 0.8
+    # per-corner pass-through + lap-level fields are forwarded intact
+    assert c["confidence"] == 0.8
+    assert c["symptom"] == "braking_phase_loss"
+    assert c["coaching"] == "do the thing"
+    assert c["apex_spline"] == 0.3
+    assert h["car_id"] == "ks_porsche_911_gt3_r_2016"
+    assert h["track_id"] == "magione"
+    assert h["balance"] == {"verdict": "mechanical_all_speed", "lever_class": "mechanical"}
 
 
 def test_braking_bias_decrease_is_gated_to_the_911():
