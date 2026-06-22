@@ -164,3 +164,6 @@ def test_brain_followup_uses_reference_for_time_loss(tmp_path, monkeypatch):
     out = build_brain_followup(student)
     assert out is not None
     assert any(c["time_loss_s"] is not None for c in out["cornerAnalysis"])
+    # the per-corner reference block is forwarded to live clients (codex #291) and honestly sourced
+    assert out.get("cornerReference")
+    assert out["cornerReference"][0]["source"] == "reference_lap"

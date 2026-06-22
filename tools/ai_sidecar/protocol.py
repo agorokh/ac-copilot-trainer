@@ -91,6 +91,17 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
     archive = _resolve_lap_archive(inbound)
     if archive is None:
         return None
+    # Normalize the lap counter: a lap_complete frame carries it as a top-level int (`lap: 9`), but
+    # the archive/tyre model expects `lap.lap_n`. Without this, tyres_from_lap_archive sees no lap
+    # number, so late-lap below-window tyres read as "warming" instead of persistent off-window
+    # (codex #291). Shallow-copy so we never mutate the caller's inbound dict.
+    lap_num = inbound.get("lap")
+    if (
+        isinstance(lap_num, int)
+        and not isinstance(lap_num, bool)
+        and not isinstance(archive.get("lap"), dict)
+    ):
+        archive = {**archive, "lap": {"lap_n": lap_num}}
     # optional per-car lateral grip ceiling (g) lets the brain separate grip-limited from technique
     grip_ceiling_g = _as_float(inbound.get("gripCeilingG"))
     # optional reference lap (e.g. the driver's best): unlocks the delta-based rules (time lost per
@@ -108,7 +119,7 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not structured or not structured.get("corners"):
         return None
-    return {
+    response: dict[str, Any] = {
         "protocol": PROTOCOL_VERSION,
         "event": EVENT_COACHING_RESPONSE,
         "lap": inbound.get("lap"),
@@ -118,6 +129,15 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         "cornerAnalysis": structured["corners"],
         "balance": structured["balance"],
     }
+    # Forward the machine-readable understanding blocks when the archive carried the data, so live
+    # clients (and the coach-handoff path) get tyres/conditions/reference, not just prose.
+    if structured.get("tyres") is not None:
+        response["tyres"] = structured["tyres"]
+    if structured.get("conditions") is not None:
+        response["conditions"] = structured["conditions"]
+    if structured.get("corner_reference") is not None:
+        response["cornerReference"] = structured["corner_reference"]
+    return response
 
 
 _CORNER_LABEL_MAX_LEN = 64

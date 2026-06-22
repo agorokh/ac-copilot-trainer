@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 
-from tools.ai_sidecar.coach_report import build_debrief, main
+from tools.ai_sidecar.coach_report import build_debrief, build_structured_debrief, main
 
 
 def _corner_archive(*, degrade: float = 0.0) -> dict:
@@ -89,3 +89,106 @@ def test_cli_main_runs(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "Coaching debrief" in out
+
+
+def _rich_archive(
+    *, degrade: float = 0.0, grip: float = 0.90, core: float = 35.0, weather: str = "clear"
+) -> dict:
+    """A corner archive with per-wheel tyre core-temp columns + a conditions block."""
+    a = _corner_archive(degrade=degrade)
+    a["trace"]["fields"] = a["trace"]["fields"] + [
+        "tyreCoreTemp_fl",
+        "tyreCoreTemp_fr",
+        "tyreCoreTemp_rl",
+        "tyreCoreTemp_rr",
+    ]
+    a["trace"]["samples"] = [row + [core, core, core, core] for row in a["trace"]["samples"]]
+    a["conditions"] = {
+        "trackGripLevel": grip,
+        "ambientTempC": 22.0,
+        "trackTempC": 28.0,
+        "weatherType": weather,
+    }
+    return a
+
+
+def test_structured_debrief_has_tyre_block_when_temps_present():
+    d = build_structured_debrief(_rich_archive(core=35.0), grip_ceiling_g=2.5)
+    assert d is not None
+    tyres = d["tyres"]
+    assert tyres is not None
+    # 35°C is below GRIP_ONSET_C (40) → all four wheels read "cold"
+    assert set(tyres["status"]) == {"fl", "fr", "rl", "rr"}
+    assert all(s == "cold" for s in tyres["status"].values())
+    # cold tyres must never be reported as "in window" (warming/cold/off-window are all acceptable)
+    assert "in window" not in tyres["headline"].lower()
+
+
+def test_structured_debrief_has_conditions_block():
+    d = build_structured_debrief(_rich_archive(grip=0.90, weather="clear"), grip_ceiling_g=2.5)
+    cond = d["conditions"]
+    assert cond is not None
+    assert cond["regime"] == "dry"
+    assert cond["grip_band"] == "green"  # 0.90 < GREEN_BELOW (0.93)
+    assert cond["grip_level"] == 0.90
+
+
+def test_structured_debrief_omits_blocks_when_data_absent():
+    d = build_structured_debrief(_corner_archive(), grip_ceiling_g=2.5)
+    assert d["tyres"] is None  # no per-wheel temp columns
+    assert d["conditions"] is None  # no conditions block
+    assert d["corner_reference"] is None  # no reference lap
+
+
+def test_corner_reference_present_with_reference_and_honest_source():
+    ref = _corner_archive(degrade=0.0)
+    student = _corner_archive(degrade=8.0)
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+    cr = d["corner_reference"]
+    assert cr is not None and cr
+    for entry in cr:
+        assert entry["source"] == "reference_lap"  # corpus best, not a fabricated GGV ceiling
+        assert "optimal_apex_kmh" not in entry  # must NOT over-claim a theoretical optimum
+        assert isinstance(entry["deficit_to_target_kmh"], (int, float))
+        assert isinstance(entry["target_apex_kmh"], (int, float))
+
+
+def test_debrief_text_includes_tyre_and_conditions_sections():
+    text = build_debrief(_rich_archive(), grip_ceiling_g=2.5)
+    assert "Tyres (thermal)" in text
+    assert "Conditions (track/weather)" in text
+
+
+def test_conditions_block_present_with_temps_only():
+    # only track/ambient temps known (no grip, no weather) -> still meaningful (codex #292)
+    a = _corner_archive()
+    a["conditions"] = {
+        "trackGripLevel": None,
+        "weatherType": None,
+        "trackTempC": 41.0,
+        "ambientTempC": 30.0,
+    }
+    d = build_structured_debrief(a, grip_ceiling_g=2.5)
+    assert d["conditions"] is not None
+    assert d["conditions"]["track_temp_c"] == 41.0
+    assert d["conditions"]["grip_level"] is None
+
+
+def test_tyre_block_suppressed_in_wet_conditions():
+    # slick thermal window is meaningless in the wet -> suppress the contradictory tyre block,
+    # keep the wet conditions coaching (codex #291)
+    a = _rich_archive(core=35.0, weather="rain", grip=0.90)
+    d = build_structured_debrief(a, grip_ceiling_g=2.5)
+    assert d["tyres"] is None  # not a "cold slick — build heat" cue in the rain
+    assert d["conditions"] is not None
+    assert d["conditions"]["regime"] == "wet"
+    assert "Tyres (thermal)" not in d["text"]
+
+
+def test_slower_reference_corners_are_not_published_as_targets():
+    # a SLOWER reference must not be published as a pace target the driver has already beaten
+    fast = _corner_archive(degrade=0.0)  # the driven (faster) lap
+    slow_ref = _corner_archive(degrade=10.0)  # a stale/slower reference
+    d = build_structured_debrief(fast, reference_archive=slow_ref, grip_ceiling_g=2.5)
+    # every corner's "target" is below the driven speed -> all dropped -> block omitted
+    assert d["corner_reference"] is None
