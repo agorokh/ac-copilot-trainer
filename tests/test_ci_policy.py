@@ -34,7 +34,7 @@ def ci_policy_mod():
         "cursor/feat_issue-1_x",
         "renovate/configure",
         "vault/post-merge-pr176",
-        "miner/weekly-20260622-27948235804",
+        "miner/weekly-legacy",
     ],
 )
 def test_validate_branch_accepts_allowed(ci_policy_mod, branch: str) -> None:
