@@ -42,6 +42,34 @@ CSV_COLUMNS: tuple[str, ...] = (
     "position_x_m",
     "position_y_m",
     "position_z_m",
+    # per-wheel channels (issue #266) — blank for pre-#266 archives that lack them
+    "wheelAngularSpeed_fl",
+    "wheelAngularSpeed_fr",
+    "wheelAngularSpeed_rl",
+    "wheelAngularSpeed_rr",
+    "wheelSlip_fl",
+    "wheelSlip_fr",
+    "wheelSlip_rl",
+    "wheelSlip_rr",
+    "tyreCoreTemp_fl",
+    "tyreCoreTemp_fr",
+    "tyreCoreTemp_rl",
+    "tyreCoreTemp_rr",
+)
+
+_PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = (
+    "wheelAngularSpeed_fl",
+    "wheelAngularSpeed_fr",
+    "wheelAngularSpeed_rl",
+    "wheelAngularSpeed_rr",
+    "wheelSlip_fl",
+    "wheelSlip_fr",
+    "wheelSlip_rl",
+    "wheelSlip_rr",
+    "tyreCoreTemp_fl",
+    "tyreCoreTemp_fr",
+    "tyreCoreTemp_rl",
+    "tyreCoreTemp_rr",
 )
 
 _TRACE_TO_CSV: dict[str, str] = {
@@ -55,6 +83,8 @@ _TRACE_TO_CSV: dict[str, str] = {
     "px": "position_x_m",
     "py": "position_y_m",
     "pz": "position_z_m",
+    # per-wheel channels map to identically-named CSV columns
+    **{name: name for name in _PER_WHEEL_TRACE_FIELDS},
 }
 
 _MOTEC_CHANNELS: tuple[tuple[str, str, str], ...] = (

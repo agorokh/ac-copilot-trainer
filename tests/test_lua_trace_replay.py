@@ -369,6 +369,19 @@ def test_synthesize_trace_scenarios_have_expected_shape(harness: TraceReplayHarn
         "px",
         "py",
         "pz",
+        # per-wheel channels (issue #266)
+        "wheelAngularSpeed_fl",
+        "wheelAngularSpeed_fr",
+        "wheelAngularSpeed_rl",
+        "wheelAngularSpeed_rr",
+        "wheelSlip_fl",
+        "wheelSlip_fr",
+        "wheelSlip_rl",
+        "wheelSlip_rr",
+        "tyreCoreTemp_fl",
+        "tyreCoreTemp_fr",
+        "tyreCoreTemp_rl",
+        "tyreCoreTemp_rr",
     }
     for scenario in available_scenarios():
         frames = synthesize_trace(scenario)

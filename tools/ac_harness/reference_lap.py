@@ -36,6 +36,21 @@ TRACE_FIELDS: tuple[str, ...] = (
     "px",
     "py",
     "pz",
+    # Per-wheel channels (issue #266) — MUST stay identical to lap_archive.lua::TRACE_FIELDS.
+    # Order: FL, FR, RL, RR. angularSpeed (rad/s) is the canonical longitudinal slip source;
+    # slip (AC ndSlip) is secondary; tyre core temp (degC) feeds the tyre thermal model.
+    "wheelAngularSpeed_fl",
+    "wheelAngularSpeed_fr",
+    "wheelAngularSpeed_rl",
+    "wheelAngularSpeed_rr",
+    "wheelSlip_fl",
+    "wheelSlip_fr",
+    "wheelSlip_rl",
+    "wheelSlip_rr",
+    "tyreCoreTemp_fl",
+    "tyreCoreTemp_fr",
+    "tyreCoreTemp_rl",
+    "tyreCoreTemp_rr",
 )
 
 SCHEMA_VERSION = 1
@@ -67,10 +82,22 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+#: The original required trace columns. Fields beyond these (the per-wheel #266 channels) are
+#: OPTIONAL and default to 0.0 when a frame omits them, so hand-built / pre-#266 traces stay valid.
+_REQUIRED_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
+
+
 def _normalize_trace_frame(frame: Mapping[str, Any], index: int) -> dict[str, float]:
     out: dict[str, float] = {}
     for field in TRACE_FIELDS:
-        out[field] = _finite_float(frame.get(field), f"trace[{index}].{field}")
+        raw = frame.get(field)
+        # Optional per-wheel channels default to 0.0 whether absent OR explicitly null — both mean
+        # "no reading this frame", the desired graceful degradation. A REQUIRED field that is
+        # absent/None still falls through to _finite_float, which raises (a real schema violation).
+        if raw is None and field not in _REQUIRED_TRACE_FIELDS:
+            out[field] = 0.0
+        else:
+            out[field] = _finite_float(raw, f"trace[{index}].{field}")
     if out["spline"] < 0.0 or out["spline"] > 1.0:
         raise LapArchiveSchemaError(f"trace[{index}].spline must be in [0, 1]")
     return out
@@ -246,8 +273,13 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if not isinstance(trace, Mapping):
         raise LapArchiveSchemaError("trace must be an object")
     fields = trace.get("fields")
-    if fields != list(TRACE_FIELDS):
-        raise LapArchiveSchemaError(f"trace.fields must be {list(TRACE_FIELDS)!r}")
+    # Accept the pre-#266 10-field trace AND the per-wheel-extended set: SCHEMA_VERSION is still 1
+    # and existing archives carry only the required columns. A valid trace is the required columns,
+    # optionally followed by the #266 per-wheel channels (exact, in order).
+    if fields not in (list(_REQUIRED_TRACE_FIELDS), list(TRACE_FIELDS)):
+        raise LapArchiveSchemaError(
+            f"trace.fields must be {list(_REQUIRED_TRACE_FIELDS)!r} or {list(TRACE_FIELDS)!r}"
+        )
     samples = trace.get("samples")
     if not isinstance(samples, list):
         raise LapArchiveSchemaError("trace.samples must be a list")
@@ -256,16 +288,16 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if trace.get("samples_count") != len(samples):
         raise LapArchiveSchemaError("trace.samples_count must equal len(trace.samples)")
     last_elapsed = -math.inf
+    # Row width must match the DECLARED fields (10 pre-#266, 22 with per-wheel channels).
+    n_cols = len(fields)
     for row_index, row in enumerate(samples):
-        if not isinstance(row, list) or len(row) != len(TRACE_FIELDS):
-            raise LapArchiveSchemaError(
-                f"trace.samples[{row_index}] must have {len(TRACE_FIELDS)} columns"
-            )
+        if not isinstance(row, list) or len(row) != n_cols:
+            raise LapArchiveSchemaError(f"trace.samples[{row_index}] must have {n_cols} columns")
         for field_index, value in enumerate(row):
             parsed = _finite_float(value, f"trace.samples[{row_index}][{field_index}]")
-            if TRACE_FIELDS[field_index] == "spline" and (parsed < 0.0 or parsed > 1.0):
+            if fields[field_index] == "spline" and (parsed < 0.0 or parsed > 1.0):
                 raise LapArchiveSchemaError(f"trace.samples[{row_index}].spline must be in [0, 1]")
-            if TRACE_FIELDS[field_index] == "eMs":
+            if fields[field_index] == "eMs":
                 if parsed < last_elapsed:
                     raise LapArchiveSchemaError("trace eMs must be monotonic nondecreasing")
                 last_elapsed = parsed
@@ -280,10 +312,13 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
 def archive_trace_to_object_trace(record: Mapping[str, Any]) -> list[dict[str, float]]:
     """Convert archive column rows into the live trainer's ``bestLapTrace`` shape."""
     validate_lap_archive_record(record)
+    # Iterate the DECLARED fields, not TRACE_FIELDS: a pre-#266 archive declares only the 10
+    # required columns, so indexing all 22 would IndexError. Old records degrade to 10-field frames.
+    fields = list(record["trace"]["fields"])
     rows = record["trace"]["samples"]
     frames: list[dict[str, float]] = []
     for row in rows:
-        frame = {field: float(row[i]) for i, field in enumerate(TRACE_FIELDS)}
+        frame = {field: float(row[i]) for i, field in enumerate(fields)}
         frame["gear"] = int(frame["gear"])
         frames.append(frame)
     return frames

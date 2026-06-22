@@ -42,6 +42,37 @@ def test_generated_reference_archive_matches_lap_archive_schema_v1() -> None:
     assert record["corners"][0]["entrySpeed"] == pytest.approx(BRAKE_ENTRY_SPEED_KMH)
 
 
+def test_validator_accepts_old_10_field_schema_v1_trace() -> None:
+    # codex #274: SCHEMA_VERSION is still 1 and old archives carry only the 10 required columns.
+    # The validator must still accept them (per-wheel channels are an optional extension).
+    record = build_archive_record_from_scenario("brake_too_late")
+    full = record["trace"]["fields"]
+    keep = list(full[:10])
+    idxs = list(range(10))
+    record["trace"]["fields"] = keep
+    record["trace"]["samples"] = [[row[i] for i in idxs] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)  # must not raise
+    # and conversion must degrade to 10-field frames, not IndexError on the missing wheel columns
+    frames = archive_trace_to_object_trace(record)
+    assert tuple(frames[0].keys()) == TRACE_FIELDS[:10]
+    assert "wheelAngularSpeed_fl" not in frames[0]
+
+
+def test_generated_archive_carries_per_wheel_channels() -> None:
+    # #266: a generated reference archive must include the per-wheel columns with physically
+    # plausible synthetic values (free-rolling omega = v/radius, zero slip, warm tyres).
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    for name in ("wheelAngularSpeed_fl", "wheelSlip_rr", "tyreCoreTemp_fl"):
+        assert name in fields
+    frames = archive_trace_to_object_trace(record)
+    f0 = frames[0]
+    speed_ms = f0["speed"] / 3.6
+    assert f0["wheelAngularSpeed_fl"] == pytest.approx(speed_ms / 0.347, rel=1e-6)
+    assert f0["wheelSlip_fl"] == pytest.approx(0.0)
+    assert f0["tyreCoreTemp_rr"] == pytest.approx(80.0)
+
+
 def test_archive_trace_converts_to_live_best_lap_trace_shape() -> None:
     record = build_archive_record_from_scenario("brake_too_late")
     frames = archive_trace_to_object_trace(record)

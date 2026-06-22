@@ -319,6 +319,18 @@ def test_corner_live_signals_empty_without_wheel_data():
     assert corner_live_signals(lap, sig) == {}
 
 
+def test_corner_live_signals_ignores_unread_zero_wheel():
+    # codex #274: one front wheel reads 0 (unread sentinel) while the car is NOT locking. The zero
+    # must be excluded, not treated as slip=-1 (a false front lock).
+    lap, sig = _wheel_lap(lock_axle=None, wheelspin=False)
+    assert lap.wheel_omega is not None
+    for k in range(sig.entry_i, sig.apex_i + 1):
+        if lap.brake[k] > 0.05:
+            lap.wheel_omega[k][0] = 0.0  # FL unread this frame
+    s = corner_live_signals(lap, sig)
+    assert s.get("lock_axle") is None  # the surviving FR (free-rolling) shows no lock
+
+
 def test_live_signals_feed_confirmed_braking_attribution():
     # computed live signals + a braking-phase time loss -> CONFIRMED front-axle verdict
     lap, sig = _wheel_lap(lock_axle="front", wheelspin=False)

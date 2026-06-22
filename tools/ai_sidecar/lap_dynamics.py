@@ -89,20 +89,30 @@ _WHEELS = ("fl", "fr", "rl", "rr")
 
 
 def _wheel_cols(fields: list[str], samples: list, base: str, n: int) -> list[list[float]] | None:
-    """Read a 4-wheel channel (``<base>_fl/fr/rl/rr``) into N rows of [FL, FR, RL, RR], or None."""
+    """Read a 4-wheel channel (``<base>_fl/fr/rl/rr``) into N rows of [FL, FR, RL, RR], or None.
+
+    Returns None when the columns are absent OR present-but-all-zero. The all-zero guard matters
+    since #266 made these fields ALWAYS present in the trace: a real lap whose wheels were
+    unreadable persists zeros, and a zero ``wheelAngularSpeed`` would otherwise compute slip = -1
+    (full lock) at every sample and falsely "confirm" a lockup. All-zero => treat as no live data.
+    """
     idxs = [_idx(fields, f"{base}_{w}") for w in _WHEELS]
     if any(i is None for i in idxs):
         return None
     out: list[list[float]] = []
+    any_nonzero = False
     for row in samples:
         vals = []
         for i in idxs:
             try:
-                vals.append(float(row[i]))
+                v = float(row[i])
             except (TypeError, ValueError, IndexError):
-                vals.append(0.0)
+                v = 0.0
+            if v != 0.0:
+                any_nonzero = True
+            vals.append(v)
         out.append(vals)
-    return out if len(out) == n else out
+    return out if any_nonzero else None
 
 
 def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:

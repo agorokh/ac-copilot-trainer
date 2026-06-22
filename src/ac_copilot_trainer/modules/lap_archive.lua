@@ -53,9 +53,15 @@ function M.clampArchiveCapMB(raw)
   return math.floor(n + 0.5)
 end
 
--- Trace sample field order. `traceToColumns` builds rows by iterating this list (single source of truth).
+-- Trace sample field order. `traceToColumns` builds rows by iterating this list (single source of
+-- truth). MUST stay byte-identical to tools/ac_harness/reference_lap.py::TRACE_FIELDS (the Python
+-- generator + analysis loader read by name, and test_reference_lap asserts the two agree).
+-- Per-wheel channels (issue #266) are appended last; older archives lacking them export as blanks.
 local TRACE_FIELDS = {
   "spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz",
+  "wheelAngularSpeed_fl", "wheelAngularSpeed_fr", "wheelAngularSpeed_rl", "wheelAngularSpeed_rr",
+  "wheelSlip_fl", "wheelSlip_fr", "wheelSlip_rl", "wheelSlip_rr",
+  "tyreCoreTemp_fl", "tyreCoreTemp_fr", "tyreCoreTemp_rl", "tyreCoreTemp_rr",
 }
 
 local function lapArchiveDir()

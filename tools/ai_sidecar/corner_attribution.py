@@ -426,14 +426,26 @@ def corner_live_signals(
     extra: dict[str, Any] = {"wheelAngularSpeed": True}
     if lap.wheel_slip is not None:
         extra["wheelSlip"] = True
+
+    def _axle_slip(om: list[float], a: int, b: int, v: float) -> float | None:
+        # A 0.0 omega among real readings is the "unread wheel" sentinel (telemetry serializes a nil
+        # read as 0), NOT a lock — a truly locked wheel at speed still has a small POSITIVE omega.
+        # Exclude unread wheels so one failed corner can't fake a lockup (codex partial-read guard).
+        vals = [_slip(om[i], wheel_radius_m, v) for i in (a, b) if om[i] > 0.0]
+        return min(vals) if vals else None
+
     # braking phase (turn-in..apex with brake on): which axle reaches lock first?
     front, rear = [], []
     for k in range(sig.entry_i, sig.apex_i + 1):
         if lap.brake[k] > brake_thresh:
             v, om = lap.v_ms[k], lap.wheel_omega[k]
-            front.append(min(_slip(om[0], wheel_radius_m, v), _slip(om[1], wheel_radius_m, v)))
-            rear.append(min(_slip(om[2], wheel_radius_m, v), _slip(om[3], wheel_radius_m, v)))
-    if front:
+            f = _axle_slip(om, 0, 1, v)
+            r = _axle_slip(om, 2, 3, v)
+            if f is not None:
+                front.append(f)
+            if r is not None:
+                rear.append(r)
+    if front and rear:
         fl, rl = min(front), min(rear)
         extra["front_lock"], extra["rear_lock"] = round(fl, 3), round(rl, 3)
         if min(fl, rl) <= lock_thresh:
@@ -445,7 +457,9 @@ def corner_live_signals(
     for k in range(sig.apex_i, sig.exit_i + 1):
         if lap.throttle[k] > throttle_thresh:
             v, om = lap.v_ms[k], lap.wheel_omega[k]
-            spins.append(max(_slip(om[2], wheel_radius_m, v), _slip(om[3], wheel_radius_m, v)))
+            rear_spin = [_slip(om[i], wheel_radius_m, v) for i in (2, 3) if om[i] > 0.0]
+            if rear_spin:
+                spins.append(max(rear_spin))
     if spins:
         rmax = max(spins)
         extra["rear_exit_slip"] = round(rmax, 3)

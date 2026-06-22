@@ -31,7 +31,10 @@ Stable columns:
 source_file, lap_uuid, session_uuid, car_id, track_id, lap_n, lap_ms,
 is_valid, sample_index, time_s, elapsed_ms, spline, lap_distance_m,
 speed_kmh, brake, throttle, steering, gear,
-position_x_m, position_y_m, position_z_m
+position_x_m, position_y_m, position_z_m,
+wheelAngularSpeed_fl, wheelAngularSpeed_fr, wheelAngularSpeed_rl, wheelAngularSpeed_rr,
+wheelSlip_fl, wheelSlip_fr, wheelSlip_rl, wheelSlip_rr,
+tyreCoreTemp_fl, tyreCoreTemp_fr, tyreCoreTemp_rl, tyreCoreTemp_rr
 ```
 
 `brake`, `throttle`, and `steering` preserve the normalized CSP values from the
@@ -41,14 +44,17 @@ blank cells so downstream notebooks can distinguish "missing" from zero.
 
 ### Optional Tier-B per-wheel channels (#266)
 
-When present, the trace may also carry per-wheel channels named
-`wheelAngularSpeed_{fl,fr,rl,rr}` (rad/s) and `wheelSlip_{fl,fr,rl,rr}` (AC's
-combined Pacejka NDslip). These are **optional** — older laps omit them and the
-loader degrades gracefully. The setup-coaching engine
-(`tools/ai_sidecar/corner_attribution.py`) uses `wheelAngularSpeed` to compute
-true longitudinal slip per wheel, which upgrades brake-lockup and exit-wheelspin
-attributions from a *suspicion* to a *confirmed* axle-level verdict (which axle
-locks → brake bias; rear wheelspin → traction/TC/diff). Order is `[FL, FR, RL, RR]`.
+When present, the trace also carries per-wheel channels, order `[FL, FR, RL, RR]`:
+`wheelAngularSpeed_{fl,fr,rl,rr}` (rad/s — the canonical longitudinal signal),
+`wheelSlip_{fl,fr,rl,rr}` (AC's combined Pacejka NDslip, secondary), and
+`tyreCoreTemp_{fl,fr,rl,rr}` (degC — feeds the tyre thermal model). These are
+**optional**: archives written before #266 omit them and the loader / exporter degrade
+gracefully (they export as blank cells). The setup-coaching engine
+(`tools/ai_sidecar/corner_attribution.py`) derives true longitudinal slip per wheel from
+`wheelAngularSpeed`, which upgrades brake-lockup and exit-wheelspin attributions from a
+*suspicion* to a *confirmed* axle-level verdict (which axle locks → brake bias; rear
+wheelspin → traction/TC/diff). The trace field set is a hard contract kept byte-identical
+between `lap_archive.lua::TRACE_FIELDS` and `reference_lap.py::TRACE_FIELDS`.
 
 ## MoTeC-Shaped CSV
 
