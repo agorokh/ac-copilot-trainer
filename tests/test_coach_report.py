@@ -172,3 +172,23 @@ def test_conditions_block_present_with_temps_only():
     assert d["conditions"] is not None
     assert d["conditions"]["track_temp_c"] == 41.0
     assert d["conditions"]["grip_level"] is None
+
+
+def test_tyre_block_suppressed_in_wet_conditions():
+    # slick thermal window is meaningless in the wet -> suppress the contradictory tyre block,
+    # keep the wet conditions coaching (codex #291)
+    a = _rich_archive(core=35.0, weather="rain", grip=0.90)
+    d = build_structured_debrief(a, grip_ceiling_g=2.5)
+    assert d["tyres"] is None  # not a "cold slick — build heat" cue in the rain
+    assert d["conditions"] is not None
+    assert d["conditions"]["regime"] == "wet"
+    assert "Tyres (thermal)" not in d["text"]
+
+
+def test_slower_reference_corners_are_not_published_as_targets():
+    # a SLOWER reference must not be published as a pace target the driver has already beaten
+    fast = _corner_archive(degrade=0.0)  # the driven (faster) lap
+    slow_ref = _corner_archive(degrade=10.0)  # a stale/slower reference
+    d = build_structured_debrief(fast, reference_archive=slow_ref, grip_ceiling_g=2.5)
+    # every corner's "target" is below the driven speed -> all dropped -> block omitted
+    assert d["corner_reference"] is None

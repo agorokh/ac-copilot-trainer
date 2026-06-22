@@ -71,6 +71,10 @@ def _corner_reference_scores(
     The reference lap is treated as the **corpus best** — the realistic, demonstrated target. We do
     NOT fabricate a GGV theoretical ceiling from a driven lap (that field stays equal to the corpus
     best, so :func:`track_reference.score_lap` correctly frames deficits as "under the best lap").
+
+    Corners where the reference is actually SLOWER than the driven lap (negative deficit) are
+    dropped: a stale/slower reference must not be published as a pace target the driver has already
+    beaten (codex #291). If the reference is slower everywhere, the block is omitted entirely.
     """
     if reference_lap is None:
         return None
@@ -78,7 +82,7 @@ def _corner_reference_scores(
     if not refs:
         return None
     add_corpus_lap(refs, reference_lap)  # the reference lap IS the corpus best
-    scores = score_lap(refs, driven_lap)
+    scores = [s for s in score_lap(refs, driven_lap) if s.deficit_to_target_kmh >= 0]
     return scores or None
 
 
@@ -276,6 +280,11 @@ def _analyze(
     balance = analyze_balance(lap, sigs, deltas=deltas, grip_ceiling_g=grip_ceiling_g)
     tyres = tyres_from_lap_archive(lap_archive)
     conditions = conditions_from_lap_archive(lap_archive, reference_archive=reference_archive)
+    # The tyre block is the slick compound-window thermal model; it is meaningless in the wet. When
+    # conditions say the slick model is invalid (wet regime), suppress it rather than publish a
+    # contradictory "cold slick — build heat" cue alongside wet-regime coaching (codex #291).
+    if tyres is not None and not conditions.slick_model_valid:
+        tyres = None
     corner_reference = _corner_reference_scores(ref, lap)
     return {
         "lap": lap,
