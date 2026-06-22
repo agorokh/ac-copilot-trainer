@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN:-}" ]; then
-            echo "::error::GH_PAT is not configured for this repo — cannot open a PR (default GITHUB_TOKEN is blocked by policy)."
+            echo "::error::GH_TOKEN is not available from the fleet GitHub App token step -- cannot open a PR (default GITHUB_TOKEN is blocked by policy). Check FLEET_BOT_APP_ID/FLEET_BOT_APP_PRIVATE_KEY secrets and app permissions."
             exit 1
           fi
           BRANCH="chore/miner-weekly-$(date -u +%Y%m%d)-${GITHUB_RUN_ID}"
