@@ -48,10 +48,25 @@ def _min_speed_kmh_in_window(lap: LapTrace, lo: float, hi: float) -> float | Non
     return min(vals) * 3.6 if vals else None
 
 
-def _first_brake_spline(lap: LapTrace, lo: float, hi: float, thresh: float = 0.05) -> float | None:
-    """Spline of the first braking sample within [lo, hi] (the corpus lap's brake point)."""
-    for i in range(len(lap)):
-        if lo <= lap.spline[i] <= hi and lap.brake[i] > thresh:
+def _first_brake_spline(
+    lap: LapTrace, lo: float, hi: float, thresh: float = 0.05, min_run: int = 3
+) -> float | None:
+    """Spline of the first SUSTAINED braking onset within [lo, hi] (the corpus lap's brake point).
+
+    Requires ``min_run`` consecutive in-window samples above ``thresh`` so a single-frame blip is
+    not taken as the brake point — consistent with ``lap_dynamics`` treating a brake zone as
+    near-continuous rather than a lone sample.
+    """
+    n = len(lap)
+    for i in range(n):
+        if not (lo <= lap.spline[i] <= hi and lap.brake[i] > thresh):
+            continue
+        run = 1
+        j = i + 1
+        while j < n and lap.spline[j] <= hi and lap.brake[j] > thresh:
+            run += 1
+            j += 1
+        if run >= min_run:
             return lap.spline[i]
     return None
 

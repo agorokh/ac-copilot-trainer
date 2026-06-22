@@ -104,8 +104,8 @@ def test_partial_lap_does_not_reset_a_faster_best():
 
 def test_score_lap_flags_apex_deficit_vs_target():
     refs = build_references(_corner_lap(v_apex=30.0))
-    add_corpus_lap(refs, _corner_lap(v_apex=29.0))  # realistic best ~104 km/h
-    driven = _corner_lap(v_apex=23.0)  # ~6 km/h under target... actually ~22 km/h
+    add_corpus_lap(refs, _corner_lap(v_apex=29.0))  # realistic best target ~104 km/h (29 m/s)
+    driven = _corner_lap(v_apex=23.0)  # ~83 km/h apex → ~22 km/h under the target
     scores = score_lap(refs, driven)
     assert len(scores) == 1
     s = scores[0]
