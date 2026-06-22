@@ -37,6 +37,9 @@ ALLOWED_BRANCH_PREFIXES: tuple[str, ...] = (
     "renovate/",
     "sanitize/",  # urgent privacy/metadata scrub branches (e.g. PR #113)
     "vault/",  # vault-only post-merge handoff branches
+    # Existing weekly process-miner PRs used `miner/weekly-*`; keep them
+    # mergeable while the producer moves to `chore/miner-weekly-*`.
+    "miner/",
 )
 
 # Conventional commit style for PR titles (type, optional scope, optional !, colon, message).
