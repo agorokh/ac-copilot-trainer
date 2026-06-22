@@ -52,6 +52,10 @@ def test_validator_accepts_old_10_field_schema_v1_trace() -> None:
     record["trace"]["fields"] = keep
     record["trace"]["samples"] = [[row[i] for i in idxs] for row in record["trace"]["samples"]]
     validate_lap_archive_record(record)  # must not raise
+    # and conversion must degrade to 10-field frames, not IndexError on the missing wheel columns
+    frames = archive_trace_to_object_trace(record)
+    assert tuple(frames[0].keys()) == TRACE_FIELDS[:10]
+    assert "wheelAngularSpeed_fl" not in frames[0]
 
 
 def test_generated_archive_carries_per_wheel_channels() -> None:
