@@ -71,6 +71,7 @@ from tools.ai_sidecar.protocol import (
     EVENT_COACHING_RESPONSE,
     EVENT_CORNER_QUERY,
     PROTOCOL_VERSION,
+    build_brain_followup,
     build_ollama_followup,
     prepare_outbound_message,
 )
@@ -314,6 +315,25 @@ async def _send_ollama_followup(
         return
     if followup is None:
         observability.METRICS.record_ollama_followup_error()
+        return
+    await _safe_send(websocket, followup)
+
+
+async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
+    """Run the setup-vs-technique attribution brain in a background task and send a follow-up.
+
+    Mirrors :func:`_send_ollama_followup`: runs AFTER the immediate rules ack, off the message loop
+    (the brain does disk I/O to load the lap archive + pure-Python analysis). Silently discards on
+    any error or when no usable trace is available.
+    """
+    try:
+        followup = await asyncio.to_thread(build_brain_followup, inbound)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.info("brain followup raised: %s", e)
+        return
+    if followup is None:
         return
     await _safe_send(websocket, followup)
 
@@ -972,6 +992,14 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     _background_tasks.add(bg_task)
                     pending_followups.add(bg_task)
                     bg_task.add_done_callback(_followup_done)
+
+                    # Also spawn the setup-vs-technique attribution brain (issue #275): a deeper,
+                    # archive-grounded follow-up that the rules ack + Ollama narration cannot
+                    # produce. Independent task so neither blocks the other.
+                    brain_task = asyncio.create_task(_send_brain_followup(websocket, data))
+                    _background_tasks.add(brain_task)
+                    pending_followups.add(brain_task)
+                    brain_task.add_done_callback(_followup_done)
     finally:
         _external_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)

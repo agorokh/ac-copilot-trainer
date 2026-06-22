@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 from tools.ai_sidecar.corner_attribution import (
+    Attribution,
     BalanceFinding,
     CornerCoaching,
     analyze_balance,
@@ -76,6 +77,90 @@ def format_debrief(
 
 def _load_archive(path: str | Path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _cause_class(attr: Attribution) -> str:
+    """Collapse an attribution to a single machine-readable cause class."""
+    if attr.key == "grip_limited":
+        return "grip"
+    has_setup = bool(attr.setup_causes)
+    has_tech = bool(attr.technique_causes)
+    if has_setup and has_tech:
+        return "setup+technique"
+    if has_setup:
+        return "setup"
+    if has_tech:
+        return "technique"
+    return "unknown"
+
+
+def build_structured_debrief(
+    lap_archive: dict,
+    *,
+    reference_archive: dict | None = None,
+    setup: CarSetup | None = None,
+    grip_ceiling_g: float | None = None,
+) -> dict | None:
+    """Run the coaching brain and return a JSON-serializable structured debrief.
+
+    Returns ``{text, corners[], balance, car_id, track_id}`` — the same analysis as
+    :func:`build_debrief` plus a machine-readable per-corner breakdown (cause_class, confidence,
+    advisory, coaching) for the sidecar / coach-handoff protocol. Returns ``None`` when the archive
+    has no usable trace (so callers fall back to the shallow rules debrief).
+    """
+    try:
+        lap = lap_trace_from_archive(lap_archive)
+    except ValueError:
+        return None
+    setup = setup or from_lap_archive(lap_archive)
+    ref = lap_trace_from_archive(reference_archive) if reference_archive else None
+    report = coach_lap(lap, setup, reference=ref, grip_ceiling_g=grip_ceiling_g)
+    sigs = corner_signatures(lap, segment_corners(lap))
+    deltas = compare_laps(lap, ref) if ref is not None else None
+    balance = analyze_balance(lap, sigs, deltas=deltas, grip_ceiling_g=grip_ceiling_g)
+    text = format_debrief(
+        report,
+        balance,
+        setup,
+        title=f"Coaching debrief — {lap.car_id or '?'} @ {lap.track_id or '?'}",
+    )
+    corners = [
+        {
+            "index": c.index,
+            "apex_spline": round(c.apex_spline, 4),
+            "min_speed_kmh": c.min_speed_kmh,
+            "time_loss_s": c.delta_s,
+            "headline": c.headline,
+            "attributions": [
+                {
+                    "key": a.key,
+                    "symptom": a.symptom,
+                    "phase": a.phase,
+                    "cause_class": _cause_class(a),
+                    "confidence": a.confidence,
+                    "advisory": a.advisory,
+                    "coaching": a.coaching,
+                    "setup_causes": a.setup_causes,
+                    "technique_causes": a.technique_causes,
+                }
+                for a in c.attributions
+            ],
+        }
+        for c in report
+    ]
+    return {
+        "text": text,
+        "car_id": lap.car_id,
+        "track_id": lap.track_id,
+        "balance": {
+            "verdict": balance.verdict,
+            "lever_class": balance.lever_class,
+            "coaching": balance.coaching,
+            "low_band_grip_used": balance.low_band_grip_used,
+            "high_band_grip_used": balance.high_band_grip_used,
+        },
+        "corners": corners,
+    }
 
 
 def build_debrief(

@@ -6,7 +6,9 @@ All frames are JSON objects. ``protocol`` is required on new messages; missing
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from tools.ai_sidecar.coaching.llm_coach import (
@@ -29,6 +31,77 @@ EVENT_COACHING_RESPONSE = "coaching_response"
 EVENT_ANALYSIS_ERROR = "analysis_error"
 EVENT_CORNER_QUERY = "corner_query"
 EVENT_CORNER_ADVICE = "corner_advice"
+
+#: A lap archive is at most a few MB; refuse to load anything larger from an archivePath.
+_MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+
+
+def _resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve a full lap-archive dict (with a trace) for the brain, or None.
+
+    Prefers an inline ``trace`` on the message; otherwise loads ``archivePath`` IF it is a safe
+    ``.../journal/laps/lap_*.json`` path that exists and parses. Never raises — returns None so the
+    caller falls back to the shallow rules debrief.
+    """
+    trace = inbound.get("trace")
+    if isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]:
+        return inbound
+    raw_path = inbound.get("archivePath")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    # Defer the import so protocol.py stays importable without the coaching extra installed.
+    from tools.ai_sidecar.setup_optimizer import is_supported_lap_archive_path
+
+    if not is_supported_lap_archive_path(raw_path):
+        logger.debug("brain: archivePath rejected (not a journal/laps/lap_*.json): %r", raw_path)
+        return None
+    try:
+        p = Path(raw_path)
+        if not p.is_file() or p.stat().st_size > _MAX_ARCHIVE_BYTES:
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.info("brain: could not load archivePath %r: %s", raw_path, exc)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a follow-up coaching_response from the full setup-vs-technique attribution brain.
+
+    Non-blocking follow-up (mirrors :func:`build_ollama_followup`): runs AFTER the immediate
+    rules-based ack, so it never blocks the <100ms path and tolerates the async archive write.
+    Resolves the lap archive (inline trace or safe ``archivePath``), runs the brain, and returns a
+    coaching_response carrying the rich text debrief + a machine-readable ``cornerAnalysis``.
+    Returns None on any failure or when no usable trace exists (the client keeps the rules debrief).
+    """
+    if not debrief_feature_enabled():
+        return None
+    archive = _resolve_lap_archive(inbound)
+    if archive is None:
+        return None
+    # optional per-car lateral grip ceiling (g) lets the brain separate grip-limited from technique
+    grip_ceiling_g = _as_float(inbound.get("gripCeilingG"))
+    try:
+        from tools.ai_sidecar.coach_report import build_structured_debrief
+
+        structured = build_structured_debrief(archive, grip_ceiling_g=grip_ceiling_g)
+    except Exception as exc:  # the brain must never break the coaching socket
+        logger.info("brain debrief raised: %s", exc)
+        return None
+    if not structured or not structured.get("corners"):
+        return None
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "event": EVENT_COACHING_RESPONSE,
+        "lap": inbound.get("lap"),
+        "hints": [{"kind": "general", "text": "Setup-vs-technique debrief"}],
+        "debrief": structured["text"],
+        "debriefSource": "brain",
+        "cornerAnalysis": structured["corners"],
+        "balance": structured["balance"],
+    }
+
 
 _CORNER_LABEL_MAX_LEN = 64
 _CORNER_MAX_SPEED_ABS_KMH = 450.0
