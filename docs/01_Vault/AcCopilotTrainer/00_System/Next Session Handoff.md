@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-22T22:45:00Z
+last_updated: 2026-06-22T23:45:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
@@ -33,7 +33,45 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-22 FINAL — OFFLINE FRONTIER-COACHING PROGRAM COMPLETE; only the RIG step (#277) remains)
+## Resume here (2026-06-22 LIVE-VERIFIED — coaching pipeline RUN IN-GAME on real schema-v2 telemetry)
+
+**Tested in the game, not just in code.** Launched AC at Magione (911 GT3 R) via the CM
+`acmanager://race/quick` URL + `autodrive_magione.cmpreset`, applied the custom-AI surfaces edit,
+and the autonomous curvature-FF controller (`.scratch/part-g/race_drive_diag.py`) hijacked car 0 and
+drove **real valid laps (best 1:22.55)** — verified on-screen at 193 km/h with the in-sim realtime
+coaching HUD tracking it ("B5 · ON PACE · DISTANCE TO BRAKING POINT").
+
+The in-sim trainer captured a **fresh schema-v2 lap archive** (2000 samples, 22 fields incl.
+`wheelAngularSpeed_*`/`wheelSlip_*`/`tyreCoreTemp_*`; saved at
+`.scratch/real-lap-evidence/real_v2_lap_magione_2026-06-22.json`). Running the FULL coaching pipeline
+(`coach_report.build_debrief` / `build_structured_debrief`) on that **real telemetry** produced
+grounded, honest output:
+- **Tyre model on REAL core temps:** "Tyres warming (mean core 72°C) — build heat before pushing";
+  per-wheel fl/fr/rr=warming, rl=in_window, front−rear=−5.2°C, below the 75-105°C slick window;
+  honest "surface temp not measurable, approximate."
+- **Trail-braking** on real brake/steer (abrupt-release corners), **per-corner attribution**
+  (sluggish turn-in, *suspected*), **conditions** (honest "grip unknown" — archive had only ambient
+  temp), and the **realtime observer** emitted a real late-brake advisory vs a faster reference lap.
+
+**Findings from the live run (filed):**
+- [#305](https://github.com/agorokh/ac-copilot-trainer/issues/305) — a **clean flying lap's trace is
+  lost (0 KB stub)** when not followed by another lap (the async archive seems to finalize on the
+  next lap's S/F crossing). The coached lap above was the full-trace *outlap*; the 1:22.55 flying
+  lap left a stub. Capture-side bug, not an analysis gap. Fix before relying on single-hot-lap coaching.
+- Controller tuning is the known rig-fragility trap: the 1.5g config spins on lap 2+, an over-gentle
+  config sticks in gear 1 — so chaining ≥2 clean laps (needed to flush a flying-lap archive per #305)
+  needs the tuned config, not ad-hoc knobs. computer-use `request_access` timed out and Windows-MCP
+  `Click` has a loc-serialization bug, so clicking CM's "Go!" by UI wasn't possible this run;
+  `acmanager://` URL launch + shared-memory hijack is the reliable path.
+
+**Rig left clean:** `surfaces.ini` restored to stock (`ALLOW_CUSTOM_AI_MANIPULATION` removed); AC/CM
+left running. Re-drive recipe: apply `.scratch/part-g/surfaces_customai.ini` → launch via the CM URL
+preset → `python .scratch/part-g/race_drive_diag.py <dur>` → coach with
+`python .scratch/real_coach.py <driven.json> [reference.json]`.
+
+---
+
+## Prior (2026-06-22 FINAL — OFFLINE FRONTIER-COACHING PROGRAM COMPLETE; only the RIG step (#277) remains)
 
 **Every north-star coaching capability the operator named is now built + merged.** The lone remaining
 step toward the in-the-ear coach is the rig-gated live activation
