@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-23T05:15:00Z
+last_updated: 2026-06-23T05:46:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
@@ -34,7 +35,47 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-23 — #301 trail-braking SHIPPED via PR #310)
+## Resume here (2026-06-23 — #305 capture bug SHIPPED via PR #309; rig confirmation remains)
+
+**Delivered (squash-merged [`86c5f60`](https://github.com/agorokh/ac-copilot-trainer/commit/86c5f60), 2026-06-23):**
+issue [#305](https://github.com/agorokh/ac-copilot-trainer/issues/305) — a clean flying lap's trace
+archive was lost (≈923-byte stub) when **not followed by another lap** (hot-lap-then-pit, or an
+automated capture run ending). Pure Lua **capture/flush** bug, not an analysis gap.
+
+**Root cause:** the async lap-archive job is queued at the S/F crossing that *completes* a lap and
+pumped a few rows/frame by `pumpLapArchiveJobs()`. On session end, `script.update()` enters the
+`if sim.isInMainMenu then` branch and **returns before reaching the per-frame pump**, so the last
+lap's job is abandoned mid-stream as a partial `.tmp`. The outlap survived only because ~82 s of
+flying-lap frames pumped it; `resetRuntimeAfterLeavingTrack` never drains the queue. Full write-up:
+[[pr-309-lap-archive-finalization]].
+
+**Fix (3 parts):** `flushPendingLapArchiveJobs()` synchronously drains all pending jobs, wired into
+the session-end branch (gated on `state.wasDriving` per Gemini review) before the early return;
+`createWriteJob` refuses an empty trace (never stage a traceless stub); 3 lupa tests + a
+lupa-independent source-structure guard (`tests/test_lap_archive_source_structure.py`).
+
+**Verified offline only** (macOS — the rig is AG_PC/Windows): 1334 tests + `make ci-fast` green;
+proved the stub-guard test fails on pre-fix `origin/main`; a 5-lens adversarial-review workflow
+(19→3 findings, all test-hygiene) addressed. PR review: Gemini *medium* + CodeRabbit *trivial*
+resolved; Cursor Bugbot clean; the self-hosted reviewer daemon does not review this repo (no
+head-SHA review across 3 cooldowns → anti-hang vacuous).
+
+**REMAINING — live rig confirmation (why #305 stays OPEN):** drive ≥1 flying lap, return to the
+menu / end the session **without** another lap, then confirm `…/journal/laps/` holds a **full-trace**
+`lap_*.json` (not a stub) for that lap. Needs AG_PC + AC; could not be done from macOS. Same class as
+the #277 rig-gated step.
+
+**Side bug filed (spawn-task chip, not yet an issue):** `ops/memory_manifest.yml` still carries the
+template placeholder workspace `example_kb_workspace`, so every SessionStart's Tier-3 prefetch errors
+("workspace not visible") and never stamps the memory gate. Real workspace is `ac_copilot` (visible in
+the bridge). Fix the manifest row → prefetch stamps cleanly. Separable from #305.
+
+**Housekeeping:** primary worktree `main` was 1 behind `origin/main` after the merge (protect-main
+guard blocks a manual ff from a linked worktree; `post_merge_sync.sh` can't `checkout main` when it's
+held by the primary worktree) — the next primary-worktree session's `git pull --ff-only` (or
+SessionStart) reconciles it.
+
+## Prior (2026-06-23 — #301 trail-braking SHIPPED via PR #310)
 
 **Delivered (squash-merged `2755eb7`, 2026-06-23):** issue #301 — the two trail-braking follow-ups.
 Part 1 ([`coach_handoff.py`](../../../../tools/ai_sidecar/coach_handoff.py)) joins the
