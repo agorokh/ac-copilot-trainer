@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-23T07:28:00Z
+last_updated: 2026-06-23T13:45:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
@@ -34,6 +34,40 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-23 LATEST — #278 lupa per-wheel test fidelity SHIPPED via PR #315)
+
+**Delivered (squash-merged [`f35d2fe`](https://github.com/agorokh/ac-copilot-trainer/commit/f35d2fe), closes [#278](https://github.com/agorokh/ac-copilot-trainer/issues/278)):**
+Follow-up to #266. The lupa trace-replay harness ran the real `telemetry.lua`, but the schema-gated
+mock `car` never exposed `car.wheels`, so the per-wheel capture path (`wheel_read.readPerWheel` → lp
+sample) read nil → 0 and was **never exercised off-sim**. Fix:
+- `tools/ac_harness/ac_schema.json` — declare `car.wheels` (0-indexed `ac.Wheel`, FL=0..RR=3) so the
+  schema gate allows the read.
+- `tools/ac_harness/trace_replay.py` — `make_car(wheels=[...])` synthesizes 0-indexed `car.wheels[0..3]`
+  (defensive: `None`→nil, non-sequence/non-dict passthrough like `_make_vec3`); new
+  `wheels_from_frame(frame)` maps the flat per-wheel frame columns (#266) into wheel specs.
+- `tests/test_lua_trace_replay.py` — L0-18..L0-23: `telemetry.lua` emits the
+  `wheelAngularSpeed_/wheelSlip_/tyreCoreTemp_ {fl,fr,rl,rr}` columns from the mock wheels in correct
+  corner order; a **contrast** test (no wheels → nil columns, proving non-vacuity); the
+  `synthesize_trace` path end-to-end; the 0-index `wheel_read` mapping; and the None/passthrough paths.
+
+**Verified (operator-grade, observed):** merged tree == tested tree (empty diff vs `origin/main`);
+`pytest tests/test_lua_trace_replay.py` → **24 passed**; `make ci-fast` → OK (1335 passed, CSP API/UI
+clean, coverage ≥80%). **Mutation check:** flipping `_make_wheels` to **1-based** made 3 corner-mapping
+tests FAIL (catches the #180 `rr=0` shift class); restored → 24 pass. Review: Gemini raised 4 *medium*
+robustness findings (defensive `_make_wheels`/`_ingest_lap`) — all fixed in `a0fb739`, threads resolved;
+CodeRabbit clean; Sourcery rate-limited (non-blocking); Cursor Bugbot skipped; **self-hosted reviewer
+daemon does not review this repo** (no head-SHA review → anti-hang vacuous).
+
+**Memory-gate note (resolved):** the committed `ops/memory_manifest.yml` placeholder hard-block was
+**already fixed by PR #316** (`c3590ec`, `repo.tier3_workspace_id: ac_copilot`) — so the follow-up I'd
+have filed is moot. This session also wrote a **gitignored** `ops/memory_manifest.local.yml` overlay
+(operator-local, redundant now that #316 fixed the tracked manifest — harmless, local-wins same value).
+**Tier-3 `ac_copilot` substrate remains DOWN** (verified `verify_server_health` reachable=false / HTTP
+502); grounding was vault-Tier-2 per the MEMORY_CONTRACT recovery path. Provisioning/ingest of
+`ac_copilot` is the standing follow-on (tracked environmental, see the #316 handoff note below).
+
+**No remaining work for #278** — issue CLOSED (COMPLETED), no migration/env/deps classification flags.
 
 ## Resume here (2026-06-23 LATER — Tier-3 manifest placeholder FIXED via PR #316)
 
