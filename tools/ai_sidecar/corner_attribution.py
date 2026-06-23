@@ -31,6 +31,7 @@ from tools.ai_sidecar.lap_dynamics import (
 )
 from tools.ai_sidecar.setup_knowledge import AERO, MECHANICAL
 from tools.ai_sidecar.setup_model import CarSetup
+from tools.ai_sidecar.trail_brake import analyze_trail_braking
 
 
 # --- lap comparison: localize where time is lost ----------------------------
@@ -350,12 +351,33 @@ def coach_lap(
     sigs = corner_signatures(lap, corners)
     deltas = compare_laps(lap, reference, corners=corners) if reference is not None else []
     by_idx = {d.index: d for d in deltas}
+    # Trail-braking technique read (#301): computed once over the SAME segmentation as the
+    # signatures so the per-corner finding lines up with sig.index, then injected into each corner's
+    # ``extra`` so the trail_brake rule folds it into the attribution layer (cause_class reasoning)
+    # rather than only a parallel debrief block. ``no_braking`` corners get no finding.
+    trail_by_idx = {
+        f.corner: f for f in analyze_trail_braking(lap, corners) if f.classification != "no_braking"
+    }
     out: list[CornerCoaching] = []
     for sig in sigs:
         # explicit caller-supplied signals win; else auto-compute Tier-B signals from per-wheel data
         extra = (extra_by_corner or {}).get(sig.index)
         if extra is None:
             extra = corner_live_signals(lap, sig) if lap.has_wheel_data else {}
+        tb = trail_by_idx.get(sig.index)
+        if tb is not None and "trail_brake" not in extra:
+            # Copy (never mutate a caller-supplied extra dict); a caller that already set
+            # ``trail_brake`` wins, mirroring how explicit live signals take precedence above.
+            extra = {
+                **extra,
+                "trail_brake": {
+                    "classification": tb.classification,
+                    "coaching": tb.coaching,
+                    "trail_overlap": tb.trail_overlap,
+                    "brake_off_rel": tb.brake_off_rel,
+                    "release_abruptness": tb.release_abruptness,
+                },
+            }
         ctx = CornerContext(
             sig=sig,
             setup=setup,
@@ -622,6 +644,43 @@ def _exit_coaching(ctx: CornerContext) -> str:
     )
 
 
+# --- trail-braking technique (folds trail_brake.py into the attribution layer, #301) ----------
+#: Trail-brake deficit classification → attribution confidence. Kept deliberately LOW — below every
+#: other rule's firing floor yet above ``min_confidence`` (0.25) — so a trail-braking technique read
+#: PARTICIPATES in the cause_class reasoning as a supporting attribution but never DISPLACES a
+#: time-loss / setup-bearing attribution (braking_phase_loss, exit_traction, …) as the corner's
+#: primary cause. It becomes the primary cause only when no other rule fires (e.g. a clean lap with
+#: no reference). ``good_trail_brake`` / ``no_braking`` carry no deficit and never attribute.
+_TRAIL_BRAKE_CONFIDENCE = {
+    "abrupt_release": 0.29,
+    "brakes_early_then_coasts": 0.28,
+    "trails_too_deep": 0.28,
+    "straight_braking": 0.26,
+}
+
+
+def _r_trail_brake(ctx: CornerContext) -> float:
+    """Confidence for the trail-brake technique rule, from the injected ``extra['trail_brake']``.
+
+    Returns 0.0 (no attribution) when no trail-brake read was injected (e.g. ``attribute_corner``
+    called directly without ``coach_lap``) or the classification is non-deficit.
+    """
+    tb = ctx.extra.get("trail_brake")
+    if not isinstance(tb, dict):
+        return 0.0
+    return _TRAIL_BRAKE_CONFIDENCE.get(tb.get("classification"), 0.0)
+
+
+def _trail_brake_coaching(ctx: CornerContext) -> str:
+    tb = ctx.extra.get("trail_brake")
+    if isinstance(tb, dict) and tb.get("coaching"):
+        return str(tb["coaching"])
+    return (
+        "Trail the brake into the corner — bleed it off as the steering loads so the front stays "
+        "planted to the apex."
+    )
+
+
 RULES: list[DiagnosticRule] = [
     DiagnosticRule(
         key="grip_limited",
@@ -714,5 +773,22 @@ RULES: list[DiagnosticRule] = [
             "Sluggish turn-in (heading lags steer) — likely technique or front load, not "
             "necessarily toe. Confirm with live yaw-rate."
         ),
+    ),
+    DiagnosticRule(
+        key="trail_brake",
+        symptom="trail-braking technique",
+        phase="braking",
+        tier="A",
+        # Inferred from the archive brake+steer overlap + decel profile (trail_brake.py) — a
+        # technique read, so no live channel CONFIRMS it; advisory stays False like entry_speed.
+        channels_needed=(),
+        test=_r_trail_brake,
+        setup_causes=lambda c: [],  # technique-only → cause_class "technique", no setup delta
+        technique_causes=(
+            "Bleed the brake off progressively as steering loads up — keep the front tyres loaded "
+            "into the apex rather than braking straight then coasting, trailing past it, or "
+            "releasing in one step.",
+        ),
+        coaching=_trail_brake_coaching,
     ),
 ]

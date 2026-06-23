@@ -267,3 +267,66 @@ def test_end_to_end_from_build_structured_debrief():
     h = build_coach_handoff(structured, lap=1)
     assert h["v"] == COACH_HANDOFF_VERSION
     assert isinstance(h["corners"], list) and h["corners"]
+    # every handoff corner carries the (possibly None) trail_brake field
+    assert all("trail_brake" in c for c in h["corners"])
+
+
+# --- trail-braking joined onto the handoff corner (#301) ---------------------
+def test_trail_brake_joined_onto_handoff_corner():
+    corners = [
+        {
+            "index": 0,
+            "apex_spline": 0.3,
+            "time_loss_s": 0.2,
+            "headline": "C0",
+            "attributions": [_attr("braking_phase_loss", "setup+technique", advisory=True)],
+        }
+    ]
+    structured = _structured(corners)
+    structured["trail_braking"] = [
+        {
+            "corner": 0,
+            "apex_spline": 0.3,
+            "classification": "abrupt_release",
+            "trail_overlap": 0.5,
+            "brake_off_rel": -0.02,
+            "release_abruptness": 0.6,
+            "coaching": "bleed it off smoothly",
+        }
+    ]
+    tb = build_coach_handoff(structured, setup=SETUP)["corners"][0]["trail_brake"]
+    assert tb is not None
+    assert tb["classification"] == "abrupt_release"
+    assert tb["coaching"] == "bleed it off smoothly"
+    assert tb["trail_overlap"] == 0.5 and tb["release_abruptness"] == 0.6
+    assert "apex_spline" not in tb  # already on the handoff corner; not duplicated
+
+
+def test_handoff_trail_brake_is_none_when_unmatched_or_absent():
+    corners = [
+        {
+            "index": 0,
+            "apex_spline": 0.3,
+            "time_loss_s": 0.2,
+            "headline": "C0",
+            "attributions": [_attr("entry_speed_left", "technique")],
+        },
+        {"index": 1, "apex_spline": 0.6, "time_loss_s": 0.1, "headline": "C1", "attributions": []},
+    ]
+    structured = _structured(corners)
+    structured["trail_braking"] = [
+        {
+            "corner": 0,
+            "classification": "trails_too_deep",
+            "trail_overlap": 0.4,
+            "brake_off_rel": 0.2,
+            "release_abruptness": 0.1,
+            "coaching": "release earlier",
+        }
+    ]
+    h = build_coach_handoff(structured)
+    assert h["corners"][0]["trail_brake"]["classification"] == "trails_too_deep"
+    assert h["corners"][1]["trail_brake"] is None  # no finding for this corner
+    # a structured input with no trail_braking block at all -> all None
+    h2 = build_coach_handoff(_structured(corners))
+    assert all(c["trail_brake"] is None for c in h2["corners"])
