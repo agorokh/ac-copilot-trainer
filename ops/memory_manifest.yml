@@ -14,10 +14,14 @@ repo:
     - ".github/workflows"
     - ".github/actions"
     - "firmware"
+  # This repo's canonical Tier-3 workspace (mirrors the CLAUDE.md auto-generated
+  # block). resolve_workspace honors tier3_workspace_id BEFORE any name/vault_root
+  # match, so it wins over the also-bridge-visible `ac_copilot_trainer` (#314).
+  tier3_workspace_id: "ac_copilot"
 
 manifest_version: 1
-updated_at: "2026-04-23T18:00:00Z"
-owner: "template-repo"
+updated_at: "2026-06-23T07:10:00Z"
+owner: "agorokh/ac-copilot-trainer"
 anchors:
   # Placeholder anchors. Operator overlays replace these with real upstream
   # issue / ADR URLs in their .gitignored manifest. The schema does not
@@ -63,28 +67,30 @@ rms_scheduling:
     command: "hermes run-skill memory-health-scan --actuate"
 
 # ---------------------------------------------------------------------------
-# This file is the SCHEMA reference shipped with template-repo. A real
-# operator's memory manifest (with actual host IDs, vault paths, and
-# workspace names) lives outside the repo (or in a gitignored overlay)
-# because it includes operator-specific filesystem layout and private
-# workspace names. See docs/00_Core/MEMORY_SUBSTRATE.md for the contract;
-# the example below shows the shape, not a real fleet.
+# Real fleet for ac-copilot-trainer. Canonical Tier-3 workspace is `ac_copilot`
+# on the central memory host `mac-mini-dev` (mirrors the CLAUDE.md auto-generated
+# Tier-3 block). Endpoints are loopback on the central host; from a non-central
+# host set AGENTIC_MEMORY_BRIDGE_HOST=mac-mini-dev so the bridge rewrites loopback
+# to the Tailscale name (agent-factory/docs/00_Core/HOSTS.md). Contract:
+# docs/00_Core/MEMORY_SUBSTRATE.md.
 # ---------------------------------------------------------------------------
 hosts:
-  - id: "example-host"
-    owner_repo: "<your-org>/<your-orchestrator-repo>"
-    notes: "Example host. Each workspace is one LightRAG endpoint with its own vault root and audit log. Replace with the real fleet at the operator level."
+  - id: "mac-mini-dev"
+    owner_repo: "agorokh/ac-copilot-trainer"
+    notes: "Central memory host. The ac_copilot workspace is one LightRAG endpoint with its own vault root and ingest-audit log."
     workspaces:
-      - name: "example_kb_workspace"
-        endpoint: "http://localhost:8020"
-        vault_root: "docs/01_Vault/ExampleProject"
+      - name: "ac_copilot"
+        backend: "lightrag"
+        origin: "repo-product"
+        endpoint: "http://localhost:8045"
+        vault_root: "docs/01_Vault/AcCopilotTrainer"
         audit_log: "docs/01_Vault/.turbovault/audit/operations.jsonl"
-        launchd_label: "ai.lightrag.ingest-audit.example_kb_workspace"
+        launchd_label: "ai.lightrag.ingest-audit.ac_copilot"
         stale_after_hours: 24
+        match_repo_basenames:
+          - "ac-copilot-trainer"
         canary_queries:
-          - prompt: "example architectural decision"
-            mode: "hybrid"
-            expected_refs_any:
-              - "example-investigation-2026-04-19.md"
-          - prompt: "LightRAG Neo4j graph storage"
+          - prompt: "Assetto Corsa copilot training pipeline"
             mode: "mix"
+          - prompt: "lap archive coaching telemetry"
+            mode: "hybrid"
