@@ -37,6 +37,7 @@ from tools.ac_harness.trace_replay import (  # noqa: E402 - after importorskip
     available_scenarios,
     load_schema,
     synthesize_trace,
+    wheels_from_frame,
 )
 
 
@@ -296,6 +297,209 @@ def test_telemetry_ingest_then_corner_and_delta_pipeline(harness: TraceReplayHar
     assert dsec == pytest.approx(1.0, abs=1e-6), (
         f"deltaSecondsAtSpline with +1000 ms current must be +1.0 s, got {dsec}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-wheel capture (issue #278) -- telemetry.lua + wheel_read.lua off-sim
+# ---------------------------------------------------------------------------
+
+
+def _ingest_lap(
+    harness: TraceReplayHarness,
+    car_frames: list[dict],
+    *,
+    with_wheels: bool,
+) -> object:
+    """Drive telemetry:update(dt, car, sim) over frames and finalize the lap trace.
+
+    Each item in ``car_frames`` is a kwargs dict for ``make_car`` plus a ``"wheels"``
+    list; ``with_wheels`` toggles whether ``car.wheels`` is synthesized so a single
+    helper covers both the populated and the pre-#278 (no-wheels) paths.
+    """
+    tel = harness.require("telemetry")
+    t = tel.new(harness.lua.table())
+    t.beginLapClock(t, 0.0)
+    game_time = 0.0
+    for spec in car_frames:
+        kwargs = {k: v for k, v in spec.items() if k != "wheels"}
+        if with_wheels and "wheels" in spec:
+            kwargs["wheels"] = spec["wheels"]
+        car = harness.make_car(**kwargs)
+        sim = harness.make_sim(isInMainMenu=False, gameTime=game_time)
+        harness.call_guarding_schema(t.update, t, 0.05, car, sim)
+        game_time += 0.05
+    return t.finalizeLapTrace(t)
+
+
+def test_telemetry_captures_distinct_per_wheel_channels(harness: TraceReplayHarness) -> None:
+    """L0-18: with car.wheels synthesized, telemetry.lua's wheel_read path captures
+    DISTINCT per-corner angularSpeed/slipRatio/tyreCoreTemperature into the trace
+    columns in the correct FL/FR/RL/RR (0..3) order. This is the off-sim coverage #278
+    adds: before it, the mock had no car.wheels so this path read nil -> 0 and was never
+    exercised without Assetto Corsa. Distinct values per corner catch a 0/1/2/3 shift
+    (the kind of index bug #180's rr=0 regression was)."""
+    # FL=0, FR=1, RL=2, RR=3 -- deliberately distinct, with rear wheelspin (positive slip).
+    wheels = [
+        {"angularSpeed": 100.0, "slipRatio": -0.01, "tyreCoreTemperature": 70.0},
+        {"angularSpeed": 101.0, "slipRatio": -0.02, "tyreCoreTemperature": 71.0},
+        {"angularSpeed": 102.0, "slipRatio": 0.18, "tyreCoreTemperature": 82.0},
+        {"angularSpeed": 103.0, "slipRatio": 0.19, "tyreCoreTemperature": 83.0},
+    ]
+    frames = [
+        {
+            "speedKmh": 180.0,
+            "splinePosition": 0.10 + i * 0.01,
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "wheels": wheels,
+        }
+        for i in range(5)
+    ]
+    lap_trace = _ingest_lap(harness, frames, with_wheels=True)
+    rows = harness.lua.eval("function(tr) return #tr end")(lap_trace)
+    assert rows >= 1, "telemetry must record lap-trace rows"
+
+    def col(name: str) -> float:
+        return harness.lua.eval(f"function(tr) return tr[1].{name} end")(lap_trace)
+
+    # angularSpeed (omega) -- the canonical longitudinal signal -- lands per corner.
+    assert col("wheelAngularSpeed_fl") == pytest.approx(100.0)
+    assert col("wheelAngularSpeed_fr") == pytest.approx(101.0)
+    assert col("wheelAngularSpeed_rl") == pytest.approx(102.0)
+    assert col("wheelAngularSpeed_rr") == pytest.approx(103.0)
+    # slipRatio: rear wheelspin must show on the REAR corners, not shifted forward.
+    assert col("wheelSlip_fl") == pytest.approx(-0.01)
+    assert col("wheelSlip_rl") == pytest.approx(0.18)
+    assert col("wheelSlip_rr") == pytest.approx(0.19)
+    # tyreCoreTemperature rides along on the same per-corner mapping.
+    assert col("tyreCoreTemp_fl") == pytest.approx(70.0)
+    assert col("tyreCoreTemp_rr") == pytest.approx(83.0)
+
+
+def test_telemetry_wheel_columns_nil_without_mock_wheels(harness: TraceReplayHarness) -> None:
+    """L0-19 (CONTRAST): WITHOUT synthesized car.wheels (the pre-#278 mock), the per-wheel
+    capture path reads nil and telemetry.lua emits no wheel columns. This proves the new
+    car.wheels wiring is what actually exercises wheel_read.readPerWheel off-sim -- a test
+    that passed identically with and without the wheels would be vacuous."""
+    frames = [
+        {
+            "speedKmh": 180.0,
+            "splinePosition": 0.10 + i * 0.01,
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "wheels": [{"angularSpeed": 100.0 + i} for _ in range(4)],
+        }
+        for i in range(3)
+    ]
+    lap_trace = _ingest_lap(harness, frames, with_wheels=False)
+    fl = harness.lua.eval("function(tr) return tr[1].wheelAngularSpeed_fl end")(lap_trace)
+    rr = harness.lua.eval("function(tr) return tr[1].wheelSlip_rr end")(lap_trace)
+    assert fl is None, f"without car.wheels the omega column must be nil/absent, got {fl!r}"
+    assert rr is None, f"without car.wheels the slip column must be nil/absent, got {rr!r}"
+
+
+def test_synthesized_trace_wheels_flow_through_telemetry(harness: TraceReplayHarness) -> None:
+    """L0-20: the synthesize_trace per-wheel columns (free-rolling omega, warm tyres) flow
+    through make_car(wheels=wheels_from_frame(f)) into the telemetry trace, so the synthetic
+    reference scenario exercises the wheel capture path end-to-end -- not just hand-built
+    wheels. Free-rolling omega is strictly positive while moving; tyre temp is the synthetic
+    constant."""
+    frames = synthesize_trace("brake_too_late")
+    car_frames = [
+        {
+            "brake": f["brake"],
+            "gas": f["throttle"],
+            "steer": f["steer"],
+            "gear": int(f["gear"]),
+            "speedKmh": f["speed"],
+            "splinePosition": f["spline"],
+            "position": {"x": f["px"], "y": f["py"], "z": f["pz"]},
+            "wheels": wheels_from_frame(f),
+        }
+        for f in frames
+    ]
+    lap_trace = _ingest_lap(harness, car_frames, with_wheels=True)
+    n = harness.lua.eval("function(tr) return #tr end")(lap_trace)
+    assert n > 0, "telemetry must produce a non-empty lap trace"
+    # Row 1 is pre-brake at speed -> free-rolling omega is finite and > 0 on every corner.
+    for corner in ("fl", "fr", "rl", "rr"):
+        omega = harness.lua.eval(f"function(tr) return tr[1].wheelAngularSpeed_{corner} end")(
+            lap_trace
+        )
+        assert omega is not None and omega > 0.0, (
+            f"free-rolling omega must populate wheelAngularSpeed_{corner}, got {omega!r}"
+        )
+    temp = harness.lua.eval("function(tr) return tr[1].tyreCoreTemp_fl end")(lap_trace)
+    assert temp == pytest.approx(80.0), "synthesized tyre core temp (_SYNTH_TYRE_TEMP_C) must flow"
+
+
+def test_wheels_from_frame_maps_corner_order() -> None:
+    """L0-21: wheels_from_frame maps the flat per-wheel columns to FL/FR/RL/RR in the 0..3
+    order wheel_read expects, using the canonical CSP field names, and OMITS (does not
+    zero-fill) a column the frame lacks -- a synthetic 0.0 and an unreadable nil are
+    different signals to the analysis layer."""
+    frame = {
+        "wheelAngularSpeed_fl": 1.0,
+        "wheelAngularSpeed_fr": 2.0,
+        "wheelAngularSpeed_rl": 3.0,
+        "wheelAngularSpeed_rr": 4.0,
+        "wheelSlip_fl": 0.1,
+        "wheelSlip_fr": 0.2,
+        "wheelSlip_rl": 0.3,
+        "wheelSlip_rr": 0.4,
+        "tyreCoreTemp_fl": 70.0,
+        "tyreCoreTemp_fr": 71.0,
+        "tyreCoreTemp_rl": 72.0,
+        "tyreCoreTemp_rr": 73.0,
+    }
+    wheels = wheels_from_frame(frame)
+    assert len(wheels) == 4
+    assert wheels[0] == {"angularSpeed": 1.0, "slipRatio": 0.1, "tyreCoreTemperature": 70.0}
+    assert wheels[1] == {"angularSpeed": 2.0, "slipRatio": 0.2, "tyreCoreTemperature": 71.0}
+    assert wheels[2] == {"angularSpeed": 3.0, "slipRatio": 0.3, "tyreCoreTemperature": 72.0}
+    assert wheels[3] == {"angularSpeed": 4.0, "slipRatio": 0.4, "tyreCoreTemperature": 73.0}
+    # Missing columns are omitted, not zero-filled; a wheel with no columns is an empty spec.
+    assert wheels_from_frame({"wheelAngularSpeed_fl": 5.0})[0] == {"angularSpeed": 5.0}
+    assert wheels_from_frame({})[2] == {}
+
+
+def test_make_car_wheels_are_zero_indexed_for_wheel_read(harness: TraceReplayHarness) -> None:
+    """L0-22: make_car(wheels=...) builds a 0-indexed car.wheels that wheel_read.readPerWheel
+    reads with the correct FL/FR/RL/RR mapping (it iterates `for i = 0, 3`). A 1-based array
+    would surface RR as a missing nil -- the shape of the #180 rr=0 regression."""
+    wr = harness.require("wheel_read")
+    car = harness.make_car(
+        speedKmh=120.0,
+        wheels=[
+            {"angularSpeed": 10.0, "slipRatio": -0.05, "tyreCoreTemperature": 60.0},
+            {"angularSpeed": 11.0, "slipRatio": -0.06, "tyreCoreTemperature": 61.0},
+            {"angularSpeed": 12.0, "slipRatio": 0.20, "tyreCoreTemperature": 75.0},
+            {"angularSpeed": 13.0, "slipRatio": 0.21, "tyreCoreTemperature": 76.0},
+        ],
+    )
+    out = harness.call_guarding_schema(wr.readPerWheel, car)
+    # readPerWheel returns {omega={fl,fr,rl,rr}, slip={...}, temp={...}}.
+    assert harness.lua.eval("function(o) return o.omega.fl end")(out) == pytest.approx(10.0)
+    assert harness.lua.eval("function(o) return o.omega.rr end")(out) == pytest.approx(13.0)
+    assert harness.lua.eval("function(o) return o.slip.rl end")(out) == pytest.approx(0.20)
+    assert harness.lua.eval("function(o) return o.temp.rr end")(out) == pytest.approx(76.0)
+
+
+def test_make_car_wheels_none_and_passthrough(harness: TraceReplayHarness) -> None:
+    """L0-23: make_car(wheels=None) yields a car with no car.wheels (nil), so
+    wheel_read.readPerWheel degrades to empty -- mirroring an unreadable CSP car.wheels.
+    A pre-built Lua wheels table passes through unchanged (the _make_vec3-style escape
+    hatch), so an already-shaped fixture is not re-copied."""
+    car_none = harness.make_car(speedKmh=90.0, wheels=None)
+    # car.wheels is declared in the schema, so reading it is allowed; value is nil.
+    assert harness.lua.eval("function(c) return c.wheels end")(car_none) is None
+    wr = harness.require("wheel_read")
+    out = harness.call_guarding_schema(wr.readPerWheel, car_none)
+    assert harness.lua.eval("function(o) return o.omega.fl end")(out) is None
+
+    # Pre-built Lua wheels table (index 0 only) passes through and is readable.
+    prebuilt = harness.lua.eval("function() return { [0] = { angularSpeed = 42.0 } } end")()
+    car_pt = harness.make_car(speedKmh=90.0, wheels=prebuilt)
+    out_pt = harness.call_guarding_schema(wr.readPerWheel, car_pt)
+    assert harness.lua.eval("function(o) return o.omega.fl end")(out_pt) == pytest.approx(42.0)
 
 
 # ---------------------------------------------------------------------------

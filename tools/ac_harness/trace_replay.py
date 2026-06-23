@@ -215,12 +215,55 @@ class TraceReplayHarness:
         """
         backing = self.lua.table()
         for name, value in fields.items():
-            if name in self._vec3_allowed:
+            if name == "wheels":
+                backing[name] = self._make_wheels(value)
+            elif name in self._vec3_allowed:
                 backing[name] = self._make_vec3(name, value)
             else:
                 backing[name] = value
         gate = self.lua.globals()._make_gated
         return gate(backing, self._car_allowed, "car")
+
+    def _make_wheels(self, specs: Any) -> Any:  # noqa: ANN401 - returns Lua table
+        """Build a 0-indexed Lua array of per-wheel objects from ``specs``.
+
+        ``specs`` is a sequence of per-wheel mappings in CSP order
+        (FrontLeft, FrontRight, RearLeft, RearRight) -- each a mapping of the wheel
+        fields ``wheel_read.lua`` reads (``angularSpeed`` / ``slipRatio`` /
+        ``tyreCoreTemperature``). Keyed ``0..3`` (NOT 1-based) because
+        ``wheel_read.readPerWheel`` iterates ``for i = 0, 3`` per ``ac.Wheel``; a
+        1-based array would shift every corner and read RR as a missing zero (the
+        ``tire_temps.rr = 0`` regression #180).
+
+        Wheel objects are plain (ungated) Lua tables, mirroring the vec3
+        scalar-passthrough path: ``wheel_read.field`` pcall-guards every read and
+        falls back across CSP field-name aliases, so a schema gate on the wheel
+        sub-objects would only swallow violations (never surfacing them) -- it adds
+        no test signal. Reading an unset field returns ``nil``, matching real
+        ``ac.Wheel`` userdata and the modules' ``field(...) or ...`` fallback.
+
+        Defensive, like :meth:`_make_vec3`: ``specs=None`` -> ``nil`` (explicitly
+        mock a car with no wheel data, as ``wheel_read`` handles a missing
+        ``car.wheels``); a non-sequence ``specs`` (e.g. an already-built Lua table)
+        passes through unchanged; and an individual non-dict wheel spec passes
+        through too rather than being copied.
+        """
+        if specs is None:
+            return None
+        if not isinstance(specs, (list, tuple)):
+            return specs  # already a Lua table / pre-built object -- pass through ungated
+        wheels = self.lua.table()
+        for idx, spec in enumerate(specs):
+            if spec is None:
+                continue
+            if isinstance(spec, dict):
+                one = self.lua.table()
+                for key, value in spec.items():
+                    one[key] = value
+                wheels[idx] = one  # 0-indexed to match ac.Wheel / wheel_read's `for i = 0, 3`
+            else:
+                wheels[idx] = spec  # pre-built wheel object -- pass through
+        return wheels
 
     def make_sim(self, **fields: Any) -> Any:  # noqa: ANN401 - returns Lua table
         """Build a schema-gated mock ``sim`` table (same gating as ``make_car``)."""
@@ -444,3 +487,41 @@ def synthesize_trace(scenario: str, **kwargs: Any) -> list[TraceFrame]:
 def available_scenarios() -> list[str]:
     """Names accepted by :func:`synthesize_trace`."""
     return sorted(_SCENARIOS)
+
+
+# Per-wheel frame columns (issue #266) -> the four ``ac.Wheel`` objects the mock exposes as
+# ``car.wheels[0..3]``. Index order is CSP's: FrontLeft=0, FrontRight=1, RearLeft=2, RearRight=3
+# (mirrors ``wheel_read.WHEEL_KEYS``). Keep this list 0-indexed and in this order.
+_FRAME_WHEEL_CORNERS = ("fl", "fr", "rl", "rr")
+
+
+def wheels_from_frame(frame: TraceFrame) -> list[dict[str, float]]:
+    """Map a frame's flat per-wheel columns into ``car.wheels`` specs (issue #278).
+
+    A synthesized frame (see :func:`_base_frame`) carries the flat columns
+    ``wheelAngularSpeed_{fl,fr,rl,rr}`` / ``wheelSlip_{...}`` / ``tyreCoreTemp_{...}``.
+    The lupa mock ``car`` exposes per-wheel CSP objects under ``car.wheels[0..3]``;
+    this returns the four wheel specs (FL, FR, RL, RR order) ready to hand to
+    :meth:`TraceReplayHarness.make_car` as ``wheels=...``.
+
+    Each spec uses the canonical CSP field names ``wheel_read.lua`` reads FIRST
+    (``angularSpeed`` / ``slipRatio`` / ``tyreCoreTemperature``) so telemetry capture
+    never has to fall through to an alias. A column absent from the frame is omitted
+    from that wheel's spec (so the mock exposes no such field, mirroring an unreadable
+    CSP wheel) rather than zero-filled -- a synthesized 0.0 and an unreadable nil are
+    different signals to the analysis layer.
+    """
+    wheels: list[dict[str, float]] = []
+    for corner in _FRAME_WHEEL_CORNERS:
+        spec: dict[str, float] = {}
+        omega = frame.get(f"wheelAngularSpeed_{corner}")
+        slip = frame.get(f"wheelSlip_{corner}")
+        temp = frame.get(f"tyreCoreTemp_{corner}")
+        if omega is not None:
+            spec["angularSpeed"] = omega
+        if slip is not None:
+            spec["slipRatio"] = slip
+        if temp is not None:
+            spec["tyreCoreTemperature"] = temp
+        wheels.append(spec)
+    return wheels
