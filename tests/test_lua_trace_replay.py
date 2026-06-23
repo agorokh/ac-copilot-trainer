@@ -322,7 +322,7 @@ def _ingest_lap(
     game_time = 0.0
     for spec in car_frames:
         kwargs = {k: v for k, v in spec.items() if k != "wheels"}
-        if with_wheels:
+        if with_wheels and "wheels" in spec:
             kwargs["wheels"] = spec["wheels"]
         car = harness.make_car(**kwargs)
         sim = harness.make_sim(isInMainMenu=False, gameTime=game_time)
@@ -481,6 +481,25 @@ def test_make_car_wheels_are_zero_indexed_for_wheel_read(harness: TraceReplayHar
     assert harness.lua.eval("function(o) return o.omega.rr end")(out) == pytest.approx(13.0)
     assert harness.lua.eval("function(o) return o.slip.rl end")(out) == pytest.approx(0.20)
     assert harness.lua.eval("function(o) return o.temp.rr end")(out) == pytest.approx(76.0)
+
+
+def test_make_car_wheels_none_and_passthrough(harness: TraceReplayHarness) -> None:
+    """L0-23: make_car(wheels=None) yields a car with no car.wheels (nil), so
+    wheel_read.readPerWheel degrades to empty -- mirroring an unreadable CSP car.wheels.
+    A pre-built Lua wheels table passes through unchanged (the _make_vec3-style escape
+    hatch), so an already-shaped fixture is not re-copied."""
+    car_none = harness.make_car(speedKmh=90.0, wheels=None)
+    # car.wheels is declared in the schema, so reading it is allowed; value is nil.
+    assert harness.lua.eval("function(c) return c.wheels end")(car_none) is None
+    wr = harness.require("wheel_read")
+    out = harness.call_guarding_schema(wr.readPerWheel, car_none)
+    assert harness.lua.eval("function(o) return o.omega.fl end")(out) is None
+
+    # Pre-built Lua wheels table (index 0 only) passes through and is readable.
+    prebuilt = harness.lua.eval("function() return { [0] = { angularSpeed = 42.0 } } end")()
+    car_pt = harness.make_car(speedKmh=90.0, wheels=prebuilt)
+    out_pt = harness.call_guarding_schema(wr.readPerWheel, car_pt)
+    assert harness.lua.eval("function(o) return o.omega.fl end")(out_pt) == pytest.approx(42.0)
 
 
 # ---------------------------------------------------------------------------

@@ -241,15 +241,28 @@ class TraceReplayHarness:
         sub-objects would only swallow violations (never surfacing them) -- it adds
         no test signal. Reading an unset field returns ``nil``, matching real
         ``ac.Wheel`` userdata and the modules' ``field(...) or ...`` fallback.
+
+        Defensive, like :meth:`_make_vec3`: ``specs=None`` -> ``nil`` (explicitly
+        mock a car with no wheel data, as ``wheel_read`` handles a missing
+        ``car.wheels``); a non-sequence ``specs`` (e.g. an already-built Lua table)
+        passes through unchanged; and an individual non-dict wheel spec passes
+        through too rather than being copied.
         """
+        if specs is None:
+            return None
+        if not isinstance(specs, (list, tuple)):
+            return specs  # already a Lua table / pre-built object -- pass through ungated
         wheels = self.lua.table()
         for idx, spec in enumerate(specs):
             if spec is None:
                 continue
-            one = self.lua.table()
-            for key, value in dict(spec).items():
-                one[key] = value
-            wheels[idx] = one  # 0-indexed to match ac.Wheel / wheel_read's `for i = 0, 3`
+            if isinstance(spec, dict):
+                one = self.lua.table()
+                for key, value in spec.items():
+                    one[key] = value
+                wheels[idx] = one  # 0-indexed to match ac.Wheel / wheel_read's `for i = 0, 3`
+            else:
+                wheels[idx] = spec  # pre-built wheel object -- pass through
         return wheels
 
     def make_sim(self, **fields: Any) -> Any:  # noqa: ANN401 - returns Lua table
