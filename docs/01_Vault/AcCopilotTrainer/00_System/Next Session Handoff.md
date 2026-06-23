@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-23T05:46:00Z
+last_updated: 2026-06-23T07:28:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
@@ -35,6 +35,23 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-23 LATER — Tier-3 manifest placeholder FIXED via PR #316)
+
+**Delivered (squash-merged [`c3590ec`](https://github.com/agorokh/ac-copilot-trainer/commit/c3590ec), closes [#314](https://github.com/agorokh/ac-copilot-trainer/issues/314)):**
+`ops/memory_manifest.yml` still carried the template placeholder `example_kb_workspace` (whose
+relative `vault_root` resolved inside every checkout → `resolve_workspace` picked it via the
+vault_root fallback → SessionStart prefetch failed bridge visibility → memory gate never stamped).
+Fix: `repo.tier3_workspace_id: "ac_copilot"` (authoritative, wins over the `ac_copilot_trainer`
+alias) + the real `ac_copilot` row (host `mac-mini-dev`, `http://localhost:8045`, `lightrag`).
+
+**Verified:** `resolve_workspace` → `ac_copilot` (env-independent); the prefetch resolves
+`ac_copilot` with **no mismatch error**; `test_hook_memory_manifest.py` + `make ci-fast` green.
+**Still environmental (separate from this fix):** standalone prefetch on a *non-central* host reports
+"substrate unreachable/empty" because the MCP wrapper's bridge env (TLS server name for the Tailscale
+HTTPS registry endpoint) isn't set when invoking the script bare, and the `ac_copilot` workspace is
+currently **sparse/unprovisioned** (a bridge query returns empty). Provisioning/ingest is the
+follow-on; the manifest now targets the right, reachable workspace so that ingest can fill it.
+
 ## Resume here (2026-06-23 — #305 capture bug SHIPPED via PR #309; rig confirmation remains)
 
 **Delivered (squash-merged [`86c5f60`](https://github.com/agorokh/ac-copilot-trainer/commit/86c5f60), 2026-06-23):**
@@ -65,10 +82,10 @@ menu / end the session **without** another lap, then confirm `…/journal/laps/`
 `lap_*.json` (not a stub) for that lap. Needs AG_PC + AC; could not be done from macOS. Same class as
 the #277 rig-gated step.
 
-**Side bug filed (spawn-task chip, not yet an issue):** `ops/memory_manifest.yml` still carries the
-template placeholder workspace `example_kb_workspace`, so every SessionStart's Tier-3 prefetch errors
-("workspace not visible") and never stamps the memory gate. Real workspace is `ac_copilot` (visible in
-the bridge). Fix the manifest row → prefetch stamps cleanly. Separable from #305.
+**Side bug — RESOLVED (#314 / PR #316, `c3590ec`):** `ops/memory_manifest.yml` had the template
+placeholder workspace `example_kb_workspace`, so every SessionStart's Tier-3 prefetch errored
+("workspace not visible") and never stamped the memory gate. Now points at the real `ac_copilot`
+workspace (see the manifest-fix section above).
 
 **Housekeeping:** primary worktree `main` was 1 behind `origin/main` after the merge (protect-main
 guard blocks a manual ff from a linked worktree; `post_merge_sync.sh` can't `checkout main` when it's
