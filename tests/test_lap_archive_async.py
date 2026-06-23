@@ -193,7 +193,8 @@ def test_create_write_job_refuses_empty_trace(tmp_path: pathlib.Path) -> None:
     )
     assert rt.globals()["_job"] is None, "createWriteJob must refuse an empty-trace lap"
     err = rt.globals()["_err"]
-    assert isinstance(err, str) and "empty trace" in err, f"unexpected err: {err!r}"
+    assert isinstance(err, str), f"err must be a string reason, got: {err!r}"
+    assert "empty trace" in err, f"unexpected err: {err!r}"
     assert not list(tmp_path.rglob("lap_*.json")), "no stub .json may be written"
     assert not list(tmp_path.rglob("*.tmp")), "no .tmp may be staged"
 
