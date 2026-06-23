@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-23T00:30:00Z
+last_updated: 2026-06-23T05:15:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
@@ -32,6 +32,33 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-23 — #303 Windows path-guard SHIPPED via PR #304)
+
+**Delivered (merged `5210973`, 2026-06-23):** issue #303 — `normalize_path_list` in
+[`tools/process_miner/session_debrief_schema.py`](../../../../tools/process_miner/session_debrief_schema.py)
+now detects absolute paths cross-platform (`PurePosixPath | PureWindowsPath`), closing the Windows
+`/etc/passwd` traversal-guard bypass. During PR resolution I addressed a **gemini-code-assist HIGH**:
+the guard now resolves/relativizes **only host-absolute** paths and skips foreign-platform-absolute
+paths outright (`if root is None or not Path(normalized).is_absolute(): continue`) — previously such a
+path was anchored to the CWD and could be admitted via `relative_to(root)` when the CWD lay under
+`root`. Added regression test `test_normalize_path_list_foreign_absolute_with_repo_root_skipped`.
+CI green on the head SHA, review thread resolved, merged after a full 600 s post-push cooldown.
+
+**Filed — separable infra (issue #308):** Tier-3 memory grounding falsely hard-blocked this session
+in the linked worktree. Two root causes: (A) gitignored `ops/memory_manifest.local.yml` does **not**
+propagate into linked git worktrees, so SessionStart's prefetch fell back to the committed template
+placeholder `example_kb_workspace` (not bridge-visible → `gate_policy=block`); (B) the prefetch SSRF
+guard rejects the **canonical** `http://localhost:8045` substrate endpoint (port "not registry-known").
+**Workaround this session (per MEMORY_CONTRACT bypass protocol):** grounded via the working MCP query
+against `ac_copilot` (substrate reachable; empty — brand-new narrow code), recorded an honest
+`.scratch/.last_memory_query` stamp, cleared the false block-marker, mirrored the overlay into the
+linked worktree, and wrote the rationale to `.scratch/.memory_bypass_rationale`. The committed-manifest
+fix (#308 Part A option 3: put `tier3_workspace_id: ac_copilot` in the tracked `ops/memory_manifest.yml`)
+would durably stop the per-session recurrence.
+
+**Next pick-ups (off-rig first):** **#305** (flying-lap 0 KB trace — highest-impact bug, CI-able) →
+**#277** (close the live loop, rig-gated). #303 is now done; #308 is the new infra debt item.
 
 ## Housekeeping addendum — backlog steward sweep (2026-06-22)
 
