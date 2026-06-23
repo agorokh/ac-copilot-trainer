@@ -70,7 +70,14 @@ def normalize_path_list(value: Any, *, repo_root: Path | None = None) -> list[st
         # single, OS-independent form (e.g. ``\\server\share`` -> ``//server/share``).
         normalized = item.strip().replace("\\", "/")
         if _is_absolute_any_platform(normalized):
-            if root is None:
+            # Only a *host-absolute* path can be meaningfully resolved and
+            # relativized against ``root``. A path that is absolute on the OTHER
+            # OS flavour (``C:/x`` on POSIX, ``/etc/x`` on Windows) is NOT
+            # host-absolute, so ``Path(normalized).resolve()`` would anchor it to
+            # the CWD and ``relative_to(root)`` could *admit* it as a contained
+            # relative path when the CWD lies under ``root``. Skip those outright
+            # (gemini-code-assist HIGH, PR #303/#304).
+            if root is None or not Path(normalized).is_absolute():
                 continue
             try:
                 rel = Path(normalized).resolve().relative_to(root)
