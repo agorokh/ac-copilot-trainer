@@ -29,9 +29,27 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-207-motec-reference-import.md
   - AcCopilotTrainer/03_Investigations/pr-75-ollama-corner-coaching-protocol.md
   - AcCopilotTrainer/03_Investigations/template-sync-pr87-2026-04-24.md
+  - AcCopilotTrainer/03_Investigations/pr-310-trail-brake-attribution-handoff.md
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-23 — #301 trail-braking SHIPPED via PR #310)
+
+**Delivered (squash-merged `2755eb7`, 2026-06-23):** issue #301 — the two trail-braking follow-ups.
+Part 1 ([`coach_handoff.py`](../../../../tools/ai_sidecar/coach_handoff.py)) joins the
+`trail_braking` block onto each handoff corner as a compact `trail_brake` field; Part 2
+([`corner_attribution.py`](../../../../tools/ai_sidecar/corner_attribution.py)) folds trail-braking
+into the attribution layer as a low-confidence (`0.26–0.29`) **technique** rule that never displaces
+existing setup/time-loss attributions. Additive (`COACH_HANDOFF_VERSION` unchanged); strict
+`coaching_response` golden unchanged; `make ci-fast` OK (1337 passed); adversarial review 0 confirmed
+findings; verified end-to-end on `main` (handoff `trail_brake` field + `cause_class='technique'`
+attribution + live `coaching_response` wire path). Full record:
+[`pr-310-trail-brake-attribution-handoff.md`](../03_Investigations/pr-310-trail-brake-attribution-handoff.md).
+This closes the **frontier coaching program / EPIC #154** trail-braking reach.
+
+Tier-3 substrate `ac_copilot` was **down (502)** this session → grounded vault-only; the worktree
+memory-gate false-block is already tracked as **#308** (gate sat in its sanctioned outage soft-allow).
 
 ## Resume here (2026-06-23 — #303 Windows path-guard SHIPPED via PR #304)
 
