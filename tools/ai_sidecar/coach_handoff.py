@@ -3,8 +3,15 @@
 Turns the brain's debrief (``coach_report.build_structured_debrief``) into a compact, versioned
 message a downstream consumer — an RL/agentic coach, the rig screen, or a logger — can act on
 without re-parsing prose. Per corner: ``{corner, time_loss_s, cause_class, confidence, advisory,
-coaching, suggested_setup_delta}``; per lap: total time lost, the top-focus corner, and the
-aero/mechanical balance verdict.
+coaching, suggested_setup_delta, trail_brake}``; per lap: total time lost, the top-focus corner,
+and the aero/mechanical balance verdict.
+
+The ``trail_brake`` field joins the structured debrief's separate ``trail_braking`` block (keyed by
+corner index) onto the matching handoff corner, so a downstream coach reads the trail-braking
+technique verdict inline with the per-corner cause instead of re-correlating two lists. It is
+``None`` for corners with no braking-into-entry phase. (The trail-brake read also participates in
+``cause_class`` directly, via the brain's ``trail_brake`` technique attribution — see
+``corner_attribution``.)
 
 The ``suggested_setup_delta`` is grounded in the verified setup knowledge + the attribution's own
 cause: a technique-class corner suggests NO setup change (it's a driver fix); a setup/grip-class
@@ -127,6 +134,23 @@ def _setup_delta(
     return None
 
 
+def _handoff_trail_brake(tb: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Compact per-corner trail-braking verdict for the handoff, or None when the corner has none.
+
+    Selects the actionable subset of one ``structured['trail_braking']`` entry. ``apex_spline`` is
+    already carried on the handoff corner, so it is not duplicated here.
+    """
+    if not isinstance(tb, dict):
+        return None
+    return {
+        "classification": tb.get("classification"),
+        "trail_overlap": tb.get("trail_overlap"),
+        "brake_off_rel": tb.get("brake_off_rel"),
+        "release_abruptness": tb.get("release_abruptness"),
+        "coaching": tb.get("coaching"),
+    }
+
+
 def build_coach_handoff(
     structured: dict[str, Any] | None, *, setup: CarSetup | None = None, lap: Any = None
 ) -> dict[str, Any]:
@@ -138,6 +162,12 @@ def build_coach_handoff(
     structured = structured or {}
     car_id = structured.get("car_id")
     corners_in = structured.get("corners") or []
+    # Index the separate trail-braking block by corner so it can be joined onto each handoff corner.
+    trail_by_idx = {
+        tb.get("corner"): tb
+        for tb in (structured.get("trail_braking") or [])
+        if isinstance(tb, dict)
+    }
     corners_out: list[dict[str, Any]] = []
     for c in corners_in:
         attrs = c.get("attributions") or []
@@ -160,6 +190,7 @@ def build_coach_handoff(
                 "symptom": top.get("symptom") if top else "on pace",
                 "coaching": top.get("coaching") if top else c.get("headline", ""),
                 "suggested_setup_delta": delta,
+                "trail_brake": _handoff_trail_brake(trail_by_idx.get(c.get("index"))),
             }
         )
     losers = [

@@ -456,3 +456,57 @@ def test_coach_lap_produces_per_corner_verdicts():
     assert isinstance(c0.attributions, list)
     # the synthetic apex (~90 km/h) at ~2.1 g vs 2.5 ceiling is near the limit -> grip-limited shows
     assert any(a.key == "grip_limited" for a in c0.attributions) or c0.min_speed_kmh > 0
+
+
+# --- trail-braking folded into the attribution layer (#301) ------------------
+def test_trail_brake_attribution_is_a_technique_verdict():
+    # an injected trail-brake deficit becomes a TECHNIQUE attribution (no live channel needed)
+    ctx = CornerContext(
+        sig=_sig(),
+        setup=SETUP,
+        extra={
+            "trail_brake": {"classification": "abrupt_release", "coaching": "bleed it off smoothly"}
+        },
+    )
+    tb = next(a for a in attribute_corner(ctx) if a.key == "trail_brake")
+    assert tb.advisory is False  # archive technique read — nothing live to confirm
+    assert tb.technique_causes and not tb.setup_causes  # -> cause_class "technique", no setup delta
+    assert tb.coaching == "bleed it off smoothly"  # forwards the classification's own coaching
+
+
+def test_trail_brake_no_attribution_without_injected_signal():
+    # attribute_corner called directly (no coach_lap injection) must not invent a trail_brake attr
+    assert not any(
+        a.key == "trail_brake" for a in attribute_corner(CornerContext(sig=_sig(), setup=SETUP))
+    )
+
+
+def test_good_trail_brake_does_not_attribute():
+    ctx = CornerContext(
+        sig=_sig(),
+        setup=SETUP,
+        extra={"trail_brake": {"classification": "good_trail_brake", "coaching": "textbook"}},
+    )
+    assert not any(a.key == "trail_brake" for a in attribute_corner(ctx))
+
+
+def test_trail_brake_never_displaces_a_setup_bearing_attribution():
+    # a corner that loses time braking AND trail-brakes poorly: braking_phase_loss stays PRIMARY
+    # (it carries the bias/setup hint); trail_brake only participates as a lower-ranked cue
+    ctx = CornerContext(
+        sig=_sig(peak_brake_g=1.1, brake_point_spline=0.40),
+        setup=SETUP,
+        delta=_delta(delta_s=0.3, min_speed_delta_kmh=0.0),  # no apex-speed deficit -> only braking
+        extra={"trail_brake": {"classification": "abrupt_release", "coaching": "bleed it off"}},
+    )
+    keys = [a.key for a in attribute_corner(ctx)]
+    assert "braking_phase_loss" in keys and "trail_brake" in keys
+    assert keys[0] == "braking_phase_loss"
+    assert keys.index("trail_brake") > keys.index("braking_phase_loss")
+
+
+def test_coach_lap_folds_in_trail_brake_attribution():
+    # the square-brake fixture trail-brakes poorly -> coach_lap injects a trail_brake attribution
+    lap = _corner_lap_trace()
+    report = coach_lap(lap, SETUP, grip_ceiling_g=2.5)
+    assert any(a.key == "trail_brake" for c in report for a in c.attributions)
