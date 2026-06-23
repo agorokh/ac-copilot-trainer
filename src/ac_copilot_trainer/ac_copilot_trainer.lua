@@ -411,6 +411,9 @@ local pendingWsSidecarUrl = nil
 local pendingLapArchiveJobs = {}
 local pendingLapArchiveRecordPaths = {}
 local LAP_ARCHIVE_ROWS_PER_FRAME = 64
+-- Per-step row budget used by the synchronous session-end drain (issue #305). Far above any
+-- real lap's downsampled trace (~2000 rows) so a single step finishes the whole job.
+local LAP_ARCHIVE_FLUSH_ROWS = 1000000
 
 -- Forward-declare so closures registered with wsBridge below capture the
 -- main state table as an upvalue (Lua resolves locals lexically at compile
@@ -435,10 +438,10 @@ local function queueLapArchiveJob(archiveOpts)
   end
 end
 
-local function pumpLapArchiveJobs()
+local function pumpLapArchiveJobs(maxRows)
   local job = pendingLapArchiveJobs[1]
   if not job then return end
-  local done, ok, pathOrErr = job:step(LAP_ARCHIVE_ROWS_PER_FRAME)
+  local done, ok, pathOrErr = job:step(maxRows or LAP_ARCHIVE_ROWS_PER_FRAME)
   if not done then return end
   table.remove(pendingLapArchiveJobs, 1)
   if ac and type(ac.log) == "function" then
@@ -450,6 +453,35 @@ local function pumpLapArchiveJobs()
   end
   if ok and type(pathOrErr) == "string" then
     pendingLapArchiveRecordPaths[#pendingLapArchiveRecordPaths + 1] = pathOrErr
+  end
+end
+
+--- Synchronously force EVERY pending archive job to completion (issue #305).
+--- The per-frame `pumpLapArchiveJobs` only advances the queue while `script.update`
+--- reaches its body. When a session ends (back to the main menu) update() returns
+--- early — before the per-frame pump — so a job queued for the LAST lap driven (the
+--- common "hot lap, then pit / stop" case) would otherwise be abandoned mid-stream as
+--- a partial `.tmp` and its trace lost. Drain it here instead, before that early return.
+--- `LAP_ARCHIVE_FLUSH_ROWS` finishes each front job in a single step; a hard iteration
+--- cap guarantees this can never spin even if a job's step path ever misbehaves.
+local function flushPendingLapArchiveJobs(reason)
+  if #pendingLapArchiveJobs == 0 then
+    return
+  end
+  if ac and type(ac.log) == "function" then
+    ac.log("[COPILOT][ARCHIVE] flushing " .. tostring(#pendingLapArchiveJobs)
+      .. " pending job(s) on " .. tostring(reason or "session end"))
+  end
+  local guard = 0
+  while #pendingLapArchiveJobs > 0 and guard < 4096 do
+    guard = guard + 1
+    local before = #pendingLapArchiveJobs
+    pumpLapArchiveJobs(LAP_ARCHIVE_FLUSH_ROWS)
+    if #pendingLapArchiveJobs == before then
+      -- A step with the flush budget always reaches `done`, so the front job is removed
+      -- above; this guard only fires if that contract ever breaks — drop it rather than spin.
+      table.remove(pendingLapArchiveJobs, 1)
+    end
   end
 end
 
@@ -2000,6 +2032,13 @@ function script.update(dt)
 
   if sim.isInMainMenu then
     if state.wasDriving then
+      -- Issue #305: we just left the track. update() returns a few lines below on every menu
+      -- frame, so the per-frame archive pump further down never runs again — drain any job
+      -- queued for the last lap NOW so its full trace is written instead of being abandoned as
+      -- a partial `.tmp` stub. Gated by `wasDriving` so it runs once on the driving→menu
+      -- transition (a job can only be queued while driving), not on every idle menu frame;
+      -- runs before resetRuntimeAfterLeavingTrack rebuilds runtime state.
+      flushPendingLapArchiveJobs("session end (main menu)")
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
         local journalLaps = state.lapsCompleted or 0

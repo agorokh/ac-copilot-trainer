@@ -475,6 +475,14 @@ function M.createWriteJob(opts, capMB)
     return nil, "invalid archive record options"
   end
 
+  -- Issue #305: never stage a traceless archive. A completed in-game lap always has
+  -- trace rows; 0 rows means the trace was lost upstream (finalized after a reset, or a
+  -- lap that was never recorded). Writing the envelope-only ~900-byte stub the coaching
+  -- pipeline cannot use is worse than skipping — refuse so the caller logs and moves on.
+  if samplesCount <= 0 then
+    return nil, "refusing to archive lap with empty trace (0 rows)"
+  end
+
   capMB = M.clampArchiveCapMB(capMB)
   local path = archivePathForRecord(rec)
   local job = {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import re
 from typing import Any
 
 import pytest
@@ -13,7 +12,6 @@ lupa = pytest.importorskip("lupa", reason="lupa Lua runtime not installed (pip i
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
-ENTRY = REPO / "src" / "ac_copilot_trainer" / "ac_copilot_trainer.lua"
 
 
 def _lua_to_py(value: Any) -> Any:
@@ -172,29 +170,171 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
     assert record["coaching"]["corner_advice_used"]["T1"] == "Trail brake to apex"
 
 
-def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
-    # This is an intentional source-structure regression test: if the lap
-    # boundary or WS pump sections are refactored, update these regex anchors
-    # with the implementation so the architectural guard remains meaningful.
-    src = ENTRY.read_text(encoding="utf-8")
-    match = re.search(
-        r"-- Issue #77 Part C / #246: archive this lap.*?state\.lapInvalidatedThisLap = false",
-        src,
-        flags=re.S,
+def test_create_write_job_refuses_empty_trace(tmp_path: pathlib.Path) -> None:
+    """#305 stub guard: a lap with no trace rows must NOT produce an archive at all —
+    not the envelope-only ~900-byte stub the coaching pipeline cannot use. The writer
+    refuses and the caller (queueLapArchiveJob) logs + skips. No .json, no .tmp."""
+    rt = _runtime(tmp_path)
+    rt.execute(
+        """
+        _opts = {
+          session_uuid = "session-empty",
+          car = { id = "ks_porsche_911_gt3_r_2016" },
+          sim = { trackName = "magione", trackLengthM = 2507 },
+          lap_n = 5,
+          lap_ms = 82550,
+          is_pb = true,
+          is_valid = true,
+          trace = {},  -- no samples
+        }
+        local lapArchive = require("lap_archive")
+        _job, _err = lapArchive.createWriteJob(_opts, 50)
+        """
     )
-    assert match is not None
-    block = match.group(0)
-    assert "queueLapArchiveJob(archiveOpts)" in block
-    assert "lapArchive.write" not in block
-    assert "lapArchive.buildRecord" not in block
+    assert rt.globals()["_job"] is None, "createWriteJob must refuse an empty-trace lap"
+    err = rt.globals()["_err"]
+    assert isinstance(err, str), f"err must be a string reason, got: {err!r}"
+    assert "empty trace" in err, f"unexpected err: {err!r}"
+    assert not list(tmp_path.rglob("lap_*.json")), "no stub .json may be written"
+    assert not list(tmp_path.rglob("*.tmp")), "no .tmp may be staged"
 
-    ws_match = re.search(
-        r"wsBridge\.tick\(ch\.simSeconds\(sim\)\).*?-- Issue #180 Part D step 2",
-        src,
-        flags=re.S,
+
+def test_pending_job_flushes_to_full_archive_in_one_step(tmp_path: pathlib.Path) -> None:
+    """#305 drain primitive: a job only partially pumped (the few frames before a session
+    ends) must complete to a FULL archive when force-drained in a single large step, never
+    left as a .tmp stub. This is exactly what flushPendingLapArchiveJobs relies on."""
+    rt = _runtime(tmp_path)
+    rt.execute(
+        """
+        local trace = {}
+        for i = 1, 200 do
+          trace[i] = {
+            spline = (i - 1) / 199, speed = 100, eMs = (i - 1) * 10,
+            throttle = 1, brake = 0, steer = 0, gear = 4, px = i, py = 0, pz = i,
+          }
+        end
+        _opts = {
+          session_uuid = "session-flush",
+          car = { id = "ks_porsche_911_gt3_r_2016" },
+          sim = { trackName = "magione", trackLengthM = 2507 },
+          lap_n = 7, lap_ms = 82550, is_pb = true, is_valid = true, trace = trace,
+        }
+        local lapArchive = require("lap_archive")
+        _job = assert(lapArchive.createWriteJob(_opts, 50))
+        """
     )
-    assert ws_match is not None
-    ws_block = ws_match.group(0)
-    assert ws_block.index("wsBridge.pollInbound(8)") < ws_block.index("pumpLapArchiveJobs()")
-    assert ws_block.index("pumpLapArchiveJobs()") < ws_block.index("pumpLapArchiveNotifications()")
-    assert "pendingLapArchiveRecordPaths" in src
+    # Reproduce the abandoned state: one per-frame step (64 rows) — not done, .tmp staged.
+    first = _step(rt, 64)
+    assert first["done"] is False
+    assert list(tmp_path.rglob("*.tmp")), "a partial pump should stage a .tmp"
+    assert not list(tmp_path.rglob("lap_*.json"))
+    # The drain: a single huge-budget step must finish the WHOLE job into a full .json.
+    final = _step(rt, 1_000_000)
+    assert final["done"] is True
+    assert final["ok"] is True
+    archive_path = pathlib.Path(final["res"])
+    assert archive_path.is_file()
+    assert not archive_path.with_name(archive_path.name + ".tmp").exists()
+    record = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert record["lap"]["lap_n"] == 7
+    assert record["trace"]["samples_count"] == 200
+    assert len(record["trace"]["samples"]) == 200, "drain must write the full trace, not a stub"
+
+
+def test_flush_drains_whole_queue_to_full_archives(tmp_path: pathlib.Path) -> None:
+    """#305 drain ORCHESTRATION: model the entry's pending-job queue + the synchronous
+    flush helper (flushPendingLapArchiveJobs) and drive REAL createWriteJob jobs through
+    it. The source-side helper is a file-local in the 2300-line CSP entry and can't be
+    required directly (its call-site wiring is guarded by test_lap_archive_source_structure),
+    so this mirrors its exact logic — LAP_ARCHIVE_FLUSH_ROWS=1000000, the guard cap, and the
+    before==after fallback pop — and asserts the queue-level behavior end to end:
+      (a) a partially pumped job (a few per-frame rows) completes to a FULL .json, .tmp gone;
+      (b) several queued jobs all drain;
+      (c) an empty queue is a no-op.
+    """
+    rt = _runtime(tmp_path)
+    rt.execute(
+        """
+        -- Faithful mirror of the entry's queue primitives (issue #305). Kept in lockstep
+        -- with ac_copilot_trainer.lua via test_lap_archive_source_structure.
+        local lapArchive = require("lap_archive")
+        local LAP_ARCHIVE_ROWS_PER_FRAME = 64
+        local LAP_ARCHIVE_FLUSH_ROWS = 1000000
+        _pending = {}
+        _written = {}
+
+        function _enqueue(lap_n, n_rows)
+          local trace = {}
+          for i = 1, n_rows do
+            trace[i] = { spline = (i - 1) / math.max(1, n_rows - 1), speed = 100,
+              eMs = (i - 1) * 10, throttle = 1, brake = 0, steer = 0, gear = 4,
+              px = i, py = 0, pz = i }
+          end
+          local job = assert(lapArchive.createWriteJob({
+            session_uuid = "s", car = { id = "x" },
+            sim = { trackName = "magione", trackLengthM = 2507 },
+            lap_n = lap_n, lap_ms = 80000 + lap_n, is_pb = false, is_valid = true,
+            trace = trace,
+          }, 50))
+          _pending[#_pending + 1] = job
+        end
+
+        function _pump(maxRows)  -- mirror of pumpLapArchiveJobs
+          local job = _pending[1]
+          if not job then return end
+          local done, ok, pathOrErr = job:step(maxRows or LAP_ARCHIVE_ROWS_PER_FRAME)
+          if not done then return end
+          table.remove(_pending, 1)
+          if ok and type(pathOrErr) == "string" then
+            _written[#_written + 1] = pathOrErr
+          end
+        end
+
+        function _flush()  -- mirror of flushPendingLapArchiveJobs
+          if #_pending == 0 then return end
+          local guard = 0
+          while #_pending > 0 and guard < 4096 do
+            guard = guard + 1
+            local before = #_pending
+            _pump(LAP_ARCHIVE_FLUSH_ROWS)
+            if #_pending == before then
+              table.remove(_pending, 1)
+            end
+          end
+        end
+
+        function _queue_len() return #_pending end
+        function _written_len() return #_written end
+        """
+    )
+
+    # (c) empty queue: flush is a harmless no-op.
+    rt.execute("_flush()")
+    assert rt.eval("_queue_len()") == 0
+    assert rt.eval("_written_len()") == 0
+
+    # (a) one job, partially pumped (the few frames before a session ends), then drained.
+    rt.execute("_enqueue(7, 200)")
+    rt.execute("_pump(64)")  # one per-frame step: stages a .tmp, not done
+    assert rt.eval("_queue_len()") == 1
+    assert list(tmp_path.rglob("*.tmp")), "a partial pump should stage a .tmp"
+    assert not list(tmp_path.rglob("lap_*.json"))
+
+    rt.execute("_flush()")
+    assert rt.eval("_queue_len()") == 0, "flush must drain the queue"
+    assert not list(tmp_path.rglob("*.tmp")), "no leftover .tmp after flush"
+    archives = list(tmp_path.rglob("lap_*.json"))
+    assert len(archives) == 1
+    record = json.loads(archives[0].read_text(encoding="utf-8"))
+    assert record["lap"]["lap_n"] == 7
+    assert record["trace"]["samples_count"] == 200
+    assert len(record["trace"]["samples"]) == 200, "drain must write the full trace, not a stub"
+
+    # (b) multiple queued jobs: the loop drains all of them in one flush.
+    rt.execute("_enqueue(8, 120)")
+    rt.execute("_enqueue(9, 80)")
+    assert rt.eval("_queue_len()") == 2
+    rt.execute("_flush()")
+    assert rt.eval("_queue_len()") == 0, "flush must drain ALL queued jobs, not just the first"
+    assert not list(tmp_path.rglob("*.tmp"))
+    assert len(list(tmp_path.rglob("lap_*.json"))) == 3  # lap 7 + lap 8 + lap 9
