@@ -2031,13 +2031,14 @@ function script.update(dt)
   end
 
   if sim.isInMainMenu then
-    -- Issue #305: the session has ended (or we are back at the menu). update() returns a
-    -- few lines below on every menu frame, so the per-frame archive pump further down never
-    -- runs again — drain any job queued for the last lap NOW so its full trace is written
-    -- instead of being abandoned as a partial `.tmp` stub. Must run before the early return
-    -- (and before resetRuntimeAfterLeavingTrack rebuilds runtime state).
-    flushPendingLapArchiveJobs("session end (main menu)")
     if state.wasDriving then
+      -- Issue #305: we just left the track. update() returns a few lines below on every menu
+      -- frame, so the per-frame archive pump further down never runs again — drain any job
+      -- queued for the last lap NOW so its full trace is written instead of being abandoned as
+      -- a partial `.tmp` stub. Gated by `wasDriving` so it runs once on the driving→menu
+      -- transition (a job can only be queued while driving), not on every idle menu frame;
+      -- runs before resetRuntimeAfterLeavingTrack rebuilds runtime state.
+      flushPendingLapArchiveJobs("session end (main menu)")
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
         local journalLaps = state.lapsCompleted or 0
