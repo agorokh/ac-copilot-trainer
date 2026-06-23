@@ -2,10 +2,11 @@
 type: index
 status: active
 created: 2026-04-10
-updated: 2026-04-10
+updated: 2026-06-22
 relates_to:
   - AcCopilotTrainer/00_System/invariants/_index.md
   - AcCopilotTrainer/01_Decisions/shift-left-issue-creation.md
+  - AcCopilotTrainer/pitfalls/epic-body-delivery-drift.md
 ---
 
 # Pitfalls (index)
@@ -25,3 +26,13 @@ Recurring implementation mistakes mined from fleet-wide PR review comments (sema
 | [vault-path-integrity.md](vault-path-integrity.md) | reliability | 6 | 73 | 2 |
 | [secret-credential-handling.md](secret-credential-handling.md) | security | 4 | 41 | 3 |
 | [redundant-code-drift.md](redundant-code-drift.md) | maintainability | 4 | 36 | 3 |
+
+## Project-curated (not fleet-mined)
+
+Pitfalls observed locally (e.g. during `/backlog-steward` runs) rather than mined from the
+fleet PR corpus — so they carry no cluster/comment counts. The issue-writer only injects nodes
+with `scope_paths`; process pitfalls below deliberately omit them.
+
+| Node | Severity | Source |
+|------|----------|--------|
+| [epic-body-delivery-drift.md](epic-body-delivery-drift.md) | maintainability | `/backlog-steward` sweep 2026-06-22 (canonical: #154) |

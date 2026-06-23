@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-22T23:45:00Z
+last_updated: 2026-06-23T00:30:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
@@ -32,6 +32,21 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Housekeeping addendum — backlog steward sweep (2026-06-22)
+
+`/backlog-steward` reconciled all 8 open issues against merged delivery (read-only; substrate
+`ac_copilot` returned empty → Tier-2 + code grounding). Verdicts: **5 live, 2 partially-delivered,
+0 stale/drifted**. Ledger: `.scratch/backlog-steward/ledger.json`. Two actions shipped:
+- **#154 EPIC body reconciled** (Parts A–G checked off w/ PR evidence; L2-achieved milestone #196
+  recorded; scope narrowed to open children #277/#278/#305 + a Part-G KPI residual) — see the
+  reconciliation comment on the issue.
+- **New pitfall node** [`pitfalls/epic-body-delivery-drift.md`](../pitfalls/epic-body-delivery-drift.md)
+  — captures the "long-lived EPIC body never reconciled → re-rake" pattern; candidate for upstream
+  propagation to the template-repo hub.
+
+Recommended next pick-ups (off-rig first): **#303** (Windows path-guard, CI-able on Mac) → **#305**
+(flying-lap 0 KB trace, highest-impact bug) → **#277** (close the live loop, rig-gated).
 
 ## Resume here (2026-06-22 LIVE-VERIFIED — coaching pipeline RUN IN-GAME on real schema-v2 telemetry)
 
