@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-23T13:45:00Z
+last_updated: 2026-06-26T05:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
   - AcCopilotTrainer/03_Investigations/frontier-controller-ggv-2026-06-19.md
@@ -34,6 +35,31 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-25 LATEST — #308 Tier-3 worktree memory-gate false-block CLOSED)
+
+**Closed COMPLETED** ([#308](https://github.com/agorokh/ac-copilot-trainer/issues/308)) — autonomous
+triage, no source change. Both acceptance criteria verified by running the **real** SessionStart
+prefetch from inside a linked git worktree (operator-grade, observed):
+
+- **Part A** (gitignored overlay non-propagation → `example_kb_workspace` block): already fixed by
+  [PR #316](https://github.com/agorokh/ac-copilot-trainer/pull/316). Prefetch in a linked worktree
+  resolves `workspace: ac_copilot`, **no** `.last_memory_query.missing` block marker.
+- **Part B** (prefetch SSRF guard on `:8045`): **functional criterion met** — prefetch exits 0,
+  substrate answers, `prefetch_ok: true` stamp written. The `untrusted port 8045` SSRF WARN is
+  **cosmetic / by-design** on a non-central host (grounding succeeds via the registry's non-loopback
+  Tailscale endpoint; the manifest loopback is correctly rejected). The original "permanent SSRF
+  block" was a **transient substrate outage**, not the guard.
+- **Residual** (genuinely upstream — governance-hub owns the resolver; this repo carries only shims):
+  cosmetic-WARN downgrade filed as
+  [governance-hub#111](https://github.com/agorokh/governance-hub/issues/111).
+- Detail: [issue-308-worktree-memory-gate-resolved-2026-06-25.md](../03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md).
+
+**CORRECTION to the older note below:** the earlier *"Tier-3 `ac_copilot` substrate remains DOWN"* is
+now **stale** — the substrate is **UP** as of 2026-06-25 (`verify_server_health reachable=true`; the
+prefetch grounds with a real answer).
+
+---
 
 ## Resume here (2026-06-23 LATEST — #278 lupa per-wheel test fidelity SHIPPED via PR #315)
 
