@@ -14,7 +14,11 @@ import pytest
 
 from tools.ac_harness.auto_drive import (
     AutoDriveConfig,
+    AutoDriveReport,
     DriveStats,
+    _build_arg_parser,
+    _config_from_args,
+    default_ac_root,
     resolve_fast_lane,
     run_auto_drive,
 )
@@ -237,3 +241,55 @@ def test_resolve_fast_lane_direct_layout_and_missing(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         resolve_fast_lane(root, "nonexistent")
+
+
+def test_cli_args_map_to_config():
+    args = _build_arg_parser().parse_args(
+        [
+            "--cm-preset",
+            "p.cmpreset",
+            "--track",
+            "spa",
+            "--wait-lap",
+            "--strict",
+            "--skip-launch",
+            "--drive-seconds",
+            "120",
+            "--target-speed",
+            "70",
+            "--min-corner",
+            "40",
+            "--tap-seconds",
+            "15",
+        ]
+    )
+    cfg = _config_from_args(args)
+    assert str(cfg.cm_preset) == "p.cmpreset"
+    assert cfg.track_id == "spa"
+    assert cfg.wait_lap is True
+    assert cfg.strict is True
+    assert cfg.skip_launch is True
+    assert cfg.drive_seconds == 120
+    assert cfg.target_speed_kmh == 70
+    assert cfg.min_corner_speed_kmh == 40
+    assert cfg.tap_seconds == 15
+    # --ac-root omitted -> default factory used.
+    assert cfg.ac_root == default_ac_root()
+
+
+def test_report_summary_renders_all_sections():
+    report = AutoDriveReport(
+        ok=True,
+        stage="done",
+        launched=True,
+        hijacked=True,
+        drive=DriveStats(drove=True, laps=1, total_distance_m=5200.0, max_speed_kmh=63.0),
+        sequence_ok=True,
+        counts={"coaching.snapshot": 300, "connection": 30},
+        notes=["delta: not in window"],
+    )
+    text = report.summary()
+    assert "PASS" in text
+    assert "drove=True" in text
+    assert "coaching.snapshot=300" in text
+    assert "delta: not in window" in text
