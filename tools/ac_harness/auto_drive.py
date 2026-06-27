@@ -10,7 +10,7 @@ modules into the loop the EPIC claimed** —
     CM-URL launch (entry_launcher)            -> AC on track, non-elevated
     wait LIVE + settle                        -> CSP ready to accept the Custom-AI hijack
     carcsw hijack of car 0 (custom_ai)        -> retry / relaunch on the early-LIVE race
-    autonomous drive (racing_driver + ai_line) -> RACES any track: shifts gears, carries pace
+    autonomous drive (racing_driver / ggv)     -> RACES any track: shifts gears, flat-out min-time
     tap the sidecar WS (sequence_probe)        -> assert the live coaching producer contract
     teardown
 
@@ -35,7 +35,7 @@ with injectable ``launch`` / ``hijack`` / ``drive`` / ``tap`` seams, unit-tested
 Run on the rig (loopback to a sidecar started by the daemon or by hand)::
 
     python -m tools.ac_harness.auto_drive \
-        --cm-preset "<.cmpreset>" --track imola --wait-lap --drive-seconds 360
+        --cm-preset "<.cmpreset>" --track spa --driver ggv --drive-seconds 360   # flat-out
 """
 
 from __future__ import annotations
@@ -77,7 +77,10 @@ class AutoDriveConfig:
     driver: str = "racing"
     drive_seconds: float = 300.0
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
-    racing_max_speed_kmh: float = 240.0  # racing: cap (above any GT speed; lets it use top gears)
+    racing_max_speed_kmh: float = (
+        240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
+    )
+    ggv_scale: float = 0.9  # ggv: safety margin on the min-time profile (flat-out * scale)
     target_speed_kmh: float = 55.0  # cruise only
     min_corner_speed_kmh: float = 30.0  # cruise only
     # Assertion.
@@ -320,13 +323,46 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
     return None
 
 
+def generic_gt3_ggv():
+    """The live-VERIFIED GT3 friction-circle (GGVModel), telemetry-free at call time.
+
+    These are the values empirically fit from human GT3 laps for EPIC #154's frontier controller
+    (#259, ``frontier-controller-ggv``) — the config that drove **clean AC-valid flying laps** at
+    Magione (Stanley + this GGV = 95.3 s, ~216 km/h, zero teleports). They are car-representative
+    for a GT3, so the QSS min-time profile sends straights flat-out and brakes on the friction
+    circle, **without spinning**.
+
+    The load-bearing correction (red-team #259, live-disproven aero-lateral): ``k_aero_lat`` MUST be
+    0. Any aero-lateral grip term makes the profile carry too much speed into corners and the live
+    GT3 spins out (k>=0.0003 → 96 s with teleports; even k=0.0001 spun). Braking grip RISES with
+    speed instead (aero): ``ax_brake = 0.955 + 0.0214*v_ms`` g (~1.0 g @40, ~2.2 g @180 km/h) — the
+    fixed ``brake_g=1.4`` it replaced braked far too early at speed.
+    """
+    from tools.ac_harness.ggv_profile import GGVModel
+
+    return GGVModel(
+        mu_lat_g=1.5,
+        k_aero_lat=0.0,  # MUST be 0 — an aero-lateral term spins the GT3 out at speed (#259)
+        brake_b0_g=0.955,
+        brake_b1=0.0214,  # braking rises with speed (aero): ~1.0 g @40, ~2.2 g @180 km/h
+        drive_b0_g=1.1,
+        drive_b1=-0.0117,
+        drive_min_g=0.35,
+        ellipse_n=1.55,
+        ay_cap_g=1.8,
+        ax_brake_cap_g=3.4,
+    )
+
+
 def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list | None = None):
     """Construct the drive controller for ``config.driver`` (pure; CI-testable).
 
-    ``racing`` → :class:`racing_driver.RacingDriver` following the AI line's embedded speed profile
-    (real braking points + gear shifting + pace) — the car actually races. ``cruise`` →
-    :class:`lap_driver.LapDriver`, the conservative ~50 km/h 1st-gear lane-keeper. Both expose the
-    same ``step()``/``on_recovery()`` contract, so the rig drive loop is driver-agnostic.
+    ``ggv`` → flat-out: a generic-GT3 friction-circle min-time profile (``ggv_profile``) driven
+    verbatim by :class:`racing_driver.RacingDriver` (``from_ggv_profile``) — sends straights in the
+    top gears, brakes on the friction circle. ``racing`` → :class:`racing_driver.RacingDriver`
+    following the AI line's embedded speed profile (gear shifting + pace, but only as fast as the
+    stock AI line). ``cruise`` → :class:`lap_driver.LapDriver`, the ~50 km/h 1st-gear lane-keeper.
+    All three expose the same ``step()``/``on_recovery()`` contract, so the rig loop is agnostic.
     """
     from tools.ac_harness.lap_driver import LapDriver
 
@@ -347,7 +383,16 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             pace=config.pace,
             max_speed_kmh=config.racing_max_speed_kmh,
         )
-    raise ValueError(f"unknown driver {config.driver!r} (expected 'racing' or 'cruise')")
+    if config.driver == "ggv":
+        from tools.ac_harness.ggv_profile import ggv_speed_profile_from_model
+        from tools.ac_harness.racing_driver import RacingDriver
+
+        v_target, _summ = ggv_speed_profile_from_model(
+            fast_line, generic_gt3_ggv(), v_top_kmh=config.racing_max_speed_kmh
+        )
+        v_target = [v * config.ggv_scale for v in v_target]
+        return RacingDriver.from_ggv_profile(fast_line, v_target)
+    raise ValueError(f"unknown driver {config.driver!r} (expected 'ggv', 'racing', or 'cruise')")
 
 
 def rig_drive(  # pragma: no cover - rig-only
@@ -446,12 +491,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
     p.add_argument(
         "--driver",
-        choices=("racing", "cruise"),
+        choices=("ggv", "racing", "cruise"),
         default="racing",
-        help="racing = shift gears + carry pace (default); cruise = slow 1st-gear lane-keeper",
+        help="ggv = flat-out min-time (top gears, 200+); racing = AI-line pace (default); "
+        "cruise = slow 1st-gear lane-keeper",
     )
     p.add_argument("--pace", type=float, default=0.9, help="racing: fraction of AI-line speed")
-    p.add_argument("--max-speed", type=float, default=240.0, help="racing: speed cap (km/h)")
+    p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
+    p.add_argument("--max-speed", type=float, default=240.0, help="racing/ggv: speed cap (km/h)")
     p.add_argument("--drive-seconds", type=float, default=300.0)
     p.add_argument("--target-speed", type=float, default=55.0, help="cruise target speed (km/h)")
     p.add_argument("--min-corner", type=float, default=30.0, help="cruise min corner speed (km/h)")
@@ -470,6 +517,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         sidecar_url=args.sidecar_url,
         driver=args.driver,
         pace=args.pace,
+        ggv_scale=args.ggv_scale,
         racing_max_speed_kmh=args.max_speed,
         drive_seconds=args.drive_seconds,
         target_speed_kmh=args.target_speed,

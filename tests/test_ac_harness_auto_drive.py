@@ -20,6 +20,7 @@ from tools.ac_harness.auto_drive import (
     _build_driver,
     _config_from_args,
     default_ac_root,
+    generic_gt3_ggv,
     resolve_fast_lane,
     run_auto_drive,
 )
@@ -266,6 +267,25 @@ def test_build_driver_racing_is_default_and_shifts_gears():
 def test_build_driver_racing_requires_speed_profile():
     with pytest.raises(ValueError, match="speed_profile"):
         _build_driver(_cfg(driver="racing"), _LINE, None)
+
+
+def test_build_driver_ggv_builds_min_time_racingdriver():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    # GGV computes its own min-time profile from the line curvature (no speed_profile needed).
+    d = _build_driver(_cfg(driver="ggv", racing_max_speed_kmh=200.0, ggv_scale=0.9), _LINE, None)
+    assert isinstance(d, RacingDriver)
+    assert d.max_gear >= 6  # top gears available for flat-out straights
+
+
+def test_generic_gt3_ggv_is_realistic():
+    from tools.ac_harness.ggv_profile import GGVModel
+
+    g = generic_gt3_ggv()
+    assert isinstance(g, GGVModel)
+    assert 1.0 < g.mu_lat_g < 2.0  # realistic GT3 mechanical lateral grip
+    assert 0.8 < g.brake_b0_g < 2.5  # low-speed braking g (rises with speed via brake_b1)
+    assert g.k_aero_lat == 0.0  # aero-lateral term MUST be 0 (#259: spins the GT3 out live)
 
 
 def test_build_driver_rejects_unknown_driver():
