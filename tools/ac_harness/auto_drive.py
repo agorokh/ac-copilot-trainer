@@ -67,6 +67,7 @@ class AutoDriveConfig:
 
     cm_preset: Path
     track_id: str
+    track_layout: str | None = None  # set for multi-layout tracks to match the launched layout
     ac_root: Path = field(default_factory=default_ac_root)
     cm_exe: Path | None = None
     sidecar_url: str = "ws://127.0.0.1:8765"
@@ -92,6 +93,7 @@ class AutoDriveConfig:
     attempt_timeout: float = 75.0
     settle_seconds: float = 5.0
     hijack_timeout: float = 25.0
+    hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
     # Sim-death guard.
     sim_dead_seconds: float = 4.0
     skip_launch: bool = False
@@ -185,11 +187,20 @@ async def run_auto_drive(
     controller = hijack(config)
     if controller is None:
         return AutoDriveReport(
-            ok=False, stage="hijack", launched=True, error="CSP did not accept the carcsw hijack"
+            ok=False,
+            stage="hijack",
+            launched=not config.skip_launch,
+            error="CSP did not accept the carcsw hijack",
         )
 
     stop = threading.Event()
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, config, stop))
+    stats = DriveStats(reason="drive did not run")
+    seq_ok: bool | None = None
+    counts: dict[str, int] = {}
+    notes: list[str] = []
+    error: str | None = None
+    stage = "done"
     try:
         frames = await tap(
             config.sidecar_url, seconds=config.tap_seconds, wait_for_lap=config.wait_lap
@@ -197,45 +208,66 @@ async def run_auto_drive(
         result = evaluate_sequence(
             frames, strict_lifecycle=config.strict, require_lap=config.wait_lap
         )
-        seq_ok: bool | None = result.ok
+        seq_ok = result.ok
         counts = dict(result.counts)
         notes = list(result.notes)
-        tap_error: str | None = None
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
-        seq_ok, counts, notes, tap_error = None, {}, [], f"{type(exc).__name__}: {exc}"
+        stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:
         stop.set()
-        stats = await drive_task
-        controller.close()
+        # Always stop the drive AND release the controller — even if the drive thread raised, the
+        # control mmap (the carcsw hijack) must be released, or it leaks and keeps holding the car.
+        try:
+            stats = await drive_task
+        except Exception as exc:  # noqa: BLE001 - drive thread crashed; record, don't leak
+            stage = "drive"
+            error = error or f"drive: {type(exc).__name__}: {exc}"
+        finally:
+            controller.close()
 
-    ok = bool(seq_ok) and stats.drove and tap_error is None
+    # Success needs a clean pipeline AND a real drive that did not die mid-run: sim_dead can be set
+    # after the car already passed the distance/speed thresholds (drove=True), so veto on it too.
+    ok = bool(seq_ok) and stats.drove and not stats.sim_dead and error is None
     return AutoDriveReport(
         ok=ok,
-        stage="done" if tap_error is None else "pipeline",
+        stage=stage,
         launched=not config.skip_launch,
         hijacked=True,
         drive=stats,
         sequence_ok=seq_ok,
         counts=counts,
         notes=notes,
-        error=tap_error,
+        error=error,
     )
 
 
 # ---------------------------------------------------------------------------
 # Track racing-line resolution (pure).
 # ---------------------------------------------------------------------------
-def resolve_fast_lane(ac_root: Path, track_id: str) -> Path:
-    """Return ``<ac_root>/content/tracks/<track>/ai/fast_lane.ai`` (root or first layout subdir).
+def resolve_fast_lane(ac_root: Path, track_id: str, layout: str | None = None) -> Path:
+    """Return the ``fast_lane.ai`` for ``track_id`` (optionally a specific ``layout``).
 
-    Raises :class:`FileNotFoundError` if no fast_lane.ai exists for the track.
+    A multi-layout track (e.g. Monza GP vs Junior) has one ``ai/fast_lane.ai`` per layout, and
+    ``track_id`` alone does not say which layout the CM preset launched. Pass ``layout`` to select
+    ``<track>/<layout>/ai/fast_lane.ai`` so the driven line matches the launched layout. Without it,
+    a root-level ``ai/fast_lane.ai`` is used, else the first layout subdir is picked **and the
+    ambiguity is the caller's to resolve** — set ``--track-layout`` for multi-layout tracks.
+
+    Raises :class:`FileNotFoundError` if no matching fast_lane.ai exists.
     """
     root = ac_root / "content" / "tracks" / track_id
+    if layout:
+        chosen = root / layout / "ai" / "fast_lane.ai"
+        if chosen.exists():
+            return chosen
+        raise FileNotFoundError(
+            f"no fast_lane.ai for track {track_id!r} layout {layout!r}: {chosen}"
+        )
     direct = root / "ai" / "fast_lane.ai"
     if direct.exists():
         return direct
-    for layout in sorted(root.glob("*/ai/fast_lane.ai")):
-        return layout
+    for found in sorted(root.glob("*/ai/fast_lane.ai")):
+        return found
     raise FileNotFoundError(f"no fast_lane.ai for track {track_id!r} under {root}")
 
 
@@ -310,16 +342,25 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
 
 
 def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cover - rig-only
-    """Create the CarControls0 section and wait for CSP to create Car0 (the hijack landing)."""
+    """Create CarControls0 and wait for CSP to create Car0 (the hijack landing), with retry.
+
+    The early-LIVE race: CSP only creates Car0 once its Custom-AI subsystem is watching, and the
+    act that triggers it is *creating* the CarControls0 section — so a creation that lands too early
+    silently no-ops. We split ``hijack_timeout`` across ``hijack_attempts`` and **recreate** the
+    section each attempt (close + new ``CustomAIController``) so a later creation re-triggers CSP.
+    """
     from tools.ac_harness.custom_ai import CustomAIController
 
-    ctrl = CustomAIController(0)
-    deadline = time.monotonic() + config.hijack_timeout
-    while time.monotonic() < deadline:
-        if ctrl.read_car_data() is not None:
-            return ctrl
-        time.sleep(0.1)
-    ctrl.close()
+    attempts = max(1, config.hijack_attempts)
+    per_attempt = config.hijack_timeout / attempts
+    for _ in range(attempts):
+        ctrl = CustomAIController(0)
+        deadline = time.monotonic() + per_attempt
+        while time.monotonic() < deadline:
+            if ctrl.read_car_data() is not None:
+                return ctrl
+            time.sleep(0.1)
+        ctrl.close()  # recreate the section next attempt to re-trigger the hijack
     return None
 
 
@@ -406,7 +447,7 @@ def rig_drive(  # pragma: no cover - rig-only
     """
     from tools.ac_harness.ai_line import _horizontal, load_ai_line
 
-    fast_path = resolve_fast_lane(config.ac_root, config.track_id)
+    fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
     line = load_ai_line(fast_path)
     speed_profile = None
     if config.driver == "racing":
@@ -486,6 +527,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--cm-preset", required=True, type=Path, help="Quick Drive .cmpreset")
     p.add_argument("--track", required=True, help="AC track id (for the fast_lane.ai racing line)")
+    p.add_argument(
+        "--track-layout",
+        default=None,
+        help="layout subdir for multi-layout tracks (e.g. layout_gp)",
+    )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument("--cm-exe", type=Path, default=None, help="Content Manager.exe path")
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
@@ -513,6 +559,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
     kwargs: dict[str, Any] = dict(
         cm_preset=args.cm_preset,
         track_id=args.track,
+        track_layout=args.track_layout,
         cm_exe=args.cm_exe,
         sidecar_url=args.sidecar_url,
         driver=args.driver,

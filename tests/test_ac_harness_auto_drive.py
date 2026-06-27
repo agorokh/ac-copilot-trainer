@@ -249,6 +249,69 @@ def test_resolve_fast_lane_direct_layout_and_missing(tmp_path):
         resolve_fast_lane(root, "nonexistent")
 
 
+def test_resolve_fast_lane_explicit_layout(tmp_path):
+    root = tmp_path
+    lay = root / "content" / "tracks" / "monza" / "layout_gp" / "ai"
+    lay.mkdir(parents=True)
+    (lay / "fast_lane.ai").write_bytes(b"x")
+    assert resolve_fast_lane(root, "monza", "layout_gp") == lay / "fast_lane.ai"
+    with pytest.raises(FileNotFoundError):
+        resolve_fast_lane(root, "monza", "no_such_layout")
+
+
+def test_sim_dead_vetoes_success_even_when_drove_true():
+    # sim_dead can be set AFTER the car passed the distance/speed thresholds — must still FAIL.
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(
+                DriveStats(drove=True, total_distance_m=900.0, sim_dead=True), {}
+            ),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.sequence_ok is True
+    assert report.ok is False  # sim_dead vetoes despite drove=True
+
+
+def test_drive_exception_closes_controller_and_reports_drive_stage():
+    ctrl = FakeController()
+
+    def _boom_drive(controller, config, stop):  # noqa: ANN001
+        raise RuntimeError("drive blew up")
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_boom_drive,
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "drive"
+    assert report.error is not None and "drive blew up" in report.error
+    assert ctrl.closed is True  # controller released despite the drive thread crashing
+
+
+def test_skip_launch_hijack_failure_reports_launched_false():
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(skip_launch=True),
+            launch=lambda c: pytest.fail("launch must be skipped"),
+            hijack=lambda c: None,
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "hijack"
+    assert report.launched is False  # skip_launch -> launched stays False on hijack failure
+
+
 def test_build_driver_racing_is_default_and_shifts_gears():
     from tools.ac_harness.lap_driver import LapDriver
     from tools.ac_harness.racing_driver import RacingDriver
