@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-27T20:40:00Z
+last_updated: 2026-06-27T22:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
@@ -36,6 +37,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-27 LATE — EPIC #154 auto_drive composed loop + flat-out racing MERGED)
+
+**`/autonomous-deliver 154` on AG_PC (this session, `flamboyant-poincare-b469d9`).** Shipped PR
+[#325](https://github.com/agorokh/ac-copilot-trainer/pull/325) (`0fb721f`, closes
+[#324](https://github.com/agorokh/ac-copilot-trainer/issues/324)): new `tools/ac_harness/auto_drive.py`
+— the genuinely-composed one-command L2 loop (launch → carcsw hijack w/ retry → autonomous drive in a
+thread → WS producer assert), **parametrized by car/track/preset**, with **sim-death anti-false-green**
+(Car0 packet stagnation). Driver modes: `cruise` (LapDriver) / `racing` (AI-line) / **`ggv`
+(flat-out friction-circle min-time)**. 21 off-sim tests; post-merge classification clean.
+
+**Operator question answered LIVE (generality beyond Magione/Porsche, racing not theater):**
+- **Imola + Audi R8 LMS** — autonomous **full lap** (5200 m), trainer registered the lap + reference coaching.
+- **Mugello + Corvette C7R** — 2.5 km autonomous; coaching `current_speed_kmh` matched the AI-driven car.
+- **Spa + BMW Z4 GT3** — `ggv` **flat-out top gear 6 / 211 km/h**, reference coaching (`T2 · target entry 241 km/h`).
+- The first composed run "wasn't racing" (1st gear, 49 km/h) → now shifts 1→6 and sends straights.
+
+**Load-bearing finding:** the generic GGV's `k_aero_lat` MUST be 0 — an aero-lateral grip term spins the
+GT3 out (matches the #259 red-team; a multi-agent verification workflow caught it pre-ship). Verified
+plant fit lives in `auto_drive.generic_gt3_ggv()`.
+
+**What remains (Part-G residual; #154 stays OPEN):** clean flat-out line (~83 s) needs curvature-ff
+steering with per-car `ff_c1/c2` calibration from a human CSV (#244); the formal false-green-rate <5%
+KPI; and #154 children #277/#278/#305. AC rig was crash-prone this session (4 fresh-launch crashes — the
+sim-death guard caught all, reporting honest FAIL). Full write-up:
+[[autonomous-drive-multitrack-generality-2026-06-27]].
+
+---
 
 ## Resume here (2026-06-27 EVENING — #277 brain-debrief rig-verify PREPPED, paused on rig contention)
 

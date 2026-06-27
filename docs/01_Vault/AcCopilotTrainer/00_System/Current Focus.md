@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-19T19:45:00Z
+last_updated: 2026-06-27T22:15:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -43,6 +43,21 @@ CLOSED** on the rig this session: timestamped tap of the script-frame `coaching.
 showed max gap **255 ms** (at S/F: 217 ms / 255 ms, not ~2 s); archives still land off-frame, laps
 `valid=True`. The ~2 s render freeze is gone. Evidence:
 [#246#issuecomment-4754133099](https://github.com/agorokh/ac-copilot-trainer/issues/246#issuecomment-4754133099).
+
+**Active focus update (2026-06-27) — #324 / PR [#325](https://github.com/agorokh/ac-copilot-trainer/pull/325) MERGED (`0fb721f`), generality + flat-out LIVE-VERIFIED:**
+Operator pushback ("the composed run wasn't racing — stuck in 1st gear") drove the fix. New
+`tools/ac_harness/auto_drive.py` is the genuinely-composed one-command L2 loop (launch → carcsw
+hijack w/ retry → autonomous drive in a thread → WS producer assert), **parametrized by
+car/track/preset**, with **sim-death anti-false-green** (Car0 packet stagnation). Three driver modes:
+`cruise` (LapDriver), `racing` (AI-line pace), **`ggv`** (flat-out friction-circle min-time).
+**Generality proven beyond Magione/Porsche**: Imola + Audi R8 LMS (full lap + reference coaching),
+Mugello + Corvette C7R, and **Spa + BMW Z4 GT3 flat-out top gear 6 / 211 km/h** with reference
+coaching (`T2 · target entry 241 km/h`). Load-bearing fix: the generic GGV's `k_aero_lat` MUST be 0
+(an aero-lateral term spins the GT3 out — a multi-agent verification workflow caught it against the
+#259 plant fit). Honest residual: flat-out on Stanley still loses a few corners; the clean ~83 s line
+needs curvature-ff + per-car `ff_c1/c2` calibration (#244). #154 stays OPEN (children #277/#278/#305 +
+Part-G KPI residual). Full state:
+[`autonomous-drive-multitrack-generality-2026-06-27`](../03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md).
 
 **Infra (2026-05-20):** PR [#111](https://github.com/agorokh/ac-copilot-trainer/pull/111) closed the [#108](https://github.com/agorokh/ac-copilot-trainer/issues/108) agent-surface campaign (closeout doc only; five agent SHA alignments deferred). PR [#109](https://github.com/agorokh/ac-copilot-trainer/pull/109) memory-contract cursor rule fix remains on `main`.
 
@@ -91,6 +106,13 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-27** — PR [#325](https://github.com/agorokh/ac-copilot-trainer/pull/325) **MERGED** at
+  `0fb721f` — `tools/ac_harness/auto_drive.py`: one-command composed L2 loop (launch → hijack → drive
+  → WS assert), driver modes cruise/racing/**ggv flat-out**, sim-death anti-false-green, `max_gear_used`;
+  closes [#324](https://github.com/agorokh/ac-copilot-trainer/issues/324). Live-verified non-Magione /
+  non-Porsche: Imola+Audi R8 LMS (full lap + reference coaching), Mugello+Corvette C7R, Spa+BMW Z4 GT3
+  **flat-out 6th gear / 211 km/h** with reference coaching. 21 off-sim tests; no post-merge flags.
+  #154 stays OPEN.
 - **2026-06-19** — PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) **MERGED** at
   `88249bf` — Stanley steering + `RacingDriver.from_human_profile` ([#244](https://github.com/agorokh/ac-copilot-trainer/issues/244)).
   **LIVE-VERIFIED on `AG_PC`**: 3 AC VALID laps via carcsw (best 106.8 s, 207.6 km/h, gears 1–6),
