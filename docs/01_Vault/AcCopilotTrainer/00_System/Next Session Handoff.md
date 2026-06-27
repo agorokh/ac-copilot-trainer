@@ -38,6 +38,22 @@ relates_to:
 
 # Next session handoff
 
+## Resume here (2026-06-27 LATE — CI: vault-automerge guard fixed (#329 / PR #330))
+
+**Infra fix.** Every `vault-only` PR's `guard-and-automerge` check was failing in ~3s — `Unable to
+resolve action agorokh/governance-hub, not found` — because the #863 refactor pointed it at a
+**private** cross-repo action, which the default `GITHUB_TOKEN` cannot resolve (the hub's
+`access_level=user` + the action existing at the pinned SHA were both confirmed and still insufficient).
+PR [#330](https://github.com/agorokh/ac-copilot-trainer/pull/330) (`52ecbf5`, closes
+[#329](https://github.com/agorokh/ac-copilot-trainer/issues/329)) mints the **FLEET_BOT app token**,
+checks the governance-hub action out at its pinned SHA, and runs it via a local path —
+**reference-not-vendor preserved**, mirroring the fleet's existing `create-github-app-token` pattern.
+This vault PR is itself the live test of the fix: if its guard goes green and auto-merges, #329 is
+verified. **Fleet note:** the #863 refactor is fleet-wide → every child repo has the same broken guard;
+propose the same app-token wrapper upstream (agent-factory / governance-hub).
+
+---
+
 ## Resume here (2026-06-27 LATE — EPIC #154 auto_drive composed loop + flat-out racing MERGED)
 
 **`/autonomous-deliver 154` on AG_PC (this session, `flamboyant-poincare-b469d9`).** Shipped PR
