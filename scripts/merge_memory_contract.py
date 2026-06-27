@@ -216,7 +216,7 @@ def _process(path: Path, *, root: Path, check: bool, diff: bool) -> tuple[bool, 
         original = path.read_text(encoding="utf-8")
     except OSError as e:
         return False, f"read error: {path}: {e}"
-    rel_target = str(path.relative_to(root))
+    rel_target = path.relative_to(root).as_posix()
     updated = _render(original, root=root, rel_target=rel_target)
     if updated == original:
         return False, None

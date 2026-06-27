@@ -93,9 +93,17 @@ def _slugify(path: Path) -> str:
     return abs_str.replace("/", "-")
 
 
+def _home_dir() -> Path:
+    """Return the hook home directory, honoring explicit test/session overrides."""
+    home = os.environ.get("HOME")
+    if home:
+        return Path(home).expanduser()
+    return Path.home()
+
+
 def _auto_memory_dir(project_root: Path) -> Path:
     slug = _slugify(project_root)
-    return Path.home() / ".claude" / "projects" / slug / "memory"
+    return _home_dir() / ".claude" / "projects" / slug / "memory"
 
 
 def _marker_readme(project_root: Path) -> str:

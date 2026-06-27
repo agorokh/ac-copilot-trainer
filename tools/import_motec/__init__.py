@@ -484,6 +484,10 @@ def _record_for_lap(
     }
 
 
+def _use_windows_ac_default() -> bool:
+    return os.name == "nt"
+
+
 def default_output_dir(opts: ImportOptions) -> Path:
     env_laps = os.environ.get("AC_COPILOT_LAP_ARCHIVE_DIR")
     if env_laps:
@@ -495,7 +499,7 @@ def default_output_dir(opts: ImportOptions) -> Path:
     )
     if csp_state is not None:
         return csp_state / "ac_copilot_trainer" / "journal" / "laps"
-    if os.name == "nt":
+    if _use_windows_ac_default():
         docs = Path.home() / "Documents" / "Assetto Corsa"
         candidate = (
             docs
