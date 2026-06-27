@@ -56,7 +56,7 @@ def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
     )
     assert match is not None
     block = match.group(0)
-    assert "queueLapArchiveJob(archiveOpts)" in block
+    assert "queueLapArchiveJob(archiveOpts" in block
     assert "lapArchive.write" not in block
     assert "lapArchive.buildRecord" not in block
 
@@ -70,3 +70,33 @@ def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
     assert ws_block.index("wsBridge.pollInbound(8)") < ws_block.index("pumpLapArchiveJobs()")
     assert ws_block.index("pumpLapArchiveJobs()") < ws_block.index("pumpLapArchiveNotifications()")
     assert "pendingLapArchiveRecordPaths" in src
+
+
+def test_archive_write_notification_sends_brain_activation_lap_payload() -> None:
+    """#277: the live brain needs the finalized archive path, which exists only after
+    the async archive job completes. The queue notification must attach that path to a
+    follow-up lap_complete payload and include the prior best archive as reference when
+    available, without turning the archive write back into synchronous lap-boundary I/O."""
+    src = ENTRY.read_text(encoding="utf-8")
+
+    pump = re.search(
+        r"local function pumpLapArchiveJobs.*?\nlocal function flushPendingLapArchiveJobs",
+        src,
+        flags=re.S,
+    )
+    assert pump is not None
+    pump_body = pump.group(0)
+    assert "payload.archivePath = pathOrErr" in pump_body
+    assert "payload.referenceArchivePath = notify.referenceArchivePath" in pump_body
+    assert "bestLapArchivePath = pathOrErr" in pump_body
+
+    archive_block = re.search(
+        r"-- Issue #77 Part C / #246: archive this lap.*?state\.lapInvalidatedThisLap = false",
+        src,
+        flags=re.S,
+    )
+    assert archive_block is not None
+    block = archive_block.group(0)
+    assert "local referenceArchivePathForBrain = bestLapArchivePath" in src
+    assert "archiveLapPayload.brainOnly = true" in block
+    assert "referenceArchivePath = referenceArchivePathForBrain" in block

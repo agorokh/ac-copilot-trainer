@@ -243,6 +243,54 @@ def test_legacy_protocol_frame_does_not_unblock_v1_publish():
     assert rt.eval('require("ws_bridge").publishTopic("coaching.snapshot", {})') is True
 
 
+def test_brain_debrief_source_renders_corner_analysis_tiles():
+    rt = _runtime()
+    _open(rt)
+    _inject(
+        rt,
+        {
+            "protocol": 1,
+            "event": "coaching_response",
+            "lap": 2,
+            "hints": [{"kind": "general", "text": "Setup-vs-technique debrief"}],
+            "debrief": "full structured debrief",
+            "debriefSource": "brain",
+            "cornerAnalysis": [
+                {
+                    "index": 1,
+                    "headline": "T1 lost entry speed",
+                    "time_loss_s": 0.42,
+                    "attributions": [
+                        {
+                            "cause_class": "technique",
+                            "confidence": 0.72,
+                            "coaching": "Release brake more smoothly.",
+                        }
+                    ],
+                }
+            ],
+            "balance": {"coaching": "Car is balanced; chase technique first."},
+        },
+    )
+    rt.execute(
+        """
+        local h, d = require("ws_bridge").takeCoachingForLap(2)
+        _brain_hint_count = #h
+        _brain_hint_kind = h[1].kind
+        _brain_hint_text = h[1].text
+        _brain_debrief = d
+        """
+    )
+
+    assert int(rt.eval("_brain_hint_count")) == 2
+    assert rt.eval("_brain_hint_kind") == "line"
+    text = rt.eval("_brain_hint_text")
+    assert "T1 lost entry speed" in text
+    assert "+0.42s" in text
+    assert "Release brake more smoothly." in text
+    assert rt.eval("_brain_debrief") == "full structured debrief"
+
+
 def test_reconnect_via_onopen_rearms_handshake():
     # CodeRabbit Major on PR #171: with reconnect=true, CSP auto-reconnects by
     # firing onOpen WITHOUT calling tryOpen. The handshake gating must re-arm on

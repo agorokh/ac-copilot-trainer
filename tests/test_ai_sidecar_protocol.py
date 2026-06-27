@@ -296,6 +296,61 @@ def test_sidecar_websocket_lap_complete_roundtrip() -> None:
     asyncio.run(_go())
 
 
+def test_sidecar_brain_only_lap_complete_skips_generic_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websockets = pytest.importorskip("websockets", minversion="12")
+    from tools.ai_sidecar import server as srv
+    from tools.ai_sidecar.server import _handler
+
+    def _brain(inbound: dict) -> dict:
+        return {
+            "protocol": PROTOCOL_VERSION,
+            "event": EVENT_COACHING_RESPONSE,
+            "lap": inbound.get("lap"),
+            "hints": [{"kind": "general", "text": "brain"}],
+            "debrief": "archive-backed brain",
+            "debriefSource": "brain",
+            "cornerAnalysis": [{"index": 1, "headline": "T1", "attributions": []}],
+            "balance": {"coaching": "ok"},
+        }
+
+    monkeypatch.setattr(srv, "build_brain_followup", _brain)
+
+    async def _go() -> None:
+        async with websockets.serve(
+            lambda w: _handler(w, reply_coaching=True),
+            "127.0.0.1",
+            0,
+        ) as server:
+            port = server.sockets[0].getsockname()[1]
+            uri = f"ws://127.0.0.1:{port}"
+            async with websockets.connect(uri) as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "protocol": PROTOCOL_VERSION,
+                            "event": "lap_complete",
+                            "lap": 7,
+                            "lapTimeMs": 95000,
+                            "archivePath": "journal/laps/lap_test.json",
+                            "brainOnly": True,
+                        },
+                        separators=(",", ":"),
+                    )
+                )
+                raw = await asyncio.wait_for(ws.recv(), timeout=5.0)
+                out = json.loads(raw)
+                assert out["event"] == EVENT_COACHING_RESPONSE
+                assert out["debriefSource"] == "brain"
+                assert out["debrief"] == "archive-backed brain"
+                assert out["hints"][0]["text"] == "brain"
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(ws.recv(), timeout=0.1)
+
+    asyncio.run(_go())
+
+
 def test_sidecar_non_object_json_gets_analysis_error() -> None:
     websockets = pytest.importorskip("websockets", minversion="12")
     from tools.ai_sidecar.server import _handler
