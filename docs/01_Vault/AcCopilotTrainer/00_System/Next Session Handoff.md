@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-27T06:15:00Z
+last_updated: 2026-06-27T20:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
@@ -35,6 +36,27 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-27 EVENING — #277 brain-debrief rig-verify PREPPED, paused on rig contention)
+
+**`/autonomous-deliver 277` on AG_PC.** #277 *code* is merged (PR #321, `8d9eb97`; post-merge
+classification clean — no migration/env/deps/workflow flags). The only remaining acceptance is the
+**rig-verify**: a live `debriefSource==brain` `coaching_response` with `cornerAnalysis` on a driven lap.
+
+**Fully prepped for a ~5-min resume** — see
+[[issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27]]: custom-AI surfaces rebuilt
+(`.scratch/part-g/surfaces_customai.ini`), `new_behaviour.ini [CUSTOM_AI] ENABLED=1` added, vetted drive
+script `.scratch/issue277_drive_laps.py` (PR #248 `RacingDriver.from_human_profile` Stanley path),
+capture harness `.scratch/issue277_live_verify.py` wired (its `_analyze` asserts the `brainOnly`
+lap_complete + `debriefSource==brain` round-trip; daemon-free launch).
+
+**Paused — NOT done (single-rig contention):** AG_PC has one AC instance; the concurrent session
+**"Autonomous delivery testing in Assetto Corsa"** (`flamboyant-poincare-b469d9`) was actively driving
+the rig (imola/mugello captures, Audi R8 / Corvette). I **yielded** — killed **no** peer process and
+restored magione `surfaces.ini` to stock. **To finish #277:** when the rig is exclusively free, re-run
+`/autonomous-deliver 277` (one step). Serializing the two concurrent rig sessions is an operator call.
+
+---
 
 ## Resume here (2026-06-27 LIVE RIG CONFIRMATION — #305 CLOSED)
 
