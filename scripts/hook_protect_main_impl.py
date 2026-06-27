@@ -72,6 +72,15 @@ _RECOVERY_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def _is_relative_to(path: Path, base: Path) -> bool:
+    """Python 3.9-compatible containment check."""
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return False
+    return True
+
+
 def _canonical(name: str) -> Path | None:
     """Resolve the canonical hook from a TRUSTED, configured location only."""
     here = Path(__file__).resolve()
@@ -81,10 +90,24 @@ def _canonical(name: str) -> Path | None:
         bases.append(Path(env_root).expanduser())
     bases.append(Path.home() / ".fleet-governance")
     for base in bases:
+        if not base.is_absolute():
+            continue
+        try:
+            resolved_base = base.resolve()
+        except (OSError, RuntimeError):
+            continue
         for sub in ("hooks", "scripts"):  # hub layout, then legacy layout
             p = base / sub / name
-            if p.is_file() and p.resolve() != here:
-                return p
+            try:
+                resolved = p.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if (
+                _is_relative_to(resolved, resolved_base)
+                and resolved.is_file()
+                and resolved != here
+            ):
+                return resolved
     return None
 
 

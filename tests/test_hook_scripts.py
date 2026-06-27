@@ -81,6 +81,17 @@ def _load_protect_impl():
     return mod
 
 
+def _load_detect_git_commit():
+    spec = importlib.util.spec_from_file_location(
+        "hook_detect_git_commit",
+        SCRIPTS / "hook_detect_git_commit.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(mod)
+    return mod
+
+
 @_SKIP_PROTECT_SHIM
 def test_shell_command_segments_are_independent_lists() -> None:
     """Regression: flush must not append the same list object that is then cleared."""
@@ -196,6 +207,61 @@ def test_hook_detect_git_commit_script() -> None:
         check=False,
     )
     assert r3.returncode == 0
+
+
+def test_hook_detect_git_commit_rejects_relative_env_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub = tmp_path / "hub"
+    (hub / "hooks").mkdir(parents=True)
+    (hub / "hooks" / "hook_protect_main_impl.py").write_text("OK = True\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("FLEET_GOVERNANCE_ROOT", "hub")
+
+    det = _load_detect_git_commit()
+    assert det._canonical_impl_path() is None
+
+
+def test_hook_detect_git_commit_allows_symlink_inside_hub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub = tmp_path / "hub"
+    real_hooks = hub / "real_hooks"
+    real_hooks.mkdir(parents=True)
+    target = real_hooks / "hook_protect_main_impl.py"
+    target.write_text("OK = True\n", encoding="utf-8")
+    (hub / "hooks").symlink_to(real_hooks)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("FLEET_GOVERNANCE_ROOT", str(hub))
+
+    det = _load_detect_git_commit()
+    assert det._canonical_impl_path() == target.resolve()
+
+
+def test_hook_detect_git_commit_rejects_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub = tmp_path / "hub"
+    (hub / "hooks").mkdir(parents=True)
+    outside = tmp_path / "outside" / "hook_protect_main_impl.py"
+    outside.parent.mkdir()
+    outside.write_text("OK = True\n", encoding="utf-8")
+    (hub / "hooks" / "hook_protect_main_impl.py").symlink_to(outside)
+    home = tmp_path / "home"
+    home.mkdir()
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("FLEET_GOVERNANCE_ROOT", str(hub))
+
+    det = _load_detect_git_commit()
+    assert det._canonical_impl_path() is None
 
 
 def _git_init_on(tmp_path: Path, branch: str) -> Path:

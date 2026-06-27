@@ -10,6 +10,15 @@ import sys
 from pathlib import Path
 
 
+def _is_relative_to(path: Path, base: Path) -> bool:
+    """Python 3.9-compatible containment check."""
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return False
+    return True
+
+
 def _canonical_impl_path() -> Path | None:
     """Resolve the hub's ``hook_protect_main_impl.py`` from a trusted location.
 
@@ -22,10 +31,20 @@ def _canonical_impl_path() -> Path | None:
         bases.append(Path(env_root).expanduser())
     bases.append(Path.home() / ".fleet-governance")
     for base in bases:
+        if not base.is_absolute():
+            continue
+        try:
+            resolved_base = base.resolve()
+        except (OSError, RuntimeError):
+            continue
         for sub in ("hooks", "scripts"):
             p = base / sub / "hook_protect_main_impl.py"
-            if p.is_file():
-                return p
+            try:
+                resolved = p.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if _is_relative_to(resolved, resolved_base) and resolved.is_file():
+                return resolved
     return None
 
 
