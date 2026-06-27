@@ -847,6 +847,11 @@ def resolve_memory_endpoints(
                 if not _is_loopback_host(parsed[1]):
                     registry_hosts.add(parsed[1])
 
+    # SSRF guard (#7) WARN is DEFERRED (gh#111): if the manifest names a loopback
+    # endpoint on an untrusted port we reject it below, but only surface that as a
+    # WARN once we know nothing else resolved for this workspace. Captured here,
+    # emitted after have_real_substrate is computed.
+    rejected_untrusted_loopback_port: int | None = None
     if isinstance(manifest_workspace, dict):
         # Only attach the manifest endpoint when the row is actually THIS
         # workspace and is an online (lightrag) substrate — never a mismatched
@@ -880,10 +885,10 @@ def resolve_memory_endpoints(
                     if mf_port in allowed_loopback_ports:
                         raw.append((40, "manifest", *parsed))
                     else:
-                        sys.stderr.write(
-                            "WARN  hook_memory_manifest: ignoring manifest loopback endpoint on "
-                            f"untrusted port {mf_port} (not registry-known); SSRF guard (#7)\n"
-                        )
+                        # Rejected (security #7 — unchanged). DEFER the WARN: it is only
+                        # worth surfacing if no accepted endpoint resolves for this
+                        # workspace; emitted below, gated on have_real_substrate (gh#111).
+                        rejected_untrusted_loopback_port = mf_port
                 else:
                     # Non-loopback: validated later by the registry/bridge allowlist + HTTPS.
                     raw.append((40, "manifest", *parsed))
@@ -926,6 +931,18 @@ def resolve_memory_endpoints(
         _accepted(scheme, host) and port not in _PLACEHOLDER_PORTS
         for (_pri, _src, scheme, host, port) in raw
     )
+    # SSRF guard (#7), deferred WARN (gh#111): a manifest loopback endpoint on an
+    # untrusted port was rejected above. Surface it ONLY when it actually mattered —
+    # i.e. no accepted (registry/bridge) endpoint resolved for this workspace. When a
+    # real substrate is already reachable, ignoring the repo-named loopback is a
+    # harmless, security-correct skip, and the WARN is pure noise that reads like a
+    # grounding failure on every non-central host.
+    if rejected_untrusted_loopback_port is not None and not have_real_substrate:
+        sys.stderr.write(
+            "WARN  hook_memory_manifest: ignoring manifest loopback endpoint on "
+            f"untrusted port {rejected_untrusted_loopback_port} (not registry-known); "
+            "SSRF guard (#7)\n"
+        )
     # A loopback fallback is only meaningful when the workspace config actually
     # points at loopback (central host). Synthesizing 127.0.0.1:<port> for a
     # remote-only substrate can hit an unrelated local service reusing the port
