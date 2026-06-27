@@ -212,5 +212,6 @@ def test_default_output_dir_precedence(tmp_path: Path, monkeypatch: pytest.Monke
     )
 
     monkeypatch.delenv("AC_COPILOT_CSP_STATE_DIR")
+    monkeypatch.setattr("tools.import_motec._use_windows_ac_default", lambda: False)
     monkeypatch.chdir(tmp_path)
     assert default_output_dir(opts) == tmp_path / "journal" / "laps"

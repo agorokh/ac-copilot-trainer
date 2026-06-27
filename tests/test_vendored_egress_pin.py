@@ -36,7 +36,10 @@ PINS = {"client.py": CANONICAL_CLIENT_SHA256, "__init__.py": CANONICAL_INIT_SHA2
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Pins are against the LF-normalized canonical files in governance-hub.
+    # Windows checkouts may materialize these text files as CRLF.
+    data = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(data).hexdigest()
 
 
 def test_vendored_egress_files_present_and_pinned() -> None:

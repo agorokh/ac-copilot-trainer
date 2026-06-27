@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-26T05:30:00Z
+last_updated: 2026-06-27T06:15:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
@@ -35,6 +35,36 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-27 LIVE RIG CONFIRMATION — #305 CLOSED)
+
+**Closed COMPLETED** ([#305](https://github.com/agorokh/ac-copilot-trainer/issues/305)) on AG_PC with
+AC + CSP running from the repo symlink. This was the post-PR #309 live proof for the final-lap archive
+bug.
+
+Observed run:
+- Launched AC through Content Manager `race/config` from the live `race.ini`: `ks_porsche_911_gt3_r_2016`
+  at `magione`; shared memory confirmed `LIVE` / not-in-pit and the HUD screenshot rendered.
+- Temporarily applied Magione Custom-AI permissions, drove two completed laps with the Custom-AI
+  controller, then restored stock `surfaces.ini` afterward.
+- Final target lap was **lap 2, valid PB, 81.841 s**, with no third completed lap before cleanup.
+- New archive:
+  `lap_20260627-055835_87fc4736_2_81841_6a3f668b9bbd.json` — **670,811 bytes / 655.1 KB**,
+  `trace.samples_count=2000`, `len(trace.samples)=2000`, 22 trace fields including
+  `wheelAngularSpeed_*` and `wheelSlip_*`. This is a full trace, not the former 923-byte stub.
+- CSP log also showed the defensive guard working: empty trace refused instead of written as a stub,
+  then `queued async write samples=2000` and wrote the final-lap archive.
+
+Evidence is local/ignored at `.scratch/issue305-live-20260626-225318/`:
+`drive.stdout.log`, `drive-visual.png`, `csp-archive-tail.log`, copied final archive JSON, and cleanup
+metadata. The public closeout comment is
+[#305#issuecomment-4815490402](https://github.com/agorokh/ac-copilot-trainer/issues/305#issuecomment-4815490402).
+
+Note: the session began while the active `feat/issue-277-live-brain-debrief` WIP branch already held
+source/test/docs changes for the brain-debrief delivery. The #305 rig-confirmation SAVE only added
+this vault handoff.
+
+---
 
 ## Resume here (2026-06-25 LATEST — #308 Tier-3 worktree memory-gate false-block CLOSED)
 

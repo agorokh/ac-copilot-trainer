@@ -927,6 +927,19 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     hints,
                 )
 
+            # Archive-backed activation frames are emitted after Lua knows the final archive path.
+            # They should only run the brain, not the generic rules ack or Ollama narration.
+            if (
+                reply_coaching
+                and data.get("event") == "lap_complete"
+                and data.get("brainOnly") is True
+            ):
+                brain_task = asyncio.create_task(_send_brain_followup(websocket, data))
+                _background_tasks.add(brain_task)
+                pending_followups.add(brain_task)
+                brain_task.add_done_callback(_followup_done)
+                continue
+
             # corner_query runs compose_corner_hint (blocking HTTP to Ollama). Do not
             # stall the websocket message loop — process it in a background task.
             # corner_query does not read LapComparisonState — keep it out of

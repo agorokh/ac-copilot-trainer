@@ -414,6 +414,101 @@ local function normalizeSidecarHints(hints)
   return out
 end
 
+local function trimText(text, maxLen)
+  local s = tostring(text or "")
+  local n = tonumber(maxLen) or 220
+  if #s <= n then
+    return s
+  end
+  if n <= 3 then
+    return s:sub(1, n)
+  end
+  return s:sub(1, n - 3) .. "..."
+end
+
+local function brainKindForCause(causeClass)
+  local c = tostring(causeClass or "")
+  if c:find("technique", 1, true) then
+    return "line"
+  end
+  if c:find("setup", 1, true) then
+    return "brake"
+  end
+  if c:find("grip", 1, true) then
+    return "throttle"
+  end
+  return "general"
+end
+
+local function firstAttribution(corner)
+  local attrs = type(corner) == "table" and corner.attributions or nil
+  if type(attrs) ~= "table" then
+    return nil
+  end
+  local best = nil
+  local bestConf = -1
+  for i = 1, #attrs do
+    local a = attrs[i]
+    if type(a) == "table" then
+      local conf = tonumber(a.confidence) or 0
+      if not best or conf > bestConf then
+        best = a
+        bestConf = conf
+      end
+    end
+  end
+  return best
+end
+
+local function normalizeBrainHints(data, fallbackHints)
+  local out = {}
+  local corners = type(data) == "table" and data.cornerAnalysis or nil
+  if type(corners) == "table" then
+    for i = 1, #corners do
+      if #out >= 3 then
+        break
+      end
+      local corner = corners[i]
+      if type(corner) == "table" then
+        local attr = firstAttribution(corner)
+        local headline = type(corner.headline) == "string" and corner.headline or ""
+        if headline == "" then
+          headline = "Corner " .. tostring(corner.index or i)
+        end
+        local loss = tonumber(corner.time_loss_s)
+        local lossText = ""
+        if loss and loss > 0.05 then
+          lossText = string.format(" (+%.2fs)", loss)
+        end
+        local detail = ""
+        local kind = "general"
+        if attr then
+          kind = brainKindForCause(attr.cause_class)
+          if type(attr.coaching) == "string" and attr.coaching ~= "" then
+            detail = attr.coaching
+          elseif type(attr.symptom) == "string" and attr.symptom ~= "" then
+            detail = attr.symptom
+          end
+        end
+        local text = headline .. lossText
+        if detail ~= "" then
+          text = text .. ": " .. detail
+        end
+        out[#out + 1] = { kind = kind, text = trimText(text, 220) }
+      end
+    end
+  end
+  local balance = type(data) == "table" and data.balance or nil
+  if #out < 3 and type(balance) == "table" and type(balance.coaching) == "string"
+      and balance.coaching ~= "" then
+    out[#out + 1] = { kind = "positive", text = trimText("Balance: " .. balance.coaching, 220) }
+  end
+  if #out > 0 then
+    return out
+  end
+  return normalizeSidecarHints(fallbackHints)
+end
+
 local _wsDiagLogged = false
 local _wsDiagAttempts = 0
 --- Cap noisy per-frame WS recv logs (Bugbot); diagnostics reset on new socket.
@@ -640,7 +735,13 @@ function M.pollInbound(maxPerTick)
           if type(data.debrief) == "string" and data.debrief ~= "" then
             debrief = data.debrief
           end
-          if source == "ollama" then
+          if source == "brain" then
+            pendingCoaching = {
+              lap = lap,
+              hints = normalizeBrainHints(data, hints),
+              debrief = debrief,
+            }
+          elseif source == "ollama" then
             if pendingCoaching and pendingCoaching.lap == lap then
               -- Round 8: Ollama follow-up overwrites the rules debrief with
               -- the LLM version. Hints are preserved from the immediate

@@ -410,6 +410,7 @@ local tires = tireMonitor.new()
 local pendingWsSidecarUrl = nil
 local pendingLapArchiveJobs = {}
 local pendingLapArchiveRecordPaths = {}
+local bestLapArchivePath = nil
 local LAP_ARCHIVE_ROWS_PER_FRAME = 64
 -- Per-step row budget used by the synchronous session-end drain (issue #305). Far above any
 -- real lap's downsampled trace (~2000 rows) so a single step finishes the whole job.
@@ -420,7 +421,18 @@ local LAP_ARCHIVE_FLUSH_ROWS = 1000000
 -- time; without this they would compile to globals and stay nil — issue #81).
 local state
 
-local function queueLapArchiveJob(archiveOpts)
+local function shallowCopy(tbl)
+  local out = {}
+  if type(tbl) ~= "table" then
+    return out
+  end
+  for k, v in pairs(tbl) do
+    out[k] = v
+  end
+  return out
+end
+
+local function queueLapArchiveJob(archiveOpts, notifyOpts)
   local job, err = lapArchive.createWriteJob(
     archiveOpts,
     lapArchive.clampArchiveCapMB(config.lapArchiveMaxMB)
@@ -430,6 +442,9 @@ local function queueLapArchiveJob(archiveOpts)
       ac.log("[COPILOT][ARCHIVE] queue failed: " .. tostring(err))
     end
     return
+  end
+  if type(notifyOpts) == "table" then
+    job._copilotNotify = notifyOpts
   end
   pendingLapArchiveJobs[#pendingLapArchiveJobs + 1] = job
   if ac and type(ac.log) == "function" then
@@ -452,7 +467,24 @@ local function pumpLapArchiveJobs(maxRows)
     end
   end
   if ok and type(pathOrErr) == "string" then
-    pendingLapArchiveRecordPaths[#pendingLapArchiveRecordPaths + 1] = pathOrErr
+    local notification = {
+      path = pathOrErr,
+      setupRecordSent = false,
+      archiveLapSent = false,
+    }
+    local notify = type(job._copilotNotify) == "table" and job._copilotNotify or nil
+    if notify and type(notify.archiveLapPayload) == "table" then
+      local payload = shallowCopy(notify.archiveLapPayload)
+      payload.archivePath = pathOrErr
+      if type(notify.referenceArchivePath) == "string" and notify.referenceArchivePath ~= "" then
+        payload.referenceArchivePath = notify.referenceArchivePath
+      end
+      notification.archiveLapPayload = payload
+    end
+    if notify and notify.isBestLapArchive == true then
+      bestLapArchivePath = pathOrErr
+    end
+    pendingLapArchiveRecordPaths[#pendingLapArchiveRecordPaths + 1] = notification
   end
 end
 
@@ -490,16 +522,40 @@ local function pumpLapArchiveNotifications()
     return
   end
   while #pendingLapArchiveRecordPaths > 0 do
-    local path = pendingLapArchiveRecordPaths[1]
-    local sent = false
-    pcall(function()
-      sent = wsBridge.sendSetupExperimentRecord(path) == true
-    end)
-    if sent then
+    local item = pendingLapArchiveRecordPaths[1]
+    if type(item) == "string" then
+      item = { path = item, setupRecordSent = false, archiveLapSent = true }
+      pendingLapArchiveRecordPaths[1] = item
+    end
+    local path = type(item) == "table" and item.path or nil
+    if type(path) ~= "string" or path == "" then
       table.remove(pendingLapArchiveRecordPaths, 1)
     else
-      -- Keep the path queued; handshake/reconnect can become ready on a later frame.
-      return
+      if not item.setupRecordSent then
+        local sent = false
+        pcall(function()
+          sent = wsBridge.sendSetupExperimentRecord(path) == true
+        end)
+        if sent then
+          item.setupRecordSent = true
+        else
+          -- Keep the path queued; handshake/reconnect can become ready on a later frame.
+          return
+        end
+      end
+      if type(item.archiveLapPayload) == "table" and not item.archiveLapSent then
+        local sent = false
+        pcall(function()
+          sent = wsBridge.sendJson(item.archiveLapPayload) == true
+        end)
+        if sent then
+          item.archiveLapSent = true
+        else
+          -- Avoid re-sending the setup record; retry only the archive-backed lap_complete later.
+          return
+        end
+      end
+      table.remove(pendingLapArchiveRecordPaths, 1)
     end
   end
 end
@@ -1427,6 +1483,11 @@ local function resetRuntimeAfterLeavingTrack()
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
+  bestLapArchivePath = nil
+  -- Drop any archive-backed lap_complete follow-ups left unsent: they reference the prior
+  -- stint's archives and must not leak into the next session (drained best-effort above on
+  -- the session-end path). CodeRabbit #321.
+  pendingLapArchiveRecordPaths = {}
   state.focusPracticeActive = false
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -1460,6 +1521,10 @@ local function resetRollingDrivingState()
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
+  bestLapArchivePath = nil
+  -- Rolling reset starts a disjoint session (new SESSION_UUID below); drop prior-stint
+  -- archive follow-ups so they cannot attach to the new session. CodeRabbit #321.
+  pendingLapArchiveRecordPaths = {}
   state.lapsCompleted = 0
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -2039,6 +2104,11 @@ function script.update(dt)
       -- transition (a job can only be queued while driving), not on every idle menu frame;
       -- runs before resetRuntimeAfterLeavingTrack rebuilds runtime state.
       flushPendingLapArchiveJobs("session end (main menu)")
+      -- Drain the notifications flush just enqueued: update() returns a few lines below
+      -- before the per-frame pump runs again, and resetRuntimeAfterLeavingTrack (which
+      -- also calls wsBridge.reset) is imminent — so the last lap's archive-backed brain
+      -- follow-up gets its one send attempt here instead of being stranded. CodeRabbit #321.
+      pumpLapArchiveNotifications()
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
         local journalLaps = state.lapsCompleted or 0
@@ -2409,6 +2479,7 @@ function script.update(dt)
 
     -- PB flag must use pre-update `bestLapMs` (Cursor #78); archive runs after PB block mutates it.
     local isPbThisLap = lastMs > 0 and (state.bestLapMs == nil or lastMs <= state.bestLapMs)
+    local referenceArchivePathForBrain = bestLapArchivePath
 
     local prevBestBp = copyBpList(state.brakingPoints.best)
     local localBestChanged = false
@@ -2447,6 +2518,12 @@ function script.update(dt)
     state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
     state.postLapUntil = ch.simSeconds(sim) + config.postLapHoldSeconds
 
+    -- Hoisted out of the `if lastMs > 0` block below: the deferred archive follow-up
+    -- (`shallowCopy(lapPayload)` further down) must see the populated table. In Lua 5.1 a
+    -- `local` declared inside that `if ... end` is out of scope by the archive block, so a
+    -- nested declaration would copy nil and strip the base `lap_complete` fields
+    -- (event/lap/lapTimeMs) — silently disabling the brain follow-up. CodeRabbit #321.
+    local lapPayload
     if lastMs > 0 then
       local hintsJson = {}
       if state.coachingLines then
@@ -2459,7 +2536,7 @@ function script.update(dt)
           end
         end
       end
-      local lapPayload = {
+      lapPayload = {
         protocol = wsBridge.PROTOCOL_VERSION,
         event = "lap_complete",
         lap = state.lapsCompleted,
@@ -2500,7 +2577,13 @@ function script.update(dt)
         -- (Codex + Cursor Bugbot #78 post-5f0ce39).
         corner_advice = wsBridge.cornerAdvisorySnapshotForLap((state.lapsCompleted or 0) - 1),
       }
-      queueLapArchiveJob(archiveOpts)
+      local archiveLapPayload = shallowCopy(lapPayload)
+      archiveLapPayload.brainOnly = true
+      queueLapArchiveJob(archiveOpts, {
+        archiveLapPayload = archiveLapPayload,
+        referenceArchivePath = referenceArchivePathForBrain,
+        isBestLapArchive = isPbThisLap,
+      })
     end
 
     state.lapInvalidatedThisLap = false

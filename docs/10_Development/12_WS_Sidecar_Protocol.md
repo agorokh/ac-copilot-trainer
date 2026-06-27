@@ -22,6 +22,9 @@ Sent after each completed lap when `config.wsSidecarUrl` is set and the socket i
 | `lapTimeMs`     | int         | yes      | Previous lap time in ms              |
 | `coachingHints` | string[]    | no       | Rules-based hint strings (same lap)  |
 | `telemetry`     | object      | no       | Optional structured lap data for sidecar analysis (issue **#49**); see below |
+| `archivePath`   | string      | no       | Issue **#277**: archive-backed follow-up path, sent only after the async lap archive write completes |
+| `referenceArchivePath` | string | no    | Optional safe lap archive path for the driver's written PB/reference, enabling delta-based brain rules |
+| `brainOnly`     | bool        | no       | When `true`, the sidecar skips the generic immediate ack and only emits the archive-backed brain follow-up |
 
 \*Missing `protocol` on `lap_complete` is accepted with a server warning (legacy); new clients should always send `protocol: 1`.
 
@@ -49,6 +52,9 @@ Snake_case variants (`min_speed_kmh`, …) are also accepted.
 | `hints`    | array  | yes      | Up to 3 items: `{ "kind", "text" }` or plain strings |
 | `improvementRanking` | array | no | Issue **#49**: ordered corner-level suggestions vs best lap-with-corners reference (ignored by current Lua until **3b** consumes it) |
 | `debrief`  | string | no       | Issue **#46**: one or two paragraphs when `AC_COPILOT_OLLAMA_ENABLE=1` (local Ollama with **`AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC`** default 12s, then rules fallback); omitted when debrief feature is off. The sidecar builds outbound messages in a worker thread so slow Ollama does not block the WebSocket loop. |
+| `debriefSource` | string | no | `"ollama"` or `"brain"` for async follow-ups. Lua preserves the rich debrief text and treats `"brain"` as a structured tile source. |
+| `cornerAnalysis` | array | no | Issue **#277**: machine-readable setup-vs-technique corner tiles from the brain follow-up. |
+| `balance` | object | no | Issue **#277**: overall balance verdict/coaching, rendered as a secondary brain tile when space allows. |
 
 When received for the same `lap`, Lua **replaces** `state.coachingLines` with these hints (rules-based hints are overridden). If the hold timer had already expired (e.g. delayed sidecar), Lua **restarts** the hold so hints still display.
 
