@@ -18,6 +18,13 @@ from tools.ac_harness.ai_line import (
     StanleySteering,
     load_ai_line,
 )
+from tools.ac_harness.auto_drive import (
+    AutoDriveConfig,
+    AutoDriveReport,
+    DriveStats,
+    resolve_fast_lane,
+    run_auto_drive,
+)
 from tools.ac_harness.custom_ai import (
     CarControls,
     CarData,
@@ -112,4 +119,10 @@ __all__ = [
     "PurePursuit",
     "StanleySteering",
     "load_ai_line",
+    # Composed autonomous drive+assert loop (EPIC #154 Part G --drive).
+    "AutoDriveConfig",
+    "AutoDriveReport",
+    "DriveStats",
+    "resolve_fast_lane",
+    "run_auto_drive",
 ]
