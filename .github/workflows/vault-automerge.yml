@@ -22,7 +22,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: agorokh/governance-hub/.github/actions/vault-automerge@0939d4724bd1e89515d4abd89d676c750580b028
+      # The composite action lives in the PRIVATE governance-hub repo. A cross-repo `uses:` of a
+      # private action does NOT resolve with the default GITHUB_TOKEN ("Unable to resolve action
+      # agorokh/governance-hub, not found" — issue #329), so mint the fleet-bot app token, check the
+      # action out at its pinned SHA, and run it via a local path. Reference-not-vendor is preserved:
+      # the logic still lives ONCE in the hub at this SHA; we only change HOW it is fetched.
+      - name: Mint fleet-bot token (read governance-hub)
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_BOT_APP_ID }}
+          private-key: ${{ secrets.FLEET_BOT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: governance-hub
+      - name: Check out the pinned governance-hub vault-automerge action
+        uses: actions/checkout@v7
+        with:
+          repository: agorokh/governance-hub
+          ref: 0939d4724bd1e89515d4abd89d676c750580b028  # pragma: allowlist secret (git SHA, not a secret)
+          token: ${{ steps.app-token.outputs.token }}
+          path: .governance-hub
+      - uses: ./.governance-hub/.github/actions/vault-automerge
         with:
           github-token: ${{ github.token }}
           pr-number: ${{ github.event.pull_request.number }}
