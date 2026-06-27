@@ -1484,6 +1484,10 @@ local function resetRuntimeAfterLeavingTrack()
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
   bestLapArchivePath = nil
+  -- Drop any archive-backed lap_complete follow-ups left unsent: they reference the prior
+  -- stint's archives and must not leak into the next session (drained best-effort above on
+  -- the session-end path). CodeRabbit #321.
+  pendingLapArchiveRecordPaths = {}
   state.focusPracticeActive = false
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -1518,6 +1522,9 @@ local function resetRollingDrivingState()
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
   bestLapArchivePath = nil
+  -- Rolling reset starts a disjoint session (new SESSION_UUID below); drop prior-stint
+  -- archive follow-ups so they cannot attach to the new session. CodeRabbit #321.
+  pendingLapArchiveRecordPaths = {}
   state.lapsCompleted = 0
   state.focusWorstThree = {}
   state.lastLapCornerFeats = {}
@@ -2097,6 +2104,11 @@ function script.update(dt)
       -- transition (a job can only be queued while driving), not on every idle menu frame;
       -- runs before resetRuntimeAfterLeavingTrack rebuilds runtime state.
       flushPendingLapArchiveJobs("session end (main menu)")
+      -- Drain the notifications flush just enqueued: update() returns a few lines below
+      -- before the per-frame pump runs again, and resetRuntimeAfterLeavingTrack (which
+      -- also calls wsBridge.reset) is imminent — so the last lap's archive-backed brain
+      -- follow-up gets its one send attempt here instead of being stranded. CodeRabbit #321.
+      pumpLapArchiveNotifications()
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
         local journalLaps = state.lapsCompleted or 0
@@ -2506,6 +2518,12 @@ function script.update(dt)
     state.postLapLines = buildPostLapLines(prevBestBp, state.brakingPoints.last, coastMs, sim)
     state.postLapUntil = ch.simSeconds(sim) + config.postLapHoldSeconds
 
+    -- Hoisted out of the `if lastMs > 0` block below: the deferred archive follow-up
+    -- (`shallowCopy(lapPayload)` further down) must see the populated table. In Lua 5.1 a
+    -- `local` declared inside that `if ... end` is out of scope by the archive block, so a
+    -- nested declaration would copy nil and strip the base `lap_complete` fields
+    -- (event/lap/lapTimeMs) — silently disabling the brain follow-up. CodeRabbit #321.
+    local lapPayload
     if lastMs > 0 then
       local hintsJson = {}
       if state.coachingLines then
@@ -2518,7 +2536,7 @@ function script.update(dt)
           end
         end
       end
-      local lapPayload = {
+      lapPayload = {
         protocol = wsBridge.PROTOCOL_VERSION,
         event = "lap_complete",
         lap = state.lapsCompleted,

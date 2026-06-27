@@ -100,3 +100,50 @@ def test_archive_write_notification_sends_brain_activation_lap_payload() -> None
     assert "local referenceArchivePathForBrain = bestLapArchivePath" in src
     assert "archiveLapPayload.brainOnly = true" in block
     assert "referenceArchivePath = referenceArchivePathForBrain" in block
+
+
+def test_deferred_archive_payload_copies_full_lap_complete_payload() -> None:
+    """#321 regression: the deferred archive-backed lap_complete must be a copy of the FULL
+    live ``lapPayload`` (protocol/event/lap/lapTimeMs), not a bare ``{brainOnly=true}`` table.
+
+    In Lua 5.1 a ``local`` declared inside the ``if lastMs > 0`` block is out of scope by the
+    archive block below, so ``shallowCopy(lapPayload)`` there would copy ``nil`` and silently
+    strip the base fields — leaving the sidecar's ``event == "lap_complete"`` gate unable to
+    fire the brain follow-up (the whole point of #321). The fix hoists ``lapPayload`` to an
+    outer-scope bare ``local``; this guard pins that shape so the bug cannot regress.
+    """
+    src = ENTRY.read_text(encoding="utf-8")
+
+    # Exactly one declaration, and it is a bare *hoisted* local — NOT `local lapPayload = {`,
+    # which would scope it inside the lap-boundary block and break the deferred copy.
+    decls = re.findall(r"\blocal lapPayload\b", src)
+    assert len(decls) == 1, "expected exactly one lapPayload local declaration"
+    assert re.search(r"\n[ \t]*local lapPayload[ \t]*\n", src) is not None, (
+        "lapPayload must be hoisted as a bare `local lapPayload` declaration above the "
+        "`if lastMs > 0` block (Lua block scope; #321)"
+    )
+    assert "local lapPayload = {" not in src, (
+        "lapPayload must not be re-declared inside the lap-boundary block — the deferred "
+        "archive copy would then see nil and drop the base lap_complete fields (#321)"
+    )
+
+    # The populated table is assigned to the hoisted local and carries the base lap_complete fields.
+    populated = re.search(r"\n[ \t]*lapPayload = \{(.*?)\n[ \t]*\}", src, flags=re.S)
+    assert populated is not None, "could not find the `lapPayload = { ... }` assignment"
+    payload_literal = populated.group(1)
+    for field in ('event = "lap_complete"', "lap = state.lapsCompleted", "lapTimeMs = lastMs"):
+        assert field in payload_literal, f"base lap_complete field missing from lapPayload: {field}"
+
+    # The deferred archive payload is a copy of that full payload (inheriting the base fields),
+    # then adds the brain-only marker — it must not be built from scratch.
+    archive_block = re.search(
+        r"-- Issue #77 Part C / #246: archive this lap.*?state\.lapInvalidatedThisLap = false",
+        src,
+        flags=re.S,
+    )
+    assert archive_block is not None
+    block = archive_block.group(0)
+    assert "local archiveLapPayload = shallowCopy(lapPayload)" in block, (
+        "deferred archive payload must shallowCopy the full lapPayload so it keeps the base "
+        "lap_complete fields (#321)"
+    )
