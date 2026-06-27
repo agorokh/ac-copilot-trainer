@@ -17,11 +17,16 @@ from tools.ac_harness.auto_drive import (
     AutoDriveReport,
     DriveStats,
     _build_arg_parser,
+    _build_driver,
     _config_from_args,
     default_ac_root,
     resolve_fast_lane,
     run_auto_drive,
 )
+
+# A tiny closed square line + a per-point speed profile, for driver-construction tests.
+_LINE = [(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, 0.0, 50.0), (0.0, 0.0, 50.0)]
+_PROFILE = [40.0, 40.0, 40.0, 40.0]  # m/s targets
 
 
 def _cfg(**kw) -> AutoDriveConfig:
@@ -241,6 +246,39 @@ def test_resolve_fast_lane_direct_layout_and_missing(tmp_path):
 
     with pytest.raises(FileNotFoundError):
         resolve_fast_lane(root, "nonexistent")
+
+
+def test_build_driver_racing_is_default_and_shifts_gears():
+    from tools.ac_harness.lap_driver import LapDriver
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    # Default config -> racing.
+    assert _cfg().driver == "racing"
+    racing = _build_driver(_cfg(pace=1.0, racing_max_speed_kmh=240.0), _LINE, _PROFILE)
+    assert isinstance(racing, RacingDriver)
+    # RacingDriver can shift well past 1st gear; LapDriver is capped at 3 (AC enc) = 2nd.
+    assert racing.max_gear >= 6
+
+    cruise = _build_driver(_cfg(driver="cruise"), _LINE, _PROFILE)
+    assert isinstance(cruise, LapDriver)
+
+
+def test_build_driver_racing_requires_speed_profile():
+    with pytest.raises(ValueError, match="speed_profile"):
+        _build_driver(_cfg(driver="racing"), _LINE, None)
+
+
+def test_build_driver_rejects_unknown_driver():
+    with pytest.raises(ValueError, match="unknown driver"):
+        _build_driver(_cfg(driver="bogus"), _LINE, _PROFILE)
+
+
+def test_racing_driver_step_upshifts_at_high_rpm():
+    # Direct evidence the racing controller commands an upshift out of 1st when revving + moving.
+    racing = _build_driver(_cfg(pace=1.0, racing_max_speed_kmh=240.0), _LINE, _PROFILE)
+    racing.phase = "LAP"  # skip OUT phase so longitudinal/gear logic runs
+    frame = racing.step((25.0, 0.0, 0.0), (1.0, 0.0, 0.0), 120.0, 7500.0, 3, now=10.0)
+    assert frame.gear_up is True  # rpm 7500 > rpm_up, gear 3 (2nd) < max -> upshift
 
 
 def test_cli_args_map_to_config():

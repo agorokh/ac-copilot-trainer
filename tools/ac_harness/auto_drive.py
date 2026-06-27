@@ -10,7 +10,7 @@ modules into the loop the EPIC claimed** —
     CM-URL launch (entry_launcher)            -> AC on track, non-elevated
     wait LIVE + settle                        -> CSP ready to accept the Custom-AI hijack
     carcsw hijack of car 0 (custom_ai)        -> retry / relaunch on the early-LIVE race
-    autonomous drive (lap_driver + ai_line)   -> a real lap of ANY track, no human, in a thread
+    autonomous drive (racing_driver + ai_line) -> RACES any track: shifts gears, carries pace
     tap the sidecar WS (sequence_probe)        -> assert the live coaching producer contract
     teardown
 
@@ -70,10 +70,16 @@ class AutoDriveConfig:
     ac_root: Path = field(default_factory=default_ac_root)
     cm_exe: Path | None = None
     sidecar_url: str = "ws://127.0.0.1:8765"
-    # Drive.
+    # Drive. ``driver="racing"`` (default) follows fast_lane.ai's embedded speed profile with real
+    # braking points + gear shifting (RacingDriver) — the car actually races (shifts through gears,
+    # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
+    # (LapDriver) for a guaranteed-clean slow lap when pace is not the point.
+    driver: str = "racing"
     drive_seconds: float = 300.0
-    target_speed_kmh: float = 55.0
-    min_corner_speed_kmh: float = 30.0
+    pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
+    racing_max_speed_kmh: float = 240.0  # racing: cap (above any GT speed; lets it use top gears)
+    target_speed_kmh: float = 55.0  # cruise only
+    min_corner_speed_kmh: float = 30.0  # cruise only
     # Assertion.
     tap_seconds: float = 30.0
     wait_lap: bool = False
@@ -95,6 +101,7 @@ class DriveStats:
     drove: bool = False
     laps: int = 0
     max_speed_kmh: float = 0.0
+    max_gear_used: int = 0  # highest AC gear seen (encoding 2=1st); >2 proves real shifting
     total_distance_m: float = 0.0
     samples: int = 0
     sim_dead: bool = False
@@ -122,8 +129,8 @@ class AutoDriveReport:
             d = self.drive
             lines.append(
                 f"  drive: drove={d.drove} laps={d.laps} max_speed={d.max_speed_kmh:.1f}km/h "
-                f"dist={d.total_distance_m:.0f}m sim_dead={d.sim_dead}"
-                + (f" reason={d.reason}" if d.reason else "")
+                f"top_gear={max(d.max_gear_used - 1, 0)} dist={d.total_distance_m:.0f}m "
+                f"sim_dead={d.sim_dead}" + (f" reason={d.reason}" if d.reason else "")
             )
         if self.sequence_ok is not None:
             lines.append(f"  pipeline: {'ok' if self.sequence_ok else 'FAILED'}")
@@ -313,24 +320,55 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
     return None
 
 
+def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list | None = None):
+    """Construct the drive controller for ``config.driver`` (pure; CI-testable).
+
+    ``racing`` → :class:`racing_driver.RacingDriver` following the AI line's embedded speed profile
+    (real braking points + gear shifting + pace) — the car actually races. ``cruise`` →
+    :class:`lap_driver.LapDriver`, the conservative ~50 km/h 1st-gear lane-keeper. Both expose the
+    same ``step()``/``on_recovery()`` contract, so the rig drive loop is driver-agnostic.
+    """
+    from tools.ac_harness.lap_driver import LapDriver
+
+    if config.driver == "cruise":
+        return LapDriver(
+            fast_line,
+            target_speed_kmh=config.target_speed_kmh,
+            min_corner_speed_kmh=config.min_corner_speed_kmh,
+        )
+    if config.driver == "racing":
+        from tools.ac_harness.racing_driver import RacingDriver
+
+        if speed_profile is None:
+            raise ValueError("racing driver requires a speed_profile from the track's fast_lane.ai")
+        return RacingDriver(
+            fast_line,
+            speed_profile,
+            pace=config.pace,
+            max_speed_kmh=config.racing_max_speed_kmh,
+        )
+    raise ValueError(f"unknown driver {config.driver!r} (expected 'racing' or 'cruise')")
+
+
 def rig_drive(  # pragma: no cover - rig-only
     controller: Controller, config: AutoDriveConfig, stop: threading.Event
 ) -> DriveStats:
-    """Drive ``lap_driver`` over the track's fast_lane.ai until ``stop`` or sim-death.
+    """Drive the selected controller over the track's fast_lane.ai until ``stop`` or sim-death.
 
-    Mirrors :meth:`lap_driver.LapDriver.run` but adds the sim-death guard: a frozen Car0
-    ``packet_id`` for ``sim_dead_seconds`` means ``acs.exe`` died, so we stop instead of spinning
-    on stale telemetry and reporting a false drive.
+    ``config.driver`` picks RacingDriver (default — shifts gears, carries pace) or the cruise
+    LapDriver. Adds the sim-death guard: a frozen Car0 ``packet_id`` for ``sim_dead_seconds`` means
+    ``acs.exe`` died, so we stop instead of spinning on stale telemetry and reporting a false drive.
     """
     from tools.ac_harness.ai_line import _horizontal, load_ai_line
-    from tools.ac_harness.lap_driver import LapDriver
 
-    line = load_ai_line(resolve_fast_lane(config.ac_root, config.track_id))
-    driver = LapDriver(
-        line,
-        target_speed_kmh=config.target_speed_kmh,
-        min_corner_speed_kmh=config.min_corner_speed_kmh,
-    )
+    fast_path = resolve_fast_lane(config.ac_root, config.track_id)
+    line = load_ai_line(fast_path)
+    speed_profile = None
+    if config.driver == "racing":
+        from tools.ac_harness.racing_driver import load_speed_profile
+
+        speed_profile = load_speed_profile(fast_path)
+    driver = _build_driver(config, line, speed_profile)
     stats = DriveStats()
     prev_plane: tuple[float, float] | None = None
     last_pkt: int | None = None
@@ -376,6 +414,7 @@ def rig_drive(  # pragma: no cover - rig-only
             )
             stats.samples += 1
             stats.max_speed_kmh = max(stats.max_speed_kmh, cd["speed_kmh"])
+            stats.max_gear_used = max(stats.max_gear_used, int(cd["gear"]))
             plane = _horizontal(cd["position"])
             if prev_plane is not None:
                 d = ((plane[0] - prev_plane[0]) ** 2 + (plane[1] - prev_plane[1]) ** 2) ** 0.5
@@ -405,9 +444,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument("--cm-exe", type=Path, default=None, help="Content Manager.exe path")
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
+    p.add_argument(
+        "--driver",
+        choices=("racing", "cruise"),
+        default="racing",
+        help="racing = shift gears + carry pace (default); cruise = slow 1st-gear lane-keeper",
+    )
+    p.add_argument("--pace", type=float, default=0.9, help="racing: fraction of AI-line speed")
+    p.add_argument("--max-speed", type=float, default=240.0, help="racing: speed cap (km/h)")
     p.add_argument("--drive-seconds", type=float, default=300.0)
-    p.add_argument("--target-speed", type=float, default=55.0)
-    p.add_argument("--min-corner", type=float, default=30.0)
+    p.add_argument("--target-speed", type=float, default=55.0, help="cruise target speed (km/h)")
+    p.add_argument("--min-corner", type=float, default=30.0, help="cruise min corner speed (km/h)")
     p.add_argument("--tap-seconds", type=float, default=30.0)
     p.add_argument("--wait-lap", action="store_true", help="assert a completed lap (real motion)")
     p.add_argument("--strict", action="store_true", help="require session+lap, enforce ordering")
@@ -421,6 +468,9 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         track_id=args.track,
         cm_exe=args.cm_exe,
         sidecar_url=args.sidecar_url,
+        driver=args.driver,
+        pace=args.pace,
+        racing_max_speed_kmh=args.max_speed,
         drive_seconds=args.drive_seconds,
         target_speed_kmh=args.target_speed,
         min_corner_speed_kmh=args.min_corner,
