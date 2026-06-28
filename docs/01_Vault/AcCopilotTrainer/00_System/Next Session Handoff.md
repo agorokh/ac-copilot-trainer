@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-06-28T07:10:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
@@ -41,6 +42,20 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-28) — coaching lakehouse #345 P1 IN REVIEW; #345 P0 capture is next
+**Branch `feat/345-coaching-lake-duckdb`** delivers the EPIC #344 "query the whole data plane"
+engine: `tools/coaching_lake` — an embedded **DuckDB** star (laps/corners/setup_params/samples)
+rebuilt idempotently from the immutable lap-archive JSON. Flagship `setup-effect` dependency
+query + arbitrary SQL across the corpus; samples bulk-loaded via temp-CSV→`COPY` (executemany
+was too slow). **Verified on the live 213-lap / 11-track / 702-corner / 375k-sample corpus**
+(build 46s, real per-track best/median + corner-grain speeds + ad-hoc SQL). 9 off-sim tests;
+`analytics` extra (duckdb) wired into `ci.yml`. Detail: [[coaching-lakehouse-duckdb-2026-06-28]].
+**Next:** open the PR, drive resolve-pr → merge → post-merge; then **#345 P0 capture half**
+(rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305
+flush, provenance, widen TRACE_FIELDS to Tier-1 channels. **Drift note:** `check_vault_follow_up.sh`
+hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — investigation notes
+never satisfy the guard (handoff/Current Focus do); file a fix.
 
 ## Delivered (2026-06-28) — PR #343 MERGED: in-the-ear voice coach (#340)
 `/autonomous-deliver 340` shipped the **voice output layer** for the realtime coaching pipeline.
