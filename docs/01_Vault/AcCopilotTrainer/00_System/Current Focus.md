@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T07:35:00Z
+last_updated: 2026-06-28T15:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -106,6 +106,15 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-28** — PR [#349](https://github.com/agorokh/ac-copilot-trainer/pull/349) **MERGED** at
+  `c477aee` — **live voice wiring** ([#341](https://github.com/agorokh/ac-copilot-trainer/issues/341)
+  M0 **CLOSED**): sidecar turns the live `telemetry_tick` stream into spoken cues — `coaching.cue` topic
+  + `voice` client-class + optional `spline`/`lap` validation; `server.py` `_publish_coaching_cues`
+  feeds the `RealtimeObserver` per tick → speaks via the in-process #340 `VoiceCoach` **and** publishes
+  `coaching.cue` to WS peers; `--voice-reference`/`--voice-bank` flags (audio deps lazy, OFF by default).
+  A parallel session hardened it (scheduler tie-break by rank→freshness + act-cue latency logging). 9
+  wiring tests + e2e round-trip; ci-fast green. **Remaining (rig-gated):** Lua `telemetry_tick`-with-`spline`
+  producer + on-rig audible smoke → [#350](https://github.com/agorokh/ac-copilot-trainer/issues/350).
 - **2026-06-28** — PR [#338](https://github.com/agorokh/ac-copilot-trainer/pull/338) **MERGED** at
   `f8d010e` — CoachingOracle **Qodo round-6 hardening** ([#333](https://github.com/agorokh/ac-copilot-trainer/issues/333)
   follow-up to #334): None-on-failure `get_coaching()`, spaced debrief OCR marker, nested-None coercion,
