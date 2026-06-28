@@ -51,6 +51,8 @@ defect — every proper `vault/...` PR (#331/#332/#337) is green on both checks.
 live-evidence table: [[issue-327-vault-automerge-already-resolved-2026-06-28]]. **Lesson:** parallel
 autonomous sessions can file+fix the same root cause under different numbers — reconcile before re-doing.
 
+---
+
 ## Delivered (2026-06-28) — PR #334 MERGED: Track Titan CoachingOracle
 [#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) squash-merged to `main` as
 `32c86e9`. Productionized the screen-OCR `CoachingOracle`: `tools/ai_sidecar/coaching_oracle.py` +
