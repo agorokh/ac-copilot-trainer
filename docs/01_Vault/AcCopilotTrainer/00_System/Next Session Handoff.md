@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T17:55:00Z
+last_updated: 2026-06-28T18:15:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
@@ -57,8 +57,9 @@ relates_to:
 the M0 pipeline was briefly red from a #342×#349 merge collision, **fixed in PR #355** — see below). **All
 that remains is Part B (operator/rig-gated):** bake a Piper bank (`python -m tools.ai_sidecar.voice.bake
 --backend piper`), launch the sidecar with `--voice-reference <archive> --voice-bank <dir>`, drive Magione vs
-a faster reference, tap `coaching.cue`, confirm the operator **hears** ≥1 spline-anchored cue. Minor producer
-follow-ups noted on #350 (real `lat_g`/`long_g`; dedup the double `spline`/lap validation in `external_protocol.py`).
+a faster reference, tap `coaching.cue`, confirm the operator **hears** ≥1 spline-anchored cue. Remaining
+producer follow-up on #350: real `lat_g`/`long_g` (rig-gated; inert for the observer). The double `spline`/lap
+validation dedup is **DONE** (#357 / PR #358, `4e70131`).
 
 **#345 P0 capture half** (rig-gated Lua) also still pending — see the line above.
 
@@ -78,6 +79,17 @@ decl; target `_publish_coaching_cues`; replace the stale loader tests with best-
 (non-vacuous sentinels). **`build` green on `27cb7100`**; full suite `1513 passed, 0 failed` (Py 3.11);
 3-agent adversarial pre-merge review (all approve). **#350 reconciled** → Part A done, only rig-gated Part B
 remains. **Post-merge:** no classification flags. Detail: [[pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28]].
+
+---
+
+## Delivered (2026-06-28) — PR #358 MERGED: telemetry_tick validation dedup (#357 CLOSED)
+Same `/autonomous-deliver 350` run, next debt item. A skeptic review of the #355 work surfaced that
+`_validate_telemetry_tick` validated `spline`/lap **twice** (`external_protocol.py:332-338` & `:349-355`) —
+#341/#342/#349 merge debris. PR [#358](https://github.com/agorokh/ac-copilot-trainer/pull/358)
+(`4e70131`, **#357 CLOSED**) consolidates to one `spline` check + one loop over the **union** of lap-key
+spellings (`lap`/`lap_count`/`completed_laps`/`lapCount`/`completedLaps`) — behavior-preserving — and adds
+`test_voice_wiring` assertions locking the snake_case variants. `build` green on `4e70131`; full suite
+`1513 passed, 0 failed`. **Post-merge:** no classification flags.
 
 ---
 
