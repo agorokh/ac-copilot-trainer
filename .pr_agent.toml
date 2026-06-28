@@ -26,7 +26,7 @@
 # Enable review on subsequent pushes, not just PR open.
 # Each push costs 1 credit from the 30/month free budget.
 handle_push_trigger = true
-push_commands = ["/review"]
+push_commands = ["/agentic_review"]
 
 [pr_reviewer]
 extra_instructions = """

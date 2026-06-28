@@ -58,7 +58,7 @@ Every AI assistant (Cursor, Claude Code, Codex, Warp, GitHub Copilot agents) wor
 
 ## GitHub review culture
 
-1. **Bots are part of CI** — Address inline comments from automated reviewers (CodeRabbit, Bugbot, Copilot, etc.) or reply with a clear reason.
+1. **Bots are part of CI** — Address inline comments from automated reviewers (Gemini, Qodo, Copilot, etc.) or reply with a clear reason.
 2. **Human review** — Respect CODEOWNERS and requested reviewers when configured.
 3. **Scope proof** — When an Issue demands it, link evidence in the PR body (commands run, screenshots, logs redacted).
 
