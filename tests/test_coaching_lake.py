@@ -223,3 +223,24 @@ def test_build_without_samples_skips_staging(lake_cwd):
     assert summary.laps == 1
     cols, rows = run_query(db, "SELECT count(*) FROM samples")
     assert rows[0][0] == 0
+
+
+def test_non_lake_duckdb_filename_rejected(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _archive("a", "bmw_z4_gt3", "spa", 110000))
+    with pytest.raises(ValueError, match="dedicated db filename"):
+        build_lake(laps, "journal/my_notes.duckdb")
+
+
+def test_null_setup_key_skipped(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    rec = _archive("a", "bmw_z4_gt3", "spa", 110000, snapshot={"WING": 3})
+    rec["setup"]["snapshot"] = [{"key": None, "value": 1}, {"key": "WING", "value": 3}]
+    _write(laps, "a", rec)
+    db = _db_path()
+    summary = build_lake(laps, db)
+    assert summary.setup_params == 1
+    cols, rows = run_query(db, "SELECT key FROM setup_params")
+    assert rows[0][cols.index("key")] == "WING"

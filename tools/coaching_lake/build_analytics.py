@@ -45,6 +45,8 @@ from tools.lap_archive_export import (
 # Per-sample columns = identity keys + the canonical trace fields (auto-widens with TRACE_FIELDS).
 _SAMPLE_KEYS = ("lap_uuid", "car_id", "track_id", "sample_index")
 _CSV_NULL = "\\N"
+# Dedicated coaching-lake filenames under journal/ — prevents wiping unrelated DuckDB files.
+_ALLOWED_LAKE_DB_NAMES = frozenset({"analytics.duckdb", "lake.duckdb"})
 
 
 @dataclass
@@ -106,7 +108,21 @@ def _resolve_db_path(db_path: str | Path) -> Path:
         raise ValueError(f"{raw}: db path must stay under journal/") from exc
     if resolved.exists() and resolved.is_dir():
         raise ValueError(f"{raw}: db path must be a file")
+    if not _is_allowed_lake_db(resolved.name):
+        allowed = ", ".join(sorted(_ALLOWED_LAKE_DB_NAMES))
+        raise ValueError(
+            f"{raw}: coaching lake must use a dedicated db filename ({allowed}), not {resolved.name!r}"
+        )
     return resolved
+
+
+def _is_allowed_lake_db(name: str) -> bool:
+    if name in _ALLOWED_LAKE_DB_NAMES:
+        return True
+    # Atomic rebuild scratch file: .{allowed_name}.build under journal/
+    if name.startswith(".") and name.endswith(".build"):
+        return name[1 : -len(".build")] in _ALLOWED_LAKE_DB_NAMES
+    return False
 
 
 def _create_schema(con) -> None:  # noqa: ANN001
@@ -155,13 +171,19 @@ def _create_schema(con) -> None:  # noqa: ANN001
 def _iter_setup_items(snapshot: Any):
     """Yield (key, value) from a setup snapshot — tolerant of dict or list-of-pairs shape."""
     if isinstance(snapshot, dict):
-        yield from snapshot.items()
+        for k, v in snapshot.items():
+            if k is not None:
+                yield k, v
     elif isinstance(snapshot, list):
         for item in snapshot:
             if isinstance(item, dict) and "key" in item:
-                yield item.get("key"), item.get("value")
+                k = item.get("key")
+                if k is not None:
+                    yield k, item.get("value")
             elif isinstance(item, (list, tuple)) and len(item) == 2:
-                yield item[0], item[1]
+                k = item[0]
+                if k is not None:
+                    yield k, item[1]
 
 
 def _lap_row(rec: dict, path: Path) -> tuple:
@@ -264,8 +286,11 @@ def build_lake(
 ) -> LakeSummary:
     """Rebuild the DuckDB lake from the per-lap JSON corpus under ``lap_dir`` (idempotent)."""
     resolved_db = _resolve_db_path(db_path)
+    build_tmp = resolved_db.parent / f".{resolved_db.name}.build"
+    if build_tmp.exists():
+        build_tmp.unlink()
     summary = LakeSummary(db_path=str(resolved_db))
-    con = _connect(resolved_db)
+    con = _connect(build_tmp)
     sample_cols = list(TRACE_FIELDS) + list(_SAMPLE_KEYS)
     staging_ctx: Any = (
         _SamplesCsvStaging(resolved_db.parent, sample_cols)
@@ -357,7 +382,14 @@ def build_lake(
             con.execute("ROLLBACK")
         except Exception:
             pass
+        if build_tmp.exists():
+            try:
+                build_tmp.unlink()
+            except OSError:
+                pass
         raise
+    else:
+        os.replace(build_tmp, resolved_db)
     finally:
         con.close()
     return summary
