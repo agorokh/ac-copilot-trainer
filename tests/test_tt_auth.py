@@ -296,6 +296,17 @@ def test_extract_refresh_token_ignores_3segment_jws() -> None:
     assert extract_refresh_token_from_text(jws, app_client_id="x") is None
 
 
+def test_extract_refresh_token_same_run_marker_and_value() -> None:
+    # When LevelDB stores the key and its JWE value in ONE token-run (no separating control
+    # byte), the value must still be selected AFTER the marker, and a longer *incidental* JWE
+    # before the marker must not win. Regression for the run-vs-JWE offset selection bug.
+    client = "client9"
+    real = "RRRRRRRR.rrrrrr.rrrrrr.rrrrrr.rrrrrr"
+    incidental = "I" * 40 + ".iiiiiiiiii.iiiiiiiiii.iiiiiiiiii.iiiiiiiiii"  # longer than real
+    text = f"{incidental} CognitoIdentityServiceProvider.{client}.uid7.refreshToken.{real}"
+    assert extract_refresh_token_from_text(text, app_client_id=client) == real
+
+
 def test_is_token_expired_skew_boundary() -> None:
     token = _make_jws({"exp": 1_000_000})
     near = datetime.fromtimestamp(1_000_000 - 30, tz=UTC)  # 30s before expiry, inside 60s skew

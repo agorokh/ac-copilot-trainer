@@ -18,7 +18,6 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -44,16 +43,14 @@ def sanitize_segment(value: Any, *, fallback: str = "unknown") -> str:
     return text[:128]
 
 
-def lake_root(base: Path | str | None = None, *, env: Mapping[str, str] | None = None) -> Path:
-    """Resolve the Track Titan lake root (``<base>/journal/tt``).
+def lake_root(base: Path | str | None = None) -> Path:
+    """Resolve the Track Titan lake root (``<base>/journal/tt``; default ``base``: cwd).
 
-    ``TT_LAKE_DIR`` overrides the location wholesale; otherwise the lake lives under
-    ``journal/`` at ``base`` (default: cwd), matching the coaching-lake convention.
+    Retention ALWAYS nests under ``journal/tt`` of the given base, matching the
+    coaching-lake convention that application writes stay inside ``journal/``. There is
+    deliberately no env override that could redirect the write root to an arbitrary
+    filesystem location — the operator chooses the base explicitly via ``--lake-base``.
     """
-    e = os.environ if env is None else env
-    override = e.get("TT_LAKE_DIR")
-    if override:
-        return Path(override)
     root = Path(base) if base is not None else Path.cwd()
     return root / "journal" / LAKE_SUBDIR
 

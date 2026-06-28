@@ -46,17 +46,19 @@ def test_sanitize_segment_length_cap() -> None:
 
 
 def test_lake_root_default(tmp_path) -> None:
-    root = lake_root(tmp_path, env={})
+    root = lake_root(tmp_path)
     assert root == tmp_path / "journal" / "tt"
 
 
-def test_lake_root_env_override(tmp_path) -> None:
-    override = tmp_path / "custom"
-    assert lake_root(tmp_path, env={"TT_LAKE_DIR": str(override)}) == override
+def test_lake_root_ignores_env_override(tmp_path, monkeypatch) -> None:
+    # Security: no env var may redirect the write root to an arbitrary location; retention
+    # always nests under <base>/journal/tt (the operator chooses the base via --lake-base).
+    monkeypatch.setenv("TT_LAKE_DIR", "/etc/somewhere-bad")
+    assert lake_root(tmp_path) == tmp_path / "journal" / "tt"
 
 
 def test_session_lake_dir_structure(tmp_path) -> None:
-    root = lake_root(tmp_path, env={})
+    root = lake_root(tmp_path)
     d = session_lake_dir(
         root, game="assettoCorsa", car="syn_mercedes_w09", track="spa", session_key="sess-1"
     )
@@ -64,7 +66,7 @@ def test_session_lake_dir_structure(tmp_path) -> None:
 
 
 def test_session_lake_dir_sanitizes_missing(tmp_path) -> None:
-    root = lake_root(tmp_path, env={})
+    root = lake_root(tmp_path)
     d = session_lake_dir(root, game=None, car=None, track=None, session_key=None)
     assert d.parts[-4:] == ("unknown_game", "unknown_car", "unknown_track", "unknown_session")
 

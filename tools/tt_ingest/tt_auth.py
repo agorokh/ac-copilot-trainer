@@ -85,12 +85,12 @@ def _jwe_in_run(run: str) -> str | None:
     return None
 
 
-def _iter_jwes(text: str) -> Iterator[tuple[int, str]]:
-    """Yield ``(start_offset, jwe)`` for every 5-segment JWE in ``text`` (linear scan)."""
+def _iter_jwes(text: str) -> Iterator[str]:
+    """Yield each token-run's first 5-segment JWE in ``text`` (one linear pass)."""
     for run in _TOKEN_RUN_RE.finditer(text):
         jwe = _jwe_in_run(run.group(0))
         if jwe is not None:
-            yield run.start(), jwe
+            yield jwe
 
 
 class TTAuthError(RuntimeError):
@@ -223,18 +223,19 @@ def extract_refresh_token_from_text(text: str, *, app_client_id: str) -> str | N
     """
     key_re = re.compile(_REFRESH_TOKEN_KEY_RE_TEMPLATE.format(client=re.escape(app_client_id)))
     marker = key_re.search(text)
-    # One linear pass collects every JWE with its offset (no backtracking on a multi-MB blob).
-    candidates = list(_iter_jwes(text))
     if marker is not None:
-        after = marker.end()
-        for offset, jwe in candidates:
-            if offset >= after:
-                return jwe
+        # The value follows the key, so scan only the SUFFIX after the marker and take its
+        # first JWE. Slicing at marker.end() also guarantees the key word "refreshToken"
+        # can never be mistaken for a JWE first-segment — even when LevelDB stores the key
+        # and value in one ``[A-Za-z0-9_.-]+`` run with no separating control byte.
+        for jwe in _iter_jwes(text[marker.end() :]):
+            return jwe
+    # Fallback (marker absent — e.g. LevelDB compaction reordered key/value): the refresh
+    # token is the only 5-segment JWE on disk; prefer the longest incidental match.
+    candidates = list(_iter_jwes(text))
     if not candidates:
         return None
-    # Fallback: the refresh token is the only 5-segment JWE on disk; prefer the longest
-    # (the real ~1778-char JWE dwarfs any incidental match).
-    return max((jwe for _, jwe in candidates), key=len)
+    return max(candidates, key=len)
 
 
 def extract_uid_from_text(text: str, *, app_client_id: str) -> str | None:
