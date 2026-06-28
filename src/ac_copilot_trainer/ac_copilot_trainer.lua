@@ -2271,6 +2271,13 @@ function script.update(dt)
       temps = tires:currentTemps(car),
       wsBridge = wsBridge,
     })
+    telemetryPublisher.publishTelemetryTickIfDue({
+      dt = dt,
+      car = car,
+      wsBridge = wsBridge,
+      lat_g = 0,
+      long_g = 0,
+    })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.
   -- The takeCornerAdvisory API returns the cached text for a label without

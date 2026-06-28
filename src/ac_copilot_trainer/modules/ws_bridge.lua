@@ -1,5 +1,7 @@
 -- Optional WebSocket to Python AI sidecar (issue #9 Part B, #45 protocol + inbound).
 -- Safe no-op if CSP `web.socket` unavailable or socket has no receive API.
+-- M0 (#341): client→server ``telemetry_tick`` (spline + lap) is emitted by ``telemetry_publisher.lua``
+-- via ``wsBridge.sendJson`` from ``ac_copilot_trainer.lua`` script.update.
 
 local M = {}
 

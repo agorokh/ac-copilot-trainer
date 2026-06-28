@@ -16,6 +16,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import os
 import secrets
 import time
 from collections.abc import Callable
@@ -65,6 +66,7 @@ from tools.ai_sidecar.external_protocol import (
     make_coaching_cue,
     make_error,
     make_hello_ack,
+    topics_are_sidecar_only,
     validate_inbound,
 )
 from tools.ai_sidecar.protocol import (
@@ -75,6 +77,9 @@ from tools.ai_sidecar.protocol import (
     build_brain_followup,
     build_ollama_followup,
     prepare_outbound_message,
+)
+from tools.ai_sidecar.realtime_observer import (
+    RealtimeObserver,
 )
 from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
@@ -102,6 +107,16 @@ _external_peers: set[Any] = set()
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _external_peer_classes: dict[Any, str] = {}
+# M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
+# (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
+# advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
+_observer: RealtimeObserver | None = None
+# The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
+# producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
+# producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
+# detection and silently mis-grade corners). Released when the owner disconnects.
+_observer_feed_peer: Any = None
+_observer_feed_warned = False
 
 # Issue #341 — live voice wiring. Both are OPTIONAL and OFF by default: a sidecar with neither set
 # behaves byte-identically to before. ``_observer`` turns the live ``telemetry_tick`` stream into
@@ -478,6 +493,20 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     await _broadcast_targets(frame, targets=targets)
 
 
+def _release_observer_feed(websocket: Any) -> None:
+    """Release the observer feed + reset stream state when the owning producer disconnects.
+
+    Lets the next producer claim the feed and start from a clean per-corner/wrap state (the observer
+    assumes one monotonic stream). No-op for any peer that did not own the feed.
+    """
+    global _observer_feed_peer, _observer_feed_warned
+    if websocket is _observer_feed_peer:
+        _observer_feed_peer = None
+        _observer_feed_warned = False
+        if _observer is not None:
+            _observer.reset()
+
+
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
     """Forward a v1 frame to an explicit peer list."""
     if not targets:
@@ -599,9 +628,27 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     topic
     frame so any ``voice``-class WS client can consume it. The observer/coach never raise into the
     live loop — a fault here must not stall telemetry or haptics.
+
+    Single-producer guarded: only the peer that first fed the observer (``exclude`` is the producer
+    websocket) may continue to; a second concurrent producer is ignored here.
     """
+    global _observer_feed_peer, _observer_feed_warned
     observer = _observer
     if observer is None:
+        return
+    if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
+        return
+    if _observer_feed_peer is None:
+        _observer_feed_peer = exclude
+        _observer_feed_warned = False
+    elif exclude is not _observer_feed_peer:
+        if not _observer_feed_warned:
+            logger.warning(
+                "ignoring observer feed from a second telemetry producer peer=%s; the live "
+                "observer is single-stream and already owned by another producer",
+                getattr(exclude, "remote_address", None),
+            )
+            _observer_feed_warned = True
         return
     try:
         advisories = observer.observe(frame)
@@ -623,7 +670,9 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
             if cue_payload is None:
                 continue
             cue = make_coaching_cue(cue_payload, ts_sim=ts_sim)
-            await _broadcast_external(cue, exclude=exclude)
+            cue_task = asyncio.create_task(_broadcast_external(cue, exclude=exclude))
+            _background_tasks.add(cue_task)
+            cue_task.add_done_callback(_background_tasks.discard)
         except Exception:
             logger.exception("voice: failed to publish coaching cue for advisory")
 
@@ -916,6 +965,16 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             max_hz=HAPTIC_EVENT_MAX_HZ,
         )
         return
+    if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE) and topics_are_sidecar_only(
+        data.get("topics")
+    ):
+        logger.info(
+            "sidecar-produced %s accepted without loopback peer=%s topics=%s",
+            t,
+            peer,
+            data.get("topics"),
+        )
+        return
     if (
         t in CLIENT_TO_SERVER_TYPES
         and t != TYPE_HELLO
@@ -1102,6 +1161,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     finally:
         _external_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
+        _release_observer_feed(websocket)
         for t in list(pending_followups):
             if not t.done():
                 t.cancel()
@@ -1284,7 +1344,8 @@ def main() -> None:
         help=(
             "Issue #341: path to a faster reference-lap archive JSON. When set, the sidecar feeds "
             "live telemetry_tick frames to a RealtimeObserver built from it and publishes "
-            "per-corner advisories on the `coaching.cue` topic."
+            "per-corner advisories on the `coaching.cue` topic. "
+            "Falls back to $AC_COPILOT_REFERENCE_ARCHIVE."
         ),
     )
     p.add_argument(
@@ -1330,7 +1391,8 @@ def main() -> None:
     if not _is_loopback(host) and not args.token:
         raise SystemExit("--token is required for non-loopback bind addresses")
 
-    _wire_voice(args.voice_reference, args.voice_bank)
+    ref_path = args.voice_reference or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
+    _wire_voice(ref_path, args.voice_bank)
 
     try:
         asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))

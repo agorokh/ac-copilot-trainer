@@ -377,6 +377,37 @@ def test_external_peer_non_object_payload_returns_external_error() -> None:
     assert "root must be a JSON object" in err["message"]
 
 
+def test_coaching_cue_subscribe_ok_without_loopback_lua_peer() -> None:
+    async def _run() -> None:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "voice-client",
+                            "client_class": ep.CLIENT_CLASS_VOICE,
+                        }
+                    )
+                )
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "state.subscribe",
+                            "topics": [ep.TOPIC_COACHING_CUE],
+                        }
+                    )
+                )
+                # Sidecar-only subscribe is a silent no-op: no ack and no error frame.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+    asyncio.run(_run())
+
+
 def test_external_request_errors_when_no_loopback_lua_peer() -> None:
     async def _run() -> dict:
         async with _running_sidecar() as port:

@@ -28,6 +28,10 @@ function make_ws()
       calls[#calls + 1] = { topic = topic, payload = payload }
       return true
     end,
+    sendJson = function(payload)
+      calls[#calls + 1] = { send = payload }
+      return true
+    end,
   }
 end
 function make_ws_closed()
@@ -36,6 +40,10 @@ function make_ws_closed()
     _calls = calls,
     publishTopic = function(topic, payload)
       calls[#calls + 1] = { topic = topic, payload = payload }
+      return false
+    end,
+    sendJson = function(payload)
+      calls[#calls + 1] = { send = payload }
       return false
     end,
   }
@@ -313,6 +321,59 @@ def test_producers_return_false_without_wsbridge():
     assert out["d"] is False
     assert out["t"] is False
     assert out["bad"] is False
+
+
+def test_telemetry_tick_rate_limited_to_20hz():
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+          }
+          local r1 = M.publishTelemetryTickIfDue({ dt = 0.02, car = car, wsBridge = ws })
+          local r2 = M.publishTelemetryTickIfDue({ dt = 0.04, car = car, wsBridge = ws })
+          local sent = ws._calls[1] and ws._calls[1].send
+          return {
+            r1 = r1, r2 = r2, n = #ws._calls,
+            typ = sent and sent.type,
+            spline = sent and sent.payload and sent.payload.spline,
+            lap = sent and sent.payload and sent.payload.lap,
+          }
+        end)()
+        """
+    )
+    assert out["r1"] is False
+    assert out["r2"] is True
+    assert out["n"] == 1
+    assert out["typ"] == "telemetry_tick"
+    assert out["spline"] == 0.42
+    assert out["lap"] == 2
+
+
+def test_telemetry_tick_seq_resets_on_module_reset():
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = { speedKmh = 1, rpm = 1, splinePosition = 0.1, lapCount = 0 }
+          for _ = 1, 3 do
+            M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          end
+          local seqBefore = ws._calls[#ws._calls].send.seq
+          M.reset()
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          return { before = seqBefore, after = ws._calls[#ws._calls].send.seq }
+        end)()
+        """
+    )
+    assert out["before"] == 3
+    assert out["after"] == 1
 
 
 # --------------------------------------------------------------------------- tire_monitor accessor

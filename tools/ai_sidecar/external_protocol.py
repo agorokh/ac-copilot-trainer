@@ -148,6 +148,9 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 #: Lua `publishTopic` drift-guard does not cover it — it is listed here so a `voice`-class client
 #: can legitimately subscribe.
 TOPIC_COACHING_CUE = "coaching.cue"
+# Topics the sidecar produces directly (no loopback Lua relay). Voice/offline clients may
+# state.subscribe to these without a Lua peer connected.
+SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset({TOPIC_COACHING_CUE})
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
         # Declared topics (EPIC #154 Part D wires producers for these).
@@ -169,6 +172,13 @@ AUTH_HEADER = "X-AC-Copilot-Token"
 CLIENT_HEADER = "X-AC-Copilot-Client"
 
 
+def topics_are_sidecar_only(topics: Any) -> bool:
+    """True when every topic in ``topics`` is sidecar-produced (no Lua relay needed)."""
+    if not isinstance(topics, list) or not topics:
+        return False
+    return all(isinstance(t, str) and t in SIDECAR_PRODUCED_TOPICS for t in topics)
+
+
 def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
@@ -176,6 +186,26 @@ def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
         "server_version": server_version,
         "capabilities": list(SERVER_CAPABILITIES),
     }
+
+
+def make_telemetry_tick(payload: dict[str, Any], *, seq: int | None = None) -> dict[str, Any]:
+    """Client->server high-rate telemetry frame (M0, #341).
+
+    The producer side of the live coaching loop. ``_validate_telemetry_tick`` is the single source
+    of truth for the payload contract: ``speed_kmh``, ``rpm``, ``throttle``, ``brake``, ``steer``,
+    ``gear``, ``lat_g`` and ``long_g`` are all REQUIRED (a payload omitting any is rejected by
+    :func:`validate_inbound` and dropped by the server); ``spline`` (0..1) and ``lap`` are OPTIONAL
+    (``spline`` is what lets the observer locate corners). Built here so the offline replay source
+    and any live shared-memory source emit a byte-identical, validator-accepted contract.
+    """
+    frame: dict[str, Any] = {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_TELEMETRY_TICK,
+        "payload": payload,
+    }
+    if seq is not None:
+        frame["seq"] = seq
+    return frame
 
 
 def make_coaching_cue(payload: dict[str, Any], *, ts_sim: float | None = None) -> dict[str, Any]:
@@ -297,6 +327,15 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     err = _validate_optional_number(payload, "slip")
     if err is not None:
         return err
+    # M0 (#341): the live RealtimeObserver needs track position (spline 0..1); the lap counter
+    # disambiguates a true start/finish wrap from a pit/teleport. Both optional + back-compatible.
+    err = _validate_optional_number(payload, "spline", min_value=0, max_value=1)
+    if err is not None:
+        return err
+    for lap_key in ("lap", "lap_count", "completed_laps"):
+        err = _validate_optional_number(payload, lap_key, min_value=0)
+        if err is not None:
+            return err
     for key in ("tyre_temps_c", "tyre_pressures_psi"):
         err = _validate_corner_number_map(payload, key)
         if err is not None:

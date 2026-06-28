@@ -112,7 +112,7 @@ def _normalize_frame(
     spline = _num(pick("spline", "normalizedSplinePosition"))
     speed = _num(pick("speed", "speed_kmh"))
     brake = _num(pick("brake")) or 0.0
-    lap = _num(pick("lap", "lapCount", "lap_count", "completedLaps"))
+    lap = _num(pick("lap", "lapCount", "lap_count", "completedLaps", "completed_laps"))
     return spline, speed, brake, lap
 
 
