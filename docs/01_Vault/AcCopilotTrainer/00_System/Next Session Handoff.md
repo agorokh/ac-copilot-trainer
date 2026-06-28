@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-06-28T15:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
@@ -43,7 +44,16 @@ relates_to:
 
 # Next session handoff
 
-## Resume here
+## Resume here (2026-06-28) — PR #348 resolve-pr in progress; #345 P0 capture next
+
+**PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348)** (`feat/345-coaching-lake-duckdb`) delivers the EPIC #344 "query the whole data plane"
+engine: `tools/coaching_lake` — embedded **DuckDB** star (laps/corners/setup_params/samples)
+rebuilt idempotently from the immutable lap-archive JSON. Bot review addressed (Gemini + Qodo):
+`math.isfinite`, journal-scoped temp CSV, atomic transaction through samples COPY, explicit ROLLBACK.
+`make ci-fast` green locally; merge `main` to clear conflicts and unstick CI checks.
+Detail: [[coaching-lakehouse-duckdb-2026-06-28]].
+
+**Next after #348 merge:** **#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
 
 **[#350](https://github.com/agorokh/ac-copilot-trainer/issues/350) — voice coach LIVE-FIRE (rig-gated).** The
 off-sim engine (#340) and the sidecar live-wiring (#341, PR #349) are merged; what remains is a **Lua
@@ -70,6 +80,7 @@ tests incl. an end-to-end `telemetry_tick → voice-client coaching.cue` round-t
 green locally on the merged head. **Reconciliation:** #341 closed COMPLETED but 2 ACs (Lua spline emit;
 rig smoke) were unmet → filed **#350** for the live producer + on-rig audible verification so the work isn't
 lost (cross-linked on #341). **Post-merge:** no classification flags.
+
 
 ---
 
