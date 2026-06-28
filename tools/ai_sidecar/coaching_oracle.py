@@ -134,6 +134,23 @@ def _coerce_lines(value: object) -> list[str]:
     return out
 
 
+def _extract_debrief(lines: list[str]) -> str | None:
+    """Find a post-lap debrief bounded to a 2-line window (marker line + its wrap), so the greedy
+    ``.*`` captures the debrief — not trailing HUD text from a full-screen fallback."""
+    # Anchor on the line that actually contains the marker, then include its wrap line.
+    for i, ln in enumerate(lines):
+        if _DEBRIEF_RE.search(ln):
+            m = _DEBRIEF_RE.search(" ".join(lines[i : i + 2]))
+            if m:
+                return m.group(1).strip()
+    # Fallback: the marker is split across two OCR lines.
+    for i in range(len(lines) - 1):
+        m = _DEBRIEF_RE.search(" ".join(lines[i : i + 2]))
+        if m:
+            return m.group(1).strip()
+    return None
+
+
 def parse_overlay_text(
     full_lines: list[str],
     debrief_lines: list[str] | None = None,
@@ -148,7 +165,6 @@ def parse_overlay_text(
     """
     debrief_lines = debrief_lines or []
     full_join = " ".join(full_lines)
-    debrief_join = " ".join(debrief_lines)
 
     delta: float | None = None
     for m in _DELTA_RE.finditer(full_join):
@@ -161,8 +177,8 @@ def parse_overlay_text(
     comp_m = _COMPOUND_RE.search(full_join)
     tyre_compound = comp_m.group(1) if comp_m else None
 
-    debrief_m = _DEBRIEF_RE.search(debrief_join) or _DEBRIEF_RE.search(full_join)
-    debrief_text = debrief_m.group(1).strip() if debrief_m else None
+    # Prefer the clean upscaled crop; fall back to full screen (both bounded to a 2-line window).
+    debrief_text = _extract_debrief(debrief_lines) or _extract_debrief(full_lines)
 
     # Focus areas are only meaningful inside an actual debrief — derive them from the debrief text,
     # not the whole overlay, so a live HUD label (e.g. "BRAKE"/"THROTTLE") never mints advice.

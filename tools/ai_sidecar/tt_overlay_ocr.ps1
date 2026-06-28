@@ -65,6 +65,9 @@ try {
     # Return a FLAT string[] via a List (no unary-comma idiom — the caller wraps with @()).
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($ln in $r.Lines) { $lines.Add([string]$ln.Text) }
+    # Release the bitmap + file stream so the outer finally can delete the capture (Windows file lock).
+    try { $sb.Dispose() } catch {}
+    try { $st.Dispose() } catch {}
     $lines.ToArray()
   }
   # Independent per-image OCR: if the large full-screen frame fails, the debrief crop can still succeed.

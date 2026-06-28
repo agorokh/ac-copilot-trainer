@@ -122,6 +122,28 @@ def test_advisories_gated_on_debrief_not_live_hud_labels():
     assert snap.advisories == []
 
 
+def test_debrief_match_is_bounded_not_greedy_over_full_screen():
+    # Full-screen fallback must bound the debrief to its ~2 lines, not swallow trailing HUD text.
+    full = [
+        "Post-lap debrief (lap 2, 95.1 s). Focus areas: brake earlier into T1",
+        "and carry more apex speed.",
+        "Comp: H",
+        "OIL TMP 99",
+        "EST. LAP -",
+    ]
+    snap = parse_overlay_text(full)
+    assert snap.debrief_text is not None
+    assert "apex speed" in snap.debrief_text
+    assert "OIL TMP" not in snap.debrief_text  # trailing HUD not swallowed
+
+
+def test_extract_debrief_split_marker_fallback():
+    # Marker split across two OCR lines -> the fallback 2-line window still finds it.
+    snap = parse_overlay_text(["post-lap", "debrief: brake earlier"])
+    assert snap.debrief_text is not None
+    assert "debrief" in snap.debrief_text.lower()
+
+
 def test_bare_debrief_word_is_not_a_real_debrief():
     # Only a genuine "post-lap/st-lap debrief" marker counts — a stray "debrief" token does not.
     snap = parse_overlay_text(["some debrief blurb", "THROTTLE", "BRAKE"])
