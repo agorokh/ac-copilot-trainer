@@ -71,6 +71,8 @@ class LakeSummary:
 
 
 def _num(v: Any) -> float | None:
+    if isinstance(v, bool) or v is None:
+        return None
     try:
         f = float(v)
     except (TypeError, ValueError):
@@ -178,36 +180,43 @@ def _lap_row(rec: dict, path: Path) -> tuple:
     )
 
 
-def _bulk_load_samples(con, sample_cols: list[str], rows: list[list], *, staging_dir: Path) -> int:  # noqa: ANN001
-    """Vectorized bulk-load of the per-sample rows via a temp CSV + DuckDB COPY.
+class _SamplesCsvStaging:
+    """Append-only staging CSV for vectorized DuckDB COPY (one lap batch at a time)."""
 
-    DuckDB's row-by-row ``executemany`` is pathologically slow for hundreds of thousands of rows;
-    its CSV reader is vectorized. We write the rows to a temp CSV (NULL = empty cell) and COPY.
-    Staging files live beside the DuckDB file (``journal/``), not the OS temp dir.
-    """
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".csv",
-        delete=False,
-        newline="",
-        encoding="utf-8",
-        dir=staging_dir,
-        prefix=".coaching_lake_samples_",
-    )
-    try:
-        with tmp:
-            writer = csv.writer(tmp)
-            writer.writerow(sample_cols)
-            for r in rows:
-                writer.writerow(["" if v is None else v for v in r])
-        con.execute("COPY samples FROM ? (FORMAT CSV, HEADER true, NULLSTR '')", [tmp.name])
-        return len(rows)
-    finally:
+    def __init__(self, staging_dir: Path, sample_cols: list[str]) -> None:
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        self._tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".csv",
+            delete=False,
+            newline="",
+            encoding="utf-8",
+            dir=staging_dir,
+            prefix=".coaching_lake_samples_",
+        )
+        self._writer = csv.writer(self._tmp)
+        self._writer.writerow(sample_cols)
+        self._path = self._tmp.name
+        self.count = 0
+
+    def write_rows(self, rows: list[list]) -> None:
+        for r in rows:
+            self._writer.writerow(["" if v is None else v for v in r])
+            self.count += 1
+
+    def copy_into(self, con) -> int:  # noqa: ANN001
+        self._tmp.close()
         try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+            if self.count:
+                con.execute(
+                    "COPY samples FROM ? (FORMAT CSV, HEADER true, NULLSTR '')", [self._path]
+                )
+            return self.count
+        finally:
+            try:
+                os.unlink(self._path)
+            except OSError:
+                pass
 
 
 def build_lake(
@@ -222,9 +231,9 @@ def build_lake(
     try:
         _create_schema(con)
         sample_cols = list(TRACE_FIELDS) + list(_SAMPLE_KEYS)
-        all_sample_rows: list[
-            list
-        ] = []  # bulk-loaded via COPY at the end (DuckDB hates row-by-row)
+        samples_staging = (
+            _SamplesCsvStaging(Path(db_path).parent, sample_cols) if include_samples else None
+        )
         con.execute("BEGIN TRANSACTION")
         for path in iter_lap_archive_paths([lap_dir]):
             try:
@@ -264,6 +273,7 @@ def build_lake(
                 summary.corners += 1
             setup = rec.get("setup") or {}
             for k, v in _iter_setup_items(setup.get("snapshot")):
+                num_v = _num(v)
                 con.execute(
                     "INSERT INTO setup_params VALUES (?,?,?,?,?,?,?)",
                     (
@@ -272,12 +282,12 @@ def build_lake(
                         car,
                         track,
                         str(k),
-                        _num(v),
-                        None if _num(v) is not None else (str(v) if v is not None else None),
+                        num_v,
+                        None if num_v is not None else (str(v) if v is not None else None),
                     ),
                 )
                 summary.setup_params += 1
-            if include_samples:
+            if samples_staging is not None:
                 trace = rec.get("trace") or {}
                 fields = trace.get("fields") or []
                 idx = {name: i for i, name in enumerate(fields)}
@@ -291,11 +301,10 @@ def build_lake(
                     ]
                     vals += [lap_uuid, car, track, si]
                     rows.append(vals)
-                all_sample_rows.extend(rows)
-        if all_sample_rows:
-            summary.samples = _bulk_load_samples(
-                con, sample_cols, all_sample_rows, staging_dir=Path(db_path).parent
-            )
+                if rows:
+                    samples_staging.write_rows(rows)
+        if samples_staging is not None and samples_staging.count:
+            summary.samples = samples_staging.copy_into(con)
         con.execute("COMMIT")
         summary.valid_laps = con.execute("SELECT count(*) FROM laps WHERE is_valid").fetchone()[0]
         summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]

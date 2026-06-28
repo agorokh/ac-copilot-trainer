@@ -112,6 +112,21 @@ def test_corner_speed_report_is_corner_grain(tmp_path):
     assert spa[cols.index("avg_apex_kmh")] is not None
 
 
+def test_setup_bool_stored_as_text_not_numeric(tmp_path):
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    _write(
+        laps,
+        "flag",
+        _archive("flag", "bmw_z4_gt3", "spa", 110000, snapshot={"TC_ACTIVE": True}),
+    )
+    db = tmp_path / "lake.duckdb"
+    build_lake(laps, db)
+    cols, rows = run_query(db, "SELECT value, value_text FROM setup_params WHERE key = 'TC_ACTIVE'")
+    assert rows[0][cols.index("value")] is None
+    assert rows[0][cols.index("value_text")] == "True"
+
+
 def test_setup_params_and_setup_effect_flagship(tmp_path):
     """The headline dependency query: setup param value -> corner apex speed."""
     laps = tmp_path / "laps"
