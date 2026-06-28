@@ -38,9 +38,16 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-310-trail-brake-attribution-handoff.md
   - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
+  - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
 ---
 
 # Next session handoff
+
+## Resume here
+
+**Merge [[pr-338-coaching-hardening-handoff]]** — PR #338 (issue #333 post-merge hardening).
+
+---
 
 ## Delivered (2026-06-28) — PR #343 MERGED: in-the-ear voice coach (#340)
 `/autonomous-deliver 340` shipped the **voice output layer** for the realtime coaching pipeline.
@@ -63,6 +70,8 @@ flagged 2 reliability issues (Bank sha not enforced at load; sounddevice channel
 final on-rig audible verification with the operator at the wheel; v1.1 number-splicing / live-TTS OOV
 fallback; cloud debrief; per-track corner names.
 
+---
+
 ## Delivered (2026-06-28) — #327 CLOSED (no code): vault-automerge already fixed
 `/autonomous-deliver 327` reconciled the stale issue body against live state and **closed
 [#327](https://github.com/agorokh/ac-copilot-trainer/issues/327) COMPLETED with zero code**. Both
@@ -72,6 +81,8 @@ symptoms were already gone: (1) the `guard-and-automerge` / `governance-hub`-not
 defect — every proper `vault/...` PR (#331/#332/#337) is green on both checks. Detail +
 live-evidence table: [[issue-327-vault-automerge-already-resolved-2026-06-28]]. **Lesson:** parallel
 autonomous sessions can file+fix the same root cause under different numbers — reconcile before re-doing.
+
+---
 
 ## Delivered (2026-06-28) — PR #334 MERGED: Track Titan CoachingOracle
 [#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) squash-merged to `main` as

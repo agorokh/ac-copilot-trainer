@@ -25,6 +25,7 @@ advisories are ``cause_class="technique"`` with ``suggested_setup_delta=None``. 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -36,6 +37,12 @@ from typing import Any
 
 from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
 
+logger = logging.getLogger(__name__)
+
+#: Each OCR pass may await up to five WinRT ops; the helper runs two passes sequentially. Keep this
+#: above 2 × 5 × ``tt_overlay_ocr.ps1`` per-op bound + capture overhead (see helper header comment).
+_DEFAULT_HELPER_TIMEOUT_S = 110.0
+
 #: A lap delta / gain-loss reads as a signed 3-decimal number (e.g. ``+0.657``); tyre pressures read
 #: as 1-decimal (``-9.5 psi``). Requiring exactly 3 decimals + a sane magnitude excludes the psi.
 _DELTA_RE = re.compile(r"[+\-]\s?\d+\.\d{3}\b")
@@ -43,7 +50,7 @@ _LAPTIME_RE = re.compile(r"\d{1,2}:\d\d\.\d{3}")  # 1-2 minute digits (keep 10:0
 _COMPOUND_RE = re.compile(r"Comp(?:ound)?:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 #: Require the real TT marker ("post-lap debrief", incl. the common OCR mangling "st-lap") so
 #: ``debrief_text`` is set ONLY for a genuine post-lap debrief — never a stray "debrief" token.
-_DEBRIEF_RE = re.compile(r"((?:post-?lap|st-?lap)\s+debrief.*)", re.IGNORECASE)
+_DEBRIEF_RE = re.compile(r"((?:post\s*-?\s*lap|st\s*-?\s*lap)\s+debrief.*)", re.IGNORECASE)
 _MAX_PLAUSIBLE_DELTA_S = 30.0
 
 #: focus-area keyword -> a normalized technique coaching line (TT phrases vary; we map the salient
@@ -128,7 +135,7 @@ def _coerce_lines(value: object) -> list[str]:
     out: list[str] = []
     for item in value:
         if isinstance(item, list):
-            out.extend(str(s) for s in item)
+            out.extend(str(s) for s in item if s is not None)
         elif item is not None:
             out.append(str(item))
     return out
@@ -213,7 +220,8 @@ def debrief_to_advisories(snap: CoachingSnapshot) -> list[dict[str, Any]]:
     Reuses the :data:`CAUSE_CLASSES` vocabulary. ``suggested_setup_delta`` is ALWAYS ``None`` — TT's
     overlay debrief is driver-technique advice; we never fabricate a setup change from it.
     """
-    assert "technique" in CAUSE_CLASSES  # vocabulary contract with coach_handoff
+    if "technique" not in CAUSE_CLASSES:
+        return []  # vocabulary contract with coach_handoff — never raise through get_coaching()
     if not snap.debrief_text:
         return []  # only a real post-lap debrief yields advice (never stray live-HUD labels)
     advisories: list[dict[str, Any]] = []
@@ -282,7 +290,7 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
         *,
         ps_helper: str | None = None,
         layout: OverlayLayout | None = None,
-        timeout_s: float = 30.0,
+        timeout_s: float = _DEFAULT_HELPER_TIMEOUT_S,
     ) -> None:
         self.ps_helper = ps_helper
         self.layout = layout
@@ -323,9 +331,11 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
                 args, capture_output=True, text=True, timeout=self.timeout_s, check=True
             )
             data = json.loads(proc.stdout)
-        except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+        except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("Track Titan OCR helper failed: %s", exc)
             return None
         if not isinstance(data, dict):
+            logger.warning("Track Titan OCR helper returned non-dict JSON: %r", type(data))
             return None
         try:
             return parse_overlay_text(
@@ -333,5 +343,6 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
                 _coerce_lines(data.get("debrief_lines")),
                 captured_utc=datetime.now(UTC).isoformat(),
             )
-        except (AttributeError, TypeError, ValueError):
+        except (AssertionError, AttributeError, TypeError, ValueError) as exc:
+            logger.warning("Track Titan OCR parse failed: %s", exc)
             return None
