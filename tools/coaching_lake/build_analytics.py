@@ -30,6 +30,7 @@ import csv
 import math
 import os
 import tempfile
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,7 @@ from tools.lap_archive_export import (
 
 # Per-sample columns = identity keys + the canonical trace fields (auto-widens with TRACE_FIELDS).
 _SAMPLE_KEYS = ("lap_uuid", "car_id", "track_id", "sample_index")
+_CSV_NULL = "\\N"
 
 
 @dataclass
@@ -219,24 +221,39 @@ class _SamplesCsvStaging:
         self._path = self._tmp.name
         self.count = 0
 
+    def __enter__(self) -> _SamplesCsvStaging:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._cleanup()
+
     def write_rows(self, rows: list[list]) -> None:
         for r in rows:
-            self._writer.writerow(["" if v is None else v for v in r])
+            self._writer.writerow([_CSV_NULL if v is None else v for v in r])
             self.count += 1
 
     def copy_into(self, con) -> int:  # noqa: ANN001
-        self._tmp.close()
+        if self._tmp and not self._tmp.closed:
+            self._tmp.close()
         try:
             if self.count:
                 con.execute(
-                    "COPY samples FROM ? (FORMAT CSV, HEADER true, NULLSTR '')", [self._path]
+                    f"COPY samples FROM ? (FORMAT CSV, HEADER true, NULLSTR '{_CSV_NULL}')",
+                    [self._path],
                 )
             return self.count
         finally:
+            self._cleanup()
+
+    def _cleanup(self) -> None:
+        if self._tmp and not self._tmp.closed:
+            self._tmp.close()
+        if self._path:
             try:
                 os.unlink(self._path)
             except OSError:
                 pass
+            self._path = ""
 
 
 def build_lake(
@@ -249,87 +266,92 @@ def build_lake(
     resolved_db = _resolve_db_path(db_path)
     summary = LakeSummary(db_path=str(resolved_db))
     con = _connect(resolved_db)
+    sample_cols = list(TRACE_FIELDS) + list(_SAMPLE_KEYS)
+    staging_ctx: Any = (
+        _SamplesCsvStaging(resolved_db.parent, sample_cols)
+        if include_samples
+        else nullcontext(None)
+    )
     try:
-        _create_schema(con)
-        sample_cols = list(TRACE_FIELDS) + list(_SAMPLE_KEYS)
-        samples_staging = (
-            _SamplesCsvStaging(resolved_db.parent, sample_cols) if include_samples else None
-        )
-        con.execute("BEGIN TRANSACTION")
-        for path in iter_lap_archive_paths([lap_dir]):
-            try:
-                rec = load_lap_archive(path)
-            except Exception as exc:  # noqa: BLE001 - one corrupt archive must not abort the build
-                summary.skipped.append(f"{path.name}: {type(exc).__name__}")
-                continue
-            lap_uuid = rec.get("lap_uuid")
-            car = (rec.get("car") or {}).get("id")
-            track = (rec.get("track") or {}).get("id")
-            con.execute(
-                "INSERT INTO laps VALUES (" + ", ".join("?" for _ in range(24)) + ")",
-                _lap_row(rec, path),
-            )
-            summary.laps += 1
-            for ci, c in enumerate(rec.get("corners") or []):
-                if not isinstance(c, dict):
+        with staging_ctx as samples_staging:
+            _create_schema(con)
+            con.execute("BEGIN TRANSACTION")
+            for path in iter_lap_archive_paths([lap_dir]):
+                try:
+                    rec = load_lap_archive(path)
+                except Exception as exc:  # noqa: BLE001 - one corrupt archive must not abort the build
+                    summary.skipped.append(f"{path.name}: {type(exc).__name__}")
                     continue
+                lap_uuid = rec.get("lap_uuid")
+                car = (rec.get("car") or {}).get("id")
+                track = (rec.get("track") or {}).get("id")
                 con.execute(
-                    "INSERT INTO corners VALUES (" + ", ".join("?" for _ in range(13)) + ")",
-                    (
-                        lap_uuid,
-                        car,
-                        track,
-                        ci,
-                        c.get("label"),
-                        _num(c.get("entrySpeed")),
-                        _num(c.get("minSpeed")),
-                        _num(c.get("exitSpeed")),
-                        _num(c.get("brakePointSpline")),
-                        _num(c.get("trailBrakeRatio")),
-                        _num(c.get("throttleAvg")),
-                        _num(c.get("steerReversals")),
-                        _num(c.get("tractionCircleProxy")),
-                    ),
+                    "INSERT INTO laps VALUES (" + ", ".join("?" for _ in range(24)) + ")",
+                    _lap_row(rec, path),
                 )
-                summary.corners += 1
-            setup = rec.get("setup") or {}
-            for k, v in _iter_setup_items(setup.get("snapshot")):
-                num_v = _num(v)
-                con.execute(
-                    "INSERT INTO setup_params VALUES (?,?,?,?,?,?,?)",
-                    (
-                        lap_uuid,
-                        setup.get("hash"),
-                        car,
-                        track,
-                        str(k),
-                        num_v,
-                        None if num_v is not None else (str(v) if v is not None else None),
-                    ),
-                )
-                summary.setup_params += 1
-            if samples_staging is not None:
-                trace = rec.get("trace") or {}
-                fields = trace.get("fields") or []
-                idx = {name: i for i, name in enumerate(fields)}
-                rows = []
-                for si, samp in enumerate(trace.get("samples") or []):
-                    if not isinstance(samp, (list, tuple)):
+                summary.laps += 1
+                for ci, c in enumerate(rec.get("corners") or []):
+                    if not isinstance(c, dict):
                         continue
-                    vals = [
-                        (_num(samp[idx[f]]) if f in idx and idx[f] < len(samp) else None)
-                        for f in TRACE_FIELDS
-                    ]
-                    vals += [lap_uuid, car, track, si]
-                    rows.append(vals)
-                if rows:
-                    samples_staging.write_rows(rows)
-        if samples_staging is not None and samples_staging.count:
-            summary.samples = samples_staging.copy_into(con)
-        con.execute("COMMIT")
-        summary.valid_laps = con.execute("SELECT count(*) FROM laps WHERE is_valid").fetchone()[0]
-        summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]
-        summary.tracks = con.execute("SELECT count(DISTINCT track_id) FROM laps").fetchone()[0]
+                    con.execute(
+                        "INSERT INTO corners VALUES (" + ", ".join("?" for _ in range(13)) + ")",
+                        (
+                            lap_uuid,
+                            car,
+                            track,
+                            ci,
+                            c.get("label"),
+                            _num(c.get("entrySpeed")),
+                            _num(c.get("minSpeed")),
+                            _num(c.get("exitSpeed")),
+                            _num(c.get("brakePointSpline")),
+                            _num(c.get("trailBrakeRatio")),
+                            _num(c.get("throttleAvg")),
+                            _num(c.get("steerReversals")),
+                            _num(c.get("tractionCircleProxy")),
+                        ),
+                    )
+                    summary.corners += 1
+                setup = rec.get("setup") or {}
+                for k, v in _iter_setup_items(setup.get("snapshot")):
+                    num_v = _num(v)
+                    con.execute(
+                        "INSERT INTO setup_params VALUES (?,?,?,?,?,?,?)",
+                        (
+                            lap_uuid,
+                            setup.get("hash"),
+                            car,
+                            track,
+                            str(k),
+                            num_v,
+                            None if num_v is not None else (str(v) if v is not None else None),
+                        ),
+                    )
+                    summary.setup_params += 1
+                if samples_staging is not None:
+                    trace = rec.get("trace") or {}
+                    fields = trace.get("fields") or []
+                    idx = {name: i for i, name in enumerate(fields)}
+                    rows = []
+                    for si, samp in enumerate(trace.get("samples") or []):
+                        if not isinstance(samp, (list, tuple)):
+                            continue
+                        vals = [
+                            (_num(samp[idx[f]]) if f in idx and idx[f] < len(samp) else None)
+                            for f in TRACE_FIELDS
+                        ]
+                        vals += [lap_uuid, car, track, si]
+                        rows.append(vals)
+                    if rows:
+                        samples_staging.write_rows(rows)
+            if samples_staging is not None:
+                summary.samples = samples_staging.copy_into(con)
+            con.execute("COMMIT")
+            summary.valid_laps = con.execute("SELECT count(*) FROM laps WHERE is_valid").fetchone()[
+                0
+            ]
+            summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]
+            summary.tracks = con.execute("SELECT count(DISTINCT track_id) FROM laps").fetchone()[0]
     except Exception:
         try:
             con.execute("ROLLBACK")

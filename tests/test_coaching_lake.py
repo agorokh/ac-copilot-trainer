@@ -198,3 +198,28 @@ def test_db_path_outside_journal_rejected(lake_cwd):
     _write(laps, "a", _archive("a", "bmw_z4_gt3", "spa", 110000))
     with pytest.raises(ValueError, match="journal/"):
         build_lake(laps, "lake.duckdb")
+
+
+def test_zero_sample_build_cleans_staging_csv(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    rec = _archive("a", "bmw_z4_gt3", "spa", 110000, n_samples=0)
+    rec["trace"]["samples"] = []
+    _write(laps, "a", rec)
+    db = _db_path()
+    summary = build_lake(laps, db)
+    assert summary.samples == 0
+    leaked = list((lake_cwd / "journal").glob(".coaching_lake_samples_*"))
+    assert not leaked
+
+
+def test_build_without_samples_skips_staging(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _archive("a", "bmw_z4_gt3", "spa", 110000))
+    db = _db_path()
+    summary = build_lake(laps, db, include_samples=False)
+    assert summary.samples == 0
+    assert summary.laps == 1
+    cols, rows = run_query(db, "SELECT count(*) FROM samples")
+    assert rows[0][0] == 0
