@@ -52,6 +52,15 @@ coaching = [
     "scikit-learn>=1.8.0",
     "shap>=0.51.0",
 ]
+# Issue #340: in-the-ear voice coach. Heavy audio deps are lazy-imported ONLY inside
+# tools/ai_sidecar/voice/playback.py (and optionally bake.py) — the stdlib sidecar core and the
+# resolver/scheduler/manifest logic stay dep-free, so `make ci-fast` runs without audio hardware.
+# Install on the rig (Windows) to render/play the phrase bank: pip install -e ".[voice]".
+voice = [
+    "numpy>=2.4.4",
+    "sounddevice>=0.5.1",
+    "rtmixer>=0.1.7",
+]
 # Tier 3 Phase 2+ (#26): not installed in CI; see tools/model_training/train.py
 training = [
   "torch>=2.11.0",

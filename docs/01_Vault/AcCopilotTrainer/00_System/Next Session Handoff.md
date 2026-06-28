@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T06:00:00Z
+last_updated: 2026-06-28T07:10:00Z
 relates_to:
+  - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27.md
@@ -45,6 +46,29 @@ relates_to:
 ## Resume here
 
 **Merge [[pr-338-coaching-hardening-handoff]]** — PR #338 (issue #333 post-merge hardening).
+
+---
+
+## Delivered (2026-06-28) — PR #343 MERGED: in-the-ear voice coach (#340)
+`/autonomous-deliver 340` shipped the **voice output layer** for the realtime coaching pipeline.
+[#343](https://github.com/agorokh/ac-copilot-trainer/pull/343) (issue #340) squash-merged to `main` as
+`f50719c`; **#340 CLOSED**. New `tools/ai_sidecar/voice/` module speaks the *same* `Advisory` stream the
+text HUD renders (`realtime_observer.py`), via a **pre-rendered phrase bank** (not live TTS) + an
+**urgency scheduler** (act>prepare>info; barge-in, per-pass dedup, TTL drop, per-kind cooldown):
+`vocabulary` (bounded, content-addressed) · `manifest` (the only advisory→audio map; sha256-enforced at
+load) · `resolver` · `scheduler` · `playback` (pure device resolver pins the headset **off** the haptic
+USB-DAC; lazy rtmixer/sounddevice) · `config` (verbosity) · `bake` (Tone/Piper/macOS-say) · `engine`.
+Stdlib core stays **dep-free** (audio deps behind a new `voice` extra). 51 unit tests via injectable
+playback+clock; `make ci-fast` green. **Operator-grade off-rig verification:** baked a real-speech bank
+(macOS `say`), ran the real resolver→scheduler→playback pipeline, measured **emit→dispatch latency
+1.27 ms** (budget ≤150 ms), rendered 9.19 s of real speech to a WAV (delivered to operator). Qodo round-1
+flagged 2 reliability issues (Bank sha not enforced at load; sounddevice channel stuck-busy) — both fixed
+(commit `3c96229`), tested, threads resolved; Qodo re-review clean. Decision dossier:
+[[voice-coach-architecture-2026-06-28]] — **also extinguished the dangling reference the #340 body cited**
+(that dossier was never committed; `git log --all` empty). **Post-merge:** `pyproject.toml` changed → run
+`pip install -e '.[dev]'` (or `.[voice]` on the rig to play the bank). **Deferred (rig-gated follow-up):**
+final on-rig audible verification with the operator at the wheel; v1.1 number-splicing / live-TTS OOV
+fallback; cloud debrief; per-track corner names.
 
 ---
 
