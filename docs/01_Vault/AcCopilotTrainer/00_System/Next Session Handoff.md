@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T07:10:00Z
+last_updated: 2026-06-28T07:35:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
@@ -45,7 +45,17 @@ relates_to:
 
 ## Resume here
 
-**Merge [[pr-338-coaching-hardening-handoff]]** — PR #338 (issue #333 post-merge hardening).
+**[#341](https://github.com/agorokh/ac-copilot-trainer/issues/341) M0 voice-coaching thin slice** — wire live observer → voice cue (branch `feat/issue-341-m0-voice`). Voice output layer landed in [#343](https://github.com/agorokh/ac-copilot-trainer/pull/343); this is the realtime wiring pass.
+
+---
+
+## Delivered (2026-06-28) — PR #338 MERGED: CoachingOracle Qodo round-6 hardening (#333)
+[#338](https://github.com/agorokh/ac-copilot-trainer/pull/338) squash-merged to `main` as `f8d010e` (2026-06-28T07:32:32Z).
+Post-merge hardening for round-6 Qodo findings that missed the #334 squash: `get_coaching()` None-on-failure
+(`AssertionError` + early return in `debrief_to_advisories`), spaced debrief OCR marker, nested-None coercion,
+WinRT `Await` budget (10s/op + cancel on timeout) aligned with Python `_DEFAULT_HELPER_TIMEOUT_S=110`,
+parse/helper failure logging, 19 coaching-oracle tests. Detail: [[pr-338-coaching-hardening-handoff]].
+**Classification:** no post-merge flags.
 
 ---
 
