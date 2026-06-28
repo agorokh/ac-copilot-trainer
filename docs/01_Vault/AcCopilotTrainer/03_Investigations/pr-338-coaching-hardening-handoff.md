@@ -26,7 +26,7 @@ Addresses round-6 Qodo findings that landed on the final #334 SHA but were not i
 
 ## Verification
 
-- `pytest tests/test_coaching_oracle.py` — 18/18 pass (includes default timeout regression).
+- `pytest tests/test_coaching_oracle.py` — 19/19 pass (includes default timeout regression).
 - GitHub CI green (`build`, `conformance`, `Canonical docs exist`).
 - `/resolve-pr` converged: resolve-gate clean, zero unresolved review threads.
 
