@@ -29,6 +29,7 @@ CLIENT_CLASS_SCREEN = "screen"
 CLIENT_CLASS_HAPTICS = "haptics"
 CLIENT_CLASS_PHYSICAL = "physical"
 CLIENT_CLASS_BROWSER = "browser"
+CLIENT_CLASS_VOICE = "voice"  # M0 (#341): in-ear TTS client subscribing to coaching.cue
 KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
     {
         CLIENT_CLASS_EXTERNAL,
@@ -37,6 +38,7 @@ KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
         CLIENT_CLASS_HAPTICS,
         CLIENT_CLASS_PHYSICAL,
         CLIENT_CLASS_BROWSER,
+        CLIENT_CLASS_VOICE,
     }
 )
 PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
@@ -138,6 +140,8 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 # but missing here, so a client could never legitimately subscribe to them — the
 # "produced-but-unsubscribable" sibling of the #170 handshake bug. The
 # `test_ws_topic_allowlist` drift-guard asserts every produced topic is listed.
+# M0 (#341): real-time per-corner voice cues, produced by the SIDECAR (RealtimeObserver) — not Lua.
+TOPIC_COACHING_CUE = "coaching.cue"
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
         # Declared topics (EPIC #154 Part D wires producers for these).
@@ -149,6 +153,8 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         # Already-produced topics (made subscribable; were missing).
         "coaching.snapshot",
         "setup.active",
+        # Real-time voice cues (sidecar-produced from the live observer).
+        TOPIC_COACHING_CUE,
     }
 )
 
@@ -164,6 +170,40 @@ def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
         "server_version": server_version,
         "capabilities": list(SERVER_CAPABILITIES),
     }
+
+
+def make_coaching_cue(advisory: dict[str, Any]) -> dict[str, Any]:
+    """Server->client frame publishing one real-time advisory on the ``coaching.cue`` topic.
+
+    Delivered as a ``state.snapshot`` envelope (same shape the rig screen already consumes for
+    ``coaching.snapshot``) so the existing topic fan-out + subscribe path carries it unchanged; a
+    voice client filters by ``topic == coaching.cue``. ``advisory`` is the serialized
+    :class:`tools.ai_sidecar.realtime_observer.Advisory` (``{kind, corner, spline, urgency, ...}``).
+    """
+    return {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_COACHING_CUE,
+        "state": advisory,
+    }
+
+
+def make_telemetry_tick(payload: dict[str, Any], *, seq: int | None = None) -> dict[str, Any]:
+    """Client->server high-rate telemetry frame (M0, #341).
+
+    The producer side of the live coaching loop. ``payload`` must carry at least ``speed_kmh`` and,
+    for the observer to locate corners, ``spline`` (0..1); ``brake``/``lap`` are optional. Built
+    here so the offline replay source and any live shared-memory source emit a byte-identical
+    contract that :func:`_validate_telemetry_tick` accepts.
+    """
+    frame: dict[str, Any] = {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_TELEMETRY_TICK,
+        "payload": payload,
+    }
+    if seq is not None:
+        frame["seq"] = seq
+    return frame
 
 
 def make_error(message: str, *, ref_type: str | None = None) -> dict[str, Any]:
@@ -264,6 +304,15 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     err = _validate_optional_number(payload, "slip")
     if err is not None:
         return err
+    # M0 (#341): the live RealtimeObserver needs track position (spline 0..1); the lap counter
+    # disambiguates a true start/finish wrap from a pit/teleport. Both optional + back-compatible.
+    err = _validate_optional_number(payload, "spline", min_value=0, max_value=1)
+    if err is not None:
+        return err
+    for lap_key in ("lap", "lap_count", "completed_laps"):
+        err = _validate_optional_number(payload, lap_key, min_value=0)
+        if err is not None:
+            return err
     for key in ("tyre_temps_c", "tyre_pressures_psi"):
         err = _validate_corner_number_map(payload, key)
         if err is not None:

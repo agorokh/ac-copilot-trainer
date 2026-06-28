@@ -16,9 +16,11 @@ import asyncio
 import ipaddress
 import json
 import logging
+import os
 import secrets
 import time
 from collections.abc import Callable
+from dataclasses import asdict
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -62,6 +64,7 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_STATE_SUBSCRIBE,
     TYPE_STATE_UNSUBSCRIBE,
     TYPE_TELEMETRY_TICK,
+    make_coaching_cue,
     make_error,
     make_hello_ack,
     validate_inbound,
@@ -74,6 +77,10 @@ from tools.ai_sidecar.protocol import (
     build_brain_followup,
     build_ollama_followup,
     prepare_outbound_message,
+)
+from tools.ai_sidecar.realtime_observer import (
+    RealtimeObserver,
+    build_observer_from_reference,
 )
 from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
@@ -101,6 +108,10 @@ _external_peers: set[Any] = set()
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
 _external_peer_classes: dict[Any, str] = {}
+# M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
+# (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
+# advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
+_observer: RealtimeObserver | None = None
 
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
@@ -454,6 +465,24 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     """Forward a ``{v,type}`` frame to every external peer except ``exclude``."""
     targets = [p for p in _external_peers if p is not exclude]
     await _broadcast_targets(frame, targets=targets)
+
+
+async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None:
+    """Feed one live ``telemetry_tick`` frame to the RealtimeObserver and fan out any advisories.
+
+    Each advisory becomes a ``coaching.cue`` frame on the existing topic fan-out; the voice client
+    (and any other subscriber) renders it. Deterministic + sparse: the observer dedups per corner,
+    so no rate-limit is needed. Never lets an observer error break the peripheral path.
+    """
+    if _observer is None:
+        return
+    try:
+        advisories = _observer.observe(frame)
+    except Exception:
+        logger.exception("realtime observer failed on telemetry frame")
+        return
+    for advisory in advisories:
+        await _broadcast_external(make_coaching_cue(asdict(advisory)), exclude=exclude)
 
 
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
@@ -820,6 +849,8 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
                 rate_key=(TYPE_HAPTIC_EVENT, event["event"], event["channel"]),
                 max_hz=HAPTIC_EVENT_MAX_HZ,
             )
+        # M0 (#341): the same live frame feeds the real-time observer -> coaching.cue voice cues.
+        await _publish_observer_cues(data, exclude=websocket)
         return
     if t == TYPE_HAPTIC_EVENT:
         await _route_peripheral_frame(
@@ -1069,6 +1100,27 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
+def _load_observer(path: str) -> None:
+    """Build the live RealtimeObserver from a FASTER reference lap archive (best-effort).
+
+    Sets the module-global ``_observer`` consumed by the ``telemetry_tick`` path. On any failure
+    (missing/unreadable/unsegmentable archive) leaves it ``None`` so the sidecar simply runs without
+    live voice cues rather than crashing.
+    """
+    global _observer
+    try:
+        with open(path, encoding="utf-8") as fh:
+            archive = json.load(fh)
+        _observer = build_observer_from_reference(archive)
+    except (OSError, ValueError, json.JSONDecodeError):
+        logger.exception("failed to load reference archive for live observer: %s", path)
+        _observer = None
+    if _observer is None:
+        logger.warning("live voice coaching disabled — reference archive unusable: %s", path)
+    else:
+        logger.info("live RealtimeObserver built from reference archive: %s", path)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     p = argparse.ArgumentParser(description="AC Copilot Trainer AI sidecar (WebSocket)")
@@ -1145,6 +1197,15 @@ def main() -> None:
             "analysis_error frames may still be sent for invalid JSON or non-object payloads."
         ),
     )
+    p.add_argument(
+        "--reference-archive",
+        default=None,
+        help=(
+            "Path to a FASTER reference lap archive JSON. Builds the live RealtimeObserver so the "
+            "sidecar emits real-time coaching.cue advisories for the voice client (M0, #341). "
+            "Falls back to $AC_COPILOT_REFERENCE_ARCHIVE."
+        ),
+    )
     args = p.parse_args()
     if args.compare_laps:
         _run_compare_laps(args.compare_laps[0], args.compare_laps[1])
@@ -1178,6 +1239,10 @@ def main() -> None:
         host = args.host
     if not _is_loopback(host) and not args.token:
         raise SystemExit("--token is required for non-loopback bind addresses")
+
+    ref_path = args.reference_archive or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
+    if ref_path:
+        _load_observer(ref_path)
 
     try:
         asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))
