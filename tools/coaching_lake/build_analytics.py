@@ -178,14 +178,24 @@ def _lap_row(rec: dict, path: Path) -> tuple:
     )
 
 
-def _bulk_load_samples(con, sample_cols: list[str], rows: list[list]) -> int:  # noqa: ANN001
+def _bulk_load_samples(
+    con, sample_cols: list[str], rows: list[list], *, staging_dir: Path
+) -> int:  # noqa: ANN001
     """Vectorized bulk-load of the per-sample rows via a temp CSV + DuckDB COPY.
 
     DuckDB's row-by-row ``executemany`` is pathologically slow for hundreds of thousands of rows;
     its CSV reader is vectorized. We write the rows to a temp CSV (NULL = empty cell) and COPY.
+    Staging files live beside the DuckDB file (``journal/``), not the OS temp dir.
     """
+    staging_dir.mkdir(parents=True, exist_ok=True)
     tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
+        mode="w",
+        suffix=".csv",
+        delete=False,
+        newline="",
+        encoding="utf-8",
+        dir=staging_dir,
+        prefix=".coaching_lake_samples_",
     )
     try:
         with tmp:
@@ -284,9 +294,11 @@ def build_lake(
                     vals += [lap_uuid, car, track, si]
                     rows.append(vals)
                 all_sample_rows.extend(rows)
-        con.execute("COMMIT")
         if all_sample_rows:
-            summary.samples = _bulk_load_samples(con, sample_cols, all_sample_rows)
+            summary.samples = _bulk_load_samples(
+                con, sample_cols, all_sample_rows, staging_dir=Path(db_path).parent
+            )
+        con.execute("COMMIT")
         summary.valid_laps = con.execute("SELECT count(*) FROM laps WHERE is_valid").fetchone()[0]
         summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]
         summary.tracks = con.execute("SELECT count(DISTINCT track_id) FROM laps").fetchone()[0]
