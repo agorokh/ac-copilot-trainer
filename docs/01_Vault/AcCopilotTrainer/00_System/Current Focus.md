@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T07:10:00Z
+last_updated: 2026-06-28T07:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -106,6 +106,10 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-28** — PR [#338](https://github.com/agorokh/ac-copilot-trainer/pull/338) **MERGED** at
+  `f8d010e` — CoachingOracle **Qodo round-6 hardening** ([#333](https://github.com/agorokh/ac-copilot-trainer/issues/333)
+  follow-up to #334): None-on-failure `get_coaching()`, spaced debrief OCR marker, nested-None coercion,
+  WinRT await budget + cancel, helper timeout tests (19/19). No post-merge classification flags.
 - **2026-06-28** — PR [#343](https://github.com/agorokh/ac-copilot-trainer/pull/343) **MERGED** at
   `f50719c` — **in-the-ear voice coach** ([#340](https://github.com/agorokh/ac-copilot-trainer/issues/340)
   **CLOSED**): new `tools/ai_sidecar/voice/` speaks the same `Advisory` stream the text HUD renders, via
