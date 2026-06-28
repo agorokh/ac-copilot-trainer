@@ -230,6 +230,25 @@ def test_publish_coaching_cues_survives_observer_fault(monkeypatch) -> None:
     assert captured == []
 
 
+def test_publish_coaching_cues_survives_non_serializable_broadcast(monkeypatch) -> None:
+    """Non-JSON-serializable cue payloads must not raise into the telemetry loop (Qodo #349)."""
+
+    async def _broadcast_like_targets(frame, *, exclude):  # noqa: ANN001
+        json.dumps(frame, separators=(",", ":"))
+
+    monkeypatch.setattr(server, "_broadcast_external", _broadcast_like_targets)
+    coach = _FakeCoach()
+    bad = _advisory(detail={"bad": object()})
+    server.set_realtime_observer(_FakeObserver([bad]))
+    server.set_voice_coach(coach)
+    try:
+        asyncio.run(server._publish_coaching_cues({"ts_sim": 1.0, "payload": {}}, exclude=None))
+    finally:
+        server.set_realtime_observer(None)
+        server.set_voice_coach(None)
+    assert coach.spoken == [bad]
+
+
 # --------------------------------------------------------------------------------------------------
 # End-to-end: telemetry_tick → coaching.cue to a voice-class WS client
 # --------------------------------------------------------------------------------------------------

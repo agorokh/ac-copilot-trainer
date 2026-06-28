@@ -618,11 +618,14 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
                 coach.subscribe(advisory)
             except Exception:
                 logger.exception("voice coach subscribe failed for advisory")
-        cue_payload = _advisory_to_payload(advisory)
-        if cue_payload is None:
-            continue
-        cue = make_coaching_cue(cue_payload, ts_sim=ts_sim)
-        await _broadcast_external(cue, exclude=exclude)
+        try:
+            cue_payload = _advisory_to_payload(advisory)
+            if cue_payload is None:
+                continue
+            cue = make_coaching_cue(cue_payload, ts_sim=ts_sim)
+            await _broadcast_external(cue, exclude=exclude)
+        except Exception:
+            logger.exception("voice: failed to publish coaching cue for advisory")
 
 
 async def _route_peripheral_frame(

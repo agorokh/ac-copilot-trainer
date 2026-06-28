@@ -53,6 +53,16 @@ def test_same_rank_tie_break_prefers_freshest_cue() -> None:
     assert pb.played[-1].clip_id == "late_brake.act.t04"
 
 
+def test_same_rank_and_timestamp_tie_break_prefers_later_submission() -> None:
+    """When enqueued_at collides, the later submission in the batch must win."""
+    sched, pb, clock = _scheduler()
+    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=3))
+    spoken = sched.process_pending(clock())
+    assert spoken is not None
+    assert pb.played[-1].clip_id == "late_brake.act.t04"
+
+
 def test_act_barges_in_over_lower_urgency_clip() -> None:
     sched, pb, clock = _scheduler()
     # info clip starts playing and is still sounding (current set, not finished)

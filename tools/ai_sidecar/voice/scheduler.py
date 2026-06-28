@@ -107,16 +107,19 @@ class Scheduler:
             batch = self._pending
             self._pending = []
 
-        candidates: list[tuple[Utterance, float]] = []
-        for item in batch:
+        candidates: list[tuple[Utterance, float, int]] = []
+        for batch_index, item in enumerate(batch):
             utt = self._consider(item, now)
             if utt is not None:
-                candidates.append((utt, item.enqueued_at))
+                candidates.append((utt, item.enqueued_at, batch_index))
         if not candidates:
             return None
 
         # Highest urgency wins; ties break toward the cue considered last (freshest in this batch).
-        winner, enqueued_at = max(candidates, key=lambda pair: (pair[0].rank, pair[1]))
+        # When enqueued_at collides (constant/coarse clock), batch_index preserves submission order.
+        winner, enqueued_at, _batch_index = max(
+            candidates, key=lambda pair: (pair[0].rank, pair[1], pair[2])
+        )
         return self._dispatch(winner, now, enqueued_at=enqueued_at)
 
     def _consider(self, item: _Pending, now: float) -> Utterance | None:
