@@ -116,7 +116,7 @@ class Scheduler:
             return None
 
         # Highest urgency wins; ties break toward the cue considered last (freshest in this batch).
-        winner, enqueued_at = max(candidates, key=lambda pair: pair[0].rank)
+        winner, enqueued_at = max(candidates, key=lambda pair: (pair[0].rank, pair[1]))
         return self._dispatch(winner, now, enqueued_at=enqueued_at)
 
     def _consider(self, item: _Pending, now: float) -> Utterance | None:
@@ -181,7 +181,9 @@ class Scheduler:
                 )
             else:
                 _log.debug(
-                    "voice: act cue %s advisory→dispatch latency %.1f ms", winner.clip_id, latency_ms
+                    "voice: act cue %s advisory→dispatch latency %.1f ms",
+                    winner.clip_id,
+                    latency_ms,
                 )
         self._last_spoke_key[winner.dedup_key] = now
         self._last_spoke_kind[winner.kind] = now
