@@ -1,4 +1,4 @@
-"""In-the-ear voice coach — speak the live advisory stream (issue #340).
+"""In-the-ear voice coach — speak the live advisory stream (issues #340 / #341).
 
 A pre-rendered **phrase-bank** voice output layer for the real-time coaching pipeline. It consumes
 the *same* :class:`~tools.ai_sidecar.realtime_observer.Advisory` objects the text HUD already
@@ -27,24 +27,27 @@ Layering (each module single-focus, so a future free-form/TTS path can never sta
   (lazy-imported) pinned to a named headset endpoint, plus injectable fakes for tests.
 * :mod:`bake`        — offline build step that renders the bounded vocabulary to WAV + manifest.
 * :mod:`engine`      — :class:`VoiceCoach`, the top-level seam the sidecar's telemetry loop feeds.
+* :mod:`cue`         — M0 thin-slice pyttsx3 path (issue #341): pure advisory→phrase + cue arbiter.
 
 **Dependency discipline (issue #340 architecture requirement):** the stdlib sidecar core stays
 dep-free. ``numpy`` / ``sounddevice`` / ``rtmixer`` are **lazy-imported inside** :mod:`playback`
 (and optionally :mod:`bake`) only, behind the ``voice`` optional extra in ``pyproject.toml``.
 Importing this package — or :mod:`vocabulary`, :mod:`manifest`, :mod:`resolver`, :mod:`scheduler`,
-:mod:`config`, :mod:`utterance` — pulls in **no** third-party dependency, so the resolver/scheduler/
-manifest logic is fully unit-testable on CI with no audio hardware.
+:mod:`config`, :mod:`utterance`, :mod:`cue` — pulls in **no** third-party dependency, so the
+resolver/scheduler/manifest logic is fully unit-testable on CI with no audio hardware.
 """
 
 from __future__ import annotations
 
-__all__ = [
-    "Advisory",
-    "Utterance",
-]
-
-# Re-export the upstream semantic event so callers have one import site for the seam types. This is
-# a pure-stdlib re-export (realtime_observer is itself dep-free) — it does NOT pull in audio deps.
 from tools.ai_sidecar.realtime_observer import Advisory
 
+from .cue import CueArbiter, SpokenCue, advisory_to_phrase
 from .utterance import Utterance
+
+__all__ = [
+    "Advisory",
+    "CueArbiter",
+    "SpokenCue",
+    "Utterance",
+    "advisory_to_phrase",
+]
