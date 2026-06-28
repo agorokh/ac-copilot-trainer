@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 import tools.ai_sidecar.telemetry_source as telemetry_source
@@ -84,10 +86,14 @@ def test_hello_frame_shape():
 
 
 def test_period_seconds_rejects_non_positive_hz():
-    with pytest.raises(ValueError, match="hz must be > 0"):
+    with pytest.raises(ValueError, match="hz must be a finite value > 0"):
         telemetry_source.period_seconds(0)
-    with pytest.raises(ValueError, match="hz must be > 0"):
+    with pytest.raises(ValueError, match="hz must be a finite value > 0"):
         telemetry_source.period_seconds(-1.0)
+    with pytest.raises(ValueError, match="hz must be a finite value > 0"):
+        telemetry_source.period_seconds(float("nan"))
+    with pytest.raises(ValueError, match="hz must be a finite value > 0"):
+        telemetry_source.period_seconds(float("inf"))
 
 
 def test_normalize_live_steer_uses_steering_lock():
@@ -110,3 +116,38 @@ def test_close_shared_memory_maps_closes_present_handles():
     assert closed == ["phys"]
     telemetry_source.close_shared_memory_maps(phys, _Map("gfx"))
     assert closed == ["phys", "phys", "gfx"]
+
+
+def test_stream_live_closes_maps_when_ws_connect_fails(monkeypatch):
+    from tools.ac_harness.shared_memory import SHM_GRAPHICS, SHM_PHYSICS
+
+    closed: list[str] = []
+
+    class _Map:
+        def __init__(self, name: str):
+            self.name = name
+
+        def read(self, size: int) -> bytes:
+            return b"\x00" * size
+
+        def close(self) -> None:
+            closed.append(self.name)
+
+    monkeypatch.setattr(
+        "tools.ac_harness.shared_memory.open_shared_memory",
+        lambda name, size: _Map(name),
+    )
+
+    class _FailConnect:
+        async def __aenter__(self):
+            raise ConnectionRefusedError("sidecar down")
+
+        async def __aexit__(self, *_args):
+            return False
+
+    monkeypatch.setattr("websockets.connect", lambda *_args, **_kwargs: _FailConnect())
+
+    with pytest.raises(ConnectionRefusedError, match="sidecar down"):
+        asyncio.run(telemetry_source.stream_live("ws://127.0.0.1:8765", hz=20.0))
+
+    assert closed == [SHM_PHYSICS, SHM_GRAPHICS]

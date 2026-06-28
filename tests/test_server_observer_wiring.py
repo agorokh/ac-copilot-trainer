@@ -198,8 +198,13 @@ def test_publish_observer_cues_rate_limited_at_20hz(monkeypatch):
     monkeypatch.setattr(server, "_observer", observer)
     sent = _capture_broadcast(monkeypatch)
     frame = {"type": "telemetry_tick", "payload": {"spline": 0.5, "speed_kmh": 100}}
+    now = [0.0]
+    monkeypatch.setattr(
+        server, "_peripheral_rate_limiter", server._RateLimiter(clock=lambda: now[0])
+    )
 
     asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
+    now[0] += 0.01
     asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
 
     assert observer.calls == 1

@@ -22,6 +22,7 @@ shared-memory reads are pragma-guarded.
 from __future__ import annotations
 
 import argparse
+import math
 from typing import Any
 
 from tools.ai_sidecar.external_protocol import (
@@ -44,9 +45,9 @@ _PARSE_FAILURE_SLEEP_S = 0.05
 
 
 def period_seconds(hz: float) -> float:
-    """Return the inter-frame period for ``hz``; reject non-positive values."""
-    if hz <= 0:
-        raise ValueError(f"hz must be > 0, got {hz!r}")
+    """Return the inter-frame period for ``hz``; reject non-finite/non-positive values."""
+    if not math.isfinite(hz) or hz <= 0:
+        raise ValueError(f"hz must be a finite value > 0, got {hz!r}")
     return 1.0 / hz
 
 
@@ -199,8 +200,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     sub.add_parser("live", help="read AC shared memory and stream live (rig)")
     args = p.parse_args(argv)
 
-    if args.hz <= 0:
-        raise SystemExit("--hz must be > 0")
+    if not math.isfinite(args.hz) or args.hz <= 0:
+        raise SystemExit("--hz must be a finite value > 0")
 
     try:
         if args.mode == "replay":

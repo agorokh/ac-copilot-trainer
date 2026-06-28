@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+import threading
+import time
+
 from tools.ai_sidecar.external_protocol import (
     CLIENT_CLASS_VOICE,
     TOPIC_COACHING_CUE,
@@ -12,6 +16,7 @@ from tools.ai_sidecar.external_protocol import (
 )
 from tools.ai_sidecar.voice.client import (
     VoiceClient,
+    _pyttsx3_speaker,
     extract_advisory,
     make_hello_frame,
     make_subscribe_frame,
@@ -86,3 +91,45 @@ def test_should_enqueue_voice_cue_requires_live_worker():
     assert should_enqueue_voice_cue(failed=False, worker_alive=True) is True
     assert should_enqueue_voice_cue(failed=True, worker_alive=True) is False
     assert should_enqueue_voice_cue(failed=False, worker_alive=False) is False
+
+
+def test_pyttsx3_speaker_drops_cues_when_init_fails(monkeypatch):
+    class _BrokenPyttsx3:
+        @staticmethod
+        def init():
+            raise RuntimeError("no engine")
+
+    monkeypatch.setitem(sys.modules, "pyttsx3", _BrokenPyttsx3())
+    speak = _pyttsx3_speaker()
+    time.sleep(0.05)
+    speak("hello")  # worker failed; must not raise
+
+
+def test_pyttsx3_speaker_enqueues_when_worker_ready(monkeypatch):
+    ready = threading.Event()
+    spoken: list[str] = []
+
+    class _Engine:
+        def setProperty(self, *_args, **_kwargs) -> None:
+            return None
+
+        def say(self, text: str) -> None:
+            spoken.append(text)
+
+        def runAndWait(self) -> None:
+            return None
+
+    class _Pyttsx3:
+        @staticmethod
+        def init():
+            ready.set()
+            return _Engine()
+
+    monkeypatch.setitem(sys.modules, "pyttsx3", _Pyttsx3())
+    speak = _pyttsx3_speaker()
+    assert ready.wait(timeout=1.0)
+    speak("Turn 1")
+    deadline = time.monotonic() + 1.0
+    while not spoken and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert spoken == ["Turn 1"]
