@@ -32,9 +32,23 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-75-ollama-corner-coaching-protocol.md
   - AcCopilotTrainer/03_Investigations/template-sync-pr87-2026-04-24.md
   - AcCopilotTrainer/03_Investigations/pr-310-trail-brake-attribution-handoff.md
+  - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
+  - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
 ---
 
 # Next session handoff
+
+## Side research (2026-06-27) — Track Titan as a coaching angle (no code shipped)
+Active code resume is still **#305 / Track Titan-independent** (below). Separately, a `/start-task`
+research pass investigated the locally-installed **Track Titan** as an external coaching angle.
+Findings + strategy: [[track-titan-telemetry-extraction-feasibility-2026-06-27]] +
+[[track-titan-coaching-oracle-strategy-2026-06-27]] (full report `.scratch/tt-research-report.md`).
+**TL;DR:** TT reads the same AC shared memory we do and uploads our `.acreplay`; analysis is cloud-only;
+no API/export. For AC it adds **no new raw signal** — only pro ghost laps + an AI opinion. Recommended:
+treat TT as a swappable "coaching oracle"; cheap wins first (pro ghost → #207 faster-than-PB importer;
+TT per-corner time-loss as an external referee for the autonomous harness); time-box a `ws://localhost:9121`
+tap spike; **never** automate the user's plaintext Cognito token. No runtime coupling proposed.
+**Update (fully autonomous live-verify on AG_PC):** ws:9121 tap PROVEN (11,497 frames) but **live-telemetry only** — TT's coaching (post-lap AI debrief) renders in the overlay and does NOT cross the ws (also unreliable as a 2nd consumer beside the real overlay). **Screen-capture/OCR is the extraction path** — POC built + verified: `.scratch/ocr_extract_tt.ps1` (native Windows.Media.Ocr, zero deps) emits coaching JSON (`.scratch/tt_coaching.json`). Next: productionize a `CoachingOracle` Python module via `/orchestrate`. Rig restored to stock.
 
 ## Resume here (2026-06-27 LIVE RIG CONFIRMATION — #305 CLOSED)
 
