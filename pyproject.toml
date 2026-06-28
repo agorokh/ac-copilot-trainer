@@ -133,4 +133,5 @@ omit = [
   "tools/process_miner/run.py",
   "tools/repo_knowledge/mcp_server.py",
   "tools/ai_sidecar/__main__.py",
+  "tools/tt_ingest/__main__.py",
 ]

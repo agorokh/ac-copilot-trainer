@@ -28,6 +28,10 @@ tools/_scratch/
 # Operator-local config backups (e.g. ACC config snapshots) — local data, never committed.
 backups/
 
+# Track Titan personal session lake (issue #353): the operator's OWN exported session
+# data, retained immutably. Personal data — never committed.
+journal/tt/
+
 # Stray machine-local tooling (e.g. MOZA R3 profile script) — not repo source.
 tools/acc/
 
