@@ -44,16 +44,9 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-28) — PR #348 resolve-pr in progress; #345 P0 capture next
+## Resume here (2026-06-28) — #345 P0 capture next
 
-**PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348)** (`feat/345-coaching-lake-duckdb`) delivers the EPIC #344 "query the whole data plane"
-engine: `tools/coaching_lake` — embedded **DuckDB** star (laps/corners/setup_params/samples)
-rebuilt idempotently from the immutable lap-archive JSON. Bot review addressed (Gemini + Qodo):
-`math.isfinite`, journal-scoped temp CSV, atomic transaction through samples COPY, explicit ROLLBACK.
-`make ci-fast` green locally; merge `main` to clear conflicts and unstick CI checks.
-Detail: [[coaching-lakehouse-duckdb-2026-06-28]].
-
-**Next after #348 merge:** **#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
+**#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
 
 **[#350](https://github.com/agorokh/ac-copilot-trainer/issues/350) — voice coach LIVE-FIRE (rig-gated).** The
 off-sim engine (#340) and the sidecar live-wiring (#341, PR #349) are merged; what remains is a **Lua
@@ -62,6 +55,11 @@ src/` is empty) so the observer actually fires live, plus the **on-rig audible s
 faster reference, hears a spline-anchored cue). Bake a Piper bank (`python -m tools.ai_sidecar.voice.bake
 --backend piper`), launch the sidecar with `--voice-reference <archive> --voice-bank <dir>`, tap
 `coaching.cue`. This is the deferred verification for both #340 and #341.
+
+---
+
+## Delivered (2026-06-28) — PR #348 MERGED: Coaching lakehouse DuckDB (#344 P1)
+**PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348)** (`feat/345-coaching-lake-duckdb`) squash-merged to `main` as `226bc97`. Delivers the EPIC #344 "query the whole data plane" engine: `tools/coaching_lake` — embedded **DuckDB** star schema. Rebuilt idempotently from the immutable lap-archive JSON. Bot review addressed (Gemini + Qodo): `math.isfinite`, journal-scoped temp CSV, atomic transaction through samples COPY, explicit ROLLBACK. Detail: [[coaching-lakehouse-duckdb-2026-06-28]]. **Post-merge classification:** `pyproject.toml` changed (run `pip install -e '.[dev]'`), `.github/workflows/` changed.
 
 ---
 
