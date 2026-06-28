@@ -68,9 +68,19 @@ tesseract absent), and emits structured coaching JSON (`.scratch/tt_coaching.jso
 mapping) via `/orchestrate` (issue → PR).
 
 ## Guardrails
-- **Never** copy/log/transmit the plaintext Cognito tokens in `config.json`; **never** automate the cloud
-  API with the user's token (most ToS/CFAA-exposed). Personal, local use only; nothing redistributed
-  (TT bans setup redistribution).
+- **No redistribution, no automation at scale or on others' behalf.** Never redistribute TT content
+  (TT bans setup redistribution); never automate the cloud API at scale, for third parties, or in any
+  shared/deployed service. Never copy/log/transmit plaintext Cognito tokens into tracked files or logs.
+- **Personal own-account export is permitted** (operator decision 2026-06-28; issue
+  [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)). Scoping clarification superseding the
+  original blanket "never automate the cloud API with the user's token": exporting the **operator's own**
+  session data from their **own** TT account for **personal, local** coaching use — via the same
+  Cognito/`vulcan` path the official desktop app uses, on the same machine — is treated as **self
+  data-portability**, not the prohibited at-scale / third-party automation that carries the ToS/CFAA
+  exposure. Constraints still bind: tokens are personal secrets (read from env or the gitignored lake,
+  **never** logged or committed); retained raw data stays under the gitignored `journal/tt`; nothing is
+  redistributed; this is single-operator, local-only. Implemented by `tools/tt_ingest`
+  (PR [#359](https://github.com/agorokh/ac-copilot-trainer/pull/359), #353 M-TT0).
 - Honesty invariant holds: an imported/borrowed reference slower than the driven lap is never shown as a target.
 
 ## Open questions
