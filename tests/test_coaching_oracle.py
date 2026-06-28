@@ -6,6 +6,7 @@ from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
 from tools.ai_sidecar.coaching_oracle import (
     FALLBACK_LAYOUT,
     CoachingSnapshot,
+    _coerce_lines,
     debrief_to_advisories,
     parse_overlay_text,
     select_layout,
@@ -126,6 +127,15 @@ def test_select_layout_exact_and_fallback():
     # Uncalibrated resolution -> generic fractional layout, not a wrong calibration.
     assert select_layout(1920, 1080) is FALLBACK_LAYOUT
     assert select_layout(1920, 1080).name == "generic"
+
+
+def test_coerce_lines_flattens_and_stringifies():
+    # Defensive against the OCR helper emitting nested/scalar/None arrays.
+    assert _coerce_lines(None) == []
+    assert _coerce_lines("x") == ["x"]
+    assert _coerce_lines(["a", "b"]) == ["a", "b"]
+    assert _coerce_lines([["a", "b"], "c"]) == ["a", "b", "c"]  # one-level nesting flattened
+    assert _coerce_lines([1, None, 2]) == ["1", "2"]
 
 
 def test_empty_input_is_safe():

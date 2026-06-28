@@ -55,12 +55,17 @@ try {
   $eng = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
   if (-not $eng) { Write-Error 'OCR engine unavailable'; exit 1 }
   function Ocr($p) {
+    # WinRT StorageFile needs a normalized, absolute Windows path (forward slashes / relative fail).
+    $p = [System.IO.Path]::GetFullPath($p)
     $sf = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($p)) ([Windows.Storage.StorageFile])
     $st = Await ($sf.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
     $d = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($st)) ([Windows.Graphics.Imaging.BitmapDecoder])
     $sb = Await ($d.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
     $r = Await ($eng.RecognizeAsync($sb)) ([Windows.Media.Ocr.OcrResult])
-    , @($r.Lines | ForEach-Object { $_.Text })
+    # Return a guaranteed-FLAT string[] (a List avoids the nested-array trap of the unary-comma idiom).
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($ln in $r.Lines) { $lines.Add([string]$ln.Text) }
+    , $lines.ToArray()
   }
   $full = Ocr $Png
   $deb = Ocr $crop

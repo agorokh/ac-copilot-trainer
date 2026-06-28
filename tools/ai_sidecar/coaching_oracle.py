@@ -115,6 +115,23 @@ def select_layout(screen_w: int, screen_h: int) -> OverlayLayout:
     return DEFAULT_LAYOUTS.get((screen_w, screen_h), FALLBACK_LAYOUT)
 
 
+def _coerce_lines(value: object) -> list[str]:
+    """Flatten one level + stringify OCR-helper output (defensive vs nested/scalar/None JSON)."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return [str(value)]
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, list):
+            out.extend(str(s) for s in item)
+        elif item is not None:
+            out.append(str(item))
+    return out
+
+
 def parse_overlay_text(
     full_lines: list[str],
     debrief_lines: list[str] | None = None,
@@ -287,8 +304,10 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
             data = json.loads(proc.stdout)
         except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
             return None
+        if not isinstance(data, dict):
+            return None
         return parse_overlay_text(
-            list(data.get("full_lines", [])),
-            list(data.get("debrief_lines", [])),
+            _coerce_lines(data.get("full_lines")),
+            _coerce_lines(data.get("debrief_lines")),
             captured_utc=datetime.now(UTC).isoformat(),
         )
