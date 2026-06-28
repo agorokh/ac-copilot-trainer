@@ -37,6 +37,6 @@ pytest tests/test_coaching_oracle.py -q
 make ci-fast
 ```
 
-**Verified (2026-06-28, PR #338 `c4d82ab`):** GitHub CI green (`build`, `conformance`, `Canonical docs exist`); `pytest tests/test_coaching_oracle.py` 19/19 pass; `ruff format --check` + `ruff check` clean.
+**Verified (2026-06-28, PR #338 `d0219a2`):** GitHub CI green (`build`, `conformance`, `Canonical docs exist`); `pytest tests/test_coaching_oracle.py` 19/19 pass; `ruff format --check` + `ruff check` clean.
 
 Live smoke (Windows rig with Track Titan overlay visible): instantiate `TrackTitanScreenOracle()` and call `get_coaching()`.
