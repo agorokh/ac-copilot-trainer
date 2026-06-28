@@ -67,6 +67,7 @@ from tools.ai_sidecar.external_protocol import (
     make_coaching_cue,
     make_error,
     make_hello_ack,
+    topics_are_sidecar_only,
     validate_inbound,
 )
 from tools.ai_sidecar.protocol import (
@@ -899,6 +900,16 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             classes=HAPTIC_CLIENT_CLASSES,
             rate_key=(TYPE_HAPTIC_EVENT, str(data.get("event")), str(data.get("channel"))),
             max_hz=HAPTIC_EVENT_MAX_HZ,
+        )
+        return
+    if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE) and topics_are_sidecar_only(
+        data.get("topics")
+    ):
+        logger.info(
+            "sidecar-produced topic %s accepted without loopback peer=%s topics=%s",
+            t,
+            peer,
+            data.get("topics"),
         )
         return
     if (

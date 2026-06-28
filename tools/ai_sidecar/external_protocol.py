@@ -142,6 +142,9 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 # `test_ws_topic_allowlist` drift-guard asserts every produced topic is listed.
 # M0 (#341): real-time per-corner voice cues, produced by the SIDECAR (RealtimeObserver) — not Lua.
 TOPIC_COACHING_CUE = "coaching.cue"
+# Topics the sidecar produces directly (no loopback Lua relay). Voice/offline clients may
+# state.subscribe to these without a Lua peer connected.
+SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset({TOPIC_COACHING_CUE})
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
         # Declared topics (EPIC #154 Part D wires producers for these).
@@ -161,6 +164,13 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
 # Header used on the WS upgrade for shared-secret auth.
 AUTH_HEADER = "X-AC-Copilot-Token"
 CLIENT_HEADER = "X-AC-Copilot-Client"
+
+
+def topics_are_sidecar_only(topics: Any) -> bool:
+    """True when every topic in ``topics`` is sidecar-produced (no Lua relay needed)."""
+    if not isinstance(topics, list) or not topics:
+        return False
+    return all(isinstance(t, str) and t in SIDECAR_PRODUCED_TOPICS for t in topics)
 
 
 def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:

@@ -92,6 +92,7 @@ Skill: `~/.agents/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/
 - **Checks:** `make ci-fast` (format, lint, tests, policy scripts).
 - **Pre-commit:** `make hooks-install` once per clone.
 - **Optional stacks:** DB, AWS, HF, Ollama, browser automation — [docs/00_Core/OPTIONAL_CAPABILITIES.md](docs/00_Core/OPTIONAL_CAPABILITIES.md).
+- **Sidecar reference lap (M0 voice coaching):** `AC_COPILOT_REFERENCE_ARCHIVE` — path to a faster reference lap archive JSON; used when starting the sidecar without `--reference-archive` so the live observer can emit `coaching.cue` advisories for the voice client.
 
 ---
 
