@@ -134,9 +134,7 @@ async def replay(  # pragma: no cover - runtime/ws
                 await asyncio.sleep(period)
 
 
-async def stream_live(
-    url: str, *, hz: float = DEFAULT_HZ, token: str | None = None
-) -> None:
+async def stream_live(url: str, *, hz: float = DEFAULT_HZ, token: str | None = None) -> None:
     """Read AC shared memory at ``hz`` and emit ``telemetry_tick`` frames so a human can drive."""
     import asyncio
     import json
