@@ -29,8 +29,9 @@ tools/_scratch/
 backups/
 
 # Track Titan personal session lake (issue #353): the operator's OWN exported session
-# data, retained immutably. Personal data — never committed.
-journal/tt/
+# data, retained immutably. Personal data — never committed. ``**/`` so a lake written
+# under any subdirectory (e.g. via --lake-base) is ignored too, not just the repo root.
+**/journal/tt/
 
 # Stray machine-local tooling (e.g. MOZA R3 profile script) — not repo source.
 tools/acc/

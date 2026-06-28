@@ -12,7 +12,13 @@ Cognito identifiers are hardcoded (env-overridable). See :mod:`tools.tt_ingest.t
 
 from __future__ import annotations
 
-from tools.tt_ingest.cli import ExportSummary, build_arg_parser, main, retain_sessions
+from tools.tt_ingest.cli import (
+    ExportSummary,
+    build_arg_parser,
+    main,
+    reindex_lake,
+    retain_sessions,
+)
 from tools.tt_ingest.tt_auth import (
     MintedTokens,
     TTAuthError,
@@ -76,6 +82,7 @@ __all__ = [
     "normalize_sessions",
     "parse_initiate_auth_response",
     "parse_sessions_page",
+    "reindex_lake",
     "resolve_refresh_token",
     "retain_sessions",
     "sanitize_segment",

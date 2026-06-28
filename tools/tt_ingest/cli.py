@@ -9,6 +9,7 @@ fetch) are thin and ``# pragma: no cover`` — they are proven live, not in CI.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from tools.tt_ingest.tt_export import (
     lake_root,
     relative_to_lake,
     session_lake_dir,
+    sha256_hex,
     stable_fingerprint,
     write_immutable_json,
 )
@@ -53,11 +55,13 @@ class ExportSummary:
     skipped_existing: int
     lake_root: Path
     failed: int = 0
+    indexed: int = 0
 
     def render(self) -> str:
         base = (
             f"retained {self.total} session(s) to {self.lake_root} "
-            f"({self.retained_new} new, {self.skipped_existing} already present)"
+            f"({self.retained_new} new, {self.skipped_existing} already present; "
+            f"{self.indexed} total in lake)"
         )
         if self.failed:
             base += f"; {self.failed} session(s) skipped due to errors"
@@ -68,25 +72,68 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def reindex_lake(root: Path, *, generated_at: str) -> int:
+    """Rebuild both derived indexes from EVERY ``session.json`` currently in the lake.
+
+    The indexes are a *derived view* of the immutable raw files — so they are rebuilt by
+    scanning the whole lake on disk, never from one batch's records. A partial export can
+    therefore never shrink the discovery index, and ``sessions_index.json`` always agrees
+    with the raw files actually present (no batch-vs-disk divergence). Returns the count of
+    indexed raw files.
+    """
+    records: list[RetainedFile] = []
+    normalized: list[dict[str, Any]] = []
+    for path in sorted(root.rglob(f"{RAW_SESSION_ENDPOINT}.json")):
+        try:
+            data = path.read_bytes()
+            raw = json.loads(data)
+        except (OSError, ValueError):  # pragma: no cover - corrupt file skipped defensively
+            continue
+        records.append(
+            RetainedFile(
+                session_key=path.parent.name,
+                endpoint=RAW_SESSION_ENDPOINT,
+                relative_path=relative_to_lake(path, root),
+                sha256=sha256_hex(data),
+                bytes=len(data),
+                written=False,
+            )
+        )
+        if isinstance(raw, Mapping):
+            normalized.append(normalize_session(raw))
+    root.mkdir(parents=True, exist_ok=True)
+    # sessions_index carries normalized telemetry conditions → allow_nan for lossless
+    # round-trip; the file index (hashes/sizes/paths only) stays strict, portable JSON.
+    write_immutable_json(
+        root / SESSIONS_INDEX_FILENAME,
+        build_sessions_index(normalized, generated_at=generated_at),
+        overwrite=True,
+        allow_nan=True,
+    )
+    write_immutable_json(
+        root / INDEX_FILENAME, build_index(records, generated_at=generated_at), overwrite=True
+    )
+    return len(records)
+
+
 def retain_sessions(
     sessions: Sequence[Mapping[str, Any]],
     *,
     lake_base: Path | None = None,
     generated_at: str | None = None,
-    overwrite: bool = False,
 ) -> ExportSummary:
-    """Normalize, immutably retain, and index a batch of raw vulcan sessions.
+    """Normalize, immutably retain, and (re)index a batch of raw vulcan sessions.
 
-    Each raw session is written write-once under
-    ``journal/tt/{game}/{car}/{track}/{sessionKey}/session.json``; derived
-    ``sessions_index.json`` + content-addressed ``index.json`` are (re)written at the
-    lake root. Returns counts of new vs. already-present files.
+    Each raw session is written **write-once** under
+    ``journal/tt/{game}/{car}/{track}/{sessionKey}/session.json`` — raw evidence is never
+    clobbered (data-immutability invariant). After the batch, both derived indexes are
+    rebuilt from the *entire* lake on disk (see :func:`reindex_lake`), so a partial export
+    never shrinks the index and the index always matches the immutable raw files.
     """
     root = lake_root(lake_base)
     stamp = generated_at or _iso_now()
-    records: list[RetainedFile] = []
-    normalized: list[dict[str, Any]] = []
     retained_new = 0
+    processed = 0
     failed = 0
 
     for raw in sessions:
@@ -109,44 +156,25 @@ def retain_sessions(
                 session_key=session_key,
             )
             path = endpoint_file(target_dir, RAW_SESSION_ENDPOINT)
-            # Raw retention is lossless: allow_nan keeps non-finite telemetry floats.
-            result = write_immutable_json(path, dict(raw), overwrite=overwrite, allow_nan=True)
+            # Raw retention is write-once (never overwrite) + lossless (allow_nan keeps
+            # non-finite telemetry floats).
+            result = write_immutable_json(path, dict(raw), allow_nan=True)
         except (OSError, ValueError, TypeError, TTExportError):
             # One malformed session must never abort the whole batch or the indexes.
             failed += 1
             continue
-        normalized.append(row)
+        processed += 1
         if result.written:
             retained_new += 1
-        records.append(
-            RetainedFile(
-                session_key=str(session_key),
-                endpoint=RAW_SESSION_ENDPOINT,
-                relative_path=relative_to_lake(result.path, root),
-                sha256=result.sha256,
-                bytes=result.bytes,
-                written=result.written,
-            )
-        )
 
-    root.mkdir(parents=True, exist_ok=True)
-    # sessions_index carries normalized telemetry conditions → allow_nan for the same
-    # lossless reason; the file index (hashes/sizes/paths only) stays strict JSON.
-    write_immutable_json(
-        root / SESSIONS_INDEX_FILENAME,
-        build_sessions_index(normalized, generated_at=stamp),
-        overwrite=True,
-        allow_nan=True,
-    )
-    write_immutable_json(
-        root / INDEX_FILENAME, build_index(records, generated_at=stamp), overwrite=True
-    )
+    indexed = reindex_lake(root, generated_at=stamp)
     return ExportSummary(
-        total=len(records),
+        total=processed,
         retained_new=retained_new,
-        skipped_existing=len(records) - retained_new,
+        skipped_existing=processed - retained_new,
         failed=failed,
         lake_root=root,
+        indexed=indexed,
     )
 
 
@@ -179,7 +207,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Base dir for the journal/tt lake (default: cwd).",
     )
     export.add_argument("--leveldb-dir", type=Path, default=None)
-    export.add_argument("--overwrite", action="store_true", help="Re-retain existing files.")
     export.add_argument(
         "--dry-run",
         action="store_true",
@@ -222,7 +249,7 @@ def cmd_export(args: argparse.Namespace) -> int:  # pragma: no cover - network
     sessions = list(
         iter_all_sessions(minted.access_token, uid, limit=args.limit, max_pages=args.max_pages)
     )
-    summary = retain_sessions(sessions, lake_base=args.lake_base, overwrite=args.overwrite)
+    summary = retain_sessions(sessions, lake_base=args.lake_base)
     _print(summary.render())
     return 0
 

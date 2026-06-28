@@ -89,7 +89,6 @@ def test_parser_export_defaults() -> None:
     assert args.command == "export"
     assert args.limit == 50
     assert args.dry_run is False
-    assert args.overwrite is False
 
 
 def test_parser_export_flags() -> None:
@@ -164,3 +163,33 @@ def test_retain_sessions_guards_unserializable_session(tmp_path) -> None:
     root = tmp_path / "journal" / "tt"
     assert json.loads((root / INDEX_FILENAME).read_text())["file_count"] == 1
     assert json.loads((root / SESSIONS_INDEX_FILENAME).read_text())["session_count"] == 1
+
+
+def test_retain_sessions_partial_export_preserves_index(tmp_path) -> None:
+    # A later partial export must NOT shrink the discovery index: the index is a derived
+    # view of the WHOLE lake on disk, not of one batch (regression for index-rebuild bug).
+    retain_sessions(_sessions(), lake_base=tmp_path, generated_at="2026-06-28T00:00:00Z")
+    extra = {"id": "u#new", "car_id": "c", "track_id": "t", "game_id": "g"}
+    summary = retain_sessions([extra], lake_base=tmp_path, generated_at="2026-06-29T00:00:00Z")
+    assert summary.total == 1  # this batch processed one session...
+    assert summary.indexed == 4  # ...but the index covers all 4 raw files on disk
+    root = tmp_path / "journal" / "tt"
+    assert json.loads((root / INDEX_FILENAME).read_text())["file_count"] == 4
+    assert json.loads((root / SESSIONS_INDEX_FILENAME).read_text())["session_count"] == 4
+
+
+def test_retain_sessions_raw_is_write_once_and_index_matches_disk(tmp_path) -> None:
+    s = {"id": "u#a", "car_id": "c", "track_id": "t", "game_id": "g", "bestLapTime": 1000}
+    retain_sessions([s], lake_base=tmp_path, generated_at="2026-06-28T00:00:00Z")
+    root = tmp_path / "journal" / "tt"
+    raw_path = next(root.rglob("session.json"))
+    original = raw_path.read_text()
+    # Re-export the SAME session id with DIFFERENT content: raw is write-once → unchanged,
+    # and the rebuilt index reflects the retained (old) raw, never the new payload.
+    summary = retain_sessions(
+        [{**s, "bestLapTime": 9999}], lake_base=tmp_path, generated_at="2026-06-29T00:00:00Z"
+    )
+    assert summary.retained_new == 0
+    assert raw_path.read_text() == original
+    si = json.loads((root / SESSIONS_INDEX_FILENAME).read_text())
+    assert si["sessions"][0]["best_lap_ms"] == 1000  # index agrees with disk, not the new payload
