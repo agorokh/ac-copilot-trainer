@@ -327,12 +327,15 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     err = _validate_optional_number(payload, "slip")
     if err is not None:
         return err
-    # M0 (#341): the live RealtimeObserver needs track position (spline 0..1); the lap counter
-    # disambiguates a true start/finish wrap from a pit/teleport. Both optional + back-compatible.
+    # M0 (#341): the live RealtimeObserver needs `spline` (0..1) to locate corners + detect lap
+    # wraps; the lap counter separates a real start/finish wrap from a pit/teleport. All optional +
+    # back-compatible (producers may omit them); when present they must be sane (`spline` 0..1, lap
+    # counters non-negative). Both snake_case and camelCase lap spellings are accepted (the Lua
+    # producer emits `lap`). #357: consolidated from two duplicate blocks (merge debris).
     err = _validate_optional_number(payload, "spline", min_value=0, max_value=1)
     if err is not None:
         return err
-    for lap_key in ("lap", "lap_count", "completed_laps"):
+    for lap_key in ("lap", "lap_count", "completed_laps", "lapCount", "completedLaps"):
         err = _validate_optional_number(payload, lap_key, min_value=0)
         if err is not None:
             return err
@@ -343,16 +346,6 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     for key in ("abs_active", "brake_lock", "wheel_lock"):
         if key in payload and not isinstance(payload[key], bool):
             return f"{key} must be a boolean"
-    # Issue #341: optional position fields the RealtimeObserver needs to locate corners and detect
-    # lap wraps. Optional so existing producers (which omit them) keep validating; when present they
-    # must be sane — `spline` is the normalized 0..1 track position, lap counters are non-negative.
-    err = _validate_optional_number(payload, "spline", min_value=0, max_value=1)
-    if err is not None:
-        return err
-    for lap_key in ("lap", "lapCount", "completedLaps", "lap_count"):
-        err = _validate_optional_number(payload, lap_key, min_value=0)
-        if err is not None:
-            return err
     return None
 
 
