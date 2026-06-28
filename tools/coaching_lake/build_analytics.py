@@ -178,9 +178,7 @@ def _lap_row(rec: dict, path: Path) -> tuple:
     )
 
 
-def _bulk_load_samples(
-    con, sample_cols: list[str], rows: list[list], *, staging_dir: Path
-) -> int:  # noqa: ANN001
+def _bulk_load_samples(con, sample_cols: list[str], rows: list[list], *, staging_dir: Path) -> int:  # noqa: ANN001
     """Vectorized bulk-load of the per-sample rows via a temp CSV + DuckDB COPY.
 
     DuckDB's row-by-row ``executemany`` is pathologically slow for hundreds of thousands of rows;
