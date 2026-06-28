@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
 from tools.ai_sidecar.coaching_oracle import (
+    FALLBACK_LAYOUT,
     CoachingSnapshot,
     debrief_to_advisories,
     parse_overlay_text,
+    select_layout,
 )
 
 # Real OCR captured live this session (AG_PC, magione, Cayman GT4) — the regression fixture.
@@ -102,6 +104,28 @@ def test_debrief_to_advisories_falls_back_to_debrief_text():
     assert len(advs) == 1
     assert advs[0]["coaching"] == snap.debrief_text
     assert advs[0]["suggested_setup_delta"] is None
+
+
+def test_multidigit_minute_lap_time_kept_intact():
+    # Regression: the minute field may be 2 digits (10:03.123) — must not drop the first digit.
+    snap = parse_overlay_text(["Best:", "10:03.123", "Last:", "9:58.700"])
+    assert "10:03.123" in snap.lap_times_s
+    assert "9:58.700" in snap.lap_times_s
+
+
+def test_advisories_gated_on_debrief_not_live_hud_labels():
+    # Live HUD labels (THROTTLE/BRAKE) with no post-lap debrief must NOT mint advice.
+    snap = parse_overlay_text(["THROTTLE", "BRAKE", "REFERENCE WILL APPEAR"])
+    assert snap.suggestion_state == "awaiting_valid_lap"
+    assert snap.focus_areas == []
+    assert snap.advisories == []
+
+
+def test_select_layout_exact_and_fallback():
+    assert select_layout(3440, 1440).name == "ag_pc_3440x1440"
+    # Uncalibrated resolution -> generic fractional layout, not a wrong calibration.
+    assert select_layout(1920, 1080) is FALLBACK_LAYOUT
+    assert select_layout(1920, 1080).name == "generic"
 
 
 def test_empty_input_is_safe():

@@ -38,7 +38,7 @@ from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
 #: A lap delta / gain-loss reads as a signed 3-decimal number (e.g. ``+0.657``); tyre pressures read
 #: as 1-decimal (``-9.5 psi``). Requiring exactly 3 decimals + a sane magnitude excludes the psi.
 _DELTA_RE = re.compile(r"[+\-]\s?\d+\.\d{3}\b")
-_LAPTIME_RE = re.compile(r"\d:\d\d\.\d{3}")
+_LAPTIME_RE = re.compile(r"\d{1,2}:\d\d\.\d{3}")  # 1-2 minute digits (keep 10:03.123 intact)
 _COMPOUND_RE = re.compile(r"Comp(?:ound)?:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 #: tolerate the common OCR manglings of "post-lap debrief" ("St-lap debrief").
 _DEBRIEF_RE = re.compile(r"((?:post-?lap |st-?lap |[a-z\-]*)debrief.*)", re.IGNORECASE)
@@ -104,6 +104,16 @@ DEFAULT_LAYOUTS: dict[tuple[int, int], OverlayLayout] = {
     ),
 }
 
+#: Crops are fractional, so an uncalibrated resolution still gets a usable (if approximate) crop.
+FALLBACK_LAYOUT = OverlayLayout(
+    name="generic", screen_w=0, screen_h=0, debrief_crop=(0.385, 0.020, 0.235, 0.175), upscale=3.0
+)
+
+
+def select_layout(screen_w: int, screen_h: int) -> OverlayLayout:
+    """Calibrated layout for an exact screen size, else the generic fractional fallback. Pure."""
+    return DEFAULT_LAYOUTS.get((screen_w, screen_h), FALLBACK_LAYOUT)
+
 
 def parse_overlay_text(
     full_lines: list[str],
@@ -135,8 +145,10 @@ def parse_overlay_text(
     debrief_m = _DEBRIEF_RE.search(debrief_join) or _DEBRIEF_RE.search(full_join)
     debrief_text = debrief_m.group(1).strip() if debrief_m else None
 
-    haystack = (debrief_join + " " + full_join).lower()
-    focus_areas = [kw for kw in _FOCUS_COACHING if kw in haystack]
+    # Focus areas are only meaningful inside an actual debrief — derive them from the debrief text,
+    # not the whole overlay, so a live HUD label (e.g. "BRAKE"/"THROTTLE") never mints advice.
+    focus_src = (debrief_text or "").lower()
+    focus_areas = [kw for kw in _FOCUS_COACHING if kw in focus_src]
 
     if debrief_text:
         suggestion_state = "post_lap_debrief"
@@ -166,6 +178,8 @@ def debrief_to_advisories(snap: CoachingSnapshot) -> list[dict[str, Any]]:
     overlay debrief is driver-technique advice; we never fabricate a setup change from it.
     """
     assert "technique" in CAUSE_CLASSES  # vocabulary contract with coach_handoff
+    if not snap.debrief_text:
+        return []  # only a real post-lap debrief yields advice (never stray live-HUD labels)
     advisories: list[dict[str, Any]] = []
     for kw in snap.focus_areas:
         advisories.append(
@@ -204,6 +218,20 @@ class CoachingOracle(ABC):
         raise NotImplementedError
 
 
+def _primary_screen_size() -> tuple[int, int]:  # pragma: no cover - Windows-only
+    """Primary screen (width, height) via GDI; (0, 0) off-Windows so select_layout falls back."""
+    if sys.platform != "win32":
+        return (0, 0)
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:  # noqa: BLE001 - DPI awareness is best-effort
+        pass
+    return (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
+
+
 class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-only plumbing
     """Reads Track Titan's on-screen overlay via screen-capture + native Windows OCR.
 
@@ -229,7 +257,7 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
             return None
         from datetime import datetime
 
-        layout = self.layout or DEFAULT_LAYOUTS.get((3440, 1440))
+        layout = self.layout or select_layout(*_primary_screen_size())
         args = [
             "powershell",
             "-NoProfile",
