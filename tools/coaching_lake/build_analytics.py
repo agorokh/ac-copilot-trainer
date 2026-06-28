@@ -111,7 +111,8 @@ def _resolve_db_path(db_path: str | Path) -> Path:
     if not _is_allowed_lake_db(resolved.name):
         allowed = ", ".join(sorted(_ALLOWED_LAKE_DB_NAMES))
         raise ValueError(
-            f"{raw}: coaching lake must use a dedicated db filename ({allowed}), not {resolved.name!r}"
+            f"{raw}: coaching lake must use a dedicated db filename ({allowed}), "
+            f"not {resolved.name!r}"
         )
     return resolved
 
