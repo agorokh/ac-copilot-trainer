@@ -106,6 +106,10 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-28** — PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348) **MERGED** at
+  `226bc97` — **Coaching lakehouse DuckDB** ([#344](https://github.com/agorokh/ac-copilot-trainer/issues/344) P1):
+  embedded DuckDB star schema in `tools/coaching_lake` rebuilt from lap-archives.
+  9 off-sim tests, ~46s build time. Closes the P1 query engine requirement for EPIC #344.
 - **2026-06-28** — PR [#349](https://github.com/agorokh/ac-copilot-trainer/pull/349) **MERGED** at
   `c477aee` — **live voice wiring** ([#341](https://github.com/agorokh/ac-copilot-trainer/issues/341)
   M0 **CLOSED**): sidecar turns the live `telemetry_tick` stream into spoken cues — `coaching.cue` topic
