@@ -493,9 +493,9 @@ async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None
 
     Each advisory becomes a ``coaching.cue`` frame on the existing topic fan-out; the voice client
     (and any other subscriber) renders it. Deterministic + sparse: the observer dedups per corner,
-    so no cue-rate-limit is needed. The observer is intentionally fed at the FULL producer rate (not
-    behind the 20 Hz peripheral cap) because accurate spline-delta + wrap detection need every
-    frame; per-frame ``observe()`` cost is bounded in practice by the 20 Hz producer.
+    so no cue-rate-limit is needed. Producers contract at 20 Hz (Lua ``telemetry_publisher``,
+    ``telemetry_source``); the sidecar applies the same ``TELEMETRY_TICK_MAX_HZ`` guard here so
+    over-fast senders cannot flood the observer while still receiving every in-contract frame.
 
     Single-producer guarded: only the peer that first fed the observer (``exclude`` is the producer
     websocket) may continue to; a second concurrent producer is ignored here. Never lets an observer

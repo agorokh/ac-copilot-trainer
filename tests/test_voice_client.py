@@ -133,3 +133,37 @@ def test_pyttsx3_speaker_enqueues_when_worker_ready(monkeypatch):
     while not spoken and time.monotonic() < deadline:
         time.sleep(0.01)
     assert spoken == ["Turn 1"]
+
+
+def test_pyttsx3_speaker_drops_oldest_when_queue_full(monkeypatch):
+    ready = threading.Event()
+    spoken: list[str] = []
+
+    class _Engine:
+        def setProperty(self, *_args, **_kwargs) -> None:
+            return None
+
+        def say(self, text: str) -> None:
+            spoken.append(text)
+
+        def runAndWait(self) -> None:
+            return None
+
+    class _Pyttsx3:
+        @staticmethod
+        def init():
+            ready.set()
+            return _Engine()
+
+    monkeypatch.setitem(sys.modules, "pyttsx3", _Pyttsx3())
+    monkeypatch.setattr("tools.ai_sidecar.voice.client._VOICE_QUEUE_MAX", 2)
+    speak = _pyttsx3_speaker()
+    assert ready.wait(timeout=1.0)
+    speak("one")
+    speak("two")
+    speak("three")
+    deadline = time.monotonic() + 1.0
+    while len(spoken) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert "one" not in spoken
+    assert "two" in spoken or "three" in spoken

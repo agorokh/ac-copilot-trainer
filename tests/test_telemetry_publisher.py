@@ -354,6 +354,28 @@ def test_telemetry_tick_rate_limited_to_20hz():
     assert out["lap"] == 2
 
 
+def test_telemetry_tick_seq_resets_on_module_reset():
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = { speedKmh = 1, rpm = 1, splinePosition = 0.1, lapCount = 0 }
+          for _ = 1, 3 do
+            M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          end
+          local seqBefore = ws._calls[#ws._calls].send.seq
+          M.reset()
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          return { before = seqBefore, after = ws._calls[#ws._calls].send.seq }
+        end)()
+        """
+    )
+    assert out["before"] == 3
+    assert out["after"] == 1
+
+
 # --------------------------------------------------------------------------- tire_monitor accessor
 def test_mon_current_temps_reads_four_wheels():
     # CSP `car.wheels` is 0-indexed per `ac.Wheel` (FrontLeft=0 .. RearRight=3) — the table is

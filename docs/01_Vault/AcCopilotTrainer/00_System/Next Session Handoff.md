@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T07:35:00Z
+last_updated: 2026-06-28T10:15:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
@@ -45,7 +45,7 @@ relates_to:
 
 ## Resume here
 
-**[#341](https://github.com/agorokh/ac-copilot-trainer/issues/341) M0 voice-coaching thin slice** — wire live observer → voice cue (branch `feat/issue-341-m0-voice`). Voice output layer landed in [#343](https://github.com/agorokh/ac-copilot-trainer/pull/343); this is the realtime wiring pass.
+**[#341](https://github.com/agorokh/ac-copilot-trainer/issues/341) M0 voice-coaching thin slice — MERGE-READY** — [#342](https://github.com/agorokh/ac-copilot-trainer/pull/342) on `feat/issue-341-m0-voice` @ `8aa33d1`. `/resolve-pr` exit (2026-06-28): required CI green, GraphQL **17/17** threads resolved, local `make ci-fast` green, mergeable. Lua `telemetry_tick` @ 20 Hz (`telemetry_publisher.lua`), sidecar-only subscribe bypass, pyttsx3 in `[voice-client]` extra. **Post-merge operator step:** rig smoke — drive Magione, confirm live voice cue (not a CI gate). Qodo persistent review items #4–#5 fixed in code; bot body may lag until next SHA push.
 
 ---
 

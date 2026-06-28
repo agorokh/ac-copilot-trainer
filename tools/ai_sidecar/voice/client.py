@@ -29,6 +29,9 @@ from tools.ai_sidecar.external_protocol import (
 )
 from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue
 
+#: Max pending TTS phrases; when full, drop the oldest so memory stays bounded under cue bursts.
+_VOICE_QUEUE_MAX = 4
+
 
 def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
     """Return the advisory dict from a ``coaching.cue`` snapshot frame, else ``None``. Pure."""
@@ -97,7 +100,7 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
     import pyttsx3
 
     logger = logging.getLogger(__name__)
-    q: queue.Queue[str | None] = queue.Queue()
+    q: queue.Queue[str | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)
     ready = threading.Event()
     failed = threading.Event()
 
@@ -128,7 +131,17 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
         if not should_enqueue_voice_cue(failed=failed.is_set(), worker_alive=t.is_alive()):
             logger.warning("pyttsx3 unavailable; dropping cue %r", text)
             return
-        q.put(text)
+        try:
+            q.put_nowait(text)
+        except queue.Full:
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(text)
+            except queue.Full:
+                logger.warning("pyttsx3 queue saturated; dropping cue %r", text)
 
     return speak
 

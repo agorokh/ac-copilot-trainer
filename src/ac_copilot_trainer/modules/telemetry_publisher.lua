@@ -200,11 +200,12 @@ function M.publishTelemetryTickIfDue(opts)
 end
 
 
---- Reset the rate-limiters (e.g. on session/stint reset).
+--- Reset the rate-limiters and ``telemetry_tick`` sequence (e.g. on session/stint reset).
 function M.reset()
   _deltaAccum = 0.0
   _tireAccum = 0.0
   _tickAccum = 0.0
+  _tickSeq = 0
 end
 
 
