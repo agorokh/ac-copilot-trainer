@@ -1,9 +1,9 @@
 ---
 type: decision
-status: draft
+status: active
 memory_tier: canonical
 created: 2026-06-27
-updated: 2026-06-27
+updated: 2026-06-28
 relates_to:
   - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/pr-207-motec-reference-import.md
@@ -11,10 +11,24 @@ relates_to:
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
 ---
 
-# Strategy: Track Titan as a swappable "coaching oracle" (proposal, 2026-06-27)
+# Strategy: Track Titan as a swappable "coaching oracle" (implemented 2026-06-28, PR #334)
 
-**Status: draft / proposal** (not yet built). Grounded in
-[[track-titan-telemetry-extraction-feasibility-2026-06-27]] + Gemini council + web research.
+**Status: IMPLEMENTED** — landed in PR [#334](https://github.com/agorokh/ac-copilot-trainer/pull/334)
+(`32c86e9`, 2026-06-28): `tools/ai_sidecar/coaching_oracle.py` (`CoachingOracle` + pure
+parser/advisory mapping + pragma-guarded `TrackTitanScreenOracle`), `tools/ai_sidecar/tt_overlay_ocr.ps1`
+(native `Windows.Media.Ocr`), `tests/test_coaching_oracle.py` (14 tests, 98% cov), pyproject
+`package-data`. Grounded in [[track-titan-telemetry-extraction-feasibility-2026-06-27]] + Gemini
+council + web research.
+
+**Bot-review hardening (6 rounds — durable learnings for any screen-OCR provider):** prefer an English
+OCR engine (`TryCreateFromLanguage('en-US')`, fall back to user-profile) so non-English Windows profiles
+don't misread; cap the upscaled crop to `OcrEngine.MaxImageDimension`; dispose the `SoftwareBitmap` +
+`IRandomAccessStream` in `try/finally` or the capture file stays locked and cannot be deleted; return a
+guaranteed-flat `string[]` (PowerShell's unary-comma `,@(...)` idiom nests the array in JSON); gate
+advisories on a real post-lap debrief (live HUD labels like `BRAKE`/`THROTTLE` must not mint advice) and
+bound the debrief regex to a 2-line window; resolve the helper via `Path(__file__)` and ship it as
+`package-data` for wheel installs; exit non-zero when both OCR passes fail so the caller returns `None`
+rather than a misleading empty snapshot.
 
 ## Decision (proposed)
 Do **not** treat Track Titan (TT) as a runtime data source. Treat it as an **external oracle** behind a

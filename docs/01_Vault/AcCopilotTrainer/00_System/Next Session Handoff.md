@@ -40,6 +40,17 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-06-28) — PR #334 MERGED: Track Titan CoachingOracle
+[#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) squash-merged to `main` as
+`32c86e9`. Productionized the screen-OCR `CoachingOracle`: `tools/ai_sidecar/coaching_oracle.py` +
+`tools/ai_sidecar/tt_overlay_ocr.ps1` (native `Windows.Media.Ocr`) + `tests/test_coaching_oracle.py`
+(14 tests, 98% module cov) + pyproject `package-data`. Bot review converged over 6 rounds (Codex/Qodo);
+hardening learnings recorded in [[track-titan-coaching-oracle-strategy-2026-06-27]] (now `active`).
+**Post-merge note:** `pyproject.toml` changed → run `pip install -e '.[dev]'`. The research/feasibility
+block below is superseded by this delivered entry.
+
+---
+
 ## Side research (2026-06-27) — Track Titan as a coaching angle (PR #334)
 Active code resume is still **#305 / Track Titan-independent** (below). Separately, a `/start-task`
 research pass investigated the locally-installed **Track Titan** as an external coaching angle.
