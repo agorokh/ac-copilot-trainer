@@ -146,14 +146,14 @@ class MacSayBackend:
                     "afconvert",
                     str(aiff),
                     str(out_path),
+                    # afconvert carries the sample rate in the data-format spec (@<rate>); there is
+                    # no separate --rate flag. LEI16 = little-endian 16-bit PCM; -c 1 = mono.
                     "-d",
-                    "LEI16",
+                    f"LEI16@{samplerate}",
                     "-f",
                     "WAVE",
                     "-c",
                     "1",
-                    "--rate",
-                    str(samplerate),
                 ],
                 check=True,
             )
