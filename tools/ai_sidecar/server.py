@@ -20,7 +20,6 @@ import os
 import secrets
 import time
 from collections.abc import Callable
-from dataclasses import asdict
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -81,7 +80,6 @@ from tools.ai_sidecar.protocol import (
 )
 from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
-    build_observer_from_reference,
 )
 from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
@@ -119,6 +117,27 @@ _observer: RealtimeObserver | None = None
 # detection and silently mis-grade corners). Released when the owner disconnects.
 _observer_feed_peer: Any = None
 _observer_feed_warned = False
+
+# Issue #341 — live voice wiring. Both are OPTIONAL and OFF by default: a sidecar with neither set
+# behaves byte-identically to before. ``_observer`` turns the live ``telemetry_tick`` stream into
+# per-corner advisories (published on ``coaching.cue``); ``_voice_coach`` (the #340 phrase-bank
+# engine) speaks them in-process on the rig. The audio deps live only inside the voice package and
+# are imported lazily when ``--voice-bank`` is supplied, so the sidecar core stays dep-free.
+_observer: Any | None = None
+_voice_coach: Any | None = None
+
+
+def set_realtime_observer(observer: Any | None) -> None:
+    """Install (or clear) the live ``RealtimeObserver`` fed by ``telemetry_tick`` (issue #341)."""
+    global _observer
+    _observer = observer
+
+
+def set_voice_coach(coach: Any | None) -> None:
+    """Install (or clear) the in-process voice coach that speaks advisories on the rig (#341)."""
+    global _voice_coach
+    _voice_coach = coach
+
 
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
@@ -488,58 +507,6 @@ def _release_observer_feed(websocket: Any) -> None:
             _observer.reset()
 
 
-async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None:
-    """Feed one live ``telemetry_tick`` frame to the RealtimeObserver and fan out any advisories.
-
-    Each advisory becomes a ``coaching.cue`` frame on the existing topic fan-out; the voice client
-    (and any other subscriber) renders it. Deterministic + sparse: the observer dedups per corner,
-    so no cue-rate-limit is needed. Producers contract at 20 Hz (Lua ``telemetry_publisher``,
-    ``telemetry_source``); the sidecar applies the same ``TELEMETRY_TICK_MAX_HZ`` guard here so
-    over-fast senders cannot flood the observer while still receiving every in-contract frame.
-
-    Single-producer guarded: only the peer that first fed the observer (``exclude`` is the producer
-    websocket) may continue to; a second concurrent producer is ignored here. Never lets an observer
-    error break the peripheral path. Cue delivery is best-effort: broadcasts are scheduled as
-    background tasks so a slow subscriber cannot stall telemetry handling.
-    """
-    global _observer_feed_peer, _observer_feed_warned
-    if _observer is None:
-        return
-    if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
-        return
-    if _observer_feed_peer is None:
-        _observer_feed_peer = exclude
-        _observer_feed_warned = False
-    elif exclude is not _observer_feed_peer:
-        if not _observer_feed_warned:
-            logger.warning(
-                "ignoring observer feed from a second telemetry producer peer=%s; the live "
-                "observer is single-stream and already owned by another producer",
-                getattr(exclude, "remote_address", None),
-            )
-            _observer_feed_warned = True
-        return
-    try:
-        advisories = _observer.observe(frame)
-    except Exception:
-        logger.exception("realtime observer failed on telemetry frame")
-        return
-    tick_payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
-    for advisory in advisories:
-        adv_dict = asdict(advisory)
-        car_spline = tick_payload.get("spline")
-        if isinstance(car_spline, int | float):
-            adv_dict["car_spline"] = float(car_spline)
-        car_speed = tick_payload.get("speed_kmh")
-        if isinstance(car_speed, int | float):
-            adv_dict["car_speed_kmh"] = float(car_speed)
-        cue_task = asyncio.create_task(
-            _broadcast_external(make_coaching_cue(adv_dict), exclude=exclude)
-        )
-        _background_tasks.add(cue_task)
-        cue_task.add_done_callback(_background_tasks.discard)
-
-
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
     """Forward a v1 frame to an explicit peer list."""
     if not targets:
@@ -626,6 +593,88 @@ def _build_haptic_events_from_telemetry(frame: dict[str, Any]) -> list[dict[str,
             event["ts_sim"] = ts_sim
         events.append(event)
     return events
+
+
+def _advisory_to_payload(advisory: Any) -> dict[str, Any] | None:
+    """Flatten a ``RealtimeObserver`` Advisory into the ``coaching.cue`` wire payload (issue #341).
+
+    ``corner`` is kept 0-based (as the observer emits it) so a consumer can reconstruct the Advisory
+    faithfully; the human-facing 1-based turn number already lives in ``message`` ("...T4...").
+
+    Returns ``None`` when required fields are missing so consumers never see null
+    ``kind``/``urgency``.
+    """
+    kind = getattr(advisory, "kind", None)
+    urgency = getattr(advisory, "urgency", None)
+    if not isinstance(kind, str) or not kind or not isinstance(urgency, str) or not urgency:
+        logger.warning("voice: dropping advisory with missing kind/urgency: %r", advisory)
+        return None
+    return {
+        "kind": kind,
+        "corner": getattr(advisory, "corner", None),
+        "urgency": urgency,
+        "message": getattr(advisory, "message", ""),
+        "spline": getattr(advisory, "spline", None),
+        "detail": getattr(advisory, "detail", {}),
+    }
+
+
+async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None:
+    """Feed one live ``telemetry_tick`` frame to the observer; speak + fan-out its advisories
+    (#341).
+
+    No-op unless a ``RealtimeObserver`` is installed (the default). Each advisory is both (a) fed to
+    the in-process voice coach so it speaks on the rig, and (b) published as a ``coaching.cue``
+    topic
+    frame so any ``voice``-class WS client can consume it. The observer/coach never raise into the
+    live loop — a fault here must not stall telemetry or haptics.
+
+    Single-producer guarded: only the peer that first fed the observer (``exclude`` is the producer
+    websocket) may continue to; a second concurrent producer is ignored here.
+    """
+    global _observer_feed_peer, _observer_feed_warned
+    observer = _observer
+    if observer is None:
+        return
+    if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
+        return
+    if _observer_feed_peer is None:
+        _observer_feed_peer = exclude
+        _observer_feed_warned = False
+    elif exclude is not _observer_feed_peer:
+        if not _observer_feed_warned:
+            logger.warning(
+                "ignoring observer feed from a second telemetry producer peer=%s; the live "
+                "observer is single-stream and already owned by another producer",
+                getattr(exclude, "remote_address", None),
+            )
+            _observer_feed_warned = True
+        return
+    try:
+        advisories = observer.observe(frame)
+    except Exception:
+        logger.exception("realtime observer failed on telemetry_tick")
+        return
+    if not advisories:
+        return
+    ts_sim = frame.get("ts_sim")
+    coach = _voice_coach
+    for advisory in advisories:
+        if coach is not None:
+            try:
+                coach.subscribe(advisory)
+            except Exception:
+                logger.exception("voice coach subscribe failed for advisory")
+        try:
+            cue_payload = _advisory_to_payload(advisory)
+            if cue_payload is None:
+                continue
+            cue = make_coaching_cue(cue_payload, ts_sim=ts_sim)
+            cue_task = asyncio.create_task(_broadcast_external(cue, exclude=exclude))
+            _background_tasks.add(cue_task)
+            cue_task.add_done_callback(_background_tasks.discard)
+        except Exception:
+            logger.exception("voice: failed to publish coaching cue for advisory")
 
 
 async def _route_peripheral_frame(
@@ -904,8 +953,8 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
                 rate_key=(TYPE_HAPTIC_EVENT, event["event"], event["channel"]),
                 max_hz=HAPTIC_EVENT_MAX_HZ,
             )
-        # M0 (#341): the same live frame feeds the real-time observer -> coaching.cue voice cues.
-        await _publish_observer_cues(data, exclude=websocket)
+        # Issue #341: turn the same live frame into spoken coaching cues (no-op unless wired).
+        await _publish_coaching_cues(data, exclude=websocket)
         return
     if t == TYPE_HAPTIC_EVENT:
         await _route_peripheral_frame(
@@ -1166,24 +1215,51 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _load_observer(path: str) -> None:
-    """Build the live RealtimeObserver from a FASTER reference lap archive.
+def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
+    """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
-    Called only when ``--reference-archive`` or ``AC_COPILOT_REFERENCE_ARCHIVE`` is set. Raises
-    ``SystemExit`` if the archive cannot be loaded — an explicit operator request must not silently
-    degrade.
+    Best-effort by design: a missing/invalid reference or bank disables the feature with a loud log
+    rather than aborting the sidecar — telemetry and haptics must keep flowing regardless. Audio
+    deps
+    are imported lazily here (only when ``--voice-bank`` is supplied), so the sidecar core stays
+    dep-free for users who never enable voice.
     """
-    global _observer
-    try:
-        with open(path, encoding="utf-8") as fh:
-            archive = json.load(fh)
-        _observer = build_observer_from_reference(archive)
-    except Exception as exc:
-        logger.exception("failed to load reference archive for live observer: %s", path)
-        raise SystemExit(f"reference archive unusable: {path}") from exc
-    if _observer is None:
-        raise SystemExit(f"reference archive did not yield a usable observer: {path}")
-    logger.info("live RealtimeObserver built from reference archive: %s", path)
+    if bank_dir and not reference_path:
+        logger.warning(
+            "voice: --voice-bank is set but --voice-reference is missing; voice coach will be idle"
+        )
+
+    if reference_path:
+        try:
+            from tools.ai_sidecar.realtime_observer import build_observer_from_reference
+
+            with open(reference_path, encoding="utf-8") as fh:
+                archive = json.load(fh)
+            observer = build_observer_from_reference(archive)
+            if observer is None:
+                logger.error(
+                    "voice: reference %s has no usable corners — observer disabled", reference_path
+                )
+            else:
+                set_realtime_observer(observer)
+                logger.info("voice: realtime observer wired from reference %s", reference_path)
+        except Exception:  # noqa: BLE001 - malformed archive must not abort the sidecar
+            logger.exception("voice: failed to load reference %s", reference_path)
+    if bank_dir:
+        try:
+            from tools.ai_sidecar.voice.engine import VoiceCoach
+
+            coach = VoiceCoach.from_bank(bank_dir)
+            if not coach.enabled:
+                logger.error(
+                    "voice: bank %s disabled the coach (%s)", bank_dir, coach.disabled_reason
+                )
+            else:
+                coach.start()
+                set_voice_coach(coach)
+                logger.info("voice: in-process voice coach wired from bank %s", bank_dir)
+        except Exception:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
+            logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
 
 
 def main() -> None:
@@ -1263,12 +1339,22 @@ def main() -> None:
         ),
     )
     p.add_argument(
-        "--reference-archive",
+        "--voice-reference",
         default=None,
         help=(
-            "Path to a FASTER reference lap archive JSON. Builds the live RealtimeObserver so the "
-            "sidecar emits real-time coaching.cue advisories for the voice client (M0, #341). "
+            "Issue #341: path to a faster reference-lap archive JSON. When set, the sidecar feeds "
+            "live telemetry_tick frames to a RealtimeObserver built from it and publishes "
+            "per-corner advisories on the `coaching.cue` topic. "
             "Falls back to $AC_COPILOT_REFERENCE_ARCHIVE."
+        ),
+    )
+    p.add_argument(
+        "--voice-bank",
+        default=None,
+        help=(
+            "Issue #341/#340: path to a baked phrase-bank directory. When set (with "
+            "--voice-reference), the sidecar speaks the live cues in-process via the VoiceCoach "
+            "engine. Requires the `voice` extra (numpy/sounddevice/rtmixer) + an audio device."
         ),
     )
     args = p.parse_args()
@@ -1305,9 +1391,8 @@ def main() -> None:
     if not _is_loopback(host) and not args.token:
         raise SystemExit("--token is required for non-loopback bind addresses")
 
-    ref_path = args.reference_archive or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
-    if ref_path:
-        _load_observer(ref_path)
+    ref_path = args.voice_reference or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
+    _wire_voice(ref_path, args.voice_bank)
 
     try:
         asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))

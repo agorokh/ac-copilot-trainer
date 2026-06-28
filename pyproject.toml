@@ -72,6 +72,12 @@ training = [
   "peft>=0.19.1",
   "datasets>=4.8.4",
 ]
+# Coaching lakehouse (EPIC #344 / #345): embedded DuckDB over the lap-archive corpus for
+# whole-data-plane analytical queries (trends/dependencies across car x track x corner x
+# condition x setup). Single pip wheel, no server -- Windows + py3.13 native.
+analytics = [
+  "duckdb>=1.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src", "."]

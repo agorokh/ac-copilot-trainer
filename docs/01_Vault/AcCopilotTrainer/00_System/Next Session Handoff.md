@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T07:35:00Z
+last_updated: 2026-06-28T15:35:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
@@ -43,9 +44,43 @@ relates_to:
 
 # Next session handoff
 
-## Resume here
+## Resume here (2026-06-28) — PR #348 resolve-pr in progress; #345 P0 capture next
 
-**[#341](https://github.com/agorokh/ac-copilot-trainer/issues/341) M0 voice-coaching thin slice** — wire live observer → voice cue (branch `feat/issue-341-m0-voice`). Voice output layer landed in [#343](https://github.com/agorokh/ac-copilot-trainer/pull/343); this is the realtime wiring pass.
+**PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348)** (`feat/345-coaching-lake-duckdb`) delivers the EPIC #344 "query the whole data plane"
+engine: `tools/coaching_lake` — embedded **DuckDB** star (laps/corners/setup_params/samples)
+rebuilt idempotently from the immutable lap-archive JSON. Bot review addressed (Gemini + Qodo):
+`math.isfinite`, journal-scoped temp CSV, atomic transaction through samples COPY, explicit ROLLBACK.
+`make ci-fast` green locally; merge `main` to clear conflicts and unstick CI checks.
+Detail: [[coaching-lakehouse-duckdb-2026-06-28]].
+
+**Next after #348 merge:** **#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
+
+**[#350](https://github.com/agorokh/ac-copilot-trainer/issues/350) — voice coach LIVE-FIRE (rig-gated).** The
+off-sim engine (#340) and the sidecar live-wiring (#341, PR #349) are merged; what remains is a **Lua
+`telemetry_tick` producer that emits `spline`+speed** (none exists today — `git grep -rln telemetry_tick
+src/` is empty) so the observer actually fires live, plus the **on-rig audible smoke** (operator drives vs a
+faster reference, hears a spline-anchored cue). Bake a Piper bank (`python -m tools.ai_sidecar.voice.bake
+--backend piper`), launch the sidecar with `--voice-reference <archive> --voice-bank <dir>`, tap
+`coaching.cue`. This is the deferred verification for both #340 and #341.
+
+---
+
+## Delivered (2026-06-28) — PR #349 MERGED: live voice wiring (#341 M0 CLOSED)
+`/autonomous-deliver` continued from #340 into #341 Part A. [#349](https://github.com/agorokh/ac-copilot-trainer/pull/349)
+squash-merged to `main` as `c477aee`; **#341 CLOSED**. The sidecar now turns the live `telemetry_tick`
+stream into spoken cues: `external_protocol` adds `CLIENT_CLASS_VOICE`, the sidecar-originated
+`coaching.cue` topic, optional `spline`/`lap` validation, and `make_coaching_cue`; `server.py` gains
+optional `_observer`/`_voice_coach` state (OFF by default → byte-identical when unset) + `_publish_coaching_cues`
+(feeds the `RealtimeObserver` per tick → speaks via the in-process #340 `VoiceCoach` **and** publishes
+`coaching.cue` to WS peers) + `--voice-reference`/`--voice-bank` startup flags (audio deps lazy). A **parallel
+autonomous session** (running as `agorokh`) advanced this PR to green — adding a `process_pending` tie-break
+by `(rank, enqueued_at, batch_index)` (fixing a latent freshest-tie bug in #340 + act-cue advisory→dispatch
+latency logging vs the 150 ms budget), a test-isolation autouse fixture, and a `lapCount` case. 9 new wiring
+tests incl. an end-to-end `telemetry_tick → voice-client coaching.cue` round-trip; `make ci-fast` re-verified
+green locally on the merged head. **Reconciliation:** #341 closed COMPLETED but 2 ACs (Lua spline emit;
+rig smoke) were unmet → filed **#350** for the live producer + on-rig audible verification so the work isn't
+lost (cross-linked on #341). **Post-merge:** no classification flags.
+
 
 ---
 
