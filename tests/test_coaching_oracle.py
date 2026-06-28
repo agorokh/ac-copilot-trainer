@@ -172,6 +172,14 @@ def test_coerce_lines_flattens_and_stringifies():
     assert _coerce_lines(["a", "b"]) == ["a", "b"]
     assert _coerce_lines([["a", "b"], "c"]) == ["a", "b", "c"]  # one-level nesting flattened
     assert _coerce_lines([1, None, 2]) == ["1", "2"]
+    assert _coerce_lines([["a", None, "b"]]) == ["a", "b"]  # nested None dropped, not "None"
+
+
+def test_spaced_post_lap_debrief_marker_recognized():
+    snap = parse_overlay_text(["Post lap debrief: focus on earlier throttle application"])
+    assert snap.suggestion_state == "post_lap_debrief"
+    assert snap.debrief_text is not None
+    assert "throttle" in snap.focus_areas
 
 
 def test_empty_input_is_safe():

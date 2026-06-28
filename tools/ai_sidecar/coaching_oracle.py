@@ -43,7 +43,7 @@ _LAPTIME_RE = re.compile(r"\d{1,2}:\d\d\.\d{3}")  # 1-2 minute digits (keep 10:0
 _COMPOUND_RE = re.compile(r"Comp(?:ound)?:\s*([A-Za-z0-9]+)", re.IGNORECASE)
 #: Require the real TT marker ("post-lap debrief", incl. the common OCR mangling "st-lap") so
 #: ``debrief_text`` is set ONLY for a genuine post-lap debrief — never a stray "debrief" token.
-_DEBRIEF_RE = re.compile(r"((?:post-?lap|st-?lap)\s+debrief.*)", re.IGNORECASE)
+_DEBRIEF_RE = re.compile(r"((?:post\s*-?\s*lap|st\s*-?\s*lap)\s+debrief.*)", re.IGNORECASE)
 _MAX_PLAUSIBLE_DELTA_S = 30.0
 
 #: focus-area keyword -> a normalized technique coaching line (TT phrases vary; we map the salient
@@ -128,7 +128,7 @@ def _coerce_lines(value: object) -> list[str]:
     out: list[str] = []
     for item in value:
         if isinstance(item, list):
-            out.extend(str(s) for s in item)
+            out.extend(str(s) for s in item if s is not None)
         elif item is not None:
             out.append(str(item))
     return out
@@ -213,7 +213,8 @@ def debrief_to_advisories(snap: CoachingSnapshot) -> list[dict[str, Any]]:
     Reuses the :data:`CAUSE_CLASSES` vocabulary. ``suggested_setup_delta`` is ALWAYS ``None`` — TT's
     overlay debrief is driver-technique advice; we never fabricate a setup change from it.
     """
-    assert "technique" in CAUSE_CLASSES  # vocabulary contract with coach_handoff
+    if "technique" not in CAUSE_CLASSES:
+        return []  # vocabulary contract with coach_handoff — never raise through get_coaching()
     if not snap.debrief_text:
         return []  # only a real post-lap debrief yields advice (never stray live-HUD labels)
     advisories: list[dict[str, Any]] = []
@@ -333,5 +334,5 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
                 _coerce_lines(data.get("debrief_lines")),
                 captured_utc=datetime.now(UTC).isoformat(),
             )
-        except (AttributeError, TypeError, ValueError):
+        except (AssertionError, AttributeError, TypeError, ValueError):
             return None

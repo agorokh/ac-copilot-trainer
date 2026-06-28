@@ -36,4 +36,6 @@ pytest tests/test_coaching_oracle.py -q
 make ci-fast
 ```
 
+**Verified (2026-06-28, commit `0a8547c`+):** GitHub CI green on PR #334 (`build`, `conformance`, `pip-audit`, `Canonical docs exist`, `score`, `classify`); local `pytest tests/test_coaching_oracle.py` 17/17 pass; `ruff format --check` + `ruff check` clean. Full `make ci-fast` coverage step requires the project venv (`pip install -e '.[dev]'`).
+
 Live smoke (Windows rig with Track Titan overlay visible): instantiate `TrackTitanScreenOracle()` and call `get_coaching()`.
