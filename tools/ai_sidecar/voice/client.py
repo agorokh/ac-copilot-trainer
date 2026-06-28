@@ -4,7 +4,7 @@ The pure core — :func:`extract_advisory`, :class:`VoiceClient.handle_frame` (s
 injected), and the hello/subscribe frame builders — is CI-testable on any OS. The websockets loop
 and the pyttsx3 engine are pragma-guarded (Windows / runtime / audio). Piper TTS is M2.
 
-Run on the rig alongside the sidecar:
+Run on the rig alongside the sidecar (``pip install -e '.[voice-client]'``):
 
     python -m tools.ai_sidecar.voice.client --url ws://127.0.0.1:8765
 """
