@@ -1150,6 +1150,11 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
     are imported lazily here (only when ``--voice-bank`` is supplied), so the sidecar core stays
     dep-free for users who never enable voice.
     """
+    if bank_dir and not reference_path:
+        logger.warning(
+            "voice: --voice-bank is set but --voice-reference is missing; voice coach will be idle"
+        )
+
     if reference_path:
         try:
             from tools.ai_sidecar.realtime_observer import build_observer_from_reference
@@ -1164,7 +1169,7 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
             else:
                 set_realtime_observer(observer)
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
-        except (OSError, ValueError) as exc:
+        except Exception as exc:  # noqa: BLE001 - malformed archive must not abort the sidecar
             logger.error("voice: failed to load reference %s: %s", reference_path, exc)
     if bank_dir:
         try:

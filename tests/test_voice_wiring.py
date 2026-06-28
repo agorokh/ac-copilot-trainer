@@ -121,6 +121,7 @@ def test_telemetry_tick_accepts_optional_spline_and_lap() -> None:
     assert ep.validate_inbound(_telemetry_tick(spline=0.5)) is None
     assert ep.validate_inbound(_telemetry_tick(spline=0.0, lap=3)) is None
     assert ep.validate_inbound(_telemetry_tick(completedLaps=5)) is None
+    assert ep.validate_inbound(_telemetry_tick(lapCount=5)) is None
     # still valid with neither (existing producers unaffected)
     assert ep.validate_inbound(_telemetry_tick()) is None
 

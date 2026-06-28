@@ -107,17 +107,17 @@ class Scheduler:
             batch = self._pending
             self._pending = []
 
-        candidates: list[Utterance] = []
+        candidates: list[tuple[Utterance, float]] = []
         for item in batch:
             utt = self._consider(item, now)
             if utt is not None:
-                candidates.append(utt)
+                candidates.append((utt, item.enqueued_at))
         if not candidates:
             return None
 
         # Highest urgency wins; ties break toward the cue considered last (freshest in this batch).
-        winner = max(candidates, key=lambda u: u.rank)
-        return self._dispatch(winner, now)
+        winner, enqueued_at = max(candidates, key=lambda pair: pair[0].rank)
+        return self._dispatch(winner, now, enqueued_at=enqueued_at)
 
     def _consider(self, item: _Pending, now: float) -> Utterance | None:
         """Resolve + filter one pending advisory; return a playable utterance or ``None``."""
@@ -149,7 +149,9 @@ class Scheduler:
                 return None
         return utt
 
-    def _dispatch(self, winner: Utterance, now: float) -> Utterance | None:
+    def _dispatch(
+        self, winner: Utterance, now: float, *, enqueued_at: float | None = None
+    ) -> Utterance | None:
         """Play ``winner`` with barge-in semantics, or drop it if the channel is busy with >=
         cue."""
         current = self._playback.current
@@ -169,6 +171,18 @@ class Scheduler:
         except Exception:  # noqa: BLE001 — never let a backend fault crash the scheduler thread
             _log.exception("voice: playback.play failed for %s — staying silent", winner.clip_id)
             return None
+        if winner.rank >= _ACT_RANK and enqueued_at is not None:
+            latency_ms = (now - enqueued_at) * 1000.0
+            if latency_ms > 150.0:
+                _log.warning(
+                    "voice: act cue %s advisory→dispatch latency %.1f ms exceeds 150 ms budget",
+                    winner.clip_id,
+                    latency_ms,
+                )
+            else:
+                _log.debug(
+                    "voice: act cue %s advisory→dispatch latency %.1f ms", winner.clip_id, latency_ms
+                )
         self._last_spoke_key[winner.dedup_key] = now
         self._last_spoke_kind[winner.kind] = now
         return winner

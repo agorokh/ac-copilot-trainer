@@ -310,7 +310,7 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     err = _validate_optional_number(payload, "spline", min_value=0, max_value=1)
     if err is not None:
         return err
-    for lap_key in ("lap", "completedLaps", "lap_count"):
+    for lap_key in ("lap", "lapCount", "completedLaps", "lap_count"):
         err = _validate_optional_number(payload, lap_key, min_value=0)
         if err is not None:
             return err
