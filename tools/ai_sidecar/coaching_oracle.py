@@ -327,8 +327,11 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
             return None
         if not isinstance(data, dict):
             return None
-        return parse_overlay_text(
-            _coerce_lines(data.get("full_lines")),
-            _coerce_lines(data.get("debrief_lines")),
-            captured_utc=datetime.now(UTC).isoformat(),
-        )
+        try:
+            return parse_overlay_text(
+                _coerce_lines(data.get("full_lines")),
+                _coerce_lines(data.get("debrief_lines")),
+                captured_utc=datetime.now(UTC).isoformat(),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return None

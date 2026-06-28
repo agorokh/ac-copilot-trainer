@@ -180,3 +180,39 @@ def test_empty_input_is_safe():
     assert snap.debrief_text is None
     assert snap.delta_gainloss_s is None
     assert snap.advisories == []
+
+
+def test_get_coaching_returns_none_on_non_dict_json(monkeypatch):
+    """Qodo: helper JSON must be a dict; list/scalar shapes return None."""
+    import tools.ai_sidecar.coaching_oracle as mod
+
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    monkeypatch.setattr(mod, "_primary_screen_size", lambda: (0, 0))
+
+    class _Proc:
+        returncode = 0
+        stdout = '["not","a","dict"]'
+        stderr = ""
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
+    assert mod.TrackTitanScreenOracle().get_coaching() is None
+
+
+def test_get_coaching_returns_none_when_parse_raises(monkeypatch):
+    """Qodo: parse failures must not escape get_coaching's None-on-failure contract."""
+    import tools.ai_sidecar.coaching_oracle as mod
+
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    monkeypatch.setattr(mod, "_primary_screen_size", lambda: (0, 0))
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"full_lines":["x"],"debrief_lines":[]}'
+        stderr = ""
+
+    def _boom(*a, **k):
+        raise TypeError("simulated parse failure")
+
+    monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
+    monkeypatch.setattr(mod, "parse_overlay_text", _boom)
+    assert mod.TrackTitanScreenOracle().get_coaching() is None

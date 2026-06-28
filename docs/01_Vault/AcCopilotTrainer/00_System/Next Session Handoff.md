@@ -50,8 +50,9 @@ no API/export. For AC it adds **no new raw signal** — only pro ghost laps + an
 treat TT as a swappable "coaching oracle"; cheap wins first (pro ghost → #207 faster-than-PB importer;
 TT per-corner time-loss as an external referee for the autonomous harness); time-box a `ws://localhost:9121`
 tap spike; **never** automate the user's plaintext Cognito token. No runtime coupling proposed.
-**Update (fully autonomous live-verify on AG_PC):** ws:9121 tap PROVEN (11,497 frames) but **live-telemetry only** — TT's coaching (post-lap AI debrief) renders in the overlay and does NOT cross the ws (also unreliable as a 2nd consumer beside the real overlay). **Screen-capture/OCR is the extraction path** — POC built + verified: `.scratch/ocr_extract_tt.ps1` (native Windows.Media.Ocr, zero deps) emits coaching JSON (`.scratch/tt_coaching.json`). Next: productionize a `CoachingOracle` Python module via `/orchestrate`. Rig restored to stock. **Update:** productionization is PR
-[#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) —
+**Update (fully autonomous live-verify on AG_PC):** ws:9121 tap PROVEN (11,497 frames) but **live-telemetry only** — TT's coaching (post-lap AI debrief) renders in the overlay and does NOT cross the ws (also unreliable as a 2nd consumer beside the real overlay). **Screen-capture/OCR is the extraction path** — POC built + verified: `.scratch/ocr_extract_tt.ps1` (native Windows.Media.Ocr, zero deps) emits coaching JSON (`.scratch/tt_coaching.json`). Next: productionize a `CoachingOracle` Python module via `/orchestrate`. Rig restored to stock. **Update:** productionization shipped in
+[PR #334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (implements
+[#333](https://github.com/agorokh/ac-copilot-trainer/issues/333)) —
 `tools/ai_sidecar/coaching_oracle.py` + `tt_overlay_ocr.ps1` + tests; bot review resolved.
 
 ---
