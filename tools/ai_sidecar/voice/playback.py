@@ -28,11 +28,13 @@ Test/verification doubles:
 from __future__ import annotations
 
 import logging
+import time
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from tools.ai_sidecar.voice.manifest import Manifest
+from tools.ai_sidecar.voice.manifest import Manifest, sha256_bytes
 from tools.ai_sidecar.voice.utterance import Utterance
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -154,6 +156,23 @@ class Bank:
         clips: dict[str, np.ndarray] = {}
         for entry in manifest.clips.values():
             fp = base / entry.file
+            try:
+                raw = fp.read_bytes()
+            except OSError as exc:
+                _log.error("voice: cannot read clip %s (%s): %s", entry.clip_id, fp, exc)
+                continue
+            # Enforce the manifest digest at LOAD, not just in validate(): a corrupted or
+            # substituted (yet decodable) clip must be skipped, never played — "never play the
+            # wrong clip" (#340).
+            digest = sha256_bytes(raw)
+            if digest != entry.sha256:
+                _log.error(
+                    "voice: sha256 mismatch for clip %s (file=%s… manifest=%s…) — skipping",
+                    entry.clip_id,
+                    digest[:12],
+                    entry.sha256[:12],
+                )
+                continue
             try:
                 pcm = _decode_wav_float32(fp, manifest.samplerate, np)
             except (OSError, wave.Error, ValueError) as exc:
@@ -327,10 +346,45 @@ class RtMixerPlayback:
         self._current = None
 
 
+class _TimedCurrent:
+    """Tracks the currently-sounding utterance with an estimated end time. Pure (no audio dep).
+
+    ``sounddevice.play`` is fire-and-forget with no cheap "is it still playing?" signal, so the
+    fallback backend estimates completion from clip duration: :meth:`set` stamps an end time, and
+    :attr:`current` auto-clears once the clock passes it. Without this the channel would read busy
+    forever and the scheduler would drop every cue after the first. Clock is injectable for tests.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._current: Utterance | None = None
+        self._until = 0.0
+
+    def set(self, utterance: Utterance, duration_s: float) -> None:
+        self._current = utterance
+        self._until = self._clock() + max(0.0, duration_s)
+
+    def clear(self) -> None:
+        self._current = None
+
+    @property
+    def current(self) -> Utterance | None:
+        if self._current is not None and self._clock() >= self._until:
+            self._current = None
+        return self._current
+
+
 class SoundDevicePlayback:
     """Interim fallback: ``sounddevice.play(device=)`` + ``.stop()`` behind the same interface."""
 
-    def __init__(self, bank: Bank, *, device_name: str | None, host_api: str | None) -> None:
+    def __init__(
+        self,
+        bank: Bank,
+        *,
+        device_name: str | None,
+        host_api: str | None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         import sounddevice as sd
 
         self._bank = bank
@@ -341,15 +395,13 @@ class SoundDevicePlayback:
             devices=list(sd.query_devices()),
             host_apis=list(sd.query_hostapis()),
         )
-        self._current: Utterance | None = None
+        # Estimated-completion tracking so the channel frees when a clip finishes (not just on
+        # cancel/close) — otherwise the scheduler treats it as perpetually busy after the first cue.
+        self._timed = _TimedCurrent(clock)
 
     @property
     def current(self) -> Utterance | None:
-        # sounddevice has no cheap "is this clip still playing" without a callback; treat the
-        # channel
-        # as free once the stream reports idle via get_stream() activity is not reliable, so we rely
-        # on the scheduler's short clips + cancel-on-barge-in. Conservative: report idle.
-        return self._current
+        return self._timed.current
 
     def play(self, utterance: Utterance) -> None:
         pcm = self._bank.get(utterance.clip_id)
@@ -357,12 +409,12 @@ class SoundDevicePlayback:
             _log.error("voice: clip %s absent from bank — staying silent", utterance.clip_id)
             return
         self._sd.play(pcm, samplerate=self._bank.samplerate, device=self._device)
-        self._current = utterance
+        self._timed.set(utterance, len(pcm) / self._bank.samplerate)
 
     def cancel(self) -> None:
         self._sd.stop()
-        self._current = None
+        self._timed.clear()
 
     def close(self) -> None:
         self._sd.stop()
-        self._current = None
+        self._timed.clear()

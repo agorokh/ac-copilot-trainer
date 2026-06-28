@@ -8,11 +8,12 @@ onto the haptic USB-DAC" criterion is fully unit-tested here.
 from __future__ import annotations
 
 import pytest
-from _voice_support import build_manifest, make_advisory
+from _voice_support import FakeClock, build_manifest, make_advisory
 
 from tools.ai_sidecar.voice.playback import (
     DeviceResolutionError,
     RecordingPlayback,
+    _TimedCurrent,
     resolve_output_device,
 )
 from tools.ai_sidecar.voice.resolver import Resolver
@@ -76,3 +77,39 @@ def test_recording_playback_tracks_current() -> None:
     pb.cancel()
     assert pb.current is None
     assert pb.cancelled == [utt]
+
+
+def test_timed_current_frees_channel_after_estimated_duration() -> None:
+    # Qodo finding #2: the sounddevice fallback must free the channel when a clip naturally
+    # finishes, or the scheduler treats it as perpetually busy and drops every later cue.
+    clock = FakeClock()
+    tc = _TimedCurrent(clock=clock)
+    r = Resolver(build_manifest())
+    utt = r.resolve(make_advisory(kind="late_brake", urgency="act", corner=2))
+    assert tc.current is None
+    tc.set(utt, duration_s=0.5)
+    assert tc.current is utt  # still sounding
+    clock.advance(0.4)
+    assert tc.current is utt  # mid-clip
+    clock.advance(0.2)  # past the estimated end (0.6 > 0.5)
+    assert tc.current is None  # channel freed automatically
+    # cancel/clear frees immediately
+    tc.set(utt, duration_s=10.0)
+    tc.clear()
+    assert tc.current is None
+
+
+def test_bank_skips_clips_with_sha256_mismatch(tmp_path) -> None:
+    # Qodo finding #1: a corrupted-but-decodable clip must be skipped at load, never played.
+    pytest.importorskip("numpy")  # Bank decode needs numpy (the real-backend path)
+    from tools.ai_sidecar.voice.bake import ToneBackend, bake_bank
+    from tools.ai_sidecar.voice.playback import Bank
+
+    manifest = bake_bank(tmp_path, ToneBackend())
+    victim = "late_brake.act.t03"
+    # Corrupt one clip's bytes without updating the manifest sha → load must skip it.
+    (tmp_path / manifest.clips[victim].file).write_bytes(b"RIFFcorrupted-not-the-baked-bytes")
+    bank = Bank.from_manifest(manifest, tmp_path)
+    assert victim not in bank.clips  # mismatched clip skipped
+    assert "late_brake.act.t04" in bank.clips  # an untouched clip still loads
+    assert len(bank.clips) == len(manifest.clips) - 1
