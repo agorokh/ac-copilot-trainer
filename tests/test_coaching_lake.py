@@ -7,6 +7,7 @@ the flagship reports — including the headline setup×corner dependency query.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -69,20 +70,32 @@ def _write(dirpath, name: str, rec: dict) -> None:
     (dirpath / f"lap_{name}.json").write_text(json.dumps(rec), encoding="utf-8")
 
 
-def _build(tmp_path):
-    laps = tmp_path / "laps"
+@pytest.fixture
+def lake_cwd(tmp_path, monkeypatch):
+    """Chdir to an isolated workspace with an approved journal/ write root."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "journal").mkdir()
+    return tmp_path
+
+
+def _db_path() -> Path:
+    return Path("journal/lake.duckdb")
+
+
+def _build(lake_cwd):
+    laps = lake_cwd / "laps"
     laps.mkdir()
     _write(laps, "a", _archive("a", "bmw_z4_gt3", "spa", 110000, min_speed=80.0))
     _write(laps, "b", _archive("b", "bmw_z4_gt3", "spa", 108000, min_speed=85.0))
     _write(laps, "c", _archive("c", "ks_audi_r8_lms", "imola", 95000, min_speed=70.0))
     _write(laps, "d", _archive("d", "bmw_z4_gt3", "spa", 0, is_valid=False))  # invalid (0 ms)
-    db = tmp_path / "lake.duckdb"
+    db = _db_path()
     summary = build_lake(laps, db)
     return db, summary
 
 
-def test_build_lake_counts(tmp_path):
-    db, summary = _build(tmp_path)
+def test_build_lake_counts(lake_cwd):
+    db, summary = _build(lake_cwd)
     assert summary.laps == 4
     assert summary.valid_laps == 3  # the 0-ms lap is invalid
     assert summary.corners == 4  # one corner each
@@ -92,8 +105,8 @@ def test_build_lake_counts(tmp_path):
     assert not summary.skipped
 
 
-def test_summary_and_best_laps_reports(tmp_path):
-    db, _ = _build(tmp_path)
+def test_summary_and_best_laps_reports(lake_cwd):
+    db, _ = _build(lake_cwd)
     cols, rows = run_report(db, "summary")
     assert rows[0][cols.index("laps")] == 4
     assert rows[0][cols.index("samples")] == 16
@@ -103,8 +116,8 @@ def test_summary_and_best_laps_reports(tmp_path):
     assert spa[cols.index("best_ms")] == 108000  # min valid lap on spa
 
 
-def test_corner_speed_report_is_corner_grain(tmp_path):
-    db, _ = _build(tmp_path)
+def test_corner_speed_report_is_corner_grain(lake_cwd):
+    db, _ = _build(lake_cwd)
     cols, rows = run_report(db, "corner-speed")
     spa = [r for r in rows if r[cols.index("track_id")] == "spa"][0]
     # spa T1 apex averaged across the spa laps (corners table holds all laps, valid or not)
@@ -112,24 +125,24 @@ def test_corner_speed_report_is_corner_grain(tmp_path):
     assert spa[cols.index("avg_apex_kmh")] is not None
 
 
-def test_setup_bool_stored_as_text_not_numeric(tmp_path):
-    laps = tmp_path / "laps"
+def test_setup_bool_stored_as_text_not_numeric(lake_cwd):
+    laps = lake_cwd / "laps"
     laps.mkdir()
     _write(
         laps,
         "flag",
         _archive("flag", "bmw_z4_gt3", "spa", 110000, snapshot={"TC_ACTIVE": True}),
     )
-    db = tmp_path / "lake.duckdb"
+    db = _db_path()
     build_lake(laps, db)
     cols, rows = run_query(db, "SELECT value, value_text FROM setup_params WHERE key = 'TC_ACTIVE'")
     assert rows[0][cols.index("value")] is None
     assert rows[0][cols.index("value_text")] == "True"
 
 
-def test_setup_params_and_setup_effect_flagship(tmp_path):
+def test_setup_params_and_setup_effect_flagship(lake_cwd):
     """The headline dependency query: setup param value -> corner apex speed."""
-    laps = tmp_path / "laps"
+    laps = lake_cwd / "laps"
     laps.mkdir()
     _write(
         laps,
@@ -141,7 +154,7 @@ def test_setup_params_and_setup_effect_flagship(tmp_path):
         "w2",
         _archive("w2", "bmw_z4_gt3", "spa", 109000, min_speed=84.0, snapshot={"WING_FRONT": 4}),
     )
-    db = tmp_path / "lake.duckdb"
+    db = _db_path()
     summary = build_lake(laps, db)
     assert summary.setup_params == 2  # one WING_FRONT each
 
@@ -152,28 +165,36 @@ def test_setup_params_and_setup_effect_flagship(tmp_path):
     assert by_val[3.0] == 80.0 and by_val[4.0] == 84.0  # the dependency is queryable
 
 
-def test_idempotent_rebuild(tmp_path):
-    db, s1 = _build(tmp_path)
-    s2 = build_lake(tmp_path / "laps", db)  # rebuild over the same db
+def test_idempotent_rebuild(lake_cwd):
+    db, s1 = _build(lake_cwd)
+    s2 = build_lake(lake_cwd / "laps", db)  # rebuild over the same db
     assert (s2.laps, s2.corners, s2.samples) == (s1.laps, s1.corners, s1.samples)
 
 
-def test_corrupt_archive_is_skipped_not_fatal(tmp_path):
-    laps = tmp_path / "laps"
+def test_corrupt_archive_is_skipped_not_fatal(lake_cwd):
+    laps = lake_cwd / "laps"
     laps.mkdir()
     _write(laps, "ok", _archive("ok", "bmw_z4_gt3", "spa", 100000))
     (laps / "lap_bad.json").write_text("{not valid json", encoding="utf-8")
-    db = tmp_path / "lake.duckdb"
+    db = _db_path()
     summary = build_lake(laps, db)
     assert summary.laps == 1
     assert len(summary.skipped) == 1
 
 
-def test_run_query_arbitrary_sql(tmp_path):
-    db, _ = _build(tmp_path)
+def test_run_query_arbitrary_sql(lake_cwd):
+    db, _ = _build(lake_cwd)
     cols, rows = run_query(db, "SELECT count(*) AS n FROM laps WHERE car_id = 'bmw_z4_gt3'")
     assert rows[0][0] == 3
 
 
 def test_reports_registry_nonempty():
     assert {"summary", "best-laps", "corner-speed", "setup-effect"} <= set(list_reports())
+
+
+def test_db_path_outside_journal_rejected(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _archive("a", "bmw_z4_gt3", "spa", 110000))
+    with pytest.raises(ValueError, match="journal/"):
+        build_lake(laps, "lake.duckdb")

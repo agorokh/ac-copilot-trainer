@@ -83,8 +83,28 @@ def _num(v: Any) -> float | None:
 def _connect(db_path: str | Path):
     import duckdb  # local import so the rest of the repo doesn't hard-depend on duckdb
 
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(db_path))
+    resolved = _resolve_db_path(db_path)
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    return duckdb.connect(str(resolved))
+
+
+def _resolve_db_path(db_path: str | Path) -> Path:
+    """Resolve ``db_path`` under ``journal/`` (approved analytics write root)."""
+    raw = Path(db_path)
+    base_dir = Path.cwd().resolve()
+    resolved = raw.resolve() if raw.is_absolute() else (base_dir / raw).resolve()
+    try:
+        resolved.relative_to(base_dir)
+    except ValueError as exc:
+        raise ValueError(f"{raw}: db path must stay within {base_dir}") from exc
+    journal_root = (base_dir / "journal").resolve()
+    try:
+        resolved.relative_to(journal_root)
+    except ValueError as exc:
+        raise ValueError(f"{raw}: db path must stay under journal/") from exc
+    if resolved.exists() and resolved.is_dir():
+        raise ValueError(f"{raw}: db path must be a file")
+    return resolved
 
 
 def _create_schema(con) -> None:  # noqa: ANN001
@@ -226,13 +246,14 @@ def build_lake(
     include_samples: bool = True,
 ) -> LakeSummary:
     """Rebuild the DuckDB lake from the per-lap JSON corpus under ``lap_dir`` (idempotent)."""
-    summary = LakeSummary(db_path=str(db_path))
-    con = _connect(db_path)
+    resolved_db = _resolve_db_path(db_path)
+    summary = LakeSummary(db_path=str(resolved_db))
+    con = _connect(resolved_db)
     try:
         _create_schema(con)
         sample_cols = list(TRACE_FIELDS) + list(_SAMPLE_KEYS)
         samples_staging = (
-            _SamplesCsvStaging(Path(db_path).parent, sample_cols) if include_samples else None
+            _SamplesCsvStaging(resolved_db.parent, sample_cols) if include_samples else None
         )
         con.execute("BEGIN TRANSACTION")
         for path in iter_lap_archive_paths([lap_dir]):
@@ -372,7 +393,7 @@ def list_reports() -> list[str]:
 
 
 def run_query(db_path: str | Path, sql: str) -> tuple[list[str], list[tuple]]:
-    con = _connect(db_path)
+    con = _connect(_resolve_db_path(db_path))
     try:
         cur = con.execute(sql)
         cols = [d[0] for d in cur.description] if cur.description else []
