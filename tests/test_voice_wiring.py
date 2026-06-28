@@ -26,6 +26,22 @@ from tools.ai_sidecar.realtime_observer import Advisory  # noqa: E402
 from tools.ai_sidecar.server import _reset_external_state, make_token_check  # noqa: E402
 
 # --------------------------------------------------------------------------------------------------
+# Isolation — global sidecar module state must not leak between tests (Qodo focus area).
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolated_sidecar_state() -> None:
+    server.set_realtime_observer(None)
+    server.set_voice_coach(None)
+    _reset_external_state()
+    yield
+    server.set_realtime_observer(None)
+    server.set_voice_coach(None)
+    _reset_external_state()
+
+
+# --------------------------------------------------------------------------------------------------
 # Fakes + helpers
 # --------------------------------------------------------------------------------------------------
 

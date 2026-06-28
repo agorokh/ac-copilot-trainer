@@ -566,16 +566,24 @@ def _build_haptic_events_from_telemetry(frame: dict[str, Any]) -> list[dict[str,
     return events
 
 
-def _advisory_to_payload(advisory: Any) -> dict[str, Any]:
+def _advisory_to_payload(advisory: Any) -> dict[str, Any] | None:
     """Flatten a ``RealtimeObserver`` Advisory into the ``coaching.cue`` wire payload (issue #341).
 
     ``corner`` is kept 0-based (as the observer emits it) so a consumer can reconstruct the Advisory
     faithfully; the human-facing 1-based turn number already lives in ``message`` ("...T4...").
+
+    Returns ``None`` when required fields are missing so consumers never see null
+    ``kind``/``urgency``.
     """
+    kind = getattr(advisory, "kind", None)
+    urgency = getattr(advisory, "urgency", None)
+    if not isinstance(kind, str) or not kind or not isinstance(urgency, str) or not urgency:
+        logger.warning("voice: dropping advisory with missing kind/urgency: %r", advisory)
+        return None
     return {
-        "kind": getattr(advisory, "kind", None),
+        "kind": kind,
         "corner": getattr(advisory, "corner", None),
-        "urgency": getattr(advisory, "urgency", None),
+        "urgency": urgency,
         "message": getattr(advisory, "message", ""),
         "spline": getattr(advisory, "spline", None),
         "detail": getattr(advisory, "detail", {}),
@@ -610,7 +618,10 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
                 coach.subscribe(advisory)
             except Exception:
                 logger.exception("voice coach subscribe failed for advisory")
-        cue = make_coaching_cue(_advisory_to_payload(advisory), ts_sim=ts_sim)
+        cue_payload = _advisory_to_payload(advisory)
+        if cue_payload is None:
+            continue
+        cue = make_coaching_cue(cue_payload, ts_sim=ts_sim)
         await _broadcast_external(cue, exclude=exclude)
 
 
@@ -1169,8 +1180,8 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
             else:
                 set_realtime_observer(observer)
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
-        except Exception as exc:  # noqa: BLE001 - malformed archive must not abort the sidecar
-            logger.error("voice: failed to load reference %s: %s", reference_path, exc)
+        except Exception:  # noqa: BLE001 - malformed archive must not abort the sidecar
+            logger.exception("voice: failed to load reference %s", reference_path)
     if bank_dir:
         try:
             from tools.ai_sidecar.voice.engine import VoiceCoach
