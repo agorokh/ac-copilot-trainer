@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-27T22:15:00Z
+last_updated: 2026-06-28T00:25:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27.md
@@ -37,6 +37,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-27 — #277 CLOSED: brain debrief LIVE-VERIFIED on the rig)
+
+**`/autonomous-deliver 277` — DONE.** [#277](https://github.com/agorokh/ac-copilot-trainer/issues/277)
+**CLOSED**: the archive-backed brain debrief (#321) is live-verified end-to-end on AG_PC. Autonomous
+carcsw/Stanley drive of **`ks_audi_r8_lms` @ magione** (3 valid laps, best 1:46.9, 207.8 km/h) →
+**5 live `debriefSource:"brain"` `coaching_response` frames** captured on the WS wire
+(sidecar→`ws_bridge.lua`), each a 5-corner `cornerAnalysis` with **CONFIRMED per-wheel attribution**
+(e.g. "Rear wheelspin on exit (confirmed) — raise TC / open diff", "No wheelspin (confirmed)") plus
+`trailBraking`/`tyres`/`balance`. `build_brain_followup` on the real archive reproduces it offline.
+Detail + learnings: [[issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27]].
+
+**Key learnings (durable):**
+- Brain debrief is gated by **`AC_COPILOT_OLLAMA_ENABLE`** (deterministic brain, but shares the Ollama
+  flag). `start_sidecar.bat` sets it `=1` by default → the CSP-auto-launched sidecar enables it; a
+  sidecar started with it `=0` silently disables the brain debrief (`build_brain_followup` → None).
+- **carcsw hijack is incompatible with extended-physics cars**: `911 GT3 R 2016` triggers CSP
+  "extended physics for car" → no `Car0` mmap → hijack fails. Use a non-extended car (`ks_audi_r8_lms`).
+  **No `surfaces.ini` custom-AI edit is needed** (stock + AC-install `new_behaviour.ini [CUSTOM_AI]
+  ENABLED=1` suffices; the `WAV_PITCH=extended-0` edit actively BREAKS the hijack).
+- Launch reliably via `ContentManagerActuator` (`Content Manager.exe acmanager://…`), **not**
+  `explorer.exe` (opens CM without applying the preset).
+- **Residual (separable → EPIC #154 Part-G):** the HUD coaching-summary *tile* gates on an AC-**valid**
+  lap; the autonomous Stanley line clips curbs → AC-invalid → tile placeholder. The brain frame is
+  delivered live regardless; on-screen tile pixels confirm on a clean valid (human) lap.
+
+**Rig left:** surfaces stock, `new_behaviour.ini` restored; AC + a brain-enabled sidecar left running.
+The "PREPPED/paused" block below is superseded by this.
 
 ## Resume here (2026-06-27 LATE — CI: vault-automerge guard fixed (#329 / PR #330))
 
