@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T00:25:00Z
+last_updated: 2026-06-28T06:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md
@@ -39,6 +40,16 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-28) — #327 CLOSED (no code): vault-automerge already fixed
+`/autonomous-deliver 327` reconciled the stale issue body against live state and **closed
+[#327](https://github.com/agorokh/ac-copilot-trainer/issues/327) COMPLETED with zero code**. Both
+symptoms were already gone: (1) the `guard-and-automerge` / `governance-hub`-not-found regression is a
+**duplicate of #329**, fixed by **PR #330** (fleet-bot app-token + checkout, present at `HEAD`); (2) the
+`build`/`ci-conventional` failure was a **branch-name artifact** of PR #326's `claude/...` branch, not a
+defect — every proper `vault/...` PR (#331/#332/#337) is green on both checks. Detail +
+live-evidence table: [[issue-327-vault-automerge-already-resolved-2026-06-28]]. **Lesson:** parallel
+autonomous sessions can file+fix the same root cause under different numbers — reconcile before re-doing.
 
 ## Delivered (2026-06-28) — PR #334 MERGED: Track Titan CoachingOracle
 [#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) squash-merged to `main` as
