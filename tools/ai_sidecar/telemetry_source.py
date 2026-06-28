@@ -130,8 +130,13 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
         async with websockets.connect(url, additional_headers=headers) as ws:
             await ws.send(json.dumps(make_hello_frame("telemetry-source-live")))
             while True:
-                phys = parse_physics(phys_map.read(PHYS_BYTES))
-                gfx = parse_graphics(gfx_map.read(GFX_BYTES))
+                try:
+                    phys = parse_physics(phys_map.read(PHYS_BYTES))
+                    gfx = parse_graphics(gfx_map.read(GFX_BYTES))
+                except ValueError:
+                    if period:
+                        await asyncio.sleep(period)
+                    continue
                 # NOTE: phys.steer is AC's raw steerAngle (degrees), not a normalized -1..1 input,
                 # so the clamp below saturates it; the M0 observer ignores steer, but a future steer
                 # consumer wants normalization (steerAngle / steering-lock; cf. import_motec). gear

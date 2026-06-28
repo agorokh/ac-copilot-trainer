@@ -1164,7 +1164,7 @@ def _load_observer(path: str) -> None:
         with open(path, encoding="utf-8") as fh:
             archive = json.load(fh)
         _observer = build_observer_from_reference(archive)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except Exception:
         logger.exception("failed to load reference archive for live observer: %s", path)
         _observer = None
     if _observer is None:

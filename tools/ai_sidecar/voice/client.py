@@ -12,6 +12,7 @@ Run on the rig alongside the sidecar:
 from __future__ import annotations
 
 import argparse
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -112,7 +113,7 @@ async def run(url: str, *, token: str | None = None) -> None:  # pragma: no cove
             except (TypeError, ValueError):
                 continue
             if isinstance(frame, dict):
-                client.handle_frame(frame, time.monotonic())
+                await asyncio.to_thread(client.handle_frame, frame, time.monotonic())
 
 
 def main() -> None:  # pragma: no cover - CLI wiring
