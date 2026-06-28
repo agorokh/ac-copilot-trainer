@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
-
 import tools.ai_sidecar.server as server
 from tests.test_realtime_observer import _corner_archive
 from tools.ai_sidecar.external_protocol import TOPIC_COACHING_CUE, TYPE_STATE_SNAPSHOT
@@ -51,13 +49,13 @@ def _reset_feed(monkeypatch):
 
 
 async def _run_publish_cues(frame, *, exclude):
-    await server._publish_observer_cues(frame, exclude=exclude)
+    await server._publish_coaching_cues(frame, exclude=exclude)
     pending = list(server._background_tasks)
     if pending:
         await asyncio.gather(*pending)
 
 
-def test_publish_observer_cues_broadcasts_coaching_cue(monkeypatch):
+def test_publish_coaching_cues_broadcasts_coaching_cue(monkeypatch):
     _reset_feed(monkeypatch)
     observer = _FakeObserver([_adv()])
     monkeypatch.setattr(server, "_observer", observer)
@@ -76,7 +74,7 @@ def test_publish_observer_cues_broadcasts_coaching_cue(monkeypatch):
     assert cue_frame["payload"]["corner"] == 3
 
 
-def test_publish_observer_cues_fans_out_each_advisory(monkeypatch):
+def test_publish_coaching_cues_fans_out_each_advisory(monkeypatch):
     # one frame -> two advisories -> two coaching.cue frames, each carrying the same exclude.
     _reset_feed(monkeypatch)
     a = _adv(kind="late_brake", corner=3)
@@ -92,7 +90,7 @@ def test_publish_observer_cues_fans_out_each_advisory(monkeypatch):
     assert sent[0][1] == "wsX" and sent[1][1] == "wsX"
 
 
-def test_publish_observer_cues_noop_without_observer(monkeypatch):
+def test_publish_coaching_cues_noop_without_observer(monkeypatch):
     _reset_feed(monkeypatch)
     monkeypatch.setattr(server, "_observer", None)
     sent = _capture_broadcast(monkeypatch)
@@ -100,7 +98,7 @@ def test_publish_observer_cues_noop_without_observer(monkeypatch):
     assert sent == []
 
 
-def test_publish_observer_cues_swallows_observer_error(monkeypatch):
+def test_publish_coaching_cues_swallows_observer_error(monkeypatch):
     _reset_feed(monkeypatch)
 
     class _Boom:
@@ -117,7 +115,7 @@ def test_publish_observer_cues_swallows_observer_error(monkeypatch):
     assert sent == []
 
 
-def test_publish_observer_cues_ignores_second_producer(monkeypatch):
+def test_publish_coaching_cues_ignores_second_producer(monkeypatch):
     # single-producer guard: a second concurrent producer is NOT fed to the single-stream observer.
     _reset_feed(monkeypatch)
     observer = _FakeObserver([_adv()])
@@ -144,27 +142,37 @@ def test_release_observer_feed_frees_owner_only(monkeypatch):
     assert server._observer_feed_peer == "owner2"
 
 
-def test_load_observer_builds_from_archive(tmp_path, monkeypatch):
+def test_wire_voice_builds_and_installs_observer_from_reference(tmp_path, monkeypatch):
+    # Happy path of the real loader (#354 — replaces the removed _load_observer happy-path test):
+    # a corner-bearing reference archive is read, built, and installed via set_realtime_observer.
+    # This drives the file-read -> build -> install seam that the dead _load_observer test used to.
     monkeypatch.setattr(server, "_observer", None)
     ref = tmp_path / "ref.json"
     ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
-    server._load_observer(str(ref))
+    server._wire_voice(str(ref), None)
     assert server._observer is not None
 
 
-def test_load_observer_unsegmentable_archive_raises(tmp_path, monkeypatch):
-    monkeypatch.setattr(server, "_observer", object())
-    monkeypatch.setattr(server, "build_observer_from_reference", lambda archive: None)
-    ref = tmp_path / "straight.json"
-    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
-    with pytest.raises(SystemExit, match="did not yield a usable observer"):
-        server._load_observer(str(ref))
+def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch):
+    # build_observer_from_reference returns None for a reference with no usable corners; _wire_voice
+    # logs and leaves the observer UNINSTALLED (best-effort), never raising. The sentinel makes the
+    # negative-install non-vacuous: a pre-existing observer is left untouched, not cleared/replaced.
+    sentinel = object()
+    monkeypatch.setattr(server, "_observer", sentinel)
+    ref = tmp_path / "no_corners.json"
+    ref.write_text(json.dumps({}), encoding="utf-8")
+    server._wire_voice(str(ref), None)
+    assert server._observer is sentinel
 
 
-def test_load_observer_missing_file_raises(monkeypatch):
-    monkeypatch.setattr(server, "_observer", object())
-    with pytest.raises(SystemExit, match="reference archive unusable"):
-        server._load_observer("does-not-exist-9f3a.json")
+def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
+    # A missing/unreadable reference must NOT abort the sidecar — telemetry + haptics keep flowing
+    # (#341 best-effort; the earlier fail-fast _load_observer/SystemExit contract was abandoned).
+    # The sentinel proves _wire_voice neither raises nor disturbs the existing observer.
+    sentinel = object()
+    monkeypatch.setattr(server, "_observer", sentinel)
+    server._wire_voice("does-not-exist-9f3a.json", None)
+    assert server._observer is sentinel
 
 
 class _FakeWS:
@@ -192,7 +200,7 @@ def _full_tick_payload():
     }
 
 
-def test_publish_observer_cues_rate_limited_at_20hz(monkeypatch):
+def test_publish_coaching_cues_rate_limited_at_20hz(monkeypatch):
     _reset_feed(monkeypatch)
     observer = _FakeObserver([_adv()])
     monkeypatch.setattr(server, "_observer", observer)

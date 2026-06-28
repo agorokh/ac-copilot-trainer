@@ -123,7 +123,7 @@ _observer_feed_warned = False
 # per-corner advisories (published on ``coaching.cue``); ``_voice_coach`` (the #340 phrase-bank
 # engine) speaks them in-process on the rig. The audio deps live only inside the voice package and
 # are imported lazily when ``--voice-bank`` is supplied, so the sidecar core stays dep-free.
-_observer: Any | None = None
+# (``_observer`` is declared once above with its RealtimeObserver type; not re-declared here.)
 _voice_coach: Any | None = None
 
 
@@ -218,9 +218,16 @@ _peripheral_rate_limiter = _RateLimiter()
 
 
 def _reset_external_state() -> None:
+    global _observer_feed_peer, _observer_feed_warned
     _external_peers.clear()
     _external_peer_classes.clear()
     _peripheral_rate_limiter.reset()
+    # The single-producer observer feed is external-peer state: a full reset (server (re)start or
+    # teardown) leaves no producer owning the feed, so the next telemetry producer can claim it.
+    # Without this, a stale owner persists and the next producer is silently rejected by the guard
+    # in _publish_coaching_cues — which also leaked across tests sharing this reset (#354).
+    _observer_feed_peer = None
+    _observer_feed_warned = False
 
 
 def _get_ollama_followup_sem() -> asyncio.Semaphore:
