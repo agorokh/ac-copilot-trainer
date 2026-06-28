@@ -61,3 +61,20 @@ def test_arbiter_per_corner_cooldown_avoids_nagging():
 
 def test_arbiter_empty_is_silent():
     assert CueArbiter().select([], now_s=0.0) is None
+
+
+def test_arbiter_holds_info_cue_until_spline_lookahead_window():
+    arb = CueArbiter(global_cooldown_s=0.0, corner_cooldown_s=0.0)
+    far = {
+        "kind": "apex_deficit",
+        "corner": 1,
+        "urgency": "info",
+        "spline": 0.50,
+        "car_spline": 0.40,
+        "car_speed_kmh": 120.0,
+        "message": "m",
+    }
+    assert arb.select([far], now_s=0.0) is None
+    near = dict(far)
+    near["car_spline"] = 0.495
+    assert arb.select([near], now_s=0.0) is not None

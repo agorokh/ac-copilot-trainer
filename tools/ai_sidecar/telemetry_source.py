@@ -68,7 +68,15 @@ def normalize_live_steer(
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
+    if not math.isfinite(value):
+        return lo
     return lo if value < lo else hi if value > hi else value
+
+
+def _safe_gear(value: float) -> int:
+    if not math.isfinite(value):
+        return 0
+    return max(0, int(value))
 
 
 def ticks_from_archive(archive: dict[str, Any]) -> list[dict[str, Any]]:
@@ -92,7 +100,7 @@ def ticks_from_archive(archive: dict[str, Any]) -> list[dict[str, Any]]:
             "throttle": _clamp(throttle[i], 0.0, 1.0),
             "brake": _clamp(brake[i], 0.0, 1.0),
             "steer": _clamp(steer[i], -1.0, 1.0),
-            "gear": int(gear[i]),
+            "gear": _safe_gear(gear[i]),
             "lat_g": lat_g[i],
             "long_g": long_g[i],
             "spline": _clamp(spline[i], 0.0, 1.0),

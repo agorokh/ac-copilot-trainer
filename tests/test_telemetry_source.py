@@ -151,3 +151,24 @@ def test_stream_live_closes_maps_when_ws_connect_fails(monkeypatch):
         asyncio.run(telemetry_source.stream_live("ws://127.0.0.1:8765", hz=20.0))
 
     assert closed == [SHM_PHYSICS, SHM_GRAPHICS]
+
+
+def test_ticks_from_archive_sanitizes_nan_channels(monkeypatch):
+    class _NaNLap:
+        def __len__(self):
+            return 1
+
+        v_kmh = [float("nan")]
+        spline = [float("nan")]
+        brake = [float("nan")]
+        throttle = [float("nan")]
+        steer = [float("nan")]
+        gear = [float("nan")]
+        lat_g = [0.0]
+        long_g = [0.0]
+
+    monkeypatch.setattr(telemetry_source, "lap_trace_from_archive", lambda _a: _NaNLap())
+    frames = telemetry_source.ticks_from_archive({"ignored": True})
+    assert len(frames) == 1
+    assert validate_inbound(frames[0]) is None
+    assert frames[0]["payload"]["gear"] == 0

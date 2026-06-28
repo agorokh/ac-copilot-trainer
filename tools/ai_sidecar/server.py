@@ -524,9 +524,17 @@ async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None
     except Exception:
         logger.exception("realtime observer failed on telemetry frame")
         return
+    tick_payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
     for advisory in advisories:
+        adv_dict = asdict(advisory)
+        car_spline = tick_payload.get("spline")
+        if isinstance(car_spline, int | float):
+            adv_dict["car_spline"] = float(car_spline)
+        car_speed = tick_payload.get("speed_kmh")
+        if isinstance(car_speed, int | float):
+            adv_dict["car_speed_kmh"] = float(car_speed)
         cue_task = asyncio.create_task(
-            _broadcast_external(make_coaching_cue(asdict(advisory)), exclude=exclude)
+            _broadcast_external(make_coaching_cue(adv_dict), exclude=exclude)
         )
         _background_tasks.add(cue_task)
         cue_task.add_done_callback(_background_tasks.discard)

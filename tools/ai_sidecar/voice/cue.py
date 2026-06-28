@@ -13,11 +13,45 @@ Input is the wire form of :class:`tools.ai_sidecar.realtime_observer.Advisory` â
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
 #: Higher rank preempts and may barge in through the global cooldown.
 _URGENCY_RANK: dict[str, int] = {"info": 1, "prepare": 2, "act": 3}
+#: Default lap length (m) for spline lookahead when track length is unknown.
+DEFAULT_LAP_LENGTH_M = 2500.0
+#: Target lead time (s) before turn-in for non-urgent cues.
+DEFAULT_LOOKAHEAD_S = 1.5
+
+
+def _forward_spline_delta(car_s: float, target_s: float) -> float:
+    """Forward distance along the lap from ``car_s`` to ``target_s`` in [0, 1)."""
+    return (target_s - car_s) % 1.0
+
+
+def _lookahead_spline_fraction(
+    speed_kmh: float, *, lookahead_s: float = DEFAULT_LOOKAHEAD_S
+) -> float:
+    if not math.isfinite(speed_kmh) or speed_kmh <= 0:
+        return 0.02
+    dist_m = (speed_kmh / 3.6) * lookahead_s
+    return min(0.08, max(0.005, dist_m / DEFAULT_LAP_LENGTH_M))
+
+
+def _within_spline_lookahead(advisory: dict[str, Any]) -> bool:
+    """True when the car is within the M0 ~1â€“2 s spline lookahead window of the advisory."""
+    urgency = str(advisory.get("urgency", ""))
+    if _URGENCY_RANK.get(urgency, 0) >= _URGENCY_RANK["act"]:
+        return True
+    car_s = advisory.get("car_spline")
+    target_s = advisory.get("spline")
+    if not isinstance(car_s, int | float) or not isinstance(target_s, int | float):
+        return True
+    speed = advisory.get("car_speed_kmh")
+    speed_kmh = float(speed) if isinstance(speed, int | float) else 120.0
+    delta = _forward_spline_delta(float(car_s), float(target_s))
+    return delta <= _lookahead_spline_fraction(speed_kmh)
 
 
 @dataclass(frozen=True)
@@ -80,6 +114,7 @@ class CueArbiter:
             if last is not None and now_s - last < self.corner_cooldown_s:
                 continue
             fresh.append(a)
+        fresh = [a for a in fresh if _within_spline_lookahead(a)]
         if not fresh:
             return None
         # Highest urgency wins (ties: keep input order, i.e. the observer's per-frame order).

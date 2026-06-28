@@ -4,6 +4,8 @@
 --   * `delta`       — live time delta vs the reference lap (reuses delta.deltaSecondsAtSpline).
 --   * `tire_temps`  — current per-wheel core temps {fl, fr, rl, rr}.
 --
+-- M0 (#341): also emits client→server `telemetry_tick` frames (20 Hz) via `wsBridge.sendJson`
+-- so the sidecar observer receives spline + lap from the in-game Lua producer.
 -- Unlike the lifecycle topics (`lifecycle_publisher.lua`) these carry NO ordering contract and
 -- need no reconnect machinery — they are continuous streams like `coaching.snapshot`, so a
 -- (re)connected consumer simply gets the next sample within the publish interval. Both are
@@ -19,11 +21,14 @@ local M = {}
 
 local DELTA_INTERVAL_SEC = 0.1  -- ~10 Hz, matches the HUD delta refresh
 local TIRE_INTERVAL_SEC = 0.2  -- ~5 Hz; temps move slowly, no need for 10 Hz
+local TICK_INTERVAL_SEC = 0.05  -- 20 Hz, matches the sidecar telemetry_tick cap (M0 #341)
 local TOPIC_DELTA = "delta"
 local TOPIC_TIRE_TEMPS = "tire_temps"
 
 local _deltaAccum = 0.0
 local _tireAccum = 0.0
+local _tickAccum = 0.0
+local _tickSeq = 0
 
 
 local function _wsReady(opts)
@@ -132,10 +137,74 @@ function M.publishTireTempsIfDue(opts)
 end
 
 
+local function _clamp(v, lo, hi)
+  v = tonumber(v)
+  if v == nil or v ~= v or v == math.huge or v == -math.huge then
+    return lo
+  end
+  if v < lo then
+    return lo
+  end
+  if v > hi then
+    return hi
+  end
+  return v
+end
+
+
+--- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341). Requires ``wsBridge.sendJson``.
+---@param opts table  {dt:number, car:table, wsBridge, lat_g?:number, long_g?:number}
+---@return boolean
+function M.publishTelemetryTickIfDue(opts)
+  if type(opts) ~= "table" then
+    return false
+  end
+  local wsBridge = _wsReady(opts)
+  if not wsBridge or type(wsBridge.sendJson) ~= "function" then
+    return false
+  end
+  local car = opts.car
+  if type(car) ~= "table" then
+    return false
+  end
+  local due, accum = _due(_tickAccum, tonumber(opts.dt) or 0, TICK_INTERVAL_SEC)
+  _tickAccum = accum
+  if not due then
+    return false
+  end
+  _tickSeq = _tickSeq + 1
+  local gear = 0
+  if car.gear ~= nil then
+    local g = tonumber(car.gear)
+    if g ~= nil and g == g then
+      gear = math.max(0, math.floor(g))
+    end
+  end
+  return wsBridge.sendJson({
+    v = 1,
+    type = "telemetry_tick",
+    seq = _tickSeq,
+    payload = {
+      speed_kmh = math.max(0, _finite(car.speedKmh) or 0),
+      rpm = math.max(0, _finite(car.rpm) or 0),
+      throttle = _clamp(car.gas or 0, 0, 1),
+      brake = _clamp(car.brake or 0, 0, 1),
+      steer = _clamp(car.steer or 0, -1, 1),
+      gear = gear,
+      lat_g = _finite(opts.lat_g) or 0,
+      long_g = _finite(opts.long_g) or 0,
+      spline = _clamp(car.splinePosition or 0, 0, 1),
+      lap = math.max(0, math.floor(tonumber(car.lapCount) or 0)),
+    },
+  }) == true
+end
+
+
 --- Reset the rate-limiters (e.g. on session/stint reset).
 function M.reset()
   _deltaAccum = 0.0
   _tireAccum = 0.0
+  _tickAccum = 0.0
 end
 
 
