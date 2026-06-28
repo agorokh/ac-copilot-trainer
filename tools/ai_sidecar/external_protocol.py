@@ -175,26 +175,29 @@ def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
 def make_coaching_cue(advisory: dict[str, Any]) -> dict[str, Any]:
     """Server->client frame publishing one real-time advisory on the ``coaching.cue`` topic.
 
-    Delivered as a ``state.snapshot`` envelope (same shape the rig screen already consumes for
-    ``coaching.snapshot``) so the existing topic fan-out + subscribe path carries it unchanged; a
-    voice client filters by ``topic == coaching.cue``. ``advisory`` is the serialized
+    Delivered as a ``state.snapshot`` envelope with the advisory under ``payload`` — the same
+    ``{v, type, topic, payload}`` shape the rig screen already consumes for ``coaching.snapshot``
+    (``ws_bridge.publishTopic``) — so the existing topic fan-out + subscribe path carries it
+    unchanged; a voice client filters by ``topic == coaching.cue``. ``advisory`` is the serialized
     :class:`tools.ai_sidecar.realtime_observer.Advisory` (``{kind, corner, spline, urgency, ...}``).
     """
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
         TYPE_KEY: TYPE_STATE_SNAPSHOT,
         "topic": TOPIC_COACHING_CUE,
-        "state": advisory,
+        "payload": advisory,
     }
 
 
 def make_telemetry_tick(payload: dict[str, Any], *, seq: int | None = None) -> dict[str, Any]:
     """Client->server high-rate telemetry frame (M0, #341).
 
-    The producer side of the live coaching loop. ``payload`` must carry at least ``speed_kmh`` and,
-    for the observer to locate corners, ``spline`` (0..1); ``brake``/``lap`` are optional. Built
-    here so the offline replay source and any live shared-memory source emit a byte-identical
-    contract that :func:`_validate_telemetry_tick` accepts.
+    The producer side of the live coaching loop. ``_validate_telemetry_tick`` is the single source
+    of truth for the payload contract: ``speed_kmh``, ``rpm``, ``throttle``, ``brake``, ``steer``,
+    ``gear``, ``lat_g`` and ``long_g`` are all REQUIRED (a payload omitting any is rejected by
+    :func:`validate_inbound` and dropped by the server); ``spline`` (0..1) and ``lap`` are OPTIONAL
+    (``spline`` is what lets the observer locate corners). Built here so the offline replay source
+    and any live shared-memory source emit a byte-identical, validator-accepted contract.
     """
     frame: dict[str, Any] = {
         ENVELOPE_KEY: ENVELOPE_VERSION,

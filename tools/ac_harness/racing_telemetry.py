@@ -29,10 +29,10 @@ from tools.ac_harness.shared_memory import SHM_GRAPHICS, SHM_PHYSICS, open_share
 #   float steerAngle@24, float speedKmh@28, float velocity[3]@32, float accG[3]@44,
 #   float wheelSlip[4]@56, float wheelLoad[4]@72, float wheelsPressure[4]@88,
 #   float wheelAngularSpeed[4]@104, ...
-_PHYS_BYTES = 160
+PHYS_BYTES = 160
 # acpmf_graphics: int packetId@0, int status@4; completedLaps@132, normalizedCarPosition@248
 #   (@248 ground-truthed live by scanning for the changing in-range float; @156=distanceTraveled)
-_GFX_BYTES = 256
+GFX_BYTES = 256
 # Minimum bytes needed: norm_pos at offset 248 is a 4-byte float.
 _GFX_MIN_BYTES = 252
 
@@ -66,8 +66,8 @@ class GfxFrame:
 
 def parse_physics(buf: bytes) -> PhysFrame:
     """Parse an ``acpmf_physics`` buffer (pure)."""
-    if len(buf) < _PHYS_BYTES:
-        raise ValueError(f"physics buffer too short: {len(buf)} < {_PHYS_BYTES}")
+    if len(buf) < PHYS_BYTES:
+        raise ValueError(f"physics buffer too short: {len(buf)} < {PHYS_BYTES}")
     packet_id = struct.unpack_from("<i", buf, 0)[0]
     gas, brake = struct.unpack_from("<2f", buf, 4)
     gear, rpm = struct.unpack_from("<2i", buf, 16)
@@ -141,8 +141,8 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
     laps = 0
     rows = 0
     try:
-        phys = open_shared_memory(SHM_PHYSICS, _PHYS_BYTES)
-        gfx = open_shared_memory(SHM_GRAPHICS, _GFX_BYTES)
+        phys = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
+        gfx = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
         with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(CSV_HEADER + "\n")
 
@@ -162,7 +162,7 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
                     now = time.monotonic()
                     if now - t0 >= max_seconds or laps >= max_laps:
                         break
-                    pbuf = phys.read(_PHYS_BYTES)
+                    pbuf = phys.read(PHYS_BYTES)
                     try:
                         p = parse_physics(pbuf)
                     except ValueError as exc:
@@ -174,7 +174,7 @@ def record(out_path: str, *, max_laps: int = 10, max_seconds: float = 1800.0) ->
                         continue
                     last_phys_packet = p.packet_id
 
-                    gbuf = gfx.read(_GFX_BYTES)
+                    gbuf = gfx.read(GFX_BYTES)
                     try:
                         g = parse_graphics(gbuf)
                     except ValueError as exc:

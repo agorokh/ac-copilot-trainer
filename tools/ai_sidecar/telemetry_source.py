@@ -106,17 +106,23 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
 
     import websockets
 
-    from tools.ac_harness.racing_telemetry import parse_graphics, parse_physics
+    from tools.ac_harness.racing_telemetry import (
+        GFX_BYTES,
+        PHYS_BYTES,
+        csv_display_gear,
+        parse_graphics,
+        parse_physics,
+    )
     from tools.ac_harness.shared_memory import (
         SHM_GRAPHICS,
         SHM_PHYSICS,
         open_shared_memory,
     )
 
-    # Read lengths cover the fields racing_telemetry parses: speedKmh@28/brake@8 (phys) and
-    # normalizedCarPosition@248/completedLaps@132 (gfx). See racing_telemetry layout comment.
-    phys_map = open_shared_memory(SHM_PHYSICS, 160)
-    gfx_map = open_shared_memory(SHM_GRAPHICS, 256)
+    # Map/read lengths come from racing_telemetry's own parser constants (single source of truth):
+    # speedKmh@28/brake@8 (phys) and normalizedCarPosition@248/completedLaps@132 (gfx).
+    phys_map = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
+    gfx_map = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
     headers = {AUTH_HEADER: token} if token else {}
     period = 1.0 / hz if hz > 0 else 0.0
     seq = 0
@@ -124,15 +130,19 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
         async with websockets.connect(url, additional_headers=headers) as ws:
             await ws.send(json.dumps(make_hello_frame("telemetry-source-live")))
             while True:
-                phys = parse_physics(phys_map.read(160))
-                gfx = parse_graphics(gfx_map.read(256))
+                phys = parse_physics(phys_map.read(PHYS_BYTES))
+                gfx = parse_graphics(gfx_map.read(GFX_BYTES))
+                # NOTE: phys.steer is AC's raw steerAngle (degrees), not a normalized -1..1 input,
+                # so the clamp below saturates it; the M0 observer ignores steer, but a future steer
+                # consumer wants normalization (steerAngle / steering-lock; cf. import_motec). gear
+                # goes through csv_display_gear -> racing_telemetry's 0=neutral / -1=reverse / 1..N.
                 payload = {
                     "speed_kmh": max(0.0, phys.speed_kmh),
                     "rpm": max(0, phys.rpm),
                     "throttle": _clamp(phys.gas, 0.0, 1.0),
                     "brake": _clamp(phys.brake, 0.0, 1.0),
                     "steer": _clamp(phys.steer, -1.0, 1.0),
-                    "gear": phys.gear,
+                    "gear": csv_display_gear(phys.gear),
                     "lat_g": phys.accg_lat,
                     "long_g": phys.accg_lon,
                     "spline": _clamp(gfx.norm_pos, 0.0, 1.0),

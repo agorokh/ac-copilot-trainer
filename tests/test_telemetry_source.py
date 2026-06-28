@@ -4,12 +4,35 @@ from __future__ import annotations
 
 import pytest
 
+import tools.ai_sidecar.telemetry_source as telemetry_source
 from tests.test_realtime_observer import _corner_archive
 from tools.ai_sidecar.external_protocol import TYPE_TELEMETRY_TICK, validate_inbound
 from tools.ai_sidecar.telemetry_source import (
     make_hello_frame,
     ticks_from_archive,
 )
+
+
+class _StubLap:
+    """A lap trace with OUT-OF-RANGE channels, to exercise the clamps in ticks_from_archive."""
+
+    def __init__(self, n=4):
+        self._n = n
+        self.spline = [1.5, -0.1, 0.5, 0.5][:n]
+        self.brake = [1.3, -0.2, 0.5, 0.5][:n]
+        self.throttle = [1.4, -0.5, 0.5, 0.5][:n]
+        self.steer = [-1.3, 2.0, 0.0, 0.0][:n]
+        self.gear = [3.0] * n
+        self.lat_g = [0.1] * n
+        self.long_g = [-0.1] * n
+        self._v = [-5.0, 300.0, 120.0, 120.0][:n]  # includes a negative speed sample
+
+    @property
+    def v_kmh(self):
+        return self._v
+
+    def __len__(self):
+        return self._n
 
 
 def test_ticks_from_archive_are_valid_telemetry_ticks():
@@ -31,6 +54,22 @@ def test_ticks_carry_monotonic_seq():
 def test_ticks_spline_within_unit_range():
     for frame in ticks_from_archive(_corner_archive()):
         assert 0.0 <= frame["payload"]["spline"] <= 1.0
+
+
+def test_ticks_clamp_out_of_range_channels(monkeypatch):
+    # Out-of-range archive jitter must be clamped into the contract range so the sidecar admits
+    # the frame rather than dropping it — the documented jitter-tolerance of ticks_from_archive.
+    monkeypatch.setattr(telemetry_source, "lap_trace_from_archive", lambda archive: _StubLap())
+    frames = ticks_from_archive({"ignored": True})
+    assert len(frames) == 4
+    for frame in frames:
+        assert validate_inbound(frame) is None  # would fail if clamps were removed
+        p = frame["payload"]
+        assert 0.0 <= p["spline"] <= 1.0
+        assert 0.0 <= p["throttle"] <= 1.0
+        assert 0.0 <= p["brake"] <= 1.0
+        assert -1.0 <= p["steer"] <= 1.0
+        assert p["speed_kmh"] >= 0.0
 
 
 def test_ticks_from_archive_raises_without_trace():

@@ -36,8 +36,8 @@ def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if frame.get(TYPE_KEY) != TYPE_STATE_SNAPSHOT or frame.get("topic") != TOPIC_COACHING_CUE:
         return None
-    state = frame.get("state")
-    return state if isinstance(state, dict) else None
+    payload = frame.get("payload")
+    return payload if isinstance(payload, dict) else None
 
 
 def make_hello_frame(client: str = "voice-client") -> dict[str, Any]:

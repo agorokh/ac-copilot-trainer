@@ -112,6 +112,12 @@ _external_peer_classes: dict[Any, str] = {}
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
 # advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
 _observer: RealtimeObserver | None = None
+# The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
+# producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
+# producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
+# detection and silently mis-grade corners). Released when the owner disconnects.
+_observer_feed_peer: Any = None
+_observer_feed_warned = False
 
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
@@ -467,14 +473,48 @@ async def _broadcast_external(frame: dict[str, Any], *, exclude: Any) -> None:
     await _broadcast_targets(frame, targets=targets)
 
 
+def _release_observer_feed(websocket: Any) -> None:
+    """Release the observer feed + reset stream state when the owning producer disconnects.
+
+    Lets the next producer claim the feed and start from a clean per-corner/wrap state (the observer
+    assumes one monotonic stream). No-op for any peer that did not own the feed.
+    """
+    global _observer_feed_peer, _observer_feed_warned
+    if websocket is _observer_feed_peer:
+        _observer_feed_peer = None
+        _observer_feed_warned = False
+        if _observer is not None:
+            _observer.reset()
+
+
 async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None:
     """Feed one live ``telemetry_tick`` frame to the RealtimeObserver and fan out any advisories.
 
     Each advisory becomes a ``coaching.cue`` frame on the existing topic fan-out; the voice client
     (and any other subscriber) renders it. Deterministic + sparse: the observer dedups per corner,
-    so no rate-limit is needed. Never lets an observer error break the peripheral path.
+    so no cue-rate-limit is needed. The observer is intentionally fed at the FULL producer rate (not
+    behind the 20 Hz peripheral cap) because accurate spline-delta + wrap detection need every
+    frame; per-frame ``observe()`` cost is bounded in practice by the 20 Hz producer.
+
+    Single-producer guarded: only the peer that first fed the observer (``exclude`` is the producer
+    websocket) may continue to; a second concurrent producer is ignored here. Never lets an observer
+    error break the peripheral path. Cue delivery is best-effort and bounded by the slowest coaching
+    subscriber (each broadcast awaits ``send`` under websockets backpressure).
     """
+    global _observer_feed_peer, _observer_feed_warned
     if _observer is None:
+        return
+    if _observer_feed_peer is None:
+        _observer_feed_peer = exclude
+        _observer_feed_warned = False
+    elif exclude is not _observer_feed_peer:
+        if not _observer_feed_warned:
+            logger.warning(
+                "ignoring observer feed from a second telemetry producer peer=%s; the live "
+                "observer is single-stream and already owned by another producer",
+                getattr(exclude, "remote_address", None),
+            )
+            _observer_feed_warned = True
         return
     try:
         advisories = _observer.observe(frame)
@@ -1047,6 +1087,7 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     finally:
         _external_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
+        _release_observer_feed(websocket)
         for t in list(pending_followups):
             if not t.done():
                 t.cancel()

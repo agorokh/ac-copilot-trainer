@@ -34,7 +34,8 @@ def test_make_coaching_cue_shape():
     assert frame["v"] == 1
     assert frame["type"] == TYPE_STATE_SNAPSHOT
     assert frame["topic"] == TOPIC_COACHING_CUE
-    assert frame["state"] == adv
+    # advisory rides under the canonical state.snapshot 'payload' key (project-wide contract)
+    assert frame["payload"] == adv
 
 
 def test_make_telemetry_tick_shape_and_validates():
