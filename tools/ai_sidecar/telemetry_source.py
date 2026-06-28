@@ -1,8 +1,8 @@
 """Telemetry source: feed the sidecar's ``telemetry_tick`` contract so the M0 voice loop can run.
 
-The producer side of the M0 voice-coaching slice (#341). The in-game CSP app does not yet emit the
-high-rate ``telemetry_tick`` contract — the live rig/shared-memory producer is the #277 residual —
-so this client supplies frames two ways:
+The producer side of the M0 voice-coaching slice (#341). The in-game Lua app emits
+``telemetry_tick`` at ~20 Hz via :mod:`telemetry_publisher` (spline + lap on the wire); the Python
+replay/shared-memory sources below remain for offline CI and rig fallback:
 
 * **replay** (offline, CI-tested core): stream a stored lap archive as ``telemetry_tick`` frames so
   the whole spine (frame -> observer -> ``coaching.cue`` -> voice) is validated without the rig. Run
@@ -134,7 +134,7 @@ async def replay(  # pragma: no cover - runtime/ws
                 await asyncio.sleep(period)
 
 
-async def stream_live(  # pragma: no cover - rig/shared-memory/ws
+async def stream_live(
     url: str, *, hz: float = DEFAULT_HZ, token: str | None = None
 ) -> None:
     """Read AC shared memory at ``hz`` and emit ``telemetry_tick`` frames so a human can drive."""

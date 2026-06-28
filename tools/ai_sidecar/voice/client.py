@@ -84,7 +84,7 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
     return not failed and worker_alive
 
 
-def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover - runtime/audio
+def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
     """Build a non-blocking speak() backed by pyttsx3 on a dedicated worker thread.
 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
