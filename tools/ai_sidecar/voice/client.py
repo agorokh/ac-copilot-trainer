@@ -93,6 +93,8 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover 
 
     logger = logging.getLogger(__name__)
     q: queue.Queue[str | None] = queue.Queue()
+    ready = threading.Event()
+    failed = threading.Event()
 
     def worker() -> None:
         try:
@@ -100,8 +102,10 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover 
             engine.setProperty("rate", rate)
             engine.setProperty("volume", volume)
         except Exception:
+            failed.set()
             logger.exception("pyttsx3 voice worker failed to initialize")
             return
+        ready.set()
         while True:
             text = q.get()
             if text is None:
@@ -115,6 +119,12 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover 
     threading.Thread(target=worker, daemon=True, name="pyttsx3-voice").start()
 
     def speak(text: str) -> None:
+        if failed.is_set():
+            logger.warning("pyttsx3 unavailable; dropping cue %r", text)
+            return
+        if not ready.wait(timeout=2.0):
+            logger.warning("pyttsx3 not ready; dropping cue %r", text)
+            return
         q.put(text)
 
     return speak
