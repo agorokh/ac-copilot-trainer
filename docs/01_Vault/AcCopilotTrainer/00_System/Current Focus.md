@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-27T22:15:00Z
+last_updated: 2026-06-28T07:10:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -106,6 +106,14 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot p
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-28** — PR [#343](https://github.com/agorokh/ac-copilot-trainer/pull/343) **MERGED** at
+  `f50719c` — **in-the-ear voice coach** ([#340](https://github.com/agorokh/ac-copilot-trainer/issues/340)
+  **CLOSED**): new `tools/ai_sidecar/voice/` speaks the same `Advisory` stream the text HUD renders, via
+  a pre-rendered phrase bank (not live TTS) + urgency scheduler (barge-in/dedup/TTL/cooldown). Stdlib
+  core dep-free (audio deps behind a new `voice` extra); 51 tests; `make ci-fast` green. Off-rig verified:
+  emit→dispatch latency **1.27 ms** (≤150 ms budget), 9.19 s real-speech WAV. Decision:
+  [`voice-coach-architecture-2026-06-28`](../01_Decisions/voice-coach-architecture-2026-06-28.md).
+  **Deferred (rig-gated):** on-rig audible verification at the wheel; v1.1 number-splicing. #154 stays OPEN.
 - **2026-06-27** — PR [#325](https://github.com/agorokh/ac-copilot-trainer/pull/325) **MERGED** at
   `0fb721f` — `tools/ac_harness/auto_drive.py`: one-command composed L2 loop (launch → hijack → drive
   → WS assert), driver modes cruise/racing/**ggv flat-out**, sim-death anti-false-green, `max_gear_used`;
