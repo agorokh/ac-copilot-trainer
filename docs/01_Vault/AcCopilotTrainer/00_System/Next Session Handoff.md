@@ -2,8 +2,10 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-27T06:15:00Z
+last_updated: 2026-06-27T22:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
+  - AcCopilotTrainer/03_Investigations/issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/issue-308-worktree-memory-gate-resolved-2026-06-25.md
   - AcCopilotTrainer/03_Investigations/pr-309-lap-archive-finalization.md
   - AcCopilotTrainer/01_Decisions/realtime-coaching-architecture-2026-06-22.md
@@ -38,7 +40,7 @@ relates_to:
 
 # Next session handoff
 
-## Side research (2026-06-27) — Track Titan as a coaching angle (no code shipped)
+## Side research (2026-06-27) — Track Titan as a coaching angle (PR #334)
 Active code resume is still **#305 / Track Titan-independent** (below). Separately, a `/start-task`
 research pass investigated the locally-installed **Track Titan** as an external coaching angle.
 Findings + strategy: [[track-titan-telemetry-extraction-feasibility-2026-06-27]] +
@@ -48,7 +50,76 @@ no API/export. For AC it adds **no new raw signal** — only pro ghost laps + an
 treat TT as a swappable "coaching oracle"; cheap wins first (pro ghost → #207 faster-than-PB importer;
 TT per-corner time-loss as an external referee for the autonomous harness); time-box a `ws://localhost:9121`
 tap spike; **never** automate the user's plaintext Cognito token. No runtime coupling proposed.
-**Update (fully autonomous live-verify on AG_PC):** ws:9121 tap PROVEN (11,497 frames) but **live-telemetry only** — TT's coaching (post-lap AI debrief) renders in the overlay and does NOT cross the ws (also unreliable as a 2nd consumer beside the real overlay). **Screen-capture/OCR is the extraction path** — POC built + verified: `.scratch/ocr_extract_tt.ps1` (native Windows.Media.Ocr, zero deps) emits coaching JSON (`.scratch/tt_coaching.json`). Next: productionize a `CoachingOracle` Python module via `/orchestrate`. Rig restored to stock.
+**Update (fully autonomous live-verify on AG_PC):** ws:9121 tap PROVEN (11,497 frames) but **live-telemetry only** — TT's coaching (post-lap AI debrief) renders in the overlay and does NOT cross the ws (also unreliable as a 2nd consumer beside the real overlay). **Screen-capture/OCR is the extraction path** — POC built + verified: `.scratch/ocr_extract_tt.ps1` (native Windows.Media.Ocr, zero deps) emits coaching JSON (`.scratch/tt_coaching.json`). Next: productionize a `CoachingOracle` Python module via `/orchestrate`. Rig restored to stock. **Update:** productionization is PR
+[#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) —
+`tools/ai_sidecar/coaching_oracle.py` + `tt_overlay_ocr.ps1` + tests; bot review resolved.
+
+---
+
+## Resume here (2026-06-27 LATE — CI: vault-automerge guard fixed (#329 / PR #330))
+
+**Infra fix.** Every `vault-only` PR's `guard-and-automerge` check was failing in ~3s — `Unable to
+resolve action agorokh/governance-hub, not found` — because the #863 refactor pointed it at a
+**private** cross-repo action, which the default `GITHUB_TOKEN` cannot resolve (the hub's
+`access_level=user` + the action existing at the pinned SHA were both confirmed and still insufficient).
+PR [#330](https://github.com/agorokh/ac-copilot-trainer/pull/330) (`52ecbf5`, closes
+[#329](https://github.com/agorokh/ac-copilot-trainer/issues/329)) mints the **FLEET_BOT app token**,
+checks the governance-hub action out at its pinned SHA, and runs it via a local path —
+**reference-not-vendor preserved**, mirroring the fleet's existing `create-github-app-token` pattern.
+This vault PR is itself the live test of the fix: if its guard goes green and auto-merges, #329 is
+verified. **Fleet note:** the #863 refactor is fleet-wide → every child repo has the same broken guard;
+propose the same app-token wrapper upstream (agent-factory / governance-hub).
+
+---
+
+## Resume here (2026-06-27 LATE — EPIC #154 auto_drive composed loop + flat-out racing MERGED)
+
+**`/autonomous-deliver 154` on AG_PC (this session, `flamboyant-poincare-b469d9`).** Shipped PR
+[#325](https://github.com/agorokh/ac-copilot-trainer/pull/325) (`0fb721f`, closes
+[#324](https://github.com/agorokh/ac-copilot-trainer/issues/324)): new `tools/ac_harness/auto_drive.py`
+— the genuinely-composed one-command L2 loop (launch → carcsw hijack w/ retry → autonomous drive in a
+thread → WS producer assert), **parametrized by car/track/preset**, with **sim-death anti-false-green**
+(Car0 packet stagnation). Driver modes: `cruise` (LapDriver) / `racing` (AI-line) / **`ggv`
+(flat-out friction-circle min-time)**. 21 off-sim tests; post-merge classification clean.
+
+**Operator question answered LIVE (generality beyond Magione/Porsche, racing not theater):**
+- **Imola + Audi R8 LMS** — autonomous **full lap** (5200 m), trainer registered the lap + reference coaching.
+- **Mugello + Corvette C7R** — 2.5 km autonomous; coaching `current_speed_kmh` matched the AI-driven car.
+- **Spa + BMW Z4 GT3** — `ggv` **flat-out top gear 6 / 211 km/h**, reference coaching (`T2 · target entry 241 km/h`).
+- The first composed run "wasn't racing" (1st gear, 49 km/h) → now shifts 1→6 and sends straights.
+
+**Load-bearing finding:** the generic GGV's `k_aero_lat` MUST be 0 — an aero-lateral grip term spins the
+GT3 out (matches the #259 red-team; a multi-agent verification workflow caught it pre-ship). Verified
+plant fit lives in `auto_drive.generic_gt3_ggv()`.
+
+**What remains (Part-G residual; #154 stays OPEN):** clean flat-out line (~83 s) needs curvature-ff
+steering with per-car `ff_c1/c2` calibration from a human CSV (#244); the formal false-green-rate <5%
+KPI; and #154 children #277/#278/#305. AC rig was crash-prone this session (4 fresh-launch crashes — the
+sim-death guard caught all, reporting honest FAIL). Full write-up:
+[[autonomous-drive-multitrack-generality-2026-06-27]].
+
+---
+
+## Resume here (2026-06-27 EVENING — #277 brain-debrief rig-verify PREPPED, paused on rig contention)
+
+**`/autonomous-deliver 277` on AG_PC.** #277 *code* is merged (PR #321, `8d9eb97`; post-merge
+classification clean — no migration/env/deps/workflow flags). The only remaining acceptance is the
+**rig-verify**: a live `debriefSource==brain` `coaching_response` with `cornerAnalysis` on a driven lap.
+
+**Fully prepped for a ~5-min resume** — see
+[[issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27]]: custom-AI surfaces rebuilt
+(`.scratch/part-g/surfaces_customai.ini`), `new_behaviour.ini [CUSTOM_AI] ENABLED=1` added, vetted drive
+script `.scratch/issue277_drive_laps.py` (PR #248 `RacingDriver.from_human_profile` Stanley path),
+capture harness `.scratch/issue277_live_verify.py` wired (its `_analyze` asserts the `brainOnly`
+lap_complete + `debriefSource==brain` round-trip; daemon-free launch).
+
+**Paused — NOT done (single-rig contention):** AG_PC has one AC instance; the concurrent session
+**"Autonomous delivery testing in Assetto Corsa"** (`flamboyant-poincare-b469d9`) was actively driving
+the rig (imola/mugello captures, Audi R8 / Corvette). I **yielded** — killed **no** peer process and
+restored magione `surfaces.ini` to stock. **To finish #277:** when the rig is exclusively free, re-run
+`/autonomous-deliver 277` (one step). Serializing the two concurrent rig sessions is an operator call.
+
+---
 
 ## Resume here (2026-06-27 LIVE RIG CONFIRMATION — #305 CLOSED)
 
