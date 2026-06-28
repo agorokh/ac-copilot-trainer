@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -74,12 +75,13 @@ def _num(v: Any) -> float | None:
         f = float(v)
     except (TypeError, ValueError):
         return None
-    return f if f == f and f not in (float("inf"), float("-inf")) else None
+    return f if math.isfinite(f) else None
 
 
 def _connect(db_path: str | Path):
     import duckdb  # local import so the rest of the repo doesn't hard-depend on duckdb
 
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(str(db_path))
 
 
@@ -186,11 +188,11 @@ def _bulk_load_samples(con, sample_cols: list[str], rows: list[list]) -> int:  #
         mode="w", suffix=".csv", delete=False, newline="", encoding="utf-8"
     )
     try:
-        writer = csv.writer(tmp)
-        writer.writerow(sample_cols)
-        for r in rows:
-            writer.writerow(["" if v is None else v for v in r])
-        tmp.close()
+        with tmp:
+            writer = csv.writer(tmp)
+            writer.writerow(sample_cols)
+            for r in rows:
+                writer.writerow(["" if v is None else v for v in r])
         con.execute("COPY samples FROM ? (FORMAT CSV, HEADER true, NULLSTR '')", [tmp.name])
         return len(rows)
     finally:
@@ -288,6 +290,12 @@ def build_lake(
         summary.valid_laps = con.execute("SELECT count(*) FROM laps WHERE is_valid").fetchone()[0]
         summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]
         summary.tracks = con.execute("SELECT count(DISTINCT track_id) FROM laps").fetchone()[0]
+    except Exception:
+        try:
+            con.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
     finally:
         con.close()
     return summary
