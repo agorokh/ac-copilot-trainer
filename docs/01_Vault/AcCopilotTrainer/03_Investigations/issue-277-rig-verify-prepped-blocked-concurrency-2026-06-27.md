@@ -12,7 +12,28 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
 ---
 
-# #277 live brain-debrief rig-verify — PREPPED, paused on rig contention (2026-06-27 eve)
+# #277 live brain-debrief rig-verify — RESOLVED (#277 CLOSED 2026-06-27)
+
+> **RESOLVED 2026-06-27 (later same day):** live-verified end-to-end on AG_PC + **#277 CLOSED**.
+> Autonomous carcsw/Stanley drive of `ks_audi_r8_lms` @ magione (3 valid laps) produced **5 live
+> `debriefSource:"brain"` coaching_response frames** on the WS wire, each a 5-corner `cornerAnalysis`
+> with CONFIRMED per-wheel attribution ("Rear wheelspin on exit (confirmed)", "No wheelspin
+> (confirmed)") + trailBraking/tyres/balance; `build_brain_followup` reproduces it offline on the real
+> archive. **Root cause of the earlier no-fire:** the brain debrief is gated by
+> `AC_COPILOT_OLLAMA_ENABLE` (deterministic brain, shares the Ollama flag; the capture harness had set
+> it `=0` — `start_sidecar.bat` defaults it `=1`, so normal operation is enabled). **carcsw gotcha:**
+> the `911 GT3 R 2016` is an extended-physics car → CSP "extended physics for car" → no `Car0` mmap →
+> hijack fails; use `ks_audi_r8_lms` (non-extended) on **stock** surfaces (the `WAV_PITCH=extended-0` /
+> `_EXTRA_PERMISSIONS` edit actively BREAKS the hijack; AC-install `new_behaviour.ini [CUSTOM_AI]
+> ENABLED=1` is the only enable needed). Launch via `ContentManagerActuator`, not `explorer.exe`.
+> **Residual (→ EPIC #154 Part-G):** the HUD coaching-summary tile gates on an AC-valid lap (autonomous
+> laps clip curbs → invalid) → on-screen tile pixels confirm on a clean valid lap. Evidence:
+> `.scratch/issue277-cap-frames2.jsonl`, `issue277_brain_{live,offline}.json`, `issue277_hud_brain_*.png`.
+> Closeout: [#277#issuecomment-4823317786](https://github.com/agorokh/ac-copilot-trainer/issues/277#issuecomment-4823317786).
+
+The original (now-superseded) prepped/paused write-up follows.
+
+## Prepped + paused (earlier 2026-06-27 eve)
 
 `/autonomous-deliver 277` on **AG_PC**. The #277 *code* shipped in **PR #321** (merged `8d9eb97`);
 the only remaining acceptance is the **rig-verify** (drive a lap → confirm the live
