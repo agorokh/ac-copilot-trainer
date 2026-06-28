@@ -25,7 +25,10 @@ $asTask = ($ext.GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetPa
 function Await($op, $t) {
   $m = $asTask.MakeGenericMethod($t)
   $task = $m.Invoke($null, @($op))
-  if (-not $task.Wait($AwaitTimeoutMs)) { throw "WinRT async timed out after ${AwaitTimeoutMs}ms" }
+  if (-not $task.Wait($AwaitTimeoutMs)) {
+    try { $op.Cancel() } catch {}
+    throw "WinRT async timed out after ${AwaitTimeoutMs}ms"
+  }
   $task.Result
 }
 [void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
