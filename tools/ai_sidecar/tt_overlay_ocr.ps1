@@ -18,14 +18,14 @@ Add-Type -AssemblyName System.Drawing | Out-Null
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
 
-# WinRT async helper.
+# WinRT async helper — 10s/op (each Ocr pass uses up to five awaits; two passes run sequentially).
+$AwaitTimeoutMs = 10000
 $ext = [System.WindowsRuntimeSystemExtensions]
 $asTask = ($ext.GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
 function Await($op, $t) {
   $m = $asTask.MakeGenericMethod($t)
   $task = $m.Invoke($null, @($op))
-  # Bounded wait (25s/op) so Python's subprocess timeout doesn't kill us mid-finally.
-  if (-not $task.Wait(25000)) { throw "WinRT async timed out after 25s" }
+  if (-not $task.Wait($AwaitTimeoutMs)) { throw "WinRT async timed out after ${AwaitTimeoutMs}ms" }
   $task.Result
 }
 [void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]

@@ -25,6 +25,7 @@ advisories are ``cause_class="technique"`` with ``suggested_setup_delta=None``. 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -35,6 +36,12 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
+
+logger = logging.getLogger(__name__)
+
+#: Each OCR pass may await up to five WinRT ops; the helper runs two passes sequentially. Keep this
+#: above 2 × 5 × ``tt_overlay_ocr.ps1`` per-op bound + capture overhead (see helper header comment).
+_DEFAULT_HELPER_TIMEOUT_S = 110.0
 
 #: A lap delta / gain-loss reads as a signed 3-decimal number (e.g. ``+0.657``); tyre pressures read
 #: as 1-decimal (``-9.5 psi``). Requiring exactly 3 decimals + a sane magnitude excludes the psi.
@@ -283,7 +290,7 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
         *,
         ps_helper: str | None = None,
         layout: OverlayLayout | None = None,
-        timeout_s: float = 30.0,
+        timeout_s: float = _DEFAULT_HELPER_TIMEOUT_S,
     ) -> None:
         self.ps_helper = ps_helper
         self.layout = layout
@@ -324,9 +331,11 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
                 args, capture_output=True, text=True, timeout=self.timeout_s, check=True
             )
             data = json.loads(proc.stdout)
-        except (subprocess.SubprocessError, OSError, json.JSONDecodeError):
+        except (subprocess.SubprocessError, OSError, json.JSONDecodeError) as exc:
+            logger.warning("Track Titan OCR helper failed: %s", exc)
             return None
         if not isinstance(data, dict):
+            logger.warning("Track Titan OCR helper returned non-dict JSON: %r", type(data))
             return None
         try:
             return parse_overlay_text(
@@ -334,5 +343,6 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
                 _coerce_lines(data.get("debrief_lines")),
                 captured_utc=datetime.now(UTC).isoformat(),
             )
-        except (AssertionError, AttributeError, TypeError, ValueError):
+        except (AssertionError, AttributeError, TypeError, ValueError) as exc:
+            logger.warning("Track Titan OCR parse failed: %s", exc)
             return None

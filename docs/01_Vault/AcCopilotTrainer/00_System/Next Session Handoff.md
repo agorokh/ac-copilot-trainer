@@ -37,9 +37,16 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-310-trail-brake-attribution-handoff.md
   - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
+  - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
 ---
 
 # Next session handoff
+
+## Resume here
+
+**Merge [[pr-338-coaching-hardening-handoff]]** — PR #338 (issue #333 post-merge hardening).
+
+---
 
 ## Delivered (2026-06-28) — #327 CLOSED (no code): vault-automerge already fixed
 `/autonomous-deliver 327` reconciled the stale issue body against live state and **closed

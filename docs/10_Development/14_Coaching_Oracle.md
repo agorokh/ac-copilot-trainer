@@ -12,7 +12,8 @@ Issue **#333** — swappable external coaching source for the harness referee an
 
 ## Contract
 
-- **`CoachingOracle.get_coaching() -> CoachingSnapshot | None`** — `None` when unavailable (off-Windows, helper failure, malformed helper JSON).
+- **`CoachingOracle.get_coaching() -> CoachingSnapshot | None`** — swappable interface; implementations return `None` when unavailable.
+- **`TrackTitanScreenOracle.get_coaching() -> CoachingSnapshot | None`** — `None` when unavailable (off-Windows, helper failure, malformed helper JSON). Default helper subprocess timeout is 110s (two OCR passes × up to five 10s WinRT awaits each + capture overhead).
 - **`parse_overlay_text(full_lines, debrief_lines?)`** — pure; maps OCR lines to `CoachingSnapshot` (3-decimal delta filter, post-lap debrief gate, technique-only advisories).
 - **`debrief_to_advisories(snapshot)`** — emits `coach_handoff`-compatible rows; `suggested_setup_delta` is always `None`.
 
