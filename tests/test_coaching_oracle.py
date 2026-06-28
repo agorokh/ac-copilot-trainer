@@ -226,6 +226,13 @@ def test_get_coaching_returns_none_when_parse_raises(monkeypatch):
     assert mod.TrackTitanScreenOracle().get_coaching() is None
 
 
+def test_default_helper_timeout_constant():
+    import tools.ai_sidecar.coaching_oracle as mod
+
+    assert mod._DEFAULT_HELPER_TIMEOUT_S == 110.0
+    assert mod.TrackTitanScreenOracle().timeout_s == mod._DEFAULT_HELPER_TIMEOUT_S
+
+
 def test_get_coaching_passes_default_helper_timeout_to_subprocess(monkeypatch):
     """Default timeout_s must match _DEFAULT_HELPER_TIMEOUT_S in subprocess.run."""
     import tools.ai_sidecar.coaching_oracle as mod
