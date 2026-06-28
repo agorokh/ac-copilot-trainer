@@ -31,6 +31,7 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from datetime import UTC
+from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
@@ -40,8 +41,9 @@ from tools.ai_sidecar.coach_handoff import CAUSE_CLASSES
 _DELTA_RE = re.compile(r"[+\-]\s?\d+\.\d{3}\b")
 _LAPTIME_RE = re.compile(r"\d{1,2}:\d\d\.\d{3}")  # 1-2 minute digits (keep 10:03.123 intact)
 _COMPOUND_RE = re.compile(r"Comp(?:ound)?:\s*([A-Za-z0-9]+)", re.IGNORECASE)
-#: tolerate the common OCR manglings of "post-lap debrief" ("St-lap debrief").
-_DEBRIEF_RE = re.compile(r"((?:post-?lap |st-?lap |[a-z\-]*)debrief.*)", re.IGNORECASE)
+#: Require the real TT marker ("post-lap debrief", incl. the common OCR mangling "st-lap") so
+#: ``debrief_text`` is set ONLY for a genuine post-lap debrief — never a stray "debrief" token.
+_DEBRIEF_RE = re.compile(r"((?:post-?lap|st-?lap)\s+debrief.*)", re.IGNORECASE)
 _MAX_PLAUSIBLE_DELTA_S = 30.0
 
 #: focus-area keyword -> a normalized technique coaching line (TT phrases vary; we map the salient
@@ -261,7 +263,7 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
     def __init__(
         self,
         *,
-        ps_helper: str = "tools/ai_sidecar/tt_overlay_ocr.ps1",
+        ps_helper: str | None = None,
         layout: OverlayLayout | None = None,
         timeout_s: float = 30.0,
     ) -> None:
@@ -275,13 +277,15 @@ class TrackTitanScreenOracle(CoachingOracle):  # pragma: no cover - Windows/rig-
         from datetime import datetime
 
         layout = self.layout or select_layout(*_primary_screen_size())
+        # Resolve the helper next to THIS module so it works regardless of cwd / install location.
+        helper = self.ps_helper or str(Path(__file__).with_name("tt_overlay_ocr.ps1"))
         args = [
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            self.ps_helper,
+            helper,
         ]
         if layout is not None:
             fx, fy, fw, fh = layout.debrief_crop

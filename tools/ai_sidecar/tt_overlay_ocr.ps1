@@ -62,13 +62,14 @@ try {
     $d = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($st)) ([Windows.Graphics.Imaging.BitmapDecoder])
     $sb = Await ($d.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
     $r = Await ($eng.RecognizeAsync($sb)) ([Windows.Media.Ocr.OcrResult])
-    # Return a guaranteed-FLAT string[] (a List avoids the nested-array trap of the unary-comma idiom).
+    # Return a FLAT string[] via a List (no unary-comma idiom — the caller wraps with @()).
     $lines = New-Object System.Collections.Generic.List[string]
     foreach ($ln in $r.Lines) { $lines.Add([string]$ln.Text) }
-    , $lines.ToArray()
+    $lines.ToArray()
   }
-  $full = Ocr $Png
-  $deb = Ocr $crop
+  # Independent per-image OCR: if the large full-screen frame fails, the debrief crop can still succeed.
+  $full = @(); try { $full = @(Ocr $Png) } catch { [Console]::Error.WriteLine("full OCR failed: $_") }
+  $deb = @(); try { $deb = @(Ocr $crop) } catch { [Console]::Error.WriteLine("crop OCR failed: $_") }
 
   # 4) Emit JSON (stdout only).
   ([ordered]@{ full_lines = @($full); debrief_lines = @($deb) }) | ConvertTo-Json -Depth 4 -Compress

@@ -122,6 +122,14 @@ def test_advisories_gated_on_debrief_not_live_hud_labels():
     assert snap.advisories == []
 
 
+def test_bare_debrief_word_is_not_a_real_debrief():
+    # Only a genuine "post-lap/st-lap debrief" marker counts — a stray "debrief" token does not.
+    snap = parse_overlay_text(["some debrief blurb", "THROTTLE", "BRAKE"])
+    assert snap.debrief_text is None
+    assert snap.focus_areas == []
+    assert snap.advisories == []
+
+
 def test_select_layout_exact_and_fallback():
     assert select_layout(3440, 1440).name == "ag_pc_3440x1440"
     # Uncalibrated resolution -> generic fractional layout, not a wrong calibration.
