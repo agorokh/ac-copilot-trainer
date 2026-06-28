@@ -138,6 +138,10 @@ def test_telemetry_tick_accepts_optional_spline_and_lap() -> None:
     assert ep.validate_inbound(_telemetry_tick(spline=0.0, lap=3)) is None
     assert ep.validate_inbound(_telemetry_tick(completedLaps=5)) is None
     assert ep.validate_inbound(_telemetry_tick(lapCount=5)) is None
+    # snake_case lap spellings validate too — locks the union after the #357 de-duplication so the
+    # snake variants the first (removed) block enforced are not silently dropped.
+    assert ep.validate_inbound(_telemetry_tick(lap_count=5)) is None
+    assert ep.validate_inbound(_telemetry_tick(completed_laps=5)) is None
     # still valid with neither (existing producers unaffected)
     assert ep.validate_inbound(_telemetry_tick()) is None
 
@@ -149,6 +153,11 @@ def test_telemetry_tick_rejects_bad_spline_and_lap() -> None:
         ep.validate_inbound(_telemetry_tick(spline="x")) or ""
     )
     assert "lap must be >= 0" in (ep.validate_inbound(_telemetry_tick(lap=-1)) or "")
+    # snake_case lap spellings are still range-checked after the #357 de-duplication.
+    assert "lap_count must be >= 0" in (ep.validate_inbound(_telemetry_tick(lap_count=-1)) or "")
+    assert "completed_laps must be >= 0" in (
+        ep.validate_inbound(_telemetry_tick(completed_laps=-1)) or ""
+    )
 
 
 def test_make_coaching_cue_frame_shape() -> None:
