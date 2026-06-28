@@ -26,6 +26,14 @@ The DuckDB file is a **derived, disposable** view — rebuilt from JSON; the JSO
 is never mutated (data-immutability invariant). No server, single pip wheel,
 Windows + py3.11 native.
 
+## Vault graph anchor
+
+Frontmatter `relates_to` paths follow
+[`docs/01_Vault/00_Graph_Schema.md`](../../00_Graph_Schema.md): entries are
+**relative to** `docs/01_Vault/` (e.g. `AcCopilotTrainer/00_System/...`), not
+prefixed with the literal `docs/01_Vault/` string. This matches every other
+vault node in the repo (see PR #265).
+
 ## Schema (star)
 
 - `laps` — lap grain (car_id, track_id, conditions, setup_hash, lap_ms, is_valid…)
