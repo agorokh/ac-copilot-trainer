@@ -224,3 +224,27 @@ def test_get_coaching_returns_none_when_parse_raises(monkeypatch):
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
     monkeypatch.setattr(mod, "parse_overlay_text", _boom)
     assert mod.TrackTitanScreenOracle().get_coaching() is None
+
+
+def test_get_coaching_passes_default_helper_timeout_to_subprocess(monkeypatch):
+    """Default timeout_s must match _DEFAULT_HELPER_TIMEOUT_S in subprocess.run."""
+    import tools.ai_sidecar.coaching_oracle as mod
+
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    monkeypatch.setattr(mod, "_primary_screen_size", lambda: (3440, 1440))
+    captured: dict[str, float] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"full_lines":["x"],"debrief_lines":[]}'
+        stderr = ""
+
+    def _run(*args, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return _Proc()
+
+    monkeypatch.setattr(mod.subprocess, "run", _run)
+    oracle = mod.TrackTitanScreenOracle()
+    assert oracle.timeout_s == mod._DEFAULT_HELPER_TIMEOUT_S
+    oracle.get_coaching()
+    assert captured["timeout"] == mod._DEFAULT_HELPER_TIMEOUT_S
