@@ -152,6 +152,12 @@ def test_bare_debrief_word_is_not_a_real_debrief():
     assert snap.advisories == []
 
 
+def test_state_derived_from_crop_when_full_screen_empty():
+    # If the full-screen OCR failed (empty) but the crop saw the suggestion, still derive the state.
+    snap = parse_overlay_text([], ["REFERENCE WILL APPEAR"])
+    assert snap.suggestion_state == "awaiting_valid_lap"
+
+
 def test_select_layout_exact_and_fallback():
     assert select_layout(3440, 1440).name == "ag_pc_3440x1440"
     # Uncalibrated resolution -> generic fractional layout, not a wrong calibration.

@@ -187,7 +187,8 @@ def parse_overlay_text(
 
     if debrief_text:
         suggestion_state = "post_lap_debrief"
-    elif "reference will appear" in full_join.lower():
+    elif "reference will appear" in (full_join + " " + " ".join(debrief_lines)).lower():
+        # include the crop OCR — the full-screen pass may have failed while the crop succeeded.
         suggestion_state = "awaiting_valid_lap"
     else:
         suggestion_state = "unknown"
