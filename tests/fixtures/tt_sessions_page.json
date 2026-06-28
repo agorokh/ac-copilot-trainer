@@ -1,0 +1,88 @@
+{
+  "data": {
+    "count": 3,
+    "limit": 50,
+    "page": 1,
+    "sessions": [
+      {
+        "id": "fake-uid-001#sess-aaa",
+        "timestamp": "2026-06-01T10:00:00Z",
+        "last_updated": "2026-06-01T10:05:00Z",
+        "game": {"gameId": "assettoCorsa", "name": "Assetto Corsa"},
+        "game_id": "assettoCorsa",
+        "car_id": "syn_mercedes_w09",
+        "carName": "Mercedes W09",
+        "car_class": "F1",
+        "car_performance_index": 100,
+        "track_id": "ks_red_bull_ring",
+        "trackName": "Red Bull Ring",
+        "track_grip": 0.98,
+        "weather_id": "clear",
+        "session_type": "hotlap",
+        "ghost_version": "v3",
+        "bestLapTime": 64321,
+        "lapCount": 12,
+        "lap_attributes": {
+          "airTemp": 24.0,
+          "roadTemp": 31.0,
+          "fuelLevel": 5.0,
+          "tcEnabled": true,
+          "absEnabled": true,
+          "absSetting": 2,
+          "carSetupName": "quali",
+          "isFixedSetup": false,
+          "tyreCompound": "Pirelli SuperSoft (SS)"
+        },
+        "driver_name": "Operator",
+        "user_id": "fake-uid-001",
+        "season_id": "2026",
+        "status": "complete"
+      },
+      {
+        "id": "fake-uid-001#sess-bbb",
+        "timestamp": "2026-06-02T11:00:00Z",
+        "game": {"gameId": "assettoCorsa", "name": "Assetto Corsa"},
+        "game_id": "assettoCorsa",
+        "car_id": "ks_porsche_911_gt3_rs",
+        "carName": "Porsche 911 GT3 RS",
+        "car_class": "GT3",
+        "track_id": "spa",
+        "trackName": "Spa-Francorchamps",
+        "track_grip": 0.95,
+        "bestLapTime": 138900,
+        "lapCount": 5,
+        "lap_attributes": {
+          "airTemp": 18.0,
+          "roadTemp": 22.0,
+          "tcEnabled": false,
+          "absEnabled": false,
+          "carSetupName": "race",
+          "isFixedSetup": true,
+          "tyreCompound": "Soft"
+        },
+        "user_id": "fake-uid-001",
+        "status": "complete"
+      },
+      {
+        "id": "fake-uid-001#sess-ccc",
+        "timestamp": "2026-06-03T09:00:00Z",
+        "game_id": "assettoCorsa",
+        "car_id": "ks_abarth500",
+        "track_id": "magione",
+        "user_id": "fake-uid-001"
+      }
+    ],
+    "cars": {
+      "syn_mercedes_w09": {"name": "Mercedes W09"},
+      "ks_porsche_911_gt3_rs": {"name": "Porsche 911 GT3 RS"}
+    },
+    "games": {"assettoCorsa": {"name": "Assetto Corsa"}},
+    "tracks": {
+      "ks_red_bull_ring": {"name": "Red Bull Ring"},
+      "spa": {"name": "Spa-Francorchamps"}
+    }
+  },
+  "message": "ok",
+  "status": 200,
+  "success": true
+}

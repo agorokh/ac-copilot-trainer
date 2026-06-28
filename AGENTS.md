@@ -93,6 +93,7 @@ Skill: `~/.agents/skills/vault-memory/SKILL.md` (mirrored under `.cursor/skills/
 - **Pre-commit:** `make hooks-install` once per clone.
 - **Optional stacks:** DB, AWS, HF, Ollama, browser automation — [docs/00_Core/OPTIONAL_CAPABILITIES.md](docs/00_Core/OPTIONAL_CAPABILITIES.md).
 - **Sidecar reference lap (M0 voice coaching):** `AC_COPILOT_REFERENCE_ARCHIVE` — path to a faster reference lap archive JSON; used when starting the sidecar without `--reference-archive` so the live observer can emit `coaching.cue` advisories for the voice client.
+- **Track Titan ingest (#353):** `TT_REFRESH_TOKEN` — the operator's **personal** TT refresh token for `python -m tools.tt_ingest`; source from Doppler / the shell (never commit), or omit to auto-discover from the TT desktop app's Local Storage on Windows. Optional public-identifier overrides: `TT_COGNITO_CLIENT_ID`, `TT_COGNITO_USER_POOL_ID`, `TT_COGNITO_IDENTITY_POOL_ID`, `TT_COGNITO_REGION` (defaults are the app's public ids, not secrets). Install the CLI's runtime dep with `pip install -e ".[tt-ingest]"`. **Sensitivity:** retained exports under `journal/tt/**` are **personal data** (the operator's own sessions) — gitignored, write-once immutable, never redistributed; tokens are personal secrets, never logged or committed (see the [TT coaching-oracle guardrail](docs/01_Vault/AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md)).
 
 ---
 

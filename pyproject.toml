@@ -78,6 +78,11 @@ training = [
 analytics = [
   "duckdb>=1.4",
 ]
+# Track Titan ingest CLI (#353): the `auth-check` / `export` network commands lazy-import
+# `requests`. Install with `pip install -e ".[tt-ingest]"` to run the CLI outside a dev env.
+tt-ingest = [
+  "requests>=2.33.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
@@ -133,4 +138,5 @@ omit = [
   "tools/process_miner/run.py",
   "tools/repo_knowledge/mcp_server.py",
   "tools/ai_sidecar/__main__.py",
+  "tools/tt_ingest/__main__.py",
 ]
