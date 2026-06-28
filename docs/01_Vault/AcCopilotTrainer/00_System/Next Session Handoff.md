@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T15:35:00Z
+last_updated: 2026-06-28T17:55:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
@@ -48,13 +49,35 @@ relates_to:
 
 **#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
 
-**[#350](https://github.com/agorokh/ac-copilot-trainer/issues/350) — voice coach LIVE-FIRE (rig-gated).** The
-off-sim engine (#340) and the sidecar live-wiring (#341, PR #349) are merged; what remains is a **Lua
-`telemetry_tick` producer that emits `spline`+speed** (none exists today — `git grep -rln telemetry_tick
-src/` is empty) so the observer actually fires live, plus the **on-rig audible smoke** (operator drives vs a
-faster reference, hears a spline-anchored cue). Bake a Piper bank (`python -m tools.ai_sidecar.voice.bake
---backend piper`), launch the sidecar with `--voice-reference <archive> --voice-bank <dir>`, tap
-`coaching.cue`. This is the deferred verification for both #340 and #341.
+**[#350](https://github.com/agorokh/ac-copilot-trainer/issues/350) — voice coach LIVE-FIRE: now RIG-SMOKE ONLY.**
+⚠️ The old "no Lua producer / `git grep telemetry_tick src/` empty" note is **STALE** — the **Lua
+`telemetry_tick` producer (Part A) shipped in PR #342** (`M.publishTelemetryTickIfDue`,
+`telemetry_publisher.lua:158`, 20 Hz spline+lap, wired at `ac_copilot_trainer.lua:2274`), merged 39 min
+*after* #350 was filed. Part A is **DONE and green on `main`** (reconciled on the issue with pasted evidence;
+the M0 pipeline was briefly red from a #342×#349 merge collision, **fixed in PR #355** — see below). **All
+that remains is Part B (operator/rig-gated):** bake a Piper bank (`python -m tools.ai_sidecar.voice.bake
+--backend piper`), launch the sidecar with `--voice-reference <archive> --voice-bank <dir>`, drive Magione vs
+a faster reference, tap `coaching.cue`, confirm the operator **hears** ≥1 spline-anchored cue. Minor producer
+follow-ups noted on #350 (real `lat_g`/`long_g`; dedup the double `spline`/lap validation in `external_protocol.py`).
+
+**#345 P0 capture half** (rig-gated Lua) also still pending — see the line above.
+
+---
+
+## Delivered (2026-06-28) — PR #355 MERGED: green main + #350 reconciliation (#354 CLOSED)
+`/autonomous-deliver 350` (ultracode). Reconciling #350 surfaced that its premise was **stale** (Part A
+producer already shipped in PR #342, merged 39 min after #350 was filed) **and** that `main` was **RED**
+(`build: failure @ 84b5698`) from a **#342×#349 merge collision**. PR
+[#355](https://github.com/agorokh/ac-copilot-trainer/pull/355) (`27cb7100`, **#354 CLOSED**) greens main:
+`tests/test_server_observer_wiring.py` referenced the renamed `_publish_coaching_cues` (as
+`_publish_observer_cues`) + an abandoned `_load_observer`/`SystemExit` contract; and `_reset_external_state()`
+didn't clear the single-producer globals `_observer_feed_peer`/`_observer_feed_warned`, leaking observer-feed
+ownership across the voice-wiring tests (AssertionError reproduced on the **Linux CI runner**). Fix: reset the
+feed globals on external-state reset (correct on server (re)start/teardown); drop the duplicate `_observer`
+decl; target `_publish_coaching_cues`; replace the stale loader tests with best-effort `_wire_voice` tests
+(non-vacuous sentinels). **`build` green on `27cb7100`**; full suite `1513 passed, 0 failed` (Py 3.11);
+3-agent adversarial pre-merge review (all approve). **#350 reconciled** → Part A done, only rig-gated Part B
+remains. **Post-merge:** no classification flags. Detail: [[pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28]].
 
 ---
 
