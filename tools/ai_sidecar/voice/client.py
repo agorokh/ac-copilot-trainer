@@ -85,23 +85,32 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
     stays responsive and incoming ``act`` cues can still be arbitrated while speech plays.
     """
+    import logging
     import queue
     import threading
 
     import pyttsx3
 
+    logger = logging.getLogger(__name__)
     q: queue.Queue[str | None] = queue.Queue()
 
     def worker() -> None:
-        engine = pyttsx3.init()
-        engine.setProperty("rate", rate)
-        engine.setProperty("volume", volume)
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty("rate", rate)
+            engine.setProperty("volume", volume)
+        except Exception:
+            logger.exception("pyttsx3 voice worker failed to initialize")
+            return
         while True:
             text = q.get()
             if text is None:
                 break
-            engine.say(text)
-            engine.runAndWait()
+            try:
+                engine.say(text)
+                engine.runAndWait()
+            except Exception:
+                logger.exception("pyttsx3 playback failed for %r", text)
 
     threading.Thread(target=worker, daemon=True, name="pyttsx3-voice").start()
 

@@ -121,12 +121,14 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
 
     # Map/read lengths come from racing_telemetry's own parser constants (single source of truth):
     # speedKmh@28/brake@8 (phys) and normalizedCarPosition@248/completedLaps@132 (gfx).
-    phys_map = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
-    gfx_map = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
-    headers = {AUTH_HEADER: token} if token else {}
-    period = 1.0 / hz if hz > 0 else 0.0
-    seq = 0
+    phys_map = None
+    gfx_map = None
     try:
+        phys_map = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
+        gfx_map = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
+        headers = {AUTH_HEADER: token} if token else {}
+        period = 1.0 / hz if hz > 0 else 0.0
+        seq = 0
         async with websockets.connect(url, additional_headers=headers) as ws:
             await ws.send(json.dumps(make_hello_frame("telemetry-source-live")))
             while True:
@@ -137,10 +139,9 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
                     if period:
                         await asyncio.sleep(period)
                     continue
-                # NOTE: phys.steer is AC's raw steerAngle (degrees), not a normalized -1..1 input,
-                # so the clamp below saturates it; the M0 observer ignores steer, but a future steer
-                # consumer wants normalization (steerAngle / steering-lock; cf. import_motec). gear
-                # goes through csv_display_gear -> racing_telemetry's 0=neutral / -1=reverse / 1..N.
+                # NOTE: phys.steer is AC's raw steerAngle (degrees), not a normalized -1..1 input;
+                # divide by a typical steering lock before clamping. gear goes through
+                # csv_display_gear -> racing_telemetry's 0=neutral / -1=reverse / 1..N.
                 payload = {
                     "speed_kmh": max(0.0, phys.speed_kmh),
                     "rpm": max(0, phys.rpm),
@@ -158,8 +159,10 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
                 if period:
                     await asyncio.sleep(period)
     finally:
-        phys_map.close()
-        gfx_map.close()
+        if phys_map is not None:
+            phys_map.close()
+        if gfx_map is not None:
+            gfx_map.close()
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
