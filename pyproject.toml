@@ -65,6 +65,10 @@ training = [
 where = ["src", "."]
 include = ["ac_copilot_trainer*", "tools*"]
 
+[tool.setuptools.package-data]
+# Ship the native-OCR PowerShell helper so TrackTitanScreenOracle resolves it in wheel/non-editable installs.
+"tools.ai_sidecar" = ["*.ps1"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
