@@ -298,6 +298,7 @@ def build_lake(
         if include_samples
         else nullcontext(None)
     )
+    build_ok = False
     try:
         with staging_ctx as samples_staging:
             _create_schema(con)
@@ -378,21 +379,22 @@ def build_lake(
             ]
             summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]
             summary.tracks = con.execute("SELECT count(DISTINCT track_id) FROM laps").fetchone()[0]
+            build_ok = True
     except Exception:
         try:
             con.execute("ROLLBACK")
         except Exception:
             pass
-        if build_tmp.exists():
-            try:
-                build_tmp.unlink()
-            except OSError:
-                pass
         raise
-    else:
-        os.replace(build_tmp, resolved_db)
     finally:
         con.close()
+    if build_ok:
+        os.replace(build_tmp, resolved_db)
+    elif build_tmp.exists():
+        try:
+            build_tmp.unlink()
+        except OSError:
+            pass
     return summary
 
 
