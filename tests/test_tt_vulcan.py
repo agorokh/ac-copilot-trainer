@@ -168,3 +168,29 @@ def test_fetch_sessions_page_http_error() -> None:
 
     with pytest.raises(TTVulcanError):
         fetch_sessions_page("tok", "uid-1", http=_ErrHttp())
+
+
+# --- regression tests for the PR-359 adversarial-review fixes ----------------------
+
+
+def test_parse_sessions_page_coerces_numeric_strings() -> None:
+    page = parse_sessions_page(
+        {"data": {"count": "149", "limit": "50.0", "page": "1", "sessions": []}}
+    )
+    assert page.count == 149
+    assert page.limit == 50  # float-string coerced → pagination not collapsed to a single page
+    assert page.total_pages == 3
+
+
+def test_session_summary_laps_fallback() -> None:
+    summary = session_summary({"car_id": "c", "track_id": "t", "game_id": "g"})
+    assert "? lap(s)" in summary
+    assert "None" not in summary
+
+
+def test_session_summary_excludes_pii() -> None:
+    # Pin the documented "never tokens or PII" contract against a future regression that
+    # might start interpolating user_id / driver_name into the operator-facing log line.
+    out = session_summary(parse_sessions_page(_load_fixture()).sessions[0])
+    assert "fake-uid-001" not in out
+    assert "Operator" not in out

@@ -17,6 +17,7 @@ from tools.tt_ingest.tt_export import (
     sanitize_segment,
     session_lake_dir,
     sha256_hex,
+    stable_fingerprint,
     write_immutable_json,
 )
 
@@ -135,3 +136,31 @@ def test_build_index() -> None:
     assert index["file_count"] == 2
     assert index["files"][0]["sha256"] == "deadbeef"
     assert index["files"][1]["path"] == "a/s2/session.json"
+
+
+# --- regression tests for the PR-359 adversarial-review fixes ----------------------
+
+
+def test_stable_fingerprint_deterministic_and_distinct() -> None:
+    a = {"car_id": "c", "track_id": "t"}
+    b = {"track_id": "t", "car_id": "c"}  # same content, different key order
+    c = {"car_id": "c", "track_id": "u"}
+    assert stable_fingerprint(a) == stable_fingerprint(b)  # canonical → order-independent
+    assert stable_fingerprint(a) != stable_fingerprint(c)  # distinct content → distinct id
+    assert len(stable_fingerprint(a)) == 12
+
+
+def test_write_immutable_json_strict_rejects_nan_by_default(tmp_path) -> None:
+    with pytest.raises(ValueError):
+        write_immutable_json(tmp_path / "x.json", {"v": float("nan")})
+
+
+def test_write_immutable_json_allow_nan_is_lossless(tmp_path) -> None:
+    import json
+
+    path = tmp_path / "raw.json"
+    result = write_immutable_json(path, {"airTemp": float("nan")}, allow_nan=True)
+    assert result.written is True
+    # Round-trips through our own json.loads (which accepts NaN), so retention is lossless.
+    loaded = json.loads(path.read_text())
+    assert loaded["airTemp"] != loaded["airTemp"]  # NaN != NaN

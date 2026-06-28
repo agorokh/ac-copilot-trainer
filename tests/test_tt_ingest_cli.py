@@ -110,3 +110,57 @@ def test_parser_auth_check() -> None:
 def test_parser_requires_subcommand() -> None:
     with pytest.raises(SystemExit):
         build_arg_parser().parse_args([])
+
+
+# --- regression tests for the PR-359 adversarial-review fixes ----------------------
+
+
+def test_retain_sessions_idless_sessions_do_not_collide(tmp_path) -> None:
+    # Two DISTINCT sessions both lacking a usable id must NOT collapse onto one lake path
+    # (the old 'unknown_session' single bucket silently dropped the second + corrupted the index).
+    s1 = {"car_id": "c", "track_id": "t", "game_id": "g", "bestLapTime": 1000}
+    s2 = {"car_id": "c", "track_id": "t", "game_id": "g", "bestLapTime": 2000}
+    summary = retain_sessions([s1, s2], lake_base=tmp_path, generated_at="2026-06-28T00:00:00Z")
+    assert summary.total == 2
+    assert summary.retained_new == 2  # both retained — no silent drop
+    root = tmp_path / "journal" / "tt"
+    assert len(list(root.rglob("session.json"))) == 2  # two distinct raw files on disk
+    file_index = json.loads((root / INDEX_FILENAME).read_text())
+    assert file_index["file_count"] == 2
+    # Distinct sha256 per session — the first file's hash is never mis-attributed to the second.
+    assert len({f["sha256"] for f in file_index["files"]}) == 2
+
+
+def test_retain_sessions_keeps_nan_session_and_whole_batch(tmp_path) -> None:
+    good = {"id": "u#a", "car_id": "c", "track_id": "t", "game_id": "g"}
+    nan_session = {
+        "id": "u#b",
+        "car_id": "c",
+        "track_id": "t",
+        "game_id": "g",
+        "lap_attributes": {"fuelLevel": float("nan")},
+    }
+    after = {"id": "u#c", "car_id": "c", "track_id": "t", "game_id": "g"}
+    summary = retain_sessions(
+        [good, nan_session, after], lake_base=tmp_path, generated_at="2026-06-28T00:00:00Z"
+    )
+    # A non-finite telemetry float must NOT abort the batch or skip the indexes.
+    assert summary.total == 3
+    assert summary.failed == 0
+    root = tmp_path / "journal" / "tt"
+    assert (root / SESSIONS_INDEX_FILENAME).exists()
+    assert json.loads((root / INDEX_FILENAME).read_text())["file_count"] == 3
+
+
+def test_retain_sessions_guards_unserializable_session(tmp_path) -> None:
+    good = {"id": "u#a", "car_id": "c", "track_id": "t", "game_id": "g"}
+    # A set is not JSON-serializable (even with allow_nan): the per-session write raises, but the
+    # guard must keep the rest of the batch and still write both indexes.
+    bad = {"id": "u#b", "car_id": "c", "track_id": "t", "game_id": "g", "weird": {1, 2, 3}}
+    summary = retain_sessions([good, bad], lake_base=tmp_path, generated_at="2026-06-28T00:00:00Z")
+    assert summary.failed == 1
+    assert summary.total == 1  # only the good session retained
+    assert "1 session(s) skipped due to errors" in summary.render()
+    root = tmp_path / "journal" / "tt"
+    assert json.loads((root / INDEX_FILENAME).read_text())["file_count"] == 1
+    assert json.loads((root / SESSIONS_INDEX_FILENAME).read_text())["session_count"] == 1

@@ -35,6 +35,7 @@ from tools.tt_ingest.tt_export import (
     lake_root,
     sanitize_segment,
     session_lake_dir,
+    stable_fingerprint,
     write_immutable_json,
 )
 from tools.tt_ingest.tt_normalize import (
@@ -82,6 +83,7 @@ __all__ = [
     "session_summary",
     "sessions_url",
     "split_session_id",
+    "stable_fingerprint",
     "token_expiry",
     "uid_from_token",
     "write_immutable_json",

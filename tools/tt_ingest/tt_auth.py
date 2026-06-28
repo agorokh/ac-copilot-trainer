@@ -26,7 +26,7 @@ import binascii
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,11 +55,42 @@ _LAST_AUTH_USER_KEY_RE_TEMPLATE = r"CognitoIdentityServiceProvider\.{client}\.La
 #: A Cognito refresh token is a 5-segment JWE (header.key.iv.ciphertext.tag), each
 #: segment base64url. Access / id tokens are 3-segment JWS, so the *5-segment* shape
 #: (four dots) — not the segment length — is what uniquely identifies the refresh
-#: token on disk. The per-segment minimums stay modest so synthetic/edge tokens match
-#: while the four-dot structure rejects any 3-segment JWS substring.
-_JWE_RE = re.compile(r"[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]{6,}){4}")
+#: token on disk. We match it with a LINEAR scan, never a single backtracking regex:
+#: ``_TOKEN_RUN_RE`` is one character class (so it scans a multi-MB LevelDB blob in
+#: O(n) with no catastrophic backtracking), then each run is split on ``.`` and the
+#: five-consecutive-segment window is validated in Python. The per-segment minimums
+#: stay modest so synthetic/edge tokens match while the four-dot structure rejects any
+#: 3-segment JWS substring.
+_TOKEN_RUN_RE = re.compile(r"[A-Za-z0-9_.-]+")
+_JWE_SEGMENTS = 5
+_JWE_FIRST_MIN = 8
+_JWE_REST_MIN = 6
 #: A printable token value (e.g. a uid) as it sits next to its key in the LevelDB blob.
 _TOKEN_VALUE_RE = re.compile(r"[A-Za-z0-9._-]{8,}")
+
+
+def _jwe_in_run(run: str) -> str | None:
+    """Return the first 5-segment JWE inside a dot-joined token run, else ``None``.
+
+    Linear in ``len(run)``: a single ``str.split`` plus a sliding window over the
+    resulting segments — no regex backtracking.
+    """
+    parts = run.split(".")
+    if len(parts) < _JWE_SEGMENTS:
+        return None
+    for i in range(len(parts) - _JWE_SEGMENTS + 1):
+        window = parts[i : i + _JWE_SEGMENTS]
+        if len(window[0]) >= _JWE_FIRST_MIN and all(len(p) >= _JWE_REST_MIN for p in window[1:]):
+            return ".".join(window)
+    return None
+
+
+def _iter_jwes(text: str) -> Iterator[tuple[int, str]]:
+    """Yield ``(start_offset, jwe)`` for every 5-segment JWE in ``text`` (linear scan)."""
+    for run in _TOKEN_RUN_RE.finditer(text):
+        jwe = _jwe_in_run(run.group(0))
+        if jwe is not None:
+            yield run.start(), jwe
 
 
 class TTAuthError(RuntimeError):
@@ -192,17 +223,18 @@ def extract_refresh_token_from_text(text: str, *, app_client_id: str) -> str | N
     """
     key_re = re.compile(_REFRESH_TOKEN_KEY_RE_TEMPLATE.format(client=re.escape(app_client_id)))
     marker = key_re.search(text)
+    # One linear pass collects every JWE with its offset (no backtracking on a multi-MB blob).
+    candidates = list(_iter_jwes(text))
     if marker is not None:
-        after = text[marker.end() :]
-        jwe = _JWE_RE.search(after)
-        if jwe is not None:
-            return jwe.group(0)
-    # Fallback: the refresh token is the only 5-segment JWE on disk.
-    candidates = _JWE_RE.findall(text)
+        after = marker.end()
+        for offset, jwe in candidates:
+            if offset >= after:
+                return jwe
     if not candidates:
         return None
-    # Prefer the longest (the real ~1778-char JWE dwarfs any incidental match).
-    return max(candidates, key=len)
+    # Fallback: the refresh token is the only 5-segment JWE on disk; prefer the longest
+    # (the real ~1778-char JWE dwarfs any incidental match).
+    return max((jwe for _, jwe in candidates), key=len)
 
 
 def extract_uid_from_text(text: str, *, app_client_id: str) -> str | None:
@@ -351,7 +383,13 @@ def mint_tokens(
         import requests as requests_mod
 
         client = requests_mod
-    response = client.post(url, headers=headers, json=body, timeout=timeout)
+    try:
+        response = client.post(url, headers=headers, json=body, timeout=timeout)
+    except Exception as exc:
+        # Belt-and-suspenders for invariant (1): the request body carries the refresh
+        # token, so re-raise transport failures with only the exception *type* name and
+        # NO chained cause, so no library traceback (which could echo the request) escapes.
+        raise TTAuthError(f"Cognito InitiateAuth request failed: {type(exc).__name__}") from None
     if getattr(response, "status_code", 200) >= 400:
         # Surface status only — never the response body, which can echo token material.
         raise TTAuthError(f"Cognito InitiateAuth failed with HTTP {response.status_code}")

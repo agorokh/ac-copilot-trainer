@@ -74,15 +74,24 @@ def endpoint_file(session_dir: Path, endpoint: str) -> Path:
     return session_dir / f"{sanitize_segment(endpoint, fallback='endpoint')}.json"
 
 
-def _serialize(payload: Any) -> bytes:
+def _serialize(payload: Any, *, allow_nan: bool = False) -> bytes:
     return (
-        json.dumps(payload, separators=(",", ":"), sort_keys=True, allow_nan=False) + "\n"
+        json.dumps(payload, separators=(",", ":"), sort_keys=True, allow_nan=allow_nan) + "\n"
     ).encode("utf-8")
 
 
 def sha256_hex(data: bytes) -> str:
     """Hex sha256 of bytes."""
     return hashlib.sha256(data).hexdigest()
+
+
+def stable_fingerprint(payload: Any, *, length: int = 12) -> str:
+    """A short, deterministic content fingerprint of ``payload`` (sha256 of canonical JSON).
+
+    Used to key retention for sessions that lack a usable id, so two *distinct* id-less
+    payloads never collapse onto one lake path (which would silently drop the second).
+    """
+    return sha256_hex(_serialize(payload, allow_nan=True))[:length]
 
 
 @dataclass(frozen=True)
@@ -95,15 +104,22 @@ class WriteResult:
     bytes: int
 
 
-def write_immutable_json(path: Path, payload: Any, *, overwrite: bool = False) -> WriteResult:
+def write_immutable_json(
+    path: Path, payload: Any, *, overwrite: bool = False, allow_nan: bool = False
+) -> WriteResult:
     """Atomically write ``payload`` as JSON, refusing to clobber an existing file.
 
     Write-once is the default: if ``path`` already exists and ``overwrite`` is False,
     nothing is written and ``WriteResult.written`` is False (with the *existing* file's
     hash, so the caller can still index it). Uses a temp file + ``os.replace`` so a
     crash never leaves a half-written record on disk.
+
+    ``allow_nan`` controls non-finite float handling: ``False`` (default) keeps derived
+    indexes as strict, portable JSON; raw retention passes ``True`` so a session carrying
+    a ``NaN``/``Infinity`` telemetry float is retained *losslessly* (it round-trips through
+    our own ``json.loads``) instead of raising and aborting the batch.
     """
-    data = _serialize(payload)
+    data = _serialize(payload, allow_nan=allow_nan)
     digest = sha256_hex(data)
     if path.exists():
         if not overwrite:

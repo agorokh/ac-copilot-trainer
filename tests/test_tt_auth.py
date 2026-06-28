@@ -271,3 +271,69 @@ def test_mint_tokens_raises_on_http_error() -> None:
 
 def test_module_exposes_default_timeout() -> None:
     assert tt_auth.DEFAULT_REQUEST_TIMEOUT_S > 0
+
+
+# --- regression tests for the PR-359 adversarial-review fixes ----------------------
+
+
+def test_extract_refresh_token_is_linear_on_large_blob() -> None:
+    # ReDoS regression: a several-hundred-KB run of token chars with NO 5-segment JWE must
+    # resolve quickly. The previous single backtracking regex took ~minutes on this shape.
+    import time
+
+    client = "client-x"
+    big = "A" * 300_000  # one long run, no dots → cannot be a JWE
+    text = f"{big} CognitoIdentityServiceProvider.{client}.u.refreshToken {FAKE_JWE} {big}"
+    start = time.monotonic()
+    got = extract_refresh_token_from_text(text, app_client_id=client)
+    assert time.monotonic() - start < 3.0
+    assert got == FAKE_JWE
+
+
+def test_extract_refresh_token_ignores_3segment_jws() -> None:
+    # A long 3-segment access-token JWS (only 2 dots) must never be taken as the refresh JWE.
+    jws = "a" * 800 + "." + "b" * 800 + "." + "c" * 64
+    assert extract_refresh_token_from_text(jws, app_client_id="x") is None
+
+
+def test_is_token_expired_skew_boundary() -> None:
+    token = _make_jws({"exp": 1_000_000})
+    near = datetime.fromtimestamp(1_000_000 - 30, tz=UTC)  # 30s before expiry, inside 60s skew
+    far = datetime.fromtimestamp(1_000_000 - 90, tz=UTC)  # 90s before, outside skew
+    assert is_token_expired(token, skew_s=60, now=near) is True
+    assert is_token_expired(token, skew_s=60, now=far) is False
+    # The 60s default skew is applied when skew_s is omitted.
+    assert is_token_expired(token, now=near) is True
+
+
+def test_resolve_refresh_token_env_precedes_populated_leveldb(tmp_path) -> None:
+    cfg = TTConfig()
+    ldb = tmp_path / "000003.ldb"
+    ldb.write_bytes(
+        f"CognitoIdentityServiceProvider.{cfg.app_client_id}.u.refreshToken={FAKE_JWE}".encode()
+    )
+    # Env token must win even when disk holds a (different) token.
+    got = resolve_refresh_token(cfg, leveldb_dir=tmp_path, env={"TT_REFRESH_TOKEN": "env-token"})
+    assert got == "env-token"
+
+
+def test_resolve_refresh_token_blank_env_falls_through_to_disk(tmp_path) -> None:
+    cfg = TTConfig()
+    ldb = tmp_path / "000003.ldb"
+    ldb.write_bytes(
+        f"CognitoIdentityServiceProvider.{cfg.app_client_id}.u.refreshToken={FAKE_JWE}".encode()
+    )
+    got = resolve_refresh_token(cfg, leveldb_dir=tmp_path, env={"TT_REFRESH_TOKEN": "   "})
+    assert got == FAKE_JWE
+
+
+def test_parse_initiate_auth_rejects_empty_access_token() -> None:
+    with pytest.raises(TTAuthError):
+        parse_initiate_auth_response({"AuthenticationResult": {"AccessToken": "", "IdToken": "x"}})
+
+
+def test_parse_initiate_auth_preserves_non_bearer_token_type() -> None:
+    minted = parse_initiate_auth_response(
+        {"AuthenticationResult": {"AccessToken": "a", "IdToken": "b", "TokenType": "Token"}}
+    )
+    assert minted.token_type == "Token"

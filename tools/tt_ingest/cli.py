@@ -28,11 +28,13 @@ from tools.tt_ingest.tt_auth import (
 from tools.tt_ingest.tt_export import (
     INDEX_FILENAME,
     RetainedFile,
+    TTExportError,
     build_index,
     endpoint_file,
     lake_root,
     relative_to_lake,
     session_lake_dir,
+    stable_fingerprint,
     write_immutable_json,
 )
 from tools.tt_ingest.tt_normalize import build_sessions_index, normalize_session
@@ -50,12 +52,16 @@ class ExportSummary:
     retained_new: int
     skipped_existing: int
     lake_root: Path
+    failed: int = 0
 
     def render(self) -> str:
-        return (
+        base = (
             f"retained {self.total} session(s) to {self.lake_root} "
             f"({self.retained_new} new, {self.skipped_existing} already present)"
         )
+        if self.failed:
+            base += f"; {self.failed} session(s) skipped due to errors"
+        return base
 
 
 def _iso_now() -> str:
@@ -81,20 +87,35 @@ def retain_sessions(
     records: list[RetainedFile] = []
     normalized: list[dict[str, Any]] = []
     retained_new = 0
+    failed = 0
 
     for raw in sessions:
-        row = normalize_session(raw)
+        try:
+            row = normalize_session(raw)
+            # Distinct sessions must never collapse onto one lake path. A real vulcan id
+            # is unique per session; for a degraded session lacking one, key on a content
+            # fingerprint so two different id-less payloads stay distinct (a true duplicate
+            # still de-dupes) — never the single literal bucket that silently drops data.
+            session_key = (
+                row.get("session_key")
+                or row.get("session_id")
+                or f"nokey-{stable_fingerprint(raw)}"
+            )
+            target_dir = session_lake_dir(
+                root,
+                game=row.get("game_id"),
+                car=row.get("car_id"),
+                track=row.get("track_id"),
+                session_key=session_key,
+            )
+            path = endpoint_file(target_dir, RAW_SESSION_ENDPOINT)
+            # Raw retention is lossless: allow_nan keeps non-finite telemetry floats.
+            result = write_immutable_json(path, dict(raw), overwrite=overwrite, allow_nan=True)
+        except (OSError, ValueError, TypeError, TTExportError):
+            # One malformed session must never abort the whole batch or the indexes.
+            failed += 1
+            continue
         normalized.append(row)
-        session_key = row.get("session_key") or row.get("session_id") or "unknown_session"
-        target_dir = session_lake_dir(
-            root,
-            game=row.get("game_id"),
-            car=row.get("car_id"),
-            track=row.get("track_id"),
-            session_key=session_key,
-        )
-        path = endpoint_file(target_dir, RAW_SESSION_ENDPOINT)
-        result = write_immutable_json(path, dict(raw), overwrite=overwrite)
         if result.written:
             retained_new += 1
         records.append(
@@ -109,10 +130,13 @@ def retain_sessions(
         )
 
     root.mkdir(parents=True, exist_ok=True)
+    # sessions_index carries normalized telemetry conditions → allow_nan for the same
+    # lossless reason; the file index (hashes/sizes/paths only) stays strict JSON.
     write_immutable_json(
         root / SESSIONS_INDEX_FILENAME,
         build_sessions_index(normalized, generated_at=stamp),
         overwrite=True,
+        allow_nan=True,
     )
     write_immutable_json(
         root / INDEX_FILENAME, build_index(records, generated_at=stamp), overwrite=True
@@ -121,6 +145,7 @@ def retain_sessions(
         total=len(records),
         retained_new=retained_new,
         skipped_existing=len(records) - retained_new,
+        failed=failed,
         lake_root=root,
     )
 

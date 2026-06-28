@@ -93,10 +93,17 @@ def parse_sessions_page(payload: Mapping[str, Any]) -> SessionsPage:
         return dict(value) if isinstance(value, Mapping) else {}
 
     def _int(name: str, default: int) -> int:
+        raw = data.get(name, default)
         try:
-            return int(data.get(name, default))
+            return int(raw)
         except (TypeError, ValueError):
-            return default
+            # Tolerate numeric-as-string variants (the API has shipped float-strings like
+            # "26.0" for other fields) so a stringified count/limit never silently
+            # collapses pagination to a single page.
+            try:
+                return int(float(raw))
+            except (TypeError, ValueError):
+                return default
 
     return SessionsPage(
         count=_int("count", len(rows)),
@@ -116,8 +123,9 @@ def session_summary(session: Mapping[str, Any]) -> str:
     game = session.get("game_id") or "?"
     best = session.get("bestLapTime")
     laps = session.get("lapCount")
+    laps_s = laps if laps is not None else "?"
     best_s = f"{best / 1000.0:.3f}s" if isinstance(best, (int, float)) and best > 0 else "—"
-    return f"[{game}] {car} @ {track} — best {best_s}, {laps} lap(s)"
+    return f"[{game}] {car} @ {track} — best {best_s}, {laps_s} lap(s)"
 
 
 def _auth_headers(access_token: str) -> dict[str, str]:
