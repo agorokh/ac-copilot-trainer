@@ -18,10 +18,19 @@ Add-Type -AssemblyName System.Drawing | Out-Null
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
 Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
 
-# WinRT async helper.
+# WinRT async helper — 10s/op (each Ocr pass uses up to five awaits; two passes run sequentially).
+$AwaitTimeoutMs = 10000
 $ext = [System.WindowsRuntimeSystemExtensions]
 $asTask = ($ext.GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
-function Await($op, $t) { $m = $asTask.MakeGenericMethod($t); $task = $m.Invoke($null, @($op)); [void]$task.Wait(-1); $task.Result }
+function Await($op, $t) {
+  $m = $asTask.MakeGenericMethod($t)
+  $task = $m.Invoke($null, @($op))
+  if (-not $task.Wait($AwaitTimeoutMs)) {
+    try { $op.Cancel() } catch {}
+    throw "WinRT async timed out after ${AwaitTimeoutMs}ms"
+  }
+  $task.Result
+}
 [void][Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
 [void][Windows.Media.Ocr.OcrEngine, Windows.Media, ContentType = WindowsRuntime]
 [void][Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
@@ -38,6 +47,11 @@ $maxdim = try { [int][Windows.Media.Ocr.OcrEngine]::MaxImageDimension } catch { 
 # App-owned per-user capture dir; created if absent.
 $appdir = Join-Path $env:LOCALAPPDATA 'ac-copilot-trainer\ocr'
 New-Item -ItemType Directory -Force -Path $appdir | Out-Null
+# Defensive: delete stale captures left by a prior forced termination (older than 10 min).
+$staleCutoff = (Get-Date).AddMinutes(-10)
+Get-ChildItem -Path $appdir -Filter '*.png' -ErrorAction SilentlyContinue |
+  Where-Object { $_.LastWriteTime -lt $staleCutoff } |
+  ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 $temps = @()
 function New-Temp { $p = Join-Path $appdir ([guid]::NewGuid().ToString() + '.png'); $script:temps += $p; $p }
 

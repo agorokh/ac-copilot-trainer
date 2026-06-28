@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T07:10:00Z
+last_updated: 2026-06-28T07:35:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
@@ -39,23 +39,35 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-310-trail-brake-attribution-handoff.md
   - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
+  - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
 ---
 
 # Next session handoff
 
-## Resume here (2026-06-28) — coaching lakehouse #345 P1 IN REVIEW; #345 P0 capture is next
-**Branch `feat/345-coaching-lake-duckdb`** delivers the EPIC #344 "query the whole data plane"
-engine: `tools/coaching_lake` — an embedded **DuckDB** star (laps/corners/setup_params/samples)
-rebuilt idempotently from the immutable lap-archive JSON. Flagship `setup-effect` dependency
-query + arbitrary SQL across the corpus; samples bulk-loaded via temp-CSV→`COPY` (executemany
-was too slow). **Verified on the live 213-lap / 11-track / 702-corner / 375k-sample corpus**
-(build 46s, real per-track best/median + corner-grain speeds + ad-hoc SQL). 9 off-sim tests;
-`analytics` extra (duckdb) wired into `ci.yml`. Detail: [[coaching-lakehouse-duckdb-2026-06-28]].
-**Next:** open the PR, drive resolve-pr → merge → post-merge; then **#345 P0 capture half**
-(rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305
-flush, provenance, widen TRACE_FIELDS to Tier-1 channels. **Drift note:** `check_vault_follow_up.sh`
-hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — investigation notes
-never satisfy the guard (handoff/Current Focus do); file a fix.
+## Resume here (2026-06-28) — PR #348 resolve-pr in progress; #345 P0 capture next
+
+**PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348)** (`feat/345-coaching-lake-duckdb`) delivers the EPIC #344 "query the whole data plane"
+engine: `tools/coaching_lake` — embedded **DuckDB** star (laps/corners/setup_params/samples)
+rebuilt idempotently from the immutable lap-archive JSON. Bot review addressed (Gemini + Qodo):
+`math.isfinite`, journal-scoped temp CSV, atomic transaction through samples COPY, explicit ROLLBACK.
+`make ci-fast` green locally; merge `main` to clear conflicts and unstick CI checks.
+Detail: [[coaching-lakehouse-duckdb-2026-06-28]].
+
+**Parallel track — [#341](https://github.com/agorokh/ac-copilot-trainer/issues/341) M0 voice-coaching thin slice** (`feat/issue-341-m0-voice`): wire live observer → voice cue. Voice output layer landed in [#343](https://github.com/agorokh/ac-copilot-trainer/pull/343).
+
+**Next after #348 merge:** **#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
+
+---
+
+## Delivered (2026-06-28) — PR #338 MERGED: CoachingOracle Qodo round-6 hardening (#333)
+[#338](https://github.com/agorokh/ac-copilot-trainer/pull/338) squash-merged to `main` as `f8d010e` (2026-06-28T07:32:32Z).
+Post-merge hardening for round-6 Qodo findings that missed the #334 squash: `get_coaching()` None-on-failure
+(`AssertionError` + early return in `debrief_to_advisories`), spaced debrief OCR marker, nested-None coercion,
+WinRT `Await` budget (10s/op + cancel on timeout) aligned with Python `_DEFAULT_HELPER_TIMEOUT_S=110`,
+parse/helper failure logging, 19 coaching-oracle tests. Detail: [[pr-338-coaching-hardening-handoff]].
+**Classification:** no post-merge flags.
+
+---
 
 ## Delivered (2026-06-28) — PR #343 MERGED: in-the-ear voice coach (#340)
 `/autonomous-deliver 340` shipped the **voice output layer** for the realtime coaching pipeline.
@@ -78,6 +90,8 @@ flagged 2 reliability issues (Bank sha not enforced at load; sounddevice channel
 final on-rig audible verification with the operator at the wheel; v1.1 number-splicing / live-TTS OOV
 fallback; cloud debrief; per-track corner names.
 
+---
+
 ## Delivered (2026-06-28) — #327 CLOSED (no code): vault-automerge already fixed
 `/autonomous-deliver 327` reconciled the stale issue body against live state and **closed
 [#327](https://github.com/agorokh/ac-copilot-trainer/issues/327) COMPLETED with zero code**. Both
@@ -87,6 +101,8 @@ symptoms were already gone: (1) the `guard-and-automerge` / `governance-hub`-not
 defect — every proper `vault/...` PR (#331/#332/#337) is green on both checks. Detail +
 live-evidence table: [[issue-327-vault-automerge-already-resolved-2026-06-28]]. **Lesson:** parallel
 autonomous sessions can file+fix the same root cause under different numbers — reconcile before re-doing.
+
+---
 
 ## Delivered (2026-06-28) — PR #334 MERGED: Track Titan CoachingOracle
 [#334](https://github.com/agorokh/ac-copilot-trainer/pull/334) (issue #333) squash-merged to `main` as

@@ -172,6 +172,14 @@ def test_coerce_lines_flattens_and_stringifies():
     assert _coerce_lines(["a", "b"]) == ["a", "b"]
     assert _coerce_lines([["a", "b"], "c"]) == ["a", "b", "c"]  # one-level nesting flattened
     assert _coerce_lines([1, None, 2]) == ["1", "2"]
+    assert _coerce_lines([["a", None, "b"]]) == ["a", "b"]  # nested None dropped, not "None"
+
+
+def test_spaced_post_lap_debrief_marker_recognized():
+    snap = parse_overlay_text(["Post lap debrief: focus on earlier throttle application"])
+    assert snap.suggestion_state == "post_lap_debrief"
+    assert snap.debrief_text is not None
+    assert "throttle" in snap.focus_areas
 
 
 def test_empty_input_is_safe():
@@ -216,3 +224,34 @@ def test_get_coaching_returns_none_when_parse_raises(monkeypatch):
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _Proc())
     monkeypatch.setattr(mod, "parse_overlay_text", _boom)
     assert mod.TrackTitanScreenOracle().get_coaching() is None
+
+
+def test_default_helper_timeout_constant():
+    import tools.ai_sidecar.coaching_oracle as mod
+
+    assert mod._DEFAULT_HELPER_TIMEOUT_S == 110.0
+    assert mod.TrackTitanScreenOracle().timeout_s == mod._DEFAULT_HELPER_TIMEOUT_S
+
+
+def test_get_coaching_passes_default_helper_timeout_to_subprocess(monkeypatch):
+    """Default timeout_s must match _DEFAULT_HELPER_TIMEOUT_S in subprocess.run."""
+    import tools.ai_sidecar.coaching_oracle as mod
+
+    monkeypatch.setattr(mod.sys, "platform", "win32")
+    monkeypatch.setattr(mod, "_primary_screen_size", lambda: (3440, 1440))
+    captured: dict[str, float] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"full_lines":["x"],"debrief_lines":[]}'
+        stderr = ""
+
+    def _run(*args, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return _Proc()
+
+    monkeypatch.setattr(mod.subprocess, "run", _run)
+    oracle = mod.TrackTitanScreenOracle()
+    assert oracle.timeout_s == mod._DEFAULT_HELPER_TIMEOUT_S
+    oracle.get_coaching()
+    assert captured["timeout"] == mod._DEFAULT_HELPER_TIMEOUT_S
