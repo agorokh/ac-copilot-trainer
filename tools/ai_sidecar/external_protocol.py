@@ -29,6 +29,10 @@ CLIENT_CLASS_SCREEN = "screen"
 CLIENT_CLASS_HAPTICS = "haptics"
 CLIENT_CLASS_PHYSICAL = "physical"
 CLIENT_CLASS_BROWSER = "browser"
+# Issue #341: a voice-coach client subscribes to `coaching.cue` and speaks the live advisory
+# stream (the #340 phrase-bank engine). On the rig the sidecar also drives a VoiceCoach in-process,
+# but a separate `voice`-class WS client is a first-class consumer (e.g. a remote speaker / a tap).
+CLIENT_CLASS_VOICE = "voice"
 KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
     {
         CLIENT_CLASS_EXTERNAL,
@@ -37,6 +41,7 @@ KNOWN_CLIENT_CLASSES: frozenset[str] = frozenset(
         CLIENT_CLASS_HAPTICS,
         CLIENT_CLASS_PHYSICAL,
         CLIENT_CLASS_BROWSER,
+        CLIENT_CLASS_VOICE,
     }
 )
 PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
@@ -138,6 +143,11 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 # but missing here, so a client could never legitimately subscribe to them — the
 # "produced-but-unsubscribable" sibling of the #170 handshake bug. The
 # `test_ws_topic_allowlist` drift-guard asserts every produced topic is listed.
+#: Topic the sidecar publishes live coaching cues on (issue #341). Unlike the Lua-produced topics
+#: above, `coaching.cue` is **sidecar-originated** (the `RealtimeObserver` advisory stream), so the
+#: Lua `publishTopic` drift-guard does not cover it — it is listed here so a `voice`-class client
+#: can legitimately subscribe.
+TOPIC_COACHING_CUE = "coaching.cue"
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
         # Declared topics (EPIC #154 Part D wires producers for these).
@@ -149,6 +159,8 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         # Already-produced topics (made subscribable; were missing).
         "coaching.snapshot",
         "setup.active",
+        # Sidecar-originated live coaching cues (issue #341).
+        TOPIC_COACHING_CUE,
     }
 )
 
@@ -164,6 +176,27 @@ def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
         "server_version": server_version,
         "capabilities": list(SERVER_CAPABILITIES),
     }
+
+
+def make_coaching_cue(payload: dict[str, Any], *, ts_sim: float | None = None) -> dict[str, Any]:
+    """Build a ``coaching.cue`` topic frame for one live advisory (issue #341).
+
+    Sidecar-originated ``state.snapshot`` envelope on the ``coaching.cue`` topic — the same
+    ``{v, type:"state.snapshot", topic, payload}`` shape every topic uses, so a ``voice``-class
+    client subscribes to it exactly like ``coaching.snapshot``. ``payload`` carries the advisory's
+    machine-readable fields (kind/corner/urgency/message/spline/detail); the renderer (#340's
+    resolver) turns it back into speech. ``ts_sim`` is forwarded when the source carried one.
+    """
+    frame: dict[str, Any] = {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_COACHING_CUE,
+        "payload": payload,
+        "source": "sidecar.observer",
+    }
+    if ts_sim is not None:
+        frame["ts_sim"] = ts_sim
+    return frame
 
 
 def make_error(message: str, *, ref_type: str | None = None) -> dict[str, Any]:
@@ -271,6 +304,16 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
     for key in ("abs_active", "brake_lock", "wheel_lock"):
         if key in payload and not isinstance(payload[key], bool):
             return f"{key} must be a boolean"
+    # Issue #341: optional position fields the RealtimeObserver needs to locate corners and detect
+    # lap wraps. Optional so existing producers (which omit them) keep validating; when present they
+    # must be sane — `spline` is the normalized 0..1 track position, lap counters are non-negative.
+    err = _validate_optional_number(payload, "spline", min_value=0, max_value=1)
+    if err is not None:
+        return err
+    for lap_key in ("lap", "lapCount", "completedLaps", "lap_count"):
+        err = _validate_optional_number(payload, lap_key, min_value=0)
+        if err is not None:
+            return err
     return None
 
 
