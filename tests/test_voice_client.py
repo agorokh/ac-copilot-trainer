@@ -15,6 +15,7 @@ from tools.ai_sidecar.voice.client import (
     extract_advisory,
     make_hello_frame,
     make_subscribe_frame,
+    should_enqueue_voice_cue,
 )
 
 
@@ -79,3 +80,9 @@ def test_hello_and_subscribe_frame_shapes():
     s = make_subscribe_frame()
     assert s["type"] == TYPE_STATE_SUBSCRIBE
     assert s["topics"] == [TOPIC_COACHING_CUE]
+
+
+def test_should_enqueue_voice_cue_requires_live_worker():
+    assert should_enqueue_voice_cue(failed=False, worker_alive=True) is True
+    assert should_enqueue_voice_cue(failed=True, worker_alive=True) is False
+    assert should_enqueue_voice_cue(failed=False, worker_alive=False) is False

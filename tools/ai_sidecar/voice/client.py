@@ -79,6 +79,11 @@ class VoiceClient:
         return cue
 
 
+def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
+    """Return True when the pyttsx3 worker may accept another queued cue."""
+    return not failed and worker_alive
+
+
 def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover - runtime/audio
     """Build a non-blocking speak() backed by pyttsx3 on a dedicated worker thread.
 
@@ -116,14 +121,12 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover 
             except Exception:
                 logger.exception("pyttsx3 playback failed for %r", text)
 
-    threading.Thread(target=worker, daemon=True, name="pyttsx3-voice").start()
+    t = threading.Thread(target=worker, daemon=True, name="pyttsx3-voice")
+    t.start()
 
     def speak(text: str) -> None:
-        if failed.is_set():
+        if not should_enqueue_voice_cue(failed=failed.is_set(), worker_alive=t.is_alive()):
             logger.warning("pyttsx3 unavailable; dropping cue %r", text)
-            return
-        if not ready.wait(timeout=2.0):
-            logger.warning("pyttsx3 not ready; dropping cue %r", text)
             return
         q.put(text)
 

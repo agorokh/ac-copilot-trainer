@@ -46,6 +46,15 @@ def _reset_feed(monkeypatch):
     """Isolate the single-producer feed globals per test."""
     monkeypatch.setattr(server, "_observer_feed_peer", None)
     monkeypatch.setattr(server, "_observer_feed_warned", False)
+    server._peripheral_rate_limiter.reset()
+    server._background_tasks.clear()
+
+
+async def _run_publish_cues(frame, *, exclude):
+    await server._publish_observer_cues(frame, exclude=exclude)
+    pending = list(server._background_tasks)
+    if pending:
+        await asyncio.gather(*pending)
 
 
 def test_publish_observer_cues_broadcasts_coaching_cue(monkeypatch):
@@ -55,7 +64,7 @@ def test_publish_observer_cues_broadcasts_coaching_cue(monkeypatch):
     sent = _capture_broadcast(monkeypatch)
 
     frame = {"type": "telemetry_tick", "payload": {"spline": 0.5, "speed_kmh": 100}}
-    asyncio.run(server._publish_observer_cues(frame, exclude="ws-1"))
+    asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
 
     assert observer.seen == [frame]
     assert len(sent) == 1
@@ -75,9 +84,7 @@ def test_publish_observer_cues_fans_out_each_advisory(monkeypatch):
     monkeypatch.setattr(server, "_observer", _FakeObserver([a, b]))
     sent = _capture_broadcast(monkeypatch)
 
-    asyncio.run(
-        server._publish_observer_cues({"type": "telemetry_tick", "payload": {}}, exclude="wsX")
-    )
+    asyncio.run(_run_publish_cues({"type": "telemetry_tick", "payload": {}}, exclude="wsX"))
 
     assert len(sent) == 2
     assert sent[0][0]["payload"]["kind"] == "late_brake" and sent[0][0]["payload"]["corner"] == 3
@@ -89,9 +96,7 @@ def test_publish_observer_cues_noop_without_observer(monkeypatch):
     _reset_feed(monkeypatch)
     monkeypatch.setattr(server, "_observer", None)
     sent = _capture_broadcast(monkeypatch)
-    asyncio.run(
-        server._publish_observer_cues({"type": "telemetry_tick", "payload": {}}, exclude=None)
-    )
+    asyncio.run(_run_publish_cues({"type": "telemetry_tick", "payload": {}}, exclude=None))
     assert sent == []
 
 
@@ -108,9 +113,7 @@ def test_publish_observer_cues_swallows_observer_error(monkeypatch):
     monkeypatch.setattr(server, "_observer", _Boom())
     sent = _capture_broadcast(monkeypatch)
     # must not raise — the peripheral path is never broken by an observer fault
-    asyncio.run(
-        server._publish_observer_cues({"type": "telemetry_tick", "payload": {}}, exclude=None)
-    )
+    asyncio.run(_run_publish_cues({"type": "telemetry_tick", "payload": {}}, exclude=None))
     assert sent == []
 
 
@@ -121,12 +124,8 @@ def test_publish_observer_cues_ignores_second_producer(monkeypatch):
     monkeypatch.setattr(server, "_observer", observer)
     sent = _capture_broadcast(monkeypatch)
 
-    asyncio.run(
-        server._publish_observer_cues({"type": "telemetry_tick", "payload": {}}, exclude="owner")
-    )
-    asyncio.run(
-        server._publish_observer_cues({"type": "telemetry_tick", "payload": {}}, exclude="intruder")
-    )
+    asyncio.run(_run_publish_cues({"type": "telemetry_tick", "payload": {}}, exclude="owner"))
+    asyncio.run(_run_publish_cues({"type": "telemetry_tick", "payload": {}}, exclude="intruder"))
 
     assert observer.calls == 1  # only the owner's frame reached the observer
     assert len(sent) == 1
@@ -193,6 +192,20 @@ def _full_tick_payload():
     }
 
 
+def test_publish_observer_cues_rate_limited_at_20hz(monkeypatch):
+    _reset_feed(monkeypatch)
+    observer = _FakeObserver([_adv()])
+    monkeypatch.setattr(server, "_observer", observer)
+    sent = _capture_broadcast(monkeypatch)
+    frame = {"type": "telemetry_tick", "payload": {"spline": 0.5, "speed_kmh": 100}}
+
+    asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
+    asyncio.run(_run_publish_cues(frame, exclude="ws-1"))
+
+    assert observer.calls == 1
+    assert len(sent) == 1
+
+
 def test_handler_routes_telemetry_tick_into_observer(monkeypatch):
     # Locks the seam: a real telemetry_tick through _handle_external_frame reaches the observer
     # and broadcasts a coaching.cue excluding the producer.
@@ -205,7 +218,14 @@ def test_handler_routes_telemetry_tick_into_observer(monkeypatch):
     monkeypatch.setattr(server, "_external_peer_classes", {ws: "physical"})
 
     frame = {"v": 1, "type": "telemetry_tick", "payload": _full_tick_payload()}
-    asyncio.run(server._handle_external_frame(ws, frame))
+
+    async def _run() -> None:
+        await server._handle_external_frame(ws, frame)
+        pending = list(server._background_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+
+    asyncio.run(_run())
 
     assert observer.calls == 1
     assert observer.seen[0] is frame

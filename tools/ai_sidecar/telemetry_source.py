@@ -36,6 +36,34 @@ from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
 
 #: Default replay/live cadence. The sidecar caps ``telemetry_tick`` at 20 Hz.
 DEFAULT_HZ = 20.0
+#: Default steering lock (degrees) for normalizing AC ``steerAngle`` to ``[-1, 1]``.
+#: Matches ``import_motec`` default (450°).
+DEFAULT_STEER_LOCK_DEG = 450.0
+#: Minimum sleep on shared-memory parse failure so a bad/unready rig cannot busy-loop.
+_PARSE_FAILURE_SLEEP_S = 0.05
+
+
+def period_seconds(hz: float) -> float:
+    """Return the inter-frame period for ``hz``; reject non-positive values."""
+    if hz <= 0:
+        raise ValueError(f"hz must be > 0, got {hz!r}")
+    return 1.0 / hz
+
+
+def close_shared_memory_maps(phys_map: Any, gfx_map: Any) -> None:
+    """Close AC shared-memory mappings when present (rig/runtime helper)."""
+    if phys_map is not None:
+        phys_map.close()
+    if gfx_map is not None:
+        gfx_map.close()
+
+
+def normalize_live_steer(
+    steer_angle_deg: float, *, lock_deg: float = DEFAULT_STEER_LOCK_DEG
+) -> float:
+    """Map raw AC ``steerAngle`` degrees into the telemetry_tick ``[-1, 1]`` contract."""
+    lock = lock_deg if lock_deg > 0 else DEFAULT_STEER_LOCK_DEG
+    return _clamp(steer_angle_deg / lock, -1.0, 1.0)
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -88,7 +116,7 @@ async def replay(  # pragma: no cover - runtime/ws
 
     frames = ticks_from_archive(archive)
     headers = {AUTH_HEADER: token} if token else {}
-    period = 1.0 / hz if hz > 0 else 0.0
+    period = period_seconds(hz)
     async with websockets.connect(url, additional_headers=headers) as ws:
         await ws.send(json.dumps(make_hello_frame()))
         for frame in frames:
@@ -127,7 +155,7 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
         phys_map = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
         gfx_map = open_shared_memory(SHM_GRAPHICS, GFX_BYTES)
         headers = {AUTH_HEADER: token} if token else {}
-        period = 1.0 / hz if hz > 0 else 0.0
+        period = period_seconds(hz)
         seq = 0
         async with websockets.connect(url, additional_headers=headers) as ws:
             await ws.send(json.dumps(make_hello_frame("telemetry-source-live")))
@@ -136,18 +164,14 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
                     phys = parse_physics(phys_map.read(PHYS_BYTES))
                     gfx = parse_graphics(gfx_map.read(GFX_BYTES))
                 except ValueError:
-                    if period:
-                        await asyncio.sleep(period)
+                    await asyncio.sleep(max(period, _PARSE_FAILURE_SLEEP_S))
                     continue
-                # NOTE: phys.steer is AC's raw steerAngle (degrees), not a normalized -1..1 input;
-                # divide by a typical steering lock before clamping. gear goes through
-                # csv_display_gear -> racing_telemetry's 0=neutral / -1=reverse / 1..N.
                 payload = {
                     "speed_kmh": max(0.0, phys.speed_kmh),
                     "rpm": max(0, phys.rpm),
                     "throttle": _clamp(phys.gas, 0.0, 1.0),
                     "brake": _clamp(phys.brake, 0.0, 1.0),
-                    "steer": _clamp(phys.steer / 360.0, -1.0, 1.0),
+                    "steer": normalize_live_steer(phys.steer),
                     "gear": csv_display_gear(phys.gear),
                     "lat_g": phys.accg_lat,
                     "long_g": phys.accg_lon,
@@ -156,13 +180,9 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
                 }
                 await ws.send(json.dumps(make_telemetry_tick(payload, seq=seq)))
                 seq += 1
-                if period:
-                    await asyncio.sleep(period)
+                await asyncio.sleep(period)
     finally:
-        if phys_map is not None:
-            phys_map.close()
-        if gfx_map is not None:
-            gfx_map.close()
+        close_shared_memory_maps(phys_map, gfx_map)
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
@@ -178,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     rp.add_argument("--archive", required=True, help="path to a lap archive JSON to replay")
     sub.add_parser("live", help="read AC shared memory and stream live (rig)")
     args = p.parse_args(argv)
+
+    if args.hz <= 0:
+        raise SystemExit("--hz must be > 0")
 
     try:
         if args.mode == "replay":

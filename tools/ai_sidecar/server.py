@@ -499,11 +499,13 @@ async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None
 
     Single-producer guarded: only the peer that first fed the observer (``exclude`` is the producer
     websocket) may continue to; a second concurrent producer is ignored here. Never lets an observer
-    error break the peripheral path. Cue delivery is best-effort and bounded by the slowest coaching
-    subscriber (each broadcast awaits ``send`` under websockets backpressure).
+    error break the peripheral path. Cue delivery is best-effort: broadcasts are scheduled as
+    background tasks so a slow subscriber cannot stall telemetry handling.
     """
     global _observer_feed_peer, _observer_feed_warned
     if _observer is None:
+        return
+    if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
         return
     if _observer_feed_peer is None:
         _observer_feed_peer = exclude
@@ -523,7 +525,11 @@ async def _publish_observer_cues(frame: dict[str, Any], *, exclude: Any) -> None
         logger.exception("realtime observer failed on telemetry frame")
         return
     for advisory in advisories:
-        await _broadcast_external(make_coaching_cue(asdict(advisory)), exclude=exclude)
+        cue_task = asyncio.create_task(
+            _broadcast_external(make_coaching_cue(asdict(advisory)), exclude=exclude)
+        )
+        _background_tasks.add(cue_task)
+        cue_task.add_done_callback(_background_tasks.discard)
 
 
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
@@ -906,7 +912,7 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         data.get("topics")
     ):
         logger.info(
-            "sidecar-produced topic %s accepted without loopback peer=%s topics=%s",
+            "sidecar-produced %s accepted without loopback peer=%s topics=%s",
             t,
             peer,
             data.get("topics"),

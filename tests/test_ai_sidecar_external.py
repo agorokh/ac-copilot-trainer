@@ -401,12 +401,9 @@ def test_coaching_cue_subscribe_ok_without_loopback_lua_peer() -> None:
                         }
                     )
                 )
-                try:
-                    err_raw = await asyncio.wait_for(ws.recv(), timeout=0.5)
-                except TimeoutError:
-                    return
-                err = json.loads(err_raw)
-                assert err["type"] != ep.TYPE_ERROR, err.get("message")
+                # Sidecar-only subscribe is a silent no-op: no ack and no error frame.
+                with pytest.raises(TimeoutError):
+                    await asyncio.wait_for(ws.recv(), timeout=2.0)
 
     asyncio.run(_run())
 

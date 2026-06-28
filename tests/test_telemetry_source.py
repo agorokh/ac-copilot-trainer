@@ -81,3 +81,32 @@ def test_hello_frame_shape():
     h = make_hello_frame()
     assert h["type"] == "hello"
     assert h["client"] == "telemetry-source"
+
+
+def test_period_seconds_rejects_non_positive_hz():
+    with pytest.raises(ValueError, match="hz must be > 0"):
+        telemetry_source.period_seconds(0)
+    with pytest.raises(ValueError, match="hz must be > 0"):
+        telemetry_source.period_seconds(-1.0)
+
+
+def test_normalize_live_steer_uses_steering_lock():
+    assert telemetry_source.normalize_live_steer(90.0) == pytest.approx(0.2)
+    assert telemetry_source.normalize_live_steer(-450.0) == pytest.approx(-1.0)
+
+
+def test_close_shared_memory_maps_closes_present_handles():
+    closed: list[str] = []
+
+    class _Map:
+        def __init__(self, name: str):
+            self.name = name
+
+        def close(self) -> None:
+            closed.append(self.name)
+
+    phys = _Map("phys")
+    telemetry_source.close_shared_memory_maps(phys, None)
+    assert closed == ["phys"]
+    telemetry_source.close_shared_memory_maps(phys, _Map("gfx"))
+    assert closed == ["phys", "phys", "gfx"]
