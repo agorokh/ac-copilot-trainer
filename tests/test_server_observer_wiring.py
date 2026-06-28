@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 import tools.ai_sidecar.server as server
 from tests.test_realtime_observer import _corner_archive
 from tools.ai_sidecar.external_protocol import TOPIC_COACHING_CUE, TYPE_STATE_SNAPSHOT
@@ -151,21 +153,19 @@ def test_load_observer_builds_from_archive(tmp_path, monkeypatch):
     assert server._observer is not None
 
 
-def test_load_observer_unsegmentable_archive_leaves_none(tmp_path, monkeypatch):
-    # A readable archive whose trace builds no corners -> build_observer_from_reference returns None
-    # (NOT an exception) -> _load_observer disables coaching rather than crashing.
+def test_load_observer_unsegmentable_archive_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_observer", object())
     monkeypatch.setattr(server, "build_observer_from_reference", lambda archive: None)
     ref = tmp_path / "straight.json"
     ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
-    server._load_observer(str(ref))
-    assert server._observer is None
+    with pytest.raises(SystemExit, match="did not yield a usable observer"):
+        server._load_observer(str(ref))
 
 
-def test_load_observer_missing_file_leaves_none(monkeypatch):
+def test_load_observer_missing_file_raises(monkeypatch):
     monkeypatch.setattr(server, "_observer", object())
-    server._load_observer("does-not-exist-9f3a.json")
-    assert server._observer is None
+    with pytest.raises(SystemExit, match="reference archive unusable"):
+        server._load_observer("does-not-exist-9f3a.json")
 
 
 class _FakeWS:

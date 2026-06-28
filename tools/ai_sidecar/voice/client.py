@@ -12,7 +12,6 @@ Run on the rig alongside the sidecar:
 from __future__ import annotations
 
 import argparse
-import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -81,16 +80,33 @@ class VoiceClient:
 
 
 def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):  # pragma: no cover - runtime/audio
-    """Build a blocking speak() backed by pyttsx3 (Windows SAPI). Day-1 engine; Piper is M2."""
+    """Build a non-blocking speak() backed by pyttsx3 on a dedicated worker thread.
+
+    pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
+    stays responsive and incoming ``act`` cues can still be arbitrated while speech plays.
+    """
+    import queue
+    import threading
+
     import pyttsx3
 
-    engine = pyttsx3.init()
-    engine.setProperty("rate", rate)
-    engine.setProperty("volume", volume)
+    q: queue.Queue[str | None] = queue.Queue()
+
+    def worker() -> None:
+        engine = pyttsx3.init()
+        engine.setProperty("rate", rate)
+        engine.setProperty("volume", volume)
+        while True:
+            text = q.get()
+            if text is None:
+                break
+            engine.say(text)
+            engine.runAndWait()
+
+    threading.Thread(target=worker, daemon=True, name="pyttsx3-voice").start()
 
     def speak(text: str) -> None:
-        engine.say(text)
-        engine.runAndWait()
+        q.put(text)
 
     return speak
 
@@ -113,7 +129,7 @@ async def run(url: str, *, token: str | None = None) -> None:  # pragma: no cove
             except (TypeError, ValueError):
                 continue
             if isinstance(frame, dict):
-                await asyncio.to_thread(client.handle_frame, frame, time.monotonic())
+                client.handle_frame(frame, time.monotonic())
 
 
 def main() -> None:  # pragma: no cover - CLI wiring

@@ -1153,24 +1153,23 @@ def _is_loopback(host: str) -> bool:
 
 
 def _load_observer(path: str) -> None:
-    """Build the live RealtimeObserver from a FASTER reference lap archive (best-effort).
+    """Build the live RealtimeObserver from a FASTER reference lap archive.
 
-    Sets the module-global ``_observer`` consumed by the ``telemetry_tick`` path. On any failure
-    (missing/unreadable/unsegmentable archive) leaves it ``None`` so the sidecar simply runs without
-    live voice cues rather than crashing.
+    Called only when ``--reference-archive`` or ``AC_COPILOT_REFERENCE_ARCHIVE`` is set. Raises
+    ``SystemExit`` if the archive cannot be loaded — an explicit operator request must not silently
+    degrade.
     """
     global _observer
     try:
         with open(path, encoding="utf-8") as fh:
             archive = json.load(fh)
         _observer = build_observer_from_reference(archive)
-    except Exception:
+    except Exception as exc:
         logger.exception("failed to load reference archive for live observer: %s", path)
-        _observer = None
+        raise SystemExit(f"reference archive unusable: {path}") from exc
     if _observer is None:
-        logger.warning("live voice coaching disabled — reference archive unusable: %s", path)
-    else:
-        logger.info("live RealtimeObserver built from reference archive: %s", path)
+        raise SystemExit(f"reference archive did not yield a usable observer: {path}")
+    logger.info("live RealtimeObserver built from reference archive: %s", path)
 
 
 def main() -> None:

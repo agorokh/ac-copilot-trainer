@@ -146,7 +146,7 @@ async def stream_live(  # pragma: no cover - rig/shared-memory/ws
                     "rpm": max(0, phys.rpm),
                     "throttle": _clamp(phys.gas, 0.0, 1.0),
                     "brake": _clamp(phys.brake, 0.0, 1.0),
-                    "steer": _clamp(phys.steer, -1.0, 1.0),
+                    "steer": _clamp(phys.steer / 360.0, -1.0, 1.0),
                     "gear": csv_display_gear(phys.gear),
                     "lat_g": phys.accg_lat,
                     "long_g": phys.accg_lon,
