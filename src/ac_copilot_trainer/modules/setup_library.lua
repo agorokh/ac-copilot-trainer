@@ -468,6 +468,14 @@ local function numberOrNil(v)
   return n
 end
 
+local function safeField(tbl, key)
+  local ok, v = pcall(function()
+    return tbl[key]
+  end)
+  if ok then return v end
+  return nil
+end
+
 local function normalizeSetupPath(p)
   if type(p) ~= "string" or p == "" or p:find("%z") then
     return nil
@@ -639,11 +647,140 @@ local function snapToStep(value, minV, step)
   return minV + (math.floor(((value - minV) / step) + 0.5) * step)
 end
 
---- List active setup spinner-style controls from the current user setup INI.
+local function normalizeCspSpinner(raw)
+  if type(raw) ~= "table" and type(raw) ~= "userdata" then
+    return nil
+  end
+  local name = safeField(raw, "name") or safeField(raw, "id") or safeField(raw, "section")
+  if type(name) ~= "string" or name == "" then
+    return nil
+  end
+  local value = numberOrNil(safeField(raw, "value"))
+  if value == nil then
+    return nil
+  end
+  local def = SPINNER_DEFS[name] or SPINNER_DEFS[name:upper()] or {}
+  local minV = numberOrNil(safeField(raw, "min")) or def.min or value
+  local maxV = numberOrNil(safeField(raw, "max")) or def.max or value
+  local step = numberOrNil(safeField(raw, "step")) or def.step or 1
+  if step <= 0 then step = 1 end
+  if maxV < minV then
+    local tmp = minV
+    minV = maxV
+    maxV = tmp
+  end
+  local label = safeField(raw, "label") or safeField(raw, "displayName") or safeField(raw, "uiName")
+  if type(label) ~= "string" or label == "" then
+    label = labelForSection(name)
+  end
+  local unit = safeField(raw, "unit")
+  if type(unit) ~= "string" then unit = def.unit or "" end
+  return {
+    name = name,
+    section = name,
+    label = label,
+    value = value,
+    min = minV,
+    max = maxV,
+    step = step,
+    unit = unit,
+  }
+end
+
+local function cspSpinnerList()
+  if not (ac and type(ac.getSetupSpinners) == "function") then
+    return nil
+  end
+  local ok, rows = pcall(ac.getSetupSpinners)
+  if not ok or type(rows) ~= "table" then
+    return nil
+  end
+  local out = {}
+  for _, raw in ipairs(rows) do
+    local row = normalizeCspSpinner(raw)
+    if row then
+      out[#out + 1] = row
+    end
+  end
+  table.sort(out, function(a, b)
+    local ao = (SPINNER_DEFS[a.section] and SPINNER_DEFS[a.section].order) or 1000
+    local bo = (SPINNER_DEFS[b.section] and SPINNER_DEFS[b.section].order) or 1000
+    if ao ~= bo then return ao < bo end
+    return tostring(a.label) < tostring(b.label)
+  end)
+  return out
+end
+
+local function cspSpinnerByName(name)
+  local rows = cspSpinnerList()
+  if not rows then return nil, false end
+  local want = tostring(name or "")
+  local wantUpper = want:upper()
+  for i = 1, #rows do
+    local row = rows[i]
+    if row.name == want or row.section == want or row.name:upper() == wantUpper then
+      return row, true
+    end
+  end
+  return nil, true
+end
+
+local function setCspSpinner(section, value)
+  if not (ac and type(ac.setSetupSpinnerValue) == "function") then
+    return nil, false
+  end
+  local spinner, hadList = cspSpinnerByName(section)
+  if hadList and not spinner then
+    return { ok = false, section = section, value = value, error = "spinner not found" }, true
+  end
+  local appliedValue = value
+  if spinner then
+    if value < spinner.min or value > spinner.max then
+      return {
+        ok = false,
+        section = section,
+        value = value,
+        error = string.format("value out of range %.3f..%.3f", spinner.min, spinner.max),
+      }, true
+    end
+    appliedValue = snapToStep(value, spinner.min, spinner.step)
+    if appliedValue < spinner.min then appliedValue = spinner.min end
+    if appliedValue > spinner.max then appliedValue = spinner.max end
+  end
+  local setName = spinner and spinner.name or section
+  local okSet, ret = pcall(ac.setSetupSpinnerValue, setName, appliedValue)
+  if not okSet or ret == false then
+    return {
+      ok = false,
+      section = section,
+      value = appliedValue,
+      error = okSet and "setSetupSpinnerValue refused" or ("setSetupSpinnerValue raised: " .. tostring(ret)),
+    }, true
+  end
+  return {
+    ok = true,
+    section = spinner and spinner.section or section,
+    name = spinner and spinner.name or section,
+    label = spinner and spinner.label or labelForSection(section),
+    value = appliedValue,
+    min = spinner and spinner.min or appliedValue,
+    max = spinner and spinner.max or appliedValue,
+    step = spinner and spinner.step or 1,
+    unit = spinner and spinner.unit or "",
+    source = "csp",
+  }, true
+end
+
+--- List active setup spinner-style controls from CSP, falling back to the
+--- current user setup INI when the runtime does not expose setup spinners.
 --- Returns `{ok=true,path,spinners=[{section,label,value,min,max,step,unit}]}`.
 ---@param payload table|nil
 ---@return table
 function M.listSpinners(payload)
+  local cspRows = cspSpinnerList()
+  if cspRows then
+    return { ok = true, source = "csp", spinners = cspRows }
+  end
   local path, pathErr = setupPathFromPayload(payload)
   if not path then
     return { ok = false, error = pathErr or "setup path unavailable" }
@@ -670,9 +807,8 @@ function M.listSpinners(payload)
   return { ok = true, path = path, spinners = spinners }
 end
 
---- Set one active setup spinner value. The value is written to the user setup
---- INI and applied through `ac.loadSetup`; failed apply attempts restore the
---- previous file contents.
+--- Set one active setup spinner value. Uses CSP's live setup-spinner API when
+--- present, falling back to editing the user setup INI and reloading it.
 ---@param payload table|nil
 ---@return table
 function M.setSpinner(payload)
@@ -690,6 +826,10 @@ function M.setSpinner(payload)
   local value = numberOrNil(payload.value)
   if value == nil then
     return { ok = false, section = section, error = "invalid value" }
+  end
+  local cspAck, cspHandled = setCspSpinner(section, value)
+  if cspHandled then
+    return cspAck
   end
   local path, pathErr = setupPathFromPayload(payload)
   if not path then

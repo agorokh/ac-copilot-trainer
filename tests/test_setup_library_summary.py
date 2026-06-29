@@ -135,6 +135,33 @@ def test_spinner_list_reads_active_setup_controls(lua, tmp_path: pathlib.Path) -
     assert first["max"] == 80
 
 
+def test_spinner_list_prefers_csp_api(lua) -> None:
+    lua.execute(
+        """
+        ac = {
+          getSetupSpinners = function()
+            return {
+              { name = "ABS", label = "ABS", value = 7, min = 0, max = 12, step = 1 },
+              { name = "FRONT_BIAS", value = 66, min = 40, max = 80, step = 1 },
+            }
+          end,
+        }
+        """
+    )
+
+    result = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.listSpinners({})
+        """
+    )
+
+    assert result["ok"] is True
+    assert result["source"] == "csp"
+    assert result["spinners"][1]["section"] == "FRONT_BIAS"
+    assert result["spinners"][2]["section"] == "ABS"
+
+
 def test_spinner_set_rewrites_active_setup_and_applies(lua, tmp_path: pathlib.Path) -> None:
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
@@ -154,6 +181,38 @@ def test_spinner_set_rewrites_active_setup_and_applies(lua, tmp_path: pathlib.Pa
     assert ack["value"] == 67
     assert "VALUE=67" in setup_path.read_text(encoding="utf-8")
     assert lua.globals()["__loaded_setup"] == str(setup_path).replace("\\", "/")
+
+
+def test_spinner_set_prefers_csp_api_and_snaps_to_step(lua) -> None:
+    lua.execute(
+        """
+        ac = {
+          getSetupSpinners = function()
+            return {
+              { name = "ABS", label = "ABS", value = 7, min = 0, max = 12, step = 2 },
+            }
+          end,
+          setSetupSpinnerValue = function(name, value)
+            _G.__set_spinner_name = name
+            _G.__set_spinner_value = value
+            return true
+          end,
+        }
+        """
+    )
+
+    ack = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.setSpinner({ section = "ABS", value = 9 })
+        """
+    )
+
+    assert ack["ok"] is True
+    assert ack["source"] == "csp"
+    assert ack["value"] == 10
+    assert lua.globals()["__set_spinner_name"] == "ABS"
+    assert lua.globals()["__set_spinner_value"] == 10
 
 
 def test_spinner_set_rejects_out_of_range_without_writing(lua, tmp_path: pathlib.Path) -> None:
