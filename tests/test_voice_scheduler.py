@@ -91,7 +91,7 @@ def test_lower_urgency_does_not_interrupt_busy_channel() -> None:
 
 def test_dedup_same_corner_pass_collapses_to_one() -> None:
     sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
-    adv = dict(kind="late_brake", urgency="act", corner=2)
+    adv = dict(kind="late_brake", urgency="prepare", corner=2)
     sched.submit(make_advisory(**adv))
     sched.process_pending(clock())
     pb.finish()  # clip done — channel free
@@ -105,6 +105,19 @@ def test_dedup_same_corner_pass_collapses_to_one() -> None:
     sched.submit(make_advisory(**adv))
     sched.process_pending(clock())
     assert len(pb.played) == 2
+
+
+def test_act_escalation_after_prepare_same_corner_is_not_deduped() -> None:
+    sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
+    sched.submit(make_advisory(kind="late_brake", urgency="prepare", corner=2))
+    sched.process_pending(clock())
+    assert pb.current is not None and pb.current.urgency == "prepare"
+    clock.advance(0.2)
+    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))
+    spoken = sched.process_pending(clock())
+    assert spoken is not None
+    assert spoken.clip_id == "late_brake.act.t03"
+    assert pb.cancelled and pb.cancelled[-1].urgency == "prepare"
 
 
 def test_fresh_act_for_a_new_corner_is_never_suppressed_by_dedup() -> None:

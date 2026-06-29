@@ -40,6 +40,7 @@
 #include "ui/screen_ac_copilot.h"
 #include "ui/screen_launcher.h"
 #include "ui/screen_pocket_technician.h"
+#include "ui/screen_setup_exchange.h"
 #endif
 
 using namespace websockets;
@@ -544,6 +545,20 @@ static int32_t phase2_json_setup_chip(JsonVariantConst v,
   return -1;
 }
 
+static void phase2_send_setup_load(const char* name, const char* path) {
+  if (ws_state != WsState::Open) return;
+  if ((!name || !*name) && (!path || !*path)) return;
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["type"] = "setup.load";
+  if (name && *name) doc["name"] = name;
+  if (path && *path) doc["path"] = path;
+  String out;
+  serializeJson(doc, out);
+  ws.send(out);
+  Serial.printf("[ws] -> %s\n", out.c_str());
+}
+
 // Issue #86 Parts C/D: dispatch per-message-type. `state.snapshot` carries
 // a `topic` field we route to the appropriate screen module; `setup.*`
 // frames go straight to the Pocket Technician screen module.
@@ -632,6 +647,10 @@ static void dispatch_phase2_message(const String& body) {
                                             *car_brand  ? car_brand  : nullptr,
                                             *track_id   ? track_id   : nullptr,
                                             *track_name ? track_name : nullptr);
+      screen_setup_exchange_set_context(*car_id     ? car_id     : nullptr,
+                                        *car_name   ? car_name   : nullptr,
+                                        *track_id   ? track_id   : nullptr,
+                                        *track_name ? track_name : nullptr);
     }
     screen_pocket_technician_clear_setups();
     JsonArrayConst setups = doc["setups"].as<JsonArrayConst>();
@@ -703,6 +722,42 @@ static void dispatch_phase2_message(const String& body) {
     int32_t value = phase2_json_num_or(doc["value"], 0);
     const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
     screen_pocket_technician_apply_spinner_ack(ok, section, value, err_arg);
+  } else if (strcmp(type, "se.search.result") == 0) {
+    bool ok = doc["ok"] | false;
+    screen_setup_exchange_clear_results();
+    if (!ok) {
+      const char* error = doc["error"] | "search failed";
+      screen_setup_exchange_apply_search_error(error);
+      return;
+    }
+    JsonArrayConst setups = doc["setups"].as<JsonArrayConst>();
+    if (!setups.isNull()) {
+      for (JsonVariantConst entry : setups) {
+        int32_t setup_id = phase2_json_num_or(entry["setup_id"], -1);
+        const char* name = entry["name"] | "";
+        const char* author = entry["author"] | "";
+        const char* car_id = entry["car_id"] | "";
+        const char* track_id = entry["track_id"] | "";
+        int32_t downloads = phase2_json_num_or(entry["downloads"], -1);
+        screen_setup_exchange_add_result(setup_id, name, author, downloads,
+                                         *car_id ? car_id : nullptr,
+                                         *track_id ? track_id : nullptr);
+      }
+    }
+    screen_setup_exchange_finish_results();
+  } else if (strcmp(type, "se.download.ack") == 0) {
+    bool ok = doc["ok"] | false;
+    int32_t setup_id = phase2_json_num_or(doc["setup_id"], -1);
+    const char* name = doc["name"] | "";
+    const char* path = doc["path"] | "";
+    const char* error = doc["error"] | "";
+    const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
+    screen_setup_exchange_apply_download_ack(ok, setup_id, name,
+                                             *path ? path : nullptr,
+                                             err_arg);
+    if (ok && *path) {
+      phase2_send_setup_load(*name ? name : nullptr, path);
+    }
   }
 }
 #endif
@@ -1044,6 +1099,36 @@ static void pt_request_drain() {
     Serial.printf("[ws] -> %s\n", out.c_str());
   }
 }
+
+static void se_request_drain() {
+  if (ws_state != WsState::Open) return;
+  for (int i = 0; i < 4; ++i) {
+    se_request_t req = screen_setup_exchange_pop_request();
+    if (req.kind == SE_REQ_NONE) break;
+
+    JsonDocument doc;
+    doc["v"] = 1;
+    if (req.kind == SE_REQ_SEARCH) {
+      doc["type"] = "se.search";
+      doc["limit"] = 20;
+      if (req.car_id[0]) doc["car_id"] = req.car_id;
+      if (req.track_id[0]) doc["track_id"] = req.track_id;
+      if (req.search[0]) doc["search"] = req.search;
+    } else if (req.kind == SE_REQ_DOWNLOAD) {
+      doc["type"] = "se.download";
+      doc["setup_id"] = req.setup_id;
+      doc["car_id"] = req.car_id;
+      if (req.track_id[0]) doc["track_id"] = req.track_id;
+      if (req.name[0]) doc["name"] = req.name;
+    } else {
+      continue;
+    }
+    String out;
+    serializeJson(doc, out);
+    ws.send(out);
+    Serial.printf("[ws] -> %s\n", out.c_str());
+  }
+}
 #endif
 
 void loop() {
@@ -1051,7 +1136,9 @@ void loop() {
   ws_tick();
 #if PHASE1_FALLBACK == 0
   screen_pocket_technician_set_sidecar_link_up(ws_state == WsState::Open);
+  screen_setup_exchange_set_sidecar_link_up(ws_state == WsState::Open);
   pt_request_drain();
+  se_request_drain();
   lvgl_tick();
 #endif
   delay(2);

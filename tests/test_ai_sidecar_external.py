@@ -198,6 +198,19 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
+    assert ep.validate_inbound({"v": 1, "type": "se.search", "limit": 10}) is None
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "se.download",
+                "setup_id": 42,
+                "car_id": "ks_porsche_911_gt3_r_2016",
+                "track_id": "magione",
+            }
+        )
+        is None
+    )
     assert ep.validate_inbound({"v": 1, "type": "setup.spinner.list"}) is None
     assert (
         ep.validate_inbound(
@@ -234,6 +247,23 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
+    assert "limit must be <= 40" in (
+        ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
+    )
+    assert "positive integer 'setup_id'" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "se.download",
+                "setup_id": "42",
+                "car_id": "ks_porsche_911_gt3_r_2016",
+            }
+        )
+        or ""
+    )
+    assert "non-empty 'car_id'" in (
+        ep.validate_inbound({"v": 1, "type": "se.download", "setup_id": 42}) or ""
+    )
     assert "section" in (
         ep.validate_inbound({"v": 1, "type": "setup.spinner.set", "value": 66}) or ""
     )
@@ -281,7 +311,13 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
     seen: dict[str, object] = {}
 
     async def fake_run(
-        host: str, port: int, reply: bool, token: str | None, setup_store: str | None
+        host: str,
+        port: int,
+        reply: bool,
+        token: str | None,
+        setup_store: str | None,
+        setup_exchange_endpoint: str | None,
+        user_setups_root: str | None,
     ):
         seen.update(
             {
@@ -290,6 +326,8 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
                 "reply": reply,
                 "token": token,
                 "setup_store": setup_store,
+                "setup_exchange_endpoint": setup_exchange_endpoint,
+                "user_setups_root": user_setups_root,
             }
         )
 
@@ -334,6 +372,8 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
         "reply": True,
         "token": "env-token",
         "setup_store": None,
+        "setup_exchange_endpoint": None,
+        "user_setups_root": None,
     }
 
 
@@ -344,9 +384,15 @@ def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
     async def fake_run(
-        host: str, port: int, reply: bool, token: str | None, setup_store: str | None
+        host: str,
+        port: int,
+        reply: bool,
+        token: str | None,
+        setup_store: str | None,
+        setup_exchange_endpoint: str | None,
+        user_setups_root: str | None,
     ):
-        del host, port, reply, token, setup_store
+        del host, port, reply, token, setup_store, setup_exchange_endpoint, user_setups_root
 
     def fake_wire_voice(
         ref_path: str | None,
@@ -566,6 +612,86 @@ def test_external_request_errors_when_no_loopback_lua_peer() -> None:
     err = asyncio.run(_run())
     assert err["type"] == ep.TYPE_ERROR
     assert "no loopback Lua peer connected" in err["message"]
+
+
+def test_setup_exchange_search_and_download_are_sidecar_local(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _FakeSetupExchangeClient:
+        def __init__(self, endpoint: str) -> None:
+            self.endpoint = endpoint
+
+        def search(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "ok": True,
+                "endpoint": self.endpoint,
+                "setups": [{"setup_id": 42, "name": "Fast race", "downloads": 7}],
+                "count": 1,
+                "total": 1,
+            }
+
+        def download_setup(self, setup_id: int) -> dict[str, object]:
+            return {"setup_id": setup_id, "name": "Fast race", "data": "[HEADER]\nVERSION=1"}
+
+    monkeypatch.setattr(srv, "SetupExchangeClient", _FakeSetupExchangeClient)
+    srv._setup_exchange_endpoint = "https://se.example.test"
+    srv._setup_exchange_user_setups_root = tmp_path
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "screen",
+                            "client_class": ep.CLIENT_CLASS_SCREEN,
+                        }
+                    )
+                )
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "se.search",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                search = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "se.download",
+                            "setup_id": 42,
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "name": "Fast race",
+                        }
+                    )
+                )
+                download = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return search, download
+
+    try:
+        search, download = asyncio.run(_run())
+    finally:
+        srv._setup_exchange_endpoint = None
+        srv._setup_exchange_user_setups_root = None
+
+    assert search["type"] == ep.TYPE_SETUP_EXCHANGE_SEARCH_RESULT
+    assert search["ok"] is True
+    assert search["setups"][0]["setup_id"] == 42
+    assert download["type"] == ep.TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+    assert download["ok"] is True
+    assert Path(download["path"]).read_text(encoding="utf-8") == "[HEADER]\nVERSION=1\n"
 
 
 def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:

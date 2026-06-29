@@ -57,3 +57,17 @@ Settings precedence is:
 `settings.json` is created by the launcher's **Settings** button, or can be
 created ahead of time by calling `ensure_settings_file()` from
 `tools.rig_launcher.settings`.
+
+## Setup Exchange
+
+The rig-screen Setup Exchange tile talks to the Python sidecar with
+`se.search` / `se.download`. The sidecar proxies the public Setup Exchange
+endpoint and installs downloaded `.ini` files under the Assetto Corsa user
+setups folder without overwriting existing files.
+
+Optional environment overrides:
+
+- `AC_COPILOT_SE_ENDPOINT` changes the Setup Exchange HTTP endpoint, mainly for
+  local proxy or fake-service tests.
+- `AC_COPILOT_USER_SETUPS_DIR` points at the Assetto Corsa `setups` directory
+  when Windows Documents discovery cannot find it.

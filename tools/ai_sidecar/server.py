@@ -49,6 +49,10 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_KEY,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_COMPARE_RESULT,
+    TYPE_SETUP_EXCHANGE_DOWNLOAD,
+    TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+    TYPE_SETUP_EXCHANGE_SEARCH,
+    TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
     TYPE_SETUP_EXPERIMENT_RECORD,
     TYPE_SETUP_EXPERIMENT_RECORD_ACK,
     TYPE_SETUP_EXPERIMENT_STORE,
@@ -85,6 +89,14 @@ from tools.ai_sidecar.protocol import (
 from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
 )
+from tools.ai_sidecar.se_proxy import (
+    DEFAULT_SETUP_EXCHANGE_ENDPOINT,
+    ENV_SETUP_EXCHANGE_ENDPOINT,
+    ENV_USER_SETUPS_DIR,
+    SetupExchangeClient,
+    SetupExchangeError,
+    download_and_install_setup,
+)
 from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
     SetupExperimentError,
@@ -110,6 +122,8 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 _external_peers: set[Any] = set()
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
+_setup_exchange_endpoint: str | None = None
+_setup_exchange_user_setups_root: Path | None = None
 _external_peer_classes: dict[Any, str] = {}
 # M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
@@ -224,6 +238,8 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
+        TYPE_SETUP_EXCHANGE_SEARCH,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -247,6 +263,8 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
+        TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     }
 )
 SIDECAR_LOCAL_TYPES = frozenset(
@@ -255,6 +273,8 @@ SIDECAR_LOCAL_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
+        TYPE_SETUP_EXCHANGE_SEARCH,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD,
     }
 )
 
@@ -378,6 +398,10 @@ def _suggest_setup_store(
     track_id: str | None,
 ) -> dict[str, Any]:
     return suggest_next_setup(load_records(store_path), car_id=car_id, track_id=track_id)
+
+
+def _user_setups_root_from_config(path: str | None) -> Path | None:
+    return Path(os.path.expandvars(path)).expanduser() if path else None
 
 
 def _peer_host(connection: Any) -> str | None:
@@ -965,6 +989,87 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
 
+async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> None:
+    """Handle Setup Exchange search/download frames in the sidecar (#363)."""
+
+    t = data.get(TYPE_KEY)
+    endpoint = _setup_exchange_endpoint or os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT)
+    try:
+        client = SetupExchangeClient(endpoint or DEFAULT_SETUP_EXCHANGE_ENDPOINT)
+    except SetupExchangeError as e:
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: (
+                    TYPE_SETUP_EXCHANGE_SEARCH_RESULT
+                    if t == TYPE_SETUP_EXCHANGE_SEARCH
+                    else TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+                ),
+                "ok": False,
+                "error": str(e),
+            },
+        )
+        return
+    if t == TYPE_SETUP_EXCHANGE_SEARCH:
+        try:
+            out = await asyncio.to_thread(
+                client.search,
+                car_id=data.get("car_id") or None,
+                track_id=data.get("track_id") or None,
+                search=data.get("search") or None,
+                order_by=data.get("order_by") or None,
+                offset=data.get("offset"),
+                limit=data.get("limit"),
+            )
+        except SetupExchangeError as e:
+            logger.info("setup exchange search failed err=%s", e)
+            out = {"ok": False, "error": str(e)}
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
+                **out,
+            },
+        )
+        return
+
+    if t == TYPE_SETUP_EXCHANGE_DOWNLOAD:
+        setup_id = int(data["setup_id"])
+        car_id = str(data["car_id"])
+        track_id = data.get("track_id") or None
+        name = data.get("name") or None
+        try:
+            out = await asyncio.to_thread(
+                download_and_install_setup,
+                client=client,
+                user_setups_root=_setup_exchange_user_setups_root,
+                setup_id=setup_id,
+                car_id=car_id,
+                track_id=track_id if isinstance(track_id, str) else None,
+                name=name if isinstance(name, str) else None,
+            )
+        except SetupExchangeError as e:
+            logger.info("setup exchange download failed setup_id=%s err=%s", setup_id, e)
+            out = {
+                "ok": False,
+                "setup_id": setup_id,
+                "car_id": car_id,
+                "track_id": track_id,
+                "error": str(e),
+            }
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+                **out,
+            },
+        )
+        return
+
+
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
     peer = getattr(websocket, "remote_address", None)
@@ -994,6 +1099,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             websocket,
             make_error("peer must send hello before other frame types", ref_type=t),
         )
+        return
+    if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
+        await _handle_setup_exchange_frame(websocket, data)
         return
     if t in SIDECAR_LOCAL_TYPES:
         await _handle_setup_experiment_frame(websocket, data)
@@ -1252,7 +1360,10 @@ async def _run(
     reply_coaching: bool,
     token: str | None,
     setup_store: str | None = None,
+    setup_exchange_endpoint: str | None = None,
+    user_setups_root: str | None = None,
 ) -> None:
+    global _setup_exchange_endpoint, _setup_exchange_user_setups_root
     global _setup_experiment_store_path, _setup_experiment_store_seeded
     try:
         import websockets
@@ -1263,6 +1374,11 @@ async def _run(
     _reset_external_state()
     _setup_experiment_store_path = Path(setup_store) if setup_store else None
     _setup_experiment_store_seeded = setup_store is not None
+    _setup_exchange_endpoint = setup_exchange_endpoint or os.environ.get(
+        ENV_SETUP_EXCHANGE_ENDPOINT
+    )
+    configured_setups_root = user_setups_root or os.environ.get(ENV_USER_SETUPS_DIR)
+    _setup_exchange_user_setups_root = _user_setups_root_from_config(configured_setups_root)
     try:
         async with websockets.serve(
             lambda ws: _handler(ws, reply_coaching),
@@ -1343,7 +1459,7 @@ def _wire_voice(
                 device_name=voice_device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
                 host_api=voice_host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
                 verbosity=(
-                    voice_verbosity or os.environ.get("AC_COPILOT_VOICE_VERBOSITY") or "normal"
+                    voice_verbosity or os.environ.get("AC_COPILOT_VOICE_VERBOSITY") or "low"
                 ),
             )
             coach = VoiceCoach.from_bank(bank_dir, config, backend=backend)
@@ -1468,6 +1584,23 @@ def main() -> None:
         "--setup-track-id",
         default=None,
         help="Optional track id filter for --setup-suggest.",
+    )
+    p.add_argument(
+        "--se-endpoint",
+        default=os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT),
+        help=(
+            "Setup Exchange endpoint for se.search/se.download. "
+            f"Falls back to ${ENV_SETUP_EXCHANGE_ENDPOINT} then "
+            f"{DEFAULT_SETUP_EXCHANGE_ENDPOINT}."
+        ),
+    )
+    p.add_argument(
+        "--user-setups-root",
+        default=os.environ.get(ENV_USER_SETUPS_DIR),
+        help=(
+            "Assetto Corsa user setups directory for se.download installs. "
+            f"Falls back to ${ENV_USER_SETUPS_DIR}, then Windows Documents discovery."
+        ),
     )
     p.add_argument(
         "--no-reply",
@@ -1599,7 +1732,17 @@ def main() -> None:
     )
 
     try:
-        asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))
+        asyncio.run(
+            _run(
+                host,
+                args.port,
+                reply,
+                args.token,
+                args.setup_store,
+                args.se_endpoint,
+                args.user_setups_root,
+            )
+        )
     except KeyboardInterrupt:
         logger.info("sidecar stopped")
 

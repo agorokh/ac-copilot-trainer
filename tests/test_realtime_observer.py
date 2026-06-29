@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
@@ -121,11 +123,55 @@ def test_late_brake_fires_once_when_coasting_past_brake_point():
         {"spline": mid, "speed": 195.0, "brake": 0.0},
     ]
     fired = [a for f in frames for a in obs.observe(f)]
-    late = [a for a in fired if a.kind == "late_brake"]
+    late = [a for a in fired if a.kind == "late_brake" and a.urgency == "act"]
     assert len(late) == 1  # exactly once per pass, not per frame
     assert late[0].corner == r.index and late[0].urgency == "act"
     # user-facing label is 1-based: corner index 0 -> "T1", never "T0" (codex #294)
     assert "T1" in late[0].message and "T0" not in late[0].message
+
+
+def test_brake_prepare_fires_before_brake_point():
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    # At 180 km/h, one second is 50 m, i.e. 0.020 spline on a 2500 m track.
+    out = obs.observe({"spline": 0.432, "speed": 180.0, "brake": 0.0})
+    prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert prepare and prepare[0].spline == 0.45
+    assert prepare[0].detail["lead_s"] == pytest.approx(0.9, abs=0.05)
+
+
+def test_brake_prepare_is_not_post_fact_and_does_not_repeat():
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    assert obs.observe({"spline": 0.44, "speed": 180.0, "brake": 0.0})
+    assert [
+        a
+        for a in obs.observe({"spline": 0.445, "speed": 180.0, "brake": 0.0})
+        if a.urgency == "prepare"
+    ] == []
+    assert [
+        a
+        for a in obs.observe({"spline": 0.451, "speed": 180.0, "brake": 0.0})
+        if a.urgency == "prepare"
+    ] == []
 
 
 def test_lap_wrap_resets_pass_state():

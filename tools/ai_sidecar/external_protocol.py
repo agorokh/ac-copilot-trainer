@@ -68,6 +68,8 @@ TYPE_SETUP_EXPERIMENT_STORE = "setup.experiment.store"
 TYPE_SETUP_EXPERIMENT_RECORD = "setup.experiment.record"
 TYPE_SETUP_COMPARE = "setup.compare"
 TYPE_SETUP_SUGGEST = "setup.suggest"
+TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
+TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 
 # Server → client.
 TYPE_HELLO_ACK = "hello_ack"
@@ -85,6 +87,8 @@ TYPE_SETUP_EXPERIMENT_STORE_ACK = "setup.experiment.store.ack"
 TYPE_SETUP_EXPERIMENT_RECORD_ACK = "setup.experiment.record.ack"
 TYPE_SETUP_COMPARE_RESULT = "setup.compare.result"
 TYPE_SETUP_SUGGEST_RESULT = "setup.suggest.result"
+TYPE_SETUP_EXCHANGE_SEARCH_RESULT = "se.search.result"
+TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK = "se.download.ack"
 # Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
 # from the Lua loopback peer to physical clients; the sidecar can derive and
 # route `haptic_event` frames to haptic-class clients.
@@ -121,6 +125,8 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_STATE_SUBSCRIBE,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_SUGGEST,
+    TYPE_SETUP_EXCHANGE_SEARCH,
+    TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_SET,
     TYPE_TELEMETRY_TICK,
@@ -282,6 +288,31 @@ def _validate_optional_number(
     if key not in payload:
         return None
     return _validate_number(payload, key, min_value=min_value, max_value=max_value)
+
+
+def _validate_optional_string(frame: dict[str, Any], key: str) -> str | None:
+    if key in frame and not isinstance(frame.get(key), str):
+        return f"{key} must be a string"
+    return None
+
+
+def _validate_optional_int(
+    frame: dict[str, Any],
+    key: str,
+    *,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> str | None:
+    if key not in frame:
+        return None
+    value = frame.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return f"{key} must be an integer"
+    if min_value is not None and value < min_value:
+        return f"{key} must be >= {min_value}"
+    if max_value is not None and value > max_value:
+        return f"{key} must be <= {max_value}"
+    return None
 
 
 def _validate_corner_number_map(payload: dict[str, Any], key: str) -> str | None:
@@ -473,6 +504,31 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             if key in frame and not isinstance(frame.get(key), str):
                 return f"setup.suggest optional '{key}' must be a string"
         return None
+    if t == TYPE_SETUP_EXCHANGE_SEARCH:
+        for key in ("car_id", "track_id", "search", "order_by"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        err = _validate_optional_int(frame, "limit", min_value=1, max_value=40)
+        if err is not None:
+            return err
+        err = _validate_optional_int(frame, "offset", min_value=0)
+        if err is not None:
+            return err
+        return None
+    if t == TYPE_SETUP_EXCHANGE_DOWNLOAD:
+        setup_id = frame.get("setup_id")
+        setup_id_ok = not isinstance(setup_id, bool) and isinstance(setup_id, int) and setup_id > 0
+        if not setup_id_ok:
+            return "se.download requires positive integer 'setup_id'"
+        car_id = frame.get("car_id")
+        if not isinstance(car_id, str) or not car_id:
+            return "se.download requires non-empty 'car_id'"
+        for key in ("track_id", "name"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return None
     if t in (
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
@@ -486,6 +542,8 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
+        TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     ):
         return None
     if t == TYPE_TELEMETRY_TICK:
