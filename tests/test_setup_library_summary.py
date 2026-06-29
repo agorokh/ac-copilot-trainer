@@ -383,11 +383,44 @@ def test_spinner_set_write_nil_keeps_original(lua, tmp_path: pathlib.Path) -> No
     assert setup_path.read_text(encoding="utf-8") == original
 
 
+def test_spinner_set_write_exception_reports_pcall_error(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    original = FIXTURE_INI.read_text(encoding="utf-8")
+    setup_path.write_text(original, encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+
+    ack = lua.execute(
+        """
+        local realOpen = io.open
+        io.open = function(path, mode)
+          if mode == "w" and path:find("%.ac%-copilot%-tmp%-1$") then
+            return {
+              write = function(_self, _text) error("disk exploded") end,
+              close = function(_self) return true end
+            }
+          end
+          return realOpen(path, mode)
+        end
+        local setupLibrary = require("setup_library")
+        local ret = setupLibrary.setSpinner({ section = "FRONT_BIAS", value = 67 })
+        io.open = realOpen
+        return ret
+        """
+    )
+
+    assert ack["ok"] is False
+    assert "disk exploded" in ack["error"]
+    assert setup_path.read_text(encoding="utf-8") == original
+
+
 def test_write_text_file_restore_failure_uses_pcall() -> None:
     """Atomic setup write reports backup-restore failures via pcall (PR #365 Gemini)."""
     lua_src = (MODULES_DIR / "setup_library.lua").read_text(encoding="utf-8")
     assert "local okRestore, restoreRet, restoreErr = pcall(os.rename, backup, path)" in lua_src
     assert "not okRestore or not restoreRet" in lua_src
+    assert 'local restoreMsg = (not okRestore and restoreRet) or restoreErr or "unknown"' in lua_src
     assert "restore from backup failed" in lua_src
 
 
@@ -396,3 +429,14 @@ def test_phase2_json_float_or_rejects_non_finite() -> None:
     assert "phase2_json_finite_float" in main_cpp
     assert "isnan" in main_cpp
     assert "isinf" in main_cpp
+
+
+def test_setup_exchange_active_row_uses_delete_event() -> None:
+    """Setup Exchange clears active LVGL rows from LV_EVENT_DELETE."""
+    cpp = (REPO / "firmware" / "screen" / "src" / "ui" / "screen_setup_exchange.cpp").read_text(
+        encoding="utf-8"
+    )
+    assert "void on_row_delete" in cpp
+    assert "lv_obj_add_event_cb(row, on_row_delete, LV_EVENT_DELETE, ctx)" in cpp
+    assert "ctx->active_row == lv_event_get_target(e)" in cpp
+    assert "lv_obj_is_valid(ctx->active_row)" not in cpp

@@ -349,13 +349,13 @@ class GamePointSupervisor:
         try:
             proc = self._run(command, capture_output=True, text=True, timeout=8)
         except Exception as exc:  # noqa: BLE001 - preflight should report, not crash
-            return ProbeResult("hotspot", False, "probe_failed", str(exc))
+            return ProbeResult("hotspot", True, "unavailable", str(exc))
         if proc.returncode != 0:
-            return ProbeResult("hotspot", False, "probe_failed", _short(proc.stderr))
+            return ProbeResult("hotspot", True, "unavailable", _short(proc.stderr))
         try:
             payload = json.loads(proc.stdout)
         except json.JSONDecodeError:
-            return ProbeResult("hotspot", False, "probe_failed", _short(proc.stdout))
+            return ProbeResult("hotspot", True, "unavailable", _short(proc.stdout))
         state = str(payload.get("state") or "unknown")
         clients = payload.get("client_count")
         ok = state.lower() == "on"

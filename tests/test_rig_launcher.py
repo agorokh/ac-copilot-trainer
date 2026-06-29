@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import tools.rig_launcher.supervisor as supervisor_module
 from tools.rig_launcher.app import _open_path, config_from_args, run_sidecar_child
 from tools.rig_launcher.install import (
     SHORTCUT_NAME,
@@ -528,6 +529,26 @@ def test_hotspot_probe_parses_windows_state(tmp_path: Path) -> None:
         assert result.ok is True
         assert result.state == "on"
         assert "clients=1" in result.detail
+
+
+def test_hotspot_probe_failure_is_non_blocking(monkeypatch, tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    monkeypatch.setattr(supervisor_module.os, "name", "nt")
+
+    def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="Wi-Fi adapter not found",
+        )
+
+    sup = GamePointSupervisor(cfg, run=fake_run)
+    result = sup.probe_hotspot()
+
+    assert result.ok is True
+    assert result.state == "unavailable"
+    assert "Wi-Fi adapter" in result.detail
 
 
 def test_hotspot_probe_falls_back_without_internet_profile() -> None:

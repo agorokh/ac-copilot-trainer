@@ -584,7 +584,8 @@ local function writeTextFile(path, text)
   local closeOk, closeErr = f:close()
   if not ok or writeRet == nil then
     os.remove(tmp)
-    return false, tostring(writeErr or "setup file write failed")
+    local err = (not ok and writeRet) or writeErr or "setup file write failed"
+    return false, tostring(err)
   end
   if not closeOk then
     os.remove(tmp)
@@ -617,9 +618,10 @@ local function writeTextFile(path, text)
     local okRestore, restoreRet, restoreErr = pcall(os.rename, backup, path)
     os.remove(tmp)
     if not okRestore or not restoreRet then
+      local restoreMsg = (not okRestore and restoreRet) or restoreErr or "unknown"
       return false, tostring(renameNewErr or "setup replace failed")
         .. "; and restore from backup failed: "
-        .. tostring(restoreErr or "unknown")
+        .. tostring(restoreMsg)
     end
     return false, tostring(renameNewErr or "setup replace failed")
   end

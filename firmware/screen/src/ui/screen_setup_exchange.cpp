@@ -112,12 +112,7 @@ bool has_pending_download() {
 }
 
 lv_obj_t* valid_active_row(se_ctx_t* ctx) {
-    if (!ctx || !ctx->active_row) return nullptr;
-    if (!lv_obj_is_valid(ctx->active_row)) {
-        ctx->active_row = nullptr;
-        return nullptr;
-    }
-    return ctx->active_row;
+    return (ctx && ctx->active_row) ? ctx->active_row : nullptr;
 }
 
 void update_meta(se_ctx_t* ctx) {
@@ -178,7 +173,15 @@ void on_row_clicked(lv_event_t* e) {
     set_status("Downloading...", UI_ACCENT_GOLD);
 }
 
-lv_obj_t* make_row(lv_obj_t* parent, int idx, const se_result_t& result) {
+void on_row_delete(lv_event_t* e) {
+    auto* ctx = static_cast<se_ctx_t*>(lv_event_get_user_data(e));
+    if (!ctx) return;
+    if (ctx->active_row == lv_event_get_target(e)) ctx->active_row = nullptr;
+}
+
+lv_obj_t* make_row(se_ctx_t* ctx, int idx, const se_result_t& result) {
+    if (!ctx || !ctx->list_col) return nullptr;
+    lv_obj_t* parent = ctx->list_col;
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_set_size(row, lv_pct(100), ROW_H);
     lv_obj_set_style_bg_color(row, UI_BG_PANEL, LV_PART_MAIN);
@@ -192,6 +195,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const se_result_t& result) {
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, on_row_clicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
+    lv_obj_add_event_cb(row, on_row_delete, LV_EVENT_DELETE, ctx);
 
     lv_obj_t* name = lv_label_create(row);
     lv_label_set_text(name, result.name);
@@ -246,7 +250,7 @@ void rebuild_list(se_ctx_t* ctx) {
         return;
     }
     for (int i = 0; i < g_result_count; ++i) {
-        make_row(ctx->list_col, i, g_results[i]);
+        make_row(ctx, i, g_results[i]);
     }
 }
 
