@@ -147,6 +147,7 @@ void on_refresh_clicked(lv_event_t*) {
 }
 
 void on_row_clicked(lv_event_t* e) {
+    if (!g_active_ctx) return;
     if (!g_se_sidecar_link_up) {
         ui_toast_error("Setup Exchange offline");
         return;

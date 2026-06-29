@@ -437,6 +437,7 @@ def test_setup_exchange_active_row_uses_delete_event() -> None:
         encoding="utf-8"
     )
     assert "void on_row_delete" in cpp
+    assert "if (!g_active_ctx) return;" in cpp
     assert "ctx != g_active_ctx" in cpp
     assert "lv_obj_add_event_cb(row, on_row_delete, LV_EVENT_DELETE, ctx)" in cpp
     assert "ctx->active_row == lv_event_get_target(e)" in cpp
