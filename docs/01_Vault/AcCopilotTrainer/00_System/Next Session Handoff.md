@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T16:20:00Z
+last_updated: 2026-06-29T17:11:55Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-365-game-point-launcher-2026-06-29.md
@@ -51,6 +52,23 @@ relates_to:
 ---
 
 # Next session handoff
+
+## In flight (2026-06-29T17:11:55Z) — PR #371 voice-intensity resolution for #368
+
+PR [#371](https://github.com/agorokh/ac-copilot-trainer/pull/371) is still OPEN at local/remote head
+`382b090` (`fix(voice): address round-2 review findings — escalation barge-in, wrap window,
+lead-braking, WS cooldown (#368)`). This head reconciles the #368 voice-intensity work with the
+parallel `origin/main` voice/launcher changes and addresses the second Codex review round:
+wrap-aware anticipatory lead windows, lead-brake `has_braked` latch, register tie-break barge-in,
+and WS `CueArbiter` act-escalation cooldown bypass.
+
+Verification on `382b090`: local `make ci-fast PYTHON=.venv/bin/python` passed at
+2026-06-29T17:10Z (`1820 passed, 79 skipped`, coverage 83.61%, bandit/policy/CSP checks OK).
+GitHub checks on `382b090` were green (`build`, `pip-audit`, `Canonical docs exist`,
+`conformance`; `guard-and-automerge` skipped). Next resolver step: trigger/inspect current-head
+reviewers for `382b090`; older unresolved Codex threads from review of `3ae2043` may remain visible
+but are stale if no current-head review repeats them. Detailed merge-contension notes:
+[[voice-368-merge-contention-2026-06-29]].
 
 ## Delivered (2026-06-29) — PR #370 MERGED: M-TT1 Track Titan services crack (#353)
 
