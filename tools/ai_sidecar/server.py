@@ -20,6 +20,7 @@ import os
 import secrets
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,19 @@ _observer_feed_warned = False
 # are imported lazily when ``--voice-bank`` is supplied, so the sidecar core stays dep-free.
 # (``_observer`` is declared once above with its RealtimeObserver type; not re-declared here.)
 _voice_coach: Any | None = None
+
+
+@dataclass(frozen=True)
+class VoiceRuntimeConfig:
+    reference_path: str | None
+    bank_dir: str | None
+    tts_enabled: bool = False
+    tts_rate: int | None = None
+    tts_volume: float | None = None
+    backend: str | None = None
+    device: str | None = None
+    host_api: str | None = None
+    verbosity: str | None = None
 
 
 def set_realtime_observer(observer: Any | None) -> None:
@@ -1424,18 +1438,7 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _wire_voice(
-    reference_path: str | None,
-    bank_dir: str | None,
-    *,
-    tts_enabled: bool = False,
-    tts_rate: int | None = None,
-    tts_volume: float | None = None,
-    voice_backend: str | None = None,
-    voice_device: str | None = None,
-    voice_host_api: str | None = None,
-    voice_verbosity: str | None = None,
-) -> None:
+def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
     Best-effort by design: a missing/invalid reference or bank disables the feature with a loud log
@@ -1444,6 +1447,8 @@ def _wire_voice(
     are imported lazily here (only when ``--voice-bank`` is supplied), so the sidecar core stays
     dep-free for users who never enable voice.
     """
+    reference_path = voice_settings.reference_path
+    bank_dir = voice_settings.bank_dir
     if bank_dir and not reference_path:
         logger.warning(
             "voice: --voice-bank is set but --voice-reference is missing; voice coach will be idle"
@@ -1470,12 +1475,16 @@ def _wire_voice(
             from tools.ai_sidecar.voice.config import VoiceConfig
             from tools.ai_sidecar.voice.engine import VoiceCoach
 
-            backend = voice_backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
+            backend = (
+                voice_settings.backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
+            )
             config = VoiceConfig(
-                device_name=voice_device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
-                host_api=voice_host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
+                device_name=voice_settings.device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
+                host_api=voice_settings.host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
                 verbosity=(
-                    voice_verbosity or os.environ.get("AC_COPILOT_VOICE_VERBOSITY") or "low"
+                    voice_settings.verbosity
+                    or os.environ.get("AC_COPILOT_VOICE_VERBOSITY")
+                    or "low"
                 ),
             )
             coach = VoiceCoach.from_bank(bank_dir, config, backend=backend)
@@ -1497,7 +1506,7 @@ def _wire_voice(
                 )
         except Exception:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
             logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
-    elif tts_enabled:
+    elif voice_settings.tts_enabled:
         try:
             from tools.ai_sidecar.voice.client import (
                 DEFAULT_TTS_RATE,
@@ -1506,15 +1515,15 @@ def _wire_voice(
             )
 
             rate = (
-                tts_rate
-                if tts_rate is not None
+                voice_settings.tts_rate
+                if voice_settings.tts_rate is not None
                 else _env_int(
                     "AC_COPILOT_VOICE_RATE", DEFAULT_TTS_RATE, min_value=120, max_value=360
                 )
             )
             volume = (
-                tts_volume
-                if tts_volume is not None
+                voice_settings.tts_volume
+                if voice_settings.tts_volume is not None
                 else _env_float(
                     "AC_COPILOT_VOICE_VOLUME",
                     DEFAULT_TTS_VOLUME,
@@ -1736,15 +1745,17 @@ def main() -> None:
     ref_path = args.voice_reference or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
     bank_dir = args.voice_bank or os.environ.get("AC_COPILOT_VOICE_BANK")
     _wire_voice(
-        ref_path,
-        bank_dir,
-        tts_enabled=args.voice_tts or _env_truthy("AC_COPILOT_VOICE_TTS"),
-        tts_rate=args.voice_rate,
-        tts_volume=args.voice_volume,
-        voice_backend=args.voice_backend,
-        voice_device=args.voice_device,
-        voice_host_api=args.voice_host_api,
-        voice_verbosity=args.voice_verbosity,
+        VoiceRuntimeConfig(
+            reference_path=ref_path,
+            bank_dir=bank_dir,
+            tts_enabled=args.voice_tts or _env_truthy("AC_COPILOT_VOICE_TTS"),
+            tts_rate=args.voice_rate,
+            tts_volume=args.voice_volume,
+            backend=args.voice_backend,
+            device=args.voice_device,
+            host_api=args.voice_host_api,
+            verbosity=args.voice_verbosity,
+        )
     )
 
     try:

@@ -334,29 +334,8 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "env-token")
     monkeypatch.setattr(srv, "_run", fake_run)
 
-    def fake_wire_voice(
-        ref_path: str | None,
-        bank_dir: str | None,
-        *,
-        tts_enabled: bool,
-        tts_rate: int | None,
-        tts_volume: float | None,
-        voice_backend: str | None,
-        voice_device: str | None,
-        voice_host_api: str | None,
-        voice_verbosity: str | None,
-    ) -> None:
-        del (
-            ref_path,
-            bank_dir,
-            tts_enabled,
-            tts_rate,
-            tts_volume,
-            voice_backend,
-            voice_device,
-            voice_host_api,
-            voice_verbosity,
-        )
+    def fake_wire_voice(config: srv.VoiceRuntimeConfig) -> None:
+        del config
 
     monkeypatch.setattr(srv, "_wire_voice", fake_wire_voice)
     monkeypatch.setattr(
@@ -394,27 +373,16 @@ def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     ):
         del host, port, reply, token, setup_store, setup_exchange_endpoint, user_setups_root
 
-    def fake_wire_voice(
-        ref_path: str | None,
-        bank_dir: str | None,
-        *,
-        tts_enabled: bool,
-        tts_rate: int | None,
-        tts_volume: float | None,
-        voice_backend: str | None,
-        voice_device: str | None,
-        voice_host_api: str | None,
-        voice_verbosity: str | None,
-    ) -> None:
-        seen["ref_path"] = ref_path
-        seen["bank_dir"] = bank_dir
-        seen["tts_enabled"] = tts_enabled
-        seen["tts_rate"] = tts_rate
-        seen["tts_volume"] = tts_volume
-        seen["voice_backend"] = voice_backend
-        seen["voice_device"] = voice_device
-        seen["voice_host_api"] = voice_host_api
-        seen["voice_verbosity"] = voice_verbosity
+    def fake_wire_voice(config: srv.VoiceRuntimeConfig) -> None:
+        seen["ref_path"] = config.reference_path
+        seen["bank_dir"] = config.bank_dir
+        seen["tts_enabled"] = config.tts_enabled
+        seen["tts_rate"] = config.tts_rate
+        seen["tts_volume"] = config.tts_volume
+        seen["voice_backend"] = config.backend
+        seen["voice_device"] = config.device
+        seen["voice_host_api"] = config.host_api
+        seen["voice_verbosity"] = config.verbosity
 
     monkeypatch.setenv("AC_COPILOT_REFERENCE_ARCHIVE", "ref.json")
     monkeypatch.setenv("AC_COPILOT_VOICE_BANK", "voice-bank")

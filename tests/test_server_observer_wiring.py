@@ -149,7 +149,7 @@ def test_wire_voice_builds_and_installs_observer_from_reference(tmp_path, monkey
     monkeypatch.setattr(server, "_observer", None)
     ref = tmp_path / "ref.json"
     ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
-    server._wire_voice(str(ref), None)
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is not None
 
 
@@ -161,7 +161,7 @@ def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch
     monkeypatch.setattr(server, "_observer", sentinel)
     ref = tmp_path / "no_corners.json"
     ref.write_text(json.dumps({}), encoding="utf-8")
-    server._wire_voice(str(ref), None)
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is sentinel
 
 
@@ -171,7 +171,9 @@ def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
     # The sentinel proves _wire_voice neither raises nor disturbs the existing observer.
     sentinel = object()
     monkeypatch.setattr(server, "_observer", sentinel)
-    server._wire_voice("does-not-exist-9f3a.json", None)
+    server._wire_voice(
+        server.VoiceRuntimeConfig(reference_path="does-not-exist-9f3a.json", bank_dir=None)
+    )
     assert server._observer is sentinel
 
 
@@ -192,7 +194,9 @@ def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
     monkeypatch.setattr(voice_client, "_pyttsx3_speaker", fake_speaker)
 
     try:
-        server._wire_voice(None, None, tts_enabled=True)
+        server._wire_voice(
+            server.VoiceRuntimeConfig(reference_path=None, bank_dir=None, tts_enabled=True)
+        )
         assert server._voice_coach is not None
         server._voice_coach.subscribe(_adv(kind="apex_deficit", corner=1, urgency="info"))
     finally:
@@ -230,7 +234,7 @@ def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):
     monkeypatch.setattr(engine.VoiceCoach, "from_bank", fake_from_bank)
 
     try:
-        server._wire_voice(None, "bank-dir", tts_enabled=False)
+        server._wire_voice(server.VoiceRuntimeConfig(reference_path=None, bank_dir="bank-dir"))
         assert server._voice_coach is not None
     finally:
         server.set_voice_coach(None)
