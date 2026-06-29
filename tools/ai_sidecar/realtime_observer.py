@@ -21,6 +21,7 @@ frame contract here mirrors ``telemetry.lua``'s ``TelemetrySample``: ``speed`` i
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -131,6 +132,18 @@ def _lead_spline_fraction(speed_kmh: float, track_length_m: float, lead_s: float
     return max(0.002, min(0.08, (speed_kmh / 3.6) * lead_s / track_length_m))
 
 
+def _positive_track_length_m(value: Any) -> float:
+    try:
+        track_length_m = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_TRACK_LENGTH_M
+    return (
+        track_length_m
+        if math.isfinite(track_length_m) and track_length_m > 0.0
+        else _DEFAULT_TRACK_LENGTH_M
+    )
+
+
 class RealtimeObserver:
     """Stateful streaming observer over the per-corner reference envelope.
 
@@ -146,14 +159,15 @@ class RealtimeObserver:
         *,
         deficit_margin_kmh: float = _DEFICIT_MARGIN_KMH,
         brake_on: float = _BRAKE_ON,
-        track_length_m: float = _DEFAULT_TRACK_LENGTH_M,
+        track_length_m: float | None = _DEFAULT_TRACK_LENGTH_M,
         brake_prepare_lead_s: float = _BRAKE_PREPARE_LEAD_S,
     ) -> None:
+        # _positive_track_length_m handles None / non-finite archive values safely.
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
         self._deficit_margin = deficit_margin_kmh
         self._brake_on = brake_on
-        self._track_length_m = track_length_m if track_length_m > 0.0 else _DEFAULT_TRACK_LENGTH_M
+        self._track_length_m = _positive_track_length_m(track_length_m)
         self._brake_prepare_lead_s = max(0.0, brake_prepare_lead_s)
         self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
         self._last_spline: float | None = None

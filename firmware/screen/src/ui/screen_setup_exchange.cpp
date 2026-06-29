@@ -371,10 +371,26 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
 extern "C" void screen_setup_exchange_set_context(const char* car_id, const char* car_name,
                                                    const char* track_id,
                                                    const char* track_name) {
-    if (car_id) copy_text(g_car_id, sizeof(g_car_id), car_id);
-    if (car_name) copy_text(g_car_name, sizeof(g_car_name), car_name);
-    if (track_id) copy_text(g_track_id, sizeof(g_track_id), track_id);
-    if (track_name) copy_text(g_track_name, sizeof(g_track_name), track_name);
+    if (car_id) {
+        copy_text(g_car_id, sizeof(g_car_id), car_id);
+    } else {
+        g_car_id[0] = 0;
+    }
+    if (car_name) {
+        copy_text(g_car_name, sizeof(g_car_name), car_name);
+    } else {
+        g_car_name[0] = 0;
+    }
+    if (track_id) {
+        copy_text(g_track_id, sizeof(g_track_id), track_id);
+    } else {
+        g_track_id[0] = 0;
+    }
+    if (track_name) {
+        copy_text(g_track_name, sizeof(g_track_name), track_name);
+    } else {
+        g_track_name[0] = 0;
+    }
     if (g_active_ctx) update_meta(g_active_ctx);
 }
 

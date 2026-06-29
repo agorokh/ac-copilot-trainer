@@ -152,6 +152,28 @@ def test_discover_user_setups_root_rejects_non_ac_override(tmp_path: Path) -> No
         discover_user_setups_root({"AC_COPILOT_USER_SETUPS_DIR": str(tmp_path / "setups")})
 
 
+def test_discover_user_setups_root_allows_fresh_install_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    documents = home / "Documents"
+    documents.mkdir(parents=True)
+    expected = documents / "Assetto Corsa" / "setups"
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    discovered = discover_user_setups_root({})
+
+    assert discovered == expected.resolve(strict=False)
+    assert not expected.exists()
+
+
+def test_user_setups_root_from_config_ignores_invalid_path() -> None:
+    from tools.ai_sidecar.server import _user_setups_root_from_config
+
+    assert _user_setups_root_from_config(None) is None
+    assert _user_setups_root_from_config("/tmp/not-ac-setups") is None
+
+
 def test_install_setup_rejects_unapproved_root(tmp_path: Path) -> None:
     with pytest.raises(SetupExchangeError, match="Assetto Corsa"):
         install_setup(

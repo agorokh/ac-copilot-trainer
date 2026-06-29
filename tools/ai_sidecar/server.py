@@ -402,7 +402,13 @@ def _suggest_setup_store(
 
 
 def _user_setups_root_from_config(path: str | None) -> Path | None:
-    return validate_user_setups_root(path) if path else None
+    if not path:
+        return None
+    try:
+        return validate_user_setups_root(path)
+    except SetupExchangeError as exc:
+        logger.warning("Ignoring invalid user setups root %r: %s", path, exc)
+        return None
 
 
 def _peer_host(connection: Any) -> str | None:

@@ -302,6 +302,13 @@ def discover_user_setups_root(env: Mapping[str, str] | None = None) -> Path | No
     for candidate in candidates:
         if candidate.exists():
             return validate_user_setups_root(candidate)
+    for candidate in candidates:
+        try:
+            validated = validate_user_setups_root(candidate)
+        except SetupExchangeError:
+            continue
+        if candidate.parent.parent.exists():
+            return validated
     return None
 
 
