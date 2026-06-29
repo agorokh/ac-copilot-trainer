@@ -140,6 +140,33 @@ def test_brake_release_fires_without_a_brake_point() -> None:
     assert [a for a in out if a.kind == "brake_release"]
 
 
+def test_braking_in_lead_window_suppresses_false_late_brake() -> None:
+    # codex review #371: braking during the anticipatory lead (before the brake point) counts as
+    # braking this pass — a later release-and-coast must NOT draw a false late-brake alarm.
+    ref = _ref()
+    obs = RealtimeObserver([ref])
+    obs.observe({"spline": 0.44, "speed": 150.0, "brake": 0.6, "throttle": 0.0})  # braked in lead
+    out = obs.observe(
+        {"spline": 0.49, "speed": 120.0, "brake": 0.0, "throttle": 0.0}
+    )  # release+coast
+    assert [a for a in out if a.kind == "late_brake"] == []
+
+
+def test_lead_window_wraps_over_start_finish() -> None:
+    # codex review #371: a first corner with bp≈0 — the lead window wraps past start/finish; a frame
+    # at spline≈0.995 (within the lead before bp) must still fire the anticipatory cue (not a lap).
+    ref = _ref(
+        apex_spline=0.05,
+        spline_lo=0.0,
+        spline_hi=0.10,
+        best_brake_point_spline=0.01,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    out = obs.observe({"spline": 0.995, "speed": 180.0, "brake": 0.0, "throttle": 0.0})
+    brake = [a for a in out if a.kind == "late_brake"]
+    assert brake and brake[0].detail["anticipatory"] is True
+
+
 # --- throttle now flows through normalization -----------------------------------------------------
 
 

@@ -123,6 +123,20 @@ def test_act_escalation_after_prepare_same_corner_is_not_deduped() -> None:
     assert pb.cancelled and pb.cancelled[-1].urgency == "prepare"
 
 
+def test_critical_barges_in_over_playing_firm_same_urgency() -> None:
+    # codex review #371: firm and critical share `act` urgency; a critical escalation must still
+    # interrupt a firm clip that is still sounding (barge-in tie broken on the tone register).
+    sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
+    sched.process_pending(clock())
+    assert pb.current is not None and pb.current.register == "firm"
+    clock.advance(0.1)
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="critical", corner=2))
+    sched.process_pending(clock())
+    assert pb.cancelled and pb.cancelled[-1].register == "firm"  # the firm clip was barged over
+    assert pb.current is not None and pb.current.register == "critical"
+
+
 def test_fresh_act_for_a_new_corner_is_never_suppressed_by_dedup() -> None:
     sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
     sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))

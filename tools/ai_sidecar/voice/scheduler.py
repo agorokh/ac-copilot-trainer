@@ -45,6 +45,9 @@ from tools.ai_sidecar.voice.utterance import URGENCY_RANK, Utterance
 _log = logging.getLogger("ai_sidecar.voice.scheduler")
 
 _ACT_RANK = URGENCY_RANK["act"]
+#: tone-register ordering (low → high) — used only to break a same-urgency barge-in tie so a
+#: critical escalation can interrupt a still-playing firm clip (issue #368 / codex review #371).
+_REGISTER_RANK: dict[str, int] = {"calm": 0, "firm": 1, "critical": 2}
 
 
 @dataclass
@@ -161,8 +164,16 @@ class Scheduler:
         cue."""
         current = self._playback.current
         if current is not None:
-            if winner.rank >= _ACT_RANK and winner.rank > current.rank:
-                # Barge-in: an act cue interrupts a strictly-lower clip mid-word.
+            higher_urgency = winner.rank > current.rank
+            # A critical escalation over a still-playing FIRM clip shares the `act` urgency rank, so
+            # break the tie on the tone register — the more intense alarm must be heard (codex
+            # review #371). Same urgency + same/lower register never interrupts (it would be stale).
+            louder_same_urgency = winner.rank == current.rank and _REGISTER_RANK.get(
+                winner.register, 0
+            ) > _REGISTER_RANK.get(current.register, 0)
+            if winner.rank >= _ACT_RANK and (higher_urgency or louder_same_urgency):
+                # Barge-in: an act cue interrupts a strictly-lower clip — or a higher-intensity
+                # register at the same urgency — mid-word.
                 _log.info("voice: barge-in %s over %s", winner.clip_id, current.clip_id)
                 self._playback.cancel()
             else:

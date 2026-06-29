@@ -120,12 +120,16 @@ class CueArbiter:
         """Choose the one cue to speak now, applying cooldowns + urgency preemption."""
         if not advisories:
             return None
-        # Drop advisories still within their per-(corner, kind) cooldown.
+        # Drop advisories still within their per-(corner, kind) cooldown — EXCEPT an `act` cue,
+        # which bypasses the anti-nag window so a critical/firm escalation ("Brake!") is still heard
+        # after an earlier calm lead-in for the same corner (codex review #371). Mirrors the
+        # in-process scheduler's act exemption.
         fresh: list[dict[str, Any]] = []
         for a in advisories:
+            is_act = _URGENCY_RANK.get(str(a.get("urgency", "")), 0) >= _URGENCY_RANK["act"]
             key = (_corner_key(a), str(a.get("kind", "")))
             last = self._last_corner_kind_s.get(key)
-            if last is not None and now_s - last < self.corner_cooldown_s:
+            if not is_act and last is not None and now_s - last < self.corner_cooldown_s:
                 continue
             fresh.append(a)
         fresh = [a for a in fresh if _within_spline_lookahead(a)]

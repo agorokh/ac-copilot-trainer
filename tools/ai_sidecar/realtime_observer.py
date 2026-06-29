@@ -210,6 +210,14 @@ def _forward_spline_delta(current: float, target: float) -> float:
     return (target - current) % 1.0
 
 
+def _in_arc(x: float, lo: float, hi: float) -> bool:
+    """True if normalized spline ``x`` is in the arc ``[lo, hi]``, wrap-aware (``lo`` may exceed
+    ``hi`` when the arc crosses the start/finish line)."""
+    if lo <= hi:
+        return lo <= x <= hi
+    return x >= lo or x <= hi
+
+
 def _lead_spline_fraction(speed_kmh: float, track_length_m: float, lead_s: float) -> float:
     """Convert a speed/time lead into normalized spline distance."""
     if speed_kmh <= 0.0 or lead_s <= 0.0:
@@ -342,7 +350,9 @@ class RealtimeObserver:
                 )
                 if bp <= spline <= ref.apex_spline and brake >= self._brake_on:
                     st.has_braked = True  # so a later release before apex isn't "late to brake"
-                if (bp - lead) <= spline <= ref.apex_spline:
+                # The actionable window runs from the anticipatory lead (which can wrap over
+                # start/finish for a first corner with bp≈0) through the apex (codex review #371).
+                if _in_arc(spline, (bp - lead) % 1.0, ref.apex_spline):
                     a = self._brake_cue(ref, st, spline, speed, brake)
                     if a is not None:
                         out.append(a)
@@ -410,9 +420,16 @@ class RealtimeObserver:
         if bp is None or st.has_braked:
             return None
         if brake >= self._brake_on:
+            # Braking inside the anticipatory lead (before the brake point) IS braking this pass —
+            # record it so a later release-and-coast does not draw a false late-brake alarm
+            # (codex review #371). Mirrors the in-window has_braked latch.
+            st.has_braked = True
             return None
         s = self._brake_severity(ref, spline, speed)
-        anticipatory = spline < bp
+        # "anticipatory" = the car has not yet reached the brake point — robust to a lead window
+        # wraps over start/finish (a first corner with bp≈0): the forward distance to bp is a small
+        # positive value (≤ lead), not a negative linear delta (codex review #371).
+        anticipatory = 0.0 < _forward_spline_delta(spline, bp) <= _LAP_WRAP_DROP
         # BEFORE the brake point it is a calm anticipatory heads-up regardless of closing speed (the
         # driver hasn't missed anything yet — main's `brake_prepare` contract). Severity-based
         # escalation (firm/critical) applies only AT/PAST the point, where coasting on is a real

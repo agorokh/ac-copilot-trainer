@@ -72,9 +72,11 @@ def test_voice_client_ignores_non_cue_frame():
 def test_voice_client_respects_corner_cooldown():
     spoken: list[tuple[str, str]] = []
     vc = VoiceClient(lambda text, register: spoken.append((text, register)))
-    assert vc.handle_frame(_cue_frame(), now_s=0.0) is not None
+    # a non-urgent (info) cue is anti-nag throttled (an `act` escalation would bypass — #371).
+    frame = _cue_frame(kind="apex_deficit", urgency="info")
+    assert vc.handle_frame(frame, now_s=0.0) is not None
     # same corner + kind, within the 6 s per-corner cooldown -> suppressed
-    assert vc.handle_frame(_cue_frame(), now_s=1.0) is None
+    assert vc.handle_frame(frame, now_s=1.0) is None
     assert len(spoken) == 1
 
 

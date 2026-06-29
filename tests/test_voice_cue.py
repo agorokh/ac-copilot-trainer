@@ -72,12 +72,22 @@ def test_arbiter_act_barges_in_through_global_cooldown():
 
 
 def test_arbiter_per_corner_cooldown_avoids_nagging():
+    # A non-urgent (info) cue is anti-nag throttled by the per-corner cooldown.
     arb = CueArbiter(global_cooldown_s=0.0, corner_cooldown_s=6.0)
-    assert arb.select([_adv("late_brake", 4, "act")], now_s=0.0) is not None
+    assert arb.select([_adv("apex_deficit", 4, "info")], now_s=0.0) is not None
     # same corner+kind again within the per-corner cooldown -> suppressed
-    assert arb.select([_adv("late_brake", 4, "act")], now_s=3.0) is None
+    assert arb.select([_adv("apex_deficit", 4, "info")], now_s=3.0) is None
     # after the per-corner cooldown it may fire again
-    assert arb.select([_adv("late_brake", 4, "act")], now_s=7.0) is not None
+    assert arb.select([_adv("apex_deficit", 4, "info")], now_s=7.0) is not None
+
+
+def test_arbiter_act_escalation_bypasses_corner_cooldown():
+    # codex review #371: a critical/firm "Brake!" escalation must be heard even within the corner
+    # anti-nag window after an earlier calm lead-in for the SAME corner.
+    arb = CueArbiter(global_cooldown_s=0.0, corner_cooldown_s=6.0)
+    assert arb.select([_adv("late_brake", 4, "prepare", register="calm")], now_s=0.0) is not None
+    esc = arb.select([_adv("late_brake", 4, "act", register="critical")], now_s=2.0)
+    assert esc is not None and esc.register == "critical"  # not suppressed by the corner cooldown
 
 
 def test_arbiter_empty_is_silent():
