@@ -148,7 +148,7 @@ M-TT1/M-TT2/M-TT3 remain on #353. Merge `bd69cab`.
 
 ---
 
-## Delivered (2026-06-28) — curated setups as first-class data-platform entities (PR #367)
+## Delivered (2026-06-28) — curated setups as first-class data-platform entities (PR #369)
 `/start-task` (ultracode). Operator asked for a **balanced fast-race setup for the 911 GT3 R at
 Magione**, visible on the rig, plus "put it properly in our data platform" + preserve the knowledge.
 Shipped: (1) **`assets/setups/ks_porsche_911_gt3_r_2016/magione/Copilot_Balanced_Fast.ini`** — verified
@@ -162,7 +162,8 @@ end-to-end "simulated driven lap joins the catalog" proof; module 100% cov; ruff
 + [[porsche-911-gt3r-magione-balanced-setup-2026-06-28]]; **resolved** the long-open AC user-data path
 (`%USERPROFILE%\OneDrive\Documents\Assetto Corsa`) in `glossary/install-paths.md`. **Note:** Tier-3
 agentic-memory MCP query tool was absent this session (degraded-mode bypass logged in
-`.scratch/.memory_bypass_rationale`). PR [#367](https://github.com/agorokh/ac-copilot-trainer/pull/367).
+`.scratch/.memory_bypass_rationale`). PR [#369](https://github.com/agorokh/ac-copilot-trainer/pull/369)
+(supersedes #367 — `claude/` branch prefix is rejected by ci-conventional).
 
 ---
 
