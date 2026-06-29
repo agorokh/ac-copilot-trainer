@@ -216,6 +216,13 @@ class SetupExchangeClient:
         return {"setup_id": setup_id, "name": name, "data": data}
 
 
+def _row_value(row: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return None
+
+
 def _normalize_setup_rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         rows = payload
@@ -250,9 +257,9 @@ def _normalize_setup_rows(payload: Any) -> list[dict[str, Any]]:
                 "car_id": str(row.get("carID") or row.get("car_id") or ""),
                 "track_id": str(row.get("trackID") or row.get("track_id") or ""),
                 "downloads": _coerce_int(
-                    row.get("downloads") or row.get("downloadCount") or row.get("download_count")
+                    _row_value(row, "downloads", "downloadCount", "download_count")
                 ),
-                "rating": _coerce_float(row.get("rating") or row.get("score")),
+                "rating": _coerce_float(_row_value(row, "rating", "score")),
                 "created_at": str(row.get("createdAt") or row.get("created_at") or ""),
             }
         )

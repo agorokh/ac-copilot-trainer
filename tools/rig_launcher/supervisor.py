@@ -387,7 +387,7 @@ class GamePointSupervisor:
         url = f"http://{_url_host(self._health_host())}:{self.config.port}/health"
         try:
             with self._urlopen(url, timeout=1.0) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             return ProbeResult("sidecar", False, "unreachable", str(exc))
         peers = int(payload.get("connected_peers") or 0)

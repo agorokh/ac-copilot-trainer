@@ -154,6 +154,30 @@ def test_status_reads_health_and_writes_status_file(tmp_path: Path) -> None:
     assert saved["log_path"].endswith("sidecar.log")
 
 
+def test_read_health_tolerates_non_utf8_response_bytes(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    class BadUtf8Response:
+        def __enter__(self) -> BadUtf8Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"\xff\xfe not json"
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=lambda _url, timeout: BadUtf8Response())
+    result = sup._read_health()
+
+    assert result.ok is False
+    assert result.state == "unreachable"
+
+
 def test_status_polls_concrete_external_bind_health(tmp_path: Path) -> None:
     cfg = GamePointConfig(
         external_bind="192.168.137.1",

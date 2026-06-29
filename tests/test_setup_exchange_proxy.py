@@ -11,6 +11,7 @@ from tools.ai_sidecar.se_proxy import (
     SetupExchangeClient,
     SetupExchangeError,
     _coerce_float,
+    _normalize_setup_rows,
     _windows_casefolded_contains,
     discover_user_setups_root,
     download_and_install_setup,
@@ -83,6 +84,34 @@ def test_search_builds_setup_exchange_query_and_normalizes_rows() -> None:
     assert "carID=ks_porsche_911_gt3_r_2016" in seen["url"]
     assert "trackID=magione" in seen["url"]
     assert "orderBy=rating" in seen["url"]
+
+
+def test_normalize_setup_rows_preserves_zero_downloads_and_rating() -> None:
+    rows = _normalize_setup_rows(
+        {
+            "setups": [
+                {
+                    "id": 9,
+                    "name": "zero stats",
+                    "downloads": 0,
+                    "rating": 0.0,
+                }
+            ]
+        }
+    )
+
+    assert rows == [
+        {
+            "setup_id": 9,
+            "name": "zero stats",
+            "author": "",
+            "car_id": "",
+            "track_id": "",
+            "downloads": 0,
+            "rating": 0.0,
+            "created_at": "",
+        }
+    ]
 
 
 def test_default_public_endpoint_requires_authenticated_proxy() -> None:
