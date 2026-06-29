@@ -46,8 +46,11 @@ from tools.tt_ingest.tt_normalize import (
 )
 from tools.tt_ingest.tt_services import (
     TTServicesError,
-    fetch_last_session,
+    fetch_last_session_raw,
+    fetch_services_sessions,
     fetch_session_coaching,
+    find_session,
+    parse_last_session,
 )
 from tools.tt_ingest.tt_vulcan import iter_all_sessions, session_summary
 
@@ -83,35 +86,44 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+# Endpoint files the content-addressed file index records (sessions_index is built from
+# RAW_SESSION_ENDPOINT only — it normalizes vulcan sessions; the coaching endpoints are
+# services data, indexed for discovery/integrity but not normalized into sessions_index).
+INDEXED_ENDPOINTS = (RAW_SESSION_ENDPOINT, LAST_SESSION_ENDPOINT, COACHING_ENDPOINT)
+
+
 def reindex_lake(root: Path, *, generated_at: str) -> int:
-    """Rebuild both derived indexes from EVERY ``session.json`` currently in the lake.
+    """Rebuild both derived indexes from EVERY retained endpoint file in the lake.
 
     The indexes are a *derived view* of the immutable raw files — so they are rebuilt by
     scanning the whole lake on disk, never from one batch's records. A partial export can
     therefore never shrink the discovery index, and ``sessions_index.json`` always agrees
-    with the raw files actually present (no batch-vs-disk divergence). Returns the count of
-    indexed raw files.
+    with the raw files actually present (no batch-vs-disk divergence). The content-addressed
+    file index covers vulcan ``session.json`` **and** the M-TT1 services endpoints
+    (``last_session.json`` / ``coaching.json``); ``sessions_index.json`` is built from
+    ``session.json`` only (it normalizes vulcan sessions). Returns the count of indexed files.
     """
     records: list[RetainedFile] = []
     normalized: list[dict[str, Any]] = []
-    for path in sorted(root.rglob(f"{RAW_SESSION_ENDPOINT}.json")):
-        try:
-            data = path.read_bytes()
-            raw = json.loads(data)
-        except (OSError, ValueError):  # pragma: no cover - corrupt file skipped defensively
-            continue
-        records.append(
-            RetainedFile(
-                session_key=path.parent.name,
-                endpoint=RAW_SESSION_ENDPOINT,
-                relative_path=relative_to_lake(path, root),
-                sha256=sha256_hex(data),
-                bytes=len(data),
-                written=False,
+    for endpoint in INDEXED_ENDPOINTS:
+        for path in sorted(root.rglob(f"{endpoint}.json")):
+            try:
+                data = path.read_bytes()
+                raw = json.loads(data)
+            except (OSError, ValueError):  # pragma: no cover - corrupt file skipped defensively
+                continue
+            records.append(
+                RetainedFile(
+                    session_key=path.parent.name,
+                    endpoint=endpoint,
+                    relative_path=relative_to_lake(path, root),
+                    sha256=sha256_hex(data),
+                    bytes=len(data),
+                    written=False,
+                )
             )
-        )
-        if isinstance(raw, Mapping):
-            normalized.append(normalize_session(raw))
+            if endpoint == RAW_SESSION_ENDPOINT and isinstance(raw, Mapping):
+                normalized.append(normalize_session(raw))
     root.mkdir(parents=True, exist_ok=True)
     # sessions_index carries normalized telemetry conditions → allow_nan for lossless
     # round-trip; the file index (hashes/sizes/paths only) stays strict, portable JSON.
@@ -198,12 +210,13 @@ class CoachingSummary:
     actionable: int
     written: list[str]
     lake_root: Path
+    indexed: int = 0
 
     def render(self) -> str:
         return (
             f"retained coaching for session {self.session_key} "
             f"({self.segments} segment(s), {self.actionable} actionable) to {self.lake_root} "
-            f"[{', '.join(self.written) or 'nothing new'}]"
+            f"[{', '.join(self.written) or 'nothing new'}; {self.indexed} file(s) indexed]"
         )
 
 
@@ -238,35 +251,45 @@ def retain_coaching(
     session: Mapping[str, Any],
     bundle: Mapping[str, Any],
     *,
+    last_session_payload: Mapping[str, Any] | None = None,
     lake_base: Path | None = None,
     generated_at: str | None = None,
 ) -> CoachingSummary:
-    """Immutably retain a session's last-session metadata + coaching bundle.
+    """Immutably retain a session's last-session payload + coaching bundle, then reindex.
 
     Pure of network: given already-fetched payloads, writes ``last_session.json`` and
-    ``coaching.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/`` —
-    the per-corner reference + advice the M0 voice loop (M-TT2) will consume. ``allow_nan``
-    keeps non-finite telemetry floats lossless, matching raw session retention.
+    ``coaching.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/`` keyed
+    by the **given** ``session`` (so ``coaching --session-key OLD`` lands under OLD, not the
+    latest). ``last_session_payload`` is the FULL raw services response (session +
+    referenceLap + telemetry) — preserved so the lake reconstructs exactly what the endpoint
+    returned (the M-TT2 reference-lap input); it defaults to ``session`` when not supplied.
+    After writing, the lake indexes are rebuilt from disk (:func:`reindex_lake`) so the new
+    services endpoints are discoverable and integrity-checkable. ``allow_nan`` keeps
+    non-finite telemetry floats lossless, matching raw session retention.
     """
     root = lake_root(lake_base)
+    stamp = generated_at or _iso_now()
     key = _session_lake_key(session)
     target_dir = session_lake_dir(
         root, game=key["game"], car=key["car"], track=key["track"], session_key=key["session_key"]
     )
+    last_payload = dict(last_session_payload) if last_session_payload is not None else dict(session)
     written: list[str] = []
     for endpoint, payload in (
-        (LAST_SESSION_ENDPOINT, dict(session)),
+        (LAST_SESSION_ENDPOINT, last_payload),
         (COACHING_ENDPOINT, dict(bundle)),
     ):
         result = write_immutable_json(endpoint_file(target_dir, endpoint), payload, allow_nan=True)
         if result.written:
             written.append(endpoint)
+    indexed = reindex_lake(root, generated_at=stamp)
     return CoachingSummary(
         session_key=key["session_key"],
         segments=len(bundle.get("segments", []) or []),
         actionable=_count_actionable(bundle),
         written=written,
         lake_root=root,
+        indexed=indexed,
     )
 
 
@@ -376,12 +399,27 @@ def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
     minted = mint_tokens(refresh, config)
     uid = args.uid or uid_from_token(minted.access_token)
 
-    # Resolve the target session/lap from the last session unless explicitly given.
-    last = fetch_last_session(minted.access_token, uid)
-    session = last["session"]
-    key = _session_lake_key(session)
-    session_key = args.session_key or key["session_key"]
-    lap = args.lap if args.lap is not None else session.get("lap_number")
+    # Resolve the target session. Default: the current last session (full payload incl.
+    # telemetry). With --session-key for an OLDER session, look it up in the services
+    # sessions list so retention is keyed to the REQUESTED session, not the latest.
+    raw_last = fetch_last_session_raw(minted.access_token, uid)
+    last_session = parse_last_session(raw_last)["session"]
+    last_key = _session_lake_key(last_session)["session_key"]
+    session_key = args.session_key or last_key
+
+    if session_key == last_key:
+        target_session: Mapping[str, Any] = last_session
+        last_payload: Mapping[str, Any] = raw_last  # full services evidence (telemetry)
+    else:
+        sessions = fetch_services_sessions(minted.access_token, uid, limit=50)
+        found = find_session(sessions, session_key)
+        if found is None:
+            _print(f"coaching: session_key {session_key} not found in the sessions list")
+            return 1
+        target_session = found
+        last_payload = found  # metadata for the requested (non-last) session
+
+    lap = args.lap if args.lap is not None else target_session.get("lap_number")
     if not session_key or lap is None:
         _print("coaching: could not resolve a session_key/lap (no recent session?)")
         return 1
@@ -392,14 +430,16 @@ def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
 
     if args.dry_run:
         _print(f"dry-run — uid={uid}, session={session_key}, lap={lap}")
-        _print(f"  reference: {bundle['reference_lap'].get('username', '?')}")
+        _print(f"  dynamic reference: {bundle['reference_lap'].get('username', '?')}")
         for seg in bundle["segments"]:
             stories = seg.get("stories", [])
             head = stories[0]["diagnosis"] if stories else "(no advice)"
             _print(f"  corner {seg['segment']}: {head}")
         return 0
 
-    summary = retain_coaching(session, bundle, lake_base=args.lake_base)
+    summary = retain_coaching(
+        target_session, bundle, last_session_payload=last_payload, lake_base=args.lake_base
+    )
     _print(summary.render())
     return 0
 

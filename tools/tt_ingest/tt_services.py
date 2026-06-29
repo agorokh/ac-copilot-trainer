@@ -302,6 +302,42 @@ def parse_last_session(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def parse_services_sessions(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the session rows from a services ``/users/{uid}/sessions`` response.
+
+    Enveloped (``data.sessions``); tolerates a bare ``data`` list. Skips non-mapping rows.
+    """
+    data = unwrap_envelope(payload)
+    rows: Any = None
+    if isinstance(data, Mapping):
+        rows = data.get("sessions")
+    elif isinstance(data, list):
+        rows = data
+    if not isinstance(rows, list):
+        raise TTServicesError("services sessions response missing 'data.sessions' list")
+    return [dict(s) for s in rows if isinstance(s, Mapping)]
+
+
+def session_key_of(session: Mapping[str, Any]) -> str | None:
+    """Extract the bare session key from a services session row.
+
+    The services id is ``{uid}#{sessionKey}``; fall back to an explicit ``session_key``.
+    """
+    raw_id = session.get("id") or session.get("session_id") or ""
+    if isinstance(raw_id, str) and "#" in raw_id:
+        return raw_id.split("#", 1)[1] or None
+    sk = session.get("session_key")
+    return sk if isinstance(sk, str) and sk else None
+
+
+def find_session(sessions: list[Mapping[str, Any]], session_key: str) -> dict[str, Any] | None:
+    """Return the session row whose key matches ``session_key``, else ``None``."""
+    for s in sessions:
+        if session_key_of(s) == session_key:
+            return dict(s)
+    return None
+
+
 # ----------------------------------------------------------------------------------
 # Network round-trips — thin, isolated, ``# pragma: no cover`` (verified live, #353).
 # ----------------------------------------------------------------------------------
@@ -334,6 +370,24 @@ def _client(http: Any | None) -> Any:  # pragma: no cover - trivial import shim
     return requests_mod
 
 
+def fetch_last_session_raw(
+    access_token: str,
+    uid: str,
+    *,
+    http: Any | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_S,
+) -> dict[str, Any]:  # pragma: no cover - network round-trip, verified live (#353)
+    """Fetch the FULL raw last-session payload (session + referenceLap + telemetry).
+
+    Retention uses this so the immutable lake preserves the complete services evidence
+    (incl. the reference telemetry trace M-TT2 needs) rather than a stripped projection.
+    """
+    body = _services_get(last_session_url(uid), access_token, http=_client(http), timeout=timeout)
+    if not isinstance(body, Mapping):
+        raise TTServicesError("last-session response was not an object")
+    return dict(body)
+
+
 def fetch_last_session(
     access_token: str,
     uid: str,
@@ -344,6 +398,23 @@ def fetch_last_session(
     """Fetch + parse the user's last session (session + reference lap)."""
     body = _services_get(last_session_url(uid), access_token, http=_client(http), timeout=timeout)
     return parse_last_session(body)
+
+
+def fetch_services_sessions(
+    access_token: str,
+    uid: str,
+    *,
+    page: int = 1,
+    limit: int = 20,
+    http: Any | None = None,
+    timeout: float = DEFAULT_REQUEST_TIMEOUT_S,
+) -> list[dict[str, Any]]:  # pragma: no cover - network round-trip, verified live (#353)
+    """Fetch + parse one page of the services-view sessions list."""
+    url = services_sessions_url(uid, page=page, limit=limit)
+    body = _services_get(url, access_token, http=_client(http), timeout=timeout)
+    if not isinstance(body, Mapping):
+        raise TTServicesError("services sessions response was not an object")
+    return parse_services_sessions(body)
 
 
 def fetch_dynamic_reference_lap(
@@ -394,16 +465,28 @@ def fetch_session_coaching(
     lap: Any,
     *,
     segment_count: int = DEFAULT_SEGMENT_COUNT,
-    ref_lap: Any = THEORETICAL_BEST_REF,
+    advice_ref_uid: str | None = None,
+    advice_ref_session_key: str | None = None,
+    advice_ref_lap: Any = THEORETICAL_BEST_REF,
     http: Any | None = None,
     timeout: float = DEFAULT_REQUEST_TIMEOUT_S,
 ) -> dict[str, Any]:  # pragma: no cover - network round-trip, verified live (#353)
     """Pull the full per-corner coaching bundle for one lap.
 
-    Returns ``{"reference_lap": {...}, "segments": [{segment, stories: [...]}]}``.
-    The reference lap's identity (uid + session key) drives the advice requests; the
-    advice itself compares the lap against the operator's ``theoreticalBestRef`` by
-    default (matching the renderer's own behaviour).
+    Returns ``{"reference_lap", "dynamic_reference", "advice_reference", "segments"}``.
+
+    There are **two distinct references**, which must not be conflated (#353 review):
+
+    * ``dynamic_reference`` — the comparison lap returned by ``dynamic-reference-laps``
+      (a faster/community driver, e.g. another user's session). Its identity is
+      ``[ref_uid, ref_session_key]`` and it drives the racing-line/segment comparison.
+    * ``advice_reference`` — what the per-corner ``/advice`` is computed against. The
+      renderer compares the operator's lap against their **own** ``theoreticalBestRef``
+      by default (verified live), so advice defaults to ``(uid, session_key,
+      theoreticalBestRef)``. Override via ``advice_ref_*`` to diff against another lap.
+
+    Recording both separately means the bundle's reference identity always matches the
+    data it labels (the prior single ``reference_id`` mislabelled the advice source).
     """
     client = _client(http)
     raw_ref = _services_get(
@@ -413,22 +496,33 @@ def fetch_session_coaching(
         timeout=timeout,
     )
     reference_lap = parse_reference_lap(raw_ref)
-    ref_uid, ref_sk = reference_identity(reference_lap)
+    try:
+        dyn_uid, dyn_sk = reference_identity(reference_lap)
+    except TTServicesError:
+        dyn_uid, dyn_sk = None, None
+    a_uid = advice_ref_uid or uid
+    a_sk = advice_ref_session_key or session_key
     segments: list[dict[str, Any]] = []
-    for seg_num, _ in reference_lap_segments(reference_lap) or [
-        (i, 0.0) for i in range(1, segment_count + 1)
-    ]:
+    seg_nums = [n for n, _ in reference_lap_segments(reference_lap)] or list(
+        range(1, segment_count + 1)
+    )
+    for seg_num in seg_nums:
         stories = fetch_advice_segment(
             access_token,
             uid,
             session_key,
             lap,
-            uid,  # advice references the operator's OWN session for theoreticalBestRef
-            session_key,
+            a_uid,
+            a_sk,
             seg_num,
-            ref_lap=ref_lap,
+            ref_lap=advice_ref_lap,
             http=client,
             timeout=timeout,
         )
         segments.append({"segment": seg_num, "stories": [s.__dict__ for s in stories]})
-    return {"reference_lap": reference_lap, "reference_id": [ref_uid, ref_sk], "segments": segments}
+    return {
+        "reference_lap": reference_lap,
+        "dynamic_reference": [dyn_uid, dyn_sk],
+        "advice_reference": [a_uid, a_sk, advice_ref_lap],
+        "segments": segments,
+    }

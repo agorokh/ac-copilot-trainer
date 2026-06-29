@@ -22,16 +22,19 @@ from tools.tt_ingest.tt_services import (
     fetch_advice_segment,
     fetch_dynamic_reference_lap,
     fetch_last_session,
+    find_session,
     is_enveloped,
     lap_reference_url,
     last_session_url,
     parse_advice,
     parse_last_session,
     parse_reference_lap,
+    parse_services_sessions,
     reference_identity,
     reference_lap_segments,
     reference_lap_url,
     services_sessions_url,
+    session_key_of,
     unwrap_envelope,
 )
 
@@ -246,3 +249,71 @@ def test_services_get_raises_on_http_error() -> None:
 
     with pytest.raises(TTServicesError):
         fetch_last_session("tok", "uid-1", http=_ErrHttp())
+
+
+# --- services sessions list (parse + find) ----------------------------------------
+
+
+def test_parse_services_sessions_from_fixture() -> None:
+    rows = parse_services_sessions(_load("tt_services_sessions.json"))
+    assert len(rows) == 2
+    assert all(isinstance(r, dict) for r in rows)
+    assert rows[0].get("game_id")
+
+
+def test_parse_services_sessions_bare_list() -> None:
+    rows = parse_services_sessions(
+        {"success": True, "status": 200, "data": [{"id": "u#a"}, "junk", {"id": "u#b"}]}
+    )
+    assert [r["id"] for r in rows] == ["u#a", "u#b"]
+
+
+def test_parse_services_sessions_missing_raises() -> None:
+    with pytest.raises(TTServicesError):
+        parse_services_sessions({"success": True, "status": 200, "data": {"count": 0}})
+
+
+def test_session_key_of() -> None:
+    assert session_key_of({"id": "uid-1#20260629005756"}) == "20260629005756"
+    assert session_key_of({"session_id": "u#sk-2"}) == "sk-2"
+    assert session_key_of({"session_key": "sk-3"}) == "sk-3"
+    assert session_key_of({"id": "no-separator"}) is None
+
+
+def test_find_session() -> None:
+    rows = parse_services_sessions(_load("tt_services_sessions.json"))
+    key = session_key_of(rows[0])
+    found = find_session(rows, key)
+    assert found is not None and session_key_of(found) == key
+    assert find_session(rows, "does-not-exist") is None
+
+
+def test_fetch_session_coaching_bundle_separates_references() -> None:
+    # Build advice URLs against the operator's OWN theoreticalBestRef (observed renderer
+    # behaviour) while recording the dynamic reference's identity distinctly — so the bundle
+    # never mislabels the advice source (PR #370 review fix).
+    from tools.tt_ingest.tt_services import fetch_session_coaching
+
+    class _SeqHttp:
+        """Returns the dynamic-reference payload first, then advice for each segment."""
+
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+            self._dyn = _load("tt_services_dynamic_reference.json")
+            self._advice = _load("tt_services_advice.json")
+
+        def get(self, url, headers=None, timeout=None):
+            self.urls.append(url)
+            payload = self._dyn if "dynamic-reference-laps" in url else self._advice
+            return _FakeResponse(payload)
+
+    http = _SeqHttp()
+    bundle = fetch_session_coaching("tok", "own-uid", "own-sk", 5, segment_count=2, http=http)
+    # dynamic_reference is the OTHER driver from the dynamic-reference-laps payload...
+    assert bundle["dynamic_reference"] == ["ref-uid-002", "20220611194228"]
+    # ...while advice was requested against the operator's OWN session + theoreticalBestRef.
+    assert bundle["advice_reference"] == ["own-uid", "own-sk", THEORETICAL_BEST_REF]
+    advice_urls = [u for u in http.urls if "/advice/" in u]
+    assert advice_urls and all(
+        "own-uid/own-sk" in u and THEORETICAL_BEST_REF in u for u in advice_urls
+    )

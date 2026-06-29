@@ -172,6 +172,49 @@ def test_retain_coaching_summary_render(tmp_path) -> None:
     assert "1 actionable" in rendered
 
 
+def test_retain_coaching_preserves_full_payload(tmp_path) -> None:
+    # The FULL services payload (session + referenceLap + telemetry) must be retained as
+    # last_session.json so the lake reconstructs what the endpoint returned (M-TT2 input).
+    full = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
+    retain_coaching(_last_session(), _bundle(), last_session_payload=full, lake_base=tmp_path)
+    root = tmp_path / "journal" / "tt"
+    session_dir = root / "assettoCorsa" / "ks_porsche_911_gt3_r_2016" / "magione" / "20260629005756"
+    retained = json.loads((session_dir / f"{LAST_SESSION_ENDPOINT}.json").read_text())
+    assert retained.get("success") is True  # envelope preserved, not the stripped session
+    assert "referenceLap" in retained["data"]  # reference evidence kept for M-TT2
+
+
+def test_retain_coaching_indexes_endpoint_files(tmp_path) -> None:
+    summary = retain_coaching(_last_session(), _bundle(), lake_base=tmp_path)
+    root = tmp_path / "journal" / "tt"
+    file_index = json.loads((root / INDEX_FILENAME).read_text())
+    endpoints = {f["endpoint"] for f in file_index["files"]}
+    assert {LAST_SESSION_ENDPOINT, COACHING_ENDPOINT} <= endpoints
+    assert summary.indexed == file_index["file_count"] >= 2
+
+
+def test_retain_coaching_keys_on_given_session(tmp_path) -> None:
+    # The lake key comes from the GIVEN session, so coaching for an OLD session lands under
+    # that session's dir (PR #370 review fix — not the latest session's).
+    old = {
+        "session_id": "u#20240101120000",
+        "game_id": "assettoCorsa",
+        "car": "ks_audi_r8_lms",
+        "track_id": "monza",
+        "lap_number": 3,
+    }
+    retain_coaching(old, _bundle(), lake_base=tmp_path)
+    root = tmp_path / "journal" / "tt"
+    assert (
+        root
+        / "assettoCorsa"
+        / "ks_audi_r8_lms"
+        / "monza"
+        / "20240101120000"
+        / f"{COACHING_ENDPOINT}.json"
+    ).exists()
+
+
 def test_parser_requires_subcommand() -> None:
     with pytest.raises(SystemExit):
         build_arg_parser().parse_args([])
