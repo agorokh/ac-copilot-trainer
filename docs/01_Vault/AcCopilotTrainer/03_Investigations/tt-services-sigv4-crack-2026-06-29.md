@@ -11,50 +11,52 @@ relates_to:
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/353
 ---
 
-# M-TT1 services SigV4 crack — research (2026-06-29, BLOCKED on final path/key)
+# M-TT1 services crack — RESOLVED (2026-06-29): accessToken, not SigV4
 
-`/autonomous-deliver 353` (ultracode). After M-TT0 merged (PR #359), researched M-TT1 (the
-services API). The issue's stated blocker — "services sits behind Cognito Identity-Pool IAM
-(SigV4); idToken → 403" — is now **substantially cracked**. NOT yet end-to-end (no services 200),
-so no code shipped. Live-probed against the operator's real account.
+`/autonomous-deliver 353` (ultracode). M-TT1 shipped in **PR #370**. The earlier
+SigV4 / Identity-Pool hypothesis (this node's prior revision) was **WRONG** and is
+corrected here. Cracked + verified live via CDP capture of the running TT renderer.
 
-## CRACKED ✅ — the Cognito Identity-Pool → SigV4 auth flow works
-- `POST cognito-identity.us-east-1.amazonaws.com` `AWSCognitoIdentityService.GetId`
-  (IdentityPoolId `us-east-1:03459aca-683c-4cc1-b2af-86b86705dd67`, Logins
-  `{cognito-idp.us-east-1.amazonaws.com/us-east-1_fdm9kB5Wr: idToken}`) → **200**, IdentityId.
-- `GetCredentialsForIdentity` → **200**, temp creds `{AccessKeyId, SecretKey, SessionToken, Expiration}`.
-- Hand-rolled **SigV4** (stdlib hmac/hashlib; service `execute-api`, region us-east-1) is **accepted**
-  by API Gateway — no signature errors. Probe: `.scratch/tt_services_probe.py` (scratch, no secrets).
+## CORRECTED auth model (verified live, from our own mint path)
+- services `/api/v2/*`, `/dynamic-reference-laps/*`, `/advice/*` authenticate with the
+  **raw Cognito ACCESS token** in `Authorization` (NO `Bearer`) — the SAME token vulcan
+  uses (`tt_auth.mint_tokens` already returns it). **No SigV4 / Identity-Pool flow needed.**
+- Proof: `services last-session [accessToken] → 200`, `[idToken] → 403`; vulcan
+  `[accessToken] → 200`. uid `ed469389…` from the minted token matches the captured request.
+- Why the prior 403s: the research probed **old cached paths** (`data-analysis/{uid}%23{sk}`)
+  with the **idToken**. The live API is RESTful `/api/v2/…` and takes the access token.
+- The Cognito Identity-Pool `GetCredentialsForIdentity` calls the app also makes are for
+  analytics (Pinpoint), NOT these data routes.
 
-## PINNED ✅ — exact services path shapes (from the Electron HTTP cache, readable)
-TT is an **AWS Amplify** Next.js app (`app.tracktitan.io/_next/static/chunks/*.js`, CDN-fetchable,
-not bot-blocked — only the HTML route is 429). Paths grepped from `%APPDATA%/track-titan-ghost-application/{Cache,Code Cache}`:
-- `dynamic-reference-laps/sessions/{uid}/{sessionKey}/laps/{lap}`
-- `dynamic-reference-laps/context/{gameId}/{trackId}/{carId}`  (e.g. `.../assettoCorsa/ks_red_bull_ring/syn_mercedes_w09`)
-- `advice/sessions/{uid}/{sessionKey}/laps/{lap}/reference/{referenceId}/...`
-- `data-analysis/...` (fragmented to `data-analysis/20…` = sessionKey-first; full template not in the cached chunk set)
+## Method (reusable)
+Relaunch `TrackTitanDesktopApplication.exe --remote-debugging-port=9222`; attach CDP
+(`websockets`), `Network.enable`, drive the renderer (`Page.navigate` to /dashboard →
+click "Get Insights"), capture `Network.requestWillBeSent` + `getResponseBody`. 68+ real
+bodies captured to gitignored `.scratch/tt_capture/`. Scratch tooling: `.scratch/tt_cdp_*`,
+`tt_crack.py`, `tt_verify.py` (no secrets; redacted prints).
 
-## Auth model (observed status codes, correct paths)
-- **`data-analysis` ACCEPTS SigV4/IAM** → `404 {"message":"Not Found"}` (Lambda ran; wrong path/params,
-  OR session lacks computed analysis). This is the operator's PRIMARY want (per-corner diagnosis) and it
-  is **auth-cracked** — only the exact path remains.
-- **`dynamic-reference-laps` / `advice` / `context`** → `403 {"message":"Forbidden"}` under valid SigV4
-  on the correct path → the Identity-Pool IAM role likely lacks `execute-api:Invoke` on those routes (or
-  they need userPool/apiKey auth). No `da2-` AppSync apiKey literal exists in asar/cache/LocalStorage, so
-  it is NOT a simple embedded key; `services.tracktitan.io/{auth,api/content}` → 404 (not the issuer).
+## Live paths (envelope = `{success,status,data,message}`; dynamic-reference-laps is BARE)
+- `GET /api/v2/users/{uid}/sessions?page&hideLimited&limit`
+- `GET /api/v2/sessions/{uid}/last-session`  → session + referenceLap + **telemetry trace**
+- `GET /api/v2/sessions/{uid}/{sk}/laps/{lap}/reference`  (dynamicComparisonLap)
+- `GET /dynamic-reference-laps/sessions/{uid}/{sk}/laps/{lap}?segmentCount=N`
+- `GET /api/v2/sessions/{uid}/{sk}/reference/{refUid}/{refSk}/laps/{refLap}`
+- `GET /advice/sessions/{uid}/{sk}/laps/{lap}/reference/{refUid}/{refSk}/laps/theoreticalBestRef/segments/{n}`
+- `GET /api/v2/users/{uid}/analysis/progress/?gameId&trackId&carId`
 
-## BLOCKED — precise remaining work (next session)
-1. **Pin the exact `data-analysis` path** (unblocks the primary want via the already-working SigV4):
-   capture the running renderer's network (CDP — launch the TT app with `--remote-debugging-port`, read
-   `Network.requestWillBeSent` for the data-analysis GET), OR fetch the session-review page chunk (not in
-   the 77 cached chunk URLs) and read the fetch template. Then brute-confirm against a session known to
-   have analysis (cache lists `20260628051354/laps/5`, `20260620003604/laps/4`).
-2. **Resolve ref-laps/advice 403:** try the **userPool idToken** auth mode (Amplify `defaultAuthMode`
-   per-endpoint) vs IAM, or inspect the Identity-Pool role policy. The reference lap (M-TT2 input) comes
-   from `dynamic-reference-laps`.
-3. Then build `tt_services.py` (SigV4 signer already prototyped) + fixtures, and proceed to M-TT2
-   (reference → `lap_archive` → M0 `--voice-reference`) and M-TT3.
+Two references, kept distinct: **dynamic_reference** (community/other driver, e.g. "Dennis
+Bosman") vs **advice_reference** (operator's own `theoreticalBestRef`).
 
-Scratch tooling (gitignored, no secrets — values redacted on print): `.scratch/tt_services_probe.py`,
-`tt_chunk_scan.py`, `tt_chunk_context.py`, `tt_auth_endpoint_probe.py`. Guardrail scope (personal
-own-account use) per [[track-titan-coaching-oracle-strategy-2026-06-27]] applies.
+## M-TT2 input (telemetry trace, PINNED)
+`last-session.data.telemetry.telemetry.{user,reference}` = ~265-pt lists. Point keys:
+`dist`(spline 0-1), `distM`, `Kmh`(speed), `brak`, `throt`, `steer`, `ovSteer`, `unSteer`,
+`gear`, `lTime`(ms), `useGrip`, `X`,`Y`(track pos). Maps to `lap_archive` TRACE_FIELDS in
+`tools/ac_harness/reference_lap.py` (spline=dist, speed=Kmh, brake=brak, throttle=throt, …).
+
+## Shipped (PR #370)
+`tools/tt_ingest/tt_services.py` (client: builders+parsers pure, network no-cover) +
+`coaching` CLI (retains per-lap raw evidence `last_session_lap{N}.json` + `coaching_lap{N}.json`
+to the write-once lake, reindexed) + sanitized fixtures + tests. Live E2E verified
+(per-corner diagnoses, e.g. Magione Porsche 911 GT3 R: c3 "You messed up your exit").
+
+## NEXT: M-TT2 (reference telemetry → lap_archive → M0 --reference-archive), M-TT3 (per-corner → harness).
