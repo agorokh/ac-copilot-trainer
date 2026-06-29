@@ -22,9 +22,8 @@ The JC3248W535 screen was powered on but not connecting to the trainer sidecar.
 
 ## Live diagnosis
 
-- Windows Wi-Fi was attached to `AHOME5G` on 5 GHz; there was no active
-  `192.168.137.1` Mobile Hotspot interface for the ESP32's configured `AG_RIG`
-  path.
+- Windows Wi-Fi was attached to a home 5 GHz network; there was no active
+  Windows Mobile Hotspot gateway for the ESP32's configured rig hotspot path.
 - Nothing was listening on sidecar port `8765`.
 - The ESP32 itself was present over native USB CDC/JTAG (`COM6`, VID/PID
   `303A/1001`), so the fault was the PC-side network/sidecar path, not a dead
@@ -33,18 +32,17 @@ The JC3248W535 screen was powered on but not connecting to the trainer sidecar.
 ## Recovery performed
 
 1. Started `tools.ai_sidecar` with external bind and the firmware-matching token.
-2. Set the `AHOME5G` Wi-Fi profile to manual and disconnected the Intel 7260
-   from 5 GHz so Windows Mobile Hotspot could host the 2.4 GHz `AG_RIG` AP.
-3. Confirmed Mobile Hotspot `On`, one client, and ARP lease
-   `192.168.137.231` for the ESP32 MAC.
-4. Confirmed sidecar `/health` and `/metrics`, established socket
-   `192.168.137.1:8765 <- 192.168.137.231`, and protocol counters moving
+2. Set the home Wi-Fi profile to manual and disconnected the Intel 7260 from
+   5 GHz so Windows Mobile Hotspot could host the 2.4 GHz rig AP.
+3. Confirmed Mobile Hotspot `On`, one client, and an ESP32 DHCP/ARP lease.
+4. Confirmed sidecar `/health` and `/metrics`, an established
+   hotspot-gateway-to-screen socket, and protocol counters moving
    (`state.snapshot`, `state.subscribe`, `corner_query`, setup experiment frames).
 
-`ac_sidecar_screen_connected` is a 120-second recency gauge based on the WS
-upgrade header, not a durable socket-open gauge. After quiet periods it can read
-`0` while the ESP32 TCP connection is still established; check `/health`,
-`Get-NetTCPConnection`, ARP, and message counters together.
+Original diagnosis found `ac_sidecar_screen_connected` was only a 120-second
+recency gauge based on the WS upgrade header, not a durable socket-open gauge.
+PR #361 now adds current `screen_peers` health/metrics and keeps
+`ac_sidecar_screen_connected` true when a screen socket is actually present.
 
 ## Code fix in flight
 
@@ -58,18 +56,20 @@ Branch `fix/issue-86-rig-sidecar-autostart` patches the recurring startup gap:
   `--token` is omitted.
 - `firmware/screen/README.md` documents the user-env setup and the restart
   requirement for Content Manager / Assetto Corsa.
+- `tools.ai_sidecar` health/metrics now report current screen peers, and the Lua
+  telemetry publisher reads CSP userdata/cdata car state defensively.
 - User environment on this PC now has `AC_COPILOT_SIDECAR_TOKEN` set and
   `AC_COPILOT_SIDECAR_PORT=8765`; token value intentionally not recorded here.
 
 ## Verification
 
-- Focused tests: `6 passed` for rig env-token, missing-token safety, batch
+- Focused tests: `8 passed` for rig env-token, missing-token safety, batch
   contract, and Windows hook path resolution.
 - `start_sidecar.bat` artifact proof: launched on temporary port `9876`; logs
   showed `AI sidecar listening host=0.0.0.0 port=9876 ... token=set`, process
   command line omitted `--token`, and `/health` returned OK.
 - Broad suite with only `tests/test_process_miner/test_distill.py` ignored:
-  `1547 passed, 114 skipped`, coverage `83.32%`.
+  `1548 passed, 114 skipped`, coverage `83.33%`.
 - Full pytest collection without the ignore is blocked on missing
   governance-hub `runtime/inference_egress`; `~/.fleet-governance` exists on this
   PC but has no `runtime/` directory.

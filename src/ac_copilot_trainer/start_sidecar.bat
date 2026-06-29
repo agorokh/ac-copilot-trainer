@@ -40,6 +40,7 @@ if not defined AC_COPILOT_OLLAMA_NUM_PREDICT set "AC_COPILOT_OLLAMA_NUM_PREDICT=
 if not defined AC_COPILOT_OLLAMA_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_TIMEOUT_SEC=60"
 if not defined AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC=60"
 if not defined AC_COPILOT_SIDECAR_PORT set "AC_COPILOT_SIDECAR_PORT=8765"
+if "!AC_COPILOT_SIDECAR_PORT!"=="" set "AC_COPILOT_SIDECAR_PORT=8765"
 
 cd /d "!REPO_ROOT!"
 IF NOT EXIST "!REPO_ROOT!\tools\ai_sidecar" (
@@ -51,11 +52,12 @@ REM Default remains loopback-only for normal in-game Lua use. When the rig-scree
 REM token is present, expose the sidecar on the LAN/hotspot while keeping the
 REM token in the child process environment instead of the process command line.
 set "SIDECAR_ARGS=--host 127.0.0.1 --port !AC_COPILOT_SIDECAR_PORT!"
-if defined AC_COPILOT_SIDECAR_TOKEN (
+if not "!AC_COPILOT_SIDECAR_TOKEN!"=="" (
   if not defined AC_COPILOT_SIDECAR_EXTERNAL_BIND set "AC_COPILOT_SIDECAR_EXTERNAL_BIND=0.0.0.0"
+  if "!AC_COPILOT_SIDECAR_EXTERNAL_BIND!"=="" set "AC_COPILOT_SIDECAR_EXTERNAL_BIND=0.0.0.0"
   set "SIDECAR_ARGS=--external-bind !AC_COPILOT_SIDECAR_EXTERNAL_BIND! --port !AC_COPILOT_SIDECAR_PORT!"
 ) else (
-  if defined AC_COPILOT_SIDECAR_EXTERNAL_BIND (
+  if not "!AC_COPILOT_SIDECAR_EXTERNAL_BIND!"=="" (
     echo [start_sidecar] WARNING: AC_COPILOT_SIDECAR_EXTERNAL_BIND ignored because AC_COPILOT_SIDECAR_TOKEN is unset.
   )
 )

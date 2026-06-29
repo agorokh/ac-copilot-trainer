@@ -50,14 +50,14 @@ relates_to:
 ## Resume here (2026-06-28 evening) - #86 rig screen connectivity restored; PR #361 active
 
 User reported the #86 rig screen was powered on but not connecting. Live cause:
-PC was on `AHOME5G` 5 GHz, Mobile Hotspot was not presenting `192.168.137.1`,
-and no sidecar was listening on `8765`. Recovered the live rig by starting an
-externally-bound sidecar, switching the Intel 7260 Wi-Fi profile to manual,
-disconnecting from 5 GHz, and starting Mobile Hotspot. Evidence at SAVE:
-Mobile Hotspot `On` with one client; ESP32 ARP lease `192.168.137.231`;
-sidecar `/health` OK with established `192.168.137.1:8765 <- 192.168.137.231`
-socket and protocol counters moving (`state.snapshot`, `state.subscribe`,
-`corner_query`, setup experiment frames).
+PC was on a home 5 GHz Wi-Fi network, Mobile Hotspot was not presenting the
+rig-screen hotspot gateway, and no sidecar was listening on `8765`. Recovered
+the live rig by starting an externally-bound sidecar, switching the Intel 7260
+Wi-Fi profile to manual, disconnecting from 5 GHz, and starting Mobile Hotspot.
+Evidence at SAVE: Mobile Hotspot `On` with one client, ESP32 DHCP lease present,
+sidecar `/health` OK with an established hotspot-gateway-to-screen socket, and
+protocol counters moving (`state.snapshot`, `state.subscribe`, `corner_query`,
+setup experiment frames).
 
 Branch **`fix/issue-86-rig-sidecar-autostart`** patches the recurring gap:
 `start_sidecar.bat` now stays loopback-only by default, but if
@@ -74,7 +74,7 @@ Artifact proof: `start_sidecar.bat` launched on temporary port `9876`
 with log `AI sidecar listening host=0.0.0.0 port=9876 ... token=set`, `/health`
 OK, and no `--token` in the process command line.
 
-Verification: focused tests `6 passed`; `ruff check` on the repo passed; Bandit,
+Verification: focused tests `8 passed`; `ruff check` on the repo passed; Bandit,
 policy docs, tracked-file secret policy, agent-forbidden, CSP API, and CSP UI
 checks passed. Broad pytest with only
 `tests/test_process_miner/test_distill.py` ignored: `1548 passed, 114 skipped`,
@@ -1625,9 +1625,12 @@ If you're working on screen firmware specifically, also:
 
 3. **Start the sidecar + hotspot** before any device test. PR [#78](https://github.com/agorokh/ac-copilot-trainer/pull/78) added **auto-launch** so the sidecar spawns when the trainer Lua loads; see [`pr-78-sidecar-autolaunch-lap-archive`](../03_Investigations/pr-78-sidecar-autolaunch-lap-archive.md). For rig testing outside of AC (firmware smoke):
    ```bash
-   py -m tools.ai_sidecar --external-bind 0.0.0.0 --token <T>
+   py -m tools.ai_sidecar --external-bind 0.0.0.0 --port 8765
    ```
-   **Hotspot SSID is now `AG_RIG`** (no space) on **2.4 GHz forced** + the AHOME5G profile is set to `connectionmode=manual` so it doesn't snap back and steal the radio. **Disconnect Wi-Fi from AHOME5G** (`netsh wlan disconnect`) before starting the hotspot — the Intel 7260 is single-radio so it cannot host 2.4 GHz while connected to a 5 GHz network. Full diagnosis + recovery commands: [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md).
+   Run that from a shell with `AC_COPILOT_SIDECAR_TOKEN` already set. The rig
+   hotspot is 2.4 GHz forced; keep the home Wi-Fi profile manual so it does not
+   reclaim the single-radio Intel 7260 while the hotspot is hosting. Full
+   diagnosis + recovery commands: [`wifi-hotspot-single-radio-2026-04-26`](../03_Investigations/wifi-hotspot-single-radio-2026-04-26.md).
 
 4. **Phase-2 firmware: bring up LVGL 8.3 + touch.** Follow [`screen-ui-stack-lvgl-touch`](../01_Decisions/screen-ui-stack-lvgl-touch.md):
    - `lib_deps += lvgl/lvgl @ ~8.3.11` in `firmware/screen/platformio.ini`.
@@ -1650,7 +1653,7 @@ From [`screen-debugging-journey-2026-04-21`](../03_Investigations/screen-debuggi
 1. **AXS15231B QSPI** panels need `Arduino_Canvas` + `flush()` — per-pixel writes garble the controller. Use `ips=false` for the 320×480 LCD variant.
 2. **JC3248W535 touch IS the AXS15231B** at I²C 0x3B — no separate touch IC. 40-line reader in the ADR.
 3. **moononournation init table** is for the 1.91" AMOLED, not our LCD.
-4. **AHOME5G mesh** segregates per-AP subnets; TCP dropped cross-AP. Hotspot is the dev path.
+4. **Home mesh Wi-Fi** segregates per-AP subnets; TCP dropped cross-AP. Hotspot is the dev path.
 5. **Factory backup restore** is the proof-of-life test when display looks dead. Binary at `firmware/screen/_factory-backup/jc3248w535_v0.9.1_factory.bin`.
 6. **CSP API quirks**: `type(vec2/rgbm)` returns `"cdata"` not `"function"` (use nil-checks); `web.socket` is callback-based (`reconnect:true` mandatory); `ac.storage` table-form silently fails (use per-key form).
 7. **Sim-time not os.clock** for staleness — see `ac-storage-persistence.md` and the `corner_advice` TTL in PR #75.
