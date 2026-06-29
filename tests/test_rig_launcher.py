@@ -384,6 +384,27 @@ def test_open_path_uses_macos_open(tmp_path: Path, monkeypatch) -> None:
     assert calls == [["open", str(tmp_path)]]
 
 
+def test_open_path_falls_back_to_notepad_when_windows_startfile_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_startfile(_path: Path) -> None:
+        raise OSError("no file association")
+
+    def fake_popen(args: list[str]) -> _Proc:
+        calls.append(args)
+        return _Proc()
+
+    monkeypatch.setattr("tools.rig_launcher.app.os.name", "nt")
+    monkeypatch.setattr("tools.rig_launcher.app.os.startfile", fake_startfile, raising=False)
+    monkeypatch.setattr("tools.rig_launcher.app.subprocess.Popen", fake_popen)
+
+    _open_path(tmp_path)
+
+    assert calls == [["notepad.exe", str(tmp_path)]]
+
+
 def test_settings_load_falls_back_on_invalid_utf8(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     path.write_bytes(b"\xff\xfe")

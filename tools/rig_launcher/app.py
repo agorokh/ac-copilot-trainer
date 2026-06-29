@@ -23,7 +23,10 @@ from tools.rig_launcher.supervisor import (
 
 def _open_path(path: Path) -> None:
     if os.name == "nt":
-        os.startfile(path)  # type: ignore[attr-defined]
+        try:
+            os.startfile(path)  # type: ignore[attr-defined]
+        except OSError:
+            subprocess.Popen(["notepad.exe", str(path)])
     elif sys.platform == "darwin":
         subprocess.Popen(["open", str(path)])
     else:

@@ -116,7 +116,7 @@ def _normalize_wav(path: Path, samplerate: int) -> None:
     if sample_width == 2:
         audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
     elif sample_width == 4:
-        audio = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+        audio = np.frombuffer(raw, dtype="<f4").astype(np.float32)
     else:
         raise ValueError(f"unsupported sample width {sample_width} bytes in {path}")
     if channels > 1:

@@ -83,3 +83,31 @@ def test_bake_resamples_external_backend_to_requested_samplerate(tmp_path) -> No
         assert wf.getnchannels() == 1
         assert wf.getsampwidth() == 2
     assert manifest.samplerate == 48000
+
+
+def test_bake_accepts_float32_external_backend(tmp_path) -> None:
+    pytest.importorskip("numpy")
+
+    class _Float32Backend:
+        voice_signature = "float32-test"
+
+        def synthesize(self, text, out_path, samplerate):  # noqa: ANN001
+            del text
+            frames = bytearray()
+            for i in range(int(samplerate * 0.02)):
+                sample = 0.25 * math.sin(2 * math.pi * 330.0 * i / samplerate)
+                frames += struct.pack("<f", sample)
+            with wave.open(str(out_path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(4)
+                wf.setframerate(samplerate)
+                wf.writeframes(bytes(frames))
+
+    manifest = bake_bank(tmp_path, _Float32Backend(), samplerate=22050)
+    clip = tmp_path / next(iter(manifest.clips.values())).file
+    with wave.open(str(clip), "rb") as wf:
+        assert wf.getframerate() == 22050
+        assert wf.getnchannels() == 1
+        assert wf.getsampwidth() == 2
+        raw = wf.readframes(wf.getnframes())
+    assert max(abs(v[0]) for v in struct.iter_unpack("<h", raw)) > 1000
