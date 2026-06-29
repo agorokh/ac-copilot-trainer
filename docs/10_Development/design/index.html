@@ -7,7 +7,7 @@
 <style>
   :root{
     --bg:#0b0b0c; --ink:#fff; --muted:#a3a3a3; --quiet:#737373;
-    --panel:#1e1e1e; --panel-2:#1a1a1a; --header:#141414; --line:#2c2c2c;
+    --panel:#1e1e1e; --panel-2:#1e1e1e; --header:#141414; --line:#2c2c2c;
     --gold:#ffd700; --amber:#ffc43d; --red:#ef4444; --green:#22c55e;
     --gold-bg:#332a00; --green-bg:#10240f; --red-bg:#2a1410;
     --font:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
@@ -35,7 +35,7 @@
   .btn{flex:1;background:var(--gold);color:#1a1400;border:none;border-radius:7px;padding:10px 0;font-size:13px;font-weight:600;cursor:pointer;}
   .btn.ghost{flex:0 0 auto;background:#161616;color:#fff;border:1px solid #2e2e2e;padding:10px 14px;}
   /* esp32 */
-  .device{width:240px;height:360px;background:#000;border:1px solid #2a2a2a;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;}
+  .device{width:320px;height:480px;background:#000;border:1px solid #2a2a2a;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;}
   .dhead{height:42px;background:var(--header);display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid #242424;}
   .card{margin:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:11px 12px;}
   .bar{height:7px;background:var(--panel);border-radius:4px;overflow:hidden;}
@@ -108,11 +108,11 @@
             <span style="color:var(--green);font-size:22px;">&#10003;</span>
             <div><div style="color:var(--green);font-weight:500;">Ready to drive</div><div style="color:var(--muted);font-size:12px;">Sidecar, rig screen and hotspot all live</div></div>
           </div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:var(--green-bg);color:var(--green)">HEALTHY</span><span class="detail">peers 1 · screen 1</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--green-bg);color:var(--green)">CONNECTED</span><span class="detail">1 screen peer</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">ON</span><span class="detail">1 client</span></div>
-          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:var(--gold-bg);color:var(--gold)">ARMED</span><span class="detail">bank · sounddevice</span></div>
-          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">ABSENT</span><span class="detail">not installed</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:var(--green-bg);color:var(--green)">healthy</span><span class="detail">peers=1 screen_peers=1</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--green-bg);color:var(--green)">connected</span><span class="detail">screen_peers=1</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">on</span><span class="detail">state=On clients=1</span></div>
+          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:var(--gold-bg);color:var(--gold)">configured</span><span class="detail">reference archive + bank configured</span></div>
+          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">absent</span><span class="detail">SimHub executable not found</span></div>
           <div class="btnrow">
             <button class="btn">&#9654; Start</button>
             <button class="btn ghost">&#8635;</button>
@@ -135,11 +135,11 @@
             <span style="color:var(--red);font-size:22px;">&#9654;</span>
             <div><div style="color:var(--red);font-weight:500;">Press Start to launch the sidecar</div><div style="color:var(--muted);font-size:12px;">Nothing is listening on port 8765 yet</div></div>
           </div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:#222;color:var(--muted)">STOPPED</span><span class="detail">—</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--red-bg);color:var(--red)">WAITING</span><span class="detail">no peer</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">ON</span><span class="detail">0 clients</span></div>
-          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:#222;color:var(--muted)">CONFIGURED</span><span class="detail">reference + bank</span></div>
-          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">ABSENT</span><span class="detail">not installed</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:#222;color:var(--muted)">stopped</span><span class="detail">—</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--red-bg);color:var(--red)">waiting</span><span class="detail">no ESP32 screen peer connected</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">on</span><span class="detail">state=On clients=0</span></div>
+          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:#222;color:var(--muted)">configured</span><span class="detail">reference archive + bank configured</span></div>
+          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">absent</span><span class="detail">SimHub executable not found</span></div>
           <div class="btnrow">
             <button class="btn">&#9654; Start</button>
             <button class="btn ghost">&#8635;</button>
@@ -168,7 +168,7 @@
     <div>
       <p class="cap">AC Copilot — live coaching</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span style="margin-left:auto;" class="dot" style="background:var(--green)"></span></div>
+        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span class="dot" style="margin-left:auto;background:var(--green)"></span></div>
         <div class="card">
           <div style="color:var(--gold);font-size:11px;font-weight:600;letter-spacing:.05em;">T4 · VARIANTE ASCARI</div>
           <div style="font-size:21px;font-weight:500;margin:5px 0 2px;">Brake later</div>
@@ -188,7 +188,7 @@
     <div>
       <p class="cap">AC Copilot — on pace (empty/idle variant)</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span style="margin-left:auto;" class="dot" style="background:var(--green)"></span></div>
+        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span class="dot" style="margin-left:auto;background:var(--green)"></span></div>
         <div class="card">
           <div style="color:var(--quiet);font-size:11px;font-weight:600;letter-spacing:.05em;">T6 · LESMO 2</div>
           <div style="font-size:21px;font-weight:500;margin:5px 0 2px;color:var(--green);">On pace</div>
