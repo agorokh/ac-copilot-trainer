@@ -146,7 +146,17 @@ class VoiceCoach:
     def _build_playback(
         manifest: Manifest, bank_dir: Path, config: VoiceConfig, backend: str
     ) -> Playback | None:
-        """Lazily construct the real audio backend (deps imported here only)."""
+        """Lazily construct the real audio backend (deps imported here only).
+
+        When ``backend="rtmixer"`` but the ``rtmixer`` extra is not importable, fall back to
+        :class:`SoundDevicePlayback` rather than disabling the coach. This is the common Windows
+        reality: ``rtmixer`` needs a C/PortAudio build (and is frequently absent from a PyInstaller
+        bundle or a plain ``pip install``), while ``sounddevice`` ships a bundled-PortAudio wheel.
+        ``sounddevice`` is the documented interim backend behind the same interface (issue #340), so
+        the coach keeps speaking instead of going silent on a missing optional dep. A *device* or
+        *driver* fault (not a missing module) still disables — that fault would recur on sounddevice
+        too, and "stay silent" beats "play onto the wrong endpoint".
+        """
         try:
             from tools.ai_sidecar.voice.playback import (
                 Bank,
@@ -155,14 +165,25 @@ class VoiceCoach:
             )
 
             bank = Bank.from_manifest(manifest, bank_dir)
-            if backend == "rtmixer":
-                return RtMixerPlayback(
-                    bank, device_name=config.device_name, host_api=config.host_api
-                )
             if backend == "sounddevice":
                 return SoundDevicePlayback(
                     bank, device_name=config.device_name, host_api=config.host_api
                 )
+            if backend == "rtmixer":
+                try:
+                    return RtMixerPlayback(
+                        bank, device_name=config.device_name, host_api=config.host_api
+                    )
+                except ImportError:
+                    # rtmixer (or its native PortAudio dep) is not installed/bundled. Degrade to
+                    # the sounddevice backend so the coach still speaks (issue #340 fallback).
+                    _log.warning(
+                        "voice: rtmixer backend unavailable (module not importable); "
+                        "falling back to the sounddevice backend"
+                    )
+                    return SoundDevicePlayback(
+                        bank, device_name=config.device_name, host_api=config.host_api
+                    )
             _log.error("voice: unknown backend %r", backend)
             return None
         except Exception:  # noqa: BLE001 - missing extra / no device / driver fault → disable, not crash

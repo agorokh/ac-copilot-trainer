@@ -74,3 +74,96 @@ def test_disabled_coach_factory() -> None:
     assert not coach.enabled
     assert coach.disabled_reason == "test reason"
     coach.subscribe(make_advisory())  # no-op, no crash
+
+
+def test_build_playback_falls_back_to_sounddevice_when_rtmixer_missing(
+    monkeypatch, tmp_path
+) -> None:
+    """rtmixer absent must NOT silence the coach — it degrades to the sounddevice backend.
+
+    Reproduces the rig log `ModuleNotFoundError: No module named 'rtmixer'` → "coach disabled".
+    Fakes the audio classes so the test needs no numpy / PortAudio / device.
+    """
+    import tools.ai_sidecar.voice.playback as pb_mod
+
+    class _FakeBank:
+        @staticmethod
+        def from_manifest(_manifest, _bank_dir):
+            return object()
+
+    constructed: dict[str, object] = {}
+
+    class _FakeRtMixer:
+        def __init__(self, *_args, **_kwargs):
+            raise ModuleNotFoundError("No module named 'rtmixer'")
+
+    class _FakeSoundDevice:
+        def __init__(self, _bank, *, device_name, host_api, **_kwargs):
+            constructed["device_name"] = device_name
+            constructed["host_api"] = host_api
+
+    monkeypatch.setattr(pb_mod, "Bank", _FakeBank)
+    monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
+    monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
+
+    playback = VoiceCoach._build_playback(
+        object(), tmp_path, VoiceConfig(device_name="Headset", host_api="WASAPI"), "rtmixer"
+    )
+
+    assert isinstance(playback, _FakeSoundDevice)
+    assert constructed == {"device_name": "Headset", "host_api": "WASAPI"}
+
+
+def test_build_playback_disables_when_no_backend_importable(monkeypatch, tmp_path) -> None:
+    """If neither rtmixer nor sounddevice imports, disable (None) rather than crash."""
+    import tools.ai_sidecar.voice.playback as pb_mod
+
+    class _FakeBank:
+        @staticmethod
+        def from_manifest(_manifest, _bank_dir):
+            return object()
+
+    class _FakeRtMixer:
+        def __init__(self, *_args, **_kwargs):
+            raise ModuleNotFoundError("No module named 'rtmixer'")
+
+    class _FakeSoundDevice:
+        def __init__(self, *_args, **_kwargs):
+            raise ModuleNotFoundError("No module named 'sounddevice'")
+
+    monkeypatch.setattr(pb_mod, "Bank", _FakeBank)
+    monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
+    monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
+
+    assert VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer") is None
+
+
+def test_build_playback_device_fault_still_disables_without_fallback(monkeypatch, tmp_path) -> None:
+    """A real device/driver fault (not a missing module) disables — no silent sounddevice retry.
+
+    The same fault would recur on sounddevice, and staying silent beats routing onto the wrong
+    endpoint. Only a *missing module* triggers the fallback.
+    """
+    import tools.ai_sidecar.voice.playback as pb_mod
+
+    class _FakeBank:
+        @staticmethod
+        def from_manifest(_manifest, _bank_dir):
+            return object()
+
+    sd_calls: list[object] = []
+
+    class _FakeRtMixer:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("PortAudio device error -9996")
+
+    class _FakeSoundDevice:
+        def __init__(self, *_args, **_kwargs):
+            sd_calls.append(object())
+
+    monkeypatch.setattr(pb_mod, "Bank", _FakeBank)
+    monkeypatch.setattr(pb_mod, "RtMixerPlayback", _FakeRtMixer)
+    monkeypatch.setattr(pb_mod, "SoundDevicePlayback", _FakeSoundDevice)
+
+    assert VoiceCoach._build_playback(object(), tmp_path, VoiceConfig(), "rtmixer") is None
+    assert sd_calls == []  # device fault must not fall through to sounddevice

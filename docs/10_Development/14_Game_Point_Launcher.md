@@ -24,6 +24,28 @@ The shortcut points at `dist\AC-Copilot-Game-Point.exe` and uses the repository
 root as the working directory. The exe remains a local build artifact and is not
 committed.
 
+### Audio backend (rtmixer is opt-in)
+
+`pip install -e ".[launcher]"` is **always installable on a clean Windows rig**:
+its sidecar voice floor is `numpy` + `sounddevice`, which ship bundled-PortAudio
+wheels. The lower-latency `rtmixer` backend is **not** part of the default
+`launcher` / `voice` extras (issue #383) — it has no prebuilt Windows wheels and
+needs a C/PortAudio build toolchain, so bundling it made the documented install
+path hard-fail on the rig.
+
+The voice engine auto-falls back to the `sounddevice` backend when `rtmixer` is
+not importable (PR #387), so voice playback works with the floor alone. To opt
+into the lower-latency backend **where a C/PortAudio toolchain can build it**,
+add the best-effort extra:
+
+```powershell
+pip install -e ".[launcher,voice-rtmixer]"
+```
+
+`voice-rtmixer` self-references the `voice` extra, so `pip install -e ".[voice-rtmixer]"`
+also installs the `numpy` + `sounddevice` floor. Select the backend at runtime
+with `AC_COPILOT_VOICE_BACKEND` (`rtmixer` or `sounddevice`).
+
 ## UI design handoff
 
 Before changing launcher screens, rig screen UI, or cross-surface status

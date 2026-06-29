@@ -66,6 +66,26 @@ class _Proc:
         self.terminated = True
 
 
+def _refused_urlopen(_url: str, timeout: float) -> _Response:
+    """Health probe that always fails — keeps spawn-path tests hermetic.
+
+    ``start_sidecar`` now probes ``/health`` before spawning so it can adopt an already-running
+    sidecar instead of double-binding the port. Tests that assert a *spawn* inject this so the
+    probe deterministically misses regardless of whatever is (or isn't) listening on 8765.
+    """
+    del timeout
+    raise OSError("connection refused")
+
+
+def _no_simhub_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    """`tasklist` stub reporting no SimHub — keeps probe_simhub tests off the real machine.
+
+    ``_simhub_running()`` shells out to the real ``tasklist`` by default, so on a dev box with
+    SimHub actually running the absence/start assertions would flake. Inject this for determinism.
+    """
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+
 def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     cfg = GamePointConfig(
         external_bind="0.0.0.0",
@@ -254,7 +274,9 @@ def test_start_sidecar_writes_to_predictable_log_dir(tmp_path: Path) -> None:
         calls.append({"args": args, "kwargs": kwargs})
         return _Proc()
 
-    sup = GamePointSupervisor(cfg, environ={}, popen=fake_popen, python_executable="python")
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=_refused_urlopen, python_executable="python"
+    )
     result = sup.start_sidecar()
     sup.close()
 
@@ -264,13 +286,86 @@ def test_start_sidecar_writes_to_predictable_log_dir(tmp_path: Path) -> None:
     assert "AC_COPILOT_SIDECAR_TOKEN" in calls[0]["kwargs"]["env"]
 
 
+def test_start_sidecar_adopts_healthy_existing_instance(tmp_path: Path) -> None:
+    """Clicking Start when a sidecar is already healthy must adopt it, never spawn a duplicate.
+
+    A second spawn would bind the same port and crash the child with WinError 10048 — exactly the
+    failure in the rig log. Guards that regression: a healthy /health probe → no popen call.
+    """
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+    spawned: list[Any] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        spawned.append((args, kwargs))
+        return _Proc()
+
+    def healthy_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok", "connected_peers": 1, "screen_peers": 1})
+
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=healthy_urlopen, python_executable="python"
+    )
+    result = sup.start_sidecar()
+
+    assert spawned == []  # no duplicate spawn → no WinError 10048
+    assert result.ok is True
+    assert result.state == "running"
+    assert "adopted" in (result.detail or "")
+    assert sup._sidecar_process is None
+    assert sup._log_handles == []
+
+
+def test_start_sidecar_adoption_closes_stale_log_handles(tmp_path: Path) -> None:
+    """Adopting after a prior supervised spawn must close the leftover log handle, not leak it.
+
+    Regression for the Qodo finding on PR #387: the adopt early-return ran before
+    ``_close_log_handles()``, so a handle opened by an earlier spawn stayed open for the launcher's
+    lifetime (kept sidecar.log held open). The cleanup now precedes the health probe.
+    """
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+    health = {"ok": False}
+
+    def staged_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        if not health["ok"]:
+            raise OSError("connection refused")
+        return _Response({"status": "ok", "connected_peers": 1, "screen_peers": 1})
+
+    procs: list[_Proc] = []
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> _Proc:
+        proc = _Proc()
+        procs.append(proc)
+        return proc
+
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=staged_urlopen, python_executable="python"
+    )
+    # First start: nothing healthy yet → spawns and opens a log handle.
+    first = sup.start_sidecar()
+    assert first.state == "starting"
+    assert len(sup._log_handles) == 1
+    # The supervised child exits; an external healthy sidecar is now on the port.
+    procs[0].terminated = True
+    health["ok"] = True
+    second = sup.start_sidecar()
+    # Adopts the external sidecar (no second spawn) and closes the stale handle.
+    assert second.state == "running"
+    assert "adopted" in (second.detail or "")
+    assert len(procs) == 1
+    assert sup._log_handles == []
+
+
 def test_start_sidecar_returns_probe_result_on_spawn_failure(tmp_path: Path) -> None:
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
 
     def failing_popen(*_args: Any, **_kwargs: Any) -> _Proc:
         raise FileNotFoundError("missing sidecar executable")
 
-    sup = GamePointSupervisor(cfg, environ={}, popen=failing_popen, python_executable="python")
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=failing_popen, urlopen=_refused_urlopen, python_executable="python"
+    )
     result = sup.start_sidecar()
 
     assert result.ok is False
@@ -310,6 +405,7 @@ def test_start_sidecar_uses_repo_root_cwd_in_dev_mode(tmp_path: Path) -> None:
         cfg,
         environ={},
         popen=fake_popen,
+        urlopen=_refused_urlopen,
         python_executable="python",
         frozen=False,
     )
@@ -340,7 +436,9 @@ def test_sidecar_environment_resolves_relative_voice_paths(tmp_path: Path) -> No
 def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:
     proc = _Proc()
     cfg = GamePointConfig(external_bind="127.0.0.1", paths=LauncherPaths(tmp_path))
-    sup = GamePointSupervisor(cfg, environ={}, popen=lambda *a, **kw: proc)
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=lambda *a, **kw: proc, urlopen=_refused_urlopen
+    )
 
     sup.start_sidecar()
     sup.close()
@@ -350,7 +448,9 @@ def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:
 
 def test_simhub_absence_is_visible_but_not_fatal(tmp_path: Path) -> None:
     cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
-    sup = GamePointSupervisor(cfg, environ={"ProgramFiles": str(tmp_path / "missing")})
+    sup = GamePointSupervisor(
+        cfg, environ={"ProgramFiles": str(tmp_path / "missing")}, run=_no_simhub_run
+    )
 
     result = sup.probe_simhub(start=True)
 
@@ -374,6 +474,7 @@ def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> N
         cfg,
         environ={"ProgramFiles": str(tmp_path)},
         popen=fake_popen,
+        run=_no_simhub_run,
     )
 
     result = sup.probe_simhub(start=True)
@@ -573,7 +674,9 @@ def test_restart_sidecar_reuses_single_log_handle(tmp_path: Path) -> None:
         return proc
 
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
-    sup = GamePointSupervisor(cfg, environ={}, popen=fake_popen, python_executable="python")
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=_refused_urlopen, python_executable="python"
+    )
     sup.start_sidecar()
     assert len(sup._log_handles) == 1
     procs[0].terminated = True
@@ -596,11 +699,39 @@ def test_launcher_extra_includes_sidecar_voice_runtime_deps() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     launcher = set(project["project"]["optional-dependencies"]["launcher"])
 
+    # Always-installable floor: numpy + sounddevice ship bundled-PortAudio wheels that install
+    # cleanly on a clean Windows rig, so `pip install -e ".[launcher]"` does not hard-fail there.
     assert "websockets>=16.0" in launcher
     assert "numpy>=2.4.4" in launcher
     assert "sounddevice>=0.5.1" in launcher
-    assert "rtmixer>=0.1.7" in launcher
     assert "pyttsx3>=2.90" in launcher
+    # rtmixer (#383) has no prebuilt Windows wheels and would hard-fail the documented launcher
+    # install path — it must stay OUT of this default extra and is opt-in via `voice-rtmixer`
+    # (asserted by test_voice_rtmixer_extra_is_opt_in_and_pulls_floor).
+    assert not any(dep.startswith("rtmixer") for dep in launcher)
+
+
+def test_voice_extra_floor_excludes_rtmixer() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    voice = set(project["project"]["optional-dependencies"]["voice"])
+
+    # numpy + sounddevice are the always-installable voice floor; the engine falls back to the
+    # sounddevice backend when rtmixer is absent (PR #387), so rtmixer is opt-in only.
+    assert "numpy>=2.4.4" in voice
+    assert "sounddevice>=0.5.1" in voice
+    assert not any(dep.startswith("rtmixer") for dep in voice)
+
+
+def test_voice_rtmixer_extra_is_opt_in_and_pulls_floor() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+    voice_rtmixer = set(extras["voice-rtmixer"])
+
+    # The opt-in, best-effort low-latency rtmixer backend lives here (and only here).
+    assert "rtmixer>=0.1.7" in voice_rtmixer
+    # Self-references the `voice` extra so `pip install -e ".[voice-rtmixer]"` also installs the
+    # numpy + sounddevice floor — rtmixer alone is not useful.
+    assert "ac-copilot-trainer[voice]" in voice_rtmixer
 
 
 def test_default_exe_path_targets_dist_launcher(tmp_path: Path) -> None:
