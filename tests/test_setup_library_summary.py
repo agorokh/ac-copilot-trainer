@@ -427,8 +427,8 @@ def test_write_text_file_restore_failure_uses_pcall() -> None:
 def test_phase2_json_float_or_rejects_non_finite() -> None:
     main_cpp = (REPO / "firmware" / "screen" / "src" / "main.cpp").read_text(encoding="utf-8")
     assert "phase2_json_finite_float" in main_cpp
-    assert "isnan" in main_cpp
-    assert "isinf" in main_cpp
+    assert "std::isnan" in main_cpp
+    assert "std::isinf" in main_cpp
 
 
 def test_setup_exchange_active_row_uses_delete_event() -> None:
@@ -437,6 +437,9 @@ def test_setup_exchange_active_row_uses_delete_event() -> None:
         encoding="utf-8"
     )
     assert "void on_row_delete" in cpp
+    assert "ctx != g_active_ctx" in cpp
     assert "lv_obj_add_event_cb(row, on_row_delete, LV_EVENT_DELETE, ctx)" in cpp
     assert "ctx->active_row == lv_event_get_target(e)" in cpp
     assert "lv_obj_is_valid(ctx->active_row)" not in cpp
+    assert "g_result_count = 0;" in cpp
+    assert "memset(g_results, 0, sizeof(g_results));" in cpp

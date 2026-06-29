@@ -175,7 +175,7 @@ void on_row_clicked(lv_event_t* e) {
 
 void on_row_delete(lv_event_t* e) {
     auto* ctx = static_cast<se_ctx_t*>(lv_event_get_user_data(e));
-    if (!ctx) return;
+    if (!ctx || ctx != g_active_ctx) return;
     if (ctx->active_row == lv_event_get_target(e)) ctx->active_row = nullptr;
 }
 
@@ -276,6 +276,10 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
         return nullptr;
     }
     *ctx = se_ctx_t{};
+    g_result_count = 0;
+    g_loading = false;
+    g_pending_setup_id = -1;
+    memset(g_results, 0, sizeof(g_results));
 
     lv_obj_t* scr = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);

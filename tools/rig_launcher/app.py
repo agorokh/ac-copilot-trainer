@@ -130,13 +130,14 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     try:
         import tkinter as tk
         from tkinter import ttk
+
+        root = tk.Tk()
     except Exception as exc:  # noqa: BLE001 - fall back to visible CLI status
         status = supervisor.poll_status()
         print(f"GUI unavailable: {exc}", file=sys.stderr)
         print("\n".join(render_status_lines(status)))
         return 1 if not status.ok else 0
 
-    root = tk.Tk()
     root.title("AC Copilot Game Point")
     root.geometry("620x360")
     root.minsize(560, 320)

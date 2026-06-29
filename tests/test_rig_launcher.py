@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tomllib
+import types
 from pathlib import Path
 from typing import Any
 
 import tools.rig_launcher.supervisor as supervisor_module
-from tools.rig_launcher.app import _open_path, config_from_args, run_sidecar_child
+from tools.rig_launcher.app import _open_path, config_from_args, run_gui, run_sidecar_child
 from tools.rig_launcher.install import (
     SHORTCUT_NAME,
     default_exe_path,
@@ -17,8 +19,10 @@ from tools.rig_launcher.settings import LauncherSettings, ensure_settings_file
 from tools.rig_launcher.supervisor import (
     _HOTSPOT_PROBE_SCRIPT,
     GamePointConfig,
+    GamePointStatus,
     GamePointSupervisor,
     LauncherPaths,
+    ProbeResult,
     build_pyinstaller_args,
 )
 
@@ -554,3 +558,38 @@ def test_hotspot_probe_failure_is_non_blocking(monkeypatch, tmp_path: Path) -> N
 def test_hotspot_probe_falls_back_without_internet_profile() -> None:
     assert "GetConnectionProfiles() | Select-Object -First 1" in _HOTSPOT_PROBE_SCRIPT
     assert "No network connection profile found for Mobile Hotspot." in _HOTSPOT_PROBE_SCRIPT
+
+
+def test_run_gui_falls_back_when_tk_init_fails(monkeypatch, capsys) -> None:
+    tk_mod = types.ModuleType("tkinter")
+    ttk_mod = types.ModuleType("tkinter.ttk")
+
+    class FailingTk:
+        def __init__(self) -> None:
+            raise RuntimeError("no display")
+
+    tk_mod.Tk = FailingTk
+    tk_mod.ttk = ttk_mod
+    monkeypatch.setitem(sys.modules, "tkinter", tk_mod)
+    monkeypatch.setitem(sys.modules, "tkinter.ttk", ttk_mod)
+
+    ok = ProbeResult("sidecar", True, "ok")
+    status = GamePointStatus(
+        generated_at=0.0,
+        sidecar=ok,
+        screen=ProbeResult("screen", True, "connected"),
+        hotspot=ProbeResult("hotspot", True, "skipped"),
+        voice=ProbeResult("voice", True, "skipped"),
+        simhub=ProbeResult("simhub", True, "absent"),
+        log_path="sidecar.log",
+        status_path="status.json",
+    )
+
+    class DummySupervisor:
+        def poll_status(self) -> GamePointStatus:
+            return status
+
+    assert run_gui(DummySupervisor()) == 0  # type: ignore[arg-type]
+    captured = capsys.readouterr()
+    assert "GUI unavailable: no display" in captured.err
+    assert "sidecar: ok" in captured.out

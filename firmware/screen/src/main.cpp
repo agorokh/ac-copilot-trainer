@@ -536,7 +536,7 @@ static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
 }
 
 static bool phase2_json_finite_float(float value) {
-  return !isnan(value) && !isinf(value);
+  return !std::isnan(value) && !std::isinf(value);
 }
 
 static float phase2_json_float_or(JsonVariantConst v, float fallback) {
