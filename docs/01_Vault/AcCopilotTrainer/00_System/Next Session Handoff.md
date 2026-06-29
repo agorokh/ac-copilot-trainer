@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T18:25:40Z
+last_updated: 2026-06-29T18:42:58Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -53,7 +53,7 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-06-29T18:25:40Z) — PR #371 voice-intensity resolution for #368
+## In flight (2026-06-29T18:42:58Z) — PR #371 voice-intensity resolution for #368
 
 PR [#371](https://github.com/agorokh/ac-copilot-trainer/pull/371) is still OPEN. The branch has been
 merged with `origin/main` (`669eba7`) and has local review-resolution commits after that merge. It
@@ -71,16 +71,20 @@ from speed/frame-rate/track length, Piper batch bakes preserve register `--lengt
 this repo's advertised 3.14 runtime. Latest local fixes also reset first-corner previous-lap cue
 state before a wrapped lead window, defer post-apex release cues until a still-playing brake alarm
 finishes, drive timing reports one frame past corner exit so LOW verbosity proves info suppression
-non-vacuously, and require anticipatory assertions to be based on spoken cues.
+non-vacuously, require anticipatory assertions to be based on spoken cues, and make the prosody chain
+resample backend-native Piper/Kokoro WAVs to the requested bank rate before applying critical
+tempo/pitch shaping.
 
 Focused verification after these fixes: voice client/resolver/observer/scheduler/engine suite
 passed (`66 passed`); voice bake/timing/resolver/observer suite passed (`58 passed`); synthetic
 timing-report CLI exits 0 and asserts `critical_brake_alarm_spoken: true`; latest
 observer/scheduler/timing/bake focused suite passed (`82 passed`) and timing-report CLI now emits
-real `apex_deficit` info advisories while keeping them unspoken under LOW. Next resolver step: rerun
-full `make ci-fast PYTHON=.venv/bin/python`, push, trigger reviewers, observe the 10-minute cooldown,
-then inspect GitHub checks plus current-head review threads. Detailed merge-contention notes:
-[[voice-368-merge-contention-2026-06-29]].
+real `apex_deficit` info advisories while keeping them unspoken under LOW; after the Piper
+source-rate fix, `tests/test_voice_bake.py` passed (`17 passed`) and ruff is clean on the touched
+bake files. Full local `make ci-fast PYTHON=.venv/bin/python` passed at head `06153a3` before this
+latest Qodo fix; rerun full CI after committing it, push, trigger reviewers, observe the 10-minute
+cooldown, then inspect GitHub checks plus current-head review threads. Detailed merge-contention
+notes: [[voice-368-merge-contention-2026-06-29]].
 
 ## Delivered (2026-06-29) — PR #372 MERGED: #350 Part B voice-bake (batch Piper + 48 kHz default)
 

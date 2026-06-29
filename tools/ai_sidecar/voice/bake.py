@@ -109,15 +109,16 @@ def _prosody_filter(register: str, samplerate: int, *, apply_tempo: bool) -> str
     ``apply_tempo`` is ``False`` for backends that already vary speaking rate at synthesis time
     (macOS ``say -r``), so we never stack tempo twice and turn a terse cue unintelligible (issue
     #368 AC c / adversary finding). Neutral-rate neural backends (Kokoro/Piper) pass
-    ``apply_tempo=True``. Every chain ends with a 6 ms fade (no onset click on short clips), a
-    brick-wall limiter, and a fixed output format so the bytes are reproducible on a given ffmpeg
-    build.
+    ``apply_tempo=True``. Every chain starts by resampling backend-native WAVs to the requested bank
+    rate before any tempo/pitch filter, then ends with a 6 ms fade, a brick-wall limiter, and a
+    fixed output format so the bytes are reproducible on a given ffmpeg build.
     """
     sr = samplerate
     # A short fade-IN declicks the onset after the highpass/compressor; we deliberately do NOT add a
     # fade-OUT (ffmpeg's ``afade=t=out`` needs a start time we don't know ahead of render, and with
     # the default ``st=0`` it silences the whole clip after 6 ms — a real bug caught by
     # measurement).
+    prefix = f"aresample={sr}"
     tail = f"afade=t=in:d=0.006,alimiter=limit=0.97,aformat=sample_fmts=s16:sample_rates={sr}:channel_layouts=mono"  # noqa: E501
     if register == "calm":
         # measured, warm, slightly softer — a guidance tone.
@@ -131,7 +132,7 @@ def _prosody_filter(register: str, samplerate: int, *, apply_tempo: bool) -> str
         body = f"{tempo}highpass=f=130,acompressor=threshold=-22dB:ratio=5:attack=3:release=45,treble=g=5.5:f=3600,volume=6dB"  # noqa: E501
     else:  # pragma: no cover - registers are validated upstream
         body = "anull"
-    return f"{body},{tail}"
+    return f"{prefix},{body},{tail}"
 
 
 class ProsodyShaper:

@@ -151,6 +151,12 @@ def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
     assert a.read_bytes() == b.read_bytes()  # identical bytes → deterministic, content-addressable
 
 
+def test_prosody_filter_resamples_before_critical_tempo_shift() -> None:
+    filt = bake_mod._prosody_filter("critical", 48000, apply_tempo=True)
+
+    assert filt.startswith("aresample=48000,asetrate=48000*1.05,aresample=48000,")
+
+
 @pytest.mark.parametrize("backend", ["say-expressive", "piper", "kokoro"])
 def test_shaped_backend_preflights_missing_ffmpeg(monkeypatch, backend: str) -> None:
     # qodo review #371: shaped backends should fail at backend selection with an actionable message,
