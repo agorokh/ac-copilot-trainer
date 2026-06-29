@@ -1,0 +1,50 @@
+{
+  "session": "ref-uid-002#20220611194228",
+  "fastest": null,
+  "fastest_effective": null,
+  "prospects_seen": 0,
+  "lap": {
+    "game_version": null,
+    "season_name": null,
+    "is_in_pit": false,
+    "session_id": "ref-uid-002#20220611194228",
+    "season_id": null,
+    "car_performance_index": null,
+    "leaderboard_block": false,
+    "has_processed": true,
+    "segments": [
+      {
+        "segment_time": 11281.8,
+        "segment_number": 1
+      },
+      {
+        "segment_time": 9126.7,
+        "segment_number": 2
+      },
+      {
+        "segment_time": 8765.1,
+        "segment_number": 3
+      },
+      {
+        "segment_time": 13807.5,
+        "segment_number": 4
+      }
+    ],
+    "user_id": "ref-uid-002",
+    "has_sufficient_data": true,
+    "weather": null,
+    "name": "dynamicComparisonLap",
+    "session_key": "20220611194228",
+    "lap_time": "71035",
+    "attributes": null,
+    "session_type": "race",
+    "lap_number": 4,
+    "car_class": null,
+    "is_invalid": false,
+    "timestamp": 1654976550000,
+    "username": "Reference Driver",
+    "user_groups": null
+  },
+  "user_lap_time": 80303.0,
+  "is_cache_hit": true
+}

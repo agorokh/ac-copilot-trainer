@@ -13,17 +13,36 @@ from pathlib import Path
 import pytest
 
 from tools.tt_ingest.cli import (
+    COACHING_ENDPOINT,
     INDEX_FILENAME,
+    LAST_SESSION_ENDPOINT,
     SESSIONS_INDEX_FILENAME,
     build_arg_parser,
+    retain_coaching,
     retain_sessions,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tt_sessions_page.json"
+LAST_SESSION_FIXTURE = Path(__file__).parent / "fixtures" / "tt_services_last_session.json"
 
 
 def _sessions() -> list[dict]:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))["data"]["sessions"]
+
+
+def _last_session() -> dict:
+    return json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))["data"]["session"]
+
+
+def _bundle() -> dict:
+    return {
+        "reference_lap": {"username": "Reference Driver", "lap_time": "71035"},
+        "reference_id": ["ref-uid-002", "20220611194228"],
+        "segments": [
+            {"segment": 1, "stories": [{"diagnosis": "Brake later", "time_loss": 0.12}]},
+            {"segment": 2, "stories": [{"diagnosis": "Good corner", "time_loss": 0.0}]},
+        ],
+    }
 
 
 # --- retain_sessions end-to-end ---------------------------------------------------
@@ -104,6 +123,53 @@ def test_parser_export_flags() -> None:
 def test_parser_auth_check() -> None:
     args = build_arg_parser().parse_args(["auth-check"])
     assert args.command == "auth-check"
+
+
+def test_parser_coaching_defaults() -> None:
+    args = build_arg_parser().parse_args(["coaching"])
+    assert args.command == "coaching"
+    assert args.segment_count == 7
+    assert args.session_key is None
+    assert args.lap is None
+    assert args.dry_run is False
+
+
+def test_parser_coaching_flags() -> None:
+    args = build_arg_parser().parse_args(
+        ["coaching", "--session-key", "20260629005756", "--lap", "5", "--segment-count", "3"]
+    )
+    assert args.session_key == "20260629005756"
+    assert args.lap == 5
+    assert args.segment_count == 3
+
+
+# --- retain_coaching (M-TT1) ------------------------------------------------------
+
+
+def test_retain_coaching_writes_lake(tmp_path) -> None:
+    summary = retain_coaching(_last_session(), _bundle(), lake_base=tmp_path)
+    root = tmp_path / "journal" / "tt"
+    session_dir = root / "assettoCorsa" / "ks_porsche_911_gt3_r_2016" / "magione" / "20260629005756"
+    assert (session_dir / f"{LAST_SESSION_ENDPOINT}.json").exists()
+    coaching = json.loads((session_dir / f"{COACHING_ENDPOINT}.json").read_text())
+    assert coaching["reference_lap"]["username"] == "Reference Driver"
+    assert summary.segments == 2
+    assert summary.actionable == 1  # only the 0.12s loss is actionable; the 0.0 is not
+    assert set(summary.written) == {LAST_SESSION_ENDPOINT, COACHING_ENDPOINT}
+
+
+def test_retain_coaching_is_write_once(tmp_path) -> None:
+    retain_coaching(_last_session(), _bundle(), lake_base=tmp_path)
+    again = retain_coaching(_last_session(), _bundle(), lake_base=tmp_path)
+    assert again.written == []  # both endpoints already present → nothing re-written
+    assert "nothing new" in again.render()
+
+
+def test_retain_coaching_summary_render(tmp_path) -> None:
+    rendered = retain_coaching(_last_session(), _bundle(), lake_base=tmp_path).render()
+    assert "session 20260629005756" in rendered
+    assert "2 segment(s)" in rendered
+    assert "1 actionable" in rendered
 
 
 def test_parser_requires_subcommand() -> None:

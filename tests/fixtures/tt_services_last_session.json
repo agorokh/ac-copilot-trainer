@@ -1,0 +1,316 @@
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "session": {
+      "id": "fake-uid-001#20260629005756",
+      "user_id": "fake-uid-001",
+      "car": "ks_porsche_911_gt3_r_2016",
+      "driver_name": "operator",
+      "game_id": "assettoCorsa",
+      "track_id": "magione",
+      "weather_id": null,
+      "session_type": "race",
+      "track_grip": null,
+      "game_version": "1",
+      "ghost_version": "2.1.37",
+      "timestamp": "2026-06-29T00:57:56.000Z",
+      "last_updated": "2026-06-29T01:06:21.499Z",
+      "is_blocked": false,
+      "car_performance_index": null,
+      "car_class": null,
+      "season_id": null,
+      "leaderboard_block": false,
+      "attributes": {
+        "airTemp": "26.0",
+        "roadTemp": "37.0",
+        "fuelLevel": 24.836441614284116,
+        "tcEnabled": true,
+        "absEnabled": true,
+        "absSetting": "1.0",
+        "carSetupName": null,
+        "isFixedSetup": null,
+        "tyreCompound": "Slick Medium (M)",
+        "old_ghost_version": false,
+        "playerCarPowerAdjust": null,
+        "playerCarWeightPenalty": null,
+        "tractionControlSetting": null
+      },
+      "limited_status": null,
+      "ghost_version_number": 2001037,
+      "session_id": "fake-uid-001#20260629005756",
+      "lap_number": 5,
+      "lap_time": "80303",
+      "is_invalid": false,
+      "has_processed": true,
+      "is_in_pit": false,
+      "has_sufficient_data": true,
+      "has_pov": null,
+      "segments": {
+        "1": {
+          "segment_time": 12327.8,
+          "has_sufficient_data": true
+        },
+        "2": {
+          "segment_time": 10170.8,
+          "has_sufficient_data": true
+        },
+        "3": {
+          "segment_time": 10815.7,
+          "has_sufficient_data": true
+        },
+        "4": {
+          "segment_time": 14834.7,
+          "has_sufficient_data": true
+        },
+        "5": {
+          "segment_time": 10118.2,
+          "has_sufficient_data": true
+        },
+        "6": {
+          "segment_time": 6221,
+          "has_sufficient_data": true
+        },
+        "7": {
+          "segment_time": 15814.8,
+          "has_sufficient_data": true
+        }
+      },
+      "etl_version": "1.0.210",
+      "lapCount": "5"
+    },
+    "referenceLap": {
+      "game_version": null,
+      "season_name": null,
+      "is_in_pit": false,
+      "session_id": "ref-uid-002#20220611194228",
+      "season_id": null,
+      "car_performance_index": null,
+      "leaderboard_block": false,
+      "has_processed": true,
+      "segments": [
+        {
+          "segment_time": 11281.8,
+          "segment_number": 1
+        },
+        {
+          "segment_time": 9126.7,
+          "segment_number": 2
+        },
+        {
+          "segment_time": 8765.1,
+          "segment_number": 3
+        },
+        {
+          "segment_time": 13807.5,
+          "segment_number": 4
+        }
+      ],
+      "user_id": "ref-uid-002",
+      "has_sufficient_data": true,
+      "weather": null,
+      "name": "dynamicComparisonLap",
+      "session_key": "20220611194228",
+      "lap_time": "71035",
+      "attributes": null,
+      "session_type": "race",
+      "lap_number": 4,
+      "car_class": null,
+      "is_invalid": false,
+      "timestamp": 1654976550000,
+      "username": "Reference Driver",
+      "user_groups": null
+    },
+    "telemetry": {
+      "telemetry": {
+        "user": [
+          {
+            "dist": 0.265,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 142.77418,
+            "lTime": 22499,
+            "ovSteer": 0,
+            "steer": 0.1504,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 257.88217,
+            "Y": -22.75985,
+            "distM": null
+          },
+          {
+            "dist": 0.26502,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 142.79489,
+            "lTime": 22500,
+            "ovSteer": 0,
+            "steer": 0.13395,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 257.93661,
+            "Y": -22.77325,
+            "distM": null
+          },
+          {
+            "dist": 0.26604,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 143.88756,
+            "lTime": 22563,
+            "ovSteer": 0,
+            "steer": -0.40185,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 260.39194,
+            "Y": -23.37434,
+            "distM": null
+          },
+          {
+            "dist": 0.26673,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 144.61549,
+            "lTime": 22605,
+            "ovSteer": 0,
+            "steer": -0.75905,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 262.02737,
+            "Y": -23.77105,
+            "distM": null
+          }
+        ],
+        "reference": [
+          {
+            "dist": 0.265,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 149.53914,
+            "lTime": 20420,
+            "ovSteer": 0,
+            "steer": 0.36,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 258.18731,
+            "Y": -22.50241,
+            "distM": null
+          },
+          {
+            "dist": 0.26502,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 149.56046,
+            "lTime": 20421.7586,
+            "ovSteer": 0,
+            "steer": 0.36,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 258.2414693,
+            "Y": -22.5160159,
+            "distM": null
+          },
+          {
+            "dist": 0.26604,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 150.6091,
+            "lTime": 20481.94563,
+            "ovSteer": 0,
+            "steer": 0.25767,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 260.6759008,
+            "Y": -23.1286101,
+            "distM": null
+          },
+          {
+            "dist": 0.26673,
+            "brak": 0,
+            "gear": 3,
+            "Kmh": 151.32525,
+            "lTime": 20522.04395,
+            "ovSteer": 0,
+            "steer": 0.396,
+            "throt": 1,
+            "unSteer": 0,
+            "useGrip": 0,
+            "X": 262.3072557,
+            "Y": -23.5403095,
+            "distM": null
+          }
+        ]
+      },
+      "diffToRef": [
+        {
+          "dist": 0.265,
+          "value": 0
+        },
+        {
+          "dist": 0.26502,
+          "value": -0.0007586000000010245,
+          "keyMomentStart": true
+        },
+        {
+          "dist": 0.26604,
+          "value": 0.0020543700000016543
+        },
+        {
+          "dist": 0.26673,
+          "value": 0.003956050000000687
+        }
+      ],
+      "format": {
+        "user": "jsonzip",
+        "reference": "jsonzip"
+      }
+    },
+    "segment": 3,
+    "game": {
+      "gameId": "assettoCorsa",
+      "name": "Assetto Corsa",
+      "image": {
+        "id": 6,
+        "alt": "Assetto Corsa",
+        "url": "/api/media/file/943e7ee99e82185b22b6176eea5a9548ae595d30-1024x1024.webp",
+        "width": 1024,
+        "height": 1024
+      },
+      "fullImage": null,
+      "supportedPlatforms": null,
+      "mobileSupported": false,
+      "supported": true
+    },
+    "track": {
+      "trackId": "magione",
+      "name": "Magione",
+      "image": {
+        "id": 3520,
+        "alt": "Magione",
+        "url": "/api/media/file/a1251fabd03440504de4743e64293f2c6f4b3723-1920x1080.webp",
+        "width": 1920,
+        "height": 1080
+      },
+      "trackLength": null
+    },
+    "car": {
+      "carId": "ks_porsche_911_gt3_r_2016",
+      "name": "Porsche 911 GT3 R 2016",
+      "image": {
+        "id": 1332,
+        "alt": "Porsche 911 GT3 R 2016",
+        "url": "/api/media/file/dc2524e04b0d3f0c8f597a8c0006010aa5b03864-2500x1238.png",
+        "width": 2500,
+        "height": 1238
+      }
+    }
+  },
+  "message": "Last session successfully returned"
+}

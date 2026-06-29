@@ -39,11 +39,22 @@ from tools.tt_ingest.tt_export import (
     stable_fingerprint,
     write_immutable_json,
 )
-from tools.tt_ingest.tt_normalize import build_sessions_index, normalize_session
+from tools.tt_ingest.tt_normalize import (
+    build_sessions_index,
+    normalize_session,
+    split_session_id,
+)
+from tools.tt_ingest.tt_services import (
+    TTServicesError,
+    fetch_last_session,
+    fetch_session_coaching,
+)
 from tools.tt_ingest.tt_vulcan import iter_all_sessions, session_summary
 
 SESSIONS_INDEX_FILENAME = "sessions_index.json"
 RAW_SESSION_ENDPOINT = "session"
+LAST_SESSION_ENDPOINT = "last_session"
+COACHING_ENDPOINT = "coaching"
 
 
 @dataclass(frozen=True)
@@ -178,6 +189,87 @@ def retain_sessions(
     )
 
 
+@dataclass(frozen=True)
+class CoachingSummary:
+    """Outcome of retaining one session's coaching bundle (M-TT1)."""
+
+    session_key: str
+    segments: int
+    actionable: int
+    written: list[str]
+    lake_root: Path
+
+    def render(self) -> str:
+        return (
+            f"retained coaching for session {self.session_key} "
+            f"({self.segments} segment(s), {self.actionable} actionable) to {self.lake_root} "
+            f"[{', '.join(self.written) or 'nothing new'}]"
+        )
+
+
+def _session_lake_key(session: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve the (game, car, track, session_key) lake key for a services session.
+
+    The services session uses ``car`` (vulcan uses ``car_id``); the session key is the
+    second half of the ``{uid}#{sessionKey}`` id (services has no standalone field).
+    """
+    raw_id = session.get("session_id") or session.get("id") or ""
+    _, session_key = split_session_id(raw_id)
+    return {
+        "game": session.get("game_id"),
+        "car": session.get("car") or session.get("car_id"),
+        "track": session.get("track_id"),
+        "session_key": session_key or f"nokey-{stable_fingerprint(dict(session))}",
+    }
+
+
+def _count_actionable(bundle: Mapping[str, Any]) -> int:
+    """Count corner stories carrying a real (>0) time loss across the bundle."""
+    total = 0
+    for seg in bundle.get("segments", []) or []:
+        for story in seg.get("stories", []) or []:
+            loss = story.get("time_loss")
+            if isinstance(loss, (int, float)) and loss > 0:
+                total += 1
+    return total
+
+
+def retain_coaching(
+    session: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    *,
+    lake_base: Path | None = None,
+    generated_at: str | None = None,
+) -> CoachingSummary:
+    """Immutably retain a session's last-session metadata + coaching bundle.
+
+    Pure of network: given already-fetched payloads, writes ``last_session.json`` and
+    ``coaching.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/`` —
+    the per-corner reference + advice the M0 voice loop (M-TT2) will consume. ``allow_nan``
+    keeps non-finite telemetry floats lossless, matching raw session retention.
+    """
+    root = lake_root(lake_base)
+    key = _session_lake_key(session)
+    target_dir = session_lake_dir(
+        root, game=key["game"], car=key["car"], track=key["track"], session_key=key["session_key"]
+    )
+    written: list[str] = []
+    for endpoint, payload in (
+        (LAST_SESSION_ENDPOINT, dict(session)),
+        (COACHING_ENDPOINT, dict(bundle)),
+    ):
+        result = write_immutable_json(endpoint_file(target_dir, endpoint), payload, allow_nan=True)
+        if result.written:
+            written.append(endpoint)
+    return CoachingSummary(
+        session_key=key["session_key"],
+        segments=len(bundle.get("segments", []) or []),
+        actionable=_count_actionable(bundle),
+        written=written,
+        lake_root=root,
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the ``tools.tt_ingest`` argument parser."""
     parser = argparse.ArgumentParser(
@@ -211,6 +303,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Fetch page 1 and print a sanitized summary; write nothing.",
+    )
+
+    coaching = sub.add_parser(
+        "coaching",
+        help="Fetch + retain per-corner reference & advice for a session (services API, M-TT1).",
+    )
+    coaching.add_argument("--uid", default=None, help="User id; defaults to the token 'sub'.")
+    coaching.add_argument(
+        "--session-key",
+        default=None,
+        help="Session key (YYYYMMDDHHMMSS); defaults to the most recent session.",
+    )
+    coaching.add_argument(
+        "--lap", type=int, default=None, help="Lap number; defaults to the last session's lap."
+    )
+    coaching.add_argument(
+        "--segment-count", type=int, default=7, help="Corners (segments) to pull (default 7)."
+    )
+    coaching.add_argument("--lake-base", type=Path, default=None)
+    coaching.add_argument("--leveldb-dir", type=Path, default=None)
+    coaching.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resolved session + a sanitized advice summary; write nothing.",
     )
     return parser
 
@@ -254,6 +370,40 @@ def cmd_export(args: argparse.Namespace) -> int:  # pragma: no cover - network
     return 0
 
 
+def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
+    config = TTConfig.from_env()
+    refresh = resolve_refresh_token(config, leveldb_dir=args.leveldb_dir)
+    minted = mint_tokens(refresh, config)
+    uid = args.uid or uid_from_token(minted.access_token)
+
+    # Resolve the target session/lap from the last session unless explicitly given.
+    last = fetch_last_session(minted.access_token, uid)
+    session = last["session"]
+    key = _session_lake_key(session)
+    session_key = args.session_key or key["session_key"]
+    lap = args.lap if args.lap is not None else session.get("lap_number")
+    if not session_key or lap is None:
+        _print("coaching: could not resolve a session_key/lap (no recent session?)")
+        return 1
+
+    bundle = fetch_session_coaching(
+        minted.access_token, uid, session_key, lap, segment_count=args.segment_count
+    )
+
+    if args.dry_run:
+        _print(f"dry-run — uid={uid}, session={session_key}, lap={lap}")
+        _print(f"  reference: {bundle['reference_lap'].get('username', '?')}")
+        for seg in bundle["segments"]:
+            stories = seg.get("stories", [])
+            head = stories[0]["diagnosis"] if stories else "(no advice)"
+            _print(f"  corner {seg['segment']}: {head}")
+        return 0
+
+    summary = retain_coaching(session, bundle, lake_base=args.lake_base)
+    _print(summary.render())
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
@@ -262,7 +412,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_auth_check(args)
         if args.command == "export":
             return cmd_export(args)
-    except TTAuthError as exc:  # pragma: no cover - surfaced live
+        if args.command == "coaching":
+            return cmd_coaching(args)
+    except (TTAuthError, TTServicesError) as exc:  # pragma: no cover - surfaced live
         parser.exit(2, f"tt_ingest: {exc}\n")
     parser.error(f"unknown command: {args.command}")  # pragma: no cover - argparse guards
     return 2
