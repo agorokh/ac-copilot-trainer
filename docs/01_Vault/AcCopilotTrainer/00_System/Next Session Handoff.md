@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T05:32:54Z
+last_updated: 2026-06-29T05:43:30Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -107,6 +107,17 @@ coverage: `tests/test_rig_launcher.py` passed (`23 passed`), launcher Ruff
 check/format passed, and `python scripts\ci_policy.py` passed.
 Tier-3 MCP was not exposed in this Codex session, so this pass used vault-only
 grounding and records that gap here for the next session.
+
+Post-design-package bot review follow-up on the same PR also fixed four new
+threads: Pocket Technician now carries the loaded setup INI path into
+`setup.spinner.list` / `setup.spinner.set`, spinner-list failures no longer
+self-retry forever, the launcher extra includes voice runtime dependencies for
+voice-enabled frozen builds, and `run_auto_drive()` continues after a failed
+single-launch attempt until the total `max_launches` budget is exhausted.
+Focused verification: `59 passed` across
+`tests/test_ac_harness_auto_drive.py`, `tests/test_rig_launcher.py`, and
+`tests/test_setup_library_summary.py`; Ruff check/format passed for touched
+Python files; `python scripts\ci_policy.py` passed.
 
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 

@@ -58,7 +58,7 @@ void screen_pocket_technician_finish_setup_list(void);
 void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,
                                             const char* car_brand,
                                             const char* track_id, const char* track_name);
-void screen_pocket_technician_set_active_setup(const char* name);
+void screen_pocket_technician_set_active_setup(const char* name, const char* path);
 
 // Result of the most recent `setup.load` (called from main.cpp's WS dispatch).
 // `ok=true` triggers a gold border pulse on the active row; `ok=false`
@@ -82,6 +82,7 @@ void screen_pocket_technician_apply_spinner_ack(bool ok,
                                                  const char* section,
                                                  int32_t value,
                                                  const char* error);
+void screen_pocket_technician_apply_spinner_list_error(const char* error);
 
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request
@@ -92,7 +93,7 @@ typedef enum {
     PT_REQ_NONE = 0,
     PT_REQ_LIST,        // {"v":1,"type":"setup.list"}
     PT_REQ_LOAD,        // {"v":1,"type":"setup.load","name":"<name>"}
-    PT_REQ_SPINNER_LIST, // {"v":1,"type":"setup.spinner.list"}
+    PT_REQ_SPINNER_LIST, // {"v":1,"type":"setup.spinner.list","path":"..."}
     PT_REQ_SPINNER_SET,  // {"v":1,"type":"setup.spinner.set","section":"...","value":N}
 } pt_request_kind_t;
 

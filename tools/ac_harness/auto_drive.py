@@ -182,11 +182,15 @@ async def run_auto_drive(
     controller: Controller | None = None
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
     launch_config = replace(config, max_launches=1)
+    launched_once = config.skip_launch
+    last_launch_error = ""
     for _ in range(attempts):
         if not config.skip_launch:
             ok, reason = launch(launch_config)
             if not ok:
-                return AutoDriveReport(ok=False, stage="launch", error=reason)
+                last_launch_error = reason
+                continue
+            launched_once = True
         controller = hijack(config)
         if controller is not None:
             break
@@ -194,6 +198,13 @@ async def run_auto_drive(
             break
 
     if controller is None:
+        if not launched_once:
+            return AutoDriveReport(
+                ok=False,
+                stage="launch",
+                launched=False,
+                error=last_launch_error or "sim never reached LIVE",
+            )
         return AutoDriveReport(
             ok=False,
             stage="hijack",

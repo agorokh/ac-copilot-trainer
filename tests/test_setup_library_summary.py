@@ -62,9 +62,12 @@ def test_firmware_spinner_protocol_path_present() -> None:
     assert "PT_REQ_SPINNER_LIST" in header
     assert "PT_REQ_SPINNER_SET" in header
     assert "screen_pocket_technician_apply_spinner_ack" in screen_cpp
+    assert "screen_pocket_technician_apply_spinner_list_error" in screen_cpp
+    assert "active_path_or_null" in screen_cpp
     assert "make_spinner_row" in screen_cpp
     assert "setup.spinner.list" in main_cpp
     assert "setup.spinner.set" in main_cpp
+    assert 'doc["path"] = req.path' in main_cpp
 
 
 def test_chip_int_coercion_rounds_and_omits_invalid(lua) -> None:

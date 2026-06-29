@@ -81,6 +81,7 @@ char g_car_brand[32] = {0};   // empty hides brand line
 char g_track_id[32]  = {0};
 char g_track_name[48] = {0};  // human-readable; empty falls back to g_track_id
 char g_active_name[48] = {0}; // currently loaded setup name (from setup.active)
+char g_active_path[PT_SETUP_PATH_MAX] = {0}; // currently loaded setup INI path, if known
 
 // Out-queue (FIFO).
 pt_request_t g_req_q[PT_MAX_REQUESTS];
@@ -170,7 +171,20 @@ bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
     return true;
 }
 
-bool req_q_push_spinner_set(const char* section, int32_t value) {
+const char* active_path_or_null() {
+    return g_active_path[0] ? g_active_path : nullptr;
+}
+
+void set_active_path(const char* path) {
+    if (path && path[0]) {
+        strncpy(g_active_path, path, sizeof(g_active_path) - 1);
+        g_active_path[sizeof(g_active_path) - 1] = 0;
+    } else {
+        g_active_path[0] = 0;
+    }
+}
+
+bool req_q_push_spinner_set(const char* section, int32_t value, const char* path) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
     pt_request_t* r = &g_req_q[g_req_tail];
@@ -179,6 +193,10 @@ bool req_q_push_spinner_set(const char* section, int32_t value) {
     if (section) {
         strncpy(r->section, section, sizeof(r->section) - 1);
         r->section[sizeof(r->section) - 1] = 0;
+    }
+    if (path && path[0]) {
+        strncpy(r->path, path, sizeof(r->path) - 1);
+        r->path[sizeof(r->path) - 1] = 0;
     }
     r->value = value;
     g_req_tail = next;
@@ -336,7 +354,7 @@ void queue_spinner_delta(int idx, int dir) {
     if (next < s.min_value) next = s.min_value;
     if (next > s.max_value) next = s.max_value;
     if (next == s.value) return;
-    if (!req_q_push_spinner_set(s.section, next)) {
+    if (!req_q_push_spinner_set(s.section, next, active_path_or_null())) {
         ui_toast_error("Setup control busy");
     }
 }
@@ -738,7 +756,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     // screen_pocket_technician_clear_setups + add_setup, then a final
     // rebuild via set_identity / set_active_setup callbacks.
     req_q_push(PT_REQ_LIST, nullptr, nullptr);
-    req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
+    req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
 
     return scr;
 }
@@ -863,15 +881,21 @@ extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
                 break;
             }
         }
-        req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
+        req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
         req_q_push(PT_REQ_LIST, nullptr, nullptr);
         if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
     } else {
         char msg[80];
         snprintf(msg, sizeof(msg), "Setup failed: %s", error ? error : "unknown");
         ui_toast_error(msg);
-        req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
+        req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
     }
+}
+
+extern "C" void screen_pocket_technician_apply_spinner_list_error(const char* error) {
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Setup failed: %s", error ? error : "unknown");
+    ui_toast_error(msg);
 }
 
 extern "C" void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,
@@ -916,17 +940,26 @@ extern "C" void screen_pocket_technician_set_identity(const char* car_id, const 
     if ((car_id && strcmp(prev_car, g_car_id) != 0) ||
         (track_id && strcmp(prev_track, g_track_id) != 0)) {
         g_active_name[0] = 0;
+        set_active_path(nullptr);
         pending_load_clear();
     }
     if (g_active_ctx) update_meta(g_active_ctx);
 }
 
-extern "C" void screen_pocket_technician_set_active_setup(const char* name) {
+extern "C" void screen_pocket_technician_set_active_setup(const char* name, const char* path) {
+    char prev_name[sizeof(g_active_name)];
+    strncpy(prev_name, g_active_name, sizeof(prev_name));
+    prev_name[sizeof(prev_name) - 1] = 0;
     if (name) {
         strncpy(g_active_name, name, sizeof(g_active_name) - 1);
         g_active_name[sizeof(g_active_name) - 1] = 0;
     } else {
         g_active_name[0] = 0;
+    }
+    if (path && path[0]) {
+        set_active_path(path);
+    } else if (!name || strcmp(prev_name, g_active_name) != 0) {
+        set_active_path(nullptr);
     }
     if (g_active_ctx) update_meta(g_active_ctx);
 }
@@ -946,12 +979,21 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
     g_active_ctx->active_row_obj = row;
 
     if (ok) {
+        const char* resolved_path = (path && path[0])
+            ? path
+            : (g_active_ctx->pending_path[0] ? g_active_ctx->pending_path : nullptr);
+        if (name && name[0]) {
+            strncpy(g_active_name, name, sizeof(g_active_name) - 1);
+            g_active_name[sizeof(g_active_name) - 1] = 0;
+        }
+        set_active_path(resolved_path);
+        update_meta(g_active_ctx);
         // Successful load — kick off the gold pulse on the row that owns
         // this ack (Cursor Bugbot on PR #91).
         start_gold_pulse(g_active_ctx);
         // Re-fetch the list so any "BEST" recomputation lands.
         req_q_push(PT_REQ_LIST, nullptr, nullptr);
-        req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
+        req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
     } else {
         // Reset any pressed visual then surface the toast. The row's
         // PRESSED-state bg was originally UI_BG_HEADER (matching the

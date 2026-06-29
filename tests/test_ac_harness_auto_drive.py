@@ -127,12 +127,18 @@ def _ok_launch(config) -> tuple[bool, str]:  # noqa: ANN001
     return True, "live"
 
 
-def test_launch_failure_short_circuits():
+def test_launch_failure_exhausts_launch_budget_before_failing():
     record: dict = {}
+    launches: list[int] = []
+
+    def _fail_launch(config):  # noqa: ANN001
+        launches.append(config.max_launches)
+        return False, "no LIVE"
+
     report = asyncio.run(
         run_auto_drive(
             _cfg(),
-            launch=lambda c: (False, "no LIVE"),
+            launch=_fail_launch,
             hijack=lambda c: pytest.fail("hijack must not run after launch failure"),
             drive=_drive_returning(DriveStats(drove=True), record),
             tap=_tap_returning(CONTINUOUS),
@@ -141,7 +147,35 @@ def test_launch_failure_short_circuits():
     assert report.ok is False
     assert report.stage == "launch"
     assert report.error == "no LIVE"
+    assert launches == [1, 1, 1]
     assert report.hijacked is False
+
+
+def test_launch_failure_retries_until_later_launch_reaches_live():
+    record: dict = {}
+    outcomes = [(False, "first miss"), (True, "live")]
+    ctrl = FakeController()
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(config.max_launches)
+        return outcomes.pop(0)
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(max_launches=2),
+            launch=_launch,
+            hijack=lambda c: ctrl,
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [1, 1]
+    assert report.launched is True
+    assert report.hijacked is True
+    assert ctrl.closed is True
 
 
 def test_hijack_failure_reports_stage_hijack():

@@ -614,7 +614,11 @@ static void dispatch_phase2_message(const String& body) {
       screen_ac_copilot_apply_snapshot(&snap);
     } else if (strcmp(topic, "setup.active") == 0) {
       const char* name = payload["name"] | "";
-      if (*name) screen_pocket_technician_set_active_setup(name);
+      const char* path = payload["path"] | "";
+      if (*name || *path) {
+        screen_pocket_technician_set_active_setup(*name ? name : nullptr,
+                                                  *path ? path : nullptr);
+      }
     }
   } else if (strcmp(type, "setup.list.result") == 0) {
     const char* car_id     = doc["car_id"]     | "";
@@ -670,7 +674,7 @@ static void dispatch_phase2_message(const String& body) {
     screen_pocket_technician_clear_spinners();
     if (!ok) {
       const char* error = doc["error"] | "spinner list failed";
-      screen_pocket_technician_apply_spinner_ack(false, "", 0, error);
+      screen_pocket_technician_apply_spinner_list_error(error);
       return;
     }
     JsonArrayConst spinners = doc["spinners"].as<JsonArrayConst>();
@@ -1025,10 +1029,12 @@ static void pt_request_drain() {
       if (req.path[0]) doc["path"] = req.path;
     } else if (req.kind == PT_REQ_SPINNER_LIST) {
       doc["type"] = "setup.spinner.list";
+      if (req.path[0]) doc["path"] = req.path;
     } else if (req.kind == PT_REQ_SPINNER_SET) {
       doc["type"] = "setup.spinner.set";
       doc["section"] = req.section;
       doc["value"] = req.value;
+      if (req.path[0]) doc["path"] = req.path;
     } else {
       continue;
     }

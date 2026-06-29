@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -374,6 +375,17 @@ def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> N
     assert "tools.ai_sidecar" in args
     assert "--collect-data" in args
     assert str(tmp_path / "tools" / "rig_launcher" / "__main__.py") == args[-1]
+
+
+def test_launcher_extra_includes_sidecar_voice_runtime_deps() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    launcher = set(project["project"]["optional-dependencies"]["launcher"])
+
+    assert "websockets>=16.0" in launcher
+    assert "numpy>=2.4.4" in launcher
+    assert "sounddevice>=0.5.1" in launcher
+    assert "rtmixer>=0.1.7" in launcher
+    assert "pyttsx3>=2.90" in launcher
 
 
 def test_default_exe_path_targets_dist_launcher(tmp_path: Path) -> None:
