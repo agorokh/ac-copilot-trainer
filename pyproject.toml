@@ -31,14 +31,14 @@ mining = [
   # Security floor: requests 2.33.0+ fixes CVE-2026-25645 (surfaced in pip-audit with dev+mining+knowledge).
   "requests>=2.33.1",
   "scikit-learn>=1.8.0",
-  "numpy>=1.24.4",
+  "numpy>=1.24.4,<2.0",
 ]
 mining-semantic = [
   # Opt-in for MINING_SEMANTIC_CLUSTER=1 — sentence-transformer embeddings + agglom clustering.
   # ~80 MB model download on first run (all-MiniLM-L6-v2). CPU-only on M2/M5 Pro.
   "sentence-transformers>=5.4.1",
   "scikit-learn>=1.8.0",
-  "numpy>=1.24.4",
+  "numpy>=1.24.4,<2.0",
 ]
 knowledge = [
     "mcp>=1.27.0",
@@ -48,14 +48,14 @@ bootstrap = [
 ]
 coaching = [
     "websockets>=16.0",
-    "numpy>=1.24.4",
+    "numpy>=1.24.4,<2.0",
     "scikit-learn>=1.8.0",
     "shap>=0.51.0",
 ]
 # Issue #340: in-the-ear phrase-bank playback (lazy-imported in voice/playback.py).
 # Install on the rig to render/play clips: pip install -e ".[voice]".
 voice = [
-    "numpy>=1.24.4",
+    "numpy>=1.24.4,<2.0",
     "sounddevice>=0.5.1",
     "rtmixer>=0.1.7",
 ]
@@ -69,7 +69,7 @@ voice-client = [
 launcher = [
   "pyinstaller>=6.15.0",
   "websockets>=16.0",
-  "numpy>=1.24.4",
+  "numpy>=1.24.4,<2.0",
   "sounddevice>=0.5.1",
   "rtmixer>=0.1.7",
   "pyttsx3>=2.90",

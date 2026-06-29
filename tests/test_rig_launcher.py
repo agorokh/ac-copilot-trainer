@@ -446,7 +446,7 @@ def test_launcher_extra_includes_sidecar_voice_runtime_deps() -> None:
     launcher = set(project["project"]["optional-dependencies"]["launcher"])
 
     assert "websockets>=16.0" in launcher
-    assert "numpy>=1.24.4" in launcher
+    assert "numpy>=1.24.4,<2.0" in launcher
     assert "sounddevice>=0.5.1" in launcher
     assert "rtmixer>=0.1.7" in launcher
     assert "pyttsx3>=2.90" in launcher
