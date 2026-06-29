@@ -54,11 +54,20 @@ from tools.tt_ingest.tt_vulcan import iter_all_sessions, session_summary
 
 SESSIONS_INDEX_FILENAME = "sessions_index.json"
 RAW_SESSION_ENDPOINT = "session"
-LAST_SESSION_ENDPOINT = "last_session"
-#: Coaching is retained one file PER LAP (``coaching_lap{N}.json``) so a multi-lap session
-#: never collides on the write-once lake (a single ``coaching.json`` would block later laps).
+# Both the raw /last-session payload AND the coaching bundle are retained one file PER LAP
+# (``last_session_lap{N}.json`` / ``coaching_lap{N}.json``). The /last-session telemetry is
+# lap-specific, so lap-keying it keeps each lap's raw evidence COHERENT with its coaching even
+# when the same session later gains another lap (a single write-once ``last_session.json``
+# would otherwise go stale against a newer lap's bundle).
+LAST_SESSION_ENDPOINT_PREFIX = "last_session_lap"
+LAST_SESSION_ENDPOINT_GLOB = f"{LAST_SESSION_ENDPOINT_PREFIX}*.json"
 COACHING_ENDPOINT_PREFIX = "coaching_lap"
 COACHING_ENDPOINT_GLOB = f"{COACHING_ENDPOINT_PREFIX}*.json"
+
+
+def last_session_endpoint(lap: Any) -> str:
+    """Endpoint (file stem) for a lap's raw /last-session payload: ``last_session_lap{lap}``."""
+    return f"{LAST_SESSION_ENDPOINT_PREFIX}{lap}"
 
 
 def coaching_endpoint(lap: Any) -> str:
@@ -97,7 +106,7 @@ def _iso_now() -> str:
 # normalized). Coaching is per-lap, so it is matched by glob, not a fixed name.
 INDEXED_ENDPOINT_GLOBS = (
     f"{RAW_SESSION_ENDPOINT}.json",
-    f"{LAST_SESSION_ENDPOINT}.json",
+    LAST_SESSION_ENDPOINT_GLOB,
     COACHING_ENDPOINT_GLOB,
 )
 
@@ -290,13 +299,14 @@ def retain_coaching(
 ) -> CoachingSummary:
     """Immutably retain a session's last-session payload + per-lap coaching bundle, then reindex.
 
-    Pure of network: given already-fetched payloads, writes ``last_session.json`` and
+    Pure of network: given already-fetched payloads, writes ``last_session_lap{lap}.json`` and
     ``coaching_lap{lap}.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/``
-    keyed by the given ``session``. The coaching file is **per-lap** so retaining a second
-    lap of the same session never collides with the first on the write-once lake (#353
-    review). ``last_session_payload`` is the FULL raw services response (session +
-    referenceLap + telemetry) — preserved so the lake reconstructs exactly what the endpoint
-    returned (the M-TT2 reference-lap input); it defaults to ``session`` when not supplied.
+    keyed by the given ``session``. BOTH files are **per-lap**: the /last-session telemetry is
+    lap-specific, so lap-keying it keeps each lap's raw evidence coherent with its coaching even
+    when the same session later gains another lap (#353 review). ``last_session_payload`` is the
+    FULL raw services response (session + referenceLap + telemetry) — preserved so the lake
+    reconstructs exactly what the endpoint returned (the M-TT2 reference-lap input); it defaults
+    to ``session`` when not supplied.
     After writing, the lake indexes are rebuilt from disk (:func:`reindex_lake`) so the new
     services endpoints are discoverable and integrity-checkable. ``allow_nan`` keeps
     non-finite telemetry floats lossless, matching raw session retention.
@@ -310,7 +320,7 @@ def retain_coaching(
     last_payload = dict(last_session_payload) if last_session_payload is not None else dict(session)
     written: list[str] = []
     for endpoint, payload in (
-        (LAST_SESSION_ENDPOINT, last_payload),
+        (last_session_endpoint(lap), last_payload),
         (coaching_endpoint(lap), dict(bundle)),
     ):
         result = write_immutable_json(endpoint_file(target_dir, endpoint), payload, allow_nan=True)

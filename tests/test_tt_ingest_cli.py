@@ -14,10 +14,10 @@ import pytest
 
 from tools.tt_ingest.cli import (
     INDEX_FILENAME,
-    LAST_SESSION_ENDPOINT,
     SESSIONS_INDEX_FILENAME,
     build_arg_parser,
     coaching_endpoint,
+    last_session_endpoint,
     retain_coaching,
     retain_sessions,
 )
@@ -145,23 +145,25 @@ def test_retain_coaching_writes_lake(tmp_path) -> None:
     summary = retain_coaching(_last_session(), _bundle(), lap=5, lake_base=tmp_path)
     root = tmp_path / "journal" / "tt"
     session_dir = root / "assettoCorsa" / "ks_porsche_911_gt3_r_2016" / "magione" / "20260629005756"
-    assert (session_dir / f"{LAST_SESSION_ENDPOINT}.json").exists()
+    assert (session_dir / f"{last_session_endpoint(5)}.json").exists()
     coaching = json.loads((session_dir / f"{coaching_endpoint(5)}.json").read_text())
     assert coaching["reference_lap"]["username"] == "Reference Driver"
     assert summary.segments == 2
     assert summary.actionable == 1  # only the 0.12s loss is actionable; the 0.0 is not
-    assert set(summary.written) == {LAST_SESSION_ENDPOINT, coaching_endpoint(5)}
+    assert set(summary.written) == {last_session_endpoint(5), coaching_endpoint(5)}
 
 
 def test_retain_coaching_per_lap_files_do_not_collide(tmp_path) -> None:
-    # Two laps of the SAME session retain to distinct coaching_lap{N}.json files — the
-    # write-once lake never blocks the second lap (PR #370 review fix).
+    # Two laps of the SAME session retain to distinct lap-keyed files — the write-once lake
+    # never blocks the second lap, and each lap's last-session evidence stays coherent with
+    # its coaching (PR #370 review fix).
     retain_coaching(_last_session(), _bundle(), lap=5, lake_base=tmp_path)
     summary = retain_coaching(_last_session(), _bundle(), lap=6, lake_base=tmp_path)
     root = tmp_path / "journal" / "tt"
     session_dir = root / "assettoCorsa" / "ks_porsche_911_gt3_r_2016" / "magione" / "20260629005756"
-    assert (session_dir / f"{coaching_endpoint(5)}.json").exists()
-    assert (session_dir / f"{coaching_endpoint(6)}.json").exists()
+    for lap in (5, 6):
+        assert (session_dir / f"{coaching_endpoint(lap)}.json").exists()
+        assert (session_dir / f"{last_session_endpoint(lap)}.json").exists()
     assert coaching_endpoint(6) in summary.written  # lap 6 was newly written, not blocked
 
 
@@ -188,7 +190,7 @@ def test_retain_coaching_preserves_full_payload(tmp_path) -> None:
     )
     root = tmp_path / "journal" / "tt"
     session_dir = root / "assettoCorsa" / "ks_porsche_911_gt3_r_2016" / "magione" / "20260629005756"
-    retained = json.loads((session_dir / f"{LAST_SESSION_ENDPOINT}.json").read_text())
+    retained = json.loads((session_dir / f"{last_session_endpoint(5)}.json").read_text())
     assert retained.get("success") is True  # envelope preserved, not the stripped session
     assert "referenceLap" in retained["data"]  # reference evidence kept for M-TT2
 
@@ -198,7 +200,7 @@ def test_retain_coaching_indexes_endpoint_files(tmp_path) -> None:
     root = tmp_path / "journal" / "tt"
     file_index = json.loads((root / INDEX_FILENAME).read_text())
     endpoints = {f["endpoint"] for f in file_index["files"]}
-    assert {LAST_SESSION_ENDPOINT, coaching_endpoint(5)} <= endpoints
+    assert {last_session_endpoint(5), coaching_endpoint(5)} <= endpoints
     assert summary.indexed == file_index["file_count"] >= 2
 
 
