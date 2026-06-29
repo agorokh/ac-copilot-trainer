@@ -24,6 +24,8 @@ from tools.rig_launcher.supervisor import (
     GamePointSupervisor,
     LauncherPaths,
     ProbeResult,
+    _repo_root,
+    _resolve_launcher_path,
     _subprocess_kwargs,
     build_pyinstaller_args,
 )
@@ -276,6 +278,56 @@ def test_start_sidecar_returns_probe_result_on_spawn_failure(tmp_path: Path) -> 
     assert "missing sidecar executable" in (result.detail or "")
     assert sup._sidecar_process is None
     assert sup._log_handles == []
+
+
+def test_resolve_launcher_path_makes_relative_paths_absolute(tmp_path: Path) -> None:
+    base = tmp_path / "GamePoint"
+    archive = base / "archives" / "ref.json"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("{}", encoding="utf-8")
+
+    resolved = _resolve_launcher_path("archives/ref.json", base=base)
+
+    assert resolved == str(archive.resolve())
+
+
+def test_start_sidecar_uses_repo_root_cwd_in_dev_mode(tmp_path: Path) -> None:
+    calls: list[dict[str, Any]] = []
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        calls.append(kwargs)
+        return _Proc()
+
+    sup = GamePointSupervisor(
+        cfg,
+        environ={},
+        popen=fake_popen,
+        python_executable="python",
+        frozen=False,
+    )
+    sup.start_sidecar()
+    sup.close()
+
+    assert calls[0]["cwd"] == str(_repo_root())
+
+
+def test_sidecar_environment_resolves_relative_voice_paths(tmp_path: Path) -> None:
+    bank_dir = tmp_path / "banks" / "default"
+    bank_dir.mkdir(parents=True)
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        reference_archive=str(tmp_path / "ref.json"),
+        voice_bank="banks/default",
+        paths=LauncherPaths(tmp_path),
+    )
+    (tmp_path / "ref.json").write_text("{}", encoding="utf-8")
+
+    env = GamePointSupervisor(cfg, environ={}).sidecar_environment()
+
+    assert env["AC_COPILOT_VOICE_BANK"] == str(bank_dir.resolve())
+    assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
 
 
 def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:

@@ -32,6 +32,22 @@ def _subprocess_kwargs(**kwargs: Any) -> dict[str, Any]:
     return kwargs
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _resolve_launcher_path(value: str | None, *, base: Path) -> str | None:
+    text = _none_if_blank(value)
+    if text is None:
+        return None
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        path = (base / path).resolve(strict=False)
+    else:
+        path = path.resolve(strict=False)
+    return str(path)
+
+
 @dataclass(frozen=True)
 class LauncherPaths:
     """Per-user launcher storage paths."""
@@ -206,14 +222,38 @@ class GamePointSupervisor:
         else:
             args.extend(["--host", self.config.host])
         if self.config.setup_store:
-            args.extend(["--setup-store", self.config.setup_store])
+            setup_store = _resolve_launcher_path(
+                self.config.setup_store,
+                base=self._launcher_path_base(),
+            )
+            if setup_store:
+                args.extend(["--setup-store", setup_store])
         return args
+
+    def _launcher_path_base(self) -> Path:
+        if self.paths is not None:
+            return self.paths.root
+        return Path.cwd()
+
+    def _sidecar_working_directory(self) -> str:
+        if self._frozen:
+            return str(self._launcher_path_base())
+        return str(_repo_root())
 
     def sidecar_environment(self) -> dict[str, str]:
         env = dict(self._environ)
+        base = self._launcher_path_base()
         _put_if_present(env, "AC_COPILOT_SIDECAR_TOKEN", self.config.token)
-        _put_if_present(env, "AC_COPILOT_REFERENCE_ARCHIVE", self.config.reference_archive)
-        _put_if_present(env, "AC_COPILOT_VOICE_BANK", self.config.voice_bank)
+        _put_if_present(
+            env,
+            "AC_COPILOT_REFERENCE_ARCHIVE",
+            _resolve_launcher_path(self.config.reference_archive, base=base),
+        )
+        _put_if_present(
+            env,
+            "AC_COPILOT_VOICE_BANK",
+            _resolve_launcher_path(self.config.voice_bank, base=base),
+        )
         if self.config.voice_tts:
             env["AC_COPILOT_VOICE_TTS"] = "1"
         return env
@@ -276,7 +316,7 @@ class GamePointSupervisor:
             self._sidecar_process = self._popen(
                 self.sidecar_command(),
                 **_subprocess_kwargs(
-                    cwd=str(Path.cwd()),
+                    cwd=self._sidecar_working_directory(),
                     env=self.sidecar_environment(),
                     stdout=log,
                     stderr=subprocess.STDOUT,
