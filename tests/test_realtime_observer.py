@@ -8,6 +8,7 @@ import pytest
 
 from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import (
+    _DEFAULT_TRACK_LENGTH_M,
     RealtimeObserver,
     _frames_from_lap_trace,
     build_observer_from_reference,
@@ -83,6 +84,13 @@ def _replay(observer: RealtimeObserver, archive: dict) -> list:
 
 def test_build_observer_returns_none_without_trace():
     assert build_observer_from_reference({}) is None
+
+
+@pytest.mark.parametrize("track_length_m", [None, "bad", 0.0, -12.0, float("nan")])
+def test_observer_defaults_invalid_track_length(track_length_m: object):
+    obs = RealtimeObserver([], track_length_m=track_length_m)  # type: ignore[arg-type]
+
+    assert obs._track_length_m == pytest.approx(_DEFAULT_TRACK_LENGTH_M)
 
 
 def test_reference_lap_against_itself_emits_no_deficit():

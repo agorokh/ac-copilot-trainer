@@ -21,6 +21,15 @@ from tools.rig_launcher.supervisor import (
 )
 
 
+def _open_path(path: Path) -> None:
+    if os.name == "nt":
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AC Copilot Game Point launcher")
     parser.add_argument("--once", action="store_true", help="Probe once and exit.")
@@ -154,17 +163,11 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     def open_logs() -> None:
         path = supervisor.paths.logs_dir
         path.mkdir(parents=True, exist_ok=True)
-        if os.name == "nt":
-            os.startfile(path)  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        _open_path(path)
 
     def open_settings() -> None:
         path = ensure_settings_file(supervisor.paths)
-        if os.name == "nt":
-            os.startfile(path)  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        _open_path(path)
 
     ttk.Button(button_row, text="Start", command=start).pack(side="left", padx=(0, 8))
     ttk.Button(button_row, text="Refresh", command=refresh).pack(side="left", padx=(0, 8))

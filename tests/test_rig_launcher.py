@@ -6,7 +6,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from tools.rig_launcher.app import config_from_args, run_sidecar_child
+from tools.rig_launcher.app import _open_path, config_from_args, run_sidecar_child
 from tools.rig_launcher.install import (
     SHORTCUT_NAME,
     default_exe_path,
@@ -365,6 +365,22 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert payload["sidecar_port"] == 8765
     assert payload["external_bind"] == ""
     assert "token" not in json.dumps(payload).lower()
+
+
+def test_open_path_uses_macos_open(tmp_path: Path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_popen(args: list[str]) -> _Proc:
+        calls.append(args)
+        return _Proc()
+
+    monkeypatch.setattr("tools.rig_launcher.app.os.name", "posix")
+    monkeypatch.setattr("tools.rig_launcher.app.sys.platform", "darwin")
+    monkeypatch.setattr("tools.rig_launcher.app.subprocess.Popen", fake_popen)
+
+    _open_path(tmp_path)
+
+    assert calls == [["open", str(tmp_path)]]
 
 
 def test_settings_load_falls_back_on_invalid_utf8(tmp_path: Path) -> None:
