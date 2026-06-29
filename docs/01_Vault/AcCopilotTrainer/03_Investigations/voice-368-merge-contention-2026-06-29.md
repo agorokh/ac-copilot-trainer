@@ -59,7 +59,36 @@ contention + the recovery so the next agent does not re-walk it.
 - The earlier stale-comment trap repeated in miniature: `realtime_observer.py:99` claimed the live
   payload lacked `spline`; `telemetry_publisher.lua:212` proves it emits spline+throttle at 20 Hz.
 
+## Final blocker (2026-06-29): behind-main conflict with PR #350 voice-bake-windows
+
+After all findings landed (`dc21875`, green), `origin/main` merged **PR #350 / #372**
+(`e0c93fd fix(voice): batch Piper baking + 48kHz default`). It **reworked the same bake backend
+layer incompatibly** → `mergeable=CONFLICTING`. The conflict (150 lines in `bake.py`, plus
+`test_voice_bake.py` and the handoff doc) is two parallel voice efforts converging:
+
+| | #368 (this PR, `bake.py` HEAD) | #350 (origin/main `bake.py`) |
+|---|---|---|
+| `synthesize` signature | `(text, register, out_path, samplerate)` — register-aware (tone) | `(text, out_path, samplerate)` — no register |
+| extras | `ProsodyShaper`, `KokoroBackend`, `MacSayExpressiveBackend`, register-aware `ToneBackend` | `BatchVoiceBackend.synthesize_many` (batch Piper), `_normalize_wav` (48 kHz/WASAPI), `samplerate=48000` default |
+
+**Unification plan (do NOT drop #350's batch baking — it's shipped + rig-needed):**
+1. Keep the **register-aware** `synthesize(text, register, out_path, samplerate)` (needed for #368
+   tone) across all backends.
+2. Port #350's `_normalize_wav` + **48 kHz default** + `BatchVoiceBackend`/`synthesize_many` +
+   `_synthesize_many_batch`. Make `synthesize_many` register-aware (`items: list[(text, register,
+   Path)]`): batch-render in one Piper process, then `ProsodyShaper.shape` each clip per its
+   register; `_normalize_wav` for non-shaped backends.
+3. `bake_bank`: use the batch path when the backend supports it (register items), `samplerate=48000`.
+4. Combine the CLI (`tone|say|say-expressive|piper|kokoro`, `--samplerate 48000`) and merge both
+   test files. Re-merge `origin/main` (guard override: merging main INTO the feature is allowed),
+   `make ci-fast`, then squash-merge before main drifts again.
+
+A focused pass (or an ultracode workflow over both `bake.py` versions) is the clean way — it was
+deliberately deferred rather than rushed at the tail of a long session, to avoid silently breaking
+either #350's Windows batch baking or #368's tone.
+
 ## Follow-ups
 
+- **Land the #350×#368 bake reconciliation** above → merge PR #371.
 - At-the-wheel audible audit of the Kokoro rig bank (rig-gated; off-rig measured + a demo WAV were
   delivered). Deferred cue taxonomy: turn_in/hold/unwind/throttle/track_out/gear.
