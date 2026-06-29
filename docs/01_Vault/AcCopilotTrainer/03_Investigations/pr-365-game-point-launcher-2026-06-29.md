@@ -1,6 +1,6 @@
 ---
 type: investigation
-status: active
+status: completed
 created: 2026-06-29
 updated: 2026-06-29
 relates_to:
@@ -18,6 +18,10 @@ visible user launch path and extension contract for Game Point
 ([#363](https://github.com/agorokh/ac-copilot-trainer/issues/363)): Windows
 shortcut installer, per-user settings, Pocket Technician spinner protocol, and
 launcher-sidecar supervision.
+
+Merged 2026-06-29T09:15:25Z as squash commit
+[`854f822`](https://github.com/agorokh/ac-copilot-trainer/commit/854f822bdd868397e99bfd56c08ade2f87277139);
+[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363) is closed.
 
 ## Install verification (rig)
 
@@ -60,3 +64,6 @@ the sidecar until the official signed `/session` handshake is ported. Use
   still desired, and final on-device smoke evidence
   `launcher -> AC Copilot live hints -> Pocket Technician setup load -> Setup Exchange browse/download/install`.
 - Re-run packaged-launcher rig proof after merge when the Windows rig is available.
+- Post-merge classifier flagged `.env.example` and `pyproject.toml`: review rig
+  environment defaults and refresh the local dev install (`pip install -e '.[dev]'`
+  or equivalent lockfile workflow). No migrations were detected or run.

@@ -84,7 +84,7 @@ Integration ADR landed 2026-04-21 as `[screen-and-csp-apps-integration.md](../01
 
 Surface map of both apps lives in `[csp-app-pocket-tech-setup-exchange-2026-04-21](../03_Investigations/csp-app-pocket-tech-setup-exchange-2026-04-21.md)`.
 
-**Next:** `setup.list` / `setup.load` shipped with PR #91; remaining B-stream work is spinner tiles / `setup_control.lua` if still desired, plus Setup Exchange (Part E).
+**Next:** `setup.list` / `setup.load` shipped with PR #91; spinner controls and Setup Exchange screen/proxy/install shipped with PR #365. Remaining B-stream work is optional `setup_control.lua` / UI polish if still desired, plus the #86 final on-device smoke artifact.
 
 ## Stream C — Physical rig integration EPIC #59
 
@@ -100,10 +100,16 @@ Now **MERGED 2026-04-14**. Ollama corner coaching pipeline (`corner_query` / `co
 
 ## Priority call
 
-Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot path — user designed the visuals, firmware Phase 1 is end-to-end working, next tangible win is "tap a tile on the screen, see the setup change in-game." Stream B integration is folded into Stream A's protocol work.
+Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot path — the Game Point/Pocket Technician/Setup Exchange code path is now merged, so the next tangible win is a clean physical-rig smoke artifact across launcher → live hints → setup load → Setup Exchange install. Stream B integration is folded into Stream A's protocol work.
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-29** — PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) **MERGED** at
+  `854f822` — **Game Point launcher supervisor** ([#363](https://github.com/agorokh/ac-copilot-trainer/issues/363)
+  **CLOSED**): Windows launcher package/shortcut/settings, supervised sidecar start/status/logging,
+  environment-only sidecar token/voice routing, Pocket Technician spinner controls, Setup Exchange
+  proxy/install path + rig-screen browse/download/install UI, and Game Point docs. Classification:
+  `.env.example` and `pyproject.toml` changed; no migrations.
 - **2026-06-28** — PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348) **MERGED** at
   `226bc97` — **Coaching lakehouse DuckDB** ([#344](https://github.com/agorokh/ac-copilot-trainer/issues/344) P1):
   embedded DuckDB star schema in `tools/coaching_lake` rebuilt from lap-archives.
