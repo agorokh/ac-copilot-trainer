@@ -953,12 +953,12 @@ extern "C" void screen_pocket_technician_set_active_setup(const char* name, cons
     if (name) {
         strncpy(g_active_name, name, sizeof(g_active_name) - 1);
         g_active_name[sizeof(g_active_name) - 1] = 0;
-    } else {
-        g_active_name[0] = 0;
     }
+    // name==nullptr means "leave g_active_name unchanged" — setup.spinner.set
+    // publishes setup.active with path only after a spinner edit (qodo on PR #365).
     if (path && path[0]) {
         set_active_path(path);
-    } else if (!name || strcmp(prev_name, g_active_name) != 0) {
+    } else if (name && strcmp(prev_name, g_active_name) != 0) {
         set_active_path(nullptr);
     }
     if (g_active_ctx) update_meta(g_active_ctx);

@@ -765,7 +765,12 @@ if wsBridge.registerRequestHandler then
     end
     if ack.ok and wsBridge.publishTopic then
       pcall(function()
+        local activeName = nil
+        if type(ack.path) == "string" and ack.path ~= "" then
+          activeName = ack.path:match("([^/\\]+)%.ini$") or ack.path:match("([^/\\]+)$")
+        end
         wsBridge.publishTopic("setup.active", {
+          name = activeName,
           path = ack.path,
           changed_at = (os and os.time and os.time()) or 0,
         })
