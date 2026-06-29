@@ -68,6 +68,8 @@ def test_firmware_spinner_protocol_path_present() -> None:
     assert "setup.spinner.list" in main_cpp
     assert "setup.spinner.set" in main_cpp
     assert "phase2_json_float_or" in main_cpp
+    assert "v.is<double>()" in main_cpp
+    assert "v.is<long>()" in main_cpp
     assert "float             value" in header
     assert "format_spinner_value" in screen_cpp
     assert 'doc["path"] = req.path' in main_cpp

@@ -584,8 +584,12 @@ _HOTSPOT_PROBE_SCRIPT = "\n".join(
         "Windows.Networking.Connectivity,ContentType=WindowsRuntime] | Out-Null",
         "$profile = "
         "[Windows.Networking.Connectivity.NetworkInformation]::GetInternetConnectionProfile()",
+        "if ($null -eq $profile) {",
+        "  $profile = [Windows.Networking.Connectivity.NetworkInformation]::"
+        "GetConnectionProfiles() | Select-Object -First 1",
+        "}",
         "if ($null -eq $profile) { "
-        "throw 'No active internet connection profile for Mobile Hotspot.' }",
+        "throw 'No network connection profile found for Mobile Hotspot.' }",
         "$mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]"
         "::CreateFromConnectionProfile($profile)",
         "[pscustomobject]@{",

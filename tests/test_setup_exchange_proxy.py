@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.request import Request
 
@@ -10,6 +10,7 @@ import pytest
 from tools.ai_sidecar.se_proxy import (
     SetupExchangeClient,
     SetupExchangeError,
+    _windows_casefolded_contains,
     discover_user_setups_root,
     download_and_install_setup,
     install_setup,
@@ -243,3 +244,17 @@ def test_install_setup_converts_filesystem_errors(tmp_path: Path) -> None:
             setup_name="Fast race",
             setup_data="[HEADER]\nVERSION=1",
         )
+
+
+def test_windows_casefolded_containment_accepts_drive_letter_case_variants() -> None:
+    root = PureWindowsPath("C:/Users/Driver/Documents/Assetto Corsa/setups")
+    target = PureWindowsPath("c:/Users/Driver/Documents/Assetto Corsa/setups/car/file.ini")
+
+    assert _windows_casefolded_contains(root, target) is True
+
+
+def test_windows_casefolded_containment_rejects_sibling_prefix() -> None:
+    root = PureWindowsPath("C:/Users/Driver/Documents/Assetto Corsa/setups")
+    target = PureWindowsPath("c:/Users/Driver/Documents/Assetto Corsa/setups_backup/file.ini")
+
+    assert _windows_casefolded_contains(root, target) is False

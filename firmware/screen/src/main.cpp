@@ -505,6 +505,15 @@ static bool phase2_json_try_int32(JsonVariantConst v, int32_t* out) {
     *out = (int32_t)(f >= 0.0f ? f + 0.5f : f - 0.5f);
     return true;
   }
+  if (v.is<double>()) {
+    double f = v.as<double>();
+    *out = (int32_t)(f >= 0.0 ? f + 0.5 : f - 0.5);
+    return true;
+  }
+  if (v.is<long>()) {
+    *out = phase2_json_clamp_long(v.as<long>());
+    return true;
+  }
   if (v.is<const char*>()) {
     const char* s = v.as<const char*>();
     if (!s || !*s) return false;
@@ -527,8 +536,8 @@ static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
 
 static float phase2_json_float_or(JsonVariantConst v, float fallback) {
   if (v.isNull()) return fallback;
-  if (v.is<float>()) return v.as<float>();
-  if (v.is<int>()) return (float)v.as<int>();
+  if (v.is<float>() || v.is<double>()) return v.as<float>();
+  if (v.is<int>() || v.is<long>()) return (float)v.as<long>();
   if (v.is<const char*>()) {
     const char* s = v.as<const char*>();
     if (!s || !*s) return fallback;

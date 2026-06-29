@@ -9,6 +9,7 @@ the HTTP call and the filesystem write.
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 import re
 import urllib.error
@@ -363,8 +364,26 @@ def _resolve_inside(root: Path, *parts: str) -> Path:
 def _ensure_inside(resolved_root: Path, target: Path) -> None:
     try:
         target.relative_to(resolved_root)
+        return
     except ValueError as e:
+        if _windows_casefolded_contains(resolved_root, target):
+            return
         raise SetupExchangeError("resolved setup path escaped the user setups directory") from e
+
+
+def _windows_path_key(path: Path) -> str | None:
+    text = str(path)
+    if os.name != "nt" and not re.match(r"^[A-Za-z]:[\\/]", text):
+        return None
+    return ntpath.normcase(ntpath.normpath(text)).rstrip("\\/")
+
+
+def _windows_casefolded_contains(resolved_root: Path, target: Path) -> bool:
+    root_key = _windows_path_key(resolved_root)
+    target_key = _windows_path_key(target)
+    if not root_key or not target_key:
+        return False
+    return target_key == root_key or target_key.startswith(f"{root_key}\\")
 
 
 def install_setup(

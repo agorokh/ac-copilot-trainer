@@ -14,6 +14,7 @@ from tools.rig_launcher.install import (
 )
 from tools.rig_launcher.settings import LauncherSettings, ensure_settings_file
 from tools.rig_launcher.supervisor import (
+    _HOTSPOT_PROBE_SCRIPT,
     GamePointConfig,
     GamePointSupervisor,
     LauncherPaths,
@@ -506,3 +507,8 @@ def test_hotspot_probe_parses_windows_state(tmp_path: Path) -> None:
         assert result.ok is True
         assert result.state == "on"
         assert "clients=1" in result.detail
+
+
+def test_hotspot_probe_falls_back_without_internet_profile() -> None:
+    assert "GetConnectionProfiles() | Select-Object -First 1" in _HOTSPOT_PROBE_SCRIPT
+    assert "No network connection profile found for Mobile Hotspot." in _HOTSPOT_PROBE_SCRIPT
