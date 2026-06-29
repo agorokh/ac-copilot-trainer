@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-06-28
+updated: 2026-06-29
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [pr-365-game-point-launcher-2026-06-29.md](pr-365-game-point-launcher-2026-06-29.md) | PR #365 / #363 Game Point launcher supervisor: shortcut install, settings contract, PT spinner protocol, review-resolution history. |
 | [issue-86-rig-screen-hotspot-autostart-2026-06-28.md](issue-86-rig-screen-hotspot-autostart-2026-06-28.md) | #86 rig screen incident: device powered but not connecting because PC was on 5 GHz mesh, hotspot was absent, and no sidecar listened on `8765`. Restored Mobile Hotspot + sidecar, verified ESP32 socket/protocol traffic, and patched `start_sidecar.bat` env-token external-bind auto-start on branch `fix/issue-86-rig-sidecar-autostart`. |
 | [coaching-lakehouse-duckdb-2026-06-28.md](coaching-lakehouse-duckdb-2026-06-28.md) | #344/#345 P1 — `tools/coaching_lake` embedded **DuckDB** star (laps/corners/setup_params/samples) built idempotently from the immutable lap-archive JSON; flagship `setup-effect` dependency query + arbitrary SQL across the whole corpus. Samples via temp-CSV→`COPY` (executemany too slow). Verified on live **213-lap/11-track/702-corner/375k-sample** corpus (46s). Capture gaps (`cars=1` car-id fn bug, `setup_params=0`) are P0 rig-gated. |
 | [issue-327-vault-automerge-already-resolved-2026-06-28.md](issue-327-vault-automerge-already-resolved-2026-06-28.md) | #327 closed COMPLETED with **no code** — both symptoms already gone: `guard-and-automerge` regression = dup of #329, fixed by PR #330 (app-token); `build`/`ci-conventional` failure = `claude/...` branch-name artifact of PR #326, not a defect. Proper `vault/...` PRs (#331/#332/#337) green on both. Reconcile before re-doing CI-regression issues. |

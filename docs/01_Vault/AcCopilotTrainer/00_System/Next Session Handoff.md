@@ -2,11 +2,12 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T05:43:30Z
+last_updated: 2026-06-29T06:32:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-365-game-point-launcher-2026-06-29.md
+  - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
