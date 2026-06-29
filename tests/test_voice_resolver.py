@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from _voice_support import build_manifest, make_advisory
 
+from tools.ai_sidecar.realtime_observer import Advisory
 from tools.ai_sidecar.voice.resolver import Resolver
 
 
@@ -29,6 +30,24 @@ def test_act_cue_is_terse_corner_dropped() -> None:
     assert utt.register == "firm"
     assert utt.dedup_key == "late_brake:2:firm"  # dedup still tracks the real corner + register
     assert "turn" not in utt.text.lower()
+
+
+def test_legacy_act_cue_without_register_resolves_to_playable_firm() -> None:
+    r = Resolver(build_manifest())
+    advisory = Advisory(
+        kind="late_brake",
+        corner=2,
+        spline=0.5,
+        urgency="act",
+        message="Brake now",
+    )
+
+    utt = r.resolve(advisory)
+
+    assert utt is not None
+    assert utt.clip_id == "late_brake.act.firm.generic"
+    assert utt.register == "firm"
+    assert utt.dedup_key == "late_brake:2:calm"
 
 
 def test_register_fallback_critical_to_firm() -> None:

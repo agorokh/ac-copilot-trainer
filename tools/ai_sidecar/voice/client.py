@@ -34,11 +34,11 @@ _VOICE_QUEUE_MAX = 4
 DEFAULT_TTS_RATE = 240
 DEFAULT_TTS_VOLUME = 1.0
 
-#: pyttsx3 rate (wpm) + volume per intensity register (issue #368) — the WS/pyttsx3 path can't bake
-#: prosody, but it can speak faster + louder as the situation escalates, so the WS client conveys
-#: the same intensity the in-process bank coach does (codex review #371).
-_REGISTER_RATE: dict[str, int] = {"calm": 185, "firm": 200, "critical": 215}
-_REGISTER_VOLUME: dict[str, float] = {"calm": 0.9, "firm": 1.0, "critical": 1.0}
+#: pyttsx3 rate/volume offsets per intensity register. The configured base rate/volume remains the
+#: center point so rig tuning knobs still work; the WS/pyttsx3 path just nudges calm down and
+#: critical up to convey intensity when there is no baked prosody.
+_REGISTER_RATE_DELTA: dict[str, int] = {"calm": -15, "firm": 0, "critical": 15}
+_REGISTER_VOLUME_DELTA: dict[str, float] = {"calm": -0.1, "firm": 0.0, "critical": 0.1}
 
 
 def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
@@ -97,6 +97,14 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
 
 def _env_truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _register_rate(base_rate: int, register: str) -> int:
+    return max(1, base_rate + _REGISTER_RATE_DELTA.get(register, 0))
+
+
+def _register_volume(base_volume: float, register: str) -> float:
+    return min(1.0, max(0.0, base_volume + _REGISTER_VOLUME_DELTA.get(register, 0.0)))
 
 
 def _disabled_speaker(reason: str) -> Callable[[str, str], None]:
@@ -168,8 +176,8 @@ def _pyttsx3_speaker(
                 break
             text, register = item
             try:
-                engine.setProperty("rate", _REGISTER_RATE.get(register, base_rate))
-                engine.setProperty("volume", _REGISTER_VOLUME.get(register, base_volume))
+                engine.setProperty("rate", _register_rate(base_rate, register))
+                engine.setProperty("volume", _register_volume(base_volume, register))
                 engine.say(text)
                 engine.runAndWait()
             except Exception:
@@ -197,6 +205,11 @@ def _pyttsx3_speaker(
     return speak
 
 
+def _standalone_speaker() -> Callable[[str, str], None]:
+    """Standalone WS client owns its pyttsx3 output, so it does not require fallback env opt-in."""
+    return _pyttsx3_speaker(require_opt_in=False)
+
+
 async def run(url: str, *, token: str | None = None) -> None:  # pragma: no cover - runtime/ws/audio
     """Connect, advertise the voice class, subscribe to coaching.cue, and speak arriving cues."""
     import json
@@ -205,7 +218,7 @@ async def run(url: str, *, token: str | None = None) -> None:  # pragma: no cove
     import websockets
 
     headers = {AUTH_HEADER: token} if token else {}
-    client = VoiceClient(_pyttsx3_speaker())
+    client = VoiceClient(_standalone_speaker())
     async with websockets.connect(url, additional_headers=headers) as ws:
         await ws.send(json.dumps(make_hello_frame()))
         await ws.send(json.dumps(make_subscribe_frame()))

@@ -223,6 +223,27 @@ def test_trail_brake_before_brake_point_is_not_flagged_late():
     assert [a for a in fired if a.kind == "late_brake"] == []
 
 
+def test_brake_release_can_escalate_after_calm_threshold_crossing():
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+
+    calm = obs.observe({"spline": 0.52, "speed": 90.0, "brake": 0.46, "throttle": 0.0})
+    firm = obs.observe({"spline": 0.53, "speed": 88.0, "brake": 0.82, "throttle": 0.0})
+
+    releases = [a for a in [*calm, *firm] if a.kind == "brake_release"]
+    assert [a.register for a in releases] == ["calm", "firm"]
+    assert releases[-1].urgency == "act"
+
+
 def test_late_brake_fires_upstream_of_corner_window():
     # brake point upstream of turn-in (bp 0.30 < spline_lo 0.40): a driver coasting past the real
     # brake point must be cued THERE, not delayed until the corner window begins (codex #294)

@@ -56,12 +56,17 @@ def _spoken_corner(corner: object) -> int | None:
     return None
 
 
-def _register_fallback_chain(register: str) -> tuple[str, ...]:
+def _register_fallback_chain(register: str, *, urgency: str) -> tuple[str, ...]:
     """Registers to try, from the requested tier down toward the always-present ``calm`` base.
 
     ``critical`` -> ``(critical, firm, calm)``; ``firm`` -> ``(firm, calm)``;
     ``calm`` -> ``(calm,)``.
     """
+    if urgency == "act" and register == "calm":
+        # Legacy Advisory construction predates the register field and therefore carries the
+        # dataclass default "calm". The v2 vocabulary intentionally bakes act-now clips at firm /
+        # critical, not calm, so try the playable firm act clip before dropping the cue.
+        return ("firm", "calm")
     idx = vocab.REGISTERS.index(register)
     return tuple(reversed(vocab.REGISTERS[: idx + 1]))
 
@@ -101,7 +106,7 @@ class Resolver:
         clip_id: str | None = None
         resolved_register = register
         resolved_corner = spoken
-        for reg in _register_fallback_chain(register):
+        for reg in _register_fallback_chain(register, urgency=urgency):
             cid = self._manifest.lookup(kind, urgency, reg, spoken)
             if cid is not None:
                 clip_id, resolved_register, resolved_corner = cid, reg, spoken

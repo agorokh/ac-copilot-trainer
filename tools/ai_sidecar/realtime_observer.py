@@ -155,7 +155,9 @@ class _CornerPass:
     #: when severity escalates to a strictly higher tier (calm→firm→critical), so a calm lead-in
     #: never locks out the later critical alarm (issue #368 escalation; codex review #371).
     brake_cue_rank: int = -1
-    release_emitted: bool = False
+    #: rank of the highest brake-release register emitted this pass. A barely-over-threshold
+    #: release warning can still escalate to firm if the driver stays hard on the brake.
+    release_cue_rank: int = -1
     exit_emitted: bool = False
     #: last tone register spoken for this corner pass — feeds register hysteresis (issue #368).
     last_register: str = "calm"
@@ -482,16 +484,18 @@ class RealtimeObserver:
 
         Heavy braking after the apex (still off the power) scrubs exit speed instead of releasing
         toward the throttle. Gated conservatively on a HIGH brake level and no throttle so a normal
-        trail-brake release is not flagged. Register firm (a clear correction, never an alarm).
+        trail-brake release is not flagged. Register caps at firm (a clear correction, never an
+        alarm), but can start calm near the threshold and escalate once if braking stays heavy.
         """
-        if st.release_emitted:
-            return None
         past_apex = ref.apex_spline < spline <= ref.spline_hi
         if not past_apex or brake < _RELEASE_BRAKE_MIN or throttle >= _THROTTLE_ON:
             return None
-        st.release_emitted = True
         s = _clamp01((brake - _RELEASE_BRAKE_MIN) / max(1.0 - _RELEASE_BRAKE_MIN, 1e-6))
         register = _register_for(s, st.last_register, cap="firm")  # a correction, never an alarm
+        rank = REGISTER_RANK[register]
+        if rank <= st.release_cue_rank:
+            return None
+        st.release_cue_rank = rank
         st.last_register = register
         return Advisory(
             kind="brake_release",

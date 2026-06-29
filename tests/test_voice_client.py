@@ -17,6 +17,7 @@ from tools.ai_sidecar.external_protocol import (
 from tools.ai_sidecar.voice.client import (
     VoiceClient,
     _pyttsx3_speaker,
+    _standalone_speaker,
     extract_advisory,
     make_hello_frame,
     make_subscribe_frame,
@@ -157,6 +158,53 @@ def test_pyttsx3_speaker_enqueues_when_worker_ready(monkeypatch):
     assert spoken == ["Turn 1"]
     assert ("rate", 260) in props
     assert ("volume", 0.8) in props
+
+
+def test_pyttsx3_register_tuning_is_centered_on_configured_values(monkeypatch):
+    ready = threading.Event()
+    spoken: list[str] = []
+    props: list[tuple[str, float | int]] = []
+
+    class _Engine:
+        def setProperty(self, name: str, value: float | int) -> None:
+            props.append((name, value))
+
+        def say(self, text: str) -> None:
+            spoken.append(text)
+
+        def runAndWait(self) -> None:
+            return None
+
+    class _Pyttsx3:
+        @staticmethod
+        def init():
+            ready.set()
+            return _Engine()
+
+    monkeypatch.setitem(sys.modules, "pyttsx3", _Pyttsx3())
+    speak = _pyttsx3_speaker(base_rate=260, base_volume=0.8, require_opt_in=False)
+    assert ready.wait(timeout=1.0)
+    speak("Brake", "critical")
+    deadline = time.monotonic() + 1.0
+    while not spoken and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert spoken == ["Brake"]
+    assert ("rate", 275) in props
+    assert ("volume", 0.9) in props
+
+
+def test_standalone_speaker_does_not_require_fallback_env_opt_in(monkeypatch):
+    calls: list[bool] = []
+
+    def fake_pyttsx3_speaker(*, require_opt_in: bool = True):
+        calls.append(require_opt_in)
+        return lambda text, register="calm": None
+
+    monkeypatch.setattr("tools.ai_sidecar.voice.client._pyttsx3_speaker", fake_pyttsx3_speaker)
+
+    _standalone_speaker()
+
+    assert calls == [False]
 
 
 def test_pyttsx3_speaker_drops_oldest_when_queue_full(monkeypatch):
