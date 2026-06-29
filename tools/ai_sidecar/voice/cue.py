@@ -62,6 +62,7 @@ class SpokenCue:
     urgency: str
     corner: int
     kind: str
+    register: str = "calm"  # intensity tier (issue #368) — drives the WS speaker's rate/volume
 
 
 def _turn(corner: Any) -> str:
@@ -73,13 +74,26 @@ def _turn(corner: Any) -> str:
 
 
 def advisory_to_phrase(advisory: dict[str, Any]) -> str:
-    """Short, ear-first phrasing of one observer advisory dict."""
+    """Short, ear-first phrasing of one observer advisory dict, register-aware (issue #368).
+
+    The terse act tier (``firm``/``critical``) drops the corner number — the driver knows the corner
+    and needs the verb now; the calm anticipatory tier keeps it. Mirrors the baked phrase-bank
+    wording (``vocabulary._STEMS``) so the WS/pyttsx3 path speaks the same words as the in-process
+    bank coach, and the speaker varies rate/volume by ``register`` to convey the intensity.
+    """
     kind = advisory.get("kind")
+    register = str(advisory.get("register", "calm"))
     corner = advisory.get("corner", 0)
     if kind == "late_brake":
-        return f"Brake, {_turn(corner)}."
+        if register == "critical":
+            return "Brake!"
+        if register == "firm":
+            return "Brake."
+        return f"Brake point, {_turn(corner)}."
+    if kind == "brake_release":
+        return "Release." if register == "firm" else "Ease off."
     if kind == "apex_deficit":
-        return f"Carry more speed, {_turn(corner)}."
+        return f"More entry speed, {_turn(corner)}."
     # Unknown kind: fall back to the observer's own message (already human-readable), trimmed.
     message = advisory.get("message")
     if isinstance(message, str) and message.strip():
@@ -106,12 +120,16 @@ class CueArbiter:
         """Choose the one cue to speak now, applying cooldowns + urgency preemption."""
         if not advisories:
             return None
-        # Drop advisories still within their per-(corner, kind) cooldown.
+        # Drop advisories still within their per-(corner, kind) cooldown — EXCEPT an `act` cue,
+        # which bypasses the anti-nag window so a critical/firm escalation ("Brake!") is still heard
+        # after an earlier calm lead-in for the same corner (codex review #371). Mirrors the
+        # in-process scheduler's act exemption.
         fresh: list[dict[str, Any]] = []
         for a in advisories:
+            is_act = _URGENCY_RANK.get(str(a.get("urgency", "")), 0) >= _URGENCY_RANK["act"]
             key = (_corner_key(a), str(a.get("kind", "")))
             last = self._last_corner_kind_s.get(key)
-            if last is not None and now_s - last < self.corner_cooldown_s:
+            if not is_act and last is not None and now_s - last < self.corner_cooldown_s:
                 continue
             fresh.append(a)
         fresh = [a for a in fresh if _within_spline_lookahead(a)]
@@ -134,6 +152,7 @@ class CueArbiter:
             urgency=str(best.get("urgency", "info")),
             corner=_corner_key(best),
             kind=str(best.get("kind", "")),
+            register=str(best.get("register", "calm")),
         )
 
 

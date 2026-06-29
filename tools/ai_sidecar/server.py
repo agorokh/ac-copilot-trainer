@@ -177,7 +177,7 @@ class _Pyttsx3VoiceCoach:
 
     def __init__(
         self,
-        speaker: Callable[[str], None],
+        speaker: Callable[[str, str], None],
         *,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -195,7 +195,7 @@ class _Pyttsx3VoiceCoach:
         if cue is None:
             return
         logger.info("voice: pyttsx3 speaking %r", cue.text)
-        self._speaker(cue.text)
+        self._speaker(cue.text, cue.register)
 
 
 def _env_truthy(name: str) -> bool:
@@ -735,6 +735,10 @@ def _advisory_to_payload(advisory: Any) -> dict[str, Any] | None:
         "kind": kind,
         "corner": getattr(advisory, "corner", None),
         "urgency": urgency,
+        # issue #368: the tone tier + severity travel on the cue so a WS voice client renders the
+        # same intensity the in-process coach speaks (additive — older consumers ignore them).
+        "register": getattr(advisory, "register", "calm"),
+        "intensity": getattr(advisory, "intensity", 0.0),
         "message": getattr(advisory, "message", ""),
         "spline": getattr(advisory, "spline", None),
         "detail": getattr(advisory, "detail", {}),
@@ -1531,7 +1535,15 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     max_value=1.0,
                 )
             )
-            set_voice_coach(_Pyttsx3VoiceCoach(_pyttsx3_speaker(rate=rate, volume=volume)))
+            set_voice_coach(
+                _Pyttsx3VoiceCoach(
+                    _pyttsx3_speaker(
+                        base_rate=rate,
+                        base_volume=volume,
+                        require_opt_in=False,
+                    )
+                )
+            )
             logger.info(
                 "voice: in-process pyttsx3 voice coach wired rate=%s volume=%.2f",
                 rate,

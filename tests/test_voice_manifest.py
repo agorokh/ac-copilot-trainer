@@ -20,10 +20,13 @@ def test_manifest_roundtrip_and_lookup() -> None:
     restored = Manifest.from_dict(json.loads(m.to_json()))
     assert restored.vocabulary_hash == m.vocabulary_hash
     assert restored.samplerate == m.samplerate
-    # lookup by advisory key works for a numbered and a generic clip
-    assert restored.lookup("late_brake", "act", 3) == "late_brake.act.t03"
-    assert restored.lookup("apex_deficit", "info", None) == "apex_deficit.info.generic"
-    assert restored.lookup("late_brake", "act", 999) is None
+    # lookup by the 4-axis advisory key (kind, urgency, register, corner)
+    assert restored.lookup("late_brake", "prepare", "calm", 3) == "late_brake.prepare.calm.t03"
+    assert restored.lookup("late_brake", "act", "firm", None) == "late_brake.act.firm.generic"
+    assert (
+        restored.lookup("late_brake", "act", "critical", None) == "late_brake.act.critical.generic"
+    )
+    assert restored.lookup("late_brake", "prepare", "calm", 999) is None
 
 
 def test_validate_clean_vocabulary_match() -> None:
@@ -47,9 +50,9 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
     good.write_bytes(b"RIFFfake-wav-bytes")
     good_sha = sha256_bytes(good.read_bytes())
     data = {
-        "version": 1,
+        "version": 2,
         "samplerate": 22050,
-        "voice_signature": "tone-v1",
+        "voice_signature": "tone-v2",
         "vocabulary_hash": vocab.vocabulary_hash(),
         "clips": {
             "late_brake.act.t01": {
@@ -57,6 +60,7 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
                 "file": "late_brake.act.t01.wav",
                 "kind": "late_brake",
                 "urgency": "act",
+                "register": "firm",
                 "corner": 1,
                 "text": "Brake turn one.",
                 "sha256": good_sha,
@@ -66,6 +70,7 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
                 "file": "late_brake.act.t02.wav",  # never written → missing
                 "kind": "late_brake",
                 "urgency": "act",
+                "register": "firm",
                 "corner": 2,
                 "text": "Brake turn two.",
                 "sha256": "0" * 64,
@@ -92,3 +97,91 @@ def test_load_malformed_manifest_raises(tmp_path) -> None:
     bad.write_text(json.dumps({"version": 1}), encoding="utf-8")  # missing required keys
     with pytest.raises(ManifestError):
         Manifest.load(bad)
+
+
+def test_v1_manifest_without_register_is_rejected() -> None:
+    # Issue #368 migration: a v1 clip entry (no `register`) must fail at LOAD so engine.from_bank
+    # returns a disabled coach (re-bake required) — never a clip whose tier is unknown.
+    v1 = {
+        "version": 1,
+        "samplerate": 22050,
+        "voice_signature": "tone-v1",
+        "vocabulary_hash": "0" * 64,
+        "clips": {
+            "late_brake.act.t01": {
+                "clip_id": "late_brake.act.t01",
+                "file": "late_brake.act.t01.wav",
+                "kind": "late_brake",
+                "urgency": "act",
+                "corner": 1,  # NOTE: no "register" — the v1 shape
+                "text": "Brake turn one.",
+                "sha256": "0" * 64,
+            }
+        },
+    }
+    with pytest.raises(ManifestError):
+        Manifest.from_dict(v1)
+
+
+def test_forward_incompatible_version_is_rejected() -> None:
+    # A bank from a NEWER schema than this code understands must be refused, not mis-read.
+    from tools.ai_sidecar.voice.manifest import MANIFEST_VERSION
+
+    future = {
+        "version": MANIFEST_VERSION + 1,
+        "samplerate": 22050,
+        "voice_signature": "x",
+        "vocabulary_hash": "0" * 64,
+        "clips": {},
+    }
+    with pytest.raises(ManifestError):
+        Manifest.from_dict(future)
+
+
+def test_manifest_version_must_match_schema_even_if_fields_look_current() -> None:
+    # qodo review #371: the top-level version is a real schema gate, not informational metadata.
+    data = {
+        "version": 1,
+        "samplerate": 22050,
+        "voice_signature": "tone-v2",
+        "vocabulary_hash": "0" * 64,
+        "clips": {
+            "late_brake.act.firm.generic": {
+                "clip_id": "late_brake.act.firm.generic",
+                "file": "x.wav",
+                "kind": "late_brake",
+                "urgency": "act",
+                "register": "firm",
+                "corner": None,
+                "text": "Brake.",
+                "sha256": "0" * 64,
+            }
+        },
+    }
+    with pytest.raises(ManifestError):
+        Manifest.from_dict(data)
+
+
+def test_unknown_register_is_rejected_at_load() -> None:
+    # qodo/codex review #371: a hand-edited/corrupt manifest with a register outside the allowed
+    # tiers (calm|firm|critical) must fail loudly at LOAD, not as a silent lookup miss later.
+    data = {
+        "version": 2,
+        "samplerate": 22050,
+        "voice_signature": "tone-v2",
+        "vocabulary_hash": "0" * 64,
+        "clips": {
+            "late_brake.act.loud.generic": {
+                "clip_id": "late_brake.act.loud.generic",
+                "file": "x.wav",
+                "kind": "late_brake",
+                "urgency": "act",
+                "register": "loud",  # not in calm|firm|critical
+                "corner": None,
+                "text": "Brake!",
+                "sha256": "0" * 64,
+            }
+        },
+    }
+    with pytest.raises(ManifestError):
+        Manifest.from_dict(data)

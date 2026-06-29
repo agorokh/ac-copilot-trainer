@@ -27,16 +27,22 @@ class Utterance:
         kind: Originating advisory ``kind`` (carried for logging + cooldown bucketing).
         urgency: Originating advisory ``urgency`` — drives scheduling (act > prepare > info) and
             barge-in.
+        register: The intensity tier actually RESOLVED (calm|firm|critical) — issue #368. This is
+            the register of the clip that will sound, *after* any resolver fallback, so logs and the
+            timing report never claim a tier that did not play. It does NOT affect :attr:`rank`
+            (tone must never perturb scheduler arbitration).
         corner: 1-based spoken corner number, or ``None`` for a generic (corner-less) clip.
         text: The spoken text (for logs / debugging; never re-synthesized at runtime in v1).
-        dedup_key: Stable key identifying "the same cue this corner pass" — ``"{kind}:{corner}"``.
-            The scheduler suppresses a repeat of this key within one pass, and a genuinely new pass
-            (or a different kind/corner) is never suppressed.
+        dedup_key: Stable key identifying "the same cue this corner pass" —
+            ``"{kind}:{corner}:{register}"``. Including the register lets a genuine escalation
+            (calm -> firm -> critical for the same corner) through as a distinct event, while a
+            same-register repeat within one pass is still suppressed.
     """
 
     clip_id: str
     kind: str
     urgency: str
+    register: str
     corner: int | None
     text: str
     dedup_key: str

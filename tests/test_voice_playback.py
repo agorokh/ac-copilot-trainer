@@ -157,10 +157,10 @@ def test_bank_skips_clips_with_sha256_mismatch(tmp_path) -> None:
     from tools.ai_sidecar.voice.playback import Bank
 
     manifest = bake_bank(tmp_path, ToneBackend())
-    victim = "late_brake.act.t03"
+    victim = "late_brake.prepare.calm.t03"
     # Corrupt one clip's bytes without updating the manifest sha → load must skip it.
     (tmp_path / manifest.clips[victim].file).write_bytes(b"RIFFcorrupted-not-the-baked-bytes")
     bank = Bank.from_manifest(manifest, tmp_path)
     assert victim not in bank.clips  # mismatched clip skipped
-    assert "late_brake.act.t04" in bank.clips  # an untouched clip still loads
+    assert "late_brake.prepare.calm.t04" in bank.clips  # an untouched clip still loads
     assert len(bank.clips) == len(manifest.clips) - 1

@@ -58,6 +58,7 @@ _MIN_RANK_FOR: dict[Verbosity, int] = {
 #: so a short gap. These are overridable per :class:`VoiceConfig`.
 _DEFAULT_COOLDOWN_S: dict[str, float] = {
     "late_brake": 1.0,
+    "brake_release": 1.5,
     "apex_deficit": 6.0,
 }
 

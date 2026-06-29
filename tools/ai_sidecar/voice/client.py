@@ -12,7 +12,7 @@ Run on the rig alongside the sidecar (``pip install -e ".[voice-client]"``):
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from tools.ai_sidecar.external_protocol import (
@@ -33,6 +33,12 @@ from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue
 _VOICE_QUEUE_MAX = 4
 DEFAULT_TTS_RATE = 240
 DEFAULT_TTS_VOLUME = 1.0
+
+#: pyttsx3 rate/volume offsets per intensity register. The configured base rate/volume remains the
+#: center point so rig tuning knobs still work; the WS/pyttsx3 path just nudges calm down and
+#: critical up to convey intensity when there is no baked prosody.
+_REGISTER_RATE_DELTA: dict[str, int] = {"calm": -15, "firm": 0, "critical": 15}
+_REGISTER_VOLUME_DELTA: dict[str, float] = {"calm": -0.1, "firm": 0.0, "critical": 0.1}
 
 
 def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
@@ -68,7 +74,7 @@ class VoiceClient:
     """Stateful cue consumer: frame -> arbiter -> speak. Speaker + clock injected for tests."""
 
     def __init__(
-        self, speaker: Callable[[str], None], *, arbiter: CueArbiter | None = None
+        self, speaker: Callable[[str, str], None], *, arbiter: CueArbiter | None = None
     ) -> None:
         self._speak = speaker
         self._arbiter = arbiter or CueArbiter()
@@ -80,7 +86,7 @@ class VoiceClient:
             return None
         cue = self._arbiter.select([advisory], now_s)
         if cue is not None:
-            self._speak(cue.text)
+            self._speak(cue.text, cue.register)  # register drives the speaker's rate/volume (#368)
         return cue
 
 
@@ -89,38 +95,89 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
     return not failed and worker_alive
 
 
-def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_VOLUME):
-    """Build a non-blocking speak() backed by pyttsx3 on a dedicated worker thread.
+def _env_truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _register_rate(base_rate: int, register: str) -> int:
+    return max(1, base_rate + _REGISTER_RATE_DELTA.get(register, 0))
+
+
+def _register_volume(base_volume: float, register: str) -> float:
+    return min(1.0, max(0.0, base_volume + _REGISTER_VOLUME_DELTA.get(register, 0.0)))
+
+
+def _disabled_speaker(reason: str) -> Callable[[str, str], None]:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    warned = False
+
+    def speak(text: str, register: str = "calm") -> None:
+        nonlocal warned
+        del register
+        if not warned:
+            logger.warning("pyttsx3 disabled: %s; dropping cue %r", reason, text)
+            warned = True
+
+    return speak
+
+
+def _pyttsx3_speaker(
+    base_rate: int = DEFAULT_TTS_RATE,
+    base_volume: float = DEFAULT_TTS_VOLUME,
+    *,
+    require_opt_in: bool = True,
+    environ: Mapping[str, str] | None = None,
+    rate: int | None = None,
+    volume: float | None = None,
+) -> Callable[[str, str], None]:
+    """Build a non-blocking speak(text, register) backed by pyttsx3 on a dedicated worker thread.
 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
-    stays responsive and incoming ``act`` cues can still be arbitrated while speech plays.
+    stays responsive and incoming ``act`` cues can still be arbitrated while speech plays. The
+    register (issue #368) sets the engine rate + volume per utterance so the WS path escalates tone.
     """
     import logging
+    import os
     import queue
     import threading
 
     import pyttsx3
 
+    if rate is not None:
+        base_rate = rate
+    if volume is not None:
+        base_volume = volume
+
+    env = os.environ if environ is None else environ
+    if require_opt_in:
+        if not _env_truthy(env.get("AC_COPILOT_VOICE_TTS")):
+            return _disabled_speaker("AC_COPILOT_VOICE_TTS=1 is required")
+        if env.get("AC_COPILOT_VOICE_BANK"):
+            return _disabled_speaker("AC_COPILOT_VOICE_BANK is configured")
+
     logger = logging.getLogger(__name__)
-    q: queue.Queue[str | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)
+    q: queue.Queue[tuple[str, str] | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)
     ready = threading.Event()
     failed = threading.Event()
 
     def worker() -> None:
         try:
             engine = pyttsx3.init()
-            engine.setProperty("rate", rate)
-            engine.setProperty("volume", volume)
         except Exception:
             failed.set()
             logger.exception("pyttsx3 voice worker failed to initialize")
             return
         ready.set()
         while True:
-            text = q.get()
-            if text is None:
+            item = q.get()
+            if item is None:
                 break
+            text, register = item
             try:
+                engine.setProperty("rate", _register_rate(base_rate, register))
+                engine.setProperty("volume", _register_volume(base_volume, register))
                 engine.say(text)
                 engine.runAndWait()
             except Exception:
@@ -129,23 +186,28 @@ def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_V
     t = threading.Thread(target=worker, daemon=True, name="pyttsx3-voice")
     t.start()
 
-    def speak(text: str) -> None:
+    def speak(text: str, register: str = "calm") -> None:
         if not should_enqueue_voice_cue(failed=failed.is_set(), worker_alive=t.is_alive()):
             logger.warning("pyttsx3 unavailable; dropping cue %r", text)
             return
         try:
-            q.put_nowait(text)
+            q.put_nowait((text, register))
         except queue.Full:
             try:
                 q.get_nowait()
             except queue.Empty:
                 pass
             try:
-                q.put_nowait(text)
+                q.put_nowait((text, register))
             except queue.Full:
                 logger.warning("pyttsx3 queue saturated; dropping cue %r", text)
 
     return speak
+
+
+def _standalone_speaker() -> Callable[[str, str], None]:
+    """Standalone WS client owns its pyttsx3 output, so it does not require fallback env opt-in."""
+    return _pyttsx3_speaker(require_opt_in=False)
 
 
 async def run(url: str, *, token: str | None = None) -> None:  # pragma: no cover - runtime/ws/audio
@@ -156,7 +218,7 @@ async def run(url: str, *, token: str | None = None) -> None:  # pragma: no cove
     import websockets
 
     headers = {AUTH_HEADER: token} if token else {}
-    client = VoiceClient(_pyttsx3_speaker())
+    client = VoiceClient(_standalone_speaker())
     async with websockets.connect(url, additional_headers=headers) as ws:
         await ws.send(json.dumps(make_hello_frame()))
         await ws.send(json.dumps(make_subscribe_frame()))

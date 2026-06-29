@@ -6,6 +6,7 @@ manifest content-addressing end to end without a TTS engine.
 
 from __future__ import annotations
 
+import argparse
 import math
 import struct
 import subprocess
@@ -17,7 +18,7 @@ import pytest
 
 from tools.ai_sidecar.voice import bake as bake_mod
 from tools.ai_sidecar.voice import vocabulary as vocab
-from tools.ai_sidecar.voice.bake import PiperBackend, ToneBackend, bake_bank
+from tools.ai_sidecar.voice.bake import PiperBackend, ToneBackend, _build_backend, bake_bank
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest, sha256_bytes
 
 
@@ -27,7 +28,7 @@ def test_bake_renders_full_vocabulary_with_valid_manifest(tmp_path) -> None:
     assert len(manifest.clips) == len(vocab.vocabulary())
     # manifest stamps the current vocabulary hash + the backend voice signature
     assert manifest.vocabulary_hash == vocab.vocabulary_hash()
-    assert manifest.voice_signature == "tone-v1"
+    assert manifest.voice_signature == "tone-v2"
     # every clip file exists, is non-empty audio, and its sha matches the manifest
     for entry in manifest.clips.values():
         fp = tmp_path / entry.file
@@ -67,8 +68,8 @@ def test_bake_resamples_external_backend_to_requested_samplerate(tmp_path) -> No
     class _Native22050Backend:
         voice_signature = "native-22050-test"
 
-        def synthesize(self, text, out_path, samplerate):  # noqa: ANN001
-            del text, samplerate
+        def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
+            del text, register, samplerate
             source_rate = 22050
             frames = bytearray()
             for i in range(int(source_rate * 0.05)):
@@ -95,8 +96,8 @@ def test_bake_accepts_float32_external_backend(tmp_path) -> None:
     class _Float32Backend:
         voice_signature = "float32-test"
 
-        def synthesize(self, text, out_path, samplerate):  # noqa: ANN001
-            del text
+        def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
+            del text, register
             frames = bytearray()
             for i in range(int(samplerate * 0.02)):
                 sample = 0.25 * math.sin(2 * math.pi * 330.0 * i / samplerate)
@@ -117,20 +118,76 @@ def test_bake_accepts_float32_external_backend(tmp_path) -> None:
     assert max(abs(v[0]) for v in struct.iter_unpack("<h", raw)) > 1000
 
 
+def test_tone_backend_registers_are_distinct(tmp_path) -> None:
+    # Issue #368: the register (intensity tier) must produce measurably distinct audio even from the
+    # stdlib CI backend, so CI exercises the tone dimension end-to-end (firm/critical differ from
+    # calm).
+    manifest = bake_bank(tmp_path, ToneBackend())
+    firm = manifest.clips["late_brake.act.firm.generic"].sha256
+    crit = manifest.clips["late_brake.act.critical.generic"].sha256
+    calm = manifest.clips["late_brake.prepare.calm.generic"].sha256
+    assert len({firm, crit, calm}) == 3  # three distinct register clips
+
+
+def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
+    # Issue #368 (adversary): the ffmpeg-shaped path the product actually ships must be
+    # byte-deterministic run-to-run on a fixed ffmpeg (`-bitexact`), so per-clip sha256 stays a real
+    # drift detector. ToneBackend alone does not exercise the ffmpeg chain — this does.
+    import shutil
+
+    import pytest
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available")
+    from tools.ai_sidecar.voice.bake import ProsodyShaper
+
+    # a plain tone WAV as the shaper input (no TTS engine needed)
+    src = tmp_path / "src.wav"
+    ToneBackend().synthesize("Brake.", "firm", src, 22050)
+    shaper = ProsodyShaper(apply_tempo=True)
+    a, b = tmp_path / "a.wav", tmp_path / "b.wav"
+    shaper.shape(src, a, "critical", 22050)
+    shaper.shape(src, b, "critical", 22050)
+    assert a.read_bytes() == b.read_bytes()  # identical bytes → deterministic, content-addressable
+
+
+def test_prosody_filter_resamples_before_critical_tempo_shift() -> None:
+    filt = bake_mod._prosody_filter("critical", 48000, apply_tempo=True)
+
+    assert filt.startswith("aresample=48000,asetrate=48000*1.05,aresample=48000,")
+
+
+@pytest.mark.parametrize("backend", ["say-expressive", "piper", "kokoro"])
+def test_shaped_backend_preflights_missing_ffmpeg(monkeypatch, backend: str) -> None:
+    # qodo review #371: shaped backends should fail at backend selection with an actionable message,
+    # not later inside ProsodyShaper.shape().
+    monkeypatch.setattr("tools.ai_sidecar.voice.bake.shutil.which", lambda name: None)
+    args = argparse.Namespace(
+        backend=backend,
+        say_voice="Daniel",
+        piper_model="voice.onnx",
+        kokoro_model="kokoro.onnx",
+        kokoro_voices="voices.bin",
+        kokoro_voice="am_michael",
+    )
+    with pytest.raises(SystemExit, match="ffmpeg"):
+        _build_backend(args)
+
+
 class _BatchToneBackend:
     voice_signature = "batch-tone-v1"
 
     def __init__(self) -> None:
-        self.calls: list[tuple[list[tuple[str, Path]], int]] = []
+        self.calls: list[tuple[list[tuple[str, str, Path]], int]] = []
 
-    def synthesize(self, text: str, out_path: Path, samplerate: int) -> None:
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
         raise AssertionError("batch backend should not be called one clip at a time")
 
-    def synthesize_many(self, items: list[tuple[str, Path]], samplerate: int) -> None:
+    def synthesize_many(self, items: list[tuple[str, str, Path]], samplerate: int) -> None:
         self.calls.append((list(items), samplerate))
         tone = ToneBackend()
-        for text, target in items:
-            tone.synthesize(text, target, samplerate)
+        for text, register, target in items:
+            tone.synthesize(text, register, target, samplerate)
 
 
 def test_bake_uses_batch_backend_when_available(tmp_path) -> None:
@@ -175,10 +232,22 @@ def _first_sample(path: Path) -> int:
         return struct.unpack("<h", wf.readframes(1))[0]
 
 
+class _CopyShaper:
+    @property
+    def signature(self) -> str:
+        return "copy"
+
+    def shape(self, in_wav: Path, out_wav: Path, register: str, samplerate: int) -> None:
+        del register, samplerate
+        out_wav.write_bytes(in_wav.read_bytes())
+
+
 def _piper_backend(tmp_path: Path) -> PiperBackend:
     model = tmp_path / "voice.onnx"
     model.write_bytes(b"stub-model")
-    return PiperBackend(model)
+    backend = PiperBackend(model)
+    backend._shaper = _CopyShaper()
+    return backend
 
 
 def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch) -> None:
@@ -192,9 +261,9 @@ def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch
     backend = _piper_backend(tmp_path)
     out = tmp_path / "bank"
     items = [
-        ("brake one", out / "clip_a.wav"),
-        ("turn two", out / "clip_b.wav"),
-        ("apex three", out / "clip_c.wav"),
+        ("brake one", "firm", out / "clip_a.wav"),
+        ("turn two", "firm", out / "clip_b.wav"),
+        ("apex three", "firm", out / "clip_c.wav"),
     ]
     names = ["8", "9", "10"]  # generation order; numeric != lexical
 
@@ -214,9 +283,39 @@ def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch
     backend.synthesize_many(items, 48000)
 
     # input order == generation order, so target[i] must hold marker (i+1)*1000
-    assert _first_sample(items[0][1]) == 1000
-    assert _first_sample(items[1][1]) == 2000
-    assert _first_sample(items[2][1]) == 3000
+    assert _first_sample(items[0][2]) == 1000
+    assert _first_sample(items[1][2]) == 2000
+    assert _first_sample(items[2][2]) == 3000
+
+
+def test_piper_batch_preserves_register_length_scale(tmp_path, monkeypatch) -> None:
+    backend = _piper_backend(tmp_path)
+    out = tmp_path / "bank"
+    items = [
+        ("calm one", "calm", out / "clip_calm.wav"),
+        ("critical two", "critical", out / "clip_critical.wav"),
+    ]
+    seen: list[tuple[str, list[str]]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        assert "--input-file" in cmd, "batch path must use --input-file"
+        scale = cmd[cmd.index("--length_scale") + 1]
+        input_path = Path(cmd[cmd.index("--input-file") + 1])
+        texts = input_path.read_text(encoding="utf-8").splitlines()
+        seen.append((scale, texts))
+        output_dir = Path(cmd[cmd.index("--output-dir") + 1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for index, _text in enumerate(texts, start=1):
+            _write_pcm16_wav(output_dir / f"{index}.wav", samplerate=48000, value=index * 1000)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(bake_mod.subprocess, "run", fake_run)
+    backend.synthesize_many(items, 48000)
+
+    assert ("1.05", ["calm one"]) in seen
+    assert ("0.88", ["critical two"]) in seen
+    assert _first_sample(items[0][2]) == 1000
+    assert _first_sample(items[1][2]) == 1000
 
 
 def test_piper_batch_falls_back_to_per_clip_when_batch_fails(tmp_path, monkeypatch) -> None:
@@ -227,7 +326,7 @@ def test_piper_batch_falls_back_to_per_clip_when_batch_fails(tmp_path, monkeypat
     """
     backend = _piper_backend(tmp_path)
     out = tmp_path / "bank"
-    items = [("brake one", out / "clip_a.wav"), ("turn two", out / "clip_b.wav")]
+    items = [("brake one", "firm", out / "clip_a.wav"), ("turn two", "calm", out / "clip_b.wav")]
     calls: list[str] = []
 
     def fake_run(cmd, *args, **kwargs):
@@ -247,7 +346,7 @@ def test_piper_batch_falls_back_to_per_clip_when_batch_fails(tmp_path, monkeypat
 
     assert calls[0] == "batch"  # tried batch first
     assert calls.count("per-clip") == 2  # then one per clip
-    for _text, target in items:
+    for _text, _register, target in items:
         assert target.is_file()
         with wave.open(str(target), "rb") as wf:
             assert wf.getframerate() == 48000  # per-clip path produced clips at the target rate

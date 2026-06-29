@@ -1,23 +1,39 @@
 """Offline phrase-bank baker — render the bounded vocabulary once to WAV + a content-addressed
-manifest.
+manifest, with a per-register **prosody** layer so the SAME command is rendered with a tone that
+reflects the situation (issue #368).
 
 Baking is **not** time-critical (it runs offline, not at the wheel), so it can use a naturalistic
-neural voice. The runtime then plays the pre-rendered clips with deterministic, jitter-free latency.
+neural voice and shell to ``ffmpeg`` for prosody shaping. The runtime then plays the pre-rendered
+clips with deterministic, jitter-free latency — no live TTS in the hot path (invariant #1).
+
+**Register → tone.** Every clip carries a ``register`` (calm | firm | critical). A speech backend
+renders the words once; a :class:`ProsodyShaper` then applies a per-register ``ffmpeg`` filter chain
+(rate / pitch / loudness / compression / brightness) so the tone escalates with the register. The
+shaping is baked into the WAV bytes — tone is delivered with zero hot-path cost. ``ffmpeg`` is run
+with ``-bitexact`` + stripped metadata so a given ffmpeg build produces **byte-identical** output
+run-to-run (so per-clip ``sha256`` over the file bytes stays the drift detector); cross-build
+differences are expected and gated by ``voice_signature`` (which carries the ffmpeg major version +
+the prosody-chain version).
 
 Backends (pluggable via the :class:`VoiceBackend` protocol — wording always comes from
 :mod:`tools.ai_sidecar.voice.vocabulary`, never from the backend):
 
-* :class:`PiperBackend` — **production** neural voice (Piper, MIT). Shells to the ``piper`` CLI; the
-  bank is baked on the rig and committed/deployed there.
-* :class:`MacSayBackend` — local dev verification on macOS (``say`` + ``afconvert``): real
-  speech, for listening to what the engine would say, without a Piper model download.
-* :class:`ToneBackend` — **stdlib-only**, deterministic per-text tones. No third-party
-  dependency, so CI and the off-rig pipeline check can bake a real (audible) bank and exercise
-  manifest content-addressing + the full resolve->schedule->play path without a TTS engine.
+* :class:`KokoroBackend` — **recommended production** neural voice (Kokoro-82M via ``kokoro-onnx``,
+  Apache-2.0). Clean license, deterministic ONNX, best naturalness in the permissive tier.
+* :class:`MacSayExpressiveBackend` — macOS dev voice that **varies tone by register** (``say`` rate
+  + the prosody chain), so the operator can bake and **listen to** all three registers on the Mac.
+* :class:`PiperBackend` — neural voice via the Piper CLI; kept for the voice-path benchmark
+  (#368 AC d).
+* :class:`MacSayBackend` — flat macOS ``say`` (no register variation) — the benchmark's plain
+  baseline.
+* :class:`ToneBackend` — **stdlib-only**, deterministic per-(text, register) tones. No third-party
+  dependency and **no ffmpeg**, so CI bakes a real (audible) bank whose three registers are
+  measurably distinct, exercising the full key path without a TTS engine.
 
 CLI::
 
-    python -m tools.ai_sidecar.voice.bake --out <dir> --backend tone|piper|say [--samplerate 48000]
+    python -m tools.ai_sidecar.voice.bake --out <dir> \
+        --backend tone|say|say-expressive|piper|kokoro [--samplerate 48000]
 """
 
 from __future__ import annotations
@@ -25,12 +41,14 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import re
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
 import wave
+from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -45,48 +63,145 @@ from tools.ai_sidecar.voice.vocabulary import iter_vocabulary, vocabulary_hash
 
 _log = logging.getLogger("ai_sidecar.voice.bake")
 
+#: Bump when the prosody filter chains change — folded into ``voice_signature`` so a chain edit
+#: without a re-bake is surfaced (the bank's signature no longer matches what the code would
+#: render).
+PROSODY_VERSION = 1
+
 
 class VoiceBackend(Protocol):
-    """Renders one text string to a WAV file at a samplerate. ``voice_signature`` IDs the voice."""
+    """Renders one ``(text, register)`` to a WAV file at a samplerate. ``voice_signature`` IDs the
+    voice (and, for shaped backends, the prosody-chain + ffmpeg version that produced the tones)."""
 
     @property
     def voice_signature(self) -> str: ...
 
-    def synthesize(self, text: str, out_path: Path, samplerate: int) -> None: ...
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None: ...
 
 
 class BatchVoiceBackend(VoiceBackend, Protocol):
     """Backend that can render a whole phrase bank in one process."""
 
-    def synthesize_many(self, items: list[tuple[str, Path]], samplerate: int) -> None: ...
+    def synthesize_many(self, items: list[tuple[str, str, Path]], samplerate: int) -> None: ...
 
 
 # --------------------------------------------------------------------------------------------------
-# Stdlib-only deterministic backend (CI + pipeline verification)
+# ffmpeg prosody shaper (shared by the speech backends; ToneBackend never touches it)
+# --------------------------------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def ffmpeg_version() -> str:
+    """Major ffmpeg version string (e.g. ``ff8``) for ``voice_signature``; ``ff?`` if unknown."""
+    try:
+        out = subprocess.run(  # noqa: S603 - fixed binary, no shell
+            ["ffmpeg", "-version"], capture_output=True, text=True, check=True
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return "ff?"
+    m = re.search(r"ffmpeg version (\d+)", out)
+    return f"ff{m.group(1)}" if m else "ff?"
+
+
+def _prosody_filter(register: str, samplerate: int, *, apply_tempo: bool) -> str:
+    """Return the ``ffmpeg -af`` chain for a register.
+
+    ``apply_tempo`` is ``False`` for backends that already vary speaking rate at synthesis time
+    (macOS ``say -r``), so we never stack tempo twice and turn a terse cue unintelligible (issue
+    #368 AC c / adversary finding). Neutral-rate neural backends (Kokoro/Piper) pass
+    ``apply_tempo=True``. Every chain starts by resampling backend-native WAVs to the requested bank
+    rate before any tempo/pitch filter, then ends with a 6 ms fade, a brick-wall limiter, and a
+    fixed output format so the bytes are reproducible on a given ffmpeg build.
+    """
+    sr = samplerate
+    # A short fade-IN declicks the onset after the highpass/compressor; we deliberately do NOT add a
+    # fade-OUT (ffmpeg's ``afade=t=out`` needs a start time we don't know ahead of render, and with
+    # the default ``st=0`` it silences the whole clip after 6 ms — a real bug caught by
+    # measurement).
+    prefix = f"aresample={sr}"
+    tail = f"afade=t=in:d=0.006,alimiter=limit=0.97,aformat=sample_fmts=s16:sample_rates={sr}:channel_layouts=mono"  # noqa: E501
+    if register == "calm":
+        # measured, warm, slightly softer — a guidance tone.
+        body = "highpass=f=90,acompressor=threshold=-20dB:ratio=2.5:attack=10:release=80,treble=g=2:f=3000,volume=-2dB"  # noqa: E501
+    elif register == "firm":
+        tempo = "atempo=1.13," if apply_tempo else ""
+        body = f"{tempo}highpass=f=110,acompressor=threshold=-18dB:ratio=3.5:attack=5:release=60,treble=g=3.5:f=3300,volume=3dB"  # noqa: E501
+    elif register == "critical":
+        # faster + brighter + harder-compressed + louder — an alarm that cuts through engine noise.
+        tempo = f"asetrate={sr}*1.05,aresample={sr},atempo=1.12," if apply_tempo else ""
+        body = f"{tempo}highpass=f=130,acompressor=threshold=-22dB:ratio=5:attack=3:release=45,treble=g=5.5:f=3600,volume=6dB"  # noqa: E501
+    else:  # pragma: no cover - registers are validated upstream
+        body = "anull"
+    return f"{prefix},{body},{tail}"
+
+
+class ProsodyShaper:
+    """Applies a per-register ffmpeg filter chain to a raw WAV, deterministically.
+
+    ``-bitexact`` + ``-map_metadata -1`` strip the version-identifying ``ISFT``/encoder tags so the
+    output WAV is byte-identical run-to-run on a given ffmpeg build — keeping the per-clip
+    ``sha256`` over file bytes a meaningful drift detector. Cross-ffmpeg-build byte differences are
+    expected and gated by :func:`ffmpeg_version` in ``voice_signature``.
+    """
+
+    def __init__(self, *, apply_tempo: bool) -> None:
+        self._apply_tempo = apply_tempo
+
+    @property
+    def signature(self) -> str:
+        return f"{ffmpeg_version()}+prosody{PROSODY_VERSION}"
+
+    def shape(self, in_wav: Path, out_wav: Path, register: str, samplerate: int) -> None:
+        filt = _prosody_filter(register, samplerate, apply_tempo=self._apply_tempo)
+        subprocess.run(  # noqa: S603 - fixed binary + our own filter string, no shell
+            [
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-fflags", "+bitexact", "-flags", "+bitexact",
+                "-i", str(in_wav),
+                "-af", filt,
+                "-map_metadata", "-1",
+                "-ac", "1", "-c:a", "pcm_s16le",
+                "-bitexact",
+                str(out_wav),
+            ],
+            check=True,
+        )  # fmt: skip
+
+
+# --------------------------------------------------------------------------------------------------
+# Stdlib-only deterministic backend (CI + pipeline verification) — register-aware, no ffmpeg
 # --------------------------------------------------------------------------------------------------
 
 
 class ToneBackend:
-    """Deterministic, dependency-free tones — distinct per text, audible, reproducible.
+    """Deterministic, dependency-free tones — distinct per (text, register), audible, reproducible.
 
     Not speech; a smoke/verification voice that proves the bake + manifest + playback plumbing with
-    zero third-party deps. Frequency and duration derive from a stable hash of the text, so the bank
-    is byte-reproducible across runs (content-addressing is meaningful).
+    zero third-party deps and **no ffmpeg** (stdlib ``wave`` only), so it runs in CI. Frequency and
+    duration derive from a stable hash of the text PLUS a per-register shift, so the three registers
+    for one cue are **measurably distinct** (critical is higher-pitched and shorter than calm) and
+    the bank is byte-reproducible across runs — CI exercises the register dimension end-to-end.
     """
 
-    voice_signature = "tone-v1"
+    voice_signature = "tone-v2"
 
-    def synthesize(self, text: str, out_path: Path, samplerate: int) -> None:
-        # Stable, platform-independent hash of the text (avoid Python's salted hash()).
+    #: (frequency offset Hz, duration scale) per register — critical is brighter + shorter.
+    _REGISTER_TONE: dict[str, tuple[float, float]] = {
+        "calm": (0.0, 1.0),
+        "firm": (110.0, 0.85),
+        "critical": (240.0, 0.70),
+    }
+
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
         digest = sha256_bytes(text.encode("utf-8"))
         seed = int(digest[:8], 16)
-        freq = 220.0 + (seed % 660)  # 220–880 Hz, a comfortable musical band
+        freq_off, dur_scale = self._REGISTER_TONE.get(register, (0.0, 1.0))
+        freq = 220.0 + (seed % 520) + freq_off  # base band + per-register brightness
         words = max(1, len(text.split()))
-        duration_s = min(1.2, 0.18 * words)  # ~0.18 s/word, capped — terse like a real cue
+        duration_s = min(1.2, 0.18 * words) * dur_scale  # ~0.18 s/word, capped, register-scaled
         n = int(samplerate * duration_s)
         amp = 0.4
-        # 5 ms raised-cosine fade in/out so the tone has no click (mirrors the real join crossfade).
-        fade = max(1, int(samplerate * 0.005))
+        fade = max(1, int(samplerate * 0.005))  # 5 ms raised-cosine fade — no click
         frames = bytearray()
         for i in range(n):
             env = 1.0
@@ -104,12 +219,7 @@ class ToneBackend:
 
 
 def _normalize_wav(path: Path, samplerate: int) -> None:
-    """Normalize backend output to mono 16-bit PCM at ``samplerate``.
-
-    Some external synthesizers (notably Piper voices) write at the model's native sample rate even
-    when the target bank should match a 48 kHz Windows endpoint. Resample offline during baking so
-    the hot path can keep a single pre-opened audio stream.
-    """
+    """Normalize backend output to mono 16-bit PCM at ``samplerate``."""
     with wave.open(str(path), "rb") as wf:
         source_rate = wf.getframerate()
         channels = wf.getnchannels()
@@ -157,31 +267,93 @@ def _normalize_wav(path: Path, samplerate: int) -> None:
 # --------------------------------------------------------------------------------------------------
 
 
+class KokoroBackend:
+    """Recommended production neural voice: Kokoro-82M via ``kokoro-onnx`` (Apache-2.0).
+
+    Renders the words at a register-appropriate base speed, then the :class:`ProsodyShaper` applies
+    the per-register tone. Deterministic on the ONNX CPU provider. The model + voices file are
+    downloaded once and committed/deployed with the bank on the rig. ``kokoro-onnx`` is imported
+    lazily so the bake module stays importable without it.
+    """
+
+    #: per-register synthesis speed (Kokoro renders neutral; the shaper adds tempo for firm/critical
+    #: too, so keep these modest to avoid double-fast unintelligibility on terse cues).
+    _REGISTER_SPEED: dict[str, float] = {"calm": 0.95, "firm": 1.0, "critical": 1.05}
+
+    def __init__(
+        self,
+        model_path: str | Path,
+        voices_path: str | Path,
+        *,
+        voice: str = "am_michael",
+    ) -> None:
+        self._model = Path(model_path)
+        self._voices = Path(voices_path)
+        self._voice = voice
+        if not self._model.is_file():
+            raise FileNotFoundError(f"kokoro model not found: {self._model}")
+        if not self._voices.is_file():
+            raise FileNotFoundError(f"kokoro voices not found: {self._voices}")
+        self._shaper = ProsodyShaper(apply_tempo=True)
+        self._kokoro = None  # lazy
+
+    @property
+    def voice_signature(self) -> str:
+        return f"kokoro:{self._voice}+{self._shaper.signature}"
+
+    def _engine(self):
+        if self._kokoro is None:
+            from kokoro_onnx import Kokoro  # lazy import — heavy dep
+
+            self._kokoro = Kokoro(str(self._model), str(self._voices))
+        return self._kokoro
+
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
+        import soundfile as sf  # lazy
+
+        speed = self._REGISTER_SPEED.get(register, 1.0)
+        samples, sr = self._engine().create(text, voice=self._voice, speed=speed, lang="en-us")
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw.wav"
+            sf.write(str(raw), samples, sr, subtype="PCM_16")
+            self._shaper.shape(raw, out_path, register, samplerate)
+
+
 class PiperBackend:
-    """Production neural voice via the Piper CLI (MIT). Bake once on the rig, deploy the WAVs."""
+    """Neural voice via the Piper CLI (kept for the #368 AC(d) voice-path benchmark).
+
+    Renders at a register-appropriate ``length_scale`` (lower = faster), then shapes per register.
+    """
+
+    _REGISTER_LENGTH_SCALE: dict[str, float] = {"calm": 1.05, "firm": 0.95, "critical": 0.88}
 
     def __init__(self, model_path: str | Path, piper_bin: str = "piper") -> None:
         self._model = Path(model_path)
         self._bin = piper_bin
         if not self._model.is_file():
             raise FileNotFoundError(f"piper model not found: {self._model}")
+        self._shaper = ProsodyShaper(apply_tempo=True)
 
     @property
     def voice_signature(self) -> str:
-        return f"piper:{self._model.stem}"
+        return f"piper:{self._model.stem}+{self._shaper.signature}"
 
-    def synthesize(self, text: str, out_path: Path, samplerate: int) -> None:
-        # piper reads text on stdin and writes a WAV at the model's native samplerate, then we
-        # rewrite it to the bank samplerate so WASAPI devices that reject 22050 Hz can still
-        # play it.
-        subprocess.run(  # noqa: S603 - fixed binary + our own text, no shell
-            [self._bin, "--model", str(self._model), "--output_file", str(out_path)],
-            input=text.encode("utf-8"),
-            check=True,
-        )
-        _normalize_wav(out_path, samplerate)
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
+        length_scale = self._REGISTER_LENGTH_SCALE.get(register, 1.0)
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw.wav"
+            subprocess.run(  # noqa: S603 - fixed binary + our own text, no shell
+                [
+                    self._bin, "--model", str(self._model),
+                    "--length_scale", str(length_scale),
+                    "--output_file", str(raw),
+                ],
+                input=text.encode("utf-8"),
+                check=True,
+            )  # fmt: skip
+            self._shaper.shape(raw, out_path, register, samplerate)
 
-    def synthesize_many(self, items: list[tuple[str, Path]], samplerate: int) -> None:
+    def synthesize_many(self, items: list[tuple[str, str, Path]], samplerate: int) -> None:
         """Render a phrase bank in one Piper process, with a per-clip fallback.
 
         Spawning Piper once per clip is prohibitively slow on Windows, so we try a single
@@ -199,15 +371,31 @@ class PiperBackend:
             _log.warning(
                 "voice: piper batch bake failed (%s); falling back to per-clip synthesis", exc
             )
-            for text, target in items:
+            for text, register, target in items:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                self.synthesize(text, target, samplerate)
+                self.synthesize(text, register, target, samplerate)
 
-    def _synthesize_many_batch(self, items: list[tuple[str, Path]], samplerate: int) -> None:
+    def _synthesize_many_batch(self, items: list[tuple[str, str, Path]], samplerate: int) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            input_path = tmp_path / "phrases.txt"
-            output_dir = tmp_path / "clips"
+            groups: dict[str, list[tuple[str, Path]]] = {}
+            for text, register, target in items:
+                groups.setdefault(register, []).append((text, target))
+            for register, group in groups.items():
+                self._synthesize_register_batch(tmp_path, register, group, samplerate)
+
+    def _synthesize_register_batch(
+        self,
+        tmp_path: Path,
+        register: str,
+        items: list[tuple[str, Path]],
+        samplerate: int,
+    ) -> None:
+        length_scale = self._REGISTER_LENGTH_SCALE.get(register, 1.0)
+        with tempfile.TemporaryDirectory(dir=tmp_path) as group_tmp:
+            group_path = Path(group_tmp)
+            input_path = group_path / "phrases.txt"
+            output_dir = group_path / "clips"
             output_dir.mkdir(parents=True, exist_ok=True)
             input_path.write_text(
                 "".join(f"{text}\n" for text, _target in items),
@@ -218,6 +406,8 @@ class PiperBackend:
                     self._bin,
                     "--model",
                     str(self._model),
+                    "--length_scale",
+                    str(length_scale),
                     "--input-file",
                     str(input_path),
                     "--output-dir",
@@ -231,25 +421,65 @@ class PiperBackend:
             )
             # piper1-gpl names each clip ``{time.monotonic_ns()}.wav`` in generation order, so a
             # NUMERIC sort maps the generated clips back to input order. A LEXICAL sort would
-            # silently mis-order at a digit-count rollover (…9.wav vs …10.wav) and the count guard
-            # below — which checks cardinality, not correspondence — would not catch it. Any odd /
-            # non-numeric naming raises ValueError here and the caller falls back to per-clip.
+            # silently mis-order at a digit-count rollover (...9.wav vs ...10.wav) and the count
+            # guard below would not catch it. Odd/non-numeric names raise and fall back per clip.
             generated = sorted(output_dir.glob("*.wav"), key=lambda p: int(p.stem))
             if len(generated) != len(items):
                 raise RuntimeError(
                     f"piper generated {len(generated)} clips for {len(items)} input phrases"
                 )
-            for source, (_text, target) in zip(generated, items, strict=True):
+            for index, (source, (_text, target)) in enumerate(zip(generated, items, strict=True)):
                 target.parent.mkdir(parents=True, exist_ok=True)
-                # shutil.move (not Path.replace): the temp dir and the bank output dir can be on
-                # different drives on a Windows rig (%TEMP% on C:, bank on D:), where os.replace
-                # raises a cross-device OSError.
-                shutil.move(str(source), str(target))
-                _normalize_wav(target, samplerate)
+                raw = group_path / f"raw_{index}.wav"
+                # shutil.move (not Path.replace): the temp dir and bank output dir can be on
+                # different drives on a Windows rig (%TEMP% on C:, bank on D:).
+                shutil.move(str(source), str(raw))
+                self._shaper.shape(raw, target, register, samplerate)
+
+
+class MacSayExpressiveBackend:
+    """macOS dev voice that varies tone by register: a fixed ``say`` rate + the prosody chain.
+
+    Lets the operator bake on the Mac and **listen** to all three registers (issue #368). ``say``
+    renders at ONE moderate rate (just the voice timbre); the :class:`ProsodyShaper`
+    (``apply_tempo=True``) owns ALL of the register shaping — tempo, pitch, loudness, brightness —
+    exactly like the production neural backends. This keeps a single tone path (so what the operator
+    hears on the Mac matches how the rig's Kokoro clips are shaped) and avoids the say-rate +
+    chain-tempo double-fast unintelligibility the adversary flagged.
+    """
+
+    #: one moderate rate — terse but natural; the prosody chain does the per-register tempo.
+    _SAY_RATE = 200
+
+    def __init__(self, voice: str = "Daniel") -> None:
+        self._voice = voice
+        self._shaper = ProsodyShaper(apply_tempo=True)
+
+    @property
+    def voice_signature(self) -> str:
+        return f"macsay-expr:{self._voice}+{self._shaper.signature}"
+
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            aiff = Path(tmp) / "clip.aiff"
+            raw = Path(tmp) / "raw.wav"
+            subprocess.run(  # noqa: S603 - fixed binary, our own text
+                ["say", "-v", self._voice, "-r", str(self._SAY_RATE), "-o", str(aiff), text],
+                check=True,
+            )
+            subprocess.run(  # noqa: S603 - convert to mono 16-bit PCM WAV at target samplerate
+                ["afconvert", str(aiff), str(raw), "-d", f"LEI16@{samplerate}", "-f", "WAVE", "-c", "1"],  # noqa: E501
+                check=True,
+            )  # fmt: skip
+            self._shaper.shape(raw, out_path, register, samplerate)
 
 
 class MacSayBackend:
-    """macOS dev voice: ``say`` -> AIFF -> ``afconvert`` -> mono 16-bit WAV at samplerate."""
+    """Flat macOS ``say`` (no register variation) — the voice-path benchmark's plain baseline.
+
+    Renders every register identically (the "before" the issue rejects: one flat narration voice),
+    so the benchmark can quantify what the expressive path adds.
+    """
 
     def __init__(self, voice: str = "Daniel") -> None:
         self._voice = voice
@@ -258,29 +488,16 @@ class MacSayBackend:
     def voice_signature(self) -> str:
         return f"macsay:{self._voice}"
 
-    def synthesize(self, text: str, out_path: Path, samplerate: int) -> None:
+    def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             aiff = Path(tmp) / "clip.aiff"
             subprocess.run(  # noqa: S603 - fixed binary, our own text
-                ["say", "-v", self._voice, "-o", str(aiff), text],
-                check=True,
+                ["say", "-v", self._voice, "-o", str(aiff), text], check=True
             )
             subprocess.run(  # noqa: S603 - convert to mono 16-bit PCM WAV at target samplerate
-                [
-                    "afconvert",
-                    str(aiff),
-                    str(out_path),
-                    # afconvert carries the sample rate in the data-format spec (@<rate>); there is
-                    # no separate --rate flag. LEI16 = little-endian 16-bit PCM; -c 1 = mono.
-                    "-d",
-                    f"LEI16@{samplerate}",
-                    "-f",
-                    "WAVE",
-                    "-c",
-                    "1",
-                ],
+                ["afconvert", str(aiff), str(out_path), "-d", f"LEI16@{samplerate}", "-f", "WAVE", "-c", "1"],  # noqa: E501
                 check=True,
-            )
+            )  # fmt: skip
 
 
 # --------------------------------------------------------------------------------------------------
@@ -291,9 +508,9 @@ class MacSayBackend:
 def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 48000) -> Manifest:
     """Render every vocabulary phrase to ``out_dir/<clip_id>.wav`` and write ``manifest.json``.
 
-    The manifest stamps the current :func:`vocabulary_hash` and the backend's
-    ``voice_signature``, so a later wording change (or a different voice) is detected at load.
-    Returns the in-memory manifest.
+    The manifest stamps the current :func:`vocabulary_hash` and the backend's ``voice_signature``,
+    so a later wording/register change (or a different voice / prosody chain / ffmpeg build) is
+    detected at load. Returns the in-memory manifest.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -301,10 +518,10 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 4
     targets = [(phrase, out / f"{phrase.clip_id}.wav") for phrase in phrases]
     batch = getattr(backend, "synthesize_many", None)
     if callable(batch):
-        batch([(phrase.text, target) for phrase, target in targets], samplerate)
+        batch([(phrase.text, phrase.register, target) for phrase, target in targets], samplerate)
     else:
         for phrase, target in targets:
-            backend.synthesize(phrase.text, target, samplerate)
+            backend.synthesize(phrase.text, phrase.register, target, samplerate)
 
     clips: dict[str, ClipEntry] = {}
     for phrase, fp in targets:
@@ -316,6 +533,7 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 4
             file=fname,
             kind=phrase.kind,
             urgency=phrase.urgency,
+            register=phrase.register,
             corner=phrase.corner,
             text=phrase.text,
             sha256=sha256_bytes(data),
@@ -335,24 +553,47 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 4
 def _build_backend(args: argparse.Namespace) -> VoiceBackend:
     if args.backend == "tone":
         return ToneBackend()
+    if args.backend == "say":
+        return MacSayBackend(voice=args.say_voice)
+    if args.backend == "say-expressive":
+        _require_ffmpeg(args.backend)
+        return MacSayExpressiveBackend(voice=args.say_voice)
     if args.backend == "piper":
         if not args.piper_model:
             raise SystemExit("--piper-model is required for --backend piper")
+        _require_ffmpeg(args.backend)
         return PiperBackend(args.piper_model)
-    if args.backend == "say":
-        return MacSayBackend(voice=args.say_voice)
+    if args.backend == "kokoro":
+        if not args.kokoro_model or not args.kokoro_voices:
+            raise SystemExit("--kokoro-model and --kokoro-voices are required for --backend kokoro")
+        _require_ffmpeg(args.backend)
+        return KokoroBackend(args.kokoro_model, args.kokoro_voices, voice=args.kokoro_voice)
     raise SystemExit(f"unknown backend {args.backend!r}")
+
+
+def _require_ffmpeg(backend: str) -> None:
+    """Fail early with an actionable CLI error for backends that use the prosody shaper."""
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit(
+            f"--backend {backend} requires ffmpeg on PATH for deterministic prosody shaping"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Bake the voice-coach phrase bank.")
     parser.add_argument("--out", required=True, help="output bank directory")
     parser.add_argument(
-        "--backend", default="tone", choices=("tone", "piper", "say"), help="synthesis backend"
+        "--backend",
+        default="tone",
+        choices=("tone", "say", "say-expressive", "piper", "kokoro"),
+        help="synthesis backend",
     )
     parser.add_argument("--samplerate", type=int, default=48000)
     parser.add_argument("--piper-model", help="path to a Piper .onnx voice model (backend=piper)")
-    parser.add_argument("--say-voice", default="Daniel", help="macOS voice name (backend=say)")
+    parser.add_argument("--kokoro-model", help="path to kokoro .onnx model (backend=kokoro)")
+    parser.add_argument("--kokoro-voices", help="path to kokoro voices .bin (backend=kokoro)")
+    parser.add_argument("--kokoro-voice", default="am_michael", help="kokoro voice name")
+    parser.add_argument("--say-voice", default="Daniel", help="macOS voice name (backend=say*)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:

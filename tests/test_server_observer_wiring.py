@@ -180,14 +180,19 @@ def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
 def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
     import tools.ai_sidecar.voice.client as voice_client
 
-    spoken: list[str] = []
+    spoken: list[tuple[str, str]] = []
     seen: dict[str, float | int] = {}
     server.set_voice_coach(None)
 
-    def fake_speaker(*, rate: int, volume: float):
-        seen["rate"] = rate
-        seen["volume"] = volume
-        return spoken.append
+    def fake_speaker(*, base_rate: int, base_volume: float, require_opt_in: bool):
+        seen["rate"] = base_rate
+        seen["volume"] = base_volume
+        seen["require_opt_in"] = int(require_opt_in)
+
+        def speak(text: str, register: str = "calm") -> None:
+            spoken.append((text, register))
+
+        return speak
 
     monkeypatch.setenv("AC_COPILOT_VOICE_RATE", "260")
     monkeypatch.setenv("AC_COPILOT_VOICE_VOLUME", "0.8")
@@ -202,8 +207,8 @@ def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
     finally:
         server.set_voice_coach(None)
 
-    assert spoken == ["Carry more speed, Turn 2."]
-    assert seen == {"rate": 260, "volume": 0.8}
+    assert spoken == [("More entry speed, Turn 2.", "calm")]
+    assert seen == {"rate": 260, "volume": 0.8, "require_opt_in": 0}
 
 
 def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):

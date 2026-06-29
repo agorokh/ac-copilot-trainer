@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T17:15:00Z
+last_updated: 2026-06-29T18:42:58Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-365-game-point-launcher-2026-06-29.md
@@ -52,6 +53,39 @@ relates_to:
 
 # Next session handoff
 
+## In flight (2026-06-29T18:42:58Z) — PR #371 voice-intensity resolution for #368
+
+PR [#371](https://github.com/agorokh/ac-copilot-trainer/pull/371) is still OPEN. The branch has been
+merged with `origin/main` (`669eba7`) and has local review-resolution commits after that merge. It
+preserves the #368 voice-intensity work, the PR #372 batch-bake/48 kHz defaults, and the parallel
+process-miner/vault updates from `main`.
+
+Codex findings addressed after the merge: pyttsx3 register rate/volume now uses configured base
+knobs as the center; the standalone WS voice client no longer requires fallback-only
+`AC_COPILOT_VOICE_TTS=1`; legacy `act` advisories without an explicit register resolve to the
+playable firm clip instead of going silent; and post-apex brake-release cues can escalate from calm
+to firm if the driver stays heavy on the brake. Later timing/bake findings are also fixed locally:
+timing reports require the critical brake alarm clip to be spoken, long-track injected frames scale
+from speed/frame-rate/track length, Piper batch bakes preserve register `--length_scale`, and
+`voice-bake` keeps `kokoro-onnx` behind a Python `<3.14` marker so the extra remains installable on
+this repo's advertised 3.14 runtime. Latest local fixes also reset first-corner previous-lap cue
+state before a wrapped lead window, defer post-apex release cues until a still-playing brake alarm
+finishes, drive timing reports one frame past corner exit so LOW verbosity proves info suppression
+non-vacuously, require anticipatory assertions to be based on spoken cues, and make the prosody chain
+resample backend-native Piper/Kokoro WAVs to the requested bank rate before applying critical
+tempo/pitch shaping.
+
+Focused verification after these fixes: voice client/resolver/observer/scheduler/engine suite
+passed (`66 passed`); voice bake/timing/resolver/observer suite passed (`58 passed`); synthetic
+timing-report CLI exits 0 and asserts `critical_brake_alarm_spoken: true`; latest
+observer/scheduler/timing/bake focused suite passed (`82 passed`) and timing-report CLI now emits
+real `apex_deficit` info advisories while keeping them unspoken under LOW; after the Piper
+source-rate fix, `tests/test_voice_bake.py` passed (`17 passed`) and ruff is clean on the touched
+bake files. Full local `make ci-fast PYTHON=.venv/bin/python` passed at head `06153a3` before this
+latest Qodo fix; rerun full CI after committing it, push, trigger reviewers, observe the 10-minute
+cooldown, then inspect GitHub checks plus current-head review threads. Detailed merge-contention
+notes: [[voice-368-merge-contention-2026-06-29]].
+
 ## Delivered (2026-06-29) — PR #372 MERGED: #350 Part B voice-bake (batch Piper + 48 kHz default)
 
 PR [#372](https://github.com/agorokh/ac-copilot-trainer/pull/372) squash-merged to `main` as
@@ -74,6 +108,10 @@ its genuine net-new and **keep main's shipped rtmixer fix** (dropped #372's acti
 move) + 1 test-env P2 + Qodo numpy-reliability — **all fixed**; Qodo `--out` "rule violation" **rebutted +
 resolved** (operator-run offline CLI, no untrusted input, pre-existing & unchanged by the diff).
 Classification: no migration/env/deps/script/workflow flags.
+
+During this PR #371 merge, the #372 bake path was reconciled with #371's register/prosody model:
+batch items carry `(text, register, target)`, Piper batch output is shaped per register, and the
+Kokoro/say-expressive/manifest validation work remains intact.
 
 **Local verification (m5):** real 48 kHz bake (126 clips, all 48000 Hz, codepage-safe CLI); full
 `telemetry_tick` → `RealtimeObserver` → `coaching.cue` advisory → `VoiceCoach` chain dispatches the

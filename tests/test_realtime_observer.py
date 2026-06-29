@@ -115,7 +115,7 @@ def test_slower_lap_triggers_apex_deficit():
     assert a.detail["source"] == "corpus_best"  # honest: not a fabricated GGV optimum
 
 
-def test_late_brake_fires_once_when_coasting_past_brake_point():
+def test_late_brake_escalates_register_not_per_frame_when_coasting():
     ref_lap = lap_trace_from_archive(_corner_archive())
     refs = build_references(ref_lap)
     add_corpus_lap(refs, ref_lap)
@@ -131,9 +131,16 @@ def test_late_brake_fires_once_when_coasting_past_brake_point():
         {"spline": mid, "speed": 195.0, "brake": 0.0},
     ]
     fired = [a for f in frames for a in obs.observe(f)]
-    late = [a for a in fired if a.kind == "late_brake" and a.urgency == "act"]
-    assert len(late) == 1  # exactly once per pass, not per frame
-    assert late[0].corner == r.index and late[0].urgency == "act"
+    late = [a for a in fired if a.kind == "late_brake"]
+    assert late, "expected at least one brake cue"
+    # Escalation, NOT per-frame spam (issue #368 / codex #371): the cue re-fires only when the tone
+    # register steps UP, so registers are strictly increasing and there is at most one per tier.
+    rank = {"calm": 0, "firm": 1, "critical": 2}
+    ranks = [rank[a.register] for a in late]
+    assert ranks == sorted(ranks) and len(ranks) == len(set(ranks))
+    assert len(late) <= len(frames)
+    assert late[-1].urgency == "act"  # the escalated tier acts now
+    assert late[0].corner == r.index
     # user-facing label is 1-based: corner index 0 -> "T1", never "T0" (codex #294)
     assert "T1" in late[0].message and "T0" not in late[0].message
 
@@ -150,11 +157,11 @@ def test_brake_prepare_fires_before_brake_point():
         n_corpus=1,
     )
     obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
-    # At 180 km/h, one second is 50 m, i.e. 0.020 spline on a 2500 m track.
-    out = obs.observe({"spline": 0.432, "speed": 180.0, "brake": 0.0})
+    # At 110 km/h, one second is 30.6 m, i.e. about 0.012 spline on a 2500 m track.
+    out = obs.observe({"spline": 0.44, "speed": 110.0, "brake": 0.0})
     prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
     assert prepare and prepare[0].spline == 0.45
-    assert prepare[0].detail["lead_s"] == pytest.approx(0.9, abs=0.05)
+    assert prepare[0].detail["lead_s"] == pytest.approx(0.82, abs=0.05)
 
 
 def test_brake_prepare_is_not_post_fact_and_does_not_repeat():
@@ -169,15 +176,15 @@ def test_brake_prepare_is_not_post_fact_and_does_not_repeat():
         n_corpus=1,
     )
     obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
-    assert obs.observe({"spline": 0.44, "speed": 180.0, "brake": 0.0})
+    assert obs.observe({"spline": 0.44, "speed": 110.0, "brake": 0.0})
     assert [
         a
-        for a in obs.observe({"spline": 0.445, "speed": 180.0, "brake": 0.0})
+        for a in obs.observe({"spline": 0.445, "speed": 110.0, "brake": 0.0})
         if a.urgency == "prepare"
     ] == []
     assert [
         a
-        for a in obs.observe({"spline": 0.451, "speed": 180.0, "brake": 0.0})
+        for a in obs.observe({"spline": 0.451, "speed": 110.0, "brake": 0.0})
         if a.urgency == "prepare"
     ] == []
 
@@ -214,6 +221,27 @@ def test_trail_brake_before_brake_point_is_not_flagged_late():
     ]
     fired = [a for f in frames for a in obs.observe(f)]
     assert [a for a in fired if a.kind == "late_brake"] == []
+
+
+def test_brake_release_can_escalate_after_calm_threshold_crossing():
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref])
+
+    calm = obs.observe({"spline": 0.52, "speed": 90.0, "brake": 0.46, "throttle": 0.0})
+    firm = obs.observe({"spline": 0.53, "speed": 88.0, "brake": 0.82, "throttle": 0.0})
+
+    releases = [a for a in [*calm, *firm] if a.kind == "brake_release"]
+    assert [a.register for a in releases] == ["calm", "firm"]
+    assert releases[-1].urgency == "act"
 
 
 def test_late_brake_fires_upstream_of_corner_window():

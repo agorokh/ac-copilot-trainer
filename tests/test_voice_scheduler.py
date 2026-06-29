@@ -25,42 +25,45 @@ def _scheduler(config: VoiceConfig | None = None) -> tuple[Scheduler, RecordingP
 
 def test_basic_dispatch() -> None:
     sched, pb, clock = _scheduler()
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
     spoken = sched.process_pending(clock())
     assert spoken is not None
-    assert pb.played[-1].clip_id == "late_brake.act.t03"
+    assert pb.played[-1].clip_id == "late_brake.act.firm.generic"  # terse act clip
 
 
 def test_highest_urgency_wins_in_a_batch() -> None:
     sched, pb, clock = _scheduler()
-    sched.submit(make_advisory(kind="apex_deficit", urgency="info", corner=0))
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=4))
+    sched.submit(make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=0))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=4))
     spoken = sched.process_pending(clock())
     assert spoken is not None and spoken.urgency == "act"
     assert len(pb.played) == 1  # only the winner speaks
-    assert pb.played[-1].clip_id == "late_brake.act.t05"
+    assert pb.played[-1].clip_id == "late_brake.act.firm.generic"
 
 
 def test_same_rank_tie_break_prefers_freshest_cue() -> None:
-    """Equal-urgency batch must pick the later enqueued_at (Qodo #349 / scheduler.py:119)."""
+    """Equal-urgency batch must pick the later enqueued_at (Qodo #349 / scheduler.py:119).
+
+    Uses the per-corner apex_deficit cue so the freshest pick is observable in the clip id.
+    """
     sched, pb, clock = _scheduler()
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))  # t0 → t03
+    sched.submit(make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=2))
     clock.advance(0.05)
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=3))  # fresher → t04
+    sched.submit(make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=3))
     spoken = sched.process_pending(clock())
     assert spoken is not None
-    assert spoken.corner == 4  # 1-based corner in Utterance
-    assert pb.played[-1].clip_id == "late_brake.act.t04"
+    assert spoken.corner == 4  # 1-based corner in Utterance (fresher submission)
+    assert pb.played[-1].clip_id == "apex_deficit.info.calm.t04"
 
 
 def test_same_rank_and_timestamp_tie_break_prefers_later_submission() -> None:
     """When enqueued_at collides, the later submission in the batch must win."""
     sched, pb, clock = _scheduler()
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=3))
+    sched.submit(make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=2))
+    sched.submit(make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=3))
     spoken = sched.process_pending(clock())
     assert spoken is not None
-    assert pb.played[-1].clip_id == "late_brake.act.t04"
+    assert pb.played[-1].clip_id == "apex_deficit.info.calm.t04"
 
 
 def test_act_barges_in_over_lower_urgency_clip() -> None:
@@ -116,20 +119,73 @@ def test_act_escalation_after_prepare_same_corner_is_not_deduped() -> None:
     sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))
     spoken = sched.process_pending(clock())
     assert spoken is not None
-    assert spoken.clip_id == "late_brake.act.t03"
+    assert spoken.clip_id == "late_brake.act.firm.generic"
     assert pb.cancelled and pb.cancelled[-1].urgency == "prepare"
+
+
+def test_critical_barges_in_over_playing_firm_same_urgency() -> None:
+    # codex review #371: firm and critical share `act` urgency; a critical escalation must still
+    # interrupt a firm clip that is still sounding (barge-in tie broken on the tone register).
+    sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
+    sched.process_pending(clock())
+    assert pb.current is not None and pb.current.register == "firm"
+    clock.advance(0.1)
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="critical", corner=2))
+    sched.process_pending(clock())
+    assert pb.cancelled and pb.cancelled[-1].register == "firm"  # the firm clip was barged over
+    assert pb.current is not None and pb.current.register == "critical"
 
 
 def test_fresh_act_for_a_new_corner_is_never_suppressed_by_dedup() -> None:
     sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
     sched.process_pending(clock())
     pb.finish()
     clock.advance(0.5)  # within the dedup window, but a DIFFERENT corner
-    sched.submit(make_advisory(kind="late_brake", urgency="act", corner=7))
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="firm", corner=7))
+    spoken = sched.process_pending(clock())
+    assert spoken is not None  # different corner → different dedup_key → speaks again
+    assert len(pb.played) == 2
+
+
+def test_escalation_same_corner_different_register_is_not_dedup_suppressed() -> None:
+    """Issue #368 (adversary B2): a calm→critical escalation for the SAME corner within the dedup
+    window must NOT be dedup-suppressed — register is part of the dedup key, so an intensifying cue
+    barges through as a distinct coaching event."""
+    sched, pb, clock = _scheduler(VoiceConfig(dedup_window_s=8.0))
+    # calm anticipatory heads-up (prepare) speaks first
+    sched.submit(make_advisory(kind="late_brake", urgency="prepare", register="calm", corner=2))
+    assert sched.process_pending(clock()) is not None
+    pb.finish()
+    clock.advance(
+        0.4
+    )  # well within the dedup window → would be suppressed if register were ignored
+    # the driver hasn't acted → a CRITICAL act cue for the same corner must still dispatch
+    # (barge-in)
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="critical", corner=2))
+    spoken = sched.process_pending(clock())
+    assert spoken is not None and spoken.urgency == "act" and spoken.register == "critical"
+    assert len(pb.played) == 2
+
+
+def test_release_cue_is_deferred_until_brake_alarm_finishes() -> None:
+    sched, pb, clock = _scheduler()
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="critical", corner=2))
+    assert sched.process_pending(clock()) is not None
+    assert pb.current is not None and pb.current.kind == "late_brake"
+
+    clock.advance(0.1)
+    sched.submit(make_advisory(kind="brake_release", urgency="act", register="firm", corner=2))
+    assert sched.process_pending(clock()) is None
+    assert pb.current is not None and pb.current.kind == "late_brake"
+
+    pb.finish()
+    clock.advance(0.1)
     spoken = sched.process_pending(clock())
     assert spoken is not None
-    assert pb.played[-1].clip_id == "late_brake.act.t08"
+    assert spoken.kind == "brake_release"
+    assert pb.current is not None and pb.current.kind == "brake_release"
 
 
 def test_stale_advisory_is_dropped_by_ttl() -> None:
@@ -170,9 +226,11 @@ def test_cooldown_suppresses_same_kind_but_acts_are_exempt() -> None:
 
 def test_verbosity_low_suppresses_info() -> None:
     sched, pb, clock = _scheduler(VoiceConfig(verbosity=Verbosity.LOW))
-    sched.submit(make_advisory(kind="apex_deficit", urgency="info", corner=0))
+    # info (the post-fact apex verdict) is dropped at LOW — issue #368 AC e (no narration in low).
+    sched.submit(make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=0))
     assert sched.process_pending(clock()) is None
-    sched.submit(make_advisory(kind="apex_deficit", urgency="prepare", corner=0))
+    # a prepare-urgency cue (the anticipatory brake heads-up) still speaks at LOW.
+    sched.submit(make_advisory(kind="late_brake", urgency="prepare", register="calm", corner=0))
     assert sched.process_pending(clock()) is not None
 
 

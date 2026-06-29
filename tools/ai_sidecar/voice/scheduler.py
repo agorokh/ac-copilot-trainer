@@ -45,6 +45,9 @@ from tools.ai_sidecar.voice.utterance import URGENCY_RANK, Utterance
 _log = logging.getLogger("ai_sidecar.voice.scheduler")
 
 _ACT_RANK = URGENCY_RANK["act"]
+#: tone-register ordering (low → high) — used only to break a same-urgency barge-in tie so a
+#: critical escalation can interrupt a still-playing firm clip (issue #368 / codex review #371).
+_REGISTER_RANK: dict[str, int] = {"calm": 0, "firm": 1, "critical": 2}
 
 
 @dataclass
@@ -74,6 +77,7 @@ class Scheduler:
         self._lock = threading.Lock()
         self._cond = threading.Condition(self._lock)
         self._pending: list[_Pending] = []
+        self._deferred: list[tuple[Utterance, float]] = []
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -103,9 +107,15 @@ class Scheduler:
         """
         if now is None:
             now = self._clock()
+        deferred: tuple[Utterance, float] | None = None
         with self._lock:
+            if not self._pending and self._deferred and self._playback.current is None:
+                deferred = self._deferred.pop(0)
             batch = self._pending
             self._pending = []
+        if deferred is not None:
+            winner, enqueued_at = deferred
+            return self._dispatch(winner, now, enqueued_at=enqueued_at)
 
         candidates: list[tuple[Utterance, float, int]] = []
         for batch_index, item in enumerate(batch):
@@ -161,10 +171,30 @@ class Scheduler:
         cue."""
         current = self._playback.current
         if current is not None:
-            if winner.rank >= _ACT_RANK and winner.rank > current.rank:
-                # Barge-in: an act cue interrupts a strictly-lower clip mid-word.
+            higher_urgency = winner.rank > current.rank
+            # A critical escalation over a still-playing FIRM clip shares the `act` urgency rank, so
+            # break the tie on the tone register — the more intense alarm must be heard (codex
+            # review #371). Same urgency + same/lower register never interrupts (it would be stale).
+            louder_same_urgency = winner.rank == current.rank and _REGISTER_RANK.get(
+                winner.register, 0
+            ) > _REGISTER_RANK.get(current.register, 0)
+            if winner.rank >= _ACT_RANK and (higher_urgency or louder_same_urgency):
+                # Barge-in: an act cue interrupts a strictly-lower clip — or a higher-intensity
+                # register at the same urgency — mid-word.
                 _log.info("voice: barge-in %s over %s", winner.clip_id, current.clip_id)
                 self._playback.cancel()
+            elif (
+                winner.rank >= _ACT_RANK
+                and winner.kind == "brake_release"
+                and current.kind == "late_brake"
+            ):
+                # A release correction that follows a brake alarm is still fresh and materially
+                # different. Defer it until the brake alarm finishes instead of dropping it as an
+                # equal/lower act cue.
+                with self._lock:
+                    self._deferred.append((winner, enqueued_at if enqueued_at is not None else now))
+                _log.debug("voice: defer %s until %s finishes", winner.clip_id, current.clip_id)
+                return None
             else:
                 # Channel busy with an equal/higher cue; the moment for this one has passed — drop
                 # it
@@ -219,7 +249,11 @@ class Scheduler:
             with self._cond:
                 # Wake on a new submission; also wake periodically so a clip that finished frees the
                 # channel for the next submission's arbitration without an unbounded wait.
-                while not self._pending and not self._stop.is_set():
+                while (
+                    not self._pending
+                    and not self._stop.is_set()
+                    and (not self._deferred or self._playback.current is not None)
+                ):
                     self._cond.wait(timeout=0.05)
             if self._stop.is_set():
                 break
