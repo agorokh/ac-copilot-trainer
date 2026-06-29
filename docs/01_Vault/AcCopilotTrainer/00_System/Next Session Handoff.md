@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T03:10:00Z
+last_updated: 2026-06-29T03:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
@@ -46,6 +47,17 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
+
+PR [#359](https://github.com/agorokh/ac-copilot-trainer/pull/359) (M-TT0 vulcan retention) MERGED.
+M-TT1 services research (2026-06-29): the Cognito Identity-Pool → SigV4 auth flow now **works**
+(GetId/GetCredentials 200, SigV4 signing accepted), and **`data-analysis` accepts SigV4/IAM** (404 =
+exact path/params still to pin — the operator's primary want is auth-cracked). `dynamic-reference-laps`
+/`advice` paths pinned but return 403 (IAM-scoping or apiKey). Full findings + precise next steps:
+[[tt-services-sigv4-crack-2026-06-29]]. **Resume:** pin the exact `data-analysis` path (CDP capture of
+the running TT app, or fetch the session-review page chunk) → build `tt_services.py` → M-TT2 (reference
+→ `lap_archive` → M0 `--voice-reference`) → M-TT3. Personal-use guardrail scope applies.
 
 ## Resume here (2026-06-28 evening) - #86 rig screen connectivity restored; PR #361 active
 
