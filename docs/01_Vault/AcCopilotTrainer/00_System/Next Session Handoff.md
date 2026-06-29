@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T18:42:58Z
+last_updated: 2026-06-29T18:55:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -90,8 +90,8 @@ notes: [[voice-368-merge-contention-2026-06-29]].
 
 PR [#372](https://github.com/agorokh/ac-copilot-trainer/pull/372) squash-merged to `main` as
 [`e0c93fd`](https://github.com/agorokh/ac-copilot-trainer/commit/e0c93fd09d6f36ac4574c5f843aa07a85a47060e)
-at 2026-06-29T17:10:35Z via `/autonomous-deliver 350`. **#350 stays OPEN** — its final acceptance is
-the rig-gated audible smoke (see BLOCKED below).
+at 2026-06-29T17:10:35Z via `/autonomous-deliver 350`. **#350 is now CLOSED** — the rig-gated audible
+smoke was verified live on the rig (see VERIFIED below); follow-up voice work → #381.
 
 **Reconciliation (issue body was stale).** #350 **Part A** (Lua `telemetry_tick` producer with
 `spline`) ALREADY SHIPPED in `telemetry_publisher.lua` (commit `84b5698`, #341/#342) — the issue's
@@ -118,14 +118,36 @@ Kokoro/say-expressive/manifest validation work remains intact.
 correct clip (`apex_deficit.info.t01`) from the real bank; voice-bake suite is **stdlib-only** (7
 passed / 2 numpy-skipped with numpy absent, mirroring `.[dev]`).
 
-**BLOCKED — rig-gated final #350 AC (operator action needed).** The on-rig audible smoke (operator
-**hears** a spline-anchored cue while driving vs a faster reference) could not be run from m5: the rig
-PC is online and the sidecar is live on `:8765` (correctly 401-enforces its token), but **SSH from m5
-is denied** — the `mac-to-ag-pc` key (`id_ed25519`) is offered and **rejected for every username
-tried** (matches the recurring "Rig SSH from macOS unavailable" note), and the sidecar WS needs
-`AC_COPILOT_SIDECAR_TOKEN` which is **PC-env-only**. **To finish #350:** authorize the m5 key on the
-PC's `authorized_keys` (or share creds) **and** drive + listen — inherently operator-gated; prior
-sessions deferred this same AC identically.
+**VERIFIED — on-rig audible smoke (2026-06-29, operator confirmed hearing the cues → #350 CLOSED).**
+SSH works as **`ssh arsen@100.75.251.87`** (the Windows user is **`arsen`**, not `arseny`; the
+`mac-to-ag-pc` / `id_ed25519` key is authorized for that user — earlier "Rig SSH unavailable" notes
+were just the wrong username). **Root cause of the prior failing smoke (found + fixed):** a separate
+`C:\Users\arsen\Projects\ac-copilot-trainer-issue350-smoke` checkout ran an **old sidecar with the
+`rtmixer.done` bug** (`AttributeError: cdata 'struct action *' has no field 'done'` in
+`playback.py`) that **crashed on every voice dispatch**, and its configured bank was
+**vocabulary-drifted** (126-clip, hash mismatch → coach disabled). **Fix:** ran the sidecar from
+current `main` (duration-based playback, no `.done`) + a freshly-baked vocabulary-matched 48 kHz
+Piper bank (`C:\Users\arsen\.scratch\onrig-bank48k`, 46 clips, `piper:en_US-lessac-medium+ff8+prosody1`,
+baked on-rig in **16 s** via the new batch path; **installed ffmpeg** (Gyan.FFmpeg) for the prosody
+shaper). Stood it up as a **persistent interactive scheduled task `AcVoiceSidecar`** on 8765 — log
+confirms `realtime observer wired from reference` (Magione / 911 GT3 R, 1:17.8), `rtmixer stream open
+on device index 18 @ 48000 Hz` (WASAPI USB), `in-process voice coach wired`, no drift/crash. Replayed
+a slower Magione lap's `telemetry_tick` (note: **clamp `steer` to [-1,1]** — the autonomous-artifact
+lap had out-of-range steer that `validate_inbound` rejects) → observer published `coaching.cue`
+(tapped) and the VoiceCoach **spoke** them through the WASAPI device: `apex_deficit` T1/T2/T3 +
+`late_brake "Brake point for T4 coming up — brake."`. Also: a baked cue played 3× through WASAPI @
+48 kHz; the standalone telemetry→observer→VoiceCoach→rtmixer chain spoke a computed cue.
+
+**Rig state left running:** ffmpeg installed; the main repo (`C:\Users\arsen\Projects\ac-copilot-trainer`)
+pulled to current `main`; the **`AcVoiceSidecar` scheduled task runs the voice-enabled sidecar on 8765**
+(it replaced the prior no-voice `-m tools.ai_sidecar` PID 25984 — an improvement for coaching; revert
+by stopping the task + relaunching the launcher's sidecar if the no-voice setup is wanted).
+
+**Follow-up → [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381):** operator heard the
+cues but wants (a) a more expressive race-engineer **persona** (the "Verstappen/Hamilton" reference is
+style, not a literal — legally-inadvisable — clone) and (b) **importance-scaled intensity** (urgency in
+*tone*, not just speed). Builds on #368/#371's register/prosody foundation. Feasibility researched
+(web-grounded) in the #381 body.
 
 ## Delivered (2026-06-29) — PR #370 MERGED: M-TT1 Track Titan services crack (#353)
 
