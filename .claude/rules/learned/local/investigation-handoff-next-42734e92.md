@@ -1,0 +1,46 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 42734e92326acd5b
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: reliability
+preventability: guideline
+---
+
+# Investigation Handoff Next (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+Vault handoff: document PR #325 multi-track generality + flat-out (GGV) verification
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo....
+- <h3>PR Summary by Qodo</h3>
+
+Vault handoff: add PR #359 investigation node and update next steps
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-content/upl...
+- <h3>PR Summary by Qodo</h3>
+
+Docs: M‑TT1 services SigV4 research checkpoint for Track Titan #353
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-content/upl...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

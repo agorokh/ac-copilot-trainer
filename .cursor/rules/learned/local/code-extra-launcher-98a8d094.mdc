@@ -1,0 +1,38 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/pyproject.toml"
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 98a8d09491abebb2
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: automation
+---
+
+# Code Extra Launcher (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Declare the HTTP client dependency for the CLI**
+
+When someone installs the package without the `dev` extra and ...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Include sidecar runtime deps in the launcher extra**
+
+The new launcher extra installs only PyInstaller, but the ...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Bundle the voice deps advertised for the launcher**
+
+The documented launcher install/build path is `pip install ...
+
+## Suggested enforcement
+
+- Prefer lint/format or CI checks over manual review for this class of issue.

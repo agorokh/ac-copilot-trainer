@@ -1,0 +1,40 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: d532b71190ee276c
+mined_from: 5 review comments across 3 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: architecture
+---
+
+# Code Vault Paths (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **Qodo finding #5 (vault `relates_to` paths) — addressed as invalid per repo schema**
+
+The investigation node uses `AcCopilotTrainer/...` paths in `relates_to`, which matches the canonical anchor conv...
+- **Qodo finding #8 (vault `relates_to` paths) — waived per repo schema**
+
+`docs/01_Vault/00_Graph_Schema.md` defines the anchor explicitly: paths in `relates_to` are **relative to `docs/01_Vault/`** an...
+- **Qodo finding #12 (`relates_to` vault paths) — RESOLVED (repo schema waiver)**
+
+Finding is **Optional/Informational** in the Qodo body. Resolution:
+
+1. Canonical anchor: [`docs/01_Vault/00_Graph_Sche...
+- WONTFIX(false-positive): Qodo rule 688389 `relates_to` vault-root paths — the repo graph schema (`docs/01_Vault/00_Graph_Schema.md`) requires paths **relative to** `docs/01_Vault/` (e.g. `AcCopilotTra...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
