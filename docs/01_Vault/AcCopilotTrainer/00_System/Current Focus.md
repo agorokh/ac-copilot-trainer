@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T15:35:00Z
+last_updated: 2026-06-29T16:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -21,7 +21,7 @@ relates_to:
 
 **Active focus (2026-06-17):** EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) — **Part F harness daemon shipped** ([#228](https://github.com/agorokh/ac-copilot-trainer/issues/228)/PR #229) and its on-rig launch gap fixed ([#232](https://github.com/agorokh/ac-copilot-trainer/issues/232) **CLOSED** / PR [#233](https://github.com/agorokh/ac-copilot-trainer/pull/233) **MERGED** `c556dfe`): the daemon now launches AC **de-elevated via Content Manager** (`--launch-mode cm`), live-verified hands-off on `AG_PC`. The autonomous self-test is now **one command** ([#235](https://github.com/agorokh/ac-copilot-trainer/issues/235) **CLOSED** / PR [#236](https://github.com/agorokh/ac-copilot-trainer/pull/236) **MERGED** `d051096`): `python -m tools.ac_harness.self_test` drives the daemon hands-off and asserts the live coaching pipeline — **LIVE PASS** (`coaching.snapshot=335, tire_temps=168, connection=34`, no human at the wheel). The vision-oracle **"eyes"** also landed ([#238](https://github.com/agorokh/ac-copilot-trainer/issues/238) **CLOSED** / PR [#239](https://github.com/agorokh/ac-copilot-trainer/pull/239) **MERGED** `3e677c7`): `tools.ac_harness.hud_capture` (stdlib ctypes GDI, no new dep) captures the live AC HUD hands-off with a render-liveness check — **LIVE-VERIFIED** (in-cockpit at Spa, HUD text legible). [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188)/[#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. **The autonomous self-test now has launch + pipeline-assert + eyes, all hands-off + live-verified.**
 
-**Active focus (2026-06-19) — HANDOFF, see [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244):** Part G **racing driver** **MERGED** ([#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) / PR [#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) `372156a`): follows `fast_lane.ai`'s embedded speed profile with braking points/trail braking; **gear bug fixed** (was stuck in 1st — limiter below shift point) → now shifts 1→4, **146 km/h** (was 52). `tools/ac_harness/racing_telemetry.py` records human laps. **The wall is STEERING** (pure-pursuit cuts apexes → corners crawl, lap INVALID → no `lap`/`delta` telemetry). **Next:** record 5–10 human GT3 laps → build a path-tracking steering controller from real corner speeds/braking points. Full state: [`racing-driver-and-controller-2026-06-17`](../03_Investigations/racing-driver-and-controller-2026-06-17.md). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) Parts E–F.
+**Active focus (2026-06-19) — HANDOFF, see [#244](https://github.com/agorokh/ac-copilot-trainer/issues/244):** Part G **racing driver** **MERGED** ([#241](https://github.com/agorokh/ac-copilot-trainer/issues/241) / PR [#242](https://github.com/agorokh/ac-copilot-trainer/pull/242) `372156a`): follows `fast_lane.ai`'s embedded speed profile with braking points/trail braking; **gear bug fixed** (was stuck in 1st — limiter below shift point) → now shifts 1→4, **146 km/h** (was 52). `tools/ac_harness/racing_telemetry.py` records human laps. **The wall is STEERING** (pure-pursuit cuts apexes → corners crawl, lap INVALID → no `lap`/`delta` telemetry). **Next:** record 5–10 human GT3 laps → build a path-tracking steering controller from real corner speeds/braking points. Full state: [`racing-driver-and-controller-2026-06-17`](../03_Investigations/racing-driver-and-controller-2026-06-17.md). Parallel hot path: Stream A rig screen EPIC [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) after PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) is final polish/proof: font conversion outputs, persistence/backpressure/debug-screen polish if still desired, and final on-device smoke.
 
 **Active focus update (2026-06-19 LATER) — #244 / PR [#248](https://github.com/agorokh/ac-copilot-trainer/pull/248) MERGED + LIVE-VERIFIED on the rig:**
 Ran `/autonomous-deliver 244` **on `AG_PC` itself** (prior Mac→rig blocker moot). The merged Stanley
@@ -71,12 +71,10 @@ PR #83 (WS + Lua bridge) **MERGED 2026-04-22** at `caa8a9ad` — still the found
 
 **Outstanding housekeeping:** Issue [#81](https://github.com/agorokh/ac-copilot-trainer/issues/81) may still be OPEN from before PR #83 — close with `gh issue close 81` when confirmed duplicate.
 
-**Next (EPIC #86 remainder, new PRs):**
+**Next (EPIC #86 remainder after PR #365):**
 
-- **Part E** — Setup Exchange (`se_proxy.py`, SPIFFS LRU) per issue.
-- **Part F** — SPIFFS persistence, telemetry backpressure, debug screen, token runbook.
-- **Part A4** — `lv_font_conv` for bundled faces (screens still default to built-in Montserrat until converted).
-- **Polish / bugs** — `start_sidecar.bat` external-bind + token; PT BB chip refresh landed in PR [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) (optional on-device smoke).
+- **Delivered by PR #365** — Game Point launcher, Setup Exchange screen/proxy/install path, Pocket Technician spinner controls, and environment-only sidecar token/voice routing.
+- **Still open on #86** — Part A4 `lv_font_conv` outputs; SPIFFS/persistence/backpressure/debug-screen polish if still desired; final device smoke artifact covering launcher → AC Copilot live hints → Pocket Technician setup load → Setup Exchange browse/download/install.
 
 **Live-dev:** Hotspot + sidecar path per `[glossary/rig-network.md](../glossary/rig-network.md)`. Firmware: `python -m platformio run -e jc3248w535` under `firmware/screen/` (CI does not build firmware).
 
@@ -86,7 +84,7 @@ Integration ADR landed 2026-04-21 as `[screen-and-csp-apps-integration.md](../01
 
 Surface map of both apps lives in `[csp-app-pocket-tech-setup-exchange-2026-04-21](../03_Investigations/csp-app-pocket-tech-setup-exchange-2026-04-21.md)`.
 
-**Next:** `setup.list` / `setup.load` shipped with PR #91; remaining B-stream work is spinner tiles / `setup_control.lua` if still desired, plus Setup Exchange (Part E).
+**Next:** `setup.list` / `setup.load` shipped with PR #91; spinner controls and Setup Exchange screen/proxy/install shipped with PR #365. Remaining B-stream work is optional `setup_control.lua` / UI polish if still desired, plus the #86 final on-device smoke artifact.
 
 ## Stream C — Physical rig integration EPIC #59
 
@@ -102,10 +100,25 @@ Now **MERGED 2026-04-14**. Ollama corner coaching pipeline (`corner_query` / `co
 
 ## Priority call
 
-Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot path — user designed the visuals, firmware Phase 1 is end-to-end working, next tangible win is "tap a tile on the screen, see the setup change in-game." Stream B integration is folded into Stream A's protocol work.
+Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot path — the Game Point/Pocket Technician/Setup Exchange code path is now merged, so the next tangible win is a clean physical-rig smoke artifact across launcher → live hints → setup load → Setup Exchange install. Stream B integration is folded into Stream A's protocol work.
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-29** — PR [#370](https://github.com/agorokh/ac-copilot-trainer/pull/370) **MERGED** at
+  `26e9a09` — **M-TT1 Track Titan services crack** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)):
+  `tools/tt_ingest/tt_services.py` (services client) + `coaching` CLI retaining per-lap raw
+  reference + advice evidence to the write-once lake. **Auth corrected**: services `/api/v2/*` /
+  `/dynamic-reference-laps/*` / `/advice/*` use the raw Cognito **access token** (not SigV4 — that
+  was the disproved hypothesis); verified live (accessToken→200, idToken→403). Per-corner coaching
+  oracle works E2E. Classification: additive `tools/`+tests+fixtures, no migrations/env/deps.
+  Resume → **M-TT2** (reference telemetry → `lap_archive` → M0 `--reference-archive`). Full state:
+  [`tt-services-sigv4-crack-2026-06-29`](../03_Investigations/tt-services-sigv4-crack-2026-06-29.md).
+- **2026-06-29** — PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) **MERGED** at
+  `854f822` — **Game Point launcher supervisor** ([#363](https://github.com/agorokh/ac-copilot-trainer/issues/363)
+  **CLOSED**): Windows launcher package/shortcut/settings, supervised sidecar start/status/logging,
+  environment-only sidecar token/voice routing, Pocket Technician spinner controls, Setup Exchange
+  proxy/install path + rig-screen browse/download/install UI, and Game Point docs. Classification:
+  `.env.example` and `pyproject.toml` changed; no migrations.
 - **2026-06-28** — PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348) **MERGED** at
   `226bc97` — **Coaching lakehouse DuckDB** ([#344](https://github.com/agorokh/ac-copilot-trainer/issues/344) P1):
   embedded DuckDB star schema in `tools/coaching_lake` rebuilt from lap-archives.

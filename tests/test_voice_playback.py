@@ -7,12 +7,17 @@ onto the haptic USB-DAC" criterion is fully unit-tested here.
 
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 from _voice_support import FakeClock, build_manifest, make_advisory
 
 from tools.ai_sidecar.voice.playback import (
+    Bank,
     DeviceResolutionError,
     RecordingPlayback,
+    RtMixerPlayback,
     _TimedCurrent,
     resolve_output_device,
 )
@@ -97,6 +102,52 @@ def test_timed_current_frees_channel_after_estimated_duration() -> None:
     tc.set(utt, duration_s=10.0)
     tc.clear()
     assert tc.current is None
+
+
+def test_rtmixer_playback_frees_channel_by_clip_duration(monkeypatch) -> None:
+    np = pytest.importorskip("numpy")
+    clock = FakeClock()
+    resolver = Resolver(build_manifest())
+    utt = resolver.resolve(make_advisory(kind="late_brake", urgency="act", corner=2))
+    assert utt is not None
+    bank = Bank(samplerate=10, clips={utt.clip_id: np.zeros(5, dtype=np.float32)})
+    actions: list[object] = []
+
+    class _Mixer:
+        def __init__(self, **kwargs) -> None:
+            assert kwargs["device"] == 0
+            assert kwargs["samplerate"] == 10
+
+        def start(self) -> None:
+            return None
+
+        def play_buffer(self, pcm, channels):  # noqa: ANN001
+            del pcm, channels
+            action = object()  # no `.done` attribute on purpose
+            actions.append(action)
+            return action
+
+        def cancel(self, action) -> None:  # noqa: ANN001
+            assert action in actions
+
+        def stop(self) -> None:
+            return None
+
+    fake_sd = SimpleNamespace(
+        query_devices=lambda: [{"name": "Headset", "max_output_channels": 2, "hostapi": 0}],
+        query_hostapis=lambda: [{"name": "Windows WASAPI"}],
+    )
+    fake_rtmixer = SimpleNamespace(Mixer=_Mixer)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+    monkeypatch.setitem(sys.modules, "rtmixer", fake_rtmixer)
+
+    playback = RtMixerPlayback(bank, device_name="Headset", host_api="WASAPI", clock=clock)
+    playback.play(utt)
+    assert playback.current is utt
+    clock.advance(0.49)
+    assert playback.current is utt
+    clock.advance(0.02)
+    assert playback.current is None
 
 
 def test_bank_skips_clips_with_sha256_mismatch(tmp_path) -> None:

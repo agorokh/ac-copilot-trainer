@@ -63,7 +63,8 @@ _RELEASE_BRAKE_MIN = 0.45
 #: seconds of anticipatory lead — a cue fires this far (in time, converted to spline) BEFORE its
 #: mark so the audio ONSET lands before/at the control point, not after (issue #368 AC a).
 _LEAD_S = 0.8
-#: default lap length (m) for the lead-time → spline conversion when a track length is not supplied.
+#: default track length (m) for the lead-time → spline conversion when a track length is not
+#: supplied.
 _DEFAULT_TRACK_LENGTH_M = 2500.0
 #: public constructor default for the configurable brake lead.
 _BRAKE_PREPARE_LEAD_S = _LEAD_S
@@ -202,6 +203,11 @@ def _normalize_frame(
     throttle = _num(pick("throttle", "gas")) or 0.0
     lap = _num(pick("lap", "lapCount", "lap_count", "completedLaps", "completed_laps"))
     return spline, speed, brake, throttle, lap
+
+
+def _forward_spline_delta(current: float, target: float) -> float:
+    """Forward normalized distance from ``current`` to ``target`` in [0, 1)."""
+    return (target - current) % 1.0
 
 
 def _lead_spline_fraction(speed_kmh: float, track_length_m: float, lead_s: float) -> float:
@@ -406,18 +412,27 @@ class RealtimeObserver:
         if brake >= self._brake_on:
             return None
         s = self._brake_severity(ref, spline, speed)
-        register = _register_for(s, st.last_register, cap="critical")
+        anticipatory = spline < bp
+        # BEFORE the brake point it is a calm anticipatory heads-up regardless of closing speed (the
+        # driver hasn't missed anything yet — main's `brake_prepare` contract). Severity-based
+        # escalation (firm/critical) applies only AT/PAST the point, where coasting on is a real
+        # fault (#368 escalation; preserves the merged main brake_prepare semantics).
+        register = "calm" if anticipatory else _register_for(s, st.last_register, cap="critical")
         rank = REGISTER_RANK[register]
         if rank <= st.brake_cue_rank:
             return None  # not an escalation — already cued this tier (or higher) this pass
         st.brake_cue_rank = rank
         urgency = _URGENCY_FOR_REGISTER[register]
         st.last_register = register
-        anticipatory = spline < bp
+        lead_s = (
+            _forward_spline_delta(spline, bp) * self._track_length_m / max(speed / 3.6, 0.1)
+            if anticipatory
+            else 0.0
+        )
         return Advisory(
             kind="late_brake",
             corner=ref.index,
-            spline=round(spline, 4),
+            spline=round(bp if anticipatory else spline, 4),
             urgency=urgency,
             intensity=round(s, 3),
             register=register,
@@ -429,6 +444,7 @@ class RealtimeObserver:
             ),
             detail={
                 "brake_point_spline": round(bp, 4),
+                "lead_s": round(lead_s, 2),
                 "current_kmh": round(speed, 1),
                 "anticipatory": anticipatory,
                 "source": _target_source(ref),
@@ -538,11 +554,6 @@ def build_observer_from_reference(reference_archive: dict) -> RealtimeObserver |
     if not refs:
         return None
     add_corpus_lap(refs, ref_lap)  # the reference lap IS the corpus best
-    # Use the archive's real track length for the anticipatory-lead → spline conversion, so the
-    # 0.8 s lead is correct on long (Spa/Nordschleife) and short layouts alike — not the 2500 m
-    # default (codex review #371). Fall back to the default when the archive omits a sane length.
-    track = reference_archive.get("track") if isinstance(reference_archive, dict) else None
-    length_m = _num(track.get("lengthM")) if isinstance(track, dict) else None
-    if length_m is not None and length_m > 0:
-        return RealtimeObserver(refs, track_length_m=length_m)
-    return RealtimeObserver(refs)
+    track_obj = reference_archive.get("track")
+    track = track_obj if isinstance(track_obj, dict) else {}
+    return RealtimeObserver(refs, track_length_m=_positive_track_length_m(track.get("lengthM")))

@@ -45,7 +45,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -179,13 +179,32 @@ async def run_auto_drive(
     Windows, no real sidecar. On the rig the defaults (:func:`rig_launch`, :func:`rig_hijack`,
     :func:`rig_drive`, :func:`tap_frames`) wire it to the live game.
     """
-    if not config.skip_launch:
-        ok, reason = launch(config)
-        if not ok:
-            return AutoDriveReport(ok=False, stage="launch", error=reason)
+    controller: Controller | None = None
+    attempts = 1 if config.skip_launch else max(1, config.max_launches)
+    launch_config = replace(config, max_launches=1)
+    launched_once = config.skip_launch
+    last_launch_error = ""
+    for _ in range(attempts):
+        if not config.skip_launch:
+            ok, reason = launch(launch_config)
+            if not ok:
+                last_launch_error = reason
+                continue
+            launched_once = True
+        controller = hijack(config)
+        if controller is not None:
+            break
+        if config.skip_launch:
+            break
 
-    controller = hijack(config)
     if controller is None:
+        if not launched_once:
+            return AutoDriveReport(
+                ok=False,
+                stage="launch",
+                launched=False,
+                error=last_launch_error or "sim never reached LIVE",
+            )
         return AutoDriveReport(
             ok=False,
             stage="hijack",
@@ -305,6 +324,7 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
     reader: SharedMemoryReader | None = None
     last_pkt: int | None = None
     last_change: float | None = None
+    packet_changes = 0
     advancing_reads = 0
     try:
         while time.monotonic() < deadline:
@@ -324,10 +344,15 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
                 time.sleep(0.2)
                 continue
             if p is not None:
-                if last_pkt is None or p.packet_id != last_pkt:
+                if last_pkt is None:
                     last_pkt = p.packet_id
+                elif p.packet_id != last_pkt:
+                    last_pkt = p.packet_id
+                    packet_changes += 1
                     last_change = now
-            advancing = last_change is not None and (now - last_change) <= 0.25
+            advancing = (
+                packet_changes > 0 and last_change is not None and (now - last_change) <= 0.25
+            )
             if g.status == AcGameStatus.LIVE and advancing:
                 advancing_reads += 1
                 if advancing_reads >= 5:

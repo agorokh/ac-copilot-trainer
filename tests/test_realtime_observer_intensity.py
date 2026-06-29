@@ -62,7 +62,8 @@ def test_brake_cue_calm_when_on_pace_anticipatory() -> None:
     assert a.register == "calm"
     assert a.urgency == "prepare"  # calm rides the anticipatory prepare urgency
     assert a.detail["anticipatory"] is True
-    assert a.spline < ref.best_brake_point_spline  # onset before the mark (issue #368 AC a)
+    assert a.spline == ref.best_brake_point_spline  # advisory anchors to the control point
+    assert a.detail["lead_s"] > 0.0  # emitted before the mark (issue #368 AC a)
 
 
 def test_brake_cue_critical_when_arriving_far_too_hot() -> None:

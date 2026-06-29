@@ -2,10 +2,11 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T03:30:00Z
+last_updated: 2026-06-29T16:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/pr-365-game-point-launcher-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
@@ -44,9 +45,93 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
+  - AcCopilotTrainer/01_Decisions/curated-setup-as-data-platform-entity-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/curated-setup-hash-bridge-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/porsche-911-gt3r-magione-balanced-setup-2026-06-28.md
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-29) — PR #370 MERGED: M-TT1 Track Titan services crack (#353)
+
+PR [#370](https://github.com/agorokh/ac-copilot-trainer/pull/370) merged to `main` as squash
+commit [`26e9a09`](https://github.com/agorokh/ac-copilot-trainer/commit/26e9a09eb943fca8bae3e65e80b79945ac5c421c)
+at 2026-06-29T16:15:20Z (milestone **M-TT1** of #353).
+
+**The crack (corrects the prior SigV4 hypothesis):** TT `services.tracktitan.io` `/api/v2/*`,
+`/dynamic-reference-laps/*`, `/advice/*` authenticate with the **raw Cognito access token** (no
+`Bearer`) — the same token vulcan uses; **no SigV4 / Identity-Pool flow needed**. The research
+node's 403s were the **idToken** on **old cached paths**. Verified live from our own mint path
+(accessToken→200, idToken→403) via CDP capture of the running renderer. Full detail +
+reusable method + the M-TT2 telemetry schema in [[tt-services-sigv4-crack-2026-06-29]].
+
+**Shipped:** `tools/tt_ingest/tt_services.py` (services client — pure builders/parsers, network
+no-cover) + `coaching` CLI that retains per-lap raw evidence (`last_session_lap{N}.json` +
+`coaching_lap{N}.json`: full raw `/last-session`, `dynamic-reference-laps`, and per-segment
+`/advice` responses) to the write-once lake, reindexed; sanitized fixtures + 55 unit tests.
+Reviewed by codex + qodo across 5 rounds (qodo's SigV4 finding rebutted with live evidence;
+Gemini at quota). Verified live E2E: `python -m tools.tt_ingest coaching` returned real
+per-corner diagnoses for the last session (Magione, Porsche 911 GT3 R — c3 "You messed up your
+exit", c4 "line too wide") and retained them to the lake.
+
+**Resume here → M-TT2:** reference-lap telemetry → `lap_archive` schema → M0 `--reference-archive`
+voice feed. Input schema is PINNED in [[tt-services-sigv4-crack-2026-06-29]]: TT telemetry point
+(`dist`→spline, `Kmh`→speed, `brak`→brake, `throt`→throttle, `steer`, `gear`, `X`/`Y`) maps to
+`TRACE_FIELDS` in `tools/ac_harness/reference_lap.py`. Then **M-TT3** (per-corner analysis →
+harness drive-to-reference curriculum). Arbitrary-lap/older-session coaching is also a deferred
+follow-up (needs per-lap telemetry endpoints; M-TT1 scopes to the last session's own lap).
+
+## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
+
+PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) merged to
+`main` as squash commit
+[`854f822`](https://github.com/agorokh/ac-copilot-trainer/commit/854f822bdd868397e99bfd56c08ade2f87277139)
+at 2026-06-29T09:15:25Z and closed
+[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363).
+
+Delivered: Windows Game Point launcher package (`python -m tools.rig_launcher`),
+Desktop shortcut installer/build path, per-user launcher settings, supervised
+sidecar start/status/logging, environment-only sidecar token/voice routing,
+Setup Exchange proxy/install path, rig-screen Setup Exchange screen, Pocket
+Technician spinner list/set protocol, and Game Point launcher docs.
+Review-resolution and install notes live in
+[[pr-365-game-point-launcher-2026-06-29]].
+
+Verification before merge: local `make ci-fast PYTHON=.venv/bin/python` passed on
+current head `27e7dbd` (`1753 passed, 75 skipped`, coverage 84.93%); GitHub
+`build`, `pip-audit`, `Canonical docs exist`, and `conformance` passed on the
+same head; `scripts/ci_resolve_gate.py agorokh/ac-copilot-trainer 365` reported
+`No substantive findings hanging`; GraphQL `reviewThreads` returned 60 threads,
+`hasNext=false`, `unresolved_total=0`; no current-SHA self-hosted reviewer body
+was present after the required cooldown.
+
+Post-merge classification: `.env.example` changed, so review/update operator
+environment on the rig as needed; `pyproject.toml` changed, so refresh the local
+dev install with `pip install -e '.[dev]'` or the equivalent lockfile workflow.
+No migrations were detected or run.
+
+Honest remaining #86 scope: [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86)
+is still OPEN as the broader rig-screen epic. After #361 and #365, its remaining
+closure gates are not the Game Point code path itself; they are LVGL font
+conversion outputs, SPIFFS/persistence/backpressure/debug-screen polish if still
+desired, and final on-device smoke evidence
+`launcher -> AC Copilot live hints -> Pocket Technician setup load -> Setup Exchange browse/download/install`.
+Packaged-launcher proof should be rerun on the Windows rig when available.
+
+## Claude Design UI package for launcher + rig screens (2026-06-29)
+
+Created `docs/10_Development/15_Claude_Design_UI_Package.md` as the handoff
+package for Claude Design or any future UI implementation agent. It explains the
+current screen technologies and implemented functions across the ESP32 LVGL
+portrait screen, Windows Tkinter Game Point launcher, CSP Lua in-game HUD, and
+sidecar protocol, then lays out future scope for launcher expansion, Setup
+Exchange, voice, haptics, diagnostics, and post-lap coaching screens. Use it as
+the copy-paste design prompt before asking Claude Design for a full UI pass.
+
+Also linked it from `docs/10_Development/14_Game_Point_Launcher.md` so new
+driver-facing launcher work discovers the UI contract. Tier-3 MCP was not
+exposed in this Codex session; the package was grounded from the vault and live
+source files listed inside the package.
 
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 
@@ -59,7 +144,7 @@ exact path/params still to pin — the operator's primary want is auth-cracked).
 the running TT app, or fetch the session-review page chunk) → build `tt_services.py` → M-TT2 (reference
 → `lap_archive` → M0 `--voice-reference`) → M-TT3. Personal-use guardrail scope applies.
 
-## Resume here (2026-06-28 evening) - #86 rig screen connectivity restored; PR #361 active
+## Historical (2026-06-28 evening) — #86 rig screen connectivity restored; PR #361 merged
 
 User reported the #86 rig screen was powered on but not connecting. Live cause:
 PC was on a home 5 GHz Wi-Fi network, Mobile Hotspot was not presenting the
@@ -71,7 +156,9 @@ sidecar `/health` OK with an established hotspot-gateway-to-screen socket, and
 protocol counters moving (`state.snapshot`, `state.subscribe`, `corner_query`,
 setup experiment frames).
 
-Branch **`fix/issue-86-rig-sidecar-autostart`** patches the recurring gap:
+PR [#361](https://github.com/agorokh/ac-copilot-trainer/pull/361) merged as
+[`210c2a1`](https://github.com/agorokh/ac-copilot-trainer/commit/210c2a14f9e3e4993c22aa22ec56767922375296).
+It patched the recurring gap:
 `start_sidecar.bat` now stays loopback-only by default, but if
 `AC_COPILOT_SIDECAR_TOKEN` is set it launches with `--external-bind 0.0.0.0`
 (or `AC_COPILOT_SIDECAR_EXTERNAL_BIND`) and keeps the token in the process
@@ -99,7 +186,7 @@ changed files pass targeted `ruff format --check`.
 Detail: [[issue-86-rig-screen-hotspot-autostart-2026-06-28]]. Successor issue
 [#363](https://github.com/agorokh/ac-copilot-trainer/issues/363) now owns the
 broader human-playable Game Point launcher, Pocket Technician completion, and
-Setup Exchange completion scope.
+Setup Exchange completion scope; #363 closed with PR #365.
 
 ## Resume here (2026-06-28) — Track Titan #353 M-TT1 next, then #345 P0 capture
 
@@ -142,6 +229,36 @@ approved** proceeding and the guardrail was **scoped** to redistribution/at-scal
 export = self data-portability). Hardened via a 5-lens adversarial self-review (ReDoS, lake-path
 collision, NaN-batch-abort, raw write-once, full-lake reindex). Full node: [[pr-359-tt-ingest-mtt0-2026-06-28]].
 M-TT1/M-TT2/M-TT3 remain on #353. Merge `bd69cab`.
+
+---
+
+## Delivered (2026-06-28) — curated setups as first-class data-platform entities (PR #369)
+`/start-task` (ultracode). Operator asked for a **balanced fast-race setup for the 911 GT3 R at
+Magione**, visible on the rig, plus "put it properly in our data platform" + preserve the knowledge.
+Shipped: (1) **`assets/setups/ks_porsche_911_gt3_r_2016/magione/Copilot_Balanced_Fast.ini`** — verified
+values (FRONT_BIAS 63, ARB f6/r1, DIFF_COAST 60, rear TOE 9, **WING_2 16**), grounded in the operator's
+own `Realistic_BB_v3` and adversarially verified (4 vehicle-dynamics lenses → red-team, high
+confidence). **Deployed** to `%AC_USERDATA%\setups\...\magione\` (the rig `setup.list` lists it on
+Magione). (2) **`tools/setup_catalog`** registrar — rig-faithful **djb2 `canonical_hash`** bridges the
+curated catalog to the DuckDB lake + experiments store; robust name/path-fallback join; 17 tests incl. an
+end-to-end "simulated driven lap joins the catalog" proof; module 100% cov; ruff clean. (3) Vault: decision
+[[curated-setup-as-data-platform-entity-2026-06-28]], investigations [[curated-setup-hash-bridge-2026-06-28]]
++ [[porsche-911-gt3r-magione-balanced-setup-2026-06-28]]; **resolved** the long-open AC user-data path
+(`%USERPROFILE%\OneDrive\Documents\Assetto Corsa`) in `glossary/install-paths.md`. **Note:** Tier-3
+agentic-memory MCP query tool was absent this session (degraded-mode bypass logged in
+`.scratch/.memory_bypass_rationale`). PR [#369](https://github.com/agorokh/ac-copilot-trainer/pull/369)
+(supersedes #367 — `claude/` branch prefix is rejected by ci-conventional) **MERGED**
+2026-06-29 as squash [`6705bc7`](https://github.com/agorokh/ac-copilot-trainer/commit/6705bc7b206fada67310c5be8134202e68f6ecc6);
+[#366](https://github.com/agorokh/ac-copilot-trainer/issues/366) closed. Autonomous-deliver
+closeout verified PR head `a9015d8`: GitHub `build`, `conformance`, and `Canonical docs exist` green;
+GraphQL reviewThreads had no current unresolved thread after the full cooldown; Qodo updated to the
+head SHA, Gemini/Codex review capacity was quota-limited with no substantive current finding, and no
+current-SHA self-hosted reviewer review was present after cooldown. Local verification:
+`tests/test_setup_catalog_registrar.py` = 29 passed; temp catalog register/list + DuckDB join returned
+`driven_laps=1`, `best_ms=82500` for `canonical_hash=054245cb`; `make ci-fast` passed with the
+local venv Python (`1656 passed, 76 skipped`, coverage 85.19%, ruff/Bandit/policy/CSP checks green).
+Post-merge classification: `scripts/` changed (`scripts/check_agent_forbidden.py` allowlist for
+`assets/`); no migration/env/deps/workflow action required.
 
 ---
 

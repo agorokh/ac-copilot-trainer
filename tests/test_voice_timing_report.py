@@ -61,9 +61,9 @@ def test_report_serializes_to_json() -> None:
 
 
 def test_same_frame_advisories_are_arbitrated_as_one_batch() -> None:
-    # qodo review #371: the report must mirror production scheduling by submitting every advisory from
-    # one telemetry frame before calling process_pending(). Sequential processing can briefly speak a
-    # lower-rank cue that the real batch winner would suppress.
+    # qodo review #371: the report must mirror production scheduling by submitting every advisory
+    # from one telemetry frame before calling process_pending(). Sequential processing can briefly
+    # speak a lower-rank cue that the real batch winner would suppress.
     obs = _synthetic_observer()
     emitted = False
 

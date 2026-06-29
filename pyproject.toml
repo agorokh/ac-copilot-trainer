@@ -64,6 +64,16 @@ voice-client = [
     "pyttsx3>=2.90",
     "websockets>=16.0",
 ]
+# Game Point launcher packaging (#363). Runtime code stays stdlib-only; this
+# extra is needed to build the Windows .exe artifact and bundle sidecar runtime deps.
+launcher = [
+  "pyinstaller>=6.15.0",
+  "websockets>=16.0",
+  "numpy>=2.4.4",
+  "sounddevice>=0.5.1",
+  "rtmixer>=0.1.7",
+  "pyttsx3>=2.90",
+]
 # Issue #368: OFFLINE neural-voice bake (recommended Kokoro-82M backend, Apache-2.0). Used only by
 # the rig/dev bake step (tools/ai_sidecar/voice/bake.py KokoroBackend, lazy-imported); never on the
 # real-time hot path. ffmpeg (system) is also required for the prosody shaper. macOS dev can instead

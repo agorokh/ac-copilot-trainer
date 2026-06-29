@@ -7,9 +7,12 @@ manifest content-addressing end to end without a TTS engine.
 from __future__ import annotations
 
 import argparse
+import math
+import struct
 import wave
 
 import pytest
+
 from tools.ai_sidecar.voice import vocabulary as vocab
 from tools.ai_sidecar.voice.bake import ToneBackend, _build_backend, bake_bank
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest, sha256_bytes
@@ -55,6 +58,62 @@ def test_bake_distinct_phrases_have_distinct_audio(tmp_path) -> None:
     assert len(set(shas)) > len(shas) // 2
 
 
+def test_bake_resamples_external_backend_to_requested_samplerate(tmp_path) -> None:
+    pytest.importorskip("numpy")
+
+    class _Native22050Backend:
+        voice_signature = "native-22050-test"
+
+        def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
+            del text, register, samplerate
+            source_rate = 22050
+            frames = bytearray()
+            for i in range(int(source_rate * 0.05)):
+                sample = 0.3 * math.sin(2 * math.pi * 440.0 * i / source_rate)
+                frames += struct.pack("<h", int(sample * 32767))
+            with wave.open(str(out_path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(source_rate)
+                wf.writeframes(bytes(frames))
+
+    manifest = bake_bank(tmp_path, _Native22050Backend(), samplerate=48000)
+    clip = tmp_path / next(iter(manifest.clips.values())).file
+    with wave.open(str(clip), "rb") as wf:
+        assert wf.getframerate() == 48000
+        assert wf.getnchannels() == 1
+        assert wf.getsampwidth() == 2
+    assert manifest.samplerate == 48000
+
+
+def test_bake_accepts_float32_external_backend(tmp_path) -> None:
+    pytest.importorskip("numpy")
+
+    class _Float32Backend:
+        voice_signature = "float32-test"
+
+        def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
+            del text, register
+            frames = bytearray()
+            for i in range(int(samplerate * 0.02)):
+                sample = 0.25 * math.sin(2 * math.pi * 330.0 * i / samplerate)
+                frames += struct.pack("<f", sample)
+            with wave.open(str(out_path), "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(4)
+                wf.setframerate(samplerate)
+                wf.writeframes(bytes(frames))
+
+    manifest = bake_bank(tmp_path, _Float32Backend(), samplerate=22050)
+    clip = tmp_path / next(iter(manifest.clips.values())).file
+    with wave.open(str(clip), "rb") as wf:
+        assert wf.getframerate() == 22050
+        assert wf.getnchannels() == 1
+        assert wf.getsampwidth() == 2
+        raw = wf.readframes(wf.getnframes())
+    assert max(abs(v[0]) for v in struct.iter_unpack("<h", raw)) > 1000
+
+
 def test_tone_backend_registers_are_distinct(tmp_path) -> None:
     # Issue #368: the register (intensity tier) must produce measurably distinct audio even from the
     # stdlib CI backend, so CI exercises the tone dimension end-to-end (firm/critical differ from
@@ -88,16 +147,17 @@ def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
     assert a.read_bytes() == b.read_bytes()  # identical bytes → deterministic, content-addressable
 
 
-def test_shaped_backend_preflights_missing_ffmpeg(monkeypatch) -> None:
+@pytest.mark.parametrize("backend", ["say-expressive", "piper", "kokoro"])
+def test_shaped_backend_preflights_missing_ffmpeg(monkeypatch, backend: str) -> None:
     # qodo review #371: shaped backends should fail at backend selection with an actionable message,
     # not later inside ProsodyShaper.shape().
     monkeypatch.setattr("tools.ai_sidecar.voice.bake.shutil.which", lambda name: None)
     args = argparse.Namespace(
-        backend="say-expressive",
+        backend=backend,
         say_voice="Daniel",
-        piper_model=None,
-        kokoro_model=None,
-        kokoro_voices=None,
+        piper_model="voice.onnx",
+        kokoro_model="kokoro.onnx",
+        kokoro_voices="voices.bin",
         kokoro_voice="am_michael",
     )
     with pytest.raises(SystemExit, match="ffmpeg"):

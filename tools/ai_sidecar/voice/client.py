@@ -31,6 +31,8 @@ from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue
 
 #: Max pending TTS phrases; when full, drop the oldest so memory stays bounded under cue bursts.
 _VOICE_QUEUE_MAX = 4
+DEFAULT_TTS_RATE = 240
+DEFAULT_TTS_VOLUME = 1.0
 
 #: pyttsx3 rate (wpm) + volume per intensity register (issue #368) — the WS/pyttsx3 path can't bake
 #: prosody, but it can speak faster + louder as the situation escalates, so the WS client conveys
@@ -93,7 +95,7 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
     return not failed and worker_alive
 
 
-def _pyttsx3_speaker(base_rate: int = 195, base_volume: float = 1.0):
+def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_VOLUME):
     """Build a non-blocking speak(text, register) backed by pyttsx3 on a dedicated worker thread.
 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
@@ -125,8 +127,8 @@ def _pyttsx3_speaker(base_rate: int = 195, base_volume: float = 1.0):
                 break
             text, register = item
             try:
-                engine.setProperty("rate", _REGISTER_RATE.get(register, base_rate))
-                engine.setProperty("volume", _REGISTER_VOLUME.get(register, base_volume))
+                engine.setProperty("rate", _REGISTER_RATE.get(register, rate))
+                engine.setProperty("volume", _REGISTER_VOLUME.get(register, volume))
                 engine.say(text)
                 engine.runAndWait()
             except Exception:

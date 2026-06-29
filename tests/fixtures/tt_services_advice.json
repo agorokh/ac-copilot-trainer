@@ -1,0 +1,72 @@
+{
+  "success": true,
+  "status": 200,
+  "data": {
+    "showOutput": true,
+    "stories": [
+      {
+        "timeLoss": 0.001,
+        "timeLoss_mistake_all": 0.0,
+        "timeLoss_mistake_rest": 0.0,
+        "timeLoss_mistake_this": 0.0,
+        "timeLoss_mistake_next": 0.0,
+        "diagnosis": "You made a mistake as you slowed down",
+        "consequence": "Look at your braking and steering technique to understand why this cost you 0.001s through the corner",
+        "diagnosisKey": "coaching.diagnosis.rotation_insufficient",
+        "consequenceKey": "coaching.consequence.rotation_insufficient",
+        "vars": {
+          "timeLoss": 0.001,
+          "highlightKey": "coaching.highlight.corner",
+          "nthOrdinal": null,
+          "segment": null,
+          "impactSegment": null
+        },
+        "highlight": [
+          0.04054021880233441,
+          0.07350374622656264
+        ],
+        "phase_mistake": "nfta",
+        "phase_dists_norm": [
+          0.04054021880233441,
+          0.07350374622656264
+        ],
+        "mistake_list_filtered": [],
+        "time_loss_shown": 0.001,
+        "info": {
+          "mistake_key": null
+        }
+      }
+    ],
+    "phases": [
+      {
+        "number": 0,
+        "name": "userNFTA_p1",
+        "type": "nfta",
+        "start_dist": 0.04054735600948334,
+        "end_dist": 0.07346820458769798
+      },
+      {
+        "number": 1,
+        "name": "userNFTA_p2",
+        "type": "nfta",
+        "start_dist": 0.07346820458769798,
+        "end_dist": 0.10638905316591263
+      },
+      {
+        "number": 2,
+        "name": "userIPA",
+        "type": "ipa",
+        "start_dist": 0.10638905316591263,
+        "end_dist": 0.12960994243621826
+      },
+      {
+        "number": 3,
+        "name": "userFTE_p1",
+        "type": "fte",
+        "start_dist": 0.12960994243621826,
+        "end_dist": 0.14883123338222504
+      }
+    ]
+  },
+  "message": "Cached Advice retrieved successfully."
+}

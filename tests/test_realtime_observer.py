@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
 from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import (
+    _DEFAULT_TRACK_LENGTH_M,
     RealtimeObserver,
     _frames_from_lap_trace,
     build_observer_from_reference,
@@ -83,6 +86,13 @@ def test_build_observer_returns_none_without_trace():
     assert build_observer_from_reference({}) is None
 
 
+@pytest.mark.parametrize("track_length_m", [None, "bad", 0.0, -12.0, float("nan")])
+def test_observer_defaults_invalid_track_length(track_length_m: object):
+    obs = RealtimeObserver([], track_length_m=track_length_m)  # type: ignore[arg-type]
+
+    assert obs._track_length_m == pytest.approx(_DEFAULT_TRACK_LENGTH_M)
+
+
 def test_reference_lap_against_itself_emits_no_deficit():
     ref = _corner_archive()
     obs = build_observer_from_reference(ref)
@@ -133,6 +143,50 @@ def test_late_brake_escalates_register_not_per_frame_when_coasting():
     assert late[0].corner == r.index
     # user-facing label is 1-based: corner index 0 -> "T1", never "T0" (codex #294)
     assert "T1" in late[0].message and "T0" not in late[0].message
+
+
+def test_brake_prepare_fires_before_brake_point():
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    # At 110 km/h, one second is 30.6 m, i.e. about 0.012 spline on a 2500 m track.
+    out = obs.observe({"spline": 0.44, "speed": 110.0, "brake": 0.0})
+    prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert prepare and prepare[0].spline == 0.45
+    assert prepare[0].detail["lead_s"] == pytest.approx(0.82, abs=0.05)
+
+
+def test_brake_prepare_is_not_post_fact_and_does_not_repeat():
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    assert obs.observe({"spline": 0.44, "speed": 110.0, "brake": 0.0})
+    assert [
+        a
+        for a in obs.observe({"spline": 0.445, "speed": 110.0, "brake": 0.0})
+        if a.urgency == "prepare"
+    ] == []
+    assert [
+        a
+        for a in obs.observe({"spline": 0.451, "speed": 110.0, "brake": 0.0})
+        if a.urgency == "prepare"
+    ] == []
 
 
 def test_lap_wrap_resets_pass_state():
