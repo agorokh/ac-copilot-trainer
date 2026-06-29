@@ -273,7 +273,7 @@ def _coerce_int(value: Any) -> int | None:
 def _coerce_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
-    if isinstance(value, int | float):
+    if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
         try:
