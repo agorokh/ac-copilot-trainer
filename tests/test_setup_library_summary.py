@@ -135,6 +135,28 @@ def test_spinner_list_reads_active_setup_controls(lua, tmp_path: pathlib.Path) -
     assert first["max"] == 80
 
 
+def test_spinner_list_rejects_traversal_payload_path(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    setup_path.write_text(FIXTURE_INI.read_text(encoding="utf-8"), encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+    attack = str(root / "ks_porsche_911_gt3_r_2016" / ".." / ".." / "outside.ini").replace(
+        "\\",
+        "/",
+    )
+
+    result = lua.execute(
+        f"""
+        local setupLibrary = require("setup_library")
+        return setupLibrary.listSpinners({{ path = "{attack}" }})
+        """
+    )
+
+    assert result["ok"] is False
+    assert "traversal" in result["error"]
+
+
 def test_spinner_list_prefers_csp_api(lua) -> None:
     lua.execute(
         """

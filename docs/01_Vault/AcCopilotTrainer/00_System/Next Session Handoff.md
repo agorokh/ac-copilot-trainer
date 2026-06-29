@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T04:51:43Z
+last_updated: 2026-06-29T04:58:06Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -72,6 +72,17 @@ write warning only), `ruff check tools\rig_launcher tests\test_rig_launcher.py`
 passed, `ruff format --check tools\rig_launcher tests\test_rig_launcher.py`
 passed, `python scripts\ci_policy.py` passed, launcher import smoke passed, and
 the Windows COM metadata for the `.lnk` matched the target exe/workdir/icon.
+
+Post-push review audit found actionable Codex review threads and the follow-up
+commit addressed them: setup fallback now rejects `..` traversal paths before
+INI reads/writes; launcher health polling uses a concrete external bind host
+instead of always `127.0.0.1`; PyInstaller args collect sidecar data files and
+the `launcher` extra includes `websockets`; auto-drive relaunch-on-hijack-fail
+passes a single-launch budget into each launch leg so `max_launches` remains the
+total cap. Regression coverage: affected tests passed (`54 passed` across
+`tests/test_rig_launcher.py`, `tests/test_setup_library_summary.py`, and
+`tests/test_ac_harness_auto_drive.py`), targeted Ruff check/format passed, and
+`python scripts\ci_policy.py` passed.
 Tier-3 MCP was not exposed in this Codex session, so this pass used vault-only
 grounding and records that gap here for the next session.
 

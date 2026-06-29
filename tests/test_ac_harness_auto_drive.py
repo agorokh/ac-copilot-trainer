@@ -162,10 +162,12 @@ def test_hijack_failure_reports_stage_hijack():
 
 def test_hijack_failure_relaunches_until_control_lands():
     launches: list[int] = []
+    budgets: list[int] = []
     hijacks: list[FakeController | None] = [None, FakeController()]
 
     def _launch(config):  # noqa: ANN001
         launches.append(1)
+        budgets.append(config.max_launches)
         return True, "live"
 
     report = asyncio.run(
@@ -180,6 +182,7 @@ def test_hijack_failure_relaunches_until_control_lands():
 
     assert report.ok is True
     assert launches == [1, 1]
+    assert budgets == [1, 1]
     assert report.hijacked is True
 
 

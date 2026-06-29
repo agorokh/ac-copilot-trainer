@@ -147,6 +147,45 @@ def test_status_reads_health_and_writes_status_file(tmp_path: Path) -> None:
     assert saved["log_path"].endswith("sidecar.log")
 
 
+def test_status_polls_concrete_external_bind_health(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        external_bind="192.168.137.1",
+        token="token",
+        paths=LauncherPaths(tmp_path),
+    )
+    seen: list[str] = []
+
+    def fake_urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        seen.append(url)
+        return _Response({"status": "ok", "connected_peers": 2, "screen_peers": 1})
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+    status = sup.poll_status()
+
+    assert status.sidecar.ok is True
+    assert seen == ["http://192.168.137.1:8765/health"]
+
+
+def test_status_polls_loopback_for_wildcard_external_bind(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        paths=LauncherPaths(tmp_path),
+    )
+    seen: list[str] = []
+
+    def fake_urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        seen.append(url)
+        return _Response({"status": "ok", "connected_peers": 2, "screen_peers": 1})
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+    sup.poll_status()
+
+    assert seen == ["http://127.0.0.1:8765/health"]
+
+
 def test_start_sidecar_writes_to_predictable_log_dir(tmp_path: Path) -> None:
     calls: list[dict[str, Any]] = []
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
@@ -297,6 +336,7 @@ def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> N
     assert "--onefile" in args
     assert "--noconsole" in args
     assert "tools.ai_sidecar" in args
+    assert "--collect-data" in args
     assert str(tmp_path / "tools" / "rig_launcher" / "__main__.py") == args[-1]
 
 

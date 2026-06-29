@@ -372,7 +372,7 @@ class GamePointSupervisor:
         self._log_handles.clear()
 
     def _read_health(self) -> ProbeResult:
-        url = f"http://127.0.0.1:{self.config.port}/health"
+        url = f"http://{_url_host(self._health_host())}:{self.config.port}/health"
         try:
             with self._urlopen(url, timeout=1.0) as response:
                 payload = json.loads(response.read().decode("utf-8"))
@@ -381,6 +381,12 @@ class GamePointSupervisor:
         peers = int(payload.get("connected_peers") or 0)
         screens = int(payload.get("screen_peers") or 0)
         return ProbeResult("sidecar", True, "healthy", f"peers={peers} screen_peers={screens}")
+
+    def _health_host(self) -> str:
+        bind = self.config.external_bind
+        if bind and bind not in {DEFAULT_EXTERNAL_BIND, "0.0.0.0", "::"}:
+            return bind
+        return self.config.host
 
     def _sidecar_process_status(self) -> ProbeResult:
         if self._sidecar_process is None:
@@ -446,6 +452,8 @@ def build_pyinstaller_args(
         "tools.ai_sidecar",
         "--collect-submodules",
         "tools.rig_launcher",
+        "--collect-data",
+        "tools.ai_sidecar",
         "--hidden-import",
         "tools.ai_sidecar.voice.engine",
         "--hidden-import",
@@ -525,6 +533,12 @@ def _put_if_present(env: MutableMapping[str, str], key: str, value: str | None) 
 
 def _is_loopback(host: str) -> bool:
     return host in {"127.0.0.1", "localhost", "::1"}
+
+
+def _url_host(host: str) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
 
 
 def _short(text: str | None, limit: int = 240) -> str:

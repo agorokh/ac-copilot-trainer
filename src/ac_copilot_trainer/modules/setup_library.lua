@@ -483,10 +483,22 @@ local function normalizeSetupPath(p)
   return p:gsub("\\", "/")
 end
 
+local function pathHasTraversal(p)
+  for part in p:gmatch("[^/]+") do
+    if part == ".." then
+      return true
+    end
+  end
+  return false
+end
+
 local function safeUserSetupPath(p)
   local norm = normalizeSetupPath(p)
   if not norm then
     return nil, "missing setup path"
+  end
+  if pathHasTraversal(norm) then
+    return nil, "setup path traversal not allowed"
   end
   local root = normalizeSetupPath(userSetupsRoot())
   if not root then

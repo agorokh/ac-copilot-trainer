@@ -65,9 +65,10 @@ voice-client = [
     "websockets>=16.0",
 ]
 # Game Point launcher packaging (#363). Runtime code stays stdlib-only; this
-# extra is needed only to build the Windows .exe artifact.
+# extra is needed to build the Windows .exe artifact and bundle sidecar runtime deps.
 launcher = [
   "pyinstaller>=6.15.0",
+  "websockets>=16.0",
 ]
 # Tier 3 Phase 2+ (#26): not installed in CI; see tools/model_training/train.py
 training = [

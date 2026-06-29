@@ -45,7 +45,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -181,9 +181,10 @@ async def run_auto_drive(
     """
     controller: Controller | None = None
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
+    launch_config = replace(config, max_launches=1)
     for _ in range(attempts):
         if not config.skip_launch:
-            ok, reason = launch(config)
+            ok, reason = launch(launch_config)
             if not ok:
                 return AutoDriveReport(ok=False, stage="launch", error=reason)
         controller = hijack(config)
