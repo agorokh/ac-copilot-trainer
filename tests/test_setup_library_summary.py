@@ -444,3 +444,19 @@ def test_setup_exchange_active_row_uses_delete_event() -> None:
     assert "lv_obj_is_valid(ctx->active_row)" not in cpp
     assert "g_result_count = 0;" in cpp
     assert "memset(g_results, 0, sizeof(g_results));" in cpp
+
+
+def test_spinner_clear_waits_for_finish_rebuild() -> None:
+    """Spinner refresh clears data without an intermediate empty-list repaint."""
+    screen_cpp = (
+        REPO / "firmware" / "screen" / "src" / "ui" / "screen_pocket_technician.cpp"
+    ).read_text(encoding="utf-8")
+    clear_block = screen_cpp.split("screen_pocket_technician_clear_spinners", 1)[1].split(
+        'extern "C" void screen_pocket_technician_add_spinner', 1
+    )[0]
+    finish_block = screen_cpp.split("screen_pocket_technician_finish_spinner_list", 1)[1].split(
+        'extern "C" void screen_pocket_technician_apply_spinner_ack', 1
+    )[0]
+
+    assert "rebuild_list_widgets" not in clear_block
+    assert "rebuild_list_widgets(g_active_ctx)" in finish_block

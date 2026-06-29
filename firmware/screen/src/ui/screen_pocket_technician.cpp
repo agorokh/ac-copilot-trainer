@@ -862,9 +862,6 @@ extern "C" void screen_pocket_technician_finish_setup_list(void) {
 
 extern "C" void screen_pocket_technician_clear_spinners(void) {
     g_spinner_count = 0;
-    if (g_active_ctx) {
-        rebuild_list_widgets(g_active_ctx);
-    }
 }
 
 extern "C" void screen_pocket_technician_add_spinner(const char* section,
