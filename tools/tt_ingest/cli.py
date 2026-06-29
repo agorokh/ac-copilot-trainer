@@ -368,12 +368,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     coaching.add_argument("--uid", default=None, help="User id; defaults to the token 'sub'.")
     coaching.add_argument(
-        "--lap",
-        type=int,
-        default=None,
-        help="Lap number of the last session; defaults to that session's lap.",
-    )
-    coaching.add_argument(
         "--segment-count", type=int, default=7, help="Corners (segments) to pull (default 7)."
     )
     coaching.add_argument("--lake-base", type=Path, default=None)
@@ -431,17 +425,17 @@ def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
     minted = mint_tokens(refresh, config)
     uid = args.uid or uid_from_token(minted.access_token)
 
-    # M-TT1 scope: coach the LAST session. The /last-session endpoint gives the full raw
-    # payload (session + referenceLap + telemetry) keyed correctly to the lake; --lap selects
-    # which lap of that session to coach (default: the session's own lap). Coaching for an
-    # ARBITRARY older session needs per-session telemetry endpoints not in M-TT1 scope — see
-    # the M-TT2+ follow-up — so it is intentionally not wired here (a sessions-list row is not
-    # a /last-session payload and must not masquerade as one in the lake).
+    # M-TT1 scope: coach the LAST session's own lap. The /last-session endpoint returns the
+    # full raw payload (session + referenceLap + telemetry) for exactly that lap, so the
+    # retained last_session.json is COHERENT lap-specific evidence next to coaching_lap{N}.json.
+    # Coaching an arbitrary lap (or older session) needs per-lap telemetry endpoints not in
+    # M-TT1 scope — see the M-TT2+ follow-up — so it is intentionally not offered here (a
+    # mismatched lap would pair lap-N coaching with the wrong lap's raw evidence).
     raw_last = fetch_last_session_raw(minted.access_token, uid)
     session = parse_last_session(raw_last)["session"]
     key = _session_lake_key(session)
     session_key = key["session_key"]
-    lap = args.lap if args.lap is not None else session.get("lap_number")
+    lap = session.get("lap_number")
     if not session_key or lap is None:
         _print("coaching: could not resolve the last session's key/lap (no recent session?)")
         return 1

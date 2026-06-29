@@ -129,14 +129,13 @@ def test_parser_coaching_defaults() -> None:
     args = build_arg_parser().parse_args(["coaching"])
     assert args.command == "coaching"
     assert args.segment_count == 7
-    assert args.lap is None
     assert args.dry_run is False
 
 
 def test_parser_coaching_flags() -> None:
-    args = build_arg_parser().parse_args(["coaching", "--lap", "5", "--segment-count", "3"])
-    assert args.lap == 5
+    args = build_arg_parser().parse_args(["coaching", "--segment-count", "3", "--uid", "u9"])
     assert args.segment_count == 3
+    assert args.uid == "u9"
 
 
 # --- retain_coaching (M-TT1) ------------------------------------------------------
