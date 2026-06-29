@@ -5,48 +5,64 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AC Copilot — Claude Design visual package</title>
 <style>
+  /* Palette mirrors firmware/screen/include/ui/tokens.h — no off-token hex values. */
   :root{
-    --bg:#0b0b0c; --ink:#fff; --muted:#a3a3a3; --quiet:#737373;
-    --panel:#1e1e1e; --panel-2:#1e1e1e; --header:#141414; --line:#2c2c2c;
-    --gold:#ffd700; --amber:#ffc43d; --red:#ef4444; --green:#22c55e;
-    --gold-bg:#332a00; --green-bg:#10240f; --red-bg:#2a1410;
+    --ui-bg-base:#000000;
+    --ui-bg-panel:#1E1E1E;
+    --ui-bg-header:#141414;
+    --ui-tx-primary:#FFFFFF;
+    --ui-tx-muted:#A3A3A3;
+    --ui-tx-quiet:#737373;
+    --ui-accent-gold:#FFD700;
+    --ui-alert-red:#EF4444;
+    --ui-ok-green:#22C55E;
+    --ui-line-amber:#FFC43D;
+    --ui-border-soft:rgba(255,255,255,0.12);
     --font:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
   *{box-sizing:border-box;}
-  body{margin:0;background:#0e0e10;color:var(--ink);font-family:var(--font);line-height:1.5;}
+  body{margin:0;background:var(--ui-bg-base);color:var(--ui-tx-primary);font-family:var(--font);line-height:1.5;}
   .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 64px;}
   h1{font-size:24px;font-weight:600;margin:0 0 4px;}
-  h2{font-size:16px;font-weight:600;margin:36px 0 12px;color:#e5e5e5;border-bottom:1px solid #232325;padding-bottom:8px;}
-  .lede{color:var(--muted);max-width:70ch;margin:0 0 8px;}
+  h2{font-size:16px;font-weight:600;margin:36px 0 12px;color:var(--ui-tx-primary);border-bottom:1px solid var(--ui-border-soft);padding-bottom:8px;}
+  .lede{color:var(--ui-tx-muted);max-width:70ch;margin:0 0 8px;}
   .grid{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;}
-  .cap{font-size:12px;color:var(--quiet);letter-spacing:.04em;margin:0 0 8px;text-transform:uppercase;}
+  .cap{font-size:12px;color:var(--ui-tx-quiet);letter-spacing:.04em;margin:0 0 8px;text-transform:uppercase;}
   /* device + window chrome */
-  .win{background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;overflow:hidden;width:400px;max-width:100%;}
-  .titlebar{background:var(--header);height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #242424;}
+  .win{background:var(--ui-bg-base);border:1px solid var(--ui-border-soft);border-radius:10px;overflow:hidden;width:400px;max-width:100%;}
+  .titlebar{background:var(--ui-bg-header);height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--ui-border-soft);}
   .dot{width:9px;height:9px;border-radius:50%;}
   .pad{padding:16px;}
-  .banner{display:flex;align-items:center;gap:10px;border-radius:8px;padding:12px 14px;margin-bottom:14px;}
-  .row{display:flex;align-items:center;gap:10px;background:var(--panel-2);border-radius:7px;padding:9px 11px;margin-bottom:7px;}
+  .banner{display:flex;align-items:center;gap:10px;border-radius:8px;padding:12px 14px;margin-bottom:14px;background:var(--ui-bg-panel);}
+  .banner-ok{border:1px solid var(--ui-ok-green);}
+  .banner-alert{border:1px solid var(--ui-alert-red);}
+  .row{display:flex;align-items:center;gap:10px;background:var(--ui-bg-panel);border-radius:7px;padding:9px 11px;margin-bottom:7px;}
   .row .name{font-size:12.5px;width:84px;}
-  .pill{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px;}
-  .detail{color:var(--quiet);font-size:11.5px;margin-left:auto;}
+  .pill{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--ui-bg-panel);border:1px solid var(--ui-border-soft);}
+  .pill-ok{color:var(--ui-ok-green);border-color:var(--ui-ok-green);}
+  .pill-alert{color:var(--ui-alert-red);border-color:var(--ui-alert-red);}
+  .pill-gold{color:var(--ui-accent-gold);border-color:var(--ui-accent-gold);}
+  .pill-neutral{color:var(--ui-tx-muted);}
+  .detail{color:var(--ui-tx-quiet);font-size:11.5px;margin-left:auto;}
   .marker{width:20px;text-align:center;font-size:13px;}
   .btnrow{display:flex;gap:8px;margin-top:16px;}
-  .btn{flex:1;background:var(--gold);color:#1a1400;border:none;border-radius:7px;padding:10px 0;font-size:13px;font-weight:600;cursor:pointer;}
-  .btn.ghost{flex:0 0 auto;background:#161616;color:#fff;border:1px solid #2e2e2e;padding:10px 14px;}
+  .btn{flex:1;background:var(--ui-accent-gold);color:var(--ui-bg-base);border:none;border-radius:7px;padding:10px 0;font-size:13px;font-weight:600;cursor:pointer;}
+  .btn.ghost{flex:0 0 auto;background:var(--ui-bg-header);color:var(--ui-tx-primary);border:1px solid var(--ui-border-soft);padding:10px 14px;}
   /* esp32 */
-  .device{width:320px;height:480px;background:#000;border:1px solid #2a2a2a;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;}
-  .dhead{height:42px;background:var(--header);display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid #242424;}
-  .card{margin:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:11px 12px;}
-  .bar{height:7px;background:var(--panel);border-radius:4px;overflow:hidden;}
+  .device{width:320px;height:480px;background:var(--ui-bg-base);border:1px solid var(--ui-border-soft);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;}
+  .dhead{height:42px;background:var(--ui-bg-header);display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid var(--ui-border-soft);}
+  .card{margin:10px;background:var(--ui-bg-panel);border:1px solid var(--ui-border-soft);border-radius:8px;padding:11px 12px;}
+  .bar{height:7px;background:var(--ui-bg-panel);border-radius:4px;overflow:hidden;}
   .swatch{display:flex;align-items:center;gap:8px;}
-  .chip{width:34px;height:34px;border-radius:8px;border:1px solid #333;}
+  .chip{width:34px;height:34px;border-radius:8px;border:1px solid var(--ui-border-soft);}
   .tokrow{display:flex;flex-wrap:wrap;gap:18px;}
-  .tile{flex:0 0 auto;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;padding:14px;}
+  .tile{flex:0 0 auto;background:var(--ui-bg-base);border:1px solid var(--ui-border-soft);border-radius:10px;padding:14px;}
   table.tok{border-collapse:collapse;font-size:13px;}
-  table.tok td{padding:6px 14px 6px 0;color:var(--muted);}
-  code{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:4px;padding:1px 6px;font-size:12.5px;color:#e5e5e5;}
-  a{color:var(--amber);}
+  table.tok td{padding:6px 14px 6px 0;color:var(--ui-tx-muted);}
+  code{background:var(--ui-bg-panel);border:1px solid var(--ui-border-soft);border-radius:4px;padding:1px 6px;font-size:12.5px;color:var(--ui-tx-primary);}
+  a{color:var(--ui-line-amber);}
+  .hud-panel{background:var(--ui-bg-base);border:1px solid var(--ui-border-soft);border-radius:10px;padding:14px;max-width:560px;}
+  .state-chip{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;}
 </style>
 </head>
 <body>
@@ -99,20 +115,20 @@
       <p class="cap">Healthy — ready to drive</p>
       <div class="win">
         <div class="titlebar">
-          <span class="dot" style="background:var(--gold)"></span>
+          <span class="dot" style="background:var(--ui-accent-gold)"></span>
           <span style="font-size:12.5px;font-weight:500;">AC Copilot · Game Point</span>
-          <span style="margin-left:auto;color:var(--quiet);font-size:12px;">&minus; &times;</span>
+          <span style="margin-left:auto;color:var(--ui-tx-quiet);font-size:12px;">&minus; &times;</span>
         </div>
         <div class="pad">
-          <div class="banner" style="background:var(--green-bg);border:1px solid #1e3a1c;">
-            <span style="color:var(--green);font-size:22px;">&#10003;</span>
-            <div><div style="color:var(--green);font-weight:500;">Ready to drive</div><div style="color:var(--muted);font-size:12px;">Sidecar, rig screen and hotspot all live</div></div>
+          <div class="banner banner-ok">
+            <span style="color:var(--ui-ok-green);font-size:22px;">&#10003;</span>
+            <div><div style="color:var(--ui-ok-green);font-weight:500;">Ready to drive</div><div style="color:var(--ui-tx-muted);font-size:12px;">Sidecar, rig screen and hotspot all live</div></div>
           </div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:var(--green-bg);color:var(--green)">healthy</span><span class="detail">peers=1 screen_peers=1</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--green-bg);color:var(--green)">connected</span><span class="detail">screen_peers=1</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">on</span><span class="detail">state=On clients=1</span></div>
-          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:var(--gold-bg);color:var(--gold)">configured</span><span class="detail">reference archive + bank configured</span></div>
-          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">absent</span><span class="detail">SimHub executable not found</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill pill-ok">healthy</span><span class="detail">peers=1 screen_peers=1</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill pill-ok">connected</span><span class="detail">screen_peers=1</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill pill-ok">on</span><span class="detail">state=On clients=1</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-accent-gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill pill-gold">configured</span><span class="detail">reference archive + bank configured</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill pill-neutral">absent</span><span class="detail">SimHub executable not found</span></div>
           <div class="btnrow">
             <button class="btn">&#9654; Start</button>
             <button class="btn ghost">&#8635;</button>
@@ -126,20 +142,20 @@
       <p class="cap">Recovery — sidecar not started</p>
       <div class="win">
         <div class="titlebar">
-          <span class="dot" style="background:var(--quiet)"></span>
+          <span class="dot" style="background:var(--ui-tx-quiet)"></span>
           <span style="font-size:12.5px;font-weight:500;">AC Copilot · Game Point</span>
-          <span style="margin-left:auto;color:var(--quiet);font-size:12px;">&minus; &times;</span>
+          <span style="margin-left:auto;color:var(--ui-tx-quiet);font-size:12px;">&minus; &times;</span>
         </div>
         <div class="pad">
-          <div class="banner" style="background:var(--red-bg);border:1px solid #3a1e1c;">
-            <span style="color:var(--red);font-size:22px;">&#9654;</span>
-            <div><div style="color:var(--red);font-weight:500;">Press Start to launch the sidecar</div><div style="color:var(--muted);font-size:12px;">Nothing is listening on port 8765 yet</div></div>
+          <div class="banner banner-alert">
+            <span style="color:var(--ui-alert-red);font-size:22px;">&#9654;</span>
+            <div><div style="color:var(--ui-alert-red);font-weight:500;">Press Start to launch the sidecar</div><div style="color:var(--ui-tx-muted);font-size:12px;">Nothing is listening on port 8765 yet</div></div>
           </div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:#222;color:var(--muted)">stopped</span><span class="detail">—</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--red-bg);color:var(--red)">waiting</span><span class="detail">no ESP32 screen peer connected</span></div>
-          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">on</span><span class="detail">state=On clients=0</span></div>
-          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:#222;color:var(--muted)">configured</span><span class="detail">reference archive + bank configured</span></div>
-          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">absent</span><span class="detail">SimHub executable not found</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill pill-neutral">stopped</span><span class="detail">—</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill pill-alert">waiting</span><span class="detail">no ESP32 screen peer connected</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill pill-ok">on</span><span class="detail">state=On clients=0</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-accent-gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill pill-neutral">configured</span><span class="detail">reference archive + bank configured</span></div>
+          <div class="row"><span class="marker" style="color:var(--ui-tx-quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill pill-neutral">absent</span><span class="detail">SimHub executable not found</span></div>
           <div class="btnrow">
             <button class="btn">&#9654; Start</button>
             <button class="btn ghost">&#8635;</button>
@@ -157,51 +173,51 @@
     <div>
       <p class="cap">Launcher</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--gold);font-size:13px;font-weight:600;letter-spacing:.05em;">AC LAUNCHER</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px;"><span class="dot" style="background:var(--green)"></span><span style="color:var(--green);font-size:11px;">connected</span></span></div>
+        <div class="dhead"><span style="color:var(--ui-accent-gold);font-size:13px;font-weight:600;letter-spacing:.05em;">AC LAUNCHER</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px;"><span class="dot" style="background:var(--ui-ok-green)"></span><span style="color:var(--ui-ok-green);font-size:11px;">connected</span></span></div>
         <div style="margin:10px;display:flex;flex-direction:column;gap:10px;">
-          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:500;">AC Copilot</span><span style="color:var(--gold);">&#8250;</span></div>
-          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:500;">Pocket Technician</span><span style="color:var(--gold);">&#8250;</span></div>
-          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;color:var(--muted);"><span>Setup Exchange</span><span>&#8250;</span></div>
+          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:500;">AC Copilot</span><span style="color:var(--ui-accent-gold);">&#8250;</span></div>
+          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:500;">Pocket Technician</span><span style="color:var(--ui-accent-gold);">&#8250;</span></div>
+          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;color:var(--ui-tx-muted);"><span>Setup Exchange</span><span>&#8250;</span></div>
         </div>
       </div>
     </div>
     <div>
       <p class="cap">AC Copilot — live coaching</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span class="dot" style="margin-left:auto;background:var(--green)"></span></div>
+        <div class="dhead"><span style="color:var(--ui-tx-muted);font-size:12px;">&#8249; Back</span><span style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span class="dot" style="margin-left:auto;background:var(--ui-ok-green)"></span></div>
         <div class="card">
-          <div style="color:var(--gold);font-size:11px;font-weight:600;letter-spacing:.05em;">T4 · VARIANTE ASCARI</div>
+          <div style="color:var(--ui-accent-gold);font-size:11px;font-weight:600;letter-spacing:.05em;">T4 · VARIANTE ASCARI</div>
           <div style="font-size:21px;font-weight:500;margin:5px 0 2px;">Brake later</div>
-          <div style="color:var(--muted);font-size:12.5px;">Carry 8 km/h more to apex</div>
+          <div style="color:var(--ui-tx-muted);font-size:12.5px;">Carry 8 km/h more to apex</div>
         </div>
         <div style="margin:0 10px;display:flex;flex-direction:column;gap:9px;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="color:var(--quiet);font-size:11px;">Distance to braking</span><span style="font-size:13px;font-weight:500;">86 m</span></div>
-          <div class="bar"><div style="width:62%;height:100%;background:var(--gold);"></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="color:var(--ui-tx-quiet);font-size:11px;">Distance to braking</span><span style="font-size:13px;font-weight:500;">86 m</span></div>
+          <div class="bar"><div style="width:62%;height:100%;background:var(--ui-accent-gold);"></div></div>
           <div style="display:flex;gap:8px;margin-top:3px;">
-            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Target</div><div style="font-size:17px;font-weight:500;">182</div></div>
-            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Current</div><div style="font-size:17px;font-weight:500;color:var(--red);">196</div></div>
+            <div style="flex:1;background:var(--ui-bg-panel);border-radius:7px;padding:8px 10px;"><div style="color:var(--ui-tx-quiet);font-size:10px;">Target</div><div style="font-size:17px;font-weight:500;">182</div></div>
+            <div style="flex:1;background:var(--ui-bg-panel);border-radius:7px;padding:8px 10px;"><div style="color:var(--ui-tx-quiet);font-size:10px;">Current</div><div style="font-size:17px;font-weight:500;color:var(--ui-alert-red);">196</div></div>
           </div>
-          <div style="background:var(--red-bg);color:var(--red);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:500;text-align:center;">Too fast · +14 km/h</div>
+          <div style="background:var(--ui-bg-panel);color:var(--ui-alert-red);border:1px solid var(--ui-alert-red);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:500;text-align:center;">Too fast · +14 km/h</div>
         </div>
       </div>
     </div>
     <div>
       <p class="cap">AC Copilot — on pace (empty/idle variant)</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span class="dot" style="margin-left:auto;background:var(--green)"></span></div>
+        <div class="dhead"><span style="color:var(--ui-tx-muted);font-size:12px;">&#8249; Back</span><span style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span class="dot" style="margin-left:auto;background:var(--ui-ok-green)"></span></div>
         <div class="card">
-          <div style="color:var(--quiet);font-size:11px;font-weight:600;letter-spacing:.05em;">T6 · LESMO 2</div>
-          <div style="font-size:21px;font-weight:500;margin:5px 0 2px;color:var(--green);">On pace</div>
-          <div style="color:var(--muted);font-size:12.5px;">Hold this line</div>
+          <div style="color:var(--ui-tx-quiet);font-size:11px;font-weight:600;letter-spacing:.05em;">T6 · LESMO 2</div>
+          <div style="font-size:21px;font-weight:500;margin:5px 0 2px;color:var(--ui-ok-green);">On pace</div>
+          <div style="color:var(--ui-tx-muted);font-size:12.5px;">Hold this line</div>
         </div>
         <div style="margin:0 10px;display:flex;flex-direction:column;gap:9px;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="color:var(--quiet);font-size:11px;">Distance to braking</span><span style="font-size:13px;font-weight:500;">142 m</span></div>
-          <div class="bar"><div style="width:30%;height:100%;background:var(--gold);"></div></div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="color:var(--ui-tx-quiet);font-size:11px;">Distance to braking</span><span style="font-size:13px;font-weight:500;">142 m</span></div>
+          <div class="bar"><div style="width:30%;height:100%;background:var(--ui-accent-gold);"></div></div>
           <div style="display:flex;gap:8px;margin-top:3px;">
-            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Target</div><div style="font-size:17px;font-weight:500;">214</div></div>
-            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Current</div><div style="font-size:17px;font-weight:500;color:var(--green);">213</div></div>
+            <div style="flex:1;background:var(--ui-bg-panel);border-radius:7px;padding:8px 10px;"><div style="color:var(--ui-tx-quiet);font-size:10px;">Target</div><div style="font-size:17px;font-weight:500;">214</div></div>
+            <div style="flex:1;background:var(--ui-bg-panel);border-radius:7px;padding:8px 10px;"><div style="color:var(--ui-tx-quiet);font-size:10px;">Current</div><div style="font-size:17px;font-weight:500;color:var(--ui-ok-green);">213</div></div>
           </div>
-          <div style="background:var(--green-bg);color:var(--green);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:500;text-align:center;">On pace · &minus;1 km/h</div>
+          <div style="background:var(--ui-bg-panel);color:var(--ui-ok-green);border:1px solid var(--ui-ok-green);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:500;text-align:center;">On pace · &minus;1 km/h</div>
         </div>
       </div>
     </div>
@@ -214,18 +230,18 @@
     <div>
       <p class="cap">Pocket Technician — setups</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">Pocket Technician</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--green);"></span></div>
-        <div style="margin:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;">
-          <div style="display:flex;justify-content:space-between;"><span style="color:var(--quiet);font-size:11px;">Monza</span><span style="color:var(--quiet);font-size:11px;">Ferrari 296</span></div>
+        <div class="dhead"><span style="color:var(--ui-tx-muted);font-size:12px;">&#8249; Back</span><span style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;margin-left:4px;">Pocket Technician</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--ui-ok-green);"></span></div>
+        <div style="margin:10px;background:var(--ui-bg-panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;">
+          <div style="display:flex;justify-content:space-between;"><span style="color:var(--ui-tx-quiet);font-size:11px;">Monza</span><span style="color:var(--ui-tx-quiet);font-size:11px;">Ferrari 296</span></div>
           <div style="font-weight:500;margin-top:2px;">Quali — low downforce</div>
         </div>
         <div style="margin:0 10px;">
-          <div style="color:var(--gold);font-size:10px;font-weight:600;letter-spacing:.06em;margin-bottom:6px;">ADJUST</div>
-          <div class="row" style="margin-bottom:6px;"><span style="flex:1;font-size:12px;">Brake bias</span><span style="color:var(--quiet);font-size:14px;">&#8722;</span><span style="font-weight:500;font-size:13px;min-width:46px;text-align:center;">56.5%</span><span style="color:var(--gold);font-size:14px;">+</span></div>
-          <div class="row" style="margin-bottom:10px;"><span style="flex:1;font-size:12px;">TC</span><span style="color:var(--quiet);font-size:14px;">&#8722;</span><span style="font-weight:500;font-size:13px;min-width:46px;text-align:center;">3</span><span style="color:var(--gold);font-size:14px;">+</span></div>
-          <div style="color:var(--gold);font-size:10px;font-weight:600;letter-spacing:.06em;margin-bottom:6px;">SAVED</div>
-          <div class="row" style="margin-bottom:6px;"><span style="flex:1;"><div style="font-size:12px;font-weight:500;">Race — stable</div><div style="color:var(--quiet);font-size:10px;">1:21.4 · BB 54 · TC 4</div></span><span style="color:var(--gold);">&#8250;</span></div>
-          <div class="row"><span style="flex:1;"><div style="font-size:12px;font-weight:500;">Banzai</div><div style="color:var(--quiet);font-size:10px;">1:20.9 · BB 57 · TC 2</div></span><span style="color:var(--gold);">&#8250;</span></div>
+          <div style="color:var(--ui-accent-gold);font-size:10px;font-weight:600;letter-spacing:.06em;margin-bottom:6px;">ADJUST</div>
+          <div class="row" style="margin-bottom:6px;"><span style="flex:1;font-size:12px;">Brake bias</span><span style="color:var(--ui-tx-quiet);font-size:14px;">&#8722;</span><span style="font-weight:500;font-size:13px;min-width:46px;text-align:center;">56.5%</span><span style="color:var(--ui-accent-gold);font-size:14px;">+</span></div>
+          <div class="row" style="margin-bottom:10px;"><span style="flex:1;font-size:12px;">TC</span><span style="color:var(--ui-tx-quiet);font-size:14px;">&#8722;</span><span style="font-weight:500;font-size:13px;min-width:46px;text-align:center;">3</span><span style="color:var(--ui-accent-gold);font-size:14px;">+</span></div>
+          <div style="color:var(--ui-accent-gold);font-size:10px;font-weight:600;letter-spacing:.06em;margin-bottom:6px;">SAVED</div>
+          <div class="row" style="margin-bottom:6px;"><span style="flex:1;"><div style="font-size:12px;font-weight:500;">Race — stable</div><div style="color:var(--ui-tx-quiet);font-size:10px;">1:21.4 · BB 54 · TC 4</div></span><span style="color:var(--ui-accent-gold);">&#8250;</span></div>
+          <div class="row"><span style="flex:1;"><div style="font-size:12px;font-weight:500;">Banzai</div><div style="color:var(--ui-tx-quiet);font-size:10px;">1:20.9 · BB 57 · TC 2</div></span><span style="color:var(--ui-accent-gold);">&#8250;</span></div>
         </div>
       </div>
     </div>
@@ -233,47 +249,47 @@
     <div>
       <p class="cap">Setup Exchange — unavailable state</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">Setup Exchange</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--quiet);"></span></div>
+        <div class="dhead"><span style="color:var(--ui-tx-muted);font-size:12px;">&#8249; Back</span><span style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;margin-left:4px;">Setup Exchange</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--ui-tx-quiet);"></span></div>
         <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:0 26px;gap:8px;">
-          <div style="width:46px;height:46px;border-radius:50%;border:1px solid #333;display:flex;align-items:center;justify-content:center;color:var(--quiet);font-size:22px;">&#8595;</div>
+          <div style="width:46px;height:46px;border-radius:50%;border:1px solid var(--ui-border-soft);display:flex;align-items:center;justify-content:center;color:var(--ui-tx-quiet);font-size:22px;">&#8595;</div>
           <div style="font-weight:500;">No matching setups</div>
-          <div style="color:var(--muted);font-size:12px;">Setup Exchange isn't installed, or none fit Monza · Ferrari 296.</div>
+          <div style="color:var(--ui-tx-muted);font-size:12px;">Setup Exchange isn't installed, or none fit Monza · Ferrari 296.</div>
         </div>
-        <div style="margin:10px;color:var(--quiet);font-size:10px;text-align:center;">Reads local UserSetups/&lt;carID&gt;/ · coexists with the official app</div>
+        <div style="margin:10px;color:var(--ui-tx-quiet);font-size:10px;text-align:center;">Reads local UserSetups/&lt;carID&gt;/ · coexists with the official app</div>
       </div>
     </div>
 
     <div>
       <p class="cap">Settings / Diagnostics</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">Settings</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--green);"></span></div>
+        <div class="dhead"><span style="color:var(--ui-tx-muted);font-size:12px;">&#8249; Back</span><span style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;margin-left:4px;">Settings</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--ui-ok-green);"></span></div>
         <div style="margin:10px;display:flex;flex-direction:column;gap:6px;">
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Wi-Fi</span><span style="color:#fff;font-size:11.5px;">RIG-HOTSPOT</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Sidecar</span><span class="pill" style="background:var(--green-bg);color:var(--green)">connected</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Token</span><span class="pill" style="background:var(--green-bg);color:var(--green)">present</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Client id</span><span style="color:#fff;font-size:11.5px;">rig-screen-01</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Firmware</span><span style="color:#fff;font-size:11.5px;">v1.4.2</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Snapshot age</span><span style="color:var(--green);font-size:11.5px;">0.1 s</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Wi-Fi</span><span style="color:var(--ui-tx-primary);font-size:11.5px;">RIG-HOTSPOT</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Sidecar</span><span class="pill pill-ok">healthy</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Sidecar token</span><span class="pill pill-ok">configured</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Client id</span><span style="color:var(--ui-tx-primary);font-size:11.5px;">rig-screen-01</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Firmware</span><span style="color:var(--ui-tx-primary);font-size:11.5px;">v1.4.2</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Snapshot age</span><span style="color:var(--ui-ok-green);font-size:11.5px;">0.1 s</span></div>
         </div>
-        <div style="margin:6px 10px 10px;color:var(--quiet);font-size:10px;">Token shown as present/absent only — never the value.</div>
+        <div style="margin:6px 10px 10px;color:var(--ui-tx-quiet);font-size:10px;">Sidecar token uses configured/missing/loopback — never the secret value.</div>
       </div>
     </div>
 
     <div>
       <p class="cap">Voice &amp; haptics status</p>
       <div class="device">
-        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">Voice &amp; haptics</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--green);"></span></div>
+        <div class="dhead"><span style="color:var(--ui-tx-muted);font-size:12px;">&#8249; Back</span><span style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;margin-left:4px;">Voice &amp; haptics</span><span style="margin-left:auto;width:9px;height:9px;border-radius:50%;background:var(--ui-ok-green);"></span></div>
         <div class="card">
-          <div style="color:var(--gold);font-size:11px;font-weight:600;letter-spacing:.05em;">VOICE COACH</div>
-          <div style="font-size:18px;font-weight:500;margin:4px 0 2px;color:var(--green)">configured</div>
-          <div style="color:var(--muted);font-size:12px;">bank · sounddevice · USB headset</div>
-          <div style="color:var(--quiet);font-size:11px;margin-top:6px;">Last cue: &ldquo;Brake later&rdquo; · 3 s ago</div>
+          <div style="color:var(--ui-accent-gold);font-size:11px;font-weight:600;letter-spacing:.05em;">VOICE COACH</div>
+          <div style="font-size:18px;font-weight:500;margin:4px 0 2px;color:var(--ui-ok-green)">configured</div>
+          <div style="color:var(--ui-tx-muted);font-size:12px;">bank · sounddevice · USB headset</div>
+          <div style="color:var(--ui-tx-quiet);font-size:11px;margin-top:6px;">Last cue: &ldquo;Brake later&rdquo; · 3 s ago</div>
         </div>
         <div style="margin:0 10px;display:flex;flex-direction:column;gap:6px;">
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Wind fan</span><span class="pill" style="background:var(--green-bg);color:var(--green)">on</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Seat shaker</span><span class="pill" style="background:var(--green-bg);color:var(--green)">on</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Pedal rumble</span><span class="pill" style="background:#222;color:var(--muted)">off</span></div>
-          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Route</span><span style="color:#fff;font-size:11.5px;">native (no SimHub)</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Wind fan</span><span class="pill pill-ok">on</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Seat shaker</span><span class="pill pill-ok">on</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Pedal rumble</span><span class="pill pill-neutral">off</span></div>
+          <div class="row" style="margin:0;"><span style="flex:1;font-size:12px;">Route</span><span style="color:var(--ui-tx-primary);font-size:11.5px;">native (no SimHub)</span></div>
         </div>
       </div>
     </div>
@@ -282,26 +298,26 @@
 
   <h2>In-game CSP HUD — cross-surface alignment</h2>
   <p class="lede">The Dear ImGui overlay shares the launcher and rig-screen language so the three surfaces read as one product: one action line (<code>now</code>), one reason (<code>why</code>), target/current/delta only when useful (<code>detail</code>), plus a consistent reference-lap + sidecar + voice status strip.</p>
-  <div style="background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;padding:14px;max-width:560px;">
+  <div class="hud-panel">
     <div style="display:flex;align-items:stretch;gap:14px;">
-      <div style="flex:0 0 96px;background:var(--panel-2);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0;">
-        <div style="color:var(--quiet);font-size:10px;">T4</div>
-        <div style="color:#fff;font-size:13px;font-weight:500;text-align:center;line-height:1.25;">Variante<br>Ascari</div>
+      <div style="flex:0 0 96px;background:var(--ui-bg-panel);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 0;">
+        <div style="color:var(--ui-tx-quiet);font-size:10px;">T4</div>
+        <div style="color:var(--ui-tx-primary);font-size:13px;font-weight:500;text-align:center;line-height:1.25;">Variante<br>Ascari</div>
       </div>
       <div style="flex:1;">
         <div style="font-size:22px;font-weight:500;">Brake later</div>
-        <div style="color:var(--muted);font-size:13px;margin-bottom:8px;">Carry 8 km/h more to apex</div>
+        <div style="color:var(--ui-tx-muted);font-size:13px;margin-bottom:8px;">Carry 8 km/h more to apex</div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-          <span style="background:var(--panel-2);border-radius:6px;padding:5px 9px;font-size:12px;">Target <b style="font-weight:500;">182</b></span>
-          <span style="background:var(--panel-2);border-radius:6px;padding:5px 9px;font-size:12px;">Now <b style="font-weight:500;color:var(--red)">196</b></span>
-          <span style="background:var(--red-bg);color:var(--red);border-radius:6px;padding:5px 9px;font-size:12px;font-weight:500;">+14 km/h</span>
+          <span style="background:var(--ui-bg-panel);border-radius:6px;padding:5px 9px;font-size:12px;">Target <b style="font-weight:500;">182</b></span>
+          <span style="background:var(--ui-bg-panel);border-radius:6px;padding:5px 9px;font-size:12px;">Now <b style="font-weight:500;color:var(--ui-alert-red)">196</b></span>
+          <span style="background:var(--ui-bg-panel);color:var(--ui-alert-red);border-radius:6px;padding:5px 9px;font-size:12px;font-weight:500;">+14 km/h</span>
         </div>
       </div>
     </div>
-    <div style="display:flex;gap:16px;margin-top:12px;padding-top:10px;border-top:1px solid #1f1f1f;color:var(--quiet);font-size:11px;">
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);"></span> Sidecar</span>
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);"></span> Reference lap loaded</span>
-      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--gold);"></span> Voice configured</span>
+    <div style="display:flex;gap:16px;margin-top:12px;padding-top:10px;border-top:1px solid var(--ui-border-soft);color:var(--ui-tx-quiet);font-size:11px;">
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ui-ok-green);"></span> Sidecar</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ui-ok-green);"></span> Reference lap loaded</span>
+      <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ui-accent-gold);"></span> Voice configured</span>
     </div>
   </div>
 
