@@ -75,10 +75,57 @@ to force ROM DFU, then `esptool.py ... write_flash 0 <factory.bin>`.
   `include/board/LGFX_JC3248W535.h` first — they are community defaults and
   have not yet been verified on this physical board.
 - **WS never opens, status says "Sidecar: closed".** Verify the sidecar is started
-  with an external bind + token that match `secrets/sidecar.h`:
-  `py -3 -m tools.ai_sidecar --external-bind 0.0.0.0 --port 8765 --token <TOKEN>`.
+  with an external bind and `AC_COPILOT_SIDECAR_TOKEN` matching
+  `secrets/sidecar.h`:
+  `py -3 -m tools.ai_sidecar --external-bind 0.0.0.0 --port 8765`.
   The sidecar now accepts authenticated external clients and keeps loopback Lua
   traffic working for in-game coaching.
+
+### Auto-start with the in-game trainer
+
+`src/ac_copilot_trainer/start_sidecar.bat` stays loopback-only unless a rig-screen
+token is configured. To let the AC app auto-spawn the sidecar for the physical
+screen, set the token in the user environment to the same value compiled into
+`secrets/sidecar.h`:
+
+```powershell
+[Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_TOKEN", "<TOKEN>", "User")
+```
+
+Optional overrides:
+
+```powershell
+[Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_EXTERNAL_BIND", "0.0.0.0", "User")
+[Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_PORT", "8765", "User")
+```
+
+Restart Content Manager / Assetto Corsa after changing user environment variables.
+For the current rig firmware, `SIDECAR_HOST` in `secrets/sidecar.h` must match
+the Windows Mobile Hotspot gateway address shown on the rig PC, and the screen
+must join the 2.4 GHz hotspot SSID from `secrets/wifi_secrets.h`.
+
+### Token rotation
+
+Rotate the sidecar token whenever it may have been exposed, after a rig rebuild,
+or before sharing logs/screenshots externally:
+
+1. Generate a new random token locally and keep it out of chat, issue comments,
+   screenshots, command lines, and committed files.
+2. Update `firmware/screen/secrets/sidecar.h` with the new token.
+3. Update the rig PC user environment:
+
+   ```powershell
+   [Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_TOKEN", "<NEW_TOKEN>", "User")
+   ```
+
+4. Rebuild and flash the screen firmware if the flashed firmware still contains
+   the old token.
+5. Restart Content Manager / Assetto Corsa and any already-running sidecar
+   process so the new user environment is inherited.
+6. Verify the screen reconnects and `/health` reports a current screen peer.
+
+If rotation was caused by suspected exposure, do not reuse the old token in any
+local config or firmware build.
 
 ## Layout
 

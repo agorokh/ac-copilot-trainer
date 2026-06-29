@@ -249,6 +249,7 @@ def test_external_bind_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """Argparse refuses --external-bind without --token (SystemExit)."""
     from tools.ai_sidecar import server as srv
 
+    monkeypatch.delenv("AC_COPILOT_SIDECAR_TOKEN", raising=False)
     monkeypatch.setattr(
         "sys.argv",
         ["ai_sidecar", "--external-bind", "0.0.0.0", "--port", "0"],
@@ -257,9 +258,48 @@ def test_external_bind_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
         srv.main()
 
 
+def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rig-screen auto-start can keep the token in the process environment."""
+    from tools.ai_sidecar import server as srv
+
+    seen: dict[str, object] = {}
+
+    async def fake_run(
+        host: str, port: int, reply: bool, token: str | None, setup_store: str | None
+    ):
+        seen.update(
+            {
+                "host": host,
+                "port": port,
+                "reply": reply,
+                "token": token,
+                "setup_store": setup_store,
+            }
+        )
+
+    monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "env-token")
+    monkeypatch.setattr(srv, "_run", fake_run)
+    monkeypatch.setattr(srv, "_wire_voice", lambda ref_path, bank_dir: None)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ai_sidecar", "--external-bind", "0.0.0.0", "--port", "0"],
+    )
+
+    srv.main()
+
+    assert seen == {
+        "host": "0.0.0.0",
+        "port": 0,
+        "reply": True,
+        "token": "env-token",
+        "setup_store": None,
+    }
+
+
 def test_non_loopback_host_requires_token(monkeypatch: pytest.MonkeyPatch) -> None:
     from tools.ai_sidecar import server as srv
 
+    monkeypatch.delenv("AC_COPILOT_SIDECAR_TOKEN", raising=False)
     monkeypatch.setattr(
         "sys.argv",
         ["ai_sidecar", "--host", "0.0.0.0", "--port", "0"],

@@ -151,9 +151,22 @@ local function _clamp(v, lo, hi)
   return v
 end
 
+local function _field(obj, key)
+  if obj == nil then
+    return nil
+  end
+  local ok, value = pcall(function()
+    return obj[key]
+  end)
+  if ok then
+    return value
+  end
+  return nil
+end
+
 
 --- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341). Requires ``wsBridge.sendJson``.
----@param opts table  {dt:number, car:table, wsBridge, lat_g?:number, long_g?:number}
+---@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number}
 ---@return boolean
 function M.publishTelemetryTickIfDue(opts)
   if type(opts) ~= "table" then
@@ -164,7 +177,9 @@ function M.publishTelemetryTickIfDue(opts)
     return false
   end
   local car = opts.car
-  if type(car) ~= "table" then
+  -- CSP state objects can be FFI cdata/userdata rather than plain tables. Tests use tables,
+  -- but the live rig path must accept either shape and read fields defensively.
+  if car == nil then
     return false
   end
   local due, accum = _due(_tickAccum, tonumber(opts.dt) or 0, TICK_INTERVAL_SEC)
@@ -174,8 +189,9 @@ function M.publishTelemetryTickIfDue(opts)
   end
   _tickSeq = _tickSeq + 1
   local gear = 0
-  if car.gear ~= nil then
-    local g = tonumber(car.gear)
+  local rawGear = _field(car, "gear")
+  if rawGear ~= nil then
+    local g = tonumber(rawGear)
     if g ~= nil and g == g then
       gear = math.max(0, math.floor(g))
     end
@@ -185,16 +201,16 @@ function M.publishTelemetryTickIfDue(opts)
     type = "telemetry_tick",
     seq = _tickSeq,
     payload = {
-      speed_kmh = math.max(0, _finite(car.speedKmh) or 0),
-      rpm = math.max(0, _finite(car.rpm) or 0),
-      throttle = _clamp(car.gas or 0, 0, 1),
-      brake = _clamp(car.brake or 0, 0, 1),
-      steer = _clamp(car.steer or 0, -1, 1),
+      speed_kmh = math.max(0, _finite(_field(car, "speedKmh")) or 0),
+      rpm = math.max(0, _finite(_field(car, "rpm")) or 0),
+      throttle = _clamp(_field(car, "gas") or 0, 0, 1),
+      brake = _clamp(_field(car, "brake") or 0, 0, 1),
+      steer = _clamp(_field(car, "steer") or 0, -1, 1),
       gear = gear,
       lat_g = _finite(opts.lat_g) or 0,
       long_g = _finite(opts.long_g) or 0,
-      spline = _clamp(car.splinePosition or 0, 0, 1),
-      lap = math.max(0, math.floor(tonumber(car.lapCount) or 0)),
+      spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
+      lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
     },
   }) == true
 end

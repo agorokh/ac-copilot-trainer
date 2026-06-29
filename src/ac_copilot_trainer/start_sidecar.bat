@@ -39,6 +39,8 @@ if not defined AC_COPILOT_OLLAMA_TEMPERATURE set "AC_COPILOT_OLLAMA_TEMPERATURE=
 if not defined AC_COPILOT_OLLAMA_NUM_PREDICT set "AC_COPILOT_OLLAMA_NUM_PREDICT=160"
 if not defined AC_COPILOT_OLLAMA_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_TIMEOUT_SEC=60"
 if not defined AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC set "AC_COPILOT_OLLAMA_DEBRIEF_TIMEOUT_SEC=60"
+if not defined AC_COPILOT_SIDECAR_PORT set "AC_COPILOT_SIDECAR_PORT=8765"
+if "!AC_COPILOT_SIDECAR_PORT!"=="" set "AC_COPILOT_SIDECAR_PORT=8765"
 
 cd /d "!REPO_ROOT!"
 IF NOT EXIST "!REPO_ROOT!\tools\ai_sidecar" (
@@ -46,9 +48,23 @@ IF NOT EXIST "!REPO_ROOT!\tools\ai_sidecar" (
     exit /b 2
 )
 
+REM Default remains loopback-only for normal in-game Lua use. When the rig-screen
+REM token is present, expose the sidecar on the LAN/hotspot while keeping the
+REM token in the child process environment instead of the process command line.
+set "SIDECAR_ARGS=--host 127.0.0.1 --port !AC_COPILOT_SIDECAR_PORT!"
+if not "!AC_COPILOT_SIDECAR_TOKEN!"=="" (
+  if not defined AC_COPILOT_SIDECAR_EXTERNAL_BIND set "AC_COPILOT_SIDECAR_EXTERNAL_BIND=0.0.0.0"
+  if "!AC_COPILOT_SIDECAR_EXTERNAL_BIND!"=="" set "AC_COPILOT_SIDECAR_EXTERNAL_BIND=0.0.0.0"
+  set "SIDECAR_ARGS=--external-bind !AC_COPILOT_SIDECAR_EXTERNAL_BIND! --port !AC_COPILOT_SIDECAR_PORT!"
+) else (
+  if not "!AC_COPILOT_SIDECAR_EXTERNAL_BIND!"=="" (
+    echo [start_sidecar] WARNING: AC_COPILOT_SIDECAR_EXTERNAL_BIND ignored because AC_COPILOT_SIDECAR_TOKEN is unset.
+  )
+)
+
 where py >nul 2>nul
 IF ERRORLEVEL 1 GOTO :USE_PYTHON
-py -3 -m tools.ai_sidecar --host 127.0.0.1 --port 8765
+py -3 -m tools.ai_sidecar !SIDECAR_ARGS!
 set "EC=!ERRORLEVEL!"
 if "!EC!"=="0" exit /b 0
 echo [start_sidecar] py -3 sidecar exited (errorlevel=!EC!); not retrying with a different python.exe
@@ -58,7 +74,7 @@ if "!EC!" LSS "0" exit /b 1
 exit /b !EC!
 
 :USE_PYTHON
-python -m tools.ai_sidecar --host 127.0.0.1 --port 8765
+python -m tools.ai_sidecar !SIDECAR_ARGS!
 set "EC=!ERRORLEVEL!"
 if "!EC!"=="0" exit /b 0
 echo [start_sidecar] python sidecar exited (errorlevel=!EC!)
