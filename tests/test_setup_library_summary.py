@@ -50,6 +50,23 @@ def test_firmware_chip_refresh_path_present() -> None:
     assert "g_row_chip_labels[i] = nullptr" in cpp
 
 
+def test_firmware_spinner_protocol_path_present() -> None:
+    """Pocket Technician queues setup.spinner list/set frames and renders +/- controls."""
+    screen_cpp = (
+        REPO / "firmware" / "screen" / "src" / "ui" / "screen_pocket_technician.cpp"
+    ).read_text(encoding="utf-8")
+    main_cpp = (REPO / "firmware" / "screen" / "src" / "main.cpp").read_text(encoding="utf-8")
+    header = (
+        REPO / "firmware" / "screen" / "include" / "ui" / "screen_pocket_technician.h"
+    ).read_text(encoding="utf-8")
+    assert "PT_REQ_SPINNER_LIST" in header
+    assert "PT_REQ_SPINNER_SET" in header
+    assert "screen_pocket_technician_apply_spinner_ack" in screen_cpp
+    assert "make_spinner_row" in screen_cpp
+    assert "setup.spinner.list" in main_cpp
+    assert "setup.spinner.set" in main_cpp
+
+
 def test_chip_int_coercion_rounds_and_omits_invalid(lua) -> None:
     """chipInt helper used in setup.list matches issue #93 semantics."""
     out = lua.execute(
@@ -70,3 +87,90 @@ def test_chip_int_coercion_rounds_and_omits_invalid(lua) -> None:
     assert out["bb"] == 66
     assert out["missing"] is None
     assert out["bad"] is None
+
+
+def _install_spinner_stubs(lua, setup_path: pathlib.Path, root: pathlib.Path) -> None:
+    setup_lua = str(setup_path).replace("\\", "/")
+    root_lua = str(root).replace("\\", "/")
+    lua.execute(
+        f"""
+        ac = {{
+          FolderID = {{ UserSetups = 11 }},
+          getFolder = function(_id) return "{root_lua}" end,
+          getCar = function(_idx) return {{}} end,
+          getSim = function() return {{}} end,
+          loadSetup = function(path)
+            _G.__loaded_setup = path
+            return true
+          end,
+        }}
+        local setupReader = require("setup_reader")
+        setupReader.activeSetupIniPath = function(_car, _sim)
+          return "{setup_lua}"
+        end
+        """
+    )
+
+
+def test_spinner_list_reads_active_setup_controls(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    setup_path.write_text(FIXTURE_INI.read_text(encoding="utf-8"), encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+
+    result = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.listSpinners({})
+        """
+    )
+
+    assert result["ok"] is True
+    first = result["spinners"][1]
+    assert first["section"] == "FRONT_BIAS"
+    assert first["label"] == "Brake bias"
+    assert first["value"] == 66
+    assert first["min"] == 40
+    assert first["max"] == 80
+
+
+def test_spinner_set_rewrites_active_setup_and_applies(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    setup_path.write_text(FIXTURE_INI.read_text(encoding="utf-8"), encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+
+    ack = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.setSpinner({ section = "FRONT_BIAS", value = 67 })
+        """
+    )
+
+    assert ack["ok"] is True
+    assert ack["section"] == "FRONT_BIAS"
+    assert ack["value"] == 67
+    assert "VALUE=67" in setup_path.read_text(encoding="utf-8")
+    assert lua.globals()["__loaded_setup"] == str(setup_path).replace("\\", "/")
+
+
+def test_spinner_set_rejects_out_of_range_without_writing(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    original = FIXTURE_INI.read_text(encoding="utf-8")
+    setup_path.write_text(original, encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+
+    ack = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.setSpinner({ section = "FRONT_BIAS", value = 100 })
+        """
+    )
+
+    assert ack["ok"] is False
+    assert "out of range" in ack["error"]
+    assert setup_path.read_text(encoding="utf-8") == original

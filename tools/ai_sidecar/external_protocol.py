@@ -62,6 +62,8 @@ TYPE_STATE_UNSUBSCRIBE = "state.unsubscribe"
 # the Lua side enforces the in-pits gate and does the actual ac.loadSetup().
 TYPE_SETUP_LIST = "setup.list"
 TYPE_SETUP_LOAD = "setup.load"
+TYPE_SETUP_SPINNER_LIST = "setup.spinner.list"
+TYPE_SETUP_SPINNER_SET = "setup.spinner.set"
 TYPE_SETUP_EXPERIMENT_STORE = "setup.experiment.store"
 TYPE_SETUP_EXPERIMENT_RECORD = "setup.experiment.record"
 TYPE_SETUP_COMPARE = "setup.compare"
@@ -77,6 +79,8 @@ TYPE_ERROR = "error"
 # Issue #86 Part D: replies to the screen for setup operations.
 TYPE_SETUP_LIST_RESULT = "setup.list.result"
 TYPE_SETUP_LOAD_ACK = "setup.load.ack"
+TYPE_SETUP_SPINNER_LIST_RESULT = "setup.spinner.list.result"
+TYPE_SETUP_SPINNER_SET_ACK = "setup.spinner.set.ack"
 TYPE_SETUP_EXPERIMENT_STORE_ACK = "setup.experiment.store.ack"
 TYPE_SETUP_EXPERIMENT_RECORD_ACK = "setup.experiment.record.ack"
 TYPE_SETUP_COMPARE_RESULT = "setup.compare.result"
@@ -117,6 +121,8 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_STATE_SUBSCRIBE,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_SUGGEST,
+    TYPE_SETUP_SPINNER_LIST,
+    TYPE_SETUP_SPINNER_SET,
     TYPE_TELEMETRY_TICK,
     TYPE_HAPTIC_EVENT,
 )
@@ -425,6 +431,25 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         if not (name_ok or path_ok):
             return "setup.load requires non-empty 'name' or 'path'"
         return None
+    if t == TYPE_SETUP_SPINNER_LIST:
+        path = frame.get("path")
+        if path is not None and not isinstance(path, str):
+            return "setup.spinner.list optional 'path' must be a string"
+        return None
+    if t == TYPE_SETUP_SPINNER_SET:
+        section = frame.get("section")
+        name = frame.get("name")
+        section_ok = isinstance(section, str) and section != ""
+        name_ok = isinstance(name, str) and name != ""
+        if not (section_ok or name_ok):
+            return "setup.spinner.set requires non-empty 'section' or 'name'"
+        path = frame.get("path")
+        if path is not None and not isinstance(path, str):
+            return "setup.spinner.set optional 'path' must be a string"
+        err = _validate_number(frame, "value")
+        if err is not None:
+            return err
+        return None
     if t == TYPE_SETUP_EXPERIMENT_STORE:
         store_path = frame.get("store_path") or frame.get("path")
         if not isinstance(store_path, str) or not store_path:
@@ -448,7 +473,12 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             if key in frame and not isinstance(frame.get(key), str):
                 return f"setup.suggest optional '{key}' must be a string"
         return None
-    if t in (TYPE_SETUP_LIST_RESULT, TYPE_SETUP_LOAD_ACK):
+    if t in (
+        TYPE_SETUP_LIST_RESULT,
+        TYPE_SETUP_LOAD_ACK,
+        TYPE_SETUP_SPINNER_LIST_RESULT,
+        TYPE_SETUP_SPINNER_SET_ACK,
+    ):
         # Server-to-client replies forwarded from the Lua peer — accept silently.
         return None
     if t in (

@@ -96,6 +96,45 @@ class ToneBackend:
             wf.writeframes(bytes(frames))
 
 
+def _normalize_wav(path: Path, samplerate: int) -> None:
+    """Normalize backend output to mono 16-bit PCM at ``samplerate``.
+
+    Some external synthesizers (notably Piper voices) write at the model's native sample rate even
+    when the target bank should match a 48 kHz Windows endpoint. Resample offline during baking so
+    the hot path can keep a single pre-opened audio stream.
+    """
+    with wave.open(str(path), "rb") as wf:
+        source_rate = wf.getframerate()
+        channels = wf.getnchannels()
+        sample_width = wf.getsampwidth()
+        raw = wf.readframes(wf.getnframes())
+    if source_rate == samplerate and channels == 1 and sample_width == 2:
+        return
+
+    import numpy as np
+
+    if sample_width == 2:
+        audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    elif sample_width == 4:
+        audio = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"unsupported sample width {sample_width} bytes in {path}")
+    if channels > 1:
+        audio = audio.reshape(-1, channels).mean(axis=1)
+    if source_rate != samplerate:
+        old_x = np.linspace(0.0, 1.0, num=len(audio), endpoint=False)
+        new_len = max(1, round(len(audio) * samplerate / source_rate))
+        new_x = np.linspace(0.0, 1.0, num=new_len, endpoint=False)
+        audio = np.interp(new_x, old_x, audio).astype(np.float32)
+    pcm16 = np.clip(audio, -1.0, 1.0)
+    pcm16 = (pcm16 * 32767.0).astype("<i2")
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(pcm16.tobytes())
+
+
 # --------------------------------------------------------------------------------------------------
 # Production / dev speech backends (external tools; not exercised on CI)
 # --------------------------------------------------------------------------------------------------
@@ -179,6 +218,7 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 2
         fname = f"{phrase.clip_id}.wav"
         fp = out / fname
         backend.synthesize(phrase.text, fp, samplerate)
+        _normalize_wav(fp, samplerate)
         data = fp.read_bytes()
         clips[phrase.clip_id] = ClipEntry(
             clip_id=phrase.clip_id,

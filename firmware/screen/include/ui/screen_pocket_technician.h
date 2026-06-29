@@ -68,6 +68,21 @@ void screen_pocket_technician_set_active_setup(const char* name);
 void screen_pocket_technician_apply_load_ack(bool ok, const char* name,
                                               const char* path, const char* error);
 
+// Live adjustable setup controls from `setup.spinner.list.result`.
+void screen_pocket_technician_clear_spinners(void);
+void screen_pocket_technician_add_spinner(const char* section,
+                                          const char* label,
+                                          int32_t value,
+                                          int32_t min_value,
+                                          int32_t max_value,
+                                          int32_t step,
+                                          const char* unit);
+void screen_pocket_technician_finish_spinner_list(void);
+void screen_pocket_technician_apply_spinner_ack(bool ok,
+                                                 const char* section,
+                                                 int32_t value,
+                                                 const char* error);
+
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request
 // in a small bounded out-queue that `main.cpp` drains every loop tick.
@@ -77,6 +92,8 @@ typedef enum {
     PT_REQ_NONE = 0,
     PT_REQ_LIST,        // {"v":1,"type":"setup.list"}
     PT_REQ_LOAD,        // {"v":1,"type":"setup.load","name":"<name>"}
+    PT_REQ_SPINNER_LIST, // {"v":1,"type":"setup.spinner.list"}
+    PT_REQ_SPINNER_SET,  // {"v":1,"type":"setup.spinner.set","section":"...","value":N}
 } pt_request_kind_t;
 
 // Absolute INI paths on Windows can exceed 160–256 chars; keep one shared cap
@@ -87,6 +104,8 @@ typedef struct {
     pt_request_kind_t kind;
     char              name[64];   // valid for PT_REQ_LOAD only
     char              path[PT_SETUP_PATH_MAX];  // optional disambiguator; "" if unknown
+    char              section[32]; // valid for PT_REQ_SPINNER_SET only
+    int32_t           value;       // valid for PT_REQ_SPINNER_SET only
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.

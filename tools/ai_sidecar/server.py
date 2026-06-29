@@ -57,6 +57,10 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SETUP_LIST_RESULT,
     TYPE_SETUP_LOAD,
     TYPE_SETUP_LOAD_ACK,
+    TYPE_SETUP_SPINNER_LIST,
+    TYPE_SETUP_SPINNER_LIST_RESULT,
+    TYPE_SETUP_SPINNER_SET,
+    TYPE_SETUP_SPINNER_SET_ACK,
     TYPE_SETUP_SUGGEST,
     TYPE_SETUP_SUGGEST_RESULT,
     TYPE_STATE_SNAPSHOT,
@@ -214,6 +218,8 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         # "Loading…" forever.
         TYPE_SETUP_LIST,
         TYPE_SETUP_LOAD,
+        TYPE_SETUP_SPINNER_LIST,
+        TYPE_SETUP_SPINNER_SET,
         TYPE_SETUP_EXPERIMENT_STORE,
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
@@ -235,6 +241,8 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         # Issue #86 Part D: replies the Lua peer sends back to the screen.
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
+        TYPE_SETUP_SPINNER_LIST_RESULT,
+        TYPE_SETUP_SPINNER_SET_ACK,
         TYPE_SETUP_EXPERIMENT_STORE_ACK,
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
@@ -1291,6 +1299,10 @@ def _wire_voice(
     tts_enabled: bool = False,
     tts_rate: int | None = None,
     tts_volume: float | None = None,
+    voice_backend: str | None = None,
+    voice_device: str | None = None,
+    voice_host_api: str | None = None,
+    voice_verbosity: str | None = None,
 ) -> None:
     """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
@@ -1323,9 +1335,18 @@ def _wire_voice(
             logger.exception("voice: failed to load reference %s", reference_path)
     if bank_dir:
         try:
+            from tools.ai_sidecar.voice.config import VoiceConfig
             from tools.ai_sidecar.voice.engine import VoiceCoach
 
-            coach = VoiceCoach.from_bank(bank_dir)
+            backend = voice_backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
+            config = VoiceConfig(
+                device_name=voice_device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
+                host_api=voice_host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
+                verbosity=(
+                    voice_verbosity or os.environ.get("AC_COPILOT_VOICE_VERBOSITY") or "normal"
+                ),
+            )
+            coach = VoiceCoach.from_bank(bank_dir, config, backend=backend)
             if not coach.enabled:
                 logger.error(
                     "voice: bank %s disabled the coach (%s)", bank_dir, coach.disabled_reason
@@ -1333,7 +1354,15 @@ def _wire_voice(
             else:
                 coach.start()
                 set_voice_coach(coach)
-                logger.info("voice: in-process voice coach wired from bank %s", bank_dir)
+                logger.info(
+                    "voice: in-process voice coach wired from bank %s "
+                    "backend=%s device=%r host_api=%r verbosity=%s",
+                    bank_dir,
+                    backend,
+                    config.device_name,
+                    config.host_api,
+                    config.verbosity.name.lower(),
+                )
         except Exception:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
             logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
     elif tts_enabled:
@@ -1469,6 +1498,36 @@ def main() -> None:
         ),
     )
     p.add_argument(
+        "--voice-backend",
+        default=None,
+        choices=("rtmixer", "sounddevice"),
+        help=(
+            "Audio backend for --voice-bank. Falls back to $AC_COPILOT_VOICE_BACKEND then rtmixer."
+        ),
+    )
+    p.add_argument(
+        "--voice-device",
+        default=None,
+        help=(
+            "Output device substring for --voice-bank, e.g. 'USB Sound Device'. "
+            "Falls back to $AC_COPILOT_VOICE_DEVICE."
+        ),
+    )
+    p.add_argument(
+        "--voice-host-api",
+        default=None,
+        help=(
+            "PortAudio host API for --voice-bank, e.g. 'Windows DirectSound' or "
+            "'Windows WASAPI'. Falls back to $AC_COPILOT_VOICE_HOST_API."
+        ),
+    )
+    p.add_argument(
+        "--voice-verbosity",
+        default=None,
+        choices=("off", "low", "normal", "high"),
+        help="Voice-bank verbosity. Falls back to $AC_COPILOT_VOICE_VERBOSITY.",
+    )
+    p.add_argument(
         "--voice-tts",
         action="store_true",
         help=(
@@ -1533,6 +1592,10 @@ def main() -> None:
         tts_enabled=args.voice_tts or _env_truthy("AC_COPILOT_VOICE_TTS"),
         tts_rate=args.voice_rate,
         tts_volume=args.voice_volume,
+        voice_backend=args.voice_backend,
+        voice_device=args.voice_device,
+        voice_host_api=args.voice_host_api,
+        voice_verbosity=args.voice_verbosity,
     )
 
     try:

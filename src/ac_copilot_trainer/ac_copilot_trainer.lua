@@ -731,6 +731,48 @@ if wsBridge.registerRequestHandler then
     end
     return ack
   end)
+
+  wsBridge.registerRequestHandler("setup.spinner.list", "setup.spinner.list.result", function(payload)
+    local result = setupLibrary.listSpinners(payload)
+    if type(result) ~= "table" then
+      return { ok = false, error = "library returned no spinner list" }
+    end
+    return result
+  end)
+
+  wsBridge.registerRequestHandler("setup.spinner.set", "setup.spinner.set.ack", function(payload)
+    local section = ""
+    if type(payload) == "table" then
+      section = tostring(payload.section or payload.name or "")
+    end
+    if section == "" then
+      return { ok = false, error = "missing section" }
+    end
+    local resetOk = false
+    if ac and type(ac.isCarResetAllowed) == "function" then
+      local okCall, allowed = pcall(ac.isCarResetAllowed)
+      resetOk = okCall and (allowed == true)
+    end
+    if not resetOk then
+      return { ok = false, section = section, error = "must be in pits" }
+    end
+    local ack = setupLibrary.setSpinner(payload)
+    if type(ack) ~= "table" then
+      ack = { ok = false, section = section, error = "library returned no ack" }
+    elseif ack.ok == nil then
+      ack.ok = false
+      if ack.error == nil then ack.error = "library returned malformed ack" end
+    end
+    if ack.ok and wsBridge.publishTopic then
+      pcall(function()
+        wsBridge.publishTopic("setup.active", {
+          path = ack.path,
+          changed_at = (os and os.time and os.time()) or 0,
+        })
+      end)
+    end
+    return ack
+  end)
 end
 
 local function applyExternalConfigSet(key, value)

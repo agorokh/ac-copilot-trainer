@@ -202,6 +202,49 @@ def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
     assert seen == {"rate": 260, "volume": 0.8}
 
 
+def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):
+    from tools.ai_sidecar.voice import engine
+
+    seen: dict[str, object] = {}
+
+    class _Coach:
+        enabled = True
+        disabled_reason = ""
+
+        def start(self) -> None:
+            seen["started"] = True
+
+    def fake_from_bank(bank_dir, config, *, backend):  # noqa: ANN001
+        seen["bank_dir"] = bank_dir
+        seen["backend"] = backend
+        seen["device_name"] = config.device_name
+        seen["host_api"] = config.host_api
+        seen["verbosity"] = config.verbosity.name.lower()
+        return _Coach()
+
+    server.set_voice_coach(None)
+    monkeypatch.setenv("AC_COPILOT_VOICE_BACKEND", "sounddevice")
+    monkeypatch.setenv("AC_COPILOT_VOICE_DEVICE", "USB Sound Device")
+    monkeypatch.setenv("AC_COPILOT_VOICE_HOST_API", "Windows DirectSound")
+    monkeypatch.setenv("AC_COPILOT_VOICE_VERBOSITY", "high")
+    monkeypatch.setattr(engine.VoiceCoach, "from_bank", fake_from_bank)
+
+    try:
+        server._wire_voice(None, "bank-dir", tts_enabled=False)
+        assert server._voice_coach is not None
+    finally:
+        server.set_voice_coach(None)
+
+    assert seen == {
+        "bank_dir": "bank-dir",
+        "backend": "sounddevice",
+        "device_name": "USB Sound Device",
+        "host_api": "Windows DirectSound",
+        "verbosity": "high",
+        "started": True,
+    }
+
+
 class _FakeWS:
     """Minimal loopback websocket stand-in for handler-level tests."""
 

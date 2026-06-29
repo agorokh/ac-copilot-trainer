@@ -198,6 +198,13 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
+    assert ep.validate_inbound({"v": 1, "type": "setup.spinner.list"}) is None
+    assert (
+        ep.validate_inbound(
+            {"v": 1, "type": "setup.spinner.set", "section": "FRONT_BIAS", "value": 65}
+        )
+        is None
+    )
     assert ep.validate_inbound(_telemetry_tick()) is None
     assert ep.validate_inbound(_telemetry_tick(slip=-0.35)) is None
     assert ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": 74.1})) is None
@@ -227,6 +234,15 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
+    assert "section" in (
+        ep.validate_inbound({"v": 1, "type": "setup.spinner.set", "value": 66}) or ""
+    )
+    assert "finite number" in (
+        ep.validate_inbound(
+            {"v": 1, "type": "setup.spinner.set", "section": "FRONT_BIAS", "value": "66"}
+        )
+        or ""
+    )
     assert "payload" in (ep.validate_inbound({"v": 1, "type": "telemetry_tick"}) or "")
     assert "throttle must be <= 1" in (ep.validate_inbound(_telemetry_tick(throttle=1.2)) or "")
     assert "lap_time_ms must be >= 0" in (
@@ -279,11 +295,32 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "env-token")
     monkeypatch.setattr(srv, "_run", fake_run)
-    monkeypatch.setattr(
-        srv,
-        "_wire_voice",
-        lambda ref_path, bank_dir, *, tts_enabled, tts_rate, tts_volume: None,
-    )
+
+    def fake_wire_voice(
+        ref_path: str | None,
+        bank_dir: str | None,
+        *,
+        tts_enabled: bool,
+        tts_rate: int | None,
+        tts_volume: float | None,
+        voice_backend: str | None,
+        voice_device: str | None,
+        voice_host_api: str | None,
+        voice_verbosity: str | None,
+    ) -> None:
+        del (
+            ref_path,
+            bank_dir,
+            tts_enabled,
+            tts_rate,
+            tts_volume,
+            voice_backend,
+            voice_device,
+            voice_host_api,
+            voice_verbosity,
+        )
+
+    monkeypatch.setattr(srv, "_wire_voice", fake_wire_voice)
     monkeypatch.setattr(
         "sys.argv",
         ["ai_sidecar", "--external-bind", "0.0.0.0", "--port", "0"],
@@ -318,12 +355,20 @@ def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
         tts_enabled: bool,
         tts_rate: int | None,
         tts_volume: float | None,
+        voice_backend: str | None,
+        voice_device: str | None,
+        voice_host_api: str | None,
+        voice_verbosity: str | None,
     ) -> None:
         seen["ref_path"] = ref_path
         seen["bank_dir"] = bank_dir
         seen["tts_enabled"] = tts_enabled
         seen["tts_rate"] = tts_rate
         seen["tts_volume"] = tts_volume
+        seen["voice_backend"] = voice_backend
+        seen["voice_device"] = voice_device
+        seen["voice_host_api"] = voice_host_api
+        seen["voice_verbosity"] = voice_verbosity
 
     monkeypatch.setenv("AC_COPILOT_REFERENCE_ARCHIVE", "ref.json")
     monkeypatch.setenv("AC_COPILOT_VOICE_BANK", "voice-bank")
@@ -340,6 +385,10 @@ def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "tts_enabled": True,
         "tts_rate": None,
         "tts_volume": None,
+        "voice_backend": None,
+        "voice_device": None,
+        "voice_host_api": None,
+        "voice_verbosity": None,
     }
 
 

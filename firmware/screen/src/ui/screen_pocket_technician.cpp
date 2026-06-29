@@ -38,6 +38,7 @@ namespace {
 // ---- Module-static cache -------------------------------------------------
 
 constexpr int  PT_MAX_SETUPS    = 64;     // bounded list cache
+constexpr int  PT_MAX_SPINNERS  = 12;     // bounded active-setup controls
 // Effective capacity of a one-slot-wasted ring is N-1, so we size the array
 // at 5 to honor the documented depth of 4 in-flight requests (CodeRabbit on
 // PR #91). On creation we already enqueue PT_REQ_LIST once, so a user who
@@ -57,8 +58,20 @@ struct setup_row_t {
     int32_t wing_r;
 };
 
+struct spinner_row_t {
+    char    section[32];
+    char    label[32];
+    char    unit[8];
+    int32_t value;
+    int32_t min_value;
+    int32_t max_value;
+    int32_t step;
+};
+
 setup_row_t g_setups[PT_MAX_SETUPS];
 int         g_setup_count = 0;
+spinner_row_t g_spinners[PT_MAX_SPINNERS];
+int           g_spinner_count = 0;
 // Parallel to g_setups[i] — chip label widget for row i (issue #93 refresh).
 lv_obj_t*   g_row_chip_labels[PT_MAX_SETUPS] = {};
 
@@ -151,6 +164,23 @@ bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
     } else {
         r->path[0] = 0;
     }
+    r->section[0] = 0;
+    r->value = 0;
+    g_req_tail = next;
+    return true;
+}
+
+bool req_q_push_spinner_set(const char* section, int32_t value) {
+    int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
+    if (next == g_req_head) return false;  // full
+    pt_request_t* r = &g_req_q[g_req_tail];
+    *r = pt_request_t{};
+    r->kind = PT_REQ_SPINNER_SET;
+    if (section) {
+        strncpy(r->section, section, sizeof(r->section) - 1);
+        r->section[sizeof(r->section) - 1] = 0;
+    }
+    r->value = value;
     g_req_tail = next;
     return true;
 }
@@ -181,6 +211,7 @@ constexpr int SCREEN_H   = 480;
 constexpr int HEADER_H   = 40;
 constexpr int META_H     = 84;  // TRACK / BRAND / MODEL / ACTIVE
 constexpr int OUTER_PAD  = 12;
+constexpr int SPINNER_ROW_H = 44;
 constexpr int ROW_H      = 68;  // name+best on row 1, params+date on row 2
 constexpr int ROW_GAP    = 8;
 
@@ -260,6 +291,7 @@ void on_back_clicked(lv_event_t*) {
 
 void rebuild_list_widgets(pt_ctx_t* ctx);
 lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s);
+lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s);
 
 void on_row_clicked(lv_event_t* e) {
     auto* ctx = g_active_ctx;
@@ -290,6 +322,33 @@ void on_row_clicked(lv_event_t* e) {
 
     // Visual: subtle scale + spinner-like flash via a pressed style.
     lv_obj_set_style_bg_color(row, UI_BG_HEADER, LV_PART_MAIN | LV_STATE_PRESSED);
+}
+
+void queue_spinner_delta(int idx, int dir) {
+    if (idx < 0 || idx >= g_spinner_count) return;
+    if (!g_pt_sidecar_link_up) {
+        ui_toast_error("Setup controls offline");
+        return;
+    }
+    const spinner_row_t& s = g_spinners[idx];
+    int32_t step = s.step > 0 ? s.step : 1;
+    int32_t next = s.value + (dir < 0 ? -step : step);
+    if (next < s.min_value) next = s.min_value;
+    if (next > s.max_value) next = s.max_value;
+    if (next == s.value) return;
+    if (!req_q_push_spinner_set(s.section, next)) {
+        ui_toast_error("Setup control busy");
+    }
+}
+
+void on_spinner_minus_clicked(lv_event_t* e) {
+    auto idx = (intptr_t)lv_event_get_user_data(e);
+    queue_spinner_delta((int)idx, -1);
+}
+
+void on_spinner_plus_clicked(lv_event_t* e) {
+    auto idx = (intptr_t)lv_event_get_user_data(e);
+    queue_spinner_delta((int)idx, 1);
 }
 
 void pulse_step_cb(lv_timer_t* t) {
@@ -326,6 +385,62 @@ void start_gold_pulse(pt_ctx_t* ctx) {
     }
     ctx->pulse_steps_left = 6;
     ctx->pulse_timer = lv_timer_create(pulse_step_cb, 80, ctx);
+}
+
+lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
+    lv_obj_t* row = lv_obj_create(parent);
+    lv_obj_set_size(row, lv_pct(100), SPINNER_ROW_H);
+    lv_obj_set_style_bg_color(row, UI_BG_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(row, UI_BG_PANEL_OPA, LV_PART_MAIN);
+    lv_obj_set_style_border_color(row, UI_BORDER_SOFT, LV_PART_MAIN);
+    lv_obj_set_style_border_opa(row, UI_BORDER_SOFT_OPA, LV_PART_MAIN);
+    lv_obj_set_style_border_width(row, 1, LV_PART_MAIN);
+    lv_obj_set_style_radius(row, UI_RADIUS_TILE, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(row, 6, LV_PART_MAIN);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* name_lbl = lv_label_create(row);
+    lv_label_set_text(name_lbl, s.label);
+    lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
+    lv_obj_set_width(name_lbl, 128);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t* minus = lv_btn_create(row);
+    lv_obj_set_size(minus, 34, 32);
+    lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -112, 0);
+    lv_obj_set_style_radius(minus, 6, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(minus, UI_BG_HEADER, LV_PART_MAIN);
+    lv_obj_add_event_cb(minus, on_spinner_minus_clicked, LV_EVENT_CLICKED,
+                        reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
+    lv_obj_t* minus_lbl = lv_label_create(minus);
+    lv_label_set_text(minus_lbl, "-");
+    lv_obj_set_style_text_color(minus_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_center(minus_lbl);
+
+    char value_buf[28];
+    if (s.unit[0]) snprintf(value_buf, sizeof(value_buf), "%d%s", (int)s.value, s.unit);
+    else snprintf(value_buf, sizeof(value_buf), "%d", (int)s.value);
+    lv_obj_t* value_lbl = lv_label_create(row);
+    lv_label_set_text(value_lbl, value_buf);
+    lv_obj_set_style_text_color(value_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_set_width(value_lbl, 58);
+    lv_label_set_long_mode(value_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_align(value_lbl, LV_ALIGN_RIGHT_MID, -50, 0);
+
+    lv_obj_t* plus = lv_btn_create(row);
+    lv_obj_set_size(plus, 34, 32);
+    lv_obj_align(plus, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_set_style_radius(plus, 6, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(plus, UI_BG_HEADER, LV_PART_MAIN);
+    lv_obj_add_event_cb(plus, on_spinner_plus_clicked, LV_EVENT_CLICKED,
+                        reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
+    lv_obj_t* plus_lbl = lv_label_create(plus);
+    lv_label_set_text(plus_lbl, "+");
+    lv_obj_set_style_text_color(plus_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
+    lv_obj_center(plus_lbl);
+
+    return row;
 }
 
 lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
@@ -391,15 +506,29 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     lv_obj_clean(ctx->list_col);
     ctx->active_row_obj = nullptr;
 
+    if (g_spinner_count > 0) {
+        lv_obj_t* heading = lv_label_create(ctx->list_col);
+        lv_label_set_text(heading, "ADJUST");
+        lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
+        lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
+        for (int i = 0; i < g_spinner_count; ++i) {
+            make_spinner_row(ctx->list_col, i, g_spinners[i]);
+        }
+    }
+
     if (g_setup_count == 0) {
         ctx->placeholder_lbl = lv_label_create(ctx->list_col);
         lv_label_set_text(ctx->placeholder_lbl,
-                          g_car_id[0] ? "No setups for this car" : "Loading…");
+                          g_car_id[0] ? "No saved setups for this car" : "Loading…");
         lv_obj_set_style_text_color(ctx->placeholder_lbl, UI_TX_MUTED, LV_PART_MAIN);
         return;
     }
     ctx->placeholder_lbl = nullptr;
 
+    lv_obj_t* heading = lv_label_create(ctx->list_col);
+    lv_label_set_text(heading, "SAVED");
+    lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
+    lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
     for (int i = 0; i < g_setup_count; ++i) {
         make_row(ctx->list_col, i, g_setups[i]);
     }
@@ -609,6 +738,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     // screen_pocket_technician_clear_setups + add_setup, then a final
     // rebuild via set_identity / set_active_setup callbacks.
     req_q_push(PT_REQ_LIST, nullptr, nullptr);
+    req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
 
     return scr;
 }
@@ -666,6 +796,10 @@ extern "C" void screen_pocket_technician_add_setup(const char* name,
         if (g_active_ctx->placeholder_lbl) {
             lv_obj_del(g_active_ctx->placeholder_lbl);
             g_active_ctx->placeholder_lbl = nullptr;
+            lv_obj_t* heading = lv_label_create(g_active_ctx->list_col);
+            lv_label_set_text(heading, "SAVED");
+            lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
+            lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
         }
         make_row(g_active_ctx->list_col, idx, *row);
     }
@@ -675,6 +809,68 @@ extern "C" void screen_pocket_technician_finish_setup_list(void) {
     if (!g_active_ctx) return;
     for (int i = 0; i < g_setup_count; ++i) {
         refresh_chip_label(i);
+    }
+}
+
+extern "C" void screen_pocket_technician_clear_spinners(void) {
+    g_spinner_count = 0;
+    if (g_active_ctx) {
+        rebuild_list_widgets(g_active_ctx);
+    }
+}
+
+extern "C" void screen_pocket_technician_add_spinner(const char* section,
+                                                       const char* label,
+                                                       int32_t value,
+                                                       int32_t min_value,
+                                                       int32_t max_value,
+                                                       int32_t step,
+                                                       const char* unit) {
+    if (!section || !*section) return;
+    if (g_spinner_count >= PT_MAX_SPINNERS) return;
+    spinner_row_t* row = &g_spinners[g_spinner_count];
+    *row = spinner_row_t{};
+    strncpy(row->section, section, sizeof(row->section) - 1);
+    row->section[sizeof(row->section) - 1] = 0;
+    const char* label_src = (label && *label) ? label : section;
+    strncpy(row->label, label_src, sizeof(row->label) - 1);
+    row->label[sizeof(row->label) - 1] = 0;
+    if (unit) {
+        strncpy(row->unit, unit, sizeof(row->unit) - 1);
+        row->unit[sizeof(row->unit) - 1] = 0;
+    }
+    row->value = value;
+    row->min_value = min_value;
+    row->max_value = max_value;
+    row->step = step > 0 ? step : 1;
+    ++g_spinner_count;
+}
+
+extern "C" void screen_pocket_technician_finish_spinner_list(void) {
+    if (g_active_ctx) {
+        rebuild_list_widgets(g_active_ctx);
+    }
+}
+
+extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
+                                                            const char* section,
+                                                            int32_t value,
+                                                            const char* error) {
+    if (ok && section && *section) {
+        for (int i = 0; i < g_spinner_count; ++i) {
+            if (strcmp(g_spinners[i].section, section) == 0) {
+                g_spinners[i].value = value;
+                break;
+            }
+        }
+        req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
+        req_q_push(PT_REQ_LIST, nullptr, nullptr);
+        if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
+    } else {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "Setup failed: %s", error ? error : "unknown");
+        ui_toast_error(msg);
+        req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
     }
 }
 
@@ -755,6 +951,7 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
         start_gold_pulse(g_active_ctx);
         // Re-fetch the list so any "BEST" recomputation lands.
         req_q_push(PT_REQ_LIST, nullptr, nullptr);
+        req_q_push(PT_REQ_SPINNER_LIST, nullptr, nullptr);
     } else {
         // Reset any pressed visual then surface the toast. The row's
         // PRESSED-state bg was originally UI_BG_HEADER (matching the
@@ -779,6 +976,8 @@ extern "C" pt_request_t screen_pocket_technician_pop_request(void) {
     out.kind = PT_REQ_NONE;
     out.name[0] = 0;
     out.path[0] = 0;
+    out.section[0] = 0;
+    out.value = 0;
     if (g_req_head == g_req_tail) return out;
     out = g_req_q[g_req_head];
     g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;

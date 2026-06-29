@@ -665,6 +665,40 @@ static void dispatch_phase2_message(const String& body) {
     const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
     screen_pocket_technician_apply_load_ack(
         ok, name, (*lpath) ? lpath : nullptr, err_arg);
+  } else if (strcmp(type, "setup.spinner.list.result") == 0) {
+    bool ok = doc["ok"] | true;
+    screen_pocket_technician_clear_spinners();
+    if (!ok) {
+      const char* error = doc["error"] | "spinner list failed";
+      screen_pocket_technician_apply_spinner_ack(false, "", 0, error);
+      return;
+    }
+    JsonArrayConst spinners = doc["spinners"].as<JsonArrayConst>();
+    if (!spinners.isNull()) {
+      for (JsonVariantConst entry : spinners) {
+        const char* section = entry["section"] | "";
+        if (!*section) section = entry["name"] | "";
+        const char* label   = entry["label"]   | section;
+        const char* unit    = entry["unit"]    | "";
+        if (*section) {
+          int32_t value = phase2_json_num_or(entry["value"], 0);
+          int32_t min_v = phase2_json_num_or(entry["min"], value);
+          int32_t max_v = phase2_json_num_or(entry["max"], value);
+          int32_t step  = phase2_json_num_or(entry["step"], 1);
+          screen_pocket_technician_add_spinner(
+              section, label, value, min_v, max_v, step, unit);
+        }
+      }
+    }
+    screen_pocket_technician_finish_spinner_list();
+  } else if (strcmp(type, "setup.spinner.set.ack") == 0) {
+    bool ok = doc["ok"] | false;
+    const char* section = doc["section"] | "";
+    if (!*section) section = doc["name"] | "";
+    const char* error = doc["error"] | "";
+    int32_t value = phase2_json_num_or(doc["value"], 0);
+    const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
+    screen_pocket_technician_apply_spinner_ack(ok, section, value, err_arg);
   }
 }
 #endif
@@ -989,6 +1023,12 @@ static void pt_request_drain() {
       // so the Lua handler can disambiguate setups whose basenames collide
       // across track/layout folders (chatgpt-codex P1 on PR #91).
       if (req.path[0]) doc["path"] = req.path;
+    } else if (req.kind == PT_REQ_SPINNER_LIST) {
+      doc["type"] = "setup.spinner.list";
+    } else if (req.kind == PT_REQ_SPINNER_SET) {
+      doc["type"] = "setup.spinner.set";
+      doc["section"] = req.section;
+      doc["value"] = req.value;
     } else {
       continue;
     }
