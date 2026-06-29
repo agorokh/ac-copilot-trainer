@@ -26,7 +26,8 @@ def _open_path(path: Path) -> None:
         try:
             os.startfile(path)  # type: ignore[attr-defined]
         except OSError:
-            subprocess.Popen(["notepad.exe", str(path)])
+            fallback = "explorer.exe" if path.is_dir() else "notepad.exe"
+            subprocess.Popen([fallback, str(path)])
     elif sys.platform == "darwin":
         subprocess.Popen(["open", str(path)])
     else:
