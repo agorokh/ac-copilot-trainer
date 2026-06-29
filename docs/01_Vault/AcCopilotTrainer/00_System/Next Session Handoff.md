@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T17:11:55Z
+last_updated: 2026-06-29T17:28:29Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -69,6 +69,20 @@ GitHub checks on `382b090` were green (`build`, `pip-audit`, `Canonical docs exi
 reviewers for `382b090`; older unresolved Codex threads from review of `3ae2043` may remain visible
 but are stale if no current-head review repeats them. Detailed merge-contension notes:
 [[voice-368-merge-contention-2026-06-29]].
+
+## Delivered (2026-06-29) — PR #372 MERGED: #350 Part B voice-bake (batch Piper + 48 kHz default)
+
+PR [#372](https://github.com/agorokh/ac-copilot-trainer/pull/372) squash-merged to `main` as
+[`e0c93fd`](https://github.com/agorokh/ac-copilot-trainer/commit/e0c93fd09d6f36ac4574c5f843aa07a85a47060e)
+at 2026-06-29T17:10:35Z via `/autonomous-deliver 350`. **#350 stays OPEN** — final acceptance is
+the rig-gated audible smoke where the operator hears a spline-anchored cue while driving vs a faster
+reference.
+
+Merged scope: `tools/ai_sidecar/voice/bake.py` batch Piper baking with per-clip fallback, numeric
+timestamp ordering, cross-device-safe moves, default bank samplerate 48000 Hz, and codepage-safe CLI
+output. During this PR #371 merge, the #372 bake path was reconciled with #371's register/prosody
+model: batch items carry `(text, register, target)`, Piper batch output is shaped per register, and
+the Kokoro/say-expressive/manifest validation work remains intact.
 
 ## Delivered (2026-06-29) — PR #370 MERGED: M-TT1 Track Titan services crack (#353)
 
