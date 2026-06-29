@@ -80,6 +80,28 @@ to force ROM DFU, then `esptool.py ... write_flash 0 <factory.bin>`.
   The sidecar now accepts authenticated external clients and keeps loopback Lua
   traffic working for in-game coaching.
 
+### Auto-start with the in-game trainer
+
+`src/ac_copilot_trainer/start_sidecar.bat` stays loopback-only unless a rig-screen
+token is configured. To let the AC app auto-spawn the sidecar for the physical
+screen, set the token in the user environment to the same value compiled into
+`secrets/sidecar.h`:
+
+```powershell
+[Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_TOKEN", "<TOKEN>", "User")
+```
+
+Optional overrides:
+
+```powershell
+[Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_EXTERNAL_BIND", "0.0.0.0", "User")
+[Environment]::SetEnvironmentVariable("AC_COPILOT_SIDECAR_PORT", "8765", "User")
+```
+
+Restart Content Manager / Assetto Corsa after changing user environment variables.
+For the current rig firmware, the PC hotspot interface must be `192.168.137.1`
+and the screen must join the 2.4 GHz hotspot SSID from `secrets/wifi_secrets.h`.
+
 ## Layout
 
 ```text

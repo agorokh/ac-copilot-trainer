@@ -19,6 +19,12 @@ def _is_relative_to(path: Path, base: Path) -> bool:
     return True
 
 
+def _home_dir() -> Path:
+    """Return the hook-visible home directory, honoring test/Unix-style HOME on Windows."""
+    raw = os.environ.get("HOME", "").strip()
+    return Path(raw).expanduser() if raw else Path.home()
+
+
 def _canonical_impl_path() -> Path | None:
     """Resolve the hub's ``hook_protect_main_impl.py`` from a trusted location.
 
@@ -29,7 +35,7 @@ def _canonical_impl_path() -> Path | None:
     env_root = os.environ.get("FLEET_GOVERNANCE_ROOT", "").strip()
     if env_root:
         bases.append(Path(env_root).expanduser())
-    bases.append(Path.home() / ".fleet-governance")
+    bases.append(_home_dir() / ".fleet-governance")
     for base in bases:
         if not base.is_absolute():
             continue

@@ -1285,10 +1285,11 @@ def main() -> None:
     )
     p.add_argument(
         "--token",
-        default=None,
+        default=os.environ.get("AC_COPILOT_SIDECAR_TOKEN"),
         help=(
             "Shared secret enforced on the WS upgrade as X-AC-Copilot-Token. "
-            "Required whenever --external-bind is non-loopback."
+            "Required whenever --external-bind is non-loopback. "
+            "Defaults to $AC_COPILOT_SIDECAR_TOKEN when set."
         ),
     )
     p.add_argument(

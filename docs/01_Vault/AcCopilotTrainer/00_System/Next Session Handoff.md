@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T18:15:00Z
+last_updated: 2026-06-29T02:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
@@ -44,6 +45,43 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resume here (2026-06-28 evening) - #86 rig screen connectivity restored; branch ready
+
+User reported the #86 rig screen was powered on but not connecting. Live cause:
+PC was on `AHOME5G` 5 GHz, Mobile Hotspot was not presenting `192.168.137.1`,
+and no sidecar was listening on `8765`. Recovered the live rig by starting an
+externally-bound sidecar, switching the Intel 7260 Wi-Fi profile to manual,
+disconnecting from 5 GHz, and starting Mobile Hotspot. Evidence at SAVE:
+Mobile Hotspot `On` with one client; ESP32 ARP lease `192.168.137.231`;
+sidecar `/health` OK with established `192.168.137.1:8765 <- 192.168.137.231`
+socket and protocol counters moving (`state.snapshot`, `state.subscribe`,
+`corner_query`, setup experiment frames). Note: `ac_sidecar_screen_connected`
+is only a 120s recency gauge from the WS upgrade header, not the durable socket
+truth; after quiet periods it can read `0` while the ESP32 socket is still open.
+
+Branch **`fix/issue-86-rig-sidecar-autostart`** patches the recurring gap:
+`start_sidecar.bat` now stays loopback-only by default, but if
+`AC_COPILOT_SIDECAR_TOKEN` is set it launches with `--external-bind 0.0.0.0`
+(or `AC_COPILOT_SIDECAR_EXTERNAL_BIND`) and keeps the token in the process
+environment rather than the command line; `tools.ai_sidecar.server` reads that
+env token; firmware README documents the user-env setup. This PC's user env now
+has `AC_COPILOT_SIDECAR_TOKEN` set and `AC_COPILOT_SIDECAR_PORT=8765` (value not
+recorded). Artifact proof: `start_sidecar.bat` launched on temporary port `9876`
+with log `AI sidecar listening host=0.0.0.0 port=9876 ... token=set`, `/health`
+OK, and no `--token` in the process command line.
+
+Verification: focused tests `6 passed`; `ruff check` on the repo passed; Bandit,
+policy docs, tracked-file secret policy, agent-forbidden, CSP API, and CSP UI
+checks passed. Broad pytest with only
+`tests/test_process_miner/test_distill.py` ignored: `1547 passed, 114 skipped`,
+coverage `83.32%`. Full pytest collection without that ignore is blocked because
+`~/.fleet-governance` exists but lacks `runtime/inference_egress`. `make` is not
+installed in this PowerShell; repo-wide ruff format check in this Windows
+checkout still wants to rewrite hundreds of unrelated CRLF/LF files, while
+changed files pass targeted `ruff format --check`.
+
+Detail: [[issue-86-rig-screen-hotspot-autostart-2026-06-28]].
 
 ## Resume here (2026-06-28) — #345 P0 capture next
 
