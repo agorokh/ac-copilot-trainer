@@ -18,11 +18,13 @@ from tools.rig_launcher.install import (
 from tools.rig_launcher.settings import LauncherSettings, ensure_settings_file
 from tools.rig_launcher.supervisor import (
     _HOTSPOT_PROBE_SCRIPT,
+    _WINDOWS_NO_WINDOW,
     GamePointConfig,
     GamePointStatus,
     GamePointSupervisor,
     LauncherPaths,
     ProbeResult,
+    _subprocess_kwargs,
     build_pyinstaller_args,
 )
 
@@ -176,6 +178,31 @@ def test_read_health_tolerates_non_utf8_response_bytes(tmp_path: Path) -> None:
 
     assert result.ok is False
     assert result.state == "unreachable"
+
+
+def test_read_health_rejects_non_object_payload(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    def fake_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response([])
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+    result = sup._read_health()
+
+    assert result.ok is False
+    assert result.state == "unreachable"
+    assert "not an object" in (result.detail or "")
+
+
+def test_subprocess_kwargs_adds_create_no_window_on_windows(monkeypatch) -> None:
+    monkeypatch.setattr(supervisor_module.os, "name", "nt")
+    kwargs = _subprocess_kwargs(capture_output=True, text=True)
+    assert kwargs["creationflags"] == _WINDOWS_NO_WINDOW
 
 
 def test_status_polls_concrete_external_bind_health(tmp_path: Path) -> None:

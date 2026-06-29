@@ -23,6 +23,13 @@ DEFAULT_PORT = 8765
 DEFAULT_EXTERNAL_BIND = "0.0.0.0"
 APP_FOLDER_NAME = "AC Copilot Trainer"
 GAME_POINT_FOLDER_NAME = "GamePoint"
+_WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _subprocess_kwargs(**kwargs: Any) -> dict[str, Any]:
+    if os.name == "nt":
+        kwargs.setdefault("creationflags", _WINDOWS_NO_WINDOW)
+    return kwargs
 
 
 @dataclass(frozen=True)
@@ -267,11 +274,13 @@ class GamePointSupervisor:
         self._log_handles.append(log)
         self._sidecar_process = self._popen(
             self.sidecar_command(),
-            cwd=str(Path.cwd()),
-            env=self.sidecar_environment(),
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
+            **_subprocess_kwargs(
+                cwd=str(Path.cwd()),
+                env=self.sidecar_environment(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            ),
         )
         return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
 
@@ -347,7 +356,10 @@ class GamePointSupervisor:
             _HOTSPOT_PROBE_SCRIPT,
         ]
         try:
-            proc = self._run(command, capture_output=True, text=True, timeout=8)
+            proc = self._run(
+                command,
+                **_subprocess_kwargs(capture_output=True, text=True, timeout=8),
+            )
         except Exception as exc:  # noqa: BLE001 - preflight should report, not crash
             return ProbeResult("hotspot", True, "unavailable", str(exc))
         if proc.returncode != 0:
@@ -374,7 +386,10 @@ class GamePointSupervisor:
         if not start:
             return ProbeResult("simhub", True, "available", str(exe))
         try:
-            self._popen([str(exe)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._popen(
+                [str(exe)],
+                **_subprocess_kwargs(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
+            )
         except Exception as exc:  # noqa: BLE001 - visible status beats hidden failure
             return ProbeResult("simhub", False, "start_failed", str(exc))
         return ProbeResult("simhub", True, "started", str(exe))
@@ -390,6 +405,8 @@ class GamePointSupervisor:
                 payload = json.loads(response.read().decode("utf-8", errors="replace"))
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             return ProbeResult("sidecar", False, "unreachable", str(exc))
+        if not isinstance(payload, dict):
+            return ProbeResult("sidecar", False, "unreachable", "health payload is not an object")
         peers = int(payload.get("connected_peers") or 0)
         screens = int(payload.get("screen_peers") or 0)
         return ProbeResult("sidecar", True, "healthy", f"peers={peers} screen_peers={screens}")
@@ -427,9 +444,7 @@ class GamePointSupervisor:
         try:
             proc = self._run(
                 ["tasklist", "/FI", "IMAGENAME eq SimHubWPF.exe", "/NH"],
-                capture_output=True,
-                text=True,
-                timeout=5,
+                **_subprocess_kwargs(capture_output=True, text=True, timeout=5),
             )
         except Exception:  # noqa: BLE001 - inability to query means "not known running"
             return False
