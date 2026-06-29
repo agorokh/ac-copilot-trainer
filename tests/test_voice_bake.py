@@ -8,12 +8,16 @@ from __future__ import annotations
 
 import math
 import struct
+import subprocess
+import sys
 import wave
+from pathlib import Path
 
 import pytest
 
+from tools.ai_sidecar.voice import bake as bake_mod
 from tools.ai_sidecar.voice import vocabulary as vocab
-from tools.ai_sidecar.voice.bake import ToneBackend, bake_bank
+from tools.ai_sidecar.voice.bake import PiperBackend, ToneBackend, bake_bank
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest, sha256_bytes
 
 
@@ -111,3 +115,151 @@ def test_bake_accepts_float32_external_backend(tmp_path) -> None:
         assert wf.getsampwidth() == 2
         raw = wf.readframes(wf.getnframes())
     assert max(abs(v[0]) for v in struct.iter_unpack("<h", raw)) > 1000
+
+
+class _BatchToneBackend:
+    voice_signature = "batch-tone-v1"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[tuple[str, Path]], int]] = []
+
+    def synthesize(self, text: str, out_path: Path, samplerate: int) -> None:
+        raise AssertionError("batch backend should not be called one clip at a time")
+
+    def synthesize_many(self, items: list[tuple[str, Path]], samplerate: int) -> None:
+        self.calls.append((list(items), samplerate))
+        tone = ToneBackend()
+        for text, target in items:
+            tone.synthesize(text, target, samplerate)
+
+
+def test_bake_uses_batch_backend_when_available(tmp_path) -> None:
+    backend = _BatchToneBackend()
+    manifest = bake_bank(tmp_path, backend)
+
+    assert len(backend.calls) == 1
+    assert len(backend.calls[0][0]) == len(vocab.vocabulary())
+    assert manifest.voice_signature == "batch-tone-v1"
+    assert manifest.validate(tmp_path).ok
+
+
+def test_cli_status_output_is_windows_codepage_safe(tmp_path, monkeypatch, capsys) -> None:
+    def fake_bake_bank(out_dir, backend, *, samplerate: int = 48000):
+        return Manifest(
+            version=1,
+            samplerate=samplerate,
+            voice_signature=backend.voice_signature,
+            vocabulary_hash=vocab.vocabulary_hash(),
+            clips={},
+        )
+
+    monkeypatch.setattr(bake_mod, "bake_bank", fake_bake_bank)
+
+    assert bake_mod.main(["--backend", "tone", "--out", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "->" in out
+    assert "→" not in out
+
+
+def _write_pcm16_wav(path: Path, *, samplerate: int, value: int, frames: int = 16) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(b"".join(struct.pack("<h", value) for _ in range(frames)))
+
+
+def _first_sample(path: Path) -> int:
+    with wave.open(str(path), "rb") as wf:
+        return struct.unpack("<h", wf.readframes(1))[0]
+
+
+def _piper_backend(tmp_path: Path) -> PiperBackend:
+    model = tmp_path / "voice.onnx"
+    model.write_bytes(b"stub-model")
+    return PiperBackend(model)
+
+
+def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch) -> None:
+    """Generation-order recovery must use NUMERIC, not lexical, timestamp sort.
+
+    Piper names batch clips ``{monotonic_ns}.wav``; a lexical sort mis-orders across a digit-count
+    rollover (…9.wav vs …10.wav), silently writing the wrong audio under each stable clip_id while
+    the count guard still passes. Names 8/9/10 below sort numerically as 8<9<10 but lexically as
+    10<8<9, so the old code would scramble the mapping; the new numeric sort keeps it correct.
+    """
+    backend = _piper_backend(tmp_path)
+    out = tmp_path / "bank"
+    items = [
+        ("brake one", out / "clip_a.wav"),
+        ("turn two", out / "clip_b.wav"),
+        ("apex three", out / "clip_c.wav"),
+    ]
+    names = ["8", "9", "10"]  # generation order; numeric != lexical
+
+    def fake_run(cmd, *args, **kwargs):
+        assert "--input-file" in cmd, "batch path must use --input-file"
+        output_dir = Path(cmd[cmd.index("--output-dir") + 1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for gen_index, name in enumerate(names):
+            # marker encodes generation order; clips are already at the target rate so the
+            # post-move _normalize_wav is a no-op and the marker survives byte-for-byte.
+            _write_pcm16_wav(
+                output_dir / f"{name}.wav", samplerate=48000, value=(gen_index + 1) * 1000
+            )
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(bake_mod.subprocess, "run", fake_run)
+    backend.synthesize_many(items, 48000)
+
+    # input order == generation order, so target[i] must hold marker (i+1)*1000
+    assert _first_sample(items[0][1]) == 1000
+    assert _first_sample(items[1][1]) == 2000
+    assert _first_sample(items[2][1]) == 3000
+
+
+def test_piper_batch_falls_back_to_per_clip_when_batch_fails(tmp_path, monkeypatch) -> None:
+    """A Piper build without the batch flags (e.g. MIT rhasspy/piper) must not break the bake.
+
+    The batch subprocess fails; synthesize_many must fall back to the per-clip ``--output_file``
+    path that every Piper build supports, producing every requested clip at the target rate.
+    """
+    backend = _piper_backend(tmp_path)
+    out = tmp_path / "bank"
+    items = [("brake one", out / "clip_a.wav"), ("turn two", out / "clip_b.wav")]
+    calls: list[str] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        if "--input-file" in cmd:
+            calls.append("batch")
+            raise subprocess.CalledProcessError(2, cmd)  # batch flags unsupported
+        # per-clip path: piper writes a WAV to --output_file. Bake the stub already at the target
+        # rate so _normalize_wav early-returns and the stdlib-only voice-bake suite runs without
+        # numpy (the `.[dev]` extra); the numpy resample path is covered by the tests above.
+        calls.append("per-clip")
+        out_path = Path(cmd[cmd.index("--output_file") + 1])
+        _write_pcm16_wav(out_path, samplerate=48000, value=500)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(bake_mod.subprocess, "run", fake_run)
+    backend.synthesize_many(items, 48000)
+
+    assert calls[0] == "batch"  # tried batch first
+    assert calls.count("per-clip") == 2  # then one per clip
+    for _text, target in items:
+        assert target.is_file()
+        with wave.open(str(target), "rb") as wf:
+            assert wf.getframerate() == 48000  # per-clip path produced clips at the target rate
+
+
+def test_normalize_wav_gives_clear_error_when_numpy_missing(tmp_path, monkeypatch) -> None:
+    """The 48 kHz bank default routes Piper output (commonly 22050 Hz) through _normalize_wav, which
+    needs numpy (a `voice` extra, not a base dep). Without numpy the bake must fail with an
+    actionable message, not a raw ModuleNotFoundError deep in the resample path.
+    """
+    fp = tmp_path / "native.wav"
+    _write_pcm16_wav(fp, samplerate=22050, value=500)  # rate mismatch -> resample path
+    monkeypatch.setitem(sys.modules, "numpy", None)  # simulate numpy not installed
+    with pytest.raises(RuntimeError, match="numpy"):
+        bake_mod._normalize_wav(fp, 48000)

@@ -17,7 +17,7 @@ Backends (pluggable via the :class:`VoiceBackend` protocol — wording always co
 
 CLI::
 
-    python -m tools.ai_sidecar.voice.bake --out <dir> --backend tone|piper|say [--samplerate 22050]
+    python -m tools.ai_sidecar.voice.bake --out <dir> --backend tone|piper|say [--samplerate 48000]
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import logging
 import math
+import shutil
 import struct
 import subprocess
 import sys
@@ -52,6 +53,12 @@ class VoiceBackend(Protocol):
     def voice_signature(self) -> str: ...
 
     def synthesize(self, text: str, out_path: Path, samplerate: int) -> None: ...
+
+
+class BatchVoiceBackend(VoiceBackend, Protocol):
+    """Backend that can render a whole phrase bank in one process."""
+
+    def synthesize_many(self, items: list[tuple[str, Path]], samplerate: int) -> None: ...
 
 
 # --------------------------------------------------------------------------------------------------
@@ -111,7 +118,17 @@ def _normalize_wav(path: Path, samplerate: int) -> None:
     if source_rate == samplerate and channels == 1 and sample_width == 2:
         return
 
-    import numpy as np
+    try:
+        import numpy as np
+    except ImportError as exc:
+        # numpy is an optional `voice` extra, not a base dep. With the 48 kHz bank default a Piper
+        # voice (commonly 22050 Hz) lands here, so surface an actionable message instead of a raw
+        # ModuleNotFoundError deep in the bake.
+        raise RuntimeError(
+            f"numpy is required to resample {path.name} ({source_rate} Hz -> {samplerate} Hz); "
+            "install it with `pip install -e '.[voice]'` (or `pip install numpy`), or bake with "
+            f"`--samplerate {source_rate}` to skip resampling."
+        ) from exc
 
     if sample_width == 2:
         audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
@@ -154,13 +171,81 @@ class PiperBackend:
         return f"piper:{self._model.stem}"
 
     def synthesize(self, text: str, out_path: Path, samplerate: int) -> None:
-        # piper reads text on stdin and writes a WAV at the model's native samplerate; we ask the
-        # caller to bake at that samplerate (Piper voices are commonly 22050 Hz).
+        # piper reads text on stdin and writes a WAV at the model's native samplerate, then we
+        # rewrite it to the bank samplerate so WASAPI devices that reject 22050 Hz can still
+        # play it.
         subprocess.run(  # noqa: S603 - fixed binary + our own text, no shell
             [self._bin, "--model", str(self._model), "--output_file", str(out_path)],
             input=text.encode("utf-8"),
             check=True,
         )
+        _normalize_wav(out_path, samplerate)
+
+    def synthesize_many(self, items: list[tuple[str, Path]], samplerate: int) -> None:
+        """Render a phrase bank in one Piper process, with a per-clip fallback.
+
+        Spawning Piper once per clip is prohibitively slow on Windows, so we try a single
+        batch process (piper1-gpl ``--input-file`` + ``--output-dir``). That batch path is
+        best-effort: if the installed Piper is the MIT ``rhasspy/piper`` build (which lacks
+        those flags), or the generated count/ordering cannot be trusted, or anything else
+        fails, we fall back to the per-clip :meth:`synthesize` path that every Piper build
+        supports. Slower but always correct -- never a silent mis-bake.
+        """
+        if not items:
+            return
+        try:
+            self._synthesize_many_batch(items, samplerate)
+        except (OSError, subprocess.SubprocessError, ValueError, RuntimeError) as exc:
+            _log.warning(
+                "voice: piper batch bake failed (%s); falling back to per-clip synthesis", exc
+            )
+            for text, target in items:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                self.synthesize(text, target, samplerate)
+
+    def _synthesize_many_batch(self, items: list[tuple[str, Path]], samplerate: int) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_path = tmp_path / "phrases.txt"
+            output_dir = tmp_path / "clips"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            input_path.write_text(
+                "".join(f"{text}\n" for text, _target in items),
+                encoding="utf-8",
+            )
+            subprocess.run(  # noqa: S603 - fixed binary + our own text, no shell
+                [
+                    self._bin,
+                    "--model",
+                    str(self._model),
+                    "--input-file",
+                    str(input_path),
+                    "--output-dir",
+                    str(output_dir),
+                    "--output-dir-naming",
+                    "timestamp",
+                ],
+                check=True,
+                input=b"",  # close stdin: a flag-incompatible Piper errors out instead of hanging
+                timeout=600,
+            )
+            # piper1-gpl names each clip ``{time.monotonic_ns()}.wav`` in generation order, so a
+            # NUMERIC sort maps the generated clips back to input order. A LEXICAL sort would
+            # silently mis-order at a digit-count rollover (…9.wav vs …10.wav) and the count guard
+            # below — which checks cardinality, not correspondence — would not catch it. Any odd /
+            # non-numeric naming raises ValueError here and the caller falls back to per-clip.
+            generated = sorted(output_dir.glob("*.wav"), key=lambda p: int(p.stem))
+            if len(generated) != len(items):
+                raise RuntimeError(
+                    f"piper generated {len(generated)} clips for {len(items)} input phrases"
+                )
+            for source, (_text, target) in zip(generated, items, strict=True):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                # shutil.move (not Path.replace): the temp dir and the bank output dir can be on
+                # different drives on a Windows rig (%TEMP% on C:, bank on D:), where os.replace
+                # raises a cross-device OSError.
+                shutil.move(str(source), str(target))
+                _normalize_wav(target, samplerate)
 
 
 class MacSayBackend:
@@ -203,7 +288,7 @@ class MacSayBackend:
 # --------------------------------------------------------------------------------------------------
 
 
-def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 22050) -> Manifest:
+def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 48000) -> Manifest:
     """Render every vocabulary phrase to ``out_dir/<clip_id>.wav`` and write ``manifest.json``.
 
     The manifest stamps the current :func:`vocabulary_hash` and the backend's
@@ -212,12 +297,18 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 2
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    phrases = list(iter_vocabulary())
+    targets = [(phrase, out / f"{phrase.clip_id}.wav") for phrase in phrases]
+    batch = getattr(backend, "synthesize_many", None)
+    if callable(batch):
+        batch([(phrase.text, target) for phrase, target in targets], samplerate)
+    else:
+        for phrase, target in targets:
+            backend.synthesize(phrase.text, target, samplerate)
+
     clips: dict[str, ClipEntry] = {}
-    count = 0
-    for phrase in iter_vocabulary():
-        fname = f"{phrase.clip_id}.wav"
-        fp = out / fname
-        backend.synthesize(phrase.text, fp, samplerate)
+    for phrase, fp in targets:
+        fname = fp.name
         _normalize_wav(fp, samplerate)
         data = fp.read_bytes()
         clips[phrase.clip_id] = ClipEntry(
@@ -229,7 +320,6 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 2
             text=phrase.text,
             sha256=sha256_bytes(data),
         )
-        count += 1
     manifest = Manifest(
         version=MANIFEST_VERSION,
         samplerate=samplerate,
@@ -238,7 +328,7 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 2
         clips=clips,
     )
     (out / MANIFEST_FILENAME).write_text(manifest.to_json(), encoding="utf-8")
-    _log.info("voice: baked %d clips with %s into %s", count, backend.voice_signature, out)
+    _log.info("voice: baked %d clips with %s into %s", len(clips), backend.voice_signature, out)
     return manifest
 
 
@@ -260,13 +350,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--backend", default="tone", choices=("tone", "piper", "say"), help="synthesis backend"
     )
-    parser.add_argument("--samplerate", type=int, default=22050)
+    parser.add_argument("--samplerate", type=int, default=48000)
     parser.add_argument("--piper-model", help="path to a Piper .onnx voice model (backend=piper)")
     parser.add_argument("--say-voice", default="Daniel", help="macOS voice name (backend=say)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-    manifest = bake_bank(args.out, _build_backend(args), samplerate=args.samplerate)
-    print(f"baked {len(manifest.clips)} clips → {Path(args.out) / MANIFEST_FILENAME}")
+    try:
+        manifest = bake_bank(args.out, _build_backend(args), samplerate=args.samplerate)
+    except RuntimeError as exc:
+        # e.g. numpy missing on the resample path -> clean CLI error, not a deep traceback
+        raise SystemExit(str(exc)) from exc
+    print(f"baked {len(manifest.clips)} clips -> {Path(args.out) / MANIFEST_FILENAME}")
     return 0
 
 
