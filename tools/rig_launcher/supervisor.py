@@ -72,7 +72,7 @@ class GamePointConfig:
 
     host: str = "127.0.0.1"
     port: int = DEFAULT_PORT
-    external_bind: str | None = DEFAULT_EXTERNAL_BIND
+    external_bind: str | None = None
     token: str | None = None
     reference_archive: str | None = None
     voice_bank: str | None = None

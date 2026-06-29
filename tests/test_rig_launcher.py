@@ -287,6 +287,15 @@ def test_config_from_env_defaults_to_loopback_without_token(tmp_path: Path) -> N
     assert {row.name: row for row in sup.preflight()}["sidecar_token"].state == "loopback"
 
 
+def test_direct_config_default_is_loopback_safe(tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, python_executable="python")
+
+    assert cfg.external_bind is None
+    assert "--external-bind" not in sup.sidecar_command()
+    assert "--host" in sup.sidecar_command()
+
+
 def test_config_from_env_defaults_to_external_bind_with_token(tmp_path: Path) -> None:
     cfg = GamePointConfig.from_env(
         {"AC_COPILOT_SIDECAR_TOKEN": "token"},

@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T05:02:32Z
+last_updated: 2026-06-29T05:14:34Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -85,6 +85,11 @@ relaunch-on-hijack-fail passes a single-launch budget into each launch leg so
 `tests/test_rig_launcher.py`, `tests/test_setup_library_summary.py`, and
 `tests/test_ac_harness_auto_drive.py`), targeted Ruff check/format passed, and
 `python scripts\ci_policy.py` passed.
+Follow-up Qodo thread also fixed: direct `GamePointConfig()` construction now
+defaults to loopback-safe `external_bind=None`; `from_env()` remains token-aware
+and still chooses `0.0.0.0` when `AC_COPILOT_SIDECAR_TOKEN` is set. Regression
+coverage: `tests/test_rig_launcher.py` passed (`23 passed`), launcher Ruff
+check/format passed, and `python scripts\ci_policy.py` passed.
 Tier-3 MCP was not exposed in this Codex session, so this pass used vault-only
 grounding and records that gap here for the next session.
 
