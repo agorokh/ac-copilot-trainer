@@ -119,6 +119,12 @@ Focused verification: `59 passed` across
 `tests/test_setup_library_summary.py`; Ruff check/format passed for touched
 Python files; `python scripts\ci_policy.py` passed.
 
+**Merge-ready (2026-06-29 resolve-pr):** commit `5b57271` fixes the last open
+Qodo thread — `screen_pocket_technician_set_active_setup()` no longer clears
+`g_active_name` when `setup.active` arrives path-only after spinner edits; Lua
+now derives the setup basename on `setup.spinner.set` broadcasts. CI green on
+head SHA; GraphQL threads all resolved; resolve-gate ledger clean.
+
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 
 PR [#359](https://github.com/agorokh/ac-copilot-trainer/pull/359) (M-TT0 vulcan retention) MERGED.
