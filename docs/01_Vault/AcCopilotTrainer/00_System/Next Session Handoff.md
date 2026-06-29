@@ -44,6 +44,9 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/track-titan-telemetry-extraction-feasibility-2026-06-27.md
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
+  - AcCopilotTrainer/01_Decisions/curated-setup-as-data-platform-entity-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/curated-setup-hash-bridge-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/porsche-911-gt3r-magione-balanced-setup-2026-06-28.md
 ---
 
 # Next session handoff
@@ -142,6 +145,25 @@ approved** proceeding and the guardrail was **scoped** to redistribution/at-scal
 export = self data-portability). Hardened via a 5-lens adversarial self-review (ReDoS, lake-path
 collision, NaN-batch-abort, raw write-once, full-lake reindex). Full node: [[pr-359-tt-ingest-mtt0-2026-06-28]].
 M-TT1/M-TT2/M-TT3 remain on #353. Merge `bd69cab`.
+
+---
+
+## Delivered (2026-06-28) — curated setups as first-class data-platform entities (PR #369)
+`/start-task` (ultracode). Operator asked for a **balanced fast-race setup for the 911 GT3 R at
+Magione**, visible on the rig, plus "put it properly in our data platform" + preserve the knowledge.
+Shipped: (1) **`assets/setups/ks_porsche_911_gt3_r_2016/magione/Copilot_Balanced_Fast.ini`** — verified
+values (FRONT_BIAS 63, ARB f6/r1, DIFF_COAST 60, rear TOE 9, **WING_2 16**), grounded in the operator's
+own `Realistic_BB_v3` and adversarially verified (4 vehicle-dynamics lenses → red-team, high
+confidence). **Deployed** to `%AC_USERDATA%\setups\...\magione\` (the rig `setup.list` lists it on
+Magione). (2) **`tools/setup_catalog`** registrar — rig-faithful **djb2 `canonical_hash`** bridges the
+curated catalog to the DuckDB lake + experiments store; robust name/path-fallback join; 17 tests incl. an
+end-to-end "simulated driven lap joins the catalog" proof; module 100% cov; ruff clean. (3) Vault: decision
+[[curated-setup-as-data-platform-entity-2026-06-28]], investigations [[curated-setup-hash-bridge-2026-06-28]]
++ [[porsche-911-gt3r-magione-balanced-setup-2026-06-28]]; **resolved** the long-open AC user-data path
+(`%USERPROFILE%\OneDrive\Documents\Assetto Corsa`) in `glossary/install-paths.md`. **Note:** Tier-3
+agentic-memory MCP query tool was absent this session (degraded-mode bypass logged in
+`.scratch/.memory_bypass_rationale`). PR [#369](https://github.com/agorokh/ac-copilot-trainer/pull/369)
+(supersedes #367 — `claude/` branch prefix is rejected by ci-conventional).
 
 ---
 
