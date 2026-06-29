@@ -27,5 +27,7 @@ def test_lua_telemetry_tick_module_exports_publisher() -> None:
     assert 'type = "telemetry_tick"' in text
     assert "spline" in text
     assert "lap" in text
+    assert 'type(car) ~= "table"' not in text
+    assert "_field(car" in text
     wired = repo / "src/ac_copilot_trainer/ac_copilot_trainer.lua"
     assert "publishTelemetryTickIfDue" in wired.read_text(encoding="utf-8")

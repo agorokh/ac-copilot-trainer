@@ -470,17 +470,19 @@ def make_process_request(token: str | None):
     def _process_request(connection: Any, request: Any) -> Any:
         path = (getattr(request, "path", "") or "").split("?", 1)[0]
         if path in ("/health", "/healthz"):
+            connected_peers, screen_peers = _peer_counts()
             return _http_response(
                 connection,
                 HTTPStatus.OK,
-                observability.build_health_json(len(_external_peers)),
+                observability.build_health_json(connected_peers, screen_peers=screen_peers),
                 observability.HEALTH_CONTENT_TYPE,
             )
         if path == "/metrics":
+            connected_peers, screen_peers = _peer_counts()
             return _http_response(
                 connection,
                 HTTPStatus.OK,
-                observability.build_metrics_text(len(_external_peers)),
+                observability.build_metrics_text(connected_peers, screen_peers=screen_peers),
                 observability.PROM_CONTENT_TYPE,
             )
         # A rig-screen sighting rides on the WS upgrade (the client header is on
@@ -540,6 +542,11 @@ def _has_loopback_target(*, exclude: Any) -> bool:
 
 def _peer_class(peer: Any) -> str:
     return _external_peer_classes.get(peer, CLIENT_CLASS_EXTERNAL)
+
+
+def _peer_counts() -> tuple[int, int]:
+    screen_peers = sum(1 for peer in _external_peers if _peer_class(peer) == CLIENT_CLASS_SCREEN)
+    return len(_external_peers), screen_peers
 
 
 def _client_class_from_hello(data: dict[str, Any]) -> str:

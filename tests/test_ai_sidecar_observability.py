@@ -24,6 +24,7 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar import observability as obs  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    _external_peer_classes,
     _external_peers,
     _handler,
     make_process_request,
@@ -43,6 +44,7 @@ def _free_port() -> int:
 async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     port = _free_port()
     _external_peers.clear()
+    _external_peer_classes.clear()
     try:
         async with ws_serve(
             lambda ws: _handler(ws, reply_coaching=True),
@@ -53,6 +55,7 @@ async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
             yield port
     finally:
         _external_peers.clear()
+        _external_peer_classes.clear()
 
 
 def _http_get(port: int, path: str) -> tuple[int, list[str], str]:
@@ -72,6 +75,7 @@ def test_health_endpoint_on_ws_port() -> None:
     payload = json.loads(body)
     assert payload["status"] == "ok"
     assert payload["connected_peers"] == 0
+    assert payload["screen_peers"] == 0
 
 
 def test_metrics_endpoint_single_content_type_and_core_series() -> None:
@@ -86,6 +90,7 @@ def test_metrics_endpoint_single_content_type_and_core_series() -> None:
     assert "ac_sidecar_up 1" in body
     assert "ac_sidecar_build_info{" in body
     assert "ac_sidecar_connected_peers 0" in body
+    assert "ac_sidecar_screen_peers 0" in body
 
 
 def test_ws_upgrade_still_works_and_counts_messages(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,6 +122,40 @@ def test_metrics_builder_screen_recency(monkeypatch: pytest.MonkeyPatch) -> None
     assert "ac_sidecar_screen_connected 0" in obs.build_metrics_text(0)
     m.note_screen_seen()
     assert "ac_sidecar_screen_connected 1" in obs.build_metrics_text(0)
+    assert "ac_sidecar_screen_peers 2" in obs.build_metrics_text(2, screen_peers=2)
+    assert "ac_sidecar_screen_connected 1" in obs.build_metrics_text(2, screen_peers=2)
+
+
+def test_metrics_and_health_report_current_screen_peers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(obs, "METRICS", obs.SidecarMetrics())
+
+    async def _run() -> tuple[dict[str, object], str]:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}") as client:
+                await client.send(
+                    json.dumps(
+                        {
+                            ep.ENVELOPE_KEY: 1,
+                            ep.TYPE_KEY: ep.TYPE_HELLO,
+                            "client": "ac-copilot-screen-01",
+                            ep.CLIENT_CLASS_KEY: ep.CLIENT_CLASS_SCREEN,
+                        }
+                    )
+                )
+                ack = json.loads(await asyncio.wait_for(client.recv(), timeout=5))
+                assert ack[ep.TYPE_KEY] == ep.TYPE_HELLO_ACK
+                _, _, health_body = await asyncio.to_thread(_http_get, port, "/health")
+                _, _, metrics_body = await asyncio.to_thread(_http_get, port, "/metrics")
+                return json.loads(health_body), metrics_body
+
+    health, metrics = asyncio.run(_run())
+    assert health["connected_peers"] == 1
+    assert health["screen_peers"] == 1
+    assert "ac_sidecar_connected_peers 1" in metrics
+    assert "ac_sidecar_screen_peers 1" in metrics
+    assert "ac_sidecar_screen_connected 1" in metrics
 
 
 def test_metrics_builder_message_label_shape(monkeypatch: pytest.MonkeyPatch) -> None:

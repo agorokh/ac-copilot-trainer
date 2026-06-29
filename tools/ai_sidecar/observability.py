@@ -76,12 +76,19 @@ def _labels(pairs: dict[str, str]) -> str:
     return "{" + inner + "}"
 
 
-def build_health_json(connected_peers: int) -> str:
+def build_health_json(connected_peers: int, *, screen_peers: int = 0) -> str:
     """Instant health body: the endpoint answering IS liveness."""
-    return json.dumps({"status": "ok", "connected_peers": connected_peers}, separators=(",", ":"))
+    return json.dumps(
+        {
+            "status": "ok",
+            "connected_peers": connected_peers,
+            "screen_peers": screen_peers,
+        },
+        separators=(",", ":"),
+    )
 
 
-def build_metrics_text(connected_peers: int) -> str:
+def build_metrics_text(connected_peers: int, *, screen_peers: int = 0) -> str:
     """Prometheus exposition text for the sidecar's fixed metric set.
 
     Snapshots the shared counters under the lock, then formats outside it.
@@ -93,9 +100,10 @@ def build_metrics_text(connected_peers: int) -> str:
         screen_last_seen = METRICS.screen_last_seen_monotonic
 
     now_mono = time.monotonic()
-    screen_connected = (
+    screen_recent = (
         1 if screen_last_seen > 0 and (now_mono - screen_last_seen) < SCREEN_RECENCY_SECONDS else 0
     )
+    screen_connected = 1 if screen_peers > 0 or screen_recent else 0
 
     lines: list[str] = []
 
@@ -119,6 +127,12 @@ def build_metrics_text(connected_peers: int) -> str:
         "External v1 peers currently connected.",
         "gauge",
         [({}, connected_peers)],
+    )
+    emit(
+        "ac_sidecar_screen_peers",
+        "ESP32 rig-screen peers currently connected.",
+        "gauge",
+        [({}, screen_peers)],
     )
     emit(
         "ac_sidecar_messages_total",
