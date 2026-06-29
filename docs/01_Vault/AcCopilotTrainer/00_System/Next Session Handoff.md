@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T16:20:00Z
+last_updated: 2026-06-29T16:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -75,11 +75,17 @@ per-corner diagnoses for the last session (Magione, Porsche 911 GT3 R — c3 "Yo
 exit", c4 "line too wide") and retained them to the lake.
 
 **Resume here → M-TT2:** reference-lap telemetry → `lap_archive` schema → M0 `--reference-archive`
-voice feed. Input schema is PINNED in [[tt-services-sigv4-crack-2026-06-29]]: TT telemetry point
-(`dist`→spline, `Kmh`→speed, `brak`→brake, `throt`→throttle, `steer`, `gear`, `X`/`Y`) maps to
-`TRACE_FIELDS` in `tools/ac_harness/reference_lap.py`. Then **M-TT3** (per-corner analysis →
-harness drive-to-reference curriculum). Arbitrary-lap/older-session coaching is also a deferred
-follow-up (needs per-lap telemetry endpoints; M-TT1 scopes to the last session's own lap).
+voice feed. Point schema PINNED + the frame→`TRACE_FIELDS` mapping is **de-risk-PROVEN** against
+real data (`.scratch/tt_mtt2_smoke.py` builds a valid `lap_archive` from the TT reference frames;
+`Kmh`→`speed` units confirmed km/h). **BUT a real blocker surfaced (and is now documented in
+[[tt-services-sigv4-crack-2026-06-29]]): `/last-session` carries only ONE SEGMENT's telemetry
+window (~9% of the lap: measured `dist` 0.265→0.359, derived lap_ms≈29s vs the true ~71s reference).**
+So M-TT2's FIRST step is a **live capture** of the FULL reference telemetry (stitch all 7 segment
+windows by scrubbing the renderer per-segment via CDP, or find a full-lap telemetry endpoint) —
+do it while TT is open — THEN normalise + ship the `reference` CLI + M0 bridge. M-TT2 is NOT a
+single-call add. Then **M-TT3** (per-corner analysis → harness drive-to-reference curriculum).
+Arbitrary-lap/older-session coaching is also a deferred follow-up (M-TT1 scopes to the last
+session's own lap).
 
 ## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
 
