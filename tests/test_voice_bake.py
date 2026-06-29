@@ -6,10 +6,12 @@ manifest content-addressing end to end without a TTS engine.
 
 from __future__ import annotations
 
+import argparse
 import wave
 
+import pytest
 from tools.ai_sidecar.voice import vocabulary as vocab
-from tools.ai_sidecar.voice.bake import ToneBackend, bake_bank
+from tools.ai_sidecar.voice.bake import ToneBackend, _build_backend, bake_bank
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest, sha256_bytes
 
 
@@ -84,3 +86,19 @@ def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
     shaper.shape(src, a, "critical", 22050)
     shaper.shape(src, b, "critical", 22050)
     assert a.read_bytes() == b.read_bytes()  # identical bytes → deterministic, content-addressable
+
+
+def test_shaped_backend_preflights_missing_ffmpeg(monkeypatch) -> None:
+    # qodo review #371: shaped backends should fail at backend selection with an actionable message,
+    # not later inside ProsodyShaper.shape().
+    monkeypatch.setattr("tools.ai_sidecar.voice.bake.shutil.which", lambda name: None)
+    args = argparse.Namespace(
+        backend="say-expressive",
+        say_voice="Daniel",
+        piper_model=None,
+        kokoro_model=None,
+        kokoro_voices=None,
+        kokoro_voice="am_michael",
+    )
+    with pytest.raises(SystemExit, match="ffmpeg"):
+        _build_backend(args)

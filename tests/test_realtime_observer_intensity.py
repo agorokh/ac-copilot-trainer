@@ -78,6 +78,29 @@ def test_brake_cue_critical_when_arriving_far_too_hot() -> None:
     assert a.intensity > 0.66
 
 
+def test_brake_cue_escalates_calm_to_critical_across_frames() -> None:
+    # codex review #371: a calm anticipatory lead-in must NOT lock out the later critical alarm.
+    ref = _ref(optimal_apex_kmh=120.0, best_observed_apex_kmh=120.0)
+    obs = RealtimeObserver([ref], lap_length_m=2500.0)
+    cues = []
+    # frame 1: on pace in the lead window → calm/prepare heads-up
+    cues += [
+        a
+        for a in obs.observe({"spline": 0.443, "speed": 122.0, "brake": 0.0, "throttle": 0.0})
+        if a.kind == "late_brake"
+    ]
+    # frame 2: arriving far too hot, still coasting past the point → critical alarm (escalation)
+    cues += [
+        a
+        for a in obs.observe({"spline": 0.49, "speed": 190.0, "brake": 0.0, "throttle": 0.0})
+        if a.kind == "late_brake"
+    ]
+    regs = [c.register for c in cues]
+    assert "calm" in regs and "critical" in regs  # both lead-in AND the escalated alarm fired
+    rank = {"calm": 0, "firm": 1, "critical": 2}
+    assert [rank[r] for r in regs] == sorted(rank[r] for r in regs)  # strictly escalating
+
+
 def test_brake_cue_suppressed_once_braking() -> None:
     ref = _ref()
     obs = RealtimeObserver([ref])
@@ -105,6 +128,15 @@ def test_brake_release_suppressed_when_on_throttle() -> None:
     obs = RealtimeObserver([ref])
     out = obs.observe({"spline": 0.55, "speed": 80.0, "brake": 0.7, "throttle": 0.5})
     assert [a for a in out if a.kind == "brake_release"] == []
+
+
+def test_brake_release_fires_without_a_brake_point() -> None:
+    # codex review #371: a GGV-only reference (no corpus brake point) must still emit the
+    # over-braking release cue — it needs only the apex/window + brake/throttle, not a brake point.
+    ref = _ref(best_brake_point_spline=None)
+    obs = RealtimeObserver([ref])
+    out = obs.observe({"spline": 0.55, "speed": 80.0, "brake": 0.7, "throttle": 0.0})
+    assert [a for a in out if a.kind == "brake_release"]
 
 
 # --- throttle now flows through normalization -----------------------------------------------------

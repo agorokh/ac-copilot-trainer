@@ -105,7 +105,7 @@ def test_slower_lap_triggers_apex_deficit():
     assert a.detail["source"] == "corpus_best"  # honest: not a fabricated GGV optimum
 
 
-def test_late_brake_fires_once_when_coasting_past_brake_point():
+def test_late_brake_escalates_register_not_per_frame_when_coasting():
     ref_lap = lap_trace_from_archive(_corner_archive())
     refs = build_references(ref_lap)
     add_corpus_lap(refs, ref_lap)
@@ -122,8 +122,15 @@ def test_late_brake_fires_once_when_coasting_past_brake_point():
     ]
     fired = [a for f in frames for a in obs.observe(f)]
     late = [a for a in fired if a.kind == "late_brake"]
-    assert len(late) == 1  # exactly once per pass, not per frame
-    assert late[0].corner == r.index and late[0].urgency == "act"
+    assert late, "expected at least one brake cue"
+    # Escalation, NOT per-frame spam (issue #368 / codex #371): the cue re-fires only when the tone
+    # register steps UP, so registers are strictly increasing and there is at most one per tier.
+    rank = {"calm": 0, "firm": 1, "critical": 2}
+    ranks = [rank[a.register] for a in late]
+    assert ranks == sorted(ranks) and len(ranks) == len(set(ranks))
+    assert len(late) <= len(frames)
+    assert late[-1].urgency == "act"  # the escalated tier acts now
+    assert late[0].corner == r.index
     # user-facing label is 1-based: corner index 0 -> "T1", never "T0" (codex #294)
     assert "T1" in late[0].message and "T0" not in late[0].message
 

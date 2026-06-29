@@ -5,13 +5,30 @@ from __future__ import annotations
 from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue, advisory_to_phrase
 
 
-def _adv(kind: str, corner: int, urgency: str, **detail: object) -> dict[str, object]:
-    return {"kind": kind, "corner": corner, "urgency": urgency, "detail": detail, "message": "m"}
+def _adv(
+    kind: str, corner: int, urgency: str, register: str = "calm", **detail: object
+) -> dict[str, object]:
+    return {
+        "kind": kind,
+        "corner": corner,
+        "urgency": urgency,
+        "register": register,
+        "detail": detail,
+        "message": "m",
+    }
 
 
-def test_advisory_to_phrase_is_short_and_turn_anchored():
-    assert advisory_to_phrase(_adv("late_brake", 3, "act")) == "Brake, Turn 4."
-    assert advisory_to_phrase(_adv("apex_deficit", 6, "info")) == "Carry more speed, Turn 7."
+def test_advisory_to_phrase_is_register_aware_and_terse():
+    # the act tier (firm/critical) is terse + corner-less; the calm anticipatory tier keeps the
+    # corner number.
+    assert advisory_to_phrase(_adv("late_brake", 3, "act", register="firm")) == "Brake."
+    assert advisory_to_phrase(_adv("late_brake", 3, "act", register="critical")) == "Brake!"
+    assert (
+        advisory_to_phrase(_adv("late_brake", 3, "prepare", register="calm"))
+        == "Brake point, Turn 4."
+    )
+    assert advisory_to_phrase(_adv("brake_release", 0, "act", register="firm")) == "Release."
+    assert advisory_to_phrase(_adv("apex_deficit", 6, "info")) == "More entry speed, Turn 7."
 
 
 def test_advisory_to_phrase_unknown_kind_falls_back_to_message():
@@ -29,10 +46,14 @@ def test_advisory_to_phrase_handles_bad_corner():
 
 def test_arbiter_speaks_one_cue_highest_urgency():
     arb = CueArbiter()
-    cue = arb.select([_adv("apex_deficit", 1, "info"), _adv("late_brake", 2, "act")], now_s=0.0)
+    cue = arb.select(
+        [_adv("apex_deficit", 1, "info"), _adv("late_brake", 2, "act", register="firm")],
+        now_s=0.0,
+    )
     assert isinstance(cue, SpokenCue)
     assert cue.kind == "late_brake"  # 'act' beats 'info'
-    assert cue.text == "Brake, Turn 3."
+    assert cue.register == "firm"  # register carried through for the WS speaker
+    assert cue.text == "Brake."  # terse act phrasing
 
 
 def test_arbiter_global_cooldown_suppresses_non_urgent():

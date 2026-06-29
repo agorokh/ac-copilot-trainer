@@ -32,6 +32,12 @@ from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue
 #: Max pending TTS phrases; when full, drop the oldest so memory stays bounded under cue bursts.
 _VOICE_QUEUE_MAX = 4
 
+#: pyttsx3 rate (wpm) + volume per intensity register (issue #368) — the WS/pyttsx3 path can't bake
+#: prosody, but it can speak faster + louder as the situation escalates, so the WS client conveys
+#: the same intensity the in-process bank coach does (codex review #371).
+_REGISTER_RATE: dict[str, int] = {"calm": 185, "firm": 200, "critical": 215}
+_REGISTER_VOLUME: dict[str, float] = {"calm": 0.9, "firm": 1.0, "critical": 1.0}
+
 
 def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
     """Return the advisory dict from a ``coaching.cue`` snapshot frame, else ``None``. Pure."""
@@ -66,7 +72,7 @@ class VoiceClient:
     """Stateful cue consumer: frame -> arbiter -> speak. Speaker + clock injected for tests."""
 
     def __init__(
-        self, speaker: Callable[[str], None], *, arbiter: CueArbiter | None = None
+        self, speaker: Callable[[str, str], None], *, arbiter: CueArbiter | None = None
     ) -> None:
         self._speak = speaker
         self._arbiter = arbiter or CueArbiter()
@@ -78,7 +84,7 @@ class VoiceClient:
             return None
         cue = self._arbiter.select([advisory], now_s)
         if cue is not None:
-            self._speak(cue.text)
+            self._speak(cue.text, cue.register)  # register drives the speaker's rate/volume (#368)
         return cue
 
 
@@ -87,11 +93,12 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
     return not failed and worker_alive
 
 
-def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
-    """Build a non-blocking speak() backed by pyttsx3 on a dedicated worker thread.
+def _pyttsx3_speaker(base_rate: int = 195, base_volume: float = 1.0):
+    """Build a non-blocking speak(text, register) backed by pyttsx3 on a dedicated worker thread.
 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
-    stays responsive and incoming ``act`` cues can still be arbitrated while speech plays.
+    stays responsive and incoming ``act`` cues can still be arbitrated while speech plays. The
+    register (issue #368) sets the engine rate + volume per utterance so the WS path escalates tone.
     """
     import logging
     import queue
@@ -100,25 +107,26 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
     import pyttsx3
 
     logger = logging.getLogger(__name__)
-    q: queue.Queue[str | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)
+    q: queue.Queue[tuple[str, str] | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)
     ready = threading.Event()
     failed = threading.Event()
 
     def worker() -> None:
         try:
             engine = pyttsx3.init()
-            engine.setProperty("rate", rate)
-            engine.setProperty("volume", volume)
         except Exception:
             failed.set()
             logger.exception("pyttsx3 voice worker failed to initialize")
             return
         ready.set()
         while True:
-            text = q.get()
-            if text is None:
+            item = q.get()
+            if item is None:
                 break
+            text, register = item
             try:
+                engine.setProperty("rate", _REGISTER_RATE.get(register, base_rate))
+                engine.setProperty("volume", _REGISTER_VOLUME.get(register, base_volume))
                 engine.say(text)
                 engine.runAndWait()
             except Exception:
@@ -127,19 +135,19 @@ def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
     t = threading.Thread(target=worker, daemon=True, name="pyttsx3-voice")
     t.start()
 
-    def speak(text: str) -> None:
+    def speak(text: str, register: str = "calm") -> None:
         if not should_enqueue_voice_cue(failed=failed.is_set(), worker_alive=t.is_alive()):
             logger.warning("pyttsx3 unavailable; dropping cue %r", text)
             return
         try:
-            q.put_nowait(text)
+            q.put_nowait((text, register))
         except queue.Full:
             try:
                 q.get_nowait()
             except queue.Empty:
                 pass
             try:
-                q.put_nowait(text)
+                q.put_nowait((text, register))
             except queue.Full:
                 logger.warning("pyttsx3 queue saturated; dropping cue %r", text)
 

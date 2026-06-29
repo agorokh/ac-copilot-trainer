@@ -53,25 +53,25 @@ def test_extract_advisory_ignores_other_topics_and_types():
 
 
 def test_voice_client_speaks_selected_cue():
-    spoken: list[str] = []
-    vc = VoiceClient(spoken.append)
+    spoken: list[tuple[str, str]] = []  # (text, register) — the speaker is register-aware (#368)
+    vc = VoiceClient(lambda text, register: spoken.append((text, register)))
     cue = vc.handle_frame(_cue_frame(), now_s=100.0)
     assert cue is not None
     assert cue.kind == "late_brake"
-    assert spoken == [cue.text]
-    assert "Turn 4" in cue.text  # 0-based corner 3 -> Turn 4
+    assert spoken == [(cue.text, cue.register)]
+    assert "Turn 4" in cue.text  # 0-based corner 3 -> Turn 4 (calm anticipatory keeps the corner)
 
 
 def test_voice_client_ignores_non_cue_frame():
-    spoken: list[str] = []
-    vc = VoiceClient(spoken.append)
+    spoken: list[tuple[str, str]] = []
+    vc = VoiceClient(lambda text, register: spoken.append((text, register)))
     assert vc.handle_frame({"type": TYPE_HELLO}, now_s=1.0) is None
     assert spoken == []
 
 
 def test_voice_client_respects_corner_cooldown():
-    spoken: list[str] = []
-    vc = VoiceClient(spoken.append)
+    spoken: list[tuple[str, str]] = []
+    vc = VoiceClient(lambda text, register: spoken.append((text, register)))
     assert vc.handle_frame(_cue_frame(), now_s=0.0) is not None
     # same corner + kind, within the 6 s per-corner cooldown -> suppressed
     assert vc.handle_frame(_cue_frame(), now_s=1.0) is None

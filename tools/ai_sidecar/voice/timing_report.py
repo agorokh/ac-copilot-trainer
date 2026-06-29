@@ -144,6 +144,11 @@ def _inject_corner_frames(ref: CornerReference) -> tuple[list[dict[str, Any]], f
     return frames, bp
 
 
+def _advisory_dedup_key(advisory: Advisory) -> str:
+    """Return the scheduler/resolver dedup identity for an advisory."""
+    return f"{advisory.kind}:{advisory.corner}:{advisory.register}"
+
+
 def build_timing_report(
     observer: RealtimeObserver,
     resolver: Resolver,
@@ -199,16 +204,21 @@ def build_timing_report(
                 playback.finish()
             advisories: list[Advisory] = observer.observe(fr)
             for adv in advisories:
-                before = len(playback.played)
                 sched.submit(adv)
-                sched.process_pending(clock_holder["t"])
-                spoke = len(playback.played) > before
-                utt = playback.played[-1] if spoke else None
+            before = len(playback.played)
+            winner = sched.process_pending(clock_holder["t"]) if advisories else None
+            spoke = winner is not None and len(playback.played) > before
+            if spoke and winner is not None:
+                spoken_urgencies.add(winner.urgency)
+                dur = _clip_duration_ms(bank_dir, winner.clip_id, manifest) or _DEFAULT_CLIP_MS
+                playing_until_ms = t_ms + dur
+            for adv in advisories:
+                utt = (
+                    winner
+                    if spoke and winner is not None and winner.dedup_key == _advisory_dedup_key(adv)
+                    else None
+                )
                 clip_id = utt.clip_id if utt is not None else ""
-                if spoke and utt is not None:
-                    spoken_urgencies.add(utt.urgency)
-                    dur = _clip_duration_ms(bank_dir, clip_id, manifest) or _DEFAULT_CLIP_MS
-                    playing_until_ms = t_ms + dur
                 report.cues.append(
                     CueRecord(
                         corner=adv.corner,
@@ -228,7 +238,7 @@ def build_timing_report(
                         # (only meaningful for anticipatory cues — a release/verdict legitimately
                         # fires past the mark; see the assertion below.)
                         onset_before_mark=(t_mark_ms is None or t_ms <= t_mark_ms),
-                        spoken=spoke,
+                        spoken=utt is not None,
                     )
                 )
             t_ms += dt_ms
@@ -254,6 +264,11 @@ def build_timing_report(
             config.verbosity != Verbosity.LOW or "info" not in spoken_urgencies
         ),
         "brake_alarm_within_450ms": (bank_dir is None or not brake_alarm_over_budget),
+        # A non-vacuous proof must actually dispatch a cue — unless verbosity is OFF (muted).
+        # A resolver/bank gap that silently suppresses everything must FAIL the report, not pass it
+        # because the structural assertions held (codex review #371). This is a BOOL so main()'s
+        # exit-status check (which gates on the boolean assertions) catches it.
+        "cues_spoken_when_audible": (config.verbosity == Verbosity.OFF or len(spoken) >= 1),
         "cues_spoken": len(spoken),
     }
     return report
@@ -291,6 +306,15 @@ def main(argv: list[str] | None = None) -> int:
     bank_dir = Path(args.bank) if args.bank else None
     if bank_dir is not None:
         manifest = Manifest.load(bank_dir / MANIFEST_FILENAME)
+        # Reject a stale/corrupt bank up front (vocabulary drift, missing/mismatched WAVs) — the
+        # fake playback would otherwise mark clips "spoken" that the real coach (from_bank)
+        # would refuse, producing a green-but-wrong report (codex review #371).
+        report_ok = manifest.validate(bank_dir)
+        if not report_ok.ok:
+            raise SystemExit(
+                "bank failed validation (the real coach would disable or skip these clips):\n  "
+                + "\n  ".join(report_ok.problems or ["vocabulary_hash mismatch"])
+            )
     else:
         # in-memory manifest over the current vocabulary (no clip durations without a bank)
         from tools.ai_sidecar.voice import vocabulary as vocab

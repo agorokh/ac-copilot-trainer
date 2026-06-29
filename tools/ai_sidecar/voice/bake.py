@@ -42,6 +42,7 @@ import argparse
 import logging
 import math
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -415,16 +416,27 @@ def _build_backend(args: argparse.Namespace) -> VoiceBackend:
     if args.backend == "say":
         return MacSayBackend(voice=args.say_voice)
     if args.backend == "say-expressive":
+        _require_ffmpeg(args.backend)
         return MacSayExpressiveBackend(voice=args.say_voice)
     if args.backend == "piper":
         if not args.piper_model:
             raise SystemExit("--piper-model is required for --backend piper")
+        _require_ffmpeg(args.backend)
         return PiperBackend(args.piper_model)
     if args.backend == "kokoro":
         if not args.kokoro_model or not args.kokoro_voices:
             raise SystemExit("--kokoro-model and --kokoro-voices are required for --backend kokoro")
+        _require_ffmpeg(args.backend)
         return KokoroBackend(args.kokoro_model, args.kokoro_voices, voice=args.kokoro_voice)
     raise SystemExit(f"unknown backend {args.backend!r}")
+
+
+def _require_ffmpeg(backend: str) -> None:
+    """Fail early with an actionable CLI error for backends that use the prosody shaper."""
+    if shutil.which("ffmpeg") is None:
+        raise SystemExit(
+            f"--backend {backend} requires ffmpeg on PATH for deterministic prosody shaping"
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

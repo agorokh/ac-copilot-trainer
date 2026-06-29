@@ -76,16 +76,21 @@ class ClipEntry:
             corner = d["corner"]
             if corner is not None:
                 corner = int(corner)
+            # ``register`` is REQUIRED in v2: a v1 manifest (no register) raises here at LOAD, so
+            # ``engine.from_bank`` returns a disabled coach rather than ever playing a clip whose
+            # tier is unknown (issue #368). No lenient default — that would let a v1 bank masquerade
+            # as v2. The value is also validated against the allowed tiers (calm|firm|critical) at
+            # load so a hand-edited/corrupt manifest fails loudly here, not as a silent lookup miss
+            # later (codex/qodo review #371).
+            register = str(d["register"])
+            if register not in vocab.REGISTERS:
+                raise ValueError(f"register {register!r} not in {vocab.REGISTERS}")
             return ClipEntry(
                 clip_id=str(d["clip_id"]),
                 file=str(d["file"]),
                 kind=str(d["kind"]),
                 urgency=str(d["urgency"]),
-                # ``register`` is REQUIRED in v2: a v1 manifest (no register) raises here at LOAD,
-                # so ``engine.from_bank`` returns a disabled coach rather than ever playing a clip
-                # whose tier is unknown (issue #368). No lenient default — that would let a v1 bank
-                # masquerade as v2.
-                register=str(d["register"]),
+                register=register,
                 corner=corner,
                 text=str(d["text"]),
                 sha256=str(d["sha256"]),
@@ -147,13 +152,12 @@ class Manifest:
             raise ManifestError("manifest root is not an object")
         try:
             version = int(d["version"])
-            # Forward-incompat guard (issue #368): a bank written by a NEWER schema than this code
-            # understands must be refused, not silently mis-read. ``engine.from_bank`` turns this
-            # into a disabled coach. A v1 bank is rejected one level down (ClipEntry.from_dict needs
-            # ``register``), so version<current also fails closed → "re-bake required".
-            if version > MANIFEST_VERSION:
+            # Version is an authoritative schema gate (issue #368): a bank written by a different
+            # schema than this code understands must be refused, not silently mis-read. ``engine``
+            # turns this into a disabled coach with a clear "re-bake / upgrade" path.
+            if version != MANIFEST_VERSION:
                 raise ManifestError(
-                    f"manifest version {version} is newer than supported {MANIFEST_VERSION} "
+                    f"manifest version {version} is not supported by schema {MANIFEST_VERSION} "
                     "— upgrade the sidecar or re-bake the bank"
                 )
             raw_clips = d["clips"]

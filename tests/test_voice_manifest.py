@@ -136,3 +136,52 @@ def test_forward_incompatible_version_is_rejected() -> None:
     }
     with pytest.raises(ManifestError):
         Manifest.from_dict(future)
+
+
+def test_manifest_version_must_match_schema_even_if_fields_look_current() -> None:
+    # qodo review #371: the top-level version is a real schema gate, not informational metadata.
+    data = {
+        "version": 1,
+        "samplerate": 22050,
+        "voice_signature": "tone-v2",
+        "vocabulary_hash": "0" * 64,
+        "clips": {
+            "late_brake.act.firm.generic": {
+                "clip_id": "late_brake.act.firm.generic",
+                "file": "x.wav",
+                "kind": "late_brake",
+                "urgency": "act",
+                "register": "firm",
+                "corner": None,
+                "text": "Brake.",
+                "sha256": "0" * 64,
+            }
+        },
+    }
+    with pytest.raises(ManifestError):
+        Manifest.from_dict(data)
+
+
+def test_unknown_register_is_rejected_at_load() -> None:
+    # qodo/codex review #371: a hand-edited/corrupt manifest with a register outside the allowed
+    # tiers (calm|firm|critical) must fail loudly at LOAD, not as a silent lookup miss later.
+    data = {
+        "version": 2,
+        "samplerate": 22050,
+        "voice_signature": "tone-v2",
+        "vocabulary_hash": "0" * 64,
+        "clips": {
+            "late_brake.act.loud.generic": {
+                "clip_id": "late_brake.act.loud.generic",
+                "file": "x.wav",
+                "kind": "late_brake",
+                "urgency": "act",
+                "register": "loud",  # not in calm|firm|critical
+                "corner": None,
+                "text": "Brake!",
+                "sha256": "0" * 64,
+            }
+        },
+    }
+    with pytest.raises(ManifestError):
+        Manifest.from_dict(data)

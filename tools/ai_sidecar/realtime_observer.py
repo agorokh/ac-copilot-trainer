@@ -21,6 +21,7 @@ frame contract here mirrors ``telemetry.lua``'s ``TelemetrySample``: ``speed`` i
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,7 +64,9 @@ _RELEASE_BRAKE_MIN = 0.45
 #: mark so the audio ONSET lands before/at the control point, not after (issue #368 AC a).
 _LEAD_S = 0.8
 #: default lap length (m) for the lead-time → spline conversion when a track length is not supplied.
-_DEFAULT_LAP_LENGTH_M = 2500.0
+_DEFAULT_TRACK_LENGTH_M = 2500.0
+#: public constructor default for the configurable brake lead.
+_BRAKE_PREPARE_LEAD_S = _LEAD_S
 #: cap on the anticipatory lead in spline units, so a very fast straight cannot fire a corner cue
 #: half a lap early.
 _MAX_LEAD_SPLINE = 0.05
@@ -147,7 +150,10 @@ class _CornerPass:
     inside: bool = False
     min_speed_kmh: float | None = None
     has_braked: bool = False  # any braking seen this pass — suppresses a false late-brake cue
-    brake_cue_emitted: bool = False
+    #: rank of the HIGHEST brake-cue register emitted this pass (-1 = none). A cue re-fires only
+    #: when severity escalates to a strictly higher tier (calm→firm→critical), so a calm lead-in
+    #: never locks out the later critical alarm (issue #368 escalation; codex review #371).
+    brake_cue_rank: int = -1
     release_emitted: bool = False
     exit_emitted: bool = False
     #: last tone register spoken for this corner pass — feeds register hysteresis (issue #368).
@@ -198,6 +204,29 @@ def _normalize_frame(
     return spline, speed, brake, throttle, lap
 
 
+def _lead_spline_fraction(speed_kmh: float, track_length_m: float, lead_s: float) -> float:
+    """Convert a speed/time lead into normalized spline distance."""
+    if speed_kmh <= 0.0 or lead_s <= 0.0:
+        return 0.0
+    if track_length_m <= 0.0:
+        track_length_m = _DEFAULT_TRACK_LENGTH_M
+    return max(0.002, min(_MAX_LEAD_SPLINE, (speed_kmh / 3.6) * lead_s / track_length_m))
+
+
+def _positive_track_length_m(value: Any) -> float:
+    if isinstance(value, bool):
+        return _DEFAULT_TRACK_LENGTH_M
+    try:
+        track_length_m = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_TRACK_LENGTH_M
+    return (
+        track_length_m
+        if math.isfinite(track_length_m) and track_length_m > 0.0
+        else _DEFAULT_TRACK_LENGTH_M
+    )
+
+
 class RealtimeObserver:
     """Stateful streaming observer over the per-corner reference envelope.
 
@@ -213,18 +242,21 @@ class RealtimeObserver:
         *,
         deficit_margin_kmh: float = _DEFICIT_MARGIN_KMH,
         brake_on: float = _BRAKE_ON,
-        lap_length_m: float = _DEFAULT_LAP_LENGTH_M,
+        track_length_m: float | None = _DEFAULT_TRACK_LENGTH_M,
+        brake_prepare_lead_s: float = _BRAKE_PREPARE_LEAD_S,
+        lap_length_m: float | None = None,
     ) -> None:
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
         self._deficit_margin = deficit_margin_kmh
         self._brake_on = brake_on
-        # lap length lets us convert an anticipatory time-lead into a spline distance so a cue's
-        # audio ONSET lands before/at its mark (issue #368 AC a). A sane default keeps offline
-        # replay working without per-track wiring; the live wiring can pass the real length.
-        self._lap_length_m = (
-            lap_length_m if lap_length_m and lap_length_m > 0 else _DEFAULT_LAP_LENGTH_M
+        # Track length lets us convert an anticipatory time-lead into a spline distance so a cue's
+        # audio onset lands before/at its mark (issue #368 AC a). ``lap_length_m`` is kept as a
+        # keyword alias for PR-branch callers; current main uses ``track_length_m``.
+        self._track_length_m = _positive_track_length_m(
+            lap_length_m if lap_length_m is not None else track_length_m
         )
+        self._brake_prepare_lead_s = max(0.0, brake_prepare_lead_s)
         self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
         self._last_spline: float | None = None
         self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
@@ -299,17 +331,21 @@ class RealtimeObserver:
             # so the cue's audio onset lands before/at the mark (issue #368 AC a).
             bp = ref.best_brake_point_spline
             if bp is not None:
-                lead = self._lead_spline(speed)
+                lead = _lead_spline_fraction(
+                    speed, self._track_length_m, self._brake_prepare_lead_s
+                )
                 if bp <= spline <= ref.apex_spline and brake >= self._brake_on:
                     st.has_braked = True  # so a later release before apex isn't "late to brake"
                 if (bp - lead) <= spline <= ref.apex_spline:
                     a = self._brake_cue(ref, st, spline, speed, brake)
                     if a is not None:
                         out.append(a)
-                # Over-braking past the apex while still off-throttle → "release / ease" (#368).
-                a = self._brake_release(ref, st, spline, speed, brake, throttle)
-                if a is not None:
-                    out.append(a)
+            # Over-braking past the apex while still off-throttle → "release / ease" (#368). Needs
+            # only the apex/window + brake/throttle, NOT a brake point — so it fires for GGV-only
+            # references (no corpus brake point) too (codex review #371).
+            a = self._brake_release(ref, st, spline, speed, brake, throttle)
+            if a is not None:
+                out.append(a)
             in_window = ref.spline_lo <= spline <= ref.spline_hi
             if in_window:
                 st.inside = True
@@ -325,13 +361,6 @@ class RealtimeObserver:
                 if a is not None:
                     out.append(a)
         return out
-
-    def _lead_spline(self, speed_kmh: float) -> float:
-        """Anticipatory lead distance in spline units for the current speed (capped). Issue #368."""
-        if speed_kmh <= 0:
-            return 0.0
-        dist_m = (speed_kmh / 3.6) * _LEAD_S
-        return min(_MAX_LEAD_SPLINE, dist_m / self._lap_length_m)
 
     def _brake_severity(self, ref: CornerReference, spline: float, speed: float) -> float:
         """Severity ``s ∈ [0,1]`` for a brake cue — how urgent the "brake" should sound (issue
@@ -354,28 +383,35 @@ class RealtimeObserver:
     def _brake_cue(
         self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
     ) -> Advisory | None:
-        """Fire one anticipatory brake cue per pass; its TONE register reflects the situation
-        (#368).
+        """Fire an anticipatory brake cue whose TONE register reflects the situation (#368).
 
-        Fires once, the first frame the car is within the actionable brake window (from the
-        anticipatory lead before the brake point through the apex) and is not yet braking. The
-        register (calm|firm|critical) comes from :meth:`_brake_severity`, so a car arriving on pace
-        gets a calm anticipatory "brake point" while a car carrying far too much speed — or already
-        coasting past the point — gets a firm/critical "Brake!" / "Brake, brake!".
+        Fires when the car is within the actionable brake window (from the anticipatory lead before
+        the brake point through the apex) and is not yet braking. The register (calm|firm|critical)
+        comes from :meth:`_brake_severity`, so a car arriving on pace gets a calm anticipatory
+        "brake point" while a car carrying far too much speed — or coasting past the point — gets a
+        firm/critical "Brake." / "Brake!".
+
+        **Escalation (codex review #371):** the cue re-fires within one pass only when severity
+        rises to a *strictly higher* register (calm→firm→critical), so a calm lead-in never
+        suppresses the later urgent alarm; the scheduler's register-keyed dedup + act barge-in
+        deliver the escalation. A same- or lower-tier repeat is dropped.
 
         Suppressed once the driver has braked anywhere in this pass (``has_braked``): braking early
         and trailing off before the apex — normal trail-brake / rotation — is not a fault and must
         not draw a cue (codex #294).
         """
         bp = ref.best_brake_point_spline
-        if bp is None or st.brake_cue_emitted or st.has_braked:
+        if bp is None or st.has_braked:
             return None
         if brake >= self._brake_on:
             return None
         s = self._brake_severity(ref, spline, speed)
         register = _register_for(s, st.last_register, cap="critical")
+        rank = REGISTER_RANK[register]
+        if rank <= st.brake_cue_rank:
+            return None  # not an escalation — already cued this tier (or higher) this pass
+        st.brake_cue_rank = rank
         urgency = _URGENCY_FOR_REGISTER[register]
-        st.brake_cue_emitted = True
         st.last_register = register
         anticipatory = spline < bp
         return Advisory(
@@ -502,4 +538,11 @@ def build_observer_from_reference(reference_archive: dict) -> RealtimeObserver |
     if not refs:
         return None
     add_corpus_lap(refs, ref_lap)  # the reference lap IS the corpus best
+    # Use the archive's real track length for the anticipatory-lead → spline conversion, so the
+    # 0.8 s lead is correct on long (Spa/Nordschleife) and short layouts alike — not the 2500 m
+    # default (codex review #371). Fall back to the default when the archive omits a sane length.
+    track = reference_archive.get("track") if isinstance(reference_archive, dict) else None
+    length_m = _num(track.get("lengthM")) if isinstance(track, dict) else None
+    if length_m is not None and length_m > 0:
+        return RealtimeObserver(refs, track_length_m=length_m)
     return RealtimeObserver(refs)
