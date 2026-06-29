@@ -578,13 +578,13 @@ local function writeTextFile(path, text)
   if not f then
     return false, "setup file not writable"
   end
-  local ok, err = pcall(function()
-    f:write(text)
+  local ok, writeRet, writeErr = pcall(function()
+    return f:write(text)
   end)
   local closeOk, closeErr = f:close()
-  if not ok then
+  if not ok or writeRet == nil then
     os.remove(tmp)
-    return false, tostring(err)
+    return false, tostring(writeErr or "setup file write failed")
   end
   if not closeOk then
     os.remove(tmp)

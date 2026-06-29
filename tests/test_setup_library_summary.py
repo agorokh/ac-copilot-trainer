@@ -347,3 +347,35 @@ def test_spinner_set_temp_file_collision_keeps_original(lua, tmp_path: pathlib.P
     assert ack["ok"] is False
     assert "temp file" in ack["error"]
     assert setup_path.read_text(encoding="utf-8") == original
+
+
+def test_spinner_set_write_nil_keeps_original(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    original = FIXTURE_INI.read_text(encoding="utf-8")
+    setup_path.write_text(original, encoding="utf-8")
+    _install_spinner_stubs(lua, setup_path, root)
+
+    ack = lua.execute(
+        """
+        local realOpen = io.open
+        io.open = function(path, mode)
+          if mode == "w" and path:find("%.ac%-copilot%-tmp%-1$") then
+            return {
+              write = function(_self, _text) return nil, "disk full" end,
+              close = function(_self) return true end,
+            }
+          end
+          return realOpen(path, mode)
+        end
+        local setupLibrary = require("setup_library")
+        local ret = setupLibrary.setSpinner({ section = "FRONT_BIAS", value = 67 })
+        io.open = realOpen
+        return ret
+        """
+    )
+
+    assert ack["ok"] is False
+    assert "disk full" in ack["error"] or "write failed" in ack["error"]
+    assert setup_path.read_text(encoding="utf-8") == original

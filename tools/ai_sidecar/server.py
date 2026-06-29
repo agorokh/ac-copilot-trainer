@@ -1614,9 +1614,9 @@ def main() -> None:
         "--se-endpoint",
         default=os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT),
         help=(
-            "Setup Exchange endpoint for se.search/se.download. "
-            f"Falls back to ${ENV_SETUP_EXCHANGE_ENDPOINT} then "
-            f"{DEFAULT_SETUP_EXCHANGE_ENDPOINT}."
+            "Authenticated Setup Exchange-compatible proxy endpoint for se.search/se.download. "
+            f"Falls back to ${ENV_SETUP_EXCHANGE_ENDPOINT}; direct se.acstuff.club "
+            "requires the official signed session handshake and is not used by default."
         ),
     )
     p.add_argument(

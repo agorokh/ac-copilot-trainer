@@ -43,7 +43,14 @@ no token; setup path traversal rejection; health poll on configured bind host;
 PyInstaller sidecar data + launcher extra runtime deps; auto-drive `max_launches`
 total cap; PT active-name preservation on path-only `setup.active`; case-insensitive
 setup basename derivation; spinner refresh queue overflow toasts; sidecar log
-handle lifecycle; settings UTF-8 decode fallback.
+handle lifecycle; settings UTF-8 decode fallback; Setup Exchange root validation,
+bounded HTTP response reads, structured download error acks, and LVGL stale-row
+guards; Pocket Technician decimal spinner transport; safe temp-file setup writes;
+and path-load cache invalidation for freshly installed Setup Exchange files.
+
+Setup Exchange direct `se.acstuff.club` calls remain intentionally disabled in
+the sidecar until the official signed `/session` handshake is ported. Use
+`AC_COPILOT_SE_ENDPOINT` for an authenticated proxy/test endpoint.
 
 ## Follow-ups
 

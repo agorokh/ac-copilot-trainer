@@ -61,13 +61,15 @@ created ahead of time by calling `ensure_settings_file()` from
 ## Setup Exchange
 
 The rig-screen Setup Exchange tile talks to the Python sidecar with
-`se.search` / `se.download`. The sidecar proxies the public Setup Exchange
-endpoint and installs downloaded `.ini` files under the Assetto Corsa user
-setups folder without overwriting existing files.
+`se.search` / `se.download`. The sidecar can proxy an authenticated
+Setup Exchange-compatible endpoint and installs downloaded `.ini` files under
+the Assetto Corsa user setups folder without overwriting existing files. It
+does not make anonymous direct calls to `se.acstuff.club`; the official app uses
+a signed `/session` handshake that is not implemented in the sidecar.
 
 Optional environment overrides:
 
-- `AC_COPILOT_SE_ENDPOINT` changes the Setup Exchange HTTP endpoint, mainly for
-  local proxy or fake-service tests.
+- `AC_COPILOT_SE_ENDPOINT` points at an authenticated proxy or fake-service
+  endpoint for local tests.
 - `AC_COPILOT_USER_SETUPS_DIR` points at the Assetto Corsa `setups` directory
   when Windows Documents discovery cannot find it.
