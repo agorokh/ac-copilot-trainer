@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T03:30:00Z
+last_updated: 2026-06-29T07:17:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -163,7 +163,18 @@ end-to-end "simulated driven lap joins the catalog" proof; module 100% cov; ruff
 (`%USERPROFILE%\OneDrive\Documents\Assetto Corsa`) in `glossary/install-paths.md`. **Note:** Tier-3
 agentic-memory MCP query tool was absent this session (degraded-mode bypass logged in
 `.scratch/.memory_bypass_rationale`). PR [#369](https://github.com/agorokh/ac-copilot-trainer/pull/369)
-(supersedes #367 — `claude/` branch prefix is rejected by ci-conventional).
+(supersedes #367 — `claude/` branch prefix is rejected by ci-conventional) **MERGED**
+2026-06-29 as squash [`6705bc7`](https://github.com/agorokh/ac-copilot-trainer/commit/6705bc7b206fada67310c5be8134202e68f6ecc6);
+[#366](https://github.com/agorokh/ac-copilot-trainer/issues/366) closed. Autonomous-deliver
+closeout verified PR head `a9015d8`: GitHub `build`, `conformance`, and `Canonical docs exist` green;
+GraphQL reviewThreads had no current unresolved thread after the full cooldown; Qodo updated to the
+head SHA, Gemini/Codex review capacity was quota-limited with no substantive current finding, and no
+current-SHA self-hosted reviewer review was present after cooldown. Local verification:
+`tests/test_setup_catalog_registrar.py` = 29 passed; temp catalog register/list + DuckDB join returned
+`driven_laps=1`, `best_ms=82500` for `canonical_hash=054245cb`; `make ci-fast` passed with the
+local venv Python (`1656 passed, 76 skipped`, coverage 85.19%, ruff/Bandit/policy/CSP checks green).
+Post-merge classification: `scripts/` changed (`scripts/check_agent_forbidden.py` allowlist for
+`assets/`); no migration/env/deps/workflow action required.
 
 ---
 
