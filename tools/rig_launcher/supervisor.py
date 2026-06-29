@@ -269,19 +269,24 @@ class GamePointSupervisor:
         if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
             self._sidecar_process = None
         self._close_log_handles()
-        self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
-        log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
-        self._log_handles.append(log)
-        self._sidecar_process = self._popen(
-            self.sidecar_command(),
-            **_subprocess_kwargs(
-                cwd=str(Path.cwd()),
-                env=self.sidecar_environment(),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                text=True,
-            ),
-        )
+        try:
+            self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+            log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
+            self._log_handles.append(log)
+            self._sidecar_process = self._popen(
+                self.sidecar_command(),
+                **_subprocess_kwargs(
+                    cwd=str(Path.cwd()),
+                    env=self.sidecar_environment(),
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                ),
+            )
+        except (OSError, FileNotFoundError) as exc:
+            self._sidecar_process = None
+            self._close_log_handles()
+            return ProbeResult("sidecar", False, "start_failed", str(exc))
         return ProbeResult("sidecar", True, "starting", f"pid={self._sidecar_process.pid}")
 
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:

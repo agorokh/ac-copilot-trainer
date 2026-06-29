@@ -262,6 +262,22 @@ def test_start_sidecar_writes_to_predictable_log_dir(tmp_path: Path) -> None:
     assert "AC_COPILOT_SIDECAR_TOKEN" in calls[0]["kwargs"]["env"]
 
 
+def test_start_sidecar_returns_probe_result_on_spawn_failure(tmp_path: Path) -> None:
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+
+    def failing_popen(*_args: Any, **_kwargs: Any) -> _Proc:
+        raise FileNotFoundError("missing sidecar executable")
+
+    sup = GamePointSupervisor(cfg, environ={}, popen=failing_popen, python_executable="python")
+    result = sup.start_sidecar()
+
+    assert result.ok is False
+    assert result.state == "start_failed"
+    assert "missing sidecar executable" in (result.detail or "")
+    assert sup._sidecar_process is None
+    assert sup._log_handles == []
+
+
 def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:
     proc = _Proc()
     cfg = GamePointConfig(external_bind="127.0.0.1", paths=LauncherPaths(tmp_path))
