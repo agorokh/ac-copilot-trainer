@@ -316,6 +316,47 @@ def test_start_sidecar_adopts_healthy_existing_instance(tmp_path: Path) -> None:
     assert sup._log_handles == []
 
 
+def test_start_sidecar_adoption_closes_stale_log_handles(tmp_path: Path) -> None:
+    """Adopting after a prior supervised spawn must close the leftover log handle, not leak it.
+
+    Regression for the Qodo finding on PR #387: the adopt early-return ran before
+    ``_close_log_handles()``, so a handle opened by an earlier spawn stayed open for the launcher's
+    lifetime (kept sidecar.log held open). The cleanup now precedes the health probe.
+    """
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+    health = {"ok": False}
+
+    def staged_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        if not health["ok"]:
+            raise OSError("connection refused")
+        return _Response({"status": "ok", "connected_peers": 1, "screen_peers": 1})
+
+    procs: list[_Proc] = []
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> _Proc:
+        proc = _Proc()
+        procs.append(proc)
+        return proc
+
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=staged_urlopen, python_executable="python"
+    )
+    # First start: nothing healthy yet → spawns and opens a log handle.
+    first = sup.start_sidecar()
+    assert first.state == "starting"
+    assert len(sup._log_handles) == 1
+    # The supervised child exits; an external healthy sidecar is now on the port.
+    procs[0].terminated = True
+    health["ok"] = True
+    second = sup.start_sidecar()
+    # Adopts the external sidecar (no second spawn) and closes the stale handle.
+    assert second.state == "running"
+    assert "adopted" in (second.detail or "")
+    assert len(procs) == 1
+    assert sup._log_handles == []
+
+
 def test_start_sidecar_returns_probe_result_on_spawn_failure(tmp_path: Path) -> None:
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
 
