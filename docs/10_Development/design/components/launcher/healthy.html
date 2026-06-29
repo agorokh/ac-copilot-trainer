@@ -1,0 +1,33 @@
+<!-- @dsCard group="Launcher" subtitle="Ready to drive — all live" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<style>@import url('https://fonts.googleapis.com/css2?family=Michroma&family=Montserrat:wght@400;700&family=Syncopate:wght@700&display=swap');
+:root{--glass:rgba(17,17,17,.6);--solid:#111;--hair:rgba(77,82,97,.4);--inner:rgba(10,10,13,.55);
+--white:#F2F2F5;--label:#8C909C;--brand:#6F7585;--red:#EF4444;--amber:#FBBF24;--green:#4ADE80;
+--barbg:rgba(38,38,46,.85);--gold:#FFD700;--num:Michroma,sans-serif;--ui:Montserrat,sans-serif;--wm:Syncopate,sans-serif;}
+*{box-sizing:border-box;}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#26262b;background-image:repeating-linear-gradient(115deg,#26262b 0 40px,#212126 40px 80px);
+font-family:var(--ui);color:var(--white);padding:24px;}
+.num{font-family:var(--num);}.wm{font-family:var(--wm);font-weight:700;letter-spacing:.16em;}
+.lbl{font-family:var(--ui);font-weight:700;font-size:10px;letter-spacing:.14em;color:var(--label);text-transform:uppercase;}
+.panel{background:var(--glass);border:1px solid var(--hair);border-radius:8px;}
+.win{background:var(--solid);border:1px solid #2a2a2a;border-radius:10px;width:400px;overflow:hidden;}
+.titlebar{background:#161616;height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--hair);}
+.row{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid rgba(77,82,97,.18);}
+.state{font-family:var(--num);font-size:10px;letter-spacing:.05em;text-transform:uppercase;margin-left:auto;}
+.btn{background:transparent;color:var(--white);border:1px solid var(--hair);border-radius:7px;padding:9px 0;font:700 12px var(--ui);letter-spacing:.04em;text-transform:uppercase;}
+.btn.primary{border-color:rgba(255,215,0,.5);color:var(--gold);}
+.device{width:320px;height:480px;background:#000;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;}
+.dhead{height:44px;background:#0d0d0f;display:flex;align-items:center;padding:0 14px;gap:8px;border-bottom:1px solid var(--hair);}
+.bar{height:14px;background:var(--barbg);border-radius:7px;overflow:hidden;box-shadow:0 0 10px rgba(239,68,68,.5);}
+.sw{width:34px;height:34px;border-radius:8px;border:1px solid #333;}</style></head><body>
+<div class="win">
+  <div class="titlebar"><span style="width:8px;height:8px;border-radius:50%;background:var(--green);"></span><span style="font-size:12.5px;font-weight:700;letter-spacing:.02em;">AC COPILOT · GAME POINT</span></div>
+  <div style="padding:16px;">
+    <div style="padding:6px 0 12px;"><span class="num" style="font-size:15px;color:var(--green);">READY TO DRIVE</span><span style="color:var(--label);font-size:12px;margin-left:8px;">sidecar · screen · hotspot live</span></div>
+    <div class="row"><span class="lbl" style="width:96px;text-align:left;">SIDECAR</span><span class="state" style="color:var(--green)">healthy</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">peers=1 screen_peers=1</span></div><div class="row"><span class="lbl" style="width:96px;text-align:left;">SCREEN</span><span class="state" style="color:var(--green)">connected</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">screen_peers=1</span></div><div class="row"><span class="lbl" style="width:96px;text-align:left;">HOTSPOT</span><span class="state" style="color:var(--green)">on</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">clients=1</span></div><div class="row"><span class="lbl" style="width:96px;text-align:left;">VOICE</span><span class="state" style="color:var(--amber)">configured</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">bank · sounddevice</span></div><div class="row"><span class="lbl" style="width:96px;text-align:left;">SIMHUB</span><span class="state" style="color:var(--label)">absent</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">not found</span></div>
+    <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:8px;margin-top:16px;"><button class="btn primary">▶ Start</button><button class="btn">Refresh</button><button class="btn">Logs</button><button class="btn">Settings</button></div>
+  </div>
+</div>
+</body></html>
