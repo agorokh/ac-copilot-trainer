@@ -52,6 +52,7 @@ def test_low_verbosity_speaks_no_info() -> None:
     # AC e: no post-fact info narration is spoken under LOW verbosity.
     rep = _report(Verbosity.LOW)
     assert rep.assertions["no_info_spoken_in_low_verbosity"] is True
+    assert any(c.urgency == "info" for c in rep.cues)
     assert all(not (c.spoken and c.urgency == "info") for c in rep.cues)
 
 
@@ -119,6 +120,28 @@ def test_critical_brake_alarm_clip_is_required_for_audible_report() -> None:
 
     assert rep.assertions["cues_spoken"] >= 1
     assert rep.assertions["critical_brake_alarm_spoken"] is False
+
+
+def test_anticipatory_clip_must_be_spoken_for_onset_proof() -> None:
+    manifest = build_manifest()
+    for clip_id in list(manifest.clips):
+        entry = manifest.clips[clip_id]
+        if entry.kind == "late_brake" and entry.urgency == "prepare":
+            del manifest.clips[clip_id]
+    manifest.__post_init__()
+
+    rep = build_timing_report(
+        _synthetic_observer(),
+        Resolver(manifest),
+        config=VoiceConfig(verbosity=Verbosity.NORMAL),
+        manifest=manifest,
+        bank_dir=None,
+        backend="synthetic",
+    )
+
+    assert any(c.anticipatory for c in rep.cues)
+    assert rep.assertions["cues_spoken"] >= 1
+    assert rep.assertions["anticipatory_cue_fired"] is False
 
 
 def test_long_track_injection_hits_anticipatory_lead_window() -> None:

@@ -169,6 +169,25 @@ def test_escalation_same_corner_different_register_is_not_dedup_suppressed() -> 
     assert len(pb.played) == 2
 
 
+def test_release_cue_is_deferred_until_brake_alarm_finishes() -> None:
+    sched, pb, clock = _scheduler()
+    sched.submit(make_advisory(kind="late_brake", urgency="act", register="critical", corner=2))
+    assert sched.process_pending(clock()) is not None
+    assert pb.current is not None and pb.current.kind == "late_brake"
+
+    clock.advance(0.1)
+    sched.submit(make_advisory(kind="brake_release", urgency="act", register="firm", corner=2))
+    assert sched.process_pending(clock()) is None
+    assert pb.current is not None and pb.current.kind == "late_brake"
+
+    pb.finish()
+    clock.advance(0.1)
+    spoken = sched.process_pending(clock())
+    assert spoken is not None
+    assert spoken.kind == "brake_release"
+    assert pb.current is not None and pb.current.kind == "brake_release"
+
+
 def test_stale_advisory_is_dropped_by_ttl() -> None:
     sched, pb, clock = _scheduler(VoiceConfig(ttl_s=1.5))
     sched.submit(make_advisory(kind="late_brake", urgency="act", corner=2))  # enqueued at t0

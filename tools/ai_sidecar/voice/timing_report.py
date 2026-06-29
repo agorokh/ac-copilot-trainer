@@ -166,6 +166,16 @@ def _inject_corner_frames(
                 "throttle": 0.0,
             }
         )
+    exit_spline = min(0.9999, ref.spline_hi + max(step, 0.005))
+    if exit_spline > ref.spline_hi:
+        frames.append(
+            {
+                "spline": round(exit_spline, 4),
+                "speed": 90.0,
+                "brake": 0.0,
+                "throttle": 1.0,
+            }
+        )
     return frames, bp
 
 
@@ -277,6 +287,7 @@ def build_timing_report(
 
     spoken = [c for c in report.cues if c.spoken]
     anticipatory = [c for c in report.cues if c.anticipatory]
+    spoken_anticipatory = [c for c in anticipatory if c.spoken]
     # AC c: the TIME-CRITICAL brake alarm (the late_brake act cue) must be ≤450 ms. A 2-syllable
     # correction like "Release." sits ~540 ms — the honest floor of an intelligible 2-syllable word,
     # not padding — so it is reported but not gated here.
@@ -291,8 +302,8 @@ def build_timing_report(
         # AC a: an anticipatory cue actually fired, and EVERY anticipatory cue's onset led its mark.
         # (Reactive cues — over-braking release, past-the-point alarm, apex verdict — are exempt;
         # they correctly fire at/after the mark.)
-        "anticipatory_cue_fired": len(anticipatory) >= 1,
-        "anticipatory_onset_before_mark": all(c.onset_before_mark for c in anticipatory),
+        "anticipatory_cue_fired": len(spoken_anticipatory) >= 1,
+        "anticipatory_onset_before_mark": all(c.onset_before_mark for c in spoken_anticipatory),
         "no_info_spoken_in_low_verbosity": (
             config.verbosity != Verbosity.LOW or "info" not in spoken_urgencies
         ),

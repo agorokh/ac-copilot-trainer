@@ -167,6 +167,26 @@ def test_lead_window_wraps_over_start_finish() -> None:
     assert brake and brake[0].detail["anticipatory"] is True
 
 
+def test_wrapped_first_corner_lead_resets_previous_lap_cue_state() -> None:
+    # A T1 brake point near 0.0 starts its next-lap lead before the spline wrap is observed. The
+    # previous lap's emitted brake cue must not suppress that new anticipatory lead.
+    ref = _ref(
+        apex_spline=0.05,
+        spline_lo=0.0,
+        spline_hi=0.10,
+        best_brake_point_spline=0.01,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    first = obs.observe({"spline": 0.012, "speed": 180.0, "brake": 0.0, "throttle": 0.0})
+    assert [a for a in first if a.kind == "late_brake"]
+
+    wrapped_lead = obs.observe({"spline": 0.995, "speed": 180.0, "brake": 0.0, "throttle": 0.0})
+    brake = [a for a in wrapped_lead if a.kind == "late_brake"]
+    assert brake
+    assert brake[0].detail["anticipatory"] is True
+    assert brake[0].urgency == "prepare"
+
+
 # --- throttle now flows through normalization -----------------------------------------------------
 
 

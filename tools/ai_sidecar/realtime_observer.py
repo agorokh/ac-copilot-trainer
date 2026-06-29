@@ -350,11 +350,25 @@ class RealtimeObserver:
                 lead = _lead_spline_fraction(
                     speed, self._track_length_m, self._brake_prepare_lead_s
                 )
+                lead_start = (bp - lead) % 1.0
+                wrapped_lead = bp - lead < 0.0 and spline >= lead_start
+                if wrapped_lead and (
+                    st.inside
+                    or st.has_braked
+                    or st.brake_cue_rank >= 0
+                    or st.release_cue_rank >= 0
+                    or st.exit_emitted
+                ):
+                    # For a first-corner brake point near 0.0, the next lap's lead window starts
+                    # before the spline wrap is observed (for example at s=0.995). Reset this
+                    # corner's previous-lap cue state now so the anticipatory cue can still lead
+                    # the mark instead of being suppressed until after start/finish.
+                    self._passes[ref.index] = st = _CornerPass()
                 if bp <= spline <= ref.apex_spline and brake >= self._brake_on:
                     st.has_braked = True  # so a later release before apex isn't "late to brake"
                 # The actionable window runs from the anticipatory lead (which can wrap over
                 # start/finish for a first corner with bp≈0) through the apex (codex review #371).
-                if _in_arc(spline, (bp - lead) % 1.0, ref.apex_spline):
+                if _in_arc(spline, lead_start, ref.apex_spline):
                     a = self._brake_cue(ref, st, spline, speed, brake)
                     if a is not None:
                         out.append(a)
