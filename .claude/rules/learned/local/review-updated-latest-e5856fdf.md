@@ -1,0 +1,32 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: e5856fdf1878833e
+mined_from: 93 review comments across 12 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: guideline
+---
+
+# Review Updated Latest (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **[Persistent review](https://github.com/agorokh/ac-copilot-trainer/pull/323#issuecomment-4815667800)** updated to latest commit https://github.com/agorokh/ac-copilot-trainer/commit/2af9ea4f0e4e7fa053...
+- **[Persistent review](https://github.com/agorokh/ac-copilot-trainer/pull/321#issuecomment-4820064885)** updated to latest commit https://github.com/agorokh/ac-copilot-trainer/commit/e11648bb479b8b6dab...
+- [Code review](https://github.com/agorokh/ac-copilot-trainer/pull/334#issuecomment-4824648833) by qodo was updated up to the latest commit https://github.com/agorokh/ac-copilot-trainer/commit/e9ccd9b2f...
+- [Code review](https://github.com/agorokh/ac-copilot-trainer/pull/334#issuecomment-4824648833) by qodo was updated up to the latest commit https://github.com/agorokh/ac-copilot-trainer/commit/c08ce919e...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

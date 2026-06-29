@@ -1,0 +1,40 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 8ff22268420b0fcf
+mined_from: 6 review comments across 4 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Block Will (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+On Windows, if an exception occurs during the CSV writing process, the temporary file remains open. Consequently, `os.unlink(tmp...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+The database transaction is started with `con.execute("BEGIN TRANSACTION")` but is never explicitly rolled back if an exception ...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+In `_wire_voice`, the `try-except` block for loading the reference only catches `(OSError, ValueError)`. However, if the referen...
+- ![high](https://www.gstatic.com/codereviewagent/high-priority.svg)
+
+If `open_shared_memory` for the graphics mapping fails, or if an exception is raised before entering the `try` block, the successful...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

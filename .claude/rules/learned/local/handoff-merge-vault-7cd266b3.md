@@ -1,0 +1,52 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 7cd266b3fe6128df
+mined_from: 8 review comments across 8 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Handoff Merge Vault (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): record post-merge handoff for Tier-3 manifest fix (PR #316)
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo.ai/wp...
+- <h3>PR Summary by Qodo</h3>
+
+Vault handoff: document PR #315/#278 lupa per-wheel test fidelity shipping status
+<code>📝 Documentation</code> <code>🕐 Less than 5 minutes</code>
+
+<img src="https://www.qo...
+- <h3>PR Summary by Qodo</h3>
+
+Vault handoff note for vault-automerge guard fix verification (#329/#330)
+<code>📝 Documentation</code> <code>🕐 Less than 5 minutes</code>
+
+<img src="https://www.qodo.ai/wp...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): record PR #343 merge in current focus and next-session handoff
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo.ai...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
