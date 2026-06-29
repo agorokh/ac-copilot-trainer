@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T09:18:39Z
+last_updated: 2026-06-29T16:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -104,6 +104,15 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-29** — PR [#370](https://github.com/agorokh/ac-copilot-trainer/pull/370) **MERGED** at
+  `26e9a09` — **M-TT1 Track Titan services crack** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)):
+  `tools/tt_ingest/tt_services.py` (services client) + `coaching` CLI retaining per-lap raw
+  reference + advice evidence to the write-once lake. **Auth corrected**: services `/api/v2/*` /
+  `/dynamic-reference-laps/*` / `/advice/*` use the raw Cognito **access token** (not SigV4 — that
+  was the disproved hypothesis); verified live (accessToken→200, idToken→403). Per-corner coaching
+  oracle works E2E. Classification: additive `tools/`+tests+fixtures, no migrations/env/deps.
+  Resume → **M-TT2** (reference telemetry → `lap_archive` → M0 `--reference-archive`). Full state:
+  [`tt-services-sigv4-crack-2026-06-29`](../03_Investigations/tt-services-sigv4-crack-2026-06-29.md).
 - **2026-06-29** — PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) **MERGED** at
   `854f822` — **Game Point launcher supervisor** ([#363](https://github.com/agorokh/ac-copilot-trainer/issues/363)
   **CLOSED**): Windows launcher package/shortcut/settings, supervised sidecar start/status/logging,

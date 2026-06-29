@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T09:18:39Z
+last_updated: 2026-06-29T16:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -51,6 +51,35 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-29) — PR #370 MERGED: M-TT1 Track Titan services crack (#353)
+
+PR [#370](https://github.com/agorokh/ac-copilot-trainer/pull/370) merged to `main` as squash
+commit [`26e9a09`](https://github.com/agorokh/ac-copilot-trainer/commit/26e9a09eb943fca8bae3e65e80b79945ac5c421c)
+at 2026-06-29T16:15:20Z (milestone **M-TT1** of #353).
+
+**The crack (corrects the prior SigV4 hypothesis):** TT `services.tracktitan.io` `/api/v2/*`,
+`/dynamic-reference-laps/*`, `/advice/*` authenticate with the **raw Cognito access token** (no
+`Bearer`) — the same token vulcan uses; **no SigV4 / Identity-Pool flow needed**. The research
+node's 403s were the **idToken** on **old cached paths**. Verified live from our own mint path
+(accessToken→200, idToken→403) via CDP capture of the running renderer. Full detail +
+reusable method + the M-TT2 telemetry schema in [[tt-services-sigv4-crack-2026-06-29]].
+
+**Shipped:** `tools/tt_ingest/tt_services.py` (services client — pure builders/parsers, network
+no-cover) + `coaching` CLI that retains per-lap raw evidence (`last_session_lap{N}.json` +
+`coaching_lap{N}.json`: full raw `/last-session`, `dynamic-reference-laps`, and per-segment
+`/advice` responses) to the write-once lake, reindexed; sanitized fixtures + 55 unit tests.
+Reviewed by codex + qodo across 5 rounds (qodo's SigV4 finding rebutted with live evidence;
+Gemini at quota). Verified live E2E: `python -m tools.tt_ingest coaching` returned real
+per-corner diagnoses for the last session (Magione, Porsche 911 GT3 R — c3 "You messed up your
+exit", c4 "line too wide") and retained them to the lake.
+
+**Resume here → M-TT2:** reference-lap telemetry → `lap_archive` schema → M0 `--reference-archive`
+voice feed. Input schema is PINNED in [[tt-services-sigv4-crack-2026-06-29]]: TT telemetry point
+(`dist`→spline, `Kmh`→speed, `brak`→brake, `throt`→throttle, `steer`, `gear`, `X`/`Y`) maps to
+`TRACE_FIELDS` in `tools/ac_harness/reference_lap.py`. Then **M-TT3** (per-corner analysis →
+harness drive-to-reference curriculum). Arbitrary-lap/older-session coaching is also a deferred
+follow-up (needs per-lap telemetry endpoints; M-TT1 scopes to the last session's own lap).
 
 ## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
 
