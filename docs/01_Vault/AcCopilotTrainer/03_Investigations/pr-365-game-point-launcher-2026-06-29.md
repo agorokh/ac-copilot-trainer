@@ -54,5 +54,9 @@ the sidecar until the official signed `/session` handshake is ported. Use
 
 ## Follow-ups
 
-- Part C (Setup Exchange) and Part D (full rig smoke video) remain open on #363.
+- #363 is closed by PR #365. Remaining rig-screen epic gates stay on
+  [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86): LVGL font
+  conversion outputs, SPIFFS/persistence/backpressure/debug-screen polish if
+  still desired, and final on-device smoke evidence
+  `launcher -> AC Copilot live hints -> Pocket Technician setup load -> Setup Exchange browse/download/install`.
 - Re-run packaged-launcher rig proof after merge when the Windows rig is available.

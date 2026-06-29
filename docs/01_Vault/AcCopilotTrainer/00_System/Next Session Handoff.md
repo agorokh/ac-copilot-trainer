@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T07:17:00Z
+last_updated: 2026-06-29T09:18:39Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -52,6 +52,43 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
+
+PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) merged to
+`main` as squash commit
+[`854f822`](https://github.com/agorokh/ac-copilot-trainer/commit/854f822bdd868397e99bfd56c08ade2f87277139)
+at 2026-06-29T09:15:25Z and closed
+[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363).
+
+Delivered: Windows Game Point launcher package (`python -m tools.rig_launcher`),
+Desktop shortcut installer/build path, per-user launcher settings, supervised
+sidecar start/status/logging, environment-only sidecar token/voice routing,
+Setup Exchange proxy/install path, rig-screen Setup Exchange screen, Pocket
+Technician spinner list/set protocol, and Game Point launcher docs.
+Review-resolution and install notes live in
+[[pr-365-game-point-launcher-2026-06-29]].
+
+Verification before merge: local `make ci-fast PYTHON=.venv/bin/python` passed on
+current head `27e7dbd` (`1753 passed, 75 skipped`, coverage 84.93%); GitHub
+`build`, `pip-audit`, `Canonical docs exist`, and `conformance` passed on the
+same head; `scripts/ci_resolve_gate.py agorokh/ac-copilot-trainer 365` reported
+`No substantive findings hanging`; GraphQL `reviewThreads` returned 60 threads,
+`hasNext=false`, `unresolved_total=0`; no current-SHA self-hosted reviewer body
+was present after the required cooldown.
+
+Post-merge classification: `.env.example` changed, so review/update operator
+environment on the rig as needed; `pyproject.toml` changed, so refresh the local
+dev install with `pip install -e '.[dev]'` or the equivalent lockfile workflow.
+No migrations were detected or run.
+
+Honest remaining #86 scope: [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86)
+is still OPEN as the broader rig-screen epic. After #361 and #365, its remaining
+closure gates are not the Game Point code path itself; they are LVGL font
+conversion outputs, SPIFFS/persistence/backpressure/debug-screen polish if still
+desired, and final on-device smoke evidence
+`launcher -> AC Copilot live hints -> Pocket Technician setup load -> Setup Exchange browse/download/install`.
+Packaged-launcher proof should be rerun on the Windows rig when available.
+
 ## Claude Design UI package for launcher + rig screens (2026-06-29)
 
 Created `docs/10_Development/15_Claude_Design_UI_Package.md` as the handoff
@@ -67,7 +104,7 @@ driver-facing launcher work discovers the UI contract. Tier-3 MCP was not
 exposed in this Codex session; the package was grounded from the vault and live
 source files listed inside the package.
 
-## Game Point #363 / PR #365 (2026-06-29)
+## Game Point #363 / PR #365 (2026-06-29) — pre-merge handoff
 
 PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) delivers the
 Game Point launcher supervisor and Pocket Technician spinner completion for
@@ -86,7 +123,7 @@ exact path/params still to pin — the operator's primary want is auth-cracked).
 the running TT app, or fetch the session-review page chunk) → build `tt_services.py` → M-TT2 (reference
 → `lap_archive` → M0 `--voice-reference`) → M-TT3. Personal-use guardrail scope applies.
 
-## Resume here (2026-06-28 evening) - #86 rig screen connectivity restored; PR #361 active
+## Historical (2026-06-28 evening) — #86 rig screen connectivity restored; PR #361 merged
 
 User reported the #86 rig screen was powered on but not connecting. Live cause:
 PC was on a home 5 GHz Wi-Fi network, Mobile Hotspot was not presenting the
@@ -98,7 +135,9 @@ sidecar `/health` OK with an established hotspot-gateway-to-screen socket, and
 protocol counters moving (`state.snapshot`, `state.subscribe`, `corner_query`,
 setup experiment frames).
 
-Branch **`fix/issue-86-rig-sidecar-autostart`** patches the recurring gap:
+PR [#361](https://github.com/agorokh/ac-copilot-trainer/pull/361) merged as
+[`210c2a1`](https://github.com/agorokh/ac-copilot-trainer/commit/210c2a14f9e3e4993c22aa22ec56767922375296).
+It patched the recurring gap:
 `start_sidecar.bat` now stays loopback-only by default, but if
 `AC_COPILOT_SIDECAR_TOKEN` is set it launches with `--external-bind 0.0.0.0`
 (or `AC_COPILOT_SIDECAR_EXTERNAL_BIND`) and keeps the token in the process
@@ -126,7 +165,7 @@ changed files pass targeted `ruff format --check`.
 Detail: [[issue-86-rig-screen-hotspot-autostart-2026-06-28]]. Successor issue
 [#363](https://github.com/agorokh/ac-copilot-trainer/issues/363) now owns the
 broader human-playable Game Point launcher, Pocket Technician completion, and
-Setup Exchange completion scope.
+Setup Exchange completion scope; #363 closed with PR #365.
 
 ## Resume here (2026-06-28) — Track Titan #353 M-TT1 next, then #345 P0 capture
 
