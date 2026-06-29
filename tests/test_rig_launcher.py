@@ -92,8 +92,8 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
         "0.0.0.0",
     ]
     assert env["AC_COPILOT_SIDECAR_TOKEN"] == "secret-token"
-    assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == "ref.json"
-    assert env["AC_COPILOT_VOICE_BANK"] == "voice-bank"
+    assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
+    assert env["AC_COPILOT_VOICE_BANK"] == str((tmp_path / "voice-bank").resolve())
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
 
 
