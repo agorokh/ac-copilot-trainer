@@ -66,6 +66,26 @@ class _Proc:
         self.terminated = True
 
 
+def _refused_urlopen(_url: str, timeout: float) -> _Response:
+    """Health probe that always fails — keeps spawn-path tests hermetic.
+
+    ``start_sidecar`` now probes ``/health`` before spawning so it can adopt an already-running
+    sidecar instead of double-binding the port. Tests that assert a *spawn* inject this so the
+    probe deterministically misses regardless of whatever is (or isn't) listening on 8765.
+    """
+    del timeout
+    raise OSError("connection refused")
+
+
+def _no_simhub_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+    """`tasklist` stub reporting no SimHub — keeps probe_simhub tests off the real machine.
+
+    ``_simhub_running()`` shells out to the real ``tasklist`` by default, so on a dev box with
+    SimHub actually running the absence/start assertions would flake. Inject this for determinism.
+    """
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+
 def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     cfg = GamePointConfig(
         external_bind="0.0.0.0",
@@ -254,7 +274,9 @@ def test_start_sidecar_writes_to_predictable_log_dir(tmp_path: Path) -> None:
         calls.append({"args": args, "kwargs": kwargs})
         return _Proc()
 
-    sup = GamePointSupervisor(cfg, environ={}, popen=fake_popen, python_executable="python")
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=_refused_urlopen, python_executable="python"
+    )
     result = sup.start_sidecar()
     sup.close()
 
@@ -264,13 +286,45 @@ def test_start_sidecar_writes_to_predictable_log_dir(tmp_path: Path) -> None:
     assert "AC_COPILOT_SIDECAR_TOKEN" in calls[0]["kwargs"]["env"]
 
 
+def test_start_sidecar_adopts_healthy_existing_instance(tmp_path: Path) -> None:
+    """Clicking Start when a sidecar is already healthy must adopt it, never spawn a duplicate.
+
+    A second spawn would bind the same port and crash the child with WinError 10048 — exactly the
+    failure in the rig log. Guards that regression: a healthy /health probe → no popen call.
+    """
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+    spawned: list[Any] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        spawned.append((args, kwargs))
+        return _Proc()
+
+    def healthy_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok", "connected_peers": 1, "screen_peers": 1})
+
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=healthy_urlopen, python_executable="python"
+    )
+    result = sup.start_sidecar()
+
+    assert spawned == []  # no duplicate spawn → no WinError 10048
+    assert result.ok is True
+    assert result.state == "running"
+    assert "adopted" in (result.detail or "")
+    assert sup._sidecar_process is None
+    assert sup._log_handles == []
+
+
 def test_start_sidecar_returns_probe_result_on_spawn_failure(tmp_path: Path) -> None:
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
 
     def failing_popen(*_args: Any, **_kwargs: Any) -> _Proc:
         raise FileNotFoundError("missing sidecar executable")
 
-    sup = GamePointSupervisor(cfg, environ={}, popen=failing_popen, python_executable="python")
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=failing_popen, urlopen=_refused_urlopen, python_executable="python"
+    )
     result = sup.start_sidecar()
 
     assert result.ok is False
@@ -310,6 +364,7 @@ def test_start_sidecar_uses_repo_root_cwd_in_dev_mode(tmp_path: Path) -> None:
         cfg,
         environ={},
         popen=fake_popen,
+        urlopen=_refused_urlopen,
         python_executable="python",
         frozen=False,
     )
@@ -340,7 +395,9 @@ def test_sidecar_environment_resolves_relative_voice_paths(tmp_path: Path) -> No
 def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:
     proc = _Proc()
     cfg = GamePointConfig(external_bind="127.0.0.1", paths=LauncherPaths(tmp_path))
-    sup = GamePointSupervisor(cfg, environ={}, popen=lambda *a, **kw: proc)
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=lambda *a, **kw: proc, urlopen=_refused_urlopen
+    )
 
     sup.start_sidecar()
     sup.close()
@@ -350,7 +407,9 @@ def test_close_terminates_supervised_sidecar(tmp_path: Path) -> None:
 
 def test_simhub_absence_is_visible_but_not_fatal(tmp_path: Path) -> None:
     cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
-    sup = GamePointSupervisor(cfg, environ={"ProgramFiles": str(tmp_path / "missing")})
+    sup = GamePointSupervisor(
+        cfg, environ={"ProgramFiles": str(tmp_path / "missing")}, run=_no_simhub_run
+    )
 
     result = sup.probe_simhub(start=True)
 
@@ -374,6 +433,7 @@ def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> N
         cfg,
         environ={"ProgramFiles": str(tmp_path)},
         popen=fake_popen,
+        run=_no_simhub_run,
     )
 
     result = sup.probe_simhub(start=True)
@@ -573,7 +633,9 @@ def test_restart_sidecar_reuses_single_log_handle(tmp_path: Path) -> None:
         return proc
 
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
-    sup = GamePointSupervisor(cfg, environ={}, popen=fake_popen, python_executable="python")
+    sup = GamePointSupervisor(
+        cfg, environ={}, popen=fake_popen, urlopen=_refused_urlopen, python_executable="python"
+    )
     sup.start_sidecar()
     assert len(sup._log_handles) == 1
     procs[0].terminated = True

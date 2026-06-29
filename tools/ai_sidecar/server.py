@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import ipaddress
 import json
 import logging
@@ -230,6 +231,10 @@ def _env_float(name: str, default: float, *, min_value: float, max_value: float)
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
 LEGACY_SCREEN_CLIENT_PREFIXES = ("ac-copilot-screen",)
+
+# Windows reports a port-in-use bind as WSAEADDRINUSE (10048), which is distinct from the POSIX
+# errno.EADDRINUSE value; accept both so the clean-exit path fires on every platform.
+_WSAEADDRINUSE = getattr(errno, "WSAEADDRINUSE", 10048)
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 CLIENT_TO_SERVER_TYPES = frozenset(
@@ -1414,21 +1419,34 @@ async def _run(
     configured_setups_root = user_setups_root or os.environ.get(ENV_USER_SETUPS_DIR)
     _setup_exchange_user_setups_root = _user_setups_root_from_config(configured_setups_root)
     try:
-        async with websockets.serve(
-            lambda ws: _handler(ws, reply_coaching),
-            host,
-            port,
-            process_request=process_request,
-        ):
-            logger.info(
-                "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s token=%s",
+        try:
+            async with websockets.serve(
+                lambda ws: _handler(ws, reply_coaching),
                 host,
                 port,
-                PROTOCOL_VERSION,
-                reply_coaching,
-                "set" if token else "unset",
-            )
-            await asyncio.Future()
+                process_request=process_request,
+            ):
+                logger.info(
+                    "AI sidecar listening host=%s port=%s protocol=%s reply_coaching=%s token=%s",
+                    host,
+                    port,
+                    PROTOCOL_VERSION,
+                    reply_coaching,
+                    "set" if token else "unset",
+                )
+                await asyncio.Future()
+        except OSError as exc:
+            # WinError 10048 / errno EADDRINUSE: another sidecar already owns the port. Exit
+            # cleanly with a one-line reason instead of a traceback — a frozen --noconsole build
+            # turns an unhandled exception into a scary "Unhandled exception in script" dialog,
+            # whereas SystemExit(str) just logs the message and returns a non-zero code.
+            if exc.errno in {errno.EADDRINUSE, _WSAEADDRINUSE}:
+                raise SystemExit(
+                    f"sidecar port {port} on {host} is already in use — another AC Copilot "
+                    f"sidecar is probably running. Stop it first, or set "
+                    f"AC_COPILOT_SIDECAR_PORT to a free port."
+                ) from exc
+            raise
     finally:
         _reset_external_state()
 

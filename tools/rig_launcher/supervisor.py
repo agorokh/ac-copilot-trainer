@@ -313,6 +313,17 @@ class GamePointSupervisor:
             return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
         if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
             self._sidecar_process = None
+        # A sidecar from a previous launcher run (or a boot autostart) may already own the port.
+        # Spawning a second one would crash the child with WinError 10048 (address already in use)
+        # and pop an unhandled-exception dialog. Adopt the healthy instance instead.
+        existing = self._read_health()
+        if existing.ok:
+            return ProbeResult(
+                "sidecar",
+                True,
+                "running",
+                f"adopted existing sidecar on port {self.config.port}",
+            )
         self._close_log_handles()
         try:
             self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
