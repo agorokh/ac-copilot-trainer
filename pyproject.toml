@@ -54,9 +54,23 @@ coaching = [
 ]
 # Issue #340: in-the-ear phrase-bank playback (lazy-imported in voice/playback.py).
 # Install on the rig to render/play clips: pip install -e ".[voice]".
+# numpy + sounddevice are the always-installable floor (bundled-PortAudio wheels that install
+# cleanly on a clean Windows box). The lower-latency rtmixer backend is opt-in via the
+# `voice-rtmixer` extra (#383) because it has no prebuilt Windows wheels; the voice engine
+# auto-falls back to the sounddevice backend when rtmixer is not importable (PR #387), so this
+# extra alone is enough to render and play clips.
 voice = [
     "numpy>=2.4.4",
     "sounddevice>=0.5.1",
+]
+# Issue #383: OPT-IN, best-effort low-latency playback. rtmixer is the GIL-free C/PortAudio
+# backend (`RtMixerPlayback`) but ships NO prebuilt Windows wheels and needs a C/PortAudio build
+# toolchain, so it frequently HARD-FAILS `pip install` on a clean Windows rig. It is kept out of
+# the default `voice`/`launcher` extras so those stay installable everywhere; install it only
+# where pip can build it: `pip install -e ".[voice-rtmixer]"`. Pulls in the `voice` floor so this
+# extra is sufficient on its own.
+voice-rtmixer = [
+    "ac-copilot-trainer[voice]",
     "rtmixer>=0.1.7",
 ]
 # M0 (#341): Windows pyttsx3 voice client — no native audio stack required.
@@ -66,12 +80,15 @@ voice-client = [
 ]
 # Game Point launcher packaging (#363). Runtime code stays stdlib-only; this
 # extra is needed to build the Windows .exe artifact and bundle sidecar runtime deps.
+# Keep this extra ALWAYS-INSTALLABLE on a clean Windows rig: the sidecar voice floor here is
+# numpy + sounddevice (bundled-PortAudio wheels). rtmixer is deliberately NOT bundled (#383) —
+# it has no prebuilt Windows wheels and would hard-fail `pip install -e ".[launcher]"`; add the
+# lower-latency backend opt-in and best-effort via `.[voice-rtmixer]` where a C toolchain exists.
 launcher = [
   "pyinstaller>=6.15.0",
   "websockets>=16.0",
   "numpy>=2.4.4",
   "sounddevice>=0.5.1",
-  "rtmixer>=0.1.7",
   "pyttsx3>=2.90",
 ]
 # Issue #368: OFFLINE neural-voice bake (recommended Kokoro-82M backend, Apache-2.0). Used only by

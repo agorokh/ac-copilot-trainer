@@ -658,11 +658,39 @@ def test_launcher_extra_includes_sidecar_voice_runtime_deps() -> None:
     project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     launcher = set(project["project"]["optional-dependencies"]["launcher"])
 
+    # Always-installable floor: numpy + sounddevice ship bundled-PortAudio wheels that install
+    # cleanly on a clean Windows rig, so `pip install -e ".[launcher]"` does not hard-fail there.
     assert "websockets>=16.0" in launcher
     assert "numpy>=2.4.4" in launcher
     assert "sounddevice>=0.5.1" in launcher
-    assert "rtmixer>=0.1.7" in launcher
     assert "pyttsx3>=2.90" in launcher
+    # rtmixer (#383) has no prebuilt Windows wheels and would hard-fail the documented launcher
+    # install path — it must stay OUT of this default extra and is opt-in via `voice-rtmixer`
+    # (asserted by test_voice_rtmixer_extra_is_opt_in_and_pulls_floor).
+    assert not any(dep.startswith("rtmixer") for dep in launcher)
+
+
+def test_voice_extra_floor_excludes_rtmixer() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    voice = set(project["project"]["optional-dependencies"]["voice"])
+
+    # numpy + sounddevice are the always-installable voice floor; the engine falls back to the
+    # sounddevice backend when rtmixer is absent (PR #387), so rtmixer is opt-in only.
+    assert "numpy>=2.4.4" in voice
+    assert "sounddevice>=0.5.1" in voice
+    assert not any(dep.startswith("rtmixer") for dep in voice)
+
+
+def test_voice_rtmixer_extra_is_opt_in_and_pulls_floor() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+    voice_rtmixer = set(extras["voice-rtmixer"])
+
+    # The opt-in, best-effort low-latency rtmixer backend lives here (and only here).
+    assert "rtmixer>=0.1.7" in voice_rtmixer
+    # Self-references the `voice` extra so `pip install -e ".[voice-rtmixer]"` also installs the
+    # numpy + sounddevice floor — rtmixer alone is not useful.
+    assert "ac-copilot-trainer[voice]" in voice_rtmixer
 
 
 def test_default_exe_path_targets_dist_launcher(tmp_path: Path) -> None:
