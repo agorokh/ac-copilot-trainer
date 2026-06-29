@@ -10,6 +10,7 @@ import pytest
 from tools.ai_sidecar.se_proxy import (
     SetupExchangeClient,
     SetupExchangeError,
+    _coerce_float,
     _windows_casefolded_contains,
     discover_user_setups_root,
     download_and_install_setup,
@@ -258,3 +259,8 @@ def test_windows_casefolded_containment_rejects_sibling_prefix() -> None:
     target = PureWindowsPath("c:/Users/Driver/Documents/Assetto Corsa/setups_backup/file.ini")
 
     assert _windows_casefolded_contains(root, target) is False
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "-inf", "NaN"])
+def test_coerce_float_rejects_non_finite_values(value: object) -> None:
+    assert _coerce_float(value) is None

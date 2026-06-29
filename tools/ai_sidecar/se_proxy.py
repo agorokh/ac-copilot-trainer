@@ -9,6 +9,7 @@ the HTTP call and the filesystem write.
 from __future__ import annotations
 
 import json
+import math
 import ntpath
 import os
 import re
@@ -273,14 +274,17 @@ def _coerce_int(value: Any) -> int | None:
 def _coerce_float(value: Any) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
+    parsed: float
     if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
+        parsed = float(value)
+    elif isinstance(value, str):
         try:
-            return float(value.strip())
+            parsed = float(value.strip())
         except ValueError:
             return None
-    return None
+    else:
+        return None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _total_from_payload(payload: Any, headers: Mapping[str, str], fallback: int) -> int:
