@@ -120,3 +120,53 @@ def test_example_asset_decodes_known_values() -> None:
     assert s.decode("TYRES", 1) == "Medium"  # enum
     assert s.validate("WING_2", 25) is False and s.clamp("WING_2", 25) == 20.0
     assert s.validate("FINAL_RATIO", 7) is False  # read-only in the example
+
+
+def test_from_spinners_captures_ranges() -> None:
+    from tools.ai_sidecar.setup_model import from_spinners
+
+    cs = from_spinners(
+        [
+            {
+                "name": "WING_2",
+                "value": 16,
+                "min": 0,
+                "max": 20,
+                "step": 1,
+                "displayMultiplier": 1.0,
+            },
+            {"name": "ABS", "value": 7, "min": 0, "max": 11, "step": 1},
+        ]
+    )
+    assert cs.value("WING_2") == 16.0  # existing value path unchanged
+    assert cs.spinner_schema is not None
+    assert cs.spinner_schema["WING_2"]["max"] == 20  # ranges are NO LONGER discarded
+    sch = CarSetupSchema.from_car_setup(cs)
+    assert sch is not None and sch.validate("WING_2", 25) is False
+
+
+def test_optimizer_respects_schema_constraint() -> None:
+    from tools.ai_sidecar.setup_optimizer import suggest_next_setup
+
+    def rec(wing: float, lap_ms: int) -> dict:
+        return {
+            "car": {"id": "c"},
+            "track": {"id": "t"},
+            "lap": {"lap_ms": lap_ms, "is_valid": True},
+            "setup": {"hash": f"h{wing}", "params": {"WING_2.VALUE": wing, "ARB_FRONT.VALUE": 6.0}},
+        }
+
+    records = [rec(20, 78000), rec(19, 78500), rec(18, 79000)]
+    schema = CarSetupSchema.from_spinners_dump(
+        "c",
+        [
+            {"name": "WING_2", "min": 0, "max": 20, "step": 1},
+            {"name": "ARB_FRONT", "min": 1, "max": 8, "step": 1},
+        ],
+    )
+    out = suggest_next_setup(records, car_id="c", track_id="t", schema=schema)
+    if out.get("ok"):
+        for key, move in out.get("changes", {}).items():
+            assert schema.validate(key, move["to"]) is True  # no out-of-range proposal
+    # backward-compat: no schema still returns a dict
+    assert isinstance(suggest_next_setup(records, car_id="c", track_id="t"), dict)

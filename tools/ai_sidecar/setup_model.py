@@ -257,6 +257,7 @@ class CarSetup:
     params: dict[str, SetupParam] = field(default_factory=dict)
     car_id: str | None = None
     track_id: str | None = None
+    spinner_schema: dict[str, Any] | None = None  # full getSetupSpinners() descriptors
 
     # -- raw access --
     def value(self, section: str) -> float | None:
@@ -468,10 +469,29 @@ def from_spinners(spinners: list[dict[str, Any]]) -> CarSetup:
     live read path the rig uses (the same surface Pocket Technician drives).
     """
     snapshot: dict[str, Any] = {}
+    schema: dict[str, dict[str, Any]] = {}
+    _desc = (
+        "min",
+        "max",
+        "step",
+        "value",
+        "defaultValue",
+        "displayMultiplier",
+        "units",
+        "label",
+        "items",
+        "itemValues",
+        "readOnly",
+    )
     for sp in spinners:
         if not isinstance(sp, dict):
             continue
         name = sp.get("name")
         if isinstance(name, str) and name.strip():
-            snapshot[f"{name.strip()}.VALUE"] = sp.get("value")
-    return from_snapshot(snapshot)
+            key = name.strip()
+            snapshot[f"{key}.VALUE"] = sp.get("value")
+            schema[key] = {k: sp.get(k) for k in _desc if k in sp}
+    out = from_snapshot(snapshot)
+    if schema:
+        out.spinner_schema = schema
+    return out
