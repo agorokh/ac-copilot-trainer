@@ -133,6 +133,8 @@ def _lead_spline_fraction(speed_kmh: float, track_length_m: float, lead_s: float
 
 
 def _positive_track_length_m(value: Any) -> float:
+    if isinstance(value, bool):
+        return _DEFAULT_TRACK_LENGTH_M
     try:
         track_length_m = float(value)
     except (TypeError, ValueError):

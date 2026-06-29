@@ -525,6 +525,20 @@ static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
   return fallback;
 }
 
+static float phase2_json_float_or(JsonVariantConst v, float fallback) {
+  if (v.isNull()) return fallback;
+  if (v.is<float>()) return v.as<float>();
+  if (v.is<int>()) return (float)v.as<int>();
+  if (v.is<const char*>()) {
+    const char* s = v.as<const char*>();
+    if (!s || !*s) return fallback;
+    char* end = nullptr;
+    float n = strtof(s, &end);
+    if (end && end != s && *end == '\0') return n;
+  }
+  return fallback;
+}
+
 // setup.list chip fields: missing/null -> -1 (omit chip). Present but
 // unparsable -> log and -1 (issue #93 — avoid silent fallback).
 static int32_t phase2_json_setup_chip(JsonVariantConst v,
@@ -704,10 +718,10 @@ static void dispatch_phase2_message(const String& body) {
         const char* label   = entry["label"]   | section;
         const char* unit    = entry["unit"]    | "";
         if (*section) {
-          int32_t value = phase2_json_num_or(entry["value"], 0);
-          int32_t min_v = phase2_json_num_or(entry["min"], value);
-          int32_t max_v = phase2_json_num_or(entry["max"], value);
-          int32_t step  = phase2_json_num_or(entry["step"], 1);
+          float value = phase2_json_float_or(entry["value"], 0.0f);
+          float min_v = phase2_json_float_or(entry["min"], value);
+          float max_v = phase2_json_float_or(entry["max"], value);
+          float step  = phase2_json_float_or(entry["step"], 1.0f);
           screen_pocket_technician_add_spinner(
               section, label, value, min_v, max_v, step, unit);
         }
@@ -719,7 +733,7 @@ static void dispatch_phase2_message(const String& body) {
     const char* section = doc["section"] | "";
     if (!*section) section = doc["name"] | "";
     const char* error = doc["error"] | "";
-    int32_t value = phase2_json_num_or(doc["value"], 0);
+    float value = phase2_json_float_or(doc["value"], 0.0f);
     const char* err_arg = (ok || !error || *error == 0) ? nullptr : error;
     screen_pocket_technician_apply_spinner_ack(ok, section, value, err_arg);
   } else if (strcmp(type, "se.search.result") == 0) {

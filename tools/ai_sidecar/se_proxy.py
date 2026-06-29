@@ -22,6 +22,7 @@ DEFAULT_SETUP_EXCHANGE_ENDPOINT = "http://se.acstuff.club"
 ENV_SETUP_EXCHANGE_ENDPOINT = "AC_COPILOT_SE_ENDPOINT"
 ENV_USER_SETUPS_DIR = "AC_COPILOT_USER_SETUPS_DIR"
 MAX_SEARCH_TEXT = 80
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_SETUP_BYTES = 512 * 1024
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
 AC_SETUPS_SUFFIX = ("assetto corsa", "setups")
@@ -76,11 +77,16 @@ def _safe_int(
 
 
 def _read_response_json(response: Any) -> Any:
-    raw = response.read()
+    raw = response.read(MAX_RESPONSE_BYTES + 1)
     if isinstance(raw, str):
+        if len(raw.encode("utf-8", errors="replace")) > MAX_RESPONSE_BYTES:
+            raise SetupExchangeError("Setup Exchange response is too large")
         text = raw
     else:
-        text = bytes(raw).decode("utf-8", errors="replace")
+        raw_bytes = bytes(raw)
+        if len(raw_bytes) > MAX_RESPONSE_BYTES:
+            raise SetupExchangeError("Setup Exchange response is too large")
+        text = raw_bytes.decode("utf-8", errors="replace")
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
@@ -105,6 +111,11 @@ class SetupExchangeClient:
         urlopen: Callable[..., Any] | None = None,
     ) -> None:
         self.endpoint = _normalize_endpoint(endpoint or os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT))
+        if self.endpoint == DEFAULT_SETUP_EXCHANGE_ENDPOINT:
+            raise SetupExchangeError(
+                "default Setup Exchange endpoint requires CSP session auth; "
+                f"set {ENV_SETUP_EXCHANGE_ENDPOINT} to an authenticated proxy/test endpoint"
+            )
         self.timeout_s = timeout_s
         self._urlopen = urlopen or urllib.request.urlopen
 
@@ -302,13 +313,20 @@ def discover_user_setups_root(env: Mapping[str, str] | None = None) -> Path | No
     for candidate in candidates:
         if candidate.exists():
             return validate_user_setups_root(candidate)
-    for candidate in candidates:
+    local_documents = home / "Documents"
+    onedrive_documents = home / "OneDrive" / "Documents"
+    local_setup = local_documents / "Assetto Corsa" / "setups"
+    onedrive_setup = onedrive_documents / "Assetto Corsa" / "setups"
+    if local_documents.exists():
         try:
-            validated = validate_user_setups_root(candidate)
+            return validate_user_setups_root(local_setup)
         except SetupExchangeError:
-            continue
-        if candidate.parent.parent.exists():
-            return validated
+            pass
+    if onedrive_documents.exists() and not local_documents.exists():
+        try:
+            return validate_user_setups_root(onedrive_setup)
+        except SetupExchangeError:
+            pass
     return None
 
 

@@ -72,15 +72,15 @@ void screen_pocket_technician_apply_load_ack(bool ok, const char* name,
 void screen_pocket_technician_clear_spinners(void);
 void screen_pocket_technician_add_spinner(const char* section,
                                           const char* label,
-                                          int32_t value,
-                                          int32_t min_value,
-                                          int32_t max_value,
-                                          int32_t step,
+                                          float value,
+                                          float min_value,
+                                          float max_value,
+                                          float step,
                                           const char* unit);
 void screen_pocket_technician_finish_spinner_list(void);
 void screen_pocket_technician_apply_spinner_ack(bool ok,
                                                  const char* section,
-                                                 int32_t value,
+                                                 float value,
                                                  const char* error);
 void screen_pocket_technician_apply_spinner_list_error(const char* error);
 
@@ -106,7 +106,7 @@ typedef struct {
     char              name[64];   // valid for PT_REQ_LOAD only
     char              path[PT_SETUP_PATH_MAX];  // optional disambiguator; "" if unknown
     char              section[32]; // valid for PT_REQ_SPINNER_SET only
-    int32_t           value;       // valid for PT_REQ_SPINNER_SET only
+    float             value;       // valid for PT_REQ_SPINNER_SET only
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.

@@ -31,7 +31,7 @@ class _Response:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def read(self) -> bytes:
+    def read(self, _size: int = -1) -> bytes:
         return json.dumps(self._payload).encode("utf-8")
 
 
@@ -81,6 +81,34 @@ def test_search_builds_setup_exchange_query_and_normalizes_rows() -> None:
     assert "carID=ks_porsche_911_gt3_r_2016" in seen["url"]
     assert "trackID=magione" in seen["url"]
     assert "orderBy=rating" in seen["url"]
+
+
+def test_default_public_endpoint_requires_authenticated_proxy() -> None:
+    with pytest.raises(SetupExchangeError, match="requires CSP session auth"):
+        SetupExchangeClient()
+
+
+def test_search_rejects_oversized_json_response() -> None:
+    class LargeResponse:
+        headers: dict[str, str] = {}
+
+        def __enter__(self) -> LargeResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self, size: int = -1) -> bytes:
+            return b"{" + (b" " * size)
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> LargeResponse:
+        assert timeout == pytest.approx(8.0)
+        return LargeResponse()
+
+    client = SetupExchangeClient("https://se.example.test", urlopen=fake_urlopen)
+
+    with pytest.raises(SetupExchangeError, match="too large"):
+        client.search(limit=1)
 
 
 def test_install_setup_rejects_path_traversal_segment(tmp_path: Path) -> None:
@@ -165,6 +193,22 @@ def test_discover_user_setups_root_allows_fresh_install_path(
 
     assert discovered == expected.resolve(strict=False)
     assert not expected.exists()
+
+
+def test_discover_user_setups_root_prefers_local_documents_over_onedrive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    local_documents = home / "Documents"
+    onedrive_documents = home / "OneDrive" / "Documents"
+    local_documents.mkdir(parents=True)
+    onedrive_documents.mkdir(parents=True)
+    expected = local_documents / "Assetto Corsa" / "setups"
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    discovered = discover_user_setups_root({})
+
+    assert discovered == expected.resolve(strict=False)
 
 
 def test_user_setups_root_from_config_ignores_invalid_path() -> None:

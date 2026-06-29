@@ -21,6 +21,8 @@
 
 #include "ui/screen_pocket_technician.h"
 
+#include <math.h>
+
 #include "ui/nav.h"
 #include "ui/toast.h"
 #include "ui/tokens.h"
@@ -62,10 +64,10 @@ struct spinner_row_t {
     char    section[32];
     char    label[32];
     char    unit[8];
-    int32_t value;
-    int32_t min_value;
-    int32_t max_value;
-    int32_t step;
+    float   value;
+    float   min_value;
+    float   max_value;
+    float   step;
 };
 
 setup_row_t g_setups[PT_MAX_SETUPS];
@@ -166,7 +168,7 @@ bool req_q_push(pt_request_kind_t kind, const char* name, const char* path) {
         r->path[0] = 0;
     }
     r->section[0] = 0;
-    r->value = 0;
+    r->value = 0.0f;
     g_req_tail = next;
     return true;
 }
@@ -194,7 +196,7 @@ static void req_q_push_refresh_or_toast(bool include_list) {
     }
 }
 
-bool req_q_push_spinner_set(const char* section, int32_t value, const char* path) {
+bool req_q_push_spinner_set(const char* section, float value, const char* path) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
     pt_request_t* r = &g_req_q[g_req_tail];
@@ -256,6 +258,25 @@ void format_lap_ms(int32_t ms, char* out, size_t n) {
     int seconds  = rem_ms / 1000;
     int millis   = rem_ms % 1000;
     snprintf(out, n, "%d:%02d.%03d", minutes, seconds, millis);
+}
+
+void format_spinner_value(const spinner_row_t& s, char* out, size_t n) {
+    if (!out || n == 0) return;
+    char numeric[20];
+    float rounded = roundf(s.value);
+    if (fabsf(s.value - rounded) < 0.0001f) {
+        snprintf(numeric, sizeof(numeric), "%d", (int)rounded);
+    } else {
+        snprintf(numeric, sizeof(numeric), "%.2f", (double)s.value);
+        char* end = numeric + strlen(numeric) - 1;
+        while (end > numeric && *end == '0') {
+            *end = 0;
+            --end;
+        }
+        if (end > numeric && *end == '.') *end = 0;
+    }
+    if (s.unit[0]) snprintf(out, n, "%s%s", numeric, s.unit);
+    else snprintf(out, n, "%s", numeric);
 }
 
 // Build the per-row chip line (BB / ABS / TC / wings). Shared by row create
@@ -359,11 +380,11 @@ void queue_spinner_delta(int idx, int dir) {
         return;
     }
     const spinner_row_t& s = g_spinners[idx];
-    int32_t step = s.step > 0 ? s.step : 1;
-    int32_t next = s.value + (dir < 0 ? -step : step);
+    float step = s.step > 0.0f ? s.step : 1.0f;
+    float next = s.value + (dir < 0 ? -step : step);
     if (next < s.min_value) next = s.min_value;
     if (next > s.max_value) next = s.max_value;
-    if (next == s.value) return;
+    if (fabsf(next - s.value) < 0.0001f) return;
     if (!req_q_push_spinner_set(s.section, next, active_path_or_null())) {
         ui_toast_error("Setup control busy");
     }
@@ -447,8 +468,7 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_center(minus_lbl);
 
     char value_buf[28];
-    if (s.unit[0]) snprintf(value_buf, sizeof(value_buf), "%d%s", (int)s.value, s.unit);
-    else snprintf(value_buf, sizeof(value_buf), "%d", (int)s.value);
+    format_spinner_value(s, value_buf, sizeof(value_buf));
     lv_obj_t* value_lbl = lv_label_create(row);
     lv_label_set_text(value_lbl, value_buf);
     lv_obj_set_style_text_color(value_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
@@ -849,10 +869,10 @@ extern "C" void screen_pocket_technician_clear_spinners(void) {
 
 extern "C" void screen_pocket_technician_add_spinner(const char* section,
                                                        const char* label,
-                                                       int32_t value,
-                                                       int32_t min_value,
-                                                       int32_t max_value,
-                                                       int32_t step,
+                                                       float value,
+                                                       float min_value,
+                                                       float max_value,
+                                                       float step,
                                                        const char* unit) {
     if (!section || !*section) return;
     if (g_spinner_count >= PT_MAX_SPINNERS) return;
@@ -870,7 +890,7 @@ extern "C" void screen_pocket_technician_add_spinner(const char* section,
     row->value = value;
     row->min_value = min_value;
     row->max_value = max_value;
-    row->step = step > 0 ? step : 1;
+    row->step = step > 0.0f ? step : 1.0f;
     ++g_spinner_count;
 }
 
@@ -882,7 +902,7 @@ extern "C" void screen_pocket_technician_finish_spinner_list(void) {
 
 extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
                                                             const char* section,
-                                                            int32_t value,
+                                                            float value,
                                                             const char* error) {
     if (ok && section && *section) {
         for (int i = 0; i < g_spinner_count; ++i) {
@@ -892,7 +912,6 @@ extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
             }
         }
         req_q_push_refresh_or_toast(true);
-        if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
     } else {
         char msg[80];
         snprintf(msg, sizeof(msg), "Setup failed: %s", error ? error : "unknown");
@@ -1027,7 +1046,7 @@ extern "C" pt_request_t screen_pocket_technician_pop_request(void) {
     out.name[0] = 0;
     out.path[0] = 0;
     out.section[0] = 0;
-    out.value = 0;
+    out.value = 0.0f;
     if (g_req_head == g_req_tail) return out;
     out = g_req_q[g_req_head];
     g_req_head = (g_req_head + 1) % PT_MAX_REQUESTS;

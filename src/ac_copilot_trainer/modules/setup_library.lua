@@ -36,14 +36,18 @@ local SPINNER_DEFS = {
   WING_2 = { label = "Rear wing", unit = "", min = 0, max = 40, step = 1, order = 50 },
 }
 
+local function invalidateListCache()
+  _cachedList = nil
+  _listCacheKey = nil
+end
+
 local function installRefreshHookOnce()
   if _hookInstalled then return end
   _hookInstalled = true
   if ac and type(ac.onSetupsListRefresh) == "function" then
     pcall(function()
       ac.onSetupsListRefresh(function()
-        _cachedList = nil
-        _listCacheKey = nil
+        invalidateListCache()
       end)
     end)
   end
@@ -344,17 +348,23 @@ function M.loadByName(nameOrOpts)
   -- Resolve to a full path via the cached listing (busts on SetupsListRefresh).
   -- Path match wins over name when both are present so callers can carry the
   -- exact track/layout selection forward.
-  local list = M.list()
-  local match
-  if wantPath then
-    for i = 1, #list do
-      if list[i].path == wantPath then match = list[i]; break end
+  local function findMatch(rows)
+    if wantPath then
+      for i = 1, #rows do
+        if rows[i].path == wantPath then return rows[i] end
+      end
     end
+    if name ~= "" then
+      for i = 1, #rows do
+        if rows[i].name == name then return rows[i] end
+      end
+    end
+    return nil
   end
-  if not match and name ~= "" then
-    for i = 1, #list do
-      if list[i].name == name then match = list[i]; break end
-    end
+  local match = findMatch(M.list())
+  if not match and wantPath then
+    invalidateListCache()
+    match = findMatch(M.list())
   end
   if not match then
     return { ok = false, name = name, error = "not found" }
@@ -385,8 +395,7 @@ function M.loadByName(nameOrOpts)
   end
   -- Bust the cache so a follow-up `setup.list` re-reads BEST values that
   -- might now reference the freshly-loaded setup.
-  _cachedList = nil
-  _listCacheKey = nil
+  invalidateListCache()
   return {
     ok = true,
     -- Echo the listing's canonical basename so path-only loads still surface
@@ -550,17 +559,66 @@ local function readTextFile(path)
 end
 
 local function writeTextFile(path, text)
-  local f = io.open(path, "w")
+  local tmp
+  for i = 1, 16 do
+    local candidate = string.format("%s.ac-copilot-tmp-%d", path, i)
+    local existing = io.open(candidate, "r")
+    if existing then
+      existing:close()
+    else
+      tmp = candidate
+      break
+    end
+  end
+  if not tmp then
+    return false, "setup temp file exists"
+  end
+
+  local f = io.open(tmp, "w")
   if not f then
     return false, "setup file not writable"
   end
   local ok, err = pcall(function()
     f:write(text)
   end)
-  f:close()
+  local closeOk, closeErr = f:close()
   if not ok then
+    os.remove(tmp)
     return false, tostring(err)
   end
+  if not closeOk then
+    os.remove(tmp)
+    return false, tostring(closeErr or "setup file close failed")
+  end
+
+  local backup
+  for i = 1, 16 do
+    local candidate = string.format("%s.ac-copilot-bak-%d", path, i)
+    local existing = io.open(candidate, "r")
+    if existing then
+      existing:close()
+    else
+      backup = candidate
+      break
+    end
+  end
+  if not backup then
+    os.remove(tmp)
+    return false, "setup backup file exists"
+  end
+
+  local renamedOld, renameOldErr = os.rename(path, backup)
+  if not renamedOld then
+    os.remove(tmp)
+    return false, tostring(renameOldErr or "setup backup failed")
+  end
+  local renamedNew, renameNewErr = os.rename(tmp, path)
+  if not renamedNew then
+    os.rename(backup, path)
+    os.remove(tmp)
+    return false, tostring(renameNewErr or "setup replace failed")
+  end
+  os.remove(backup)
   return true, nil
 end
 
@@ -896,8 +954,7 @@ function M.setSpinner(payload)
       error = okLoad and "loadSetup refused or returned failure" or ("loadSetup raised: " .. tostring(loadRet)),
     }
   end
-  _cachedList = nil
-  _listCacheKey = nil
+  invalidateListCache()
   return {
     ok = true,
     path = path,

@@ -67,6 +67,9 @@ def test_firmware_spinner_protocol_path_present() -> None:
     assert "make_spinner_row" in screen_cpp
     assert "setup.spinner.list" in main_cpp
     assert "setup.spinner.set" in main_cpp
+    assert "phase2_json_float_or" in main_cpp
+    assert "float             value" in header
+    assert "format_spinner_value" in screen_cpp
     assert 'doc["path"] = req.path' in main_cpp
 
 
@@ -208,6 +211,67 @@ def test_spinner_set_rewrites_active_setup_and_applies(lua, tmp_path: pathlib.Pa
     assert lua.globals()["__loaded_setup"] == str(setup_path).replace("\\", "/")
 
 
+def test_spinner_set_preserves_decimal_values(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    setup_path.write_text(
+        "[TYRE_PRESSURE_LF]\nVALUE=26.5\nMIN=20\nMAX=35\nSTEP=0.1\n",
+        encoding="utf-8",
+    )
+    _install_spinner_stubs(lua, setup_path, root)
+
+    ack = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.setSpinner({ section = "TYRE_PRESSURE_LF", value = 26.6 })
+        """
+    )
+
+    assert ack["ok"] is True
+    assert ack["value"] == pytest.approx(26.6)
+    assert "VALUE=26.6" in setup_path.read_text(encoding="utf-8")
+
+
+def test_load_by_path_retries_after_cache_miss(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "Fresh.ini"
+    setup_path.parent.mkdir(parents=True)
+    setup_path.write_text("[HEADER]\nVERSION=1\n", encoding="utf-8")
+    root_lua = str(root).replace("\\", "/")
+    setup_lua = str(setup_path).replace("\\", "/")
+
+    ack = lua.execute(
+        f"""
+        local scans = 0
+        ac = {{
+          FolderID = {{ UserSetups = 11 }},
+          getFolder = function(_id) return "{root_lua}" end,
+          loadSetup = function(path)
+            _G.__loaded_setup = path
+            return true
+          end,
+        }}
+        local csp_helpers = require("csp_helpers")
+        csp_helpers.safeCarIdRaw = function() return "ks_porsche_911_gt3_r_2016" end
+        csp_helpers.safeTrackIdRaw = function() return "monza" end
+        csp_helpers.safeTrackLayoutRaw = function() return "" end
+        io.scanDir = function(path, pattern)
+          if pattern ~= "*.ini" then return {{}} end
+          scans = scans + 1
+          if scans < 3 then return {{}} end
+          return {{ "Fresh.ini" }}
+        end
+        local setupLibrary = require("setup_library")
+        return setupLibrary.loadByName({{ name = "Fresh", path = "{setup_lua}" }})
+        """
+    )
+
+    assert ack["ok"] is True
+    assert ack["path"] == setup_lua
+    assert lua.globals()["__loaded_setup"] == setup_lua
+
+
 def test_spinner_set_prefers_csp_api_and_snaps_to_step(lua) -> None:
     lua.execute(
         """
@@ -257,4 +321,29 @@ def test_spinner_set_rejects_out_of_range_without_writing(lua, tmp_path: pathlib
 
     assert ack["ok"] is False
     assert "out of range" in ack["error"]
+    assert setup_path.read_text(encoding="utf-8") == original
+
+
+def test_spinner_set_temp_file_collision_keeps_original(lua, tmp_path: pathlib.Path) -> None:
+    root = tmp_path / "setups"
+    setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"
+    setup_path.parent.mkdir(parents=True)
+    original = FIXTURE_INI.read_text(encoding="utf-8")
+    setup_path.write_text(original, encoding="utf-8")
+    for i in range(1, 17):
+        setup_path.with_name(f"{setup_path.name}.ac-copilot-tmp-{i}").write_text(
+            "occupied\n",
+            encoding="utf-8",
+        )
+    _install_spinner_stubs(lua, setup_path, root)
+
+    ack = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.setSpinner({ section = "FRONT_BIAS", value = 67 })
+        """
+    )
+
+    assert ack["ok"] is False
+    assert "temp file" in ack["error"]
     assert setup_path.read_text(encoding="utf-8") == original
