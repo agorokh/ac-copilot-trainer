@@ -24,6 +24,7 @@ ENV_USER_SETUPS_DIR = "AC_COPILOT_USER_SETUPS_DIR"
 MAX_SEARCH_TEXT = 80
 MAX_SETUP_BYTES = 512 * 1024
 SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
+AC_SETUPS_SUFFIX = ("assetto corsa", "setups")
 
 
 class SetupExchangeError(RuntimeError):
@@ -289,7 +290,7 @@ def discover_user_setups_root(env: Mapping[str, str] | None = None) -> Path | No
     env_map = env or os.environ
     explicit = (env_map.get(ENV_USER_SETUPS_DIR) or "").strip()
     if explicit:
-        return Path(os.path.expandvars(explicit)).expanduser()
+        return validate_user_setups_root(Path(os.path.expandvars(explicit)).expanduser())
     home_text = env_map.get("USERPROFILE") or str(Path.home())
     home = Path(home_text).expanduser()
     candidates = [
@@ -300,8 +301,20 @@ def discover_user_setups_root(env: Mapping[str, str] | None = None) -> Path | No
     ]
     for candidate in candidates:
         if candidate.exists():
-            return candidate
+            return validate_user_setups_root(candidate)
     return None
+
+
+def validate_user_setups_root(root: str | Path) -> Path:
+    """Accept only Assetto Corsa's per-user ``.../Assetto Corsa/setups`` root."""
+
+    resolved = Path(os.path.expandvars(str(root))).expanduser().resolve(strict=False)
+    parts = tuple(part.lower() for part in resolved.parts)
+    if len(parts) < 2 or parts[-2:] != AC_SETUPS_SUFFIX:
+        raise SetupExchangeError(
+            f"{ENV_USER_SETUPS_DIR} must point to your Assetto Corsa 'setups' folder"
+        )
+    return resolved
 
 
 def sanitize_setup_filename(name: str | None, setup_id: int) -> str:
@@ -347,13 +360,16 @@ def install_setup(
     if len(setup_data.encode("utf-8")) > MAX_SETUP_BYTES:
         raise SetupExchangeError("setup data is too large")
     filename = sanitize_setup_filename(setup_name, setup_id)
-    resolved_root = user_setups_root.expanduser().resolve(strict=False)
+    resolved_root = validate_user_setups_root(user_setups_root)
     directory = (
         _resolve_inside(resolved_root, safe_car, safe_track)
         if safe_track
         else _resolve_inside(resolved_root, safe_car)
     )
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise SetupExchangeError(f"failed to install setup: {e}") from e
     base = directory / filename
     stem = base.stem
     suffix = base.suffix or ".ini"
@@ -368,6 +384,8 @@ def install_setup(
                     fh.write("\n")
         except FileExistsError:
             continue
+        except OSError as e:
+            raise SetupExchangeError(f"failed to install setup: {e}") from e
         return {
             "path": str(candidate),
             "name": candidate.name,
@@ -390,6 +408,7 @@ def download_and_install_setup(
     root = user_setups_root or discover_user_setups_root()
     if root is None:
         raise SetupExchangeError(f"set {ENV_USER_SETUPS_DIR} to your Assetto Corsa setups folder")
+    root = validate_user_setups_root(root)
     downloaded = client.download_setup(setup_id)
     install_name = name or downloaded.get("name")
     installed = install_setup(

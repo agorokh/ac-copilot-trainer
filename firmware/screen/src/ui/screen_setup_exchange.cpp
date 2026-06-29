@@ -107,6 +107,19 @@ void set_status(const char* text, lv_color_t color) {
     lv_obj_set_style_text_color(g_active_ctx->status, color, LV_PART_MAIN);
 }
 
+bool has_pending_download() {
+    return g_pending_setup_id > 0;
+}
+
+lv_obj_t* valid_active_row(se_ctx_t* ctx) {
+    if (!ctx || !ctx->active_row) return nullptr;
+    if (!lv_obj_is_valid(ctx->active_row)) {
+        ctx->active_row = nullptr;
+        return nullptr;
+    }
+    return ctx->active_row;
+}
+
 void update_meta(se_ctx_t* ctx) {
     if (!ctx) return;
     char buf[96];
@@ -125,6 +138,10 @@ void on_refresh_clicked(lv_event_t*) {
         ui_toast_error("Setup Exchange offline");
         return;
     }
+    if (has_pending_download()) {
+        ui_toast_error("Download in progress");
+        return;
+    }
     g_loading = true;
     set_status("Searching...", UI_TX_MUTED);
     if (!req_q_push_search(nullptr)) {
@@ -141,6 +158,10 @@ void on_row_clicked(lv_event_t* e) {
     }
     auto idx = (intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= g_result_count) return;
+    if (has_pending_download()) {
+        ui_toast_error("Download in progress");
+        return;
+    }
     se_result_t& result = g_results[idx];
     if (!(result.car_id[0] || g_car_id[0])) {
         ui_toast_error("Open Pocket Technician first");
@@ -213,6 +234,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const se_result_t& result) {
 
 void rebuild_list(se_ctx_t* ctx) {
     if (!ctx || !ctx->list_col) return;
+    ctx->active_row = nullptr;
     lv_obj_clean(ctx->list_col);
     ctx->placeholder = nullptr;
     if (g_result_count == 0) {
@@ -402,9 +424,11 @@ extern "C" void screen_setup_exchange_apply_download_ack(bool ok,
                                                           const char* error) {
     if (ok) {
         g_pending_setup_id = -1;
-        if (g_active_ctx && g_active_ctx->active_row) {
-            lv_obj_set_style_border_color(g_active_ctx->active_row, UI_OK_GREEN, LV_PART_MAIN);
-            lv_obj_set_style_border_opa(g_active_ctx->active_row, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_t* row = valid_active_row(g_active_ctx);
+        if (row) {
+            lv_obj_set_style_border_color(row, UI_OK_GREEN, LV_PART_MAIN);
+            lv_obj_set_style_border_opa(row, LV_OPA_COVER, LV_PART_MAIN);
+            g_active_ctx->active_row = nullptr;
         }
         char msg[96];
         snprintf(msg, sizeof(msg), "Installed: %s", name && *name ? name : "setup");
@@ -412,9 +436,11 @@ extern "C" void screen_setup_exchange_apply_download_ack(bool ok,
         (void)path;
     } else {
         if (setup_id == g_pending_setup_id) g_pending_setup_id = -1;
-        if (g_active_ctx && g_active_ctx->active_row) {
-            lv_obj_set_style_border_color(g_active_ctx->active_row, UI_ALERT_RED, LV_PART_MAIN);
-            lv_obj_set_style_border_opa(g_active_ctx->active_row, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_t* row = valid_active_row(g_active_ctx);
+        if (row) {
+            lv_obj_set_style_border_color(row, UI_ALERT_RED, LV_PART_MAIN);
+            lv_obj_set_style_border_opa(row, LV_OPA_COVER, LV_PART_MAIN);
+            g_active_ctx->active_row = nullptr;
         }
         set_status("Download failed", UI_ALERT_RED);
         char msg[96];

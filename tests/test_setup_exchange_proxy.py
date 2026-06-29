@@ -16,6 +16,10 @@ from tools.ai_sidecar.se_proxy import (
 )
 
 
+def _approved_setups_root(tmp_path: Path) -> Path:
+    return tmp_path / "Documents" / "Assetto Corsa" / "setups"
+
+
 class _Response:
     def __init__(self, payload: object, headers: dict[str, str] | None = None) -> None:
         self._payload = payload
@@ -82,7 +86,7 @@ def test_search_builds_setup_exchange_query_and_normalizes_rows() -> None:
 def test_install_setup_rejects_path_traversal_segment(tmp_path: Path) -> None:
     with pytest.raises(SetupExchangeError, match="car_id"):
         install_setup(
-            user_setups_root=tmp_path,
+            user_setups_root=_approved_setups_root(tmp_path),
             car_id="..",
             setup_id=9,
             setup_name="bad",
@@ -91,12 +95,13 @@ def test_install_setup_rejects_path_traversal_segment(tmp_path: Path) -> None:
 
 
 def test_install_setup_never_overwrites_existing_user_file(tmp_path: Path) -> None:
-    existing = tmp_path / "ks_porsche_911_gt3_r_2016" / "magione" / "Fast.ini"
+    root = _approved_setups_root(tmp_path)
+    existing = root / "ks_porsche_911_gt3_r_2016" / "magione" / "Fast.ini"
     existing.parent.mkdir(parents=True)
     existing.write_text("manual work\n", encoding="utf-8")
 
     out = install_setup(
-        user_setups_root=tmp_path,
+        user_setups_root=root,
         car_id="ks_porsche_911_gt3_r_2016",
         track_id="magione",
         setup_id=42,
@@ -111,6 +116,7 @@ def test_install_setup_never_overwrites_existing_user_file(tmp_path: Path) -> No
 
 def test_download_and_install_setup_uses_download_payload_name(tmp_path: Path) -> None:
     seen: dict[str, Any] = {}
+    root = _approved_setups_root(tmp_path)
 
     def fake_urlopen(request: Request, *, timeout: float) -> _Response:
         seen["url"] = request.full_url
@@ -120,7 +126,7 @@ def test_download_and_install_setup_uses_download_payload_name(tmp_path: Path) -
     client = SetupExchangeClient("https://se.example.test", urlopen=fake_urlopen)
     out = download_and_install_setup(
         client=client,
-        user_setups_root=tmp_path,
+        user_setups_root=root,
         setup_id=77,
         car_id="ks_porsche_911_gt3_r_2016",
         track_id="magione",
@@ -134,6 +140,40 @@ def test_download_and_install_setup_uses_download_payload_name(tmp_path: Path) -
 
 
 def test_discover_user_setups_root_prefers_explicit_env(tmp_path: Path) -> None:
-    root = tmp_path / "custom-setups"
+    root = _approved_setups_root(tmp_path)
 
-    assert discover_user_setups_root({"AC_COPILOT_USER_SETUPS_DIR": str(root)}) == root
+    assert discover_user_setups_root({"AC_COPILOT_USER_SETUPS_DIR": str(root)}) == root.resolve(
+        strict=False
+    )
+
+
+def test_discover_user_setups_root_rejects_non_ac_override(tmp_path: Path) -> None:
+    with pytest.raises(SetupExchangeError, match="Assetto Corsa"):
+        discover_user_setups_root({"AC_COPILOT_USER_SETUPS_DIR": str(tmp_path / "setups")})
+
+
+def test_install_setup_rejects_unapproved_root(tmp_path: Path) -> None:
+    with pytest.raises(SetupExchangeError, match="Assetto Corsa"):
+        install_setup(
+            user_setups_root=tmp_path / "custom-setups",
+            car_id="ks_porsche_911_gt3_r_2016",
+            setup_id=42,
+            setup_name="Fast.ini",
+            setup_data="[HEADER]\nVERSION=1",
+        )
+
+
+def test_install_setup_converts_filesystem_errors(tmp_path: Path) -> None:
+    root = _approved_setups_root(tmp_path)
+    root.parent.mkdir(parents=True)
+    root.write_text("not a directory\n", encoding="utf-8")
+
+    with pytest.raises(SetupExchangeError, match="failed to install setup"):
+        install_setup(
+            user_setups_root=root,
+            car_id="ks_porsche_911_gt3_r_2016",
+            track_id="magione",
+            setup_id=42,
+            setup_name="Fast race",
+            setup_data="[HEADER]\nVERSION=1",
+        )

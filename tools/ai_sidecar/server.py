@@ -96,6 +96,7 @@ from tools.ai_sidecar.se_proxy import (
     SetupExchangeClient,
     SetupExchangeError,
     download_and_install_setup,
+    validate_user_setups_root,
 )
 from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
@@ -401,7 +402,7 @@ def _suggest_setup_store(
 
 
 def _user_setups_root_from_config(path: str | None) -> Path | None:
-    return Path(os.path.expandvars(path)).expanduser() if path else None
+    return validate_user_setups_root(path) if path else None
 
 
 def _peer_host(connection: Any) -> str | None:
@@ -1058,6 +1059,15 @@ async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> 
                 "car_id": car_id,
                 "track_id": track_id,
                 "error": str(e),
+            }
+        except OSError as e:
+            logger.info("setup exchange install failed setup_id=%s err=%s", setup_id, e)
+            out = {
+                "ok": False,
+                "setup_id": setup_id,
+                "car_id": car_id,
+                "track_id": track_id,
+                "error": f"failed to install setup: {e}",
             }
         await _safe_send(
             websocket,

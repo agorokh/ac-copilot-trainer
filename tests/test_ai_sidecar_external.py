@@ -638,7 +638,7 @@ def test_setup_exchange_search_and_download_are_sidecar_local(
 
     monkeypatch.setattr(srv, "SetupExchangeClient", _FakeSetupExchangeClient)
     srv._setup_exchange_endpoint = "https://se.example.test"
-    srv._setup_exchange_user_setups_root = tmp_path
+    srv._setup_exchange_user_setups_root = tmp_path / "Documents" / "Assetto Corsa" / "setups"
 
     async def _run() -> tuple[dict, dict]:
         async with _running_sidecar() as port:
@@ -692,6 +692,65 @@ def test_setup_exchange_search_and_download_are_sidecar_local(
     assert download["type"] == ep.TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
     assert download["ok"] is True
     assert Path(download["path"]).read_text(encoding="utf-8") == "[HEADER]\nVERSION=1\n"
+
+
+def test_setup_exchange_download_oserror_returns_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _FakeSetupExchangeClient:
+        def __init__(self, endpoint: str) -> None:
+            self.endpoint = endpoint
+
+    def fail_install(**_kwargs: object) -> dict[str, object]:
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(srv, "SetupExchangeClient", _FakeSetupExchangeClient)
+    monkeypatch.setattr(srv, "download_and_install_setup", fail_install)
+    srv._setup_exchange_endpoint = "https://se.example.test"
+    srv._setup_exchange_user_setups_root = tmp_path / "Documents" / "Assetto Corsa" / "setups"
+
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "screen",
+                            "client_class": ep.CLIENT_CLASS_SCREEN,
+                        }
+                    )
+                )
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "se.download",
+                            "setup_id": 42,
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "name": "Fast race",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        ack = asyncio.run(_run())
+    finally:
+        srv._setup_exchange_endpoint = None
+        srv._setup_exchange_user_setups_root = None
+
+    assert ack["type"] == ep.TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+    assert ack["ok"] is False
+    assert ack["setup_id"] == 42
+    assert "failed to install setup" in ack["error"]
+    assert "permission denied" in ack["error"]
 
 
 def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:
