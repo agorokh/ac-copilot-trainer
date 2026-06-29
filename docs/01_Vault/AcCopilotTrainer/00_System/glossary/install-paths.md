@@ -2,7 +2,7 @@
 type: entity
 status: active
 created: 2026-04-22
-updated: 2026-04-22
+updated: 2026-06-28
 relates_to:
   - AcCopilotTrainer/03_Investigations/csp-app-pocket-tech-setup-exchange-2026-04-21.md
   - AcCopilotTrainer/01_Decisions/screen-and-csp-apps-integration.md
@@ -16,7 +16,7 @@ Use these placeholders in docs/scripts instead of user-specific absolute paths:
 
 - `%AC_ROOT%` = Assetto Corsa install root (example: `%ProgramFiles(x86)%\Steam\steamapps\common\assettocorsa`)
 - `%REPO_ROOT%` = local clone root of this repository
-- `%AC_USERDATA%` = AC user-data root (`%USERPROFILE%\Documents\Assetto Corsa` or OneDrive variant)
+- `%AC_USERDATA%` = AC user-data root — **`%USERPROFILE%\OneDrive\Documents\Assetto Corsa`** on this PC (see resolved note below)
 
 ## Pocket Technician + Setup Exchange (installed via app-csp-defaults)
 
@@ -31,9 +31,15 @@ Both by x4fab / [ac-custom-shaders-patch/app-csp-defaults](https://github.com/ac
 - Source: `%REPO_ROOT%\src\ac_copilot_trainer\`
 - Installed-in-AC path: `%AC_ROOT%\apps\lua\AC_Copilot_Trainer\` (symlinked for dev)
 
-## AC user-data folder — STILL TO CONFIRM
+## AC user-data folder — RESOLVED (2026-06-28)
 
-`%USERPROFILE%\Documents\Assetto Corsa\` does NOT exist on this PC. AC user-data appears to be redirected (likely a OneDrive Documents variant). **Open question tagged in [`csp-app-pocket-tech-setup-exchange-2026-04-21`](../../03_Investigations/csp-app-pocket-tech-setup-exchange-2026-04-21.md):** resolve and set `%AC_USERDATA%` before any file-watching sidecar work against `UserSetups/<carID>/`.
+`%AC_USERDATA%` = **`%USERPROFILE%\OneDrive\Documents\Assetto Corsa`** on this PC (Documents is
+redirected into OneDrive; the plain `%USERPROFILE%\Documents\Assetto Corsa` does **not** exist). User
+setups live at `%AC_USERDATA%\setups\<carID>\[<track>\]\<name>.ini` — confirmed against
+`ks_porsche_911_gt3_r_2016\generic\last.ini` and `...\spa\Realistic_BB_v*.ini`. This closes the open
+question previously tagged in [`csp-app-pocket-tech-setup-exchange-2026-04-21`](../../03_Investigations/csp-app-pocket-tech-setup-exchange-2026-04-21.md);
+file-watching sidecar work against `UserSetups/<carID>/` and `setup_catalog --deploy` can use it. The
+rig screen's `setup.list` already enumerates `<carID>/<activeTrack>/` from this root.
 
 ## Factory backup for rig screen
 

@@ -25,6 +25,9 @@ ALLOWED_TOPLEVEL_DIRS = {
     "src",
     "tests",
     "tools",
+    # Curated game-data assets (car setups) registered into the data platform by
+    # tools/setup_catalog; see docs/10_Development/11_Repository_Structure.md.
+    "assets",
     "firmware",
     ".claude",
     # Common additions when you specialize (uncomment as needed):
