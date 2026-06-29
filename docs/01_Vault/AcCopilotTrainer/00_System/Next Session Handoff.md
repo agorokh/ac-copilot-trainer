@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T17:34:58Z
+last_updated: 2026-06-29T17:51:56Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -53,21 +53,24 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-06-29T17:11:55Z) — PR #371 voice-intensity resolution for #368
+## In flight (2026-06-29T17:51:56Z) — PR #371 voice-intensity resolution for #368
 
-PR [#371](https://github.com/agorokh/ac-copilot-trainer/pull/371) is still OPEN at local/remote head
-`382b090` (`fix(voice): address round-2 review findings — escalation barge-in, wrap window,
-lead-braking, WS cooldown (#368)`). This head reconciles the #368 voice-intensity work with the
-parallel `origin/main` voice/launcher changes and addresses the second Codex review round:
-wrap-aware anticipatory lead windows, lead-brake `has_braked` latch, register tie-break barge-in,
-and WS `CueArbiter` act-escalation cooldown bypass.
+PR [#371](https://github.com/agorokh/ac-copilot-trainer/pull/371) is still OPEN. The branch has been
+merged with `origin/main` (`669eba7`) and the current local review-resolution commit is `2c5567a`
+(`fix(voice): address current PR 371 Codex findings`). It preserves the #368 voice-intensity work,
+the PR #372 batch-bake/48 kHz defaults, and the parallel process-miner/vault updates from `main`.
 
-Verification on `382b090`: local `make ci-fast PYTHON=.venv/bin/python` passed at
-2026-06-29T17:10Z (`1820 passed, 79 skipped`, coverage 83.61%, bandit/policy/CSP checks OK).
-GitHub checks on `382b090` were green (`build`, `pip-audit`, `Canonical docs exist`,
-`conformance`; `guard-and-automerge` skipped). Next resolver step: trigger/inspect current-head
-reviewers for `382b090`; older unresolved Codex threads from review of `3ae2043` may remain visible
-but are stale if no current-head review repeats them. Detailed merge-contension notes:
+Current Codex findings addressed in `2c5567a`: pyttsx3 register rate/volume now uses configured base
+knobs as the center; the standalone WS voice client no longer requires fallback-only
+`AC_COPILOT_VOICE_TTS=1`; legacy `act` advisories without an explicit register resolve to the
+playable firm clip instead of going silent; and post-apex brake-release cues can escalate from calm
+to firm if the driver stays heavy on the brake.
+
+Verification after `2c5567a`: focused local suite passed
+(`tests/test_voice_client.py tests/test_voice_resolver.py tests/test_realtime_observer.py
+tests/test_voice_scheduler.py tests/test_voice_engine.py` → `66 passed`). Next resolver step: rerun
+full `make ci-fast PYTHON=.venv/bin/python`, push, trigger reviewers, observe the 10-minute cooldown,
+then inspect GitHub checks plus current-head review threads. Detailed merge-contention notes:
 [[voice-368-merge-contention-2026-06-29]].
 
 ## Delivered (2026-06-29) — PR #372 MERGED: #350 Part B voice-bake (batch Piper + 48 kHz default)
