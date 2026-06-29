@@ -32,7 +32,7 @@ class LauncherSettings:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return cls()
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeError):
             return cls()
         if not isinstance(payload, Mapping):
             return cls()
@@ -54,7 +54,11 @@ def ensure_settings_file(paths: LauncherPaths) -> Path:
     if path.exists():
         return path
     paths.root.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(default_settings_payload(), indent=2, sort_keys=True) + "\n")
+    path.write_text(
+        json.dumps(default_settings_payload(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
     return path
 
 

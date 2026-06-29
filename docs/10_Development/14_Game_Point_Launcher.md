@@ -26,7 +26,7 @@ committed.
 
 ## UI design handoff
 
-Before changing launcher screens, rig-screen screens, or cross-surface status
+Before changing launcher screens, rig screen UI, or cross-surface status
 language, read [15_Claude_Design_UI_Package.md](15_Claude_Design_UI_Package.md).
 It captures the current Tkinter launcher, LVGL rig screen, CSP HUD, protocol
 state, and future UI scope for Claude Design or any implementation agent.

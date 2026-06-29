@@ -184,6 +184,16 @@ void set_active_path(const char* path) {
     }
 }
 
+static void req_q_push_refresh_or_toast(bool include_list) {
+    bool ok = req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
+    if (include_list) {
+        ok = req_q_push(PT_REQ_LIST, nullptr, nullptr) && ok;
+    }
+    if (!ok) {
+        ui_toast_error("Setup refresh busy");
+    }
+}
+
 bool req_q_push_spinner_set(const char* section, int32_t value, const char* path) {
     int next = (g_req_tail + 1) % PT_MAX_REQUESTS;
     if (next == g_req_head) return false;  // full
@@ -881,14 +891,13 @@ extern "C" void screen_pocket_technician_apply_spinner_ack(bool ok,
                 break;
             }
         }
-        req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
-        req_q_push(PT_REQ_LIST, nullptr, nullptr);
+        req_q_push_refresh_or_toast(true);
         if (g_active_ctx) rebuild_list_widgets(g_active_ctx);
     } else {
         char msg[80];
         snprintf(msg, sizeof(msg), "Setup failed: %s", error ? error : "unknown");
         ui_toast_error(msg);
-        req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
+        req_q_push_refresh_or_toast(false);
     }
 }
 
@@ -992,8 +1001,7 @@ extern "C" void screen_pocket_technician_apply_load_ack(bool ok,
         // this ack (Cursor Bugbot on PR #91).
         start_gold_pulse(g_active_ctx);
         // Re-fetch the list so any "BEST" recomputation lands.
-        req_q_push(PT_REQ_LIST, nullptr, nullptr);
-        req_q_push(PT_REQ_SPINNER_LIST, nullptr, active_path_or_null());
+        req_q_push_refresh_or_toast(true);
     } else {
         // Reset any pressed visual then surface the toast. The row's
         // PRESSED-state bg was originally UI_BG_HEADER (matching the

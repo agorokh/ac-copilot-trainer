@@ -244,6 +244,14 @@ class GamePointSupervisor:
             checks.append(ProbeResult("voice_reference", True, "skipped"))
         return tuple(checks)
 
+    def _close_log_handles(self) -> None:
+        for handle in self._log_handles:
+            try:
+                handle.close()
+            except OSError:
+                pass
+        self._log_handles.clear()
+
     def start_sidecar(self) -> ProbeResult:
         blocking = [check for check in self.preflight() if not check.ok]
         if blocking:
@@ -251,6 +259,9 @@ class GamePointSupervisor:
             return ProbeResult("sidecar", False, "blocked", detail)
         if self._sidecar_process is not None and self._sidecar_process.poll() is None:
             return ProbeResult("sidecar", True, "running", f"pid={self._sidecar_process.pid}")
+        if self._sidecar_process is not None and self._sidecar_process.poll() is not None:
+            self._sidecar_process = None
+        self._close_log_handles()
         self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
         log = self.paths.sidecar_log_path.open("a", encoding="utf-8")
         self._log_handles.append(log)
@@ -267,8 +278,11 @@ class GamePointSupervisor:
     def stop_sidecar(self, *, timeout: float = 5.0) -> ProbeResult:
         proc = self._sidecar_process
         if proc is None:
+            self._close_log_handles()
             return ProbeResult("sidecar", True, "stopped")
         if proc.poll() is not None:
+            self._sidecar_process = None
+            self._close_log_handles()
             return ProbeResult("sidecar", True, "stopped", f"exit={proc.poll()}")
         try:
             proc.terminate()
@@ -278,6 +292,8 @@ class GamePointSupervisor:
                 proc.kill()
             except Exception:  # noqa: BLE001 - no further recovery available
                 return ProbeResult("sidecar", False, "stop_failed")
+        self._sidecar_process = None
+        self._close_log_handles()
         return ProbeResult("sidecar", True, "stopped")
 
     def poll_status(self) -> GamePointStatus:
@@ -365,12 +381,7 @@ class GamePointSupervisor:
 
     def close(self) -> None:
         self.stop_sidecar()
-        for handle in self._log_handles:
-            try:
-                handle.close()
-            except OSError:
-                pass
-        self._log_handles.clear()
+        self._close_log_handles()
 
     def _read_health(self) -> ProbeResult:
         url = f"http://{_url_host(self._health_host())}:{self.config.port}/health"

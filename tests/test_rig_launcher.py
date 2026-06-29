@@ -12,7 +12,7 @@ from tools.rig_launcher.install import (
     default_exe_path,
     install_desktop_shortcut,
 )
-from tools.rig_launcher.settings import ensure_settings_file
+from tools.rig_launcher.settings import LauncherSettings, ensure_settings_file
 from tools.rig_launcher.supervisor import (
     GamePointConfig,
     GamePointSupervisor,
@@ -365,6 +365,31 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
     assert payload["sidecar_port"] == 8765
     assert payload["external_bind"] == ""
     assert "token" not in json.dumps(payload).lower()
+
+
+def test_settings_load_falls_back_on_invalid_utf8(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_bytes(b"\xff\xfe")
+    settings = LauncherSettings.load(path)
+    assert settings == LauncherSettings()
+
+
+def test_restart_sidecar_reuses_single_log_handle(tmp_path: Path) -> None:
+    procs: list[_Proc] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        proc = _Proc()
+        procs.append(proc)
+        return proc
+
+    cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, popen=fake_popen, python_executable="python")
+    sup.start_sidecar()
+    assert len(sup._log_handles) == 1
+    procs[0].terminated = True
+    sup.start_sidecar()
+    assert len(sup._log_handles) == 1
+    sup.close()
 
 
 def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> None:

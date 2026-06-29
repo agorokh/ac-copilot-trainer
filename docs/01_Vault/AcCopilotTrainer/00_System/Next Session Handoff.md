@@ -6,7 +6,7 @@ last_updated: 2026-06-29T05:43:30Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
-  - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/pr-365-game-point-launcher-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
@@ -63,67 +63,13 @@ driver-facing launcher work discovers the UI contract. Tier-3 MCP was not
 exposed in this Codex session; the package was grounded from the vault and live
 source files listed inside the package.
 
-## Game Point #363 launcher install hardening (2026-06-29)
+## Game Point #363 / PR #365 (2026-06-29)
 
-PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) now has the
-visible user launch path and future-extension contract for Game Point. The local
-Desktop shortcut was created through the launcher's own CLI:
-`python -m tools.rig_launcher --install-shortcut`. Verified shortcut:
-`C:\Users\arsen\OneDrive\Desktop\AC Copilot Game Point.lnk` ->
-`C:\Users\arsen\Projects\ac-copilot-trainer\dist\AC-Copilot-Game-Point.exe`,
-working directory `C:\Users\arsen\Projects\ac-copilot-trainer`.
-
-Code/docs added this session: Windows shortcut installer
-(`tools.rig_launcher.install`), non-secret per-user settings contract
-(`tools.rig_launcher.settings`, created/opened by the GUI **Settings** button),
-README launch instructions, and
-`docs/10_Development/14_Game_Point_Launcher.md`. `AGENTS.md` now says
-driver-facing rig functions the operator should start, monitor, or tune belong
-in `tools.rig_launcher` UI/status/settings rather than standalone desktop
-scripts. Secrets such as `AC_COPILOT_SIDECAR_TOKEN` remain environment-only.
-
-Verification: `tests/test_rig_launcher.py` passed (`18 passed`; pytest cache
-write warning only), `ruff check tools\rig_launcher tests\test_rig_launcher.py`
-passed, `ruff format --check tools\rig_launcher tests\test_rig_launcher.py`
-passed, `python scripts\ci_policy.py` passed, launcher import smoke passed, and
-the Windows COM metadata for the `.lnk` matched the target exe/workdir/icon.
-
-Post-push review audit found actionable Codex review threads and the follow-up
-commit addressed them: no-token launcher defaults now stay loopback-only while
-token-present launches still default to `0.0.0.0`; setup fallback rejects `..`
-traversal paths before INI reads/writes; launcher health polling uses a concrete
-external bind host instead of always `127.0.0.1`; PyInstaller args collect
-sidecar data files and the `launcher` extra includes `websockets`; auto-drive
-relaunch-on-hijack-fail passes a single-launch budget into each launch leg so
-`max_launches` remains the total cap. Regression coverage: affected tests passed
-(`56 passed` across
-`tests/test_rig_launcher.py`, `tests/test_setup_library_summary.py`, and
-`tests/test_ac_harness_auto_drive.py`), targeted Ruff check/format passed, and
-`python scripts\ci_policy.py` passed.
-Follow-up Qodo thread also fixed: direct `GamePointConfig()` construction now
-defaults to loopback-safe `external_bind=None`; `from_env()` remains token-aware
-and still chooses `0.0.0.0` when `AC_COPILOT_SIDECAR_TOKEN` is set. Regression
-coverage: `tests/test_rig_launcher.py` passed (`23 passed`), launcher Ruff
-check/format passed, and `python scripts\ci_policy.py` passed.
-Tier-3 MCP was not exposed in this Codex session, so this pass used vault-only
-grounding and records that gap here for the next session.
-
-Post-design-package bot review follow-up on the same PR also fixed four new
-threads: Pocket Technician now carries the loaded setup INI path into
-`setup.spinner.list` / `setup.spinner.set`, spinner-list failures no longer
-self-retry forever, the launcher extra includes voice runtime dependencies for
-voice-enabled frozen builds, and `run_auto_drive()` continues after a failed
-single-launch attempt until the total `max_launches` budget is exhausted.
-Focused verification: `59 passed` across
-`tests/test_ac_harness_auto_drive.py`, `tests/test_rig_launcher.py`, and
-`tests/test_setup_library_summary.py`; Ruff check/format passed for touched
-Python files; `python scripts\ci_policy.py` passed.
-
-**Merge-ready (2026-06-29 resolve-pr):** commit `5b57271` fixes the last open
-Qodo thread — `screen_pocket_technician_set_active_setup()` no longer clears
-`g_active_name` when `setup.active` arrives path-only after spinner edits; Lua
-now derives the setup basename on `setup.spinner.set` broadcasts. CI green on
-head SHA; GraphQL threads all resolved; resolve-gate ledger clean.
+PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) delivers the
+Game Point launcher supervisor and Pocket Technician spinner completion for
+[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363). Install
+evidence, review-resolution history, and follow-ups:
+[[pr-365-game-point-launcher-2026-06-29]].
 
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 

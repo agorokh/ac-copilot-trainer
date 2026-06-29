@@ -102,8 +102,12 @@ The driver should experience this as one "Game Point" cockpit system:
 - Desktop shortcut: `AC Copilot Game Point.lnk`.
 - UI implementation today: Python stdlib Tkinter in `tools/rig_launcher/app.py`.
 - Supervisor logic: `tools/rig_launcher/supervisor.py`.
-- Packaging: PyInstaller onefile/windowed via `python -m tools.rig_launcher
-  --build-exe`.
+- Packaging: PyInstaller onefile/windowed:
+
+```powershell
+python -m tools.rig_launcher --build-exe
+```
+
 - Install shortcut: `python -m tools.rig_launcher --install-shortcut`.
 - Local per-user data: `%LOCALAPPDATA%\AC Copilot Trainer\GamePoint\`.
 - Non-secret settings: `settings.json`, opened by the launcher Settings button.
