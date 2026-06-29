@@ -29,7 +29,8 @@ from pathlib import Path
 from tools.ai_sidecar.voice import vocabulary as vocab
 
 #: Manifest schema version. Bump on any breaking change to the on-disk shape.
-MANIFEST_VERSION = 1
+#: v2 (issue #368): adds ``register`` (intensity tier) to every clip + the index key.
+MANIFEST_VERSION = 2
 
 #: Canonical manifest filename inside a bank directory.
 MANIFEST_FILENAME = "manifest.json"
@@ -52,6 +53,7 @@ class ClipEntry:
     file: str  # relative to the bank directory
     kind: str
     urgency: str
+    register: str  # intensity tier (calm|firm|critical) — issue #368, v2 manifest
     corner: int | None
     text: str
     sha256: str
@@ -62,6 +64,7 @@ class ClipEntry:
             "file": self.file,
             "kind": self.kind,
             "urgency": self.urgency,
+            "register": self.register,
             "corner": self.corner,
             "text": self.text,
             "sha256": self.sha256,
@@ -78,6 +81,11 @@ class ClipEntry:
                 file=str(d["file"]),
                 kind=str(d["kind"]),
                 urgency=str(d["urgency"]),
+                # ``register`` is REQUIRED in v2: a v1 manifest (no register) raises here at LOAD,
+                # so ``engine.from_bank`` returns a disabled coach rather than ever playing a clip
+                # whose tier is unknown (issue #368). No lenient default — that would let a v1 bank
+                # masquerade as v2.
+                register=str(d["register"]),
                 corner=corner,
                 text=str(d["text"]),
                 sha256=str(d["sha256"]),
@@ -109,14 +117,15 @@ class Manifest:
     clips: dict[str, ClipEntry]
 
     def __post_init__(self) -> None:
-        # Index by advisory key for O(1) resolver lookups. ``corner=None`` is the generic fallback.
-        self._by_key: dict[tuple[str, str, int | None], str] = {}
+        # Index by advisory key for O(1) resolver lookups. ``corner=None`` is the generic/terse
+        # clip. ``register`` (issue #368) is the 3rd key axis — the intensity tier.
+        self._by_key: dict[tuple[str, str, str, int | None], str] = {}
         for entry in self.clips.values():
-            self._by_key[(entry.kind, entry.urgency, entry.corner)] = entry.clip_id
+            self._by_key[(entry.kind, entry.urgency, entry.register, entry.corner)] = entry.clip_id
 
-    def lookup(self, kind: str, urgency: str, corner: int | None) -> str | None:
+    def lookup(self, kind: str, urgency: str, register: str, corner: int | None) -> str | None:
         """Return the clip id for an advisory key, or ``None`` if the bank has no such clip."""
-        return self._by_key.get((kind, urgency, corner))
+        return self._by_key.get((kind, urgency, register, corner))
 
     # ---- (de)serialization -------------------------------------------------------------------
 
@@ -137,12 +146,22 @@ class Manifest:
         if not isinstance(d, dict):
             raise ManifestError("manifest root is not an object")
         try:
+            version = int(d["version"])
+            # Forward-incompat guard (issue #368): a bank written by a NEWER schema than this code
+            # understands must be refused, not silently mis-read. ``engine.from_bank`` turns this
+            # into a disabled coach. A v1 bank is rejected one level down (ClipEntry.from_dict needs
+            # ``register``), so version<current also fails closed → "re-bake required".
+            if version > MANIFEST_VERSION:
+                raise ManifestError(
+                    f"manifest version {version} is newer than supported {MANIFEST_VERSION} "
+                    "— upgrade the sidecar or re-bake the bank"
+                )
             raw_clips = d["clips"]
             if not isinstance(raw_clips, dict):
                 raise ManifestError("manifest 'clips' is not an object")
             clips = {str(cid): ClipEntry.from_dict(e) for cid, e in raw_clips.items()}
             return Manifest(
-                version=int(d["version"]),
+                version=version,
                 samplerate=int(d["samplerate"]),
                 voice_signature=str(d["voice_signature"]),
                 vocabulary_hash=str(d["vocabulary_hash"]),

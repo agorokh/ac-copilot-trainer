@@ -19,7 +19,7 @@ def test_bake_renders_full_vocabulary_with_valid_manifest(tmp_path) -> None:
     assert len(manifest.clips) == len(vocab.vocabulary())
     # manifest stamps the current vocabulary hash + the backend voice signature
     assert manifest.vocabulary_hash == vocab.vocabulary_hash()
-    assert manifest.voice_signature == "tone-v1"
+    assert manifest.voice_signature == "tone-v2"
     # every clip file exists, is non-empty audio, and its sha matches the manifest
     for entry in manifest.clips.values():
         fp = tmp_path / entry.file
@@ -51,3 +51,36 @@ def test_bake_distinct_phrases_have_distinct_audio(tmp_path) -> None:
     shas = [c.sha256 for c in manifest.clips.values()]
     # Distinct texts should mostly yield distinct tones (no wholesale collision into one clip).
     assert len(set(shas)) > len(shas) // 2
+
+
+def test_tone_backend_registers_are_distinct(tmp_path) -> None:
+    # Issue #368: the register (intensity tier) must produce measurably distinct audio even from the
+    # stdlib CI backend, so CI exercises the tone dimension end-to-end (firm/critical differ from
+    # calm).
+    manifest = bake_bank(tmp_path, ToneBackend())
+    firm = manifest.clips["late_brake.act.firm.generic"].sha256
+    crit = manifest.clips["late_brake.act.critical.generic"].sha256
+    calm = manifest.clips["late_brake.prepare.calm.generic"].sha256
+    assert len({firm, crit, calm}) == 3  # three distinct register clips
+
+
+def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
+    # Issue #368 (adversary): the ffmpeg-shaped path the product actually ships must be
+    # byte-deterministic run-to-run on a fixed ffmpeg (`-bitexact`), so per-clip sha256 stays a real
+    # drift detector. ToneBackend alone does not exercise the ffmpeg chain — this does.
+    import shutil
+
+    import pytest
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not available")
+    from tools.ai_sidecar.voice.bake import ProsodyShaper
+
+    # a plain tone WAV as the shaper input (no TTS engine needed)
+    src = tmp_path / "src.wav"
+    ToneBackend().synthesize("Brake.", "firm", src, 22050)
+    shaper = ProsodyShaper(apply_tempo=True)
+    a, b = tmp_path / "a.wav", tmp_path / "b.wav"
+    shaper.shape(src, a, "critical", 22050)
+    shaper.shape(src, b, "critical", 22050)
+    assert a.read_bytes() == b.read_bytes()  # identical bytes → deterministic, content-addressable

@@ -627,6 +627,10 @@ def _advisory_to_payload(advisory: Any) -> dict[str, Any] | None:
         "kind": kind,
         "corner": getattr(advisory, "corner", None),
         "urgency": urgency,
+        # issue #368: the tone tier + severity travel on the cue so a WS voice client renders the
+        # same intensity the in-process coach speaks (additive — older consumers ignore them).
+        "register": getattr(advisory, "register", "calm"),
+        "intensity": getattr(advisory, "intensity", 0.0),
         "message": getattr(advisory, "message", ""),
         "spline": getattr(advisory, "spline", None),
         "detail": getattr(advisory, "detail", {}),

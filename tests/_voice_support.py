@@ -20,6 +20,7 @@ def build_manifest(*, samplerate: int = 22050, voice_signature: str = "tone-v1")
             file=f"{p.clip_id}.wav",
             kind=p.kind,
             urgency=p.urgency,
+            register=p.register,
             corner=p.corner,
             text=p.text,
             sha256="0" * 64,
@@ -38,17 +39,21 @@ def make_advisory(
     kind: str = "late_brake",
     corner: int = 2,
     urgency: str = "act",
+    register: str = "firm",
     spline: float = 0.5,
     message: str = "",
     detail: dict | None = None,
+    intensity: float = 0.5,
 ) -> Advisory:
     return Advisory(
         kind=kind,
         corner=corner,
         spline=spline,
         urgency=urgency,
+        register=register,
         message=message,
         detail=detail or {},
+        intensity=intensity,
     )
 
 

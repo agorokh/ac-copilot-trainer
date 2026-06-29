@@ -38,7 +38,8 @@ def test_coach_speaks_advisory_and_meets_latency_budget(tmp_path) -> None:
     finally:
         coach.stop()
     assert pb.played, "advisory was never dispatched to playback"
-    assert pb.played[-1].clip_id == "late_brake.act.t03"
+    # act cues are terse/corner-less; a firm late_brake resolves to the generic firm clip.
+    assert pb.played[-1].clip_id == "late_brake.act.firm.generic"
     # advisory-emit -> first-sample dispatch budget (target <= ~150 ms end-to-end). The
     # clip-playback
     # component is the pre-warmed audio stream, measured on-rig in the deferred live verification.

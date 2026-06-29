@@ -42,6 +42,72 @@ _WRAP_CUR_MAX = 0.25
 _DEFICIT_MARGIN_KMH = 2.0
 #: brake pedal fraction above which we consider the driver "on the brakes".
 _BRAKE_ON = 0.05
+#: throttle pedal fraction above which we consider the driver "on the power".
+_THROTTLE_ON = 0.1
+
+# --- Intensity model (issue #368) -----------------------------------------------------------------
+# The observer computes a continuous severity scalar ``s ∈ [0,1]`` for each cue from telemetry +
+# the reference envelope, then quantizes it to a tone ``register`` (calm|firm|critical) with
+# hysteresis. ``register`` is what the manifest keys on; ``intensity`` (the float) rides on the
+# Advisory too (logs, haptics, the timing report). These constants are documented TUNING references,
+# NOT fabricated physical ceilings (the project's honesty invariant): they set how aggressively the
+# tone escalates, not a claim about the car.
+
+#: km/h above a corner's apex target that counts as "fully hot" (severity closing term saturates).
+_CLOSING_REF_KMH = 35.0
+#: km/h of apex-speed deficit that counts as "egregious" (apex_deficit severity saturates).
+_DEFICIT_REF_KMH = 18.0
+#: brake fraction past the apex that flags over-braking (the ``brake_release`` cue).
+_RELEASE_BRAKE_MIN = 0.45
+#: seconds of anticipatory lead — a cue fires this far (in time, converted to spline) BEFORE its
+#: mark so the audio ONSET lands before/at the control point, not after (issue #368 AC a).
+_LEAD_S = 0.8
+#: default lap length (m) for the lead-time → spline conversion when a track length is not supplied.
+_DEFAULT_LAP_LENGTH_M = 2500.0
+#: cap on the anticipatory lead in spline units, so a very fast straight cannot fire a corner cue
+#: half a lap early.
+_MAX_LEAD_SPLINE = 0.05
+#: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
+#: sits below the rising edge so a severity hovering near a boundary does not flicker tone
+#: frame-to-frame.
+_REG_FIRM_RISE, _REG_FIRM_FALL = 0.34, 0.27
+_REG_CRIT_RISE, _REG_CRIT_FALL = 0.67, 0.58
+
+
+def _clamp01(x: float) -> float:
+    return 0.0 if x < 0.0 else 1.0 if x > 1.0 else x
+
+
+def _register_for(s: float, prev: str, *, cap: str = "critical") -> str:
+    """Quantize a severity scalar ``s ∈ [0,1]`` to a tone register, with hysteresis + a per-kind
+    cap.
+
+    Pure function (``prev`` register in → next register out), mirroring the scheduler's pure-core
+    discipline so it is unit-testable with no telemetry. Hysteresis: the rising thresholds are above
+    the falling ones, so a severity hovering on a boundary holds its tier instead of flickering. The
+    ``cap`` clamps the result for cues whose tone must not reach the top tier (e.g. a slow-loss cue
+    that should never sound like an alarm).
+    """
+    cap_rank = REGISTER_RANK.get(cap, REGISTER_RANK["critical"])
+    prev_rank = REGISTER_RANK.get(prev, 0)
+    # Critical band (with hysteresis against the current tier).
+    if s >= _REG_CRIT_RISE or (prev_rank >= REGISTER_RANK["critical"] and s >= _REG_CRIT_FALL):
+        out = "critical"
+    elif s >= _REG_FIRM_RISE or (prev_rank >= REGISTER_RANK["firm"] and s >= _REG_FIRM_FALL):
+        out = "firm"
+    else:
+        out = "calm"
+    if REGISTER_RANK[out] > cap_rank:
+        out = cap
+    return out
+
+
+#: Register ordering (low → high) for the cap/hysteresis comparisons above.
+REGISTER_RANK: dict[str, int] = {"calm": 0, "firm": 1, "critical": 2}
+#: urgency a given register rides on: a calm heads-up is anticipatory (``prepare``); a firm/critical
+#: correction must be acted on now (``act``). Keeps tone (register) and scheduling (urgency)
+#: correlated but distinct — the scheduler still arbitrates on urgency alone.
+_URGENCY_FOR_REGISTER: dict[str, str] = {"calm": "prepare", "firm": "act", "critical": "act"}
 
 
 def _target_source(ref: CornerReference) -> str:
@@ -55,14 +121,23 @@ def _target_source(ref: CornerReference) -> str:
 
 @dataclass
 class Advisory:
-    """One real-time coaching cue, machine-readable + human string."""
+    """One real-time coaching cue, machine-readable + human string.
 
-    kind: str  # "late_brake" | "apex_deficit"
+    ``intensity`` / ``register`` (issue #368): ``intensity`` is the continuous severity scalar
+    ``s ∈ [0,1]`` the observer computed for the situation; ``register`` is its quantized tone tier
+    (calm|firm|critical), which the voice path keys on so the SPOKEN TONE reflects the situation
+    ("not just 'turn left'"). Both default to the calm/zero base so every existing construction and
+    the server's ``_advisory_to_payload`` keep working.
+    """
+
+    kind: str  # "late_brake" | "brake_release" | "turn_in" | "apex_deficit"
     corner: int
     spline: float
     urgency: str  # "info" | "prepare" | "act"
     message: str
     detail: dict[str, Any] = field(default_factory=dict)
+    intensity: float = 0.0
+    register: str = "calm"
 
 
 @dataclass
@@ -72,8 +147,11 @@ class _CornerPass:
     inside: bool = False
     min_speed_kmh: float | None = None
     has_braked: bool = False  # any braking seen this pass — suppresses a false late-brake cue
-    late_brake_emitted: bool = False
+    brake_cue_emitted: bool = False
+    release_emitted: bool = False
     exit_emitted: bool = False
+    #: last tone register spoken for this corner pass — feeds register hysteresis (issue #368).
+    last_register: str = "calm"
 
 
 def _num(value: Any) -> float | None:
@@ -89,16 +167,19 @@ def _num(value: Any) -> float | None:
 
 def _normalize_frame(
     frame: dict[str, Any],
-) -> tuple[float | None, float | None, float, float | None]:
-    """Extract ``(spline, speed_kmh, brake, lap)`` from the offline replay or the live
+) -> tuple[float | None, float | None, float, float, float | None]:
+    """Extract ``(spline, speed_kmh, brake, throttle, lap)`` from the offline replay or the live
     ``telemetry_tick`` shape.
 
-    The replay/test shape carries ``spline``/``speed``/``brake`` at the top level; the live
-    high-rate frame (``external_protocol._validate_telemetry_tick``) nests values under ``payload``
-    with speed named ``speed_kmh``. We accept both so the #277 wiring can hand us the real frame
-    without a translation shim. NB: the current high-rate contract does not yet carry ``spline`` —
-    that wiring (#277) must add it to the payload, since corner location requires it. ``lap`` (the
-    completed-lap counter, when present) disambiguates a real lap completion from a pit/teleport.
+    The replay/test shape carries ``spline``/``speed``/``brake``/``throttle`` at the top level; the
+    live high-rate frame (``external_protocol._validate_telemetry_tick``) nests values under
+    ``payload`` with speed named ``speed_kmh``. We accept both so the live wiring hands us the real
+    frame without a translation shim. The live producer (``telemetry_publisher.lua``) DOES emit
+    ``spline`` (and ``throttle``) in the payload (validated by
+    ``external_protocol._validate_telemetry_tick`` as ``spline`` 0..1, ``throttle`` required), so
+    the observer locates corners on the live rig today — ``throttle`` was the only field the
+    producer sent that this normalizer previously dropped (issue #368). ``lap`` (the completed-lap
+    counter, when present) disambiguates a real lap completion from a pit/teleport.
     """
     payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
 
@@ -112,8 +193,9 @@ def _normalize_frame(
     spline = _num(pick("spline", "normalizedSplinePosition"))
     speed = _num(pick("speed", "speed_kmh"))
     brake = _num(pick("brake")) or 0.0
+    throttle = _num(pick("throttle", "gas")) or 0.0
     lap = _num(pick("lap", "lapCount", "lap_count", "completedLaps", "completed_laps"))
-    return spline, speed, brake, lap
+    return spline, speed, brake, throttle, lap
 
 
 class RealtimeObserver:
@@ -131,11 +213,18 @@ class RealtimeObserver:
         *,
         deficit_margin_kmh: float = _DEFICIT_MARGIN_KMH,
         brake_on: float = _BRAKE_ON,
+        lap_length_m: float = _DEFAULT_LAP_LENGTH_M,
     ) -> None:
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
         self._deficit_margin = deficit_margin_kmh
         self._brake_on = brake_on
+        # lap length lets us convert an anticipatory time-lead into a spline distance so a cue's
+        # audio ONSET lands before/at its mark (issue #368 AC a). A sane default keeps offline
+        # replay working without per-track wiring; the live wiring can pass the real length.
+        self._lap_length_m = (
+            lap_length_m if lap_length_m and lap_length_m > 0 else _DEFAULT_LAP_LENGTH_M
+        )
         self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
         self._last_spline: float | None = None
         self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
@@ -153,7 +242,7 @@ class RealtimeObserver:
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
-        spline, speed, brake, lap = _normalize_frame(frame)
+        spline, speed, brake, throttle, lap = _normalize_frame(frame)
         if spline is None or speed is None:
             return []
 
@@ -205,12 +294,20 @@ class RealtimeObserver:
             st = self._passes[ref.index]
             # Braking-evaluation region: from the (corpus/GGV) brake point to the apex — which may
             # begin UPSTREAM of the lateral-g corner window, so a driver coasting past the real
-            # brake point is cued there, not only once the window starts (codex #294 @176).
+            # brake point is cued there, not only once the window starts (codex #294 @176). The
+            # window now opens a tone-register-independent anticipatory LEAD before the brake point
+            # so the cue's audio onset lands before/at the mark (issue #368 AC a).
             bp = ref.best_brake_point_spline
-            if bp is not None and bp <= spline <= ref.apex_spline:
-                if brake >= self._brake_on:
+            if bp is not None:
+                lead = self._lead_spline(speed)
+                if bp <= spline <= ref.apex_spline and brake >= self._brake_on:
                     st.has_braked = True  # so a later release before apex isn't "late to brake"
-                a = self._late_brake(ref, st, spline, speed, brake)
+                if (bp - lead) <= spline <= ref.apex_spline:
+                    a = self._brake_cue(ref, st, spline, speed, brake)
+                    if a is not None:
+                        out.append(a)
+                # Over-braking past the apex while still off-throttle → "release / ease" (#368).
+                a = self._brake_release(ref, st, spline, speed, brake, throttle)
                 if a is not None:
                     out.append(a)
             in_window = ref.spline_lo <= spline <= ref.spline_hi
@@ -229,34 +326,114 @@ class RealtimeObserver:
                     out.append(a)
         return out
 
-    def _late_brake(
-        self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
-    ) -> Advisory | None:
-        """Fire once if the car is past the brake point, before apex, and has not braked at all.
+    def _lead_spline(self, speed_kmh: float) -> float:
+        """Anticipatory lead distance in spline units for the current speed (capped). Issue #368."""
+        if speed_kmh <= 0:
+            return 0.0
+        dist_m = (speed_kmh / 3.6) * _LEAD_S
+        return min(_MAX_LEAD_SPLINE, dist_m / self._lap_length_m)
 
-        Suppressed once the driver has braked anywhere in this pass (``has_braked``): braking early
-        and trailing off before the apex — normal trail-brake / rotation — is not "late to brake"
-        and must not draw an urgent cue (codex #294).
+    def _brake_severity(self, ref: CornerReference, spline: float, speed: float) -> float:
+        """Severity ``s ∈ [0,1]`` for a brake cue — how urgent the "brake" should sound (issue
+        #368).
+
+        Two grounded terms: how far through the braking zone the car is without braking (proximity /
+        lateness, 0 at the brake point → 1 at the apex; clamped to 0 before the point during the
+        anticipatory lead) and the closing speed above the corner's apex target (a car arriving much
+        faster than the reference apex needs a firmer cue). Both come from real telemetry + the
+        reference envelope — no fabricated ceiling.
         """
         bp = ref.best_brake_point_spline
-        if bp is None or st.late_brake_emitted or st.has_braked:
+        if bp is None:
+            return 0.0
+        zone = max(ref.apex_spline - bp, 1e-6)
+        progress = _clamp01((spline - bp) / zone)  # 0 at/before bp, 1 at apex
+        closing = _clamp01((speed - ref.target_apex_kmh) / _CLOSING_REF_KMH)
+        return _clamp01(0.45 * progress + 0.55 * closing)
+
+    def _brake_cue(
+        self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
+    ) -> Advisory | None:
+        """Fire one anticipatory brake cue per pass; its TONE register reflects the situation
+        (#368).
+
+        Fires once, the first frame the car is within the actionable brake window (from the
+        anticipatory lead before the brake point through the apex) and is not yet braking. The
+        register (calm|firm|critical) comes from :meth:`_brake_severity`, so a car arriving on pace
+        gets a calm anticipatory "brake point" while a car carrying far too much speed — or already
+        coasting past the point — gets a firm/critical "Brake!" / "Brake, brake!".
+
+        Suppressed once the driver has braked anywhere in this pass (``has_braked``): braking early
+        and trailing off before the apex — normal trail-brake / rotation — is not a fault and must
+        not draw a cue (codex #294).
+        """
+        bp = ref.best_brake_point_spline
+        if bp is None or st.brake_cue_emitted or st.has_braked:
             return None
-        if spline >= bp and spline < ref.apex_spline and brake < self._brake_on:
-            st.late_brake_emitted = True
-            return Advisory(
-                kind="late_brake",
-                corner=ref.index,
-                spline=round(spline, 4),
-                urgency="act",
-                # +1: CornerReference.index is 0-based; user-facing turn labels are 1-based (T1..)
-                message=f"Past your brake point for T{ref.index + 1} and still coasting — brake.",
-                detail={
-                    "brake_point_spline": round(bp, 4),
-                    "current_kmh": round(speed, 1),
-                    "source": _target_source(ref),
-                },
-            )
-        return None
+        if brake >= self._brake_on:
+            return None
+        s = self._brake_severity(ref, spline, speed)
+        register = _register_for(s, st.last_register, cap="critical")
+        urgency = _URGENCY_FOR_REGISTER[register]
+        st.brake_cue_emitted = True
+        st.last_register = register
+        anticipatory = spline < bp
+        return Advisory(
+            kind="late_brake",
+            corner=ref.index,
+            spline=round(spline, 4),
+            urgency=urgency,
+            intensity=round(s, 3),
+            register=register,
+            # +1: CornerReference.index is 0-based; user-facing turn labels are 1-based (T1..)
+            message=(
+                f"Brake point for T{ref.index + 1} coming up — brake."
+                if anticipatory
+                else f"Past your brake point for T{ref.index + 1} and still coasting — brake."
+            ),
+            detail={
+                "brake_point_spline": round(bp, 4),
+                "current_kmh": round(speed, 1),
+                "anticipatory": anticipatory,
+                "source": _target_source(ref),
+            },
+        )
+
+    def _brake_release(
+        self,
+        ref: CornerReference,
+        st: _CornerPass,
+        spline: float,
+        speed: float,
+        brake: float,
+        throttle: float,
+    ) -> Advisory | None:
+        """Fire once when the car is over-braking PAST the apex while still off-throttle (issue
+        #368).
+
+        Heavy braking after the apex (still off the power) scrubs exit speed instead of releasing
+        toward the throttle. Gated conservatively on a HIGH brake level and no throttle so a normal
+        trail-brake release is not flagged. Register firm (a clear correction, never an alarm).
+        """
+        if st.release_emitted:
+            return None
+        past_apex = ref.apex_spline < spline <= ref.spline_hi
+        if not past_apex or brake < _RELEASE_BRAKE_MIN or throttle >= _THROTTLE_ON:
+            return None
+        st.release_emitted = True
+        s = _clamp01((brake - _RELEASE_BRAKE_MIN) / max(1.0 - _RELEASE_BRAKE_MIN, 1e-6))
+        register = _register_for(s, st.last_register, cap="firm")  # a correction, never an alarm
+        st.last_register = register
+        return Advisory(
+            kind="brake_release",
+            corner=ref.index,
+            spline=round(spline, 4),
+            urgency=_URGENCY_FOR_REGISTER[register],
+            intensity=round(s, 3),
+            register=register,
+            message=f"Still hard on the brakes past the T{ref.index + 1} apex — ease off.",
+            detail={"brake": round(brake, 3), "current_kmh": round(speed, 1)},
+        )
 
     def _apex_deficit(self, ref: CornerReference, st: _CornerPass) -> Advisory | None:
         """On corner exit, compare the min speed carried to the target apex (corpus best / GGV)."""
@@ -271,11 +448,19 @@ class RealtimeObserver:
         # be honest about what the target IS: a demonstrated corpus best vs a GGV theoretical
         # ceiling (which the live TC-off car may not reach — see the #244 frontier diagnostics).
         target_label = "the best lap" if source == "corpus_best" else "the GGV optimum (a ceiling)"
+        # Severity from the magnitude of the deficit; register capped at firm (a slow-loss verdict
+        # is never an alarm). This is the suppressible heads-up — it rides `info` urgency so LOW
+        # verbosity drops it from voice (issue #368 AC e: no post-fact narration in low verbosity).
+        s = _clamp01(deficit / _DEFICIT_REF_KMH)
+        register = _register_for(s, st.last_register, cap="calm")  # a verdict, never an alarm
+        st.last_register = register
         return Advisory(
             kind="apex_deficit",
             corner=ref.index,
             spline=round(ref.apex_spline, 4),
             urgency="info",
+            intensity=round(s, 3),
+            register=register,
             message=(
                 f"T{ref.index + 1}: carried {deficit:.0f} km/h under {target_label} "
                 f"({st.min_speed_kmh:.0f} vs {target:.0f}) — more entry speed if grip allows."

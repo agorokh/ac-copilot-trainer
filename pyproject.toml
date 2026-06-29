@@ -64,6 +64,14 @@ voice-client = [
     "pyttsx3>=2.90",
     "websockets>=16.0",
 ]
+# Issue #368: OFFLINE neural-voice bake (recommended Kokoro-82M backend, Apache-2.0). Used only by
+# the rig/dev bake step (tools/ai_sidecar/voice/bake.py KokoroBackend, lazy-imported); never on the
+# real-time hot path. ffmpeg (system) is also required for the prosody shaper. macOS dev can instead
+# use the `say-expressive` backend (no extra deps).
+voice-bake = [
+    "kokoro-onnx>=0.4.9",
+    "soundfile>=0.13.1",
+]
 # Tier 3 Phase 2+ (#26): not installed in CI; see tools/model_training/train.py
 training = [
   "torch>=2.11.0",
