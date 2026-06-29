@@ -40,6 +40,10 @@ class LauncherPaths:
         return self.root / "status.json"
 
     @property
+    def settings_path(self) -> Path:
+        return self.root / "settings.json"
+
+    @property
     def sidecar_log_path(self) -> Path:
         return self.logs_dir / "sidecar.log"
 
@@ -86,21 +90,41 @@ class GamePointConfig:
         paths: LauncherPaths | None = None,
     ) -> GamePointConfig:
         env_map = env if env is not None else os.environ
-        port = _coerce_port(env_map.get("AC_COPILOT_SIDECAR_PORT"), DEFAULT_PORT)
-        external_bind = env_map.get("AC_COPILOT_SIDECAR_EXTERNAL_BIND", DEFAULT_EXTERNAL_BIND)
+        resolved_paths = paths or default_paths(env_map)
+        from tools.rig_launcher.settings import LauncherSettings
+
+        settings = LauncherSettings.load(resolved_paths.settings_path)
+        port = _configured_port(env_map.get("AC_COPILOT_SIDECAR_PORT"), settings.sidecar_port)
+        external_bind = env_map.get("AC_COPILOT_SIDECAR_EXTERNAL_BIND")
+        if external_bind is None:
+            external_bind = settings.external_bind or DEFAULT_EXTERNAL_BIND
         if external_bind == "":
             external_bind = None
+        voice_tts = _env_bool_or(
+            env_map.get("AC_COPILOT_VOICE_TTS"),
+            default=bool(settings.voice_tts),
+        )
+        start_simhub = _env_bool_or(
+            env_map.get("AC_COPILOT_START_SIMHUB"),
+            default=bool(settings.start_simhub),
+        )
         return cls(
             port=port,
             external_bind=external_bind,
             token=_none_if_blank(env_map.get("AC_COPILOT_SIDECAR_TOKEN")),
-            reference_archive=_none_if_blank(env_map.get("AC_COPILOT_REFERENCE_ARCHIVE")),
-            voice_bank=_none_if_blank(env_map.get("AC_COPILOT_VOICE_BANK")),
-            voice_tts=_env_bool(env_map.get("AC_COPILOT_VOICE_TTS")),
-            setup_store=_none_if_blank(env_map.get("AC_COPILOT_SETUP_STORE")),
-            simhub_exe=_none_if_blank(env_map.get("AC_COPILOT_SIMHUB_EXE")),
-            start_simhub=_env_bool(env_map.get("AC_COPILOT_START_SIMHUB")),
-            paths=paths or default_paths(env_map),
+            reference_archive=_configured_text(
+                env_map.get("AC_COPILOT_REFERENCE_ARCHIVE"),
+                settings.reference_archive,
+            ),
+            voice_bank=_configured_text(env_map.get("AC_COPILOT_VOICE_BANK"), settings.voice_bank),
+            voice_tts=voice_tts,
+            setup_store=_configured_text(
+                env_map.get("AC_COPILOT_SETUP_STORE"),
+                settings.setup_store,
+            ),
+            simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
+            start_simhub=start_simhub,
+            paths=resolved_paths,
         )
 
 
@@ -463,8 +487,28 @@ def _coerce_port(value: str | None, default: int) -> int:
     return default
 
 
+def _configured_port(env_value: str | None, settings_value: int | None) -> int:
+    if env_value is not None:
+        return _coerce_port(env_value, DEFAULT_PORT)
+    if settings_value is not None:
+        return _coerce_port(str(settings_value), DEFAULT_PORT)
+    return DEFAULT_PORT
+
+
+def _configured_text(env_value: str | None, settings_value: str | None) -> str | None:
+    if env_value is not None:
+        return _none_if_blank(env_value)
+    return _none_if_blank(settings_value)
+
+
 def _env_bool(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_bool_or(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    return _env_bool(value)
 
 
 def _none_if_blank(value: str | None) -> str | None:

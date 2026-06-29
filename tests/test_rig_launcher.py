@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from tools.rig_launcher.app import config_from_args, run_sidecar_child
+from tools.rig_launcher.install import (
+    SHORTCUT_NAME,
+    default_exe_path,
+    install_desktop_shortcut,
+)
+from tools.rig_launcher.settings import ensure_settings_file
 from tools.rig_launcher.supervisor import (
     GamePointConfig,
     GamePointSupervisor,
@@ -225,6 +231,66 @@ def test_config_from_env_and_args_uses_launcher_overrides(tmp_path: Path, monkey
     assert cfg.paths.root == tmp_path
 
 
+def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "external_bind": "127.0.0.1",
+                "reference_archive": "ref.json",
+                "setup_store": "setup.jsonl",
+                "sidecar_port": 9999,
+                "simhub_exe": "SimHubWPF.exe",
+                "start_simhub": True,
+                "voice_bank": "bank",
+                "voice_tts": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = GamePointConfig.from_env({}, paths=LauncherPaths(tmp_path))
+
+    assert cfg.port == 9999
+    assert cfg.external_bind == "127.0.0.1"
+    assert cfg.reference_archive == "ref.json"
+    assert cfg.voice_bank == "bank"
+    assert cfg.voice_tts is True
+    assert cfg.setup_store == "setup.jsonl"
+    assert cfg.simhub_exe == "SimHubWPF.exe"
+    assert cfg.start_simhub is True
+    assert cfg.token is None
+
+
+def test_env_overrides_settings_file(tmp_path: Path) -> None:
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"sidecar_port": 9999, "voice_tts": False, "start_simhub": False}),
+        encoding="utf-8",
+    )
+
+    cfg = GamePointConfig.from_env(
+        {
+            "AC_COPILOT_SIDECAR_PORT": "8766",
+            "AC_COPILOT_VOICE_TTS": "1",
+            "AC_COPILOT_START_SIMHUB": "1",
+        },
+        paths=LauncherPaths(tmp_path),
+    )
+
+    assert cfg.port == 8766
+    assert cfg.voice_tts is True
+    assert cfg.start_simhub is True
+
+
+def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None:
+    path = ensure_settings_file(LauncherPaths(tmp_path))
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert path == tmp_path / "settings.json"
+    assert payload["sidecar_port"] == 8765
+    assert "token" not in json.dumps(payload).lower()
+
+
 def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> None:
     args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
 
@@ -232,6 +298,47 @@ def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> N
     assert "--noconsole" in args
     assert "tools.ai_sidecar" in args
     assert str(tmp_path / "tools" / "rig_launcher" / "__main__.py") == args[-1]
+
+
+def test_default_exe_path_targets_dist_launcher(tmp_path: Path) -> None:
+    assert default_exe_path(tmp_path) == tmp_path / "dist" / "AC-Copilot-Game-Point.exe"
+
+
+def test_install_desktop_shortcut_invokes_powershell(tmp_path: Path) -> None:
+    target = tmp_path / "dist" / "AC-Copilot-Game-Point.exe"
+    target.parent.mkdir()
+    target.write_text("", encoding="utf-8")
+    shortcut = tmp_path / "Desktop" / SHORTCUT_NAME
+    calls: list[dict[str, Any]] = []
+
+    def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append({"args": args, "kwargs": kwargs})
+        shortcut.write_text("shortcut", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=f"{shortcut}\n",
+            stderr="",
+        )
+
+    result = install_desktop_shortcut(
+        target,
+        working_directory=tmp_path,
+        shortcut_path=shortcut,
+        run=fake_run,
+        require_windows=False,
+    )
+
+    assert result.shortcut_path == shortcut.resolve()
+    assert result.target_path == target.resolve()
+    assert result.working_directory == tmp_path.resolve()
+    assert calls[0]["args"][0][:4] == [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+    ]
+    assert calls[0]["kwargs"]["env"]["AC_COPILOT_SHORTCUT_TARGET"] == str(target.resolve())
 
 
 def test_sidecar_child_entrypoint_rewrites_sys_argv(monkeypatch) -> None:

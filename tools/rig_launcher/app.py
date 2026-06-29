@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools.rig_launcher.install import default_exe_path, install_desktop_shortcut
+from tools.rig_launcher.settings import ensure_settings_file
 from tools.rig_launcher.supervisor import (
     GamePointConfig,
     GamePointStatus,
@@ -33,6 +35,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--build-exe",
         action="store_true",
         help="Run PyInstaller to build the windowed launcher executable.",
+    )
+    parser.add_argument(
+        "--install-shortcut",
+        action="store_true",
+        help="Create or update the Windows Desktop shortcut to the packaged launcher.",
+    )
+    parser.add_argument(
+        "--shortcut-target",
+        default=None,
+        help="Override the exe path used by --install-shortcut.",
     )
     return parser
 
@@ -65,10 +77,26 @@ def main(argv: list[str] | None = None) -> int:
         return run_sidecar_child(argv[1:])
 
     args = build_arg_parser().parse_args(argv)
+    project_root = Path(__file__).resolve().parents[2]
     if args.build_exe:
-        project_root = Path(__file__).resolve().parents[2]
         cmd = [sys.executable, "-m", "PyInstaller", *build_pyinstaller_args(project_root)]
-        return subprocess.call(cmd)
+        rc = subprocess.call(cmd)
+        if rc != 0 or not args.install_shortcut:
+            return rc
+    if args.install_shortcut:
+        target = (
+            Path(args.shortcut_target).expanduser()
+            if args.shortcut_target
+            else default_exe_path(project_root)
+        )
+        try:
+            result = install_desktop_shortcut(target, working_directory=project_root)
+        except Exception as exc:  # noqa: BLE001 - CLI should report the install failure plainly
+            print(f"Shortcut install failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"Installed Desktop shortcut: {result.shortcut_path}")
+        print(f"Target: {result.target_path}")
+        return 0
 
     supervisor = GamePointSupervisor(config_from_args(args))
     try:
@@ -131,9 +159,17 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         else:
             subprocess.Popen(["xdg-open", str(path)])
 
+    def open_settings() -> None:
+        path = ensure_settings_file(supervisor.paths)
+        if os.name == "nt":
+            os.startfile(path)  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
+
     ttk.Button(button_row, text="Start", command=start).pack(side="left", padx=(0, 8))
     ttk.Button(button_row, text="Refresh", command=refresh).pack(side="left", padx=(0, 8))
-    ttk.Button(button_row, text="Logs", command=open_logs).pack(side="left")
+    ttk.Button(button_row, text="Logs", command=open_logs).pack(side="left", padx=(0, 8))
+    ttk.Button(button_row, text="Settings", command=open_settings).pack(side="left")
     ttk.Label(frame, text=f"Status: {supervisor.paths.status_path}").pack(anchor="w", pady=(16, 0))
 
     refresh()

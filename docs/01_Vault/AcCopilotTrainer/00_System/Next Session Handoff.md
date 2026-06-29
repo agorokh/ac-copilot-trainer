@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T03:30:00Z
+last_updated: 2026-06-29T04:51:43Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -47,6 +47,33 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Game Point #363 launcher install hardening (2026-06-29)
+
+PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) now has the
+visible user launch path and future-extension contract for Game Point. The local
+Desktop shortcut was created through the launcher's own CLI:
+`python -m tools.rig_launcher --install-shortcut`. Verified shortcut:
+`C:\Users\arsen\OneDrive\Desktop\AC Copilot Game Point.lnk` ->
+`C:\Users\arsen\Projects\ac-copilot-trainer\dist\AC-Copilot-Game-Point.exe`,
+working directory `C:\Users\arsen\Projects\ac-copilot-trainer`.
+
+Code/docs added this session: Windows shortcut installer
+(`tools.rig_launcher.install`), non-secret per-user settings contract
+(`tools.rig_launcher.settings`, created/opened by the GUI **Settings** button),
+README launch instructions, and
+`docs/10_Development/14_Game_Point_Launcher.md`. `AGENTS.md` now says
+driver-facing rig functions the operator should start, monitor, or tune belong
+in `tools.rig_launcher` UI/status/settings rather than standalone desktop
+scripts. Secrets such as `AC_COPILOT_SIDECAR_TOKEN` remain environment-only.
+
+Verification: `tests/test_rig_launcher.py` passed (`18 passed`; pytest cache
+write warning only), `ruff check tools\rig_launcher tests\test_rig_launcher.py`
+passed, `ruff format --check tools\rig_launcher tests\test_rig_launcher.py`
+passed, `python scripts\ci_policy.py` passed, launcher import smoke passed, and
+the Windows COM metadata for the `.lnk` matched the target exe/workdir/icon.
+Tier-3 MCP was not exposed in this Codex session, so this pass used vault-only
+grounding and records that gap here for the next session.
 
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 
