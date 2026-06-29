@@ -16,10 +16,11 @@ This brief is the written half. The **rendered** half lives at
 [`design/index.html`](design/index.html) — a standalone, dependency-free page
 you can open in any browser. It shows the actual cockpit palette
 (`firmware/screen/include/ui/tokens.h`) applied to the Windows Game Point
-launcher (healthy + recovery states) and the ESP32 320×480 AC Copilot screens
-(live-coaching + on-pace states). Hand both files to Claude together: this
-`.md` for the constraints and data bindings, the `.html` for the visual target.
-The HTML is the seed set; extend it surface-by-surface as new screens land.
+launcher (healthy + recovery states), ESP32 320×480 AC Copilot screens
+(live-coaching + on-pace states), Pocket Technician, Setup Exchange,
+Settings/Diagnostics, Voice & haptics status, and the in-game CSP HUD band.
+Hand both files to Claude together: this `.md` for the constraints and data
+bindings, the `.html` for the visual target. Extend both when a new screen lands.
 
 ## Copy-paste prompt for Claude Design
 
