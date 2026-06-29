@@ -1,0 +1,50 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+  - "firmware/**/*"
+source: process-miner
+rule_fingerprint: 33f831d5ab2a0100
+mined_from: 4 review comments across 4 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: architecture
+---
+
+# Prompt Copy This (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. Nested ocr lines arrays <code>🐞 Bug</code> <code>≡ Correctness</code>
+
+<pre>
+...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+2\. Sounddevice backend stuck busy <code>🐞 Bug</code> <code>☼ Reliability</code>
+...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+3\. Non-atomic lake rebuild <code>🐞 Bug</code> <code>☼ Reliability</code>
+
+<pre>
+...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+2\. Dangling lvgl row pointer <code>🐞 Bug</code> <code>☼ Reliability</code>
+
+<pre...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

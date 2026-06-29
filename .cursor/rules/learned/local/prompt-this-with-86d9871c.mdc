@@ -1,0 +1,42 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 86d9871c7fc0b53f
+mined_from: 9 review comments across 4 PRs
+last_updated: 2026-06-29
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: security
+preventability: guideline
+---
+
+# Prompt This With (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. Unvalidated <b><i>db_path</i></b> write target <code>📘 Rule violation</code> ...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+2\. <b><i>tt_lake_dir</i></b> allows arbitrary writes <code>📘 Rule violation</cod...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+3\. Deploy path traversal write <code>🐞 Bug</code> <code>⛨ Security</code>
+
+<pre>...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. <b><i>canonical_hash</i></b> not byte-faithful <code>📎 Requirement gap</code>...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

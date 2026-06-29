@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T17:28:29Z
+last_updated: 2026-06-29T17:34:58Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -74,15 +74,42 @@ but are stale if no current-head review repeats them. Detailed merge-contension 
 
 PR [#372](https://github.com/agorokh/ac-copilot-trainer/pull/372) squash-merged to `main` as
 [`e0c93fd`](https://github.com/agorokh/ac-copilot-trainer/commit/e0c93fd09d6f36ac4574c5f843aa07a85a47060e)
-at 2026-06-29T17:10:35Z via `/autonomous-deliver 350`. **#350 stays OPEN** — final acceptance is
-the rig-gated audible smoke where the operator hears a spline-anchored cue while driving vs a faster
-reference.
+at 2026-06-29T17:10:35Z via `/autonomous-deliver 350`. **#350 stays OPEN** — its final acceptance is
+the rig-gated audible smoke (see BLOCKED below).
 
-Merged scope: `tools/ai_sidecar/voice/bake.py` batch Piper baking with per-clip fallback, numeric
-timestamp ordering, cross-device-safe moves, default bank samplerate 48000 Hz, and codepage-safe CLI
-output. During this PR #371 merge, the #372 bake path was reconciled with #371's register/prosody
-model: batch items carry `(text, register, target)`, Piper batch output is shaped per register, and
-the Kokoro/say-expressive/manifest validation work remains intact.
+**Reconciliation (issue body was stale).** #350 **Part A** (Lua `telemetry_tick` producer with
+`spline`) ALREADY SHIPPED in `telemetry_publisher.lua` (commit `84b5698`, #341/#342) — the issue's
+"`git grep telemetry_tick src/` → empty" premise is no longer true. **Part B** draft PR #372 was
+~80% **subsumed by #363** (Game Point launcher), which independently landed the `server.py` voice
+device/host-api/verbosity wiring, the `playback.py` rtmixer duration-completion fix, and `bake.py`
+`_normalize_wav` resampling. Council (4/4) + an adversarial review workflow agreed: salvage PR #372 to
+its genuine net-new and **keep main's shipped rtmixer fix** (dropped #372's actions-membership variant).
+
+**Shipped (`bake.py` only):** batch Piper baking (`PiperBackend.synthesize_many` — one process;
+**falls back to per-clip** on any failure with stdin closed; **numeric** timestamp sort, not lexical;
+`shutil.move` cross-device); default bake samplerate **22050→48000** (WASAPI shared-mode); codepage-safe
+`->` in CLI. Bot review converged: Codex 3×P2 (MIT-piper hang, silent lexical-sort mis-map, cross-volume
+move) + 1 test-env P2 + Qodo numpy-reliability — **all fixed**; Qodo `--out` "rule violation" **rebutted +
+resolved** (operator-run offline CLI, no untrusted input, pre-existing & unchanged by the diff).
+Classification: no migration/env/deps/script/workflow flags.
+
+During this PR #371 merge, the #372 bake path was reconciled with #371's register/prosody model:
+batch items carry `(text, register, target)`, Piper batch output is shaped per register, and the
+Kokoro/say-expressive/manifest validation work remains intact.
+
+**Local verification (m5):** real 48 kHz bake (126 clips, all 48000 Hz, codepage-safe CLI); full
+`telemetry_tick` → `RealtimeObserver` → `coaching.cue` advisory → `VoiceCoach` chain dispatches the
+correct clip (`apex_deficit.info.t01`) from the real bank; voice-bake suite is **stdlib-only** (7
+passed / 2 numpy-skipped with numpy absent, mirroring `.[dev]`).
+
+**BLOCKED — rig-gated final #350 AC (operator action needed).** The on-rig audible smoke (operator
+**hears** a spline-anchored cue while driving vs a faster reference) could not be run from m5: the rig
+PC is online and the sidecar is live on `:8765` (correctly 401-enforces its token), but **SSH from m5
+is denied** — the `mac-to-ag-pc` key (`id_ed25519`) is offered and **rejected for every username
+tried** (matches the recurring "Rig SSH from macOS unavailable" note), and the sidecar WS needs
+`AC_COPILOT_SIDECAR_TOKEN` which is **PC-env-only**. **To finish #350:** authorize the m5 key on the
+PC's `authorized_keys` (or share creds) **and** drive + listen — inherently operator-gated; prior
+sessions deferred this same AC identically.
 
 ## Delivered (2026-06-29) — PR #370 MERGED: M-TT1 Track Titan services crack (#353)
 
@@ -107,11 +134,17 @@ per-corner diagnoses for the last session (Magione, Porsche 911 GT3 R — c3 "Yo
 exit", c4 "line too wide") and retained them to the lake.
 
 **Resume here → M-TT2:** reference-lap telemetry → `lap_archive` schema → M0 `--reference-archive`
-voice feed. Input schema is PINNED in [[tt-services-sigv4-crack-2026-06-29]]: TT telemetry point
-(`dist`→spline, `Kmh`→speed, `brak`→brake, `throt`→throttle, `steer`, `gear`, `X`/`Y`) maps to
-`TRACE_FIELDS` in `tools/ac_harness/reference_lap.py`. Then **M-TT3** (per-corner analysis →
-harness drive-to-reference curriculum). Arbitrary-lap/older-session coaching is also a deferred
-follow-up (needs per-lap telemetry endpoints; M-TT1 scopes to the last session's own lap).
+voice feed. Point schema PINNED + the frame→`TRACE_FIELDS` mapping is **de-risk-PROVEN** against
+real data (`.scratch/tt_mtt2_smoke.py` builds a valid `lap_archive` from the TT reference frames;
+`Kmh`→`speed` units confirmed km/h). **BUT a real blocker surfaced (and is now documented in
+[[tt-services-sigv4-crack-2026-06-29]]): `/last-session` carries only ONE SEGMENT's telemetry
+window (~9% of the lap: measured `dist` 0.265→0.359, derived lap_ms≈29s vs the true ~71s reference).**
+So M-TT2's FIRST step is a **live capture** of the FULL reference telemetry (stitch all 7 segment
+windows by scrubbing the renderer per-segment via CDP, or find a full-lap telemetry endpoint) —
+do it while TT is open — THEN normalise + ship the `reference` CLI + M0 bridge. M-TT2 is NOT a
+single-call add. Then **M-TT3** (per-corner analysis → harness drive-to-reference curriculum).
+Arbitrary-lap/older-session coaching is also a deferred follow-up (M-TT1 scopes to the last
+session's own lap).
 
 ## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
 
