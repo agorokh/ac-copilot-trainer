@@ -60,6 +60,23 @@ def test_canonical_hash_ignores_line_endings() -> None:
     assert len(registrar.canonical_hash(lf)) == 8
 
 
+def test_build_record_infers_track_from_asset_path() -> None:
+    rec = registrar.build_record(ASSET, author="AC Copilot Trainer")
+    assert rec.track_id == "magione"
+
+
+def test_deploy_allows_dotted_content_ids(tmp_path: Path) -> None:
+    (tmp_path / "setups").mkdir()
+    dest = registrar.deploy_setup(
+        ASSET,
+        tmp_path,
+        car_id="ks.porsche.911",
+        track_id="magione.v1",
+    )
+    assert dest.exists()
+    assert dest.parent.name == "magione.v1"
+
+
 def test_build_record_from_curated_asset() -> None:
     assert ASSET.exists(), f"curated asset missing: {ASSET}"
     rec = registrar.build_record(ASSET, track_id="magione", author="AC Copilot Trainer")

@@ -70,7 +70,7 @@ _MOD32 = 4294967296  # 2**32
 # column 0 (no indentation), value is the trimmed remainder. %w in Lua is [A-Za-z0-9]; '_' is added.
 _SECTION_RE = re.compile(r"^\[([^\]]+)\]")
 _KEY_RE = re.compile(r"^([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
-_SAFE_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SAFE_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _validate_path_component(value: str, label: str) -> str:
@@ -80,8 +80,20 @@ def _validate_path_component(value: str, label: str) -> str:
     if "/" in value or "\\" in value or ".." in value:
         raise ValueError(f"invalid {label}: path separators or traversal in {value!r}")
     if not _SAFE_PATH_COMPONENT_RE.match(value):
-        raise ValueError(f"invalid {label}: {value!r} (expected alnum, _, or -)")
+        raise ValueError(f"invalid {label}: {value!r} (expected alnum, _, ., or -)")
     return value
+
+
+def _infer_track_from_path(ini_path: Path) -> str | None:
+    """Infer track id from ``.../setups/<car>/<track>/<name>.ini`` asset layout."""
+    parts = ini_path.resolve().parts
+    for i, part in enumerate(parts):
+        if part == "setups" and i + 3 < len(parts) and parts[i + 3].endswith(".ini"):
+            try:
+                return _validate_path_component(parts[i + 2], "track_id")
+            except ValueError:
+                return None
+    return None
 
 
 def _assert_under_root(path: Path, root: Path) -> Path:
@@ -269,7 +281,7 @@ def build_record(
     return SetupRecord(
         name=name or path.stem,
         car_id=resolved_car,
-        track_id=track_id,
+        track_id=track_id or _infer_track_from_path(path),
         source_path=stored_path,
         canonical_hash=canonical_hash(hash_text),
         tunable_hash=tunable_hash(snapshot),
