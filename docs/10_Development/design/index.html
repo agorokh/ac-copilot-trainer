@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AC Copilot — Claude Design visual package</title>
+<style>
+  :root{
+    --bg:#0b0b0c; --ink:#fff; --muted:#a3a3a3; --quiet:#737373;
+    --panel:#1e1e1e; --panel-2:#1a1a1a; --header:#141414; --line:#2c2c2c;
+    --gold:#ffd700; --amber:#ffc43d; --red:#ef4444; --green:#22c55e;
+    --gold-bg:#332a00; --green-bg:#10240f; --red-bg:#2a1410;
+    --font:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#0e0e10;color:var(--ink);font-family:var(--font);line-height:1.5;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 64px;}
+  h1{font-size:24px;font-weight:600;margin:0 0 4px;}
+  h2{font-size:16px;font-weight:600;margin:36px 0 12px;color:#e5e5e5;border-bottom:1px solid #232325;padding-bottom:8px;}
+  .lede{color:var(--muted);max-width:70ch;margin:0 0 8px;}
+  .grid{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;}
+  .cap{font-size:12px;color:var(--quiet);letter-spacing:.04em;margin:0 0 8px;text-transform:uppercase;}
+  /* device + window chrome */
+  .win{background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;overflow:hidden;width:400px;max-width:100%;}
+  .titlebar{background:var(--header);height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #242424;}
+  .dot{width:9px;height:9px;border-radius:50%;}
+  .pad{padding:16px;}
+  .banner{display:flex;align-items:center;gap:10px;border-radius:8px;padding:12px 14px;margin-bottom:14px;}
+  .row{display:flex;align-items:center;gap:10px;background:var(--panel-2);border-radius:7px;padding:9px 11px;margin-bottom:7px;}
+  .row .name{font-size:12.5px;width:84px;}
+  .pill{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:10px;}
+  .detail{color:var(--quiet);font-size:11.5px;margin-left:auto;}
+  .marker{width:20px;text-align:center;font-size:13px;}
+  .btnrow{display:flex;gap:8px;margin-top:16px;}
+  .btn{flex:1;background:var(--gold);color:#1a1400;border:none;border-radius:7px;padding:10px 0;font-size:13px;font-weight:600;cursor:pointer;}
+  .btn.ghost{flex:0 0 auto;background:#161616;color:#fff;border:1px solid #2e2e2e;padding:10px 14px;}
+  /* esp32 */
+  .device{width:240px;height:360px;background:#000;border:1px solid #2a2a2a;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;}
+  .dhead{height:42px;background:var(--header);display:flex;align-items:center;padding:0 12px;gap:8px;border-bottom:1px solid #242424;}
+  .card{margin:10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:11px 12px;}
+  .bar{height:7px;background:var(--panel);border-radius:4px;overflow:hidden;}
+  .swatch{display:flex;align-items:center;gap:8px;}
+  .chip{width:34px;height:34px;border-radius:8px;border:1px solid #333;}
+  .tokrow{display:flex;flex-wrap:wrap;gap:18px;}
+  .tile{flex:0 0 auto;background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;padding:14px;}
+  table.tok{border-collapse:collapse;font-size:13px;}
+  table.tok td{padding:6px 14px 6px 0;color:var(--muted);}
+  code{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:4px;padding:1px 6px;font-size:12.5px;color:#e5e5e5;}
+  a{color:var(--amber);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AC Copilot — Claude Design visual package</h1>
+  <p class="lede">Rendered cockpit reference for the AC Copilot Trainer driver-facing surfaces. Open this file in a browser, or hand it to Claude alongside <code>docs/10_Development/15_Claude_Design_UI_Package.md</code> (the written brief) to iterate on the visuals. Palette is the authoritative <code>firmware/screen/include/ui/tokens.h</code> set — charcoal/black surfaces, gold accent, green = on pace, red = warning.</p>
+
+  <h2>Visual tokens</h2>
+  <div class="tokrow">
+    <div class="tile">
+      <p class="cap">Surfaces</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="swatch"><span class="chip" style="background:#000"></span><div><div>Base</div><code>#000000</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#141414"></span><div><div>Header</div><code>#141414</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#1e1e1e"></span><div><div>Panel</div><code>#1E1E1E</code></div></div>
+      </div>
+    </div>
+    <div class="tile">
+      <p class="cap">Accents / state</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="swatch"><span class="chip" style="background:#ffd700"></span><div><div>Accent / action</div><code>#FFD700</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#22c55e"></span><div><div>OK / on pace</div><code>#22C55E</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#ef4444"></span><div><div>Alert / warning</div><code>#EF4444</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#ffc43d"></span><div><div>HUD line amber</div><code>#FFC43D</code></div></div>
+      </div>
+    </div>
+    <div class="tile">
+      <p class="cap">Text</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div class="swatch"><span class="chip" style="background:#fff"></span><div><div>Primary</div><code>#FFFFFF</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#a3a3a3"></span><div><div>Muted</div><code>#A3A3A3</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#737373"></span><div><div>Quiet</div><code>#737373</code></div></div>
+      </div>
+    </div>
+    <div class="tile">
+      <p class="cap">Layout</p>
+      <table class="tok">
+        <tr><td>Tap target floor</td><td><code>60 px</code></td></tr>
+        <tr><td>Tile radius</td><td><code>8 px</code></td></tr>
+        <tr><td>Tile gap</td><td><code>12 px</code></td></tr>
+        <tr><td>Screen</td><td><code>320 × 480 portrait</code></td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2>Windows Game Point launcher</h2>
+  <p class="lede">Replaces the raw multi-line status text with status rows (icon · label · state pill · detail), a top "what's the situation" banner, and a primary Start action. Status fields map 1:1 to <code>GamePointStatus</code> in <code>tools/rig_launcher/supervisor.py</code>.</p>
+  <div class="grid">
+    <div>
+      <p class="cap">Healthy — ready to drive</p>
+      <div class="win">
+        <div class="titlebar">
+          <span class="dot" style="background:var(--gold)"></span>
+          <span style="font-size:12.5px;font-weight:500;">AC Copilot · Game Point</span>
+          <span style="margin-left:auto;color:var(--quiet);font-size:12px;">&minus; &times;</span>
+        </div>
+        <div class="pad">
+          <div class="banner" style="background:var(--green-bg);border:1px solid #1e3a1c;">
+            <span style="color:var(--green);font-size:22px;">&#10003;</span>
+            <div><div style="color:var(--green);font-weight:500;">Ready to drive</div><div style="color:var(--muted);font-size:12px;">Sidecar, rig screen and hotspot all live</div></div>
+          </div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:var(--green-bg);color:var(--green)">HEALTHY</span><span class="detail">peers 1 · screen 1</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--green-bg);color:var(--green)">CONNECTED</span><span class="detail">1 screen peer</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">ON</span><span class="detail">1 client</span></div>
+          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:var(--gold-bg);color:var(--gold)">ARMED</span><span class="detail">bank · sounddevice</span></div>
+          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">ABSENT</span><span class="detail">not installed</span></div>
+          <div class="btnrow">
+            <button class="btn">&#9654; Start</button>
+            <button class="btn ghost">&#8635;</button>
+            <button class="btn ghost">Logs</button>
+            <button class="btn ghost">&#9881;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap">Recovery — sidecar not started</p>
+      <div class="win">
+        <div class="titlebar">
+          <span class="dot" style="background:var(--quiet)"></span>
+          <span style="font-size:12.5px;font-weight:500;">AC Copilot · Game Point</span>
+          <span style="margin-left:auto;color:var(--quiet);font-size:12px;">&minus; &times;</span>
+        </div>
+        <div class="pad">
+          <div class="banner" style="background:var(--red-bg);border:1px solid #3a1e1c;">
+            <span style="color:var(--red);font-size:22px;">&#9654;</span>
+            <div><div style="color:var(--red);font-weight:500;">Press Start to launch the sidecar</div><div style="color:var(--muted);font-size:12px;">Nothing is listening on port 8765 yet</div></div>
+          </div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9776;</span><span class="name">Sidecar</span><span class="pill" style="background:#222;color:var(--muted)">STOPPED</span><span class="detail">—</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9636;</span><span class="name">Rig screen</span><span class="pill" style="background:var(--red-bg);color:var(--red)">WAITING</span><span class="detail">no peer</span></div>
+          <div class="row"><span class="marker" style="color:var(--muted)">&#9737;</span><span class="name">Hotspot</span><span class="pill" style="background:var(--green-bg);color:var(--green)">ON</span><span class="detail">0 clients</span></div>
+          <div class="row"><span class="marker" style="color:var(--gold)">&#9834;</span><span class="name">Voice coach</span><span class="pill" style="background:#222;color:var(--muted)">CONFIGURED</span><span class="detail">reference + bank</span></div>
+          <div class="row"><span class="marker" style="color:var(--quiet)">&#9881;</span><span class="name">SimHub</span><span class="pill" style="background:#222;color:var(--muted)">ABSENT</span><span class="detail">not installed</span></div>
+          <div class="btnrow">
+            <button class="btn">&#9654; Start</button>
+            <button class="btn ghost">&#8635;</button>
+            <button class="btn ghost">Logs</button>
+            <button class="btn ghost">&#9881;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>ESP32 rig screen — 320 × 480</h2>
+  <p class="lede">Driver-facing screens. One action line plus one number, legible from two feet away, gloved-thumb tap targets. Bound to the <code>coaching.snapshot</code> / <code>setup.*</code> WebSocket topics.</p>
+  <div class="grid">
+    <div>
+      <p class="cap">Launcher</p>
+      <div class="device">
+        <div class="dhead"><span style="color:var(--gold);font-size:13px;font-weight:600;letter-spacing:.05em;">AC LAUNCHER</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px;"><span class="dot" style="background:var(--green)"></span><span style="color:var(--green);font-size:11px;">CONNECTED</span></span></div>
+        <div style="margin:10px;display:flex;flex-direction:column;gap:10px;">
+          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:500;">AC Copilot</span><span style="color:var(--gold);">&#8250;</span></div>
+          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:500;">Pocket Technician</span><span style="color:var(--gold);">&#8250;</span></div>
+          <div class="card" style="margin:0;display:flex;align-items:center;justify-content:space-between;color:var(--muted);"><span>Setup Exchange</span><span>&#8250;</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap">AC Copilot — live coaching</p>
+      <div class="device">
+        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span style="margin-left:auto;" class="dot" style="background:var(--green)"></span></div>
+        <div class="card">
+          <div style="color:var(--gold);font-size:11px;font-weight:600;letter-spacing:.05em;">T4 · VARIANTE ASCARI</div>
+          <div style="font-size:21px;font-weight:500;margin:5px 0 2px;">Brake later</div>
+          <div style="color:var(--muted);font-size:12.5px;">Carry 8 km/h more to apex</div>
+        </div>
+        <div style="margin:0 10px;display:flex;flex-direction:column;gap:9px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="color:var(--quiet);font-size:11px;">Distance to braking</span><span style="font-size:13px;font-weight:500;">86 m</span></div>
+          <div class="bar"><div style="width:62%;height:100%;background:var(--gold);"></div></div>
+          <div style="display:flex;gap:8px;margin-top:3px;">
+            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Target</div><div style="font-size:17px;font-weight:500;">182</div></div>
+            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Current</div><div style="font-size:17px;font-weight:500;color:var(--red);">196</div></div>
+          </div>
+          <div style="background:var(--red-bg);color:var(--red);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:500;text-align:center;">Too fast · +14 km/h</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap">AC Copilot — on pace (empty/idle variant)</p>
+      <div class="device">
+        <div class="dhead"><span style="color:var(--muted);font-size:12px;">&#8249; Back</span><span style="color:#fff;font-size:13px;font-weight:500;margin-left:4px;">AC Copilot</span><span style="margin-left:auto;" class="dot" style="background:var(--green)"></span></div>
+        <div class="card">
+          <div style="color:var(--quiet);font-size:11px;font-weight:600;letter-spacing:.05em;">T6 · LESMO 2</div>
+          <div style="font-size:21px;font-weight:500;margin:5px 0 2px;color:var(--green);">On pace</div>
+          <div style="color:var(--muted);font-size:12.5px;">Hold this line</div>
+        </div>
+        <div style="margin:0 10px;display:flex;flex-direction:column;gap:9px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span style="color:var(--quiet);font-size:11px;">Distance to braking</span><span style="font-size:13px;font-weight:500;">142 m</span></div>
+          <div class="bar"><div style="width:30%;height:100%;background:var(--gold);"></div></div>
+          <div style="display:flex;gap:8px;margin-top:3px;">
+            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Target</div><div style="font-size:17px;font-weight:500;">214</div></div>
+            <div style="flex:1;background:var(--panel-2);border-radius:7px;padding:8px 10px;"><div style="color:var(--quiet);font-size:10px;">Current</div><div style="font-size:17px;font-weight:500;color:var(--green);">213</div></div>
+          </div>
+          <div style="background:var(--green-bg);color:var(--green);border-radius:7px;padding:7px 10px;font-size:12px;font-weight:500;text-align:center;">On pace · &minus;1 km/h</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>How to extend this package</h2>
+  <p class="lede">These screens are the seed set. The remaining surfaces from the written brief — Pocket Technician, Setup Exchange, Settings/Diagnostics, Voice/Haptics status, and the in-game CSP HUD — follow the same tokens and component patterns. Keep each change in the surface that owns it (LVGL firmware, Tkinter launcher, or CSP Lua HUD) and update both this file and <code>15_Claude_Design_UI_Package.md</code> when a new screen or status row lands.</p>
+</div>
+</body>
+</html>
