@@ -379,3 +379,10 @@ def test_spinner_set_write_nil_keeps_original(lua, tmp_path: pathlib.Path) -> No
     assert ack["ok"] is False
     assert "disk full" in ack["error"] or "write failed" in ack["error"]
     assert setup_path.read_text(encoding="utf-8") == original
+
+
+def test_write_text_file_restore_failure_uses_pcall() -> None:
+    """Atomic setup write reports backup-restore failures via pcall (PR #365 Gemini)."""
+    lua_src = (MODULES_DIR / "setup_library.lua").read_text(encoding="utf-8")
+    assert "local okRestore, errRestore = pcall(os.rename, backup, path)" in lua_src
+    assert "restore from backup failed" in lua_src
