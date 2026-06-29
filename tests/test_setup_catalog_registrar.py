@@ -60,6 +60,36 @@ def test_canonical_hash_ignores_line_endings() -> None:
     assert len(registrar.canonical_hash(lf)) == 8
 
 
+def test_canonical_hash_treats_0x85_as_value_not_newline(tmp_path: Path) -> None:
+    ini = tmp_path / "nel.ini"
+    ini.write_bytes(b"[ABOUT]\nAUTHOR=a\x85b\n[ABS]\nVALUE=7\n")
+    hash_strict = registrar.canonical_hash(ini.read_bytes().decode("latin-1"))
+    broken = registrar.canonical_hash("[ABOUT]\nAUTHOR=a\nb\n[ABS]\nVALUE=7\n")
+    assert hash_strict != broken
+
+
+def test_build_record_infers_car_from_asset_path(tmp_path: Path) -> None:
+    asset_dir = tmp_path / "assets" / "setups" / "ks_test_car" / "magione"
+    asset_dir.mkdir(parents=True)
+    ini = asset_dir / "Test.ini"
+    ini.write_text("[ABS]\nVALUE=7\n", encoding="utf-8")
+    rec = registrar.build_record(ini)
+    assert rec.car_id == "ks_test_car"
+    assert rec.track_id == "magione"
+
+
+def test_build_record_source_path_is_portable() -> None:
+    rec = registrar.build_record(ASSET)
+    assert rec.source_path.startswith("assets/setups/")
+    assert not rec.source_path.startswith("/")
+
+
+def test_deploy_infers_track_from_asset_path(tmp_path: Path) -> None:
+    (tmp_path / "setups").mkdir()
+    dest = registrar.deploy_setup(ASSET, tmp_path, car_id="ks_porsche_911_gt3_r_2016")
+    assert dest.parent.name == "magione"
+
+
 def test_build_record_infers_track_from_asset_path() -> None:
     rec = registrar.build_record(ASSET, author="AC Copilot Trainer")
     assert rec.track_id == "magione"

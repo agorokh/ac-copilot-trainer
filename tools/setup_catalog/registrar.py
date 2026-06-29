@@ -84,16 +84,41 @@ def _validate_path_component(value: str, label: str) -> str:
     return value
 
 
-def _infer_track_from_path(ini_path: Path) -> str | None:
-    """Infer track id from ``.../setups/<car>/<track>/<name>.ini`` asset layout."""
+def _infer_ids_from_path(ini_path: Path) -> tuple[str | None, str | None]:
+    """Infer ``(car_id, track_id)`` from ``.../setups/<car>/<track>/<name>.ini``."""
     parts = ini_path.resolve().parts
     for i, part in enumerate(parts):
         if part == "setups" and i + 3 < len(parts) and parts[i + 3].endswith(".ini"):
             try:
-                return _validate_path_component(parts[i + 2], "track_id")
+                car = _validate_path_component(parts[i + 1], "car_id")
+                track = _validate_path_component(parts[i + 2], "track_id")
+                return car, track
             except ValueError:
-                return None
-    return None
+                return None, None
+    return None, None
+
+
+def _infer_track_from_path(ini_path: Path) -> str | None:
+    return _infer_ids_from_path(ini_path)[1]
+
+
+def _infer_car_from_path(ini_path: Path) -> str | None:
+    return _infer_ids_from_path(ini_path)[0]
+
+
+def _portable_source_path(ini_path: Path, override: str | None = None) -> str:
+    """Store a checkout-portable path (``assets/...``) when the INI lives in-repo."""
+    if override:
+        return override.replace("\\", "/")
+    path = ini_path.resolve()
+    parts = path.parts
+    for i, part in enumerate(parts):
+        if part == "assets" and i + 1 < len(parts):
+            return "/".join(parts[i:])
+    try:
+        return str(path.relative_to(Path.cwd().resolve())).replace("\\", "/")
+    except ValueError:
+        return str(path).replace("\\", "/")
 
 
 def _assert_under_root(path: Path, root: Path) -> Path:
@@ -144,7 +169,8 @@ def _canonical_pairs(text: str) -> list[tuple[str, str, str]]:
     """Harvest ``(section, key, value)`` tuples like ``setup_reader.lua::readIniSnapshot``."""
     pairs: list[tuple[str, str, str]] = []
     section = ""
-    for line in text.splitlines():  # splitlines() strips \n and \r\n like Lua's [^\r\n]+ does
+    # Lua uses ``[^\r\n]+`` — only CR/LF are line breaks, not Unicode NEL (0x85) etc.
+    for line in re.findall(r"[^\r\n]+", text):
         sec = _SECTION_RE.match(line)
         if sec:
             section = sec.group(1)
@@ -266,8 +292,13 @@ def build_record(
     hash_text, parse_text = _read_ini_texts(path)
     snapshot = parse_setup_ini(parse_text)
     setup = from_snapshot(snapshot)
+    inferred_car, inferred_track = _infer_ids_from_path(path)
     resolved_car = (
-        car_id or snapshot.get("CAR.MODEL") or snapshot.get("CAR.SCREEN_NAME") or "unknown"
+        car_id
+        or snapshot.get("CAR.MODEL")
+        or snapshot.get("CAR.SCREEN_NAME")
+        or inferred_car
+        or "unknown"
     )
     by_cat: dict[str, dict[str, float]] = {}
     for cat, params in setup.by_category().items():
@@ -276,12 +307,11 @@ def build_record(
             by_cat[cat] = bucket
     numeric = _numeric_params(snapshot, tunable_only=True)
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # POSIX-normalize the stored path so the version-controlled catalog is portable across OSes.
-    stored_path = (source_path or str(path)).replace("\\", "/")
+    stored_path = _portable_source_path(path, source_path)
     return SetupRecord(
         name=name or path.stem,
         car_id=resolved_car,
-        track_id=track_id or _infer_track_from_path(path),
+        track_id=track_id or inferred_track,
         source_path=stored_path,
         canonical_hash=canonical_hash(hash_text),
         tunable_hash=tunable_hash(snapshot),
@@ -375,11 +405,16 @@ def deploy_setup(
     setups_root = _resolve_ac_setups_root(ac_userdata)
     _, text = _read_ini_texts(src)
     resolved_car = _validate_path_component(
-        car_id or parse_setup_ini(text).get("CAR.MODEL") or "unknown", "car_id"
+        car_id or parse_setup_ini(text).get("CAR.MODEL") or _infer_car_from_path(src) or "unknown",
+        "car_id",
     )
     validated_track: str | None = None
     if track_id:
         validated_track = _validate_path_component(track_id, "track_id")
+    else:
+        inferred_track = _infer_track_from_path(src)
+        if inferred_track:
+            validated_track = _validate_path_component(inferred_track, "track_id")
     dest_dir = setups_root / resolved_car
     if validated_track:
         dest_dir = dest_dir / validated_track
