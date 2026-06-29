@@ -19,11 +19,13 @@ from tools.ac_harness.auto_drive import (
     _build_arg_parser,
     _build_driver,
     _config_from_args,
+    _wait_live,
     default_ac_root,
     generic_gt3_ggv,
     resolve_fast_lane,
     run_auto_drive,
 )
+from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot, PhysicsSnapshot
 
 # A tiny closed square line + a per-point speed profile, for driver-construction tests.
 _LINE = [(0.0, 0.0, 0.0), (50.0, 0.0, 0.0), (50.0, 0.0, 50.0), (0.0, 0.0, 50.0)]
@@ -65,6 +67,44 @@ class FakeController:
 
     def close(self) -> None:
         self.closed = True
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _LiveReader:
+    def __init__(self, packet_ids: list[int]) -> None:
+        self.packet_ids = list(packet_ids)
+        self.index = 0
+        self.closed = False
+
+    def read_graphics(self) -> GraphicsSnapshot:
+        return GraphicsSnapshot(
+            packet_id=self._packet_id(),
+            status=AcGameStatus.LIVE,
+            is_in_pit=False,
+        )
+
+    def read_physics(self) -> PhysicsSnapshot:
+        pkt = self._packet_id()
+        self.index += 1
+        return PhysicsSnapshot(packet_id=pkt)
+
+    def close(self) -> None:
+        self.closed = True
+
+    def _packet_id(self) -> int:
+        if self.index >= len(self.packet_ids):
+            return self.packet_ids[-1]
+        return self.packet_ids[self.index]
 
 
 def _drive_returning(stats: DriveStats, record: dict):
@@ -118,6 +158,29 @@ def test_hijack_failure_reports_stage_hijack():
     assert report.stage == "hijack"
     assert report.launched is True
     assert report.hijacked is False
+
+
+def test_hijack_failure_relaunches_until_control_lands():
+    launches: list[int] = []
+    hijacks: list[FakeController | None] = [None, FakeController()]
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(max_launches=2),
+            launch=_launch,
+            hijack=lambda c: hijacks.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+
+    assert report.ok is True
+    assert launches == [1, 1]
+    assert report.hijacked is True
 
 
 def test_happy_path_window_mode_passes_and_tears_down():
@@ -310,6 +373,32 @@ def test_skip_launch_hijack_failure_reports_launched_false():
     assert report.ok is False
     assert report.stage == "hijack"
     assert report.launched is False  # skip_launch -> launched stays False on hijack failure
+
+
+def test_wait_live_rejects_stale_live_shared_memory(monkeypatch):
+    from tools.ac_harness import auto_drive, shared_memory
+
+    clock = _Clock()
+    monkeypatch.setattr(auto_drive.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(auto_drive.time, "sleep", clock.sleep)
+    monkeypatch.setattr(shared_memory, "SharedMemoryReader", lambda: _LiveReader([42]))
+
+    assert _wait_live(timeout=0.3) is False
+
+
+def test_wait_live_requires_real_packet_advancement(monkeypatch):
+    from tools.ac_harness import auto_drive, shared_memory
+
+    clock = _Clock()
+    monkeypatch.setattr(auto_drive.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(auto_drive.time, "sleep", clock.sleep)
+    monkeypatch.setattr(
+        shared_memory,
+        "SharedMemoryReader",
+        lambda: _LiveReader([1, 2, 3, 4, 5, 6]),
+    )
+
+    assert _wait_live(timeout=1.0) is True
 
 
 def test_build_driver_racing_is_default_and_shifts_gears():

@@ -279,7 +279,11 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "env-token")
     monkeypatch.setattr(srv, "_run", fake_run)
-    monkeypatch.setattr(srv, "_wire_voice", lambda ref_path, bank_dir: None)
+    monkeypatch.setattr(
+        srv,
+        "_wire_voice",
+        lambda ref_path, bank_dir, *, tts_enabled, tts_rate, tts_volume: None,
+    )
     monkeypatch.setattr(
         "sys.argv",
         ["ai_sidecar", "--external-bind", "0.0.0.0", "--port", "0"],
@@ -293,6 +297,49 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
         "reply": True,
         "token": "env-token",
         "setup_store": None,
+    }
+
+
+def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Content Manager autostart inherits voice env without fragile batch quoting."""
+    from tools.ai_sidecar import server as srv
+
+    seen: dict[str, object] = {}
+
+    async def fake_run(
+        host: str, port: int, reply: bool, token: str | None, setup_store: str | None
+    ):
+        del host, port, reply, token, setup_store
+
+    def fake_wire_voice(
+        ref_path: str | None,
+        bank_dir: str | None,
+        *,
+        tts_enabled: bool,
+        tts_rate: int | None,
+        tts_volume: float | None,
+    ) -> None:
+        seen["ref_path"] = ref_path
+        seen["bank_dir"] = bank_dir
+        seen["tts_enabled"] = tts_enabled
+        seen["tts_rate"] = tts_rate
+        seen["tts_volume"] = tts_volume
+
+    monkeypatch.setenv("AC_COPILOT_REFERENCE_ARCHIVE", "ref.json")
+    monkeypatch.setenv("AC_COPILOT_VOICE_BANK", "voice-bank")
+    monkeypatch.setenv("AC_COPILOT_VOICE_TTS", "1")
+    monkeypatch.setattr(srv, "_run", fake_run)
+    monkeypatch.setattr(srv, "_wire_voice", fake_wire_voice)
+    monkeypatch.setattr("sys.argv", ["ai_sidecar", "--host", "127.0.0.1", "--port", "0"])
+
+    srv.main()
+
+    assert seen == {
+        "ref_path": "ref.json",
+        "bank_dir": "voice-bank",
+        "tts_enabled": True,
+        "tts_rate": None,
+        "tts_volume": None,
     }
 
 

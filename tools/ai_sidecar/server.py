@@ -139,6 +139,61 @@ def set_voice_coach(coach: Any | None) -> None:
     _voice_coach = coach
 
 
+class _Pyttsx3VoiceCoach:
+    """Small in-process pyttsx3 adapter for the M0 no-phrase-bank rig path."""
+
+    def __init__(
+        self,
+        speaker: Callable[[str], None],
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        from tools.ai_sidecar.voice.cue import CueArbiter
+
+        self._speaker = speaker
+        self._clock = clock
+        self._arbiter = CueArbiter()
+
+    def subscribe(self, advisory: Any) -> None:
+        payload = _advisory_to_payload(advisory)
+        if payload is None:
+            return
+        cue = self._arbiter.select([payload], self._clock())
+        if cue is None:
+            return
+        logger.info("voice: pyttsx3 speaking %r", cue.text)
+        self._speaker(cue.text)
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    return value is not None and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("ignoring invalid %s=%r; expected integer", name, raw)
+        return default
+    return max(min_value, min(max_value, value))
+
+
+def _env_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("ignoring invalid %s=%r; expected number", name, raw)
+        return default
+    return max(min_value, min(max_value, value))
+
+
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
 LEGACY_SCREEN_CLIENT_PREFIXES = ("ac-copilot-screen",)
@@ -1229,7 +1284,14 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
+def _wire_voice(
+    reference_path: str | None,
+    bank_dir: str | None,
+    *,
+    tts_enabled: bool = False,
+    tts_rate: int | None = None,
+    tts_volume: float | None = None,
+) -> None:
     """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
     Best-effort by design: a missing/invalid reference or bank disables the feature with a loud log
@@ -1274,6 +1336,39 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
                 logger.info("voice: in-process voice coach wired from bank %s", bank_dir)
         except Exception:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
             logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
+    elif tts_enabled:
+        try:
+            from tools.ai_sidecar.voice.client import (
+                DEFAULT_TTS_RATE,
+                DEFAULT_TTS_VOLUME,
+                _pyttsx3_speaker,
+            )
+
+            rate = (
+                tts_rate
+                if tts_rate is not None
+                else _env_int(
+                    "AC_COPILOT_VOICE_RATE", DEFAULT_TTS_RATE, min_value=120, max_value=360
+                )
+            )
+            volume = (
+                tts_volume
+                if tts_volume is not None
+                else _env_float(
+                    "AC_COPILOT_VOICE_VOLUME",
+                    DEFAULT_TTS_VOLUME,
+                    min_value=0.0,
+                    max_value=1.0,
+                )
+            )
+            set_voice_coach(_Pyttsx3VoiceCoach(_pyttsx3_speaker(rate=rate, volume=volume)))
+            logger.info(
+                "voice: in-process pyttsx3 voice coach wired rate=%s volume=%.2f",
+                rate,
+                volume,
+            )
+        except Exception:  # noqa: BLE001 - pyttsx3 must never abort the sidecar
+            logger.exception("voice: failed to initialize pyttsx3 voice coach")
 
 
 def main() -> None:
@@ -1369,7 +1464,31 @@ def main() -> None:
         help=(
             "Issue #341/#340: path to a baked phrase-bank directory. When set (with "
             "--voice-reference), the sidecar speaks the live cues in-process via the VoiceCoach "
-            "engine. Requires the `voice` extra (numpy/sounddevice/rtmixer) + an audio device."
+            "engine. Requires the `voice` extra (numpy/sounddevice/rtmixer) + an audio device. "
+            "Falls back to $AC_COPILOT_VOICE_BANK."
+        ),
+    )
+    p.add_argument(
+        "--voice-tts",
+        action="store_true",
+        help=(
+            "Issue #341: speak coaching.cue advisories in-process via Windows pyttsx3 when no "
+            "voice bank is configured. Also enabled by $AC_COPILOT_VOICE_TTS=1."
+        ),
+    )
+    p.add_argument(
+        "--voice-rate",
+        type=int,
+        default=None,
+        help="pyttsx3 speaking rate for --voice-tts. Falls back to $AC_COPILOT_VOICE_RATE.",
+    )
+    p.add_argument(
+        "--voice-volume",
+        type=float,
+        default=None,
+        help=(
+            "pyttsx3 speaking volume for --voice-tts, 0.0 to 1.0. "
+            "Falls back to $AC_COPILOT_VOICE_VOLUME."
         ),
     )
     args = p.parse_args()
@@ -1407,7 +1526,14 @@ def main() -> None:
         raise SystemExit("--token is required for non-loopback bind addresses")
 
     ref_path = args.voice_reference or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
-    _wire_voice(ref_path, args.voice_bank)
+    bank_dir = args.voice_bank or os.environ.get("AC_COPILOT_VOICE_BANK")
+    _wire_voice(
+        ref_path,
+        bank_dir,
+        tts_enabled=args.voice_tts or _env_truthy("AC_COPILOT_VOICE_TTS"),
+        tts_rate=args.voice_rate,
+        tts_volume=args.voice_volume,
+    )
 
     try:
         asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))

@@ -175,6 +175,33 @@ def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
     assert server._observer is sentinel
 
 
+def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
+    import tools.ai_sidecar.voice.client as voice_client
+
+    spoken: list[str] = []
+    seen: dict[str, float | int] = {}
+    server.set_voice_coach(None)
+
+    def fake_speaker(*, rate: int, volume: float):
+        seen["rate"] = rate
+        seen["volume"] = volume
+        return spoken.append
+
+    monkeypatch.setenv("AC_COPILOT_VOICE_RATE", "260")
+    monkeypatch.setenv("AC_COPILOT_VOICE_VOLUME", "0.8")
+    monkeypatch.setattr(voice_client, "_pyttsx3_speaker", fake_speaker)
+
+    try:
+        server._wire_voice(None, None, tts_enabled=True)
+        assert server._voice_coach is not None
+        server._voice_coach.subscribe(_adv(kind="apex_deficit", corner=1, urgency="info"))
+    finally:
+        server.set_voice_coach(None)
+
+    assert spoken == ["Carry more speed, Turn 2."]
+    assert seen == {"rate": 260, "volume": 0.8}
+
+
 class _FakeWS:
     """Minimal loopback websocket stand-in for handler-level tests."""
 
