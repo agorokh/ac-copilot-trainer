@@ -184,9 +184,10 @@ def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
     seen: dict[str, float | int] = {}
     server.set_voice_coach(None)
 
-    def fake_speaker(*, base_rate: int, base_volume: float):
+    def fake_speaker(*, base_rate: int, base_volume: float, require_opt_in: bool):
         seen["rate"] = base_rate
         seen["volume"] = base_volume
+        seen["require_opt_in"] = int(require_opt_in)
 
         def speak(text: str, register: str = "calm") -> None:
             spoken.append((text, register))
@@ -207,7 +208,7 @@ def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
         server.set_voice_coach(None)
 
     assert spoken == [("More entry speed, Turn 2.", "calm")]
-    assert seen == {"rate": 260, "volume": 0.8}
+    assert seen == {"rate": 260, "volume": 0.8, "require_opt_in": 0}
 
 
 def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):

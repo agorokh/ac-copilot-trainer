@@ -1536,7 +1536,13 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 )
             )
             set_voice_coach(
-                _Pyttsx3VoiceCoach(_pyttsx3_speaker(base_rate=rate, base_volume=volume))
+                _Pyttsx3VoiceCoach(
+                    _pyttsx3_speaker(
+                        base_rate=rate,
+                        base_volume=volume,
+                        require_opt_in=False,
+                    )
+                )
             )
             logger.info(
                 "voice: in-process pyttsx3 voice coach wired rate=%s volume=%.2f",

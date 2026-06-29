@@ -12,7 +12,7 @@ Run on the rig alongside the sidecar (``pip install -e ".[voice-client]"``):
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from tools.ai_sidecar.external_protocol import (
@@ -95,7 +95,35 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
     return not failed and worker_alive
 
 
-def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_VOLUME):
+def _env_truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _disabled_speaker(reason: str) -> Callable[[str, str], None]:
+    import logging
+
+    logger = logging.getLogger(__name__)
+    warned = False
+
+    def speak(text: str, register: str = "calm") -> None:
+        nonlocal warned
+        del register
+        if not warned:
+            logger.warning("pyttsx3 disabled: %s; dropping cue %r", reason, text)
+            warned = True
+
+    return speak
+
+
+def _pyttsx3_speaker(
+    base_rate: int = DEFAULT_TTS_RATE,
+    base_volume: float = DEFAULT_TTS_VOLUME,
+    *,
+    require_opt_in: bool = True,
+    environ: Mapping[str, str] | None = None,
+    rate: int | None = None,
+    volume: float | None = None,
+) -> Callable[[str, str], None]:
     """Build a non-blocking speak(text, register) backed by pyttsx3 on a dedicated worker thread.
 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop
@@ -103,10 +131,23 @@ def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_V
     register (issue #368) sets the engine rate + volume per utterance so the WS path escalates tone.
     """
     import logging
+    import os
     import queue
     import threading
 
     import pyttsx3
+
+    if rate is not None:
+        base_rate = rate
+    if volume is not None:
+        base_volume = volume
+
+    env = os.environ if environ is None else environ
+    if require_opt_in:
+        if not _env_truthy(env.get("AC_COPILOT_VOICE_TTS")):
+            return _disabled_speaker("AC_COPILOT_VOICE_TTS=1 is required")
+        if env.get("AC_COPILOT_VOICE_BANK"):
+            return _disabled_speaker("AC_COPILOT_VOICE_BANK is configured")
 
     logger = logging.getLogger(__name__)
     q: queue.Queue[tuple[str, str] | None] = queue.Queue(maxsize=_VOICE_QUEUE_MAX)
@@ -127,8 +168,8 @@ def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_V
                 break
             text, register = item
             try:
-                engine.setProperty("rate", _REGISTER_RATE.get(register, rate))
-                engine.setProperty("volume", _REGISTER_VOLUME.get(register, volume))
+                engine.setProperty("rate", _REGISTER_RATE.get(register, base_rate))
+                engine.setProperty("volume", _REGISTER_VOLUME.get(register, base_volume))
                 engine.say(text)
                 engine.runAndWait()
             except Exception:
