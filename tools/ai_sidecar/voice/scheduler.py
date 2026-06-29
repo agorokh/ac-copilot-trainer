@@ -138,11 +138,13 @@ class Scheduler:
         if (now - item.enqueued_at) > self._config.ttl_s:
             _log.debug("voice: dropping stale %s (age=%.3fs)", utt.clip_id, now - item.enqueued_at)
             return None
-        # Dedup: same (kind, corner) within the pass collapses to one utterance.
-        last_key = self._last_spoke_key.get(utt.dedup_key)
-        if last_key is not None and (now - last_key) < self._config.dedup_window_s:
-            _log.debug("voice: dedup-suppress %s (key=%s)", utt.clip_id, utt.dedup_key)
-            return None
+        # Dedup: same (kind, corner) within the pass collapses to one utterance. Fresh act cues are
+        # exempt so a same-corner escalation from "brake soon" to "brake now" is never silenced.
+        if not is_act:
+            last_key = self._last_spoke_key.get(utt.dedup_key)
+            if last_key is not None and (now - last_key) < self._config.dedup_window_s:
+                _log.debug("voice: dedup-suppress %s (key=%s)", utt.clip_id, utt.dedup_key)
+                return None
         # Cooldown: minimum gap between same-kind cues. ACT is exempt (never delayed/dropped).
         if not is_act:
             last_kind = self._last_spoke_kind.get(utt.kind)
@@ -174,6 +176,7 @@ class Scheduler:
         except Exception:  # noqa: BLE001 — never let a backend fault crash the scheduler thread
             _log.exception("voice: playback.play failed for %s — staying silent", winner.clip_id)
             return None
+        _log.info("voice: dispatched %s urgency=%s", winner.clip_id, winner.urgency)
         if winner.rank >= _ACT_RANK and enqueued_at is not None:
             latency_ms = (now - enqueued_at) * 1000.0
             if latency_ms > 150.0:

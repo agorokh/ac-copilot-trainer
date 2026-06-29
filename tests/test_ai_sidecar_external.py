@@ -198,6 +198,26 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
+    assert ep.validate_inbound({"v": 1, "type": "se.search", "limit": 10}) is None
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "se.download",
+                "setup_id": 42,
+                "car_id": "ks_porsche_911_gt3_r_2016",
+                "track_id": "magione",
+            }
+        )
+        is None
+    )
+    assert ep.validate_inbound({"v": 1, "type": "setup.spinner.list"}) is None
+    assert (
+        ep.validate_inbound(
+            {"v": 1, "type": "setup.spinner.set", "section": "FRONT_BIAS", "value": 65}
+        )
+        is None
+    )
     assert ep.validate_inbound(_telemetry_tick()) is None
     assert ep.validate_inbound(_telemetry_tick(slip=-0.35)) is None
     assert ep.validate_inbound(_telemetry_tick(tyre_temps_c={"fl": 74.1})) is None
@@ -227,6 +247,32 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
+    assert "limit must be <= 40" in (
+        ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
+    )
+    assert "positive integer 'setup_id'" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "se.download",
+                "setup_id": "42",
+                "car_id": "ks_porsche_911_gt3_r_2016",
+            }
+        )
+        or ""
+    )
+    assert "non-empty 'car_id'" in (
+        ep.validate_inbound({"v": 1, "type": "se.download", "setup_id": 42}) or ""
+    )
+    assert "section" in (
+        ep.validate_inbound({"v": 1, "type": "setup.spinner.set", "value": 66}) or ""
+    )
+    assert "finite number" in (
+        ep.validate_inbound(
+            {"v": 1, "type": "setup.spinner.set", "section": "FRONT_BIAS", "value": "66"}
+        )
+        or ""
+    )
     assert "payload" in (ep.validate_inbound({"v": 1, "type": "telemetry_tick"}) or "")
     assert "throttle must be <= 1" in (ep.validate_inbound(_telemetry_tick(throttle=1.2)) or "")
     assert "lap_time_ms must be >= 0" in (
@@ -265,7 +311,13 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
     seen: dict[str, object] = {}
 
     async def fake_run(
-        host: str, port: int, reply: bool, token: str | None, setup_store: str | None
+        host: str,
+        port: int,
+        reply: bool,
+        token: str | None,
+        setup_store: str | None,
+        setup_exchange_endpoint: str | None,
+        user_setups_root: str | None,
     ):
         seen.update(
             {
@@ -274,12 +326,18 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
                 "reply": reply,
                 "token": token,
                 "setup_store": setup_store,
+                "setup_exchange_endpoint": setup_exchange_endpoint,
+                "user_setups_root": user_setups_root,
             }
         )
 
     monkeypatch.setenv("AC_COPILOT_SIDECAR_TOKEN", "env-token")
     monkeypatch.setattr(srv, "_run", fake_run)
-    monkeypatch.setattr(srv, "_wire_voice", lambda ref_path, bank_dir: None)
+
+    def fake_wire_voice(config: srv.VoiceRuntimeConfig) -> None:
+        del config
+
+    monkeypatch.setattr(srv, "_wire_voice", fake_wire_voice)
     monkeypatch.setattr(
         "sys.argv",
         ["ai_sidecar", "--external-bind", "0.0.0.0", "--port", "0"],
@@ -293,6 +351,58 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
         "reply": True,
         "token": "env-token",
         "setup_store": None,
+        "setup_exchange_endpoint": None,
+        "user_setups_root": None,
+    }
+
+
+def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Content Manager autostart inherits voice env without fragile batch quoting."""
+    from tools.ai_sidecar import server as srv
+
+    seen: dict[str, object] = {}
+
+    async def fake_run(
+        host: str,
+        port: int,
+        reply: bool,
+        token: str | None,
+        setup_store: str | None,
+        setup_exchange_endpoint: str | None,
+        user_setups_root: str | None,
+    ):
+        del host, port, reply, token, setup_store, setup_exchange_endpoint, user_setups_root
+
+    def fake_wire_voice(config: srv.VoiceRuntimeConfig) -> None:
+        seen["ref_path"] = config.reference_path
+        seen["bank_dir"] = config.bank_dir
+        seen["tts_enabled"] = config.tts_enabled
+        seen["tts_rate"] = config.tts_rate
+        seen["tts_volume"] = config.tts_volume
+        seen["voice_backend"] = config.backend
+        seen["voice_device"] = config.device
+        seen["voice_host_api"] = config.host_api
+        seen["voice_verbosity"] = config.verbosity
+
+    monkeypatch.setenv("AC_COPILOT_REFERENCE_ARCHIVE", "ref.json")
+    monkeypatch.setenv("AC_COPILOT_VOICE_BANK", "voice-bank")
+    monkeypatch.setenv("AC_COPILOT_VOICE_TTS", "1")
+    monkeypatch.setattr(srv, "_run", fake_run)
+    monkeypatch.setattr(srv, "_wire_voice", fake_wire_voice)
+    monkeypatch.setattr("sys.argv", ["ai_sidecar", "--host", "127.0.0.1", "--port", "0"])
+
+    srv.main()
+
+    assert seen == {
+        "ref_path": "ref.json",
+        "bank_dir": "voice-bank",
+        "tts_enabled": True,
+        "tts_rate": None,
+        "tts_volume": None,
+        "voice_backend": None,
+        "voice_device": None,
+        "voice_host_api": None,
+        "voice_verbosity": None,
     }
 
 
@@ -470,6 +580,145 @@ def test_external_request_errors_when_no_loopback_lua_peer() -> None:
     err = asyncio.run(_run())
     assert err["type"] == ep.TYPE_ERROR
     assert "no loopback Lua peer connected" in err["message"]
+
+
+def test_setup_exchange_search_and_download_are_sidecar_local(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _FakeSetupExchangeClient:
+        def __init__(self, endpoint: str) -> None:
+            self.endpoint = endpoint
+
+        def search(self, **_kwargs: object) -> dict[str, object]:
+            return {
+                "ok": True,
+                "endpoint": self.endpoint,
+                "setups": [{"setup_id": 42, "name": "Fast race", "downloads": 7}],
+                "count": 1,
+                "total": 1,
+            }
+
+        def download_setup(self, setup_id: int) -> dict[str, object]:
+            return {"setup_id": setup_id, "name": "Fast race", "data": "[HEADER]\nVERSION=1"}
+
+    monkeypatch.setattr(srv, "SetupExchangeClient", _FakeSetupExchangeClient)
+    srv._setup_exchange_endpoint = "https://se.example.test"
+    srv._setup_exchange_user_setups_root = tmp_path / "Documents" / "Assetto Corsa" / "setups"
+
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "screen",
+                            "client_class": ep.CLIENT_CLASS_SCREEN,
+                        }
+                    )
+                )
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "se.search",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                search = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "se.download",
+                            "setup_id": 42,
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "name": "Fast race",
+                        }
+                    )
+                )
+                download = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return search, download
+
+    try:
+        search, download = asyncio.run(_run())
+    finally:
+        srv._setup_exchange_endpoint = None
+        srv._setup_exchange_user_setups_root = None
+
+    assert search["type"] == ep.TYPE_SETUP_EXCHANGE_SEARCH_RESULT
+    assert search["ok"] is True
+    assert search["setups"][0]["setup_id"] == 42
+    assert download["type"] == ep.TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+    assert download["ok"] is True
+    assert Path(download["path"]).read_text(encoding="utf-8") == "[HEADER]\nVERSION=1\n"
+
+
+def test_setup_exchange_download_oserror_returns_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _FakeSetupExchangeClient:
+        def __init__(self, endpoint: str) -> None:
+            self.endpoint = endpoint
+
+    def fail_install(**_kwargs: object) -> dict[str, object]:
+        raise PermissionError("permission denied")
+
+    monkeypatch.setattr(srv, "SetupExchangeClient", _FakeSetupExchangeClient)
+    monkeypatch.setattr(srv, "download_and_install_setup", fail_install)
+    srv._setup_exchange_endpoint = "https://se.example.test"
+    srv._setup_exchange_user_setups_root = tmp_path / "Documents" / "Assetto Corsa" / "setups"
+
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "screen",
+                            "client_class": ep.CLIENT_CLASS_SCREEN,
+                        }
+                    )
+                )
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "se.download",
+                            "setup_id": 42,
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "name": "Fast race",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    try:
+        ack = asyncio.run(_run())
+    finally:
+        srv._setup_exchange_endpoint = None
+        srv._setup_exchange_user_setups_root = None
+
+    assert ack["type"] == ep.TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+    assert ack["ok"] is False
+    assert ack["setup_id"] == 42
+    assert "failed to install setup" in ack["error"]
+    assert "permission denied" in ack["error"]
 
 
 def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:

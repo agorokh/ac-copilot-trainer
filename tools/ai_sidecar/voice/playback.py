@@ -288,6 +288,7 @@ class RtMixerPlayback:
         device_name: str | None,
         host_api: str | None,
         channels: int = 1,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         import rtmixer  # noqa: F401 - imported to fail fast if the extra is missing
         import sounddevice as sd
@@ -309,14 +310,17 @@ class RtMixerPlayback:
         self._mixer.start()
         self._current: Utterance | None = None
         self._action = None
+        self._clock = clock
+        self._current_until = 0.0
         _log.info(
             "voice: rtmixer stream open on device index %d @ %d Hz", device_index, bank.samplerate
         )
 
     @property
     def current(self) -> Utterance | None:
-        # An action that has run to completion frees the channel.
-        if self._action is not None and self._action.done:
+        # rtmixer returns a C action pointer without a stable cross-version completion flag. Track
+        # expected clip duration so the scheduler frees the channel after playback naturally ends.
+        if self._current is not None and self._clock() >= self._current_until:
             self._current = None
             self._action = None
         return self._current
@@ -328,6 +332,7 @@ class RtMixerPlayback:
             return
         self._action = self._mixer.play_buffer(pcm, channels=1)
         self._current = utterance
+        self._current_until = self._clock() + (len(pcm) / self._bank.samplerate)
 
     def cancel(self) -> None:
         if self._action is not None:
@@ -337,6 +342,7 @@ class RtMixerPlayback:
                 _log.exception("voice: rtmixer cancel failed")
         self._action = None
         self._current = None
+        self._current_until = 0.0
 
     def close(self) -> None:
         try:
@@ -344,6 +350,7 @@ class RtMixerPlayback:
         except Exception:  # noqa: BLE001
             _log.exception("voice: rtmixer stop failed")
         self._current = None
+        self._current_until = 0.0
 
 
 class _TimedCurrent:

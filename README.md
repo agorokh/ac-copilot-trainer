@@ -37,6 +37,21 @@ Enable in Content Manager → Settings → Apps.
 
 **Python sidecar auto-launch (issue #77):** `start_sidecar.bat` walks upward from the app folder until it finds `tools/ai_sidecar` (your full git checkout). If you install only the Lua folder into `apps/lua/`, set environment variable `AC_COPILOT_REPO_ROOT` to the repository root before starting AC, or run `python -m tools.ai_sidecar` manually.
 
+**Game Point launcher (issue #363):** build the Windows launcher exe and Desktop
+shortcut from the repo root:
+
+```powershell
+pip install -e ".[launcher]"
+python -m tools.rig_launcher --build-exe
+python -m tools.rig_launcher --install-shortcut
+```
+
+Use the **AC Copilot Game Point** shortcut on the Desktop to launch the rig
+supervisor. Non-secret local defaults live in
+`%LOCALAPPDATA%\AC Copilot Trainer\GamePoint\settings.json`; tokens stay in the
+user environment. See
+[docs/10_Development/14_Game_Point_Launcher.md](docs/10_Development/14_Game_Point_Launcher.md).
+
 **Setup experiments (issue #114):** lap archives under `journal/laps` can be rebuilt into a setup experiment table and queried for A/B comparisons or the next setup suggestion:
 ```bash
 python -m tools.ai_sidecar --setup-rebuild-experiments "<...>/journal/laps"

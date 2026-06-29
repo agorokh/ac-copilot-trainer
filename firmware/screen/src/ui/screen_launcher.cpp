@@ -39,6 +39,7 @@
 #include "ui/nav.h"
 #include "ui/screen_ac_copilot.h"
 #include "ui/screen_pocket_technician.h"
+#include "ui/screen_setup_exchange.h"
 #include "ui/tokens.h"
 
 #include <Arduino.h>
@@ -144,41 +145,6 @@ void on_screen_delete(lv_event_t* e) {
     delete ctx;
 }
 
-// Placeholder factory retained for Setup Exchange (Part E) until that
-// screen is implemented. Parts C and D have shipped — see
-// screen_ac_copilot.cpp / screen_pocket_technician.cpp for the real
-// factories, wired below in `on_tile_clicked`.
-lv_obj_t* placeholder_screen(const char* title) {
-    lv_obj_t* scr = lv_obj_create(nullptr);
-    lv_obj_set_style_bg_color(scr, UI_BG_BASE, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t* heading = lv_label_create(scr);
-    lv_label_set_text(heading, title);
-    lv_obj_set_style_text_color(heading, UI_TX_PRIMARY, LV_PART_MAIN);
-    lv_obj_align(heading, LV_ALIGN_TOP_MID, 0, 32);
-
-    lv_obj_t* body = lv_label_create(scr);
-    lv_label_set_text(body, "Coming soon\nTap to return");
-    lv_obj_set_style_text_color(body, UI_TX_MUTED, LV_PART_MAIN);
-    lv_obj_set_style_text_align(body, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-    lv_obj_center(body);
-
-    // Whole-screen tap returns to launcher.
-    lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(
-        scr,
-        [](lv_event_t*) { ui_nav_pop(); },
-        LV_EVENT_CLICKED,
-        nullptr);
-    return scr;
-}
-
-// AC Copilot (Part C) and Pocket Technician (Part D) now have real
-// factories; Setup Exchange (Part E) is still a placeholder.
-lv_obj_t* setup_exchange_create(void)  { return placeholder_screen("SETUP EXCHANGE"); }
-
 void on_tile_clicked(lv_event_t* e) {
     auto app = static_cast<launcher_app_t>(
         reinterpret_cast<uintptr_t>(lv_event_get_user_data(e)));
@@ -190,7 +156,7 @@ void on_tile_clicked(lv_event_t* e) {
             ui_nav_push(screen_pocket_technician_create);
             break;
         case LAUNCHER_APP_SETUP_EXCHANGE:
-            ui_nav_push(setup_exchange_create);
+            ui_nav_push(screen_setup_exchange_create);
             break;
     }
 }

@@ -28,14 +28,26 @@ local _cachedList = nil  -- {name, mtime, path}[] — invalidated by SetupsListR
 local _listCacheKey = nil ---@type string|nil  -- car/track/layout tuple; busts on session change
 local _hookInstalled = false
 
+local SPINNER_DEFS = {
+  FRONT_BIAS = { label = "Brake bias", unit = "%", min = 40, max = 80, step = 1, order = 10 },
+  ABS = { label = "ABS", unit = "", min = 0, max = 12, step = 1, order = 20 },
+  TRACTION_CONTROL = { label = "TC", unit = "", min = 0, max = 12, step = 1, order = 30 },
+  WING_1 = { label = "Front wing", unit = "", min = 0, max = 40, step = 1, order = 40 },
+  WING_2 = { label = "Rear wing", unit = "", min = 0, max = 40, step = 1, order = 50 },
+}
+
+local function invalidateListCache()
+  _cachedList = nil
+  _listCacheKey = nil
+end
+
 local function installRefreshHookOnce()
   if _hookInstalled then return end
   _hookInstalled = true
   if ac and type(ac.onSetupsListRefresh) == "function" then
     pcall(function()
       ac.onSetupsListRefresh(function()
-        _cachedList = nil
-        _listCacheKey = nil
+        invalidateListCache()
       end)
     end)
   end
@@ -336,17 +348,23 @@ function M.loadByName(nameOrOpts)
   -- Resolve to a full path via the cached listing (busts on SetupsListRefresh).
   -- Path match wins over name when both are present so callers can carry the
   -- exact track/layout selection forward.
-  local list = M.list()
-  local match
-  if wantPath then
-    for i = 1, #list do
-      if list[i].path == wantPath then match = list[i]; break end
+  local function findMatch(rows)
+    if wantPath then
+      for i = 1, #rows do
+        if rows[i].path == wantPath then return rows[i] end
+      end
     end
+    if name ~= "" then
+      for i = 1, #rows do
+        if rows[i].name == name then return rows[i] end
+      end
+    end
+    return nil
   end
-  if not match and name ~= "" then
-    for i = 1, #list do
-      if list[i].name == name then match = list[i]; break end
-    end
+  local match = findMatch(M.list())
+  if not match and wantPath then
+    invalidateListCache()
+    match = findMatch(M.list())
   end
   if not match then
     return { ok = false, name = name, error = "not found" }
@@ -377,8 +395,7 @@ function M.loadByName(nameOrOpts)
   end
   -- Bust the cache so a follow-up `setup.list` re-reads BEST values that
   -- might now reference the freshly-loaded setup.
-  _cachedList = nil
-  _listCacheKey = nil
+  invalidateListCache()
   return {
     ok = true,
     -- Echo the listing's canonical basename so path-only loads still surface
@@ -450,6 +467,513 @@ function M.summaryForSetup(iniPath)
     end
   end
   return out
+end
+
+local function numberOrNil(v)
+  local n = tonumber(v)
+  if n == nil or n ~= n or n == math.huge or n == -math.huge then
+    return nil
+  end
+  return n
+end
+
+local function safeField(tbl, key)
+  local ok, v = pcall(function()
+    return tbl[key]
+  end)
+  if ok then return v end
+  return nil
+end
+
+local function normalizeSetupPath(p)
+  if type(p) ~= "string" or p == "" or p:find("%z") then
+    return nil
+  end
+  return p:gsub("\\", "/")
+end
+
+local function pathHasTraversal(p)
+  for part in p:gmatch("[^/]+") do
+    if part == ".." then
+      return true
+    end
+  end
+  return false
+end
+
+local function safeUserSetupPath(p)
+  local norm = normalizeSetupPath(p)
+  if not norm then
+    return nil, "missing setup path"
+  end
+  if pathHasTraversal(norm) then
+    return nil, "setup path traversal not allowed"
+  end
+  local root = normalizeSetupPath(userSetupsRoot())
+  if not root then
+    return nil, "user setups folder unavailable"
+  end
+  root = root:gsub("/+$", "")
+  local low = norm:lower()
+  local rootLow = root:lower()
+  if low ~= rootLow and low:sub(1, #rootLow + 1) ~= (rootLow .. "/") then
+    return nil, "setup path outside user setups folder"
+  end
+  return norm, nil
+end
+
+local function activeSetupPath()
+  local car, sim
+  if ac and type(ac.getCar) == "function" then
+    local okCar, c = pcall(ac.getCar, 0)
+    if okCar then car = c end
+  end
+  if ac and type(ac.getSim) == "function" then
+    local okSim, s = pcall(ac.getSim)
+    if okSim then sim = s end
+  end
+  return setupReader.activeSetupIniPath(car, sim)
+end
+
+local function setupPathFromPayload(payload)
+  local p
+  if type(payload) == "table" and type(payload.path) == "string" and payload.path ~= "" then
+    p = payload.path
+  else
+    p = activeSetupPath()
+  end
+  return safeUserSetupPath(p)
+end
+
+local function readTextFile(path)
+  local f = io.open(path, "r")
+  if not f then
+    return nil, "setup file not found"
+  end
+  local text = f:read("*a")
+  f:close()
+  if type(text) ~= "string" then
+    return nil, "setup file unreadable"
+  end
+  return text, nil
+end
+
+local function writeTextFile(path, text)
+  local tmp
+  for i = 1, 16 do
+    local candidate = string.format("%s.ac-copilot-tmp-%d", path, i)
+    local existing = io.open(candidate, "r")
+    if existing then
+      existing:close()
+    else
+      tmp = candidate
+      break
+    end
+  end
+  if not tmp then
+    return false, "setup temp file exists"
+  end
+
+  local f = io.open(tmp, "w")
+  if not f then
+    return false, "setup file not writable"
+  end
+  local ok, writeRet, writeErr = pcall(function()
+    return f:write(text)
+  end)
+  local closeOk, closeErr = f:close()
+  if not ok or writeRet == nil then
+    os.remove(tmp)
+    local err = (not ok and writeRet) or writeErr or "setup file write failed"
+    return false, tostring(err)
+  end
+  if not closeOk then
+    os.remove(tmp)
+    return false, tostring(closeErr or "setup file close failed")
+  end
+
+  local backup
+  for i = 1, 16 do
+    local candidate = string.format("%s.ac-copilot-bak-%d", path, i)
+    local existing = io.open(candidate, "r")
+    if existing then
+      existing:close()
+    else
+      backup = candidate
+      break
+    end
+  end
+  if not backup then
+    os.remove(tmp)
+    return false, "setup backup file exists"
+  end
+
+  local renamedOld, renameOldErr = os.rename(path, backup)
+  if not renamedOld then
+    os.remove(tmp)
+    return false, tostring(renameOldErr or "setup backup failed")
+  end
+  local renamedNew, renameNewErr = os.rename(tmp, path)
+  if not renamedNew then
+    local okRestore, restoreRet, restoreErr = pcall(os.rename, backup, path)
+    os.remove(tmp)
+    if not okRestore or not restoreRet then
+      local restoreMsg = (not okRestore and restoreRet) or restoreErr or "unknown"
+      return false, tostring(renameNewErr or "setup replace failed")
+        .. "; and restore from backup failed: "
+        .. tostring(restoreMsg)
+    end
+    return false, tostring(renameNewErr or "setup replace failed")
+  end
+  os.remove(backup)
+  return true, nil
+end
+
+local function parseSetupIni(text)
+  local newline = text:find("\r\n", 1, true) and "\r\n" or "\n"
+  local hadTrailingNewline = text:sub(-1) == "\n"
+  local source = hadTrailingNewline and text or (text .. "\n")
+  local lines, order, sections = {}, {}, {}
+  local current = nil
+  for raw in source:gmatch("([^\n]*)\n") do
+    local line = raw
+    if line:sub(-1) == "\r" then line = line:sub(1, -2) end
+    lines[#lines + 1] = line
+    local sec = line:match("^%s*%[([^%]]+)%]%s*$")
+    if sec then
+      current = tostring(sec):upper()
+      if not sections[current] then
+        sections[current] = { fields = {}, field_lines = {} }
+        order[#order + 1] = current
+      end
+    elseif current then
+      local k, v = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+      if k then
+        k = tostring(k):upper()
+        sections[current].fields[k] = v
+        sections[current].field_lines[k] = #lines
+      end
+    end
+  end
+  return {
+    newline = newline,
+    hadTrailingNewline = hadTrailingNewline,
+    lines = lines,
+    order = order,
+    sections = sections,
+  }
+end
+
+local function encodeSetupIni(parsed)
+  local text = table.concat(parsed.lines, parsed.newline)
+  if parsed.hadTrailingNewline then
+    text = text .. parsed.newline
+  end
+  return text
+end
+
+local function labelForSection(section)
+  local def = SPINNER_DEFS[section]
+  if def and def.label then return def.label end
+  local out = tostring(section or ""):lower():gsub("_", " ")
+  return (out:gsub("(%a)([%w_']*)", function(a, b)
+    return a:upper() .. b
+  end))
+end
+
+local function spinnerFromSection(section, data)
+  local value = numberOrNil(data.fields.VALUE)
+  if value == nil then return nil end
+  local def = SPINNER_DEFS[section] or {}
+  local minV = numberOrNil(data.fields.MIN) or def.min
+  local maxV = numberOrNil(data.fields.MAX) or def.max
+  local step = numberOrNil(data.fields.STEP) or def.step or 1
+  if step <= 0 then step = 1 end
+  if minV == nil then minV = value - (10 * step) end
+  if maxV == nil then maxV = value + (10 * step) end
+  if maxV < minV then
+    local tmp = minV
+    minV = maxV
+    maxV = tmp
+  end
+  return {
+    name = section,
+    section = section,
+    label = labelForSection(section),
+    value = value,
+    min = minV,
+    max = maxV,
+    step = step,
+    unit = def.unit or "",
+    order = def.order or (1000 + #section),
+  }
+end
+
+local function formatNumber(n)
+  local rounded = math.floor(n + 0.5)
+  if math.abs(n - rounded) < 0.000001 then
+    return tostring(rounded)
+  end
+  local s = string.format("%.3f", n)
+  s = s:gsub("0+$", ""):gsub("%.$", "")
+  return s
+end
+
+local function snapToStep(value, minV, step)
+  if not step or step <= 0 then return value end
+  return minV + (math.floor(((value - minV) / step) + 0.5) * step)
+end
+
+local function normalizeCspSpinner(raw)
+  if type(raw) ~= "table" and type(raw) ~= "userdata" then
+    return nil
+  end
+  local name = safeField(raw, "name") or safeField(raw, "id") or safeField(raw, "section")
+  if type(name) ~= "string" or name == "" then
+    return nil
+  end
+  local value = numberOrNil(safeField(raw, "value"))
+  if value == nil then
+    return nil
+  end
+  local def = SPINNER_DEFS[name] or SPINNER_DEFS[name:upper()] or {}
+  local minV = numberOrNil(safeField(raw, "min")) or def.min or value
+  local maxV = numberOrNil(safeField(raw, "max")) or def.max or value
+  local step = numberOrNil(safeField(raw, "step")) or def.step or 1
+  if step <= 0 then step = 1 end
+  if maxV < minV then
+    local tmp = minV
+    minV = maxV
+    maxV = tmp
+  end
+  local label = safeField(raw, "label") or safeField(raw, "displayName") or safeField(raw, "uiName")
+  if type(label) ~= "string" or label == "" then
+    label = labelForSection(name)
+  end
+  local unit = safeField(raw, "unit")
+  if type(unit) ~= "string" then unit = def.unit or "" end
+  return {
+    name = name,
+    section = name,
+    label = label,
+    value = value,
+    min = minV,
+    max = maxV,
+    step = step,
+    unit = unit,
+  }
+end
+
+local function cspSpinnerList()
+  if not (ac and type(ac.getSetupSpinners) == "function") then
+    return nil
+  end
+  local ok, rows = pcall(ac.getSetupSpinners)
+  if not ok or type(rows) ~= "table" then
+    return nil
+  end
+  local out = {}
+  for _, raw in ipairs(rows) do
+    local row = normalizeCspSpinner(raw)
+    if row then
+      out[#out + 1] = row
+    end
+  end
+  table.sort(out, function(a, b)
+    local ao = (SPINNER_DEFS[a.section] and SPINNER_DEFS[a.section].order) or 1000
+    local bo = (SPINNER_DEFS[b.section] and SPINNER_DEFS[b.section].order) or 1000
+    if ao ~= bo then return ao < bo end
+    return tostring(a.label) < tostring(b.label)
+  end)
+  return out
+end
+
+local function cspSpinnerByName(name)
+  local rows = cspSpinnerList()
+  if not rows then return nil, false end
+  local want = tostring(name or "")
+  local wantUpper = want:upper()
+  for i = 1, #rows do
+    local row = rows[i]
+    if row.name == want or row.section == want or row.name:upper() == wantUpper then
+      return row, true
+    end
+  end
+  return nil, true
+end
+
+local function setCspSpinner(section, value)
+  if not (ac and type(ac.setSetupSpinnerValue) == "function") then
+    return nil, false
+  end
+  local spinner, hadList = cspSpinnerByName(section)
+  if hadList and not spinner then
+    return { ok = false, section = section, value = value, error = "spinner not found" }, true
+  end
+  local appliedValue = value
+  if spinner then
+    if value < spinner.min or value > spinner.max then
+      return {
+        ok = false,
+        section = section,
+        value = value,
+        error = string.format("value out of range %.3f..%.3f", spinner.min, spinner.max),
+      }, true
+    end
+    appliedValue = snapToStep(value, spinner.min, spinner.step)
+    if appliedValue < spinner.min then appliedValue = spinner.min end
+    if appliedValue > spinner.max then appliedValue = spinner.max end
+  end
+  local setName = spinner and spinner.name or section
+  local okSet, ret = pcall(ac.setSetupSpinnerValue, setName, appliedValue)
+  if not okSet or ret == false then
+    return {
+      ok = false,
+      section = section,
+      value = appliedValue,
+      error = okSet and "setSetupSpinnerValue refused" or ("setSetupSpinnerValue raised: " .. tostring(ret)),
+    }, true
+  end
+  return {
+    ok = true,
+    section = spinner and spinner.section or section,
+    name = spinner and spinner.name or section,
+    label = spinner and spinner.label or labelForSection(section),
+    value = appliedValue,
+    min = spinner and spinner.min or appliedValue,
+    max = spinner and spinner.max or appliedValue,
+    step = spinner and spinner.step or 1,
+    unit = spinner and spinner.unit or "",
+    source = "csp",
+  }, true
+end
+
+--- List active setup spinner-style controls from CSP, falling back to the
+--- current user setup INI when the runtime does not expose setup spinners.
+--- Returns `{ok=true,path,spinners=[{section,label,value,min,max,step,unit}]}`.
+---@param payload table|nil
+---@return table
+function M.listSpinners(payload)
+  local cspRows = cspSpinnerList()
+  if cspRows then
+    return { ok = true, source = "csp", spinners = cspRows }
+  end
+  local path, pathErr = setupPathFromPayload(payload)
+  if not path then
+    return { ok = false, error = pathErr or "setup path unavailable" }
+  end
+  local text, readErr = readTextFile(path)
+  if not text then
+    return { ok = false, path = path, error = readErr }
+  end
+  local parsed = parseSetupIni(text)
+  local spinners = {}
+  for _, section in ipairs(parsed.order) do
+    local row = spinnerFromSection(section, parsed.sections[section])
+    if row then
+      row.order = nil
+      spinners[#spinners + 1] = row
+    end
+  end
+  table.sort(spinners, function(a, b)
+    local ao = (SPINNER_DEFS[a.section] and SPINNER_DEFS[a.section].order) or 1000
+    local bo = (SPINNER_DEFS[b.section] and SPINNER_DEFS[b.section].order) or 1000
+    if ao ~= bo then return ao < bo end
+    return tostring(a.label) < tostring(b.label)
+  end)
+  return { ok = true, path = path, spinners = spinners }
+end
+
+--- Set one active setup spinner value. Uses CSP's live setup-spinner API when
+--- present, falling back to editing the user setup INI and reloading it.
+---@param payload table|nil
+---@return table
+function M.setSpinner(payload)
+  if type(payload) ~= "table" then
+    return { ok = false, error = "missing payload" }
+  end
+  local section = payload.section or payload.name
+  if type(section) ~= "string" or section == "" then
+    return { ok = false, error = "missing section" }
+  end
+  section = section:upper()
+  if not section:match("^[A-Z0-9_]+$") then
+    return { ok = false, section = section, error = "invalid section" }
+  end
+  local value = numberOrNil(payload.value)
+  if value == nil then
+    return { ok = false, section = section, error = "invalid value" }
+  end
+  local cspAck, cspHandled = setCspSpinner(section, value)
+  if cspHandled then
+    return cspAck
+  end
+  local path, pathErr = setupPathFromPayload(payload)
+  if not path then
+    return { ok = false, section = section, value = value, error = pathErr or "setup path unavailable" }
+  end
+  local text, readErr = readTextFile(path)
+  if not text then
+    return { ok = false, path = path, section = section, value = value, error = readErr }
+  end
+  local parsed = parseSetupIni(text)
+  local data = parsed.sections[section]
+  if not data or not data.field_lines.VALUE then
+    return { ok = false, path = path, section = section, value = value, error = "spinner not found" }
+  end
+  local spinner = spinnerFromSection(section, data)
+  if not spinner then
+    return { ok = false, path = path, section = section, value = value, error = "spinner value is not numeric" }
+  end
+  if value < spinner.min or value > spinner.max then
+    return {
+      ok = false,
+      path = path,
+      section = section,
+      value = value,
+      error = string.format("value out of range %.3f..%.3f", spinner.min, spinner.max),
+    }
+  end
+  local appliedValue = snapToStep(value, spinner.min, spinner.step)
+  if appliedValue < spinner.min then appliedValue = spinner.min end
+  if appliedValue > spinner.max then appliedValue = spinner.max end
+
+  local idx = data.field_lines.VALUE
+  local prefix = parsed.lines[idx]:match("^(%s*[%w_]+%s*=%s*)") or "VALUE="
+  parsed.lines[idx] = prefix .. formatNumber(appliedValue)
+  local newText = encodeSetupIni(parsed)
+  local okWrite, writeErr = writeTextFile(path, newText)
+  if not okWrite then
+    return { ok = false, path = path, section = section, value = appliedValue, error = writeErr }
+  end
+  if not (ac and type(ac.loadSetup) == "function") then
+    writeTextFile(path, text)
+    return { ok = false, path = path, section = section, value = appliedValue, error = "ac.loadSetup unavailable" }
+  end
+  local okLoad, loadRet = pcall(ac.loadSetup, path)
+  if not okLoad or loadRet == nil or loadRet == false then
+    writeTextFile(path, text)
+    return {
+      ok = false,
+      path = path,
+      section = section,
+      value = appliedValue,
+      error = okLoad and "loadSetup refused or returned failure" or ("loadSetup raised: " .. tostring(loadRet)),
+    }
+  end
+  invalidateListCache()
+  return {
+    ok = true,
+    path = path,
+    section = section,
+    name = section,
+    label = spinner.label,
+    value = appliedValue,
+    min = spinner.min,
+    max = spinner.max,
+    step = spinner.step,
+    unit = spinner.unit,
+  }
 end
 
 return M

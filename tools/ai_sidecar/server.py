@@ -20,6 +20,7 @@ import os
 import secrets
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,10 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_KEY,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_COMPARE_RESULT,
+    TYPE_SETUP_EXCHANGE_DOWNLOAD,
+    TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+    TYPE_SETUP_EXCHANGE_SEARCH,
+    TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
     TYPE_SETUP_EXPERIMENT_RECORD,
     TYPE_SETUP_EXPERIMENT_RECORD_ACK,
     TYPE_SETUP_EXPERIMENT_STORE,
@@ -57,6 +62,10 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_SETUP_LIST_RESULT,
     TYPE_SETUP_LOAD,
     TYPE_SETUP_LOAD_ACK,
+    TYPE_SETUP_SPINNER_LIST,
+    TYPE_SETUP_SPINNER_LIST_RESULT,
+    TYPE_SETUP_SPINNER_SET,
+    TYPE_SETUP_SPINNER_SET_ACK,
     TYPE_SETUP_SUGGEST,
     TYPE_SETUP_SUGGEST_RESULT,
     TYPE_STATE_SNAPSHOT,
@@ -80,6 +89,15 @@ from tools.ai_sidecar.protocol import (
 )
 from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
+)
+from tools.ai_sidecar.se_proxy import (
+    DEFAULT_SETUP_EXCHANGE_ENDPOINT,
+    ENV_SETUP_EXCHANGE_ENDPOINT,
+    ENV_USER_SETUPS_DIR,
+    SetupExchangeClient,
+    SetupExchangeError,
+    download_and_install_setup,
+    validate_user_setups_root,
 )
 from tools.ai_sidecar.session import LapComparisonState
 from tools.ai_sidecar.setup_optimizer import (
@@ -106,6 +124,8 @@ _ollama_followup_sem: asyncio.Semaphore | None = None
 _external_peers: set[Any] = set()
 _setup_experiment_store_path: Path | None = None
 _setup_experiment_store_seeded = False
+_setup_exchange_endpoint: str | None = None
+_setup_exchange_user_setups_root: Path | None = None
 _external_peer_classes: dict[Any, str] = {}
 # M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
@@ -127,6 +147,19 @@ _observer_feed_warned = False
 _voice_coach: Any | None = None
 
 
+@dataclass(frozen=True)
+class VoiceRuntimeConfig:
+    reference_path: str | None
+    bank_dir: str | None
+    tts_enabled: bool = False
+    tts_rate: int | None = None
+    tts_volume: float | None = None
+    backend: str | None = None
+    device: str | None = None
+    host_api: str | None = None
+    verbosity: str | None = None
+
+
 def set_realtime_observer(observer: Any | None) -> None:
     """Install (or clear) the live ``RealtimeObserver`` fed by ``telemetry_tick`` (issue #341)."""
     global _observer
@@ -137,6 +170,61 @@ def set_voice_coach(coach: Any | None) -> None:
     """Install (or clear) the in-process voice coach that speaks advisories on the rig (#341)."""
     global _voice_coach
     _voice_coach = coach
+
+
+class _Pyttsx3VoiceCoach:
+    """Small in-process pyttsx3 adapter for the M0 no-phrase-bank rig path."""
+
+    def __init__(
+        self,
+        speaker: Callable[[str], None],
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        from tools.ai_sidecar.voice.cue import CueArbiter
+
+        self._speaker = speaker
+        self._clock = clock
+        self._arbiter = CueArbiter()
+
+    def subscribe(self, advisory: Any) -> None:
+        payload = _advisory_to_payload(advisory)
+        if payload is None:
+            return
+        cue = self._arbiter.select([payload], self._clock())
+        if cue is None:
+            return
+        logger.info("voice: pyttsx3 speaking %r", cue.text)
+        self._speaker(cue.text)
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name)
+    return value is not None and value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("ignoring invalid %s=%r; expected integer", name, raw)
+        return default
+    return max(min_value, min(max_value, value))
+
+
+def _env_float(name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("ignoring invalid %s=%r; expected number", name, raw)
+        return default
+    return max(min_value, min(max_value, value))
 
 
 TELEMETRY_TICK_MAX_HZ = 20.0
@@ -159,10 +247,14 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         # "Loading…" forever.
         TYPE_SETUP_LIST,
         TYPE_SETUP_LOAD,
+        TYPE_SETUP_SPINNER_LIST,
+        TYPE_SETUP_SPINNER_SET,
         TYPE_SETUP_EXPERIMENT_STORE,
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
+        TYPE_SETUP_EXCHANGE_SEARCH,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -180,10 +272,14 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         # Issue #86 Part D: replies the Lua peer sends back to the screen.
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
+        TYPE_SETUP_SPINNER_LIST_RESULT,
+        TYPE_SETUP_SPINNER_SET_ACK,
         TYPE_SETUP_EXPERIMENT_STORE_ACK,
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
+        TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     }
 )
 SIDECAR_LOCAL_TYPES = frozenset(
@@ -192,6 +288,8 @@ SIDECAR_LOCAL_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
+        TYPE_SETUP_EXCHANGE_SEARCH,
+        TYPE_SETUP_EXCHANGE_DOWNLOAD,
     }
 )
 
@@ -315,6 +413,16 @@ def _suggest_setup_store(
     track_id: str | None,
 ) -> dict[str, Any]:
     return suggest_next_setup(load_records(store_path), car_id=car_id, track_id=track_id)
+
+
+def _user_setups_root_from_config(path: str | None) -> Path | None:
+    if not path:
+        return None
+    try:
+        return validate_user_setups_root(path)
+    except SetupExchangeError as exc:
+        logger.warning("Ignoring invalid user setups root %r: %s", path, exc)
+        return None
 
 
 def _peer_host(connection: Any) -> str | None:
@@ -902,6 +1010,96 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
 
+async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> None:
+    """Handle Setup Exchange search/download frames in the sidecar (#363)."""
+
+    t = data.get(TYPE_KEY)
+    endpoint = _setup_exchange_endpoint or os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT)
+    try:
+        client = SetupExchangeClient(endpoint or DEFAULT_SETUP_EXCHANGE_ENDPOINT)
+    except SetupExchangeError as e:
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: (
+                    TYPE_SETUP_EXCHANGE_SEARCH_RESULT
+                    if t == TYPE_SETUP_EXCHANGE_SEARCH
+                    else TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK
+                ),
+                "ok": False,
+                "error": str(e),
+            },
+        )
+        return
+    if t == TYPE_SETUP_EXCHANGE_SEARCH:
+        try:
+            out = await asyncio.to_thread(
+                client.search,
+                car_id=data.get("car_id") or None,
+                track_id=data.get("track_id") or None,
+                search=data.get("search") or None,
+                order_by=data.get("order_by") or None,
+                offset=data.get("offset"),
+                limit=data.get("limit"),
+            )
+        except SetupExchangeError as e:
+            logger.info("setup exchange search failed err=%s", e)
+            out = {"ok": False, "error": str(e)}
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
+                **out,
+            },
+        )
+        return
+
+    if t == TYPE_SETUP_EXCHANGE_DOWNLOAD:
+        setup_id = int(data["setup_id"])
+        car_id = str(data["car_id"])
+        track_id = data.get("track_id") or None
+        name = data.get("name") or None
+        try:
+            out = await asyncio.to_thread(
+                download_and_install_setup,
+                client=client,
+                user_setups_root=_setup_exchange_user_setups_root,
+                setup_id=setup_id,
+                car_id=car_id,
+                track_id=track_id if isinstance(track_id, str) else None,
+                name=name if isinstance(name, str) else None,
+            )
+        except SetupExchangeError as e:
+            logger.info("setup exchange download failed setup_id=%s err=%s", setup_id, e)
+            out = {
+                "ok": False,
+                "setup_id": setup_id,
+                "car_id": car_id,
+                "track_id": track_id,
+                "error": str(e),
+            }
+        except OSError as e:
+            logger.info("setup exchange install failed setup_id=%s err=%s", setup_id, e)
+            out = {
+                "ok": False,
+                "setup_id": setup_id,
+                "car_id": car_id,
+                "track_id": track_id,
+                "error": f"failed to install setup: {e}",
+            }
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+                **out,
+            },
+        )
+        return
+
+
 async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
     peer = getattr(websocket, "remote_address", None)
@@ -931,6 +1129,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             websocket,
             make_error("peer must send hello before other frame types", ref_type=t),
         )
+        return
+    if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
+        await _handle_setup_exchange_frame(websocket, data)
         return
     if t in SIDECAR_LOCAL_TYPES:
         await _handle_setup_experiment_frame(websocket, data)
@@ -1189,7 +1390,10 @@ async def _run(
     reply_coaching: bool,
     token: str | None,
     setup_store: str | None = None,
+    setup_exchange_endpoint: str | None = None,
+    user_setups_root: str | None = None,
 ) -> None:
+    global _setup_exchange_endpoint, _setup_exchange_user_setups_root
     global _setup_experiment_store_path, _setup_experiment_store_seeded
     try:
         import websockets
@@ -1200,6 +1404,11 @@ async def _run(
     _reset_external_state()
     _setup_experiment_store_path = Path(setup_store) if setup_store else None
     _setup_experiment_store_seeded = setup_store is not None
+    _setup_exchange_endpoint = setup_exchange_endpoint or os.environ.get(
+        ENV_SETUP_EXCHANGE_ENDPOINT
+    )
+    configured_setups_root = user_setups_root or os.environ.get(ENV_USER_SETUPS_DIR)
+    _setup_exchange_user_setups_root = _user_setups_root_from_config(configured_setups_root)
     try:
         async with websockets.serve(
             lambda ws: _handler(ws, reply_coaching),
@@ -1229,7 +1438,7 @@ def _is_loopback(host: str) -> bool:
         return False
 
 
-def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
+def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     """Build the optional live observer + in-process voice coach from CLI paths (issue #341).
 
     Best-effort by design: a missing/invalid reference or bank disables the feature with a loud log
@@ -1238,6 +1447,8 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
     are imported lazily here (only when ``--voice-bank`` is supplied), so the sidecar core stays
     dep-free for users who never enable voice.
     """
+    reference_path = voice_settings.reference_path
+    bank_dir = voice_settings.bank_dir
     if bank_dir and not reference_path:
         logger.warning(
             "voice: --voice-bank is set but --voice-reference is missing; voice coach will be idle"
@@ -1261,9 +1472,22 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
             logger.exception("voice: failed to load reference %s", reference_path)
     if bank_dir:
         try:
+            from tools.ai_sidecar.voice.config import VoiceConfig
             from tools.ai_sidecar.voice.engine import VoiceCoach
 
-            coach = VoiceCoach.from_bank(bank_dir)
+            backend = (
+                voice_settings.backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
+            )
+            config = VoiceConfig(
+                device_name=voice_settings.device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
+                host_api=voice_settings.host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
+                verbosity=(
+                    voice_settings.verbosity
+                    or os.environ.get("AC_COPILOT_VOICE_VERBOSITY")
+                    or "low"
+                ),
+            )
+            coach = VoiceCoach.from_bank(bank_dir, config, backend=backend)
             if not coach.enabled:
                 logger.error(
                     "voice: bank %s disabled the coach (%s)", bank_dir, coach.disabled_reason
@@ -1271,9 +1495,50 @@ def _wire_voice(reference_path: str | None, bank_dir: str | None) -> None:
             else:
                 coach.start()
                 set_voice_coach(coach)
-                logger.info("voice: in-process voice coach wired from bank %s", bank_dir)
+                logger.info(
+                    "voice: in-process voice coach wired from bank %s "
+                    "backend=%s device=%r host_api=%r verbosity=%s",
+                    bank_dir,
+                    backend,
+                    config.device_name,
+                    config.host_api,
+                    config.verbosity.name.lower(),
+                )
         except Exception:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
             logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
+    elif voice_settings.tts_enabled:
+        try:
+            from tools.ai_sidecar.voice.client import (
+                DEFAULT_TTS_RATE,
+                DEFAULT_TTS_VOLUME,
+                _pyttsx3_speaker,
+            )
+
+            rate = (
+                voice_settings.tts_rate
+                if voice_settings.tts_rate is not None
+                else _env_int(
+                    "AC_COPILOT_VOICE_RATE", DEFAULT_TTS_RATE, min_value=120, max_value=360
+                )
+            )
+            volume = (
+                voice_settings.tts_volume
+                if voice_settings.tts_volume is not None
+                else _env_float(
+                    "AC_COPILOT_VOICE_VOLUME",
+                    DEFAULT_TTS_VOLUME,
+                    min_value=0.0,
+                    max_value=1.0,
+                )
+            )
+            set_voice_coach(_Pyttsx3VoiceCoach(_pyttsx3_speaker(rate=rate, volume=volume)))
+            logger.info(
+                "voice: in-process pyttsx3 voice coach wired rate=%s volume=%.2f",
+                rate,
+                volume,
+            )
+        except Exception:  # noqa: BLE001 - pyttsx3 must never abort the sidecar
+            logger.exception("voice: failed to initialize pyttsx3 voice coach")
 
 
 def main() -> None:
@@ -1346,6 +1611,23 @@ def main() -> None:
         help="Optional track id filter for --setup-suggest.",
     )
     p.add_argument(
+        "--se-endpoint",
+        default=os.environ.get(ENV_SETUP_EXCHANGE_ENDPOINT),
+        help=(
+            "Authenticated Setup Exchange-compatible proxy endpoint for se.search/se.download. "
+            f"Falls back to ${ENV_SETUP_EXCHANGE_ENDPOINT}; direct se.acstuff.club "
+            "requires the official signed session handshake and is not used by default."
+        ),
+    )
+    p.add_argument(
+        "--user-setups-root",
+        default=os.environ.get(ENV_USER_SETUPS_DIR),
+        help=(
+            "Assetto Corsa user setups directory for se.download installs. "
+            f"Falls back to ${ENV_USER_SETUPS_DIR}, then Windows Documents discovery."
+        ),
+    )
+    p.add_argument(
         "--no-reply",
         action="store_true",
         help=(
@@ -1369,7 +1651,61 @@ def main() -> None:
         help=(
             "Issue #341/#340: path to a baked phrase-bank directory. When set (with "
             "--voice-reference), the sidecar speaks the live cues in-process via the VoiceCoach "
-            "engine. Requires the `voice` extra (numpy/sounddevice/rtmixer) + an audio device."
+            "engine. Requires the `voice` extra (numpy/sounddevice/rtmixer) + an audio device. "
+            "Falls back to $AC_COPILOT_VOICE_BANK."
+        ),
+    )
+    p.add_argument(
+        "--voice-backend",
+        default=None,
+        choices=("rtmixer", "sounddevice"),
+        help=(
+            "Audio backend for --voice-bank. Falls back to $AC_COPILOT_VOICE_BACKEND then rtmixer."
+        ),
+    )
+    p.add_argument(
+        "--voice-device",
+        default=None,
+        help=(
+            "Output device substring for --voice-bank, e.g. 'USB Sound Device'. "
+            "Falls back to $AC_COPILOT_VOICE_DEVICE."
+        ),
+    )
+    p.add_argument(
+        "--voice-host-api",
+        default=None,
+        help=(
+            "PortAudio host API for --voice-bank, e.g. 'Windows DirectSound' or "
+            "'Windows WASAPI'. Falls back to $AC_COPILOT_VOICE_HOST_API."
+        ),
+    )
+    p.add_argument(
+        "--voice-verbosity",
+        default=None,
+        choices=("off", "low", "normal", "high"),
+        help="Voice-bank verbosity. Falls back to $AC_COPILOT_VOICE_VERBOSITY.",
+    )
+    p.add_argument(
+        "--voice-tts",
+        action="store_true",
+        help=(
+            "Issue #341: speak coaching.cue advisories in-process via Windows pyttsx3 when no "
+            "voice bank is configured. Also enabled by $AC_COPILOT_VOICE_TTS=1."
+        ),
+    )
+    p.add_argument(
+        "--voice-rate",
+        type=int,
+        default=None,
+        help="pyttsx3 speaking rate for --voice-tts. Falls back to $AC_COPILOT_VOICE_RATE.",
+    )
+    p.add_argument(
+        "--voice-volume",
+        type=float,
+        default=None,
+        help=(
+            "pyttsx3 speaking volume for --voice-tts, 0.0 to 1.0. "
+            "Falls back to $AC_COPILOT_VOICE_VOLUME."
         ),
     )
     args = p.parse_args()
@@ -1407,10 +1743,33 @@ def main() -> None:
         raise SystemExit("--token is required for non-loopback bind addresses")
 
     ref_path = args.voice_reference or os.environ.get("AC_COPILOT_REFERENCE_ARCHIVE")
-    _wire_voice(ref_path, args.voice_bank)
+    bank_dir = args.voice_bank or os.environ.get("AC_COPILOT_VOICE_BANK")
+    _wire_voice(
+        VoiceRuntimeConfig(
+            reference_path=ref_path,
+            bank_dir=bank_dir,
+            tts_enabled=args.voice_tts or _env_truthy("AC_COPILOT_VOICE_TTS"),
+            tts_rate=args.voice_rate,
+            tts_volume=args.voice_volume,
+            backend=args.voice_backend,
+            device=args.voice_device,
+            host_api=args.voice_host_api,
+            verbosity=args.voice_verbosity,
+        )
+    )
 
     try:
-        asyncio.run(_run(host, args.port, reply, args.token, args.setup_store))
+        asyncio.run(
+            _run(
+                host,
+                args.port,
+                reply,
+                args.token,
+                args.setup_store,
+                args.se_endpoint,
+                args.user_setups_root,
+            )
+        )
     except KeyboardInterrupt:
         logger.info("sidecar stopped")
 

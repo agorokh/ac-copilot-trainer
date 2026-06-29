@@ -91,6 +91,8 @@ Lua currently ignores this event (logging only in Python); future versions may s
 
 **Setup optimization (issue #114):**
 
+- screen/client -> sidecar -> Lua: `{"v":1,"type":"setup.spinner.list"}` returns `setup.spinner.list.result` with active setup controls (`section`, `label`, `value`, `min`, `max`, `step`, `unit`).
+- screen/client -> sidecar -> Lua: `{"v":1,"type":"setup.spinner.set","section":"FRONT_BIAS","value":67}` returns `setup.spinner.set.ack`; Lua applies the edit only inside the AC user setup folder and only when the pits/reset gate allows setup changes.
 - Lua → sidecar: `{"v":1,"type":"setup.experiment.store","store_path":".../journal/setup_experiments/experiments.jsonl"}` registers the canonical store after handshake so compare/suggest can use rebuilt rows immediately after sidecar restart.
 - Lua → sidecar: `{"v":1,"type":"setup.experiment.record","archive_path":".../journal/laps/lap_...json"}` ingests one PR #78 lap archive into `journal/setup_experiments/experiments.jsonl`.
 - client → sidecar: `{"v":1,"type":"setup.compare","baseline_setup":"old","candidate_setup":"new"}` returns `setup.compare.result` with A/B improvement, confidence, and significance.

@@ -31,6 +31,8 @@ from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue
 
 #: Max pending TTS phrases; when full, drop the oldest so memory stays bounded under cue bursts.
 _VOICE_QUEUE_MAX = 4
+DEFAULT_TTS_RATE = 240
+DEFAULT_TTS_VOLUME = 1.0
 
 
 def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
@@ -87,7 +89,7 @@ def should_enqueue_voice_cue(*, failed: bool, worker_alive: bool) -> bool:
     return not failed and worker_alive
 
 
-def _pyttsx3_speaker(rate: int = 195, volume: float = 1.0):
+def _pyttsx3_speaker(rate: int = DEFAULT_TTS_RATE, volume: float = DEFAULT_TTS_VOLUME):
     """Build a non-blocking speak() backed by pyttsx3 on a dedicated worker thread.
 
     pyttsx3/SAPI must init and run on one thread; the worker owns the engine so the asyncio loop

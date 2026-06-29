@@ -21,6 +21,7 @@ frame contract here mirrors ``telemetry.lua``'s ``TelemetrySample``: ``speed`` i
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -42,6 +43,8 @@ _WRAP_CUR_MAX = 0.25
 _DEFICIT_MARGIN_KMH = 2.0
 #: brake pedal fraction above which we consider the driver "on the brakes".
 _BRAKE_ON = 0.05
+_DEFAULT_TRACK_LENGTH_M = 2500.0
+_BRAKE_PREPARE_LEAD_S = 1.0
 
 
 def _target_source(ref: CornerReference) -> str:
@@ -72,6 +75,7 @@ class _CornerPass:
     inside: bool = False
     min_speed_kmh: float | None = None
     has_braked: bool = False  # any braking seen this pass — suppresses a false late-brake cue
+    brake_prepare_emitted: bool = False
     late_brake_emitted: bool = False
     exit_emitted: bool = False
 
@@ -116,6 +120,32 @@ def _normalize_frame(
     return spline, speed, brake, lap
 
 
+def _forward_spline_delta(current: float, target: float) -> float:
+    """Forward normalized distance from ``current`` to ``target`` in [0, 1)."""
+    return (target - current) % 1.0
+
+
+def _lead_spline_fraction(speed_kmh: float, track_length_m: float, lead_s: float) -> float:
+    """Convert a speed/time lead into normalized spline distance."""
+    if track_length_m <= 0.0:
+        track_length_m = _DEFAULT_TRACK_LENGTH_M
+    return max(0.002, min(0.08, (speed_kmh / 3.6) * lead_s / track_length_m))
+
+
+def _positive_track_length_m(value: Any) -> float:
+    if isinstance(value, bool):
+        return _DEFAULT_TRACK_LENGTH_M
+    try:
+        track_length_m = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_TRACK_LENGTH_M
+    return (
+        track_length_m
+        if math.isfinite(track_length_m) and track_length_m > 0.0
+        else _DEFAULT_TRACK_LENGTH_M
+    )
+
+
 class RealtimeObserver:
     """Stateful streaming observer over the per-corner reference envelope.
 
@@ -131,11 +161,16 @@ class RealtimeObserver:
         *,
         deficit_margin_kmh: float = _DEFICIT_MARGIN_KMH,
         brake_on: float = _BRAKE_ON,
+        track_length_m: float | None = _DEFAULT_TRACK_LENGTH_M,
+        brake_prepare_lead_s: float = _BRAKE_PREPARE_LEAD_S,
     ) -> None:
+        # _positive_track_length_m handles None / non-finite archive values safely.
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
         self._deficit_margin = deficit_margin_kmh
         self._brake_on = brake_on
+        self._track_length_m = _positive_track_length_m(track_length_m)
+        self._brake_prepare_lead_s = max(0.0, brake_prepare_lead_s)
         self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
         self._last_spline: float | None = None
         self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
@@ -207,6 +242,10 @@ class RealtimeObserver:
             # begin UPSTREAM of the lateral-g corner window, so a driver coasting past the real
             # brake point is cued there, not only once the window starts (codex #294 @176).
             bp = ref.best_brake_point_spline
+            if bp is not None:
+                a = self._prepare_brake(ref, st, spline, speed, brake)
+                if a is not None:
+                    out.append(a)
             if bp is not None and bp <= spline <= ref.apex_spline:
                 if brake >= self._brake_on:
                     st.has_braked = True  # so a later release before apex isn't "late to brake"
@@ -228,6 +267,38 @@ class RealtimeObserver:
                 if a is not None:
                     out.append(a)
         return out
+
+    def _prepare_brake(
+        self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
+    ) -> Advisory | None:
+        """Call the upcoming reference brake point before it arrives."""
+        bp = ref.best_brake_point_spline
+        if bp is None or st.brake_prepare_emitted or st.has_braked:
+            return None
+        if brake >= self._brake_on:
+            st.has_braked = True
+            return None
+        delta = _forward_spline_delta(spline, bp)
+        if spline >= bp and abs(spline - bp) < 0.5:
+            return None
+        lead = _lead_spline_fraction(speed, self._track_length_m, self._brake_prepare_lead_s)
+        if 0.0 < delta <= lead:
+            st.brake_prepare_emitted = True
+            lead_s = delta * self._track_length_m / max(speed / 3.6, 0.1)
+            return Advisory(
+                kind="late_brake",
+                corner=ref.index,
+                spline=round(bp, 4),
+                urgency="prepare",
+                message=f"Brake soon for T{ref.index + 1}.",
+                detail={
+                    "brake_point_spline": round(bp, 4),
+                    "lead_s": round(lead_s, 2),
+                    "current_kmh": round(speed, 1),
+                    "source": _target_source(ref),
+                },
+            )
+        return None
 
     def _late_brake(
         self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
@@ -317,4 +388,8 @@ def build_observer_from_reference(reference_archive: dict) -> RealtimeObserver |
     if not refs:
         return None
     add_corpus_lap(refs, ref_lap)  # the reference lap IS the corpus best
-    return RealtimeObserver(refs)
+    track = (
+        reference_archive.get("track") if isinstance(reference_archive.get("track"), dict) else {}
+    )
+    length_m = _num(track.get("lengthM")) if isinstance(track, dict) else None
+    return RealtimeObserver(refs, track_length_m=length_m or _DEFAULT_TRACK_LENGTH_M)

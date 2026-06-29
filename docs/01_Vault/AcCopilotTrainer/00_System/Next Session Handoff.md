@@ -6,6 +6,7 @@ last_updated: 2026-06-29T07:17:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/pr-365-game-point-launcher-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
@@ -50,6 +51,29 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Claude Design UI package for launcher + rig screens (2026-06-29)
+
+Created `docs/10_Development/15_Claude_Design_UI_Package.md` as the handoff
+package for Claude Design or any future UI implementation agent. It explains the
+current screen technologies and implemented functions across the ESP32 LVGL
+portrait screen, Windows Tkinter Game Point launcher, CSP Lua in-game HUD, and
+sidecar protocol, then lays out future scope for launcher expansion, Setup
+Exchange, voice, haptics, diagnostics, and post-lap coaching screens. Use it as
+the copy-paste design prompt before asking Claude Design for a full UI pass.
+
+Also linked it from `docs/10_Development/14_Game_Point_Launcher.md` so new
+driver-facing launcher work discovers the UI contract. Tier-3 MCP was not
+exposed in this Codex session; the package was grounded from the vault and live
+source files listed inside the package.
+
+## Game Point #363 / PR #365 (2026-06-29)
+
+PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) delivers the
+Game Point launcher supervisor and Pocket Technician spinner completion for
+[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363). Install
+evidence, review-resolution history, and follow-ups:
+[[pr-365-game-point-launcher-2026-06-29]].
 
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 

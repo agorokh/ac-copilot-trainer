@@ -149,7 +149,7 @@ def test_wire_voice_builds_and_installs_observer_from_reference(tmp_path, monkey
     monkeypatch.setattr(server, "_observer", None)
     ref = tmp_path / "ref.json"
     ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
-    server._wire_voice(str(ref), None)
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is not None
 
 
@@ -161,7 +161,7 @@ def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch
     monkeypatch.setattr(server, "_observer", sentinel)
     ref = tmp_path / "no_corners.json"
     ref.write_text(json.dumps({}), encoding="utf-8")
-    server._wire_voice(str(ref), None)
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is sentinel
 
 
@@ -171,8 +171,82 @@ def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
     # The sentinel proves _wire_voice neither raises nor disturbs the existing observer.
     sentinel = object()
     monkeypatch.setattr(server, "_observer", sentinel)
-    server._wire_voice("does-not-exist-9f3a.json", None)
+    server._wire_voice(
+        server.VoiceRuntimeConfig(reference_path="does-not-exist-9f3a.json", bank_dir=None)
+    )
     assert server._observer is sentinel
+
+
+def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
+    import tools.ai_sidecar.voice.client as voice_client
+
+    spoken: list[str] = []
+    seen: dict[str, float | int] = {}
+    server.set_voice_coach(None)
+
+    def fake_speaker(*, rate: int, volume: float):
+        seen["rate"] = rate
+        seen["volume"] = volume
+        return spoken.append
+
+    monkeypatch.setenv("AC_COPILOT_VOICE_RATE", "260")
+    monkeypatch.setenv("AC_COPILOT_VOICE_VOLUME", "0.8")
+    monkeypatch.setattr(voice_client, "_pyttsx3_speaker", fake_speaker)
+
+    try:
+        server._wire_voice(
+            server.VoiceRuntimeConfig(reference_path=None, bank_dir=None, tts_enabled=True)
+        )
+        assert server._voice_coach is not None
+        server._voice_coach.subscribe(_adv(kind="apex_deficit", corner=1, urgency="info"))
+    finally:
+        server.set_voice_coach(None)
+
+    assert spoken == ["Carry more speed, Turn 2."]
+    assert seen == {"rate": 260, "volume": 0.8}
+
+
+def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):
+    from tools.ai_sidecar.voice import engine
+
+    seen: dict[str, object] = {}
+
+    class _Coach:
+        enabled = True
+        disabled_reason = ""
+
+        def start(self) -> None:
+            seen["started"] = True
+
+    def fake_from_bank(bank_dir, config, *, backend):  # noqa: ANN001
+        seen["bank_dir"] = bank_dir
+        seen["backend"] = backend
+        seen["device_name"] = config.device_name
+        seen["host_api"] = config.host_api
+        seen["verbosity"] = config.verbosity.name.lower()
+        return _Coach()
+
+    server.set_voice_coach(None)
+    monkeypatch.setenv("AC_COPILOT_VOICE_BACKEND", "sounddevice")
+    monkeypatch.setenv("AC_COPILOT_VOICE_DEVICE", "USB Sound Device")
+    monkeypatch.setenv("AC_COPILOT_VOICE_HOST_API", "Windows DirectSound")
+    monkeypatch.setenv("AC_COPILOT_VOICE_VERBOSITY", "high")
+    monkeypatch.setattr(engine.VoiceCoach, "from_bank", fake_from_bank)
+
+    try:
+        server._wire_voice(server.VoiceRuntimeConfig(reference_path=None, bank_dir="bank-dir"))
+        assert server._voice_coach is not None
+    finally:
+        server.set_voice_coach(None)
+
+    assert seen == {
+        "bank_dir": "bank-dir",
+        "backend": "sounddevice",
+        "device_name": "USB Sound Device",
+        "host_api": "Windows DirectSound",
+        "verbosity": "high",
+        "started": True,
+    }
 
 
 class _FakeWS:

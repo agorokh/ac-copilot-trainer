@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-06-28
+updated: 2026-06-29
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [pr-365-game-point-launcher-2026-06-29.md](pr-365-game-point-launcher-2026-06-29.md) | PR #365 / #363 Game Point launcher supervisor: shortcut install, settings contract, PT spinner protocol, review-resolution history. |
 | [issue-86-rig-screen-hotspot-autostart-2026-06-28.md](issue-86-rig-screen-hotspot-autostart-2026-06-28.md) | #86 rig screen incident: device powered but not connecting because PC was on 5 GHz mesh, hotspot was absent, and no sidecar listened on `8765`. Restored Mobile Hotspot + sidecar, verified ESP32 socket/protocol traffic, and patched `start_sidecar.bat` env-token external-bind auto-start on branch `fix/issue-86-rig-sidecar-autostart`. |
 | [porsche-911-gt3r-magione-balanced-setup-2026-06-28.md](porsche-911-gt3r-magione-balanced-setup-2026-06-28.md) | First **curated setup** in the data platform: balanced fast-race 911 GT3 R @ Magione (`assets/setups/.../magione/Copilot_Balanced_Fast.ini`, deployed to the rig, `canonical_hash=054245cb`). Grounded in the operator's own `Realistic_BB_v3` + adversarially verified (4 vehicle-dynamics lenses → red-team, high confidence). Rear-engine levers: FRONT_BIAS 63, ARB f6/r1, DIFF_COAST 60, rear TOE 9, **WING_2 16** (source stability mechanically, free the wing). |
 | [curated-setup-hash-bridge-2026-06-28.md](curated-setup-hash-bridge-2026-06-28.md) | Why a curated setup joins driven laps: the one key is the **Lua djb2 canonical hash** (8-hex over sorted `SECTION\|KEY=value`, raw strings, all keys) — NOT `_stable_hash` (sha1/16, a dead fallback). `tools/setup_catalog` reimplements the djb2 faithfully + a name/path fallback; proven by an end-to-end join test. Trap: a sha1 curated hash returns 0 rows *silently*. |

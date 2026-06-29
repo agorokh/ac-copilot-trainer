@@ -58,7 +58,7 @@ void screen_pocket_technician_finish_setup_list(void);
 void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,
                                             const char* car_brand,
                                             const char* track_id, const char* track_name);
-void screen_pocket_technician_set_active_setup(const char* name);
+void screen_pocket_technician_set_active_setup(const char* name, const char* path);
 
 // Result of the most recent `setup.load` (called from main.cpp's WS dispatch).
 // `ok=true` triggers a gold border pulse on the active row; `ok=false`
@@ -67,6 +67,22 @@ void screen_pocket_technician_set_active_setup(const char* name);
 // basenames correlate acks to the correct row (chatgpt-codex P2 on PR #91).
 void screen_pocket_technician_apply_load_ack(bool ok, const char* name,
                                               const char* path, const char* error);
+
+// Live adjustable setup controls from `setup.spinner.list.result`.
+void screen_pocket_technician_clear_spinners(void);
+void screen_pocket_technician_add_spinner(const char* section,
+                                          const char* label,
+                                          float value,
+                                          float min_value,
+                                          float max_value,
+                                          float step,
+                                          const char* unit);
+void screen_pocket_technician_finish_spinner_list(void);
+void screen_pocket_technician_apply_spinner_ack(bool ok,
+                                                 const char* section,
+                                                 float value,
+                                                 const char* error);
+void screen_pocket_technician_apply_spinner_list_error(const char* error);
 
 // ---- Out-queue (screen → trainer) ----------------------------------------
 // The screen module never writes to the WS directly; it stages a request
@@ -77,6 +93,8 @@ typedef enum {
     PT_REQ_NONE = 0,
     PT_REQ_LIST,        // {"v":1,"type":"setup.list"}
     PT_REQ_LOAD,        // {"v":1,"type":"setup.load","name":"<name>"}
+    PT_REQ_SPINNER_LIST, // {"v":1,"type":"setup.spinner.list","path":"..."}
+    PT_REQ_SPINNER_SET,  // {"v":1,"type":"setup.spinner.set","section":"...","value":N}
 } pt_request_kind_t;
 
 // Absolute INI paths on Windows can exceed 160–256 chars; keep one shared cap
@@ -87,6 +105,8 @@ typedef struct {
     pt_request_kind_t kind;
     char              name[64];   // valid for PT_REQ_LOAD only
     char              path[PT_SETUP_PATH_MAX];  // optional disambiguator; "" if unknown
+    char              section[32]; // valid for PT_REQ_SPINNER_SET only
+    float             value;       // valid for PT_REQ_SPINNER_SET only
 } pt_request_t;
 
 // Pop the next pending request, or PT_REQ_NONE. Drained from main.cpp.
