@@ -40,9 +40,14 @@ def _resolve_launcher_path(value: str | None, *, base: Path) -> str | None:
     text = _none_if_blank(value)
     if text is None:
         return None
+    root = base.expanduser().resolve(strict=False)
     path = Path(text).expanduser()
     if not path.is_absolute():
-        path = (base / path).resolve(strict=False)
+        path = (root / path).resolve(strict=False)
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return None
     else:
         path = path.resolve(strict=False)
     return str(path)

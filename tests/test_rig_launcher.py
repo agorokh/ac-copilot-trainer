@@ -291,6 +291,13 @@ def test_resolve_launcher_path_makes_relative_paths_absolute(tmp_path: Path) -> 
     assert resolved == str(archive.resolve())
 
 
+def test_resolve_launcher_path_rejects_traversal_outside_base(tmp_path: Path) -> None:
+    base = tmp_path / "GamePoint"
+    base.mkdir()
+
+    assert _resolve_launcher_path("../outside/ref.json", base=base) is None
+
+
 def test_start_sidecar_uses_repo_root_cwd_in_dev_mode(tmp_path: Path) -> None:
     calls: list[dict[str, Any]] = []
     cfg = GamePointConfig(external_bind="0.0.0.0", token="token", paths=LauncherPaths(tmp_path))
