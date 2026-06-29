@@ -47,9 +47,7 @@ from tools.tt_ingest.tt_normalize import (
 from tools.tt_ingest.tt_services import (
     TTServicesError,
     fetch_last_session_raw,
-    fetch_services_sessions,
     fetch_session_coaching,
-    find_session,
     parse_last_session,
 )
 from tools.tt_ingest.tt_vulcan import iter_all_sessions, session_summary
@@ -57,7 +55,15 @@ from tools.tt_ingest.tt_vulcan import iter_all_sessions, session_summary
 SESSIONS_INDEX_FILENAME = "sessions_index.json"
 RAW_SESSION_ENDPOINT = "session"
 LAST_SESSION_ENDPOINT = "last_session"
-COACHING_ENDPOINT = "coaching"
+#: Coaching is retained one file PER LAP (``coaching_lap{N}.json``) so a multi-lap session
+#: never collides on the write-once lake (a single ``coaching.json`` would block later laps).
+COACHING_ENDPOINT_PREFIX = "coaching_lap"
+COACHING_ENDPOINT_GLOB = f"{COACHING_ENDPOINT_PREFIX}*.json"
+
+
+def coaching_endpoint(lap: Any) -> str:
+    """Endpoint (file stem) for a lap's coaching bundle: ``coaching_lap{lap}``."""
+    return f"{COACHING_ENDPOINT_PREFIX}{lap}"
 
 
 @dataclass(frozen=True)
@@ -86,10 +92,14 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-# Endpoint files the content-addressed file index records (sessions_index is built from
-# RAW_SESSION_ENDPOINT only — it normalizes vulcan sessions; the coaching endpoints are
-# services data, indexed for discovery/integrity but not normalized into sessions_index).
-INDEXED_ENDPOINTS = (RAW_SESSION_ENDPOINT, LAST_SESSION_ENDPOINT, COACHING_ENDPOINT)
+# File-index globs (sessions_index is built from RAW_SESSION_ENDPOINT only — it normalizes
+# vulcan sessions; the M-TT1 services endpoints are indexed for discovery/integrity but not
+# normalized). Coaching is per-lap, so it is matched by glob, not a fixed name.
+INDEXED_ENDPOINT_GLOBS = (
+    f"{RAW_SESSION_ENDPOINT}.json",
+    f"{LAST_SESSION_ENDPOINT}.json",
+    COACHING_ENDPOINT_GLOB,
+)
 
 
 def reindex_lake(root: Path, *, generated_at: str) -> int:
@@ -100,18 +110,23 @@ def reindex_lake(root: Path, *, generated_at: str) -> int:
     therefore never shrink the discovery index, and ``sessions_index.json`` always agrees
     with the raw files actually present (no batch-vs-disk divergence). The content-addressed
     file index covers vulcan ``session.json`` **and** the M-TT1 services endpoints
-    (``last_session.json`` / ``coaching.json``); ``sessions_index.json`` is built from
+    (``last_session.json`` / ``coaching_lap{N}.json``); ``sessions_index.json`` is built from
     ``session.json`` only (it normalizes vulcan sessions). Returns the count of indexed files.
     """
     records: list[RetainedFile] = []
     normalized: list[dict[str, Any]] = []
-    for endpoint in INDEXED_ENDPOINTS:
-        for path in sorted(root.rglob(f"{endpoint}.json")):
+    seen: set[Path] = set()
+    for pattern in INDEXED_ENDPOINT_GLOBS:
+        for path in sorted(root.rglob(pattern)):
+            if path in seen:
+                continue
+            seen.add(path)
             try:
                 data = path.read_bytes()
                 raw = json.loads(data)
             except (OSError, ValueError):  # pragma: no cover - corrupt file skipped defensively
                 continue
+            endpoint = path.stem  # e.g. "session", "last_session", "coaching_lap5"
             records.append(
                 RetainedFile(
                     session_key=path.parent.name,
@@ -220,17 +235,34 @@ class CoachingSummary:
         )
 
 
+def _car_segment(session: Mapping[str, Any]) -> Any:
+    """Resolve a STRING car id for the lake path.
+
+    The last-session ``session`` stores ``car`` as a string id; other surfaces may carry a
+    string ``car_id`` or a ``car`` object. Prefer a string id and unwrap an object so the
+    lake path is ``…/{car_id}/…``, never a dict-repr (#353 review).
+    """
+    for value in (session.get("car_id"), session.get("car")):
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, Mapping):
+            inner = value.get("car_id") or value.get("id")
+            if isinstance(inner, str) and inner:
+                return inner
+    return None
+
+
 def _session_lake_key(session: Mapping[str, Any]) -> dict[str, Any]:
     """Resolve the (game, car, track, session_key) lake key for a services session.
 
-    The services session uses ``car`` (vulcan uses ``car_id``); the session key is the
-    second half of the ``{uid}#{sessionKey}`` id (services has no standalone field).
+    The session key is the second half of the ``{uid}#{sessionKey}`` id (services has no
+    standalone field). The car id is resolved to a string via :func:`_car_segment`.
     """
     raw_id = session.get("session_id") or session.get("id") or ""
     _, session_key = split_session_id(raw_id)
     return {
         "game": session.get("game_id"),
-        "car": session.get("car") or session.get("car_id"),
+        "car": _car_segment(session),
         "track": session.get("track_id"),
         "session_key": session_key or f"nokey-{stable_fingerprint(dict(session))}",
     }
@@ -251,16 +283,18 @@ def retain_coaching(
     session: Mapping[str, Any],
     bundle: Mapping[str, Any],
     *,
+    lap: Any,
     last_session_payload: Mapping[str, Any] | None = None,
     lake_base: Path | None = None,
     generated_at: str | None = None,
 ) -> CoachingSummary:
-    """Immutably retain a session's last-session payload + coaching bundle, then reindex.
+    """Immutably retain a session's last-session payload + per-lap coaching bundle, then reindex.
 
     Pure of network: given already-fetched payloads, writes ``last_session.json`` and
-    ``coaching.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/`` keyed
-    by the **given** ``session`` (so ``coaching --session-key OLD`` lands under OLD, not the
-    latest). ``last_session_payload`` is the FULL raw services response (session +
+    ``coaching_lap{lap}.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/``
+    keyed by the given ``session``. The coaching file is **per-lap** so retaining a second
+    lap of the same session never collides with the first on the write-once lake (#353
+    review). ``last_session_payload`` is the FULL raw services response (session +
     referenceLap + telemetry) — preserved so the lake reconstructs exactly what the endpoint
     returned (the M-TT2 reference-lap input); it defaults to ``session`` when not supplied.
     After writing, the lake indexes are rebuilt from disk (:func:`reindex_lake`) so the new
@@ -277,7 +311,7 @@ def retain_coaching(
     written: list[str] = []
     for endpoint, payload in (
         (LAST_SESSION_ENDPOINT, last_payload),
-        (COACHING_ENDPOINT, dict(bundle)),
+        (coaching_endpoint(lap), dict(bundle)),
     ):
         result = write_immutable_json(endpoint_file(target_dir, endpoint), payload, allow_nan=True)
         if result.written:
@@ -330,16 +364,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     coaching = sub.add_parser(
         "coaching",
-        help="Fetch + retain per-corner reference & advice for a session (services API, M-TT1).",
+        help="Fetch + retain per-corner reference & advice for the last session (services, M-TT1).",
     )
     coaching.add_argument("--uid", default=None, help="User id; defaults to the token 'sub'.")
     coaching.add_argument(
-        "--session-key",
+        "--lap",
+        type=int,
         default=None,
-        help="Session key (YYYYMMDDHHMMSS); defaults to the most recent session.",
-    )
-    coaching.add_argument(
-        "--lap", type=int, default=None, help="Lap number; defaults to the last session's lap."
+        help="Lap number of the last session; defaults to that session's lap.",
     )
     coaching.add_argument(
         "--segment-count", type=int, default=7, help="Corners (segments) to pull (default 7)."
@@ -399,29 +431,19 @@ def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
     minted = mint_tokens(refresh, config)
     uid = args.uid or uid_from_token(minted.access_token)
 
-    # Resolve the target session. Default: the current last session (full payload incl.
-    # telemetry). With --session-key for an OLDER session, look it up in the services
-    # sessions list so retention is keyed to the REQUESTED session, not the latest.
+    # M-TT1 scope: coach the LAST session. The /last-session endpoint gives the full raw
+    # payload (session + referenceLap + telemetry) keyed correctly to the lake; --lap selects
+    # which lap of that session to coach (default: the session's own lap). Coaching for an
+    # ARBITRARY older session needs per-session telemetry endpoints not in M-TT1 scope — see
+    # the M-TT2+ follow-up — so it is intentionally not wired here (a sessions-list row is not
+    # a /last-session payload and must not masquerade as one in the lake).
     raw_last = fetch_last_session_raw(minted.access_token, uid)
-    last_session = parse_last_session(raw_last)["session"]
-    last_key = _session_lake_key(last_session)["session_key"]
-    session_key = args.session_key or last_key
-
-    if session_key == last_key:
-        target_session: Mapping[str, Any] = last_session
-        last_payload: Mapping[str, Any] = raw_last  # full services evidence (telemetry)
-    else:
-        sessions = fetch_services_sessions(minted.access_token, uid, limit=50)
-        found = find_session(sessions, session_key)
-        if found is None:
-            _print(f"coaching: session_key {session_key} not found in the sessions list")
-            return 1
-        target_session = found
-        last_payload = found  # metadata for the requested (non-last) session
-
-    lap = args.lap if args.lap is not None else target_session.get("lap_number")
+    session = parse_last_session(raw_last)["session"]
+    key = _session_lake_key(session)
+    session_key = key["session_key"]
+    lap = args.lap if args.lap is not None else session.get("lap_number")
     if not session_key or lap is None:
-        _print("coaching: could not resolve a session_key/lap (no recent session?)")
+        _print("coaching: could not resolve the last session's key/lap (no recent session?)")
         return 1
 
     bundle = fetch_session_coaching(
@@ -438,7 +460,7 @@ def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
         return 0
 
     summary = retain_coaching(
-        target_session, bundle, last_session_payload=last_payload, lake_base=args.lake_base
+        session, bundle, lap=lap, last_session_payload=raw_last, lake_base=args.lake_base
     )
     _print(summary.render())
     return 0

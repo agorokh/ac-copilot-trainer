@@ -471,31 +471,31 @@ def fetch_session_coaching(
     http: Any | None = None,
     timeout: float = DEFAULT_REQUEST_TIMEOUT_S,
 ) -> dict[str, Any]:  # pragma: no cover - network round-trip, verified live (#353)
-    """Pull the full per-corner coaching bundle for one lap.
+    """Pull the full per-corner coaching bundle for one lap, preserving RAW evidence.
 
-    Returns ``{"reference_lap", "dynamic_reference", "advice_reference", "segments"}``.
+    The lake is write-once **raw services evidence**, so the bundle keeps the unmodified
+    endpoint responses (``dynamic_reference_raw`` and each segment's ``advice_raw``) — the
+    parsed views (``reference_lap``, per-segment ``stories``) are convenience on top, never
+    a replacement (#353 review: don't drop ``vars``/``user_lap_time``/``is_cache_hit`` etc).
 
     There are **two distinct references**, which must not be conflated (#353 review):
 
-    * ``dynamic_reference`` — the comparison lap returned by ``dynamic-reference-laps``
-      (a faster/community driver, e.g. another user's session). Its identity is
-      ``[ref_uid, ref_session_key]`` and it drives the racing-line/segment comparison.
-    * ``advice_reference`` — what the per-corner ``/advice`` is computed against. The
-      renderer compares the operator's lap against their **own** ``theoreticalBestRef``
-      by default (verified live), so advice defaults to ``(uid, session_key,
-      theoreticalBestRef)``. Override via ``advice_ref_*`` to diff against another lap.
-
-    Recording both separately means the bundle's reference identity always matches the
-    data it labels (the prior single ``reference_id`` mislabelled the advice source).
+    * ``dynamic_reference`` — the comparison lap from ``dynamic-reference-laps`` (a
+      faster/community driver). Identity ``[ref_uid, ref_session_key]``; drives the
+      racing-line/segment comparison.
+    * ``advice_reference`` — what ``/advice`` is computed against. The renderer compares the
+      operator's lap against their **own** ``theoreticalBestRef`` by default (verified live),
+      so advice defaults to ``(uid, session_key, theoreticalBestRef)``. Override via
+      ``advice_ref_*``.
     """
     client = _client(http)
-    raw_ref = _services_get(
+    dynamic_reference_raw = _services_get(
         dynamic_reference_lap_url(uid, session_key, lap, segment_count=segment_count),
         access_token,
         http=client,
         timeout=timeout,
     )
-    reference_lap = parse_reference_lap(raw_ref)
+    reference_lap = parse_reference_lap(dynamic_reference_raw)
     try:
         dyn_uid, dyn_sk = reference_identity(reference_lap)
     except TTServicesError:
@@ -507,21 +507,23 @@ def fetch_session_coaching(
         range(1, segment_count + 1)
     )
     for seg_num in seg_nums:
-        stories = fetch_advice_segment(
+        advice_raw = _services_get(
+            advice_segment_url(uid, session_key, lap, a_uid, a_sk, seg_num, ref_lap=advice_ref_lap),
             access_token,
-            uid,
-            session_key,
-            lap,
-            a_uid,
-            a_sk,
-            seg_num,
-            ref_lap=advice_ref_lap,
             http=client,
             timeout=timeout,
         )
-        segments.append({"segment": seg_num, "stories": [s.__dict__ for s in stories]})
+        stories = parse_advice(advice_raw) if isinstance(advice_raw, Mapping) else []
+        segments.append(
+            {
+                "segment": seg_num,
+                "advice_raw": advice_raw,  # write-once raw /advice evidence
+                "stories": [s.__dict__ for s in stories],  # parsed convenience view
+            }
+        )
     return {
-        "reference_lap": reference_lap,
+        "dynamic_reference_raw": dynamic_reference_raw,  # write-once raw /dynamic-reference-laps
+        "reference_lap": reference_lap,  # parsed convenience view
         "dynamic_reference": [dyn_uid, dyn_sk],
         "advice_reference": [a_uid, a_sk, advice_ref_lap],
         "segments": segments,
