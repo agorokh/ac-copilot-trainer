@@ -47,11 +47,26 @@ bodies captured to gitignored `.scratch/tt_capture/`. Scratch tooling: `.scratch
 Two references, kept distinct: **dynamic_reference** (community/other driver, e.g. "Dennis
 Bosman") vs **advice_reference** (operator's own `theoreticalBestRef`).
 
-## M-TT2 input (telemetry trace, PINNED)
-`last-session.data.telemetry.telemetry.{user,reference}` = ~265-pt lists. Point keys:
-`dist`(spline 0-1), `distM`, `Kmh`(speed), `brak`, `throt`, `steer`, `ovSteer`, `unSteer`,
-`gear`, `lTime`(ms), `useGrip`, `X`,`Y`(track pos). Maps to `lap_archive` TRACE_FIELDS in
-`tools/ac_harness/reference_lap.py` (spline=dist, speed=Kmh, brake=brak, throttle=throt, …).
+## M-TT2 input (telemetry trace) — point schema PINNED, full-lap SOURCE still open
+Point keys (`last-session.data.telemetry.telemetry.{user,reference}`): `dist`(spline 0-1),
+`distM`(often null), `Kmh`(speed, **km/h — matches our `lap_archive` `speed`**, confirmed
+`realtime_observer.py:19`), `brak`, `throt`, `steer`, `ovSteer`, `unSteer`, `gear`, `lTime`(ms),
+`useGrip`, `X`,`Y`(**normalised track pos 0-1, NOT world metres** — so they are not directly our
+`px/py/pz`; voice coaching uses spline/speed/brake, not px/py geometry). Maps to `lap_archive`
+TRACE_FIELDS in `tools/ac_harness/reference_lap.py` (spline=dist, speed=Kmh, brake=brak,
+throttle=throt, steer, gear). **De-risk PROVEN** (`.scratch/tt_mtt2_smoke.py`): these frames
+build a schema-v1 `lap_archive` record via `build_archive_record` (speeds 55.9–161.3 km/h, valid).
+
+**⚠️ BLOCKER for M-TT2 — `/last-session` carries only ONE SEGMENT's telemetry window, not the
+full lap.** Measured: the `reference` trace is 256 pts spanning `dist` **0.265→0.359** (~9% of
+the lap), `lTime` 20420→29147 ms — i.e. the corner the renderer is currently scrubbed to. Derived
+`lap_ms`≈29.1 s ≠ the real reference lap time (~71.0 s). So a single `/last-session` call yields a
+**9%-of-a-lap** reference. **Next session (M-TT2) must first capture the FULL reference telemetry**
+— either stitch all 7 segment windows (scrub the renderer per segment via CDP, concatenate by
+`dist`) or find a full-lap telemetry endpoint — THEN normalise to `lap_archive`. Do this while TT
+is open (live capture). Only after the full-lap trace is correct should the normalizer + `reference`
+CLI + M0 `--reference-archive` bridge land. (M-TT2 is NOT a single-call add — this is the trap M-TT1
+de-risking caught.)
 
 ## Shipped (PR #370)
 `tools/tt_ingest/tt_services.py` (client: builders+parsers pure, network no-cover) +
