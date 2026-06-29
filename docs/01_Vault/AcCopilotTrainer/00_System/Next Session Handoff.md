@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T18:15:00Z
+last_updated: 2026-06-28T22:45:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
@@ -45,7 +46,20 @@ relates_to:
 
 # Next session handoff
 
-## Resume here (2026-06-28) — #345 P0 capture next
+## Resume here (2026-06-28) — Track Titan #353 M-TT1 next, then #345 P0 capture
+
+**[#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) — Track Titan ingest. M-TT0
+(vulcan retention) MERGED in [PR #359](https://github.com/agorokh/ac-copilot-trainer/pull/359)
+(`bd69cab`); see [[pr-359-tt-ingest-mtt0-2026-06-28]].** Issue stays OPEN. **Next = M-TT1 services
+SigV4 crack** (`data-analysis` / `dynamic-reference-laps` / `advice`): idToken → `GetId` →
+`GetCredentialsForIdentity` → SigV4-sign `services.tracktitan.io` (`execute-api`, us-east-1); pin the
+`data-analysis` API path from the Electron Code Cache JS bundle (also check the alternate `X-Api-Key`
+path before committing to full IAM). Pure SigV4 canonical-request helpers go in `tt_auth` (reuse
+`TTConfig.identity_url` / `user_pool_provider`). **Operator decision 2026-06-28:** personal own-account
+TT export is permitted (guardrail scoped to redistribution/at-scale — see
+[[track-titan-coaching-oracle-strategy-2026-06-27]]); same scope applies to M-TT1/M-TT2/M-TT3.
+
+
 
 **#345 P0 capture half** (rig-gated Lua): car-id fn-bug (`cars=1` collapse), setup snapshot, weather/conditions, #305 flush, provenance, widen TRACE_FIELDS. **Drift note:** `check_vault_follow_up.sh` hardcodes `02_Investigations/` but this spoke uses `03_Investigations/` — file a fix.
 
@@ -62,6 +76,19 @@ producer follow-up on #350: real `lat_g`/`long_g` (rig-gated; inert for the obse
 validation dedup is **DONE** (#357 / PR #358, `4e70131`).
 
 **#345 P0 capture half** (rig-gated Lua) also still pending — see the line above.
+
+---
+
+## Delivered (2026-06-28) — PR #359 MERGED: Track Titan ingest M-TT0 (vulcan retention)
+`/autonomous-deliver 353` (ultracode). `tools/tt_ingest/` retains the operator's **own** TT sessions
+immutably (auth → mint → paginate → write-once lake + reindex-from-disk + lossless conditions index);
+CLI `python -m tools.tt_ingest {auth-check, export}`. 97 tests, 96% cov. **Live-verified** on the real
+account: 149 sessions, write-once + index-holds-on-partial-export confirmed. **Policy:** token cloud-API
+automation conflicted with the canonical TT guardrail; reconciliation gate paused the merge, **operator
+approved** proceeding and the guardrail was **scoped** to redistribution/at-scale (personal own-account
+export = self data-portability). Hardened via a 5-lens adversarial self-review (ReDoS, lake-path
+collision, NaN-batch-abort, raw write-once, full-lake reindex). Full node: [[pr-359-tt-ingest-mtt0-2026-06-28]].
+M-TT1/M-TT2/M-TT3 remain on #353. Merge `bd69cab`.
 
 ---
 
