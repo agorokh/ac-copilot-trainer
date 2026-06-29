@@ -377,11 +377,27 @@ class PiperBackend:
     def _synthesize_many_batch(self, items: list[tuple[str, str, Path]], samplerate: int) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            input_path = tmp_path / "phrases.txt"
-            output_dir = tmp_path / "clips"
+            groups: dict[str, list[tuple[str, Path]]] = {}
+            for text, register, target in items:
+                groups.setdefault(register, []).append((text, target))
+            for register, group in groups.items():
+                self._synthesize_register_batch(tmp_path, register, group, samplerate)
+
+    def _synthesize_register_batch(
+        self,
+        tmp_path: Path,
+        register: str,
+        items: list[tuple[str, Path]],
+        samplerate: int,
+    ) -> None:
+        length_scale = self._REGISTER_LENGTH_SCALE.get(register, 1.0)
+        with tempfile.TemporaryDirectory(dir=tmp_path) as group_tmp:
+            group_path = Path(group_tmp)
+            input_path = group_path / "phrases.txt"
+            output_dir = group_path / "clips"
             output_dir.mkdir(parents=True, exist_ok=True)
             input_path.write_text(
-                "".join(f"{text}\n" for text, _register, _target in items),
+                "".join(f"{text}\n" for text, _target in items),
                 encoding="utf-8",
             )
             subprocess.run(  # noqa: S603 - fixed binary + our own text, no shell
@@ -389,6 +405,8 @@ class PiperBackend:
                     self._bin,
                     "--model",
                     str(self._model),
+                    "--length_scale",
+                    str(length_scale),
                     "--input-file",
                     str(input_path),
                     "--output-dir",
@@ -409,11 +427,9 @@ class PiperBackend:
                 raise RuntimeError(
                     f"piper generated {len(generated)} clips for {len(items)} input phrases"
                 )
-            for index, (source, (_text, register, target)) in enumerate(
-                zip(generated, items, strict=True)
-            ):
+            for index, (source, (_text, target)) in enumerate(zip(generated, items, strict=True)):
                 target.parent.mkdir(parents=True, exist_ok=True)
-                raw = tmp_path / f"raw_{index}.wav"
+                raw = group_path / f"raw_{index}.wav"
                 # shutil.move (not Path.replace): the temp dir and bank output dir can be on
                 # different drives on a Windows rig (%TEMP% on C:, bank on D:).
                 shutil.move(str(source), str(raw))

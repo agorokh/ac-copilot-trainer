@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.realtime_observer import (
+    _DEFAULT_TRACK_LENGTH_M,
     Advisory,
     CornerReference,
     RealtimeObserver,
@@ -53,6 +54,9 @@ _log = logging.getLogger("ai_sidecar.voice.timing_report")
 _FRAME_HZ = 20.0
 #: assumed clip length (ms) when no baked bank is supplied, for channel-completion modeling.
 _DEFAULT_CLIP_MS = 400.0
+_MAX_LEAD_SPLINE = 0.05
+_DEFAULT_BRAKE_PREPARE_LEAD_S = 0.8
+_CRITICAL_BRAKE_CLIP_ID = "late_brake.act.critical.generic"
 
 
 @dataclass
@@ -112,7 +116,13 @@ def _clip_duration_ms(bank_dir: Path | None, clip_id: str, manifest: Manifest) -
         return None
 
 
-def _inject_corner_frames(ref: CornerReference) -> tuple[list[dict[str, Any]], float]:
+def _inject_corner_frames(
+    ref: CornerReference,
+    *,
+    track_length_m: float = _DEFAULT_TRACK_LENGTH_M,
+    frame_hz: float = _FRAME_HZ,
+    brake_prepare_lead_s: float = _DEFAULT_BRAKE_PREPARE_LEAD_S,
+) -> tuple[list[dict[str, Any]], float]:
     """Frames that approach ``ref``'s brake point hot-and-coasting, then over-brake past the apex.
 
     Returns the frame list and the *spline of the mark* (the brake point) so the caller can find
@@ -127,10 +137,25 @@ def _inject_corner_frames(ref: CornerReference) -> tuple[list[dict[str, Any]], f
     # approach hot (well above the apex target) and not braking → forces a firm/critical brake cue
     speed = max(ref.target_apex_kmh + 60.0, 120.0)
     frames: list[dict[str, Any]] = []
-    s = max(0.0, bp - 0.04)
+    track_length_m = max(track_length_m, 1.0)
+    frame_hz = max(frame_hz, 1.0)
+    step = max(0.0001, min(0.005, (speed / 3.6) / track_length_m / frame_hz))
+    lead = min(_MAX_LEAD_SPLINE, (speed / 3.6) * brake_prepare_lead_s / track_length_m)
+    start = max(0.0, bp - max(step * 2.0, min(0.04, lead * 0.5 if lead > 0 else step * 2.0)))
+    s = start
     while s <= apex:
         frames.append({"spline": round(s, 4), "speed": speed, "brake": 0.0, "throttle": 0.0})
-        s += 0.005
+        s += step
+    if lead > 0:
+        # Guarantee one pre-brake-point sample inside the same lead window a live 20 Hz producer
+        # would hit, even on long tracks where a fixed 0.005 spline step can skip over it.
+        lead_frame = max(0.0, bp - max(0.0001, min(lead * 0.5, step)))
+        frames.append(
+            {"spline": round(lead_frame, 4), "speed": speed, "brake": 0.0, "throttle": 0.0}
+        )
+    frames = sorted(
+        {float(fr["spline"]): fr for fr in frames}.values(), key=lambda fr: fr["spline"]
+    )
     # past the apex, still hard on the brakes, off throttle → over-braking / release cue
     for ds in (0.02, 0.04):
         frames.append(
@@ -180,7 +205,14 @@ def build_timing_report(
     # first cue would read "busy" forever and every later cue would be dropped.
     playing_until_ms = -1.0
     for ref in refs:
-        frames, mark_spline = _inject_corner_frames(ref)
+        frames, mark_spline = _inject_corner_frames(
+            ref,
+            track_length_m=getattr(observer, "_track_length_m", _DEFAULT_TRACK_LENGTH_M),
+            frame_hz=frame_hz,
+            brake_prepare_lead_s=getattr(
+                observer, "_brake_prepare_lead_s", _DEFAULT_BRAKE_PREPARE_LEAD_S
+            ),
+        )
         if not frames:
             continue
         report.covered_corners += 1
@@ -253,6 +285,7 @@ def build_timing_report(
         for c in spoken
         if c.kind == "late_brake" and c.urgency == "act" and (c.clip_duration_ms or 0) > 450.0
     ]
+    critical_brake_alarm_spoken = any(c.clip_id == _CRITICAL_BRAKE_CLIP_ID for c in spoken)
     report.assertions = {
         "covered_corners_at_least_one": report.covered_corners >= 1,
         # AC a: an anticipatory cue actually fired, and EVERY anticipatory cue's onset led its mark.
@@ -264,6 +297,9 @@ def build_timing_report(
             config.verbosity != Verbosity.LOW or "info" not in spoken_urgencies
         ),
         "brake_alarm_within_450ms": (bank_dir is None or not brake_alarm_over_budget),
+        "critical_brake_alarm_spoken": (
+            config.verbosity == Verbosity.OFF or critical_brake_alarm_spoken
+        ),
         # A non-vacuous proof must actually dispatch a cue — unless verbosity is OFF (muted).
         # A resolver/bank gap that silently suppresses everything must FAIL the report, not pass it
         # because the structural assertions held (codex review #371). This is a BOOL so main()'s

@@ -79,7 +79,9 @@ launcher = [
 # real-time hot path. ffmpeg (system) is also required for the prosody shaper. macOS dev can instead
 # use the `say-expressive` backend (no extra deps).
 voice-bake = [
-    "kokoro-onnx>=0.4.9",
+    # kokoro-onnx 0.4.x currently declares Requires-Python <3.14; keep the extra installable on
+    # this repo's advertised 3.14 dev/runtime while still enabling Kokoro where pip can solve it.
+    "kokoro-onnx>=0.4.9; python_version < '3.14'",
     "soundfile>=0.13.1",
 ]
 # Tier 3 Phase 2+ (#26): not installed in CI; see tools/model_training/train.py

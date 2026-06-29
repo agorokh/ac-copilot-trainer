@@ -256,8 +256,8 @@ def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch
     out = tmp_path / "bank"
     items = [
         ("brake one", "firm", out / "clip_a.wav"),
-        ("turn two", "calm", out / "clip_b.wav"),
-        ("apex three", "critical", out / "clip_c.wav"),
+        ("turn two", "firm", out / "clip_b.wav"),
+        ("apex three", "firm", out / "clip_c.wav"),
     ]
     names = ["8", "9", "10"]  # generation order; numeric != lexical
 
@@ -280,6 +280,36 @@ def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch
     assert _first_sample(items[0][2]) == 1000
     assert _first_sample(items[1][2]) == 2000
     assert _first_sample(items[2][2]) == 3000
+
+
+def test_piper_batch_preserves_register_length_scale(tmp_path, monkeypatch) -> None:
+    backend = _piper_backend(tmp_path)
+    out = tmp_path / "bank"
+    items = [
+        ("calm one", "calm", out / "clip_calm.wav"),
+        ("critical two", "critical", out / "clip_critical.wav"),
+    ]
+    seen: list[tuple[str, list[str]]] = []
+
+    def fake_run(cmd, *args, **kwargs):
+        assert "--input-file" in cmd, "batch path must use --input-file"
+        scale = cmd[cmd.index("--length_scale") + 1]
+        input_path = Path(cmd[cmd.index("--input-file") + 1])
+        texts = input_path.read_text(encoding="utf-8").splitlines()
+        seen.append((scale, texts))
+        output_dir = Path(cmd[cmd.index("--output-dir") + 1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for index, _text in enumerate(texts, start=1):
+            _write_pcm16_wav(output_dir / f"{index}.wav", samplerate=48000, value=index * 1000)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(bake_mod.subprocess, "run", fake_run)
+    backend.synthesize_many(items, 48000)
+
+    assert ("1.05", ["calm one"]) in seen
+    assert ("0.88", ["critical two"]) in seen
+    assert _first_sample(items[0][2]) == 1000
+    assert _first_sample(items[1][2]) == 1000
 
 
 def test_piper_batch_falls_back_to_per_clip_when_batch_fails(tmp_path, monkeypatch) -> None:

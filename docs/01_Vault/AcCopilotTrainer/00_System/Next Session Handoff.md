@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T17:51:56Z
+last_updated: 2026-06-29T18:09:13Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -53,22 +53,26 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-06-29T17:51:56Z) — PR #371 voice-intensity resolution for #368
+## In flight (2026-06-29T18:09:13Z) — PR #371 voice-intensity resolution for #368
 
 PR [#371](https://github.com/agorokh/ac-copilot-trainer/pull/371) is still OPEN. The branch has been
-merged with `origin/main` (`669eba7`) and the current local review-resolution commit is `2c5567a`
-(`fix(voice): address current PR 371 Codex findings`). It preserves the #368 voice-intensity work,
-the PR #372 batch-bake/48 kHz defaults, and the parallel process-miner/vault updates from `main`.
+merged with `origin/main` (`669eba7`) and has local review-resolution commits after that merge. It
+preserves the #368 voice-intensity work, the PR #372 batch-bake/48 kHz defaults, and the parallel
+process-miner/vault updates from `main`.
 
-Current Codex findings addressed in `2c5567a`: pyttsx3 register rate/volume now uses configured base
+Codex findings addressed after the merge: pyttsx3 register rate/volume now uses configured base
 knobs as the center; the standalone WS voice client no longer requires fallback-only
 `AC_COPILOT_VOICE_TTS=1`; legacy `act` advisories without an explicit register resolve to the
 playable firm clip instead of going silent; and post-apex brake-release cues can escalate from calm
-to firm if the driver stays heavy on the brake.
+to firm if the driver stays heavy on the brake. Later timing/bake findings are also fixed locally:
+timing reports require the critical brake alarm clip to be spoken, long-track injected frames scale
+from speed/frame-rate/track length, Piper batch bakes preserve register `--length_scale`, and
+`voice-bake` keeps `kokoro-onnx` behind a Python `<3.14` marker so the extra remains installable on
+this repo's advertised 3.14 runtime.
 
-Verification after `2c5567a`: focused local suite passed
-(`tests/test_voice_client.py tests/test_voice_resolver.py tests/test_realtime_observer.py
-tests/test_voice_scheduler.py tests/test_voice_engine.py` → `66 passed`). Next resolver step: rerun
+Focused verification after these fixes: voice client/resolver/observer/scheduler/engine suite
+passed (`66 passed`); voice bake/timing/resolver/observer suite passed (`58 passed`); synthetic
+timing-report CLI exits 0 and asserts `critical_brake_alarm_spoken: true`. Next resolver step: rerun
 full `make ci-fast PYTHON=.venv/bin/python`, push, trigger reviewers, observe the 10-minute cooldown,
 then inspect GitHub checks plus current-head review threads. Detailed merge-contention notes:
 [[voice-368-merge-contention-2026-06-29]].

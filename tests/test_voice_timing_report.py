@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from _voice_support import build_manifest, make_advisory
 
+from tools.ai_sidecar.realtime_observer import CornerReference, RealtimeObserver
 from tools.ai_sidecar.voice.config import Verbosity, VoiceConfig
 from tools.ai_sidecar.voice.resolver import Resolver
 from tools.ai_sidecar.voice.timing_report import _synthetic_observer, build_timing_report
@@ -100,6 +101,51 @@ def test_cues_spoken_is_a_gating_boolean() -> None:
     normal = _report(Verbosity.NORMAL)
     assert normal.assertions["cues_spoken"] >= 1
     assert normal.assertions["cues_spoken_when_audible"] is True
+
+
+def test_critical_brake_alarm_clip_is_required_for_audible_report() -> None:
+    manifest = build_manifest()
+    del manifest.clips["late_brake.act.critical.generic"]
+    manifest.__post_init__()
+
+    rep = build_timing_report(
+        _synthetic_observer(),
+        Resolver(manifest),
+        config=VoiceConfig(verbosity=Verbosity.NORMAL),
+        manifest=manifest,
+        bank_dir=None,
+        backend="synthetic",
+    )
+
+    assert rep.assertions["cues_spoken"] >= 1
+    assert rep.assertions["critical_brake_alarm_spoken"] is False
+
+
+def test_long_track_injection_hits_anticipatory_lead_window() -> None:
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.30,
+        spline_lo=0.24,
+        spline_hi=0.38,
+        optimal_apex_kmh=120.0,
+        best_observed_apex_kmh=120.0,
+        best_brake_point_spline=0.25,
+        n_corpus=1,
+    )
+    observer = RealtimeObserver([ref], track_length_m=20_000.0)
+    manifest = build_manifest()
+
+    rep = build_timing_report(
+        observer,
+        Resolver(manifest),
+        config=VoiceConfig(verbosity=Verbosity.NORMAL),
+        manifest=manifest,
+        bank_dir=None,
+        backend="synthetic",
+    )
+
+    assert rep.assertions["anticipatory_cue_fired"] is True
+    assert any(c.anticipatory and c.spoken for c in rep.cues)
 
 
 def test_main_rejects_an_invalid_bank(tmp_path) -> None:
