@@ -48,10 +48,17 @@ import hashlib
 import json
 import re
 import shutil
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+# Allow `python tools/setup_catalog/registrar.py` from a checkout (not only `-m`).
+if __package__ in (None, ""):
+    _repo_root = str(Path(__file__).resolve().parents[2])
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
 
 from tools.ai_sidecar.setup_model import from_snapshot, parse_setup_ini
 
@@ -63,6 +70,26 @@ _MOD32 = 4294967296  # 2**32
 # column 0 (no indentation), value is the trimmed remainder. %w in Lua is [A-Za-z0-9]; '_' is added.
 _SECTION_RE = re.compile(r"^\[([^\]]+)\]")
 _KEY_RE = re.compile(r"^([A-Za-z0-9_]+)\s*=\s*(.*?)\s*$")
+_SAFE_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _validate_path_component(value: str, label: str) -> str:
+    """Reject path separators and traversal in car/track ids used as directory names."""
+    if not value or value in (".", ".."):
+        raise ValueError(f"invalid {label}: {value!r}")
+    if "/" in value or "\\" in value or ".." in value:
+        raise ValueError(f"invalid {label}: path separators or traversal in {value!r}")
+    if not _SAFE_PATH_COMPONENT_RE.match(value):
+        raise ValueError(f"invalid {label}: {value!r} (expected alnum, _, or -)")
+    return value
+
+
+def _assert_under_root(path: Path, root: Path) -> Path:
+    resolved = path.resolve()
+    root_resolved = root.resolve()
+    if not resolved.is_relative_to(root_resolved):
+        raise ValueError(f"refusing path outside setups root: {resolved} not under {root_resolved}")
+    return resolved
 
 
 def _canonical_pairs(text: str) -> list[tuple[str, str, str]]:
@@ -301,11 +328,17 @@ def deploy_setup(
             "Deploy only on a machine with Assetto Corsa user-data present."
         )
     text = src.read_text(encoding="utf-8", errors="replace")
-    resolved_car = car_id or parse_setup_ini(text).get("CAR.MODEL") or "unknown"
-    dest_dir = setups_root / resolved_car
+    resolved_car = _validate_path_component(
+        car_id or parse_setup_ini(text).get("CAR.MODEL") or "unknown", "car_id"
+    )
+    validated_track: str | None = None
     if track_id:
-        dest_dir = dest_dir / track_id
+        validated_track = _validate_path_component(track_id, "track_id")
+    dest_dir = setups_root / resolved_car
+    if validated_track:
+        dest_dir = dest_dir / validated_track
     dest = dest_dir / src.name
+    _assert_under_root(dest, setups_root)
     if dest.exists() and not force:
         raise FileExistsError(f"refusing to overwrite existing setup: {dest} (pass force=True)")
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -333,6 +366,7 @@ def catalog_join_sql(registry_path: str | Path = DEFAULT_REGISTRY) -> str:
         FROM catalog c
         LEFT JOIN laps l
           ON l.car_id = c.car_id
+         AND (c.track_id IS NULL OR l.track_id = c.track_id)
          AND (
               l.setup_hash = c.canonical_hash
               OR (l.setup_path IS NOT NULL
@@ -399,9 +433,4 @@ def _main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import sys
-
-    _repo_root = str(Path(__file__).resolve().parents[2])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
     raise SystemExit(_main())

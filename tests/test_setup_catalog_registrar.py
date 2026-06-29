@@ -9,6 +9,7 @@ bridge holds.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,88 @@ def test_register_upsert_is_idempotent(tmp_path: Path) -> None:
     assert r1.canonical_hash == r2.canonical_hash
     assert rows[0]["name"] == "Copilot_Balanced_Fast"
     assert rows[0]["canonical_hash"] == r1.canonical_hash
+
+
+def test_deploy_rejects_path_traversal(tmp_path: Path) -> None:
+    (tmp_path / "setups").mkdir()
+    with pytest.raises(ValueError, match="car_id"):
+        registrar.deploy_setup(ASSET, tmp_path, car_id="../outside", track_id="magione")
+    with pytest.raises(ValueError, match="track_id"):
+        registrar.deploy_setup(ASSET, tmp_path, car_id="ks_porsche_911_gt3_r_2016", track_id="..")
+
+
+def test_catalog_join_scoped_to_track(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Track-specific catalog rows must not absorb laps from other tracks."""
+    pytest.importorskip("duckdb")
+    from tools.coaching_lake.build_analytics import build_lake, run_query
+    from tools.lap_archive_export import LAP_ARCHIVE_SCHEMA_VERSION
+
+    text = ASSET.read_text(encoding="utf-8")
+    chash = registrar.canonical_hash(text)
+    snapshot = parse_setup_ini(text)
+
+    monkeypatch.chdir(tmp_path)
+    lap_dir = tmp_path / "journal" / "laps"
+    lap_dir.mkdir(parents=True)
+    for track, lap_uuid, lap_ms in (
+        ("magione", "u-magione", 78123),
+        ("spa", "u-spa", 120000),
+    ):
+        lap = {
+            "schema_version": LAP_ARCHIVE_SCHEMA_VERSION,
+            "lap_uuid": lap_uuid,
+            "session_uuid": "s1",
+            "exported_at": "2026-06-29T00:00:00Z",
+            "car": {"id": "ks_porsche_911_gt3_r_2016"},
+            "track": {"id": track},
+            "lap": {"lap_n": 3, "lap_ms": lap_ms, "is_pb": True, "is_valid": True},
+            "setup": {
+                "hash": chash,
+                "path": f"setups/ks_porsche_911_gt3_r_2016/{track}/Copilot_Balanced_Fast.ini",
+                "snapshot": snapshot,
+            },
+            "conditions": {},
+            "corners": [],
+            "trace": {"fields": [], "samples": []},
+        }
+        (lap_dir / f"lap_{track}.json").write_text(json.dumps(lap), encoding="utf-8")
+
+    build_lake("journal/laps", "journal/lake.duckdb", include_samples=False)
+
+    reg = tmp_path / "registry.jsonl"
+    registrar.register_setup(ASSET, registry_path=reg, track_id="magione")
+
+    cols, rows = run_query("journal/lake.duckdb", registrar.catalog_join_sql(reg))
+    by_name = {r[cols.index("name")]: r for r in rows}
+    row = by_name["Copilot_Balanced_Fast"]
+    assert row[cols.index("driven_laps")] == 1
+    assert row[cols.index("best_ms")] == 78123
+
+
+def test_script_invocation_from_checkout(tmp_path: Path) -> None:
+    """Direct script path must work without `python -m`."""
+    import subprocess
+
+    reg = tmp_path / "registry.jsonl"
+    script = REPO_ROOT / "tools/setup_catalog/registrar.py"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(ASSET),
+            "--register",
+            "--track-id",
+            "magione",
+            "--registry",
+            str(reg),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert len(registrar.load_registry(reg)) == 1
 
 
 def test_deploy_rejects_non_rig_host(tmp_path: Path) -> None:
