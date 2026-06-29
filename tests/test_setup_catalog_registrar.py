@@ -88,6 +88,21 @@ def test_register_upsert_is_idempotent(tmp_path: Path) -> None:
     assert rows[0]["canonical_hash"] == r1.canonical_hash
 
 
+def test_canonical_hash_uses_byte_faithful_latin1(tmp_path: Path) -> None:
+    ini = tmp_path / "legacy.ini"
+    # 0xE9 is 'é' in Latin-1 / Windows-1252 but invalid standalone UTF-8.
+    ini.write_bytes(b"[ABS]\nVALUE=7\n[ABOUT]\nAUTHOR=\xe9\n")
+    rec = registrar.build_record(ini)
+    assert rec.canonical_hash == registrar.canonical_hash(ini.read_bytes().decode("latin-1"))
+
+
+def test_catalog_join_sql_quotes_registry_path(tmp_path: Path) -> None:
+    reg = tmp_path / "O'Connor" / "registry.jsonl"
+    sql = registrar.catalog_join_sql(reg)
+    assert "O''Connor" in sql
+    assert "ESCAPE '\\\\'" in sql
+
+
 def test_deploy_rejects_path_traversal(tmp_path: Path) -> None:
     (tmp_path / "setups").mkdir()
     with pytest.raises(ValueError, match="car_id"):

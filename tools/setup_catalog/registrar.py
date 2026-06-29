@@ -92,6 +92,43 @@ def _assert_under_root(path: Path, root: Path) -> Path:
     return resolved
 
 
+def _read_ini_texts(path: Path) -> tuple[str, str]:
+    """Return (latin-1 byte-faithful text for hashing, utf-8 text for parsing)."""
+    raw = path.read_bytes()
+    return raw.decode("latin-1"), raw.decode("utf-8", errors="replace")
+
+
+def _sql_string_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _like_escape_sql(column_expr: str) -> str:
+    """Escape LIKE metacharacters in a SQL column expression."""
+    return (
+        "replace(replace(replace(lower("
+        + column_expr
+        + "), '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')"
+    )
+
+
+def _resolve_ac_setups_root(ac_userdata: str | Path) -> Path:
+    """Resolve and validate the AC user-data ``setups/`` root for deploy."""
+    userdata = Path(ac_userdata)
+    if ".." in userdata.parts:
+        raise ValueError(
+            f"invalid ac_userdata path: {ac_userdata!r} (must not contain '..' segments)"
+        )
+    root = userdata.resolve()
+    setups_root = root / "setups"
+    if not setups_root.is_dir():
+        raise FileNotFoundError(
+            f"no AC setups folder at {setups_root} — not a rig host? "
+            "Deploy only on a machine with Assetto Corsa user-data present."
+        )
+    _assert_under_root(setups_root, root)
+    return setups_root
+
+
 def _canonical_pairs(text: str) -> list[tuple[str, str, str]]:
     """Harvest ``(section, key, value)`` tuples like ``setup_reader.lua::readIniSnapshot``."""
     pairs: list[tuple[str, str, str]] = []
@@ -212,8 +249,8 @@ def build_record(
 ) -> SetupRecord:
     """Parse a curated ``.ini`` into a :class:`SetupRecord` (no I/O beyond reading ``ini_path``)."""
     path = Path(ini_path)
-    text = path.read_text(encoding="utf-8", errors="replace")
-    snapshot = parse_setup_ini(text)
+    hash_text, parse_text = _read_ini_texts(path)
+    snapshot = parse_setup_ini(parse_text)
     setup = from_snapshot(snapshot)
     resolved_car = (
         car_id or snapshot.get("CAR.MODEL") or snapshot.get("CAR.SCREEN_NAME") or "unknown"
@@ -232,7 +269,7 @@ def build_record(
         car_id=resolved_car,
         track_id=track_id,
         source_path=stored_path,
-        canonical_hash=canonical_hash(text),
+        canonical_hash=canonical_hash(hash_text),
         tunable_hash=tunable_hash(snapshot),
         param_count=len(numeric),
         params=numeric,
@@ -321,13 +358,8 @@ def deploy_setup(
     Returns the destination path.
     """
     src = Path(ini_path)
-    setups_root = Path(ac_userdata) / "setups"
-    if not setups_root.is_dir():
-        raise FileNotFoundError(
-            f"no AC setups folder at {setups_root} — not a rig host? "
-            "Deploy only on a machine with Assetto Corsa user-data present."
-        )
-    text = src.read_text(encoding="utf-8", errors="replace")
+    setups_root = _resolve_ac_setups_root(ac_userdata)
+    _, text = _read_ini_texts(src)
     resolved_car = _validate_path_component(
         car_id or parse_setup_ini(text).get("CAR.MODEL") or "unknown", "car_id"
     )
@@ -357,7 +389,8 @@ def catalog_join_sql(registry_path: str | Path = DEFAULT_REGISTRY) -> str:
     ``canonical_hash`` (the rig djb2) OR, as a fallback, on the setup *name* embedded in
     ``laps.setup_path`` — so a byte-hash miss (AC re-materializing ``setup.ini``) still joins.
     """
-    reg = str(Path(registry_path)).replace("\\", "/")
+    reg = _sql_string_literal(str(Path(registry_path)).replace("\\", "/"))
+    name_like = _like_escape_sql("c.name")
     return f"""
         WITH catalog AS (SELECT * FROM read_json_auto('{reg}'))
         SELECT c.name, c.car_id, c.track_id, c.canonical_hash,
@@ -370,7 +403,7 @@ def catalog_join_sql(registry_path: str | Path = DEFAULT_REGISTRY) -> str:
          AND (
               l.setup_hash = c.canonical_hash
               OR (l.setup_path IS NOT NULL
-                  AND lower(l.setup_path) LIKE '%' || lower(c.name) || '.ini')
+                  AND lower(l.setup_path) LIKE '%' || {name_like} || '.ini' ESCAPE '\\\\')
          )
         GROUP BY c.name, c.car_id, c.track_id, c.canonical_hash
         ORDER BY c.car_id, c.track_id, c.name
