@@ -921,6 +921,9 @@ extern "C" void screen_pocket_technician_apply_spinner_list_error(const char* er
     char msg[80];
     snprintf(msg, sizeof(msg), "Setup failed: %s", error ? error : "unknown");
     ui_toast_error(msg);
+    if (g_active_ctx) {
+        rebuild_list_widgets(g_active_ctx);
+    }
 }
 
 extern "C" void screen_pocket_technician_set_identity(const char* car_id, const char* car_name,

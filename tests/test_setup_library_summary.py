@@ -457,6 +457,10 @@ def test_spinner_clear_waits_for_finish_rebuild() -> None:
     finish_block = screen_cpp.split("screen_pocket_technician_finish_spinner_list", 1)[1].split(
         'extern "C" void screen_pocket_technician_apply_spinner_ack', 1
     )[0]
+    error_block = screen_cpp.split("screen_pocket_technician_apply_spinner_list_error", 1)[1].split(
+        'extern "C" void screen_pocket_technician_set_identity', 1
+    )[0]
 
     assert "rebuild_list_widgets" not in clear_block
     assert "rebuild_list_widgets(g_active_ctx)" in finish_block
+    assert "rebuild_list_widgets(g_active_ctx)" in error_block
