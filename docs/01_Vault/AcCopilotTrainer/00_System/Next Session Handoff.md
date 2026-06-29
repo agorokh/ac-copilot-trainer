@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T05:14:34Z
+last_updated: 2026-06-29T05:32:54Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -47,6 +47,21 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Claude Design UI package for launcher + rig screens (2026-06-29)
+
+Created `docs/10_Development/15_Claude_Design_UI_Package.md` as the handoff
+package for Claude Design or any future UI implementation agent. It explains the
+current screen technologies and implemented functions across the ESP32 LVGL
+portrait screen, Windows Tkinter Game Point launcher, CSP Lua in-game HUD, and
+sidecar protocol, then lays out future scope for launcher expansion, Setup
+Exchange, voice, haptics, diagnostics, and post-lap coaching screens. Use it as
+the copy-paste design prompt before asking Claude Design for a full UI pass.
+
+Also linked it from `docs/10_Development/14_Game_Point_Launcher.md` so new
+driver-facing launcher work discovers the UI contract. Tier-3 MCP was not
+exposed in this Codex session; the package was grounded from the vault and live
+source files listed inside the package.
 
 ## Game Point #363 launcher install hardening (2026-06-29)
 

@@ -24,6 +24,13 @@ The shortcut points at `dist\AC-Copilot-Game-Point.exe` and uses the repository
 root as the working directory. The exe remains a local build artifact and is not
 committed.
 
+## UI design handoff
+
+Before changing launcher screens, rig-screen screens, or cross-surface status
+language, read [15_Claude_Design_UI_Package.md](15_Claude_Design_UI_Package.md).
+It captures the current Tkinter launcher, LVGL rig screen, CSP HUD, protocol
+state, and future UI scope for Claude Design or any implementation agent.
+
 ## Extension contract
 
 When adding a new rig-facing function:
