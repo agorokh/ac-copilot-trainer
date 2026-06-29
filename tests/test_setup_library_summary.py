@@ -386,5 +386,13 @@ def test_spinner_set_write_nil_keeps_original(lua, tmp_path: pathlib.Path) -> No
 def test_write_text_file_restore_failure_uses_pcall() -> None:
     """Atomic setup write reports backup-restore failures via pcall (PR #365 Gemini)."""
     lua_src = (MODULES_DIR / "setup_library.lua").read_text(encoding="utf-8")
-    assert "local okRestore, errRestore = pcall(os.rename, backup, path)" in lua_src
+    assert "local okRestore, restoreRet, restoreErr = pcall(os.rename, backup, path)" in lua_src
+    assert "not okRestore or not restoreRet" in lua_src
     assert "restore from backup failed" in lua_src
+
+
+def test_phase2_json_float_or_rejects_non_finite() -> None:
+    main_cpp = (REPO / "firmware" / "screen" / "src" / "main.cpp").read_text(encoding="utf-8")
+    assert "phase2_json_finite_float" in main_cpp
+    assert "isnan" in main_cpp
+    assert "isinf" in main_cpp

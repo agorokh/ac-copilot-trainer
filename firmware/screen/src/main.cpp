@@ -15,6 +15,7 @@
 
 #include <Arduino.h>
 #include <climits>
+#include <cmath>
 #include <WiFi.h>
 #include <ArduinoWebsockets.h>
 #include <ArduinoJson.h>
@@ -534,16 +535,23 @@ static int32_t phase2_json_num_or(JsonVariantConst v, int32_t fallback) {
   return fallback;
 }
 
+static bool phase2_json_finite_float(float value) {
+  return !isnan(value) && !isinf(value);
+}
+
 static float phase2_json_float_or(JsonVariantConst v, float fallback) {
   if (v.isNull()) return fallback;
-  if (v.is<float>() || v.is<double>()) return v.as<float>();
+  if (v.is<float>() || v.is<double>()) {
+    float n = v.as<float>();
+    return phase2_json_finite_float(n) ? n : fallback;
+  }
   if (v.is<int>() || v.is<long>()) return (float)v.as<long>();
   if (v.is<const char*>()) {
     const char* s = v.as<const char*>();
     if (!s || !*s) return fallback;
     char* end = nullptr;
     float n = strtof(s, &end);
-    if (end && end != s && *end == '\0') return n;
+    if (end && end != s && *end == '\0' && phase2_json_finite_float(n)) return n;
   }
   return fallback;
 }

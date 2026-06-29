@@ -614,12 +614,12 @@ local function writeTextFile(path, text)
   end
   local renamedNew, renameNewErr = os.rename(tmp, path)
   if not renamedNew then
-    local okRestore, errRestore = pcall(os.rename, backup, path)
+    local okRestore, restoreRet, restoreErr = pcall(os.rename, backup, path)
     os.remove(tmp)
-    if not okRestore then
+    if not okRestore or not restoreRet then
       return false, tostring(renameNewErr or "setup replace failed")
         .. "; and restore from backup failed: "
-        .. tostring(errRestore or "unknown")
+        .. tostring(restoreErr or "unknown")
     end
     return false, tostring(renameNewErr or "setup replace failed")
   end
