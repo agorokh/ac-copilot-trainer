@@ -101,6 +101,7 @@ def test_catalog_join_sql_quotes_registry_path(tmp_path: Path) -> None:
     sql = registrar.catalog_join_sql(reg)
     assert "O''Connor" in sql
     assert "regexp_extract" in sql
+    assert "chr(92)" in sql
 
 
 def test_deploy_rejects_path_traversal(tmp_path: Path) -> None:
@@ -209,6 +210,47 @@ def test_deploy_is_additive_and_guards_overwrite(tmp_path: Path) -> None:
     registrar.deploy_setup(
         ASSET, tmp_path, car_id="ks_porsche_911_gt3_r_2016", track_id="magione", force=True
     )
+
+
+def test_catalog_join_windows_path_basename_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("duckdb")
+    from tools.coaching_lake.build_analytics import build_lake, run_query
+    from tools.lap_archive_export import LAP_ARCHIVE_SCHEMA_VERSION
+
+    text = ASSET.read_text(encoding="utf-8")
+    snapshot = parse_setup_ini(text)
+
+    monkeypatch.chdir(tmp_path)
+    lap_dir = tmp_path / "journal" / "laps"
+    lap_dir.mkdir(parents=True)
+    lap = {
+        "schema_version": LAP_ARCHIVE_SCHEMA_VERSION,
+        "lap_uuid": "u-magione-1",
+        "session_uuid": "s1",
+        "exported_at": "2026-06-29T00:00:00Z",
+        "car": {"id": "ks_porsche_911_gt3_r_2016"},
+        "track": {"id": "magione"},
+        "lap": {"lap_n": 3, "lap_ms": 78123, "is_pb": True, "is_valid": True},
+        "setup": {
+            "hash": "deadbeef",
+            "path": r"setups\ks_porsche_911_gt3_r_2016\magione\Copilot_Balanced_Fast.ini",
+            "snapshot": snapshot,
+        },
+        "conditions": {},
+        "corners": [],
+        "trace": {"fields": [], "samples": []},
+    }
+    (lap_dir / "lap_magione_1.json").write_text(json.dumps(lap), encoding="utf-8")
+    build_lake("journal/laps", "journal/lake.duckdb", include_samples=False)
+
+    reg = tmp_path / "registry.jsonl"
+    registrar.register_setup(ASSET, registry_path=reg, track_id="magione")
+
+    cols, rows = run_query("journal/lake.duckdb", registrar.catalog_join_sql(reg))
+    driven = next(r[cols.index("driven_laps")] for r in rows)
+    assert driven == 1
 
 
 def test_catalog_joins_simulated_driven_lap(

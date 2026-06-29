@@ -404,7 +404,7 @@ def catalog_join_sql(registry_path: str | Path = DEFAULT_REGISTRY) -> str:
          AND (
               l.setup_hash = c.canonical_hash
               OR (l.setup_path IS NOT NULL
-                  AND lower(regexp_extract(replace(l.setup_path, '\\\\', '/'), '([^/]+)$', 1))
+                  AND lower(regexp_extract(replace(l.setup_path, chr(92), '/'), '([^/]+)$', 1))
                       = lower(c.name || '.ini'))
          )
         GROUP BY c.name, c.car_id, c.track_id, c.canonical_hash
