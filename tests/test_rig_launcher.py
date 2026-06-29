@@ -270,6 +270,32 @@ def test_config_from_env_and_args_uses_launcher_overrides(tmp_path: Path, monkey
     assert cfg.paths.root == tmp_path
 
 
+def test_config_from_env_defaults_to_loopback_without_token(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env({}, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, python_executable="python")
+
+    assert cfg.external_bind is None
+    assert sup.sidecar_command() == [
+        "python",
+        "-m",
+        "tools.ai_sidecar",
+        "--port",
+        "8765",
+        "--host",
+        "127.0.0.1",
+    ]
+    assert {row.name: row for row in sup.preflight()}["sidecar_token"].state == "loopback"
+
+
+def test_config_from_env_defaults_to_external_bind_with_token(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_SIDECAR_TOKEN": "token"},
+        paths=LauncherPaths(tmp_path),
+    )
+
+    assert cfg.external_bind == "0.0.0.0"
+
+
 def test_config_from_settings_file_supplies_non_secret_defaults(tmp_path: Path) -> None:
     (tmp_path / "settings.json").write_text(
         json.dumps(
@@ -327,6 +353,7 @@ def test_ensure_settings_file_writes_non_secret_template(tmp_path: Path) -> None
 
     assert path == tmp_path / "settings.json"
     assert payload["sidecar_port"] == 8765
+    assert payload["external_bind"] == ""
     assert "token" not in json.dumps(payload).lower()
 
 

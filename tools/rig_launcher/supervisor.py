@@ -94,12 +94,13 @@ class GamePointConfig:
         from tools.rig_launcher.settings import LauncherSettings
 
         settings = LauncherSettings.load(resolved_paths.settings_path)
+        token = _none_if_blank(env_map.get("AC_COPILOT_SIDECAR_TOKEN"))
         port = _configured_port(env_map.get("AC_COPILOT_SIDECAR_PORT"), settings.sidecar_port)
-        external_bind = env_map.get("AC_COPILOT_SIDECAR_EXTERNAL_BIND")
-        if external_bind is None:
-            external_bind = settings.external_bind or DEFAULT_EXTERNAL_BIND
-        if external_bind == "":
-            external_bind = None
+        external_bind = _configured_external_bind(
+            env_map.get("AC_COPILOT_SIDECAR_EXTERNAL_BIND"),
+            settings.external_bind,
+            token=token,
+        )
         voice_tts = _env_bool_or(
             env_map.get("AC_COPILOT_VOICE_TTS"),
             default=bool(settings.voice_tts),
@@ -111,7 +112,7 @@ class GamePointConfig:
         return cls(
             port=port,
             external_bind=external_bind,
-            token=_none_if_blank(env_map.get("AC_COPILOT_SIDECAR_TOKEN")),
+            token=token,
             reference_archive=_configured_text(
                 env_map.get("AC_COPILOT_REFERENCE_ARCHIVE"),
                 settings.reference_archive,
@@ -507,6 +508,21 @@ def _configured_text(env_value: str | None, settings_value: str | None) -> str |
     if env_value is not None:
         return _none_if_blank(env_value)
     return _none_if_blank(settings_value)
+
+
+def _configured_external_bind(
+    env_value: str | None,
+    settings_value: str | None,
+    *,
+    token: str | None,
+) -> str | None:
+    if env_value is not None:
+        return _none_if_blank(env_value)
+    if settings_value:
+        return settings_value
+    if token:
+        return DEFAULT_EXTERNAL_BIND
+    return None
 
 
 def _env_bool(value: str | None) -> bool:

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.rig_launcher.supervisor import DEFAULT_EXTERNAL_BIND, DEFAULT_PORT, LauncherPaths
+from tools.rig_launcher.supervisor import DEFAULT_PORT, LauncherPaths
 
 SETTINGS_SCHEMA = "ac-copilot-game-point-settings-v1"
 
@@ -62,7 +62,7 @@ def default_settings_payload() -> dict[str, object]:
     """Return the editable settings template. Tokens intentionally stay out."""
     return {
         "_schema": SETTINGS_SCHEMA,
-        "external_bind": DEFAULT_EXTERNAL_BIND,
+        "external_bind": "",
         "reference_archive": "",
         "setup_store": "",
         "sidecar_port": DEFAULT_PORT,
