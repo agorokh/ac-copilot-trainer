@@ -102,13 +102,12 @@ def _sql_string_literal(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _like_escape_sql(column_expr: str) -> str:
-    """Escape LIKE metacharacters in a SQL column expression."""
-    return (
-        "replace(replace(replace(lower("
-        + column_expr
-        + "), '\\\\', '\\\\\\\\'), '%', '\\\\%'), '_', '\\\\_')"
-    )
+_META_SECTIONS = frozenset({"CAR", "ABOUT", "HEADER", "BASIC"})
+
+
+def _is_meta_key(key: str) -> bool:
+    section = key.split(".", 1)[0]
+    return section in _META_SECTIONS or section.startswith("__EXT")
 
 
 def _resolve_ac_setups_root(ac_userdata: str | Path) -> Path:
@@ -159,7 +158,8 @@ def djb2_8hex(s: str) -> str:
     if not s:
         return ""
     h = 5381
-    for b in s.encode("utf-8"):  # iterate bytes to match Lua string.byte over the UTF-8 buffer
+    # Latin-1 preserves byte values 0-255 so non-UTF-8 INI metadata hashes like Lua ``string.byte``.
+    for b in s.encode("latin-1"):
         h = (h * 33 + b) % _MOD32
     return f"{h:08x}"
 
@@ -169,10 +169,12 @@ def canonical_hash(ini_text: str) -> str:
     return djb2_8hex(canonical_setup_string(ini_text))
 
 
-def _numeric_params(snapshot: dict[str, str]) -> dict[str, float]:
-    """``{SECTION.KEY: float}`` for finite-numeric entries of a snapshot (drops MODEL/VERSION)."""
+def _numeric_params(snapshot: dict[str, str], *, tunable_only: bool = False) -> dict[str, float]:
+    """``{SECTION.KEY: float}`` for finite-numeric entries of a snapshot."""
     out: dict[str, float] = {}
     for key, raw in snapshot.items():
+        if tunable_only and _is_meta_key(str(key)):
+            continue
         try:
             val = float(raw)
         except (TypeError, ValueError):
@@ -189,7 +191,7 @@ def tunable_hash(snapshot: dict[str, str]) -> str:
     tune" even when the canonical (whole-file) hash would differ on metadata. Secondary dedup key
     only — it is deliberately NOT the cross-store join key (that is :func:`canonical_hash`).
     """
-    params = _numeric_params(snapshot)
+    params = _numeric_params(snapshot, tunable_only=True)
     canonical = ";".join(f"{k}={params[k]!r}" for k in sorted(params))
     if not canonical:
         return ""
@@ -260,7 +262,7 @@ def build_record(
         bucket = {p.section: p.value for p in params if p.value is not None}
         if bucket:
             by_cat[cat] = bucket
-    numeric = _numeric_params(snapshot)
+    numeric = _numeric_params(snapshot, tunable_only=True)
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%dT%H:%M:%SZ")
     # POSIX-normalize the stored path so the version-controlled catalog is portable across OSes.
     stored_path = (source_path or str(path)).replace("\\", "/")
@@ -390,7 +392,6 @@ def catalog_join_sql(registry_path: str | Path = DEFAULT_REGISTRY) -> str:
     ``laps.setup_path`` — so a byte-hash miss (AC re-materializing ``setup.ini``) still joins.
     """
     reg = _sql_string_literal(str(Path(registry_path)).replace("\\", "/"))
-    name_like = _like_escape_sql("c.name")
     return f"""
         WITH catalog AS (SELECT * FROM read_json_auto('{reg}'))
         SELECT c.name, c.car_id, c.track_id, c.canonical_hash,
@@ -403,7 +404,8 @@ def catalog_join_sql(registry_path: str | Path = DEFAULT_REGISTRY) -> str:
          AND (
               l.setup_hash = c.canonical_hash
               OR (l.setup_path IS NOT NULL
-                  AND lower(l.setup_path) LIKE '%' || {name_like} || '.ini' ESCAPE '\\\\')
+                  AND lower(regexp_extract(replace(l.setup_path, '\\\\', '/'), '([^/]+)$', 1))
+                      = lower(c.name || '.ini'))
          )
         GROUP BY c.name, c.car_id, c.track_id, c.canonical_hash
         ORDER BY c.car_id, c.track_id, c.name

@@ -26,7 +26,7 @@ def _djb2_reference(s: str) -> str:
     if not s:
         return ""
     h = 5381
-    for byte in s.encode("utf-8"):
+    for byte in s.encode("latin-1"):
         h = (h * 33 + byte) & 0xFFFFFFFF
     return f"{h:08x}"
 
@@ -100,7 +100,7 @@ def test_catalog_join_sql_quotes_registry_path(tmp_path: Path) -> None:
     reg = tmp_path / "O'Connor" / "registry.jsonl"
     sql = registrar.catalog_join_sql(reg)
     assert "O''Connor" in sql
-    assert "ESCAPE '\\\\'" in sql
+    assert "regexp_extract" in sql
 
 
 def test_deploy_rejects_path_traversal(tmp_path: Path) -> None:
