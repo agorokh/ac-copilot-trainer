@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T07:17:00Z
+last_updated: 2026-06-29T09:22:01Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -69,11 +69,32 @@ source files listed inside the package.
 
 ## Game Point #363 / PR #365 (2026-06-29)
 
-PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) delivers the
-Game Point launcher supervisor and Pocket Technician spinner completion for
-[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363). Install
-evidence, review-resolution history, and follow-ups:
-[[pr-365-game-point-launcher-2026-06-29]].
+PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) MERGED at
+[`854f822`](https://github.com/agorokh/ac-copilot-trainer/commit/854f822bdd868397e99bfd56c08ade2f87277139)
+and closed [#363](https://github.com/agorokh/ac-copilot-trainer/issues/363).
+It delivers the Game Point launcher supervisor, Windows shortcut/install path,
+per-user settings/status/log roots, sidecar start/health supervision, optional
+SimHub start, voice env routing, Pocket Technician setup spinner list/set, and
+Setup Exchange proxy/install plumbing.
+
+Closeout evidence: PR head `27e7dbd`; GitHub `build`, `conformance`,
+`Canonical docs exist`, `pip-audit`, PR-pain `score`, and post-merge
+`classify` green; GraphQL review threads empty; Qodo updated to `27e7dbd` at
+2026-06-29T09:14:22Z; Gemini/Codex review paths were quota-limited with no
+current substantive finding. Local proof on macOS: focused launcher/setup tests
+`59 passed`; `make ci-fast PYTHON=.venv/bin/python` `1753 passed, 75 skipped`,
+coverage 84.93%, ruff/Bandit/policy/CSP checks green; firmware
+`platformio run -e jc3248w535` green with temporary ignored dummy secret headers
+removed afterward. Details: [[pr-365-game-point-launcher-2026-06-29]].
+
+Post-merge classification: `.env.example` changed (review new env knobs) and
+`pyproject.toml` changed (run `pip install -e '.[dev]'` / lockfile workflow on
+dev machines). Runtime follow-ups are honest gates, not #363 residue: on the
+next Windows rig session, launch the installed Game Point shortcut and confirm
+sidecar status/screen connection plus voice cue path if configured. Direct
+`se.acstuff.club` Setup Exchange calls stay disabled until the official signed
+`/session` handshake is ported; use `AC_COPILOT_SE_ENDPOINT` for an authenticated
+proxy/test endpoint meanwhile.
 
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 

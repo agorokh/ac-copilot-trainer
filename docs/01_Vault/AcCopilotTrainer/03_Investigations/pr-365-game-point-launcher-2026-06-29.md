@@ -19,6 +19,10 @@ visible user launch path and extension contract for Game Point
 shortcut installer, per-user settings, Pocket Technician spinner protocol, and
 launcher-sidecar supervision.
 
+Merged 2026-06-29T09:15:25Z as squash
+[`854f822`](https://github.com/agorokh/ac-copilot-trainer/commit/854f822bdd868397e99bfd56c08ade2f87277139)
+from PR head `27e7dbd`; #363 is closed.
+
 ## Install verification (rig)
 
 Desktop shortcut via `python -m tools.rig_launcher --install-shortcut`:
@@ -33,8 +37,29 @@ Desktop shortcut via `python -m tools.rig_launcher --install-shortcut`:
 - `docs/10_Development/14_Game_Point_Launcher.md`
 - Pocket Technician spinner path carry + firmware refresh handling
 - `AGENTS.md` — driver-facing rig functions belong in `tools.rig_launcher`
+- `.env.example` — new operator-facing env knobs for Game Point, sidecar, voice,
+  SimHub, and Setup Exchange routing.
+- `pyproject.toml` — launcher/voice packaging extras and runtime dependency
+  bounds.
 
 Secrets (`AC_COPILOT_SIDECAR_TOKEN`, etc.) remain environment-only.
+
+## Merge verification
+
+- GitHub checks on `27e7dbd`: `build`, `conformance`, `Canonical docs exist`,
+  `pip-audit`, PR-pain `score`, and post-merge `classify` green.
+- Review graph: no unresolved review threads after Qodo updated to `27e7dbd`
+  at 2026-06-29T09:14:22Z. Gemini and Codex review bots were quota-limited and
+  did not provide a current substantive finding.
+- Local proof on macOS: `tests/test_rig_launcher.py` +
+  `tests/test_setup_library_summary.py` = 59 passed; `make ci-fast
+  PYTHON=.venv/bin/python` = 1753 passed, 75 skipped, coverage 84.93%;
+  firmware `python -m platformio run -e jc3248w535` green under
+  `firmware/screen/` with temporary ignored dummy secret headers removed after
+  each build.
+- Post-merge classification: `.env.example` changed (review new required env
+  variables); `pyproject.toml` changed (run `pip install -e '.[dev]'` or the
+  lockfile workflow).
 
 ## Review resolution history
 
@@ -54,5 +79,11 @@ the sidecar until the official signed `/session` handshake is ported. Use
 
 ## Follow-ups
 
-- Part C (Setup Exchange) and Part D (full rig smoke video) remain open on #363.
-- Re-run packaged-launcher rig proof after merge when the Windows rig is available.
+- Re-run packaged-launcher rig proof on the Windows rig after merge: launch the
+  Desktop shortcut, confirm status/log roots, sidecar health, screen peer
+  presence, and audible cue path when voice env is configured.
+- Direct `se.acstuff.club` Setup Exchange calls remain disabled until the
+  official signed `/session` handshake is ported. Use `AC_COPILOT_SE_ENDPOINT`
+  for a proxy/test endpoint meanwhile.
+- Refresh dev environments after the `pyproject.toml` changes with
+  `pip install -e '.[dev]'` or the repo lockfile workflow.

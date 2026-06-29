@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-28T15:35:00Z
+last_updated: 2026-06-29T09:22:01Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -71,12 +71,27 @@ PR #83 (WS + Lua bridge) **MERGED 2026-04-22** at `caa8a9ad` — still the found
 
 **Outstanding housekeeping:** Issue [#81](https://github.com/agorokh/ac-copilot-trainer/issues/81) may still be OPEN from before PR #83 — close with `gh issue close 81` when confirmed duplicate.
 
+**Latest Stream A status (2026-06-29):** PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365)
+MERGED as `854f822` and closed [#363](https://github.com/agorokh/ac-copilot-trainer/issues/363).
+The Game Point launcher is now the canonical driver-facing Windows entrypoint,
+and Pocket Technician setup spinner list/set is wired across firmware, sidecar,
+and Lua. Remaining Stream A work is no longer "build the launcher"; it is
+runtime proof/hardening: launch the installed shortcut on the Windows rig,
+confirm sidecar/screen/voice status, port the official signed Setup Exchange
+`/session` handshake if direct public `se.acstuff.club` access is required, and
+continue lower-priority SPIFFS persistence/telemetry backpressure/debug-screen
+work.
+
 **Next (EPIC #86 remainder, new PRs):**
 
-- **Part E** — Setup Exchange (`se_proxy.py`, SPIFFS LRU) per issue.
+- **Rig smoke** — launch the installed Game Point shortcut on the Windows rig;
+  confirm status/log roots, sidecar health, screen peer, and audible cue path
+  when voice env is configured.
+- **Setup Exchange direct-service hardening** — keep direct `se.acstuff.club`
+  calls disabled until the signed `/session` handshake is ported; use
+  `AC_COPILOT_SE_ENDPOINT` for proxy/test routing meanwhile.
 - **Part F** — SPIFFS persistence, telemetry backpressure, debug screen, token runbook.
 - **Part A4** — `lv_font_conv` for bundled faces (screens still default to built-in Montserrat until converted).
-- **Polish / bugs** — `start_sidecar.bat` external-bind + token; PT BB chip refresh landed in PR [#100](https://github.com/agorokh/ac-copilot-trainer/pull/100) (optional on-device smoke).
 
 **Live-dev:** Hotspot + sidecar path per `[glossary/rig-network.md](../glossary/rig-network.md)`. Firmware: `python -m platformio run -e jc3248w535` under `firmware/screen/` (CI does not build firmware).
 
@@ -86,7 +101,10 @@ Integration ADR landed 2026-04-21 as `[screen-and-csp-apps-integration.md](../01
 
 Surface map of both apps lives in `[csp-app-pocket-tech-setup-exchange-2026-04-21](../03_Investigations/csp-app-pocket-tech-setup-exchange-2026-04-21.md)`.
 
-**Next:** `setup.list` / `setup.load` shipped with PR #91; remaining B-stream work is spinner tiles / `setup_control.lua` if still desired, plus Setup Exchange (Part E).
+**Next:** `setup.list` / `setup.load` shipped with PR #91, and spinner tiles /
+`setup.spinner.list` / `setup.spinner.set` shipped in PR #365. Remaining
+B-stream work is direct Setup Exchange service authentication/session hardening
+if the proxy/test endpoint is not enough.
 
 ## Stream C — Physical rig integration EPIC #59
 
@@ -102,10 +120,20 @@ Now **MERGED 2026-04-14**. Ollama corner coaching pipeline (`corner_query` / `co
 
 ## Priority call
 
-Stream A (rig screen Phase-2 LVGL + Figma UI + setup spinner tiles) is the hot path — user designed the visuals, firmware Phase 1 is end-to-end working, next tangible win is "tap a tile on the screen, see the setup change in-game." Stream B integration is folded into Stream A's protocol work.
+Stream A (rig screen Phase-2 LVGL + Figma UI + Game Point launcher) is the hot path. The next tangible win is no longer code wiring; it is the Windows rig smoke of the installed Game Point shortcut driving sidecar/screen/voice status end to end. Stream B integration is folded into Stream A's protocol work.
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-29** — PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) **MERGED** at
+  `854f822` — **Game Point launcher supervisor + Pocket Technician setup spinners**
+  ([#363](https://github.com/agorokh/ac-copilot-trainer/issues/363) **CLOSED**):
+  Windows launcher/shortcut/settings/status/logs, sidecar supervision, optional
+  SimHub start, voice env routing, Setup Exchange proxy/install plumbing, and
+  setup spinner list/set across firmware, sidecar, and Lua. Verification:
+  GitHub checks green on `27e7dbd`, Qodo updated to the head with no unresolved
+  threads, focused tests 59 passed, `make ci-fast` 1753 passed / 75 skipped,
+  firmware PlatformIO `jc3248w535` build green. Classification: `.env.example`
+  and `pyproject.toml` changed; refresh dev envs and review new env knobs.
 - **2026-06-28** — PR [#348](https://github.com/agorokh/ac-copilot-trainer/pull/348) **MERGED** at
   `226bc97` — **Coaching lakehouse DuckDB** ([#344](https://github.com/agorokh/ac-copilot-trainer/issues/344) P1):
   embedded DuckDB star schema in `tools/coaching_lake` rebuilt from lap-archives.
