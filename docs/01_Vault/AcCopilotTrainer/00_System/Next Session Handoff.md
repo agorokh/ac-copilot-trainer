@@ -104,14 +104,6 @@ driver-facing launcher work discovers the UI contract. Tier-3 MCP was not
 exposed in this Codex session; the package was grounded from the vault and live
 source files listed inside the package.
 
-## Game Point #363 / PR #365 (2026-06-29) — pre-merge handoff
-
-PR [#365](https://github.com/agorokh/ac-copilot-trainer/pull/365) delivers the
-Game Point launcher supervisor and Pocket Technician spinner completion for
-[#363](https://github.com/agorokh/ac-copilot-trainer/issues/363). Install
-evidence, review-resolution history, and follow-ups:
-[[pr-365-game-point-launcher-2026-06-29]].
-
 ## Track Titan #353 (parallel track) — M-TT0 shipped; M-TT1 services auth CRACKED, path-pinning remains
 
 PR [#359](https://github.com/agorokh/ac-copilot-trainer/pull/359) (M-TT0 vulcan retention) MERGED.
