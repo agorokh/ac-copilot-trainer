@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-06-30
-updated: 2026-06-30T23:00:33Z
+updated: 2026-06-30T23:17:02Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/404
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -43,6 +43,10 @@ Fourth review hardening moved the retry into a pending menu-work item outside re
 state, so a transient send miss can still retry after `resetRuntimeAfterLeavingTrack()`. Failed
 generation now caches and broadcasts an `ok:false` `session.review` snapshot to replace any older
 debrief for late/reconnecting screens.
+
+Fifth review hardening ticks/polls the WS bridge while pending review work exists in the menu, so
+post-reset reconnect can finish before retrying the send. A new driving stint clears unsent pending
+review work, and queueing replaces a pending request when the session UUID differs.
 
 ## Output contract
 

@@ -38,6 +38,13 @@ def test_session_end_flushes_pending_lap_archive() -> None:
     anchor = src.index("sessionJournal.writeSessionEnd")
     menu_kw = src.rindex("if sim.isInMainMenu then", 0, anchor)
     branch_body = src[menu_kw:anchor]
+    menu_prefix = branch_body.split("if state.wasDriving then", maxsplit=1)[0]
+    assert "pendingSessionReview ~= nil" in menu_prefix
+    assert "wsBridge.tick(ch.simSeconds(sim))" in menu_prefix
+    assert "wsBridge.pollInbound(8)" in menu_prefix
+    assert menu_prefix.index("wsBridge.tick(ch.simSeconds(sim))") < menu_prefix.index(
+        "pumpSessionReviewRequest()"
+    )
     assert "flushPendingLapArchiveJobs(" in branch_body, (
         "session-end branch must drain pending lap-archive jobs before its session-end "
         "work (issue #305)"
@@ -53,6 +60,8 @@ def test_session_end_flushes_pending_lap_archive() -> None:
         "queueSessionReviewRequest"
     )
     assert "pendingSessionReview" in src
+    assert "pendingSessionReview.sessionUuid == sessionUuid" in src
+    assert "pendingSessionReview = nil" in src
     assert "pending.retryFrames = 60" in src
     assert "state.sessionReviewRetryFrames = pending.retryFrames" in src
     assert src.index("reviewOk and reviewSentOrErr == true") < src.index(
@@ -92,13 +101,10 @@ def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
     assert "lapArchive.write" not in block
     assert "lapArchive.buildRecord" not in block
 
-    ws_match = re.search(
-        r"wsBridge\.tick\(ch\.simSeconds\(sim\)\).*?-- Issue #180 Part D step 2",
-        src,
-        flags=re.S,
-    )
-    assert ws_match is not None
-    ws_block = ws_match.group(0)
+    drive_start = src.index("lastDriveCar = car")
+    marker = src.index("-- Issue #180 Part D step 2", drive_start)
+    ws_block = src[drive_start:marker]
+    assert "wsBridge.tick(ch.simSeconds(sim))" in ws_block
     assert ws_block.index("wsBridge.pollInbound(8)") < ws_block.index("pumpLapArchiveJobs()")
     assert ws_block.index("pumpLapArchiveJobs()") < ws_block.index("pumpLapArchiveNotifications()")
     assert "pendingLapArchiveRecordPaths" in src

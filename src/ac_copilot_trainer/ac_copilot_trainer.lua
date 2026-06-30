@@ -563,7 +563,11 @@ end
 
 local function queueSessionReviewRequest(lapDir, sessionUuid)
   if type(lapDir) ~= "string" or lapDir == "" then return false end
-  if pendingSessionReview ~= nil then return true end
+  if pendingSessionReview ~= nil
+      and pendingSessionReview.lapDir == lapDir
+      and pendingSessionReview.sessionUuid == sessionUuid then
+    return true
+  end
   pendingSessionReview = {
     lapDir = lapDir,
     sessionUuid = sessionUuid,
@@ -2205,6 +2209,12 @@ function script.update(dt)
   end
 
   if sim.isInMainMenu then
+    if pendingSessionReview ~= nil and wsBridge then
+      pcall(function()
+        wsBridge.tick(ch.simSeconds(sim))
+        wsBridge.pollInbound(8)
+      end)
+    end
     pumpSessionReviewRequest()
     if state.wasDriving then
       -- Issue #305: we just left the track. update() returns a few lines below on every menu
@@ -2268,6 +2278,7 @@ function script.update(dt)
   lastDriveCar = car
   lastDriveSim = sim
   if not state.wasDriving then
+    pendingSessionReview = nil
     state.sessionReviewRequested = false
     state.sessionReviewRetryFrames = 0
   end
