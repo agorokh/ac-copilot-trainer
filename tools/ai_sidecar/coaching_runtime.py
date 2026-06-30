@@ -48,12 +48,12 @@ _BRAKE_ON = 0.05
 _THROTTLE_ON = 0.20
 _STEER_ON = 0.05
 _GRIP_CEILING_G = 1.55  # GT3 peak lateral g (the Magione reference corners at 1.40–1.56 g)
-# At/above this fraction of the grip ceiling the corner is grip-limited (setup/tyre), NOT technique,
-# so "carry more"/"brake later" would be a lie and is suppressed. HONEST GATE: needs a real
-# grip/lateral-g signal on the frame (grip/grip_used/lat_g); the live telemetry carries none today,
-# so it is fail-open (never suppresses) on the rig and activates only when the telemetry provides
-# tyre-slip or lateral-g. We do NOT fabricate it from v²·κ against an at-the-limit reference (which
-# can never fire honestly). See council P3.
+# At/above this fraction of the grip ceiling the corner is grip-limited (setup/tyre), not
+# technique, so "carry more"/"brake later" would lie and is suppressed. The signal is the frame's
+# lateral-g: lat_g is REQUIRED by the telemetry_tick contract (external_protocol), so the gate is
+# LIVE-ACTIVE with the real producer; fail-open only for a producer that omits it (contract forbids
+# that). We do NOT fabricate grip from v²·κ against an at-the-limit reference (can never fire
+# honestly — the Magione reference itself corners at 1.40–1.56 g). See council P3.
 _GRIP_GATE_FRAC = 0.95
 _DEFAULT_TRACK_M = 2455.7
 _DEFAULT_LEAD_S = 1.3  # reference-travel seconds before the action point a PRIME audio onset lands
