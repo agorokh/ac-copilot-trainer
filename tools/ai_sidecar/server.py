@@ -40,6 +40,7 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_VERSION,
     HAPTIC_CLIENT_CLASSES,
     PHYSICAL_CLIENT_CLASSES,
+    SIDECAR_PRODUCED_TOPICS,
     TOPIC_SESSION_REVIEW,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
@@ -134,6 +135,7 @@ _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None
 _setup_exchange_user_setups_root: Path | None = None
 _external_peer_classes: dict[Any, str] = {}
+_sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
 # advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
@@ -351,7 +353,6 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_SETUP_SUGGEST_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
-        TYPE_SESSION_REVIEW_RESULT,
     }
 )
 SIDECAR_LOCAL_TYPES = frozenset(
@@ -392,6 +393,7 @@ def _reset_external_state() -> None:
     global _observer_feed_peer, _observer_feed_warned
     _external_peers.clear()
     _external_peer_classes.clear()
+    _sidecar_state_cache.clear()
     _peripheral_rate_limiter.reset()
     if _race_manager is not None:
         _race_manager.reset()
@@ -468,6 +470,14 @@ def _record_lap_archive_safe(archive_path: str) -> dict[str, Any]:
     return record_lap_archive(archive_path, require_safe_path=True)
 
 
+def _resolve_session_review_lap_dir(lap_dir: str | Path) -> Path:
+    raw = Path(lap_dir)
+    resolved = raw.resolve() if raw.is_absolute() else (Path.cwd() / raw).resolve()
+    if resolved.name != "laps" or resolved.parent.name != "journal":
+        raise ValueError("lap_dir must point to journal/laps")
+    return resolved
+
+
 def _generate_session_review_safe(
     lap_dir: str,
     *,
@@ -477,12 +487,20 @@ def _generate_session_review_safe(
 ) -> dict[str, Any]:
     from tools.session_review import (
         build_session_report,
-        report_dir_for_lap_dir,
         write_session_report,
     )
 
-    report = build_session_report([lap_dir], session=session, driver_id=driver_id)
-    target_dir = Path(output_dir) if output_dir else report_dir_for_lap_dir(lap_dir)
+    safe_lap_dir = _resolve_session_review_lap_dir(lap_dir)
+    target_dir = safe_lap_dir.parent / "reports"
+    if output_dir:
+        requested_output_dir = (
+            Path(output_dir).resolve()
+            if Path(output_dir).is_absolute()
+            else (Path.cwd() / output_dir).resolve()
+        )
+        if requested_output_dir != target_dir:
+            raise ValueError("output_dir must be the sibling journal/reports for lap_dir")
+    report = build_session_report([safe_lap_dir], session=session, driver_id=driver_id)
     written = write_session_report(report, output_dir=target_dir)
     session_meta = report.get("session") if isinstance(report.get("session"), dict) else {}
     return {
@@ -1159,6 +1177,12 @@ def _session_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cache_sidecar_snapshot(frame: dict[str, Any]) -> None:
+    topic = frame.get("topic")
+    if frame.get(TYPE_KEY) == TYPE_STATE_SNAPSHOT and topic in SIDECAR_PRODUCED_TOPICS:
+        _sidecar_state_cache[str(topic)] = frame
+
+
 def _sanitize_session_review_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Drop host-local paths before broadcasting session-review results to clients."""
     sanitized = dict(payload)
@@ -1207,14 +1231,12 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
     lap_dir = str(data.get("lap_dir") or "")
     session = str(data.get("session") or SESSION_REVIEW_DEFAULT_SESSION)
     driver_id = str(data.get("driver_id") or "local-driver")
-    output_dir = data.get("output_dir")
     try:
         result = await asyncio.to_thread(
             _generate_session_review_safe,
             lap_dir,
             session=session,
             driver_id=driver_id,
-            output_dir=output_dir if isinstance(output_dir, str) and output_dir else None,
         )
     except Exception as e:
         logger.info(
@@ -1239,8 +1261,10 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
         **result,
     }
     await _safe_send(websocket, ack)
+    snapshot = _session_review_snapshot(_sanitize_session_review_result(result))
+    _cache_sidecar_snapshot(snapshot)
     await _broadcast_external(
-        _session_review_snapshot(_sanitize_session_review_result(result)),
+        snapshot,
         exclude=websocket,
     )
 
@@ -1438,6 +1462,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             peer,
             data.get("topics"),
         )
+        if t == TYPE_STATE_SUBSCRIBE:
+            for topic in data.get("topics") or []:
+                cached = _sidecar_state_cache.get(str(topic))
+                if cached is not None:
+                    await _safe_send(websocket, cached)
         return
     if (
         t in CLIENT_TO_SERVER_TYPES

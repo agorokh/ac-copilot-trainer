@@ -1138,6 +1138,7 @@ state = {
   lastLapCount = -1,
   wasDriving = false,
   sessionReviewRequested = false,
+  sessionReviewRetryFrames = 0,
   brakingPoints = {
     best = {},
     last = {},
@@ -1472,6 +1473,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.lastLapMs = nil
   state.lastLapCount = -1
   state.sessionReviewRequested = false
+  state.sessionReviewRetryFrames = 0
   state.brakingPoints = {
     best = {},
     last = {},
@@ -1537,6 +1539,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
   state.sessionReviewRequested = false
+  state.sessionReviewRetryFrames = 0
   bestLapArchivePath = nil
   -- Drop any archive-backed lap_complete follow-ups left unsent: they reference the prior
   -- stint's archives and must not leak into the next session (drained best-effort above on
@@ -1576,6 +1579,7 @@ local function resetRollingDrivingState()
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
   state.sessionReviewRequested = false
+  state.sessionReviewRetryFrames = 0
   bestLapArchivePath = nil
   -- Rolling reset starts a disjoint session (new SESSION_UUID below); drop prior-stint
   -- archive follow-ups so they cannot attach to the new session. CodeRabbit #321.
@@ -2167,18 +2171,28 @@ function script.update(dt)
       local sessionReviewLaps = tonumber(state.lapsCompleted) or 0
       if sessionReviewLaps >= 1 and not state.sessionReviewRequested and wsBridge
           and type(wsBridge.sendSessionReviewGenerate) == "function" then
-        state.sessionReviewRequested = true
-        local reviewOk, reviewSentOrErr = pcall(
-          wsBridge.sendSessionReviewGenerate,
-          persistence.lapArchiveDir(),
-          SESSION_UUID
-        )
-        if ac and type(ac.log) == "function" then
-          if not reviewOk then
-            ac.log("[COPILOT][SESSION-REVIEW] generate request raised: "
-              .. tostring(reviewSentOrErr))
-          elseif reviewSentOrErr ~= true then
-            ac.log("[COPILOT][SESSION-REVIEW] generate request not sent; sidecar not ready")
+        local reviewRetryFrames = tonumber(state.sessionReviewRetryFrames) or 0
+        if reviewRetryFrames > 0 then
+          state.sessionReviewRetryFrames = reviewRetryFrames - 1
+        else
+          local reviewOk, reviewSentOrErr = pcall(
+            wsBridge.sendSessionReviewGenerate,
+            persistence.lapArchiveDir(),
+            SESSION_UUID
+          )
+          if reviewOk and reviewSentOrErr == true then
+            state.sessionReviewRequested = true
+            state.sessionReviewRetryFrames = 0
+          else
+            state.sessionReviewRetryFrames = 60
+            if ac and type(ac.log) == "function" then
+              if not reviewOk then
+                ac.log("[COPILOT][SESSION-REVIEW] generate request raised: "
+                  .. tostring(reviewSentOrErr))
+              else
+                ac.log("[COPILOT][SESSION-REVIEW] generate request not sent; sidecar not ready")
+              end
+            end
           end
         end
       end

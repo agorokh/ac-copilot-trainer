@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-06-30
-updated: 2026-06-30T22:24:25Z
+updated: 2026-06-30T22:42:07Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/404
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -33,6 +33,11 @@ Second review hardening keeps full report paths on the loopback ack only; extern
 safe `markdown_file` / `json_file` basenames. Lua also has a one-shot `sessionReviewRequested` guard
 so a failed persistence retry cannot regenerate the report or repeat the spoken summary every menu
 frame.
+
+Third review hardening changed that guard to mark success only after the frame is sent, with a
+60-frame retry backoff for sidecar readiness. The sidecar caches the sanitized `session.review`
+snapshot for late/reconnecting screens, rejects inbound `session.review.result` relays, and validates
+that generation reads a resolved `journal/laps` tree and writes only to its sibling `journal/reports`.
 
 ## Output contract
 
@@ -75,7 +80,7 @@ frame.
   tests/test_coach_report.py tests/test_coaching_lake.py tests/test_voice_wiring.py` passed
   (`80 passed, 1 skipped`; DuckDB optional skip).
 - Full parity: `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast
-  PYTHON=python` passed on Windows (`1958 passed, 117 skipped`, coverage 85.40%, `ci-fast: OK`).
+  PYTHON=python` passed on Windows (`1960 passed, 117 skipped`, coverage 85.40%, `ci-fast: OK`).
   The only warnings were existing root-file allowlist warnings for `.copier-answers.yml` and
   `doppler.yaml`.
 

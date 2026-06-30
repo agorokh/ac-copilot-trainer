@@ -565,7 +565,9 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         lap_dir = frame.get("lap_dir")
         if not isinstance(lap_dir, str) or not lap_dir:
             return "session.review.generate requires non-empty 'lap_dir'"
-        for key in ("session", "driver_id", "output_dir"):
+        if "output_dir" in frame:
+            return "session.review.generate does not accept 'output_dir'"
+        for key in ("session", "driver_id"):
             err = _validate_optional_string(frame, key)
             if err is not None:
                 return err
@@ -585,7 +587,6 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         TYPE_SETUP_SUGGEST_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
-        TYPE_SESSION_REVIEW_RESULT,
     ):
         return None
     if t == TYPE_TELEMETRY_TICK:

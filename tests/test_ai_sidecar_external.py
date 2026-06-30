@@ -262,6 +262,17 @@ def test_validate_inbound_rejects_invalid() -> None:
         ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
     )
     assert "lap_dir" in (ep.validate_inbound({"v": 1, "type": "session.review.generate"}) or "")
+    assert "output_dir" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "session.review.generate",
+                "lap_dir": "journal/laps",
+                "output_dir": "journal/reports",
+            }
+        )
+        or ""
+    )
     assert "positive integer 'setup_id'" in (
         ep.validate_inbound(
             {
@@ -1029,7 +1040,7 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
         )
         await asyncio.wait_for(ws.recv(), timeout=2.0)
 
-    async def _run() -> tuple[dict, list[dict]]:
+    async def _run() -> tuple[dict, list[dict], dict]:
         async with _running_sidecar() as port:
             async with (
                 ws_connect(f"ws://127.0.0.1:{port}/") as lua,
@@ -1053,10 +1064,22 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
                     json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0)),
                     json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0)),
                 ]
-                return ack, frames
+                async with ws_connect(f"ws://127.0.0.1:{port}/") as late_screen:
+                    await _hello(late_screen, "screen-02", ep.CLIENT_CLASS_SCREEN)
+                    await late_screen.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "state.subscribe",
+                                "topics": [ep.TOPIC_SESSION_REVIEW],
+                            }
+                        )
+                    )
+                    cached = json.loads(await asyncio.wait_for(late_screen.recv(), timeout=2.0))
+                return ack, frames, cached
 
     try:
-        ack, frames = asyncio.run(_run())
+        ack, frames, cached = asyncio.run(_run())
     finally:
         srv.set_voice_coach(None)
 
@@ -1085,7 +1108,40 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
     assert "json_path" not in cue["payload"]["detail"]
     assert cue["payload"]["detail"]["markdown_file"] == "session_sess.md"
     assert cue["payload"]["detail"]["json_file"] == "session_sess.json"
+    assert cached == review
     assert voice.messages == ["Session debrief for Magione: focus T1."]
+
+
+def test_session_review_generate_rejects_non_journal_laps_dir(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as lua:
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "trainer-lua",
+                            "client_class": ep.CLIENT_CLASS_LUA,
+                        }
+                    )
+                )
+                await asyncio.wait_for(lua.recv(), timeout=2.0)
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_REVIEW_GENERATE,
+                            "lap_dir": str(tmp_path / "laps"),
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+
+    ack = asyncio.run(_run())
+    assert ack["type"] == ep.TYPE_SESSION_REVIEW_RESULT
+    assert ack["ok"] is False
+    assert "journal/laps" in ack["error"]
 
 
 def test_session_review_generate_returns_structured_error_on_unexpected_exception(
@@ -1135,6 +1191,41 @@ def test_session_review_generate_returns_structured_error_on_unexpected_exceptio
     assert ack["type"] == ep.TYPE_SESSION_REVIEW_RESULT
     assert ack["ok"] is False
     assert "analysis worker exploded" in ack["error"]
+
+
+def test_loopback_session_review_result_is_rejected_not_relayed() -> None:
+    async def _hello(ws, client: str, client_class: str) -> None:
+        await ws.send(
+            json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
+        )
+        await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with (
+                ws_connect(f"ws://127.0.0.1:{port}/") as lua,
+                ws_connect(f"ws://127.0.0.1:{port}/") as screen,
+            ):
+                await _hello(lua, "trainer-lua", ep.CLIENT_CLASS_LUA)
+                await _hello(screen, "screen-01", ep.CLIENT_CLASS_SCREEN)
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_REVIEW_RESULT,
+                            "ok": True,
+                            "markdown_path": "C:/Users/driver/journal/reports/private.md",
+                        }
+                    )
+                )
+                err = json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(screen.recv(), timeout=0.1)
+                return err
+
+    err = asyncio.run(_run())
+    assert err["type"] == ep.TYPE_ERROR
+    assert "unknown type" in err["message"]
 
 
 def test_config_set_round_trip_via_hub() -> None:

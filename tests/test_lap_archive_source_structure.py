@@ -47,6 +47,10 @@ def test_session_end_flushes_pending_lap_archive() -> None:
         "after the lap archives are final"
     )
     assert "not state.sessionReviewRequested" in branch_body
+    assert "state.sessionReviewRetryFrames = 60" in branch_body
+    assert branch_body.index("reviewOk and reviewSentOrErr == true") < branch_body.index(
+        "state.sessionReviewRequested = true"
+    )
     assert "state.sessionReviewRequested = true" in branch_body
     assert branch_body.index("pumpLapArchiveNotifications()") < branch_body.index(
         "wsBridge.sendSessionReviewGenerate"
