@@ -187,11 +187,12 @@ def _corner_history_matches(
     if not anchors:
         return by_idx
     for lap in laps:
-        lap_sigs = corner_signatures(lap)
+        unused = corner_signatures(lap)
         for anchor in anchors:
-            match = _match_corner_signature(anchor, lap_sigs)
+            match = _match_corner_signature(anchor, unused)
             if match is not None:
                 by_idx.setdefault(anchor.index, []).append(match)
+                unused.remove(match)
     return by_idx
 
 

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import math
 
+import tools.ai_sidecar.corner_attribution as ca
 from tools.ai_sidecar.corner_attribution import (
     WHEEL_RADIUS_M,
     CornerContext,
     CornerDelta,
+    _corner_history_matches,
     _match_corner_signature,
     analyze_balance,
     attribute_corner,
@@ -310,6 +312,18 @@ def test_reference_matching_uses_apex_spline_not_index():
     assert match is not None
     assert match.index == 1
     assert match.gear_at_apex == 3
+
+
+def test_corner_history_matching_consumes_candidates_once(monkeypatch):
+    anchors = [_sig(index=0, apex_spline=0.50), _sig(index=1, apex_spline=0.51)]
+    candidate = _sig(index=9, apex_spline=0.505)
+    monkeypatch.setattr(ca, "corner_signatures", lambda _lap: [candidate])
+    matches = _corner_history_matches(
+        [LapTrace([], [], [], [], [], [], [], [], [])],
+        anchors,
+    )
+    matched_history_count = sum(len(sigs) - 1 for sigs in matches.values())
+    assert matched_history_count == 1
 
 
 # --- analyze_balance (the master discriminator) -----------------------------

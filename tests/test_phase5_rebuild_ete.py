@@ -336,6 +336,7 @@ def test_ete01_empty_session_returns_placeholder(lua):
         {
             recording = false, speed = 0, brake = 0, lapCount = 0,
             bestLapMs = nil, lastLapMs = nil, deltaSmoothedSec = nil,
+            sectorMessage = "S1: 0.20 s faster than ref lap",
             appVersionUi = "v0.5.0",
             realtimeHint = nil,
             realtimeView = {
@@ -354,6 +355,9 @@ def test_ete01_empty_session_returns_placeholder(lua):
     )
     assert lua.execute('return _count_dwrite_text("DRIVE A LAP")') >= 1, (
         "empty state must render 'DRIVE A LAP' placeholder"
+    )
+    assert lua.execute('return _count_dwrite_text("S1: 0.20 S FASTER")') >= 1, (
+        "sector delta toast must render in WINDOW_0"
     )
 
 

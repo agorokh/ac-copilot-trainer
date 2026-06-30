@@ -46,6 +46,7 @@ end
 ---@field bestLapMs number|nil
 ---@field lastLapMs number|nil
 ---@field deltaSmoothedSec number|nil
+---@field sectorMessage string|nil
 ---@field appVersionUi string|nil
 ---@field debriefText string|nil
 ---@field realtimeHint table|nil  @legacy {text, kind, cornerLabel} for back-compat
@@ -87,6 +88,13 @@ local function colorForKind(kind)
   if kind == "positive" then return COLOR_GREEN end
   if kind == "placeholder" then return COLOR_TEXT_GREY end
   return COLOR_WHITE
+end
+
+local function colorForSectorMessage(text)
+  local s = string.lower(text or "")
+  if string.find(s, "faster", 1, true) then return COLOR_GREEN end
+  if string.find(s, "slower", 1, true) then return COLOR_RED_HARD end
+  return COLOR_TEXT_GREY
 end
 
 local function measure(text, fontPx)
@@ -246,6 +254,18 @@ function M.draw(vm)
     dwriteSafe(secStr, secFontPx, secPos, sColor)
     fontMod.pop(sk)
     y = y + 20
+  end
+
+  -- Sector/micro-sector delta toast from the live delta pipeline.
+  if type(vm.sectorMessage) == "string" and vm.sectorMessage ~= "" then
+    local sectorFontPx = 11
+    local sectorStr = string.upper(vm.sectorMessage)
+    local sectorSize = measure(sectorStr, sectorFontPx)
+    local sectorPos = vec2(centerX - sectorSize.x * 0.5, y)
+    local sk = fontMod.pushNamed("labels_bold", sectorFontPx)
+    dwriteSafe(sectorStr, sectorFontPx, sectorPos, colorForSectorMessage(vm.sectorMessage))
+    fontMod.pop(sk)
+    y = y + 16
   end
 
   -- Sidecar debrief (rules + optional Ollama follow-up); keeps LLM output visible
