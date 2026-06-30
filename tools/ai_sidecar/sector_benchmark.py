@@ -120,7 +120,7 @@ def build_sector_map(
                 label=label,
                 spline_start=s0,
                 spline_end=s1,
-                sector_index=si,
+                sector_index=si + 1,
             )
         )
         span = s1 - s0
@@ -134,8 +134,8 @@ def build_sector_map(
                     label=mlabel,
                     spline_start=m0,
                     spline_end=m1,
-                    sector_index=si,
-                    micro_index=mi,
+                    sector_index=si + 1,
+                    micro_index=mi + 1,
                 )
             )
     return SectorMap(sectors=sectors, micro_sectors=micro_sectors)
@@ -279,8 +279,11 @@ def _time_at_spline(lap: LapTrace, spline_pos: float) -> float | None:
     if not math.isfinite(sp):
         return None
     eps = 1e-6
-    if sp < points[0][0] - eps or sp > points[-1][0] + eps:
-        return None
+    lap_clock_s = lap.lap_ms / 1000.0 if lap.lap_ms is not None and lap.lap_ms > 0 else None
+    if sp < points[0][0] - eps:
+        return 0.0 if sp >= -eps and lap_clock_s is not None else None
+    if sp > points[-1][0] + eps:
+        return lap_clock_s if sp <= 1.0 + eps else None
     if sp <= points[0][0]:
         return points[0][1]
     if sp >= points[-1][0]:

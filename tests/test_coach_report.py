@@ -180,6 +180,26 @@ def test_structured_debrief_includes_sector_deltas_and_superlap():
     assert superlap["source_count"] >= 1
 
 
+def test_sector_deltas_skip_invalid_reference_lap():
+    ref = _corner_archive(degrade=0.0)
+    ref["lap"]["is_valid"] = False
+    student = _corner_archive(degrade=8.0)
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["sector_deltas"] is None
+
+
+def test_sector_deltas_skip_reference_from_different_combo():
+    ref = _corner_archive(degrade=0.0)
+    ref["track"]["id"] = "spa"
+    student = _corner_archive(degrade=8.0)
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["sector_deltas"] is None
+
+
 def test_superlap_ignores_invalid_current_lap():
     ref = _corner_archive(degrade=8.0)
     student = _corner_archive(degrade=0.0)

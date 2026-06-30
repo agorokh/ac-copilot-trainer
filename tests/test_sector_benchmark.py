@@ -33,7 +33,7 @@ def _lap_from_micro_durations(durations: list[float], *, car: str = "car", track
     )
 
 
-def _drop_first_sample(lap: LapTrace) -> LapTrace:
+def _drop_first_sample(lap: LapTrace, *, keep_lap_ms: bool = True) -> LapTrace:
     return LapTrace(
         spline=lap.spline[1:],
         t_s=lap.t_s[1:],
@@ -44,9 +44,29 @@ def _drop_first_sample(lap: LapTrace) -> LapTrace:
         gear=lap.gear[1:],
         x=lap.x[1:],
         z=lap.z[1:],
-        lap_ms=lap.lap_ms,
+        lap_ms=lap.lap_ms if keep_lap_ms else None,
         car_id=lap.car_id,
         track_id=lap.track_id,
+    )
+
+
+def _lap_with_edge_gap() -> LapTrace:
+    n = 10
+    spline = [0.05 + 0.90 * i / (n - 1) for i in range(n)]
+    t_s = [5.0 + 90.0 * i / (n - 1) for i in range(n)]
+    return LapTrace(
+        spline=spline,
+        t_s=t_s,
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[1.0] * n,
+        steer=[0.0] * n,
+        gear=[4.0] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        lap_ms=100_000.0,
+        car_id="car",
+        track_id="track",
     )
 
 
@@ -55,6 +75,9 @@ def test_sector_map_defaults_to_three_by_three_micro_sectors() -> None:
     assert [s.label for s in smap.sectors] == ["S1", "S2", "S3"]
     assert [m.label for m in smap.micro_sectors[:4]] == ["S1.1", "S1.2", "S1.3", "S2.1"]
     assert smap.micro_sectors[-1].label == "S3.3"
+    assert [s.sector_index for s in smap.sectors] == [1, 2, 3]
+    assert (smap.micro_sectors[0].sector_index, smap.micro_sectors[0].micro_index) == (1, 1)
+    assert (smap.micro_sectors[-1].sector_index, smap.micro_sectors[-1].micro_index) == (3, 3)
 
 
 def test_sector_delta_report_localizes_micro_sector_loss_and_gain() -> None:
@@ -87,20 +110,29 @@ def test_superlap_stitches_fastest_micro_sectors() -> None:
 
 def test_segment_duration_requires_sampled_window_edges() -> None:
     lap = _lap_from_micro_durations([10.0] * 9)
-    sparse = _drop_first_sample(lap)
+    sparse = _drop_first_sample(lap, keep_lap_ms=False)
 
     assert segment_duration_s(sparse, build_sector_map().micro_sectors[0]) is None
 
 
+def test_segment_duration_uses_lap_clock_for_archive_boundaries() -> None:
+    lap = _lap_with_edge_gap()
+    smap = build_sector_map()
+
+    assert segment_duration_s(lap, smap.micro_sectors[-1]) is not None
+    assert build_sector_delta_report(lap, lap) is not None
+    assert build_superlap([lap]) is not None
+
+
 def test_sector_delta_report_requires_complete_sector_coverage() -> None:
     reference = _lap_from_micro_durations([10.0] * 9)
-    sparse_candidate = _drop_first_sample(_lap_from_micro_durations([10.0] * 9))
+    sparse_candidate = _drop_first_sample(_lap_from_micro_durations([10.0] * 9), keep_lap_ms=False)
 
     assert build_sector_delta_report(sparse_candidate, reference) is None
 
 
 def test_superlap_requires_complete_micro_sector_coverage() -> None:
     lap = _lap_from_micro_durations([10.0] * 9)
-    sparse = _drop_first_sample(lap)
+    sparse = _drop_first_sample(lap, keep_lap_ms=False)
 
     assert build_superlap([sparse]) is None

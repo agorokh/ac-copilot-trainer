@@ -405,7 +405,14 @@ def _analyze(
     """
     lap = lap_trace_from_archive(lap_archive)
     setup = setup or from_lap_archive(lap_archive)
-    ref = lap_trace_from_archive(reference_archive) if reference_archive else None
+    raw_ref = lap_trace_from_archive(reference_archive) if reference_archive else None
+    ref = (
+        raw_ref
+        if raw_ref is not None
+        and _archive_lap_is_valid(reference_archive)
+        and _same_lap_scope(raw_ref, lap)
+        else None
+    )
     report = coach_lap(lap, setup, reference=ref, grip_ceiling_g=grip_ceiling_g)
     sigs = corner_signatures(lap, segment_corners(lap))
     deltas = compare_laps(lap, ref) if ref is not None else None
@@ -422,7 +429,7 @@ def _analyze(
     trail_braking = [f for f in analyze_trail_braking(lap) if f.classification != "no_braking"]
     sector_deltas = build_sector_delta_report(lap, ref) if ref is not None else None
     corpus_laps: list[LapTrace] = []
-    if ref is not None and _archive_lap_is_valid(reference_archive) and _same_lap_scope(ref, lap):
+    if ref is not None:
         corpus_laps.append(ref)
     if (ref is not None or corpus_archives) and _archive_lap_is_valid(lap_archive):
         corpus_laps.append(lap)
