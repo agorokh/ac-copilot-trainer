@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T20:49:44Z
+last_updated: 2026-06-30T21:44:31Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -58,6 +58,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) - PR #418 MERGED: sector benchmarks + SuperLap targets (#408)
+
+PR [#418](https://github.com/agorokh/ac-copilot-trainer/pull/418) squash-merged to `main` as
+[`17aa36b`](https://github.com/agorokh/ac-copilot-trainer/commit/17aa36b3db0284068cf4cb6ca8cae42f0b5b8190)
+at 2026-06-30T21:42:47Z. Epic [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408)
+stays **OPEN**: this PR delivers the sector/micro-sector and SuperLap benchmark slices; Track Titan
+M-TT3 (#353) and fuller reference-library management remain epic work.
+
+**Shipped:** Added `tools.ai_sidecar.sector_benchmark` for deterministic sector/micro-sector
+windows, complete-only sector delta reports, and complete-only stitched SuperLap targets. The
+post-lap debrief now emits sector deltas and SuperLap structures, `protocol.py` forwards them as
+`sectorDeltas` / `superLap`, and Lua HUD/delta modules surface sector-loss/gain toasts using
+stable segment windows. Benchmark payload indices are 1-based to match labels and Lua helpers.
+
+**Review hardening:** The benchmark path now refuses partial SuperLaps and partial sector totals,
+does not invent unsampled interior segment edges, uses explicit `lap_ms` only for true 0/1 archive
+boundaries, filters invalid current/reference laps out of benchmarks, scopes reference/corpus laps
+by car, track, and raw `track.layout`, and keeps Windows CLI help ASCII-safe.
+
+**Verification:** GitHub checks on head `1d4405b` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). Required review cooldowns were observed after each push;
+all GraphQL review threads are resolved. Local full parity in
+`C:\Users\arsen\Projects\ac-copilot-trainer-issue408-ci` passed with
+`make ci-fast PYTHON=python` (`2001 passed, 77 skipped`, coverage 85.47%, `ci-fast: OK`; root-file
+allowlist warnings only for existing `.copier-answers.yml` and `doppler.yaml`). Focused sidecar/HUD
+regression slice passed (`94 passed`). Post-merge classification: no migration/env/deps/script/workflow
+flags.
 
 ## Delivered (2026-06-30) - PR #415 MERGED: telemetry data platform (#402)
 

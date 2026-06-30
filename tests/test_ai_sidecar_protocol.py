@@ -84,6 +84,24 @@ def test_brain_followup_forwards_structured_blocks(monkeypatch: pytest.MonkeyPat
     assert out["conditions"]["grip_band"] == "green"
 
 
+def test_brain_followup_forwards_sector_benchmarks_with_reference(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(proto, "debrief_feature_enabled", lambda: True)
+    laps = tmp_path / "journal" / "laps"
+    laps.mkdir(parents=True)
+    ref = laps / "lap_ref.json"
+    ref.write_text(json.dumps(_rich_corner_archive()), encoding="utf-8")
+
+    out = build_brain_followup(_rich_corner_archive() | {"referenceArchivePath": str(ref)})
+
+    assert out is not None
+    assert out.get("sectorDeltas")
+    assert out["sectorDeltas"]["micro_sectors"][0]["label"] == "S1.1"
+    assert out.get("superLap")
+    assert out["superLap"]["segments"][0]["label"] == "S1.1"
+
+
 def test_prepare_rejects_bad_protocol() -> None:
     out = prepare_outbound_message(
         {"protocol": 99, "event": "lap_complete", "lap": 1},

@@ -170,3 +170,7 @@ def test_brain_followup_uses_reference_for_time_loss(tmp_path, monkeypatch):
     # the per-corner reference block is forwarded to live clients (codex #291) and honestly sourced
     assert out.get("cornerReference")
     assert out["cornerReference"][0]["source"] == "reference_lap"
+    assert out.get("sectorDeltas")
+    assert out["sectorDeltas"]["micro_sectors"][0]["label"] == "S1.1"
+    assert out.get("superLap")
+    assert out["superLap"]["segments"][0]["label"] == "S1.1"
