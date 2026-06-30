@@ -18,6 +18,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -152,6 +153,7 @@ _voice_runtime_status: dict[str, object] = {
     "state": "skipped",
     "disabled_reason": "",
 }
+_ABSOLUTE_PATH_RE = re.compile(r"(?:(?:[A-Za-z]:[\\/]|/)[^\s'\"<>]+)")
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,15 @@ def set_voice_runtime_status(**updates: object) -> None:
 def voice_runtime_status() -> dict[str, object]:
     """Return a JSON-safe snapshot of the current voice runtime state."""
     return dict(_voice_runtime_status)
+
+
+def public_voice_runtime_status() -> dict[str, object]:
+    """Return voice runtime state safe for unauthenticated health responses."""
+    status = voice_runtime_status()
+    reason = str(status.get("disabled_reason") or "")
+    if reason:
+        status["disabled_reason"] = _ABSOLUTE_PATH_RE.sub("<path>", reason)
+    return status
 
 
 def _exception_detail(exc: BaseException) -> str:
@@ -621,7 +632,7 @@ def make_process_request(token: str | None):
                 observability.build_health_json(
                     connected_peers,
                     screen_peers=screen_peers,
-                    voice=voice_runtime_status(),
+                    voice=public_voice_runtime_status(),
                 ),
                 observability.HEALTH_CONTENT_TYPE,
             )
@@ -1687,6 +1698,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                         base_rate=rate,
                         base_volume=volume,
                         require_opt_in=False,
+                        startup_timeout_s=2.0,
                     )
                 )
             )

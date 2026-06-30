@@ -401,7 +401,18 @@ class GamePointSupervisor:
         if health_payload is not None:
             voice = health_payload.get("voice")
             if isinstance(voice, Mapping):
-                return _voice_from_health(voice, requested=self._voice_requested())
+                return _voice_from_health(
+                    voice,
+                    requested=self._voice_requested(),
+                    playback_requested=self._voice_playback_requested(),
+                )
+            if self._voice_requested():
+                return ProbeResult(
+                    "voice",
+                    False,
+                    "DISABLED",
+                    "voice requested but sidecar health has no voice runtime status",
+                )
         if self.config.reference_archive and self.config.voice_bank:
             return ProbeResult("voice", True, "configured", "reference archive + bank configured")
         if self.config.reference_archive and self.config.voice_tts:
@@ -416,6 +427,9 @@ class GamePointSupervisor:
         return bool(
             self.config.reference_archive or self.config.voice_bank or self.config.voice_tts
         )
+
+    def _voice_playback_requested(self) -> bool:
+        return bool(self.config.voice_bank or self.config.voice_tts)
 
     def probe_hotspot(self) -> ProbeResult:
         if os.name != "nt":
@@ -614,7 +628,12 @@ def _screen_from_health(health: ProbeResult) -> ProbeResult:
     return ProbeResult("screen", False, "waiting", "no ESP32 screen peer connected")
 
 
-def _voice_from_health(voice: Mapping[str, object], *, requested: bool = False) -> ProbeResult:
+def _voice_from_health(
+    voice: Mapping[str, object],
+    *,
+    requested: bool = False,
+    playback_requested: bool = False,
+) -> ProbeResult:
     configured = bool(voice.get("configured"))
     enabled = bool(voice.get("enabled"))
     state = str(voice.get("state") or "").strip().lower()
@@ -626,6 +645,13 @@ def _voice_from_health(voice: Mapping[str, object], *, requested: bool = False) 
         detail = f"backend={backend}" if backend else ""
         return ProbeResult("voice", True, label, detail)
     if state == "observer_only":
+        if playback_requested:
+            return ProbeResult(
+                "voice",
+                False,
+                "DISABLED",
+                "voice playback requested but sidecar is observer-only",
+            )
         return ProbeResult("voice", True, "observer_only", "reference archive configured")
     if state == "skipped" or not configured:
         if requested:

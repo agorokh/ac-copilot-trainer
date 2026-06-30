@@ -6,6 +6,8 @@ import sys
 import threading
 import time
 
+import pytest
+
 from tools.ai_sidecar.external_protocol import (
     CLIENT_CLASS_VOICE,
     TOPIC_COACHING_CUE,
@@ -106,6 +108,18 @@ def test_pyttsx3_speaker_drops_cues_when_init_fails(monkeypatch):
     speak = _pyttsx3_speaker(require_opt_in=False)
     time.sleep(0.05)
     speak("hello")  # worker failed; must not raise
+
+
+def test_pyttsx3_speaker_can_fail_fast_when_startup_fails(monkeypatch):
+    class _BrokenPyttsx3:
+        @staticmethod
+        def init():
+            raise RuntimeError("no engine")
+
+    monkeypatch.setitem(sys.modules, "pyttsx3", _BrokenPyttsx3())
+
+    with pytest.raises(RuntimeError, match="failed to initialize"):
+        _pyttsx3_speaker(require_opt_in=False, startup_timeout_s=0.2)
 
 
 def test_pyttsx3_speaker_requires_tts_opt_in_and_no_bank(monkeypatch):

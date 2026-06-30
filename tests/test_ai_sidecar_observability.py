@@ -83,6 +83,25 @@ def test_health_endpoint_on_ws_port() -> None:
     assert payload["voice"]["enabled"] is False
 
 
+def test_health_endpoint_sanitizes_voice_disabled_paths() -> None:
+    async def _run() -> tuple[int, list[str], str]:
+        async with _running_sidecar() as port:
+            set_voice_runtime_status(
+                configured=True,
+                enabled=False,
+                state="disabled",
+                disabled_reason="failed to load reference /Users/driver/rig/ref.json: bad json",
+            )
+            return await asyncio.to_thread(_http_get, port, "/health")
+
+    status, _content_types, body = asyncio.run(_run())
+    payload = json.loads(body)
+
+    assert status == 200
+    assert payload["voice"]["disabled_reason"] == "failed to load reference <path> bad json"
+    assert "/Users/driver" not in body
+
+
 def test_metrics_endpoint_single_content_type_and_core_series() -> None:
     async def _run() -> tuple[int, list[str], str]:
         async with _running_sidecar() as port:
