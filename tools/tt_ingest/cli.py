@@ -443,6 +443,10 @@ def build_reference_archive_from_files(
     pretty: bool = False,
 ) -> ReferenceArchiveSummary:
     """Build and write a TT reference archive from retained payload files."""
+    resolved_output = output.resolve()
+    for path in paths:
+        if resolved_output == path.resolve():
+            raise TTNormalizeError(f"output must not overwrite retained input: {output}")
     if output.exists() and not overwrite:
         raise TTNormalizeError(f"output already exists (pass --overwrite): {output}")
     payloads = [_load_json_file(path) for path in paths]

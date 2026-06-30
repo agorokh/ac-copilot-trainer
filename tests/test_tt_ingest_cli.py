@@ -302,6 +302,20 @@ def test_build_reference_archive_from_files_refuses_overwrite(tmp_path) -> None:
         )
 
 
+def test_build_reference_archive_from_files_rejects_output_over_input(tmp_path) -> None:
+    retained = tmp_path / f"{last_session_endpoint(5)}.json"
+    retained.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="must not overwrite retained input"):
+        build_reference_archive_from_files(
+            [retained],
+            output=retained,
+            allow_partial=True,
+            overwrite=True,
+            track_length_m=2525.0,
+        )
+
+
 def test_build_reference_archive_from_files_wraps_write_error(tmp_path) -> None:
     parent_is_file = tmp_path / "not-a-dir"
     parent_is_file.write_text("x", encoding="utf-8")
