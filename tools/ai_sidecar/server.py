@@ -146,6 +146,12 @@ _observer_feed_warned = False
 # are imported lazily when ``--voice-bank`` is supplied, so the sidecar core stays dep-free.
 # (``_observer`` is declared once above with its RealtimeObserver type; not re-declared here.)
 _voice_coach: Any | None = None
+_voice_runtime_status: dict[str, object] = {
+    "configured": False,
+    "enabled": False,
+    "state": "skipped",
+    "disabled_reason": "",
+}
 
 
 @dataclass(frozen=True)
@@ -171,6 +177,25 @@ def set_voice_coach(coach: Any | None) -> None:
     """Install (or clear) the in-process voice coach that speaks advisories on the rig (#341)."""
     global _voice_coach
     _voice_coach = coach
+
+
+def set_voice_runtime_status(**updates: object) -> None:
+    """Record the voice runtime state reported by ``/health`` and the launcher."""
+    _voice_runtime_status.clear()
+    _voice_runtime_status.update(
+        {
+            "configured": False,
+            "enabled": False,
+            "state": "skipped",
+            "disabled_reason": "",
+        }
+    )
+    _voice_runtime_status.update(updates)
+
+
+def voice_runtime_status() -> dict[str, object]:
+    """Return a JSON-safe snapshot of the current voice runtime state."""
+    return dict(_voice_runtime_status)
 
 
 class _Pyttsx3VoiceCoach:
@@ -587,7 +612,11 @@ def make_process_request(token: str | None):
             return _http_response(
                 connection,
                 HTTPStatus.OK,
-                observability.build_health_json(connected_peers, screen_peers=screen_peers),
+                observability.build_health_json(
+                    connected_peers,
+                    screen_peers=screen_peers,
+                    voice=voice_runtime_status(),
+                ),
                 observability.HEALTH_CONTENT_TYPE,
             )
         if path == "/metrics":
@@ -1471,11 +1500,40 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     """
     reference_path = voice_settings.reference_path
     bank_dir = voice_settings.bank_dir
+    bank_backend = (
+        voice_settings.backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
+        if bank_dir
+        else None
+    )
+    configured = bool(reference_path or bank_dir or voice_settings.tts_enabled)
+    set_voice_runtime_status(
+        configured=configured,
+        enabled=False,
+        state="initializing" if configured else "skipped",
+        disabled_reason="",
+        backend=bank_backend or "",
+        bank_configured=bool(bank_dir),
+        reference_configured=bool(reference_path),
+        tts_enabled=bool(voice_settings.tts_enabled),
+    )
+    if not configured:
+        return
     if bank_dir and not reference_path:
-        logger.warning(
-            "voice: --voice-bank is set but --voice-reference is missing; voice coach will be idle"
+        reason = "voice bank configured without AC_COPILOT_REFERENCE_ARCHIVE"
+        logger.error("voice: %s", reason)
+        set_voice_runtime_status(
+            configured=True,
+            enabled=False,
+            state="disabled",
+            disabled_reason=reason,
+            backend=bank_backend or "",
+            bank_configured=True,
+            reference_configured=False,
+            tts_enabled=bool(voice_settings.tts_enabled),
         )
+        return
 
+    observer_ready = False
     if reference_path:
         try:
             from tools.ai_sidecar.realtime_observer import build_observer_from_reference
@@ -1484,22 +1542,53 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 archive = json.load(fh)
             observer = build_observer_from_reference(archive)
             if observer is None:
-                logger.error(
-                    "voice: reference %s has no usable corners — observer disabled", reference_path
+                reason = f"reference {reference_path} has no usable corners"
+                logger.error("voice: %s — observer disabled", reason)
+                set_voice_runtime_status(
+                    configured=True,
+                    enabled=False,
+                    state="disabled",
+                    disabled_reason=reason,
+                    backend=bank_backend or "",
+                    bank_configured=bool(bank_dir),
+                    reference_configured=True,
+                    tts_enabled=bool(voice_settings.tts_enabled),
                 )
             else:
                 set_realtime_observer(observer)
+                observer_ready = True
+                set_voice_runtime_status(
+                    configured=True,
+                    enabled=False,
+                    state="observer_only",
+                    disabled_reason="",
+                    backend=bank_backend or "",
+                    bank_configured=bool(bank_dir),
+                    reference_configured=True,
+                    tts_enabled=bool(voice_settings.tts_enabled),
+                )
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
-        except Exception:  # noqa: BLE001 - malformed archive must not abort the sidecar
+        except Exception as exc:  # noqa: BLE001 - malformed archive must not abort the sidecar
+            reason = f"failed to load reference {reference_path}: {exc or type(exc).__name__}"
             logger.exception("voice: failed to load reference %s", reference_path)
+            set_voice_runtime_status(
+                configured=True,
+                enabled=False,
+                state="disabled",
+                disabled_reason=reason,
+                backend=bank_backend or "",
+                bank_configured=bool(bank_dir),
+                reference_configured=True,
+                tts_enabled=bool(voice_settings.tts_enabled),
+            )
+    if (bank_dir or voice_settings.tts_enabled) and not observer_ready:
+        return
     if bank_dir:
         try:
             from tools.ai_sidecar.voice.config import VoiceConfig
             from tools.ai_sidecar.voice.engine import VoiceCoach
 
-            backend = (
-                voice_settings.backend or os.environ.get("AC_COPILOT_VOICE_BACKEND") or "rtmixer"
-            )
+            backend = bank_backend or "rtmixer"
             config = VoiceConfig(
                 device_name=voice_settings.device or os.environ.get("AC_COPILOT_VOICE_DEVICE"),
                 host_api=voice_settings.host_api or os.environ.get("AC_COPILOT_VOICE_HOST_API"),
@@ -1511,12 +1600,33 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             )
             coach = VoiceCoach.from_bank(bank_dir, config, backend=backend)
             if not coach.enabled:
+                set_voice_coach(coach)
+                set_voice_runtime_status(
+                    configured=True,
+                    enabled=False,
+                    state="disabled",
+                    disabled_reason=coach.disabled_reason,
+                    backend=backend,
+                    bank_configured=True,
+                    reference_configured=True,
+                    tts_enabled=False,
+                )
                 logger.error(
                     "voice: bank %s disabled the coach (%s)", bank_dir, coach.disabled_reason
                 )
             else:
                 coach.start()
                 set_voice_coach(coach)
+                set_voice_runtime_status(
+                    configured=True,
+                    enabled=True,
+                    state="enabled",
+                    disabled_reason="",
+                    backend=backend,
+                    bank_configured=True,
+                    reference_configured=True,
+                    tts_enabled=False,
+                )
                 logger.info(
                     "voice: in-process voice coach wired from bank %s "
                     "backend=%s device=%r host_api=%r verbosity=%s",
@@ -1526,7 +1636,17 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     config.host_api,
                     config.verbosity.name.lower(),
                 )
-        except Exception:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
+        except Exception as exc:  # noqa: BLE001 - any backend/import fault disables voice, never aborts
+            set_voice_runtime_status(
+                configured=True,
+                enabled=False,
+                state="disabled",
+                disabled_reason=f"failed to initialize voice coach: {exc or type(exc).__name__}",
+                backend=bank_backend or "",
+                bank_configured=True,
+                reference_configured=True,
+                tts_enabled=False,
+            )
             logger.exception("voice: failed to initialize voice coach from %s", bank_dir)
     elif voice_settings.tts_enabled:
         try:
@@ -1562,12 +1682,33 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     )
                 )
             )
+            set_voice_runtime_status(
+                configured=True,
+                enabled=True,
+                state="tts",
+                disabled_reason="",
+                backend="pyttsx3",
+                bank_configured=False,
+                reference_configured=True,
+                tts_enabled=True,
+            )
             logger.info(
                 "voice: in-process pyttsx3 voice coach wired rate=%s volume=%.2f",
                 rate,
                 volume,
             )
-        except Exception:  # noqa: BLE001 - pyttsx3 must never abort the sidecar
+        except Exception as exc:  # noqa: BLE001 - pyttsx3 must never abort the sidecar
+            reason = f"failed to initialize pyttsx3 voice coach: {exc or type(exc).__name__}"
+            set_voice_runtime_status(
+                configured=True,
+                enabled=False,
+                state="disabled",
+                disabled_reason=reason,
+                backend="pyttsx3",
+                bank_configured=False,
+                reference_configured=True,
+                tts_enabled=True,
+            )
             logger.exception("voice: failed to initialize pyttsx3 voice coach")
 
 

@@ -28,6 +28,7 @@ from tools.rig_launcher.supervisor import (
     _resolve_launcher_path,
     _subprocess_kwargs,
     build_pyinstaller_args,
+    render_status_lines,
 )
 
 
@@ -176,6 +177,77 @@ def test_status_reads_health_and_writes_status_file(tmp_path: Path) -> None:
     saved = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert saved["screen"]["state"] == "connected"
     assert saved["log_path"].endswith("sidecar.log")
+
+
+def test_status_uses_sidecar_voice_health(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        reference_archive="ref.json",
+        voice_bank="bank",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    def fake_urlopen(_url: str, timeout: float) -> _Response:
+        assert timeout == 1.0
+        return _Response(
+            {
+                "status": "ok",
+                "connected_peers": 1,
+                "screen_peers": 1,
+                "voice": {
+                    "configured": True,
+                    "enabled": True,
+                    "state": "enabled",
+                    "backend": "sounddevice",
+                },
+            }
+        )
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+    status = sup.poll_status()
+
+    assert status.voice.ok is True
+    assert status.voice.state == "enabled"
+    assert status.voice.detail == "backend=sounddevice"
+
+
+def test_status_surfaces_disabled_voice_reason_and_overall_summary(tmp_path: Path) -> None:
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        reference_archive="ref.json",
+        voice_bank="bank",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    def fake_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response(
+            {
+                "status": "ok",
+                "connected_peers": 1,
+                "screen_peers": 1,
+                "voice": {
+                    "configured": True,
+                    "enabled": False,
+                    "state": "disabled",
+                    "disabled_reason": "manifest version 1 is not supported by schema 2",
+                    "backend": "rtmixer",
+                },
+            }
+        )
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+    status = sup.poll_status()
+    lines = render_status_lines(status)
+
+    assert status.ok is False
+    assert status.voice.ok is False
+    assert status.voice.state == "DISABLED"
+    assert "manifest version 1" in status.voice.detail
+    assert lines[0] == "overall: needs_attention"
+    assert any(line.startswith("voice: DISABLED - manifest version 1") for line in lines)
 
 
 def test_read_health_tolerates_non_utf8_response_bytes(tmp_path: Path) -> None:
@@ -693,6 +765,40 @@ def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> N
     assert "tools.ai_sidecar" in args
     assert "--collect-data" in args
     assert str(tmp_path / "tools" / "rig_launcher" / "__main__.py") == args[-1]
+
+
+def test_build_pyinstaller_args_collects_voice_runtime_floor(tmp_path: Path) -> None:
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    assert _has_option_value(args, "--collect-data", "_sounddevice_data")
+    assert _has_option_value(args, "--collect-dynamic-libs", "sounddevice")
+    assert _has_option_value(args, "--hidden-import", "numpy")
+    assert _has_option_value(args, "--hidden-import", "sounddevice")
+    assert _has_option_value(args, "--hidden-import", "pyttsx3")
+    assert _has_option_value(args, "--hidden-import", "pyttsx3.drivers.sapi5")
+
+
+def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def fake_find_spec(module: str) -> object | None:
+        if module in {"rtmixer", "pa_ringbuffer"}:
+            return object()
+        return None
+
+    monkeypatch.setattr(supervisor_module, "find_spec", fake_find_spec)
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    assert _has_option_value(args, "--hidden-import", "rtmixer")
+    assert _has_option_value(args, "--collect-dynamic-libs", "rtmixer")
+    assert _has_option_value(args, "--hidden-import", "pa_ringbuffer")
+    assert _has_option_value(args, "--collect-dynamic-libs", "pa_ringbuffer")
+
+
+def _has_option_value(args: list[str], option: str, value: str) -> bool:
+    return any(
+        left == option and right == value for left, right in zip(args, args[1:], strict=False)
+    )
 
 
 def test_launcher_extra_includes_sidecar_voice_runtime_deps() -> None:

@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -371,7 +372,7 @@ class GamePointSupervisor:
     def poll_status(self) -> GamePointStatus:
         checks = self.preflight()
         sidecar = self._sidecar_process_status()
-        health = self._read_health()
+        health, health_payload = self._read_health_payload()
         if health.ok:
             sidecar = health
         screen = _screen_from_health(health)
@@ -380,7 +381,7 @@ class GamePointSupervisor:
             sidecar=sidecar,
             screen=screen,
             hotspot=self.probe_hotspot(),
-            voice=self.probe_voice(),
+            voice=self.probe_voice(health_payload),
             simhub=self.probe_simhub(start=self.config.start_simhub),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
@@ -396,7 +397,11 @@ class GamePointSupervisor:
             encoding="utf-8",
         )
 
-    def probe_voice(self) -> ProbeResult:
+    def probe_voice(self, health_payload: Mapping[str, object] | None = None) -> ProbeResult:
+        if health_payload is not None:
+            voice = health_payload.get("voice")
+            if isinstance(voice, Mapping):
+                return _voice_from_health(voice)
         if self.config.reference_archive and self.config.voice_bank:
             return ProbeResult("voice", True, "configured", "reference archive + bank configured")
         if self.config.reference_archive and self.config.voice_tts:
@@ -462,17 +467,26 @@ class GamePointSupervisor:
         self._close_log_handles()
 
     def _read_health(self) -> ProbeResult:
+        return self._read_health_payload()[0]
+
+    def _read_health_payload(self) -> tuple[ProbeResult, dict[str, object] | None]:
         url = f"http://{_url_host(self._health_host())}:{self.config.port}/health"
         try:
             with self._urlopen(url, timeout=1.0) as response:
                 payload = json.loads(response.read().decode("utf-8", errors="replace"))
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            return ProbeResult("sidecar", False, "unreachable", str(exc))
+            return ProbeResult("sidecar", False, "unreachable", str(exc)), None
         if not isinstance(payload, dict):
-            return ProbeResult("sidecar", False, "unreachable", "health payload is not an object")
+            return (
+                ProbeResult("sidecar", False, "unreachable", "health payload is not an object"),
+                None,
+            )
         peers = int(payload.get("connected_peers") or 0)
         screens = int(payload.get("screen_peers") or 0)
-        return ProbeResult("sidecar", True, "healthy", f"peers={peers} screen_peers={screens}")
+        return (
+            ProbeResult("sidecar", True, "healthy", f"peers={peers} screen_peers={screens}"),
+            payload,
+        )
 
     def _health_host(self) -> str:
         bind = self.config.external_bind
@@ -544,17 +558,39 @@ def build_pyinstaller_args(
         "tools.rig_launcher",
         "--collect-data",
         "tools.ai_sidecar",
+        "--collect-data",
+        "_sounddevice_data",
+        "--collect-dynamic-libs",
+        "sounddevice",
         "--hidden-import",
         "tools.ai_sidecar.voice.engine",
         "--hidden-import",
         "tools.ai_sidecar.voice.playback",
+        "--hidden-import",
+        "numpy",
+        "--hidden-import",
+        "sounddevice",
+        "--hidden-import",
+        "pyttsx3",
+        "--hidden-import",
+        "pyttsx3.drivers",
+        "--hidden-import",
+        "pyttsx3.drivers.sapi5",
     ]
+    _append_optional_pyinstaller_module(args, "rtmixer")
+    _append_optional_pyinstaller_module(args, "pa_ringbuffer")
     if onefile:
         args.append("--onefile")
     if windowed:
         args.append("--noconsole")
     args.append(str(entry))
     return args
+
+
+def _append_optional_pyinstaller_module(args: list[str], module: str) -> None:
+    if find_spec(module) is None:
+        return
+    args.extend(["--hidden-import", module, "--collect-dynamic-libs", module])
 
 
 def _screen_from_health(health: ProbeResult) -> ProbeResult:
@@ -571,6 +607,29 @@ def _screen_from_health(health: ProbeResult) -> ProbeResult:
     if count > 0:
         return ProbeResult("screen", True, "connected", f"screen_peers={count}")
     return ProbeResult("screen", False, "waiting", "no ESP32 screen peer connected")
+
+
+def _voice_from_health(voice: Mapping[str, object]) -> ProbeResult:
+    configured = bool(voice.get("configured"))
+    enabled = bool(voice.get("enabled"))
+    state = str(voice.get("state") or "").strip().lower()
+    reason = str(voice.get("disabled_reason") or "").strip()
+    backend = str(voice.get("backend") or "").strip()
+
+    if enabled:
+        label = "tts" if state == "tts" else "enabled"
+        detail = f"backend={backend}" if backend else ""
+        return ProbeResult("voice", True, label, detail)
+    if state == "observer_only":
+        return ProbeResult("voice", True, "observer_only", "reference archive configured")
+    if state == "skipped" or not configured:
+        return ProbeResult("voice", True, "skipped", "no voice env configured")
+    if state == "initializing":
+        return ProbeResult("voice", False, "initializing", "sidecar voice still initializing")
+    detail = reason or "voice coach is not enabled"
+    if backend and reason:
+        detail = f"{detail} (backend={backend})"
+    return ProbeResult("voice", False, "DISABLED", detail)
 
 
 def _coerce_port(value: str | None, default: int) -> int:
@@ -679,7 +738,9 @@ _HOTSPOT_PROBE_SCRIPT = "\n".join(
 
 
 def render_status_lines(status: GamePointStatus) -> list[str]:
+    summary = ProbeResult("overall", status.ok, "ok" if status.ok else "needs_attention")
     rows = [
+        summary,
         status.sidecar,
         status.screen,
         status.hotspot,

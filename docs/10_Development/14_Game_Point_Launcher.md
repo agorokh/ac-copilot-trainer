@@ -14,6 +14,13 @@ pip install -e ".[launcher]"
 python -m tools.rig_launcher --build-exe
 ```
 
+The build extra includes the runtime voice floor (`numpy`, `sounddevice`,
+`pyttsx3`, and PyInstaller collection for sounddevice's PortAudio binaries).
+`rtmixer` remains opt-in via `pip install -e ".[voice-rtmixer]"`; when it is
+installed, the build helper collects it opportunistically. Bake-time neural
+voice prosody still requires a system `ffmpeg` on `PATH` before running
+`python -m tools.ai_sidecar.voice.bake`.
+
 Create or refresh the Desktop shortcut:
 
 ```powershell
@@ -79,6 +86,12 @@ Settings precedence is:
 `settings.json` is created by the launcher's **Settings** button, or can be
 created ahead of time by calling `ensure_settings_file()` from
 `tools.rig_launcher.settings`.
+
+The launcher status row for `voice` is sourced from the sidecar `/health`
+payload when the sidecar is reachable. A stale bank, missing reference archive,
+or failed audio backend reports `voice: DISABLED - <reason>` and makes the
+overall status `needs_attention`; the launcher does not treat the mere presence
+of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 
 ## Setup Exchange
 

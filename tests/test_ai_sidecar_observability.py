@@ -28,6 +28,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _external_peers,
     _handler,
     make_process_request,
+    set_voice_runtime_status,
 )
 
 
@@ -45,6 +46,7 @@ async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     port = _free_port()
     _external_peers.clear()
     _external_peer_classes.clear()
+    set_voice_runtime_status()
     try:
         async with ws_serve(
             lambda ws: _handler(ws, reply_coaching=True),
@@ -56,6 +58,7 @@ async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     finally:
         _external_peers.clear()
         _external_peer_classes.clear()
+        set_voice_runtime_status()
 
 
 def _http_get(port: int, path: str) -> tuple[int, list[str], str]:
@@ -76,6 +79,8 @@ def test_health_endpoint_on_ws_port() -> None:
     assert payload["status"] == "ok"
     assert payload["connected_peers"] == 0
     assert payload["screen_peers"] == 0
+    assert payload["voice"]["state"] == "skipped"
+    assert payload["voice"]["enabled"] is False
 
 
 def test_metrics_endpoint_single_content_type_and_core_series() -> None:
