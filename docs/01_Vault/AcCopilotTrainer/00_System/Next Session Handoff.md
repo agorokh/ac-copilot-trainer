@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T08:35:00Z
+last_updated: 2026-06-30T08:36:35Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -54,6 +55,40 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
+
+PR [#394](https://github.com/agorokh/ac-copilot-trainer/pull/394) squash-merged to `main` as
+[`b14c984`](https://github.com/agorokh/ac-copilot-trainer/commit/b14c9842c9c9fcea5bae0b17d6ad5f221e9b02dc)
+at 2026-06-30T08:33:34Z. Issue [#392](https://github.com/agorokh/ac-copilot-trainer/issues/392) is
+**CLOSED**.
+
+**Shipped:** sidecar `/health` now includes path-safe `voice` runtime state; Game Point launcher
+uses that health payload as the source of truth for voice status instead of treating configured paths
+as proof that the coach initialized. Launcher status now catches disabled/stale schema-v1 banks,
+adopted sidecars that were started without voice config, missing old `voice` health payloads, and
+observer-only sidecars when playback was requested. PyInstaller packaging collects the installable
+voice runtime floor (`numpy`, `sounddevice`, `pyttsx3`) and opportunistically collects opt-in
+`rtmixer`/`pa_ringbuffer` only when installed. The pyttsx3 fallback waits for worker startup before
+reporting `tts` enabled.
+
+**Verification:** local `make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python`
+passed on the final head (`1893 passed, 75 skipped`, coverage 85.43%, `ci-fast: OK`). Focused
+launcher/sidecar/voice tests passed (`96 passed`). GitHub checks on `be2fb50` passed (`build`,
+`Canonical docs exist`, `conformance`; vault automerge skipped). Required review cooldowns were
+observed through 2026-06-30T08:24:15Z; current non-outdated review threads were resolved; no
+current-SHA review body landed after the final cooldown.
+
+**Runtime proof:** Windows `pc` packaged proof was captured before the later review-fix commits:
+`C:\Users\arsen\Projects\ac-copilot-trainer-issue392` built
+`dist\AC-Copilot-Game-Point.exe` with PyInstaller 6.21.0 at head `4d5a610`; the frozen exe loaded a
+schema-v2 tone bank with `/health.voice.state=enabled` using `sounddevice`, and a stale schema-v1 bank
+reported `DISABLED` through both frozen sidecar and frozen launcher with no module import errors.
+After the final review-fix commits, `pc` was offline in Tailscale (`100.75.251.87`, last seen ~31m
+before closeout) and SSH timed out, so final Windows rerun was not available. Final-head local runtime
+smoke with real sidecar processes + launcher CLI covered the changed logic: stale schema-v1 bank
+surfaces `DISABLED`, no-voice sidecar adoption is `DISABLED`, and missing-reference health does not
+leak local paths. Details: [[pr-394-voice-reliability-2026-06-30]].
 
 ## Delivered (2026-06-30) — PR #395 MERGED: M-TT2 Track Titan reference archive builder (#353)
 
