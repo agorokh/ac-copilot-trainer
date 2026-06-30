@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T08:35:00Z
+last_updated: 2026-06-30T08:36:35Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/00_System/Project State.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/10_Rig/esp32-jc3248w535-screen-v1.md
@@ -104,6 +105,15 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-30** — PR [#394](https://github.com/agorokh/ac-copilot-trainer/pull/394) **MERGED** at
+  `b14c984` — **voice reliability for packaged Game Point** ([#392](https://github.com/agorokh/ac-copilot-trainer/issues/392)
+  **CLOSED**): sidecar `/health.voice` is the launcher source of truth; Game Point now reports
+  disabled/stale schema-v1 banks, adopted no-voice sidecars, missing old voice health, observer-only
+  sidecars when playback was requested, and pyttsx3 startup failures honestly. PyInstaller collects
+  the installable voice floor (`numpy`, `sounddevice`, `pyttsx3`) and only collects opt-in `rtmixer`
+  modules when present. Windows packaged proof was captured on `pc` at the packaging head; final
+  review-fix behavior was re-smoked locally because `pc` was offline before merge. Details:
+  [`pr-394-voice-reliability-2026-06-30`](../03_Investigations/pr-394-voice-reliability-2026-06-30.md).
 - **2026-06-30** — PR [#395](https://github.com/agorokh/ac-copilot-trainer/pull/395) **MERGED** at
   `b122e1b` — **M-TT2 Track Titan reference archive builder** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)):
   `tools.tt_ingest reference` builds schema-v1 `lap_archive` records from retained TT services
