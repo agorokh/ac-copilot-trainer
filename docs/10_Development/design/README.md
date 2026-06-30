@@ -1,5 +1,10 @@
 # Design — canonical source
 
+> [!WARNING]
+> **Offline Reliability & Third-Party Scripts**
+> Opening the HTML prototypes in `racing-atelier/` will execute third-party JS from CDNs (React, ReactDOM, Babel via unpkg) and make network requests for Google Fonts.
+> If you are working in an offline, air-gapped, or restricted environment, you must use a local static server and vendor/pin local copies of these dependencies.
+
 **The design language of record is [`racing-atelier/`](racing-atelier/)** — the *Racing
 Atelier* handoff bundle exported from Claude Design (the dark, instrument-grade cockpit
 system for AC Copilot Trainer / Game Point). Brand: **RACING ATELIER**; product footer

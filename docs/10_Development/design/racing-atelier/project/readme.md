@@ -1,5 +1,10 @@
 # Racing Atelier — Design System
 
+> [!WARNING]
+> **Offline Reliability & Third-Party Scripts**
+> Opening the HTML prototypes in this package will execute third-party JS from CDNs (React, ReactDOM, Babel via unpkg) and make network requests for Google Fonts.
+> If you are working in an offline, air-gapped, or restricted environment, you must use a local static server and vendor/pin local copies of these dependencies.
+
 The brand and instrument language for **AC Copilot Trainer** (a.k.a. the **Game
 Point** cockpit) — an in-sim driving coach for **Assetto Corsa**. It turns
 telemetry into one decision a driver can read in a blink: *brake in 86 m, you're

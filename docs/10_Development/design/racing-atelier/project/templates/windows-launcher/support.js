@@ -1605,6 +1605,9 @@
       if (window.parent === window) return;
       const r = runtime.registry.entries[rootName];
       try {
+        const targetOrigin = (document.referrer && document.referrer.startsWith("http"))
+          ? new URL(document.referrer).origin
+          : "*";
         window.parent.postMessage(
           {
             type: "__dc_booted",
@@ -1612,7 +1615,7 @@
             propsMeta: r && r.propsMeta || null,
             preview: r && r.preview || null
           },
-          "*"
+          targetOrigin
         );
       } catch {
       }
