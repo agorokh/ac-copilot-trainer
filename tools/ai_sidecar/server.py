@@ -512,6 +512,16 @@ def _run_setup_diff(baseline: str, candidate: str) -> None:
     print(json.dumps(diff_setup_files(baseline, candidate), indent=2, sort_keys=True))
 
 
+def _setup_snapshot_car_id(snapshot: Any) -> str | None:
+    if not isinstance(snapshot, dict):
+        return None
+    for key in ("CAR.MODEL", "CAR.SCREEN_NAME"):
+        value = snapshot.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _setup_store_record_count(store_path: str | Path) -> int:
     return len(load_records(store_path))
 
@@ -1040,21 +1050,26 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         baseline_snapshot = data.get("baseline_snapshot")
         candidate_snapshot = data.get("candidate_snapshot")
         try:
+            car_id = (
+                data.get("car_id")
+                or _setup_snapshot_car_id(candidate_snapshot)
+                or _setup_snapshot_car_id(baseline_snapshot)
+            )
             baseline = from_snapshot(
                 baseline_snapshot if isinstance(baseline_snapshot, dict) else {},
-                car_id=data.get("car_id"),
+                car_id=car_id,
                 track_id=data.get("track_id"),
             )
             candidate = from_snapshot(
                 candidate_snapshot if isinstance(candidate_snapshot, dict) else {},
-                car_id=data.get("car_id"),
+                car_id=car_id,
                 track_id=data.get("track_id"),
             )
             out = await asyncio.to_thread(
                 setup_diff_summary,
                 baseline,
                 candidate,
-                schema=load_latest_schema(data.get("car_id")),
+                schema=load_latest_schema(car_id),
             )
         except Exception as e:
             logger.info("setup diff failed err=%s", e)

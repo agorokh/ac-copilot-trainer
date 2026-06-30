@@ -829,6 +829,39 @@ def test_setup_advice_and_diff_roundtrip() -> None:
     assert any("Brake bias" in line for line in diff["display_lines"])
 
 
+def test_setup_diff_roundtrip_uses_snapshot_car_model_for_schema() -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.diff",
+                            "baseline_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "CAMBER_LF.VALUE": "-18",
+                            },
+                            "candidate_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "CAMBER_LF.VALUE": "-19",
+                            },
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    diff = asyncio.run(_run())
+    assert diff["type"] == ep.TYPE_SETUP_DIFF_RESULT
+    assert diff["ok"] is True
+    row = diff["rows"][0]
+    assert row["units"] == "deg"
+    assert row["from_display"] == "-1.8"
+    assert row["to_display"] == "-1.9"
+
+
 def test_setup_closed_loop_roundtrip(tmp_path: Path) -> None:
     async def _run() -> dict:
         from tools.ai_sidecar import server as srv

@@ -234,12 +234,12 @@ def _parse_issue(text: str) -> str | None:
         text, "wont turn", "won t turn", "doesnt turn", "doesn t turn"
     ):
         return "understeer"
+    if {"kerb", "curb", "bump", "bumpy", "unstable", "nervous", "darty"} & words:
+        return "instability"
     if {"oversteer", "loose", "snap", "snappy", "tail", "rear"} & words or _has_phrase(
         text, "steps out", "stepping out", "rear steps"
     ):
         return "oversteer"
-    if {"kerb", "curb", "bump", "bumpy", "unstable", "nervous", "darty"} & words:
-        return "instability"
     return None
 
 
@@ -326,14 +326,51 @@ def _display_units(schema: CarSetupSchema | None, section: str, fallback: str) -
     return fallback
 
 
+def _spinner_read_only(schema: CarSetupSchema | None, section: str) -> bool:
+    if schema is None:
+        return False
+    sp = schema.get(section)
+    return bool(sp is not None and sp.read_only)
+
+
+def _direction_from_delta(delta: float | None) -> str:
+    if delta is None:
+        return "unchanged"
+    if delta > 0:
+        return "increase"
+    if delta < 0:
+        return "decrease"
+    return "unchanged"
+
+
+def _semantic_delta(
+    schema: CarSetupSchema | None,
+    section: str,
+    from_v: float | None,
+    to_v: float | None,
+) -> float | None:
+    if from_v is None or to_v is None:
+        return None
+    before = _decoded(schema, section, from_v)
+    after = _decoded(schema, section, to_v)
+    if not isinstance(before, int | float) or not isinstance(after, int | float):
+        return float(to_v) - float(from_v)
+    delta = float(after) - float(before)
+    if schema is not None and _base_section(section) == "CAMBER":
+        return -delta
+    return delta
+
+
 def _move_to_suggestion(
     move: ComplaintMove,
     *,
     setup: CarSetup,
     schema: CarSetupSchema | None,
     rank: int,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     section = move.section.strip().upper()
+    if _spinner_read_only(schema, section):
+        return None
     spec = spec_for(section)
     effect = effect_for(section)
     current = setup.value(section)
@@ -346,6 +383,8 @@ def _move_to_suggestion(
             target = schema.clamp(section, target)
         elif target < 0:
             target = 0.0
+        if abs(target - current) <= 1e-9:
+            return None
     direction = "increase" if move.direction > 0 else "decrease"
     effect_text = ""
     if effect is not None:
@@ -446,10 +485,28 @@ def advise_from_complaint(
             "error": "handling vocabulary recognized, but no setup rule is available",
         }
     moves = _rank_moves(rule.moves, speed_hint)
-    suggestions = [
-        _move_to_suggestion(move, setup=setup, schema=schema, rank=i)
-        for i, move in enumerate(moves[:max_suggestions], start=1)
-    ]
+    suggestions: list[dict[str, Any]] = []
+    for move in moves:
+        suggestion = _move_to_suggestion(
+            move,
+            setup=setup,
+            schema=schema,
+            rank=len(suggestions) + 1,
+        )
+        if suggestion is not None:
+            suggestions.append(suggestion)
+        if len(suggestions) >= max_suggestions:
+            break
+    if not suggestions:
+        return {
+            "ok": False,
+            "status": "no_applicable_moves",
+            "complaint": text,
+            "parsed": {"issue": issue, "phase": phase, "speed_hint": speed_hint},
+            "car_id": setup.car_id,
+            "track_id": setup.track_id,
+            "error": "recognized setup levers are unavailable or already at their bounds",
+        }
     return {
         "ok": True,
         "status": "suggested",
@@ -489,11 +546,7 @@ def setup_diff_summary(
             if from_v is None
             else "removed"
             if to_v is None
-            else "increase"
-            if delta is not None and delta > 0
-            else "decrease"
-            if delta is not None and delta < 0
-            else "unchanged"
+            else _direction_from_delta(_semantic_delta(schema, section, from_v, to_v))
         )
         effect_text = ""
         if effect is not None and direction in {"increase", "decrease"}:

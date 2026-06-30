@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tools.ai_sidecar.car_schema import load_latest_schema
 from tools.ai_sidecar.setup_advisor import (
     advise_from_complaint,
     diff_setup_files,
@@ -97,6 +98,44 @@ def test_low_speed_hint_prefers_mechanical_lever() -> None:
     assert sections.index("ARB_FRONT") < sections.index("WING_1")
 
 
+def test_kerb_instability_takes_priority_over_rear_shorthand() -> None:
+    out = advise_from_complaint(
+        "rear unstable over kerb",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"]["issue"] == "instability"
+    assert out["parsed"]["phase"] == "kerb"
+    assert out["suggestions"][0]["section"] == "ARB_REAR"
+
+
+def test_schema_bound_noop_suggestions_are_skipped() -> None:
+    out = advise_from_complaint(
+        "rear locks on entry",
+        setup_snapshot={**GT3_SNAPSHOT, "FRONT_BIAS.VALUE": "70"},
+        car_id="ks_porsche_911_gt3_r_2016",
+        schema=load_latest_schema("ks_porsche_911_gt3_r_2016"),
+    )
+
+    assert out["ok"] is True
+    assert all(suggestion["section"] != "FRONT_BIAS" for suggestion in out["suggestions"])
+    assert out["suggestions"][0]["section"] == "BRAKE_POWER_MULT"
+
+
+def test_schema_read_only_suggestions_are_skipped() -> None:
+    out = advise_from_complaint(
+        "wheelspin on exit",
+        setup_snapshot={**GT3_SNAPSHOT, "FINAL_RATIO.VALUE": "7"},
+        car_id="ks_porsche_911_gt3_r_2016",
+        schema=load_latest_schema("ks_porsche_911_gt3_r_2016"),
+    )
+
+    assert out["ok"] is True
+    assert all(suggestion["section"] != "FINAL_RATIO" for suggestion in out["suggestions"])
+
+
 def test_setup_diff_summary_returns_display_ready_rows() -> None:
     baseline = from_snapshot(GT3_SNAPSHOT, car_id="ks_porsche_911_gt3_r_2016")
     candidate = from_snapshot(
@@ -131,6 +170,19 @@ def test_setup_diff_without_schema_uses_click_units_for_raw_alignment() -> None:
     assert out["rows"][0]["from_display"] == "-18"
     assert out["rows"][0]["to_display"] == "-19"
     assert out["rows"][0]["display"].endswith("clicks (decrease)")
+
+
+def test_setup_diff_uses_camber_semantic_direction_with_schema() -> None:
+    schema = load_latest_schema("ks_porsche_911_gt3_r_2016")
+    baseline = from_snapshot({"CAMBER_LF.VALUE": "-18"}, car_id="ks_porsche_911_gt3_r_2016")
+    candidate = from_snapshot({"CAMBER_LF.VALUE": "-19"}, car_id="ks_porsche_911_gt3_r_2016")
+
+    out = setup_diff_summary(baseline, candidate, schema=schema)
+
+    row = out["rows"][0]
+    assert row["direction"] == "increase"
+    assert row["effect"].startswith("More negative")
+    assert row["display"].endswith("deg (increase)")
 
 
 def test_diff_setup_files_loads_car_schema_for_display_units(tmp_path: Path) -> None:
