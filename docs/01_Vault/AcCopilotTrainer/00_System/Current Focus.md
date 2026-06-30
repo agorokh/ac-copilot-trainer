@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T20:44:28Z
+last_updated: 2026-06-30T20:49:44Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -105,6 +105,14 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-30** - PR [#415](https://github.com/agorokh/ac-copilot-trainer/pull/415)
+  **MERGED** at `c407d46` - **telemetry data platform** ([#402](https://github.com/agorokh/ac-copilot-trainer/issues/402)
+  **CLOSED**): DuckDB `sessions` / `stints` rollups, compacted driver profile ledger, dry-run-first
+  lap/TT retention, stdout CSV streaming, and telemetry data-platform docs. Review hardening made
+  retention fail closed on invalid profiles, preserve compacted bests through partial rebuilds,
+  reject negative caps, invalidate TT derived indexes after TT deletions, and normalize Windows
+  drive-letter paths in the Git Bash agentic-memory wrapper. Classification: `scripts/` changed due
+  wrapper hardening; no migration/env/deps/workflow action required.
 - **2026-06-30** - PR [#416](https://github.com/agorokh/ac-copilot-trainer/pull/416)
   **MERGED** at `9832004` - **race management cues** ([#406](https://github.com/agorokh/ac-copilot-trainer/issues/406)
   **CLOSED**): live stint-level fuel-to-finish, tyre, brake, and conditions advisories now ride
