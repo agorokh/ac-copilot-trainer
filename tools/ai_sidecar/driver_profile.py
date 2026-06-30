@@ -25,6 +25,7 @@ from tools.lap_archive_export import iter_lap_archive_paths, lap_is_valid, load_
 
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_DRIVER_ID = "local-driver"
+# Runtime app state derived from lap journals, not agent memory; keep it beside AC journal data.
 DEFAULT_PROFILE_PATH = Path("journal/driver/profile.json")
 NON_DRIVER_LAP_SOURCES = frozenset({"imported", "reference", "reference_archive"})
 
@@ -494,6 +495,12 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
             ),
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max(best_values, default=None),
+            "median_min_speed_kmh": _weighted_avg(
+                existing.get("median_min_speed_kmh"),
+                old_laps,
+                incoming.get("median_min_speed_kmh"),
+                new_laps,
+            ),
             "avg_entry_speed_kmh": _weighted_avg(
                 existing.get("avg_entry_speed_kmh"),
                 old_laps,
@@ -519,6 +526,12 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
                 existing.get("avg_steer_reversals"),
                 old_laps,
                 incoming.get("avg_steer_reversals"),
+                new_laps,
+            ),
+            "avg_traction_circle_proxy": _weighted_avg(
+                existing.get("avg_traction_circle_proxy"),
+                old_laps,
+                incoming.get("avg_traction_circle_proxy"),
                 new_laps,
             ),
             "latest_source_file": incoming.get("latest_source_file")

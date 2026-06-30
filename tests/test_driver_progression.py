@@ -36,6 +36,7 @@ def _write_archive(
     throttle: float = 0.4,
     trail: float = 0.1,
     steer_reversals: float = 4.0,
+    traction: float = 0.7,
     source: str = "test",
 ) -> None:
     path.write_text(
@@ -60,7 +61,7 @@ def _write_archive(
                         "trailBrakeRatio": trail,
                         "throttleAvg": throttle,
                         "steerReversals": steer_reversals,
-                        "tractionCircleProxy": 0.7,
+                        "tractionCircleProxy": traction,
                     }
                 ],
             }
@@ -321,6 +322,40 @@ def test_incremental_same_session_update_keeps_faster_existing_pb(tmp_path: Path
     assert rollup["best_lap_uuid"] == "fast-lap"
 
 
+def test_incremental_corner_merge_updates_derived_stats(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_archive(
+        first / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+        traction=0.5,
+    )
+    _write_archive(
+        second / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+        traction=0.9,
+    )
+
+    merged = build_profile([second], existing=build_profile([first]))
+    corner = next(iter(merged["corner_history"].values()))
+
+    assert corner["valid_laps"] == 2
+    assert corner["median_min_speed_kmh"] == 82.0
+    assert corner["avg_traction_circle_proxy"] == pytest.approx(0.7)
+
+
 def test_rebuilding_same_lap_corpus_is_idempotent(tmp_path: Path) -> None:
     lap_dir = tmp_path / "laps"
     lap_dir.mkdir()
@@ -410,6 +445,25 @@ def test_corner_count_alone_cannot_unlock_advanced_policy() -> None:
     assert report["level"] == LEVEL_NOVICE
 
 
+def test_single_high_sample_corner_cannot_unlock_advanced_policy() -> None:
+    profile = _profile(
+        corner_count=4,
+        apex_delta=3.0,
+        trail=0.4,
+        throttle=0.7,
+        steer=1.0,
+        consistency_ms=1000.0,
+        corner_valid_laps=1,
+    )
+    profile["corner_history"]["car-a|track-a||corner:0"]["valid_laps"] = 8
+
+    report = build_progression_report(profile)
+
+    assert report["skills"]["apex_speed"]["samples"] == 1
+    assert report["skills"]["apex_speed"]["level"] == LEVEL_NOVICE
+    assert report["level"] == LEVEL_NOVICE
+
+
 def test_malformed_nested_profile_counts_do_not_disable_progression() -> None:
     report = build_progression_report(
         {
@@ -437,6 +491,20 @@ def test_malformed_nested_profile_counts_do_not_disable_progression() -> None:
 
     assert report["level"] in {"unknown", LEVEL_NOVICE}
     assert report["skills"]["apex_speed"]["samples"] == 0
+
+
+def test_malformed_nested_profile_sections_do_not_disable_progression() -> None:
+    report = build_progression_report(
+        {
+            "schema_version": 1,
+            "driver_id": "driver-a",
+            "corner_history": "bad",
+            "consistency": "bad",
+        }
+    )
+
+    assert report["level"] == "unknown"
+    assert report["trends"] == []
 
 
 def _sig(**over: object) -> CornerSignature:

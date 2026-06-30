@@ -169,6 +169,10 @@ def _count(value: Any) -> int:
     return int(parsed)
 
 
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
 def _median(values: Sequence[float]) -> float | None:
     if not values:
         return None
@@ -202,11 +206,14 @@ def _corner_rows(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def _corner_lap_samples(corners: Sequence[Mapping[str, Any]]) -> int:
     counts = [_count(row.get("valid_laps")) for row in corners]
-    return max(counts, default=0)
+    nonzero = [count for count in counts if count > 0]
+    return int(median(nonzero)) if nonzero else 0
 
 
 def _consistency_assessment(profile: Mapping[str, Any]) -> SkillAssessment:
-    rows = [row for row in (profile.get("consistency") or {}).values() if isinstance(row, Mapping)]
+    rows = [
+        row for row in _mapping(profile.get("consistency")).values() if isinstance(row, Mapping)
+    ]
     ratios = [
         ratio
         for row in rows
@@ -396,7 +403,7 @@ def progression_trends(profile: Mapping[str, Any] | None) -> list[dict[str, Any]
     if not isinstance(profile, Mapping):
         return []
     out: list[dict[str, Any]] = []
-    for key, row in sorted((profile.get("corner_history") or {}).items()):
+    for key, row in sorted(_mapping(profile.get("corner_history")).items()):
         if not isinstance(row, Mapping):
             continue
         delta = _finite(row.get("delta_min_speed_kmh"))
