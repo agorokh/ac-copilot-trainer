@@ -8,6 +8,7 @@ import pytest
 from tools.ai_sidecar.coaching_diagnosis import RootError
 from tools.ai_sidecar.coaching_runtime import CoachRuntime, _Anchors
 from tools.ai_sidecar.driver_profile import (
+    _merge_corner_row,
     build_profile,
     load_profile,
     update_profile,
@@ -410,6 +411,29 @@ def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) ->
     assert corner["min_speed_samples_kmh"] == [80.0, 84.0, 86.0]
     assert corner["median_min_speed_kmh"] == 84.0
     assert corner["avg_traction_circle_proxy"] == pytest.approx((0.2 + 0.4 + 1.0) / 3)
+
+
+def test_corner_merge_sanitizes_corrupt_nested_sample_maps() -> None:
+    merged = _merge_corner_row(
+        {
+            "session_count": 1,
+            "valid_laps": 1,
+            "corner_samples_by_lap_uuid": "bad",
+            "min_speed_by_lap_uuid": "bad",
+            "min_speed_samples_kmh": "bad",
+        },
+        {
+            "session_count": 1,
+            "valid_laps": 0,
+            "corner_samples_by_lap_uuid": {},
+            "min_speed_by_lap_uuid": {},
+            "min_speed_samples_kmh": [],
+        },
+    )
+
+    assert merged["corner_samples_by_lap_uuid"] == {}
+    assert merged["min_speed_by_lap_uuid"] == {}
+    assert merged["min_speed_samples_kmh"] == []
 
 
 def test_corner_merge_orders_endpoints_by_export_time(tmp_path: Path) -> None:

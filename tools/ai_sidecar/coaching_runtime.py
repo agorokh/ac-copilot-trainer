@@ -533,7 +533,7 @@ def _profile_for_reference_combo(
         return profile
     combo = _archive_combo(reference_archive)
     if combo is None:
-        return profile
+        return None
     filtered = dict(profile)
     for key in ("corner_history", "consistency", "session_rollups", "personal_bests"):
         rows = profile.get(key)

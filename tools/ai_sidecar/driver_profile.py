@@ -629,13 +629,9 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
             "median_min_speed_kmh": median_min_speed,
             "corner_samples_by_lap_uuid": corner_samples_by_lap_uuid
             if corner_samples_by_lap_uuid
-            else existing.get("corner_samples_by_lap_uuid"),
-            "min_speed_by_lap_uuid": min_speed_by_lap_uuid
-            if min_speed_by_lap_uuid
-            else existing.get("min_speed_by_lap_uuid"),
-            "min_speed_samples_kmh": min_speed_samples
-            if min_speed_samples
-            else existing.get("min_speed_samples_kmh"),
+            else {},
+            "min_speed_by_lap_uuid": min_speed_by_lap_uuid,
+            "min_speed_samples_kmh": min_speed_samples,
             "avg_entry_speed_kmh": sample_avg("entry_speed_kmh", "avg_entry_speed_kmh"),
             "avg_exit_speed_kmh": sample_avg("exit_speed_kmh", "avg_exit_speed_kmh"),
             "avg_trail_brake_ratio": sample_avg("trail_brake_ratio", "avg_trail_brake_ratio"),
