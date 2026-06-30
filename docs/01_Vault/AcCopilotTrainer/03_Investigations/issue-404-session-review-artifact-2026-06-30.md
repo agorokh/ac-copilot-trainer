@@ -1,9 +1,9 @@
 ---
 type: investigation
-status: active
+status: delivered
 memory_tier: canonical
 created: 2026-06-30
-updated: 2026-06-30T23:17:02Z
+updated: 2026-06-30T23:41:32Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/404
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -18,6 +18,11 @@ relates_to:
 Branch `feat/issue-404-session-review` adds the first data-product layer on top of the lap archive
 and #402 session foundation: a saved post-session debrief artifact that can also feed voice and
 launcher surfaces.
+
+PR [#423](https://github.com/agorokh/ac-copilot-trainer/pull/423) merged to `main` as
+[`d374d33`](https://github.com/agorokh/ac-copilot-trainer/commit/d374d337bcfc5e3efda8e567aa697cff32478b78)
+at 2026-06-30T23:40:21Z. Epic [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404)
+remains open for Parts B-D.
 
 The new `tools.session_review` package reads immutable `journal/laps/lap_*.json` files, chooses the
 latest session by `exported_at` or a requested `--session`, compares valid laps with the fastest
@@ -83,15 +88,21 @@ review work, and queueing replaces a pending request when the session UUID diffe
   ks_porsche_911_gt3_r_2016 at magione: best lap 5.079s. Next session, focus T1.` The Markdown named
   session `sess-latest`, best lap `5.079s`, reference `lap_ref.json (4.773s)`, the T1 problem list,
   and next-session prep.
-- Focused checks: `python -m ruff format --check ...`, `python -m ruff check ...`, and
+- Focused checks after merging current `main`: `python -m ruff check ...` passed, and
   `python -m pytest -q tests/test_session_review.py tests/test_ai_sidecar_external.py
   tests/test_ws_topic_allowlist.py tests/test_lap_archive_source_structure.py
-  tests/test_coach_report.py tests/test_coaching_lake.py tests/test_voice_wiring.py` passed
-  (`80 passed, 1 skipped`; DuckDB optional skip).
+  tests/test_coach_report.py tests/test_coaching_lake.py tests/test_voice_wiring.py
+  tests/test_ws_bridge_hello_handshake.py tests/test_driver_progression.py
+  tests/test_sector_benchmark.py tests/test_coaching_runtime.py tests/test_ai_sidecar_protocol.py
+  tests/test_brain_wiring.py tests/test_lua_trace_replay.py tests/test_phase5_rebuild_ete.py`
+  passed (`217 passed, 1 skipped`; DuckDB optional skip).
 - Full parity: `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast
-  PYTHON=python` passed on Windows (`1961 passed, 117 skipped`, coverage 85.41%, `ci-fast: OK`).
+  PYTHON=python` passed on Windows (`2003 passed, 117 skipped`, coverage 85.67%, `ci-fast: OK`).
   The only warnings were existing root-file allowlist warnings for `.copier-answers.yml` and
   `doppler.yaml`.
+- GitHub checks on head `4e49f6c` passed (`build`, `Canonical docs exist`, `conformance`; vault
+  automerge skipped). Resolve-gate reported no substantive findings, GraphQL review threads were
+  resolved, and the current-SHA self-hosted review had no medium-or-higher findings.
 
 ## Live-state reconciliation
 
@@ -101,9 +112,13 @@ review work, and queueing replaces a pending request when the session UUID diffe
 This branch covers Part A only. The epic still owns Parts B-D unless the operator explicitly
 re-scopes them after the PR: history/replay browser, trend dashboards, and shareable session report.
 
+Post-merge classifier reported `scripts/` and `Makefile` because the policy wrappers and CI target
+routing changed; no migration/env/dependency/workflow action is required.
+
 ## Memory note
 
 The exact `mcp__agentic-memory__query_knowledge_graph` tool was not exposed in this Codex tool
 surface. The repo prefetch fallback was run before implementation and returned no relevant context;
-the configured governance hub also lacked `hooks/forward_capture.py`. This node records the vault
-SAVE so the next cold session does not have to infer the #404 state from the branch alone.
+the final resolve loop armed `forward_capture.py` for `agorokh/ac-copilot-trainer#404`. This node
+records the vault SAVE so the next cold session does not have to infer the #404 state from the
+branch alone.

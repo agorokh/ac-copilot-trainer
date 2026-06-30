@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T23:22:10Z
+last_updated: 2026-06-30T23:41:32Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -60,13 +60,14 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-06-30) - #404 Part A: session review artifact
+## Delivered (2026-06-30) - PR #423 MERGED: session review artifact (#404 Part A)
 
-Branch `feat/issue-404-session-review` in worktree
-`C:\Users\arsen\Projects\ac-copilot-trainer-issue404` implements the structured post-session debrief
-artifact from issue [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404) Part A.
+PR [#423](https://github.com/agorokh/ac-copilot-trainer/pull/423) squash-merged to `main` as
+[`d374d33`](https://github.com/agorokh/ac-copilot-trainer/commit/d374d337bcfc5e3efda8e567aa697cff32478b78)
+at 2026-06-30T23:40:21Z. Epic [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404)
+stays **OPEN** for Parts B-D.
 
-**Shipped on branch / PR #423:** `tools.session_review` reads immutable `journal/laps/lap_*.json` archives,
+**Shipped:** `tools.session_review` reads immutable `journal/laps/lap_*.json` archives,
 selects the latest or requested session, compares it with the fastest valid same car/track/layout
 reference lap, and writes Markdown + JSON reports under `journal/reports/`. The report includes a
 ranked per-corner problem list, ranked fixes, `next_session_prep`, `spoken_summary`, and
@@ -100,17 +101,24 @@ from scratch cwd. The JSON output carried `screen_summary=["T1: 0.74s - techniqu
 summary `Session debrief for ks_porsche_911_gt3_r_2016 at magione: best lap 5.079s. Next session,
 focus T1.` The Markdown named session `sess-latest`, best lap `5.079s`, reference
 `lap_ref.json (4.773s)`, the T1 problem list, and next-session prep. Focused checks passed
-(`80 passed, 1 skipped`) across session review, sidecar external protocol, topic allowlist, lap
-archive source-structure, coach report, coaching lake, and voice wiring tests. Full local
-parity passed on Windows with
+(`217 passed, 1 skipped`) across session review, sidecar external protocol, topic allowlist, lap
+archive source-structure, Coach v2/report/runtime, voice wiring, sector benchmark, and driver
+progression overlap tests after merging current `main`. Full local parity passed on Windows with
 `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast PYTHON=python`
-(`1961 passed, 117 skipped`, coverage 85.41%, `ci-fast: OK`; only existing root-file allowlist
-warnings for `.copier-answers.yml` and `doppler.yaml`).
+(`2003 passed, 117 skipped`, coverage 85.67%, `ci-fast: OK`; only existing root-file allowlist
+warnings for `.copier-answers.yml` and `doppler.yaml`). GitHub checks passed on head `4e49f6c`
+before merge (`build`, `Canonical docs exist`, `conformance`; vault automerge skipped). GraphQL
+review threads were resolved; resolve-gate reported no substantive findings; the current-SHA
+self-hosted review reported no medium-or-higher findings.
+
+**Post-merge classification:** `scripts/` and `Makefile` changed because `ci-fast` now routes the
+policy-doc and tracked-file secret scans through Python wrappers. No migration/env/dependency/workflow
+action required.
 
 **Memory note:** The exact Tier-3 MCP tool was not exposed in this Codex tool surface. The repo
-prefetch fallback was run before implementation and returned no relevant context; the
-`forward_capture.py` helper was also absent from the configured governance hub. Vault Tier-2 context
-and live issue state were used instead. Live reconciliation on 2026-06-30:
+prefetch fallback was run before implementation and returned no relevant context; the final resolve
+loop armed `forward_capture.py` for `agorokh/ac-copilot-trainer#404`. Vault Tier-2 context and live
+issue state were used instead. Live reconciliation on 2026-06-30:
 `gh issue view 404 --json number,title,state,url` reported issue #404 **OPEN**. This branch covers
 Part A only; Parts B-D (history/replay browser, trend dashboards, shareable report) remain on the
 epic unless the operator explicitly splits or closes them after this PR.
