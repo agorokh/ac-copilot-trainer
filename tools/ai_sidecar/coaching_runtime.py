@@ -120,6 +120,19 @@ class CoachRuntime:
         self._pass = {r.index: _PassState() for r in self.refs}
         self.ledger.begin_lap(self._lap)
 
+    def reset(self) -> None:
+        """Clear ALL session state — call on pit-exit / producer reconnect / session restart (B4).
+
+        Without this, stale ``_lap``/``_last_spline``/per-corner passes + a RETIRED ledger carry
+        across stints, which silently suppresses cues until the sidecar process is restarted.
+        """
+        self.ledger.clear_session()
+        self._pass = {r.index: _PassState() for r in self.refs}
+        self._last_spline = None
+        self._last_lap = None
+        self._lap = 1
+        self.ledger.begin_lap(self._lap)
+
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         spline, speed, brake, throttle, steer, lap, grip = _normalize(frame)
         if spline is None or speed is None:
@@ -148,14 +161,16 @@ class CoachRuntime:
                     inten = gst.intensity if gst else 0.5
                     out.append(_prime(r, spoken, spline, register=reg, intensity=inten))
 
-            # 2. accumulate technique within the pass window, finalize on exit.
-            in_window = (anc.brake - 0.04) <= spline <= r.spline_hi or st.active
-            if r.spline_lo <= spline <= r.spline_hi or in_window:
+            # 2. Accumulate within the pass window [brake-lead .. exit], then finalize ON EXIT.
+            # The exit check MUST come first: once a pass is active the window must be able to
+            # CLOSE at spline_hi, else the corner accumulates lap-wide (B1) and every apex/min-speed
+            # collapses to the lap minimum.
+            if st.active and spline > r.spline_hi:
+                out.extend(self._finalize_pass(r))
+            elif (anc.brake - 0.04) <= spline <= r.spline_hi:
                 self._accumulate(st, r, spline, speed, brake, throttle, steer, out)
                 if grip is not None and st.active:
                     st.max_grip_used = max(st.max_grip_used, grip)
-            elif st.active and spline > r.spline_hi:
-                out.extend(self._finalize_pass(r))
 
         self._last_spline = spline
         if lap is not None:
@@ -204,7 +219,12 @@ class CoachRuntime:
             diag = Diagnosis(RootError.NONE, {"grip_gated": round(st.max_grip_used, 3)})
         # time-lost proxy: apex-speed deficit (km/h) stands in until lap-time deltas are wired
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
-        events = self.ledger.record_pass(r.index, diag, time_lost_s=time_lost, valid=True)
+        # Validity gate (B3): a pass that never reached a plausible apex (no entry samples, or the
+        # min-speed sentinel never beaten) is an out-lap / pit / teleport / partial pass — do NOT
+        # let it poison the ledger. The runtime has no richer off-track flag yet; v2 trusts every
+        # on-track pass that produced real corner samples (documented in the PR).
+        valid = st.entry_count > 0 and st.min_speed_kmh < 1e9
+        events = self.ledger.record_pass(r.index, diag, time_lost_s=time_lost, valid=valid)
         st.reset()
         return [_confirm(r) for e in events if e.kind == "confirm"]
 
@@ -252,12 +272,13 @@ def _reference_signatures(
         for r in refs:
             st = states[r.index]
             anc = anchors[r.index]
-            in_window = (anc.brake - 0.04) <= spline <= r.spline_hi or st.active
-            if r.spline_lo <= spline <= r.spline_hi or in_window:
-                _accumulate_core(st, r, spline, speed, brake, throttle, steer)
-            elif st.active and spline > r.spline_hi:
+            # Same window-close discipline as observe() (B2): the reference baseline must be built
+            # with the IDENTICAL per-corner window, or a clean lap diagnoses non-NONE everywhere.
+            if st.active and spline > r.spline_hi:
                 sigs[r.index] = _signature_from_pass(st, r)
                 st.reset()
+            elif (anc.brake - 0.04) <= spline <= r.spline_hi:
+                _accumulate_core(st, r, spline, speed, brake, throttle, steer)
     for r in refs:
         if r.index not in sigs and states[r.index].active:
             sigs[r.index] = _signature_from_pass(states[r.index], r)
@@ -336,10 +357,15 @@ def _signature_from_pass(st: _PassState, r: CornerReference) -> CornerSignature:
 
 
 def _crossed(prev: float | None, cur: float, target: float) -> bool:
-    """True if the car crossed ``target`` between ``prev`` and ``cur`` (no wrap within a pass)."""
+    """True if the car crossed ``target`` going forward between ``prev`` and ``cur`` — wrap-aware
+    (m6): on a track where a corner's anchor wraps below 0 (``brake_point < lead`` → anchor ≈ 0.99),
+    the forward arc prev→1→0→cur must still register the crossing, else the PRIME is dropped.
+    """
     if prev is None:
         return False
-    return prev < target <= cur
+    if prev <= cur:  # normal, no wrap
+        return prev < target <= cur
+    return target > prev or target <= cur  # wrapped over start/finish
 
 
 def _normalize(
@@ -430,17 +456,19 @@ def build_coach_runtime(
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
     ledger = CoachingLedger(
-        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", HYSTERESIS_PASSES),
-        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", ASSESS_LAPS),
-        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", LAP_CUE_BUDGET),
+        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", HYSTERESIS_PASSES, min_value=1),
+        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", ASSESS_LAPS, min_value=0),
+        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", LAP_CUE_BUDGET, min_value=1),
     )
     return CoachRuntime(
         refs=refs, ref_sigs=ref_sigs, anchors=anchors, track_length_m=track_m, ledger=ledger
     )
 
 
-def _env_int(name: str, default: int) -> int:
+def _env_int(name: str, default: int, *, min_value: int = 0) -> int:
+    """Env int with a floor (n7): an unvalidated 0/negative budget or hysteresis silently breaks
+    pacing, so clamp rather than trust the operator."""
     try:
-        return int(os.environ[name])
+        return max(min_value, int(os.environ[name]))
     except (KeyError, ValueError):
         return default

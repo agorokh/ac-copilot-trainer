@@ -215,8 +215,10 @@ def test_magnitude_grades_register(amount, expect_register):
 
 # --- ROOT_NOT_SYMPTOM: early brake CAUSES late throttle → coach only the cause -------------------
 def test_root_not_symptom():
+    # T3, where late_throttle DOES fire in isolation (see test_root_error_spoken_at_anchor) — so the
+    # "Power. not coached" assertion is non-vacuous: it proves the earliest-in-chain suppression.
     sim = CoachSim()
-    idx, ref = sim.corner(1)
+    idx, ref = sim.corner(3)
 
     def both(f):
         early_brake(f, ref)
@@ -224,8 +226,22 @@ def test_root_not_symptom():
 
     cues = sim.drive(_laps(sim, {lap: [both] for lap in (1, 2, 3)}, 3))
     phrases = {c.phrase for c in _primes(cues, corner=idx)}
-    assert "Brake later." in phrases
-    assert "Power." not in phrases  # downstream symptom suppressed
+    assert "Brake later." in phrases  # the cause is coached
+    assert "Power." not in phrases  # the downstream symptom (late throttle) is suppressed
+
+
+# --- B1/B2 guard: the pass window must CLOSE per-corner (no lap-wide accumulation) ---------------
+def test_no_cross_corner_false_positive():
+    """A slow apex injected at ONE corner must not be coached at OTHER corners. If the per-corner
+    pass window never closes (accumulates to lap-end), an injection bleeds into every upstream
+    corner's apex and false-positives there. This fails before the window-latch fix (B1/B2)."""
+    sim = CoachSim()
+    idx5, ref5 = sim.corner(5)
+    cues = sim.drive(
+        _laps(sim, {lap: [lambda f: slow_apex(f, ref5, kmh=12.0)] for lap in (1, 2, 3)}, 3)
+    )
+    coached = {c.corner for c in _primes(cues)}
+    assert coached <= {idx5}, f"slow apex at T5 leaked to corners {coached - {idx5}}"
 
 
 # --- GRIP_GATE (P3): at the lateral limit, a slow apex is setup/tyre — stay SILENT, don't lie -----
@@ -257,6 +273,7 @@ def test_save_gross_late_brake():
     cues = sim.drive(_laps(sim, {1: [lambda f: gross_late_brake(f, ref)]}, 2))
     saves = [c for c in cues if c.coach == "save" and c.corner == idx]
     assert saves and saves[0].phrase == "Brake!"
+    assert saves[0].register == "critical"  # SAVE is always a critical-register barge-in
 
 
 # --- pacing: hysteresis, assess, budget, acknowledge-then-silence, regression --------------------
@@ -265,6 +282,7 @@ def test_assess_laps_silent_then_arms():
     idx, ref = sim.corner(1)
     cues = sim.drive(_laps(sim, {lap: [lambda f: early_brake(f, ref)] for lap in range(1, 5)}, 4))
     laps_spoken = {c.lap for c in _primes(cues, corner=idx)}
+    assert laps_spoken, "the error must eventually be coached (guard against a vacuous pass)"
     assert all(lap > 2 for lap in laps_spoken), f"spoke on an assess lap: {laps_spoken}"
 
 
@@ -278,18 +296,23 @@ def test_hysteresis_needs_two_passes():
 
 def test_budget_caps_cues_per_lap():
     sim = CoachSim(assess=1, hysteresis=1, budget=2)
+    big = [sim.corner(3)[1], sim.corner(5)[1]]  # T3 + T5 get the BIG deficits (most time lost)
 
-    # slow every corner; only the 2 biggest losses should speak per lap
-    def slow_all(f):
-        for r in sim.rt.refs:  # CornerReference has spline_lo/spline_hi/apex_spline
-            slow_apex(f, r, kmh=12.0)
+    def inject(f):
+        for r in sim.rt.refs:  # small deficit at every corner
+            slow_apex(f, r, kmh=4.0)
+        for info in big:  # extra slow at T3/T5 → they lose the most time
+            slow_apex(f, info, kmh=18.0)
 
-    cues = sim.drive(_laps(sim, {lap: [slow_all] for lap in (1, 2, 3)}, 3))
+    cues = sim.drive(_laps(sim, {lap: [inject] for lap in (1, 2, 3)}, 3))
     by_lap: dict[int, int] = {}
     for c in _primes(cues):
         if c.lap >= 2:
             by_lap[c.lap] = by_lap.get(c.lap, 0) + 1
-    assert by_lap and all(n <= 2 for n in by_lap.values()), by_lap
+    assert by_lap and all(n <= 2 for n in by_lap.values()), by_lap  # budget cap honoured
+    # the budget is spent on the two BIGGEST-loss corners (T3=idx2, T5=idx4), not arbitrary ones
+    spoken_idx = {c.corner for c in _primes(cues) if c.lap >= 2}
+    assert spoken_idx <= {2, 4}, f"budget spent off the biggest losses: {spoken_idx - {2, 4}}"
 
 
 def test_acknowledge_once_then_silence():

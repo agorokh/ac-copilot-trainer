@@ -632,6 +632,8 @@ def _release_observer_feed(websocket: Any) -> None:
         _observer_feed_warned = False
         if _observer is not None:
             _observer.reset()
+        if _coach_runtime is not None:  # B4: clear v2 stint state so the next producer starts clean
+            _coach_runtime.reset()
 
 
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
@@ -1503,7 +1505,14 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                         len(coach_rt.refs),
                     )
                 else:
-                    logger.error("voice: Coach v2 could not build from %s", reference_path)
+                    # M1: v2 was REQUESTED but could not build — fail loud + SILENT, never degrade
+                    # to the legacy v1 cues (that would make "v2 on" silently mean "v1 on").
+                    set_realtime_observer(None)
+                    logger.error(
+                        "voice: Coach v2 requested (AC_COPILOT_COACH_V2=1) but could not build "
+                        "from %s — coaching DISABLED (not falling back to v1)",
+                        reference_path,
+                    )
         except Exception:  # noqa: BLE001 - malformed archive must not abort the sidecar
             logger.exception("voice: failed to load reference %s", reference_path)
     if bank_dir:

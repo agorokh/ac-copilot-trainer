@@ -12,6 +12,7 @@ from tools.ai_sidecar.coaching_diagnosis import (
     Diagnosis,
     RootError,
     classify_root_error,
+    severity,
 )
 from tools.ai_sidecar.coaching_ledger import CoachingLedger, Status
 from tools.ai_sidecar.lap_dynamics import CornerSignature
@@ -90,6 +91,23 @@ def test_phrase_and_anchor_present():
     assert Diagnosis(RootError.EARLY_BRAKE).phrase == "Brake later."
     assert Diagnosis(RootError.EARLY_BRAKE).anchor == "brake"
     assert Diagnosis(RootError.LATE_THROTTLE).anchor == "apex"
+
+
+def test_v2_kinds_disjoint_from_legacy_observer_kinds():
+    """M2: v2 advisory kinds must not collide with the legacy observer cue kinds, or the resolver
+    mis-routes — this is why RootError.LATE_BRAKE is "brake_late", not "late_brake"."""
+    legacy = {"late_brake", "brake_release", "apex_deficit"}
+    v2_roots = {r.value for r in RootError if r is not RootError.NONE}
+    assert v2_roots.isdisjoint(legacy), f"v2/legacy kind collision: {v2_roots & legacy}"
+
+
+def test_severity_grades_by_magnitude():
+    """severity() escalates register with the measured margin (P2)."""
+    minor = Diagnosis(RootError.EARLY_BRAKE, {"brake_delta_spline": -0.006})
+    gross = Diagnosis(RootError.EARLY_BRAKE, {"brake_delta_spline": -0.030})
+    assert severity(minor)[0] == "firm"
+    assert severity(gross)[0] == "critical"
+    assert severity(gross)[1] > severity(minor)[1]  # higher intensity for the bigger miss
 
 
 # --- ledger state machine -------------------------------------------------------------------------

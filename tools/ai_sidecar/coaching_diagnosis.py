@@ -103,10 +103,10 @@ def severity(diag: Diagnosis) -> tuple[str, float]:
     spec = _CRITICAL_MARGIN.get(diag.root)
     if spec is None:
         return ("firm", 0.5)
-    key, crit = spec
+    key, crit = spec  # crit is always a positive threshold from _CRITICAL_MARGIN
     mag = abs(diag.detail.get(key, 0.0))
     register = "critical" if mag >= crit else "firm"
-    return (register, round(max(0.0, min(1.0, mag / crit)) if crit else 0.5, 3))
+    return (register, round(max(0.0, min(1.0, mag / crit)), 3))
 
 
 def classify_root_error(cand: CornerSignature, ref: CornerSignature) -> Diagnosis:

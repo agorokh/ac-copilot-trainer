@@ -54,11 +54,11 @@ class CornerState:
 
 @dataclass
 class CueEvent:
-    """A speech the ledger decided to emit outside the PRIME path (acknowledge / refocus)."""
+    """A speech the ledger decided to emit outside the PRIME path (acknowledge)."""
 
     corner: int
     root: RootError
-    kind: str  # 'confirm' | 'refocus'
+    kind: str  # 'confirm' (the session-arc 'refocus' cue is a deferred follow-up, not yet emitted)
 
 
 @dataclass

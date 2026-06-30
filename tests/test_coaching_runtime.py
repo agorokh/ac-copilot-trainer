@@ -106,6 +106,36 @@ def test_injected_early_brake_speaks_brake_later_at_that_corner():
     assert a.spline <= bp + 1e-6
 
 
+def test_degenerate_pass_is_gated_invalid():
+    """B3: a pass that never reached a real apex (validity sentinel) must NOT arm the ledger —
+    the runtime no longer hardcodes valid=True."""
+    rt = build_coach_runtime(_ref())
+    r = rt.refs[0]
+    rt._pass[
+        r.index
+    ].active = True  # active but no real samples (entry_count=0, min_speed sentinel)
+    rt._finalize_pass(r)
+    assert rt.ledger.state(r.index) is None  # invalid pass recorded nothing
+
+
+def test_reset_clears_stint_state():
+    """B4: reset() must clear lap/stream/ledger state so a reconnecting producer starts clean
+    (else stale RETIRED/lap state suppresses cues until a process restart)."""
+    rt = build_coach_runtime(_ref())
+    target = next(r for r in rt.refs if rt.ref_sigs[r.index].brake_point_spline is not None)
+    bp = rt.ref_sigs[target.index].brake_point_spline
+    laps = []
+    for _ in range(3):
+        f = _lap_frames(_ref())
+        _inject_early_brake(f, bp)
+        laps.append(f)
+    _drive(rt, laps)
+    assert rt.ledger.state(target.index) is not None  # state accumulated
+    rt.reset()
+    assert rt._lap == 1 and rt._last_spline is None
+    assert all(rt.ledger.state(r.index) is None for r in rt.refs)  # ledger wiped
+
+
 def test_injected_then_fixed_acknowledges_and_silences():
     rt = build_coach_runtime(_ref())
     target = next(r for r in rt.refs if rt.ref_sigs[r.index].brake_point_spline is not None)
