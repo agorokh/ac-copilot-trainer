@@ -1,8 +1,9 @@
-﻿"""Persistent driver profile roll-up over immutable lap archives (issue #403).
+"""Persistent driver profile roll-up over immutable lap archives (issues #402/#403).
 
 The profile is compacted state under ``journal/driver/profile.json``. It is
 rebuilt from ``journal/laps/lap_*.json`` without mutating those raw archives and
-preserves operator-owned preferences/focus metadata across updates.
+preserves historical PB/session roll-ups after raw lap retention pruning, plus
+operator-owned preferences/focus metadata across updates.
 """
 
 from __future__ import annotations
@@ -26,6 +27,10 @@ PROFILE_SCHEMA_VERSION = 1
 DEFAULT_DRIVER_ID = "local-driver"
 DEFAULT_PROFILE_PATH = Path("journal/driver/profile.json")
 NON_DRIVER_LAP_SOURCES = frozenset({"imported", "reference", "reference_archive"})
+
+
+class ProfileLoadError(ValueError):
+    """Raised when an existing profile ledger cannot be trusted."""
 
 
 @dataclass(frozen=True)
@@ -194,7 +199,10 @@ def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[
 
 
 def load_profile(
-    path: str | Path = DEFAULT_PROFILE_PATH, *, driver_id: str = DEFAULT_DRIVER_ID
+    path: str | Path = DEFAULT_PROFILE_PATH,
+    *,
+    driver_id: str = DEFAULT_DRIVER_ID,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Load an existing profile, returning a default shell when the file is absent."""
     profile_path = Path(path)
@@ -202,9 +210,19 @@ def load_profile(
         return _default_profile(driver_id)
     try:
         loaded = json.loads(profile_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError as exc:
+        if strict:
+            raise ProfileLoadError(f"profile unreadable at {profile_path}: {exc}") from exc
+        return _default_profile(driver_id)
+    except ValueError as exc:
+        if strict:
+            raise ProfileLoadError(f"profile invalid JSON at {profile_path}: {exc}") from exc
         return _default_profile(driver_id)
     if not isinstance(loaded, dict) or loaded.get("schema_version") != PROFILE_SCHEMA_VERSION:
+        if strict:
+            raise ProfileLoadError(
+                f"profile schema mismatch at {profile_path}: expected {PROFILE_SCHEMA_VERSION}"
+            )
         return _default_profile(driver_id)
     loaded.setdefault("driver_id", driver_id)
     loaded["preferences"] = _mapping_or_empty(loaded.get("preferences"))
@@ -343,6 +361,8 @@ def _merge_session_rollup(
     new_valid_ids = _text_set(incoming.get("valid_lap_uuids"))
     old_laps = _count(existing.get("lap_count"))
     new_laps = _count(incoming.get("lap_count"))
+    old_valid_laps = _count(existing.get("valid_laps"))
+    new_valid_laps = _count(incoming.get("valid_laps"))
 
     if old_lap_ids and new_lap_ids:
         if new_lap_ids == old_lap_ids:
@@ -361,11 +381,19 @@ def _merge_session_rollup(
         best_source = incoming
     merged_lap_ids = old_lap_ids | new_lap_ids
     merged_valid_ids = old_valid_ids | new_valid_ids
-    merged_laps = len(merged_lap_ids) if merged_lap_ids else old_laps + new_laps
+    merged_laps = (
+        len(merged_lap_ids)
+        if old_lap_ids and new_lap_ids
+        else max(old_laps, new_laps)
+        if merged_lap_ids
+        else old_laps + new_laps
+    )
     merged_valid_laps = (
         len(merged_valid_ids)
+        if old_valid_ids and new_valid_ids
+        else max(old_valid_laps, new_valid_laps)
         if merged_valid_ids
-        else _count(existing.get("valid_laps")) + _count(incoming.get("valid_laps"))
+        else old_valid_laps + new_valid_laps
     )
 
     merged = dict(existing)
@@ -442,7 +470,13 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
         if value is not None
     ]
     merged_lap_ids = old_lap_ids | new_lap_ids
-    merged_laps = len(merged_lap_ids) if merged_lap_ids else old_laps + new_laps
+    merged_laps = (
+        len(merged_lap_ids)
+        if old_lap_ids and new_lap_ids
+        else max(old_laps, new_laps)
+        if merged_lap_ids
+        else old_laps + new_laps
+    )
     merged = dict(existing)
     merged.update(
         {
@@ -785,7 +819,7 @@ def update_profile(
     generated_at: str | None = None,
 ) -> ProfileSummary:
     """Load, merge, and persist the driver profile."""
-    existing = load_profile(profile_path, driver_id=driver_id)
+    existing = load_profile(profile_path, driver_id=driver_id, strict=True)
     profile = build_profile(
         inputs, driver_id=driver_id, existing=existing, generated_at=generated_at
     )
