@@ -131,6 +131,9 @@ _external_peer_classes: dict[Any, str] = {}
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
 # advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
 _observer: RealtimeObserver | None = None
+# Coach v2 (diagnosed, anticipatory, paced). When installed via AC_COPILOT_COACH_V2=1 it is the cue
+# producer in place of the legacy observer's apex_deficit/late_brake output.
+_coach_runtime: Any | None = None
 # The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
 # producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
 # producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
@@ -164,6 +167,13 @@ def set_realtime_observer(observer: Any | None) -> None:
     """Install (or clear) the live ``RealtimeObserver`` fed by ``telemetry_tick`` (issue #341)."""
     global _observer
     _observer = observer
+
+
+def set_coach_runtime(coach: Any | None) -> None:
+    """Install (or clear) the Coach v2 :class:`CoachRuntime` — the diagnosed, anticipatory, paced
+    producer. When set (``AC_COPILOT_COACH_V2=1``) it replaces the legacy observer's cue output."""
+    global _coach_runtime
+    _coach_runtime = coach
 
 
 def set_voice_coach(coach: Any | None) -> None:
@@ -759,7 +769,8 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     websocket) may continue to; a second concurrent producer is ignored here.
     """
     global _observer_feed_peer, _observer_feed_warned
-    observer = _observer
+    # Coach v2 (diagnosed, anticipatory, paced) replaces the legacy observer's cues when wired.
+    observer = _coach_runtime if _coach_runtime is not None else _observer
     if observer is None:
         return
     if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
@@ -795,6 +806,15 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
             cue_payload = _advisory_to_payload(advisory)
             if cue_payload is None:
                 continue
+            logger.info(
+                "CUE-AUDIT corner=%s(T%s) spline=%.4f kind=%s reg=%s msg=%s",
+                cue_payload.get("corner"),
+                (cue_payload.get("corner") or 0) + 1,
+                float(cue_payload.get("spline") or 0.0),
+                cue_payload.get("kind"),
+                cue_payload.get("register"),
+                cue_payload.get("message"),
+            )
             cue = make_coaching_cue(cue_payload, ts_sim=ts_sim)
             cue_task = asyncio.create_task(_broadcast_external(cue, exclude=exclude))
             _background_tasks.add(cue_task)
@@ -1472,6 +1492,18 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             else:
                 set_realtime_observer(observer)
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
+            if os.environ.get("AC_COPILOT_COACH_V2") == "1":
+                from tools.ai_sidecar.coaching_runtime import build_coach_runtime
+
+                coach_rt = build_coach_runtime(archive)
+                if coach_rt is not None:
+                    set_coach_runtime(coach_rt)
+                    logger.info(
+                        "voice: Coach v2 runtime wired (%d corners) — diagnosed anticipatory cues",
+                        len(coach_rt.refs),
+                    )
+                else:
+                    logger.error("voice: Coach v2 could not build from %s", reference_path)
         except Exception:  # noqa: BLE001 - malformed archive must not abort the sidecar
             logger.exception("voice: failed to load reference %s", reference_path)
     if bank_dir:
