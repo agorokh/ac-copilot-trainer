@@ -142,6 +142,53 @@ def test_compare_laps_localizes_lost_time():
     assert deltas[0].min_speed_delta_kmh < 0  # carried less apex speed
 
 
+def test_compare_laps_matches_reference_by_apex_spline(monkeypatch):
+    n = 10
+    spline = [i / (n - 1) for i in range(n)]
+    reference = LapTrace(
+        spline=spline,
+        t_s=[float(i) for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.0] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+    )
+    cand_t = [float(i) for i in range(n)]
+    cand_t[7] += 0.2
+    cand_t[8] += 0.4
+    candidate = LapTrace(
+        spline=spline,
+        t_s=cand_t,
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.0] * n,
+        gear=[4] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+    )
+    cand_sig = _sig(index=0, entry_i=4, apex_i=5, exit_i=6, apex_spline=spline[5])
+    ref_sigs = [
+        _sig(index=0, entry_i=1, apex_i=2, exit_i=3, apex_spline=spline[2]),
+        _sig(index=1, entry_i=6, apex_i=7, exit_i=8, apex_spline=spline[5]),
+    ]
+
+    monkeypatch.setattr(
+        ca,
+        "corner_signatures",
+        lambda lap_arg, _corners=None: [cand_sig] if lap_arg is candidate else ref_sigs,
+    )
+
+    deltas = compare_laps(candidate, reference)
+    assert len(deltas) == 1
+    assert deltas[0].index == 0
+    assert deltas[0].spline_lo == round(spline[6], 4)
+    assert deltas[0].delta_s == 0.4
+
+
 # --- attribute_corner -------------------------------------------------------
 def test_grip_limited_fires_and_is_advisory_without_pressure():
     ctx = CornerContext(sig=_sig(peak_lat_g=1.5), setup=SETUP, grip_ceiling_g=1.5)

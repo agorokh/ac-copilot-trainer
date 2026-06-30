@@ -171,13 +171,16 @@ def compare_laps(
     *,
     corners: list[tuple[int, int, int]] | None = None,
 ) -> list[CornerDelta]:
-    """Per-corner time/speed deltas of ``candidate`` vs ``reference`` (corners from the reference).
+    """Per-corner time/speed deltas of ``candidate`` vs ``reference``.
 
-    Both laps are assumed to cover the same track with a monotone ``spline`` 0..1. Time is compared
-    over each corner's spline window, so the deltas localize where the candidate gained/lost time.
+    By default, candidate corners are matched to reference corners by apex spline so deltas describe
+    the same physical corner even when segmentation differs. Supplying ``corners`` keeps the legacy
+    explicit-window mode, where the tuples are interpreted as reference-lap sample indexes.
     """
     if corners is None:
-        corners = segment_corners(reference)
+        return [
+            delta for _ref_sig, delta in _match_reference_corners(candidate, reference).values()
+        ]
     out: list[CornerDelta] = []
     for idx, (entry_i, _apex_i, exit_i) in enumerate(corners):
         lo = reference.spline[entry_i]
@@ -204,6 +207,24 @@ def _match_corner_signature(
         return None
     best = min(candidates, key=lambda c: abs(c.apex_spline - anchor.apex_spline))
     return best if abs(best.apex_spline - anchor.apex_spline) <= max_apex_delta else None
+
+
+def _match_reference_corners(
+    candidate: LapTrace,
+    reference: LapTrace,
+    *,
+    anchors: list[CornerSignature] | None = None,
+) -> dict[int, tuple[CornerSignature, CornerDelta]]:
+    anchors = anchors if anchors is not None else corner_signatures(candidate)
+    unused_ref_sigs = corner_signatures(reference)
+    out: dict[int, tuple[CornerSignature, CornerDelta]] = {}
+    for sig in anchors:
+        ref_sig = _match_corner_signature(sig, unused_ref_sigs)
+        if ref_sig is None:
+            continue
+        unused_ref_sigs.remove(ref_sig)
+        out[sig.index] = (ref_sig, _corner_delta_for_match(candidate, reference, sig, ref_sig))
+    return out
 
 
 def _corner_history_matches(
@@ -512,18 +533,12 @@ def coach_lap(
     """Full per-corner coaching pass over a lap (optionally vs reference, optionally with setup)."""
     corners = segment_corners(lap)
     sigs = corner_signatures(lap, corners)
-    ref_sigs = corner_signatures(reference) if reference is not None else []
     ref_by_idx: dict[int, CornerSignature] = {}
     delta_by_idx: dict[int, CornerDelta] = {}
     if reference is not None:
-        unused_ref_sigs = list(ref_sigs)
-        for sig in sigs:
-            ref_sig = _match_corner_signature(sig, unused_ref_sigs)
-            if ref_sig is None:
-                continue
-            ref_by_idx[sig.index] = ref_sig
-            unused_ref_sigs.remove(ref_sig)
-            delta_by_idx[sig.index] = _corner_delta_for_match(lap, reference, sig, ref_sig)
+        ref_matches = _match_reference_corners(lap, reference, anchors=sigs)
+        ref_by_idx = {idx: ref_sig for idx, (ref_sig, _delta) in ref_matches.items()}
+        delta_by_idx = {idx: delta for idx, (_ref_sig, delta) in ref_matches.items()}
     history_laps = [*(history or []), lap]
     history_matches = (
         _corner_history_matches(history_laps[:-1], sigs) if len(history_laps) >= 2 else {}

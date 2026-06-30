@@ -98,31 +98,6 @@ def _archive_lap_is_valid(archive: dict | None) -> bool:
     return not (isinstance(lap, dict) and lap.get("is_valid") is False)
 
 
-def _same_lap_scope(candidate: LapTrace, anchor: LapTrace) -> bool:
-    if (
-        anchor.car_id is not None
-        and candidate.car_id is not None
-        and candidate.car_id != anchor.car_id
-    ):
-        return False
-    return not (
-        anchor.track_id is not None
-        and candidate.track_id is not None
-        and candidate.track_id != anchor.track_id
-    )
-
-
-def _archive_track_length_m(archive: dict | None) -> float | None:
-    track = archive.get("track") if isinstance(archive, dict) else None
-    if not isinstance(track, dict):
-        return None
-    try:
-        length = float(track.get("lengthM"))
-    except (TypeError, ValueError):
-        return None
-    return length if length > 0 else None
-
-
 def _archive_track_layout(archive: dict | None) -> str | None:
     track = archive.get("track") if isinstance(archive, dict) else None
     layout = track.get("layout") if isinstance(track, dict) else None
@@ -132,22 +107,11 @@ def _archive_track_layout(archive: dict | None) -> str | None:
 
 
 def _same_archive_layout(candidate: dict | None, anchor: dict | None) -> bool:
-    anchor_layout = _archive_track_layout(anchor)
-    if anchor_layout is None:
-        return True
-    return _archive_track_layout(candidate) == anchor_layout
-
-
-def _same_archive_track_fingerprint(candidate: dict | None, anchor: dict | None) -> bool:
     candidate_layout = _archive_track_layout(candidate)
     anchor_layout = _archive_track_layout(anchor)
-    if candidate_layout is not None and anchor_layout is not None:
-        return candidate_layout == anchor_layout
-    candidate_length = _archive_track_length_m(candidate)
-    anchor_length = _archive_track_length_m(anchor)
-    if candidate_length is None or anchor_length is None:
-        return False
-    return abs(candidate_length - anchor_length) <= 1.0
+    if candidate_layout is None and anchor_layout is None:
+        return True
+    return candidate_layout == anchor_layout
 
 
 def _same_archive_scope(
@@ -156,15 +120,18 @@ def _same_archive_scope(
     candidate_archive: dict | None,
     anchor_archive: dict | None,
 ) -> bool:
-    if not _same_lap_scope(candidate_lap, anchor_lap):
+    if (
+        candidate_lap.car_id is None
+        or anchor_lap.car_id is None
+        or candidate_lap.car_id != anchor_lap.car_id
+    ):
         return False
-    # Car identity has no reliable fallback fingerprint in lap archives.
-    if (candidate_lap.car_id is None) != (anchor_lap.car_id is None):
+    if (
+        candidate_lap.track_id is None
+        or anchor_lap.track_id is None
+        or candidate_lap.track_id != anchor_lap.track_id
+    ):
         return False
-    if (candidate_lap.track_id is None) != (anchor_lap.track_id is None):
-        return _same_archive_track_fingerprint(candidate_archive, anchor_archive)
-    if candidate_lap.track_id is None and anchor_lap.track_id is None:
-        return _same_archive_track_fingerprint(candidate_archive, anchor_archive)
     return _same_archive_layout(candidate_archive, anchor_archive)
 
 

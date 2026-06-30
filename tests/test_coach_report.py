@@ -342,7 +342,7 @@ def test_structured_debrief_ignores_history_from_other_track():
     assert diag["sample_count"] == 1
 
 
-def test_structured_debrief_allows_history_when_current_track_id_missing():
+def test_structured_debrief_rejects_history_when_current_track_id_missing():
     current = _corner_archive(degrade=2.0)
     del current["track"]["id"]
     d = build_structured_debrief(
@@ -351,17 +351,28 @@ def test_structured_debrief_allows_history_when_current_track_id_missing():
         grip_ceiling_g=2.5,
     )
     diag = d["corners"][0]["diagnostics"]["consistency"]
-    assert diag["available"] is True
-    assert diag["sample_count"] == 2
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
 
 
-def test_structured_debrief_rejects_missing_track_id_history_with_different_fingerprint():
-    current = _corner_archive(degrade=2.0)
-    del current["track"]["id"]
+def test_structured_debrief_rejects_history_when_history_track_id_missing():
     other = _corner_archive(degrade=4.0)
-    other["track"]["lengthM"] = current["track"]["lengthM"] + 500.0
+    del other["track"]["id"]
     d = build_structured_debrief(
-        current,
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_rejects_one_sided_track_layout():
+    other = _corner_archive(degrade=4.0)
+    other["track"]["layout"] = "junior"
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
         history_archives=[other],
         grip_ceiling_g=2.5,
     )
