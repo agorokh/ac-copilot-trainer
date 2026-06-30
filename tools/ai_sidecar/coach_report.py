@@ -118,6 +118,8 @@ def _same_archive_layout(candidate: dict | None, anchor: dict | None, *, require
 
 
 def _same_optional_identity(candidate: str | None, anchor: str | None, *, required: bool) -> bool:
+    if candidate is None and anchor is None:
+        return True
     if not required and (candidate is None or anchor is None):
         return True
     if candidate is None or anchor is None:

@@ -395,6 +395,23 @@ def test_structured_debrief_rejects_history_when_history_track_id_missing():
     assert diag["sample_count"] == 1
 
 
+def test_structured_debrief_allows_history_when_both_archives_omit_identity():
+    current = _corner_archive(degrade=2.0)
+    history = _corner_archive(degrade=4.0)
+    del current["car"]["id"]
+    del history["car"]["id"]
+    del current["track"]["id"]
+    del history["track"]["id"]
+    d = build_structured_debrief(
+        current,
+        history_archives=[history],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is True
+    assert diag["sample_count"] == 2
+
+
 def test_structured_debrief_rejects_one_sided_track_layout():
     other = _corner_archive(degrade=4.0)
     other["track"]["layout"] = "junior"
