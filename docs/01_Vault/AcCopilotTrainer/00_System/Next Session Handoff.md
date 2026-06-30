@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T22:07:12Z
+last_updated: 2026-06-30T22:24:25Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -75,6 +75,10 @@ ranked per-corner problem list, ranked fixes, `next_session_prep`, `spoken_summa
 unusable trace, and fails closed when a selected session has no usable trace at all. Lua session-end
 now drains lap-archive jobs, sends `session.review.generate` to the loopback sidecar, and the sidecar
 writes the sibling report plus `session.review` / `coaching.cue` frames for screen and voice clients.
+Second review hardening sanitized broadcast payloads so full report paths stay only in the loopback
+ack, added a one-shot guard so menu-frame retries do not repeat voice/report generation, broadened
+sidecar error acks for unexpected generator exceptions, and renamed the Lua path-frame guard so the
+feature is not coupled to setup-experiment naming.
 Docs landed in `docs/10_Development/17_Session_Review.md`. `make ci-fast` is now Windows-friendly by routing
 policy-doc and tracked-file secret scans through Python wrappers instead of invoking Bash with a
 `PYTHON=python` prefix that PowerShell misparsed.
@@ -90,7 +94,7 @@ focus T1.` The Markdown named session `sess-latest`, best lap `5.079s`, referenc
 archive source-structure, coach report, coaching lake, and voice wiring tests. Full local
 parity passed on Windows with
 `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast PYTHON=python`
-(`1956 passed, 117 skipped`, coverage 85.37%, `ci-fast: OK`; only existing root-file allowlist
+(`1958 passed, 117 skipped`, coverage 85.40%, `ci-fast: OK`; only existing root-file allowlist
 warnings for `.copier-answers.yml` and `doppler.yaml`).
 
 **Memory note:** The exact Tier-3 MCP tool was not exposed in this Codex tool surface. The repo

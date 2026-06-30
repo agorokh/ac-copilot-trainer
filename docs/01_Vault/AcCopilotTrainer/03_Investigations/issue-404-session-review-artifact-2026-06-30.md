@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-06-30
-updated: 2026-06-30T22:07:12Z
+updated: 2026-06-30T22:24:25Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/404
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -29,6 +29,11 @@ pending lap archive jobs, it sends `session.review.generate` to the loopback sid
 writes the sibling `journal/reports` files, publishes `session.review` for screen clients, and emits
 a `coaching.cue` carrying `spoken_summary` for the voice client.
 
+Second review hardening keeps full report paths on the loopback ack only; external broadcasts expose
+safe `markdown_file` / `json_file` basenames. Lua also has a one-shot `sessionReviewRequested` guard
+so a failed persistence retry cannot regenerate the report or repeat the spoken summary every menu
+frame.
+
 ## Output contract
 
 - Markdown: driver-readable report with session stats, reference lap, ranked corner problem list,
@@ -50,6 +55,8 @@ a `coaching.cue` carrying `spoken_summary` for the voice client.
 - Missing `exported_at` no longer breaks latest-session selection; unusable fastest reference laps
   fall back to lap-only analysis; sessions with no usable trace fail closed instead of reporting a
   misleading empty problem list.
+- Sidecar generation returns a structured `session.review.result` error for unexpected generator
+  exceptions, matching the setup-experiment handler style.
 - `Makefile` policy targets now call Python wrappers for tracked-file secret scanning and canonical
   policy-doc existence checks. This preserves the existing checks while making `make ci-fast
   PYTHON=python` work under Windows PowerShell.
@@ -68,7 +75,7 @@ a `coaching.cue` carrying `spoken_summary` for the voice client.
   tests/test_coach_report.py tests/test_coaching_lake.py tests/test_voice_wiring.py` passed
   (`80 passed, 1 skipped`; DuckDB optional skip).
 - Full parity: `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast
-  PYTHON=python` passed on Windows (`1956 passed, 117 skipped`, coverage 85.37%, `ci-fast: OK`).
+  PYTHON=python` passed on Windows (`1958 passed, 117 skipped`, coverage 85.40%, `ci-fast: OK`).
   The only warnings were existing root-file allowlist warnings for `.copier-answers.yml` and
   `doppler.yaml`.
 

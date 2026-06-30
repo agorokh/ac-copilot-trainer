@@ -1137,6 +1137,7 @@ state = {
   lastLapMs = nil,
   lastLapCount = -1,
   wasDriving = false,
+  sessionReviewRequested = false,
   brakingPoints = {
     best = {},
     last = {},
@@ -1470,6 +1471,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.bestLapMs = nil
   state.lastLapMs = nil
   state.lastLapCount = -1
+  state.sessionReviewRequested = false
   state.brakingPoints = {
     best = {},
     last = {},
@@ -1534,6 +1536,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
+  state.sessionReviewRequested = false
   bestLapArchivePath = nil
   -- Drop any archive-backed lap_complete follow-ups left unsent: they reference the prior
   -- stint's archives and must not leak into the next session (drained best-effort above on
@@ -1572,6 +1575,7 @@ local function resetRollingDrivingState()
   state.sidecarDebriefText = ""
   state.cornerAdvisories = {}
   state.lapInvalidatedThisLap = false
+  state.sessionReviewRequested = false
   bestLapArchivePath = nil
   -- Rolling reset starts a disjoint session (new SESSION_UUID below); drop prior-stint
   -- archive follow-ups so they cannot attach to the new session. CodeRabbit #321.
@@ -2161,8 +2165,9 @@ function script.update(dt)
       -- follow-up gets its one send attempt here instead of being stranded. CodeRabbit #321.
       pumpLapArchiveNotifications()
       local sessionReviewLaps = tonumber(state.lapsCompleted) or 0
-      if sessionReviewLaps >= 1 and wsBridge
+      if sessionReviewLaps >= 1 and not state.sessionReviewRequested and wsBridge
           and type(wsBridge.sendSessionReviewGenerate) == "function" then
+        state.sessionReviewRequested = true
         local reviewOk, reviewSentOrErr = pcall(
           wsBridge.sendSessionReviewGenerate,
           persistence.lapArchiveDir(),

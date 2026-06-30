@@ -1159,10 +1159,25 @@ def _session_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _sanitize_session_review_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop host-local paths before broadcasting session-review results to clients."""
+    sanitized = dict(payload)
+    for path_key, file_key in (("markdown_path", "markdown_file"), ("json_path", "json_file")):
+        path = sanitized.pop(path_key, None)
+        if isinstance(path, str) and path:
+            sanitized[file_key] = Path(path).name
+    return sanitized
+
+
 def _session_review_cue_payload(result: dict[str, Any]) -> dict[str, Any] | None:
     message = result.get("spoken_summary")
     if not isinstance(message, str) or not message.strip():
         return None
+    detail: dict[str, Any] = {"session_uuid": result.get("session_uuid")}
+    for path_key, file_key in (("markdown_path", "markdown_file"), ("json_path", "json_file")):
+        path = result.get(path_key)
+        if isinstance(path, str) and path:
+            detail[file_key] = Path(path).name
     return {
         "kind": "session_review",
         "corner": None,
@@ -1171,11 +1186,7 @@ def _session_review_cue_payload(result: dict[str, Any]) -> dict[str, Any] | None
         "intensity": 0.0,
         "message": message.strip(),
         "spline": None,
-        "detail": {
-            "session_uuid": result.get("session_uuid"),
-            "markdown_path": result.get("markdown_path"),
-            "json_path": result.get("json_path"),
-        },
+        "detail": detail,
     }
 
 
@@ -1205,7 +1216,7 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
             driver_id=driver_id,
             output_dir=output_dir if isinstance(output_dir, str) and output_dir else None,
         )
-    except (OSError, ValueError) as e:
+    except Exception as e:
         logger.info(
             "session review generation failed lap_dir=%s session=%s err=%s", lap_dir, session, e
         )
@@ -1228,7 +1239,10 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
         **result,
     }
     await _safe_send(websocket, ack)
-    await _broadcast_external(_session_review_snapshot(result), exclude=websocket)
+    await _broadcast_external(
+        _session_review_snapshot(_sanitize_session_review_result(result)),
+        exclude=websocket,
+    )
 
     cue_payload = _session_review_cue_payload(result)
     if cue_payload is None:

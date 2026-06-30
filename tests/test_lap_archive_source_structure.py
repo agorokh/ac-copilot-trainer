@@ -46,9 +46,27 @@ def test_session_end_flushes_pending_lap_archive() -> None:
         "session-end branch must ask the sidecar to generate the post-session review "
         "after the lap archives are final"
     )
+    assert "not state.sessionReviewRequested" in branch_body
+    assert "state.sessionReviewRequested = true" in branch_body
     assert branch_body.index("pumpLapArchiveNotifications()") < branch_body.index(
         "wsBridge.sendSessionReviewGenerate"
     )
+
+
+def test_session_review_bridge_uses_generic_local_path_gate() -> None:
+    """#404: report generation carries local archive paths but is not setup-experiment logic."""
+    bridge = (REPO / "src" / "ac_copilot_trainer" / "modules" / "ws_bridge.lua").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r"function M\.sendSessionReviewGenerate.*?\nend\n",
+        bridge,
+        flags=re.S,
+    )
+    assert match is not None
+    body = match.group(0)
+    assert "localPathFramesAllowed()" in body
+    assert "setupExperimentPathFramesAllowed" not in body
 
 
 def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:

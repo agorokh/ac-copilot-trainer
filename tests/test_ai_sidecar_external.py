@@ -1075,9 +1075,66 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
     cue = next(frame for frame in frames if frame.get("topic") == ep.TOPIC_COACHING_CUE)
     assert review["type"] == ep.TYPE_STATE_SNAPSHOT
     assert review["payload"]["session_uuid"] == "sess"
+    assert "markdown_path" not in review["payload"]
+    assert "json_path" not in review["payload"]
+    assert review["payload"]["markdown_file"] == "session_sess.md"
+    assert review["payload"]["json_file"] == "session_sess.json"
     assert cue["payload"]["kind"] == "session_review"
     assert cue["payload"]["message"] == "Session debrief for Magione: focus T1."
+    assert "markdown_path" not in cue["payload"]["detail"]
+    assert "json_path" not in cue["payload"]["detail"]
+    assert cue["payload"]["detail"]["markdown_file"] == "session_sess.md"
+    assert cue["payload"]["detail"]["json_file"] == "session_sess.json"
     assert voice.messages == ["Session debrief for Magione: focus T1."]
+
+
+def test_session_review_generate_returns_structured_error_on_unexpected_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    def _boom(
+        lap_dir: str,
+        *,
+        session: str,
+        driver_id: str,
+        output_dir: str | None = None,
+    ) -> dict[str, object]:
+        del lap_dir, session, driver_id, output_dir
+        raise RuntimeError("analysis worker exploded")
+
+    monkeypatch.setattr(srv, "_generate_session_review_safe", _boom)
+
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as lua:
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "hello",
+                            "client": "trainer-lua",
+                            "client_class": ep.CLIENT_CLASS_LUA,
+                        }
+                    )
+                )
+                await asyncio.wait_for(lua.recv(), timeout=2.0)
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_REVIEW_GENERATE,
+                            "lap_dir": str(tmp_path / "journal" / "laps"),
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+
+    ack = asyncio.run(_run())
+    assert ack["type"] == ep.TYPE_SESSION_REVIEW_RESULT
+    assert ack["ok"] is False
+    assert "analysis worker exploded" in ack["error"]
 
 
 def test_config_set_round_trip_via_hub() -> None:
