@@ -278,7 +278,9 @@ class CarSetupSchema:
 
 
 def _main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Ingest an ac.getSetupSpinners() dump → schema asset.")
+    p = argparse.ArgumentParser(
+        description="Ingest an ac.getSetupSpinners() dump into a schema asset."
+    )
     p.add_argument("dump", help="JSON file: a list of getSetupSpinners() descriptors")
     p.add_argument("--car-id", required=True)
     p.add_argument("--schema-dir", default=DEFAULT_SCHEMA_DIR)
