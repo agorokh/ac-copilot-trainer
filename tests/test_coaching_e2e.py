@@ -18,8 +18,12 @@ import pytest
 
 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
-REF_PATH = Path(__file__).resolve().parents[1] / ".scratch" / "coach-demo" / "reference.json"
-pytestmark = pytest.mark.skipif(not REF_PATH.exists(), reason="rig reference trace not present")
+# Prefer the committed fixture (so this CI gate actually RUNS on a clean checkout); fall back to the
+# rig capture under .scratch (gitignored) when iterating on the rig.
+_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "magione_gt3r_reference.json"
+_RIG = Path(__file__).resolve().parents[1] / ".scratch" / "coach-demo" / "reference.json"
+REF_PATH = _FIXTURE if _FIXTURE.exists() else _RIG
+pytestmark = pytest.mark.skipif(not REF_PATH.exists(), reason="reference trace fixture missing")
 
 
 # --- fixtures / frame plumbing --------------------------------------------------------------------
