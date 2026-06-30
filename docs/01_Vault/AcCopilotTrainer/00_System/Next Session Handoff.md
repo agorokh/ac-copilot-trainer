@@ -57,9 +57,9 @@ relates_to:
 
 # Next session handoff
 
-## Resolved (2026-06-30) — PR #399 Coach v2
+## In flight (2026-06-30) — PR #399 Coach v2
 
-Merge-ready on [`8e6135a`](https://github.com/agorokh/ac-copilot-trainer/commit/8e6135af370dfc28bea4a05cb85288d0f44a064c).
+Merge-ready (OPEN) on [`2908fc6`](https://github.com/agorokh/ac-copilot-trainer/commit/2908fc61fed5a43f489f422671a9234751d6406b).
 Detail: [[pr-399-coach-v2-review-loop-2026-06-30]].
 
 ## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
