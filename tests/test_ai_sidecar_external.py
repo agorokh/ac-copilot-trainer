@@ -873,6 +873,38 @@ def test_setup_diff_roundtrip_uses_snapshot_car_model_for_schema() -> None:
     assert row["to_display"] == "-1.9"
 
 
+def test_setup_diff_roundtrip_preserves_snapshot_car_mismatch() -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.diff",
+                            "baseline_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "FRONT_BIAS.VALUE": "66",
+                            },
+                            "candidate_snapshot": {
+                                "CAR.MODEL": "bmw_z4_gt3",
+                                "FRONT_BIAS.VALUE": "64",
+                            },
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    diff = asyncio.run(_run())
+    assert diff["type"] == ep.TYPE_SETUP_DIFF_RESULT
+    assert diff["ok"] is False
+    assert diff["status"] == "car_mismatch"
+    assert diff["baseline"]["car_id"] == "ks_porsche_911_gt3_r_2016"
+    assert diff["candidate"]["car_id"] == "bmw_z4_gt3"
+
+
 def test_setup_advice_roundtrip_uses_snapshot_car_model_for_schema() -> None:
     async def _run() -> dict:
         async with _running_sidecar() as port:

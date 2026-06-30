@@ -1070,26 +1070,25 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         baseline_snapshot = data.get("baseline_snapshot")
         candidate_snapshot = data.get("candidate_snapshot")
         try:
-            car_id = (
-                data.get("car_id")
-                or _setup_snapshot_car_id(candidate_snapshot)
-                or _setup_snapshot_car_id(baseline_snapshot)
-            )
+            requested_car_id = data.get("car_id")
+            baseline_car_id = requested_car_id or _setup_snapshot_car_id(baseline_snapshot)
+            candidate_car_id = requested_car_id or _setup_snapshot_car_id(candidate_snapshot)
+            schema_car_id = candidate_car_id or baseline_car_id
             baseline = from_snapshot(
                 baseline_snapshot if isinstance(baseline_snapshot, dict) else {},
-                car_id=car_id,
+                car_id=baseline_car_id,
                 track_id=data.get("track_id"),
             )
             candidate = from_snapshot(
                 candidate_snapshot if isinstance(candidate_snapshot, dict) else {},
-                car_id=car_id,
+                car_id=candidate_car_id,
                 track_id=data.get("track_id"),
             )
             out = await asyncio.to_thread(
                 setup_diff_summary,
                 baseline,
                 candidate,
-                schema=load_latest_schema(car_id),
+                schema=load_latest_schema(schema_car_id),
             )
         except Exception as e:
             logger.info("setup diff failed err=%s", e)

@@ -512,6 +512,64 @@ def _filter_records(
     return valid
 
 
+def _scope_ids(records: list[dict[str, Any]], group: str) -> list[str]:
+    ids: set[str] = set()
+    for rec in records:
+        obj = rec.get(group) if isinstance(rec.get(group), dict) else {}
+        value = obj.get("id")
+        if isinstance(value, str) and value.strip() and value.strip().lower() != "unknown":
+            ids.add(value.strip())
+    return sorted(ids)
+
+
+def _infer_closed_loop_scope(
+    records: list[dict[str, Any]],
+    *,
+    car_id: str | None,
+    track_id: str | None,
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    effective_car_id = car_id
+    valid = _valid_records(records)
+    track_scoped = _filter_records(valid, track_id=track_id)
+    if effective_car_id is None:
+        car_ids = _scope_ids(track_scoped, "car")
+        if len(car_ids) > 1:
+            return (
+                None,
+                None,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "car_id",
+                    "car_ids": car_ids,
+                    "error": "setup.closed_loop requires a single car scope",
+                },
+            )
+        if len(car_ids) == 1:
+            effective_car_id = car_ids[0]
+
+    car_scoped = _filter_records(valid, car_id=effective_car_id)
+    effective_track_id = track_id
+    if effective_track_id is None:
+        track_ids = _scope_ids(car_scoped, "track")
+        if len(track_ids) > 1:
+            return (
+                effective_car_id,
+                None,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "track_id",
+                    "car_id": effective_car_id,
+                    "track_ids": track_ids,
+                    "error": "setup.closed_loop requires a single track scope",
+                },
+            )
+        if len(track_ids) == 1:
+            effective_track_id = track_ids[0]
+    return effective_car_id, effective_track_id, None
+
+
 def _select_params(records: list[dict[str, Any]], best: dict[str, Any]) -> list[str]:
     best_params = best["setup"]["params"]
     all_keys = {key for rec in records for key in rec["setup"]["params"]}
@@ -698,7 +756,18 @@ def suggest_closed_loop(
     """
 
     key = _normalize_param_key(param)
-    scoped = _filter_records(records, car_id=car_id, track_id=track_id)
+    effective_car_id, effective_track_id, scope_error = _infer_closed_loop_scope(
+        records,
+        car_id=car_id,
+        track_id=track_id,
+    )
+    if scope_error is not None:
+        return {
+            **scope_error,
+            "param": key,
+            "experiments_used": len(_valid_records(records)),
+        }
+    scoped = _filter_records(records, car_id=effective_car_id, track_id=effective_track_id)
     complete = [
         rec
         for rec in scoped

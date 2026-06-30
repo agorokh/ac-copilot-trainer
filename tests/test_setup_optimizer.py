@@ -349,6 +349,68 @@ def test_closed_loop_uses_latest_pair_where_param_changed() -> None:
     }
 
 
+def test_closed_loop_rejects_ambiguous_car_scope() -> None:
+    first = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-a1",
+            setup_hash="old",
+            setup_name="baseline",
+            lap_ms=100_000,
+            front_bias=64,
+            rear_wing=8,
+        )
+    )
+    second = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-b2",
+            setup_hash="new",
+            setup_name="candidate",
+            lap_ms=98_000,
+            front_bias=65,
+            rear_wing=8,
+        )
+    )
+    second["car"]["id"] = "bmw_z4_gt3"
+
+    suggestion = suggest_closed_loop([first, second], param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "car_id"
+    assert suggestion["car_ids"] == ["bmw_z4_gt3", "ks_porsche_911_gt3_r_2016"]
+
+
+def test_closed_loop_rejects_ambiguous_track_scope() -> None:
+    first = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-a1",
+            setup_hash="old",
+            setup_name="baseline",
+            lap_ms=100_000,
+            front_bias=64,
+            rear_wing=8,
+        )
+    )
+    second = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-b2",
+            setup_hash="new",
+            setup_name="candidate",
+            lap_ms=98_000,
+            front_bias=65,
+            rear_wing=8,
+        )
+    )
+    second["track"]["id"] = "spa"
+
+    suggestion = suggest_closed_loop([first, second], param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "track_id"
+    assert suggestion["track_ids"] == ["magione", "spa"]
+
+
 def test_closed_loop_treats_zero_measured_delta_as_inconclusive() -> None:
     records = [
         record_from_lap_archive(
