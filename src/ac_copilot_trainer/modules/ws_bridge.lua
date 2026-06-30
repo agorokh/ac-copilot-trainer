@@ -1186,9 +1186,9 @@ function M.setSetupExperimentStorePath(storePath)
   return true
 end
 
---- Send the setup experiment store path after the v1 sidecar handshake.
+--- Return true when path-bearing frames are allowed to leave the Lua app.
 ---@return boolean
-local function setupExperimentPathFramesAllowed()
+local function localPathFramesAllowed()
   local u = tostring(url or ""):lower()
   local host = u:match("^wss?://%[([^%]]+)%]") or u:match("^wss?://([^:/]+)")
   if host == "localhost" or host == "::1" then
@@ -1197,11 +1197,13 @@ local function setupExperimentPathFramesAllowed()
   return type(host) == "string" and host:match("^127%.%d+%.%d+%.%d+$") ~= nil
 end
 
+--- Send the setup experiment store path after the v1 sidecar handshake.
+---@return boolean
 function M.sendSetupExperimentStorePath()
   if type(setupExperimentStorePath) ~= "string" or setupExperimentStorePath == "" then return false end
   if setupExperimentStoreSent then return true end
   if not (sock and externalHelloAcked) then return false end
-  if not setupExperimentPathFramesAllowed() then return false end
+  if not localPathFramesAllowed() then return false end
   if setupExperimentStoreRetryFrames < SETUP_EXPERIMENT_STORE_RETRY_FRAMES then
     setupExperimentStoreRetryFrames = setupExperimentStoreRetryFrames + 1
     return false
@@ -1226,12 +1228,32 @@ end
 function M.sendSetupExperimentRecord(archivePath)
   if type(archivePath) ~= "string" or archivePath == "" then return false end
   if not (sock and externalHelloAcked) then return false end
-  if not setupExperimentPathFramesAllowed() then return false end
+  if not localPathFramesAllowed() then return false end
   return M.sendJson({
     v = PROTOCOL_VERSION,
     type = "setup.experiment.record",
     archive_path = archivePath,
   })
+end
+
+--- Ask the Python sidecar to generate a saved post-session review artifact.
+---@param lapDir string|nil
+---@param sessionUuid string|nil
+---@return boolean
+function M.sendSessionReviewGenerate(lapDir, sessionUuid)
+  if type(lapDir) ~= "string" or lapDir == "" then return false end
+  if not (sock and externalHelloAcked) then return false end
+  if not localPathFramesAllowed() then return false end
+  local payload = {
+    v = PROTOCOL_VERSION,
+    type = "session.review.generate",
+    lap_dir = lapDir,
+    driver_id = "local-driver",
+  }
+  if type(sessionUuid) == "string" and sessionUuid ~= "" then
+    payload.session = sessionUuid
+  end
+  return M.sendJson(payload)
 end
 
 --- Issue #86 Part D: register a handler for an external `request` event
