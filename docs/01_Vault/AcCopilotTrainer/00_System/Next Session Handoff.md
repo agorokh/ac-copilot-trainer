@@ -11,6 +11,7 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
+  - AcCopilotTrainer/01_Decisions/duckdb-over-clickhouse-storage-2026-06-29.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
