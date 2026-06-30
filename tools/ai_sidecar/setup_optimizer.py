@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from tools.ai_sidecar.car_schema import load_latest_schema
+
 SCHEMA_VERSION = 1
 DEFAULT_STORE_NAME = "experiments.jsonl"
 DEFAULT_STORE_DIR = "setup_experiments"
@@ -254,7 +256,7 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig") as fh:
         for line_no, line in enumerate(fh, start=1):
             text = line.strip()
             if not text:
@@ -767,6 +769,8 @@ def suggest_closed_loop(
             "param": key,
             "experiments_used": len(_valid_records(records)),
         }
+    if schema is None:
+        schema = load_latest_schema(effective_car_id)
     scoped = _filter_records(records, car_id=effective_car_id, track_id=effective_track_id)
     complete = [
         rec

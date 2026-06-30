@@ -55,3 +55,17 @@ def test_batches_keep_single_path_that_exceeds_character_budget() -> None:
     long_file = "deep/" + ("x" * 64)
 
     assert policy_tracked_files._batches([long_file], max_chars=10) == [[long_file]]
+
+
+def test_batches_use_smaller_windows_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(policy_tracked_files.sys, "platform", "win32")
+    files = [f"{i}-" + ("x" * 300) for i in range(30)]
+
+    batches = policy_tracked_files._batches(files)
+
+    assert len(batches) > 1
+    assert all(len(batch) <= policy_tracked_files.WINDOWS_BATCH_SIZE for batch in batches)
+    assert all(
+        sum(len(item) + 1 for item in batch) <= policy_tracked_files.WINDOWS_MAX_ARG_CHARS
+        for batch in batches
+    )

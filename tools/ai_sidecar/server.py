@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar import observability
-from tools.ai_sidecar.car_schema import load_latest_schema
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
@@ -481,14 +480,11 @@ def _run_setup_closed_loop(
     car_id: str | None,
     track_id: str | None,
 ) -> None:
-    records = load_records(store_path)
-    effective_car_id = car_id or _setup_record_car_id(records, track_id=track_id)
     out = suggest_closed_loop(
-        records,
+        load_records(store_path),
         param=param,
-        car_id=effective_car_id,
+        car_id=car_id,
         track_id=track_id,
-        schema=load_latest_schema(effective_car_id),
     )
     print(json.dumps(out, indent=2, sort_keys=True))
 
@@ -505,38 +501,12 @@ def _run_setup_advice(
         setup=setup,
         car_id=car_id,
         track_id=track_id,
-        schema=load_latest_schema(car_id or (setup.car_id if setup else None)),
     )
     print(json.dumps(out, indent=2, sort_keys=True))
 
 
 def _run_setup_diff(baseline: str, candidate: str) -> None:
     print(json.dumps(diff_setup_files(baseline, candidate), indent=2, sort_keys=True))
-
-
-def _setup_snapshot_car_id(snapshot: Any) -> str | None:
-    if not isinstance(snapshot, dict):
-        return None
-    for key in ("CAR.MODEL", "CAR.SCREEN_NAME"):
-        value = snapshot.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _setup_record_car_id(
-    records: list[dict[str, Any]], *, track_id: str | None = None
-) -> str | None:
-    car_ids: set[str] = set()
-    for record in records:
-        track = record.get("track") if isinstance(record.get("track"), dict) else {}
-        if track_id and track.get("id") != track_id:
-            continue
-        car = record.get("car") if isinstance(record.get("car"), dict) else {}
-        car_id = car.get("id")
-        if isinstance(car_id, str) and car_id.strip().lower() != "unknown":
-            car_ids.add(car_id.strip())
-    return next(iter(car_ids)) if len(car_ids) == 1 else None
 
 
 def _setup_store_record_count(store_path: str | Path) -> int:
@@ -576,14 +546,11 @@ def _closed_loop_setup_store(
     car_id: str | None,
     track_id: str | None,
 ) -> dict[str, Any]:
-    records = load_records(store_path)
-    effective_car_id = car_id or _setup_record_car_id(records, track_id=track_id)
     return suggest_closed_loop(
-        records,
+        load_records(store_path),
         param=param,
-        car_id=effective_car_id,
+        car_id=car_id,
         track_id=track_id,
-        schema=load_latest_schema(effective_car_id),
     )
 
 
@@ -1044,14 +1011,12 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
     if t == TYPE_SETUP_ADVICE:
         snapshot = data.get("setup_snapshot")
         try:
-            car_id = data.get("car_id") or _setup_snapshot_car_id(snapshot)
             out = await asyncio.to_thread(
                 advise_from_complaint,
                 str(data.get("complaint") or ""),
                 setup_snapshot=snapshot if isinstance(snapshot, dict) else None,
-                car_id=car_id,
+                car_id=data.get("car_id"),
                 track_id=data.get("track_id"),
-                schema=load_latest_schema(car_id),
             )
         except Exception as e:
             logger.info("setup advice failed err=%s", e)
@@ -1070,25 +1035,20 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         baseline_snapshot = data.get("baseline_snapshot")
         candidate_snapshot = data.get("candidate_snapshot")
         try:
-            requested_car_id = data.get("car_id")
-            baseline_car_id = _setup_snapshot_car_id(baseline_snapshot) or requested_car_id
-            candidate_car_id = _setup_snapshot_car_id(candidate_snapshot) or requested_car_id
-            schema_car_id = candidate_car_id or baseline_car_id or requested_car_id
             baseline = from_snapshot(
                 baseline_snapshot if isinstance(baseline_snapshot, dict) else {},
-                car_id=baseline_car_id,
+                car_id=data.get("car_id"),
                 track_id=data.get("track_id"),
             )
             candidate = from_snapshot(
                 candidate_snapshot if isinstance(candidate_snapshot, dict) else {},
-                car_id=candidate_car_id,
+                car_id=data.get("car_id"),
                 track_id=data.get("track_id"),
             )
             out = await asyncio.to_thread(
                 setup_diff_summary,
                 baseline,
                 candidate,
-                schema=load_latest_schema(schema_car_id),
             )
         except Exception as e:
             logger.info("setup diff failed err=%s", e)

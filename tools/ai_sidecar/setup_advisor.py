@@ -490,6 +490,8 @@ def advise_from_complaint(
         setup.car_id = car_id
     if track_id and setup.track_id is None:
         setup.track_id = track_id
+    if schema is None:
+        schema = load_latest_schema(setup.car_id)
     if issue is None:
         return {
             "ok": False,
@@ -567,6 +569,8 @@ def setup_diff_summary(
             "display_lines": [],
             "error": "cannot compare setup files from different cars",
         }
+    if schema is None:
+        schema = load_latest_schema(candidate.car_id or baseline.car_id)
 
     raw = candidate.diff(baseline)
     priority = {name: i for i, name in enumerate(_PRIORITY)}
@@ -626,8 +630,6 @@ def diff_setup_files(
 ) -> dict[str, Any]:
     baseline = load_setup_file(baseline_path)
     candidate = load_setup_file(candidate_path)
-    if schema is None:
-        schema = load_latest_schema(candidate.car_id or baseline.car_id)
     out = setup_diff_summary(baseline, candidate, schema=schema)
     out["baseline"]["path"] = str(baseline_path)
     out["candidate"]["path"] = str(candidate_path)

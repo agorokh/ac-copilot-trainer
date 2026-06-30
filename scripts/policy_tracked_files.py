@@ -7,8 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-BATCH_SIZE = 100
-MAX_ARG_CHARS = 24_000
+POSIX_BATCH_SIZE = 100
+POSIX_MAX_ARG_CHARS = 24_000
+WINDOWS_BATCH_SIZE = 25
+WINDOWS_MAX_ARG_CHARS = 4_000
 
 
 def _repo_root() -> Path:
@@ -36,9 +38,13 @@ def _tracked_files(root: Path) -> list[str]:
 
 def _batches(
     items: list[str],
-    size: int = BATCH_SIZE,
-    max_chars: int = MAX_ARG_CHARS,
+    size: int | None = None,
+    max_chars: int | None = None,
 ) -> list[list[str]]:
+    if size is None:
+        size = WINDOWS_BATCH_SIZE if sys.platform == "win32" else POSIX_BATCH_SIZE
+    if max_chars is None:
+        max_chars = WINDOWS_MAX_ARG_CHARS if sys.platform == "win32" else POSIX_MAX_ARG_CHARS
     batches: list[list[str]] = []
     current: list[str] = []
     current_chars = 0

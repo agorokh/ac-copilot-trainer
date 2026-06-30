@@ -477,6 +477,49 @@ def test_closed_loop_respects_schema_bounds() -> None:
     assert suggestion["current"] == 70.0
 
 
+def test_closed_loop_infers_schema_while_ignoring_unknown_car_sentinel() -> None:
+    unknown = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-u0",
+            setup_hash="unknown",
+            setup_name="unknown",
+            lap_ms=101_000,
+            front_bias=68,
+            rear_wing=8,
+        )
+    )
+    unknown["car"]["id"] = "unknown"
+    records = [
+        unknown,
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS", track_id="magione")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
 def test_record_lap_archive_upserts_without_duplicates(tmp_path: Path) -> None:
     lap_dir = tmp_path / "journal" / "laps"
     path = _write_laps(lap_dir)[0]
@@ -496,6 +539,13 @@ def test_load_records_rejects_corrupt_store(tmp_path: Path) -> None:
 
     with pytest.raises(SetupExperimentError, match=r"experiments\.jsonl:2"):
         load_records(store)
+
+
+def test_load_records_handles_utf8_bom_store(tmp_path: Path) -> None:
+    store = tmp_path / "experiments.jsonl"
+    store.write_text('{"ok": true}\n', encoding="utf-8-sig")
+
+    assert load_records(store) == [{"ok": True}]
 
 
 def test_rebuild_experiments_rejects_missing_lap_dir_without_rewriting_store(

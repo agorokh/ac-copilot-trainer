@@ -33,7 +33,6 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _is_loopback,
     _RateLimiter,
     _reset_external_state,
-    _setup_record_car_id,
     make_token_check,
 )
 from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
@@ -81,16 +80,6 @@ def _write_setup_lap(
         encoding="utf-8",
     )
     return path
-
-
-def test_setup_record_car_id_ignores_unknown_sentinel() -> None:
-    records = [
-        {"car": {"id": "unknown"}, "track": {"id": "magione"}},
-        {"car": {"id": "ks_porsche_911_gt3_r_2016"}, "track": {"id": "magione"}},
-        {"car": {"id": "ks_porsche_911_gt3_r_2016"}, "track": {"id": "magione"}},
-    ]
-
-    assert _setup_record_car_id(records, track_id="magione") == "ks_porsche_911_gt3_r_2016"
 
 
 @asynccontextmanager

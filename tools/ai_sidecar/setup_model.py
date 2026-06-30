@@ -415,6 +415,14 @@ def parse_setup_ini(text: str) -> dict[str, str]:
     return out
 
 
+def _snapshot_car_id(snapshot: dict[str, Any]) -> str | None:
+    for key in ("CAR.MODEL", "CAR.SCREEN_NAME"):
+        value = snapshot.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def from_snapshot(
     snapshot: dict[str, Any], *, car_id: str | None = None, track_id: str | None = None
 ) -> CarSetup:
@@ -434,7 +442,7 @@ def from_snapshot(
             continue
         raw = "" if raw_value is None else str(raw_value)
         params[section] = SetupParam(section, _to_float(raw_value), raw, spec_for(section))
-    return CarSetup(params=params, car_id=car_id, track_id=track_id)
+    return CarSetup(params=params, car_id=_snapshot_car_id(snapshot) or car_id, track_id=track_id)
 
 
 def from_lap_archive(lap_archive: dict[str, Any]) -> CarSetup:
@@ -458,8 +466,7 @@ def load_setup_file(path: str | Path) -> CarSetup:
     """Read and parse an AC setup ``.ini`` file into a :class:`CarSetup`."""
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     snap = parse_setup_ini(text)
-    car_id = snap.get("CAR.MODEL") or snap.get("CAR.SCREEN_NAME")
-    return from_snapshot(snap, car_id=car_id)
+    return from_snapshot(snap)
 
 
 def from_spinners(
