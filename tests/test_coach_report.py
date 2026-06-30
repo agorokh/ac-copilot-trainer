@@ -80,6 +80,8 @@ def test_build_debrief_with_reference_shows_time_loss():
     student = _corner_archive(degrade=8.0)  # student carries less apex speed
     text = build_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
     assert "vs reference" in text or "losing time" in text
+    assert "Sector deltas vs reference" in text
+    assert "SuperLap target" in text
 
 
 def test_cli_main_runs(tmp_path, capsys):
@@ -151,6 +153,24 @@ def test_corner_reference_present_with_reference_and_honest_source():
         assert "optimal_apex_kmh" not in entry  # must NOT over-claim a theoretical optimum
         assert isinstance(entry["deficit_to_target_kmh"], (int, float))
         assert isinstance(entry["target_apex_kmh"], (int, float))
+
+
+def test_structured_debrief_includes_sector_deltas_and_superlap():
+    ref = _corner_archive(degrade=0.0)
+    student = _corner_archive(degrade=8.0)
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    sector_deltas = d["sector_deltas"]
+    assert sector_deltas is not None
+    assert sector_deltas["track_id"] == "magione"
+    assert len(sector_deltas["sectors"]) == 3
+    assert len(sector_deltas["micro_sectors"]) == 9
+    assert sector_deltas["micro_sectors"][0]["label"] == "S1.1"
+
+    superlap = d["superlap"]
+    assert superlap is not None
+    assert superlap["segments"][0]["label"] == "S1.1"
+    assert superlap["source_count"] >= 1
 
 
 def test_debrief_text_includes_tyre_and_conditions_sections():

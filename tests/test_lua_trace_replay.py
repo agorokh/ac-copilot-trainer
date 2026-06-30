@@ -297,6 +297,15 @@ def test_telemetry_ingest_then_corner_and_delta_pipeline(harness: TraceReplayHar
     assert dsec == pytest.approx(1.0, abs=1e-6), (
         f"deltaSecondsAtSpline with +1000 ms current must be +1.0 s, got {dsec}"
     )
+    windows = dl.segmentWindows(3)
+    n_micro = harness.lua.eval("function(w) return #w.microSectors end")(windows)
+    first_label = harness.lua.eval("function(w) return w.microSectors[1].label end")(windows)
+    assert n_micro == 9
+    assert first_label == "S1.1"
+    seg_ms = dl.segmentDurationMs(sorted_tr, 0.0, 1 / 3)
+    assert seg_ms is not None and seg_ms > 0
+    seg_delta_ms = dl.segmentDeltaMs(sorted_tr, 0.0, 1 / 3, seg_ms + 125.0)
+    assert seg_delta_ms == pytest.approx(125.0, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

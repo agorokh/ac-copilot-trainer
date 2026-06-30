@@ -216,4 +216,79 @@ function M.sectorBoundariesMs(sortedTrace)
   return { e1, e2, eEnd }
 end
 
+--- Deterministic sector and micro-sector windows in spline space.
+---@param microPerSector integer|nil subdivisions per sector (default 3)
+---@return table { sectors: table[], microSectors: table[] }
+function M.segmentWindows(microPerSector)
+  local microN = tonumber(microPerSector) or 3
+  microN = math.max(1, math.floor(microN))
+  local sectors = {}
+  local microSectors = {}
+  for si = 1, 3 do
+    local s0 = (si - 1) / 3
+    local s1 = si / 3
+    local label = "S" .. tostring(si)
+    sectors[#sectors + 1] = {
+      key = string.lower(label),
+      label = label,
+      splineStart = s0,
+      splineEnd = s1,
+      sectorIndex = si,
+    }
+    local span = s1 - s0
+    for mi = 1, microN do
+      local m0 = s0 + span * (mi - 1) / microN
+      local m1 = s0 + span * mi / microN
+      local mlabel = label .. "." .. tostring(mi)
+      microSectors[#microSectors + 1] = {
+        key = string.lower(mlabel),
+        label = mlabel,
+        splineStart = m0,
+        splineEnd = m1,
+        sectorIndex = si,
+        microIndex = mi,
+      }
+    end
+  end
+  return { sectors = sectors, microSectors = microSectors }
+end
+
+--- Reference duration (ms) between two spline positions.
+---@param sortedTrace LapTraceSample[]|nil
+---@param splineLo number
+---@param splineHi number
+---@return number|nil
+function M.segmentDurationMs(sortedTrace, splineLo, splineHi)
+  if not sortedTrace or #sortedTrace < 2 then
+    return nil
+  end
+  local a = M.bestElapsedMsAtSpline(sortedTrace, splineLo)
+  local b = M.bestElapsedMsAtSpline(sortedTrace, splineHi)
+  if not a or not b then
+    return nil
+  end
+  local d = b - a
+  if d < -1e-6 then
+    return nil
+  end
+  return math.max(0, d)
+end
+
+--- Segment delta (ms): positive = slower than the reference segment.
+---@param sortedTrace LapTraceSample[]|nil
+---@param splineLo number
+---@param splineHi number
+---@param actualMs number|nil
+---@return number|nil
+function M.segmentDeltaMs(sortedTrace, splineLo, splineHi, actualMs)
+  if actualMs == nil then
+    return nil
+  end
+  local refMs = M.segmentDurationMs(sortedTrace, splineLo, splineHi)
+  if not refMs then
+    return nil
+  end
+  return actualMs - refMs
+end
+
 return M

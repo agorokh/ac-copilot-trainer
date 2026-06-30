@@ -1625,17 +1625,18 @@ local function tryLoadDisk()
 end
 
 ---@param simTime number
-local function sectorMessage(refMs, actualMs, simTime)
+local function sectorMessage(refMs, actualMs, simTime, label)
   if not refMs or refMs <= 0 or not actualMs then
     return
   end
   local d = actualMs - refMs
+  local prefix = tostring(label or "Sector")
   if d < -5 then
-    state.sectorHudMsg = string.format("Sector: %.2f s faster than ref lap", -d / 1000)
+    state.sectorHudMsg = string.format("%s: %.2f s faster than ref lap", prefix, -d / 1000)
   elseif d > 5 then
-    state.sectorHudMsg = string.format("Sector: %.2f s slower than ref lap", d / 1000)
+    state.sectorHudMsg = string.format("%s: %.2f s slower than ref lap", prefix, d / 1000)
   else
-    state.sectorHudMsg = string.format("Sector: on pace (Δ %+d ms)", math.floor(d + 0.5))
+    state.sectorHudMsg = string.format("%s: on pace (Δ %+d ms)", prefix, math.floor(d + 0.5))
   end
   state.sectorHudUntil = simTime + config.sectorMessageSeconds
 end
@@ -2405,7 +2406,7 @@ function script.update(dt)
     local s3 = (state.sectorIndex == 3 and state.sectorStartSimT)
         and ((ch.simSeconds(sim) - state.sectorStartSimT) * 1000) or nil
     if s3 and state.bestSectorMs[3] and state.bestSectorMs[3] > 0 then
-      sectorMessage(state.bestSectorMs[3], s3, ch.simSeconds(sim))
+      sectorMessage(state.bestSectorMs[3], s3, ch.simSeconds(sim), "S3")
     end
 
     local evLap = brakes:finalizeQualifiedWhileHolding(car)
@@ -2688,12 +2689,12 @@ function script.update(dt)
     local b1, b2 = 1 / 3, 2 / 3
     if state.sectorIndex == 1 and lsp < b1 and sp >= b1 then
       local aMs = (ch.simSeconds(sim) - state.sectorStartSimT) * 1000
-      sectorMessage(state.bestSectorMs[1], aMs, ch.simSeconds(sim))
+      sectorMessage(state.bestSectorMs[1], aMs, ch.simSeconds(sim), "S1")
       state.sectorIndex = 2
       state.sectorStartSimT = ch.simSeconds(sim)
     elseif state.sectorIndex == 2 and lsp < b2 and sp >= b2 then
       local aMs = (ch.simSeconds(sim) - state.sectorStartSimT) * 1000
-      sectorMessage(state.bestSectorMs[2], aMs, ch.simSeconds(sim))
+      sectorMessage(state.bestSectorMs[2], aMs, ch.simSeconds(sim), "S2")
       state.sectorIndex = 3
       state.sectorStartSimT = ch.simSeconds(sim)
     end

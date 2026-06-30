@@ -139,6 +139,10 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
         response["cornerReference"] = structured["corner_reference"]
     if structured.get("trail_braking") is not None:
         response["trailBraking"] = structured["trail_braking"]
+    if structured.get("sector_deltas") is not None:
+        response["sectorDeltas"] = structured["sector_deltas"]
+    if structured.get("superlap") is not None:
+        response["superLap"] = structured["superlap"]
     return response
 
 
