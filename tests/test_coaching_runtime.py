@@ -154,3 +154,28 @@ def test_injected_then_fixed_acknowledges_and_silences():
     ]
     assert confirms, "fixing a coached mistake should be acknowledged once"
     assert confirms[0][1].message == "Good."
+
+
+def test_same_lap_rewind_does_not_advance_ledger_lap():
+    """Wrap-shaped spline drop with a stable lap counter is a pit/teleport, not a new lap."""
+    rt = build_coach_runtime(_ref())
+    start_lap = rt._lap
+    rt.observe({"spline": 0.92, "speed": 90.0, "brake": 0.5, "lap": 1})
+    rt.observe({"spline": 0.03, "speed": 60.0, "brake": 0.0, "lap": 1})
+    rt.observe({"spline": 0.40, "speed": 90.0, "brake": 0.0, "lap": 1})
+    assert rt._lap == start_lap
+    assert rt._pending_wrap_finals is False
+
+
+def test_late_brake_not_suppressed_at_grip_ceiling():
+    """LATE_BRAKE is 'Brake earlier.' — still valid coaching at high grip utilization."""
+    rt = build_coach_runtime(_ref())
+    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    st = rt._pass[r.index]
+    st.active = True
+    st.entry_count = 5
+    st.min_speed_kmh = 70.0
+    st.brake_onset_spline = (rt.ref_sigs[r.index].brake_point_spline or 0.25) + 0.02
+    st.max_grip_used = 0.99
+    rt._finalize_pass(r)
+    assert rt.ledger.state(r.index) is not None

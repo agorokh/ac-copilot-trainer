@@ -41,7 +41,8 @@ from tools.ai_sidecar.realtime_observer import Advisory
 from tools.ai_sidecar.track_reference import CornerReference, build_references
 
 #: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3).
-_GRIP_GATED_ROOTS = frozenset({RootError.SLOW_APEX, RootError.EARLY_BRAKE, RootError.LATE_BRAKE})
+#: LATE_BRAKE maps to "Brake earlier." and is NOT grip-gated (still valid at the grip ceiling).
+_GRIP_GATED_ROOTS = frozenset({RootError.SLOW_APEX, RootError.EARLY_BRAKE})
 
 # live thresholds
 _BRAKE_ON = 0.05
@@ -57,7 +58,9 @@ _GRIP_CEILING_G = 1.55  # GT3 peak lateral g (the Magione reference corners at 1
 _GRIP_GATE_FRAC = 0.95
 _DEFAULT_TRACK_M = 2455.7
 _DEFAULT_LEAD_S = 1.3  # reference-travel seconds before the action point a PRIME audio onset lands
-_LAP_WRAP_DROP = 0.5  # backward spline jump that means a start/finish wrap
+_LAP_WRAP_DROP = 0.5  # backward spline jump that means a start/finish wrap OR same-lap rewind
+_WRAP_PREV_MIN = 0.8  # prev spline must be high for a true start/finish wrap (codex #294)
+_WRAP_CUR_MAX = 0.25  # current spline must be low for a true start/finish wrap
 
 # SAVE: gross late brake — past the reference brake point, still not braking, carrying speed.
 _SAVE_LATE_BRAKE_MARGIN = 0.01  # spline past the ref brake point before it's "gross"
@@ -114,6 +117,8 @@ class CoachRuntime:
     _last_spline: float | None = None
     _last_lap: float | None = None
     _lap: int = 1
+    _pending_wrap_finals: bool = False
+    _pending_pre_lap: float | None = None
 
     def __post_init__(self) -> None:
         self.refs = sorted(self.refs, key=lambda r: r.spline_lo)
@@ -131,6 +136,8 @@ class CoachRuntime:
         self._last_spline = None
         self._last_lap = None
         self._lap = 1
+        self._pending_wrap_finals = False
+        self._pending_pre_lap = None
         self.ledger.begin_lap(self._lap)
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
@@ -139,13 +146,41 @@ class CoachRuntime:
             return []
         out: list[Advisory] = []
 
-        # lap wrap → new lap: finalize any open pass, advance the ledger's lap.
+        # Deferred wrap finalization when lapCount lags the spline drop by a frame (codex #294).
+        if self._pending_wrap_finals:
+            if (
+                lap is not None
+                and self._pending_pre_lap is not None
+                and lap > self._pending_pre_lap
+            ):
+                self._lap += 1
+                self.ledger.begin_lap(self._lap)
+                for r in self.refs:
+                    if self._pass[r.index].active:
+                        out.extend(self._finalize_pass(r))
+                self._pending_wrap_finals = False
+                self._pending_pre_lap = None
+            elif spline > _WRAP_CUR_MAX:
+                self._pass = {r.index: _PassState() for r in self.refs}
+                self._pending_wrap_finals = False
+                self._pending_pre_lap = None
+
+        # A backward spline jump is either a true start/finish wrap or a same-lap rewind/teleport.
         if self._last_spline is not None and self._last_spline - spline > _LAP_WRAP_DROP:
-            self._lap += 1
-            self.ledger.begin_lap(self._lap)
-            for r in self.refs:  # close any pass left open across the line
-                if self._pass[r.index].active:
-                    out.extend(self._finalize_pass(r))
+            lap_known = lap is not None and self._last_lap is not None
+            lap_advanced = lap_known and lap > self._last_lap
+            wrap_shaped = self._last_spline >= _WRAP_PREV_MIN and spline <= _WRAP_CUR_MAX
+            if lap_advanced or (wrap_shaped and not lap_known):
+                self._lap += 1
+                self.ledger.begin_lap(self._lap)
+                for r in self.refs:
+                    if self._pass[r.index].active:
+                        out.extend(self._finalize_pass(r))
+            elif wrap_shaped and lap_known:
+                self._pending_wrap_finals = True
+                self._pending_pre_lap = self._last_lap
+            else:
+                self._pass = {r.index: _PassState() for r in self.refs}
 
         for r in self.refs:
             st = self._pass[r.index]

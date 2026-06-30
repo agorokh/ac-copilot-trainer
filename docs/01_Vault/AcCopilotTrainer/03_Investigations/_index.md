@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [coach-v2-real-coaching-2026-06-29.md](coach-v2-real-coaching-2026-06-29.md) | Coach v2 (#396 / PR #399): diagnosed anticipatory in-ear coaching — root-error diagnosis, pass ledger, PRIME/SAVE/CONFIRM runtime, grip-gate via `lat_g`, deterministic E2E + live-audible proof on Magione/911. |
 | [voice-368-merge-contention-2026-06-29.md](voice-368-merge-contention-2026-06-29.md) | #368 / PR #371 voice-intensity review resolution: concurrent branch/worktree contention, `origin/main` voice overlap, and final reconciliation through `382b090` (wrap-aware lead windows, lead-brake latch, register barge-in, WS cooldown bypass). |
 | [pr-365-game-point-launcher-2026-06-29.md](pr-365-game-point-launcher-2026-06-29.md) | PR #365 / #363 Game Point launcher supervisor: shortcut install, settings contract, PT spinner protocol, review-resolution history. |
 | [issue-86-rig-screen-hotspot-autostart-2026-06-28.md](issue-86-rig-screen-hotspot-autostart-2026-06-28.md) | #86 rig screen incident: device powered but not connecting because PC was on 5 GHz mesh, hotspot was absent, and no sidecar listened on `8765`. Restored Mobile Hotspot + sidecar, verified ESP32 socket/protocol traffic, and patched `start_sidecar.bat` env-token external-bind auto-start on branch `fix/issue-86-rig-sidecar-autostart`. |
