@@ -87,8 +87,7 @@ class CoachingLedger:
         speakable = [
             s
             for s in self._states.values()
-            if s.status == Status.ARMED
-            or (s.status == Status.PRIMED and s.clean_streak == 0)
+            if s.status == Status.ARMED or (s.status == Status.PRIMED and s.clean_streak == 0)
         ]
         speakable.sort(key=lambda s: s.time_lost_s, reverse=True)
         self._speak_set = {s.corner for s in speakable[: self.lap_budget]}

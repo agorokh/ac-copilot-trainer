@@ -266,7 +266,11 @@ def _reference_signatures(
 
 # --- advisory builders (message carries the exact spoken phrase) ---
 def _prime(
-    r: CornerReference, root: RootError, spline: float, *, register: str = "firm",
+    r: CornerReference,
+    root: RootError,
+    spline: float,
+    *,
+    register: str = "firm",
     intensity: float = 0.5,
 ) -> Advisory:
     return Advisory(
@@ -375,8 +379,11 @@ def _normalize(
         num(pick("brake")),
         num(pick("throttle", "gas")),
         num(pick("steer")),
-        (None if pick("lap", "lapCount", "lap_count", "completedLaps") is None
-         else num(pick("lap", "lapCount", "lap_count", "completedLaps"))),
+        (
+            None
+            if pick("lap", "lapCount", "lap_count", "completedLaps") is None
+            else num(pick("lap", "lapCount", "lap_count", "completedLaps"))
+        ),
         None if grip is None else num(grip),
     )
 
@@ -405,7 +412,7 @@ def build_coach_runtime(
         sig = geom.get(r.index)
         v_ref = sig.entry_speed_kmh if sig else 150.0
         lead = _lead_spline(v_ref, track_m, lead_s)
-        bp = (sig.brake_point_spline if sig and sig.brake_point_spline is not None else r.spline_lo)
+        bp = sig.brake_point_spline if sig and sig.brake_point_spline is not None else r.spline_lo
         anchors[r.index] = _Anchors(
             brake=(bp - lead) % 1.0,
             turn_in=(r.spline_lo - lead) % 1.0,

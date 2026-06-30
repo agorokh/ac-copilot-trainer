@@ -90,7 +90,8 @@ def test_injected_early_brake_speaks_brake_later_at_that_corner():
         laps.append(f)
     advs = _drive(rt, laps)
     primes = [
-        (lap, a) for (lap, a) in advs
+        (lap, a)
+        for (lap, a) in advs
         if a.detail.get("coach") == "prime" and a.corner == target.index
     ]
     assert primes, "early braking at a corner must eventually be coached"

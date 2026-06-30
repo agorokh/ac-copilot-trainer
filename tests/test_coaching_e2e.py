@@ -86,8 +86,15 @@ class CoachSim:
             for f in frames:
                 for a in self.rt.observe({**f, "lap": lap_i}):
                     out.append(
-                        Cue(lap_i, a.spline, a.kind, a.message, a.register, a.corner,
-                            a.detail.get("coach", ""))
+                        Cue(
+                            lap_i,
+                            a.spline,
+                            a.kind,
+                            a.message,
+                            a.register,
+                            a.corner,
+                            a.detail.get("coach", ""),
+                        )
                     )
         return out
 
@@ -267,6 +274,7 @@ def test_hysteresis_needs_two_passes():
 
 def test_budget_caps_cues_per_lap():
     sim = CoachSim(assess=1, hysteresis=1, budget=2)
+
     # slow every corner; only the 2 biggest losses should speak per lap
     def slow_all(f):
         for r in sim.rt.refs:  # CornerReference has spline_lo/spline_hi/apex_spline
@@ -283,8 +291,11 @@ def test_budget_caps_cues_per_lap():
 def test_acknowledge_once_then_silence():
     sim = CoachSim(assess=1, hysteresis=1)
     idx, ref = sim.corner(1)
-    inj = {1: [lambda f: early_brake(f, ref)], 2: [lambda f: early_brake(f, ref)],
-           3: [lambda f: early_brake(f, ref)]}  # clean from lap 4
+    inj = {
+        1: [lambda f: early_brake(f, ref)],
+        2: [lambda f: early_brake(f, ref)],
+        3: [lambda f: early_brake(f, ref)],
+    }  # clean from lap 4
     cues = sim.drive(_laps(sim, inj, 6))
     confirms = [c for c in cues if c.coach == "confirm" and c.corner == idx]
     assert len(confirms) == 1 and confirms[0].phrase == "Good."
