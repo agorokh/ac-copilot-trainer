@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T17:15:00Z
+last_updated: 2026-06-30T08:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -104,6 +104,16 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-30** — PR [#395](https://github.com/agorokh/ac-copilot-trainer/pull/395) **MERGED** at
+  `b122e1b` — **M-TT2 Track Titan reference archive builder** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)):
+  `tools.tt_ingest reference` builds schema-v1 `lap_archive` records from retained TT services
+  telemetry, with strict full-lap spatial coverage, reference-lap timing/identity validation,
+  debug-only partial metadata, and a runtime guard so partial TT archives cannot install as M0 live
+  observers. Lake discovery is scoped by session/lap, repeated same-lap `/last-session` captures are
+  retained as deterministic segment-window files, and archive output cannot overwrite retained TT
+  inputs. Classification: no migration/env/deps/workflow flags. #353 stays OPEN for M-TT3
+  per-corner analysis -> harness curriculum/oracle work and for live full-window capture before
+  production non-partial TT references exist.
 - **2026-06-29** — PR [#370](https://github.com/agorokh/ac-copilot-trainer/pull/370) **MERGED** at
   `26e9a09` — **M-TT1 Track Titan services crack** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)):
   `tools/tt_ingest/tt_services.py` (services client) + `coaching` CLI retaining per-lap raw

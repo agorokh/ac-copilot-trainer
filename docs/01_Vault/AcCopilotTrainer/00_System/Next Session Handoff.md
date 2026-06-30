@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T00:53:41Z
+last_updated: 2026-06-30T08:35:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -54,6 +54,46 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) — PR #395 MERGED: M-TT2 Track Titan reference archive builder (#353)
+
+PR [#395](https://github.com/agorokh/ac-copilot-trainer/pull/395) squash-merged to `main` as
+[`b122e1b`](https://github.com/agorokh/ac-copilot-trainer/commit/b122e1becbfaaa9d028c01b924a4a6b8db50614d)
+at 2026-06-30T08:29:43Z. This delivers the #353 **M-TT2** local bridge from retained Track Titan
+services telemetry into schema-v1 `lap_archive` references for the M0 voice-coaching observer.
+
+**Shipped:** `tools.tt_ingest.tt_normalize.build_reference_archive` maps TT frames into archive trace
+fields (`dist` -> `spline`, `Kmh` -> `speed`, `lTime` -> `eMs`, pedals clamped to `[0,1]`, TT `X/Y`
+preserved as `px/pz` with `py=0`), deterministically merges multiple retained windows, validates one
+source session/lap plus reference-lap identity, rejects large spatial gaps, and treats reference-lap
+time mismatches as partial. `python -m tools.tt_ingest reference` now builds archives from explicit
+retained inputs or scoped lake discovery (`--discover-lake --session-key ... --lap ...`). Same-lap
+`/last-session` captures are retained as deterministic `last_session_lapN_window_<fingerprint>.json`
+files after the first canonical file, so repeated segment-window captures are discoverable without
+overwriting write-once evidence. Debug partial archives carry `generator.tt_reference.partial=true`,
+coverage/timing diagnostics, and are rejected by `build_observer_from_reference`.
+
+**Review hardening:** addressed Codex/Gemini/Qodo findings for dict-shaped car IDs, start/finish wrap
+coverage, disjoint windows, malformed services envelopes, referenceLap lap metadata, scoped lake
+discovery, segment-window discovery, partial-runtime guard, output write errors, and `--overwrite`
+attempts that would corrupt retained TT input files. GitHub checks on `b6fcbaf` passed (`build`,
+`Canonical docs exist`, `conformance`; vault automerge skipped), `ci_resolve_gate.py` reported
+`No substantive findings hanging`, and all current review threads were resolved after the required
+cooldowns.
+
+**Verification:** clean worktree
+`make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python` passed on
+`b6fcbaf` (`1907 passed, 75 skipped`, coverage 85.47%, `ci-fast: OK`). Focused tests:
+`tests/test_tt_normalize.py`, `tests/test_tt_ingest_cli.py`, `tests/test_tt_reference_runtime_guard.py`,
+and `tests/test_realtime_observer.py` passed (`79 passed`). Manual CLI trap: the one-segment TT
+fixture is rejected in strict mode; `--allow-partial` emits a schema-valid debug archive marked
+partial and the live observer refuses to install it.
+
+**What remains on #353:** issue [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)
+stays **OPEN**. M-TT0/M-TT1/M-TT2 are now merged, but M-TT3 still needs the per-corner analysis ->
+harness curriculum/oracle work. Production M-TT2 use also still depends on collecting enough real TT
+segment windows (or finding a full-lap endpoint) for strict mode to produce a non-partial reference;
+the code intentionally refuses to fake a full lap from one `/last-session` segment window.
 
 ## Resolved (2026-06-30T00:53:41Z) — PR #389 setup-schema review loop
 
@@ -191,18 +231,12 @@ Gemini at quota). Verified live E2E: `python -m tools.tt_ingest coaching` return
 per-corner diagnoses for the last session (Magione, Porsche 911 GT3 R — c3 "You messed up your
 exit", c4 "line too wide") and retained them to the lake.
 
-**Resume here → M-TT2:** reference-lap telemetry → `lap_archive` schema → M0 `--reference-archive`
-voice feed. Point schema PINNED + the frame→`TRACE_FIELDS` mapping is **de-risk-PROVEN** against
-real data (`.scratch/tt_mtt2_smoke.py` builds a valid `lap_archive` from the TT reference frames;
-`Kmh`→`speed` units confirmed km/h). **BUT a real blocker surfaced (and is now documented in
-[[tt-services-sigv4-crack-2026-06-29]]): `/last-session` carries only ONE SEGMENT's telemetry
-window (~9% of the lap: measured `dist` 0.265→0.359, derived lap_ms≈29s vs the true ~71s reference).**
-So M-TT2's FIRST step is a **live capture** of the FULL reference telemetry (stitch all 7 segment
-windows by scrubbing the renderer per-segment via CDP, or find a full-lap telemetry endpoint) —
-do it while TT is open — THEN normalise + ship the `reference` CLI + M0 bridge. M-TT2 is NOT a
-single-call add. Then **M-TT3** (per-corner analysis → harness drive-to-reference curriculum).
-Arbitrary-lap/older-session coaching is also a deferred follow-up (M-TT1 scopes to the last
-session's own lap).
+**M-TT2 follow-up:** PR #395 now ships the `reference` CLI + M0 bridge, with strict partial guards.
+The real data constraint still stands: `/last-session` carries only one segment's telemetry window
+(~9% of the lap in the retained fixture), so production use requires enough retained segment windows
+or a newly found full-lap endpoint before strict mode emits a non-partial archive. Next #353 slice is
+**M-TT3** (per-corner analysis -> harness drive-to-reference curriculum). Arbitrary-lap/older-session
+coaching is also a deferred follow-up (M-TT1 scopes to the last session's own lap).
 
 ## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
 
