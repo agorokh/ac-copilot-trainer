@@ -55,9 +55,27 @@ _expand_home() {
   printf '%s' "${p}"
 }
 
+_normalize_windows_path() {
+  local p="${1:-}"
+  if [[ "${p}" =~ ^[A-Za-z]:[\\/] ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      cygpath -u -- "${p}"
+      return $?
+    fi
+    local drive rest
+    drive="$(printf '%s' "${p:0:1}" | tr '[:upper:]' '[:lower:]')"
+    rest="${p:2}"
+    rest="${rest//\\//}"
+    printf '/%s%s' "${drive}" "${rest}"
+    return 0
+  fi
+  printf '%s' "${p}"
+}
+
 _to_abs_path() {
   local p
   p="$(_expand_home "${1:-}")" || return 1
+  p="$(_normalize_windows_path "${p}")" || return 1
   if [[ "${p}" != /* ]]; then
     p="${CHILD_REPO_ROOT}/${p}"
   fi
@@ -114,6 +132,7 @@ _resolve_python() {
   local candidate="${1:-}"
   if [[ -n "${candidate}" ]]; then
     candidate="$(_expand_home "${candidate}")" || return 1
+    candidate="$(_normalize_windows_path "${candidate}")" || return 1
     if [[ "${candidate}" == */* || "${candidate}" == ./* ]]; then
       if [[ "${candidate}" != /* ]]; then
         candidate="${CHILD_REPO_ROOT}/${candidate}"
@@ -150,6 +169,7 @@ AF_ROOT="$(_resolve_root "AGENTIC_MEMORY_AGENT_FACTORY_ROOT" "${AGENTIC_MEMORY_A
 
 if [[ -n "${AGENTIC_MEMORY_SOURCE_REGISTRY:-}" ]]; then
   SRC_REGISTRY="$(_expand_home "${AGENTIC_MEMORY_SOURCE_REGISTRY}")" || exit 1
+  SRC_REGISTRY="$(_normalize_windows_path "${SRC_REGISTRY}")" || exit 1
   if [[ "${SRC_REGISTRY}" != /* ]]; then
     SRC_REGISTRY="${AF_ROOT}/${SRC_REGISTRY}"
   fi

@@ -2317,9 +2317,10 @@ function script.update(dt)
         wsBridge = wsBridge,
       })
     end
+    local currentTireTemps = tires:currentTemps(car)
     telemetryPublisher.publishTireTempsIfDue({
       dt = dt,
-      temps = tires:currentTemps(car),
+      temps = currentTireTemps,
       wsBridge = wsBridge,
     })
     telemetryPublisher.publishTelemetryTickIfDue({
@@ -2328,6 +2329,7 @@ function script.update(dt)
       wsBridge = wsBridge,
       lat_g = 0,
       long_g = 0,
+      temps = currentTireTemps,
     })
   end)
   -- Round 10: drain any corner_advice replies into state.cornerAdvisories.

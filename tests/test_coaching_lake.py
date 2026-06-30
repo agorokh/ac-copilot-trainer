@@ -28,9 +28,11 @@ def _archive(
     track: str,
     lap_ms: int,
     *,
+    session_uuid="sess",
     is_valid=True,
     min_speed=80.0,
     snapshot=None,
+    setup_hash="setup-default",
     n_samples=4,
 ) -> dict:
     fields = list(TRACE_FIELDS)
@@ -42,13 +44,13 @@ def _archive(
         "schema_version": 1,
         "source": "in_game",
         "lap_uuid": lap_uuid,
-        "session_uuid": "sess",
+        "session_uuid": session_uuid,
         "exported_at": "2026-06-28T00:00:00Z",
         "car": {"id": car},
         "track": {"id": track, "lengthM": 4000.0},
         "conditions": {"ambientTempC": 26, "trackGripLevel": 0.98, "weatherType": "clear"},
         "lap": {"lap_n": 1, "lap_ms": lap_ms, "is_pb": True, "is_valid": is_valid},
-        "setup": {"hash": f"h{lap_uuid}", "path": "x/race.ini", "snapshot": snapshot or {}},
+        "setup": {"hash": setup_hash, "path": "x/race.ini", "snapshot": snapshot or {}},
         "trace": {"samples_count": n_samples, "fields": fields, "samples": samples},
         "corners": [
             {
@@ -85,10 +87,33 @@ def _db_path() -> Path:
 def _build(lake_cwd):
     laps = lake_cwd / "laps"
     laps.mkdir()
-    _write(laps, "a", _archive("a", "bmw_z4_gt3", "spa", 110000, min_speed=80.0))
-    _write(laps, "b", _archive("b", "bmw_z4_gt3", "spa", 108000, min_speed=85.0))
-    _write(laps, "c", _archive("c", "ks_audi_r8_lms", "imola", 95000, min_speed=70.0))
-    _write(laps, "d", _archive("d", "bmw_z4_gt3", "spa", 0, is_valid=False))  # invalid (0 ms)
+    _write(
+        laps,
+        "a",
+        _archive("a", "bmw_z4_gt3", "spa", 110000, session_uuid="sess-a", min_speed=80.0),
+    )
+    _write(
+        laps,
+        "b",
+        _archive("b", "bmw_z4_gt3", "spa", 108000, session_uuid="sess-a", min_speed=85.0),
+    )
+    _write(
+        laps,
+        "c",
+        _archive(
+            "c",
+            "ks_audi_r8_lms",
+            "imola",
+            95000,
+            session_uuid="sess-b",
+            min_speed=70.0,
+        ),
+    )
+    _write(
+        laps,
+        "d",
+        _archive("d", "bmw_z4_gt3", "spa", 0, session_uuid="sess-a", is_valid=False),
+    )
     db = _db_path()
     summary = build_lake(laps, db)
     return db, summary
@@ -98,6 +123,8 @@ def test_build_lake_counts(lake_cwd):
     db, summary = _build(lake_cwd)
     assert summary.laps == 4
     assert summary.valid_laps == 3  # the 0-ms lap is invalid
+    assert summary.sessions == 2
+    assert summary.stints == 2
     assert summary.corners == 4  # one corner each
     assert summary.samples == 16  # 4 laps x 4 samples
     assert summary.cars == 2
@@ -109,11 +136,29 @@ def test_summary_and_best_laps_reports(lake_cwd):
     db, _ = _build(lake_cwd)
     cols, rows = run_report(db, "summary")
     assert rows[0][cols.index("laps")] == 4
+    assert rows[0][cols.index("sessions")] == 2
+    assert rows[0][cols.index("stints")] == 2
     assert rows[0][cols.index("samples")] == 16
 
     cols, rows = run_report(db, "best-laps")
     spa = [r for r in rows if r[cols.index("track_id")] == "spa"][0]
     assert spa[cols.index("best_ms")] == 108000  # min valid lap on spa
+
+
+def test_session_and_stint_rollups_are_queryable(lake_cwd):
+    db, _ = _build(lake_cwd)
+    cols, rows = run_report(db, "sessions")
+    sess_a = [r for r in rows if r[cols.index("session_uuid")] == "sess-a"][0]
+    assert sess_a[cols.index("lap_count")] == 3
+    assert sess_a[cols.index("valid_laps")] == 2
+    assert sess_a[cols.index("best_lap_ms")] == 108000
+    assert sess_a[cols.index("pb_lap_uuid")] == "b"
+
+    cols, rows = run_report(db, "stints")
+    assert len(rows) == 2
+    stint_a = [r for r in rows if r[cols.index("session_uuid")] == "sess-a"][0]
+    assert stint_a[cols.index("tyre_set_key")] == "setup-default"
+    assert stint_a[cols.index("lap_count")] == 3
 
 
 def test_corner_speed_report_is_corner_grain(lake_cwd):
@@ -189,7 +234,9 @@ def test_run_query_arbitrary_sql(lake_cwd):
 
 
 def test_reports_registry_nonempty():
-    assert {"summary", "best-laps", "corner-speed", "setup-effect"} <= set(list_reports())
+    assert {"summary", "sessions", "stints", "best-laps", "corner-speed", "setup-effect"} <= set(
+        list_reports()
+    )
 
 
 def test_db_path_outside_journal_rejected(lake_cwd):

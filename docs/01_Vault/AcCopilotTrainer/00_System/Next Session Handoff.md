@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T19:36:03Z
+last_updated: 2026-06-30T20:49:44Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -58,6 +58,75 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) - PR #415 MERGED: telemetry data platform (#402)
+
+PR [#415](https://github.com/agorokh/ac-copilot-trainer/pull/415) squash-merged to `main` as
+[`c407d46`](https://github.com/agorokh/ac-copilot-trainer/commit/c407d46820974e37554b1b3c29317cc8459d7f76)
+at 2026-06-30T20:46:36Z. Issue [#402](https://github.com/agorokh/ac-copilot-trainer/issues/402)
+is **CLOSED**.
+
+**Shipped:** The coaching lake now materializes first-class `sessions` and `stints` rollups in
+DuckDB, with `sessions` / `stints` reports. `tools.ai_sidecar.driver_profile` maintains a compacted
+`journal/driver/profile.json` ledger with preferences, focus corners, session rollups, PBs, and
+consistency summaries so driver history survives raw-lap pruning. `tools.coaching_lake.retention`
+adds dry-run-first lifecycle planning/apply for `journal/laps` and `journal/tt`, preserving PB,
+reference, profile-ledger, pinned, and unreadable evidence. `tools.lap_archive_export --output -`
+streams CSV to stdout for live export bridges. Docs landed in
+`docs/10_Development/16_Telemetry_Data_Platform.md` plus the lap-archive export docs.
+
+**Review hardening:** Retention/profile safety now fails closed on invalid existing profile ledgers,
+merges partial session rebuilds without discarding older compacted bests, rejects negative retention
+caps, and invalidates TT derived indexes after TT raw deletions. `scripts/mcp/agentic-memory.sh`
+also normalizes Windows drive-letter paths under Git Bash, fixing local `ci-fast` parity when Bash is
+present on Windows.
+
+**Verification:** GitHub checks on head `63ba78d` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). Required review cooldowns were observed; GraphQL review
+threads are resolved; no current-SHA self-hosted reviewer body was present after the final cooldown.
+Local full parity in the clean LF checkout
+`C:\Users\arsen\Projects\ac-copilot-trainer-ci-402-lf` passed with
+`make ci-fast PYTHON=python` (`1977 passed, 76 skipped`, coverage 85.59%, `ci-fast: OK`; root-file
+allowlist warnings only for existing `.copier-answers.yml` and `doppler.yaml`). Focused slice passed
+(`47 passed`) across coaching lake, driver profile, retention, lap export, and agentic-memory wrapper
+tests. Scratch CLI smoke built a synthetic lake with `laps=3`, `sessions=2`, `stints=2`, wrote a
+driver profile with 2 session rollups / 1 PB, selected only the old non-PB lap for retention, and
+streamed 9 CSV rows to stdout.
+
+**Post-merge classification:** `scripts/` changed due the agentic-memory wrapper hardening; no
+migration/env/deps/workflow action required.
+
+## Delivered (2026-06-30) - PR #416 MERGED: race management cues (#406)
+
+PR [#416](https://github.com/agorokh/ac-copilot-trainer/pull/416) squash-merged to `main` as
+[`9832004`](https://github.com/agorokh/ac-copilot-trainer/commit/983200453d06ff5469165d5bcc9cc115feb0d7cc)
+at 2026-06-30T20:44:26Z. Issue [#406](https://github.com/agorokh/ac-copilot-trainer/issues/406)
+is **CLOSED**.
+
+**Shipped:** Added `tools.ai_sidecar.race_management.RaceManagementObserver` for stint-level
+`fuel_status` / `fuel_save`, `tyre_manage`, `brake_manage`, and `conditions_strategy` advisories.
+The observer rides alongside Coach v2 or the legacy realtime observer in `server.py`, reuses the
+existing tyre and conditions models, and emits through the existing `coaching.cue` / voice pipeline.
+Lua `telemetry_tick` payloads now carry fuel level/capacity and per-corner tyre core temps when
+available, and `external_protocol.py` validates the new race-management channels. Voice vocabulary
+and cue mapping include short action phrases for fuel saving, tyre saving, brake cooling, and
+conditions strategy. A Windows help-output CI failure was also fixed by changing the
+`car_schema.py --help` description to ASCII-safe `->`.
+
+**Review hardening:** Qodo found two real edge cases and both were fixed before merge:
+critical tyre escalation no longer reuses the firm-overheat dedupe classification, and fuel samples
+reset/reseed on lap-counter rollback so a new stint cannot inherit stale burn-rate estimates.
+
+**Verification:** GitHub checks on head `fe95758` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). GraphQL review threads are resolved; resolve-gate reports
+`No substantive findings hanging`; no current-SHA self-hosted reviewer body was present after the
+required cooldowns. Local focused verification passed (`105 passed`) across race management,
+protocol validation, server fan-out, voice phrasing, Lua telemetry publishing, and the Windows
+`car_schema.py --help` smoke. Local Windows CI parity required an LF checkout plus
+`FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub`; full pytest reached
+`1929 passed, 117 skipped`, coverage 85.51%, and the bash-backed secret/policy wrappers were run by
+equivalent PowerShell checks because `bash` is not on PATH. Post-merge classifier: no migration /
+env / deps / script / workflow flags.
 
 ## Delivered (2026-06-30) - PR #410 MERGED: Racing Atelier design package (#400)
 

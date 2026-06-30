@@ -69,3 +69,31 @@ def test_telemetry_tick_rejects_negative_lap():
 def test_telemetry_tick_valid_without_spline_backcompat():
     # spline is additive/optional — a legacy peripheral frame without it still validates.
     assert validate_inbound(make_telemetry_tick(_full_payload())) is None
+
+
+def test_telemetry_tick_accepts_race_management_channels():
+    frame = make_telemetry_tick(
+        _full_payload(
+            fuel_l=12.5,
+            target_laps_remaining=5.0,
+            tyre_temps_c={"fl": 92.0, "fr": 93.0, "rl": 89.0, "rr": 90.0},
+            tyre_wear_pct={"fl": 12.0, "fr": 11.0},
+            brake_temps_c={"fl": 500.0, "fr": 510.0},
+            weather_type="dry",
+            track_temp_c=32.0,
+            track_grip_level=0.98,
+        )
+    )
+    assert validate_inbound(frame) is None
+
+
+def test_telemetry_tick_rejects_bad_race_management_channels():
+    assert "fuel_l must be >= 0" in (
+        validate_inbound(make_telemetry_tick(_full_payload(fuel_l=-1.0))) or ""
+    )
+    assert "tyre_wear_pct.xx is not a known corner" in (
+        validate_inbound(make_telemetry_tick(_full_payload(tyre_wear_pct={"xx": 1.0}))) or ""
+    )
+    assert "weather_type must be a string" in (
+        validate_inbound(make_telemetry_tick(_full_payload(weather_type=7))) or ""
+    )

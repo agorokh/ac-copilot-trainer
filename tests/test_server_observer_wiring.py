@@ -44,6 +44,7 @@ def _reset_feed(monkeypatch):
     """Isolate the single-producer feed globals per test."""
     monkeypatch.setattr(server, "_observer_feed_peer", None)
     monkeypatch.setattr(server, "_observer_feed_warned", False)
+    server.set_race_manager(server.RaceManagementObserver())
     server._peripheral_rate_limiter.reset()
     server._background_tasks.clear()
 
@@ -96,6 +97,27 @@ def test_publish_coaching_cues_noop_without_observer(monkeypatch):
     sent = _capture_broadcast(monkeypatch)
     asyncio.run(_run_publish_cues({"type": "telemetry_tick", "payload": {}}, exclude=None))
     assert sent == []
+
+
+def test_publish_coaching_cues_fans_out_race_management_without_corner_observer(monkeypatch):
+    _reset_feed(monkeypatch)
+    race = _FakeObserver([_adv(kind="fuel_save", corner=-1, urgency="act")])
+    monkeypatch.setattr(server, "_observer", None)
+    server.set_race_manager(race)
+    sent = _capture_broadcast(monkeypatch)
+    try:
+        asyncio.run(
+            _run_publish_cues(
+                {"type": "telemetry_tick", "payload": {"fuel_l": 8.0, "lap": 2}},
+                exclude="ws-1",
+            )
+        )
+    finally:
+        server.set_race_manager(server.RaceManagementObserver())
+
+    assert race.calls == 1
+    assert len(sent) == 1
+    assert sent[0][0]["payload"]["kind"] == "fuel_save"
 
 
 def test_publish_coaching_cues_swallows_observer_error(monkeypatch):

@@ -56,6 +56,8 @@ class LakeSummary:
     db_path: str
     laps: int = 0
     valid_laps: int = 0
+    sessions: int = 0
+    stints: int = 0
     corners: int = 0
     samples: int = 0
     setup_params: int = 0
@@ -67,6 +69,7 @@ class LakeSummary:
         lines = [
             f"coaching lake built: {self.db_path}",
             f"  laps={self.laps} (valid={self.valid_laps})  cars={self.cars}  tracks={self.tracks}",
+            f"  sessions={self.sessions}  stints={self.stints}",
             f"  corners={self.corners}  samples={self.samples}  setup_params={self.setup_params}",
         ]
         if self.skipped:
@@ -131,6 +134,8 @@ def _create_schema(con) -> None:  # noqa: ANN001
     con.execute("DROP TABLE IF EXISTS samples")
     con.execute("DROP TABLE IF EXISTS setup_params")
     con.execute("DROP TABLE IF EXISTS corners")
+    con.execute("DROP TABLE IF EXISTS stints")
+    con.execute("DROP TABLE IF EXISTS sessions")
     con.execute("DROP TABLE IF EXISTS laps")
     con.execute(
         """
@@ -141,6 +146,30 @@ def _create_schema(con) -> None:  # noqa: ANN001
             weather_type TEXT, track_grip DOUBLE, ambient_temp_c DOUBLE, track_temp_c DOUBLE,
             setup_hash TEXT, setup_path TEXT, n_setup_params INTEGER,
             n_corners INTEGER, sample_count INTEGER, exported_at TEXT
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE sessions (
+            session_uuid TEXT, car_id TEXT, track_id TEXT, track_layout TEXT,
+            first_exported_at TEXT, last_exported_at TEXT,
+            first_lap_n INTEGER, last_lap_n INTEGER,
+            lap_count INTEGER, valid_laps INTEGER,
+            best_lap_ms BIGINT, median_lap_ms DOUBLE, consistency_ms DOUBLE,
+            pb_lap_uuid TEXT
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE TABLE stints (
+            stint_id TEXT, session_uuid TEXT, stint_index INTEGER,
+            car_id TEXT, track_id TEXT, setup_hash TEXT, tyre_set_key TEXT,
+            first_lap_n INTEGER, last_lap_n INTEGER,
+            lap_count INTEGER, valid_laps INTEGER,
+            best_lap_ms BIGINT, median_lap_ms DOUBLE, consistency_ms DOUBLE,
+            first_file TEXT, last_file TEXT
         )
         """
     )
@@ -222,6 +251,88 @@ def _lap_row(rec: dict, path: Path) -> tuple:
         len(rec.get("corners") or []),
         trace.get("samples_count") or len(trace.get("samples") or []),
         rec.get("exported_at"),
+    )
+
+
+def _materialize_session_tables(con) -> None:  # noqa: ANN001
+    """Project first-class session/stint rollups from the loaded lap fact table."""
+    con.execute(
+        """
+        INSERT INTO sessions
+        WITH best AS (
+            SELECT session_uuid, lap_uuid
+            FROM (
+                SELECT session_uuid, lap_uuid,
+                       row_number() OVER (
+                           PARTITION BY session_uuid
+                           ORDER BY lap_ms ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
+                       ) AS rn
+                FROM laps
+                WHERE is_valid AND lap_ms IS NOT NULL AND lap_ms > 0
+            )
+            WHERE rn = 1
+        )
+        SELECT l.session_uuid,
+               any_value(l.car_id),
+               any_value(l.track_id),
+               any_value(l.track_layout),
+               min(l.exported_at),
+               max(l.exported_at),
+               min(l.lap_n),
+               max(l.lap_n),
+               count(*)::INTEGER,
+               count(*) FILTER (WHERE l.is_valid)::INTEGER,
+               min(l.lap_ms) FILTER (WHERE l.is_valid AND l.lap_ms > 0),
+               median(l.lap_ms) FILTER (WHERE l.is_valid AND l.lap_ms > 0),
+               stddev_samp(l.lap_ms) FILTER (WHERE l.is_valid AND l.lap_ms > 0),
+               any_value(best.lap_uuid)
+        FROM laps l
+        LEFT JOIN best ON l.session_uuid IS NOT DISTINCT FROM best.session_uuid
+        GROUP BY l.session_uuid
+        """
+    )
+    con.execute(
+        """
+        INSERT INTO stints
+        WITH ordered AS (
+            SELECT *,
+                   CASE
+                     WHEN lag(coalesce(setup_hash, '')) OVER (
+                         PARTITION BY session_uuid
+                         ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
+                     ) IS NOT DISTINCT FROM coalesce(setup_hash, '')
+                     THEN 0 ELSE 1
+                   END AS stint_start
+            FROM laps
+        ),
+        grouped AS (
+            SELECT *,
+                   sum(stint_start) OVER (
+                       PARTITION BY session_uuid
+                       ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                   ) - 1 AS stint_index
+            FROM ordered
+        )
+        SELECT coalesce(session_uuid, 'session') || ':' || stint_index::TEXT AS stint_id,
+               session_uuid,
+               stint_index::INTEGER,
+               any_value(car_id),
+               any_value(track_id),
+               nullif(any_value(setup_hash), ''),
+               coalesce(nullif(any_value(setup_hash), ''), 'unknown-tyre-set'),
+               min(lap_n),
+               max(lap_n),
+               count(*)::INTEGER,
+               count(*) FILTER (WHERE is_valid)::INTEGER,
+               min(lap_ms) FILTER (WHERE is_valid AND lap_ms > 0),
+               median(lap_ms) FILTER (WHERE is_valid AND lap_ms > 0),
+               stddev_samp(lap_ms) FILTER (WHERE is_valid AND lap_ms > 0),
+               min(file),
+               max(file)
+        FROM grouped
+        GROUP BY session_uuid, stint_index
+        """
     )
 
 
@@ -373,10 +484,13 @@ def build_lake(
                         samples_staging.write_rows(rows)
             if samples_staging is not None:
                 summary.samples = samples_staging.copy_into(con)
+            _materialize_session_tables(con)
             con.execute("COMMIT")
             summary.valid_laps = con.execute("SELECT count(*) FROM laps WHERE is_valid").fetchone()[
                 0
             ]
+            summary.sessions = con.execute("SELECT count(*) FROM sessions").fetchone()[0]
+            summary.stints = con.execute("SELECT count(*) FROM stints").fetchone()[0]
             summary.cars = con.execute("SELECT count(DISTINCT car_id) FROM laps").fetchone()[0]
             summary.tracks = con.execute("SELECT count(DISTINCT track_id) FROM laps").fetchone()[0]
             build_ok = True
@@ -406,8 +520,27 @@ REPORTS: dict[str, str] = {
         SELECT count(*) AS laps, count(*) FILTER (WHERE is_valid) AS valid_laps,
                count(DISTINCT car_id) AS cars, count(DISTINCT track_id) AS tracks,
                min(exported_at) AS first_lap, max(exported_at) AS last_lap,
+               (SELECT count(*) FROM sessions) AS sessions,
+               (SELECT count(*) FROM stints) AS stints,
                (SELECT count(*) FROM samples) AS samples
         FROM laps
+    """,
+    "sessions": """
+        SELECT car_id, track_id, session_uuid, lap_count, valid_laps,
+               best_lap_ms, round(median_lap_ms, 1) AS median_lap_ms,
+               round(consistency_ms, 1) AS consistency_ms, pb_lap_uuid,
+               first_exported_at, last_exported_at
+        FROM sessions
+        ORDER BY last_exported_at, session_uuid
+    """,
+    "stints": """
+        SELECT car_id, track_id, session_uuid, stint_index, tyre_set_key,
+               lap_count, valid_laps, best_lap_ms,
+               round(median_lap_ms, 1) AS median_lap_ms,
+               round(consistency_ms, 1) AS consistency_ms,
+               first_lap_n, last_lap_n
+        FROM stints
+        ORDER BY session_uuid, stint_index
     """,
     "best-laps": """
         SELECT car_id, track_id, count(*) AS laps,

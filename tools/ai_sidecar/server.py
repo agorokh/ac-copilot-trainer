@@ -96,6 +96,7 @@ from tools.ai_sidecar.protocol import (
     build_ollama_followup,
     prepare_outbound_message,
 )
+from tools.ai_sidecar.race_management import RaceManagementObserver
 from tools.ai_sidecar.realtime_observer import (
     RealtimeObserver,
 )
@@ -150,6 +151,7 @@ _observer: RealtimeObserver | None = None
 # Coach v2 (diagnosed, anticipatory, paced). When installed via AC_COPILOT_COACH_V2=1 it is the cue
 # producer in place of the legacy observer's apex_deficit/late_brake output.
 _coach_runtime: Any | None = None
+_race_manager: Any | None = RaceManagementObserver()
 # The observer holds single-monotonic-stream state (last spline/lap, per-corner passes), so only ONE
 # producer may feed it. The first telemetry producer claims the feed; a second concurrent loopback
 # producer is still routed to peripherals but NOT into the observer (interleaving would corrupt wrap
@@ -197,6 +199,12 @@ def set_coach_runtime(coach: Any | None) -> None:
     producer. When set (``AC_COPILOT_COACH_V2=1``) it replaces the legacy observer's cue output."""
     global _coach_runtime
     _coach_runtime = coach
+
+
+def set_race_manager(manager: Any | None) -> None:
+    """Install (or clear) the stint-level race-management observer."""
+    global _race_manager
+    _race_manager = manager
 
 
 def set_voice_coach(coach: Any | None) -> None:
@@ -400,6 +408,8 @@ def _reset_external_state() -> None:
     _external_peers.clear()
     _external_peer_classes.clear()
     _peripheral_rate_limiter.reset()
+    if _race_manager is not None:
+        _race_manager.reset()
     # The single-producer observer feed is external-peer state: a full reset (server (re)start or
     # teardown) leaves no producer owning the feed, so the next telemetry producer can claim it.
     # Without this, a stale owner persists and the next producer is silently rejected by the guard
@@ -761,6 +771,8 @@ def _release_observer_feed(websocket: Any) -> None:
             _observer.reset()
         if _coach_runtime is not None:  # B4: clear v2 stint state so the next producer starts clean
             _coach_runtime.reset()
+        if _race_manager is not None:
+            _race_manager.reset()
 
 
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
@@ -898,9 +910,12 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
     websocket) may continue to; a second concurrent producer is ignored here.
     """
     global _observer_feed_peer, _observer_feed_warned
-    # Coach v2 (diagnosed, anticipatory, paced) replaces the legacy observer's cues when wired.
+    # Coach v2 (diagnosed, anticipatory, paced) replaces the legacy observer's corner cues when
+    # wired. Race management rides alongside either producer because it depends on stint channels,
+    # not reference-corner geometry.
     observer = _coach_runtime if _coach_runtime is not None else _observer
-    if observer is None:
+    race_manager = _race_manager
+    if observer is None and race_manager is None:
         return
     if not _peripheral_rate_limiter.allow((TYPE_TELEMETRY_TICK, "observer"), TELEMETRY_TICK_MAX_HZ):
         return
@@ -916,11 +931,17 @@ async def _publish_coaching_cues(frame: dict[str, Any], *, exclude: Any) -> None
             )
             _observer_feed_warned = True
         return
-    try:
-        advisories = observer.observe(frame)
-    except Exception:
-        logger.exception("realtime observer failed on telemetry_tick")
-        return
+    advisories: list[Any] = []
+    if observer is not None:
+        try:
+            advisories.extend(observer.observe(frame))
+        except Exception:
+            logger.exception("realtime observer failed on telemetry_tick")
+    if race_manager is not None:
+        try:
+            advisories.extend(race_manager.observe(frame))
+        except Exception:
+            logger.exception("race-management observer failed on telemetry_tick")
     if not advisories:
         return
     ts_sim = frame.get("ts_sim")

@@ -391,10 +391,36 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
         err = _validate_optional_number(payload, lap_key, min_value=0)
         if err is not None:
             return err
-    for key in ("tyre_temps_c", "tyre_pressures_psi"):
+    for key in (
+        "tyre_temps_c",
+        "tyre_pressures_psi",
+        "tyre_wear_pct",
+        "brake_temps_c",
+        "brake_wear_pct",
+    ):
         err = _validate_corner_number_map(payload, key)
         if err is not None:
             return err
+    optional_ranges = {
+        "fuel_l": (0, None),
+        "fuel_capacity_l": (0, None),
+        "fuel_per_lap_l": (0, None),
+        "target_laps_remaining": (0, None),
+        "laps_to_finish": (0, None),
+        "race_laps_remaining": (0, None),
+        "race_laps": (0, None),
+        "session_laps_total": (0, None),
+        "track_grip_level": (0, None),
+        "track_temp_c": (None, None),
+        "ambient_temp_c": (None, None),
+    }
+    for key, (min_value, max_value) in optional_ranges.items():
+        err = _validate_optional_number(payload, key, min_value=min_value, max_value=max_value)
+        if err is not None:
+            return err
+    for key in ("weather_type", "tyre_compound"):
+        if key in payload and not isinstance(payload[key], str):
+            return f"{key} must be a string"
     for key in ("abs_active", "brake_lock", "wheel_lock"):
         if key in payload and not isinstance(payload[key], bool):
             return f"{key} must be a boolean"
