@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T21:44:31Z
+last_updated: 2026-06-30T22:23:39Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -58,6 +58,39 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) - PR #419 MERGED: driver progression profile (#403)
+
+PR [#419](https://github.com/agorokh/ac-copilot-trainer/pull/419) squash-merged to `main` as
+[`14f6257`](https://github.com/agorokh/ac-copilot-trainer/commit/14f625775863f44f03cf7685b7e8918f53492321)
+at 2026-06-30T22:21:09Z. Issue [#403](https://github.com/agorokh/ac-copilot-trainer/issues/403)
+is **CLOSED**.
+
+**Shipped:** Coach v2 now has a longitudinal driver progression layer on top of the compacted
+profile ledger from #402. `tools.ai_sidecar.driver_progression` classifies skills and selects
+foundation/intermediate/advanced cue policies and drills. The live runtime scopes profile history
+to the active reference car/track/layout before deriving cue density, and falls back to the baseline
+policy when reference combo metadata is missing. `AC_COPILOT_DRIVER_PROFILE` is documented as the
+override for the persisted `journal/driver/profile.json` runtime state.
+
+**Review hardening:** Bot review drove fail-closed profile path containment, imported/reference lap
+skips, idempotent rebuilds, same-session incremental merges, corner sample de-dupe, median sample
+gating, exact per-lap corner medians, active-combo filtering, chronological endpoint ordering, and
+UUID normalization across overlapping lap corpora. Qodo's remaining summary-only notes on corner
+derived stats and sample gating were stale against current code/tests; its tiers note was answered
+as a runtime telemetry-state false positive, not agent memory.
+
+**Verification:** GitHub checks on head `9149930` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). GraphQL review threads were resolved; Gemini and Codex
+review reruns were quota-limited after earlier passes, so current thread state plus Qodo's updated
+summary were used as the final gate. Local focused regression passed (`82 passed`) across driver
+profile/progression, Coach v2 runtime, observer wiring, and retention. Ruff check/format, policy,
+diff whitespace, Bandit, secret scan, policy docs, agent-forbidden, CSP API, and CSP UI checks were
+clean, with only existing root-file allowlist warnings for `.copier-answers.yml` and `doppler.yaml`.
+Local `make ci-fast` could not be used as a single command in the Windows checkout because the
+repo-wide formatter target wants to reformat unrelated baseline files; the changed-file formatter
+and all runnable component gates passed. Post-merge classification: `.env.example` changed for the
+new documented `AC_COPILOT_DRIVER_PROFILE`; no migration/dependency/workflow action required.
 
 ## Delivered (2026-06-30) - PR #418 MERGED: sector benchmarks + SuperLap targets (#408)
 
