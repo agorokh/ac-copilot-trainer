@@ -42,6 +42,13 @@ def test_session_end_flushes_pending_lap_archive() -> None:
         "session-end branch must drain pending lap-archive jobs before its session-end "
         "work (issue #305)"
     )
+    assert "wsBridge.sendSessionReviewGenerate" in branch_body, (
+        "session-end branch must ask the sidecar to generate the post-session review "
+        "after the lap archives are final"
+    )
+    assert branch_body.index("pumpLapArchiveNotifications()") < branch_body.index(
+        "wsBridge.sendSessionReviewGenerate"
+    )
 
 
 def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:

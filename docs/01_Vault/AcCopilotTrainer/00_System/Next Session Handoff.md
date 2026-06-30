@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T21:34:22Z
+last_updated: 2026-06-30T22:07:12Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -66,12 +66,16 @@ Branch `feat/issue-404-session-review` in worktree
 `C:\Users\arsen\Projects\ac-copilot-trainer-issue404` implements the structured post-session debrief
 artifact from issue [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404) Part A.
 
-**Shipped on branch:** `tools.session_review` reads immutable `journal/laps/lap_*.json` archives,
+**Shipped on branch / PR #423:** `tools.session_review` reads immutable `journal/laps/lap_*.json` archives,
 selects the latest or requested session, compares it with the fastest valid same car/track/layout
 reference lap, and writes Markdown + JSON reports under `journal/reports/`. The report includes a
 ranked per-corner problem list, ranked fixes, `next_session_prep`, `spoken_summary`, and
-`screen_summary` payloads for voice/launcher consumers. Docs landed in
-`docs/10_Development/17_Session_Review.md`. `make ci-fast` is now Windows-friendly by routing
+`screen_summary` payloads for voice/launcher consumers. Review hardening now filters missing
+`exported_at` timestamps, falls back to lap-only analysis when the fastest reference lap has an
+unusable trace, and fails closed when a selected session has no usable trace at all. Lua session-end
+now drains lap-archive jobs, sends `session.review.generate` to the loopback sidecar, and the sidecar
+writes the sibling report plus `session.review` / `coaching.cue` frames for screen and voice clients.
+Docs landed in `docs/10_Development/17_Session_Review.md`. `make ci-fast` is now Windows-friendly by routing
 policy-doc and tracked-file secret scans through Python wrappers instead of invoking Bash with a
 `PYTHON=python` prefix that PowerShell misparsed.
 
@@ -82,10 +86,11 @@ from scratch cwd. The JSON output carried `screen_summary=["T1: 0.74s - techniqu
 summary `Session debrief for ks_porsche_911_gt3_r_2016 at magione: best lap 5.079s. Next session,
 focus T1.` The Markdown named session `sess-latest`, best lap `5.079s`, reference
 `lap_ref.json (4.773s)`, the T1 problem list, and next-session prep. Focused checks passed
-(`17 passed, 1 skipped`) across session review, coach report, and coaching lake tests. Full local
+(`80 passed, 1 skipped`) across session review, sidecar external protocol, topic allowlist, lap
+archive source-structure, coach report, coaching lake, and voice wiring tests. Full local
 parity passed on Windows with
 `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast PYTHON=python`
-(`1950 passed, 117 skipped`, coverage 85.38%, `ci-fast: OK`; only existing root-file allowlist
+(`1956 passed, 117 skipped`, coverage 85.37%, `ci-fast: OK`; only existing root-file allowlist
 warnings for `.copier-answers.yml` and `doppler.yaml`).
 
 **Memory note:** The exact Tier-3 MCP tool was not exposed in this Codex tool surface. The repo

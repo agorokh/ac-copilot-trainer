@@ -2160,9 +2160,26 @@ function script.update(dt)
       -- also calls wsBridge.reset) is imminent — so the last lap's archive-backed brain
       -- follow-up gets its one send attempt here instead of being stranded. CodeRabbit #321.
       pumpLapArchiveNotifications()
+      local sessionReviewLaps = tonumber(state.lapsCompleted) or 0
+      if sessionReviewLaps >= 1 and wsBridge
+          and type(wsBridge.sendSessionReviewGenerate) == "function" then
+        local reviewOk, reviewSentOrErr = pcall(
+          wsBridge.sendSessionReviewGenerate,
+          persistence.lapArchiveDir(),
+          SESSION_UUID
+        )
+        if ac and type(ac.log) == "function" then
+          if not reviewOk then
+            ac.log("[COPILOT][SESSION-REVIEW] generate request raised: "
+              .. tostring(reviewSentOrErr))
+          elseif reviewSentOrErr ~= true then
+            ac.log("[COPILOT][SESSION-REVIEW] generate request not sent; sidecar not ready")
+          end
+        end
+      end
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
-        local journalLaps = state.lapsCompleted or 0
+        local journalLaps = sessionReviewLaps
         local callOk, journalOkOrErr = pcall(sessionJournal.writeSessionEnd, lastDriveCar, lastDriveSim, {
           lapsCompleted = state.lapsCompleted,
           bestLapMs = state.bestLapMs,

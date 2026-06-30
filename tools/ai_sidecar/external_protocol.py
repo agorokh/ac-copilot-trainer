@@ -70,6 +70,7 @@ TYPE_SETUP_COMPARE = "setup.compare"
 TYPE_SETUP_SUGGEST = "setup.suggest"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
+TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
 
 # Server → client.
 TYPE_HELLO_ACK = "hello_ack"
@@ -89,6 +90,7 @@ TYPE_SETUP_COMPARE_RESULT = "setup.compare.result"
 TYPE_SETUP_SUGGEST_RESULT = "setup.suggest.result"
 TYPE_SETUP_EXCHANGE_SEARCH_RESULT = "se.search.result"
 TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK = "se.download.ack"
+TYPE_SESSION_REVIEW_RESULT = "session.review.result"
 # Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
 # from the Lua loopback peer to physical clients; the sidecar can derive and
 # route `haptic_event` frames to haptic-class clients.
@@ -127,6 +129,7 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_SETUP_SUGGEST,
     TYPE_SETUP_EXCHANGE_SEARCH,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
+    TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SETUP_SPINNER_LIST,
     TYPE_SETUP_SPINNER_SET,
     TYPE_TELEMETRY_TICK,
@@ -160,9 +163,10 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 #: Lua `publishTopic` drift-guard does not cover it — it is listed here so a `voice`-class client
 #: can legitimately subscribe.
 TOPIC_COACHING_CUE = "coaching.cue"
+TOPIC_SESSION_REVIEW = "session.review"
 # Topics the sidecar produces directly (no loopback Lua relay). Voice/offline clients may
 # state.subscribe to these without a Lua peer connected.
-SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset({TOPIC_COACHING_CUE})
+SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset({TOPIC_COACHING_CUE, TOPIC_SESSION_REVIEW})
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
         # Declared topics (EPIC #154 Part D wires producers for these).
@@ -176,6 +180,8 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         "setup.active",
         # Sidecar-originated live coaching cues (issue #341).
         TOPIC_COACHING_CUE,
+        # Sidecar-originated post-session debrief report (issue #404 Part A).
+        TOPIC_SESSION_REVIEW,
     }
 )
 
@@ -555,6 +561,15 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             if err is not None:
                 return err
         return None
+    if t == TYPE_SESSION_REVIEW_GENERATE:
+        lap_dir = frame.get("lap_dir")
+        if not isinstance(lap_dir, str) or not lap_dir:
+            return "session.review.generate requires non-empty 'lap_dir'"
+        for key in ("session", "driver_id", "output_dir"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return None
     if t in (
         TYPE_SETUP_LIST_RESULT,
         TYPE_SETUP_LOAD_ACK,
@@ -570,6 +585,7 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         TYPE_SETUP_SUGGEST_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+        TYPE_SESSION_REVIEW_RESULT,
     ):
         return None
     if t == TYPE_TELEMETRY_TICK:

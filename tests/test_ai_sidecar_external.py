@@ -203,6 +203,17 @@ def test_validate_inbound_accepts_known_types() -> None:
         ep.validate_inbound(
             {
                 "v": 1,
+                "type": "session.review.generate",
+                "lap_dir": "journal/laps",
+                "session": "sess",
+            }
+        )
+        is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
                 "type": "se.download",
                 "setup_id": 42,
                 "car_id": "ks_porsche_911_gt3_r_2016",
@@ -250,6 +261,7 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "limit must be <= 40" in (
         ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
     )
+    assert "lap_dir" in (ep.validate_inbound({"v": 1, "type": "session.review.generate"}) or "")
     assert "positive integer 'setup_id'" in (
         ep.validate_inbound(
             {
@@ -958,6 +970,114 @@ def test_setup_compare_returns_error_when_store_load_fails(
     assert result["type"] == ep.TYPE_SETUP_COMPARE_RESULT
     assert result["ok"] is False
     assert "permission denied" in result["error"]
+
+
+def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _FakeVoiceCoach:
+        def __init__(self) -> None:
+            self.messages: list[str] = []
+
+        def subscribe(self, advisory: object) -> None:
+            self.messages.append(str(advisory.message))
+
+    voice = _FakeVoiceCoach()
+    calls: list[dict[str, object]] = []
+
+    def _fake_generate(
+        lap_dir: str,
+        *,
+        session: str,
+        driver_id: str,
+        output_dir: str | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "lap_dir": lap_dir,
+                "session": session,
+                "driver_id": driver_id,
+                "output_dir": output_dir,
+            }
+        )
+        report_dir = tmp_path / "journal" / "reports"
+        return {
+            "ok": True,
+            "markdown_path": str(report_dir / "session_sess.md"),
+            "json_path": str(report_dir / "session_sess.json"),
+            "session_uuid": "sess",
+            "car_id": "ks_porsche_911_gt3_r_2016",
+            "track_id": "magione",
+            "best_lap_ms": 98_000,
+            "spoken_summary": "Session debrief for Magione: focus T1.",
+            "screen_summary": ["T1: 0.74s - technique"],
+            "problems": [],
+            "next_session_prep": [],
+            "source": {"lap_dirs": [lap_dir]},
+        }
+
+    monkeypatch.setattr(srv, "_generate_session_review_safe", _fake_generate)
+    srv.set_voice_coach(voice)
+    lap_dir = tmp_path / "journal" / "laps"
+
+    async def _hello(ws, client: str, client_class: str) -> None:
+        await ws.send(
+            json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
+        )
+        await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+    async def _run() -> tuple[dict, list[dict]]:
+        async with _running_sidecar() as port:
+            async with (
+                ws_connect(f"ws://127.0.0.1:{port}/") as lua,
+                ws_connect(f"ws://127.0.0.1:{port}/") as screen,
+            ):
+                await _hello(lua, "trainer-lua", ep.CLIENT_CLASS_LUA)
+                await _hello(screen, "screen-01", ep.CLIENT_CLASS_SCREEN)
+
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": ep.TYPE_SESSION_REVIEW_GENERATE,
+                            "lap_dir": str(lap_dir),
+                            "session": "sess",
+                        }
+                    )
+                )
+                ack = json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+                frames = [
+                    json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0)),
+                    json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0)),
+                ]
+                return ack, frames
+
+    try:
+        ack, frames = asyncio.run(_run())
+    finally:
+        srv.set_voice_coach(None)
+
+    assert calls == [
+        {
+            "lap_dir": str(lap_dir),
+            "session": "sess",
+            "driver_id": "local-driver",
+            "output_dir": None,
+        }
+    ]
+    assert ack["type"] == ep.TYPE_SESSION_REVIEW_RESULT
+    assert ack["ok"] is True
+    assert ack["markdown_path"].endswith("session_sess.md")
+    review = next(frame for frame in frames if frame.get("topic") == ep.TOPIC_SESSION_REVIEW)
+    cue = next(frame for frame in frames if frame.get("topic") == ep.TOPIC_COACHING_CUE)
+    assert review["type"] == ep.TYPE_STATE_SNAPSHOT
+    assert review["payload"]["session_uuid"] == "sess"
+    assert cue["payload"]["kind"] == "session_review"
+    assert cue["payload"]["message"] == "Session debrief for Magione: focus T1."
+    assert voice.messages == ["Session debrief for Magione: focus T1."]
 
 
 def test_config_set_round_trip_via_hub() -> None:

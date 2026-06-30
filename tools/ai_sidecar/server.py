@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
@@ -39,6 +40,7 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_VERSION,
     HAPTIC_CLIENT_CLASSES,
     PHYSICAL_CLIENT_CLASSES,
+    TOPIC_SESSION_REVIEW,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
     TYPE_CONFIG_ACK,
@@ -50,6 +52,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SESSION_REVIEW_GENERATE,
+    TYPE_SESSION_REVIEW_RESULT,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_COMPARE_RESULT,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
@@ -291,6 +295,7 @@ def _env_float(name: str, default: float, *, min_value: float, max_value: float)
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
 LEGACY_SCREEN_CLIENT_PREFIXES = ("ac-copilot-screen",)
+SESSION_REVIEW_DEFAULT_SESSION = "latest"
 
 # Windows reports a port-in-use bind as WSAEADDRINUSE (10048), which is distinct from the POSIX
 # errno.EADDRINUSE value; accept both so the clean-exit path fires on every platform.
@@ -320,6 +325,7 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_SUGGEST,
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
+        TYPE_SESSION_REVIEW_GENERATE,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -345,6 +351,7 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_SETUP_SUGGEST_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
+        TYPE_SESSION_REVIEW_RESULT,
     }
 )
 SIDECAR_LOCAL_TYPES = frozenset(
@@ -355,6 +362,7 @@ SIDECAR_LOCAL_TYPES = frozenset(
         TYPE_SETUP_SUGGEST,
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
+        TYPE_SESSION_REVIEW_GENERATE,
     }
 )
 
@@ -458,6 +466,39 @@ def _setup_store_record_count(store_path: str | Path) -> int:
 
 def _record_lap_archive_safe(archive_path: str) -> dict[str, Any]:
     return record_lap_archive(archive_path, require_safe_path=True)
+
+
+def _generate_session_review_safe(
+    lap_dir: str,
+    *,
+    session: str = SESSION_REVIEW_DEFAULT_SESSION,
+    driver_id: str = "local-driver",
+    output_dir: str | None = None,
+) -> dict[str, Any]:
+    from tools.session_review import (
+        build_session_report,
+        report_dir_for_lap_dir,
+        write_session_report,
+    )
+
+    report = build_session_report([lap_dir], session=session, driver_id=driver_id)
+    target_dir = Path(output_dir) if output_dir else report_dir_for_lap_dir(lap_dir)
+    written = write_session_report(report, output_dir=target_dir)
+    session_meta = report.get("session") if isinstance(report.get("session"), dict) else {}
+    return {
+        "ok": True,
+        "markdown_path": str(written.markdown_path),
+        "json_path": str(written.json_path),
+        "session_uuid": session_meta.get("session_uuid"),
+        "car_id": session_meta.get("car_id"),
+        "track_id": session_meta.get("track_id"),
+        "best_lap_ms": session_meta.get("best_lap_ms"),
+        "spoken_summary": report.get("spoken_summary"),
+        "screen_summary": report.get("screen_summary"),
+        "problems": report.get("problems"),
+        "next_session_prep": report.get("next_session_prep"),
+        "source": report.get("source"),
+    }
 
 
 def _compare_setup_store(
@@ -1108,6 +1149,99 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
 
+def _session_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_SESSION_REVIEW,
+        "payload": payload,
+        "source": "sidecar.session_review",
+    }
+
+
+def _session_review_cue_payload(result: dict[str, Any]) -> dict[str, Any] | None:
+    message = result.get("spoken_summary")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    return {
+        "kind": "session_review",
+        "corner": None,
+        "urgency": "info",
+        "register": "calm",
+        "intensity": 0.0,
+        "message": message.strip(),
+        "spline": None,
+        "detail": {
+            "session_uuid": result.get("session_uuid"),
+            "markdown_path": result.get("markdown_path"),
+            "json_path": result.get("json_path"),
+        },
+    }
+
+
+async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> None:
+    """Generate and fan out the post-session review artifact (#404 Part A)."""
+    if not _is_loopback_peer(websocket):
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SESSION_REVIEW_RESULT,
+                "ok": False,
+                "error": "session review generation is loopback-only",
+            },
+        )
+        return
+
+    lap_dir = str(data.get("lap_dir") or "")
+    session = str(data.get("session") or SESSION_REVIEW_DEFAULT_SESSION)
+    driver_id = str(data.get("driver_id") or "local-driver")
+    output_dir = data.get("output_dir")
+    try:
+        result = await asyncio.to_thread(
+            _generate_session_review_safe,
+            lap_dir,
+            session=session,
+            driver_id=driver_id,
+            output_dir=output_dir if isinstance(output_dir, str) and output_dir else None,
+        )
+    except (OSError, ValueError) as e:
+        logger.info(
+            "session review generation failed lap_dir=%s session=%s err=%s", lap_dir, session, e
+        )
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SESSION_REVIEW_RESULT,
+                "ok": False,
+                "lap_dir": lap_dir,
+                "session": session,
+                "error": str(e),
+            },
+        )
+        return
+
+    ack = {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_SESSION_REVIEW_RESULT,
+        **result,
+    }
+    await _safe_send(websocket, ack)
+    await _broadcast_external(_session_review_snapshot(result), exclude=websocket)
+
+    cue_payload = _session_review_cue_payload(result)
+    if cue_payload is None:
+        return
+    coach = _voice_coach
+    if coach is not None:
+        try:
+            coach.subscribe(SimpleNamespace(**cue_payload))
+        except Exception:
+            logger.exception("voice coach subscribe failed for session review")
+    await _broadcast_external(make_coaching_cue(cue_payload), exclude=websocket)
+
+
 async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Handle Setup Exchange search/download frames in the sidecar (#363)."""
 
@@ -1230,6 +1364,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         return
     if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
         await _handle_setup_exchange_frame(websocket, data)
+        return
+    if t == TYPE_SESSION_REVIEW_GENERATE:
+        await _handle_session_review_frame(websocket, data)
         return
     if t in SIDECAR_LOCAL_TYPES:
         await _handle_setup_experiment_frame(websocket, data)

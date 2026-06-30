@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-06-30
-updated: 2026-06-30
+updated: 2026-06-30T22:07:12Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/404
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -24,6 +24,11 @@ latest session by `exported_at` or a requested `--session`, compares valid laps 
 valid same car/track/layout reference lap in the supplied corpus, and writes derived Markdown + JSON
 reports under `journal/reports/`.
 
+PR #423 review hardening connected the artifact to the live session-end path: after Lua drains
+pending lap archive jobs, it sends `session.review.generate` to the loopback sidecar. The sidecar
+writes the sibling `journal/reports` files, publishes `session.review` for screen clients, and emits
+a `coaching.cue` carrying `spoken_summary` for the voice client.
+
 ## Output contract
 
 - Markdown: driver-readable report with session stats, reference lap, ranked corner problem list,
@@ -42,6 +47,9 @@ reports under `journal/reports/`.
   up to three lap examples.
 - The `spoken_summary` and `screen_summary` fields intentionally keep Part A ready for the existing
   voice / launcher pipeline without adding a new UI surface in this slice.
+- Missing `exported_at` no longer breaks latest-session selection; unusable fastest reference laps
+  fall back to lap-only analysis; sessions with no usable trace fail closed instead of reporting a
+  misleading empty problem list.
 - `Makefile` policy targets now call Python wrappers for tracked-file secret scanning and canonical
   policy-doc existence checks. This preserves the existing checks while making `make ci-fast
   PYTHON=python` work under Windows PowerShell.
@@ -55,10 +63,12 @@ reports under `journal/reports/`.
   session `sess-latest`, best lap `5.079s`, reference `lap_ref.json (4.773s)`, the T1 problem list,
   and next-session prep.
 - Focused checks: `python -m ruff format --check ...`, `python -m ruff check ...`, and
-  `python -m pytest -q tests/test_session_review.py tests/test_coach_report.py
-  tests/test_coaching_lake.py` passed (`17 passed, 1 skipped`; DuckDB optional skip).
+  `python -m pytest -q tests/test_session_review.py tests/test_ai_sidecar_external.py
+  tests/test_ws_topic_allowlist.py tests/test_lap_archive_source_structure.py
+  tests/test_coach_report.py tests/test_coaching_lake.py tests/test_voice_wiring.py` passed
+  (`80 passed, 1 skipped`; DuckDB optional skip).
 - Full parity: `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast
-  PYTHON=python` passed on Windows (`1950 passed, 117 skipped`, coverage 85.38%, `ci-fast: OK`).
+  PYTHON=python` passed on Windows (`1956 passed, 117 skipped`, coverage 85.37%, `ci-fast: OK`).
   The only warnings were existing root-file allowlist warnings for `.copier-answers.yml` and
   `doppler.yaml`.
 

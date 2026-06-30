@@ -31,3 +31,16 @@ Use JSON output when a launcher or rig surface needs the paths:
 ```bash
 python -m tools.session_review --lap-dir journal/laps --json
 ```
+
+Runtime integration:
+
+- When the Lua trainer reaches the main menu after a driven session, it drains
+  pending lap archive jobs, then sends `session.review.generate` to the loopback
+  sidecar with the current lap archive directory and session UUID.
+- The sidecar writes the same Markdown and JSON reports to the sibling
+  `journal/reports/` directory, publishes a `session.review` state snapshot for
+  screens, and emits a `coaching.cue` with the `spoken_summary` for the voice
+  client.
+- Generation is loopback-only. External screens subscribe to the derived
+  `session.review` / `coaching.cue` topics; they do not request report writes
+  directly.

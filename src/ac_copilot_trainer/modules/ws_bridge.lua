@@ -1234,6 +1234,26 @@ function M.sendSetupExperimentRecord(archivePath)
   })
 end
 
+--- Ask the Python sidecar to generate a saved post-session review artifact.
+---@param lapDir string|nil
+---@param sessionUuid string|nil
+---@return boolean
+function M.sendSessionReviewGenerate(lapDir, sessionUuid)
+  if type(lapDir) ~= "string" or lapDir == "" then return false end
+  if not (sock and externalHelloAcked) then return false end
+  if not setupExperimentPathFramesAllowed() then return false end
+  local payload = {
+    v = PROTOCOL_VERSION,
+    type = "session.review.generate",
+    lap_dir = lapDir,
+    driver_id = "local-driver",
+  }
+  if type(sessionUuid) == "string" and sessionUuid ~= "" then
+    payload.session = sessionUuid
+  end
+  return M.sendJson(payload)
+end
+
 --- Issue #86 Part D: register a handler for an external `request` event
 --- (e.g. screen → trainer `setup.list`, `setup.load`). Handler signature
 --- mirrors action handlers: `(payload:table|nil) -> (response_payload, error?)`.

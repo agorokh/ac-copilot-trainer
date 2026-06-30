@@ -85,6 +85,10 @@ def _parse_dt(value: str | None) -> datetime | None:
     return parsed
 
 
+def _parsed_datetimes(laps: Iterable[LoadedLap]) -> list[datetime]:
+    return [dt for dt in (_parse_dt(lap.exported_at) for lap in laps) if dt is not None]
+
+
 def _format_ms(value: int | float | None) -> str:
     if value is None:
         return "n/a"
@@ -157,7 +161,8 @@ def _select_session(laps: list[LoadedLap], session: str) -> tuple[str, list[Load
         return session, sorted(selected, key=_lap_sort_key)
 
     def last_seen(item: tuple[str, list[LoadedLap]]) -> tuple[datetime, str]:
-        latest = max((_parse_dt(lap.exported_at) for lap in item[1]), default=None)
+        timestamps = _parsed_datetimes(item[1])
+        latest = max(timestamps) if timestamps else None
         return latest or datetime.min.replace(tzinfo=UTC), item[0]
 
     selected_session, selected_laps = max(sessions.items(), key=last_seen)
@@ -198,8 +203,9 @@ def _session_stats(session_uuid: str, selected: list[LoadedLap]) -> dict[str, An
     valid = _valid_laps(selected)
     times = [lap.lap_ms for lap in valid if lap.lap_ms is not None]
     best = min(valid, key=lambda lap: lap.lap_ms or 999_999_999) if valid else None
-    first = min((_parse_dt(lap.exported_at) for lap in selected), default=None)
-    last = max((_parse_dt(lap.exported_at) for lap in selected), default=None)
+    timestamps = _parsed_datetimes(selected)
+    first = min(timestamps) if timestamps else None
+    last = max(timestamps) if timestamps else None
     return {
         "session_uuid": session_uuid,
         "car_id": selected[0].car_id if selected else None,
@@ -334,9 +340,10 @@ def _aggregate_problems(
     *,
     reference: LoadedLap | None,
     grip_ceiling_g: float | None,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], int]:
     problems: dict[int, dict[str, Any]] = {}
     skipped: list[str] = []
+    analyzed = 0
     reference_record = reference.record if reference else None
     for lap in _valid_laps(selected):
         ref_for_lap = (
@@ -347,9 +354,21 @@ def _aggregate_problems(
             reference_archive=ref_for_lap,
             grip_ceiling_g=grip_ceiling_g,
         )
+        if structured is None and ref_for_lap is not None:
+            structured = build_structured_debrief(
+                lap.record,
+                reference_archive=None,
+                grip_ceiling_g=grip_ceiling_g,
+            )
+            if structured is not None and reference is not None:
+                skipped.append(
+                    f"{reference.path.name}: unusable reference for {lap.path.name}; "
+                    "used lap-only analysis"
+                )
         if not structured:
             skipped.append(f"{lap.path.name}: no usable trace")
             continue
+        analyzed += 1
         reference_by_corner = {
             int(row.get("index") or 0): row
             for row in structured.get("corner_reference") or []
@@ -379,7 +398,7 @@ def _aggregate_problems(
         ),
         reverse=True,
     )
-    return ranked, skipped
+    return ranked, skipped, analyzed
 
 
 def _prep_items(problems: list[Mapping[str, Any]]) -> list[str]:
@@ -430,11 +449,15 @@ def build_session_report(
     if not stats["valid_laps"]:
         raise SessionReviewError(f"session {selected_session!r} has no valid timed laps")
     reference = _select_reference(laps, selected)
-    problems, analysis_skipped = _aggregate_problems(
+    problems, analysis_skipped, analyzed = _aggregate_problems(
         selected,
         reference=reference,
         grip_ceiling_g=grip_ceiling_g,
     )
+    if analyzed == 0:
+        raise SessionReviewError(
+            f"session {selected_session!r} has no valid laps with usable trace"
+        )
     prep = _prep_items(problems)
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -477,14 +500,25 @@ def _resolve_output_dir(output_dir: str | Path) -> Path:
     base_dir = Path.cwd().resolve()
     resolved = raw.resolve() if raw.is_absolute() else (base_dir / raw).resolve()
     report_root = (base_dir / DEFAULT_OUTPUT_DIR).resolve()
+    allowed = False
     try:
         resolved.relative_to(report_root)
-    except ValueError as exc:
+        allowed = True
+    except ValueError:
+        allowed = False
+    if not allowed and resolved.name == "reports" and resolved.parent.name == "journal":
+        allowed = True
+    if not allowed:
         report_root_label = DEFAULT_OUTPUT_DIR.as_posix()
-        raise SessionReviewError(
-            f"{raw}: report output must stay under {report_root_label}"
-        ) from exc
+        raise SessionReviewError(f"{raw}: report output must stay under {report_root_label}")
     return resolved
+
+
+def report_dir_for_lap_dir(lap_dir: str | Path) -> Path:
+    """Return the sibling ``journal/reports`` directory for a lap archive corpus."""
+    raw = Path(lap_dir)
+    resolved = raw.resolve() if raw.is_absolute() else (Path.cwd() / raw).resolve()
+    return resolved.parent / "reports"
 
 
 def _report_basename(report: Mapping[str, Any]) -> str:
