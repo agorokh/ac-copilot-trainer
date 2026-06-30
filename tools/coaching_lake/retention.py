@@ -30,6 +30,17 @@ class RetentionPolicy:
     max_tt_files: int | None = None
     max_tt_age_days: int | None = None
 
+    def __post_init__(self) -> None:
+        for name in (
+            "max_lap_files",
+            "max_lap_age_days",
+            "max_tt_files",
+            "max_tt_age_days",
+        ):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must be non-negative")
+
 
 @dataclass(frozen=True)
 class RetentionItem:
@@ -73,10 +84,13 @@ class RetentionApplyResult:
 
     deleted: int
     bytes_deleted: int
+    invalidated_indexes: int = 0
     failures: tuple[str, ...] = ()
 
     def render(self) -> str:
         text = f"retention applied: deleted={self.deleted}, bytes={self.bytes_deleted}"
+        if self.invalidated_indexes:
+            text += f", invalidated_indexes={self.invalidated_indexes}"
         if self.failures:
             text += f", failures={len(self.failures)}"
         return text
@@ -242,6 +256,21 @@ def _select_by_cap(
     return sorted(selected.values(), key=lambda item: (item.sort_time, item.path.as_posix()))
 
 
+def _tt_index_paths_for_deleted(items: Sequence[RetentionItem]) -> list[Path]:
+    roots: set[Path] = set()
+    for item in items:
+        if item.domain != "tt":
+            continue
+        for parent in item.path.parents:
+            if any((parent / name).exists() for name in DERIVED_TT_INDEXES):
+                roots.add(parent)
+                break
+    return sorted(
+        (root / name for root in roots for name in DERIVED_TT_INDEXES if (root / name).exists()),
+        key=lambda path: path.as_posix(),
+    )
+
+
 def plan_retention(
     *,
     lap_dir: str | Path | None = None,
@@ -252,7 +281,7 @@ def plan_retention(
 ) -> RetentionPlan:
     """Build a deterministic retention plan without deleting anything."""
     stamp = now or datetime.now(UTC)
-    profile = load_profile(profile_path) if profile_path is not None else None
+    profile = load_profile(profile_path, strict=True) if profile_path is not None else None
     items: list[RetentionItem] = []
     delete: list[RetentionItem] = []
 
@@ -295,6 +324,7 @@ def apply_retention(plan: RetentionPlan) -> RetentionApplyResult:
     """Delete files selected by a plan. Pin/protection is decided only during planning."""
     deleted = 0
     bytes_deleted = 0
+    deleted_tt_items: list[RetentionItem] = []
     failures: list[str] = []
     for item in plan.delete:
         try:
@@ -304,8 +334,21 @@ def apply_retention(plan: RetentionPlan) -> RetentionApplyResult:
             continue
         deleted += 1
         bytes_deleted += item.bytes
+        if item.domain == "tt":
+            deleted_tt_items.append(item)
+    invalidated_indexes = 0
+    for index_path in _tt_index_paths_for_deleted(deleted_tt_items):
+        try:
+            index_path.unlink()
+        except OSError as exc:
+            failures.append(f"{index_path}: {exc}")
+            continue
+        invalidated_indexes += 1
     return RetentionApplyResult(
-        deleted=deleted, bytes_deleted=bytes_deleted, failures=tuple(failures)
+        deleted=deleted,
+        bytes_deleted=bytes_deleted,
+        invalidated_indexes=invalidated_indexes,
+        failures=tuple(failures),
     )
 
 
@@ -329,18 +372,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.lap_dir is None and args.tt_dir is None:
         parser.error("pass --lap-dir and/or --tt-dir")
-    policy = RetentionPolicy(
-        max_lap_files=args.max_lap_files,
-        max_lap_age_days=args.max_lap_age_days,
-        max_tt_files=args.max_tt_files,
-        max_tt_age_days=args.max_tt_age_days,
-    )
-    plan = plan_retention(
-        lap_dir=args.lap_dir,
-        tt_dir=args.tt_dir,
-        policy=policy,
-        profile_path=args.profile,
-    )
+    try:
+        policy = RetentionPolicy(
+            max_lap_files=args.max_lap_files,
+            max_lap_age_days=args.max_lap_age_days,
+            max_tt_files=args.max_tt_files,
+            max_tt_age_days=args.max_tt_age_days,
+        )
+        plan = plan_retention(
+            lap_dir=args.lap_dir,
+            tt_dir=args.tt_dir,
+            policy=policy,
+            profile_path=args.profile,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     print(plan.render())
     if args.apply:
         print(apply_retention(plan).render())

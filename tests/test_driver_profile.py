@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from tools.ai_sidecar.driver_profile import build_profile, update_profile, write_profile
+from tools.ai_sidecar.driver_profile import (
+    ProfileLoadError,
+    build_profile,
+    update_profile,
+    write_profile,
+)
 
 
 def _archive(
@@ -96,6 +101,43 @@ def test_profile_keeps_compacted_pb_when_raw_archive_was_pruned(tmp_path: Path) 
     assert len(profile["session_rollups"]) == 2
 
 
+def test_profile_merges_partial_session_without_losing_compacted_best(tmp_path: Path) -> None:
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    _write_lap(laps, "new", _archive("lap-new", session_uuid="sess-a", lap_ms=90000))
+    existing = {
+        "session_rollups": {
+            "sess-a|bmw_z4_gt3|spa|": {
+                "session_uuid": "sess-a",
+                "car_id": "bmw_z4_gt3",
+                "track_id": "spa",
+                "track_layout": None,
+                "lap_count": 4,
+                "valid_laps": 4,
+                "best_lap_ms": 85000,
+                "median_lap_ms": 87000.0,
+                "consistency_ms": 500.0,
+                "best_lap_uuid": "lap-old",
+                "best_source_file": "lap_old.json",
+                "first_exported_at": "2026-06-01T00:00:00Z",
+                "last_exported_at": "2026-06-02T00:00:00Z",
+            }
+        }
+    }
+
+    profile = build_profile([laps], existing=existing, generated_at="stamp")
+
+    rollup = profile["session_rollups"]["sess-a|bmw_z4_gt3|spa|"]
+    assert rollup["lap_count"] == 4
+    assert rollup["valid_laps"] == 4
+    assert rollup["best_lap_ms"] == 85000
+    assert rollup["best_lap_uuid"] == "lap-old"
+    assert rollup["best_source_file"] == "lap_old.json"
+    pb = profile["personal_bests"]["bmw_z4_gt3|spa|"]
+    assert pb["lap_ms"] == 85000
+    assert pb["lap_uuid"] == "lap-old"
+
+
 def test_profile_keeps_existing_pb_ledger_without_rollup(tmp_path: Path) -> None:
     laps = tmp_path / "laps"
     laps.mkdir()
@@ -135,6 +177,20 @@ def test_update_profile_writes_under_journal_driver(tmp_path: Path, monkeypatch)
     profile_path = tmp_path / "journal" / "driver" / "profile.json"
     assert profile_path.exists()
     assert json.loads(profile_path.read_text(encoding="utf-8"))["driver_id"] == "driver-1"
+
+
+def test_update_profile_fails_closed_on_invalid_existing_profile(tmp_path: Path) -> None:
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    _write_lap(laps, "a", _archive("lap-a", session_uuid="sess-a", lap_ms=91000))
+    profile_path = tmp_path / "journal" / "driver" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(ProfileLoadError, match="profile invalid JSON"):
+        update_profile([laps], profile_path=profile_path)
+
+    assert profile_path.read_text(encoding="utf-8") == "{not-json"
 
 
 def test_profile_write_rejects_noncanonical_path(tmp_path: Path, monkeypatch) -> None:

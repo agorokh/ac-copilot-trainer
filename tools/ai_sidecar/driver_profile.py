@@ -28,6 +28,10 @@ DEFAULT_DRIVER_ID = "local-driver"
 DEFAULT_PROFILE_PATH = Path("journal/driver/profile.json")
 
 
+class ProfileLoadError(ValueError):
+    """Raised when an existing profile ledger cannot be trusted."""
+
+
 @dataclass(frozen=True)
 class ProfileSummary:
     """Summary of one profile update."""
@@ -136,7 +140,10 @@ def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[
 
 
 def load_profile(
-    path: str | Path = DEFAULT_PROFILE_PATH, *, driver_id: str = DEFAULT_DRIVER_ID
+    path: str | Path = DEFAULT_PROFILE_PATH,
+    *,
+    driver_id: str = DEFAULT_DRIVER_ID,
+    strict: bool = False,
 ) -> dict:
     """Load an existing profile, returning a default shell when the file is absent."""
     profile_path = Path(path)
@@ -144,9 +151,19 @@ def load_profile(
         return _default_profile(driver_id)
     try:
         loaded = json.loads(profile_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError as exc:
+        if strict:
+            raise ProfileLoadError(f"profile unreadable at {profile_path}: {exc}") from exc
+        return _default_profile(driver_id)
+    except ValueError as exc:
+        if strict:
+            raise ProfileLoadError(f"profile invalid JSON at {profile_path}: {exc}") from exc
         return _default_profile(driver_id)
     if not isinstance(loaded, dict) or loaded.get("schema_version") != PROFILE_SCHEMA_VERSION:
+        if strict:
+            raise ProfileLoadError(
+                f"profile schema mismatch at {profile_path}: expected {PROFILE_SCHEMA_VERSION}"
+            )
         return _default_profile(driver_id)
     loaded.setdefault("driver_id", driver_id)
     loaded.setdefault("preferences", {})
@@ -156,6 +173,50 @@ def load_profile(
     loaded.setdefault("consistency", {})
     loaded.setdefault("source", {"lap_count": 0, "valid_laps": 0, "skipped": []})
     return loaded
+
+
+def _min_present(*values: Any) -> Any:
+    present = [value for value in values if value is not None]
+    return min(present) if present else None
+
+
+def _max_present(*values: Any) -> Any:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None
+
+
+def _merge_session_rollup(existing: Mapping[str, Any] | None, incoming: Mapping[str, Any]) -> dict:
+    if not isinstance(existing, Mapping):
+        return dict(incoming)
+    merged = {**dict(existing), **dict(incoming)}
+    merged["first_exported_at"] = _min_present(
+        existing.get("first_exported_at"), incoming.get("first_exported_at")
+    )
+    merged["last_exported_at"] = _max_present(
+        existing.get("last_exported_at"), incoming.get("last_exported_at")
+    )
+    merged["first_lap_n"] = _min_present(existing.get("first_lap_n"), incoming.get("first_lap_n"))
+    merged["last_lap_n"] = _max_present(existing.get("last_lap_n"), incoming.get("last_lap_n"))
+    merged["lap_count"] = max(
+        int(existing.get("lap_count") or 0), int(incoming.get("lap_count") or 0)
+    )
+    merged["valid_laps"] = max(
+        int(existing.get("valid_laps") or 0), int(incoming.get("valid_laps") or 0)
+    )
+
+    existing_best = _num_ms(existing.get("best_lap_ms"))
+    incoming_best = _num_ms(incoming.get("best_lap_ms"))
+    if existing_best is not None and (incoming_best is None or existing_best <= incoming_best):
+        merged["best_lap_ms"] = existing_best
+        merged["best_lap_uuid"] = existing.get("best_lap_uuid")
+        merged["best_source_file"] = existing.get("best_source_file")
+    elif incoming_best is not None:
+        merged["best_lap_ms"] = incoming_best
+
+    if int(existing.get("valid_laps") or 0) >= int(incoming.get("valid_laps") or 0):
+        merged["median_lap_ms"] = existing.get("median_lap_ms")
+        merged["consistency_ms"] = existing.get("consistency_ms")
+    return merged
 
 
 def _rollups_from_archives(
@@ -259,7 +320,10 @@ def build_profile(
         }
 
     new_rollups, source_laps, valid_laps, skipped = _rollups_from_archives(inputs)
-    base["session_rollups"].update(new_rollups)
+    for key, rollup in new_rollups.items():
+        base["session_rollups"][key] = _merge_session_rollup(
+            base["session_rollups"].get(key), rollup
+        )
     rollups = base["session_rollups"]
 
     by_combo: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -362,7 +426,7 @@ def update_profile(
     generated_at: str | None = None,
 ) -> ProfileSummary:
     """Load, merge, and persist the driver profile."""
-    existing = load_profile(profile_path, driver_id=driver_id)
+    existing = load_profile(profile_path, driver_id=driver_id, strict=True)
     profile = build_profile(
         inputs, driver_id=driver_id, existing=existing, generated_at=generated_at
     )

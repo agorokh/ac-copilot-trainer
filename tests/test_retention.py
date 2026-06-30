@@ -5,7 +5,16 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.coaching_lake.retention import RetentionPolicy, apply_retention, plan_retention
+import pytest
+
+from tools.coaching_lake.retention import (
+    RetentionPolicy,
+    apply_retention,
+    plan_retention,
+)
+from tools.coaching_lake.retention import (
+    main as retention_main,
+)
 
 
 def _archive(
@@ -102,6 +111,23 @@ def test_lap_retention_deletes_only_unprotected_candidates(tmp_path: Path) -> No
     assert protected_profile.exists()
 
 
+def test_lap_retention_fails_closed_when_profile_is_invalid(tmp_path: Path) -> None:
+    laps = tmp_path / "journal" / "laps"
+    profile_path = tmp_path / "journal" / "driver" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    laps.mkdir(parents=True)
+    profile_path.write_text("{not-json", encoding="utf-8")
+    _write_lap(laps, "eligible", _archive("lap-eligible", exported_at="2026-01-01T00:00:00Z"))
+
+    with pytest.raises(ValueError, match="profile invalid JSON"):
+        plan_retention(
+            lap_dir=laps,
+            policy=RetentionPolicy(max_lap_files=0),
+            profile_path=profile_path,
+            now=datetime(2026, 6, 30, tzinfo=UTC),
+        )
+
+
 def test_lap_retention_age_cap_is_dry_run_until_apply(tmp_path: Path) -> None:
     laps = tmp_path / "journal" / "laps"
     laps.mkdir(parents=True)
@@ -120,6 +146,17 @@ def test_lap_retention_age_cap_is_dry_run_until_apply(tmp_path: Path) -> None:
     assert new.exists()
 
 
+def test_retention_rejects_negative_caps(tmp_path: Path) -> None:
+    laps = tmp_path / "journal" / "laps"
+    laps.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="max_lap_age_days must be non-negative"):
+        RetentionPolicy(max_lap_age_days=-1)
+    with pytest.raises(SystemExit) as exc_info:
+        retention_main(["--lap-dir", str(laps), "--max-lap-age-days", "-1"])
+    assert exc_info.value.code == 2
+
+
 def test_tt_retention_excludes_indexes_and_honors_pins(tmp_path: Path) -> None:
     tt = tmp_path / "journal" / "tt"
     raw_dir = tt / "assettoCorsa" / "car" / "spa" / "sess"
@@ -127,10 +164,12 @@ def test_tt_retention_excludes_indexes_and_honors_pins(tmp_path: Path) -> None:
     delete_me = raw_dir / "session.json"
     keep_me = raw_dir / "coaching_lap1.json"
     index = tt / "index.json"
+    sessions_index = tt / "sessions_index.json"
     delete_me.write_text('{"raw":1}', encoding="utf-8")
     keep_me.write_text('{"raw":2}', encoding="utf-8")
     keep_me.with_suffix(".pin").write_text("manual", encoding="utf-8")
     index.write_text('{"derived":true}', encoding="utf-8")
+    sessions_index.write_text('{"derived":true}', encoding="utf-8")
     old = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
     os.utime(delete_me, (old, old))
     os.utime(keep_me, (old + 1, old + 1))
@@ -144,7 +183,9 @@ def test_tt_retention_excludes_indexes_and_honors_pins(tmp_path: Path) -> None:
 
     assert [item.path for item in plan.delete] == [delete_me]
     assert index not in {item.path for item in plan.items}
-    apply_retention(plan)
+    result = apply_retention(plan)
+    assert result.invalidated_indexes == 2
     assert not delete_me.exists()
     assert keep_me.exists()
-    assert index.exists()
+    assert not index.exists()
+    assert not sessions_index.exists()
