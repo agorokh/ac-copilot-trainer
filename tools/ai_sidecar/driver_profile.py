@@ -98,6 +98,17 @@ def _sorted_texts(values: Iterable[Any]) -> list[str]:
     return sorted({str(value) for value in values if isinstance(value, str) and value})
 
 
+def _numeric_list(value: Any) -> list[float]:
+    if not isinstance(value, Iterable) or isinstance(value, (Mapping, str, bytes)):
+        return []
+    out: list[float] = []
+    for item in value:
+        parsed = _num(item)
+        if parsed is not None:
+            out.append(parsed)
+    return out
+
+
 def _avg(values: Iterable[float | None]) -> float | None:
     finite = [v for v in values if v is not None and math.isfinite(v)]
     if not finite:
@@ -297,6 +308,7 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
         )
         first = ordered[0]
         min_speeds = [row.get("min_speed_kmh") for row in ordered]
+        finite_min_speeds = [speed for speed in min_speeds if speed is not None]
         first_min = next((speed for speed in min_speeds if speed is not None), None)
         last_min = next(
             (
@@ -326,6 +338,7 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max((v for v in min_speeds if v is not None), default=None),
             "median_min_speed_kmh": _median_float(min_speeds),
+            "min_speed_samples_kmh": finite_min_speeds,
             "lap_uuids": _sorted_texts(row.get("lap_uuid") for row in ordered),
             "delta_min_speed_kmh": (
                 round(last_min - first_min, 3)
@@ -478,6 +491,14 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
         if merged_lap_ids
         else old_laps + new_laps
     )
+    min_speed_samples = _numeric_list(existing.get("min_speed_samples_kmh")) + _numeric_list(
+        incoming.get("min_speed_samples_kmh")
+    )
+    median_min_speed = (
+        _median_float(min_speed_samples)
+        if min_speed_samples
+        else incoming.get("median_min_speed_kmh") or existing.get("median_min_speed_kmh")
+    )
     merged = dict(existing)
     merged.update(
         {
@@ -495,12 +516,10 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
             ),
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max(best_values, default=None),
-            "median_min_speed_kmh": _weighted_avg(
-                existing.get("median_min_speed_kmh"),
-                old_laps,
-                incoming.get("median_min_speed_kmh"),
-                new_laps,
-            ),
+            "median_min_speed_kmh": median_min_speed,
+            "min_speed_samples_kmh": min_speed_samples
+            if min_speed_samples
+            else existing.get("min_speed_samples_kmh"),
             "avg_entry_speed_kmh": _weighted_avg(
                 existing.get("avg_entry_speed_kmh"),
                 old_laps,

@@ -353,6 +353,7 @@ def test_incremental_corner_merge_updates_derived_stats(tmp_path: Path) -> None:
 
     assert corner["valid_laps"] == 2
     assert corner["median_min_speed_kmh"] == 82.0
+    assert corner["min_speed_samples_kmh"] == [80.0, 84.0]
     assert corner["avg_traction_circle_proxy"] == pytest.approx(0.7)
 
 
