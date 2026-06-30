@@ -1,5 +1,12 @@
 # Claude Design UI package
 
+> **⚠ SUPERSEDED (2026-06-30).** The canonical design is now **Racing Atelier** at
+> [`design/racing-atelier/`](design/racing-atelier/) (see [`design/README.md`](design/README.md)).
+> This brief's **screen inventory, states, copy rules, and data bindings remain useful**, but its
+> **token table and `AG Porsche Academy` branding are the retired pass** — use
+> `design/racing-atelier/project/tokens/` for colours/type and the `AC COPILOT` / `RACING ATELIER`
+> lockups for branding. Owning issue: #400.
+
 Last updated: 2026-06-29
 
 This package is the source brief to hand to Claude Design, Figma work, or a UI
@@ -12,8 +19,15 @@ spec, not a marketing page.
 
 ## Rendered visual reference (start here)
 
-This brief is the written half. The **rendered** half lives at
-[`design/index.html`](design/index.html) — open it in any browser.
+The canonical design is the **Racing Atelier** package at
+[`design/racing-atelier/`](design/racing-atelier/) — read the **source** (`project/tokens/`,
+`project/templates/`, `project/ui_kits/`, `project/guidelines/firmware-fonts.md`). Per-surface
+**visual targets** for the comparison gate are at
+[`design/racing-atelier-renders/`](design/racing-atelier-renders/) (`esp32_rig.png`,
+`ingame_hud.png`, `game_point.png`) with the gate in its `README.md`. An implementing agent
+**must visually compare** the real surface (rig photo / in-game HUD capture / launcher
+screenshot) against the matching PNG **and** `project/tokens/colors.css` — a green code diff is
+**not** UI verification.
 
 It is **HUD-first**: the already-shipped, Figma-matched in-game HUD is the
 **source of truth**, reproduced faithfully from

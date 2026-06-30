@@ -1,0 +1,35 @@
+{
+  "id": "laguna-seca", "name": "Laguna Seca", "country": "USA",
+  "lengthKm": 3.602, "cornerCount": 11, "climbM": 54, "drsZones": 0,
+  "map": {
+    "viewBox": "0 0 320 180",
+    "path": "M82 38 Q70 38 70 52 L70 84 Q70 98 84 100 L122 106 Q134 108 134 121 L132 148 Q131 160 145 160 L182 158 Q196 158 198 144 Q200 128 214 128 L246 130 Q260 131 260 116 L258 78 Q256 60 240 62 L154 74 Q140 76 140 62 L140 52 Q140 38 126 38 L82 38 Z",
+    "highlight": "M198 144 Q200 128 214 128 L232 129",
+    "here": { "x": 206, "y": 130 },
+    "markers": [
+      { "x": 84, "y": 100, "tone": "warn", "r": 3 },
+      { "x": 205, "y": 132, "tone": "house", "r": 3.2 },
+      { "x": 258, "y": 90, "tone": "chalk", "r": 3 }
+    ],
+    "labels": [{ "x": 150, "y": 152, "text": "corkscrew", "tone": "stop", "size": 9 }]
+  },
+  "elevation": {
+    "points": "0,18 60,22 130,16 175,12 200,40 250,46 320,30",
+    "peakX": 200, "peakLabel": "-18 m", "startLabel": "t6 rise", "endLabel": "rahal"
+  },
+  "now": { "id": "T8-8A", "name": "Corkscrew", "gear": 3, "minSpeed": 88, "throttle": 40,
+    "note": "blind crest then a plunging left-right, dropping ~18 m. aim at the lone tree on entry, let the car fall into the apex — brake before the crest, never on the way down." },
+  "next": [
+    { "id": "T9", "dist": "260 m", "name": "Rainey", "note": "fast-L · 4th", "tone": "warn" },
+    { "id": "T10", "dist": "420 m", "name": "Turn 10", "note": "downhill-R · 3rd" },
+    { "id": "T11", "dist": "640 m", "name": "Turn 11", "note": "hairpin · 2nd" }
+  ],
+  "keyCorners": [
+    { "id": "T2", "name": "Andretti Hairpin", "note": "brake hard · 2nd" },
+    { "id": "T5", "name": "Turn 5", "note": "uphill-L · 3rd" },
+    { "id": "T6", "name": "Turn 6", "note": "blind climb · commit" },
+    { "id": "T8-8A", "name": "Corkscrew", "note": "the drop · iconic" },
+    { "id": "T9", "name": "Rainey Curve", "note": "long fast-L" },
+    { "id": "T11", "name": "Turn 11", "note": "hairpin onto straight" }
+  ]
+}

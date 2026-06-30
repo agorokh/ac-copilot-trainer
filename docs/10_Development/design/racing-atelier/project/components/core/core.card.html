@@ -1,0 +1,55 @@
+<!-- @dsCard group="Components" viewport="700x420" name="Core — buttons, status, steppers, chips" subtitle="Field/brass/ghost buttons · status fields · block stepper · chips · labels · toasts" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body{margin:0;background:var(--carbon);color:var(--chalk);font-family:var(--font-read);}
+  .wrap{padding:24px;display:flex;flex-direction:column;gap:20px;}
+  .cap{font-family:var(--font-disp);font-weight:600;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--dim);}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;}
+</style></head>
+<body><div id="root" class="wrap"></div>
+<script src="../../_ds_bundle.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel">
+  const { Button, StatusField, Stepper, Chip, Label, Panel, Toast } = window.ACCopilotDesignSystem_bba7a8;
+  function Demo(){
+    const [v,setV]=React.useState(56.5);
+    return (<>
+      <div><div className="cap">Buttons</div>
+        <div className="row" style={{marginTop:8}}>
+          <Button variant="primary" iconLeft="▶ ">Start</Button>
+          <Button>Refresh</Button><Button>Logs</Button>
+          <Button variant="ghost">Settings</Button>
+          <Button disabled>Disabled</Button>
+        </div></div>
+      <div className="cols">
+        <div><div className="cap">Status fields</div>
+          <div className="row" style={{marginTop:8}}><StatusField tone="go">Ready to drive</StatusField><StatusField tone="stop">Press start</StatusField></div>
+          <div className="row" style={{marginTop:8}}><StatusField tone="go" variant="dot">Live</StatusField><StatusField tone="warn" variant="dot">Waiting</StatusField><StatusField tone="idle" variant="dot">Absent</StatusField></div>
+        </div>
+        <div><div className="cap">Chips · labels</div>
+          <div className="row" style={{marginTop:8}}><Chip>BB 54</Chip><Chip tone="warn">TC 4</Chip><Chip tone="go">WINGS</Chip><Chip tone="brass">QUALI</Chip></div>
+          <div className="row" style={{marginTop:10,gap:18}}><Label>Brake zone</Label><Label tone="stop">Too hot</Label><Label tone="brass">Adjust</Label></div>
+        </div>
+      </div>
+      <div className="cols">
+        <div><div className="cap">Stepper</div>
+          <Panel variant="raised" pad="12px" style={{marginTop:8}}>
+            <Stepper label="Brake bias" value={v.toFixed(1)} unit="%" fill={v/100}
+              onDecrement={()=>setV(x=>Math.round((x-0.5)*10)/10)} onIncrement={()=>setV(x=>Math.round((x+0.5)*10)/10)} />
+          </Panel></div>
+        <div><div className="cap">Toasts · panel w/ brackets</div>
+          <div className="row" style={{marginTop:8,alignItems:'stretch'}}>
+            <Toast tone="ok" title="Loaded">Race — stable</Toast>
+            <Panel brackets pad="14px" style={{flex:1}}><Label tone="dim">Bracketed panel</Label></Panel>
+          </div>
+        </div>
+      </div>
+    </>);
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script></body></html>

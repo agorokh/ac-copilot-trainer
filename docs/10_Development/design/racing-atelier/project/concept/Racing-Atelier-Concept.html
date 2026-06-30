@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Racing Atelier — instrument system</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@400;500;600;700;800&family=Saira:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    /* CARBON INSTRUMENT — high contrast, flat, matte. Built for a blink at speed. */
+    --carbon:#0B0C0D; --graphite:#141618; --slab:#191C1F; --raise:#20242A;
+    --edge:#2A2F35; --line:rgba(255,255,255,0.07); --line-2:rgba(255,255,255,0.16);
+    --chalk:#EEF1F3;   /* primary — near-white, max legibility */
+    --mute:#9BA1A8;    /* labels */
+    --dim:#5B6068;     /* meta */
+    /* signal — flat fields, no glow. read as quantity + colour, not subtlety. */
+    --brass:#C8983E;   /* the house mark / structure / brackets */
+    --red:#F23B2C;     /* brake · danger · too hot */
+    --amber:#F4A52C;   /* lift · caution · approaching */
+    --green:#2FBE6E;   /* on line · faster · clear */
+    --disp:'Saira Semi Condensed', system-ui, sans-serif;
+    --sans:'Saira', system-ui, sans-serif;
+    --mono:'Spline Sans Mono', ui-monospace, monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--carbon);color:var(--chalk);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+  .num{font-variant-numeric:tabular-nums;}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  .sheet{max-width:1180px;margin:0 auto;padding:40px 40px 90px;}
+
+  /* labels — tight bold caps, never spaced-out & thin */
+  .lab{font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--mute);}
+  .lab.dim{color:var(--dim);} .lab.brass{color:var(--brass);}
+
+  /* masthead */
+  .top{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line-2);padding-bottom:16px;}
+  .seg-mark{width:6px;height:22px;background:var(--brass);flex:0 0 auto;}
+  .wm{font-family:var(--disp);font-weight:800;font-size:22px;letter-spacing:0.16em;text-transform:uppercase;}
+  .top .desc{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.06em;}
+  .top .folio{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.08em;text-transform:uppercase;}
+
+  section{margin-top:60px;}
+  .secmark{display:flex;align-items:center;gap:12px;margin:0 0 24px;}
+  .secmark .bar{width:24px;height:3px;background:var(--brass);}
+  .secmark h2{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:0.14em;text-transform:uppercase;margin:0;color:var(--chalk);}
+
+  .hero h1{font-family:var(--disp);font-weight:700;font-size:52px;line-height:0.98;letter-spacing:-0.005em;text-transform:uppercase;margin:18px 0 0;}
+  .hero h1 .o{color:var(--brass);}
+  .lede{font-family:var(--sans);font-size:16.5px;line-height:1.6;color:var(--mute);max-width:64ch;margin:20px 0 0;}
+  .lede b{color:var(--chalk);font-weight:600;}
+
+  /* principles */
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line-2);border:1px solid var(--line-2);}
+  .pr{background:var(--carbon);padding:20px;}
+  .pr .k{font-family:var(--mono);font-size:11px;color:var(--brass);}
+  .pr h3{font-family:var(--disp);font-weight:700;font-size:18px;letter-spacing:0.04em;text-transform:uppercase;margin:12px 0 8px;}
+  .pr p{margin:0;color:var(--mute);font-size:13.5px;line-height:1.55;}
+
+  /* palette */
+  .swrow{display:flex;gap:1px;background:var(--line-2);border:1px solid var(--line-2);}
+  .sw{flex:1;height:84px;background:var(--carbon);display:flex;flex-direction:column;justify-content:flex-end;padding:9px 10px;}
+  .sw .h{font-family:var(--mono);font-size:10px;}
+  .sw .nm{font-family:var(--disp);font-weight:600;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;margin-bottom:2px;}
+  .signal-note{font-family:var(--sans);font-size:14px;color:var(--mute);max-width:64ch;margin:16px 0 0;line-height:1.55;}
+
+  /* type */
+  .typ{display:grid;grid-template-columns:1fr 1fr 1fr;gap:30px;align-items:end;}
+  .typ .s1{font-family:var(--disp);font-weight:800;font-size:40px;letter-spacing:0.02em;text-transform:uppercase;}
+  .typ .s2{font-family:var(--disp);font-weight:700;font-size:40px;font-variant-numeric:tabular-nums;}
+  .typ .s3{font-family:var(--mono);font-weight:500;font-size:24px;}
+  .typ .lab{margin-top:12px;line-height:1.7;}
+
+  /* ============ INSTRUMENT WIDGET ============ */
+  .stage{display:flex;gap:40px;flex-wrap:wrap;align-items:flex-start;padding:44px 36px;border:1px solid var(--line);
+    background:radial-gradient(120% 130% at 50% -20%, #16191d 0%, #090a0b 60%);}
+
+  .panel{position:relative;width:560px;background:linear-gradient(180deg,var(--graphite),var(--carbon));border:1px solid var(--edge);padding:22px 24px 24px;}
+  .panel.calm{width:330px;}
+  /* machined corner brackets — the house device */
+  .panel::before,.panel::after{content:"";position:absolute;width:14px;height:14px;border:2px solid var(--brass);}
+  .panel::before{top:-1px;left:-1px;border-right:0;border-bottom:0;}
+  .panel::after{bottom:-1px;right:-1px;border-left:0;border-top:0;}
+  .br-tr{position:absolute;top:-1px;right:-1px;width:14px;height:14px;border:2px solid var(--brass);border-left:0;border-bottom:0;}
+  .br-bl{position:absolute;bottom:-1px;left:-1px;width:14px;height:14px;border:2px solid var(--brass);border-right:0;border-top:0;}
+
+  .ctx{display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--line);}
+  .ctx .corner{display:flex;align-items:baseline;gap:9px;}
+  .ctx .cnum{font-family:var(--disp);font-weight:700;font-size:15px;color:var(--carbon);background:var(--brass);padding:1px 6px;letter-spacing:0.04em;}
+  .ctx .cname{font-family:var(--disp);font-weight:700;font-size:22px;letter-spacing:0.06em;text-transform:uppercase;}
+  .ctx .gs{display:flex;gap:18px;align-items:baseline;}
+  .ctx .gs .v{font-family:var(--disp);font-weight:700;font-size:26px;}
+  .ctx .gs .u{font-family:var(--mono);font-size:11px;color:var(--dim);}
+
+  /* the instruction zone */
+  .instr{margin-top:18px;display:flex;align-items:center;gap:20px;}
+  .cmd{flex:0 0 auto;width:188px;}
+  .cmd .verb{font-family:var(--disp);font-weight:800;font-size:66px;line-height:0.84;letter-spacing:0.01em;text-transform:uppercase;color:var(--red);}
+  .cmd .verb.amberv{color:var(--amber);} .cmd .verb.greenv{color:var(--green);}
+  .cmd .arrow{font-size:30px;color:var(--red);line-height:1;}
+  .bigdist{flex:1;text-align:right;}
+  .bigdist .v{font-family:var(--disp);font-weight:700;font-size:58px;line-height:0.85;}
+  .bigdist .u{font-family:var(--mono);font-size:15px;color:var(--mute);margin-left:4px;}
+  .bigdist .lab{margin-top:2px;}
+
+  /* segmented brake bar — shift-light logic, chunky, glanceable */
+  .segbar{display:flex;gap:3px;height:26px;margin-top:16px;}
+  .segbar .s{flex:1;background:var(--raise);}
+  .segbar .s.lit{background:var(--chalk);}
+  .segbar .s.amb{background:var(--amber);}
+  .segbar .s.red{background:var(--red);}
+  .segbar .s.zone{background:rgba(242,59,44,0.16);}
+  .seglabels{display:flex;justify-content:space-between;margin-top:7px;}
+
+  /* delta — thick bidirectional block, big number */
+  .delta{margin-top:24px;}
+  .delta .dl{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+  .dwrap{display:flex;align-items:center;gap:16px;}
+  .dtrack{flex:1;position:relative;height:24px;background:var(--raise);}
+  .dtrack .mid{position:absolute;left:50%;top:-4px;bottom:-4px;width:2px;background:var(--mute);}
+  .dtrack .blk{position:absolute;top:0;bottom:0;background:var(--red);}
+  .dtrack .blk.g{background:var(--green);}
+  .dval{font-family:var(--disp);font-weight:700;font-size:44px;line-height:0.8;color:var(--red);min-width:96px;text-align:right;}
+  .dval.g{color:var(--green);}
+  .dends{display:flex;justify-content:space-between;margin-top:7px;}
+
+  .coachline{margin-top:18px;display:inline-flex;align-items:center;gap:10px;border-top:1px solid var(--line);padding-top:14px;width:100%;}
+  .coachline .tag{font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:var(--red);}
+  .coachline .txt{font-family:var(--mono);font-size:12px;color:var(--mute);}
+
+  /* annotations */
+  .annot{width:268px;display:flex;flex-direction:column;gap:20px;padding-top:4px;}
+  .annot .ai{display:flex;gap:13px;}
+  .annot .n{font-family:var(--mono);font-size:11px;color:var(--brass);flex:0 0 auto;padding-top:3px;}
+  .annot h4{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 4px;}
+  .annot p{margin:0;font-size:13px;color:var(--mute);line-height:1.55;}
+
+  footer{margin-top:70px;border-top:1px solid var(--line-2);padding-top:24px;color:var(--mute);font-size:14px;line-height:1.6;}
+  footer b{color:var(--chalk);}
+  .ask{background:var(--graphite);border:1px solid var(--line-2);border-left:3px solid var(--brass);padding:18px 22px;margin-top:20px;}
+  .ask h4{font-family:var(--disp);font-weight:700;letter-spacing:0.08em;text-transform:uppercase;margin:0 0 8px;font-size:14px;color:var(--chalk);}
+  .ask ol{margin:0;padding-left:18px;color:var(--mute);font-size:14px;line-height:1.75;}
+  .compare{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+  .compare a{font-family:var(--mono);font-size:11px;color:var(--dim);border:1px solid var(--line-2);padding:5px 10px;text-decoration:none;}
+  .compare a:hover{color:var(--chalk);}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <!-- masthead -->
+  <div class="top">
+    <span class="seg-mark"></span>
+    <span class="wm">Racing Atelier</span>
+    <span class="desc">instrument system · night</span>
+    <span class="folio">concept iii · instrument cluster</span>
+  </div>
+
+  <!-- hero -->
+  <div class="hero" style="margin-top:30px;">
+    <div class="lab brass">read in a blink, at two hundred</div>
+    <h1>An instrument cluster.<br><span class="o">Not a magazine. Not a game.</span></h1>
+    <p class="lede">This corrects course. The eye at speed reads in periphery — it catches <b>size, colour fields and lit blocks</b>, never an italic or a hairline tick. So the racing register is built from the cockpit out: <b>bold condensed numerals, chunky segmented indicators (shift-light logic), full colour fields for state, maximum contrast.</b> It inherits from Atelier the things that travel — an <b>authored token system, ruthless restraint, a named lexicon, instrument rigor</b> — and none of the things that don't: the serif, the italics, the paper.</p>
+  </div>
+
+  <!-- principles -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>What it takes from Atelier — and what it refuses</h2></div>
+    <div class="grid3">
+      <div class="pr"><div class="k">keep</div><h3>The discipline</h3><p>One source-of-truth token file. Colour spent only on meaning. A named lexicon (corner, reference, zone, delta). Calm reframed as glanceable: one action loud, everything else quiet.</p></div>
+      <div class="pr"><div class="k">refuse</div><h3>The dress</h3><p>No serif, no italics, no hairline measures, no lowercase prose at the wheel. Those read as editorial calm — fatal on a dash. Legibility outranks taste here.</p></div>
+      <div class="pr"><div class="k">forge</div><h3>The instrument</h3><p>Shift-light segment bars, thick delta blocks, big tabular numerals, machined corner brackets, hazard fields. The vocabulary of the garage and the data bay, not the studio floor.</p></div>
+    </div>
+  </section>
+
+  <!-- palette -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>Carbon &amp; signal</h2></div>
+    <div class="swrow">
+      <div class="sw" style="background:#0B0C0D"><span class="nm" style="color:#9BA1A8">Carbon</span><span class="h" style="color:#5B6068">0B0C0D</span></div>
+      <div class="sw" style="background:#141618"><span class="nm" style="color:#9BA1A8">Graphite</span><span class="h" style="color:#5B6068">141618</span></div>
+      <div class="sw" style="background:#20242A"><span class="nm" style="color:#9BA1A8">Raise</span><span class="h" style="color:#5B6068">20242A</span></div>
+      <div class="sw" style="background:#EEF1F3"><span class="nm" style="color:#0B0C0D">Chalk</span><span class="h" style="color:#5B6068">EEF1F3</span></div>
+      <div class="sw" style="background:#C8983E"><span class="nm" style="color:#0B0C0D">Brass</span><span class="h" style="color:#3a2c12">C8983E</span></div>
+      <div class="sw" style="background:#2FBE6E"><span class="nm" style="color:#06140c">Clear</span><span class="h" style="color:#06140c">2FBE6E</span></div>
+      <div class="sw" style="background:#F4A52C"><span class="nm" style="color:#1c1404">Lift</span><span class="h" style="color:#1c1404">F4A52C</span></div>
+      <div class="sw" style="background:#F23B2C"><span class="nm" style="color:#fff">Brake</span><span class="h" style="color:#2a0805">F23B2C</span></div>
+    </div>
+    <p class="signal-note">Near-black carbon, one structural <b style="color:var(--brass)">brass</b> for the house, and three <b>flat signal fields</b> — <b style="color:var(--green)">clear</b>, <b style="color:var(--amber)">lift</b>, <b style="color:var(--red)">brake</b> — vivid and matte for safety, never glowing or gradient. Brass is the only tie to Atelier's <span class="mono">--work</span> gold; the signals are tuned brighter than Atelier's muted hues because a dash must shout state, not whisper it.</p>
+  </section>
+
+  <!-- type -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>Two voices, both engineered</h2></div>
+    <div class="typ">
+      <div><div class="s1">BRAKE · LIFT</div><div class="lab dim">SAIRA SEMI CONDENSED — display, commands,<br>labels. Tight bold caps. Wide, technical, no flourish.</div></div>
+      <div><div class="s2 num">196 · 86 · +14</div><div class="lab dim">SAIRA 700 — the big readouts.<br>Tabular, condensed, legible at a glance.</div></div>
+      <div><div class="s3">m · km/h · t4</div><div class="lab dim">SPLINE SANS MONO — units, ids, the one<br>thread of kinship with Atelier's instrument layer.</div></div>
+    </div>
+  </section>
+
+  <!-- THE WIDGET -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>The widget, built for the eye — a brake zone</h2></div>
+    <div class="stage">
+      <div class="panel"><span class="br-tr"></span><span class="br-bl"></span>
+        <div class="ctx">
+          <div class="corner"><span class="cnum">T4</span><span class="cname">Ascari</span></div>
+          <div class="gs"><span><span class="v num">2</span> <span class="u">gear</span></span><span><span class="v num">196</span> <span class="u">km/h</span></span></div>
+        </div>
+
+        <div class="instr">
+          <div class="cmd"><div class="verb">BRAKE</div><div class="arrow">▼</div></div>
+          <div class="bigdist"><div class="lab">brake point</div><div><span class="v num">86</span><span class="u">m</span></div></div>
+        </div>
+        <div class="segbar">
+          <span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span>
+          <span class="s amb"></span><span class="s amb"></span>
+          <span class="s red"></span><span class="s red"></span><span class="s zone"></span><span class="s zone"></span><span class="s zone"></span><span class="s zone"></span>
+        </div>
+        <div class="seglabels"><span class="lab dim">now</span><span class="lab" style="color:var(--red)">brake zone</span></div>
+
+        <div class="delta">
+          <div class="dl"><span class="lab">entry Δ · ref 182 km/h</span><span class="lab" style="color:var(--red)">too hot — lift</span></div>
+          <div class="dwrap">
+            <div class="dtrack"><span class="mid"></span><span class="blk" style="left:50%;width:35%;"></span></div>
+            <span class="dval num">+14</span>
+          </div>
+          <div class="dends"><span class="lab dim">−20</span><span class="lab dim">0</span><span class="lab dim">+20</span></div>
+        </div>
+
+        <div class="coachline"><span class="tag">−0.18s here</span><span class="txt">lost on entry last lap · trail to apex</span></div>
+      </div>
+
+      <div class="annot">
+        <div class="ai"><span class="n">01</span><div><h4>One command, periphery-caught</h4><p>BRAKE + arrow in a hazard-red block, 66px. The eye flags it before it reads — colour and mass, not a word.</p></div></div>
+        <div class="ai"><span class="n">02</span><div><h4>Distance is a count of blocks</h4><p>Shift-light segments fill toward the red zone — you read <i>how close</i> as quantity of lit bars, plus one huge 86 m. No thin slider to decode.</p></div></div>
+        <div class="ai"><span class="n">03</span><div><h4>Delta is mass + a big number</h4><p>A thick block grows right of centre = too fast. The +14 is 44px. Direction and amount land in one glance.</p></div></div>
+        <div class="ai"><span class="n">04</span><div><h4>Everything else is demoted hard</h4><p>Corner, gear, speed, last-lap loss — small mono at the edges. The frame carries one decision, sized to matter.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- calm -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>On the reference — the dash goes quiet</h2></div>
+    <div class="stage">
+      <div class="panel calm"><span class="br-tr"></span><span class="br-bl"></span>
+        <div class="ctx">
+          <div class="corner"><span class="cnum">T7</span><span class="cname">Parabolica</span></div>
+          <div class="gs"><span><span class="v num">4</span> <span class="u">gear</span></span></div>
+        </div>
+        <div class="instr">
+          <div class="cmd"><div class="verb greenv" style="font-size:40px;">ON LINE</div></div>
+        </div>
+        <div class="delta">
+          <div class="dl"><span class="lab">entry Δ · ref 154 km/h</span><span class="lab" style="color:var(--green)">matched</span></div>
+          <div class="dwrap">
+            <div class="dtrack"><span class="mid"></span><span class="blk g" style="left:50%;width:6%;"></span></div>
+            <span class="dval g num">+2</span>
+          </div>
+          <div class="dends"><span class="lab dim">−20</span><span class="lab dim">0</span><span class="lab dim">+20</span></div>
+        </div>
+        <div class="coachline"><span class="tag" style="color:var(--green)">−0.06s</span><span class="txt">up on your lap · hold it</span></div>
+      </div>
+      <div class="annot">
+        <div class="ai"><span class="n">·</span><div><h4>Loud only when it must be</h4><p>On the reference the red is gone — one green word, a near-centred block. The driver earns the quiet. Hazard vs calm is the brand at speed.</p></div></div>
+        <div class="ai"><span class="n">·</span><div><h4>One cluster, three surfaces</h4><p>The same blocks reflow into the 320×480 rig dash and the in-game overlay. One instrument language, never re-drawn.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    A <b>direction</b> — live tokens untouched. On your nod I re-cut <b>tokens/</b> to this carbon-instrument system, rebuild the widgets as segmented/blocked instruments, and propagate across components, templates and all three surfaces. Atelier and Racing Atelier then read as two registers of one studio — same rigor, different machine.
+    <div class="ask">
+      <h4>Two calls and I start</h4>
+      <ol>
+        <li><b>This is the cockpit now?</b> Bold Saira + shift-light segments + colour fields, no italic, no hairline. If the command should be even bigger / the layout reshuffled, tell me what your eye wants first.</li>
+        <li><b>Brass + the three signals</b> — keep, or steer (e.g. cooler signal set, or a different house accent)?</li>
+      </ol>
+    </div>
+    <div class="compare"><a href="Racing-Atelier-Concept-v2.html">v2 · the Atelier-dark misfire</a><a href="Racing-Atelier-Concept-v1.html">v1 · the brutalist pass</a></div>
+  </footer>
+
+</div>
+</body>
+</html>

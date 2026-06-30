@@ -1,0 +1,35 @@
+{
+  "id": "silverstone", "name": "Silverstone", "country": "United Kingdom",
+  "lengthKm": 5.891, "cornerCount": 18, "climbM": 13, "drsZones": 2,
+  "map": {
+    "viewBox": "0 0 320 180",
+    "path": "M58 70 Q54 56 68 54 L150 46 Q176 44 192 58 L214 76 Q224 84 238 82 L276 74 Q290 72 292 86 Q294 100 280 104 L238 112 Q222 115 224 130 L228 150 Q230 162 216 162 L112 158 Q96 157 96 143 Q96 132 108 130 L150 124 Q164 122 159 110 L150 96 Q145 87 132 89 L78 100 Q63 103 61 90 L58 70 Z",
+    "highlight": "M192 58 L214 76 Q224 84 238 82 L260 78",
+    "here": { "x": 205, "y": 67 },
+    "markers": [
+      { "x": 150, "y": 46, "tone": "house", "r": 3.2 },
+      { "x": 280, "y": 90, "tone": "warn", "r": 3 },
+      { "x": 112, "y": 158, "tone": "chalk", "r": 3 }
+    ],
+    "labels": [{ "x": 196, "y": 52, "text": "maggotts", "tone": "data", "size": 9 }]
+  },
+  "elevation": {
+    "points": "0,38 60,36 130,34 180,30 240,34 290,30 320,32",
+    "peakX": 180, "peakLabel": "+6 m", "startLabel": "abbey", "endLabel": "stowe"
+  },
+  "now": { "id": "T10-13", "name": "Maggotts", "gear": 6, "minSpeed": 250, "throttle": 92,
+    "note": "the signature esses — Maggotts, Becketts, Chapel. flow left-right-left, never settle the car. lose the rhythm here and you bleed all of Hangar straight." },
+  "next": [
+    { "id": "T15", "dist": "770 m", "name": "Stowe", "note": "brake · 4th", "tone": "warn" },
+    { "id": "T16-17", "dist": "1.0 km", "name": "Vale", "note": "chicane · 2nd" },
+    { "id": "T18", "dist": "1.2 km", "name": "Club", "note": "long-R · 4th" }
+  ],
+  "keyCorners": [
+    { "id": "T1", "name": "Abbey", "note": "flat-ish kink · 6th" },
+    { "id": "T3", "name": "Village", "note": "brake hard · 2nd" },
+    { "id": "T9", "name": "Copse", "note": "near-flat · commit" },
+    { "id": "T10-13", "name": "Maggotts–Becketts", "note": "esses · rhythm" },
+    { "id": "T15", "name": "Stowe", "note": "fast-R · brave" },
+    { "id": "T18", "name": "Club", "note": "long-R onto straight" }
+  ]
+}

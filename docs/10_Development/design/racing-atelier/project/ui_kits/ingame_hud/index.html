@@ -1,0 +1,133 @@
+<!-- @dsCard group="In-game HUD" viewport="900x560" name="In-game overlay — coaching & Track Atlas" subtitle="The instrument widget and the Track Atlas (Spa · Silverstone · Laguna Seca · Magione)" -->
+<!-- @startingPoint section="Screens" subtitle="In-game coaching + Track Atlas overlay" viewport="900x560" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Racing Atelier — in-game</title>
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  html,body{margin:0;height:100%;background:#08090a;font-family:var(--font-read);}
+  #app{position:relative;width:100%;height:100vh;min-height:560px;overflow:hidden;display:flex;flex-direction:column;}
+  .scene{position:absolute;inset:0;z-index:0;background:linear-gradient(180deg,#3a4048 0%,#2a2e33 30%,#1a1c20 52%,#0e0f11 100%);}
+  .scene::after{content:"";position:absolute;left:50%;top:54%;bottom:0;width:64%;transform:translateX(-50%);background:linear-gradient(90deg,transparent,rgba(120,124,132,0.08) 10%,rgba(120,124,132,0.08) 90%,transparent);clip-path:polygon(40% 0,60% 0,100% 100%,0 100%);}
+  .overlay{position:relative;z-index:1;flex:1;min-height:0;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:26px 16px;}
+  .controls{position:relative;z-index:2;flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:12px 18px;background:rgba(8,9,10,0.85);border-top:1px solid var(--line);}
+  .controls button{background:var(--raise);border:1px solid var(--line-2);color:var(--chalk);font-family:var(--font-disp);font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;padding:9px 14px;cursor:pointer;white-space:nowrap;}
+  .controls button.on{background:var(--brass);color:#000;border-color:var(--brass);}
+  .controls .meta{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--mute);}
+  .tsel{display:flex;gap:6px;}
+  .tsel button{background:none;border:1px solid var(--line-2);color:var(--mute);font-family:var(--font-disp);font-weight:600;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;padding:5px 9px;cursor:pointer;white-space:nowrap;}
+  .tsel button.on{border-color:var(--brass);color:var(--brass);}
+</style></head>
+<body>
+<div id="app"><div class="scene"></div><div class="overlay" id="root"></div></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+const D = window.ACCopilotDesignSystem_bba7a8;
+const { CommandVerb, SegmentBar, DeltaBar, Panel, CornerNote, TrackMap, ElevationProfile, Label } = D;
+
+// Four circuits — mirrors data/<id>.json. Geometry is hand-traced (see readme).
+const TRACKS = [
+  { name:"Spa-Francorchamps", stats:"7.004 km · 19 corners · 102 m climb · 2 DRS",
+    viewBox:"0 0 320 180",
+    path:"M70 152 Q58 152 58 140 L58 120 Q58 109 70 107 L165 94 Q176 93 177 83 Q177 75 170 72 L156 64 Q149 60 153 53 L176 36 Q184 30 182 21 Q181 13 190 14 Q199 15 198 24 L193 60 Q192 72 203 75 L255 86 Q268 89 267 102 L266 128 Q265 140 252 139 L205 136 Q192 135 189 146 Q186 156 174 155 L150 153 Q137 152 131 144 Q124 136 112 139 L80 150 Q75 152 70 152 Z",
+    highlight:"M153 53 L176 36 Q184 30 182 21 Q181 13 190 14", here:{x:168,y:30},
+    labels:[{x:118,y:48,text:"eau rouge",tone:"stop",size:9}],
+    elev:{points:"0,46 70,44 120,40 150,12 180,16 240,30 320,34",peakX:150,peakLabel:"+38 m",startLabel:"la source",endLabel:"kemmel"},
+    now:{id:"T3-4",name:"Raidillon",gear:6,minSpeed:285,throttle:100,note:"flat-out uphill left-right. commit on the entry, the crest goes blind — aim for the right kerb on exit. don't lift or you lose Kemmel."},
+    next:[["T5 · 480 m","Les Combes","brake · 4th","warn"],["T8 · 1.1 km","Rivage","hairpin · 2nd",""],["T10 · 1.6 km","Pouhon","fast-L · 5th",""]] },
+  { name:"Silverstone", stats:"5.891 km · 18 corners · 13 m · 2 DRS",
+    viewBox:"0 0 320 180",
+    path:"M58 70 Q54 56 68 54 L150 46 Q176 44 192 58 L214 76 Q224 84 238 82 L276 74 Q290 72 292 86 Q294 100 280 104 L238 112 Q222 115 224 130 L228 150 Q230 162 216 162 L112 158 Q96 157 96 143 Q96 132 108 130 L150 124 Q164 122 159 110 L150 96 Q145 87 132 89 L78 100 Q63 103 61 90 L58 70 Z",
+    highlight:"M192 58 L214 76 Q224 84 238 82 L260 78", here:{x:205,y:67},
+    labels:[{x:196,y:52,text:"maggotts",tone:"data",size:9}],
+    elev:{points:"0,38 60,36 130,34 180,30 240,34 290,30 320,32",peakX:180,peakLabel:"+6 m",startLabel:"abbey",endLabel:"stowe"},
+    now:{id:"T10-13",name:"Maggotts",gear:6,minSpeed:250,throttle:92,note:"the signature esses — Maggotts, Becketts, Chapel. flow left-right-left, never settle the car. lose the rhythm here and you bleed all of Hangar straight."},
+    next:[["T15 · 770 m","Stowe","brake · 4th","warn"],["T16-17 · 1.0 km","Vale","chicane · 2nd",""],["T18 · 1.2 km","Club","long-R · 4th",""]] },
+  { name:"Laguna Seca", stats:"3.602 km · 11 corners · 54 m drop",
+    viewBox:"0 0 320 180",
+    path:"M82 38 Q70 38 70 52 L70 84 Q70 98 84 100 L122 106 Q134 108 134 121 L132 148 Q131 160 145 160 L182 158 Q196 158 198 144 Q200 128 214 128 L246 130 Q260 131 260 116 L258 78 Q256 60 240 62 L154 74 Q140 76 140 62 L140 52 Q140 38 126 38 L82 38 Z",
+    highlight:"M198 144 Q200 128 214 128 L232 129", here:{x:206,y:130},
+    labels:[{x:148,y:152,text:"corkscrew",tone:"stop",size:9}],
+    elev:{points:"0,18 60,22 130,16 175,12 200,40 250,46 320,30",peakX:200,peakLabel:"-18 m",startLabel:"t6 rise",endLabel:"rahal"},
+    now:{id:"T8-8A",name:"Corkscrew",gear:3,minSpeed:88,throttle:40,note:"blind crest then a plunging left-right, dropping ~18 m. aim at the lone tree on entry, let the car fall into the apex — brake before the crest, never on the way down."},
+    next:[["T9 · 260 m","Rainey","fast-L · 4th","warn"],["T10 · 420 m","Turn 10","downhill-R · 3rd",""],["T11 · 640 m","Turn 11","hairpin · 2nd",""]] },
+  { name:"Magione", stats:"2.507 km · 10 corners · technical",
+    viewBox:"0 0 320 180",
+    path:"M92 78 Q82 60 100 56 L168 46 Q200 42 212 60 Q220 74 236 74 L256 78 Q270 82 266 98 Q262 114 246 112 L186 116 Q170 118 172 132 Q174 146 158 144 L112 140 Q96 138 98 122 L94 100 Q92 89 92 78 Z",
+    highlight:"M212 60 Q220 74 236 74 L250 75", here:{x:224,y:66},
+    labels:[{x:148,y:42,text:"curvone",tone:"data",size:9}],
+    elev:{points:"0,34 80,32 150,30 200,28 260,32 320,33",peakX:200,peakLabel:"+4 m",startLabel:"rettifilo",endLabel:"esse"},
+    now:{id:"T3",name:"Curvone",gear:4,minSpeed:132,throttle:70,note:"the long right that defines the lap. a tight, technical circuit — get a clean exit here and you carry it down the back. patience over the bumpy entry kerbs."},
+    next:[["T4 · 210 m","Esse","left-right · 3rd","warn"],["T6 · 380 m","Tornantino","hairpin · 2nd",""],["T8 · 560 m","Carro","right · 3rd",""]] },
+];
+
+function Coaching(){return(
+  <Panel variant="glass" brackets pad="22px 26px" style={{width:560}}>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',paddingBottom:14,borderBottom:'1px solid var(--line)'}}>
+      <span style={{display:'flex',alignItems:'baseline',gap:9}}><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:14,color:'#000',background:'var(--brass)',padding:'1px 6px'}}>T4</span><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:22,letterSpacing:'0.05em',textTransform:'uppercase',color:'var(--chalk)'}}>Ascari</span></span>
+      <span style={{display:'flex',gap:16}}><span><Label size="xs" tone="dim">gear</Label><div style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:24,color:'var(--chalk)'}}>2</div></span><span><Label size="xs" tone="dim">km/h</Label><div style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:24,color:'var(--chalk)'}}>196</div></span></span>
+    </div>
+    <div style={{display:'flex',alignItems:'center',gap:20,marginTop:18}}>
+      <div style={{width:188}}><CommandVerb tone="stop" arrow="down" size={66}>Brake</CommandVerb></div>
+      <div style={{flex:1,textAlign:'right'}}><Label tone="dim">brake point</Label><div><span style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:58,color:'var(--chalk)'}}>86</span><span style={{fontFamily:'var(--font-mono)',fontSize:15,color:'var(--mute)'}}>m</span></div></div>
+    </div>
+    <div style={{marginTop:16}}><SegmentBar fill={0.66} zone={0.34} /></div>
+    <div style={{display:'flex',justifyContent:'space-between',marginTop:7}}><Label size="sm" tone="dim">now</Label><Label size="sm" tone="stop">brake zone</Label></div>
+    <div style={{marginTop:22}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}><Label>entry Δ · ref 182 km/h</Label><Label tone="stop">too hot — lift</Label></div><DeltaBar value={14} refLabel="182 km/h" /></div>
+  </Panel>
+);}
+
+function Atlas({sel}){
+  const t = TRACKS[sel];
+  return(
+  <Panel variant="glass" brackets pad="22px 26px" style={{width:680}}>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',paddingBottom:14,borderBottom:'1px solid var(--line)'}}>
+      <span style={{display:'flex',alignItems:'center',gap:12}}><span style={{width:6,height:18,background:'var(--brass)'}}/><span style={{fontFamily:'var(--font-disp)',fontWeight:800,fontSize:20,letterSpacing:'0.05em',textTransform:'uppercase',color:'var(--chalk)'}}>{t.name}</span></span>
+      <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--mute)'}}>{t.stats}</span>
+    </div>
+    <div style={{display:'flex',gap:26,marginTop:18}}>
+      <div style={{flex:1.3}}>
+        <Label tone="dim" style={{marginBottom:8}}>circuit · you are here</Label>
+        <TrackMap path={t.path} viewBox={t.viewBox} highlight={t.highlight} here={t.here} labels={t.labels} opacity={0.55} />
+        <Label tone="dim" style={{margin:'12px 0 6px'}}>elevation</Label>
+        <ElevationProfile points={t.elev.points} peakX={t.elev.peakX} peakLabel={t.elev.peakLabel} startLabel={t.elev.startLabel} endLabel={t.elev.endLabel} />
+      </div>
+      <div style={{flex:1,borderLeft:'1px solid var(--line)',paddingLeft:24}}>
+        <CornerNote id={t.now.id} name={t.now.name} gear={t.now.gear} minSpeed={t.now.minSpeed} throttle={t.now.throttle} note={t.now.note} />
+      </div>
+    </div>
+    <div style={{display:'flex',gap:10,marginTop:18,borderTop:'1px solid var(--line)',paddingTop:14}}>
+      <Label tone="dim" style={{alignSelf:'center'}}>next</Label>
+      <div style={{flex:1,display:'flex',gap:8}}>
+        {t.next.map(([d,n,note,tone])=>(
+          <div key={n} style={{flex:1,background:'var(--raise)',padding:'8px 10px'}}><Label size="xs" tone={tone||'label'}>{d}</Label><div style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:12,textTransform:'uppercase',color:'var(--chalk)',marginTop:2}}>{n}</div><div style={{fontFamily:'var(--font-mono)',fontSize:9,color:'var(--dim)'}}>{note}</div></div>
+        ))}
+      </div>
+    </div>
+  </Panel>
+);}
+
+let setMode, setSel;
+function App(){
+  const [m,setM]=React.useState('coaching'); setMode=setM;
+  const [sel,setS]=React.useState(0); setSel=setS;
+  React.useEffect(()=>{
+    document.querySelectorAll('.controls .modebtn').forEach(b=>b.classList.toggle('on', b.dataset.m===m));
+    const ts=document.getElementById('tsel'); ts.style.display = m==='atlas' ? 'flex' : 'none';
+    ts.querySelectorAll('button').forEach((b,i)=>b.classList.toggle('on', i===sel));
+  },[m,sel]);
+  return m==='coaching' ? <Coaching/> : <Atlas sel={sel}/>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+const c=document.createElement('div'); c.className='controls';
+c.innerHTML='<button class="modebtn on" data-m="coaching">Coaching</button><button class="modebtn" data-m="atlas">Track Atlas</button>'
+  +'<span class="tsel" id="tsel" style="display:none">'+TRACKS.map((t,i)=>'<button data-i="'+i+'">'+t.name.split('-')[0].split(' ')[0]+'</button>').join('')+'</span>'
+  +'<span class="meta">LAP 3 · 10 Hz · sidecar healthy</span>';
+document.getElementById('app').appendChild(c);
+c.querySelectorAll('.modebtn').forEach(b=>b.onclick=()=>setMode(b.dataset.m));
+c.querySelectorAll('#tsel button').forEach(b=>b.onclick=()=>setSel(+b.dataset.i));
+</script>
+</body></html>

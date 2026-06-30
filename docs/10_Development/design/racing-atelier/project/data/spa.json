@@ -1,0 +1,35 @@
+{
+  "id": "spa", "name": "Spa-Francorchamps", "country": "Belgium",
+  "lengthKm": 7.004, "cornerCount": 19, "climbM": 102, "drsZones": 2,
+  "map": {
+    "viewBox": "0 0 320 180",
+    "path": "M70 152 Q58 152 58 140 L58 120 Q58 109 70 107 L165 94 Q176 93 177 83 Q177 75 170 72 L156 64 Q149 60 153 53 L176 36 Q184 30 182 21 Q181 13 190 14 Q199 15 198 24 L193 60 Q192 72 203 75 L255 86 Q268 89 267 102 L266 128 Q265 140 252 139 L205 136 Q192 135 189 146 Q186 156 174 155 L150 153 Q137 152 131 144 Q124 136 112 139 L80 150 Q75 152 70 152 Z",
+    "highlight": "M153 53 L176 36 Q184 30 182 21 Q181 13 190 14",
+    "here": { "x": 168, "y": 30 },
+    "markers": [
+      { "x": 198, "y": 24, "tone": "house", "r": 3.2 },
+      { "x": 255, "y": 90, "tone": "warn", "r": 3 },
+      { "x": 110, "y": 138, "tone": "chalk", "r": 3 }
+    ],
+    "labels": [{ "x": 120, "y": 48, "text": "eau rouge", "tone": "stop", "size": 9 }]
+  },
+  "elevation": {
+    "points": "0,46 70,44 120,40 150,12 180,16 240,30 320,34",
+    "peakX": 150, "peakLabel": "+38 m", "startLabel": "la source", "endLabel": "kemmel"
+  },
+  "now": { "id": "T3-4", "name": "Raidillon", "gear": 6, "minSpeed": 285, "throttle": 100,
+    "note": "flat-out uphill left-right. commit on the entry, the crest goes blind — aim for the right kerb on exit. don't lift or you lose Kemmel." },
+  "next": [
+    { "id": "T5", "dist": "480 m", "name": "Les Combes", "note": "brake · 4th", "tone": "warn" },
+    { "id": "T8", "dist": "1.1 km", "name": "Rivage", "note": "hairpin · 2nd" },
+    { "id": "T10", "dist": "1.6 km", "name": "Pouhon", "note": "fast-L · 5th" }
+  ],
+  "keyCorners": [
+    { "id": "T1", "name": "La Source", "note": "hairpin · 2nd" },
+    { "id": "T3-4", "name": "Raidillon", "note": "flat in 6th · commit" },
+    { "id": "T5", "name": "Les Combes", "note": "brake 100 m · pass" },
+    { "id": "T10", "name": "Pouhon", "note": "fast double-left" },
+    { "id": "T15", "name": "Blanchimont", "note": "near-flat · nerve" },
+    { "id": "T18", "name": "Bus Stop", "note": "chicane · last brake" }
+  ]
+}

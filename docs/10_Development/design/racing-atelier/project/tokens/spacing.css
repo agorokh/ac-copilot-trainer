@@ -1,0 +1,51 @@
+/* ============================================================
+   RACING ATELIER — SPACING & SIZING
+   Cockpit ergonomics: glanceable, gloves-friendly. ESP32 tap floor
+   is 60px. Segment bars and blocks are CHUNKY by mandate — thin is
+   unreadable at speed.
+   ============================================================ */
+:root {
+  /* --- Spacing scale --- */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 18px;
+  --space-9: 20px;
+  --space-10: 24px;
+  --space-12: 30px;
+  --space-16: 40px;
+
+  /* --- Panel insets --- */
+  --pad-panel: 22px 24px;
+  --pad-panel-sm: 13px;       /* rig screen body */
+  --pad-row: 11px 0;
+
+  /* --- Instrument dimensions (chunky on purpose) --- */
+  --seg-h: 26px;              /* shift-light segment bar height */
+  --seg-h-sm: 22px;          /* rig screen */
+  --seg-gap: 3px;            /* segment gap */
+  --delta-h: 24px;           /* bidirectional delta block height */
+  --level-w: 11px;           /* TC/ABS level cell width */
+  --level-h: 16px;
+  --bracket: 14px;           /* machined corner bracket arm */
+  --bracket-w: 2px;
+  --seg-mark-w: 6px;         /* brand seg-mark width */
+
+  /* --- Touch targets (ESP32) --- */
+  --tap-min: 60px;
+  --hit-stepper: 30px;
+
+  /* --- Device & window --- */
+  --rig-w: 320px;
+  --rig-h: 480px;
+  --rig-bezel: 7px;
+  --launcher-w: 640px;
+
+  /* --- Aliases --- */
+  --gap-tiles: var(--space-5);
+  --inset-card: var(--pad-panel);
+}

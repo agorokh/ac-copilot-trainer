@@ -1,0 +1,36 @@
+{
+  "id": "magione", "name": "Magione", "country": "Italy",
+  "lengthKm": 2.507, "cornerCount": 10, "climbM": 8, "drsZones": 0,
+  "fullName": "Autodromo dell'Umbria — Mario Umberto Borzacchini",
+  "map": {
+    "viewBox": "0 0 320 180",
+    "path": "M92 78 Q82 60 100 56 L168 46 Q200 42 212 60 Q220 74 236 74 L256 78 Q270 82 266 98 Q262 114 246 112 L186 116 Q170 118 172 132 Q174 146 158 144 L112 140 Q96 138 98 122 L94 100 Q92 89 92 78 Z",
+    "highlight": "M212 60 Q220 74 236 74 L250 75",
+    "here": { "x": 224, "y": 66 },
+    "markers": [
+      { "x": 168, "y": 46, "tone": "house", "r": 3.2 },
+      { "x": 246, "y": 112, "tone": "warn", "r": 3 },
+      { "x": 112, "y": 140, "tone": "chalk", "r": 3 }
+    ],
+    "labels": [{ "x": 150, "y": 42, "text": "curvone", "tone": "data", "size": 9 }]
+  },
+  "elevation": {
+    "points": "0,34 80,32 150,30 200,28 260,32 320,33",
+    "peakX": 200, "peakLabel": "+4 m", "startLabel": "rettifilo", "endLabel": "esse"
+  },
+  "now": { "id": "T3", "name": "Curvone", "gear": 4, "minSpeed": 132, "throttle": 70,
+    "note": "the long right that defines the lap. a tight, technical circuit — get a clean exit here and you carry it down the back. patience over the kerbs; the surface is bumpy on entry." },
+  "next": [
+    { "id": "T4", "dist": "210 m", "name": "Esse", "note": "left-right · 3rd", "tone": "warn" },
+    { "id": "T6", "dist": "380 m", "name": "Tornantino", "note": "hairpin · 2nd" },
+    { "id": "T8", "dist": "560 m", "name": "Carro", "note": "right · 3rd" }
+  ],
+  "keyCorners": [
+    { "id": "T1", "name": "Curva 1", "note": "brake · 2nd" },
+    { "id": "T3", "name": "Curvone", "note": "long-R · technical" },
+    { "id": "T4", "name": "Esse", "note": "left-right flick" },
+    { "id": "T6", "name": "Tornantino", "note": "tight hairpin" },
+    { "id": "T8", "name": "Carro", "note": "rhythm right" },
+    { "id": "T10", "name": "Ultima", "note": "onto the straight" }
+  ]
+}

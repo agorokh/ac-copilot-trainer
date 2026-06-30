@@ -1,0 +1,58 @@
+<!-- @dsCard group="Game Point Launcher" viewport="720x360" name="Windows Game Point launcher" subtitle="Status fields mapped to GamePointStatus — Start toggles ready / recovery" -->
+<!-- @startingPoint section="Screens" subtitle="Windows Game Point launcher" viewport="720x360" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Racing Atelier — Game Point</title>
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  html,body{margin:0;min-height:100%;background:#101113;display:flex;align-items:center;justify-content:center;padding:30px;font-family:var(--font-read);}
+</style></head>
+<body><div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+const D = window.ACCopilotDesignSystem_bba7a8;
+const { Panel, StatusRow, StatusField, Button, BrandMark } = D;
+const ROWS = {
+  ready: [
+    {label:'Sidecar',state:'healthy',tone:'go',detail:'peers=1 screen_peers=1'},
+    {label:'Screen',state:'connected',tone:'go',detail:'screen_peers=1'},
+    {label:'Hotspot',state:'on',tone:'go',detail:'state=On clients=1'},
+    {label:'Voice',state:'configured',tone:'go',detail:'reference + bank'},
+    {label:'SimHub',state:'absent',tone:'idle',detail:'executable not found'},
+  ],
+  stopped: [
+    {label:'Sidecar',state:'stopped',tone:'idle',detail:'—'},
+    {label:'Screen',state:'waiting',tone:'stop',detail:'no screen peer'},
+    {label:'Hotspot',state:'on',tone:'go',detail:'state=On clients=0'},
+    {label:'Voice',state:'configured',tone:'go',detail:'reference + bank'},
+    {label:'SimHub',state:'absent',tone:'idle',detail:'executable not found'},
+  ],
+};
+function App(){
+  const [run,setRun]=React.useState(false);
+  const rows = run?ROWS.ready:ROWS.stopped;
+  return (
+    <Panel variant="panel" brackets style={{width:640}}>
+      <div style={{height:38,display:'flex',alignItems:'center',gap:10,padding:'0 14px',borderBottom:'1px solid var(--line)'}}>
+        <BrandMark text="Game Point" size="sm" markHeight="16px" />
+        <span style={{marginLeft:'auto',fontFamily:'var(--font-mono)',fontSize:10,color:'var(--dim)'}}>:8765</span>
+      </div>
+      <div style={{padding:'18px 18px 20px'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12,paddingBottom:14}}>
+          <StatusField tone={run?'go':'stop'}>{run?'Ready to drive':'Press start'}</StatusField>
+          <span style={{fontFamily:'var(--font-mono)',fontSize:11,color:'var(--mute)'}}>{run?'sidecar · screen · hotspot live':'nothing on port 8765 yet'}</span>
+        </div>
+        {rows.map((r,i)=><StatusRow key={r.label} {...r} last={i===rows.length-1} />)}
+        <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr 1fr 1fr',gap:9,marginTop:18}}>
+          <Button variant="primary" iconLeft="▶ " onClick={()=>setRun(r=>!r)} block>{run?'Stop':'Start'}</Button>
+          <Button block>Refresh</Button><Button block>Logs</Button><Button block>Settings</Button>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script></body></html>

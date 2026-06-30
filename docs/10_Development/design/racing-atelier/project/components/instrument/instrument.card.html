@@ -1,0 +1,58 @@
+<!-- @dsCard group="Components" viewport="700x440" name="Instrument — command, segments, delta, levels" subtitle="CommandVerb · SegmentBar (shift-light) · DeltaBar · LevelSegments · status & setup rows · nav tile" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body{margin:0;background:var(--carbon);color:var(--chalk);font-family:var(--font-read);}
+  .wrap{padding:24px;display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start;}
+  .cap{font-family:var(--font-disp);font-weight:600;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--dim);margin-bottom:10px;}
+  .col{display:flex;flex-direction:column;gap:16px;}
+</style></head>
+<body><div id="root" class="wrap"></div>
+<script src="../../_ds_bundle.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel">
+  const { CommandVerb, SegmentBar, DeltaBar, LevelSegments, StatusRow, SetupRow, NavTile, Label, Panel } = window.ACCopilotDesignSystem_bba7a8;
+  function Demo(){
+    return (<>
+      <div className="col">
+        <div><div className="cap">Command + segment bar</div>
+          <CommandVerb tone="stop" arrow="down" size={56}>Brake</CommandVerb>
+          <div style={{marginTop:12}}><SegmentBar fill={0.66} zone={0.34} /></div>
+        </div>
+        <div><div className="cap">Delta bar</div>
+          <DeltaBar value={14} refLabel="182 km/h" />
+          <div style={{marginTop:10}}><DeltaBar value={2} refLabel="154 km/h" /></div>
+        </div>
+        <div><div className="cap">Level segments</div>
+          <div style={{display:'flex',gap:20,alignItems:'center'}}>
+            <span style={{display:'flex',gap:8,alignItems:'center'}}><Label size="sm">TC</Label><LevelSegments value={2}/></span>
+            <span style={{display:'flex',gap:8,alignItems:'center'}}><Label size="sm">ABS</Label><LevelSegments value={1}/></span>
+          </div>
+        </div>
+      </div>
+      <div className="col">
+        <div><div className="cap">Nav tiles (rig launcher)</div>
+          <div style={{display:'flex',flexDirection:'column',gap:10}}>
+            <NavTile title="AC Copilot" subtitle="real-time coaching" />
+            <NavTile title="Track Atlas" subtitle="circuit & pace notes" />
+            <NavTile title="Setup Exchange" subtitle="community setups" disabled />
+          </div></div>
+        <div><div className="cap">Status rows (launcher)</div>
+          <Panel variant="flat" pad="2px 12px">
+            <StatusRow label="Sidecar" state="healthy" tone="go" detail="peers=1" />
+            <StatusRow label="Screen" state="connected" tone="go" detail="screen_peers=1" />
+            <StatusRow label="SimHub" state="absent" tone="idle" detail="not found" last />
+          </Panel></div>
+        <div><div className="cap">Setup rows (pocket technician)</div>
+          <Panel variant="flat" pad="2px 12px">
+            <SetupRow name="Quali — Low DF" meta="1:20.9" chips={[{text:'BB 56.5'},{text:'TC 2',tone:'warn'}]} active />
+            <SetupRow name="Race — Stable" meta="1:21.4" chips={[{text:'BB 54'},{text:'TC 4'}]} last />
+          </Panel></div>
+      </div>
+    </>);
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script></body></html>
