@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T19:36:03Z
+last_updated: 2026-06-30T20:44:28Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -58,6 +58,38 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) - PR #416 MERGED: race management cues (#406)
+
+PR [#416](https://github.com/agorokh/ac-copilot-trainer/pull/416) squash-merged to `main` as
+[`9832004`](https://github.com/agorokh/ac-copilot-trainer/commit/983200453d06ff5469165d5bcc9cc115feb0d7cc)
+at 2026-06-30T20:44:26Z. Issue [#406](https://github.com/agorokh/ac-copilot-trainer/issues/406)
+is **CLOSED**.
+
+**Shipped:** Added `tools.ai_sidecar.race_management.RaceManagementObserver` for stint-level
+`fuel_status` / `fuel_save`, `tyre_manage`, `brake_manage`, and `conditions_strategy` advisories.
+The observer rides alongside Coach v2 or the legacy realtime observer in `server.py`, reuses the
+existing tyre and conditions models, and emits through the existing `coaching.cue` / voice pipeline.
+Lua `telemetry_tick` payloads now carry fuel level/capacity and per-corner tyre core temps when
+available, and `external_protocol.py` validates the new race-management channels. Voice vocabulary
+and cue mapping include short action phrases for fuel saving, tyre saving, brake cooling, and
+conditions strategy. A Windows help-output CI failure was also fixed by changing the
+`car_schema.py --help` description to ASCII-safe `->`.
+
+**Review hardening:** Qodo found two real edge cases and both were fixed before merge:
+critical tyre escalation no longer reuses the firm-overheat dedupe classification, and fuel samples
+reset/reseed on lap-counter rollback so a new stint cannot inherit stale burn-rate estimates.
+
+**Verification:** GitHub checks on head `fe95758` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). GraphQL review threads are resolved; resolve-gate reports
+`No substantive findings hanging`; no current-SHA self-hosted reviewer body was present after the
+required cooldowns. Local focused verification passed (`105 passed`) across race management,
+protocol validation, server fan-out, voice phrasing, Lua telemetry publishing, and the Windows
+`car_schema.py --help` smoke. Local Windows CI parity required an LF checkout plus
+`FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub`; full pytest reached
+`1929 passed, 117 skipped`, coverage 85.51%, and the bash-backed secret/policy wrappers were run by
+equivalent PowerShell checks because `bash` is not on PATH. Post-merge classifier: no migration /
+env / deps / script / workflow flags.
 
 ## Delivered (2026-06-30) - PR #410 MERGED: Racing Atelier design package (#400)
 

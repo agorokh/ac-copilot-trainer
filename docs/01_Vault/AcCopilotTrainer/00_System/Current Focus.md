@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T08:36:35Z
+last_updated: 2026-06-30T20:44:28Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -105,6 +105,12 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-30** - PR [#416](https://github.com/agorokh/ac-copilot-trainer/pull/416)
+  **MERGED** at `9832004` - **race management cues** ([#406](https://github.com/agorokh/ac-copilot-trainer/issues/406)
+  **CLOSED**): live stint-level fuel-to-finish, tyre, brake, and conditions advisories now ride
+  beside Coach v2 / the legacy observer and emit through the existing `coaching.cue` + voice path.
+  Lua telemetry publishes fuel and tyre temps when available; protocol validation covers the new
+  channels. Review hardening added critical-tyre escalation and lap-rollback fuel reset tests.
 - **2026-06-30** - PR [#410](https://github.com/agorokh/ac-copilot-trainer/pull/410)
   **MERGED** at `d669b19` - **Racing Atelier design package** ([#400](https://github.com/agorokh/ac-copilot-trainer/issues/400)
   **CLOSED**): committed the canonical handoff package and render-target gate, removed the retired
