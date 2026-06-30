@@ -200,6 +200,17 @@ def test_sector_deltas_skip_reference_from_different_combo():
     assert d["sector_deltas"] is None
 
 
+def test_sector_deltas_skip_reference_from_different_track_layout():
+    ref = _corner_archive(degrade=0.0)
+    ref["track"]["layout"] = "junior"
+    student = _corner_archive(degrade=8.0)
+    student["track"]["layout"] = "gp"
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["sector_deltas"] is None
+
+
 def test_superlap_ignores_invalid_current_lap():
     ref = _corner_archive(degrade=8.0)
     student = _corner_archive(degrade=0.0)
@@ -230,6 +241,27 @@ def test_superlap_filters_corpus_to_same_car_and_track():
     superlap = d["superlap"]
     assert superlap is not None
     assert {seg["track_id"] for seg in superlap["segments"]} == {"magione"}
+
+
+def test_superlap_filters_corpus_to_same_track_layout():
+    ref = _corner_archive(degrade=8.0)
+    ref["track"]["layout"] = "gp"
+    student = _corner_archive(degrade=8.0)
+    student["track"]["layout"] = "gp"
+    wrong_layout = _corner_archive(degrade=0.0)
+    _scale_archive_time(wrong_layout, 0.5)
+    wrong_layout["track"]["layout"] = "junior"
+
+    d = build_structured_debrief(
+        student,
+        reference_archive=ref,
+        corpus_archives=[wrong_layout],
+        grip_ceiling_g=2.5,
+    )
+
+    superlap = d["superlap"]
+    assert superlap is not None
+    assert 2 not in {seg["source_index"] for seg in superlap["segments"]}
 
 
 def test_debrief_text_includes_tyre_and_conditions_sections():

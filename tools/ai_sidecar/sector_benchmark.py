@@ -281,9 +281,9 @@ def _time_at_spline(lap: LapTrace, spline_pos: float) -> float | None:
     eps = 1e-6
     lap_clock_s = lap.lap_ms / 1000.0 if lap.lap_ms is not None and lap.lap_ms > 0 else None
     if sp < points[0][0] - eps:
-        return 0.0 if sp >= -eps and lap_clock_s is not None else None
+        return 0.0 if -eps <= sp <= eps and lap_clock_s is not None else None
     if sp > points[-1][0] + eps:
-        return lap_clock_s if sp <= 1.0 + eps else None
+        return lap_clock_s if 1.0 - eps <= sp <= 1.0 + eps else None
     if sp <= points[0][0]:
         return points[0][1]
     if sp >= points[-1][0]:

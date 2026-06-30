@@ -50,10 +50,10 @@ def _drop_first_sample(lap: LapTrace, *, keep_lap_ms: bool = True) -> LapTrace:
     )
 
 
-def _lap_with_edge_gap() -> LapTrace:
+def _lap_with_edge_gap(*, start: float = 0.05, end: float = 0.95) -> LapTrace:
     n = 10
-    spline = [0.05 + 0.90 * i / (n - 1) for i in range(n)]
-    t_s = [5.0 + 90.0 * i / (n - 1) for i in range(n)]
+    spline = [start + (end - start) * i / (n - 1) for i in range(n)]
+    t_s = [100.0 * s for s in spline]
     return LapTrace(
         spline=spline,
         t_s=t_s,
@@ -122,6 +122,16 @@ def test_segment_duration_uses_lap_clock_for_archive_boundaries() -> None:
     assert segment_duration_s(lap, smap.micro_sectors[-1]) is not None
     assert build_sector_delta_report(lap, lap) is not None
     assert build_superlap([lap]) is not None
+
+
+def test_segment_duration_rejects_unsampled_interior_boundaries() -> None:
+    lap = _lap_with_edge_gap(start=0.20, end=0.80)
+    smap = build_sector_map()
+
+    assert segment_duration_s(lap, smap.micro_sectors[0]) is None
+    assert segment_duration_s(lap, smap.micro_sectors[-1]) is None
+    assert build_sector_delta_report(lap, lap) is None
+    assert build_superlap([lap]) is None
 
 
 def test_sector_delta_report_requires_complete_sector_coverage() -> None:

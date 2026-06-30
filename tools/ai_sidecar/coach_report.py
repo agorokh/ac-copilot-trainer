@@ -104,6 +104,21 @@ def _same_lap_scope(candidate: LapTrace, anchor: LapTrace) -> bool:
     return not (anchor.track_id is not None and candidate.track_id != anchor.track_id)
 
 
+def _archive_track_layout(archive: dict | None) -> str | None:
+    track = archive.get("track") if isinstance(archive, dict) else None
+    layout = track.get("layout") if isinstance(track, dict) else None
+    if layout is None or layout == "":
+        return None
+    return str(layout)
+
+
+def _same_archive_layout(candidate: dict | None, anchor: dict | None) -> bool:
+    anchor_layout = _archive_track_layout(anchor)
+    if anchor_layout is None:
+        return True
+    return _archive_track_layout(candidate) == anchor_layout
+
+
 def format_debrief(
     corners: list[CornerCoaching],
     balance: BalanceFinding | None = None,
@@ -411,6 +426,7 @@ def _analyze(
         if raw_ref is not None
         and _archive_lap_is_valid(reference_archive)
         and _same_lap_scope(raw_ref, lap)
+        and _same_archive_layout(reference_archive, lap_archive)
         else None
     )
     report = coach_lap(lap, setup, reference=ref, grip_ceiling_g=grip_ceiling_g)
@@ -440,7 +456,7 @@ def _analyze(
             corpus_lap = lap_trace_from_archive(archive)
         except ValueError:
             continue
-        if _same_lap_scope(corpus_lap, lap):
+        if _same_lap_scope(corpus_lap, lap) and _same_archive_layout(archive, lap_archive):
             corpus_laps.append(corpus_lap)
     superlap = build_superlap(corpus_laps) if corpus_laps else None
     return {
