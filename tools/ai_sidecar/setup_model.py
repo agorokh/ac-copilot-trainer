@@ -402,7 +402,7 @@ def parse_setup_ini(text: str) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     section = ""
-    for raw_line in text.splitlines():
+    for raw_line in text.lstrip("\ufeff").splitlines():
         line = raw_line.split(";", 1)[0].split("//", 1)[0].strip()
         if not line:
             continue

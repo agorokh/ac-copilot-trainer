@@ -136,6 +136,13 @@ def test_parse_setup_ini_handles_comments_and_blanks():
     assert snap["ABS.VALUE"] == "5"
 
 
+def test_parse_setup_ini_handles_utf8_bom():
+    text = "\ufeff[FRONT_BIAS]\nVALUE=64\n[ABS]\nVALUE=5\n"
+    snap = parse_setup_ini(text)
+    assert snap["FRONT_BIAS.VALUE"] == "64"
+    assert snap["ABS.VALUE"] == "5"
+
+
 # --- lap archive + spinners -------------------------------------------------
 def test_from_lap_archive_fixture():
     archive = json.loads((FIXTURES / "lap_archive_valid.json").read_text(encoding="utf-8"))
