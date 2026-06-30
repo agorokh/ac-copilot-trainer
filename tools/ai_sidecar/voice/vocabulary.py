@@ -55,6 +55,7 @@ KINDS: tuple[str, ...] = (
     # Coach v2 (diagnosed, anticipatory, paced — emitted by tools.ai_sidecar.coaching_runtime):
     # one verb-first imperative per diagnosed root error, plus the live SAVE and the fix CONFIRM.
     "early_brake",
+    "brake_late",
     "slow_apex",
     "no_trail",
     "late_throttle",
@@ -135,10 +136,16 @@ _STEMS: dict[tuple[str, str, str], str] = {
     # carries the location — no spoken number). One register each (firm correction / critical
     # alarm / calm acknowledge); magnitude grading is a later slice. ---
     ("early_brake", "prepare", "firm"): "Brake later.",
-    ("late_brake", "prepare", "firm"): "Brake earlier.",
+    ("brake_late", "prepare", "firm"): "Brake earlier.",
     ("no_trail", "prepare", "firm"): "Trail it.",
     ("slow_apex", "prepare", "firm"): "Carry more.",
     ("late_throttle", "act", "firm"): "Power.",
+    # magnitude grading (P2): the SAME word, hotter tone, for a gross miss — second register tier.
+    ("early_brake", "prepare", "critical"): "Brake later.",
+    ("brake_late", "prepare", "critical"): "Brake earlier.",
+    ("no_trail", "prepare", "critical"): "Trail it.",
+    ("slow_apex", "prepare", "critical"): "Carry more.",
+    ("late_throttle", "act", "critical"): "Power.",
     ("save", "act", "critical"): "Brake!",
     ("confirm", "info", "calm"): "Good.",
 }

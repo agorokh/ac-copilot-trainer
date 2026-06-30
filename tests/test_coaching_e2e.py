@@ -179,6 +179,22 @@ def test_root_error_spoken_at_anchor(t, inject, phrase, anchor_attr):
     assert abs(first.spline - anchor) < 0.03, f"fired @{first.spline:.3f} not near {anchor:.3f}"
 
 
+# --- magnitude grading (P2): same word, register escalates with the size of the miss -------------
+@pytest.mark.parametrize("amount, expect_register", [(0.008, "firm"), (0.030, "critical")])
+def test_magnitude_grades_register(amount, expect_register):
+    sim = CoachSim()
+    idx, ref = sim.corner(1)
+    laps = _laps(
+        sim,
+        {lap: [lambda f, a=amount, r=ref: early_brake(f, r, amount=a)] for lap in (1, 2, 3)},
+        3,
+    )
+    mine = _primes(sim.drive(laps), corner=idx)
+    assert mine, "an early brake must be coached"
+    assert mine[0].phrase == "Brake later."  # word unchanged
+    assert mine[0].register == expect_register  # tone reflects magnitude
+
+
 # --- ROOT_NOT_SYMPTOM: early brake CAUSES late throttle → coach only the cause -------------------
 def test_root_not_symptom():
     sim = CoachSim()

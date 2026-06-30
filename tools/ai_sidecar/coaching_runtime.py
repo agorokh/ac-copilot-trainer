@@ -130,7 +130,10 @@ class CoachRuntime:
             if root is not None and _crossed(self._last_spline, spline, anc.for_root(root)):
                 spoken = self.ledger.due_prime(r.index)
                 if spoken is not None:
-                    out.append(_prime(r, spoken, spline))
+                    gst = self.ledger.state(r.index)
+                    reg = gst.register if gst else "firm"
+                    inten = gst.intensity if gst else 0.5
+                    out.append(_prime(r, spoken, spline, register=reg, intensity=inten))
 
             # 2. accumulate technique within the pass window, finalize on exit.
             in_window = (anc.brake - 0.04) <= spline <= r.spline_hi or st.active
@@ -242,7 +245,10 @@ def _reference_signatures(
 
 
 # --- advisory builders (message carries the exact spoken phrase) ---
-def _prime(r: CornerReference, root: RootError, spline: float) -> Advisory:
+def _prime(
+    r: CornerReference, root: RootError, spline: float, *, register: str = "firm",
+    intensity: float = 0.5,
+) -> Advisory:
     return Advisory(
         kind=str(root),
         corner=r.index,
@@ -250,8 +256,8 @@ def _prime(r: CornerReference, root: RootError, spline: float) -> Advisory:
         urgency="act" if ANCHOR[root] == "apex" else "prepare",
         message=PHRASE[root],
         detail={"coach": "prime", "root": str(root)},
-        intensity=0.5,
-        register="firm",
+        intensity=intensity,
+        register=register,
     )
 
 

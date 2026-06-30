@@ -27,7 +27,7 @@ class RootError(StrEnum):
     """The one root mistake coached per pass (verb-first imperative in :data:`PHRASE`)."""
 
     EARLY_BRAKE = "early_brake"
-    LATE_BRAKE = "late_brake"
+    LATE_BRAKE = "brake_late"  # distinct from the legacy observer's "late_brake" cue kind
     NO_TRAIL = "no_trail"
     SLOW_APEX = "slow_apex"
     LATE_THROTTLE = "late_throttle"
@@ -66,6 +66,17 @@ TRAIL_FRAC_FLOOR = 0.15
 _REF_TRAIL_MIN = 0.20
 
 
+#: Magnitude at/above which a root is GROSS -> spoken in the critical register (same word, hotter
+#: tone). Keyed by the detail margin each root records. Below it (but above the floor) -> firm.
+_CRITICAL_MARGIN: dict[RootError, tuple[str, float]] = {
+    RootError.EARLY_BRAKE: ("brake_delta_spline", 0.018),
+    RootError.LATE_BRAKE: ("brake_delta_spline", 0.018),
+    RootError.SLOW_APEX: ("apex_deficit_kmh", 12.0),
+    RootError.LATE_THROTTLE: ("throttle_delta", 0.025),
+    RootError.NO_TRAIL: ("trail_deficit", 0.40),
+}
+
+
 @dataclass
 class Diagnosis:
     """The single root error for a corner pass plus the measured margins that picked it."""
@@ -80,6 +91,22 @@ class Diagnosis:
     @property
     def anchor(self) -> str | None:
         return ANCHOR.get(self.root)
+
+
+def severity(diag: Diagnosis) -> tuple[str, float]:
+    """Map a diagnosis's measured margin to a (register, intensity) — magnitude grading (P2).
+
+    A bigger miss is spoken with a hotter register (``critical`` >= the gross threshold, else
+    ``firm``) and a higher continuous ``intensity`` (0..1, capped at the threshold). The WORD does
+    not change — the tone does ("elite coaching IS the magnitude").
+    """
+    spec = _CRITICAL_MARGIN.get(diag.root)
+    if spec is None:
+        return ("firm", 0.5)
+    key, crit = spec
+    mag = abs(diag.detail.get(key, 0.0))
+    register = "critical" if mag >= crit else "firm"
+    return (register, round(max(0.0, min(1.0, mag / crit)) if crit else 0.5, 3))
 
 
 def classify_root_error(cand: CornerSignature, ref: CornerSignature) -> Diagnosis:

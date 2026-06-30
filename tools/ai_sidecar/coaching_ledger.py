@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from tools.ai_sidecar.coaching_diagnosis import Diagnosis, RootError
+from tools.ai_sidecar.coaching_diagnosis import Diagnosis, RootError, severity
 
 HYSTERESIS_PASSES = 2  # consecutive valid passes a root must lead before it earns a PRIME
 LAP_CUE_BUDGET = 4  # max non-SAVE cues spoken per lap
@@ -48,6 +48,8 @@ class CornerState:
     time_lost_s: float = 0.0
     coached_count: int = 0
     clean_streak: int = 0  # consecutive passes the primed root was absent (fixed)
+    register: str = "firm"  # magnitude tier of the latest diagnosis (P2)
+    intensity: float = 0.5
 
 
 @dataclass
@@ -105,6 +107,7 @@ class CoachingLedger:
         root = diag.root
         if root != RootError.NONE:
             st.time_lost_s = time_lost_s
+            st.register, st.intensity = severity(diag)  # magnitude tier for the next PRIME (P2)
 
         # --- was this corner being coached, and did the coached root clear? ---
         being_coached = st.status in (Status.PRIMED, Status.HEALING)
