@@ -50,6 +50,10 @@ def _batches(
     current_chars = 0
     for item in items:
         item_chars = len(item) + 1
+        if item_chars > max_chars:
+            raise ValueError(
+                f"tracked path exceeds the platform argv budget ({item_chars}>{max_chars}): {item}"
+            )
         if current and (len(current) >= size or current_chars + item_chars > max_chars):
             batches.append(current)
             current = []
@@ -67,7 +71,12 @@ def main() -> int:
     baseline = root / ".secrets.baseline"
     if not files:
         return 0
-    for batch in _batches(files):
+    try:
+        batches = _batches(files)
+    except ValueError as exc:
+        print(f"policy_tracked_files: {exc}", file=sys.stderr)
+        return 2
+    for batch in batches:
         result = subprocess.run(
             [
                 sys.executable,

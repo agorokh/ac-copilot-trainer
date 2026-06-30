@@ -4,6 +4,8 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "policy_tracked_files.py"
 SPEC = importlib.util.spec_from_file_location("policy_tracked_files", SCRIPT)
@@ -51,10 +53,11 @@ def test_batches_respect_count_and_character_budgets() -> None:
     ]
 
 
-def test_batches_keep_single_path_that_exceeds_character_budget() -> None:
+def test_batches_reject_single_path_that_exceeds_character_budget() -> None:
     long_file = "deep/" + ("x" * 64)
 
-    assert policy_tracked_files._batches([long_file], max_chars=10) == [[long_file]]
+    with pytest.raises(ValueError, match="tracked path exceeds"):
+        policy_tracked_files._batches([long_file], max_chars=10)
 
 
 def test_batches_use_smaller_windows_defaults(monkeypatch) -> None:

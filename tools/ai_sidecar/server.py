@@ -1173,6 +1173,18 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         )
         return
 
+    if t == TYPE_SETUP_CLOSED_LOOP and not _is_loopback_peer(websocket):
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_CLOSED_LOOP_RESULT,
+                "ok": False,
+                "error": "setup.closed_loop is loopback-only",
+            },
+        )
+        return
+
     store_path = _setup_experiment_store_path
     if store_path is None:
         if t == TYPE_SETUP_COMPARE:

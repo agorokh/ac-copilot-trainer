@@ -29,6 +29,7 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    _handle_setup_experiment_frame,
     _handler,
     _is_loopback,
     _RateLimiter,
@@ -265,6 +266,30 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "complaint" in (ep.validate_inbound({"v": 1, "type": "setup.advice"}) or "")
     assert "baseline_snapshot" in (ep.validate_inbound({"v": 1, "type": "setup.diff"}) or "")
     assert "param" in (ep.validate_inbound({"v": 1, "type": "setup.closed_loop"}) or "")
+    assert "entries" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "loose",
+                "setup_snapshot": {
+                    f"PARAM_{idx}.VALUE": idx for idx in range(ep.MAX_SETUP_SNAPSHOT_KEYS + 1)
+                },
+            }
+        )
+        or ""
+    )
+    assert "bytes" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.diff",
+                "baseline_snapshot": {"FRONT_BIAS.VALUE": "66"},
+                "candidate_snapshot": {"ABOUT.NOTES": "x" * (ep.MAX_SETUP_SNAPSHOT_BYTES + 1)},
+            }
+        )
+        or ""
+    )
     assert "limit must be <= 40" in (
         ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
     )
@@ -1061,6 +1086,33 @@ def test_setup_closed_loop_roundtrip_infers_schema_from_records(tmp_path: Path) 
     assert result["ok"] is False
     assert result["status"] == "at_param_bound"
     assert result["current"] == 70.0
+
+
+def test_setup_closed_loop_rejects_non_loopback_peer() -> None:
+    class _RemoteWebsocket:
+        remote_address = ("192.168.1.50", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    async def _run() -> dict[str, object]:
+        ws = _RemoteWebsocket()
+        await _handle_setup_experiment_frame(
+            ws,
+            {
+                "type": ep.TYPE_SETUP_CLOSED_LOOP,
+                "param": "FRONT_BIAS",
+            },
+        )
+        return ws.sent[0]
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is False
+    assert "loopback-only" in str(result["error"])
 
 
 def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) -> None:

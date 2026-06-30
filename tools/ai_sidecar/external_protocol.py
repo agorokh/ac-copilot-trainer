@@ -11,6 +11,7 @@ All frames are JSON objects. Unknown ``type`` values are rejected by
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -48,6 +49,8 @@ PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
     {CLIENT_CLASS_SCREEN, CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL}
 )
 HAPTIC_CLIENT_CLASSES: frozenset[str] = frozenset({CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL})
+MAX_SETUP_SNAPSHOT_KEYS = 512
+MAX_SETUP_SNAPSHOT_BYTES = 64_000
 
 # Client → server.
 TYPE_HELLO = "hello"
@@ -311,6 +314,30 @@ def _validate_optional_object(frame: dict[str, Any], key: str) -> str | None:
     return None
 
 
+def _validate_setup_snapshot(
+    frame: dict[str, Any],
+    key: str,
+    *,
+    required: bool,
+) -> str | None:
+    if key not in frame:
+        return f"setup.diff requires object '{key}'" if required else None
+    value = frame.get(key)
+    if not isinstance(value, dict):
+        return f"{key} requires an object"
+    if len(value) > MAX_SETUP_SNAPSHOT_KEYS:
+        return f"{key} must contain <= {MAX_SETUP_SNAPSHOT_KEYS} entries"
+    try:
+        payload_bytes = len(
+            json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+    except (TypeError, ValueError):
+        return f"{key} must be JSON-serializable"
+    if payload_bytes > MAX_SETUP_SNAPSHOT_BYTES:
+        return f"{key} must be <= {MAX_SETUP_SNAPSHOT_BYTES} bytes"
+    return None
+
+
 def _validate_optional_int(
     frame: dict[str, Any],
     key: str,
@@ -553,11 +580,12 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             err = _validate_optional_string(frame, key)
             if err is not None:
                 return err
-        return _validate_optional_object(frame, "setup_snapshot")
+        return _validate_setup_snapshot(frame, "setup_snapshot", required=False)
     if t == TYPE_SETUP_DIFF:
         for key in ("baseline_snapshot", "candidate_snapshot"):
-            if not isinstance(frame.get(key), dict):
-                return f"setup.diff requires object '{key}'"
+            err = _validate_setup_snapshot(frame, key, required=True)
+            if err is not None:
+                return err
         for key in ("car_id", "track_id"):
             err = _validate_optional_string(frame, key)
             if err is not None:
