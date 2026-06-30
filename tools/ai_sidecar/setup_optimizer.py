@@ -600,11 +600,33 @@ def _expected_improvement(best_y: float, mu: float, sigma: float) -> float:
     return (best_y - mu) * _normal_cdf(z) + sigma * phi
 
 
+def _schema_allows(
+    candidate: dict[str, float], schema: Any, *, base: dict[str, float] | None = None
+) -> bool:
+    """True iff every candidate knob is in-range/on-step per a CarSetupSchema (duck-typed)."""
+    spinners = getattr(schema, "spinners", None)
+    if not isinstance(spinners, dict):
+        return True
+    for key, val in candidate.items():
+        name = key[:-6] if key.endswith(".VALUE") else key
+        sp = spinners.get(name)
+        if sp is None:
+            continue
+        if getattr(sp, "read_only", False):
+            if base is not None and key in base and abs(float(val) - float(base[key])) <= 1e-9:
+                continue
+            return False
+        if not sp.is_valid(val):
+            return False
+    return True
+
+
 def suggest_next_setup(
     records: list[dict[str, Any]],
     *,
     car_id: str | None = None,
     track_id: str | None = None,
+    schema: Any = None,
 ) -> dict[str, Any]:
     scoped = _filter_records(records, car_id=car_id, track_id=track_id)
     if len(scoped) < MIN_EXPERIMENTS_FOR_SUGGESTION:
@@ -645,12 +667,24 @@ def suggest_next_setup(
     global_var = _sample_variance([y for _, y, _ in vectors], global_mean)
     global_std = max(math.sqrt(global_var), 1.0)
     best_y = float(best["lap"]["lap_ms"])
+    base_params = {key: float(best["setup"]["params"][key]) for key in keys}
     observed = {tuple((key, round(vec[key], 6)) for key in keys) for vec, _, _ in vectors}
 
     scored = []
-    for candidate in _candidate_grid(scoped, best, keys):
+    seen_candidates: set[tuple[tuple[str, float], ...]] = set()
+    for raw_candidate in _candidate_grid(scoped, best, keys):
+        candidate = (
+            schema.constrain_params(raw_candidate)
+            if schema is not None and hasattr(schema, "constrain_params")
+            else raw_candidate
+        )
         frozen = tuple((key, round(candidate[key], 6)) for key in keys)
         if frozen in observed:
+            continue
+        if frozen in seen_candidates:
+            continue
+        seen_candidates.add(frozen)
+        if schema is not None and not _schema_allows(candidate, schema, base=base_params):
             continue
         weights = []
         for vec, lap_ms, _ in vectors:
@@ -671,7 +705,6 @@ def suggest_next_setup(
         return {"ok": False, "status": "no_untried_candidate", "experiments_used": len(vectors)}
 
     ei, mu, sigma, candidate = max(scored, key=lambda item: (item[0], -item[1]))
-    base_params = {key: float(best["setup"]["params"][key]) for key in keys}
     changed = {
         key: {"from": base_params[key], "to": candidate[key]}
         for key in keys

@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T18:55:00Z
+last_updated: 2026-06-30T00:53:41Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -48,11 +48,30 @@ relates_to:
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
   - AcCopilotTrainer/01_Decisions/curated-setup-as-data-platform-entity-2026-06-28.md
+  - AcCopilotTrainer/01_Decisions/setup-intelligence-platform-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/curated-setup-hash-bridge-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/porsche-911-gt3r-magione-balanced-setup-2026-06-28.md
 ---
 
 # Next session handoff
+
+## Resolved (2026-06-30T00:53:41Z) — PR #389 setup-schema review loop
+
+PR [#389](https://github.com/agorokh/ac-copilot-trainer/pull/389) is OPEN and review-resolved on head
+`8e8011b` (`feat/issue-388-setup-schema-foundation`). CI is green on the head SHA (`build`,
+`Canonical docs exist`, and `conformance` passed; `guard-and-automerge` skipped as expected). Local
+`make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python` passed after
+the review fixes (`1871 passed, 75 skipped`, coverage 85.27%).
+
+Review fixes shipped in two commits: `f0b45c9` covered decode-affecting `schema_hash` fields, direct
+script execution, enum decode misses, step-grid clamp bounds, unchanged read-only optimizer fields,
+and the new SIP ADR index link; `8e8011b` covered live `unit` propagation through
+`setup_model.from_spinners`, enum `itemValues` validation as raw values, `.VALUE` schema lookup
+normalization, boundary candidate clamping before optimizer filtering, and car/track id threading for
+live spinner captures. GraphQL review threads were resolved after those fixes; `ci_resolve_gate.py`
+reported `No substantive findings hanging` for PR #389. No current-SHA
+`ws-ops-cursor-reviewer[bot]` review body was present after the required cooldown, so the self-hosted
+reviewer gate is vacuously satisfied.
 
 ## In flight (2026-06-29T18:42:58Z) — PR #371 voice-intensity resolution for #368
 
