@@ -162,6 +162,13 @@ def _finite(value: Any) -> float | None:
     return parsed
 
 
+def _count(value: Any) -> int:
+    parsed = _finite(value)
+    if parsed is None or parsed <= 0:
+        return 0
+    return int(parsed)
+
+
 def _median(values: Sequence[float]) -> float | None:
     if not values:
         return None
@@ -194,7 +201,7 @@ def _corner_rows(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _corner_lap_samples(corners: Sequence[Mapping[str, Any]]) -> int:
-    counts = [int(row.get("valid_laps") or 0) for row in corners]
+    counts = [_count(row.get("valid_laps")) for row in corners]
     return max(counts, default=0)
 
 
@@ -209,8 +216,8 @@ def _consistency_assessment(profile: Mapping[str, Any]) -> SkillAssessment:
     if not ratios:
         return SkillAssessment("consistency", LEVEL_UNKNOWN, 0, evidence=("no session spread yet",))
     score = _median(ratios)
-    sessions = max(int(row.get("session_count") or 0) for row in rows)
-    valid_laps = max(int(row.get("valid_laps") or 0) for row in rows)
+    sessions = max(_count(row.get("session_count")) for row in rows)
+    valid_laps = max(_count(row.get("valid_laps")) for row in rows)
     if score is not None and sessions >= 3 and score <= 0.015:
         level = LEVEL_ADVANCED
     elif score is not None and sessions >= 2 and score <= 0.04:

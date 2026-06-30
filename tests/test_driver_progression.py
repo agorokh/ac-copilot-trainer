@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tools.ai_sidecar.coaching_diagnosis import RootError
 from tools.ai_sidecar.coaching_runtime import CoachRuntime, _Anchors
 from tools.ai_sidecar.driver_profile import (
@@ -227,13 +229,32 @@ def test_structurally_bad_profile_fields_are_sanitized(tmp_path: Path) -> None:
     assert profile["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "lap-1"
 
 
-def test_profile_write_allows_explicit_absolute_journal_path(tmp_path: Path) -> None:
-    profile_path = tmp_path / "Documents" / "Assetto Corsa" / "journal" / "driver" / "profile.json"
+def test_profile_write_allows_explicit_ac_documents_journal_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_home = tmp_path / "User"
+    monkeypatch.setenv("USERPROFILE", str(user_home))
+    profile_path = (
+        user_home
+        / "Documents"
+        / "Assetto Corsa"
+        / "ac-copilot"
+        / "journal"
+        / "driver"
+        / "profile.json"
+    )
 
     written = write_profile({"schema_version": 1, "driver_id": "driver-a"}, profile_path)
 
     assert written == profile_path
     assert profile_path.exists()
+
+
+def test_profile_write_rejects_arbitrary_absolute_journal_path(tmp_path: Path) -> None:
+    profile_path = tmp_path / "outside" / "journal" / "driver" / "profile.json"
+
+    with pytest.raises(ValueError, match="approved root"):
+        write_profile({"schema_version": 1, "driver_id": "driver-a"}, profile_path)
 
 
 def test_imported_reference_laps_do_not_enter_driver_profile(tmp_path: Path) -> None:
@@ -300,6 +321,39 @@ def test_incremental_same_session_update_keeps_faster_existing_pb(tmp_path: Path
     assert rollup["best_lap_uuid"] == "fast-lap"
 
 
+def test_rebuilding_same_lap_corpus_is_idempotent(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "laps"
+    lap_dir.mkdir()
+    _write_archive(
+        lap_dir / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+    _write_archive(
+        lap_dir / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+    )
+
+    first_profile = build_profile([lap_dir])
+    rebuilt = build_profile([lap_dir], existing=first_profile)
+    rollup = next(iter(rebuilt["session_rollups"].values()))
+    corner = next(iter(rebuilt["corner_history"].values()))
+
+    assert rollup["lap_count"] == 2
+    assert rollup["valid_laps"] == 2
+    assert corner["valid_laps"] == 2
+    assert rebuilt["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "lap-2"
+
+
 def test_novice_policy_reduces_density_and_suppresses_trail_brake_roots() -> None:
     policy = cue_policy_from_profile(_profile(apex_delta=-2.0, trail=0.05, throttle=0.2))
 
@@ -354,6 +408,35 @@ def test_corner_count_alone_cannot_unlock_advanced_policy() -> None:
 
     assert report["skills"]["apex_speed"]["level"] == LEVEL_NOVICE
     assert report["level"] == LEVEL_NOVICE
+
+
+def test_malformed_nested_profile_counts_do_not_disable_progression() -> None:
+    report = build_progression_report(
+        {
+            "schema_version": 1,
+            "driver_id": "driver-a",
+            "corner_history": {
+                "car-a|track-a||corner:0": {
+                    "valid_laps": "many",
+                    "delta_min_speed_kmh": 3.0,
+                    "avg_trail_brake_ratio": 0.4,
+                    "avg_throttle": 0.7,
+                    "avg_steer_reversals": 1.0,
+                }
+            },
+            "consistency": {
+                "car-a|track-a|": {
+                    "session_count": "several",
+                    "valid_laps": "many",
+                    "median_session_best_ms": 100000,
+                    "consistency_ms": 1000.0,
+                }
+            },
+        }
+    )
+
+    assert report["level"] in {"unknown", LEVEL_NOVICE}
+    assert report["skills"]["apex_speed"]["samples"] == 0
 
 
 def _sig(**over: object) -> CornerSignature:

@@ -73,6 +73,25 @@ def _num_ms(value: Any) -> int | None:
     return int(round(parsed))
 
 
+def _count(value: Any) -> int:
+    parsed = _num(value)
+    if parsed is None or parsed <= 0:
+        return 0
+    return int(parsed)
+
+
+def _text_set(value: Any) -> set[str]:
+    if isinstance(value, str) and value:
+        return {value}
+    if not isinstance(value, Iterable) or isinstance(value, Mapping):
+        return set()
+    return {str(item) for item in value if isinstance(item, str) and item}
+
+
+def _sorted_texts(values: Iterable[Any]) -> list[str]:
+    return sorted({str(value) for value in values if isinstance(value, str) and value})
+
+
 def _avg(values: Iterable[float | None]) -> float | None:
     finite = [v for v in values if v is not None and math.isfinite(v)]
     if not finite:
@@ -157,6 +176,8 @@ def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[
             "car_id": car_id,
             "track_id": track_id,
             "track_layout": track_layout,
+            "lap_uuids": [row.get("lap_uuid")],
+            "valid_lap_uuids": [row.get("lap_uuid")],
             "first_exported_at": row.get("exported_at"),
             "last_exported_at": row.get("exported_at"),
             "first_lap_n": None,
@@ -286,6 +307,7 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max((v for v in min_speeds if v is not None), default=None),
             "median_min_speed_kmh": _median_float(min_speeds),
+            "lap_uuids": _sorted_texts(row.get("lap_uuid") for row in ordered),
             "delta_min_speed_kmh": (
                 round(last_min - first_min, 3)
                 if first_min is not None and last_min is not None
@@ -315,9 +337,21 @@ def _last_text(*values: Any) -> str | None:
 def _merge_session_rollup(
     existing: Mapping[str, Any], incoming: Mapping[str, Any]
 ) -> dict[str, Any]:
-    old_laps = int(existing.get("lap_count") or 0)
-    new_laps = int(incoming.get("lap_count") or 0)
-    if new_laps > old_laps:
+    old_lap_ids = _text_set(existing.get("lap_uuids"))
+    new_lap_ids = _text_set(incoming.get("lap_uuids"))
+    old_valid_ids = _text_set(existing.get("valid_lap_uuids"))
+    new_valid_ids = _text_set(incoming.get("valid_lap_uuids"))
+    old_laps = _count(existing.get("lap_count"))
+    new_laps = _count(incoming.get("lap_count"))
+
+    if old_lap_ids and new_lap_ids:
+        if new_lap_ids == old_lap_ids:
+            return dict(incoming)
+        if new_lap_ids < old_lap_ids:
+            return dict(existing)
+        if old_lap_ids < new_lap_ids:
+            return dict(incoming)
+    elif new_laps >= old_laps and new_laps > 0:
         return dict(incoming)
 
     old_best = _num_ms(existing.get("best_lap_ms"))
@@ -325,10 +359,22 @@ def _merge_session_rollup(
     best_source = existing
     if new_best is not None and (old_best is None or new_best < old_best):
         best_source = incoming
+    merged_lap_ids = old_lap_ids | new_lap_ids
+    merged_valid_ids = old_valid_ids | new_valid_ids
+    merged_laps = len(merged_lap_ids) if merged_lap_ids else old_laps + new_laps
+    merged_valid_laps = (
+        len(merged_valid_ids)
+        if merged_valid_ids
+        else _count(existing.get("valid_laps")) + _count(incoming.get("valid_laps"))
+    )
 
     merged = dict(existing)
     merged.update(
         {
+            "lap_uuids": sorted(merged_lap_ids) if merged_lap_ids else existing.get("lap_uuids"),
+            "valid_lap_uuids": (
+                sorted(merged_valid_ids) if merged_valid_ids else existing.get("valid_lap_uuids")
+            ),
             "first_exported_at": _first_text(
                 existing.get("first_exported_at"), incoming.get("first_exported_at")
             ),
@@ -343,9 +389,8 @@ def _merge_session_rollup(
                 [v for v in (existing.get("last_lap_n"), incoming.get("last_lap_n")) if v],
                 default=None,
             ),
-            "lap_count": old_laps + new_laps,
-            "valid_laps": int(existing.get("valid_laps") or 0)
-            + int(incoming.get("valid_laps") or 0),
+            "lap_count": merged_laps,
+            "valid_laps": merged_valid_laps,
             "best_lap_ms": best_source.get("best_lap_ms"),
             "best_lap_uuid": best_source.get("best_lap_uuid"),
             "best_source_file": best_source.get("best_source_file"),
@@ -369,9 +414,19 @@ def _weighted_avg(old_value: Any, old_count: int, new_value: Any, new_count: int
 
 
 def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
-    old_laps = int(existing.get("valid_laps") or 0)
-    new_laps = int(incoming.get("valid_laps") or 0)
-    if new_laps > old_laps:
+    old_lap_ids = _text_set(existing.get("lap_uuids"))
+    new_lap_ids = _text_set(incoming.get("lap_uuids"))
+    old_laps = _count(existing.get("valid_laps"))
+    new_laps = _count(incoming.get("valid_laps"))
+
+    if old_lap_ids and new_lap_ids:
+        if new_lap_ids == old_lap_ids:
+            return dict(incoming)
+        if new_lap_ids < old_lap_ids:
+            return dict(existing)
+        if old_lap_ids < new_lap_ids:
+            return dict(incoming)
+    elif new_laps >= old_laps and new_laps > 0:
         return dict(incoming)
 
     first_min = _num(existing.get("first_min_speed_kmh"))
@@ -386,14 +441,17 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
         )
         if value is not None
     ]
+    merged_lap_ids = old_lap_ids | new_lap_ids
+    merged_laps = len(merged_lap_ids) if merged_lap_ids else old_laps + new_laps
     merged = dict(existing)
     merged.update(
         {
             "session_count": max(
-                int(existing.get("session_count") or 0),
-                int(incoming.get("session_count") or 0),
+                _count(existing.get("session_count")),
+                _count(incoming.get("session_count")),
             ),
-            "valid_laps": old_laps + new_laps,
+            "valid_laps": merged_laps,
+            "lap_uuids": sorted(merged_lap_ids) if merged_lap_ids else existing.get("lap_uuids"),
             "first_exported_at": _first_text(
                 existing.get("first_exported_at"), incoming.get("first_exported_at")
             ),
@@ -536,6 +594,8 @@ def _rollups_from_archives(
             "car_id": car.get("id"),
             "track_id": track.get("id"),
             "track_layout": track.get("layout"),
+            "lap_uuids": _sorted_texts(record.get("lap_uuid") for _, record in rows),
+            "valid_lap_uuids": _sorted_texts(record.get("lap_uuid") for _, record, _ in valid_rows),
             "first_exported_at": min(exported) if exported else None,
             "last_exported_at": max(exported) if exported else None,
             "first_lap_n": min(lap_ns) if lap_ns else None,
@@ -620,7 +680,7 @@ def build_profile(
             "track_id": best.get("track_id"),
             "track_layout": best.get("track_layout"),
             "session_count": len(valid_combo),
-            "valid_laps": sum(int(r.get("valid_laps") or 0) for r in valid_combo),
+            "valid_laps": sum(_count(r.get("valid_laps")) for r in valid_combo),
             "best_lap_ms": min(session_bests),
             "median_session_best_ms": float(median(session_bests)),
             "consistency_ms": _safe_population_stdev(session_bests),
@@ -649,7 +709,53 @@ def _resolve_profile_path(path: str | Path) -> Path:
     tail = tuple(part.lower() for part in resolved.parts[-3:])
     if tail != ("journal", "driver", "profile.json"):
         raise ValueError(f"{raw}: profile path must end with journal/driver/profile.json")
+    if not raw.is_absolute():
+        try:
+            resolved.relative_to(base_dir)
+        except ValueError as exc:
+            raise ValueError(f"{raw}: relative profile path must stay under {base_dir}") from exc
+        return resolved
+    allowed_roots = _approved_absolute_profile_roots()
+    if not any(_is_relative_to(resolved, root) for root in allowed_roots):
+        roots = ", ".join(str(root) for root in sorted(allowed_roots, key=str))
+        raise ValueError(f"{raw}: absolute profile path must stay under an approved root ({roots})")
     return resolved
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _approved_absolute_profile_roots() -> set[Path]:
+    roots: set[Path] = set()
+
+    def add(path: str | Path | None) -> None:
+        if path:
+            roots.add(Path(path).expanduser().resolve())
+
+    user_roots = [Path.home()]
+    for env_name in ("USERPROFILE", "HOME"):
+        env_value = os.environ.get(env_name)
+        if env_value:
+            user_roots.append(Path(env_value))
+    for user_root in user_roots:
+        add(user_root / "Documents" / "Assetto Corsa")
+        add(user_root / "OneDrive" / "Documents" / "Assetto Corsa")
+
+    onedrive = os.environ.get("OneDrive") or os.environ.get("ONEDRIVE")
+    if onedrive:
+        add(Path(onedrive) / "Documents" / "Assetto Corsa")
+
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        add(Path(local_appdata) / "AC Copilot Trainer" / "GamePoint")
+
+    add(os.environ.get("AC_COPILOT_GAME_POINT_DIR"))
+    return roots
 
 
 def write_profile(profile: Mapping[str, Any], path: str | Path = DEFAULT_PROFILE_PATH) -> Path:
