@@ -26,6 +26,7 @@ from typing import Any
 from tools.ai_sidecar.coaching_diagnosis import (
     ANCHOR,
     PHRASE,
+    Diagnosis,
     RootError,
     classify_root_error,
 )
@@ -39,10 +40,21 @@ from tools.ai_sidecar.lap_dynamics import CornerSignature, corner_signatures, la
 from tools.ai_sidecar.realtime_observer import Advisory
 from tools.ai_sidecar.track_reference import CornerReference, build_references
 
+#: Roots that demand more speed / later braking — suppressed at the grip ceiling (P3).
+_GRIP_GATED_ROOTS = frozenset({RootError.SLOW_APEX, RootError.EARLY_BRAKE, RootError.LATE_BRAKE})
+
 # live thresholds
 _BRAKE_ON = 0.05
 _THROTTLE_ON = 0.20
 _STEER_ON = 0.05
+_GRIP_CEILING_G = 1.55  # GT3 peak lateral g (the Magione reference corners at 1.40–1.56 g)
+# At/above this fraction of the grip ceiling the corner is grip-limited (setup/tyre), NOT technique,
+# so "carry more"/"brake later" would be a lie and is suppressed. HONEST GATE: needs a real
+# grip/lateral-g signal on the frame (grip/grip_used/lat_g); the live telemetry carries none today,
+# so it is fail-open (never suppresses) on the rig and activates only when the telemetry provides
+# tyre-slip or lateral-g. We do NOT fabricate it from v²·κ against an at-the-limit reference (which
+# can never fire honestly). See council P3.
+_GRIP_GATE_FRAC = 0.95
 _DEFAULT_TRACK_M = 2455.7
 _DEFAULT_LEAD_S = 1.3  # reference-travel seconds before the action point a PRIME audio onset lands
 _LAP_WRAP_DROP = 0.5  # backward spline jump that means a start/finish wrap
@@ -77,6 +89,7 @@ class _PassState:
     trail_count: int = 0
     entry_count: int = 0
     save_fired: bool = False
+    max_grip_used: float = 0.0  # peak grip-utilisation fraction this pass (0 if no signal)
 
     def reset(self) -> None:
         self.__init__()  # type: ignore[misc]
@@ -108,7 +121,7 @@ class CoachRuntime:
         self.ledger.begin_lap(self._lap)
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
-        spline, speed, brake, throttle, steer, lap = _normalize(frame)
+        spline, speed, brake, throttle, steer, lap, grip = _normalize(frame)
         if spline is None or speed is None:
             return []
         out: list[Advisory] = []
@@ -139,6 +152,8 @@ class CoachRuntime:
             in_window = (anc.brake - 0.04) <= spline <= r.spline_hi or st.active
             if r.spline_lo <= spline <= r.spline_hi or in_window:
                 self._accumulate(st, r, spline, speed, brake, throttle, steer, out)
+                if grip is not None and st.active:
+                    st.max_grip_used = max(st.max_grip_used, grip)
             elif st.active and spline > r.spline_hi:
                 out.extend(self._finalize_pass(r))
 
@@ -182,6 +197,11 @@ class CoachRuntime:
             return []
         sig = _signature_from_pass(st, r)
         diag = classify_root_error(sig, ref_sig)
+        # GRIP-GATE (P3): at the lateral-grip ceiling the loss is setup/tyre, not technique —
+        # demanding more speed/later braking would lie, so suppress. Fail-open: fires only when a
+        # real grip signal was present this pass (see _GRIP_GATE_FRAC).
+        if diag.root in _GRIP_GATED_ROOTS and st.max_grip_used >= _GRIP_GATE_FRAC:
+            diag = Diagnosis(RootError.NONE, {"grip_gated": round(st.max_grip_used, 3)})
         # time-lost proxy: apex-speed deficit (km/h) stands in until lap-time deltas are wired
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
         events = self.ledger.record_pass(r.index, diag, time_lost_s=time_lost, valid=True)
@@ -226,7 +246,7 @@ def _reference_signatures(
     states = {r.index: _PassState() for r in refs}
     sigs: dict[int, CornerSignature] = {}
     for fr in frames:
-        spline, speed, brake, throttle, steer, _ = _normalize(fr)
+        spline, speed, brake, throttle, steer, _, _ = _normalize(fr)
         if spline is None or speed is None:
             continue
         for r in refs:
@@ -320,7 +340,7 @@ def _crossed(prev: float | None, cur: float, target: float) -> bool:
 
 def _normalize(
     frame: dict[str, Any],
-) -> tuple[float | None, float | None, float, float, float, float | None]:
+) -> tuple[float | None, float | None, float, float, float, float | None, float | None]:
     payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
 
     def pick(*keys: str) -> Any:
@@ -343,6 +363,12 @@ def _normalize(
     speed = pick("speed", "speed_kmh")
     spline = None if spline is None else num(spline)
     speed = None if speed is None else num(speed)
+    # grip utilisation: a direct fraction if supplied, else derived from a lateral-g channel; None
+    # when the frame carries neither (the live telemetry today) → the grip-gate stays fail-open.
+    grip = pick("grip", "grip_used")
+    if grip is None:
+        latg = pick("lat_g", "latg", "accG")
+        grip = None if latg is None else abs(num(latg)) / _GRIP_CEILING_G
     return (
         spline,
         speed,
@@ -351,6 +377,7 @@ def _normalize(
         num(pick("steer")),
         (None if pick("lap", "lapCount", "lap_count", "completedLaps") is None
          else num(pick("lap", "lapCount", "lap_count", "completedLaps"))),
+        None if grip is None else num(grip),
     )
 
 

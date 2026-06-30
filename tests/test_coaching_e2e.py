@@ -134,6 +134,13 @@ def gross_late_brake(frames, ref_sig, *, past=0.015):
             f["brake"], f["throttle"] = 0.0, 1.0  # blow past the brake point on the gas → SAVE
 
 
+def at_grip_limit(frames, info, *, grip=0.97):
+    """Stamp a high grip-utilisation signal across the corner — the car is at the lateral limit."""
+    for f in frames:
+        if info.spline_lo <= f["spline"] <= info.spline_hi:
+            f["grip"] = grip
+
+
 def _laps(sim: CoachSim, injectors_by_lap: dict[int, list], n: int) -> list[list[dict]]:
     laps = []
     for lap in range(1, n + 1):
@@ -208,6 +215,28 @@ def test_root_not_symptom():
     phrases = {c.phrase for c in _primes(cues, corner=idx)}
     assert "Brake later." in phrases
     assert "Power." not in phrases  # downstream symptom suppressed
+
+
+# --- GRIP_GATE (P3): at the lateral limit, a slow apex is setup/tyre — stay SILENT, don't lie -----
+def test_grip_gate_silences_slow_apex_at_the_limit():
+    sim = CoachSim()
+    idx, ref = sim.corner(3)
+
+    def slow_but_at_limit(f):
+        slow_apex(f, ref, kmh=10.0)
+        at_grip_limit(f, ref)
+
+    cues = sim.drive(_laps(sim, {lap: [slow_but_at_limit] for lap in (1, 2, 3)}, 3))
+    assert _primes(cues, corner=idx) == []  # at the grip ceiling → no "Carry more."
+
+
+def test_grip_gate_fail_open_without_signal():
+    # the SAME slow apex WITHOUT a grip signal must still be coached (gate is honest/fail-open)
+    sim = CoachSim()
+    idx, ref = sim.corner(3)
+    inj = {lap: [lambda f: slow_apex(f, ref, kmh=10.0)] for lap in (1, 2, 3)}
+    cues = sim.drive(_laps(sim, inj, 3))
+    assert any(c.phrase == "Carry more." for c in _primes(cues, corner=idx))
 
 
 # --- SAVE_GROSS: blow past the brake point on the gas → instant "Brake!" -------------------------
