@@ -530,6 +530,18 @@ def setup_diff_summary(
 ) -> dict[str, Any]:
     """Return setup A/B changes as display-ready rows."""
 
+    if baseline.car_id and candidate.car_id and baseline.car_id != candidate.car_id:
+        return {
+            "ok": False,
+            "status": "car_mismatch",
+            "baseline": {"car_id": baseline.car_id, "track_id": baseline.track_id},
+            "candidate": {"car_id": candidate.car_id, "track_id": candidate.track_id},
+            "changed_count": 0,
+            "rows": [],
+            "display_lines": [],
+            "error": "cannot compare setup files from different cars",
+        }
+
     raw = candidate.diff(baseline)
     priority = {name: i for i, name in enumerate(_PRIORITY)}
     rows: list[dict[str, Any]] = []

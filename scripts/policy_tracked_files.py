@@ -28,7 +28,9 @@ def _tracked_files(root: Path) -> list[str]:
         check=True,
     )
     raw = result.stdout.split(b"\0")
-    return [path for chunk in raw if (path := chunk.decode("utf-8")) != ".secrets.baseline"]
+    return [
+        path for chunk in raw if (path := chunk.decode("utf-8")) and path != ".secrets.baseline"
+    ]
 
 
 def _batches(items: list[str], size: int = BATCH_SIZE) -> list[list[str]]:

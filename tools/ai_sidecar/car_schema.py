@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,7 @@ from tools.ai_sidecar.setup_model import spec_for  # noqa: E402
 
 SCHEMA_VERSION = 1
 DEFAULT_SCHEMA_DIR = "assets/setups/_schema"
+_SAFE_SCHEMA_CAR_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _schema_root(schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> Path:
@@ -41,14 +43,35 @@ def _schema_root(schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> Path:
     return Path(__file__).resolve().parents[2] / root
 
 
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return False
+    return True
+
+
+def _safe_schema_car_id(car_id: str | None) -> str | None:
+    if not car_id:
+        return None
+    text = car_id.strip()
+    if not text or ".." in text or not _SAFE_SCHEMA_CAR_ID.fullmatch(text):
+        return None
+    return text
+
+
 def load_latest_schema(
     car_id: str | None,
     schema_dir: str | Path = DEFAULT_SCHEMA_DIR,
 ) -> CarSetupSchema | None:
     """Load the newest checked-in schema asset for ``car_id``, if one exists."""
-    if not car_id:
+    safe_car_id = _safe_schema_car_id(car_id)
+    if safe_car_id is None:
         return None
-    car_dir = _schema_root(schema_dir) / car_id
+    root = _schema_root(schema_dir).resolve()
+    car_dir = (root / safe_car_id).resolve()
+    if not _is_relative_to(car_dir, root):
+        return None
     if not car_dir.is_dir():
         return None
     candidates = sorted(

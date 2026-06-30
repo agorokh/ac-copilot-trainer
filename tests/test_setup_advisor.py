@@ -160,6 +160,17 @@ def test_setup_diff_summary_returns_display_ready_rows() -> None:
     assert out["display_lines"][0] == first["display"]
 
 
+def test_setup_diff_rejects_different_cars() -> None:
+    baseline = from_snapshot(GT3_SNAPSHOT, car_id="ks_porsche_911_gt3_r_2016")
+    candidate = from_snapshot(GT3_SNAPSHOT, car_id="bmw_z4_gt3")
+
+    out = setup_diff_summary(baseline, candidate)
+
+    assert out["ok"] is False
+    assert out["status"] == "car_mismatch"
+    assert out["changed_count"] == 0
+
+
 def test_setup_diff_without_schema_uses_click_units_for_raw_alignment() -> None:
     baseline = from_snapshot({"CAMBER_LF.VALUE": "-18"})
     candidate = from_snapshot({"CAMBER_LF.VALUE": "-19"})

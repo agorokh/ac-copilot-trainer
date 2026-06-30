@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -922,6 +923,11 @@ def test_build_pyinstaller_args_targets_launcher_entrypoint(tmp_path: Path) -> N
     assert "--noconsole" in args
     assert "tools.ai_sidecar" in args
     assert "--collect-data" in args
+    assert _has_option_value(
+        args,
+        "--add-data",
+        f"{tmp_path / 'assets' / 'setups' / '_schema'}{os.pathsep}assets/setups/_schema",
+    )
     assert str(tmp_path / "tools" / "rig_launcher" / "__main__.py") == args[-1]
 
 

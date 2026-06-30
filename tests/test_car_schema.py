@@ -211,6 +211,17 @@ def test_load_latest_schema_loads_checked_in_car_asset() -> None:
     assert s.validate("FRONT_BIAS", 71) is False
 
 
+def test_load_latest_schema_rejects_unsafe_car_id(tmp_path: Path) -> None:
+    root = tmp_path / "schemas"
+    escape = tmp_path / "escape"
+    escape.mkdir()
+    (escape / "fake.json").write_text("{}", encoding="utf-8")
+
+    assert load_latest_schema("../escape", schema_dir=root) is None
+    assert load_latest_schema("ks/porsche", schema_dir=root) is None
+    assert load_latest_schema("ks_porsche..911", schema_dir=root) is None
+
+
 def test_from_spinners_captures_ranges() -> None:
     from tools.ai_sidecar.setup_model import from_spinners
 
