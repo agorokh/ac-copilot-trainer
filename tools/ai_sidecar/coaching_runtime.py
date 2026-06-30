@@ -20,7 +20,9 @@ I/O — so it is unit-tested by feeding synthetic injected-mistake frame streams
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.coaching_diagnosis import (
@@ -30,11 +32,12 @@ from tools.ai_sidecar.coaching_diagnosis import (
     RootError,
     classify_root_error,
 )
-from tools.ai_sidecar.coaching_ledger import (
-    ASSESS_LAPS,
-    HYSTERESIS_PASSES,
-    LAP_CUE_BUDGET,
-    CoachingLedger,
+from tools.ai_sidecar.coaching_ledger import CoachingLedger
+from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
+from tools.ai_sidecar.driver_progression import (
+    DriverCuePolicy,
+    cue_policy_from_profile,
+    default_cue_policy,
 )
 from tools.ai_sidecar.lap_dynamics import CornerSignature, corner_signatures, lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import Advisory
@@ -113,6 +116,7 @@ class CoachRuntime:
     anchors: dict[int, _Anchors]
     track_length_m: float = _DEFAULT_TRACK_M
     ledger: CoachingLedger = field(default_factory=CoachingLedger)
+    cue_policy: DriverCuePolicy = field(default_factory=default_cue_policy)
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
     _last_lap: float | None = None
@@ -259,6 +263,8 @@ class CoachRuntime:
         # real grip signal was present this pass (see _GRIP_GATE_FRAC).
         if diag.root in _GRIP_GATED_ROOTS and st.max_grip_used >= _GRIP_GATE_FRAC:
             diag = Diagnosis(RootError.NONE, {"grip_gated": round(st.max_grip_used, 3)})
+        if not self.cue_policy.allows(diag.root):
+            diag = Diagnosis(RootError.NONE, {"skill_gated": 1.0})
         # time-lost proxy: apex-speed deficit (km/h) stands in until lap-time deltas are wired
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
         # Validity gate (B3): a pass that never reached a plausible apex (no entry samples, or the
@@ -456,8 +462,25 @@ def _normalize(
     )
 
 
+def _profile_for_runtime(
+    driver_profile: Mapping[str, Any] | None,
+    driver_profile_path: str | Path | None,
+) -> Mapping[str, Any] | None:
+    if driver_profile is not None:
+        return driver_profile
+    configured = driver_profile_path or os.environ.get("AC_COPILOT_DRIVER_PROFILE")
+    path = Path(configured) if configured else DEFAULT_PROFILE_PATH
+    if not path.exists() and configured is None:
+        return None
+    return load_profile(path)
+
+
 def build_coach_runtime(
-    reference_archive: dict, *, lead_s: float = _DEFAULT_LEAD_S
+    reference_archive: dict,
+    *,
+    lead_s: float = _DEFAULT_LEAD_S,
+    driver_profile: Mapping[str, Any] | None = None,
+    driver_profile_path: str | Path | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
     try:
@@ -497,13 +520,19 @@ def build_coach_runtime(
     ref_sigs = _reference_signatures(refs, anchors, ref_frames)
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
+    policy = cue_policy_from_profile(_profile_for_runtime(driver_profile, driver_profile_path))
     ledger = CoachingLedger(
-        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", HYSTERESIS_PASSES, min_value=1),
-        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", ASSESS_LAPS, min_value=0),
-        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", LAP_CUE_BUDGET, min_value=1),
+        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1),
+        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),
+        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1),
     )
     return CoachRuntime(
-        refs=refs, ref_sigs=ref_sigs, anchors=anchors, track_length_m=track_m, ledger=ledger
+        refs=refs,
+        ref_sigs=ref_sigs,
+        anchors=anchors,
+        track_length_m=track_m,
+        ledger=ledger,
+        cue_policy=policy,
     )
 
 

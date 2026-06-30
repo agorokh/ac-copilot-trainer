@@ -1,9 +1,8 @@
-"""Persistent driver profile roll-up over immutable lap archives (issue #402).
+﻿"""Persistent driver profile roll-up over immutable lap archives (issue #403).
 
-The profile is a compacted state file under ``journal/driver/profile.json``. It is
-rebuilt or updated from ``journal/laps/lap_*.json`` without mutating those raw
-archives, and it intentionally preserves historical PB/session roll-ups after old
-raw laps are pruned by the retention policy.
+The profile is compacted state under ``journal/driver/profile.json``. It is
+rebuilt from ``journal/laps/lap_*.json`` without mutating those raw archives and
+preserves operator-owned preferences/focus metadata across updates.
 """
 
 from __future__ import annotations
@@ -28,10 +27,6 @@ DEFAULT_DRIVER_ID = "local-driver"
 DEFAULT_PROFILE_PATH = Path("journal/driver/profile.json")
 
 
-class ProfileLoadError(ValueError):
-    """Raised when an existing profile ledger cannot be trusted."""
-
-
 @dataclass(frozen=True)
 class ProfileSummary:
     """Summary of one profile update."""
@@ -40,13 +35,15 @@ class ProfileSummary:
     driver_id: str
     sessions: int
     personal_bests: int
+    corners: int
     source_laps: int
 
     def render(self) -> str:
         return (
             f"driver profile updated: {self.path} "
             f"(driver={self.driver_id}, sessions={self.sessions}, "
-            f"personal_bests={self.personal_bests}, source_laps={self.source_laps})"
+            f"personal_bests={self.personal_bests}, corners={self.corners}, "
+            f"source_laps={self.source_laps})"
         )
 
 
@@ -54,16 +51,46 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _num_ms(value: Any) -> int | None:
+def _num(value: Any, *, positive: bool = False) -> float | None:
     if isinstance(value, bool) or value is None:
         return None
     try:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(parsed) or parsed <= 0:
+    if not math.isfinite(parsed):
+        return None
+    if positive and parsed <= 0:
+        return None
+    return parsed
+
+
+def _num_ms(value: Any) -> int | None:
+    parsed = _num(value, positive=True)
+    if parsed is None:
         return None
     return int(round(parsed))
+
+
+def _avg(values: Iterable[float | None]) -> float | None:
+    finite = [v for v in values if v is not None and math.isfinite(v)]
+    if not finite:
+        return None
+    return float(sum(finite) / len(finite))
+
+
+def _median_float(values: Iterable[float | None]) -> float | None:
+    finite = [v for v in values if v is not None and math.isfinite(v)]
+    if not finite:
+        return None
+    return float(median(finite))
+
+
+def _safe_population_stdev(values: list[int]) -> float | None:
+    if len(values) < 2:
+        return None
+    avg = sum(values) / len(values)
+    return math.sqrt(sum((value - avg) ** 2 for value in values) / len(values))
 
 
 def _combo_key(car_id: Any, track_id: Any, track_layout: Any = None) -> str:
@@ -78,11 +105,8 @@ def _session_key(session_uuid: Any, car_id: Any, track_id: Any, track_layout: An
     return f"{session}|{_combo_key(car_id, track_id, track_layout)}"
 
 
-def _safe_population_stdev(values: list[int]) -> float | None:
-    if len(values) < 2:
-        return None
-    avg = sum(values) / len(values)
-    return math.sqrt(sum((value - avg) ** 2 for value in values) / len(values))
+def _corner_key(car_id: Any, track_id: Any, track_layout: Any, corner_index: Any) -> str:
+    return f"{_combo_key(car_id, track_id, track_layout)}|corner:{int(corner_index)}"
 
 
 def _default_profile(driver_id: str) -> dict[str, Any]:
@@ -95,6 +119,7 @@ def _default_profile(driver_id: str) -> dict[str, Any]:
         "session_rollups": {},
         "personal_bests": {},
         "consistency": {},
+        "corner_history": {},
         "source": {"lap_count": 0, "valid_laps": 0, "skipped": []},
     }
 
@@ -140,30 +165,17 @@ def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[
 
 
 def load_profile(
-    path: str | Path = DEFAULT_PROFILE_PATH,
-    *,
-    driver_id: str = DEFAULT_DRIVER_ID,
-    strict: bool = False,
-) -> dict:
+    path: str | Path = DEFAULT_PROFILE_PATH, *, driver_id: str = DEFAULT_DRIVER_ID
+) -> dict[str, Any]:
     """Load an existing profile, returning a default shell when the file is absent."""
     profile_path = Path(path)
     if not profile_path.exists():
         return _default_profile(driver_id)
     try:
         loaded = json.loads(profile_path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        if strict:
-            raise ProfileLoadError(f"profile unreadable at {profile_path}: {exc}") from exc
-        return _default_profile(driver_id)
-    except ValueError as exc:
-        if strict:
-            raise ProfileLoadError(f"profile invalid JSON at {profile_path}: {exc}") from exc
+    except (OSError, ValueError):
         return _default_profile(driver_id)
     if not isinstance(loaded, dict) or loaded.get("schema_version") != PROFILE_SCHEMA_VERSION:
-        if strict:
-            raise ProfileLoadError(
-                f"profile schema mismatch at {profile_path}: expected {PROFILE_SCHEMA_VERSION}"
-            )
         return _default_profile(driver_id)
     loaded.setdefault("driver_id", driver_id)
     loaded.setdefault("preferences", {})
@@ -171,58 +183,113 @@ def load_profile(
     loaded.setdefault("session_rollups", {})
     loaded.setdefault("personal_bests", {})
     loaded.setdefault("consistency", {})
+    loaded.setdefault("corner_history", {})
     loaded.setdefault("source", {"lap_count": 0, "valid_laps": 0, "skipped": []})
     return loaded
 
 
-def _min_present(*values: Any) -> Any:
-    present = [value for value in values if value is not None]
-    return min(present) if present else None
+def _corner_rows_from_record(path: Path, record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    if not lap_is_valid(dict(record)):
+        return []
+    car = record.get("car") if isinstance(record.get("car"), Mapping) else {}
+    track = record.get("track") if isinstance(record.get("track"), Mapping) else {}
+    lap = record.get("lap") if isinstance(record.get("lap"), Mapping) else {}
+    corners = record.get("corners")
+    if not isinstance(corners, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for idx, corner in enumerate(corners):
+        if not isinstance(corner, Mapping):
+            continue
+        out.append(
+            {
+                "source_file": path.name,
+                "lap_uuid": record.get("lap_uuid"),
+                "session_uuid": record.get("session_uuid"),
+                "car_id": car.get("id"),
+                "track_id": track.get("id"),
+                "track_layout": track.get("layout"),
+                "exported_at": record.get("exported_at"),
+                "lap_n": lap.get("lap_n"),
+                "corner_index": idx,
+                "label": corner.get("label") or f"T{idx + 1}",
+                "entry_speed_kmh": _num(corner.get("entrySpeed")),
+                "min_speed_kmh": _num(corner.get("minSpeed")),
+                "exit_speed_kmh": _num(corner.get("exitSpeed")),
+                "brake_point_spline": _num(corner.get("brakePointSpline")),
+                "trail_brake_ratio": _num(corner.get("trailBrakeRatio")),
+                "throttle_avg": _num(corner.get("throttleAvg")),
+                "steer_reversals": _num(corner.get("steerReversals")),
+                "traction_circle_proxy": _num(corner.get("tractionCircleProxy")),
+            }
+        )
+    return out
 
 
-def _max_present(*values: Any) -> Any:
-    present = [value for value in values if value is not None]
-    return max(present) if present else None
-
-
-def _merge_session_rollup(existing: Mapping[str, Any] | None, incoming: Mapping[str, Any]) -> dict:
-    if not isinstance(existing, Mapping):
-        return dict(incoming)
-    merged = {**dict(existing), **dict(incoming)}
-    merged["first_exported_at"] = _min_present(
-        existing.get("first_exported_at"), incoming.get("first_exported_at")
-    )
-    merged["last_exported_at"] = _max_present(
-        existing.get("last_exported_at"), incoming.get("last_exported_at")
-    )
-    merged["first_lap_n"] = _min_present(existing.get("first_lap_n"), incoming.get("first_lap_n"))
-    merged["last_lap_n"] = _max_present(existing.get("last_lap_n"), incoming.get("last_lap_n"))
-    merged["lap_count"] = max(
-        int(existing.get("lap_count") or 0), int(incoming.get("lap_count") or 0)
-    )
-    merged["valid_laps"] = max(
-        int(existing.get("valid_laps") or 0), int(incoming.get("valid_laps") or 0)
-    )
-
-    existing_best = _num_ms(existing.get("best_lap_ms"))
-    incoming_best = _num_ms(incoming.get("best_lap_ms"))
-    if existing_best is not None and (incoming_best is None or existing_best <= incoming_best):
-        merged["best_lap_ms"] = existing_best
-        merged["best_lap_uuid"] = existing.get("best_lap_uuid")
-        merged["best_source_file"] = existing.get("best_source_file")
-    elif incoming_best is not None:
-        merged["best_lap_ms"] = incoming_best
-
-    if int(existing.get("valid_laps") or 0) >= int(incoming.get("valid_laps") or 0):
-        merged["median_lap_ms"] = existing.get("median_lap_ms")
-        merged["consistency_ms"] = existing.get("consistency_ms")
-    return merged
+def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    history: dict[str, dict[str, Any]] = {}
+    for key, rows in sorted(rows_by_key.items()):
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                str(row.get("exported_at") or ""),
+                str(row.get("session_uuid") or ""),
+                int(row.get("lap_n") or 0),
+                str(row.get("source_file") or ""),
+            ),
+        )
+        first = ordered[0]
+        min_speeds = [row.get("min_speed_kmh") for row in ordered]
+        first_min = next((speed for speed in min_speeds if speed is not None), None)
+        last_min = next(
+            (
+                row.get("min_speed_kmh")
+                for row in reversed(ordered)
+                if row.get("min_speed_kmh") is not None
+            ),
+            None,
+        )
+        exported = [
+            str(row.get("exported_at"))
+            for row in ordered
+            if isinstance(row.get("exported_at"), str)
+        ]
+        sessions = {str(row.get("session_uuid")) for row in ordered if row.get("session_uuid")}
+        history[key] = {
+            "car_id": first.get("car_id"),
+            "track_id": first.get("track_id"),
+            "track_layout": first.get("track_layout"),
+            "corner_index": first.get("corner_index"),
+            "label": first.get("label"),
+            "session_count": len(sessions),
+            "valid_laps": len(ordered),
+            "first_exported_at": min(exported) if exported else None,
+            "last_exported_at": max(exported) if exported else None,
+            "first_min_speed_kmh": first_min,
+            "last_min_speed_kmh": last_min,
+            "best_min_speed_kmh": max((v for v in min_speeds if v is not None), default=None),
+            "median_min_speed_kmh": _median_float(min_speeds),
+            "delta_min_speed_kmh": (
+                round(last_min - first_min, 3)
+                if first_min is not None and last_min is not None
+                else None
+            ),
+            "avg_entry_speed_kmh": _avg(row.get("entry_speed_kmh") for row in ordered),
+            "avg_exit_speed_kmh": _avg(row.get("exit_speed_kmh") for row in ordered),
+            "avg_trail_brake_ratio": _avg(row.get("trail_brake_ratio") for row in ordered),
+            "avg_throttle": _avg(row.get("throttle_avg") for row in ordered),
+            "avg_steer_reversals": _avg(row.get("steer_reversals") for row in ordered),
+            "avg_traction_circle_proxy": _avg(row.get("traction_circle_proxy") for row in ordered),
+            "latest_source_file": ordered[-1].get("source_file"),
+        }
+    return history
 
 
 def _rollups_from_archives(
     inputs: Iterable[str | Path],
-) -> tuple[dict[str, dict], int, int, list[str]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], int, int, list[str]]:
     grouped: dict[str, list[tuple[Path, dict[str, Any]]]] = defaultdict(list)
+    corners_by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
     source_laps = 0
     valid_laps = 0
     skipped: list[str] = []
@@ -233,7 +300,8 @@ def _rollups_from_archives(
             skipped.append(f"{Path(path).name}: {type(exc).__name__}")
             continue
         source_laps += 1
-        if lap_is_valid(record):
+        is_valid = lap_is_valid(record)
+        if is_valid:
             valid_laps += 1
         car = record.get("car") if isinstance(record.get("car"), Mapping) else {}
         track = record.get("track") if isinstance(record.get("track"), Mapping) else {}
@@ -245,8 +313,18 @@ def _rollups_from_archives(
                 track.get("layout"),
             )
         ].append((Path(path), record))
+        if is_valid:
+            for row in _corner_rows_from_record(Path(path), record):
+                corners_by_key[
+                    _corner_key(
+                        row.get("car_id"),
+                        row.get("track_id"),
+                        row.get("track_layout"),
+                        row.get("corner_index"),
+                    )
+                ].append(row)
 
-    rollups: dict[str, dict] = {}
+    rollups: dict[str, dict[str, Any]] = {}
     for key, rows in grouped.items():
         rows.sort(
             key=lambda item: (
@@ -299,7 +377,7 @@ def _rollups_from_archives(
             "best_lap_uuid": best_record.get("lap_uuid") if best_record else None,
             "best_source_file": best_path.name if best_path else None,
         }
-    return rollups, source_laps, valid_laps, skipped
+    return rollups, _corner_history(corners_by_key), source_laps, valid_laps, skipped
 
 
 def build_profile(
@@ -318,12 +396,11 @@ def build_profile(
             **_rollups_from_existing_bests(existing),
             **dict(existing.get("session_rollups") or {}),
         }
+        base["corner_history"] = dict(existing.get("corner_history") or {})
 
-    new_rollups, source_laps, valid_laps, skipped = _rollups_from_archives(inputs)
-    for key, rollup in new_rollups.items():
-        base["session_rollups"][key] = _merge_session_rollup(
-            base["session_rollups"].get(key), rollup
-        )
+    new_rollups, new_corners, source_laps, valid_laps, skipped = _rollups_from_archives(inputs)
+    base["session_rollups"].update(new_rollups)
+    base["corner_history"].update(new_corners)
     rollups = base["session_rollups"]
 
     by_combo: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -426,7 +503,7 @@ def update_profile(
     generated_at: str | None = None,
 ) -> ProfileSummary:
     """Load, merge, and persist the driver profile."""
-    existing = load_profile(profile_path, driver_id=driver_id, strict=True)
+    existing = load_profile(profile_path, driver_id=driver_id)
     profile = build_profile(
         inputs, driver_id=driver_id, existing=existing, generated_at=generated_at
     )
@@ -436,6 +513,7 @@ def update_profile(
         driver_id=profile["driver_id"],
         sessions=len(profile.get("session_rollups") or {}),
         personal_bests=len(profile.get("personal_bests") or {}),
+        corners=len(profile.get("corner_history") or {}),
         source_laps=int((profile.get("source") or {}).get("lap_count") or 0),
     )
 
