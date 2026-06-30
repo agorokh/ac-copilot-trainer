@@ -161,7 +161,7 @@ def is_supported_experiment_store_path(path: str | os.PathLike[str]) -> bool:
 
 def load_lap_archive(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
-        raw = Path(path).read_text(encoding="utf-8")
+        raw = Path(path).read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise SetupExperimentError(f"cannot read lap archive: {exc}") from exc
     try:
@@ -638,6 +638,30 @@ def _chronological_key(record: dict[str, Any]) -> tuple[str, str, int, str]:
     )
 
 
+def _finite_setup_params(record: dict[str, Any]) -> dict[str, float]:
+    setup = record.get("setup") if isinstance(record.get("setup"), dict) else {}
+    params = setup.get("params") if isinstance(setup.get("params"), dict) else {}
+    out: dict[str, float] = {}
+    for raw_key, value in params.items():
+        val = _as_finite_float(value)
+        if val is not None:
+            out[_normalize_param_key(str(raw_key))] = val
+    return out
+
+
+def _changed_param_keys(
+    prev_params: dict[str, float],
+    curr_params: dict[str, float],
+) -> list[str]:
+    changed: list[str] = []
+    for key in sorted(set(prev_params) | set(curr_params)):
+        before = prev_params.get(key)
+        after = curr_params.get(key)
+        if before is None or after is None or abs(after - before) > 1e-9:
+            changed.append(key)
+    return changed
+
+
 def suggest_closed_loop(
     records: list[dict[str, Any]],
     *,
@@ -673,32 +697,56 @@ def suggest_closed_loop(
         }
     ordered = sorted(complete, key=_chronological_key)
     prev, curr = ordered[-2], ordered[-1]
-    prev_params = prev["setup"]["params"]
-    curr_params = curr["setup"]["params"]
-    prev_value = float(prev_params[key])
-    curr_value = float(curr_params[key])
+    prev_params = _finite_setup_params(prev)
+    curr_params = _finite_setup_params(curr)
+    prev_value = prev_params[key]
+    curr_value = curr_params[key]
     prev_lap_ms = float(prev["lap"]["lap_ms"])
     curr_lap_ms = float(curr["lap"]["lap_ms"])
     value_delta = curr_value - prev_value
     measured_delta_ms = prev_lap_ms - curr_lap_ms
+    previous_result = {
+        "from": prev_value,
+        "to": curr_value,
+        "delta": round(value_delta, 6),
+        "lap_ms_before": int(round(prev_lap_ms)),
+        "lap_ms_after": int(round(curr_lap_ms)),
+        "measured_delta_ms": round(measured_delta_ms, 3),
+    }
+    changed_keys = _changed_param_keys(prev_params, curr_params)
     if abs(value_delta) <= 1e-9:
         return {
             "ok": False,
             "status": "latest_laps_did_not_change_param",
             "param": key,
             "experiments_used": len(complete),
+            "changed_params": changed_keys,
+            "previous_result": previous_result,
+        }
+    if changed_keys != [key]:
+        return {
+            "ok": False,
+            "status": "latest_pair_changed_multiple_params",
+            "param": key,
+            "experiments_used": len(complete),
+            "changed_params": changed_keys,
+            "previous_result": previous_result,
+        }
+    if abs(measured_delta_ms) <= 1e-9:
+        return {
+            "ok": False,
+            "status": "inconclusive_no_lap_delta",
+            "param": key,
+            "experiments_used": len(complete),
             "previous_result": {
-                "from": prev_value,
-                "to": curr_value,
-                "measured_delta_ms": round(measured_delta_ms, 3),
-                "lap_ms_before": int(round(prev_lap_ms)),
-                "lap_ms_after": int(round(curr_lap_ms)),
+                **previous_result,
+                "improved": False,
             },
         }
 
     step = _param_step(scoped, key)
     previous_direction = 1.0 if value_delta > 0 else -1.0
-    next_direction = previous_direction if measured_delta_ms >= 0 else -previous_direction
+    next_direction = previous_direction if measured_delta_ms > 0 else -previous_direction
     raw_target = _candidate_value(scoped, key, curr_value + next_direction * step)
     candidate = {key: raw_target}
     if schema is not None and hasattr(schema, "constrain_params"):
@@ -711,9 +759,7 @@ def suggest_closed_loop(
             "param": key,
             "candidate": candidate,
             "previous_result": {
-                "from": prev_value,
-                "to": curr_value,
-                "measured_delta_ms": round(measured_delta_ms, 3),
+                **previous_result,
             },
         }
     if abs(target_value - curr_value) <= 1e-9:
@@ -724,9 +770,7 @@ def suggest_closed_loop(
             "experiments_used": len(complete),
             "current": curr_value,
             "previous_result": {
-                "from": prev_value,
-                "to": curr_value,
-                "measured_delta_ms": round(measured_delta_ms, 3),
+                **previous_result,
                 "improved": measured_delta_ms > 0,
             },
         }
@@ -741,12 +785,7 @@ def suggest_closed_loop(
         "param": key,
         "experiments_used": len(complete),
         "previous_result": {
-            "from": prev_value,
-            "to": curr_value,
-            "delta": round(value_delta, 6),
-            "lap_ms_before": int(round(prev_lap_ms)),
-            "lap_ms_after": int(round(curr_lap_ms)),
-            "measured_delta_ms": round(measured_delta_ms, 3),
+            **previous_result,
             "improved": improved,
         },
         "candidate": {

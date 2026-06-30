@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from tools.ai_sidecar.car_schema import CarSetupSchema
 from tools.ai_sidecar.server import (
     _run_setup_closed_loop,
     _run_setup_compare,
@@ -142,6 +143,30 @@ def test_rebuild_compare_and_suggest(tmp_path: Path) -> None:
     assert suggestion["rationale"]
 
 
+def test_rebuild_experiments_handles_utf8_bom_lap_archive(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "journal" / "laps"
+    lap_dir.mkdir(parents=True)
+    path = lap_dir / "lap_20260616-000001-bom.json"
+    path.write_text(
+        json.dumps(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        encoding="utf-8-sig",
+    )
+
+    summary = rebuild_experiments(lap_dir)
+
+    assert summary["records"] == 1
+    assert summary["skipped"] == []
+
+
 def test_candidate_grid_clamps_nonnegative_params() -> None:
     records = [
         record_from_lap_archive(
@@ -245,6 +270,104 @@ def test_closed_loop_reverses_hurting_one_parameter_move() -> None:
         "from": 65.0,
         "to": 64.0,
     }
+
+
+def test_closed_loop_rejects_confounded_latest_pair() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "latest_pair_changed_multiple_params"
+    assert suggestion["changed_params"] == ["FRONT_BIAS.VALUE", "WING_2.VALUE"]
+    assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+
+
+def test_closed_loop_treats_zero_measured_delta_as_inconclusive() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=100_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "inconclusive_no_lap_delta"
+    assert suggestion["previous_result"]["measured_delta_ms"] == 0.0
+
+
+def test_closed_loop_respects_schema_bounds() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+    schema = CarSetupSchema.from_spinners_dump(
+        "ks_porsche_911_gt3_r_2016",
+        [{"name": "FRONT_BIAS", "min": 50, "max": 70, "step": 1}],
+    )
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS", schema=schema)
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
 
 
 def test_record_lap_archive_upserts_without_duplicates(tmp_path: Path) -> None:

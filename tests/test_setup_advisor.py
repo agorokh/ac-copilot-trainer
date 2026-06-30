@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from tools.ai_sidecar.setup_advisor import advise_from_complaint, setup_diff_summary
+from pathlib import Path
+
+from tools.ai_sidecar.setup_advisor import (
+    advise_from_complaint,
+    diff_setup_files,
+    setup_diff_summary,
+)
 from tools.ai_sidecar.setup_model import from_snapshot
 
 GT3_SNAPSHOT = {
@@ -66,6 +72,31 @@ def test_high_speed_understeer_prefers_aero_lever() -> None:
     assert sections.index("WING_1") < sections.index("ARB_FRONT")
 
 
+def test_mid_corner_text_overrides_generic_turn_word() -> None:
+    out = advise_from_complaint(
+        "won't turn mid corner",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"] == {"issue": "understeer", "phase": "mid", "speed_hint": None}
+    assert out["suggestions"][0]["section"] == "ARB_FRONT"
+
+
+def test_low_speed_hint_prefers_mechanical_lever() -> None:
+    out = advise_from_complaint(
+        "low speed understeer mid corner",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"]["speed_hint"] == "low"
+    sections = [suggestion["section"] for suggestion in out["suggestions"]]
+    assert sections.index("ARB_FRONT") < sections.index("WING_1")
+
+
 def test_setup_diff_summary_returns_display_ready_rows() -> None:
     baseline = from_snapshot(GT3_SNAPSHOT, car_id="ks_porsche_911_gt3_r_2016")
     candidate = from_snapshot(
@@ -88,3 +119,34 @@ def test_setup_diff_summary_returns_display_ready_rows() -> None:
     assert first["to"] == 64.0
     assert "Brake bias" in first["display"]
     assert out["display_lines"][0] == first["display"]
+
+
+def test_setup_diff_without_schema_uses_click_units_for_raw_alignment() -> None:
+    baseline = from_snapshot({"CAMBER_LF.VALUE": "-18"})
+    candidate = from_snapshot({"CAMBER_LF.VALUE": "-19"})
+
+    out = setup_diff_summary(baseline, candidate)
+
+    assert out["rows"][0]["units"] == "clicks"
+    assert out["rows"][0]["from_display"] == "-18"
+    assert out["rows"][0]["to_display"] == "-19"
+    assert out["rows"][0]["display"].endswith("clicks (decrease)")
+
+
+def test_diff_setup_files_loads_car_schema_for_display_units(tmp_path: Path) -> None:
+    baseline = tmp_path / "baseline.ini"
+    candidate = tmp_path / "candidate.ini"
+    baseline.write_text(
+        "[CAR]\nMODEL=ks_porsche_911_gt3_r_2016\n[CAMBER_LF]\nVALUE=-18\n",
+        encoding="utf-8",
+    )
+    candidate.write_text(
+        "[CAR]\nMODEL=ks_porsche_911_gt3_r_2016\n[CAMBER_LF]\nVALUE=-19\n",
+        encoding="utf-8",
+    )
+
+    out = diff_setup_files(baseline, candidate)
+
+    assert out["rows"][0]["units"] == "deg"
+    assert out["rows"][0]["from_display"] == "-1.8"
+    assert out["rows"][0]["to_display"] == "-1.9"

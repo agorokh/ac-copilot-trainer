@@ -34,6 +34,32 @@ SCHEMA_VERSION = 1
 DEFAULT_SCHEMA_DIR = "assets/setups/_schema"
 
 
+def _schema_root(schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> Path:
+    root = Path(schema_dir)
+    if root.is_absolute():
+        return root
+    return Path(__file__).resolve().parents[2] / root
+
+
+def load_latest_schema(
+    car_id: str | None,
+    schema_dir: str | Path = DEFAULT_SCHEMA_DIR,
+) -> CarSetupSchema | None:
+    """Load the newest checked-in schema asset for ``car_id``, if one exists."""
+    if not car_id:
+        return None
+    car_dir = _schema_root(schema_dir) / car_id
+    if not car_dir.is_dir():
+        return None
+    candidates = sorted(
+        car_dir.glob("*.json"),
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+    )
+    if not candidates:
+        return None
+    return CarSetupSchema.load(candidates[-1])
+
+
 def _f(value: Any) -> float | None:
     """Coerce to a finite float, else None (booleans are not numbers here)."""
     if isinstance(value, bool) or value is None:

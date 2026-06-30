@@ -878,6 +878,51 @@ def test_setup_closed_loop_roundtrip(tmp_path: Path) -> None:
     }
 
 
+def test_setup_closed_loop_roundtrip_uses_car_schema_bounds(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 69)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 70)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.closed_loop",
+                            "param": "FRONT_BIAS",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is False
+    assert result["status"] == "at_param_bound"
+    assert result["current"] == 70.0
+
+
 def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) -> None:
     async def _run() -> tuple[dict, dict]:
         from tools.ai_sidecar import server as srv

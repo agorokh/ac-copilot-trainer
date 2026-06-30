@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.ai_sidecar.car_schema import CarSetupSchema
+from tools.ai_sidecar.car_schema import CarSetupSchema, load_latest_schema
 from tools.ai_sidecar.setup_knowledge import AERO, MECHANICAL, effect_for
 from tools.ai_sidecar.setup_model import CarSetup, from_snapshot, load_setup_file, spec_for
 
@@ -249,10 +249,10 @@ def _parse_phase(text: str, issue: str | None) -> str:
         return "kerb"
     if {"exit", "power", "throttle", "traction"} & words or _has_phrase(text, "corner exit"):
         return "exit"
-    if {"entry", "turn", "turnin", "turn-in", "braking", "brake", "trail"} & words:
-        return "entry" if issue not in {"lockup", "lockup_front", "lockup_rear"} else "braking"
     if {"mid", "apex", "middle", "center", "centre"} & words or _has_phrase(text, "mid corner"):
         return "mid"
+    if {"entry", "turn", "turnin", "turn-in", "braking", "brake", "trail"} & words:
+        return "entry" if issue not in {"lockup", "lockup_front", "lockup_rear"} else "braking"
     if issue in {"lockup", "lockup_front", "lockup_rear"}:
         return "braking"
     if issue == "wheelspin":
@@ -264,10 +264,10 @@ def _parse_phase(text: str, issue: str | None) -> str:
 
 def _parse_speed_hint(text: str) -> str | None:
     words = _tokens(text)
-    if {"fast", "high", "speed", "aero"} & words or _has_phrase(text, "high speed"):
-        return "high"
     if {"slow", "hairpin", "low"} & words or _has_phrase(text, "low speed"):
         return "low"
+    if {"fast", "high", "aero"} & words or _has_phrase(text, "high speed"):
+        return "high"
     return None
 
 
@@ -316,6 +316,16 @@ def _decoded(
     return schema.decode(section, value)
 
 
+def _display_units(schema: CarSetupSchema | None, section: str, fallback: str) -> str:
+    if schema is None and _base_section(section) in {"CAMBER", "TOE_OUT", "ROD_LENGTH"}:
+        return "clicks"
+    if schema is not None:
+        sp = schema.get(section)
+        if sp is not None and sp.units is not None:
+            return sp.units
+    return fallback
+
+
 def _move_to_suggestion(
     move: ComplaintMove,
     *,
@@ -356,7 +366,7 @@ def _move_to_suggestion(
         "category": spec.category,
         "direction": direction,
         "magnitude": step,
-        "units": spec.units or (effect.units if effect else ""),
+        "units": _display_units(schema, section, spec.units or (effect.units if effect else "")),
         "current": current,
         "target": target,
         "current_display": _format_value(_decoded(schema, section, current)),
@@ -490,7 +500,7 @@ def setup_diff_summary(
             effect_text = effect.increase_does if direction == "increase" else effect.decrease_does
         from_display = _format_value(_decoded(schema, section, from_v))
         to_display = _format_value(_decoded(schema, section, to_v))
-        unit = spec.units or (effect.units if effect else "")
+        unit = _display_units(schema, section, spec.units or (effect.units if effect else ""))
         arrow = f"{from_display or '-'} -> {to_display or '-'}"
         display = f"{spec.human_name}: {arrow}{(' ' + unit) if unit else ''}"
         if effect_text:
@@ -530,6 +540,8 @@ def diff_setup_files(
 ) -> dict[str, Any]:
     baseline = load_setup_file(baseline_path)
     candidate = load_setup_file(candidate_path)
+    if schema is None:
+        schema = load_latest_schema(candidate.car_id or baseline.car_id)
     out = setup_diff_summary(baseline, candidate, schema=schema)
     out["baseline"]["path"] = str(baseline_path)
     out["candidate"]["path"] = str(candidate_path)

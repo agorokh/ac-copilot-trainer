@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar import observability
+from tools.ai_sidecar.car_schema import load_latest_schema
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
@@ -475,6 +476,7 @@ def _run_setup_closed_loop(
         param=param,
         car_id=car_id,
         track_id=track_id,
+        schema=load_latest_schema(car_id),
     )
     print(json.dumps(out, indent=2, sort_keys=True))
 
@@ -491,6 +493,7 @@ def _run_setup_advice(
         setup=setup,
         car_id=car_id,
         track_id=track_id,
+        schema=load_latest_schema(car_id or (setup.car_id if setup else None)),
     )
     print(json.dumps(out, indent=2, sort_keys=True))
 
@@ -541,6 +544,7 @@ def _closed_loop_setup_store(
         param=param,
         car_id=car_id,
         track_id=track_id,
+        schema=load_latest_schema(car_id),
     )
 
 
@@ -996,6 +1000,7 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 setup_snapshot=snapshot if isinstance(snapshot, dict) else None,
                 car_id=data.get("car_id"),
                 track_id=data.get("track_id"),
+                schema=load_latest_schema(data.get("car_id")),
             )
         except Exception as e:
             logger.info("setup advice failed err=%s", e)
@@ -1024,7 +1029,12 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
                 car_id=data.get("car_id"),
                 track_id=data.get("track_id"),
             )
-            out = await asyncio.to_thread(setup_diff_summary, baseline, candidate)
+            out = await asyncio.to_thread(
+                setup_diff_summary,
+                baseline,
+                candidate,
+                schema=load_latest_schema(data.get("car_id")),
+            )
         except Exception as e:
             logger.info("setup diff failed err=%s", e)
             out = {"ok": False, "error": str(e)}

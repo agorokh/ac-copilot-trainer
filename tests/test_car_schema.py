@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.ai_sidecar.car_schema import CarSetupSchema, SpinnerDesc
+from tools.ai_sidecar.car_schema import CarSetupSchema, SpinnerDesc, load_latest_schema
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "assets/setups/_schema/ks_porsche_911_gt3_r_2016/4fcbe0406992.json"
@@ -201,6 +201,14 @@ def test_example_asset_decodes_known_values() -> None:
     assert s.decode("TYRES", 1) == "Medium"  # enum
     assert s.validate("WING_2", 25) is False and s.clamp("WING_2", 25) == 20.0
     assert s.validate("FINAL_RATIO", 7) is False  # read-only in the example
+
+
+def test_load_latest_schema_loads_checked_in_car_asset() -> None:
+    s = load_latest_schema("ks_porsche_911_gt3_r_2016")
+    assert s is not None
+    assert s.car_id == "ks_porsche_911_gt3_r_2016"
+    assert s.clamp("FRONT_BIAS", 71) == 70.0
+    assert s.validate("FRONT_BIAS", 71) is False
 
 
 def test_from_spinners_captures_ranges() -> None:
