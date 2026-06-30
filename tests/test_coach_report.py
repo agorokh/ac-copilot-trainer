@@ -203,3 +203,16 @@ def test_trail_braking_block_in_structured_debrief():
     assert "classification" in entry and "trail_overlap" in entry and "coaching" in entry
     # the square-brake fixture is a non-"good" technique → surfaces in the text section
     assert "Trail braking" in d["text"]
+
+
+def test_structured_debrief_includes_corner_diagnostics():
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        reference_archive=_corner_archive(degrade=0.0),
+        history_archives=[_corner_archive(degrade=4.0)],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]
+    assert set(diag) >= {"steering", "brake_shape", "gear", "exit_road_usage", "consistency"}
+    assert diag["exit_road_usage"]["available"] is True
+    assert diag["consistency"]["available"] is True

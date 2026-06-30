@@ -84,6 +84,23 @@ def test_brain_followup_forwards_structured_blocks(monkeypatch: pytest.MonkeyPat
     assert out["conditions"]["grip_band"] == "green"
 
 
+def test_brain_followup_loads_history_paths_for_consistency(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(proto, "debrief_feature_enabled", lambda: True)
+    laps_dir = tmp_path / "journal" / "laps"
+    laps_dir.mkdir(parents=True)
+    hist_path = laps_dir / "lap_history.json"
+    hist_path.write_text(json.dumps(_rich_corner_archive()), encoding="utf-8")
+    inbound = _rich_corner_archive()
+    inbound["historyArchivePaths"] = [str(hist_path)]
+    out = build_brain_followup(inbound)
+    assert out is not None
+    diagnostics = out["cornerAnalysis"][0]["diagnostics"]
+    assert diagnostics["consistency"]["available"] is True
+    assert diagnostics["consistency"]["sample_count"] == 2
+
+
 def test_prepare_rejects_bad_protocol() -> None:
     out = prepare_outbound_message(
         {"protocol": 99, "event": "lap_complete", "lap": 1},

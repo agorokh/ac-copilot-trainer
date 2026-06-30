@@ -292,6 +292,7 @@ def _analyze(
     lap_archive: dict,
     *,
     reference_archive: dict | None,
+    history_archives: list[dict] | None = None,
     setup: CarSetup | None,
     grip_ceiling_g: float | None,
 ) -> dict:
@@ -303,7 +304,19 @@ def _analyze(
     lap = lap_trace_from_archive(lap_archive)
     setup = setup or from_lap_archive(lap_archive)
     ref = lap_trace_from_archive(reference_archive) if reference_archive else None
-    report = coach_lap(lap, setup, reference=ref, grip_ceiling_g=grip_ceiling_g)
+    history_laps: list[LapTrace] = []
+    for history_archive in history_archives or []:
+        try:
+            history_laps.append(lap_trace_from_archive(history_archive))
+        except ValueError:
+            continue
+    report = coach_lap(
+        lap,
+        setup,
+        reference=ref,
+        history=history_laps,
+        grip_ceiling_g=grip_ceiling_g,
+    )
     sigs = corner_signatures(lap, segment_corners(lap))
     deltas = compare_laps(lap, ref) if ref is not None else None
     balance = analyze_balance(lap, sigs, deltas=deltas, grip_ceiling_g=grip_ceiling_g)
@@ -333,6 +346,7 @@ def build_structured_debrief(
     lap_archive: dict,
     *,
     reference_archive: dict | None = None,
+    history_archives: list[dict] | None = None,
     setup: CarSetup | None = None,
     grip_ceiling_g: float | None = None,
 ) -> dict | None:
@@ -349,6 +363,7 @@ def build_structured_debrief(
         a = _analyze(
             lap_archive,
             reference_archive=reference_archive,
+            history_archives=history_archives,
             setup=setup,
             grip_ceiling_g=grip_ceiling_g,
         )
@@ -373,6 +388,7 @@ def build_structured_debrief(
             "min_speed_kmh": c.min_speed_kmh,
             "time_loss_s": c.delta_s,
             "headline": c.headline,
+            "diagnostics": c.diagnostics,
             "attributions": [
                 {
                     "key": at.key,
@@ -413,6 +429,7 @@ def build_debrief(
     lap_archive: dict,
     *,
     reference_archive: dict | None = None,
+    history_archives: list[dict] | None = None,
     setup: CarSetup | None = None,
     grip_ceiling_g: float | None = None,
 ) -> str:
@@ -420,6 +437,7 @@ def build_debrief(
     a = _analyze(
         lap_archive,
         reference_archive=reference_archive,
+        history_archives=history_archives,
         setup=setup,
         grip_ceiling_g=grip_ceiling_g,
     )

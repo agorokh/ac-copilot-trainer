@@ -224,6 +224,17 @@ class CornerSignature:
     trail_brake_frac: float  # fraction of entry samples with brake & steer both active
     max_abs_steer: float
     direction: str  # 'left' | 'right' | 'straightish'
+    steering_correction_count: int = 0
+    steering_rate_p95: float = 0.0
+    steering_smoothness_score: float = 100.0
+    steering_scrub_index: float = 0.0
+    gear_at_apex: int | None = None
+    entry_gear: int | None = None
+    exit_gear: int | None = None
+    gear_change_count: int = 0
+    brake_shape: str = "unknown"
+    brake_late_rise_count: int = 0
+    brake_release_smoothness: float = 1.0
 
     def describe(self) -> str:
         bp = "n/a" if self.brake_point_spline is None else f"{self.brake_point_spline:.3f}"
@@ -375,6 +386,9 @@ def _signature(
     steers = [lap.steer[k] for k in seg]
     max_abs_steer = max((abs(s) for s in steers), default=0.0)
     mean_steer = sum(steers) / max(1, len(steers))
+    steering = _steering_metrics(lap, entry_i, apex_i, exit_i, steer_thresh=steer_thresh)
+    gear = _gear_metrics(lap, entry_i, apex_i, exit_i)
+    brake_shape = _brake_shape_metrics(lap, entry_i, apex_i, brake_thresh=brake_thresh)
     direction = (
         "right"
         if mean_steer > steer_thresh
@@ -401,10 +415,143 @@ def _signature(
         trail_brake_frac=round(trail_frac, 3),
         max_abs_steer=round(max_abs_steer, 3),
         direction=direction,
+        steering_correction_count=steering["corrections"],
+        steering_rate_p95=steering["rate_p95"],
+        steering_smoothness_score=steering["smoothness_score"],
+        steering_scrub_index=steering["scrub_index"],
+        gear_at_apex=gear["apex"],
+        entry_gear=gear["entry"],
+        exit_gear=gear["exit"],
+        gear_change_count=gear["changes"],
+        brake_shape=brake_shape["classification"],
+        brake_late_rise_count=brake_shape["late_rises"],
+        brake_release_smoothness=brake_shape["release_smoothness"],
     )
 
 
 # --- geometry / signal helpers ---------------------------------------------
+def _quantile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    pos = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * q))))
+    return ordered[pos]
+
+
+def _steering_metrics(
+    lap: LapTrace,
+    entry_i: int,
+    apex_i: int,
+    exit_i: int,
+    *,
+    steer_thresh: float,
+) -> dict[str, float | int]:
+    """Single-lap steering smoothness facts.
+
+    The archive has steering input but no tyre scrub telemetry. We therefore expose an honest
+    *scrub proxy*: high steering rate and repeated corrections while the car is fast and loaded.
+    """
+    seg = list(range(entry_i, exit_i + 1))
+    if len(seg) < 2:
+        return {
+            "corrections": 0,
+            "rate_p95": 0.0,
+            "smoothness_score": 100.0,
+            "scrub_index": 0.0,
+        }
+    rates: list[float] = []
+    signed: list[int] = []
+    scrub_terms: list[float] = []
+    for a, b in zip(seg, seg[1:], strict=False):
+        dt = max(1e-3, lap.t_s[b] - lap.t_s[a])
+        delta = lap.steer[b] - lap.steer[a]
+        rate = abs(delta) / dt
+        rates.append(rate)
+        # Proxy for scrub risk: steering saw while loaded/speedy. It is NOT tyre slip.
+        scrub_terms.append(rate * max(0.0, abs(lap.lat_g[b])) * max(0.0, lap.v_ms[b]) / 50.0)
+    for k in seg:
+        steer = lap.steer[k]
+        if abs(steer) > steer_thresh:
+            signed.append(1 if steer > 0 else -1)
+    corrections = 0
+    last = signed[0] if signed else 0
+    for sign in signed[1:]:
+        if sign != last:
+            corrections += 1
+            last = sign
+    rate_p95 = _quantile(rates, 0.95)
+    scrub = sum(scrub_terms) / max(1, len(scrub_terms))
+    smoothness = 100.0 - min(70.0, rate_p95 * 16.0) - min(30.0, corrections * 8.0)
+    return {
+        "corrections": corrections,
+        "rate_p95": round(rate_p95, 3),
+        "smoothness_score": round(max(0.0, smoothness), 1),
+        "scrub_index": round(scrub, 3),
+    }
+
+
+def _gear_value(value: float) -> int | None:
+    if not math.isfinite(value):
+        return None
+    gear = int(round(value))
+    return gear if gear > 0 else None
+
+
+def _gear_metrics(lap: LapTrace, entry_i: int, apex_i: int, exit_i: int) -> dict[str, int | None]:
+    gears = [_gear_value(lap.gear[k]) for k in range(entry_i, exit_i + 1)]
+    compact = [g for g in gears if g is not None]
+    changes = 0
+    last = compact[0] if compact else None
+    for gear in compact[1:]:
+        if gear != last:
+            changes += 1
+            last = gear
+    return {
+        "entry": _gear_value(lap.gear[entry_i]),
+        "apex": _gear_value(lap.gear[apex_i]),
+        "exit": _gear_value(lap.gear[exit_i]),
+        "changes": changes,
+    }
+
+
+def _brake_shape_metrics(
+    lap: LapTrace,
+    entry_i: int,
+    apex_i: int,
+    *,
+    brake_thresh: float,
+) -> dict[str, float | int | str]:
+    active = [k for k in range(entry_i, apex_i + 1) if lap.brake[k] > brake_thresh]
+    if not active:
+        return {"classification": "no_brake", "late_rises": 0, "release_smoothness": 1.0}
+    peak_i = max(active, key=lambda k: lap.brake[k])
+    peak = lap.brake[peak_i]
+    late_rises = 0
+    max_drop = 0.0
+    late_start = entry_i + max(0, apex_i - entry_i) // 2
+    for a, b in zip(range(late_start, apex_i), range(late_start + 1, apex_i + 1), strict=False):
+        if lap.brake[b] - lap.brake[a] > 0.05:
+            late_rises += 1
+    for a, b in zip(range(peak_i, apex_i), range(peak_i + 1, apex_i + 1), strict=False):
+        delta = lap.brake[b] - lap.brake[a]
+        max_drop = max(max_drop, -delta)
+    release_total = max(0.0, peak - lap.brake[apex_i])
+    release_smoothness = 1.0 if release_total <= 1e-6 else 1.0 - min(1.0, max_drop / release_total)
+    if late_rises >= 2:
+        classification = "increasing_pressure"
+    elif max_drop >= 0.35:
+        classification = "abrupt_release"
+    elif lap.brake[apex_i] >= 0.25:
+        classification = "braking_at_apex"
+    else:
+        classification = "ideal_trace"
+    return {
+        "classification": classification,
+        "late_rises": late_rises,
+        "release_smoothness": round(max(0.0, release_smoothness), 3),
+    }
+
+
 def _menger(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> float:
     abx, aby = b[0] - a[0], b[1] - a[1]
     cbx, cby = b[0] - c[0], b[1] - c[1]

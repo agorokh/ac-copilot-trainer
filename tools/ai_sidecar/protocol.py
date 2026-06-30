@@ -34,6 +34,7 @@ EVENT_CORNER_ADVICE = "corner_advice"
 
 #: A lap archive is at most a few MB; refuse to load anything larger from an archivePath.
 _MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+_MAX_HISTORY_ARCHIVES = 8
 
 
 def _load_safe_archive_path(raw_path: Any) -> dict[str, Any] | None:
@@ -64,6 +65,18 @@ def _load_safe_archive_path(raw_path: Any) -> dict[str, Any] | None:
         logger.info("brain: could not load archivePath %r: %s", raw_path, exc)
         return None
     return data if isinstance(data, dict) else None
+
+
+def _load_safe_archive_paths(raw_paths: Any) -> list[dict[str, Any]]:
+    """Load a bounded list of safe lap archives, skipping invalid entries."""
+    if not isinstance(raw_paths, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for raw_path in raw_paths[:_MAX_HISTORY_ARCHIVES]:
+        archive = _load_safe_archive_path(raw_path)
+        if archive is not None:
+            out.append(archive)
+    return out
 
 
 def _resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
@@ -108,11 +121,17 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
     # corner, "carried too little apex speed"). Without it the brain still emits grip/balance/exit/
     # braking attributions, just no time-loss deltas.
     reference = _load_safe_archive_path(inbound.get("referenceArchivePath"))
+    # optional recent same-session laps: unlocks per-corner consistency metrics. Paths are bounded
+    # and validated exactly like archivePath/referenceArchivePath.
+    history = _load_safe_archive_paths(inbound.get("historyArchivePaths"))
     try:
         from tools.ai_sidecar.coach_report import build_structured_debrief
 
         structured = build_structured_debrief(
-            archive, reference_archive=reference, grip_ceiling_g=grip_ceiling_g
+            archive,
+            reference_archive=reference,
+            history_archives=history,
+            grip_ceiling_g=grip_ceiling_g,
         )
     except Exception as exc:  # the brain must never break the coaching socket
         logger.info("brain debrief raised: %s", exc)

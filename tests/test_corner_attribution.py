@@ -230,6 +230,64 @@ def test_exit_traction_leads_with_technique_and_diff():
     assert "throttle technique" in joined
 
 
+def test_steering_aggression_is_technique_verdict():
+    ctx = CornerContext(
+        sig=_sig(
+            steering_correction_count=4,
+            steering_smoothness_score=55.0,
+            steering_scrub_index=0.24,
+        ),
+        setup=SETUP,
+    )
+    attr = next(a for a in attribute_corner(ctx) if a.key == "steering_aggression")
+    assert attr.technique_causes and not attr.setup_causes
+    assert "one input" in attr.coaching.lower()
+
+
+def test_exit_road_usage_fires_from_reference_path_proxy():
+    ctx = CornerContext(
+        sig=_sig(),
+        setup=SETUP,
+        delta=_delta(delta_s=0.2),
+        extra={"exit_road_usage": {"available": True, "missed_exit_width_m": 2.4}},
+    )
+    attr = next(a for a in attribute_corner(ctx) if a.key == "exit_road_usage")
+    assert attr.confidence > 0.6
+    assert "using the road" in attr.symptom
+
+
+def test_gear_selection_compares_apex_gear_to_reference():
+    ctx = CornerContext(
+        sig=_sig(gear_at_apex=4),
+        reference_sig=_sig(gear_at_apex=3),
+        setup=SETUP,
+    )
+    attr = next(a for a in attribute_corner(ctx) if a.key == "gear_selection")
+    assert attr.confidence > 0.5
+    assert "Apex gear 4 vs reference 3" in attr.coaching
+
+
+def test_brake_shape_attribution_names_pressure_rise():
+    ctx = CornerContext(
+        sig=_sig(brake_shape="increasing_pressure", brake_late_rise_count=3),
+        setup=SETUP,
+    )
+    attr = next(a for a in attribute_corner(ctx) if a.key == "brake_trace_shape")
+    assert attr.phase == "braking"
+    assert "rises late" in attr.coaching
+
+
+def test_corner_consistency_attribution_uses_history_score():
+    ctx = CornerContext(
+        sig=_sig(),
+        setup=SETUP,
+        extra={"consistency": {"available": True, "score": 61.0, "sample_count": 3}},
+    )
+    attr = next(a for a in attribute_corner(ctx) if a.key == "corner_consistency")
+    assert attr.phase == "session"
+    assert "repeatability" in attr.coaching
+
+
 # --- analyze_balance (the master discriminator) -----------------------------
 def test_balance_routes_high_speed_saturation_to_aero():
     # grip-limited (saturated) in HIGH-speed corners, grip in hand at low speed -> aero
@@ -456,6 +514,20 @@ def test_coach_lap_produces_per_corner_verdicts():
     assert isinstance(c0.attributions, list)
     # the synthetic apex (~90 km/h) at ~2.1 g vs 2.5 ceiling is near the limit -> grip-limited shows
     assert any(a.key == "grip_limited" for a in c0.attributions) or c0.min_speed_kmh > 0
+
+
+def test_coach_lap_exposes_diagnostics_with_reference_and_history():
+    lap = _corner_lap_trace(v_apex=23.0)
+    reference = _corner_lap_trace(v_apex=25.0)
+    history = [_corner_lap_trace(v_apex=21.0)]
+    report = coach_lap(lap, SETUP, reference=reference, history=history, grip_ceiling_g=2.5)
+    diagnostics = report[0].diagnostics
+    assert diagnostics["steering"]["available"] is True
+    assert diagnostics["brake_shape"]["classification"]
+    assert diagnostics["gear"]["available"] is True
+    assert diagnostics["exit_road_usage"]["available"] is True
+    assert diagnostics["consistency"]["available"] is True
+    assert diagnostics["consistency"]["sample_count"] == 2
 
 
 # --- trail-braking folded into the attribution layer (#301) ------------------
