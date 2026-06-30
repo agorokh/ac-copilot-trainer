@@ -8,8 +8,17 @@ import types
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import tools.rig_launcher.supervisor as supervisor_module
-from tools.rig_launcher.app import _open_path, config_from_args, run_gui, run_sidecar_child
+from tools.rig_launcher.app import (
+    _open_path,
+    config_from_args,
+    main,
+    render_setup_diff_lines,
+    run_gui,
+    run_sidecar_child,
+)
 from tools.rig_launcher.install import (
     SHORTCUT_NAME,
     default_exe_path,
@@ -717,6 +726,29 @@ def test_config_from_env_defaults_to_loopback_without_token(tmp_path: Path) -> N
         "127.0.0.1",
     ]
     assert {row.name: row for row in sup.preflight()}["sidecar_token"].state == "loopback"
+
+
+def test_launcher_setup_diff_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    baseline = tmp_path / "baseline.ini"
+    candidate = tmp_path / "candidate.ini"
+    baseline.write_text(
+        "[FRONT_BIAS]\nVALUE=66\n[TRACTION_CONTROL]\nVALUE=3\n",
+        encoding="utf-8",
+    )
+    candidate.write_text(
+        "[FRONT_BIAS]\nVALUE=64\n[TRACTION_CONTROL]\nVALUE=4\n",
+        encoding="utf-8",
+    )
+
+    assert main(["--setup-diff", str(baseline), str(candidate), "--json"]) == 0
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["changed_count"] == 2
+    assert any("Brake bias" in line for line in out["display_lines"])
+    lines = render_setup_diff_lines(out)
+    assert lines[0] == "setup diff: 2 changed knobs"
+    assert any(str(candidate) in line for line in lines)
 
 
 def test_direct_config_default_is_loopback_safe(tmp_path: Path) -> None:

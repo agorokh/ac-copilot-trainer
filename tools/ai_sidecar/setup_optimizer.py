@@ -556,6 +556,13 @@ def _candidate_value(records: list[dict[str, Any]], key: str, value: float) -> f
     return value
 
 
+def _normalize_param_key(param: str) -> str:
+    text = param.strip().upper()
+    if not text:
+        raise SetupExperimentError("param is required")
+    return text if text.endswith(".VALUE") else f"{text}.VALUE"
+
+
 def _candidate_grid(
     records: list[dict[str, Any]], best: dict[str, Any], keys: list[str]
 ) -> list[dict[str, float]]:
@@ -619,6 +626,141 @@ def _schema_allows(
         if not sp.is_valid(val):
             return False
     return True
+
+
+def _chronological_key(record: dict[str, Any]) -> tuple[str, str, int, str]:
+    lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
+    return (
+        str(record.get("exported_at") or ""),
+        str(record.get("session_uuid") or ""),
+        int(_as_finite_float(lap.get("lap_n")) or 0),
+        str(record.get("experiment_id") or ""),
+    )
+
+
+def suggest_closed_loop(
+    records: list[dict[str, Any]],
+    *,
+    param: str,
+    car_id: str | None = None,
+    track_id: str | None = None,
+    schema: Any = None,
+) -> dict[str, Any]:
+    """Suggest the next one-parameter move from the measured previous move.
+
+    This is deliberately simple and auditable: compare the latest two valid laps
+    where ``param`` exists, measure whether the previous value change improved
+    lap time, then continue in the same direction or reverse by one observed
+    step.  The broader surrogate optimizer remains available for exploratory
+    multi-param moves; this function is the closed suggest -> test -> measure
+    loop a driver can reason about at the rig.
+    """
+
+    key = _normalize_param_key(param)
+    scoped = _filter_records(records, car_id=car_id, track_id=track_id)
+    complete = [
+        rec
+        for rec in scoped
+        if _as_finite_float(rec.get("setup", {}).get("params", {}).get(key)) is not None
+    ]
+    if len(complete) < 2:
+        return {
+            "ok": False,
+            "status": "not_enough_param_experiments",
+            "param": key,
+            "experiments_used": len(complete),
+            "min_required": 2,
+        }
+    ordered = sorted(complete, key=_chronological_key)
+    prev, curr = ordered[-2], ordered[-1]
+    prev_params = prev["setup"]["params"]
+    curr_params = curr["setup"]["params"]
+    prev_value = float(prev_params[key])
+    curr_value = float(curr_params[key])
+    prev_lap_ms = float(prev["lap"]["lap_ms"])
+    curr_lap_ms = float(curr["lap"]["lap_ms"])
+    value_delta = curr_value - prev_value
+    measured_delta_ms = prev_lap_ms - curr_lap_ms
+    if abs(value_delta) <= 1e-9:
+        return {
+            "ok": False,
+            "status": "latest_laps_did_not_change_param",
+            "param": key,
+            "experiments_used": len(complete),
+            "previous_result": {
+                "from": prev_value,
+                "to": curr_value,
+                "measured_delta_ms": round(measured_delta_ms, 3),
+                "lap_ms_before": int(round(prev_lap_ms)),
+                "lap_ms_after": int(round(curr_lap_ms)),
+            },
+        }
+
+    step = _param_step(scoped, key)
+    previous_direction = 1.0 if value_delta > 0 else -1.0
+    next_direction = previous_direction if measured_delta_ms >= 0 else -previous_direction
+    raw_target = _candidate_value(scoped, key, curr_value + next_direction * step)
+    candidate = {key: raw_target}
+    if schema is not None and hasattr(schema, "constrain_params"):
+        candidate = schema.constrain_params(candidate)
+    target_value = float(candidate[key])
+    if schema is not None and not _schema_allows(candidate, schema, base={key: curr_value}):
+        return {
+            "ok": False,
+            "status": "candidate_out_of_schema",
+            "param": key,
+            "candidate": candidate,
+            "previous_result": {
+                "from": prev_value,
+                "to": curr_value,
+                "measured_delta_ms": round(measured_delta_ms, 3),
+            },
+        }
+    if abs(target_value - curr_value) <= 1e-9:
+        return {
+            "ok": False,
+            "status": "at_param_bound",
+            "param": key,
+            "experiments_used": len(complete),
+            "current": curr_value,
+            "previous_result": {
+                "from": prev_value,
+                "to": curr_value,
+                "measured_delta_ms": round(measured_delta_ms, 3),
+                "improved": measured_delta_ms > 0,
+            },
+        }
+
+    improved = measured_delta_ms > 0
+    direction_word = "continue" if improved else "reverse"
+    change = {"from": curr_value, "to": target_value}
+    return {
+        "ok": True,
+        "status": "suggested",
+        "method": "one_param_measured_delta",
+        "param": key,
+        "experiments_used": len(complete),
+        "previous_result": {
+            "from": prev_value,
+            "to": curr_value,
+            "delta": round(value_delta, 6),
+            "lap_ms_before": int(round(prev_lap_ms)),
+            "lap_ms_after": int(round(curr_lap_ms)),
+            "measured_delta_ms": round(measured_delta_ms, 3),
+            "improved": improved,
+        },
+        "candidate": {
+            "params": {key: target_value},
+            "changed_params": {key: change},
+        },
+        "rationale": [
+            (
+                f"Previous {key} move {'improved' if improved else 'hurt'} lap time by "
+                f"{abs(measured_delta_ms):.0f} ms."
+            ),
+            f"Next suggestion: {direction_word} that one-parameter direction by one step.",
+        ],
+    }
 
 
 def suggest_next_setup(

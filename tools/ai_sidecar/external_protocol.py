@@ -68,6 +68,9 @@ TYPE_SETUP_EXPERIMENT_STORE = "setup.experiment.store"
 TYPE_SETUP_EXPERIMENT_RECORD = "setup.experiment.record"
 TYPE_SETUP_COMPARE = "setup.compare"
 TYPE_SETUP_SUGGEST = "setup.suggest"
+TYPE_SETUP_ADVICE = "setup.advice"
+TYPE_SETUP_DIFF = "setup.diff"
+TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 
@@ -87,6 +90,9 @@ TYPE_SETUP_EXPERIMENT_STORE_ACK = "setup.experiment.store.ack"
 TYPE_SETUP_EXPERIMENT_RECORD_ACK = "setup.experiment.record.ack"
 TYPE_SETUP_COMPARE_RESULT = "setup.compare.result"
 TYPE_SETUP_SUGGEST_RESULT = "setup.suggest.result"
+TYPE_SETUP_ADVICE_RESULT = "setup.advice.result"
+TYPE_SETUP_DIFF_RESULT = "setup.diff.result"
+TYPE_SETUP_CLOSED_LOOP_RESULT = "setup.closed_loop.result"
 TYPE_SETUP_EXCHANGE_SEARCH_RESULT = "se.search.result"
 TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK = "se.download.ack"
 # Issue #118: high-rate physical-peripheral frames. `telemetry_tick` is sent
@@ -125,6 +131,9 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_STATE_SUBSCRIBE,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_SUGGEST,
+    TYPE_SETUP_ADVICE,
+    TYPE_SETUP_DIFF,
+    TYPE_SETUP_CLOSED_LOOP,
     TYPE_SETUP_EXCHANGE_SEARCH,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SETUP_SPINNER_LIST,
@@ -293,6 +302,12 @@ def _validate_optional_number(
 def _validate_optional_string(frame: dict[str, Any], key: str) -> str | None:
     if key in frame and not isinstance(frame.get(key), str):
         return f"{key} must be a string"
+    return None
+
+
+def _validate_optional_object(frame: dict[str, Any], key: str) -> str | None:
+    if key in frame and not isinstance(frame.get(key), dict):
+        return f"{key} requires an object"
     return None
 
 
@@ -504,6 +519,33 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             if key in frame and not isinstance(frame.get(key), str):
                 return f"setup.suggest optional '{key}' must be a string"
         return None
+    if t == TYPE_SETUP_ADVICE:
+        complaint = frame.get("complaint")
+        if not isinstance(complaint, str) or not complaint.strip():
+            return "setup.advice requires non-empty 'complaint'"
+        for key in ("car_id", "track_id"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return _validate_optional_object(frame, "setup_snapshot")
+    if t == TYPE_SETUP_DIFF:
+        for key in ("baseline_snapshot", "candidate_snapshot"):
+            if not isinstance(frame.get(key), dict):
+                return f"setup.diff requires object '{key}'"
+        for key in ("car_id", "track_id"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return None
+    if t == TYPE_SETUP_CLOSED_LOOP:
+        param = frame.get("param")
+        if not isinstance(param, str) or not param.strip():
+            return "setup.closed_loop requires non-empty 'param'"
+        for key in ("car_id", "track_id"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return None
     if t == TYPE_SETUP_EXCHANGE_SEARCH:
         for key in ("car_id", "track_id", "search", "order_by"):
             err = _validate_optional_string(frame, key)
@@ -542,6 +584,9 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
+        TYPE_SETUP_ADVICE_RESULT,
+        TYPE_SETUP_DIFF_RESULT,
+        TYPE_SETUP_CLOSED_LOOP_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     ):

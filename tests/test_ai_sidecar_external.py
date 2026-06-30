@@ -198,6 +198,21 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
+    assert (
+        ep.validate_inbound({"v": 1, "type": "setup.advice", "complaint": "loose on exit"}) is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.diff",
+                "baseline_snapshot": {"FRONT_BIAS.VALUE": "66"},
+                "candidate_snapshot": {"FRONT_BIAS.VALUE": "64"},
+            }
+        )
+        is None
+    )
+    assert ep.validate_inbound({"v": 1, "type": "setup.closed_loop", "param": "FRONT_BIAS"}) is None
     assert ep.validate_inbound({"v": 1, "type": "se.search", "limit": 10}) is None
     assert (
         ep.validate_inbound(
@@ -247,6 +262,9 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
+    assert "complaint" in (ep.validate_inbound({"v": 1, "type": "setup.advice"}) or "")
+    assert "baseline_snapshot" in (ep.validate_inbound({"v": 1, "type": "setup.diff"}) or "")
+    assert "param" in (ep.validate_inbound({"v": 1, "type": "setup.closed_loop"}) or "")
     assert "limit must be <= 40" in (
         ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
     )
@@ -754,6 +772,110 @@ def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:
     assert result["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
     assert result["ok"] is True
     assert result["candidate"]["changed_params"]
+
+
+def test_setup_advice_and_diff_roundtrip() -> None:
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.advice",
+                            "complaint": "car is loose on exit",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "setup_snapshot": {
+                                "FRONT_BIAS.VALUE": "66",
+                                "TRACTION_CONTROL.VALUE": "3",
+                                "DIFF_POWER.VALUE": "40",
+                            },
+                        }
+                    )
+                )
+                advice = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.diff",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "baseline_snapshot": {
+                                "FRONT_BIAS.VALUE": "66",
+                                "TRACTION_CONTROL.VALUE": "3",
+                            },
+                            "candidate_snapshot": {
+                                "FRONT_BIAS.VALUE": "64",
+                                "TRACTION_CONTROL.VALUE": "4",
+                            },
+                        }
+                    )
+                )
+                diff = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return advice, diff
+
+    advice, diff = asyncio.run(_run())
+    assert advice["type"] == ep.TYPE_SETUP_ADVICE_RESULT
+    assert advice["ok"] is True
+    assert advice["suggestions"][0]["section"] == "TRACTION_CONTROL"
+    assert advice["suggestions"][0]["target"] == 4.0
+    assert diff["type"] == ep.TYPE_SETUP_DIFF_RESULT
+    assert diff["ok"] is True
+    assert diff["changed_count"] == 2
+    assert any("Brake bias" in line for line in diff["display_lines"])
+
+
+def test_setup_closed_loop_roundtrip(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 64)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 65)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.closed_loop",
+                            "param": "FRONT_BIAS",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is True
+    assert result["method"] == "one_param_measured_delta"
+    assert result["previous_result"]["measured_delta_ms"] == 2000.0
+    assert result["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
 
 
 def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) -> None:

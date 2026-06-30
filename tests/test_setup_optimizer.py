@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from tools.ai_sidecar.server import (
+    _run_setup_closed_loop,
     _run_setup_compare,
     _run_setup_rebuild,
     _run_setup_suggest,
@@ -21,6 +22,7 @@ from tools.ai_sidecar.setup_optimizer import (
     rebuild_experiments,
     record_from_lap_archive,
     record_lap_archive,
+    suggest_closed_loop,
     suggest_next_setup,
 )
 
@@ -171,6 +173,80 @@ def test_candidate_grid_clamps_nonnegative_params() -> None:
     assert all(candidate["FRONT_BIAS.VALUE"] >= 0 for candidate in grid)
 
 
+def test_closed_loop_continues_improving_one_parameter_move() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(
+        records,
+        param="FRONT_BIAS",
+        car_id="ks_porsche_911_gt3_r_2016",
+        track_id="magione",
+    )
+
+    assert suggestion["ok"] is True
+    assert suggestion["method"] == "one_param_measured_delta"
+    assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
+def test_closed_loop_reverses_hurting_one_parameter_move() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=101_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["previous_result"]["improved"] is False
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 64.0,
+    }
+
+
 def test_record_lap_archive_upserts_without_duplicates(tmp_path: Path) -> None:
     lap_dir = tmp_path / "journal" / "laps"
     path = _write_laps(lap_dir)[0]
@@ -263,3 +339,13 @@ def test_setup_optimizer_cli_smoke(tmp_path: Path, capsys) -> None:
     suggest_out = json.loads(capsys.readouterr().out)
     assert suggest_out["ok"] is True
     assert suggest_out["candidate"]["changed_params"]
+
+    _run_setup_closed_loop(str(store), "WING_2", "ks_porsche_911_gt3_r_2016", "magione")
+    closed_loop_out = json.loads(capsys.readouterr().out)
+    assert closed_loop_out["ok"] is True
+    assert closed_loop_out["method"] == "one_param_measured_delta"
+    assert closed_loop_out["previous_result"]["measured_delta_ms"] == -1100.0
+    assert closed_loop_out["candidate"]["changed_params"]["WING_2.VALUE"] == {
+        "from": 10.0,
+        "to": 9.0,
+    }

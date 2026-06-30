@@ -1,0 +1,536 @@
+"""Complaint-language setup advice and display-ready setup diffs.
+
+This module is the thin product surface over the existing setup intelligence
+building blocks: :mod:`setup_model` gives typed setup values and
+:mod:`setup_knowledge` supplies the verified GT3 parameter effects.  The
+functions here are deterministic and stdlib-only so the sidecar can answer a
+driver's "the car is loose on exit" request without involving an LLM.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from tools.ai_sidecar.car_schema import CarSetupSchema
+from tools.ai_sidecar.setup_knowledge import AERO, MECHANICAL, effect_for
+from tools.ai_sidecar.setup_model import CarSetup, from_snapshot, load_setup_file, spec_for
+
+MAX_COMPLAINT_LEN = 240
+
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_PORSCHE_911_IDS = ("ks_porsche_911_gt3_r_2016", "porsche_911", "911_gt3")
+
+_DEFAULT_STEPS: dict[str, float] = {
+    "FRONT_BIAS": 1.0,
+    "ABS": 1.0,
+    "TRACTION_CONTROL": 1.0,
+    "BRAKE_POWER_MULT": 5.0,
+    "WING_1": 1.0,
+    "WING_2": 1.0,
+    "ARB_FRONT": 1.0,
+    "ARB_REAR": 1.0,
+    "DIFF_POWER": 5.0,
+    "DIFF_COAST": 5.0,
+    "FINAL_RATIO": 1.0,
+    "PRESSURE": 0.5,
+    "CAMBER": 0.1,
+    "TOE_OUT": 0.05,
+    "SPRING_RATE": 1.0,
+    "ROD_LENGTH": 1.0,
+}
+
+_PRIORITY: tuple[str, ...] = (
+    "FRONT_BIAS",
+    "BRAKE_POWER_MULT",
+    "ABS",
+    "TRACTION_CONTROL",
+    "WING_1",
+    "WING_2",
+    "ARB_FRONT",
+    "ARB_REAR",
+    "DIFF_POWER",
+    "DIFF_COAST",
+    "PRESSURE_LF",
+    "PRESSURE_RF",
+    "PRESSURE_LR",
+    "PRESSURE_RR",
+    "CAMBER_LF",
+    "CAMBER_RF",
+    "CAMBER_LR",
+    "CAMBER_RR",
+    "TOE_OUT_LF",
+    "TOE_OUT_RF",
+    "TOE_OUT_LR",
+    "TOE_OUT_RR",
+    "SPRING_RATE_LF",
+    "SPRING_RATE_RF",
+    "SPRING_RATE_LR",
+    "SPRING_RATE_RR",
+    "FINAL_RATIO",
+)
+
+
+@dataclass(frozen=True)
+class ComplaintMove:
+    section: str
+    direction: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class ComplaintRule:
+    issue: str
+    phase: str
+    moves: tuple[ComplaintMove, ...]
+
+
+_RULES: tuple[ComplaintRule, ...] = (
+    ComplaintRule(
+        "understeer",
+        "entry",
+        (
+            ComplaintMove("FRONT_BIAS", -1, "free entry rotation while trail braking"),
+            ComplaintMove("DIFF_COAST", -1, "freer coast diff helps the car rotate off-throttle"),
+            ComplaintMove("ARB_FRONT", -1, "softer front bar adds mechanical front grip"),
+            ComplaintMove("WING_1", 1, "if it only pushes in fast entries, add front aero"),
+        ),
+    ),
+    ComplaintRule(
+        "understeer",
+        "mid",
+        (
+            ComplaintMove("ARB_FRONT", -1, "add all-speed front mechanical grip"),
+            ComplaintMove("ARB_REAR", 1, "shift mechanical balance rearward for more rotation"),
+            ComplaintMove("WING_1", 1, "if the push is high-speed only, add front aero"),
+            ComplaintMove("PRESSURE_LF", -1, "trim front pressure if hot pressure is high"),
+            ComplaintMove("PRESSURE_RF", -1, "match the front axle pressure change"),
+        ),
+    ),
+    ComplaintRule(
+        "understeer",
+        "exit",
+        (
+            ComplaintMove("DIFF_POWER", -1, "open the power diff to reduce power-on push"),
+            ComplaintMove("ARB_FRONT", -1, "soften front bar if the push exists before throttle"),
+            ComplaintMove(
+                "TRACTION_CONTROL", -1, "if TC is cutting hard, reduce intervention one step"
+            ),
+        ),
+    ),
+    ComplaintRule(
+        "oversteer",
+        "entry",
+        (
+            ComplaintMove(
+                "FRONT_BIAS", 1, "move bias forward if the rear is nervous under braking"
+            ),
+            ComplaintMove("DIFF_COAST", 1, "more coast lock calms lift/trail-brake rotation"),
+            ComplaintMove("ARB_REAR", -1, "softer rear bar adds rear mechanical grip"),
+            ComplaintMove("WING_2", 1, "if it snaps in fast entries, add rear aero"),
+        ),
+    ),
+    ComplaintRule(
+        "oversteer",
+        "mid",
+        (
+            ComplaintMove("ARB_REAR", -1, "softer rear bar adds mid-corner rear grip"),
+            ComplaintMove("ARB_FRONT", 1, "stiffer front bar shifts balance safer"),
+            ComplaintMove("WING_2", 1, "if the snap is high-speed only, add rear aero"),
+        ),
+    ),
+    ComplaintRule(
+        "oversteer",
+        "exit",
+        (
+            ComplaintMove("TRACTION_CONTROL", 1, "catch exit wheelspin earlier"),
+            ComplaintMove("DIFF_POWER", 1, "more power lock stabilizes straight-line drive"),
+            ComplaintMove("ARB_REAR", -1, "softer rear bar improves rear grip before throttle"),
+            ComplaintMove("WING_2", 1, "add rear aero only for genuinely fast exits"),
+        ),
+    ),
+    ComplaintRule(
+        "lockup_front",
+        "braking",
+        (
+            ComplaintMove("FRONT_BIAS", -1, "front lock means the bias is too far forward"),
+            ComplaintMove("BRAKE_POWER_MULT", -1, "lower bite if both fronts still lock"),
+            ComplaintMove("ABS", 1, "raise ABS one level as a safety net"),
+        ),
+    ),
+    ComplaintRule(
+        "lockup_rear",
+        "braking",
+        (
+            ComplaintMove("FRONT_BIAS", 1, "rear lock means the bias is too far rearward"),
+            ComplaintMove("BRAKE_POWER_MULT", -1, "reduce bite if the car locks both axles"),
+            ComplaintMove("ABS", 1, "raise ABS one level as a safety net"),
+        ),
+    ),
+    ComplaintRule(
+        "lockup",
+        "braking",
+        (
+            ComplaintMove("BRAKE_POWER_MULT", -1, "reduce bite until lockups are controllable"),
+            ComplaintMove("ABS", 1, "raise ABS one level if lockups are frequent"),
+            ComplaintMove("FRONT_BIAS", -1, "if the fronts lock first, move bias rearward"),
+        ),
+    ),
+    ComplaintRule(
+        "wheelspin",
+        "exit",
+        (
+            ComplaintMove("TRACTION_CONTROL", 1, "catch drive-wheel slip earlier"),
+            ComplaintMove("DIFF_POWER", 1, "more power lock reduces inside-wheel spin"),
+            ComplaintMove("FINAL_RATIO", -1, "longer gearing softens torque spikes"),
+            ComplaintMove("ARB_REAR", -1, "add rear mechanical grip before the power phase"),
+        ),
+    ),
+    ComplaintRule(
+        "instability",
+        "kerb",
+        (
+            ComplaintMove("ARB_REAR", -1, "soften the rear bar for kerb compliance"),
+            ComplaintMove("ARB_FRONT", -1, "soften the front bar if it skips across kerbs"),
+            ComplaintMove("SPRING_RATE_LR", -1, "soften rear spring rate one click if available"),
+            ComplaintMove("SPRING_RATE_RR", -1, "match the rear spring-rate move"),
+        ),
+    ),
+)
+
+
+def _tokens(text: str) -> set[str]:
+    return set(_WORD_RE.findall(text.lower()))
+
+
+def _has_phrase(text: str, *phrases: str) -> bool:
+    low = " ".join(_WORD_RE.findall(text.lower()))
+    return any(phrase in low for phrase in phrases)
+
+
+def _parse_issue(text: str) -> str | None:
+    words = _tokens(text)
+    lock_words = {"lock", "locks", "locking", "lockup"}
+    if "front" in words and words & lock_words:
+        return "lockup_front"
+    if "rear" in words and words & lock_words:
+        return "lockup_rear"
+    if (lock_words | {"flatspot", "flatspots"}) & words:
+        return "lockup"
+    if (
+        _has_phrase(text, "wheel spin", "wheelspin")
+        or {
+            "traction",
+            "spin",
+            "spinning",
+            "lights",
+        }
+        & words
+    ):
+        return "wheelspin"
+    if {"understeer", "push", "pushing", "washes", "wash", "plough", "plow"} & words or _has_phrase(
+        text, "wont turn", "won t turn", "doesnt turn", "doesn t turn"
+    ):
+        return "understeer"
+    if {"oversteer", "loose", "snap", "snappy", "tail", "rear"} & words or _has_phrase(
+        text, "steps out", "stepping out", "rear steps"
+    ):
+        return "oversteer"
+    if {"kerb", "curb", "bump", "bumpy", "unstable", "nervous", "darty"} & words:
+        return "instability"
+    return None
+
+
+def _parse_phase(text: str, issue: str | None) -> str:
+    words = _tokens(text)
+    if {"kerb", "curb", "bump", "bumpy"} & words:
+        return "kerb"
+    if {"exit", "power", "throttle", "traction"} & words or _has_phrase(text, "corner exit"):
+        return "exit"
+    if {"entry", "turn", "turnin", "turn-in", "braking", "brake", "trail"} & words:
+        return "entry" if issue not in {"lockup", "lockup_front", "lockup_rear"} else "braking"
+    if {"mid", "apex", "middle", "center", "centre"} & words or _has_phrase(text, "mid corner"):
+        return "mid"
+    if issue in {"lockup", "lockup_front", "lockup_rear"}:
+        return "braking"
+    if issue == "wheelspin":
+        return "exit"
+    if issue == "instability":
+        return "kerb"
+    return "mid"
+
+
+def _parse_speed_hint(text: str) -> str | None:
+    words = _tokens(text)
+    if {"fast", "high", "speed", "aero"} & words or _has_phrase(text, "high speed"):
+        return "high"
+    if {"slow", "hairpin", "low"} & words or _has_phrase(text, "low speed"):
+        return "low"
+    return None
+
+
+def _base_section(section: str) -> str:
+    sec = section.strip().upper()
+    if sec.endswith(".VALUE"):
+        sec = sec[:-6]
+    for suffix in ("_LF", "_RF", "_LR", "_RR"):
+        if sec.endswith(suffix):
+            stem = sec[: -len(suffix)]
+            return stem if stem in _DEFAULT_STEPS else sec
+    return sec
+
+
+def _param_key(section: str) -> str:
+    sec = section.strip().upper()
+    return sec if sec.endswith(".VALUE") else f"{sec}.VALUE"
+
+
+def _step_for(section: str, schema: CarSetupSchema | None) -> float:
+    if schema is not None:
+        sp = schema.get(section)
+        if sp is not None and sp.step is not None and sp.step > 0:
+            return float(sp.step)
+    return _DEFAULT_STEPS.get(_base_section(section), 1.0)
+
+
+def _is_911(car_id: str | None) -> bool:
+    low = (car_id or "").lower()
+    return any(marker in low for marker in _PORSCHE_911_IDS)
+
+
+def _format_value(value: float | int | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return str(int(value)) if float(value).is_integer() else f"{float(value):g}"
+
+
+def _decoded(
+    schema: CarSetupSchema | None, section: str, value: float | None
+) -> float | str | None:
+    if schema is None or value is None:
+        return value
+    return schema.decode(section, value)
+
+
+def _move_to_suggestion(
+    move: ComplaintMove,
+    *,
+    setup: CarSetup,
+    schema: CarSetupSchema | None,
+    rank: int,
+) -> dict[str, Any]:
+    section = move.section.strip().upper()
+    spec = spec_for(section)
+    effect = effect_for(section)
+    current = setup.value(section)
+    step = _step_for(section, schema)
+    delta = move.direction * step
+    target = None
+    if current is not None:
+        target = current + delta
+        if schema is not None:
+            target = schema.clamp(section, target)
+        elif target < 0:
+            target = 0.0
+    direction = "increase" if move.direction > 0 else "decrease"
+    effect_text = ""
+    if effect is not None:
+        effect_text = effect.increase_does if move.direction > 0 else effect.decrease_does
+    caution: list[str] = []
+    if effect is not None and effect.car_dependent:
+        caution.append("Car-specific lever; verify this car's spinner label before applying.")
+    if section == "FRONT_BIAS" and _is_911(setup.car_id):
+        if move.direction < 0:
+            caution.append("911 GT3 R usually wants a lower front-bias window (~50-56%).")
+        elif current is not None and current < 50:
+            caution.append("Do not chase stability past the 911's usual low-front-bias window.")
+    return {
+        "rank": rank,
+        "section": section,
+        "param_key": _param_key(section),
+        "name": spec.human_name,
+        "category": spec.category,
+        "direction": direction,
+        "magnitude": step,
+        "units": spec.units or (effect.units if effect else ""),
+        "current": current,
+        "target": target,
+        "current_display": _format_value(_decoded(schema, section, current)),
+        "target_display": _format_value(_decoded(schema, section, target)),
+        "reason": move.reason,
+        "effect": effect_text,
+        "confidence": effect.confidence if effect is not None else "low",
+        "caution": caution,
+    }
+
+
+def _rank_moves(moves: tuple[ComplaintMove, ...], speed_hint: str | None) -> list[ComplaintMove]:
+    if speed_hint is None:
+        return list(moves)
+
+    def score(move: ComplaintMove) -> tuple[int, str]:
+        effect = effect_for(move.section)
+        if effect is None:
+            return (1, move.section)
+        if speed_hint == "high" and effect.speed_dependence == AERO:
+            return (0, move.section)
+        if speed_hint == "low" and effect.speed_dependence == MECHANICAL:
+            return (0, move.section)
+        return (1, move.section)
+
+    return sorted(moves, key=score)
+
+
+def advise_from_complaint(
+    complaint: str,
+    *,
+    setup: CarSetup | None = None,
+    setup_snapshot: dict[str, Any] | None = None,
+    car_id: str | None = None,
+    track_id: str | None = None,
+    schema: CarSetupSchema | None = None,
+    max_suggestions: int = 5,
+) -> dict[str, Any]:
+    """Return ranked setup changes for a driver handling complaint."""
+
+    text = (complaint or "").strip()
+    if not text:
+        return {"ok": False, "status": "empty_complaint", "error": "complaint is required"}
+    if len(text) > MAX_COMPLAINT_LEN:
+        return {
+            "ok": False,
+            "status": "complaint_too_long",
+            "error": f"complaint must be <= {MAX_COMPLAINT_LEN} characters",
+        }
+    issue = _parse_issue(text)
+    phase = _parse_phase(text, issue)
+    speed_hint = _parse_speed_hint(text)
+    if setup is None:
+        setup = from_snapshot(setup_snapshot or {}, car_id=car_id, track_id=track_id)
+    elif car_id and setup.car_id is None:
+        setup.car_id = car_id
+    if track_id and setup.track_id is None:
+        setup.track_id = track_id
+    if issue is None:
+        return {
+            "ok": False,
+            "status": "unknown_complaint",
+            "complaint": text,
+            "parsed": {"issue": None, "phase": phase, "speed_hint": speed_hint},
+            "error": "could not map complaint to handling vocabulary",
+        }
+
+    rule = next((r for r in _RULES if r.issue == issue and r.phase == phase), None)
+    if rule is None and phase != "mid":
+        rule = next((r for r in _RULES if r.issue == issue and r.phase == "mid"), None)
+    if rule is None:
+        return {
+            "ok": False,
+            "status": "unsupported_complaint",
+            "complaint": text,
+            "parsed": {"issue": issue, "phase": phase, "speed_hint": speed_hint},
+            "error": "handling vocabulary recognized, but no setup rule is available",
+        }
+    moves = _rank_moves(rule.moves, speed_hint)
+    suggestions = [
+        _move_to_suggestion(move, setup=setup, schema=schema, rank=i)
+        for i, move in enumerate(moves[:max_suggestions], start=1)
+    ]
+    return {
+        "ok": True,
+        "status": "suggested",
+        "complaint": text,
+        "parsed": {"issue": issue, "phase": phase, "speed_hint": speed_hint},
+        "car_id": setup.car_id,
+        "track_id": setup.track_id,
+        "suggestions": suggestions,
+        "rationale": [
+            "Complaint mapped through deterministic handling vocabulary.",
+            "Lever effects are grounded in setup_knowledge.py; live telemetry still wins.",
+        ],
+    }
+
+
+def setup_diff_summary(
+    baseline: CarSetup,
+    candidate: CarSetup,
+    *,
+    schema: CarSetupSchema | None = None,
+) -> dict[str, Any]:
+    """Return setup A/B changes as display-ready rows."""
+
+    raw = candidate.diff(baseline)
+    priority = {name: i for i, name in enumerate(_PRIORITY)}
+    rows: list[dict[str, Any]] = []
+    for section, values in sorted(
+        raw.items(), key=lambda item: (priority.get(item[0], 999), item[0])
+    ):
+        from_v = values.get("from")
+        to_v = values.get("to")
+        spec = spec_for(section)
+        effect = effect_for(section)
+        delta = None if from_v is None or to_v is None else float(to_v) - float(from_v)
+        direction = (
+            "added"
+            if from_v is None
+            else "removed"
+            if to_v is None
+            else "increase"
+            if delta is not None and delta > 0
+            else "decrease"
+            if delta is not None and delta < 0
+            else "unchanged"
+        )
+        effect_text = ""
+        if effect is not None and direction in {"increase", "decrease"}:
+            effect_text = effect.increase_does if direction == "increase" else effect.decrease_does
+        from_display = _format_value(_decoded(schema, section, from_v))
+        to_display = _format_value(_decoded(schema, section, to_v))
+        unit = spec.units or (effect.units if effect else "")
+        arrow = f"{from_display or '-'} -> {to_display or '-'}"
+        display = f"{spec.human_name}: {arrow}{(' ' + unit) if unit else ''}"
+        if effect_text:
+            display = f"{display} ({direction})"
+        rows.append(
+            {
+                "section": section,
+                "param_key": _param_key(section),
+                "name": spec.human_name,
+                "category": spec.category,
+                "from": from_v,
+                "to": to_v,
+                "delta": delta,
+                "from_display": from_display,
+                "to_display": to_display,
+                "units": unit,
+                "direction": direction,
+                "effect": effect_text,
+                "display": display,
+            }
+        )
+    return {
+        "ok": True,
+        "baseline": {"car_id": baseline.car_id, "track_id": baseline.track_id},
+        "candidate": {"car_id": candidate.car_id, "track_id": candidate.track_id},
+        "changed_count": len(rows),
+        "rows": rows,
+        "display_lines": [row["display"] for row in rows],
+    }
+
+
+def diff_setup_files(
+    baseline_path: str | Path,
+    candidate_path: str | Path,
+    *,
+    schema: CarSetupSchema | None = None,
+) -> dict[str, Any]:
+    baseline = load_setup_file(baseline_path)
+    candidate = load_setup_file(candidate_path)
+    out = setup_diff_summary(baseline, candidate, schema=schema)
+    out["baseline"]["path"] = str(baseline_path)
+    out["candidate"]["path"] = str(candidate_path)
+    return out
