@@ -13,7 +13,7 @@ import math
 import os
 import tempfile
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +25,7 @@ from tools.lap_archive_export import iter_lap_archive_paths, lap_is_valid, load_
 PROFILE_SCHEMA_VERSION = 1
 DEFAULT_DRIVER_ID = "local-driver"
 DEFAULT_PROFILE_PATH = Path("journal/driver/profile.json")
+NON_DRIVER_LAP_SOURCES = frozenset({"imported", "reference", "reference_archive"})
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,10 @@ def _safe_population_stdev(values: list[int]) -> float | None:
     return math.sqrt(sum((value - avg) ** 2 for value in values) / len(values))
 
 
+def _mapping_or_empty(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
 def _combo_key(car_id: Any, track_id: Any, track_layout: Any = None) -> str:
     car = str(car_id or "unknown_car")
     track = str(track_id or "unknown_track")
@@ -126,7 +131,10 @@ def _default_profile(driver_id: str) -> dict[str, Any]:
 
 def _rollups_from_existing_bests(existing: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     rollups: dict[str, dict[str, Any]] = {}
-    for combo, row in (existing.get("personal_bests") or {}).items():
+    personal_bests = existing.get("personal_bests")
+    if not isinstance(personal_bests, Mapping):
+        return rollups
+    for combo, row in personal_bests.items():
         if not isinstance(row, Mapping):
             continue
         lap_ms = _num_ms(row.get("lap_ms"))
@@ -178,14 +186,23 @@ def load_profile(
     if not isinstance(loaded, dict) or loaded.get("schema_version") != PROFILE_SCHEMA_VERSION:
         return _default_profile(driver_id)
     loaded.setdefault("driver_id", driver_id)
-    loaded.setdefault("preferences", {})
-    loaded.setdefault("focus_corners", {})
-    loaded.setdefault("session_rollups", {})
-    loaded.setdefault("personal_bests", {})
-    loaded.setdefault("consistency", {})
-    loaded.setdefault("corner_history", {})
-    loaded.setdefault("source", {"lap_count": 0, "valid_laps": 0, "skipped": []})
+    loaded["preferences"] = _mapping_or_empty(loaded.get("preferences"))
+    loaded["focus_corners"] = _mapping_or_empty(loaded.get("focus_corners"))
+    loaded["session_rollups"] = _mapping_or_empty(loaded.get("session_rollups"))
+    loaded["personal_bests"] = _mapping_or_empty(loaded.get("personal_bests"))
+    loaded["consistency"] = _mapping_or_empty(loaded.get("consistency"))
+    loaded["corner_history"] = _mapping_or_empty(loaded.get("corner_history"))
+    loaded["source"] = _mapping_or_empty(loaded.get("source")) or {
+        "lap_count": 0,
+        "valid_laps": 0,
+        "skipped": [],
+    }
     return loaded
+
+
+def _is_driver_lap(record: Mapping[str, Any]) -> bool:
+    source = str(record.get("source") or "").strip().lower()
+    return source not in NON_DRIVER_LAP_SOURCES
 
 
 def _corner_rows_from_record(path: Path, record: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -285,6 +302,157 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
     return history
 
 
+def _first_text(*values: Any) -> str | None:
+    texts = [value for value in values if isinstance(value, str) and value]
+    return min(texts) if texts else None
+
+
+def _last_text(*values: Any) -> str | None:
+    texts = [value for value in values if isinstance(value, str) and value]
+    return max(texts) if texts else None
+
+
+def _merge_session_rollup(
+    existing: Mapping[str, Any], incoming: Mapping[str, Any]
+) -> dict[str, Any]:
+    old_laps = int(existing.get("lap_count") or 0)
+    new_laps = int(incoming.get("lap_count") or 0)
+    if new_laps > old_laps:
+        return dict(incoming)
+
+    old_best = _num_ms(existing.get("best_lap_ms"))
+    new_best = _num_ms(incoming.get("best_lap_ms"))
+    best_source = existing
+    if new_best is not None and (old_best is None or new_best < old_best):
+        best_source = incoming
+
+    merged = dict(existing)
+    merged.update(
+        {
+            "first_exported_at": _first_text(
+                existing.get("first_exported_at"), incoming.get("first_exported_at")
+            ),
+            "last_exported_at": _last_text(
+                existing.get("last_exported_at"), incoming.get("last_exported_at")
+            ),
+            "first_lap_n": min(
+                [v for v in (existing.get("first_lap_n"), incoming.get("first_lap_n")) if v],
+                default=None,
+            ),
+            "last_lap_n": max(
+                [v for v in (existing.get("last_lap_n"), incoming.get("last_lap_n")) if v],
+                default=None,
+            ),
+            "lap_count": old_laps + new_laps,
+            "valid_laps": int(existing.get("valid_laps") or 0)
+            + int(incoming.get("valid_laps") or 0),
+            "best_lap_ms": best_source.get("best_lap_ms"),
+            "best_lap_uuid": best_source.get("best_lap_uuid"),
+            "best_source_file": best_source.get("best_source_file"),
+            "consistency_ms": None,
+        }
+    )
+    return merged
+
+
+def _weighted_avg(old_value: Any, old_count: int, new_value: Any, new_count: int) -> float | None:
+    old = _num(old_value)
+    new = _num(new_value)
+    if old is None:
+        return new
+    if new is None:
+        return old
+    total = old_count + new_count
+    if total <= 0:
+        return new
+    return ((old * old_count) + (new * new_count)) / total
+
+
+def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> dict[str, Any]:
+    old_laps = int(existing.get("valid_laps") or 0)
+    new_laps = int(incoming.get("valid_laps") or 0)
+    if new_laps > old_laps:
+        return dict(incoming)
+
+    first_min = _num(existing.get("first_min_speed_kmh"))
+    last_min = _num(incoming.get("last_min_speed_kmh"))
+    if last_min is None:
+        last_min = _num(existing.get("last_min_speed_kmh"))
+    best_values = [
+        value
+        for value in (
+            _num(existing.get("best_min_speed_kmh")),
+            _num(incoming.get("best_min_speed_kmh")),
+        )
+        if value is not None
+    ]
+    merged = dict(existing)
+    merged.update(
+        {
+            "session_count": max(
+                int(existing.get("session_count") or 0),
+                int(incoming.get("session_count") or 0),
+            ),
+            "valid_laps": old_laps + new_laps,
+            "first_exported_at": _first_text(
+                existing.get("first_exported_at"), incoming.get("first_exported_at")
+            ),
+            "last_exported_at": _last_text(
+                existing.get("last_exported_at"), incoming.get("last_exported_at")
+            ),
+            "last_min_speed_kmh": last_min,
+            "best_min_speed_kmh": max(best_values, default=None),
+            "avg_entry_speed_kmh": _weighted_avg(
+                existing.get("avg_entry_speed_kmh"),
+                old_laps,
+                incoming.get("avg_entry_speed_kmh"),
+                new_laps,
+            ),
+            "avg_exit_speed_kmh": _weighted_avg(
+                existing.get("avg_exit_speed_kmh"),
+                old_laps,
+                incoming.get("avg_exit_speed_kmh"),
+                new_laps,
+            ),
+            "avg_trail_brake_ratio": _weighted_avg(
+                existing.get("avg_trail_brake_ratio"),
+                old_laps,
+                incoming.get("avg_trail_brake_ratio"),
+                new_laps,
+            ),
+            "avg_throttle": _weighted_avg(
+                existing.get("avg_throttle"), old_laps, incoming.get("avg_throttle"), new_laps
+            ),
+            "avg_steer_reversals": _weighted_avg(
+                existing.get("avg_steer_reversals"),
+                old_laps,
+                incoming.get("avg_steer_reversals"),
+                new_laps,
+            ),
+            "latest_source_file": incoming.get("latest_source_file")
+            or existing.get("latest_source_file"),
+        }
+    )
+    if first_min is not None and last_min is not None:
+        merged["delta_min_speed_kmh"] = round(last_min - first_min, 3)
+    return merged
+
+
+def _merge_rows(
+    existing: Mapping[str, Any],
+    incoming: Mapping[str, dict[str, Any]],
+    *,
+    row_merger: Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    merged = {
+        str(key): dict(value) for key, value in existing.items() if isinstance(value, Mapping)
+    }
+    for key, row in incoming.items():
+        previous = merged.get(key)
+        merged[key] = row_merger(previous, row) if isinstance(previous, Mapping) else dict(row)
+    return merged
+
+
 def _rollups_from_archives(
     inputs: Iterable[str | Path],
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], int, int, list[str]]:
@@ -300,6 +468,9 @@ def _rollups_from_archives(
             skipped.append(f"{Path(path).name}: {type(exc).__name__}")
             continue
         source_laps += 1
+        if not _is_driver_lap(record):
+            skipped.append(f"{Path(path).name}: non_driver_source:{record.get('source')}")
+            continue
         is_valid = lap_is_valid(record)
         if is_valid:
             valid_laps += 1
@@ -388,19 +559,28 @@ def build_profile(
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """Build a compacted driver profile by merging archive-derived roll-ups."""
-    base = _default_profile(driver_id)
+    effective_driver_id = str(driver_id or DEFAULT_DRIVER_ID)
+    if driver_id == DEFAULT_DRIVER_ID and isinstance(existing, Mapping):
+        prior_driver_id = existing.get("driver_id")
+        if isinstance(prior_driver_id, str) and prior_driver_id:
+            effective_driver_id = prior_driver_id
+    base = _default_profile(effective_driver_id)
     if existing:
-        base["preferences"] = dict(existing.get("preferences") or {})
-        base["focus_corners"] = dict(existing.get("focus_corners") or {})
+        base["preferences"] = _mapping_or_empty(existing.get("preferences"))
+        base["focus_corners"] = _mapping_or_empty(existing.get("focus_corners"))
         base["session_rollups"] = {
             **_rollups_from_existing_bests(existing),
-            **dict(existing.get("session_rollups") or {}),
+            **_mapping_or_empty(existing.get("session_rollups")),
         }
-        base["corner_history"] = dict(existing.get("corner_history") or {})
+        base["corner_history"] = _mapping_or_empty(existing.get("corner_history"))
 
     new_rollups, new_corners, source_laps, valid_laps, skipped = _rollups_from_archives(inputs)
-    base["session_rollups"].update(new_rollups)
-    base["corner_history"].update(new_corners)
+    base["session_rollups"] = _merge_rows(
+        base["session_rollups"], new_rollups, row_merger=_merge_session_rollup
+    )
+    base["corner_history"] = _merge_rows(
+        base["corner_history"], new_corners, row_merger=_merge_corner_row
+    )
     rollups = base["session_rollups"]
 
     by_combo: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -448,7 +628,7 @@ def build_profile(
 
     base.update(
         {
-            "driver_id": str(driver_id or base.get("driver_id") or DEFAULT_DRIVER_ID),
+            "driver_id": effective_driver_id,
             "updated_at": generated_at or _iso_now(),
             "personal_bests": personal_bests,
             "consistency": consistency,
@@ -466,13 +646,9 @@ def _resolve_profile_path(path: str | Path) -> Path:
     raw = Path(path)
     base_dir = Path.cwd().resolve()
     resolved = raw.resolve() if raw.is_absolute() else (base_dir / raw).resolve()
-    journal_driver = (base_dir / "journal" / "driver").resolve()
-    try:
-        resolved.relative_to(journal_driver)
-    except ValueError as exc:
-        raise ValueError(f"{raw}: profile path must stay under journal/driver/") from exc
-    if resolved.name != "profile.json":
-        raise ValueError(f"{raw}: profile filename must be profile.json")
+    tail = tuple(part.lower() for part in resolved.parts[-3:])
+    if tail != ("journal", "driver", "profile.json"):
+        raise ValueError(f"{raw}: profile path must end with journal/driver/profile.json")
     return resolved
 
 

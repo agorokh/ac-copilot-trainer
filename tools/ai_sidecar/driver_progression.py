@@ -193,6 +193,11 @@ def _corner_rows(profile: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [row for row in rows.values() if isinstance(row, Mapping)]
 
 
+def _corner_lap_samples(corners: Sequence[Mapping[str, Any]]) -> int:
+    counts = [int(row.get("valid_laps") or 0) for row in corners]
+    return max(counts, default=0)
+
+
 def _consistency_assessment(profile: Mapping[str, Any]) -> SkillAssessment:
     rows = [row for row in (profile.get("consistency") or {}).values() if isinstance(row, Mapping)]
     ratios = [
@@ -233,15 +238,16 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
         }
 
     corners = _corner_rows(profile)
+    corner_laps = _corner_lap_samples(corners)
     deltas = [
         value for row in corners if (value := _finite(row.get("delta_min_speed_kmh"))) is not None
     ]
     positive_share = sum(1 for value in deltas if value >= 0.5) / len(deltas) if deltas else 0.0
     apex_score = _median(deltas)
-    if apex_score is not None and len(deltas) >= 8 and apex_score >= 2.0 and positive_share >= 0.65:
+    if apex_score is not None and corner_laps >= 8 and apex_score >= 2.0 and positive_share >= 0.65:
         apex_level = LEVEL_ADVANCED
     elif (
-        apex_score is not None and len(deltas) >= 4 and apex_score >= 0.5 and positive_share >= 0.5
+        apex_score is not None and corner_laps >= 4 and apex_score >= 0.5 and positive_share >= 0.5
     ):
         apex_level = LEVEL_INTERMEDIATE
     elif deltas:
@@ -253,13 +259,13 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
         value for row in corners if (value := _finite(row.get("avg_trail_brake_ratio"))) is not None
     ]
     trail_score = _median(trails)
-    trail_level = _skill_level(trail_score, len(trails), intermediate=0.18, advanced=0.34)
+    trail_level = _skill_level(trail_score, corner_laps, intermediate=0.18, advanced=0.34)
 
     throttles = [
         value for row in corners if (value := _finite(row.get("avg_throttle"))) is not None
     ]
     throttle_score = _median(throttles)
-    throttle_level = _skill_level(throttle_score, len(throttles), intermediate=0.45, advanced=0.62)
+    throttle_level = _skill_level(throttle_score, corner_laps, intermediate=0.45, advanced=0.62)
 
     steers = [
         value for row in corners if (value := _finite(row.get("avg_steer_reversals"))) is not None
@@ -267,9 +273,9 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
     steer_score = _median(steers)
     if steer_score is None:
         steer_level = LEVEL_UNKNOWN
-    elif len(steers) >= 8 and steer_score <= 1.5:
+    elif corner_laps >= 8 and steer_score <= 1.5:
         steer_level = LEVEL_ADVANCED
-    elif len(steers) >= 4 and steer_score <= 3.0:
+    elif corner_laps >= 4 and steer_score <= 3.0:
         steer_level = LEVEL_INTERMEDIATE
     else:
         steer_level = LEVEL_NOVICE
@@ -279,7 +285,7 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
         "apex_speed": SkillAssessment(
             "apex_speed",
             apex_level,
-            len(deltas),
+            corner_laps if deltas else 0,
             None if apex_score is None else round(apex_score, 3),
             evidence=(
                 f"median min-speed delta {apex_score:.1f} km/h"
@@ -290,7 +296,7 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
         "trail_braking": SkillAssessment(
             "trail_braking",
             trail_level,
-            len(trails),
+            corner_laps if trails else 0,
             None if trail_score is None else round(trail_score, 3),
             evidence=(
                 f"median trail ratio {trail_score:.2f}"
@@ -301,7 +307,7 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
         "throttle_commitment": SkillAssessment(
             "throttle_commitment",
             throttle_level,
-            len(throttles),
+            corner_laps if throttles else 0,
             None if throttle_score is None else round(throttle_score, 3),
             evidence=(
                 f"median throttle average {throttle_score:.2f}"
@@ -312,7 +318,7 @@ def classify_skills(profile: Mapping[str, Any] | None) -> dict[str, SkillAssessm
         "steering_smoothness": SkillAssessment(
             "steering_smoothness",
             steer_level,
-            len(steers),
+            corner_laps if steers else 0,
             None if steer_score is None else round(steer_score, 3),
             evidence=(
                 f"median steering reversals {steer_score:.1f}"

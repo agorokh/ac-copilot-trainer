@@ -27,7 +27,9 @@ from typing import Any
 
 from tools.ai_sidecar.coaching_diagnosis import (
     ANCHOR,
+    APEX_KMH_FLOOR,
     PHRASE,
+    THROTTLE_SPLINE_FLOOR,
     Diagnosis,
     RootError,
     classify_root_error,
@@ -257,14 +259,12 @@ class CoachRuntime:
             st.reset()
             return []
         sig = _signature_from_pass(st, r)
-        diag = classify_root_error(sig, ref_sig)
+        diag = _classify_for_policy(sig, ref_sig, self.cue_policy)
         # GRIP-GATE (P3): at the lateral-grip ceiling the loss is setup/tyre, not technique —
         # demanding more speed/later braking would lie, so suppress. Fail-open: fires only when a
         # real grip signal was present this pass (see _GRIP_GATE_FRAC).
         if diag.root in _GRIP_GATED_ROOTS and st.max_grip_used >= _GRIP_GATE_FRAC:
             diag = Diagnosis(RootError.NONE, {"grip_gated": round(st.max_grip_used, 3)})
-        if not self.cue_policy.allows(diag.root):
-            diag = Diagnosis(RootError.NONE, {"skill_gated": 1.0})
         # time-lost proxy: apex-speed deficit (km/h) stands in until lap-time deltas are wired
         time_lost = max(0.0, ref_sig.min_speed_kmh - st.min_speed_kmh)
         # Validity gate (B3): a pass that never reached a plausible apex (no entry samples, or the
@@ -304,6 +304,30 @@ def _accumulate_core(
             st.trail_count += 1
     elif throttle >= _THROTTLE_ON and st.throttle_on_spline is None:
         st.throttle_on_spline = spline
+
+
+def _classify_for_policy(
+    sig: CornerSignature,
+    ref_sig: CornerSignature,
+    cue_policy: DriverCuePolicy,
+) -> Diagnosis:
+    diag = classify_root_error(sig, ref_sig)
+    if cue_policy.allows(diag.root):
+        return diag
+    if diag.root is RootError.NO_TRAIL:
+        apex_deficit = ref_sig.min_speed_kmh - sig.min_speed_kmh
+        if cue_policy.allows(RootError.SLOW_APEX) and apex_deficit >= APEX_KMH_FLOOR:
+            return Diagnosis(RootError.SLOW_APEX, {"apex_deficit_kmh": round(apex_deficit, 1)})
+        if sig.throttle_on_spline is not None and ref_sig.throttle_on_spline is not None:
+            throttle_delta = sig.throttle_on_spline - ref_sig.throttle_on_spline
+            if (
+                cue_policy.allows(RootError.LATE_THROTTLE)
+                and throttle_delta > THROTTLE_SPLINE_FLOOR
+            ):
+                return Diagnosis(
+                    RootError.LATE_THROTTLE, {"throttle_delta": round(throttle_delta, 4)}
+                )
+    return Diagnosis(RootError.NONE, {"skill_gated": 1.0})
 
 
 def _reference_signatures(
