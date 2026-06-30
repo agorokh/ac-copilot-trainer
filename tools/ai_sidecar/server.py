@@ -1071,9 +1071,9 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         candidate_snapshot = data.get("candidate_snapshot")
         try:
             requested_car_id = data.get("car_id")
-            baseline_car_id = requested_car_id or _setup_snapshot_car_id(baseline_snapshot)
-            candidate_car_id = requested_car_id or _setup_snapshot_car_id(candidate_snapshot)
-            schema_car_id = candidate_car_id or baseline_car_id
+            baseline_car_id = _setup_snapshot_car_id(baseline_snapshot) or requested_car_id
+            candidate_car_id = _setup_snapshot_car_id(candidate_snapshot) or requested_car_id
+            schema_car_id = candidate_car_id or baseline_car_id or requested_car_id
             baseline = from_snapshot(
                 baseline_snapshot if isinstance(baseline_snapshot, dict) else {},
                 car_id=baseline_car_id,

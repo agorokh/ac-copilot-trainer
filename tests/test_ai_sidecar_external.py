@@ -884,6 +884,7 @@ def test_setup_diff_roundtrip_preserves_snapshot_car_mismatch() -> None:
                         {
                             "v": 1,
                             "type": "setup.diff",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
                             "baseline_snapshot": {
                                 "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
                                 "FRONT_BIAS.VALUE": "66",

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 BATCH_SIZE = 100
+MAX_ARG_CHARS = 24_000
 
 
 def _repo_root() -> Path:
@@ -33,8 +34,25 @@ def _tracked_files(root: Path) -> list[str]:
     ]
 
 
-def _batches(items: list[str], size: int = BATCH_SIZE) -> list[list[str]]:
-    return [items[i : i + size] for i in range(0, len(items), size)]
+def _batches(
+    items: list[str],
+    size: int = BATCH_SIZE,
+    max_chars: int = MAX_ARG_CHARS,
+) -> list[list[str]]:
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_chars = 0
+    for item in items:
+        item_chars = len(item) + 1
+        if current and (len(current) >= size or current_chars + item_chars > max_chars):
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += item_chars
+    if current:
+        batches.append(current)
+    return batches
 
 
 def main() -> int:

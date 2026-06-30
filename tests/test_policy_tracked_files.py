@@ -36,3 +36,22 @@ def test_tracked_files_filters_empty_git_ls_files_sentinel(
     monkeypatch.setattr(policy_tracked_files.subprocess, "run", fake_run)
 
     assert policy_tracked_files._tracked_files(tmp_path) == ["src/app.py"]
+
+
+def test_batches_respect_count_and_character_budgets() -> None:
+    files = ["a" * 10, "b" * 10, "c" * 10]
+
+    assert policy_tracked_files._batches(files, size=2, max_chars=100) == [
+        [files[0], files[1]],
+        [files[2]],
+    ]
+    assert policy_tracked_files._batches(files, size=100, max_chars=22) == [
+        [files[0], files[1]],
+        [files[2]],
+    ]
+
+
+def test_batches_keep_single_path_that_exceeds_character_budget() -> None:
+    long_file = "deep/" + ("x" * 64)
+
+    assert policy_tracked_files._batches([long_file], max_chars=10) == [[long_file]]
