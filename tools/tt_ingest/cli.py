@@ -40,6 +40,10 @@ from tools.tt_ingest.tt_export import (
     write_immutable_json,
 )
 from tools.tt_ingest.tt_normalize import (
+    DEFAULT_REFERENCE_COVERAGE_THRESHOLD,
+    DEFAULT_REFERENCE_MAX_SPLINE_GAP,
+    TTNormalizeError,
+    build_reference_archive,
     build_sessions_index,
     normalize_session,
     split_session_id,
@@ -63,6 +67,7 @@ LAST_SESSION_ENDPOINT_PREFIX = "last_session_lap"
 LAST_SESSION_ENDPOINT_GLOB = f"{LAST_SESSION_ENDPOINT_PREFIX}*.json"
 COACHING_ENDPOINT_PREFIX = "coaching_lap"
 COACHING_ENDPOINT_GLOB = f"{COACHING_ENDPOINT_PREFIX}*.json"
+REFERENCE_INPUT_GLOB = LAST_SESSION_ENDPOINT_GLOB
 
 
 def last_session_endpoint(lap: Any) -> str:
@@ -244,6 +249,25 @@ class CoachingSummary:
         )
 
 
+@dataclass(frozen=True)
+class ReferenceArchiveSummary:
+    """Outcome of building one M-TT2 Track Titan reference archive."""
+
+    output: Path
+    samples: int
+    coverage: float
+    partial: bool
+    payload_count: int
+
+    def render(self) -> str:
+        state = "PARTIAL debug" if self.partial else "full"
+        return (
+            f"wrote {state} TT reference archive to {self.output} "
+            f"({self.samples} samples, coverage={self.coverage:.3f}, "
+            f"{self.payload_count} payload(s))"
+        )
+
+
 def _car_segment(session: Mapping[str, Any]) -> Any:
     """Resolve a STRING car id for the lake path.
 
@@ -337,6 +361,88 @@ def retain_coaching(
     )
 
 
+def _load_json_file(path: Path) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise TTNormalizeError(f"could not read {path}: {exc}") from exc
+    except ValueError as exc:
+        raise TTNormalizeError(f"{path} is not valid JSON") from exc
+    if not isinstance(payload, Mapping):
+        raise TTNormalizeError(f"{path} did not contain a JSON object")
+    return payload
+
+
+def discover_reference_payloads(
+    *,
+    lake_base: Path | None = None,
+    session_key: str | None = None,
+    lap: str | int | None = None,
+) -> list[Path]:
+    """Discover retained ``last_session_lap*.json`` payloads in the TT lake."""
+    root = lake_root(lake_base)
+    if not root.exists():
+        raise TTNormalizeError(f"Track Titan lake not found: {root}")
+    paths: list[Path] = []
+    for path in sorted(root.rglob(REFERENCE_INPUT_GLOB)):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if session_key and path.parent.name != str(session_key):
+            continue
+        if lap is not None and path.stem != last_session_endpoint(lap):
+            continue
+        paths.append(path)
+    if not paths:
+        details = []
+        if session_key:
+            details.append(f"session_key={session_key}")
+        if lap is not None:
+            details.append(f"lap={lap}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        raise TTNormalizeError(f"no retained last-session payloads found under {root}{suffix}")
+    return paths
+
+
+def build_reference_archive_from_files(
+    paths: Sequence[Path],
+    *,
+    output: Path,
+    channel: str = "reference",
+    allow_partial: bool = False,
+    coverage_threshold: float = DEFAULT_REFERENCE_COVERAGE_THRESHOLD,
+    max_spline_gap: float = DEFAULT_REFERENCE_MAX_SPLINE_GAP,
+    track_length_m: float,
+    overwrite: bool = False,
+    pretty: bool = False,
+) -> ReferenceArchiveSummary:
+    """Build and write a TT reference archive from retained payload files."""
+    if output.exists() and not overwrite:
+        raise TTNormalizeError(f"output already exists (pass --overwrite): {output}")
+    payloads = [_load_json_file(path) for path in paths]
+    archive = build_reference_archive(
+        list(payloads),
+        channel=channel,
+        coverage_threshold=coverage_threshold,
+        max_spline_gap=max_spline_gap,
+        allow_partial=allow_partial,
+        track_length_m=track_length_m,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if pretty:
+        text = json.dumps(archive, indent=2, sort_keys=True) + "\n"
+    else:
+        text = json.dumps(archive, separators=(",", ":"), sort_keys=True) + "\n"
+    output.write_text(text, encoding="utf-8")
+    meta = archive["generator"]["tt_reference"]
+    return ReferenceArchiveSummary(
+        output=output,
+        samples=int(meta["samples"]),
+        coverage=float(meta["coverage"]),
+        partial=bool(meta["partial"]),
+        payload_count=int(meta["payload_count"]),
+    )
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Build the ``tools.tt_ingest`` argument parser."""
     parser = argparse.ArgumentParser(
@@ -387,6 +493,62 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the resolved session + a sanitized advice summary; write nothing.",
     )
+
+    reference = sub.add_parser(
+        "reference",
+        help="Build an M-TT2 lap_archive reference from retained TT last-session telemetry.",
+    )
+    reference.add_argument(
+        "--input",
+        action="append",
+        type=Path,
+        default=[],
+        help="Retained last_session_lap*.json payload; repeat to stitch multiple windows.",
+    )
+    reference.add_argument(
+        "--discover-lake",
+        action="store_true",
+        help="Discover retained last_session_lap*.json files under --lake-base/journal/tt.",
+    )
+    reference.add_argument("--lake-base", type=Path, default=None)
+    reference.add_argument(
+        "--session-key", default=None, help="Filter lake discovery to a session key."
+    )
+    reference.add_argument("--lap", default=None, help="Filter lake discovery to one lap number.")
+    reference.add_argument(
+        "--channel",
+        choices=("reference", "user"),
+        default="reference",
+        help="TT telemetry channel to normalize (default: reference).",
+    )
+    reference.add_argument(
+        "--output", type=Path, required=True, help="Reference archive JSON path."
+    )
+    reference.add_argument(
+        "--track-length-m",
+        type=float,
+        default=4500.0,
+        help="Track length for the archive metadata when TT does not provide one.",
+    )
+    reference.add_argument(
+        "--min-coverage",
+        type=float,
+        default=DEFAULT_REFERENCE_COVERAGE_THRESHOLD,
+        help="Required contiguous spline coverage for a full reference (default 0.90).",
+    )
+    reference.add_argument(
+        "--max-spline-gap",
+        type=float,
+        default=DEFAULT_REFERENCE_MAX_SPLINE_GAP,
+        help="Largest spline gap counted as contiguous coverage (default 0.08).",
+    )
+    reference.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Emit a debug-only archive even when full-lap coverage is not met.",
+    )
+    reference.add_argument("--overwrite", action="store_true")
+    reference.add_argument("--pretty", action="store_true")
     return parser
 
 
@@ -470,6 +632,32 @@ def cmd_coaching(args: argparse.Namespace) -> int:  # pragma: no cover - network
     return 0
 
 
+def cmd_reference(args: argparse.Namespace) -> int:
+    explicit_inputs = list(args.input or [])
+    if bool(explicit_inputs) == bool(args.discover_lake):
+        raise TTNormalizeError("reference requires exactly one of --input or --discover-lake")
+    paths = (
+        explicit_inputs
+        if explicit_inputs
+        else discover_reference_payloads(
+            lake_base=args.lake_base, session_key=args.session_key, lap=args.lap
+        )
+    )
+    summary = build_reference_archive_from_files(
+        paths,
+        output=args.output,
+        channel=args.channel,
+        allow_partial=args.allow_partial,
+        coverage_threshold=args.min_coverage,
+        max_spline_gap=args.max_spline_gap,
+        track_length_m=args.track_length_m,
+        overwrite=args.overwrite,
+        pretty=args.pretty,
+    )
+    _print(summary.render())
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
@@ -480,7 +668,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_export(args)
         if args.command == "coaching":
             return cmd_coaching(args)
-    except (TTAuthError, TTServicesError) as exc:  # pragma: no cover - surfaced live
+        if args.command == "reference":
+            return cmd_reference(args)
+    except (
+        TTAuthError,
+        TTServicesError,
+        TTNormalizeError,
+    ) as exc:  # pragma: no cover - surfaced live
         parser.exit(2, f"tt_ingest: {exc}\n")
     parser.error(f"unknown command: {args.command}")  # pragma: no cover - argparse guards
     return 2

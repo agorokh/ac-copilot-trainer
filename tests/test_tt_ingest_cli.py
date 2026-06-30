@@ -16,11 +16,15 @@ from tools.tt_ingest.cli import (
     INDEX_FILENAME,
     SESSIONS_INDEX_FILENAME,
     build_arg_parser,
+    build_reference_archive_from_files,
     coaching_endpoint,
+    discover_reference_payloads,
     last_session_endpoint,
+    main,
     retain_coaching,
     retain_sessions,
 )
+from tools.tt_ingest.tt_normalize import TTNormalizeError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tt_sessions_page.json"
 LAST_SESSION_FIXTURE = Path(__file__).parent / "fixtures" / "tt_services_last_session.json"
@@ -138,6 +142,24 @@ def test_parser_coaching_flags() -> None:
     assert args.uid == "u9"
 
 
+def test_parser_reference_flags(tmp_path) -> None:
+    out = tmp_path / "ref.json"
+    args = build_arg_parser().parse_args(
+        [
+            "reference",
+            "--input",
+            str(LAST_SESSION_FIXTURE),
+            "--output",
+            str(out),
+            "--allow-partial",
+        ]
+    )
+    assert args.command == "reference"
+    assert args.input == [LAST_SESSION_FIXTURE]
+    assert args.output == out
+    assert args.allow_partial is True
+
+
 # --- retain_coaching (M-TT1) ------------------------------------------------------
 
 
@@ -224,6 +246,77 @@ def test_retain_coaching_keys_on_given_session(tmp_path) -> None:
         / "20240101120000"
         / f"{coaching_endpoint(3)}.json"
     ).exists()
+
+
+# --- reference archive (M-TT2) ----------------------------------------------------
+
+
+def test_build_reference_archive_from_files_writes_debug_partial(tmp_path) -> None:
+    output = tmp_path / "tt_ref.json"
+    summary = build_reference_archive_from_files(
+        [LAST_SESSION_FIXTURE],
+        output=output,
+        allow_partial=True,
+        track_length_m=2525.0,
+        pretty=True,
+    )
+
+    record = json.loads(output.read_text(encoding="utf-8"))
+    assert record["import_format"] == "track_titan_reference_v1"
+    assert record["generator"]["tt_reference"]["partial"] is True
+    assert summary.partial is True
+    assert summary.samples == record["trace"]["samples_count"]
+    assert "PARTIAL debug" in summary.render()
+
+
+def test_build_reference_archive_from_files_refuses_overwrite(tmp_path) -> None:
+    output = tmp_path / "tt_ref.json"
+    output.write_text("{}", encoding="utf-8")
+    with pytest.raises(TTNormalizeError, match="output already exists"):
+        build_reference_archive_from_files(
+            [LAST_SESSION_FIXTURE],
+            output=output,
+            allow_partial=True,
+            track_length_m=2525.0,
+        )
+
+
+def test_discover_reference_payloads_filters_lake(tmp_path) -> None:
+    root = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    root.mkdir(parents=True)
+    target = root / f"{last_session_endpoint(5)}.json"
+    target.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert discover_reference_payloads(lake_base=tmp_path, session_key="sess-1", lap=5) == [target]
+    with pytest.raises(TTNormalizeError, match="no retained"):
+        discover_reference_payloads(lake_base=tmp_path, session_key="sess-2")
+
+
+def test_reference_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
+    output = tmp_path / "cli_ref.json"
+    rc = main(
+        [
+            "reference",
+            "--input",
+            str(LAST_SESSION_FIXTURE),
+            "--output",
+            str(output),
+            "--allow-partial",
+            "--track-length-m",
+            "2525",
+        ]
+    )
+
+    assert rc == 0
+    assert output.exists()
+    captured = capsys.readouterr().out
+    assert "TT reference archive" in captured
+    assert json.loads(output.read_text(encoding="utf-8"))["generator"]["tt_reference"]["partial"]
+
+
+def test_reference_cli_requires_one_input_mode(tmp_path) -> None:
+    with pytest.raises(SystemExit):
+        main(["reference", "--output", str(tmp_path / "ref.json")])
 
 
 def test_parser_requires_subcommand() -> None:
