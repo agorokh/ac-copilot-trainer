@@ -28,7 +28,7 @@ from tools.ai_sidecar.track_reference import CornerReference
 def _write_archive(
     path: Path,
     *,
-    lap_uuid: str,
+    lap_uuid: object,
     session_uuid: str,
     lap_ms: int,
     lap_n: int,
@@ -298,7 +298,7 @@ def test_duplicate_lap_uuid_across_input_dirs_is_aggregated_once(tmp_path: Path)
     for lap_dir, lap_ms in ((primary, 91000), (backup, 90500)):
         _write_archive(
             lap_dir / "lap_001.json",
-            lap_uuid="same-lap",
+            lap_uuid=123,
             session_uuid="session-1",
             lap_ms=lap_ms,
             lap_n=1,
@@ -312,9 +312,11 @@ def test_duplicate_lap_uuid_across_input_dirs_is_aggregated_once(tmp_path: Path)
 
     assert profile["source"]["lap_count"] == 1
     assert profile["source"]["valid_laps"] == 1
-    assert any("duplicate_lap_uuid:same-lap" in item for item in profile["source"]["skipped"])
+    assert any("duplicate_lap_uuid:123" in item for item in profile["source"]["skipped"])
     assert rollup["lap_count"] == 1
     assert rollup["valid_laps"] == 1
+    assert rollup["lap_uuids"] == ["123"]
+    assert rollup["lap_times_by_lap_uuid"] == {"123": 91000}
     assert corner["valid_laps"] == 1
 
 

@@ -95,16 +95,35 @@ def _count(value: Any) -> int:
     return int(parsed)
 
 
+def _normalized_lap_uuid(value: Any) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Mapping) or (
+        isinstance(value, Iterable) and not isinstance(value, (str, bytes))
+    ):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _text_set(value: Any) -> set[str]:
-    if isinstance(value, str) and value:
-        return {value}
+    text = _normalized_lap_uuid(value)
+    if text is not None:
+        return {text}
     if not isinstance(value, Iterable) or isinstance(value, Mapping):
         return set()
-    return {str(item) for item in value if isinstance(item, str) and item}
+    return {
+        item_text
+        for item in value
+        for item_text in (_normalized_lap_uuid(item),)
+        if item_text is not None
+    }
 
 
 def _sorted_texts(values: Iterable[Any]) -> list[str]:
-    return sorted({str(value) for value in values if isinstance(value, str) and value})
+    return sorted(
+        {text for value in values for text in (_normalized_lap_uuid(value),) if text is not None}
+    )
 
 
 def _numeric_list(value: Any) -> list[float]:
@@ -695,8 +714,8 @@ def _rollups_from_archives(
         if not _is_driver_lap(record):
             skipped.append(f"{Path(path).name}: non_driver_source:{record.get('source')}")
             continue
-        lap_uuid = record.get("lap_uuid")
-        if isinstance(lap_uuid, str) and lap_uuid:
+        lap_uuid = _normalized_lap_uuid(record.get("lap_uuid"))
+        if lap_uuid is not None:
             if lap_uuid in seen_lap_uuids:
                 skipped.append(f"{Path(path).name}: duplicate_lap_uuid:{lap_uuid}")
                 continue
@@ -770,9 +789,10 @@ def _rollups_from_archives(
             "lap_uuids": _sorted_texts(record.get("lap_uuid") for _, record in rows),
             "valid_lap_uuids": _sorted_texts(record.get("lap_uuid") for _, record, _ in valid_rows),
             "lap_times_by_lap_uuid": {
-                str(record.get("lap_uuid")): lap_ms
+                lap_uuid: lap_ms
                 for _, record, lap_ms in valid_rows
-                if isinstance(record.get("lap_uuid"), str) and record.get("lap_uuid")
+                for lap_uuid in (_normalized_lap_uuid(record.get("lap_uuid")),)
+                if lap_uuid is not None
             },
             "first_exported_at": min(exported) if exported else None,
             "last_exported_at": max(exported) if exported else None,
