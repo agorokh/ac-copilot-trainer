@@ -17,3 +17,7 @@ def test_partial_tt_reference_archive_is_not_installed_as_live_observer() -> Non
     }
 
     assert build_observer_from_reference(archive) is None
+
+
+def test_non_dict_reference_archive_is_not_installed_as_live_observer() -> None:
+    assert build_observer_from_reference(None) is None  # type: ignore[arg-type]

@@ -281,6 +281,19 @@ def test_build_reference_archive_from_files_refuses_overwrite(tmp_path) -> None:
         )
 
 
+def test_build_reference_archive_from_files_wraps_write_error(tmp_path) -> None:
+    parent_is_file = tmp_path / "not-a-dir"
+    parent_is_file.write_text("x", encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="could not write"):
+        build_reference_archive_from_files(
+            [LAST_SESSION_FIXTURE],
+            output=parent_is_file / "ref.json",
+            allow_partial=True,
+            track_length_m=2525.0,
+        )
+
+
 def test_discover_reference_payloads_filters_lake(tmp_path) -> None:
     root = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
     root.mkdir(parents=True)
@@ -290,6 +303,33 @@ def test_discover_reference_payloads_filters_lake(tmp_path) -> None:
     assert discover_reference_payloads(lake_base=tmp_path, session_key="sess-1", lap=5) == [target]
     with pytest.raises(TTNormalizeError, match="no retained"):
         discover_reference_payloads(lake_base=tmp_path, session_key="sess-2")
+
+
+def test_reference_cli_rejects_mixed_discovered_sessions(tmp_path) -> None:
+    first = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    second = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-2"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    raw = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
+    raw["data"]["session"]["id"] = "own#sess-1"
+    raw["data"]["session"]["session_id"] = "own#sess-1"
+    (first / f"{last_session_endpoint(5)}.json").write_text(json.dumps(raw), encoding="utf-8")
+    raw["data"]["session"]["id"] = "own#sess-2"
+    raw["data"]["session"]["session_id"] = "own#sess-2"
+    (second / f"{last_session_endpoint(5)}.json").write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "reference",
+                "--discover-lake",
+                "--lake-base",
+                str(tmp_path),
+                "--output",
+                str(tmp_path / "ref.json"),
+                "--allow-partial",
+            ]
+        )
 
 
 def test_reference_cli_writes_from_explicit_input(tmp_path, capsys) -> None:

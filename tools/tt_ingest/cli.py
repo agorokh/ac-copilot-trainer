@@ -427,12 +427,15 @@ def build_reference_archive_from_files(
         allow_partial=allow_partial,
         track_length_m=track_length_m,
     )
-    output.parent.mkdir(parents=True, exist_ok=True)
     if pretty:
         text = json.dumps(archive, indent=2, sort_keys=True) + "\n"
     else:
         text = json.dumps(archive, separators=(",", ":"), sort_keys=True) + "\n"
-    output.write_text(text, encoding="utf-8")
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise TTNormalizeError(f"could not write {output}: {exc}") from exc
     meta = archive["generator"]["tt_reference"]
     return ReferenceArchiveSummary(
         output=output,

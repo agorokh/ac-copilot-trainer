@@ -146,6 +146,23 @@ def _tt_reference_payload(start: float, end: float, *, samples: int = 16) -> dic
     }
 
 
+def _session_payload(
+    start: float,
+    end: float,
+    *,
+    session_key: str,
+    car: object = "ks_porsche_911_gt3_r_2016",
+    track_id: str = "magione",
+) -> dict:
+    payload = _tt_reference_payload(start, end)
+    session = payload["data"]["session"]
+    session["id"] = f"own-uid#{session_key}"
+    session["session_id"] = f"own-uid#{session_key}"
+    session["car"] = car
+    session["track_id"] = track_id
+    return payload
+
+
 def test_reference_frames_from_payload_maps_tt_channels() -> None:
     frame = reference_frames_from_payload(_tt_reference_payload(0.4, 0.41, samples=2))[0]
     assert frame["spline"] == pytest.approx(0.4)
@@ -154,6 +171,17 @@ def test_reference_frames_from_payload_maps_tt_channels() -> None:
     assert frame["px"] == pytest.approx(400.0)
     assert frame["py"] == 0.0
     assert frame["pz"] == pytest.approx(19.2)
+
+
+def test_reference_frames_clamp_minor_pedal_noise() -> None:
+    payload = _tt_reference_payload(0.4, 0.41, samples=2)
+    payload["data"]["telemetry"]["telemetry"]["reference"][0]["throt"] = 1.00001
+    payload["data"]["telemetry"]["telemetry"]["reference"][0]["brak"] = -0.00001
+
+    frame = reference_frames_from_payload(payload)[0]
+
+    assert frame["throttle"] == 1.0
+    assert frame["brake"] == 0.0
 
 
 def test_build_reference_archive_rejects_single_segment_window() -> None:
@@ -191,6 +219,8 @@ def test_build_reference_archive_stitches_full_lap_windows() -> None:
     assert record["generator"]["decision_issue"] == 353
     assert record["generator"]["tt_reference"]["partial"] is False
     assert record["generator"]["tt_reference"]["payload_count"] == 2
+    assert record["generator"]["tt_reference"]["max_spline_gap"] == pytest.approx(0.08)
+    assert record["generator"]["tt_reference"]["observed_max_spline_gap"] < 0.08
     assert record["corners"]  # non-vacuous for the M0 observer path
 
 
@@ -200,5 +230,58 @@ def test_build_reference_archive_rejects_spatial_gaps_even_with_wide_range() -> 
             [
                 _tt_reference_payload(0.0, 0.2, samples=12),
                 _tt_reference_payload(0.8, 1.0, samples=12),
+            ],
+        )
+
+
+def test_build_reference_archive_rejects_single_corner_sized_hole() -> None:
+    with pytest.raises(TTNormalizeError, match="partial"):
+        build_reference_archive(
+            [
+                _tt_reference_payload(0.0, 0.46, samples=30),
+                _tt_reference_payload(0.55, 1.0, samples=30),
+            ],
+        )
+
+
+def test_build_reference_archive_counts_start_finish_wrap_as_closed_loop() -> None:
+    record = build_reference_archive(
+        [_tt_reference_payload(0.02, 0.98, samples=80)],
+        max_spline_gap=0.05,
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    assert record["generator"]["tt_reference"]["partial"] is False
+    assert record["generator"]["tt_reference"]["coverage"] == pytest.approx(1.0)
+
+
+def test_build_reference_archive_resolves_car_id_from_object() -> None:
+    record = build_reference_archive(
+        [
+            _session_payload(
+                0.0,
+                0.5,
+                session_key="sess-object-car",
+                car={"car_id": "ks_audi_r8_lms", "name": "Audi R8 LMS"},
+            ),
+            _session_payload(
+                0.5,
+                1.0,
+                session_key="sess-object-car",
+                car={"car_id": "ks_audi_r8_lms", "name": "Audi R8 LMS"},
+            ),
+        ],
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    assert record["car"]["id"] == "ks_audi_r8_lms"
+
+
+def test_build_reference_archive_rejects_mixed_sessions() -> None:
+    with pytest.raises(TTNormalizeError, match="one session/lap"):
+        build_reference_archive(
+            [
+                _session_payload(0.0, 0.5, session_key="sess-a"),
+                _session_payload(0.5, 1.0, session_key="sess-b"),
             ],
         )

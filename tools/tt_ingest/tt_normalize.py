@@ -157,6 +157,11 @@ def _bounded01(raw: Any, field: str) -> float:
     return value
 
 
+def _clamped01(raw: Any, field: str) -> float:
+    value = _finite_float(raw, field)
+    return max(0.0, min(1.0, value))
+
+
 def _services_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return the services ``data`` object from an enveloped or already-unwrapped payload."""
     if not isinstance(payload, Mapping):
@@ -167,11 +172,16 @@ def _services_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return data
 
 
+def _payload_session(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    data = _services_data(payload)
+    session = data.get("session")
+    return session if isinstance(session, Mapping) else {}
+
+
 def _session_from_payload(payloads: list[Mapping[str, Any]]) -> Mapping[str, Any]:
     for payload in payloads:
-        data = _services_data(payload)
-        session = data.get("session")
-        if isinstance(session, Mapping):
+        session = _payload_session(payload)
+        if session:
             return session
     return {}
 
@@ -183,6 +193,55 @@ def _reference_lap_from_payload(payloads: list[Mapping[str, Any]]) -> Mapping[st
         if isinstance(ref, Mapping):
             return ref
     return {}
+
+
+def _resolve_car_id(session: Mapping[str, Any]) -> str | None:
+    for value in (session.get("car_id"), session.get("car")):
+        if isinstance(value, str) and value:
+            return value
+        if isinstance(value, Mapping):
+            inner = value.get("car_id") or value.get("id")
+            if isinstance(inner, str) and inner:
+                return inner
+    return None
+
+
+def _session_key(session: Mapping[str, Any]) -> str | None:
+    raw_id = session.get("session_id") or session.get("id")
+    if isinstance(raw_id, str):
+        _, key = split_session_id(raw_id)
+        if key:
+            return key
+    key = session.get("session_key")
+    return key if isinstance(key, str) and key else None
+
+
+def _identity_value(value: Any) -> str | None:
+    return str(value) if value not in (None, "") else None
+
+
+def _session_identity(session: Mapping[str, Any]) -> dict[str, str | None]:
+    return {
+        "game_id": _identity_value(session.get("game_id")),
+        "car_id": _resolve_car_id(session),
+        "track_id": _identity_value(session.get("track_id")),
+        "session_key": _session_key(session),
+        "lap_number": _identity_value(session.get("lap_number")),
+    }
+
+
+def _validated_session_identity(payloads: list[Mapping[str, Any]]) -> dict[str, str | None]:
+    identities = [_session_identity(_payload_session(payload)) for payload in payloads]
+    if not identities:
+        return _session_identity({})
+    first = identities[0]
+    for index, identity in enumerate(identities[1:], start=1):
+        if identity != first:
+            raise TTNormalizeError(
+                "Track Titan reference payloads must come from one session/lap "
+                f"(payload 0={first}, payload {index}={identity})"
+            )
+    return first
 
 
 def _raw_trace(payload: Mapping[str, Any], *, channel: str) -> list[Mapping[str, Any]]:
@@ -217,8 +276,8 @@ def _tt_frame_to_archive_frame(frame: Mapping[str, Any], index: int) -> dict[str
         "spline": spline,
         "speed": speed,
         "eMs": _finite_float(frame.get("lTime"), f"tt_frame[{index}].lTime"),
-        "throttle": _bounded01(frame.get("throt"), f"tt_frame[{index}].throt"),
-        "brake": _bounded01(frame.get("brak"), f"tt_frame[{index}].brak"),
+        "throttle": _clamped01(frame.get("throt"), f"tt_frame[{index}].throt"),
+        "brake": _clamped01(frame.get("brak"), f"tt_frame[{index}].brak"),
         "steer": _finite_float(frame.get("steer"), f"tt_frame[{index}].steer"),
         "gear": _finite_float(frame.get("gear"), f"tt_frame[{index}].gear"),
         # TT exposes a 2-D path projection. AC's schema wants px/py/pz; keep the
@@ -288,9 +347,10 @@ def reference_coverage(
     if len(splines) < 2:
         raise TTNormalizeError("reference telemetry needs at least two distinct spline samples")
     gaps = [b - a for a, b in zip(splines, splines[1:], strict=False)]
+    gaps.append((1.0 - splines[-1]) + splines[0])
     max_gap = max(gaps, default=1.0)
-    coverage = sum(gap for gap in gaps if gap <= max_spline_gap)
-    partial = coverage < threshold
+    coverage = min(1.0, sum(gap for gap in gaps if gap <= max_spline_gap))
+    partial = coverage < threshold or max_gap > max_spline_gap
     return ReferenceCoverage(
         samples=len(frames),
         coverage=coverage,
@@ -332,11 +392,12 @@ def build_reference_archive(
             "or pass --allow-partial for a debug-only archive"
         )
 
+    identity = _validated_session_identity(payloads)
     session = _session_from_payload(payloads)
     ref = _reference_lap_from_payload(payloads)
-    car_id = session.get("car") or session.get("car_id") or "track_titan_car"
-    track_id = session.get("track_id") or "track_titan_track"
-    lap_n = ref.get("lap_number") or session.get("lap_number") or 1
+    car_id = identity["car_id"] or "track_titan_car"
+    track_id = identity["track_id"] or "track_titan_track"
+    lap_n = identity["lap_number"] or ref.get("lap_number") or session.get("lap_number") or 1
     record = build_archive_record(
         frames,
         car_id=str(car_id),
@@ -361,7 +422,8 @@ def build_reference_archive(
         "coverage_threshold": coverage_threshold,
         "min_spline": coverage.min_spline,
         "max_spline": coverage.max_spline,
-        "max_spline_gap": coverage.max_gap,
+        "max_spline_gap": max_spline_gap,
+        "observed_max_spline_gap": coverage.max_gap,
         "samples": coverage.samples,
         "format": TT_REFERENCE_IMPORT_FORMAT,
     }
