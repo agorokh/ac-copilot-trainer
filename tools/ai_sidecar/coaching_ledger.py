@@ -162,6 +162,17 @@ class CoachingLedger:
         st.coached_count += 1
         return st.root
 
+    def armed_root(self, corner: int) -> RootError | None:
+        """Peek the root this corner would PRIME this lap (no side effect) — the observer uses it to
+        know WHICH action-point anchor to fire at before committing via :meth:`due_prime`.
+        """
+        if self._lap <= self.assess_laps or corner not in self._speak_set:
+            return None
+        st = self._states.get(corner)
+        if st is None or st.status not in (Status.ARMED, Status.PRIMED):
+            return None
+        return st.root
+
     # --- introspection (debrief screen / tests) ---
     def state(self, corner: int) -> CornerState | None:
         return self._states.get(corner)
