@@ -1,0 +1,34 @@
+/* ============================================================
+   RACING ATELIER — EFFECTS
+   Square, flat, matte. SQUARE corners (printed instrument, not "app").
+   No glow on signal — colour is the alert, not a halo. No blur on the
+   OLED/rig. Motion is minimal: state changes are instant or snap.
+   ============================================================ */
+:root {
+  /* --- Corners: SQUARE. The instrument idiom. --- */
+  --r: 0px;          /* everything */
+  --r-bezel: 18px;   /* the physical device shell only */
+  --r-screen: 12px;  /* the screen inside the bezel */
+
+  /* --- Borders --- */
+  --border-line: 1px solid var(--line);
+  --border-edge: 1px solid var(--edge);
+  --border-bracket: var(--bracket-w) solid var(--brass);
+
+  /* --- Elevation: presentational chrome only (never on flat UI bands) --- */
+  --shadow-device: 0 30px 70px rgba(0,0,0,0.6);
+  --shadow-glass: 0 50px 90px -54px rgba(0,0,0,0.8);
+
+  /* --- Glass: in-game overlay ONLY (web/desktop). NEVER on the ESP32. --- */
+  --glass-fill: linear-gradient(180deg, rgba(22,25,29,0.82), rgba(11,12,14,0.82));
+  --glass-blur: blur(14px) saturate(1.05); /* @kind other */
+
+  /* --- Stage: the "over the track" demo ground --- */
+  --stage-bg: radial-gradient(120% 130% at 50% -10%, #16191d 0%, #08090a 65%); /* @kind other */
+
+  /* --- Motion: minimal. State snaps; nothing decorative loops. --- */
+  --ease: cubic-bezier(0.2, 0, 0.2, 1); /* @kind other */
+  --dur-snap: 90ms;        /* @kind other */
+  --dur-press: 110ms;      /* @kind other */
+  --dur-tick: 100ms;       /* @kind other */
+}

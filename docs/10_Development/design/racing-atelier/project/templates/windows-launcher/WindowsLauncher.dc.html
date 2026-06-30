@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<!-- @template name="Windows Game Point launcher" description="Racing Atelier desktop launcher — status fields mapped to GamePointStatus, brass Start" -->
+<helmet>
+<script src="./ds-base.js"></script>
+</helmet>
+<div style="min-height:420px;background:#101113;display:flex;align-items:center;justify-content:center;padding:30px;font-family:var(--font-read);">
+  <div style="position:relative;width:640px;background:linear-gradient(180deg,var(--graphite),var(--carbon));border:1px solid var(--edge);">
+    <span style="position:absolute;top:-1px;left:-1px;width:14px;height:14px;border:2px solid var(--brass);border-right:0;border-bottom:0;"></span>
+    <span style="position:absolute;top:-1px;right:-1px;width:14px;height:14px;border:2px solid var(--brass);border-left:0;border-bottom:0;"></span>
+    <span style="position:absolute;bottom:-1px;left:-1px;width:14px;height:14px;border:2px solid var(--brass);border-right:0;border-top:0;"></span>
+    <span style="position:absolute;bottom:-1px;right:-1px;width:14px;height:14px;border:2px solid var(--brass);border-left:0;border-top:0;"></span>
+
+    <div style="height:38px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);">
+      <span style="width:6px;height:16px;background:var(--brass);"></span>
+      <span style="font-family:var(--font-disp);font-weight:800;font-size:14px;letter-spacing:0.12em;text-transform:uppercase;color:var(--chalk);">Game Point</span>
+      <span style="margin-left:auto;font-family:var(--font-mono);font-size:10px;color:var(--dim);">:8765</span>
+    </div>
+
+    <div style="padding:18px 18px 20px;">
+      <div style="display:flex;align-items:center;gap:12px;padding-bottom:14px;">
+        <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.StatusField" tone="go" hint-size="120px,24px">Ready to drive</x-import>
+        <span style="font-family:var(--font-mono);font-size:11px;color:var(--mute);">sidecar · screen · hotspot live</span>
+      </div>
+
+      <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.StatusRow" label="Sidecar" state="healthy" tone="go" detail="peers=1 screen_peers=1" hint-size="100%,38px">Sidecar healthy</x-import>
+      <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.StatusRow" label="Screen" state="connected" tone="go" detail="screen_peers=1" hint-size="100%,38px">Screen connected</x-import>
+      <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.StatusRow" label="Hotspot" state="on" tone="go" detail="state=On clients=1" hint-size="100%,38px">Hotspot on</x-import>
+      <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.StatusRow" label="Voice" state="configured" tone="go" detail="reference + bank" hint-size="100%,38px">Voice configured</x-import>
+      <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.StatusRow" label="SimHub" state="absent" tone="idle" detail="executable not found" last="true" hint-size="100%,38px">SimHub absent</x-import>
+
+      <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:9px;margin-top:18px;">
+        <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.Button" variant="primary" icon-left="▶ " block="true" hint-size="100%,40px">Start</x-import>
+        <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.Button" block="true" hint-size="100%,40px">Refresh</x-import>
+        <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.Button" block="true" hint-size="100%,40px">Logs</x-import>
+        <x-import component-from-global-scope="ACCopilotDesignSystem_bba7a8.Button" block="true" hint-size="100%,40px">Settings</x-import>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

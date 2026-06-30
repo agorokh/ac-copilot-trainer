@@ -1,0 +1,96 @@
+<!-- @dsCard group="ESP32 Rig Screen" viewport="380x540" name="OLED rig touchscreen" subtitle="320×480 — AC Copilot · Pocket Technician · Track Atlas, instrument cluster" -->
+<!-- @startingPoint section="Screens" subtitle="OLED rig touchscreen (320×480)" viewport="380x540" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Racing Atelier — OLED rig</title>
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  html,body{margin:0;min-height:100%;background:#0e0f11;font-family:var(--font-read);display:flex;align-items:center;justify-content:center;padding:20px;}
+  .frame{display:flex;flex-direction:column;align-items:center;gap:14px;}
+  .device{width:320px;height:480px;background:#000;border:1px solid var(--edge);border-radius:18px;padding:7px;box-shadow:var(--shadow-device);}
+  .scr{width:100%;height:100%;background:var(--carbon);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;color:var(--chalk);}
+  .ostrip{height:26px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);font-family:var(--font-mono);font-size:10px;color:var(--dim);}
+  .scrbody{flex:1;padding:13px;display:flex;flex-direction:column;overflow:hidden;}
+  .foot{display:flex;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid var(--line);flex:0 0 auto;}
+  .tabs{display:flex;gap:6px;}
+  .tabs button{background:none;border:1px solid var(--line-2);color:var(--mute);font-family:var(--font-disp);font-weight:600;font-size:10px;letter-spacing:0.08em;text-transform:uppercase;padding:6px 11px;cursor:pointer;border-radius:0;}
+  .tabs button.on{border-color:var(--brass);color:var(--brass);}
+  .ctxrow{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--line);}
+</style></head>
+<body>
+<div class="frame">
+  <div class="device"><div class="scr" id="scr"></div></div>
+  <div class="tabs" id="tabs"></div>
+</div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel">
+const D = window.ACCopilotDesignSystem_bba7a8;
+const { CommandVerb, SegmentBar, DeltaBar, NavTile, Stepper, LevelSegments, SetupRow, Label, StatusField, TrackMap, CornerLine, ElevationProfile, BrandMark } = D;
+const SPA = { path:"M40 128 L40 96 Q40 86 50 86 L150 78 Q165 77 168 64 L186 22 Q190 12 200 14 Q210 16 208 28 L196 70 Q193 84 205 88 L246 100 Q258 104 256 116 Q254 128 242 126 L150 118 Q120 116 110 126 Q100 136 84 134 L52 132 Q40 131 40 128 Z", highlight:"M168 64 L186 22 Q190 12 200 14", markers:[{x:40,y:128,tone:'house',r:3.4},{x:205,y:88,tone:'warn'},{x:256,y:116,tone:'chalk'}], labels:[{x:150,y:50,text:'eau rouge',tone:'stop'},{x:212,y:86,text:'combes',tone:'warn'}], viewBox:"0 0 290 150" };
+const ostrip = (l,r) => <div className="ostrip"><span>{l}</span><span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:5}}>{r}</span></div>;
+const Foot = ({t}) => <div className="foot"><span style={{width:4,height:12,background:'var(--brass)'}}/><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:9,letterSpacing:'0.18em',textTransform:'uppercase',color:'var(--dim)'}}>{t}</span></div>;
+
+function Copilot(){return(<>
+  {ostrip('SECTOR 2 · LAP 3', <StatusField tone="go" variant="dot">Live</StatusField>)}
+  <div className="scrbody">
+    <div className="ctxrow"><span style={{display:'flex',alignItems:'baseline',gap:8}}><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:13,color:'#000',background:'var(--brass)',padding:'1px 5px'}}>T4</span><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:19,letterSpacing:'0.05em',textTransform:'uppercase'}}>Ascari</span></span><span style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:21}}>196</span></div>
+    <div style={{display:'flex',alignItems:'flex-end',justifyContent:'space-between',marginTop:16}}>
+      <CommandVerb tone="stop" arrow="down" size={54}>Brake</CommandVerb>
+      <div style={{textAlign:'right'}}><Label size="xs" tone="dim">brake pt</Label><div><span style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:44}}>86</span><span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--mute)'}}>m</span></div></div>
+    </div>
+    <div style={{marginTop:14}}><SegmentBar fill={0.66} zone={0.34} height="22px" /></div>
+    <div style={{display:'flex',justifyContent:'space-between',marginTop:6}}><Label size="xs" tone="dim">now</Label><Label size="xs" tone="stop">brake zone</Label></div>
+    <div style={{marginTop:18}}><Label size="sm" style={{marginBottom:8}}>Entry Δ · ref 182</Label><DeltaBar value={14} refLabel="182" /></div>
+    <div style={{marginTop:'auto',display:'flex',gap:8,alignItems:'baseline'}}><Label size="sm" tone="stop">−0.18s</Label><span style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--mute)'}}>lost here · trail to apex</span></div>
+  </div>
+  <Foot t="AC Copilot" />
+</>);}
+
+function Pocket(){
+  const [bb,setBb]=React.useState(56.5);
+  return(<>
+  {ostrip('‹ BACK', <StatusField tone="go" variant="dot">Sidecar</StatusField>)}
+  <div className="scrbody">
+    <div className="ctxrow"><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:15,letterSpacing:'0.05em',textTransform:'uppercase'}}>Pocket Technician</span></div>
+    <div style={{display:'flex',justifyContent:'space-between',marginTop:10}}><Label>Monza · Ferrari 296</Label><Label tone="brass">Quali — Low DF</Label></div>
+    <Label tone="warn" style={{margin:'16px 0 8px'}}>Adjust</Label>
+    <Stepper label="Brake bias" value={bb.toFixed(1)} unit="%" fill={bb/100} onDecrement={()=>setBb(v=>Math.round((v-0.5)*10)/10)} onIncrement={()=>setBb(v=>Math.round((v+0.5)*10)/10)} />
+    <div style={{display:'flex',alignItems:'center',gap:10,marginTop:14}}><Label size="sm" style={{width:54}}>TC</Label><LevelSegments value={2}/><span style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:18,marginLeft:'auto'}}>2</span></div>
+    <div style={{display:'flex',alignItems:'center',gap:10,marginTop:9}}><Label size="sm" style={{width:54}}>ABS</Label><LevelSegments value={1}/><span style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:18,marginLeft:'auto'}}>1</span></div>
+    <Label tone="warn" style={{margin:'16px 0 2px'}}>Saved</Label>
+    <SetupRow name="Quali — Low DF" meta="1:20.9" chips={[{text:'BB 56.5'},{text:'TC 2',tone:'warn'}]} active />
+    <SetupRow name="Race — Stable" meta="1:21.4" chips={[{text:'BB 54'},{text:'TC 4'}]} last />
+  </div>
+  <Foot t="Pocket Technician" />
+</>);}
+
+function Atlas(){return(<>
+  {ostrip('‹ BACK', <span>BELGIUM · GP</span>)}
+  <div className="scrbody">
+    <div className="ctxrow"><span style={{fontFamily:'var(--font-disp)',fontWeight:700,fontSize:16,letterSpacing:'0.04em',textTransform:'uppercase'}}>Spa-Francorchamps</span></div>
+    <div style={{display:'flex',gap:14,marginTop:10}}>
+      {[['7.004','km'],['19','corners'],['102','m climb']].map(([v,u])=> <span key={u}><span style={{fontFamily:'var(--font-read)',fontWeight:700,fontSize:18}}>{v}</span><Label size="xs" tone="dim" style={{display:'inline',marginLeft:3}}>{u}</Label></span>)}
+    </div>
+    <div style={{marginTop:12}}><TrackMap path={SPA.path} viewBox={SPA.viewBox} highlight={SPA.highlight} markers={SPA.markers} labels={SPA.labels} /></div>
+    <Label tone="brass" style={{margin:'8px 0 2px'}}>Key corners</Label>
+    <CornerLine id="T3-4" name="Raidillon" note="flat in 6th · commit" />
+    <CornerLine id="T5" name="Les Combes" note="brake 100 m" />
+    <CornerLine id="T10" name="Pouhon" note="fast double-L" last />
+  </div>
+  <Foot t="Track Atlas" />
+</>);}
+
+const SCREENS = { copilot:['Copilot',Copilot], pocket:['Setups',Pocket], atlas:['Atlas',Atlas] };
+let setRoute;
+function App(){
+  const [r,setR]=React.useState('copilot'); setRoute=setR;
+  const View = SCREENS[r][1];
+  React.useEffect(()=>{ const el=document.getElementById('tabs'); el.innerHTML=''; Object.entries(SCREENS).forEach(([k,[label]])=>{ const b=document.createElement('button'); b.textContent=label; if(k===r)b.className='on'; b.onclick=()=>setRoute(k); el.appendChild(b); }); },[r]);
+  return <View/>;
+}
+ReactDOM.createRoot(document.getElementById('scr')).render(<App/>);
+</script>
+</body></html>

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AC Copilot â€” Claude Design visual package</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Michroma&family=Montserrat:wght@400;700&family=Syncopate:wght@700&display=swap');
+  /* Real bundled typefaces (src/ac_copilot_trainer/content/fonts) â€” the same TTFs CSP serves. */
+  :root{
+    /* Authoritative tokens â€” from hud.lua / coaching_overlay.lua (Figma-matched, PR #70/#73) */
+    --glass:rgba(17,17,17,0.60);      /* panel background â€” translucent over the track */
+    --glass-solid:#111111;            /* opaque desktop equivalent */
+    --hair:rgba(77,82,97,0.40);       /* grey hairline border */
+    --inner:rgba(10,10,13,0.55);      /* nested box (target/current) */
+    --white:#F2F2F5;                  /* primary text */
+    --label:#8C909C;                  /* small-caps labels */
+    --brand:#6F7585;                  /* footer branding */
+    --red:#EF4444; --amber:#FBBF24; --green:#4ADE80;
+    --barbg:rgba(38,38,46,0.85); --gold:#FFD700;
+    --num:Michroma,"Segoe UI",sans-serif;
+    --ui:Montserrat,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --wordmark:Syncopate,Montserrat,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:#0e0e10;color:var(--white);font-family:var(--ui);line-height:1.5;}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 24px 72px;}
+  h1{font-size:23px;font-weight:700;margin:0 0 4px;}
+  h2{font-size:15px;font-weight:700;margin:40px 0 6px;color:#e7e7ea;border-bottom:1px solid #232325;padding-bottom:8px;letter-spacing:.01em;}
+  .lede{color:#b6b8bf;max-width:74ch;margin:0 0 10px;font-size:14px;}
+  .cap{font-family:var(--ui);font-size:11px;color:var(--label);letter-spacing:.12em;text-transform:uppercase;margin:0 0 8px;}
+  .grid{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;}
+  code{background:#1a1a1a;border:1px solid #2a2a2a;border-radius:4px;padding:1px 6px;font-size:12.5px;color:#e5e5e5;font-family:ui-monospace,Consolas,monospace;}
+  a{color:var(--amber);}
+  /* the "over the track" stage so the 60% glass actually reads as translucent */
+  .stage{background:#26262b;background-image:repeating-linear-gradient(115deg,#26262b 0 38px,#222227 38px 76px);border-radius:12px;padding:26px;display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;}
+  /* HUD panels (real spec) */
+  .panel{background:var(--glass);border:1px solid var(--hair);border-radius:8px;}
+  .num{font-family:var(--num);}
+  .lbl{font-family:var(--ui);font-weight:700;font-size:10px;letter-spacing:.14em;color:var(--label);text-transform:uppercase;}
+  /* desktop window */
+  .win{background:var(--glass-solid);border:1px solid #2a2a2a;border-radius:10px;overflow:hidden;width:400px;max-width:100%;}
+  .titlebar{background:#161616;height:34px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--hair);}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid rgba(77,82,97,0.18);}
+  .state{font-family:var(--num);font-size:10px;letter-spacing:.05em;text-transform:uppercase;margin-left:auto;}
+  .btn{background:transparent;color:var(--white);border:1px solid var(--hair);border-radius:7px;padding:9px 0;font-size:12px;font-family:var(--ui);font-weight:700;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;}
+  .btn.primary{border-color:rgba(255,215,0,0.5);color:var(--gold);}
+  /* esp32 device */
+  .device{width:320px;height:480px;background:#000;border:1px solid #2a2a2a;border-radius:16px;overflow:hidden;display:flex;flex-direction:column;}
+  .dhead{height:44px;background:#0d0d0f;display:flex;align-items:center;padding:0 14px;gap:8px;border-bottom:1px solid var(--hair);}
+  .tile{background:#0a0a0a;border:1px solid #2a2a2a;border-radius:10px;padding:14px;}
+  .swatch{display:flex;align-items:center;gap:9px;font-size:12px;color:#cfd1d6;}
+  .chip{width:30px;height:30px;border-radius:7px;border:1px solid #333;flex:0 0 auto;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AC Copilot â€” Claude Design visual package</h1>
+  <p class="lede">The <b>in-game HUD is the source of truth.</b> It's already Figma-matched and shipped (PR&nbsp;#70/#73). This package reproduces it faithfully from <code>src/ac_copilot_trainer/modules/hud.lua</code> + <code>coaching_overlay.lua</code> â€” same colours, sizes, and the real bundled typefaces (Michroma Â· Montserrat Â· Syncopate) â€” then aligns the Windows launcher and the ESP32 rig screens <i>up</i> to that language so all three surfaces read as one product. Open in a browser; pair with the written brief <code>15_Claude_Design_UI_Package.md</code>.</p>
+
+  <h2>1 Â· In-game HUD â€” north star (reproduced from source)</h2>
+  <p class="lede">Two ImGui overlay windows, drawn absolute-positioned (no widgets): a centred <b>Active Suggestion</b> tile and a structured <b>Approach</b> panel. Translucent <code>#111 @ 60%</code> glass, grey hairline, Michroma numerics, red eyebrow / amber secondary / green-white-red speed semantics, Syncopate brand footer.</p>
+  <div class="stage">
+
+    <div>
+      <p class="cap">WINDOW_0 Â· active suggestion</p>
+      <div class="panel" style="width:300px;padding:14px 16px;text-align:center;">
+        <div class="lbl" style="color:var(--red);letter-spacing:.18em;">ACTIVE SUGGESTION</div>
+        <div class="num" style="font-size:22px;color:var(--white);margin-top:12px;">T4 Â· ASCARI</div>
+        <div class="num" style="font-size:18px;color:var(--red);margin-top:10px;">BRAKE LATER</div>
+        <div class="num" style="font-size:13px;color:var(--amber);margin-top:8px;">CARRY 8 KM/H MORE</div>
+        <div style="font-size:11px;color:#d4d4d4;margin-top:12px;line-height:1.45;">You lost 0.18s here last lap â€” trail the brake to the apex.</div>
+      </div>
+      <p class="cap" style="margin-top:14px;">empty / pre-reference state</p>
+      <div class="panel" style="width:300px;padding:14px 16px;text-align:center;">
+        <div class="lbl" style="color:var(--red);letter-spacing:.18em;">ACTIVE SUGGESTION</div>
+        <div class="num" style="font-size:18px;color:#d4d4d4;margin-top:12px;">DRIVE A LAP</div>
+        <div class="num" style="font-size:13px;color:#d4d4d4;margin-top:8px;">REFERENCE WILL APPEAR</div>
+      </div>
+    </div>
+
+    <div>
+      <p class="cap">WINDOW_1 Â· approach panel (640Ã—240)</p>
+      <div class="panel" style="width:440px;border-radius:12px;padding:20px 24px;">
+        <div style="display:flex;gap:16px;">
+          <div style="flex:1;">
+            <div class="lbl">APPROACHING</div>
+            <div class="num" style="font-size:28px;color:var(--white);margin-top:8px;">ASCARI</div>
+          </div>
+          <div style="flex:1;background:var(--inner);border:1px solid var(--hair);border-radius:8px;display:flex;padding:12px 0;">
+            <div style="flex:1;padding:0 14px;border-right:1px solid var(--hair);">
+              <div class="lbl" style="font-size:9px;">TARGET ENTRY</div>
+              <div class="num" style="font-size:26px;color:var(--white);">182<span class="lbl" style="font-size:9px;"> KM/H</span></div>
+            </div>
+            <div style="flex:1;padding:0 14px;">
+              <div class="lbl" style="font-size:9px;color:var(--red);">CURRENT</div>
+              <div class="num" style="font-size:28px;color:var(--red);">196<span class="lbl" style="font-size:9px;color:var(--red);"> KM/H</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:18px;display:flex;justify-content:space-between;align-items:baseline;">
+          <div class="lbl">DISTANCE TO BRAKING POINT</div>
+          <div class="num" style="font-size:24px;color:var(--white);">86 M</div>
+        </div>
+        <div style="margin-top:8px;height:14px;background:var(--barbg);border-radius:7px;overflow:hidden;box-shadow:0 0 10px rgba(239,68,68,0.45);">
+          <div style="width:62%;height:100%;background:var(--red);border-radius:7px;"></div>
+        </div>
+        <div style="margin-top:16px;border-top:1px solid var(--hair);padding-top:10px;text-align:center;">
+          <span style="font-family:var(--wordmark);font-weight:700;font-size:12px;letter-spacing:.16em;color:var(--white);">AG PORSCHE ACADEMY</span>
+        </div>
+      </div>
+      <p class="cap" style="margin-top:10px;">Speed colour: <span style="color:var(--green)">green â‰¤ target</span> Â· white between Â· <span style="color:var(--red)">red &gt; target+8</span>. Progress fill + glow = red. Footer wordmark in Syncopate.</p>
+    </div>
+
+  </div>
+
+  <h2>2 Â· Design system (lifted from the HUD)</h2>
+  <div class="grid">
+    <div class="tile">
+      <p class="cap">Surfaces &amp; line</p>
+      <div style="display:flex;flex-direction:column;gap:9px;">
+        <div class="swatch"><span class="chip" style="background:#111;opacity:.6;"></span><div>Glass panel <code>#111 @ 60%</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#0a0a0d;"></span><div>Nested box <code>#0A0A0D @ 55%</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#4d5261;"></span><div>Hairline <code>#4D5261 @ 40%</code></div></div>
+      </div>
+    </div>
+    <div class="tile">
+      <p class="cap">Semantic colour</p>
+      <div style="display:flex;flex-direction:column;gap:9px;">
+        <div class="swatch"><span class="chip" style="background:#ef4444;"></span><div>Red â€” brake / alert / progress <code>#EF4444</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#fbbf24;"></span><div>Amber â€” line / secondary <code>#FBBF24</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#4ade80;"></span><div>Green â€” on pace <code>#4ADE80</code></div></div>
+        <div class="swatch"><span class="chip" style="background:#8c909c;"></span><div>Label grey <code>#8C909C</code></div></div>
+      </div>
+    </div>
+    <div class="tile">
+      <p class="cap">Type</p>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div><div class="num" style="font-size:22px;">196 Â· ASCARI</div><div style="font-size:11px;color:var(--label);">Michroma â€” numerics, corner, action lines</div></div>
+        <div><div style="font-weight:700;font-size:13px;letter-spacing:.05em;">TARGET ENTRY</div><div style="font-size:11px;color:var(--label);">Montserrat â€” labels &amp; body</div></div>
+        <div><div style="font-family:var(--wordmark);font-weight:700;font-size:12px;letter-spacing:.16em;">AG PORSCHE ACADEMY</div><div style="font-size:11px;color:var(--label);">Syncopate Bold â€” brand footer</div></div>
+      </div>
+    </div>
+    <div class="tile">
+      <p class="cap">Rules</p>
+      <div style="font-size:12.5px;color:#cfd1d6;line-height:1.7;">
+        Centre the suggestion, structure the data.<br>
+        One action line + one reason.<br>
+        Colour = state, never decoration.<br>
+        Numbers are Michroma, labels are small-caps grey.<br>
+        Rig screen 320Ã—480 Â· tap floor 60px.
+      </div>
+    </div>
+  </div>
+
+  <h2>3 Â· Windows Game Point launcher (aligned to the HUD)</h2>
+  <p class="lede">Same glass + grey-hairline + Michroma-numeral + small-caps-grey-label language as the HUD. Status rows map 1:1 to <code>GamePointStatus</code> (<code>tools/rig_launcher/supervisor.py</code>); state words are the verbatim probe strings. Colour carries state (green healthy, red blocked, grey absent); gold stays only on the primary action.</p>
+  <div class="grid">
+    <div>
+      <p class="cap">Healthy â€” ready to drive</p>
+      <div class="win">
+        <div class="titlebar"><span style="width:8px;height:8px;border-radius:50%;background:var(--green);"></span><span style="font-size:12.5px;font-weight:700;letter-spacing:.02em;">AC COPILOT Â· GAME POINT</span></div>
+        <div style="padding:16px;">
+          <div style="padding:6px 0 12px;"><span class="num" style="font-size:15px;color:var(--green);">READY TO DRIVE</span><span style="color:var(--label);font-size:12px;margin-left:8px;">sidecar Â· screen Â· hotspot live</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">SIDECAR</span><span class="state" style="color:var(--green)">healthy</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">peers=1 screen_peers=1</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">SCREEN</span><span class="state" style="color:var(--green)">connected</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">screen_peers=1</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">HOTSPOT</span><span class="state" style="color:var(--green)">on</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">state=On clients=1</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">VOICE</span><span class="state" style="color:var(--green)">configured</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">reference archive + bank configured</span></div>
+          <div class="row" style="border-bottom:none;"><span class="lbl" style="width:96px;text-align:left;">SIMHUB</span><span class="state" style="color:var(--label)">absent</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">SimHub executable not found</span></div>
+          <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:8px;margin-top:16px;">
+            <button class="btn primary">â–¶ Start</button><button class="btn">Refresh</button><button class="btn">Logs</button><button class="btn">Settings</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap">Recovery â€” sidecar stopped</p>
+      <div class="win">
+        <div class="titlebar"><span style="width:8px;height:8px;border-radius:50%;background:var(--label);"></span><span style="font-size:12.5px;font-weight:700;letter-spacing:.02em;">AC COPILOT Â· GAME POINT</span></div>
+        <div style="padding:16px;">
+          <div style="padding:6px 0 12px;"><span class="num" style="font-size:15px;color:var(--red);">PRESS START</span><span style="color:var(--label);font-size:12px;margin-left:8px;">nothing on port 8765 yet</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">SIDECAR</span><span class="state" style="color:var(--label)">stopped</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">â€”</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">SCREEN</span><span class="state" style="color:var(--red)">waiting</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">no ESP32 screen peer connected</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">HOTSPOT</span><span class="state" style="color:var(--green)">on</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">state=On clients=0</span></div>
+          <div class="row"><span class="lbl" style="width:96px;text-align:left;">VOICE</span><span class="state" style="color:var(--green)">configured</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">reference archive + bank configured</span></div>
+          <div class="row" style="border-bottom:none;"><span class="lbl" style="width:96px;text-align:left;">SIMHUB</span><span class="state" style="color:var(--label)">absent</span><span class="num" style="font-size:11px;color:var(--label);margin-left:12px;">SimHub executable not found</span></div>
+          <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:8px;margin-top:16px;">
+            <button class="btn primary">â–¶ Start</button><button class="btn">Refresh</button><button class="btn">Logs</button><button class="btn">Settings</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>4 Â· ESP32 rig screen â€” mirrors the HUD (320Ã—480)</h2>
+  <p class="lede">The AC Copilot screen is the approach panel re-flowed to portrait: same APPROACHING + Michroma corner, target/current split, distance + glowing red bar. The other tiles keep the glass/grey/Michroma language.</p>
+  <div class="grid">
+
+    <div>
+      <p class="cap">AC Copilot â€” live coaching</p>
+      <div class="device">
+        <div class="dhead"><span style="color:var(--label);font-size:12px;">â€¹ BACK</span><span class="num" style="font-size:13px;margin-left:4px;">AC COPILOT</span><span style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--green);"></span></div>
+        <div style="margin:12px;" class="panel">
+          <div style="padding:11px 13px;">
+            <div class="lbl" style="color:var(--red);">ACTIVE SUGGESTION</div>
+            <div class="num" style="font-size:20px;color:var(--white);margin-top:8px;">T4 Â· ASCARI</div>
+            <div class="num" style="font-size:17px;color:var(--red);margin-top:8px;">BRAKE LATER</div>
+            <div class="num" style="font-size:12px;color:var(--amber);margin-top:6px;">CARRY 8 KM/H MORE</div>
+          </div>
+        </div>
+        <div style="margin:0 12px;display:flex;gap:10px;">
+          <div style="flex:1;background:var(--inner);border:1px solid var(--hair);border-radius:8px;padding:8px 11px;"><div class="lbl" style="font-size:9px;">TARGET</div><div class="num" style="font-size:20px;color:var(--white);">182</div></div>
+          <div style="flex:1;background:var(--inner);border:1px solid var(--hair);border-radius:8px;padding:8px 11px;"><div class="lbl" style="font-size:9px;color:var(--red)">CURRENT</div><div class="num" style="font-size:20px;color:var(--red);">196</div></div>
+        </div>
+        <div style="margin:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;"><span class="lbl" style="font-size:9px;">DISTANCE TO BRAKING</span><span class="num" style="font-size:15px;color:var(--white);">86 M</span></div>
+          <div style="margin-top:7px;height:12px;background:var(--barbg);border-radius:6px;overflow:hidden;box-shadow:0 0 8px rgba(239,68,68,0.45);"><div style="width:62%;height:100%;background:var(--red);border-radius:6px;"></div></div>
+        </div>
+        <div style="margin-top:auto;padding:10px;border-top:1px solid var(--hair);text-align:center;"><span style="font-family:var(--wordmark);font-weight:700;font-size:10px;letter-spacing:.16em;color:var(--brand);">AG PORSCHE ACADEMY</span></div>
+      </div>
+    </div>
+
+    <div>
+      <p class="cap">Launcher tiles</p>
+      <div class="device">
+        <div class="dhead"><span class="num" style="font-size:13px;color:var(--gold);letter-spacing:.06em;">AC LAUNCHER</span><span style="margin-left:auto;display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--green);"></span><span class="lbl" style="color:var(--green);">CONNECTED</span></span></div>
+        <div style="margin:12px;display:flex;flex-direction:column;gap:12px;">
+          <div class="panel" style="padding:16px;display:flex;align-items:center;justify-content:space-between;"><span class="num" style="font-size:14px;">AC COPILOT</span><span style="color:var(--gold);">â€º</span></div>
+          <div class="panel" style="padding:16px;display:flex;align-items:center;justify-content:space-between;"><span class="num" style="font-size:14px;">POCKET TECHNICIAN</span><span style="color:var(--gold);">â€º</span></div>
+          <div class="panel" style="padding:16px;display:flex;align-items:center;justify-content:space-between;opacity:.6;"><span class="num" style="font-size:14px;">SETUP EXCHANGE</span><span>â€º</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <p class="cap">Pocket Technician</p>
+      <div class="device">
+        <div class="dhead"><span style="color:var(--label);font-size:12px;">â€¹ BACK</span><span class="num" style="font-size:13px;margin-left:4px;">POCKET TECHNICIAN</span><span style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--green);"></span></div>
+        <div style="margin:12px;" class="panel"><div style="padding:9px 12px;"><div style="display:flex;justify-content:space-between;"><span class="lbl" style="font-size:9px;">MONZA</span><span class="lbl" style="font-size:9px;">FERRARI 296</span></div><div class="num" style="font-size:14px;margin-top:4px;">QUALI â€” LOW DF</div></div></div>
+        <div style="margin:0 12px;">
+          <div class="lbl" style="color:var(--amber);margin-bottom:8px;">ADJUST</div>
+          <div class="row" style="padding:9px 0;"><span style="flex:1;font-size:12px;">Brake bias</span><span style="color:var(--label);">âˆ’</span><span class="num" style="font-size:13px;min-width:54px;text-align:center;">56.5%</span><span style="color:var(--gold);">+</span></div>
+          <div class="row" style="padding:9px 0;"><span style="flex:1;font-size:12px;">TC</span><span style="color:var(--label);">âˆ’</span><span class="num" style="font-size:13px;min-width:54px;text-align:center;">3</span><span style="color:var(--gold);">+</span></div>
+          <div class="lbl" style="color:var(--amber);margin:12px 0 8px;">SAVED</div>
+          <div class="row" style="padding:8px 0;border-bottom:none;"><span style="flex:1;"><div style="font-size:12px;">Race â€” stable</div><div class="num" style="font-size:10px;color:var(--label);">1:21.4 Â· BB 54 Â· TC 4</div></span><span style="color:var(--gold);">â€º</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <p class="cap">Settings / Diagnostics</p>
+      <div class="device">
+        <div class="dhead"><span style="color:var(--label);font-size:12px;">â€¹ BACK</span><span class="num" style="font-size:13px;margin-left:4px;">SETTINGS</span><span style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--green);"></span></div>
+        <div style="margin:12px;display:flex;flex-direction:column;gap:0;">
+          <div class="row"><span style="flex:1;font-size:12px;">Wi-Fi</span><span class="num" style="font-size:11px;color:var(--white);">RIG-HOTSPOT</span></div>
+          <div class="row"><span style="flex:1;font-size:12px;">Sidecar</span><span class="state" style="color:var(--green)">healthy</span></div>
+          <div class="row"><span style="flex:1;font-size:12px;">Sidecar token</span><span class="state" style="color:var(--green)">configured</span></div>
+          <div class="row"><span style="flex:1;font-size:12px;">Firmware</span><span class="num" style="font-size:11px;color:var(--white);">v1.4.2</span></div>
+          <div class="row" style="border-bottom:none;"><span style="flex:1;font-size:12px;">Snapshot age</span><span class="num" style="font-size:11px;color:var(--green);">0.1 s</span></div>
+        </div>
+        <div style="margin:6px 12px;color:var(--label);font-size:10px;">Sidecar token uses configured/missing/loopback â€” never the secret value.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <h2>5 Â· Extending this package</h2>
+  <p class="lede">The HUD stays the reference; new surfaces align to it. When a screen, state, or status row changes, update this file and <code>15_Claude_Design_UI_Package.md</code>, and keep each change in the surface that owns it: CSP Lua HUD (<code>src/ac_copilot_trainer/modules/</code>), Tkinter launcher (<code>tools/rig_launcher/</code>), or LVGL firmware (<code>firmware/screen/src/ui/</code>). If the HUD's Figma source moves, re-sync the tokens here from <code>hud.lua</code> / <code>coaching_overlay.lua</code> first.</p>
+</div>
+</body>
+</html>

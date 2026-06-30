@@ -1,0 +1,22 @@
+<!-- @dsCard group="Spacing" viewport="700x190" name="Instrument anatomy" subtitle="Chunky by mandate — segment bar, delta block, level cells, corner bracket, tap floor" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" /><link rel="stylesheet" href="../styles.css" />
+<style>
+  body{margin:0;background:var(--carbon);color:var(--chalk);font-family:var(--font-disp);}
+  .wrap{padding:22px;display:flex;gap:28px;align-items:flex-end;flex-wrap:wrap;}
+  .col{display:flex;flex-direction:column;gap:8px;}
+  .cap{font-weight:600;font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--dim);}
+  .segbar{display:flex;gap:3px;width:150px;height:26px;}
+  .segbar span{flex:1;background:var(--chalk);}
+  .delta{width:150px;height:24px;background:var(--raise);position:relative;}
+  .delta span{position:absolute;left:50%;top:0;bottom:0;width:35%;background:var(--brake);}
+  .levels{display:flex;gap:3px;}
+  .levels span{width:11px;height:16px;background:var(--brass);}
+  .tap{width:60px;height:60px;border:1px solid var(--edge);display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:11px;color:var(--mute);}
+</style></head>
+<body><div class="wrap">
+  <div class="col"><span class="cap">Segment bar · 26px</span><div class="segbar"><span></span><span></span><span></span><span></span><span style="background:var(--lift)"></span><span style="background:var(--brake)"></span></div></div>
+  <div class="col"><span class="cap">Delta block · 24px</span><div class="delta"><span></span></div></div>
+  <div class="col"><span class="cap">Level cells</span><div class="levels"><span></span><span></span><span style="background:var(--raise)"></span><span style="background:var(--raise)"></span></div></div>
+  <div class="col"><span class="cap">Tap floor</span><div class="tap">60</div></div>
+</div></body></html>

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Racing Atelier — renders</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@400;500;600;700;800&family=Saira:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --carbon:#0B0C0D; --graphite:#141618; --slab:#191C1F; --raise:#20242A;
+    --edge:#2A2F35; --line:rgba(255,255,255,0.07); --line-2:rgba(255,255,255,0.16);
+    --chalk:#EEF1F3; --mute:#9BA1A8; --dim:#5B6068;
+    --brass:#C8983E; --red:#F23B2C; --amber:#F4A52C; --green:#2FBE6E; --cyan:#49B6C9;
+    --disp:'Saira Semi Condensed',system-ui,sans-serif;
+    --sans:'Saira',system-ui,sans-serif;
+    --mono:'Spline Sans Mono',ui-monospace,monospace;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--carbon);color:var(--chalk);font-family:var(--sans);-webkit-font-smoothing:antialiased;}
+  .num{font-variant-numeric:tabular-nums;} .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  .sheet{max-width:1240px;margin:0 auto;padding:40px 40px 100px;}
+  .lab{font-family:var(--disp);font-weight:600;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--mute);}
+  .lab.dim{color:var(--dim);}
+
+  .top{display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line-2);padding-bottom:16px;}
+  .seg-mark{width:6px;height:22px;background:var(--brass);flex:0 0 auto;}
+  .wm{font-family:var(--disp);font-weight:800;font-size:22px;letter-spacing:0.16em;text-transform:uppercase;}
+  .top .desc{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.06em;}
+  .top .folio{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.08em;text-transform:uppercase;}
+
+  section{margin-top:56px;}
+  .secmark{display:flex;align-items:center;gap:12px;margin:0 0 6px;}
+  .secmark .bar{width:24px;height:3px;background:var(--brass);}
+  .secmark h2{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:0.14em;text-transform:uppercase;margin:0;}
+  .seccap{font-family:var(--sans);font-size:13.5px;color:var(--mute);margin:0 0 26px 36px;max-width:70ch;line-height:1.5;}
+
+  .rigrow{display:flex;gap:30px;flex-wrap:wrap;align-items:flex-start;}
+  .rig{display:flex;flex-direction:column;gap:10px;}
+  .rig .cap{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.05em;}
+
+  /* device 320x480 */
+  .device{width:320px;height:480px;background:#000;border:1px solid #2A2F35;border-radius:18px;padding:7px;box-shadow:0 30px 70px rgba(0,0,0,0.6);}
+  .scr{width:100%;height:100%;background:var(--carbon);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;}
+  .ostrip{height:26px;flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:0.04em;}
+  .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
+  .scrbody{flex:1;padding:13px;display:flex;flex-direction:column;overflow:hidden;}
+  .footbrand{display:flex;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid var(--line);flex:0 0 auto;}
+  .footbrand .m{width:4px;height:12px;background:var(--brass);}
+  .footbrand .t{font-family:var(--disp);font-weight:700;font-size:9px;letter-spacing:0.18em;text-transform:uppercase;color:var(--dim);}
+
+  /* shared instrument bits */
+  .ctxrow{display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--line);}
+  .cnum{font-family:var(--disp);font-weight:700;font-size:13px;color:#000;background:var(--brass);padding:1px 5px;}
+  .cname{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:0.05em;text-transform:uppercase;}
+  .gs{display:flex;gap:13px;align-items:baseline;}
+  .gs .v{font-family:var(--disp);font-weight:700;font-size:21px;} .gs .u{font-family:var(--mono);font-size:10px;color:var(--dim);}
+
+  .verb{font-family:var(--disp);font-weight:800;line-height:0.82;letter-spacing:0.01em;text-transform:uppercase;}
+  .segbar{display:flex;gap:2.5px;}
+  .segbar .s{flex:1;background:var(--raise);}
+  .segbar .s.lit{background:var(--chalk);} .segbar .s.amb{background:var(--amber);} .segbar .s.red{background:var(--red);} .segbar .s.zone{background:rgba(242,59,44,0.16);}
+
+  .dtrack{position:relative;height:20px;background:var(--raise);}
+  .dtrack .mid{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--mute);}
+  .dtrack .blk{position:absolute;top:0;bottom:0;background:var(--red);} .dtrack .blk.g{background:var(--green);}
+
+  /* level segments (TC/ABS) */
+  .levels{display:flex;gap:3px;align-items:center;}
+  .levels .l{width:11px;height:16px;background:var(--raise);}
+  .levels .l.on{background:var(--brass);}
+
+  .stepbtn{font-family:var(--disp);font-weight:700;font-size:16px;color:var(--chalk);background:var(--raise);border:0;width:30px;height:30px;cursor:default;}
+  .stepbtn.plus{color:var(--brass);}
+
+  /* saved setup row */
+  .setrow{display:flex;align-items:center;gap:8px;padding:9px 8px;border-bottom:1px solid var(--line);position:relative;}
+  .setrow.active{background:linear-gradient(90deg,rgba(200,152,62,0.10),transparent);}
+  .setrow.active::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--brass);}
+  .chip{font-family:var(--mono);font-size:9.5px;color:var(--mute);border:1px solid var(--line-2);padding:1px 5px;}
+
+  /* track map */
+  .map svg{display:block;width:100%;height:auto;}
+  .cornerline{display:flex;gap:9px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line);}
+  .cornerline .id{font-family:var(--mono);font-size:11px;color:var(--brass);min-width:34px;}
+  .cornerline .nm{font-family:var(--disp);font-weight:700;font-size:13px;letter-spacing:0.03em;text-transform:uppercase;}
+  .cornerline .note{font-family:var(--sans);font-size:11px;color:var(--mute);margin-left:auto;text-align:right;}
+
+  /* glass panel (in-game) */
+  .stage{padding:40px;border:1px solid var(--line);background:radial-gradient(120% 130% at 50% -10%,#16191d,#08090a 65%);}
+  .glass{position:relative;background:linear-gradient(180deg,rgba(22,25,29,0.82),rgba(11,12,14,0.82));backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--edge);}
+  .br{position:absolute;width:14px;height:14px;border:2px solid var(--brass);}
+  .br.tl{top:-1px;left:-1px;border-right:0;border-bottom:0;} .br.tr{top:-1px;right:-1px;border-left:0;border-bottom:0;}
+  .br.bl{bottom:-1px;left:-1px;border-right:0;border-top:0;} .br.br2{bottom:-1px;right:-1px;border-left:0;border-top:0;}
+
+  /* launcher */
+  .winwrap{display:flex;justify-content:center;padding:36px;border:1px solid var(--line);background:#101113;}
+  .window{width:640px;background:linear-gradient(180deg,var(--graphite),var(--carbon));border:1px solid var(--edge);position:relative;}
+  .titlebar{height:38px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);}
+  .statefield{display:inline-flex;align-items:center;gap:7px;padding:3px 9px;font-family:var(--disp);font-weight:700;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;}
+  .statusrow2{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);}
+  .statusrow2 .rl{font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:0.1em;text-transform:uppercase;color:var(--mute);width:96px;}
+  .statusrow2 .rs{font-family:var(--disp);font-weight:700;font-size:13px;letter-spacing:0.04em;text-transform:uppercase;}
+  .statusrow2 .rd{font-family:var(--mono);font-size:11px;color:var(--dim);margin-left:auto;}
+  .btnfield{font-family:var(--disp);font-weight:700;font-size:14px;letter-spacing:0.08em;text-transform:uppercase;padding:11px 0;text-align:center;border:1px solid var(--line-2);color:var(--chalk);background:var(--raise);}
+  .btnfield.primary{background:var(--brass);color:#000;border-color:var(--brass);}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="top">
+    <span class="seg-mark"></span><span class="wm">Racing Atelier</span>
+    <span class="desc">renders · oled · in-game · desktop</span>
+    <span class="folio">concept iii · applied</span>
+  </div>
+
+  <!-- ============ OLED RIG ============ -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>OLED rig screen · 320 × 480</h2></div>
+    <p class="seccap">The instrument cluster re-flowed to the pinned black screen. True-carbon ground (pixels off on OLED), one decision per screen, segment bars and big tabular numerals. Three states of the single nav stack.</p>
+    <div class="rigrow">
+
+      <!-- AC COPILOT -->
+      <div class="rig">
+        <div class="device"><div class="scr">
+          <div class="ostrip"><span>SECTOR 2</span><span>·</span><span>LAP 3 / 12</span><span style="margin-left:auto;display:flex;align-items:center;gap:5px;"><span class="dot" style="background:var(--green)"></span>LIVE</span></div>
+          <div class="scrbody">
+            <div class="ctxrow"><span style="display:flex;align-items:baseline;gap:8px;"><span class="cnum">T4</span><span class="cname">Ascari</span></span><span class="gs"><span><span class="v num">2</span> <span class="u">g</span></span><span><span class="v num">196</span></span></span></div>
+            <div style="display:flex;align-items:flex-end;justify-content:space-between;margin-top:16px;">
+              <div><div class="verb" style="font-size:54px;color:var(--red);">BRAKE</div><div style="font-size:24px;color:var(--red);line-height:0.6;">▼</div></div>
+              <div style="text-align:right;"><div class="lab dim">brake pt</div><div><span class="num" style="font-family:var(--disp);font-weight:700;font-size:46px;">86</span><span class="mono" style="font-size:13px;color:var(--mute);">m</span></div></div>
+            </div>
+            <div class="segbar" style="height:22px;margin-top:14px;">
+              <span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s lit"></span><span class="s amb"></span><span class="s amb"></span><span class="s red"></span><span class="s red"></span><span class="s zone"></span><span class="s zone"></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:6px;"><span class="lab dim">now</span><span class="lab" style="color:var(--red)">brake zone</span></div>
+            <div style="margin-top:20px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><span class="lab">entry Δ · ref 182</span><span class="lab" style="color:var(--red)">too hot</span></div>
+              <div style="display:flex;align-items:center;gap:12px;"><div class="dtrack" style="flex:1;"><span class="mid"></span><span class="blk" style="left:50%;width:35%;"></span></div><span class="num" style="font-family:var(--disp);font-weight:700;font-size:34px;color:var(--red);">+14</span></div>
+            </div>
+            <div style="margin-top:auto;display:flex;gap:8px;align-items:baseline;"><span class="lab" style="color:var(--red)">−0.18s</span><span class="mono" style="font-size:10px;color:var(--mute);">lost here last lap · trail to apex</span></div>
+          </div>
+          <div class="footbrand"><span class="m"></span><span class="t">AC Copilot</span></div>
+        </div></div>
+        <span class="cap">ac copilot — live coaching</span>
+      </div>
+
+      <!-- POCKET TECHNICIAN -->
+      <div class="rig">
+        <div class="device"><div class="scr">
+          <div class="ostrip"><span>‹ BACK</span><span style="margin-left:auto;display:flex;align-items:center;gap:5px;"><span class="dot" style="background:var(--green)"></span>SIDECAR</span></div>
+          <div class="scrbody">
+            <div class="ctxrow"><span class="cname" style="font-size:15px;">Pocket Technician</span></div>
+            <div style="display:flex;justify-content:space-between;margin-top:10px;"><span class="lab">Monza · Ferrari 296</span><span class="lab" style="color:var(--brass)">Quali — Low DF</span></div>
+
+            <div class="lab" style="margin:16px 0 8px;color:var(--amber);">Adjust</div>
+            <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px;">
+              <div style="flex:1;"><div class="lab" style="font-size:10px;">brake bias</div><div><span class="num" style="font-family:var(--disp);font-weight:700;font-size:24px;">56.5</span><span class="mono" style="font-size:11px;color:var(--mute);">%</span></div></div>
+              <button class="stepbtn">−</button><button class="stepbtn plus">+</button>
+            </div>
+            <div class="dtrack" style="height:8px;margin-bottom:14px;"><span class="blk" style="left:0;width:62%;background:var(--brass);"></span></div>
+
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:11px;">
+              <span class="lab" style="width:60px;">TC</span>
+              <div class="levels"><span class="l on"></span><span class="l on"></span><span class="l"></span><span class="l"></span><span class="l"></span><span class="l"></span></div>
+              <span class="num" style="font-family:var(--disp);font-weight:700;font-size:18px;margin-left:auto;">2</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="lab" style="width:60px;">ABS</span>
+              <div class="levels"><span class="l on"></span><span class="l"></span><span class="l"></span><span class="l"></span><span class="l"></span><span class="l"></span></div>
+              <span class="num" style="font-family:var(--disp);font-weight:700;font-size:18px;margin-left:auto;">1</span>
+            </div>
+
+            <div class="lab" style="margin:16px 0 4px;color:var(--amber);">Saved</div>
+            <div class="setrow active"><span style="flex:1;"><span class="cname" style="font-size:12px;display:block;">Quali — Low DF</span><span class="mono" style="font-size:9.5px;color:var(--dim);">1:20.9</span></span><span class="chip">BB 56.5</span><span class="chip">TC 2</span></div>
+            <div class="setrow"><span style="flex:1;"><span class="cname" style="font-size:12px;display:block;">Race — Stable</span><span class="mono" style="font-size:9.5px;color:var(--dim);">1:21.4</span></span><span class="chip">BB 54</span><span class="chip">TC 4</span></div>
+          </div>
+          <div class="footbrand"><span class="m"></span><span class="t">Pocket Technician</span></div>
+        </div></div>
+        <span class="cap">pocket technician — setups</span>
+      </div>
+
+      <!-- TRACK / SPA -->
+      <div class="rig">
+        <div class="device"><div class="scr">
+          <div class="ostrip"><span>‹ BACK</span><span style="margin-left:auto;">BELGIUM · GP</span></div>
+          <div class="scrbody">
+            <div class="ctxrow"><span class="cname" style="font-size:16px;">Spa-Francorchamps</span></div>
+            <div style="display:flex;gap:14px;margin-top:10px;">
+              <span><span class="num" style="font-family:var(--disp);font-weight:700;font-size:18px;">7.004</span><span class="lab dim" style="font-size:9px;"> km</span></span>
+              <span><span class="num" style="font-family:var(--disp);font-weight:700;font-size:18px;">19</span><span class="lab dim" style="font-size:9px;"> corners</span></span>
+              <span><span class="num" style="font-family:var(--disp);font-weight:700;font-size:18px;">102</span><span class="lab dim" style="font-size:9px;"> m climb</span></span>
+            </div>
+            <div class="map" style="margin-top:12px;">
+              <svg viewBox="0 0 290 150" fill="none">
+                <path d="M40 128 L40 96 Q40 86 50 86 L150 78 Q165 77 168 64 L186 22 Q190 12 200 14 Q210 16 208 28 L196 70 Q193 84 205 88 L246 100 Q258 104 256 116 Q254 128 242 126 L150 118 Q120 116 110 126 Q100 136 84 134 L52 132 Q40 131 40 128 Z"
+                  stroke="#EEF1F3" stroke-width="2.4" stroke-linejoin="round"/>
+                <!-- sector tint on Eau Rouge climb -->
+                <path d="M168 64 L186 22 Q190 12 200 14" stroke="var(--red)" stroke-width="2.4" stroke-linecap="round"/>
+                <circle cx="40" cy="128" r="3.4" fill="var(--brass)"/>
+                <circle cx="168" cy="64" r="3" fill="var(--red)"/>
+                <circle cx="205" cy="88" r="3" fill="var(--amber)"/>
+                <circle cx="256" cy="116" r="3" fill="var(--chalk)"/>
+                <text x="34" y="142" font-family="Spline Sans Mono" font-size="8" fill="#9BA1A8">start</text>
+                <text x="150" y="50" font-family="Spline Sans Mono" font-size="8" fill="#F23B2C">eau rouge</text>
+                <text x="212" y="86" font-family="Spline Sans Mono" font-size="8" fill="#F4A52C">combes</text>
+              </svg>
+            </div>
+            <div class="lab" style="margin:6px 0 2px;color:var(--brass);">Key corners</div>
+            <div class="cornerline"><span class="id">T3-4</span><span class="nm">Raidillon</span><span class="note">flat in 6th · commit</span></div>
+            <div class="cornerline"><span class="id">T5</span><span class="nm">Les Combes</span><span class="note">brake 100 m · pass</span></div>
+            <div class="cornerline" style="border-bottom:0;"><span class="id">T10</span><span class="nm">Pouhon</span><span class="note">fast double-left</span></div>
+          </div>
+          <div class="footbrand"><span class="m"></span><span class="t">Track Atlas</span></div>
+        </div></div>
+        <span class="cap">track atlas — spa (new)</span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ IN-GAME TRACK DESCRIPTION ============ -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>In-game overlay · Track Atlas (new) — Spa</h2></div>
+    <p class="seccap">The same atlas projected as a driving overlay: the circuit with your position, the corner you're entering read large, the climb profile, and the next three corners queued. Length, elevation, and the character of each turn — the things a pace-note would carry — drawn as instruments, not paragraphs.</p>
+    <div class="stage">
+      <div class="glass" style="width:680px;padding:22px 26px;"><span class="br tl"></span><span class="br tr"></span><span class="br bl"></span><span class="br br2"></span>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:14px;border-bottom:1px solid var(--line);">
+          <span style="display:flex;align-items:baseline;gap:10px;"><span class="seg-mark" style="height:16px;"></span><span class="cname" style="font-size:20px;">Spa-Francorchamps</span></span>
+          <span class="mono" style="font-size:11px;color:var(--mute);">7.004 km · 19 corners · 102 m climb · 2 DRS</span>
+        </div>
+        <div style="display:flex;gap:26px;margin-top:18px;">
+          <div style="flex:1.3;">
+            <div class="lab dim" style="margin-bottom:8px;">circuit · you are here</div>
+            <div class="map">
+              <svg viewBox="0 0 340 170" fill="none">
+                <path d="M46 150 L46 110 Q46 98 58 98 L176 88 Q194 87 198 70 L220 24 Q225 12 238 14 Q251 16 248 30 L233 80 Q230 96 245 100 L292 116 Q306 120 304 134 Q302 148 288 146 L176 136 Q140 134 128 146 Q116 158 98 156 L60 154 Q46 153 46 150 Z"
+                  stroke="#EEF1F3" stroke-width="2.6" stroke-linejoin="round" opacity="0.5"/>
+                <path d="M198 70 L220 24 Q225 12 238 14" stroke="var(--red)" stroke-width="3" stroke-linecap="round"/>
+                <circle cx="198" cy="70" r="5" fill="var(--red)"/>
+                <circle cx="198" cy="70" r="9" fill="none" stroke="var(--red)" stroke-width="1.4" opacity="0.6"/>
+                <text x="120" y="58" font-family="Spline Sans Mono" font-size="9" fill="#F23B2C">eau rouge / raidillon</text>
+              </svg>
+            </div>
+            <div class="lab dim" style="margin:12px 0 6px;">elevation · the climb</div>
+            <svg viewBox="0 0 320 56" fill="none" style="width:100%;">
+              <polyline points="0,46 70,44 120,40 150,12 180,16 240,30 320,34" stroke="var(--chalk)" stroke-width="2" fill="none"/>
+              <line x1="150" y1="12" x2="150" y2="52" stroke="var(--red)" stroke-width="1.4" stroke-dasharray="3 3"/>
+              <text x="124" y="9" font-family="Spline Sans Mono" font-size="8" fill="#F23B2C">+38 m</text>
+              <text x="0" y="54" font-family="Spline Sans Mono" font-size="8" fill="#5B6068">la source</text>
+              <text x="276" y="54" font-family="Spline Sans Mono" font-size="8" fill="#5B6068">kemmel</text>
+            </svg>
+          </div>
+          <div style="flex:1;border-left:1px solid var(--line);padding-left:24px;">
+            <div class="lab" style="color:var(--red);">now entering · T3–4</div>
+            <div class="verb" style="font-size:34px;margin-top:6px;">Raidillon</div>
+            <div style="display:flex;gap:16px;margin-top:12px;">
+              <span><div class="lab dim" style="font-size:9px;">gear</div><div class="num" style="font-family:var(--disp);font-weight:700;font-size:26px;">6</div></span>
+              <span><div class="lab dim" style="font-size:9px;">min speed</div><div class="num" style="font-family:var(--disp);font-weight:700;font-size:26px;">285</div></span>
+              <span><div class="lab dim" style="font-size:9px;">throttle</div><div class="num" style="font-family:var(--disp);font-weight:700;font-size:26px;color:var(--green);">100<span style="font-size:13px;">%</span></div></div></span>
+            </div>
+            <div class="mono" style="font-size:11.5px;color:var(--mute);line-height:1.6;margin-top:14px;border-top:1px solid var(--line);padding-top:12px;">
+              flat-out uphill left-right. commit on the entry, the crest goes blind — aim for the right kerb on exit. the compression loads the car; don't lift or you lose Kemmel.
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:18px;border-top:1px solid var(--line);padding-top:14px;">
+          <div class="lab dim" style="align-self:center;">next</div>
+          <div style="flex:1;display:flex;gap:8px;">
+            <div style="flex:1;background:var(--raise);padding:8px 10px;"><div class="lab" style="font-size:9px;color:var(--amber);">T5 · 480 m</div><div class="cname" style="font-size:12px;margin-top:2px;">Les Combes</div><div class="mono" style="font-size:9px;color:var(--dim);">brake · 4th</div></div>
+            <div style="flex:1;background:var(--raise);padding:8px 10px;"><div class="lab" style="font-size:9px;">T8 · 1.1 km</div><div class="cname" style="font-size:12px;margin-top:2px;">Rivage</div><div class="mono" style="font-size:9px;color:var(--dim);">hairpin · 2nd</div></div>
+            <div style="flex:1;background:var(--raise);padding:8px 10px;"><div class="lab" style="font-size:9px;">T10 · 1.6 km</div><div class="cname" style="font-size:12px;margin-top:2px;">Pouhon</div><div class="mono" style="font-size:9px;color:var(--dim);">fast-L · 5th</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WINDOWS LAUNCHER ============ -->
+  <section>
+    <div class="secmark"><span class="bar"></span><h2>Windows · Game Point launcher</h2></div>
+    <p class="seccap">The desktop control panel, same cluster language. Status is a coloured field plus the verbatim probe word; the one start action is the brass field. Dense, predictable, work-focused.</p>
+    <div class="winwrap">
+      <div class="window"><span class="br tl"></span><span class="br tr"></span><span class="br bl"></span><span class="br br2"></span>
+        <div class="titlebar"><span class="seg-mark" style="height:16px;"></span><span class="wm" style="font-size:14px;letter-spacing:0.12em;">Game Point</span><span class="mono" style="margin-left:auto;font-size:10px;color:var(--dim);">:8765</span></div>
+        <div style="padding:18px 18px 20px;">
+          <div style="display:flex;align-items:center;gap:12px;padding-bottom:14px;">
+            <span class="statefield" style="background:var(--green);color:#06140c;">Ready to drive</span>
+            <span class="mono" style="font-size:11px;color:var(--mute);">sidecar · screen · hotspot live</span>
+          </div>
+          <div class="statusrow2"><span class="rl">Sidecar</span><span class="rs" style="color:var(--green)">healthy</span><span class="rd">peers=1 screen_peers=1</span></div>
+          <div class="statusrow2"><span class="rl">Screen</span><span class="rs" style="color:var(--green)">connected</span><span class="rd">screen_peers=1</span></div>
+          <div class="statusrow2"><span class="rl">Hotspot</span><span class="rs" style="color:var(--green)">on</span><span class="rd">state=On clients=1</span></div>
+          <div class="statusrow2"><span class="rl">Voice</span><span class="rs" style="color:var(--green)">configured</span><span class="rd">reference + bank</span></div>
+          <div class="statusrow2" style="border-bottom:0;"><span class="rl">SimHub</span><span class="rs" style="color:var(--dim)">absent</span><span class="rd">executable not found</span></div>
+          <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr;gap:9px;margin-top:18px;">
+            <div class="btnfield primary">▶ Start</div><div class="btnfield">Refresh</div><div class="btnfield">Logs</div><div class="btnfield">Settings</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

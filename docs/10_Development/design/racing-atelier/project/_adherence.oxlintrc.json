@@ -1,0 +1,493 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/brand/**",
+              "components/core/**",
+              "components/instrument/**",
+              "components/track/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Saira Semi Condensed|Saira|Spline Sans Mono))/i]",
+        "message": "Font not provided by the design system. Available: Saira Semi Condensed, Saira, Spline Sans Mono."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SegMark'] > JSXAttribute > JSXIdentifier[name!=/^(?:height|width|color|style|key|ref|className|style|children)$/]",
+        "message": "<SegMark> doesn't accept that prop. Declared props: height, width, color, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|block|iconLeft|children|key|ref|className|style|children)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, block, iconLeft, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:field|primary|ghost)$/]",
+        "message": "<Button> variant must be one of 'field' | 'primary' | 'ghost'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:sm|md|lg)$/]",
+        "message": "<Button> size must be one of 'sm' | 'md' | 'lg'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|tone|style|key|ref|className|style|children)$/]",
+        "message": "<Chip> doesn't accept that prop. Declared props: children, tone, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:neutral|stop|warn|go|brass)$/]",
+        "message": "<Chip> tone must be one of 'neutral' | 'stop' | 'warn' | 'go' | 'brass'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CommandVerb'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|tone|arrow|size|style|key|ref|className|style|children)$/]",
+        "message": "<CommandVerb> doesn't accept that prop. Declared props: children, tone, arrow, size, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CommandVerb'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:stop|warn|go)$/]",
+        "message": "<CommandVerb> tone must be one of 'stop' | 'warn' | 'go'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CommandVerb'] > JSXAttribute[name.name='arrow'] > Literal[value!=/^(?:down|up|left|right)$/]",
+        "message": "<CommandVerb> arrow must be one of 'down' | 'up' | 'left' | 'right'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CornerLine'] > JSXAttribute > JSXIdentifier[name!=/^(?:id|name|note|last|style|key|ref|className|style|children)$/]",
+        "message": "<CornerLine> doesn't accept that prop. Declared props: id, name, note, last, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CornerNote'] > JSXAttribute > JSXIdentifier[name!=/^(?:eyebrow|id|name|gear|minSpeed|throttle|note|style|key|ref|className|style|children)$/]",
+        "message": "<CornerNote> doesn't accept that prop. Declared props: eyebrow, id, name, gear, minSpeed, throttle, note, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DeltaBar'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|max|slack|unit|refLabel|style|key|ref|className|style|children)$/]",
+        "message": "<DeltaBar> doesn't accept that prop. Declared props: value, max, slack, unit, refLabel, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='ElevationProfile'] > JSXAttribute > JSXIdentifier[name!=/^(?:points|viewBox|peakX|peakLabel|startLabel|endLabel|style|key|ref|className|style|children)$/]",
+        "message": "<ElevationProfile> doesn't accept that prop. Declared props: points, viewBox, peakX, peakLabel, startLabel, endLabel, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Label'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|size|tone|style|key|ref|className|style|children)$/]",
+        "message": "<Label> doesn't accept that prop. Declared props: children, size, tone, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Label'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:md|sm|xs)$/]",
+        "message": "<Label> size must be one of 'md' | 'sm' | 'xs'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Label'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:label|dim|chalk|brass|stop|warn|go)$/]",
+        "message": "<Label> tone must be one of 'label' | 'dim' | 'chalk' | 'brass' | 'stop' | 'warn' | 'go'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='LevelSegments'] > JSXAttribute > JSXIdentifier[name!=/^(?:value|max|tone|style|key|ref|className|style|children)$/]",
+        "message": "<LevelSegments> doesn't accept that prop. Declared props: value, max, tone, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='LevelSegments'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:brass|go|warn)$/]",
+        "message": "<LevelSegments> tone must be one of 'brass' | 'go' | 'warn'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='NavTile'] > JSXAttribute > JSXIdentifier[name!=/^(?:title|subtitle|disabled|onClick|style|key|ref|className|style|children)$/]",
+        "message": "<NavTile> doesn't accept that prop. Declared props: title, subtitle, disabled, onClick, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Panel'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|variant|brackets|pad|key|ref|className|style|children)$/]",
+        "message": "<Panel> doesn't accept that prop. Declared props: children, variant, brackets, pad."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Panel'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:panel|flat|raised|glass)$/]",
+        "message": "<Panel> variant must be one of 'panel' | 'flat' | 'raised' | 'glass'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SegmentBar'] > JSXAttribute > JSXIdentifier[name!=/^(?:count|fill|zone|height|style|key|ref|className|style|children)$/]",
+        "message": "<SegmentBar> doesn't accept that prop. Declared props: count, fill, zone, height, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SetupChip'] > JSXAttribute > JSXIdentifier[name!=/^(?:text|tone|key|ref|className|style|children)$/]",
+        "message": "<SetupChip> doesn't accept that prop. Declared props: text, tone."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='SetupChip'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:neutral|stop|warn|go|brass)$/]",
+        "message": "<SetupChip> tone must be one of 'neutral' | 'stop' | 'warn' | 'go' | 'brass'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='StatusField'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|tone|variant|style|key|ref|className|style|children)$/]",
+        "message": "<StatusField> doesn't accept that prop. Declared props: children, tone, variant, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='StatusField'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:go|warn|stop|idle|brass)$/]",
+        "message": "<StatusField> tone must be one of 'go' | 'warn' | 'stop' | 'idle' | 'brass'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='StatusField'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:field|dot)$/]",
+        "message": "<StatusField> variant must be one of 'field' | 'dot'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='StatusRow'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|state|tone|detail|last|style|key|ref|className|style|children)$/]",
+        "message": "<StatusRow> doesn't accept that prop. Declared props: label, state, tone, detail, last, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='StatusRow'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:go|warn|stop|idle|info)$/]",
+        "message": "<StatusRow> tone must be one of 'go' | 'warn' | 'stop' | 'idle' | 'info'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Stepper'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|value|unit|fill|onDecrement|onIncrement|disabled|style|key|ref|className|style|children)$/]",
+        "message": "<Stepper> doesn't accept that prop. Declared props: label, value, unit, fill, onDecrement, onIncrement, disabled, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Toast'] > JSXAttribute > JSXIdentifier[name!=/^(?:children|tone|title|style|key|ref|className|style|children)$/]",
+        "message": "<Toast> doesn't accept that prop. Declared props: children, tone, title, style."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Toast'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:ok|error|info)$/]",
+        "message": "<Toast> tone must be one of 'ok' | 'error' | 'info'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='TrackMarker'] > JSXAttribute > JSXIdentifier[name!=/^(?:x|y|r|tone|key|ref|className|style|children)$/]",
+        "message": "<TrackMarker> doesn't accept that prop. Declared props: x, y, r, tone."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='TrackMarker'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:stop|warn|go|data|house|chalk)$/]",
+        "message": "<TrackMarker> tone must be one of 'stop' | 'warn' | 'go' | 'data' | 'house' | 'chalk'."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "SegMark": {
+        "replaces": []
+      },
+      "Button": {
+        "replaces": []
+      },
+      "Chip": {
+        "replaces": []
+      },
+      "CommandVerb": {
+        "replaces": []
+      },
+      "CornerLine": {
+        "replaces": []
+      },
+      "CornerNote": {
+        "replaces": []
+      },
+      "DeltaBar": {
+        "replaces": []
+      },
+      "ElevationProfile": {
+        "replaces": []
+      },
+      "Label": {
+        "replaces": []
+      },
+      "LevelSegments": {
+        "replaces": []
+      },
+      "NavTile": {
+        "replaces": []
+      },
+      "Panel": {
+        "replaces": []
+      },
+      "SegmentBar": {
+        "replaces": []
+      },
+      "SetupChip": {
+        "replaces": []
+      },
+      "StatusField": {
+        "replaces": []
+      },
+      "StatusRow": {
+        "replaces": []
+      },
+      "Stepper": {
+        "replaces": []
+      },
+      "Toast": {
+        "replaces": []
+      },
+      "TrackMarker": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--accent",
+      "--bg-base",
+      "--black",
+      "--border-bracket",
+      "--border-edge",
+      "--border-line",
+      "--bracket",
+      "--bracket-color",
+      "--bracket-w",
+      "--brake",
+      "--brass",
+      "--brass-ink",
+      "--carbon",
+      "--chalk",
+      "--clear",
+      "--cmd-hero",
+      "--cmd-lg",
+      "--cmd-md",
+      "--data",
+      "--delta-h",
+      "--dim",
+      "--display",
+      "--dur-press",
+      "--dur-snap",
+      "--dur-tick",
+      "--ease",
+      "--edge",
+      "--faint",
+      "--font-disp",
+      "--font-mono",
+      "--font-read",
+      "--gap-tiles",
+      "--glass-blur",
+      "--glass-fill",
+      "--graphite",
+      "--hit-stepper",
+      "--house",
+      "--inset-card",
+      "--label-md",
+      "--label-sm",
+      "--label-tracking",
+      "--label-tracking-wm",
+      "--label-weight",
+      "--label-xs",
+      "--launcher-w",
+      "--level-h",
+      "--level-w",
+      "--lift",
+      "--line",
+      "--line-2",
+      "--mono-md",
+      "--mono-sm",
+      "--mono-xs",
+      "--mute",
+      "--pad-panel",
+      "--pad-panel-sm",
+      "--pad-row",
+      "--r",
+      "--r-bezel",
+      "--r-screen",
+      "--raise",
+      "--read-hero",
+      "--read-lg",
+      "--read-md",
+      "--read-sm",
+      "--read-xl",
+      "--rig-bezel",
+      "--rig-h",
+      "--rig-w",
+      "--seg-amb",
+      "--seg-gap",
+      "--seg-h",
+      "--seg-h-sm",
+      "--seg-lit",
+      "--seg-mark",
+      "--seg-mark-h",
+      "--seg-mark-w",
+      "--seg-off",
+      "--seg-red",
+      "--seg-zone",
+      "--shadow-device",
+      "--shadow-glass",
+      "--signal-go",
+      "--signal-stop",
+      "--signal-warn",
+      "--slab",
+      "--space-1",
+      "--space-10",
+      "--space-12",
+      "--space-16",
+      "--space-2",
+      "--space-3",
+      "--space-4",
+      "--space-5",
+      "--space-6",
+      "--space-7",
+      "--space-8",
+      "--space-9",
+      "--stage-bg",
+      "--state-alert",
+      "--state-ok",
+      "--state-warn",
+      "--surface-panel",
+      "--surface-raised",
+      "--tap-min",
+      "--text-command",
+      "--text-label",
+      "--text-meta",
+      "--text-primary",
+      "--text-readout",
+      "--text-unit",
+      "--w-black",
+      "--w-bold",
+      "--w-medium",
+      "--w-regular",
+      "--w-semi"
+    ],
+    "tokenKinds": {
+      "--carbon": "color",
+      "--graphite": "color",
+      "--slab": "color",
+      "--raise": "color",
+      "--edge": "color",
+      "--black": "color",
+      "--line": "color",
+      "--line-2": "color",
+      "--chalk": "color",
+      "--mute": "color",
+      "--dim": "color",
+      "--faint": "color",
+      "--brass": "color",
+      "--brass-ink": "color",
+      "--brake": "color",
+      "--lift": "color",
+      "--clear": "color",
+      "--data": "color",
+      "--bg-base": "color",
+      "--surface-panel": "color",
+      "--surface-raised": "color",
+      "--text-primary": "font",
+      "--text-label": "font",
+      "--text-meta": "font",
+      "--accent": "color",
+      "--state-alert": "color",
+      "--state-warn": "color",
+      "--state-ok": "color",
+      "--font-disp": "font",
+      "--font-read": "font",
+      "--font-mono": "font",
+      "--cmd-hero": "spacing",
+      "--cmd-lg": "spacing",
+      "--cmd-md": "spacing",
+      "--display": "spacing",
+      "--read-hero": "spacing",
+      "--read-xl": "spacing",
+      "--read-lg": "spacing",
+      "--read-md": "spacing",
+      "--read-sm": "spacing",
+      "--label-md": "spacing",
+      "--label-sm": "spacing",
+      "--label-xs": "spacing",
+      "--label-weight": "font",
+      "--label-tracking": "font",
+      "--label-tracking-wm": "font",
+      "--mono-md": "spacing",
+      "--mono-sm": "spacing",
+      "--mono-xs": "spacing",
+      "--w-regular": "other",
+      "--w-medium": "other",
+      "--w-semi": "other",
+      "--w-bold": "other",
+      "--w-black": "other",
+      "--text-command": "font",
+      "--text-readout": "font",
+      "--text-unit": "font",
+      "--space-1": "spacing",
+      "--space-2": "spacing",
+      "--space-3": "spacing",
+      "--space-4": "spacing",
+      "--space-5": "spacing",
+      "--space-6": "spacing",
+      "--space-7": "spacing",
+      "--space-8": "spacing",
+      "--space-9": "spacing",
+      "--space-10": "spacing",
+      "--space-12": "spacing",
+      "--space-16": "spacing",
+      "--pad-panel": "spacing",
+      "--pad-panel-sm": "spacing",
+      "--pad-row": "spacing",
+      "--seg-h": "spacing",
+      "--seg-h-sm": "spacing",
+      "--seg-gap": "spacing",
+      "--delta-h": "spacing",
+      "--level-w": "spacing",
+      "--level-h": "spacing",
+      "--bracket": "spacing",
+      "--bracket-w": "spacing",
+      "--seg-mark-w": "spacing",
+      "--tap-min": "spacing",
+      "--hit-stepper": "spacing",
+      "--rig-w": "spacing",
+      "--rig-h": "spacing",
+      "--rig-bezel": "spacing",
+      "--launcher-w": "spacing",
+      "--gap-tiles": "spacing",
+      "--inset-card": "spacing",
+      "--r": "spacing",
+      "--r-bezel": "spacing",
+      "--r-screen": "spacing",
+      "--border-line": "color",
+      "--border-edge": "color",
+      "--border-bracket": "color",
+      "--shadow-device": "shadow",
+      "--shadow-glass": "shadow",
+      "--glass-fill": "color",
+      "--glass-blur": "other",
+      "--stage-bg": "other",
+      "--ease": "other",
+      "--dur-snap": "other",
+      "--dur-press": "other",
+      "--dur-tick": "other",
+      "--seg-mark": "color",
+      "--seg-mark-h": "spacing",
+      "--seg-off": "color",
+      "--seg-lit": "color",
+      "--seg-amb": "color",
+      "--seg-red": "color",
+      "--seg-zone": "color",
+      "--bracket-color": "color",
+      "--house": "color",
+      "--signal-go": "color",
+      "--signal-warn": "color",
+      "--signal-stop": "color"
+    },
+    "fontFamilies": [
+      "Saira",
+      "Saira Semi Condensed",
+      "Spline Sans Mono"
+    ]
+  }
+}

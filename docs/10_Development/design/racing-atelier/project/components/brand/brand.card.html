@@ -1,0 +1,39 @@
+<!-- @dsCard group="Components" viewport="700x260" name="Brand — mark, seg-mark, brackets" subtitle="RACING ATELIER lockup · the brass seg-mark atom · machined corner brackets" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body{margin:0;background:var(--carbon);color:var(--chalk);font-family:var(--font-read);}
+  .wrap{padding:26px;display:flex;flex-direction:column;gap:24px;}
+  .cap{font-family:var(--font-disp);font-weight:600;font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--dim);}
+  .row{display:flex;align-items:center;gap:30px;flex-wrap:wrap;}
+</style></head>
+<body><div id="root" class="wrap"></div>
+<script src="../../_ds_bundle.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel">
+  const { BrandMark, SegMark, CornerBracket } = window.ACCopilotDesignSystem_bba7a8;
+  function Demo(){
+    return (<>
+      <div><div className="cap">Lockup</div>
+        <div className="row" style={{marginTop:12}}>
+          <BrandMark size="lg" />
+          <BrandMark text="Game Point" size="md" color="var(--brass)" />
+        </div>
+      </div>
+      <div className="row">
+        <div><div className="cap">Seg-mark atom</div>
+          <div className="row" style={{marginTop:10,gap:12}}><SegMark height="26px"/><SegMark height="26px" color="var(--brake)"/><SegMark height="26px" color="var(--clear)"/></div>
+        </div>
+        <div><div className="cap">Corner brackets · house frame</div>
+          <div style={{position:'relative',width:200,height:90,background:'var(--graphite)',border:'1px solid var(--edge)',marginTop:10}}>
+            <CornerBracket pos="tl"/><CornerBracket pos="tr"/><CornerBracket pos="bl"/><CornerBracket pos="br"/>
+          </div>
+        </div>
+      </div>
+    </>);
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(<Demo/>);
+</script></body></html>

@@ -1,0 +1,50 @@
+/* ============================================================
+   RACING ATELIER — TYPOGRAPHY
+   Two engineered voices. No serif, no italic. Labels are tight bold
+   caps (instrument), never spaced-out and thin. Numbers are tabular
+   so digits never jump as telemetry changes.
+   ============================================================ */
+:root {
+  /* --- Families --- */
+  --font-disp: "Saira Semi Condensed", system-ui, sans-serif; /* display, commands, labels */
+  --font-read: "Saira", system-ui, sans-serif;                /* big readouts */
+  --font-mono: "Spline Sans Mono", ui-monospace, monospace;   /* units, ids */
+
+  /* --- Command / display scale (Saira Semi Condensed) --- */
+  --cmd-hero: 66px;     /* BRAKE — the one action, periphery-caught */
+  --cmd-lg: 54px;       /* command on the narrow rig screen */
+  --cmd-md: 34px;       /* corner name / sub-command */
+  --display: 52px;      /* page / kit headlines */
+
+  /* --- Readout scale (Saira 700, tabular) --- */
+  --read-hero: 58px;    /* brake distance, primary number */
+  --read-xl: 46px;      /* delta value, big telemetry */
+  --read-lg: 34px;      /* secondary number */
+  --read-md: 26px;      /* gear / speed context */
+  --read-sm: 21px;      /* compact value */
+
+  /* --- Labels (Saira Semi Condensed 600, tight caps) --- */
+  --label-md: 12px;
+  --label-sm: 11px;
+  --label-xs: 9px;
+  --label-weight: 600;
+  --label-tracking: 0.08em;     /* tight — NOT spaced-out */
+  --label-tracking-wm: 0.16em;  /* wordmark only */
+
+  /* --- Mono (units, ids, provenance) --- */
+  --mono-md: 12px;
+  --mono-sm: 11px;
+  --mono-xs: 10px;
+
+  /* --- Weights --- */
+  --w-regular: 400; /* @kind other */
+  --w-medium: 500;  /* @kind other */
+  --w-semi: 600;    /* @kind other */
+  --w-bold: 700;    /* @kind other */
+  --w-black: 800;   /* @kind other */
+
+  /* --- Aliases --- */
+  --text-command: var(--font-disp);
+  --text-readout: var(--font-read);
+  --text-unit: var(--font-mono);
+}

@@ -1,0 +1,14 @@
+/* ============================================================
+   RACING ATELIER — WEBFONTS
+   WARNING: This file imports fonts from Google Fonts (fonts.googleapis.com).
+   Opening HTML files that include this CSS will make external network requests.
+   For offline or air-gapped environments, please download and vendor these fonts locally.
+
+   The night register of Atelier, cut for the cockpit. Engineered,
+   not editorial: no serif, no italic at the wheel.
+   - Saira Semi Condensed : display, commands, labels (tight bold caps)
+   - Saira                : the big readouts (tabular)
+   - Spline Sans Mono     : units, ids — the one thread of kinship with
+                            Atelier's instrument layer
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@400;500;600;700;800&family=Saira:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap');

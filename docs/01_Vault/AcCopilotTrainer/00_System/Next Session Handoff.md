@@ -24,6 +24,7 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
   - AcCopilotTrainer/00_System/Current Focus.md
   - AcCopilotTrainer/00_System/Project State.md
+  - AcCopilotTrainer/00_System/Roadmap.md
   - AcCopilotTrainer/03_Investigations/racing-driver-and-controller-2026-06-17.md
   - AcCopilotTrainer/03_Investigations/cm-url-deelevated-launch-2026-06-16.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-live-verified-2026-06-16.md
@@ -57,6 +58,12 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-06-30) — PR #410 Racing Atelier Design System Mitigations
+
+PR [#410](https://github.com/agorokh/ac-copilot-trainer/pull/410) is OPEN and review-resolved.
+**Shipped:** Added offline reliability and third-party JS/font warnings to the Racing Atelier design package. Mitigated wildcard `postMessage` origin by using `document.referrer`. Added missing `Roadmap.md` vault node to satisfy vault link invariants.
+CI checks are green, and bot findings have been addressed.
+
 ## Delivered (2026-06-30) — PR #399 MERGED: Coach v2 (#396)
 
 PR [#399](https://github.com/agorokh/ac-copilot-trainer/pull/399) squash-merged to `main` as
@@ -65,6 +72,22 @@ Issue [#396](https://github.com/agorokh/ac-copilot-trainer/issues/396) is **CLOS
 
 **Shipped:** Coach v2: real-time diagnosed, anticipatory in-ear coaching (replace post-hoc delta reporter).
 Detail: [[pr-399-coach-v2-review-loop-2026-06-30]].
+
+## 2026-06-30 — PLAN BRUSH-UP: product roadmap + themed backlog filed
+
+Restructured the repo plan from the ad-hoc "Stream A–D + residuals" changelog into a
+forward-looking roadmap. New durable node: [Roadmap.md](Roadmap.md). New GitHub backlog:
+umbrella [#401](https://github.com/agorokh/ac-copilot-trainer/issues/401) + themed epics
+[#402](https://github.com/agorokh/ac-copilot-trainer/issues/402)–[#408](https://github.com/agorokh/ac-copilot-trainer/issues/408)
+(data platform · driver model/curriculum · session review · diagnosis depth · tyre/brake/fuel
+mgmt · setup↔feedback · reference depth). Existing #86/#117/#154/#353/#381/#396/#400 reconciled
+under their verticals; `Project State.md` refreshed off its template stub. Key finding:
+real-time + per-lap coaching is deep/shipped; the **longitudinal** layer (driver model,
+progression, review, retention) is the frontier. #396 (Coach v2 anticipatory) is **largely
+already shipped** — reconcile via #405 Part 0. Design-language #400 restructured so rig
+firmware stays owned by #86. **Vault files (`Roadmap.md`, `Project State.md`, this handoff)
+written locally on branch `claude/nice-hamilton-bf6228`; not yet PR'd** — ship via a
+`vault-only` PR when ready.
 
 ## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
 

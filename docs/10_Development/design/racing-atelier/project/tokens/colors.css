@@ -1,0 +1,49 @@
+/* ============================================================
+   RACING ATELIER — COLOUR
+   Carbon & signal. Near-black ground (pixels off on OLED), one
+   structural brass, three flat signal fields. Colour is spent only
+   on meaning — a dash must SHOUT state, not whisper it. No glow,
+   no gradient on signal: flat and matte, like a warning lamp.
+   Brass is the one tie back to Atelier's --work gold.
+   ============================================================ */
+:root {
+  /* --- Carbon ground (true-black first, for the all-black rigs/OLED) --- */
+  --carbon: #0B0C0D;     /* base — on OLED this is the pixel switched off */
+  --graphite: #141618;   /* panel */
+  --slab: #191C1F;       /* raised band */
+  --raise: #20242A;      /* control trough / inactive segment */
+  --edge: #2A2F35;       /* structural border (visible) */
+  --black: #000000;      /* device bezel / deepest OLED */
+
+  /* --- Hairlines (kept thin only for structure, never for data) --- */
+  --line: rgba(255,255,255,0.07);
+  --line-2: rgba(255,255,255,0.16);
+
+  /* --- Ink: near-white for maximum legibility at speed --- */
+  --chalk: #EEF1F3;      /* primary text / lit segment */
+  --mute: #9BA1A8;       /* labels */
+  --dim: #79808A;        /* meta, demoted context — lifted for legibility on dark */
+  --faint: #4A4E55;      /* disabled */
+
+  /* --- Brass: the house mark + structure (brackets, seg-mark, active) --- */
+  --brass: #C8983E;
+  --brass-ink: #0B0C0D;  /* text on a brass field */
+
+  /* --- Signal fields: flat, vivid, matte. State only. --- */
+  --brake: #F23B2C;      /* brake · danger · too hot · loss */
+  --lift: #F4A52C;       /* lift · caution · approaching */
+  --clear: #2FBE6E;      /* on line · faster · gain · healthy */
+  --data: #49B6C9;       /* neutral telemetry highlight (DRS, sector) */
+
+  /* --- Semantic aliases (use these in product UI) --- */
+  --bg-base: var(--carbon);
+  --surface-panel: var(--graphite);
+  --surface-raised: var(--slab);
+  --text-primary: var(--chalk);
+  --text-label: var(--mute);
+  --text-meta: var(--dim);
+  --accent: var(--brass);
+  --state-alert: var(--brake);
+  --state-warn: var(--lift);
+  --state-ok: var(--clear);
+}

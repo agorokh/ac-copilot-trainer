@@ -1,0 +1,37 @@
+/* ============================================================
+   RACING ATELIER — BRAND SIGNATURE
+   The marks that make a screen unmistakable. Inherited from Atelier:
+   an authored system, restraint, a named lexicon, instrument rigor.
+   Forged for racing: the segment, the machined corner bracket, the
+   colour field. Brass is the house; signal is the data.
+   ============================================================ */
+:root {
+  /* --- The seg-mark: the brand atom. A short brass bar before the
+         wordmark / a section. The unit the whole system is drawn from. --- */
+  --seg-mark: var(--brass);
+  --seg-mark-h: 22px;          /* @kind spacing */
+
+  /* --- The segment: the shift-light unit. Chunky, gapped, read as a
+         COUNT, never a continuous slider. States below. --- */
+  --seg-off: var(--raise);     /* unlit */
+  --seg-lit: var(--chalk);     /* lit (approaching) */
+  --seg-amb: var(--lift);      /* leading edge */
+  --seg-red: var(--brake);     /* in the zone */
+  --seg-zone: rgba(242,59,44,0.16); /* @kind color */ /* the standing red zone */
+
+  /* --- The machined corner bracket: the panel silhouette / house frame.
+         Brass L's at opposing corners, applied via the CornerBracket. --- */
+  --bracket-color: var(--brass);
+
+  /* --- Lexicon (the named vocabulary — keep it closed & consistent):
+         corner · reference · brake zone · entry delta · lift · on line ·
+         sector · gear · atlas · pace note · the keys · the hand.
+         States (verbatim probe words on the launcher): healthy · waiting ·
+         absent · configured · stopped · on. --- */
+
+  /* --- Brand aliases --- */
+  --house: var(--brass);
+  --signal-go: var(--clear);
+  --signal-warn: var(--lift);
+  --signal-stop: var(--brake);
+}
