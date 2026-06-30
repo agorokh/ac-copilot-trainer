@@ -354,6 +354,36 @@ def test_telemetry_tick_rate_limited_to_20hz():
     assert out["lap"] == 2
 
 
+def test_telemetry_tick_carries_fuel_and_tyre_temps_when_available():
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2, fuel = 18.5, fuelCapacity = 60,
+          }
+          M.publishTelemetryTickIfDue({
+            dt = 0.06, car = car, wsBridge = ws,
+            temps = { fl = 85, fr = 86, rl = 83, rr = 84 },
+          })
+          local p = ws._calls[1] and ws._calls[1].send.payload
+          return {
+            fuel = p and p.fuel_l,
+            capacity = p and p.fuel_capacity_l,
+            fl = p and p.tyre_temps_c and p.tyre_temps_c.fl,
+            rr = p and p.tyre_temps_c and p.tyre_temps_c.rr,
+          }
+        end)()
+        """
+    )
+    assert out["fuel"] == 18.5
+    assert out["capacity"] == 60
+    assert (out["fl"], out["rr"]) == (85, 84)
+
+
 def test_telemetry_tick_seq_resets_on_module_reset():
     rt = _runtime()
     out = rt.eval(

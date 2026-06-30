@@ -165,8 +165,27 @@ local function _field(obj, key)
 end
 
 
+local function _cornerMap(values)
+  if type(values) ~= "table" then
+    return nil
+  end
+  local out = {}
+  local any = false
+  for _, key in ipairs({ "fl", "fr", "rl", "rr" }) do
+    local v = _finite(values[key])
+    if v ~= nil then
+      out[key] = v
+      any = true
+    end
+  end
+  if any then
+    return out
+  end
+  return nil
+end
+
 --- Publish client→server ``telemetry_tick`` at ~20 Hz (M0 #341). Requires ``wsBridge.sendJson``.
----@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number}
+---@param opts table  {dt:number, car:any, wsBridge, lat_g?:number, long_g?:number, temps?:table}
 ---@return boolean
 function M.publishTelemetryTickIfDue(opts)
   if type(opts) ~= "table" then
@@ -196,22 +215,35 @@ function M.publishTelemetryTickIfDue(opts)
       gear = math.max(0, math.floor(g))
     end
   end
+  local payload = {
+    speed_kmh = math.max(0, _finite(_field(car, "speedKmh")) or 0),
+    rpm = math.max(0, _finite(_field(car, "rpm")) or 0),
+    throttle = _clamp(_field(car, "gas") or 0, 0, 1),
+    brake = _clamp(_field(car, "brake") or 0, 0, 1),
+    steer = _clamp(_field(car, "steer") or 0, -1, 1),
+    gear = gear,
+    lat_g = _finite(opts.lat_g) or 0,
+    long_g = _finite(opts.long_g) or 0,
+    spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
+    lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
+  }
+  local fuel = _finite(_field(car, "fuel"))
+  if fuel ~= nil then
+    payload.fuel_l = math.max(0, fuel)
+  end
+  local fuelCapacity = _finite(_field(car, "fuelCapacity") or _field(car, "maxFuel"))
+  if fuelCapacity ~= nil then
+    payload.fuel_capacity_l = math.max(0, fuelCapacity)
+  end
+  local tyreTemps = _cornerMap(opts.temps)
+  if tyreTemps ~= nil then
+    payload.tyre_temps_c = tyreTemps
+  end
   return wsBridge.sendJson({
     v = 1,
     type = "telemetry_tick",
     seq = _tickSeq,
-    payload = {
-      speed_kmh = math.max(0, _finite(_field(car, "speedKmh")) or 0),
-      rpm = math.max(0, _finite(_field(car, "rpm")) or 0),
-      throttle = _clamp(_field(car, "gas") or 0, 0, 1),
-      brake = _clamp(_field(car, "brake") or 0, 0, 1),
-      steer = _clamp(_field(car, "steer") or 0, -1, 1),
-      gear = gear,
-      lat_g = _finite(opts.lat_g) or 0,
-      long_g = _finite(opts.long_g) or 0,
-      spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
-      lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
-    },
+    payload = payload,
   }) == true
 end
 
