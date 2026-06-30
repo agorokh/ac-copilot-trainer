@@ -410,6 +410,7 @@ local tires = tireMonitor.new()
 local pendingWsSidecarUrl = nil
 local pendingLapArchiveJobs = {}
 local pendingLapArchiveRecordPaths = {}
+local pendingSessionReview = nil
 local bestLapArchivePath = nil
 local LAP_ARCHIVE_ROWS_PER_FRAME = 64
 -- Per-step row budget used by the synchronous session-end drain (issue #305). Far above any
@@ -558,6 +559,55 @@ local function pumpLapArchiveNotifications()
       table.remove(pendingLapArchiveRecordPaths, 1)
     end
   end
+end
+
+local function queueSessionReviewRequest(lapDir, sessionUuid)
+  if type(lapDir) ~= "string" or lapDir == "" then return false end
+  if pendingSessionReview ~= nil then return true end
+  pendingSessionReview = {
+    lapDir = lapDir,
+    sessionUuid = sessionUuid,
+    retryFrames = 0,
+  }
+  return true
+end
+
+local function pumpSessionReviewRequest()
+  local pending = pendingSessionReview
+  if pending == nil then return true end
+  local retryFrames = tonumber(pending.retryFrames) or 0
+  if retryFrames > 0 then
+    pending.retryFrames = retryFrames - 1
+    state.sessionReviewRetryFrames = pending.retryFrames
+    return false
+  end
+  if not (wsBridge and type(wsBridge.sendSessionReviewGenerate) == "function") then
+    pending.retryFrames = 60
+    state.sessionReviewRetryFrames = pending.retryFrames
+    return false
+  end
+  local reviewOk, reviewSentOrErr = pcall(
+    wsBridge.sendSessionReviewGenerate,
+    pending.lapDir,
+    pending.sessionUuid
+  )
+  if reviewOk and reviewSentOrErr == true then
+    state.sessionReviewRequested = true
+    state.sessionReviewRetryFrames = 0
+    pendingSessionReview = nil
+    return true
+  end
+  pending.retryFrames = 60
+  state.sessionReviewRetryFrames = pending.retryFrames
+  if ac and type(ac.log) == "function" then
+    if not reviewOk then
+      ac.log("[COPILOT][SESSION-REVIEW] generate request raised: "
+        .. tostring(reviewSentOrErr))
+    else
+      ac.log("[COPILOT][SESSION-REVIEW] generate request not sent; sidecar not ready")
+    end
+  end
+  return false
 end
 
 wsBridge.configure(config.wsSidecarUrl or "")
@@ -2155,6 +2205,7 @@ function script.update(dt)
   end
 
   if sim.isInMainMenu then
+    pumpSessionReviewRequest()
     if state.wasDriving then
       -- Issue #305: we just left the track. update() returns a few lines below on every menu
       -- frame, so the per-frame archive pump further down never runs again — drain any job
@@ -2169,32 +2220,9 @@ function script.update(dt)
       -- follow-up gets its one send attempt here instead of being stranded. CodeRabbit #321.
       pumpLapArchiveNotifications()
       local sessionReviewLaps = tonumber(state.lapsCompleted) or 0
-      if sessionReviewLaps >= 1 and not state.sessionReviewRequested and wsBridge
-          and type(wsBridge.sendSessionReviewGenerate) == "function" then
-        local reviewRetryFrames = tonumber(state.sessionReviewRetryFrames) or 0
-        if reviewRetryFrames > 0 then
-          state.sessionReviewRetryFrames = reviewRetryFrames - 1
-        else
-          local reviewOk, reviewSentOrErr = pcall(
-            wsBridge.sendSessionReviewGenerate,
-            persistence.lapArchiveDir(),
-            SESSION_UUID
-          )
-          if reviewOk and reviewSentOrErr == true then
-            state.sessionReviewRequested = true
-            state.sessionReviewRetryFrames = 0
-          else
-            state.sessionReviewRetryFrames = 60
-            if ac and type(ac.log) == "function" then
-              if not reviewOk then
-                ac.log("[COPILOT][SESSION-REVIEW] generate request raised: "
-                  .. tostring(reviewSentOrErr))
-              else
-                ac.log("[COPILOT][SESSION-REVIEW] generate request not sent; sidecar not ready")
-              end
-            end
-          end
-        end
+      if not state.sessionReviewRequested then
+        queueSessionReviewRequest(persistence.lapArchiveDir(), SESSION_UUID)
+        pumpSessionReviewRequest()
       end
       if persistSnapshotCached() then
         -- Issue #47: training journal JSON under ScriptConfig (after persist, before state reset).
@@ -2239,6 +2267,10 @@ function script.update(dt)
 
   lastDriveCar = car
   lastDriveSim = sim
+  if not state.wasDriving then
+    state.sessionReviewRequested = false
+    state.sessionReviewRetryFrames = 0
+  end
   state.wasDriving = true
 
   -- car.resetCounter is NOT a confirmed-safe StateCar field (csp-api-field-safety decision /

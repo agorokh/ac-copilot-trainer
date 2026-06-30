@@ -1144,6 +1144,105 @@ def test_session_review_generate_rejects_non_journal_laps_dir(tmp_path: Path) ->
     assert "journal/laps" in ack["error"]
 
 
+def test_failed_session_review_replaces_cached_snapshot_with_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    mode = ["ok"]
+
+    def _fake_generate(
+        lap_dir: str,
+        *,
+        session: str,
+        driver_id: str,
+        output_dir: str | None = None,
+    ) -> dict[str, object]:
+        del driver_id, output_dir
+        if mode[0] == "fail":
+            raise ValueError("session has no valid timed laps")
+        report_dir = tmp_path / "journal" / "reports"
+        return {
+            "ok": True,
+            "markdown_path": str(report_dir / "session_good.md"),
+            "json_path": str(report_dir / "session_good.json"),
+            "session_uuid": session,
+            "car_id": "ks_porsche_911_gt3_r_2016",
+            "track_id": "magione",
+            "best_lap_ms": 98_000,
+            "spoken_summary": "Session debrief: focus T1.",
+            "screen_summary": ["T1: 0.74s - technique"],
+            "problems": [],
+            "next_session_prep": [],
+            "source": {"lap_dirs": [lap_dir]},
+        }
+
+    monkeypatch.setattr(srv, "_generate_session_review_safe", _fake_generate)
+
+    async def _hello(ws, client: str, client_class: str) -> None:
+        await ws.send(
+            json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
+        )
+        await asyncio.wait_for(ws.recv(), timeout=2.0)
+
+    async def _generate(lua, session: str) -> dict:
+        await lua.send(
+            json.dumps(
+                {
+                    "v": 1,
+                    "type": ep.TYPE_SESSION_REVIEW_GENERATE,
+                    "lap_dir": str(tmp_path / "journal" / "laps"),
+                    "session": session,
+                }
+            )
+        )
+        return json.loads(await asyncio.wait_for(lua.recv(), timeout=2.0))
+
+    async def _run() -> tuple[dict, dict, dict]:
+        async with _running_sidecar() as port:
+            async with (
+                ws_connect(f"ws://127.0.0.1:{port}/") as lua,
+                ws_connect(f"ws://127.0.0.1:{port}/") as screen,
+            ):
+                await _hello(lua, "trainer-lua", ep.CLIENT_CLASS_LUA)
+                await _hello(screen, "screen-01", ep.CLIENT_CLASS_SCREEN)
+
+                ok_ack = await _generate(lua, "sess-good")
+                ok_snapshot = json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0))
+                json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0))  # coaching.cue
+                assert ok_ack["ok"] is True
+                assert ok_snapshot["payload"]["ok"] is True
+
+                mode[0] = "fail"
+                fail_ack = await _generate(lua, "sess-empty")
+                fail_snapshot = json.loads(await asyncio.wait_for(screen.recv(), timeout=2.0))
+
+                async with ws_connect(f"ws://127.0.0.1:{port}/") as late_screen:
+                    await _hello(late_screen, "screen-02", ep.CLIENT_CLASS_SCREEN)
+                    await late_screen.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "state.subscribe",
+                                "topics": [ep.TOPIC_SESSION_REVIEW],
+                            }
+                        )
+                    )
+                    cached = json.loads(await asyncio.wait_for(late_screen.recv(), timeout=2.0))
+                return fail_ack, fail_snapshot, cached
+
+    fail_ack, fail_snapshot, cached = asyncio.run(_run())
+    assert fail_ack["type"] == ep.TYPE_SESSION_REVIEW_RESULT
+    assert fail_ack["ok"] is False
+    assert "no valid timed laps" in fail_ack["error"]
+    assert fail_snapshot["topic"] == ep.TOPIC_SESSION_REVIEW
+    assert fail_snapshot["payload"]["ok"] is False
+    assert fail_snapshot["payload"]["session_uuid"] == "sess-empty"
+    assert "markdown_path" not in fail_snapshot["payload"]
+    assert cached == fail_snapshot
+
+
 def test_session_review_generate_returns_structured_error_on_unexpected_exception(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

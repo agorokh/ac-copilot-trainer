@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T22:42:07Z
+last_updated: 2026-06-30T23:00:33Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -83,6 +83,9 @@ Third review hardening changed the retry guard so it is marked requested only af
 added a 60-frame retry backoff, cached the sanitized `session.review` snapshot for late subscribers,
 rejected inbound `session.review.result` relays, and constrained sidecar generation to a resolved
 `journal/laps` corpus plus its sibling `journal/reports` output.
+Fourth review hardening moved the send retry into a pending menu-work item that survives runtime
+reset until the frame is actually sent, and sidecar generation failures now cache/broadcast an
+`ok:false` `session.review` snapshot so late screens do not replay the previous session's debrief.
 Docs landed in `docs/10_Development/17_Session_Review.md`. `make ci-fast` is now Windows-friendly by routing
 policy-doc and tracked-file secret scans through Python wrappers instead of invoking Bash with a
 `PYTHON=python` prefix that PowerShell misparsed.
@@ -98,7 +101,7 @@ focus T1.` The Markdown named session `sess-latest`, best lap `5.079s`, referenc
 archive source-structure, coach report, coaching lake, and voice wiring tests. Full local
 parity passed on Windows with
 `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast PYTHON=python`
-(`1960 passed, 117 skipped`, coverage 85.40%, `ci-fast: OK`; only existing root-file allowlist
+(`1961 passed, 117 skipped`, coverage 85.41%, `ci-fast: OK`; only existing root-file allowlist
 warnings for `.copier-answers.yml` and `doppler.yaml`).
 
 **Memory note:** The exact Tier-3 MCP tool was not exposed in this Codex tool surface. The repo

@@ -42,18 +42,21 @@ def test_session_end_flushes_pending_lap_archive() -> None:
         "session-end branch must drain pending lap-archive jobs before its session-end "
         "work (issue #305)"
     )
-    assert "wsBridge.sendSessionReviewGenerate" in branch_body, (
+    assert "wsBridge.sendSessionReviewGenerate" in src, (
         "session-end branch must ask the sidecar to generate the post-session review "
         "after the lap archives are final"
     )
     assert "not state.sessionReviewRequested" in branch_body
-    assert "state.sessionReviewRetryFrames = 60" in branch_body
-    assert branch_body.index("reviewOk and reviewSentOrErr == true") < branch_body.index(
-        "state.sessionReviewRequested = true"
-    )
-    assert "state.sessionReviewRequested = true" in branch_body
+    assert "queueSessionReviewRequest(persistence.lapArchiveDir(), SESSION_UUID)" in branch_body
+    assert "pumpSessionReviewRequest()" in branch_body
     assert branch_body.index("pumpLapArchiveNotifications()") < branch_body.index(
-        "wsBridge.sendSessionReviewGenerate"
+        "queueSessionReviewRequest"
+    )
+    assert "pendingSessionReview" in src
+    assert "pending.retryFrames = 60" in src
+    assert "state.sessionReviewRetryFrames = pending.retryFrames" in src
+    assert src.index("reviewOk and reviewSentOrErr == true") < src.index(
+        "state.sessionReviewRequested = true"
     )
 
 

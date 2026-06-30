@@ -3,7 +3,7 @@ type: investigation
 status: active
 memory_tier: canonical
 created: 2026-06-30
-updated: 2026-06-30T22:42:07Z
+updated: 2026-06-30T23:00:33Z
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/404
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
@@ -38,6 +38,11 @@ Third review hardening changed that guard to mark success only after the frame i
 60-frame retry backoff for sidecar readiness. The sidecar caches the sanitized `session.review`
 snapshot for late/reconnecting screens, rejects inbound `session.review.result` relays, and validates
 that generation reads a resolved `journal/laps` tree and writes only to its sibling `journal/reports`.
+
+Fourth review hardening moved the retry into a pending menu-work item outside resettable runtime
+state, so a transient send miss can still retry after `resetRuntimeAfterLeavingTrack()`. Failed
+generation now caches and broadcasts an `ok:false` `session.review` snapshot to replace any older
+debrief for late/reconnecting screens.
 
 ## Output contract
 
@@ -80,7 +85,7 @@ that generation reads a resolved `journal/laps` tree and writes only to its sibl
   tests/test_coach_report.py tests/test_coaching_lake.py tests/test_voice_wiring.py` passed
   (`80 passed, 1 skipped`; DuckDB optional skip).
 - Full parity: `FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast
-  PYTHON=python` passed on Windows (`1960 passed, 117 skipped`, coverage 85.40%, `ci-fast: OK`).
+  PYTHON=python` passed on Windows (`1961 passed, 117 skipped`, coverage 85.41%, `ci-fast: OK`).
   The only warnings were existing root-file allowlist warnings for `.copier-answers.yml` and
   `doppler.yaml`.
 

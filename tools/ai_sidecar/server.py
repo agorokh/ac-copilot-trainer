@@ -1177,6 +1177,19 @@ def _session_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _session_review_error_snapshot(*, session: str, error: str) -> dict[str, Any]:
+    return _session_review_snapshot(
+        {
+            "ok": False,
+            "session_uuid": session if session != SESSION_REVIEW_DEFAULT_SESSION else None,
+            "error": error,
+            "screen_summary": [],
+            "problems": [],
+            "next_session_prep": [],
+        }
+    )
+
+
 def _cache_sidecar_snapshot(frame: dict[str, Any]) -> None:
     topic = frame.get("topic")
     if frame.get(TYPE_KEY) == TYPE_STATE_SNAPSHOT and topic in SIDECAR_PRODUCED_TOPICS:
@@ -1239,9 +1252,13 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
             driver_id=driver_id,
         )
     except Exception as e:
+        error = str(e)
         logger.info(
             "session review generation failed lap_dir=%s session=%s err=%s", lap_dir, session, e
         )
+        snapshot = _session_review_error_snapshot(session=session, error=error)
+        _cache_sidecar_snapshot(snapshot)
+        await _broadcast_external(snapshot, exclude=websocket)
         await _safe_send(
             websocket,
             {
@@ -1250,7 +1267,7 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
                 "ok": False,
                 "lap_dir": lap_dir,
                 "session": session,
-                "error": str(e),
+                "error": error,
             },
         )
         return
