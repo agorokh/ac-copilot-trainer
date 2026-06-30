@@ -15,6 +15,7 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -26,9 +27,9 @@ from tools.ai_sidecar.corner_attribution import (
     Attribution,
     BalanceFinding,
     CornerCoaching,
+    _match_reference_corners,
     analyze_balance,
     coach_lap,
-    compare_laps,
 )
 from tools.ai_sidecar.lap_dynamics import (
     LapTrace,
@@ -114,25 +115,39 @@ def _same_archive_layout(candidate: dict | None, anchor: dict | None) -> bool:
     return candidate_layout == anchor_layout
 
 
+def _same_optional_identity(candidate: str | None, anchor: str | None, *, required: bool) -> bool:
+    if candidate is None or anchor is None:
+        return False if required else candidate is None and anchor is None
+    return candidate == anchor
+
+
 def _same_archive_scope(
     candidate_lap: LapTrace,
     anchor_lap: LapTrace,
     candidate_archive: dict | None,
     anchor_archive: dict | None,
+    *,
+    require_identity: bool,
 ) -> bool:
-    if (
-        candidate_lap.car_id is None
-        or anchor_lap.car_id is None
-        or candidate_lap.car_id != anchor_lap.car_id
+    if not _same_optional_identity(
+        candidate_lap.car_id, anchor_lap.car_id, required=require_identity
     ):
         return False
-    if (
-        candidate_lap.track_id is None
-        or anchor_lap.track_id is None
-        or candidate_lap.track_id != anchor_lap.track_id
+    if not _same_optional_identity(
+        candidate_lap.track_id, anchor_lap.track_id, required=require_identity
     ):
         return False
     return _same_archive_layout(candidate_archive, anchor_archive)
+
+
+def _archive_content_key(archive: dict | None) -> str:
+    identity = {
+        key: archive.get(key)
+        for key in ("car", "track", "lap", "trace")
+        if isinstance(archive, dict)
+    }
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def format_debrief(
@@ -442,28 +457,51 @@ def _analyze(
         raw_ref
         if raw_ref is not None
         and _archive_lap_is_valid(reference_archive)
-        and _same_archive_scope(raw_ref, lap, reference_archive, lap_archive)
+        and _same_archive_scope(
+            raw_ref,
+            lap,
+            reference_archive,
+            lap_archive,
+            require_identity=False,
+        )
         else None
     )
+    current_archive_key = _archive_content_key(lap_archive)
+    seen_history_keys = {current_archive_key}
     history_laps: list[LapTrace] = []
     for history_archive in history_archives or []:
         if not _archive_lap_is_valid(history_archive):
             continue
+        history_key = _archive_content_key(history_archive)
+        if history_key in seen_history_keys:
+            continue
+        seen_history_keys.add(history_key)
         try:
             history_lap = lap_trace_from_archive(history_archive)
         except ValueError:
             continue
-        if _same_archive_scope(history_lap, lap, history_archive, lap_archive):
+        if _same_archive_scope(
+            history_lap,
+            lap,
+            history_archive,
+            lap_archive,
+            require_identity=True,
+        ):
             history_laps.append(history_lap)
+    corners = segment_corners(lap)
+    sigs = corner_signatures(lap, corners)
+    reference_matches = _match_reference_corners(lap, ref, anchors=sigs) if ref is not None else {}
     report = coach_lap(
         lap,
         setup,
         reference=ref,
         history=history_laps,
         grip_ceiling_g=grip_ceiling_g,
+        corners=corners,
+        signatures=sigs,
+        reference_matches=reference_matches,
     )
-    sigs = corner_signatures(lap, segment_corners(lap))
-    deltas = compare_laps(lap, ref) if ref is not None else None
+    deltas = [delta for _ref_sig, delta in reference_matches.values()] if ref is not None else None
     balance = analyze_balance(lap, sigs, deltas=deltas, grip_ceiling_g=grip_ceiling_g)
     tyres = tyres_from_lap_archive(lap_archive)
     conditions = conditions_from_lap_archive(lap_archive, reference_archive=reference_archive)
@@ -488,7 +526,7 @@ def _analyze(
             corpus_lap = lap_trace_from_archive(archive)
         except ValueError:
             continue
-        if _same_archive_scope(corpus_lap, lap, archive, lap_archive):
+        if _same_archive_scope(corpus_lap, lap, archive, lap_archive, require_identity=True):
             corpus_laps.append(corpus_lap)
     superlap = build_superlap(corpus_laps) if corpus_laps else None
     return {

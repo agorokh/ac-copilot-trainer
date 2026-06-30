@@ -91,7 +91,11 @@ def test_brain_followup_loads_history_paths_for_consistency(
     laps_dir = tmp_path / "journal" / "laps"
     laps_dir.mkdir(parents=True)
     hist_path = laps_dir / "lap_history.json"
-    hist_path.write_text(json.dumps(_rich_corner_archive()), encoding="utf-8")
+    history = _rich_corner_archive()
+    speed_idx = history["trace"]["fields"].index("speed")
+    for sample in history["trace"]["samples"][40:60]:
+        sample[speed_idx] *= 0.95
+    hist_path.write_text(json.dumps(history), encoding="utf-8")
     inbound = _rich_corner_archive()
     inbound["historyArchivePaths"] = [str(hist_path)]
     out = build_brain_followup(inbound)

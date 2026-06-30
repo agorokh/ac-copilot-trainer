@@ -529,14 +529,29 @@ def coach_lap(
     grip_ceiling_g: float | None = None,
     extra_by_corner: dict[int, dict[str, Any]] | None = None,
     rules: list[DiagnosticRule] | None = None,
+    corners: list[tuple[int, int, int]] | None = None,
+    signatures: list[CornerSignature] | None = None,
+    reference_matches: dict[int, tuple[CornerSignature, CornerDelta]] | None = None,
 ) -> list[CornerCoaching]:
     """Full per-corner coaching pass over a lap (optionally vs reference, optionally with setup)."""
-    corners = segment_corners(lap)
-    sigs = corner_signatures(lap, corners)
+    if signatures is None:
+        corners = corners if corners is not None else segment_corners(lap)
+        sigs = corner_signatures(lap, corners)
+    else:
+        sigs = signatures
+        corners = (
+            corners
+            if corners is not None
+            else [(sig.entry_i, sig.apex_i, sig.exit_i) for sig in sigs]
+        )
     ref_by_idx: dict[int, CornerSignature] = {}
     delta_by_idx: dict[int, CornerDelta] = {}
     if reference is not None:
-        ref_matches = _match_reference_corners(lap, reference, anchors=sigs)
+        ref_matches = (
+            reference_matches
+            if reference_matches is not None
+            else _match_reference_corners(lap, reference, anchors=sigs)
+        )
         ref_by_idx = {idx: ref_sig for idx, (ref_sig, _delta) in ref_matches.items()}
         delta_by_idx = {idx: delta for idx, (_ref_sig, delta) in ref_matches.items()}
     history_laps = [*(history or []), lap]

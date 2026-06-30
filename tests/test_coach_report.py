@@ -305,6 +305,20 @@ def test_slower_reference_corners_are_not_published_as_targets():
     assert d["corner_reference"] is None
 
 
+def test_reference_still_works_when_both_archives_omit_identity():
+    ref = _corner_archive(degrade=0.0)
+    student = _corner_archive(degrade=8.0)
+    del ref["car"]["id"]
+    del student["car"]["id"]
+    del ref["track"]["id"]
+    del student["track"]["id"]
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["corner_reference"] is not None
+    assert d["corners"][0]["time_loss_s"] is not None
+
+
 def test_trail_braking_block_in_structured_debrief():
     # the trail-braking analyzer's per-corner read flows into the structured debrief + text (#296)
     d = build_structured_debrief(_corner_archive(), grip_ceiling_g=2.5)
@@ -387,6 +401,30 @@ def test_structured_debrief_rejects_history_with_missing_car_id():
     d = build_structured_debrief(
         _corner_archive(degrade=2.0),
         history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_dedupes_repeated_history_archive():
+    history = _corner_archive(degrade=4.0)
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[history, history],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is True
+    assert diag["sample_count"] == 2
+
+
+def test_structured_debrief_excludes_current_archive_from_history():
+    current = _corner_archive(degrade=2.0)
+    d = build_structured_debrief(
+        current,
+        history_archives=[current],
         grip_ceiling_g=2.5,
     )
     diag = d["corners"][0]["diagnostics"]["consistency"]
