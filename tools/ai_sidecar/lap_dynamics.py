@@ -19,6 +19,11 @@ from typing import Any
 
 G = 9.81
 
+#: km/h drop below the pre-corner speed peak that marks the deceleration ONSET — the start of a
+#: corner's window for segmentation (see :func:`segment_corners`). Small, so the brake-point
+#: detector has room to walk back, without swallowing the straight that precedes the corner.
+_DECEL_ONSET_KMH = 2.0
+
 
 # --- channel derivation -----------------------------------------------------
 @dataclass
@@ -233,45 +238,92 @@ def segment_corners(
     lap: LapTrace,
     *,
     min_lat_g: float = 0.35,
-    min_separation_frac: float = 0.02,
     smooth_win: int = 5,
+    min_apex_drop_kmh: float = 15.0,
+    split_rise_kmh: float = 18.0,
 ) -> list[tuple[int, int, int]]:
-    """Find corners as (entry_i, apex_i, exit_i) index triples.
+    """Find corners as (entry_i, apex_i, exit_i) triples — one per real, driver-perceived corner.
 
-    A corner is a contiguous run where lateral demand (``lat_g``) exceeds ``min_lat_g``; the apex is
-    the speed minimum within it. Runs closer than ``min_separation_frac`` of the lap are merged.
+    A corner is a **prominent speed minimum** (you brake and slow down for it), gated by a little
+    lateral g at the apex. This keeps the corner list — and therefore the coach's spoken turn
+    numbers — aligned with the track (issue: cue/track misalignment, where phantom corners shifted
+    every turn number and merged corners fired cues seconds early):
+
+    * **Phantom rejection** (``min_apex_drop_kmh``): ``lat_g = v² · κ / G`` blows up at high speed,
+      so a gentle kink on a 200 km/h straight (and the start/finish line) clears ``min_lat_g`` with
+      no real slow-down. A genuine corner's apex must sit at least ``min_apex_drop_kmh`` below the
+      higher of its entry/exit boundary speeds, else it is dropped.
+    * **Blob splitting** (``split_rise_kmh``): neighbouring minima are kept separate only when the
+      speed *peak* between them rises ``split_rise_kmh`` above the deeper minimum, so an esses
+      splits into several corners (each its own apex) instead of one giant window.
+
+    ``entry_i`` reaches back to the deceleration onset (room for the brake-point detector) while
+    ``exit_i`` stays tight (40 % speed recovery past the apex) so cues land right at the corner.
     """
     n = len(lap)
     if n < 5:
         return []
+    v = _smooth(lap.v_ms, smooth_win)
     lat = _smooth([abs(g) for g in lap.lat_g], smooth_win)
-    active = [g >= min_lat_g for g in lat]
-    runs: list[list[int]] = []
-    i = 0
-    while i < n:
-        if active[i]:
-            j = i
-            while j < n and active[j]:
+
+    # 1. Candidate apexes = local speed minima (a driver-perceived corner IS a speed dip). Collapse
+    #    flat minima to their midpoint.
+    mins: list[int] = []
+    k = 1
+    while k < n - 1:
+        if v[k] <= v[k - 1] and v[k] <= v[k + 1]:
+            j = k
+            while j < n - 1 and v[j + 1] == v[k]:
                 j += 1
-            runs.append([i, j - 1])
-            i = j
+            mins.append((k + j) // 2)
+            k = j + 1
         else:
-            i += 1
-    if not runs:
+            k += 1
+    if not mins:
         return []
-    # merge runs separated by a small gap
-    gap = max(1, int(min_separation_frac * n))
-    merged = [runs[0]]
-    for r in runs[1:]:
-        if r[0] - merged[-1][1] <= gap:
-            merged[-1][1] = r[1]
-        else:
-            merged.append(r)
+
+    # 2. Merge neighbouring minima separated only by a shallow speed peak (one corner, double apex).
+    merged_mins: list[int] = []
+    for m in mins:
+        if merged_mins:
+            peak = max(range(merged_mins[-1], m + 1), key=lambda t: v[t])
+            if (v[peak] - max(v[merged_mins[-1]], v[m])) * 3.6 < split_rise_kmh:
+                if v[m] < v[merged_mins[-1]]:
+                    merged_mins[-1] = m
+                continue
+        merged_mins.append(m)
+
+    # 3. Build each corner. Entry reaches back to the deceleration onset so the braking zone is in
+    #    the window (the brake-point detector needs room before the apex); exit stays TIGHT — the
+    #    first point where speed has recovered 40% of the dip — so the apex-deficit grade and the
+    #    spoken cue land right at the corner, not deep onto the next straight.
+    # smoothing offsets the minimum a sample or two; snap each apex to the true raw-speed minimum
+    raw = lap.v_ms
     out: list[tuple[int, int, int]] = []
-    for entry_i, exit_i in merged:
-        lo, hi = entry_i, exit_i
-        apex_i = min(range(lo, hi + 1), key=lambda k: lap.v_ms[k])
-        out.append((lo, apex_i, hi))
+    for mi, apex in enumerate(merged_mins):
+        lb = 0 if mi == 0 else merged_mins[mi - 1]
+        rb = n - 1 if mi == len(merged_mins) - 1 else merged_mins[mi + 1]
+        a_lo, a_hi = max(lb, apex - smooth_win), min(rb, apex + smooth_win)
+        apex = min(range(a_lo, a_hi + 1), key=lambda t: raw[t])  # exact apex speed
+        # Entry = the deceleration ONSET (where speed first falls a hair below the preceding peak),
+        # not the peak itself: wide enough that the brake-point detector has room to walk back, but
+        # tight enough that a straight on the approach is NOT counted as part of the corner window.
+        peak_i = max(range(lb, apex + 1), key=lambda t: v[t])
+        entry = peak_i
+        while entry < apex and raw[entry] > raw[peak_i] - _DECEL_ONSET_KMH / 3.6:
+            entry += 1
+        exit_peak = max(range(apex, rb + 1), key=lambda t: v[t])
+        drop_kmh = (max(raw[entry], raw[exit_peak]) - raw[apex]) * 3.6
+        if drop_kmh < min_apex_drop_kmh:  # phantom: lat_g spike with no real slow-down
+            continue
+        if lat[apex] < min_lat_g:  # braking on a straight is not a corner
+            continue
+        recover = raw[apex] + 0.4 * (raw[exit_peak] - raw[apex])
+        ex = apex
+        while ex < exit_peak and raw[ex] < recover:
+            ex += 1
+        if entry < apex < ex:
+            out.append((entry, apex, ex))
     return out
 
 

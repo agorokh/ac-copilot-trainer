@@ -98,9 +98,18 @@ def test_reference_lap_against_itself_emits_no_deficit():
     obs = build_observer_from_reference(ref)
     assert obs is not None
     advisories = _replay(obs, ref)
-    # driven == reference: on target, brakes at the brake point → no deficit, no late-brake
+    # driven == reference: on target → no apex deficit, and no brake FAULT (firm/critical "still
+    # coasting past the point"). A *calm anticipatory* brake heads-up before the mark is expected
+    # and correct (#368 AC a: the cue's audio onset lands before/at the brake point). This used to
+    # assert "no late_brake at all" only because the synthetic corner had no detectable brake point
+    # until the corner-segmentation fix gave every real corner a valid brake point.
     assert [a for a in advisories if a.kind == "apex_deficit"] == []
-    assert [a for a in advisories if a.kind == "late_brake"] == []
+    fault_brakes = [
+        a for a in advisories if a.kind == "late_brake" and a.register in ("firm", "critical")
+    ]
+    assert fault_brakes == []
+    for a in (a for a in advisories if a.kind == "late_brake"):
+        assert a.register == "calm" and a.detail.get("anticipatory") is True
 
 
 def test_slower_lap_triggers_apex_deficit():
