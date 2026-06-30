@@ -18,12 +18,12 @@ Pure stdlib; no telemetry, no I/O — unit-tested in isolation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from tools.ai_sidecar.lap_dynamics import CornerSignature
 
 
-class RootError(str, Enum):
+class RootError(StrEnum):
     """The one root mistake coached per pass (verb-first imperative in :data:`PHRASE`)."""
 
     EARLY_BRAKE = "early_brake"

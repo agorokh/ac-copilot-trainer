@@ -21,7 +21,7 @@ Pure stdlib, no telemetry, no I/O — fully unit-tested in isolation. The realti
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 from tools.ai_sidecar.coaching_diagnosis import Diagnosis, RootError
 
@@ -31,7 +31,7 @@ RETIRE_AFTER_FIXES = 2  # consecutive clean passes before a corner retires to si
 ASSESS_LAPS = 2  # leading laps that stay silent (watch first)
 
 
-class Status(str, Enum):
+class Status(StrEnum):
     DETECTING = "detecting"  # accumulating hysteresis; not yet eligible to speak
     ARMED = "armed"  # hysteresis met; will PRIME on next approach (budget permitting)
     PRIMED = "primed"  # PRIME spoken; the driver is still making the mistake
