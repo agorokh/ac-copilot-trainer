@@ -36,6 +36,8 @@ def test_decode_enum_with_item_values_does_not_fall_back_to_index() -> None:
     sp = _spinner(items=["Short", "Medium", "Long"], itemValues=[10, 20, 30], min=0, max=2, step=1)
     assert sp.decode(20) == "Medium"
     assert sp.decode(1) is None
+    assert sp.is_valid(20) is True
+    assert sp.is_valid(1) is False
 
 
 def test_clamp_snaps_to_range_and_step() -> None:
@@ -144,7 +146,9 @@ def test_schema_level_validate_clamp_decode_and_unknown_passthrough() -> None:
         "car", [{"name": "WING_2", "min": 0, "max": 20, "step": 1, "value": 16}]
     )
     assert s.validate("WING_2", 25) is False
+    assert s.validate("WING_2.VALUE", 25) is False
     assert s.clamp("WING_2", 25) == 20.0
+    assert s.clamp("WING_2.VALUE", 25) == 20.0
     # unknown spinner: permissive passthrough (schema may be partial)
     assert s.validate("UNKNOWN", 999) is True
     assert s.clamp("UNKNOWN", 999) == 999.0
@@ -213,13 +217,16 @@ def test_from_spinners_captures_ranges() -> None:
                 "displayMultiplier": 1.0,
             },
             {"name": "ABS", "value": 7, "min": 0, "max": 11, "step": 1},
-        ]
+        ],
+        car_id="car",
     )
     assert cs.value("WING_2") == 16.0  # existing value path unchanged
     assert cs.spinner_schema is not None
     assert cs.spinner_schema["WING_2"]["max"] == 20  # ranges are NO LONGER discarded
     sch = CarSetupSchema.from_car_setup(cs)
-    assert sch is not None and sch.validate("WING_2", 25) is False
+    assert sch is not None
+    assert sch.car_id == "car"
+    assert sch.validate("WING_2", 25) is False
 
 
 def test_direct_script_help_runs_from_repo_root() -> None:
@@ -287,3 +294,23 @@ def test_optimizer_allows_unchanged_read_only_schema_params() -> None:
     assert out["ok"] is True
     assert "WING_2.VALUE" in out["candidate"]["changed_params"]
     assert "FINAL_RATIO.VALUE" not in out["candidate"]["changed_params"]
+
+
+def test_optimizer_clamps_schema_boundary_candidates_before_filtering() -> None:
+    from tools.ai_sidecar.setup_optimizer import suggest_next_setup
+
+    def rec(wing: float, lap_ms: int) -> dict:
+        return {
+            "car": {"id": "c"},
+            "track": {"id": "t"},
+            "lap": {"lap_ms": lap_ms, "is_valid": True},
+            "setup": {"hash": f"h{wing}", "params": {"WING_2.VALUE": wing}},
+        }
+
+    records = [rec(19, 78_000), rec(17, 79_000)]
+    schema = CarSetupSchema.from_spinners_dump(
+        "c", [{"name": "WING_2", "min": 0, "max": 20, "step": 1}]
+    )
+    out = suggest_next_setup(records, car_id="c", track_id="t", schema=schema)
+    assert out["ok"] is True
+    assert out["candidate"]["changed_params"]["WING_2.VALUE"]["to"] == 20.0

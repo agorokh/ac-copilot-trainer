@@ -163,13 +163,17 @@ def test_from_spinners_live_read_path():
     spinners = [
         {"name": "FRONT_BIAS", "value": 62, "min": 50, "max": 70, "step": 1},
         {"name": "TRACTION_CONTROL", "value": 4, "min": 0, "max": 11, "step": 1},
-        {"name": "PRESSURE_LF", "value": 28.0},
+        {"name": "PRESSURE_LF", "value": 28.0, "unit": "psi"},
         {"bad": "no name"},
     ]
-    s = from_spinners(spinners)
+    s = from_spinners(spinners, car_id="ks_porsche_911_gt3_r_2016", track_id="magione")
     assert s.brake_bias_pct == 62.0
     assert s.tc_level == 4.0
     assert s.tire_pressures()["LF"] == 28.0
+    assert s.car_id == "ks_porsche_911_gt3_r_2016"
+    assert s.track_id == "magione"
+    assert s.spinner_schema is not None
+    assert s.spinner_schema["PRESSURE_LF"]["unit"] == "psi"
 
 
 # --- grouping / summary / diff ----------------------------------------------

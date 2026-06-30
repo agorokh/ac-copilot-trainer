@@ -107,6 +107,11 @@ class SpinnerDesc:
         if self.read_only:
             return False
         v = float(click)
+        if self.items and self.item_values:
+            return any(
+                raw is not None and abs(raw - v) <= 1e-9 and pos < len(self.items)
+                for pos, raw in enumerate(self.item_values)
+            )
         if self.min is not None and v < self.min - 1e-9:
             return False
         if self.max is not None and v > self.max + 1e-9:
@@ -206,27 +211,31 @@ class CarSetupSchema:
         body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
 
+    @staticmethod
+    def _spinner_name(name: str) -> str:
+        text = str(name)
+        return text[:-6] if text.upper().endswith(".VALUE") else text
+
     def get(self, name: str) -> SpinnerDesc | None:
-        return self.spinners.get(name)
+        return self.spinners.get(self._spinner_name(name))
 
     def validate(self, name: str, click: float) -> bool:
-        sp = self.spinners.get(name)
+        sp = self.get(name)
         return True if sp is None else sp.is_valid(click)
 
     def clamp(self, name: str, click: float) -> float:
-        sp = self.spinners.get(name)
+        sp = self.get(name)
         return float(click) if sp is None else sp.clamp(click)
 
     def decode(self, name: str, click: float | None) -> float | str | None:
-        sp = self.spinners.get(name)
+        sp = self.get(name)
         return click if sp is None else sp.decode(click)
 
     def constrain_params(self, params: dict[str, float]) -> dict[str, float]:
         """Clamp a ``{SECTION[.VALUE]: click}`` candidate so every knob is in-range/on-step."""
         out: dict[str, float] = {}
         for key, val in params.items():
-            name = key[:-6] if key.endswith(".VALUE") else key
-            out[key] = self.clamp(name, val)
+            out[key] = self.clamp(key, val)
         return out
 
     def to_json(self) -> dict[str, Any]:

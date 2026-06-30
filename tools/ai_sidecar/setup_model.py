@@ -462,7 +462,9 @@ def load_setup_file(path: str | Path) -> CarSetup:
     return from_snapshot(snap, car_id=car_id)
 
 
-def from_spinners(spinners: list[dict[str, Any]]) -> CarSetup:
+def from_spinners(
+    spinners: list[dict[str, Any]], *, car_id: str | None = None, track_id: str | None = None
+) -> CarSetup:
     """Build a :class:`CarSetup` from ``ac.getSetupSpinners()`` output.
 
     Each spinner is ``{name, value, min, max, step, ...}``; ``name`` is the AC section. This is the
@@ -478,6 +480,7 @@ def from_spinners(spinners: list[dict[str, Any]]) -> CarSetup:
         "defaultValue",
         "displayMultiplier",
         "units",
+        "unit",
         "label",
         "items",
         "itemValues",
@@ -491,7 +494,7 @@ def from_spinners(spinners: list[dict[str, Any]]) -> CarSetup:
             key = name.strip()
             snapshot[f"{key}.VALUE"] = sp.get("value")
             schema[key] = {k: sp.get(k) for k in _desc if k in sp}
-    out = from_snapshot(snapshot)
+    out = from_snapshot(snapshot, car_id=car_id, track_id=track_id)
     if schema:
         out.spinner_schema = schema
     return out

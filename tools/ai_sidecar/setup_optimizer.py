@@ -671,10 +671,19 @@ def suggest_next_setup(
     observed = {tuple((key, round(vec[key], 6)) for key in keys) for vec, _, _ in vectors}
 
     scored = []
-    for candidate in _candidate_grid(scoped, best, keys):
+    seen_candidates: set[tuple[tuple[str, float], ...]] = set()
+    for raw_candidate in _candidate_grid(scoped, best, keys):
+        candidate = (
+            schema.constrain_params(raw_candidate)
+            if schema is not None and hasattr(schema, "constrain_params")
+            else raw_candidate
+        )
         frozen = tuple((key, round(candidate[key], 6)) for key in keys)
         if frozen in observed:
             continue
+        if frozen in seen_candidates:
+            continue
+        seen_candidates.add(frozen)
         if schema is not None and not _schema_allows(candidate, schema, base=base_params):
             continue
         weights = []
