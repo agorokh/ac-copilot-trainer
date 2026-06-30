@@ -107,17 +107,21 @@ def _archive_track_layout(archive: dict | None) -> str | None:
     return str(layout)
 
 
-def _same_archive_layout(candidate: dict | None, anchor: dict | None) -> bool:
+def _same_archive_layout(candidate: dict | None, anchor: dict | None, *, required: bool) -> bool:
     candidate_layout = _archive_track_layout(candidate)
     anchor_layout = _archive_track_layout(anchor)
+    if not required and (candidate_layout is None or anchor_layout is None):
+        return True
     if candidate_layout is None and anchor_layout is None:
         return True
     return candidate_layout == anchor_layout
 
 
 def _same_optional_identity(candidate: str | None, anchor: str | None, *, required: bool) -> bool:
+    if not required and (candidate is None or anchor is None):
+        return True
     if candidate is None or anchor is None:
-        return False if required else candidate is None and anchor is None
+        return False
     return candidate == anchor
 
 
@@ -128,6 +132,7 @@ def _same_archive_scope(
     anchor_archive: dict | None,
     *,
     require_identity: bool,
+    require_layout: bool,
 ) -> bool:
     if not _same_optional_identity(
         candidate_lap.car_id, anchor_lap.car_id, required=require_identity
@@ -137,15 +142,26 @@ def _same_archive_scope(
         candidate_lap.track_id, anchor_lap.track_id, required=require_identity
     ):
         return False
-    return _same_archive_layout(candidate_archive, anchor_archive)
+    return _same_archive_layout(candidate_archive, anchor_archive, required=require_layout)
 
 
 def _archive_content_key(archive: dict | None) -> str:
+    trace = archive.get("trace") if isinstance(archive, dict) else None
+    trace_shape: dict[str, object] = {}
+    if isinstance(trace, dict):
+        samples = trace.get("samples")
+        trace_shape = {
+            "fields": trace.get("fields"),
+            "samples_count": trace.get("samples_count")
+            if trace.get("samples_count") is not None
+            else len(samples)
+            if isinstance(samples, list)
+            else None,
+        }
     identity = {
-        key: archive.get(key)
-        for key in ("car", "track", "lap", "trace")
-        if isinstance(archive, dict)
+        key: archive.get(key) for key in ("car", "track", "lap") if isinstance(archive, dict)
     }
+    identity["trace_shape"] = trace_shape
     payload = json.dumps(identity, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -463,6 +479,7 @@ def _analyze(
             reference_archive,
             lap_archive,
             require_identity=False,
+            require_layout=False,
         )
         else None
     )
@@ -486,6 +503,7 @@ def _analyze(
             history_archive,
             lap_archive,
             require_identity=True,
+            require_layout=True,
         ):
             history_laps.append(history_lap)
     corners = segment_corners(lap)
@@ -526,7 +544,14 @@ def _analyze(
             corpus_lap = lap_trace_from_archive(archive)
         except ValueError:
             continue
-        if _same_archive_scope(corpus_lap, lap, archive, lap_archive, require_identity=True):
+        if _same_archive_scope(
+            corpus_lap,
+            lap,
+            archive,
+            lap_archive,
+            require_identity=True,
+            require_layout=True,
+        ):
             corpus_laps.append(corpus_lap)
     superlap = build_superlap(corpus_laps) if corpus_laps else None
     return {

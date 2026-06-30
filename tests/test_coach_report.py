@@ -319,6 +319,19 @@ def test_reference_still_works_when_both_archives_omit_identity():
     assert d["corners"][0]["time_loss_s"] is not None
 
 
+def test_reference_allows_legacy_archive_with_missing_identity_and_layout():
+    ref = _corner_archive(degrade=0.0)
+    student = _corner_archive(degrade=8.0)
+    student["track"]["layout"] = "gp"
+    del ref["car"]["id"]
+    del ref["track"]["id"]
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["corner_reference"] is not None
+    assert d["corners"][0]["time_loss_s"] is not None
+
+
 def test_trail_braking_block_in_structured_debrief():
     # the trail-braking analyzer's per-corner read flows into the structured debrief + text (#296)
     d = build_structured_debrief(_corner_archive(), grip_ceiling_g=2.5)

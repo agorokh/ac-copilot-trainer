@@ -92,6 +92,7 @@ def test_brain_followup_loads_history_paths_for_consistency(
     laps_dir.mkdir(parents=True)
     hist_path = laps_dir / "lap_history.json"
     history = _rich_corner_archive()
+    history["lap"] = 8
     speed_idx = history["trace"]["fields"].index("speed")
     for sample in history["trace"]["samples"][40:60]:
         sample[speed_idx] *= 0.95
