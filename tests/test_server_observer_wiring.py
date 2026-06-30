@@ -163,6 +163,10 @@ def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch
     ref.write_text(json.dumps({}), encoding="utf-8")
     server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is sentinel
+    status = server.voice_runtime_status()
+    assert status["state"] == "disabled"
+    assert status["disabled_reason"] == "reference archive has no usable corners"
+    assert str(ref) not in str(status["disabled_reason"])
 
 
 def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
@@ -175,19 +179,73 @@ def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
         server.VoiceRuntimeConfig(reference_path="does-not-exist-9f3a.json", bank_dir=None)
     )
     assert server._observer is sentinel
+    status = server.voice_runtime_status()
+    assert status["state"] == "disabled"
+    assert "failed to load reference" in str(status["disabled_reason"])
+    assert "does-not-exist-9f3a.json" not in str(status["disabled_reason"])
 
 
-def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
+def test_wire_voice_bank_without_reference_reports_disabled(monkeypatch):
+    server.set_voice_coach(None)
+    monkeypatch.setattr(server, "_observer", None)
+
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=None, bank_dir="bank-dir"))
+
+    status = server.voice_runtime_status()
+    assert status["configured"] is True
+    assert status["enabled"] is False
+    assert status["state"] == "disabled"
+    assert "REFERENCE_ARCHIVE" in str(status["disabled_reason"])
+
+
+def test_wire_voice_tts_without_reference_reports_disabled(monkeypatch):
+    server.set_voice_coach(None)
+    monkeypatch.setattr(server, "_observer", None)
+
+    server._wire_voice(
+        server.VoiceRuntimeConfig(reference_path=None, bank_dir=None, tts_enabled=True)
+    )
+
+    status = server.voice_runtime_status()
+    assert status["configured"] is True
+    assert status["enabled"] is False
+    assert status["state"] == "disabled"
+    assert status["backend"] == "pyttsx3"
+    assert "REFERENCE_ARCHIVE" in str(status["disabled_reason"])
+
+
+def test_voice_runtime_status_replaces_snapshot_atomically():
+    server.set_voice_runtime_status(configured=True, state="initializing")
+    prior = server.voice_runtime_status()
+
+    server.set_voice_runtime_status()
+
+    assert prior["configured"] is True
+    assert prior["state"] == "initializing"
+    assert server.voice_runtime_status()["state"] == "skipped"
+
+
+def test_wire_voice_tts_installs_pyttsx3_adapter(tmp_path, monkeypatch):
     import tools.ai_sidecar.voice.client as voice_client
 
     spoken: list[tuple[str, str]] = []
     seen: dict[str, float | int] = {}
+    ref = tmp_path / "ref.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
+    monkeypatch.setattr(server, "_observer", None)
     server.set_voice_coach(None)
 
-    def fake_speaker(*, base_rate: int, base_volume: float, require_opt_in: bool):
+    def fake_speaker(
+        *,
+        base_rate: int,
+        base_volume: float,
+        require_opt_in: bool,
+        startup_timeout_s: float | None,
+    ):
         seen["rate"] = base_rate
         seen["volume"] = base_volume
         seen["require_opt_in"] = int(require_opt_in)
+        seen["startup_timeout_s"] = startup_timeout_s
 
         def speak(text: str, register: str = "calm") -> None:
             spoken.append((text, register))
@@ -200,21 +258,24 @@ def test_wire_voice_tts_installs_pyttsx3_adapter(monkeypatch):
 
     try:
         server._wire_voice(
-            server.VoiceRuntimeConfig(reference_path=None, bank_dir=None, tts_enabled=True)
+            server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None, tts_enabled=True)
         )
         assert server._voice_coach is not None
         server._voice_coach.subscribe(_adv(kind="apex_deficit", corner=1, urgency="info"))
+        assert server.voice_runtime_status()["state"] == "tts"
     finally:
         server.set_voice_coach(None)
 
     assert spoken == [("More entry speed, Turn 2.", "calm")]
-    assert seen == {"rate": 260, "volume": 0.8, "require_opt_in": 0}
+    assert seen == {"rate": 260, "volume": 0.8, "require_opt_in": 0, "startup_timeout_s": 2.0}
 
 
-def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):
+def test_wire_voice_bank_uses_env_audio_routing(tmp_path, monkeypatch):
     from tools.ai_sidecar.voice import engine
 
     seen: dict[str, object] = {}
+    ref = tmp_path / "ref.json"
+    ref.write_text(json.dumps(_corner_archive()), encoding="utf-8")
 
     class _Coach:
         enabled = True
@@ -237,10 +298,12 @@ def test_wire_voice_bank_uses_env_audio_routing(monkeypatch):
     monkeypatch.setenv("AC_COPILOT_VOICE_HOST_API", "Windows DirectSound")
     monkeypatch.setenv("AC_COPILOT_VOICE_VERBOSITY", "high")
     monkeypatch.setattr(engine.VoiceCoach, "from_bank", fake_from_bank)
+    monkeypatch.setattr(server, "_observer", None)
 
     try:
-        server._wire_voice(server.VoiceRuntimeConfig(reference_path=None, bank_dir="bank-dir"))
+        server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir="bank-dir"))
         assert server._voice_coach is not None
+        assert server.voice_runtime_status()["state"] == "enabled"
     finally:
         server.set_voice_coach(None)
 

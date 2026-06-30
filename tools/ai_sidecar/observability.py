@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from tools.ai_sidecar.external_protocol import SERVER_VERSION
@@ -76,16 +77,21 @@ def _labels(pairs: dict[str, str]) -> str:
     return "{" + inner + "}"
 
 
-def build_health_json(connected_peers: int, *, screen_peers: int = 0) -> str:
+def build_health_json(
+    connected_peers: int,
+    *,
+    screen_peers: int = 0,
+    voice: Mapping[str, object] | None = None,
+) -> str:
     """Instant health body: the endpoint answering IS liveness."""
-    return json.dumps(
-        {
-            "status": "ok",
-            "connected_peers": connected_peers,
-            "screen_peers": screen_peers,
-        },
-        separators=(",", ":"),
-    )
+    payload: dict[str, object] = {
+        "status": "ok",
+        "connected_peers": connected_peers,
+        "screen_peers": screen_peers,
+    }
+    if voice is not None:
+        payload["voice"] = dict(voice)
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def build_metrics_text(connected_peers: int, *, screen_peers: int = 0) -> str:

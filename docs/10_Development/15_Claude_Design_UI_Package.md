@@ -10,6 +10,27 @@ already implemented, and what future scope needs design room.
 Use this whole file as the design prompt. The intended output is a buildable UI
 spec, not a marketing page.
 
+## Rendered visual reference (start here)
+
+This brief is the written half. The **rendered** half lives at
+[`design/index.html`](design/index.html) — open it in any browser.
+
+It is **HUD-first**: the already-shipped, Figma-matched in-game HUD is the
+**source of truth**, reproduced faithfully from
+[`src/ac_copilot_trainer/modules/hud.lua`](../../src/ac_copilot_trainer/modules/hud.lua)
+and
+[`coaching_overlay.lua`](../../src/ac_copilot_trainer/modules/coaching_overlay.lua)
+— the real translucent-glass panels, grey hairline, Michroma/Montserrat/Syncopate
+typefaces (loaded from the bundled TTFs in `src/ac_copilot_trainer/content/fonts/`),
+red/amber/green speed semantics, target/current split, glowing red progress bar,
+and `AG PORSCHE ACADEMY` footer. The Windows launcher and ESP32 rig screens are
+then aligned **up** to that language so all three surfaces read as one product.
+
+Hand both files to Claude together: this `.md` for constraints and data
+bindings, the `.html` for the visual target. When the HUD's Figma source moves,
+re-sync the tokens in the HTML from `hud.lua` / `coaching_overlay.lua` first —
+the HUD leads, the other surfaces follow.
+
 ## Copy-paste prompt for Claude Design
 
 You are designing the AC Copilot Trainer driver-facing UI. Produce a practical

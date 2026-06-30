@@ -14,6 +14,13 @@ pip install -e ".[launcher]"
 python -m tools.rig_launcher --build-exe
 ```
 
+The build extra includes the runtime voice floor (`numpy`, `sounddevice`,
+`pyttsx3`, and PyInstaller collection for sounddevice's PortAudio binaries).
+`rtmixer` remains opt-in via `pip install -e ".[voice-rtmixer]"`; when it is
+installed, the build helper collects it opportunistically. Bake-time neural
+voice prosody still requires a system `ffmpeg` on `PATH` before running
+`python -m tools.ai_sidecar.voice.bake`.
+
 Create or refresh the Desktop shortcut:
 
 ```powershell
@@ -23,6 +30,28 @@ python -m tools.rig_launcher --install-shortcut
 The shortcut points at `dist\AC-Copilot-Game-Point.exe` and uses the repository
 root as the working directory. The exe remains a local build artifact and is not
 committed.
+
+### Audio backend (rtmixer is opt-in)
+
+`pip install -e ".[launcher]"` is **always installable on a clean Windows rig**:
+its sidecar voice floor is `numpy` + `sounddevice`, which ship bundled-PortAudio
+wheels. The lower-latency `rtmixer` backend is **not** part of the default
+`launcher` / `voice` extras (issue #383) — it has no prebuilt Windows wheels and
+needs a C/PortAudio build toolchain, so bundling it made the documented install
+path hard-fail on the rig.
+
+The voice engine auto-falls back to the `sounddevice` backend when `rtmixer` is
+not importable (PR #387), so voice playback works with the floor alone. To opt
+into the lower-latency backend **where a C/PortAudio toolchain can build it**,
+add the best-effort extra:
+
+```powershell
+pip install -e ".[launcher,voice-rtmixer]"
+```
+
+`voice-rtmixer` self-references the `voice` extra, so `pip install -e ".[voice-rtmixer]"`
+also installs the `numpy` + `sounddevice` floor. Select the backend at runtime
+with `AC_COPILOT_VOICE_BACKEND` (`rtmixer` or `sounddevice`).
 
 ## UI design handoff
 
@@ -57,6 +86,12 @@ Settings precedence is:
 `settings.json` is created by the launcher's **Settings** button, or can be
 created ahead of time by calling `ensure_settings_file()` from
 `tools.rig_launcher.settings`.
+
+The launcher status row for `voice` is sourced from the sidecar `/health`
+payload when the sidecar is reachable. A stale bank, missing reference archive,
+or failed audio backend reports `voice: DISABLED - <reason>` and makes the
+overall status `needs_attention`; the launcher does not treat the mere presence
+of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 
 ## Setup Exchange
 

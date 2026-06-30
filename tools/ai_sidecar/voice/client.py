@@ -12,6 +12,7 @@ Run on the rig alongside the sidecar (``pip install -e ".[voice-client]"``):
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -131,6 +132,7 @@ def _pyttsx3_speaker(
     environ: Mapping[str, str] | None = None,
     rate: int | None = None,
     volume: float | None = None,
+    startup_timeout_s: float | None = None,
 ) -> Callable[[str, str], None]:
     """Build a non-blocking speak(text, register) backed by pyttsx3 on a dedicated worker thread.
 
@@ -185,6 +187,16 @@ def _pyttsx3_speaker(
 
     t = threading.Thread(target=worker, daemon=True, name="pyttsx3-voice")
     t.start()
+    if startup_timeout_s is not None:
+        deadline = time.monotonic() + max(0.0, startup_timeout_s)
+        while not ready.is_set():
+            if failed.is_set():
+                raise RuntimeError("pyttsx3 voice worker failed to initialize")
+            if not t.is_alive():
+                raise RuntimeError("pyttsx3 voice worker exited before initialization")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("pyttsx3 voice worker did not become ready")
+            time.sleep(0.01)
 
     def speak(text: str, register: str = "calm") -> None:
         if not should_enqueue_voice_cue(failed=failed.is_set(), worker_alive=t.is_alive()):

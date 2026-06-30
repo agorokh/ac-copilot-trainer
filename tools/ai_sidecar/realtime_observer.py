@@ -581,6 +581,12 @@ def build_observer_from_reference(reference_archive: dict) -> RealtimeObserver |
     GGV theoretical ceiling (we never fabricate one from a driven lap). Returns None when the
     archive has no usable trace or no segmentable corners.
     """
+    if not isinstance(reference_archive, dict):
+        return None
+    generator = reference_archive.get("generator")
+    tt_reference = generator.get("tt_reference") if isinstance(generator, dict) else None
+    if isinstance(tt_reference, dict) and tt_reference.get("partial") is True:
+        return None
     try:
         ref_lap = lap_trace_from_archive(reference_archive)
     except ValueError:

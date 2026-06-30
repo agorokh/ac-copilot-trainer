@@ -28,6 +28,7 @@ from tools.ai_sidecar.server import (  # noqa: E402
     _external_peers,
     _handler,
     make_process_request,
+    set_voice_runtime_status,
 )
 
 
@@ -45,6 +46,7 @@ async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     port = _free_port()
     _external_peers.clear()
     _external_peer_classes.clear()
+    set_voice_runtime_status()
     try:
         async with ws_serve(
             lambda ws: _handler(ws, reply_coaching=True),
@@ -56,6 +58,7 @@ async def _running_sidecar(token: str | None = None) -> AsyncIterator[int]:
     finally:
         _external_peers.clear()
         _external_peer_classes.clear()
+        set_voice_runtime_status()
 
 
 def _http_get(port: int, path: str) -> tuple[int, list[str], str]:
@@ -76,6 +79,27 @@ def test_health_endpoint_on_ws_port() -> None:
     assert payload["status"] == "ok"
     assert payload["connected_peers"] == 0
     assert payload["screen_peers"] == 0
+    assert payload["voice"]["state"] == "skipped"
+    assert payload["voice"]["enabled"] is False
+
+
+def test_health_endpoint_sanitizes_voice_disabled_paths() -> None:
+    async def _run() -> tuple[int, list[str], str]:
+        async with _running_sidecar() as port:
+            set_voice_runtime_status(
+                configured=True,
+                enabled=False,
+                state="disabled",
+                disabled_reason="failed to load reference /Users/driver/rig/ref.json: bad json",
+            )
+            return await asyncio.to_thread(_http_get, port, "/health")
+
+    status, _content_types, body = asyncio.run(_run())
+    payload = json.loads(body)
+
+    assert status == 200
+    assert payload["voice"]["disabled_reason"] == "failed to load reference <path> bad json"
+    assert "/Users/driver" not in body
 
 
 def test_metrics_endpoint_single_content_type_and_core_series() -> None:

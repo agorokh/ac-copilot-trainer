@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-29T18:55:00Z
+last_updated: 2026-06-30T08:36:35Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/issue-86-rig-screen-hotspot-autostart-2026-06-28.md
@@ -11,6 +12,7 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/pr-359-tt-ingest-mtt0-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-355-m0-merge-collision-and-350-reconciliation-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/coaching-lakehouse-duckdb-2026-06-28.md
+  - AcCopilotTrainer/01_Decisions/duckdb-over-clickhouse-storage-2026-06-29.md
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-327-vault-automerge-already-resolved-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/autonomous-drive-multitrack-generality-2026-06-27.md
@@ -47,11 +49,104 @@ relates_to:
   - AcCopilotTrainer/01_Decisions/track-titan-coaching-oracle-strategy-2026-06-27.md
   - AcCopilotTrainer/03_Investigations/pr-338-coaching-hardening-handoff.md
   - AcCopilotTrainer/01_Decisions/curated-setup-as-data-platform-entity-2026-06-28.md
+  - AcCopilotTrainer/01_Decisions/setup-intelligence-platform-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/curated-setup-hash-bridge-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/porsche-911-gt3r-magione-balanced-setup-2026-06-28.md
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
+
+PR [#394](https://github.com/agorokh/ac-copilot-trainer/pull/394) squash-merged to `main` as
+[`b14c984`](https://github.com/agorokh/ac-copilot-trainer/commit/b14c9842c9c9fcea5bae0b17d6ad5f221e9b02dc)
+at 2026-06-30T08:33:34Z. Issue [#392](https://github.com/agorokh/ac-copilot-trainer/issues/392) is
+**CLOSED**.
+
+**Shipped:** sidecar `/health` now includes path-safe `voice` runtime state; Game Point launcher
+uses that health payload as the source of truth for voice status instead of treating configured paths
+as proof that the coach initialized. Launcher status now catches disabled/stale schema-v1 banks,
+adopted sidecars that were started without voice config, missing old `voice` health payloads, and
+observer-only sidecars when playback was requested. PyInstaller packaging collects the installable
+voice runtime floor (`numpy`, `sounddevice`, `pyttsx3`) and opportunistically collects opt-in
+`rtmixer`/`pa_ringbuffer` only when installed. The pyttsx3 fallback waits for worker startup before
+reporting `tts` enabled.
+
+**Verification:** local `make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python`
+passed on the final head (`1893 passed, 75 skipped`, coverage 85.43%, `ci-fast: OK`). Focused
+launcher/sidecar/voice tests passed (`96 passed`). GitHub checks on `be2fb50` passed (`build`,
+`Canonical docs exist`, `conformance`; vault automerge skipped). Required review cooldowns were
+observed through 2026-06-30T08:24:15Z; current non-outdated review threads were resolved; no
+current-SHA review body landed after the final cooldown.
+
+**Runtime proof:** Windows `pc` packaged proof was captured before the later review-fix commits:
+`C:\Users\arsen\Projects\ac-copilot-trainer-issue392` built
+`dist\AC-Copilot-Game-Point.exe` with PyInstaller 6.21.0 at head `4d5a610`; the frozen exe loaded a
+schema-v2 tone bank with `/health.voice.state=enabled` using `sounddevice`, and a stale schema-v1 bank
+reported `DISABLED` through both frozen sidecar and frozen launcher with no module import errors.
+After the final review-fix commits, `pc` was offline in Tailscale (`100.75.251.87`, last seen ~31m
+before closeout) and SSH timed out, so final Windows rerun was not available. Final-head local runtime
+smoke with real sidecar processes + launcher CLI covered the changed logic: stale schema-v1 bank
+surfaces `DISABLED`, no-voice sidecar adoption is `DISABLED`, and missing-reference health does not
+leak local paths. Details: [[pr-394-voice-reliability-2026-06-30]].
+
+## Delivered (2026-06-30) — PR #395 MERGED: M-TT2 Track Titan reference archive builder (#353)
+
+PR [#395](https://github.com/agorokh/ac-copilot-trainer/pull/395) squash-merged to `main` as
+[`b122e1b`](https://github.com/agorokh/ac-copilot-trainer/commit/b122e1becbfaaa9d028c01b924a4a6b8db50614d)
+at 2026-06-30T08:29:43Z. This delivers the #353 **M-TT2** local bridge from retained Track Titan
+services telemetry into schema-v1 `lap_archive` references for the M0 voice-coaching observer.
+
+**Shipped:** `tools.tt_ingest.tt_normalize.build_reference_archive` maps TT frames into archive trace
+fields (`dist` -> `spline`, `Kmh` -> `speed`, `lTime` -> `eMs`, pedals clamped to `[0,1]`, TT `X/Y`
+preserved as `px/pz` with `py=0`), deterministically merges multiple retained windows, validates one
+source session/lap plus reference-lap identity, rejects large spatial gaps, and treats reference-lap
+time mismatches as partial. `python -m tools.tt_ingest reference` now builds archives from explicit
+retained inputs or scoped lake discovery (`--discover-lake --session-key ... --lap ...`). Same-lap
+`/last-session` captures are retained as deterministic `last_session_lapN_window_<fingerprint>.json`
+files after the first canonical file, so repeated segment-window captures are discoverable without
+overwriting write-once evidence. Debug partial archives carry `generator.tt_reference.partial=true`,
+coverage/timing diagnostics, and are rejected by `build_observer_from_reference`.
+
+**Review hardening:** addressed Codex/Gemini/Qodo findings for dict-shaped car IDs, start/finish wrap
+coverage, disjoint windows, malformed services envelopes, referenceLap lap metadata, scoped lake
+discovery, segment-window discovery, partial-runtime guard, output write errors, and `--overwrite`
+attempts that would corrupt retained TT input files. GitHub checks on `b6fcbaf` passed (`build`,
+`Canonical docs exist`, `conformance`; vault automerge skipped), `ci_resolve_gate.py` reported
+`No substantive findings hanging`, and all current review threads were resolved after the required
+cooldowns.
+
+**Verification:** clean worktree
+`make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python` passed on
+`b6fcbaf` (`1907 passed, 75 skipped`, coverage 85.47%, `ci-fast: OK`). Focused tests:
+`tests/test_tt_normalize.py`, `tests/test_tt_ingest_cli.py`, `tests/test_tt_reference_runtime_guard.py`,
+and `tests/test_realtime_observer.py` passed (`79 passed`). Manual CLI trap: the one-segment TT
+fixture is rejected in strict mode; `--allow-partial` emits a schema-valid debug archive marked
+partial and the live observer refuses to install it.
+
+**What remains on #353:** issue [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)
+stays **OPEN**. M-TT0/M-TT1/M-TT2 are now merged, but M-TT3 still needs the per-corner analysis ->
+harness curriculum/oracle work. Production M-TT2 use also still depends on collecting enough real TT
+segment windows (or finding a full-lap endpoint) for strict mode to produce a non-partial reference;
+the code intentionally refuses to fake a full lap from one `/last-session` segment window.
+
+## Resolved (2026-06-30T00:53:41Z) — PR #389 setup-schema review loop
+
+PR [#389](https://github.com/agorokh/ac-copilot-trainer/pull/389) is OPEN and review-resolved on head
+`8e8011b` (`feat/issue-388-setup-schema-foundation`). CI is green on the head SHA (`build`,
+`Canonical docs exist`, and `conformance` passed; `guard-and-automerge` skipped as expected). Local
+`make ci-fast PYTHON=/Users/arseny_gorokh/Projects/ac-copilot-trainer/.venv/bin/python` passed after
+the review fixes (`1871 passed, 75 skipped`, coverage 85.27%).
+
+Review fixes shipped in two commits: `f0b45c9` covered decode-affecting `schema_hash` fields, direct
+script execution, enum decode misses, step-grid clamp bounds, unchanged read-only optimizer fields,
+and the new SIP ADR index link; `8e8011b` covered live `unit` propagation through
+`setup_model.from_spinners`, enum `itemValues` validation as raw values, `.VALUE` schema lookup
+normalization, boundary candidate clamping before optimizer filtering, and car/track id threading for
+live spinner captures. GraphQL review threads were resolved after those fixes; `ci_resolve_gate.py`
+reported `No substantive findings hanging` for PR #389. No current-SHA
+`ws-ops-cursor-reviewer[bot]` review body was present after the required cooldown, so the self-hosted
+reviewer gate is vacuously satisfied.
 
 ## In flight (2026-06-29T18:42:58Z) — PR #371 voice-intensity resolution for #368
 
@@ -171,18 +266,12 @@ Gemini at quota). Verified live E2E: `python -m tools.tt_ingest coaching` return
 per-corner diagnoses for the last session (Magione, Porsche 911 GT3 R — c3 "You messed up your
 exit", c4 "line too wide") and retained them to the lake.
 
-**Resume here → M-TT2:** reference-lap telemetry → `lap_archive` schema → M0 `--reference-archive`
-voice feed. Point schema PINNED + the frame→`TRACE_FIELDS` mapping is **de-risk-PROVEN** against
-real data (`.scratch/tt_mtt2_smoke.py` builds a valid `lap_archive` from the TT reference frames;
-`Kmh`→`speed` units confirmed km/h). **BUT a real blocker surfaced (and is now documented in
-[[tt-services-sigv4-crack-2026-06-29]]): `/last-session` carries only ONE SEGMENT's telemetry
-window (~9% of the lap: measured `dist` 0.265→0.359, derived lap_ms≈29s vs the true ~71s reference).**
-So M-TT2's FIRST step is a **live capture** of the FULL reference telemetry (stitch all 7 segment
-windows by scrubbing the renderer per-segment via CDP, or find a full-lap telemetry endpoint) —
-do it while TT is open — THEN normalise + ship the `reference` CLI + M0 bridge. M-TT2 is NOT a
-single-call add. Then **M-TT3** (per-corner analysis → harness drive-to-reference curriculum).
-Arbitrary-lap/older-session coaching is also a deferred follow-up (M-TT1 scopes to the last
-session's own lap).
+**M-TT2 follow-up:** PR #395 now ships the `reference` CLI + M0 bridge, with strict partial guards.
+The real data constraint still stands: `/last-session` carries only one segment's telemetry window
+(~9% of the lap in the retained fixture), so production use requires enough retained segment windows
+or a newly found full-lap endpoint before strict mode emits a non-partial archive. Next #353 slice is
+**M-TT3** (per-corner analysis -> harness drive-to-reference curriculum). Arbitrary-lap/older-session
+coaching is also a deferred follow-up (M-TT1 scopes to the last session's own lap).
 
 ## Delivered (2026-06-29) — PR #365 MERGED: Game Point launcher supervisor (#363 CLOSED)
 

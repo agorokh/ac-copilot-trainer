@@ -7,11 +7,18 @@ from pathlib import Path
 
 import pytest
 
+from tools.ac_harness.reference_lap import validate_lap_archive_record
 from tools.tt_ingest.tt_normalize import (
+    DEFAULT_REFERENCE_COVERAGE_THRESHOLD,
     INDEX_SCHEMA_VERSION,
+    TT_REFERENCE_IMPORT_FORMAT,
+    TTNormalizeError,
+    build_reference_archive,
     build_sessions_index,
     normalize_session,
     normalize_sessions,
+    reference_coverage,
+    reference_frames_from_payload,
     split_session_id,
 )
 
@@ -85,3 +92,238 @@ def test_build_sessions_index() -> None:
     assert index["session_count"] == 3
     assert index["generated_at"] == "2026-06-28T00:00:00Z"
     assert len(index["sessions"]) == 3
+
+
+def _tt_reference_payload(start: float, end: float, *, samples: int = 16) -> dict:
+    frames = []
+    for i in range(samples):
+        t = i / (samples - 1)
+        dist = start + (end - start) * t
+        frames.append(
+            {
+                "dist": round(dist, 6),
+                "brak": 0.7 if 0.18 <= dist <= 0.28 else 0.0,
+                "gear": 3 if dist < 0.4 else 4,
+                "Kmh": 155.0 - 45.0 * max(0.0, 1.0 - abs(dist - 0.24) / 0.12)
+                if 0.12 <= dist <= 0.36
+                else 155.0,
+                "lTime": round(71000.0 * dist, 3),
+                "ovSteer": 0,
+                "steer": 0.35 if 0.12 <= dist <= 0.36 else 0.02,
+                "throt": 0.1 if 0.18 <= dist <= 0.28 else 1.0,
+                "unSteer": 0,
+                "useGrip": 0,
+                "X": 1000.0 * dist,
+                "Y": 120.0 * dist * dist,
+                "distM": None,
+            }
+        )
+    return {
+        "success": True,
+        "status": 200,
+        "data": {
+            "session": {
+                "id": "own-uid#sess-full",
+                "session_id": "own-uid#sess-full",
+                "game_id": "assettoCorsa",
+                "car": "ks_porsche_911_gt3_r_2016",
+                "track_id": "magione",
+                "lap_number": 5,
+            },
+            "referenceLap": {
+                "user_id": "ref-uid",
+                "session_key": "ref-session",
+                "lap_number": 5,
+                "lap_time": "71000",
+            },
+            "telemetry": {
+                "telemetry": {
+                    "reference": frames,
+                    "user": frames,
+                },
+                "format": "sanitized-test",
+            },
+        },
+    }
+
+
+def _session_payload(
+    start: float,
+    end: float,
+    *,
+    session_key: str,
+    car: object = "ks_porsche_911_gt3_r_2016",
+    track_id: str = "magione",
+) -> dict:
+    payload = _tt_reference_payload(start, end)
+    session = payload["data"]["session"]
+    session["id"] = f"own-uid#{session_key}"
+    session["session_id"] = f"own-uid#{session_key}"
+    session["car"] = car
+    session["track_id"] = track_id
+    return payload
+
+
+def test_reference_frames_from_payload_maps_tt_channels() -> None:
+    frame = reference_frames_from_payload(_tt_reference_payload(0.4, 0.41, samples=2))[0]
+    assert frame["spline"] == pytest.approx(0.4)
+    assert frame["speed"] == pytest.approx(155.0)
+    assert frame["eMs"] == pytest.approx(28400.0)
+    assert frame["px"] == pytest.approx(400.0)
+    assert frame["py"] == 0.0
+    assert frame["pz"] == pytest.approx(19.2)
+
+
+def test_reference_frames_reject_malformed_services_envelope() -> None:
+    with pytest.raises(TTNormalizeError, match="missing data object"):
+        reference_frames_from_payload({"success": True})
+
+
+def test_reference_frames_clamp_minor_pedal_noise() -> None:
+    payload = _tt_reference_payload(0.4, 0.41, samples=2)
+    payload["data"]["telemetry"]["telemetry"]["reference"][0]["throt"] = 1.00001
+    payload["data"]["telemetry"]["telemetry"]["reference"][0]["brak"] = -0.00001
+
+    frame = reference_frames_from_payload(payload)[0]
+
+    assert frame["throttle"] == 1.0
+    assert frame["brake"] == 0.0
+
+
+def test_build_reference_archive_rejects_single_segment_window() -> None:
+    with pytest.raises(TTNormalizeError, match="partial"):
+        build_reference_archive([_tt_reference_payload(0.265, 0.359, samples=20)])
+
+
+def test_build_reference_archive_allows_partial_with_marker() -> None:
+    record = build_reference_archive(
+        [_tt_reference_payload(0.265, 0.359, samples=20)],
+        allow_partial=True,
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    validate_lap_archive_record(record)
+    assert record["import_format"] == TT_REFERENCE_IMPORT_FORMAT
+    meta = record["generator"]["tt_reference"]
+    assert meta["partial"] is True
+    assert meta["coverage"] < DEFAULT_REFERENCE_COVERAGE_THRESHOLD
+
+
+def test_build_reference_archive_stitches_full_lap_windows() -> None:
+    record = build_reference_archive(
+        [
+            _tt_reference_payload(0.0, 0.5, samples=26),
+            _tt_reference_payload(0.5, 1.0, samples=26),
+        ],
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    validate_lap_archive_record(record)
+    assert record["car"]["id"] == "ks_porsche_911_gt3_r_2016"
+    assert record["track"]["id"] == "magione"
+    assert record["lap"]["lap_ms"] == 71000
+    assert record["generator"]["decision_issue"] == 353
+    assert record["generator"]["tt_reference"]["partial"] is False
+    assert record["generator"]["tt_reference"]["payload_count"] == 2
+    assert record["generator"]["tt_reference"]["max_spline_gap"] == pytest.approx(0.08)
+    assert record["generator"]["tt_reference"]["observed_max_spline_gap"] < 0.08
+    assert record["generator"]["tt_reference"]["reference_lap_ms"] == 71000
+    assert record["generator"]["tt_reference"]["lap_time_mismatch_ms"] == 0
+    assert record["corners"]  # non-vacuous for the M0 observer path
+
+
+def test_build_reference_archive_uses_reference_lap_identity() -> None:
+    first = _tt_reference_payload(0.0, 0.5, samples=26)
+    second = _tt_reference_payload(0.5, 1.0, samples=26)
+    for payload in (first, second):
+        payload["data"]["session"]["lap_number"] = 5
+        payload["data"]["referenceLap"]["lap_number"] = 4
+        payload["data"]["referenceLap"]["session_key"] = "pro-reference-session"
+
+    record = build_reference_archive([first, second], exported_at="2026-06-30T00:00:00Z")
+
+    assert record["lap"]["lap_n"] == 4
+    assert record["lap"]["lap_ms"] == 71000
+
+
+def test_build_reference_archive_rejects_incomplete_lap_time() -> None:
+    payload = _tt_reference_payload(0.02, 0.98, samples=80)
+
+    with pytest.raises(TTNormalizeError, match="reference_lap_ms=71000"):
+        build_reference_archive([payload], max_spline_gap=0.05)
+
+
+def test_build_reference_archive_rejects_spatial_gaps_even_with_wide_range() -> None:
+    with pytest.raises(TTNormalizeError, match="partial"):
+        build_reference_archive(
+            [
+                _tt_reference_payload(0.0, 0.2, samples=12),
+                _tt_reference_payload(0.8, 1.0, samples=12),
+            ],
+        )
+
+
+def test_build_reference_archive_rejects_single_corner_sized_hole() -> None:
+    with pytest.raises(TTNormalizeError, match="partial"):
+        build_reference_archive(
+            [
+                _tt_reference_payload(0.0, 0.46, samples=30),
+                _tt_reference_payload(0.55, 1.0, samples=30),
+            ],
+        )
+
+
+def test_reference_coverage_counts_start_finish_wrap_as_closed_loop() -> None:
+    frames = reference_frames_from_payload(_tt_reference_payload(0.02, 0.98, samples=80))
+
+    coverage = reference_coverage(frames, max_spline_gap=0.05)
+
+    assert coverage.partial is False
+    assert coverage.coverage == pytest.approx(1.0)
+
+
+def test_build_reference_archive_marks_lap_time_mismatch_partial() -> None:
+    record = build_reference_archive(
+        [_tt_reference_payload(0.02, 0.98, samples=80)],
+        max_spline_gap=0.05,
+        allow_partial=True,
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    assert record["generator"]["tt_reference"]["partial"] is True
+    assert record["generator"]["tt_reference"]["coverage"] == pytest.approx(1.0)
+    assert record["generator"]["tt_reference"]["reference_lap_ms"] == 71000
+    assert record["generator"]["tt_reference"]["trace_lap_ms"] == 69580
+    assert record["generator"]["tt_reference"]["lap_time_mismatch_ms"] == 1420
+
+
+def test_build_reference_archive_resolves_car_id_from_object() -> None:
+    record = build_reference_archive(
+        [
+            _session_payload(
+                0.0,
+                0.5,
+                session_key="sess-object-car",
+                car={"car_id": "ks_audi_r8_lms", "name": "Audi R8 LMS"},
+            ),
+            _session_payload(
+                0.5,
+                1.0,
+                session_key="sess-object-car",
+                car={"car_id": "ks_audi_r8_lms", "name": "Audi R8 LMS"},
+            ),
+        ],
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    assert record["car"]["id"] == "ks_audi_r8_lms"
+
+
+def test_build_reference_archive_rejects_mixed_sessions() -> None:
+    with pytest.raises(TTNormalizeError, match="one session/lap"):
+        build_reference_archive(
+            [
+                _session_payload(0.0, 0.5, session_key="sess-a"),
+                _session_payload(0.5, 1.0, session_key="sess-b"),
+            ],
+        )
