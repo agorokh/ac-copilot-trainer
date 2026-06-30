@@ -36,6 +36,12 @@ from tools.ai_sidecar.lap_dynamics import (
     lap_trace_from_archive,
     segment_corners,
 )
+from tools.ai_sidecar.sector_benchmark import (
+    SectorDeltaReport,
+    SuperLap,
+    build_sector_delta_report,
+    build_superlap,
+)
 from tools.ai_sidecar.setup_model import CarSetup, from_lap_archive, load_setup_file
 from tools.ai_sidecar.track_reference import (
     CornerScore,
@@ -87,6 +93,32 @@ def _corner_reference_scores(
     return scores or None
 
 
+def _archive_lap_is_valid(archive: dict | None) -> bool:
+    lap = archive.get("lap") if isinstance(archive, dict) else None
+    return not (isinstance(lap, dict) and lap.get("is_valid") is False)
+
+
+def _same_lap_scope(candidate: LapTrace, anchor: LapTrace) -> bool:
+    if anchor.car_id is not None and candidate.car_id != anchor.car_id:
+        return False
+    return not (anchor.track_id is not None and candidate.track_id != anchor.track_id)
+
+
+def _archive_track_layout(archive: dict | None) -> str | None:
+    track = archive.get("track") if isinstance(archive, dict) else None
+    layout = track.get("layout") if isinstance(track, dict) else None
+    if layout is None or layout == "":
+        return None
+    return str(layout)
+
+
+def _same_archive_layout(candidate: dict | None, anchor: dict | None) -> bool:
+    anchor_layout = _archive_track_layout(anchor)
+    if anchor_layout is None:
+        return True
+    return _archive_track_layout(candidate) == anchor_layout
+
+
 def format_debrief(
     corners: list[CornerCoaching],
     balance: BalanceFinding | None = None,
@@ -97,6 +129,8 @@ def format_debrief(
     conditions: ConditionsReport | None = None,
     corner_reference: list[CornerScore] | None = None,
     trail_braking: list[TrailBrakeFinding] | None = None,
+    sector_deltas: SectorDeltaReport | None = None,
+    superlap: SuperLap | None = None,
 ) -> str:
     """Render the full debrief as text."""
     out: list[str] = [f"=== {title} ==="]
@@ -158,12 +192,40 @@ def format_debrief(
             out.append("  " + s.headline)
             for fnd in s.findings[:1]:
                 out.append(f"      - {fnd}")
+    if sector_deltas and sector_deltas.sectors:
+        total = sector_deltas.total_delta_s
+        out.append(f"\nSector deltas vs reference (total {_signed_seconds(total)}):")
+        for seg in sector_deltas.sectors:
+            out.append(f"  {seg.label}: {_signed_seconds(seg.delta_s)}")
+        losses = sorted(
+            (s for s in sector_deltas.micro_sectors if s.delta_s > 0.03),
+            key=lambda s: s.delta_s,
+            reverse=True,
+        )
+        if losses:
+            out.append("  Biggest micro-sector losses:")
+            for seg in losses[:3]:
+                out.append(f"      - {seg.label}: {_signed_seconds(seg.delta_s)}")
+    if superlap and superlap.segments:
+        gain = (
+            "unknown gain"
+            if superlap.gain_vs_best_s is None
+            else f"{max(0.0, superlap.gain_vs_best_s):.2f}s available"
+        )
+        out.append(
+            f"\nSuperLap target: {superlap.lap_time_s:.2f}s ({gain}), stitched from "
+            f"{len(superlap.segments)} micro-sectors across {superlap.source_count} source lap(s)."
+        )
     flagged = [f for f in (trail_braking or []) if f.classification != "good_trail_brake"]
     if flagged:
         out.append(f"\nTrail braking ({len(flagged)} corner(s) to work on):")
         for f in flagged:
             out.append(f"  T{f.corner + 1} ({f.classification}): {f.coaching}")
     return "\n".join(out)
+
+
+def _signed_seconds(value: float) -> str:
+    return f"{value:+.2f}s"
 
 
 def _load_archive(path: str | Path) -> dict:
@@ -288,10 +350,66 @@ def _trail_braking_struct(findings: list[TrailBrakeFinding] | None) -> list[dict
     ]
 
 
+def _sector_delta_struct(report: SectorDeltaReport | None) -> dict | None:
+    if report is None:
+        return None
+
+    def segment(seg) -> dict:
+        return {
+            "key": seg.key,
+            "label": seg.label,
+            "spline_start": round(seg.spline_start, 6),
+            "spline_end": round(seg.spline_end, 6),
+            "candidate_s": round(seg.candidate_s, 4),
+            "reference_s": round(seg.reference_s, 4),
+            "delta_s": round(seg.delta_s, 4),
+            "sector_index": seg.sector_index,
+            "micro_index": seg.micro_index,
+        }
+
+    return {
+        "total_delta_s": round(report.total_delta_s, 4),
+        "car_id": report.car_id,
+        "track_id": report.track_id,
+        "sectors": [segment(s) for s in report.sectors],
+        "micro_sectors": [segment(s) for s in report.micro_sectors],
+    }
+
+
+def _superlap_struct(superlap: SuperLap | None) -> dict | None:
+    if superlap is None:
+        return None
+    return {
+        "lap_time_s": round(superlap.lap_time_s, 4),
+        "baseline_best_lap_s": (
+            None if superlap.baseline_best_lap_s is None else round(superlap.baseline_best_lap_s, 4)
+        ),
+        "gain_vs_best_s": (
+            None if superlap.gain_vs_best_s is None else round(superlap.gain_vs_best_s, 4)
+        ),
+        "source_count": superlap.source_count,
+        "segments": [
+            {
+                "key": seg.key,
+                "label": seg.label,
+                "spline_start": round(seg.spline_start, 6),
+                "spline_end": round(seg.spline_end, 6),
+                "duration_s": round(seg.duration_s, 4),
+                "source_index": seg.source_index,
+                "source_lap_s": (None if seg.source_lap_s is None else round(seg.source_lap_s, 4)),
+                "car_id": seg.car_id,
+                "track_id": seg.track_id,
+            }
+            for seg in superlap.segments
+        ],
+    }
+
+
 def _analyze(
     lap_archive: dict,
     *,
     reference_archive: dict | None,
+    corpus_archives: list[dict] | None,
     setup: CarSetup | None,
     grip_ceiling_g: float | None,
 ) -> dict:
@@ -302,7 +420,15 @@ def _analyze(
     """
     lap = lap_trace_from_archive(lap_archive)
     setup = setup or from_lap_archive(lap_archive)
-    ref = lap_trace_from_archive(reference_archive) if reference_archive else None
+    raw_ref = lap_trace_from_archive(reference_archive) if reference_archive else None
+    ref = (
+        raw_ref
+        if raw_ref is not None
+        and _archive_lap_is_valid(reference_archive)
+        and _same_lap_scope(raw_ref, lap)
+        and _same_archive_layout(reference_archive, lap_archive)
+        else None
+    )
     report = coach_lap(lap, setup, reference=ref, grip_ceiling_g=grip_ceiling_g)
     sigs = corner_signatures(lap, segment_corners(lap))
     deltas = compare_laps(lap, ref) if ref is not None else None
@@ -317,6 +443,22 @@ def _analyze(
     corner_reference = _corner_reference_scores(ref, lap)
     # trail-braking technique read, per corner (only corners that actually braked surface a finding)
     trail_braking = [f for f in analyze_trail_braking(lap) if f.classification != "no_braking"]
+    sector_deltas = build_sector_delta_report(lap, ref) if ref is not None else None
+    corpus_laps: list[LapTrace] = []
+    if ref is not None:
+        corpus_laps.append(ref)
+    if (ref is not None or corpus_archives) and _archive_lap_is_valid(lap_archive):
+        corpus_laps.append(lap)
+    for archive in corpus_archives or []:
+        if not _archive_lap_is_valid(archive):
+            continue
+        try:
+            corpus_lap = lap_trace_from_archive(archive)
+        except ValueError:
+            continue
+        if _same_lap_scope(corpus_lap, lap) and _same_archive_layout(archive, lap_archive):
+            corpus_laps.append(corpus_lap)
+    superlap = build_superlap(corpus_laps) if corpus_laps else None
     return {
         "lap": lap,
         "setup": setup,
@@ -326,6 +468,8 @@ def _analyze(
         "conditions": conditions,
         "corner_reference": corner_reference,
         "trail_braking": trail_braking,
+        "sector_deltas": sector_deltas,
+        "superlap": superlap,
     }
 
 
@@ -333,6 +477,7 @@ def build_structured_debrief(
     lap_archive: dict,
     *,
     reference_archive: dict | None = None,
+    corpus_archives: list[dict] | None = None,
     setup: CarSetup | None = None,
     grip_ceiling_g: float | None = None,
 ) -> dict | None:
@@ -349,6 +494,7 @@ def build_structured_debrief(
         a = _analyze(
             lap_archive,
             reference_archive=reference_archive,
+            corpus_archives=corpus_archives,
             setup=setup,
             grip_ceiling_g=grip_ceiling_g,
         )
@@ -365,6 +511,8 @@ def build_structured_debrief(
         conditions=a["conditions"],
         corner_reference=a["corner_reference"],
         trail_braking=a["trail_braking"],
+        sector_deltas=a["sector_deltas"],
+        superlap=a["superlap"],
     )
     corners = [
         {
@@ -406,6 +554,8 @@ def build_structured_debrief(
         "conditions": _conditions_struct(a["conditions"]),
         "corner_reference": _corner_reference_struct(a["corner_reference"]),
         "trail_braking": _trail_braking_struct(a["trail_braking"]),
+        "sector_deltas": _sector_delta_struct(a["sector_deltas"]),
+        "superlap": _superlap_struct(a["superlap"]),
     }
 
 
@@ -413,6 +563,7 @@ def build_debrief(
     lap_archive: dict,
     *,
     reference_archive: dict | None = None,
+    corpus_archives: list[dict] | None = None,
     setup: CarSetup | None = None,
     grip_ceiling_g: float | None = None,
 ) -> str:
@@ -420,6 +571,7 @@ def build_debrief(
     a = _analyze(
         lap_archive,
         reference_archive=reference_archive,
+        corpus_archives=corpus_archives,
         setup=setup,
         grip_ceiling_g=grip_ceiling_g,
     )
@@ -433,6 +585,8 @@ def build_debrief(
         conditions=a["conditions"],
         corner_reference=a["corner_reference"],
         trail_braking=a["trail_braking"],
+        sector_deltas=a["sector_deltas"],
+        superlap=a["superlap"],
     )
 
 
@@ -440,6 +594,12 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Per-corner setup-vs-technique coaching debrief")
     p.add_argument("lap", help="lap archive JSON to coach")
     p.add_argument("--reference", help="reference lap archive JSON (e.g. a faster lap)")
+    p.add_argument(
+        "--corpus",
+        action="append",
+        default=[],
+        help="additional lap archive JSON to include in the SuperLap corpus",
+    )
     p.add_argument("--setup", help="setup .ini to use instead of the lap's snapshot")
     p.add_argument(
         "--grip-ceiling-g",
@@ -450,10 +610,12 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     setup = load_setup_file(args.setup) if args.setup else None
     ref = _load_archive(args.reference) if args.reference else None
+    corpus = [_load_archive(path) for path in args.corpus]
     print(
         build_debrief(
             _load_archive(args.lap),
             reference_archive=ref,
+            corpus_archives=corpus,
             setup=setup,
             grip_ceiling_g=args.grip_ceiling_g,
         )
