@@ -13,8 +13,8 @@ relates_to:
 
 ## Status
 
-PR [#399](https://github.com/agorokh/ac-copilot-trainer/pull/399) is **OPEN, merge-ready** on head
-[`2908fc6`](https://github.com/agorokh/ac-copilot-trainer/commit/2908fc61fed5a43f489f422671a9234751d6406b)
+PR [#399](https://github.com/agorokh/ac-copilot-trainer/pull/399) is **MERGED** on head
+[`e41383e`](https://github.com/agorokh/ac-copilot-trainer/commit/e41383ebc600649ea429bbf72f641dd4a7072b28)
 (`feat/coach-v2-real-coaching`, closes #396). CI green (`build`, `Canonical docs exist`,
 `conformance`; `guard-and-automerge` skipped). GraphQL review threads resolved; resolve-gate clean.
 
