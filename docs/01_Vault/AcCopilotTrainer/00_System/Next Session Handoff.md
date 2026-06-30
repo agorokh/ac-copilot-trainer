@@ -57,9 +57,13 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-06-30) — PR #399 Coach v2
+## Delivered (2026-06-30) — PR #399 MERGED: Coach v2 (#396)
 
-Merge-ready (OPEN) on [`2908fc6`](https://github.com/agorokh/ac-copilot-trainer/commit/2908fc61fed5a43f489f422671a9234751d6406b).
+PR [#399](https://github.com/agorokh/ac-copilot-trainer/pull/399) squash-merged to `main` as
+[`e41383e`](https://github.com/agorokh/ac-copilot-trainer/commit/e41383ebc600649ea429bbf72f641dd4a7072b28).
+Issue [#396](https://github.com/agorokh/ac-copilot-trainer/issues/396) is **CLOSED**.
+
+**Shipped:** Coach v2: real-time diagnosed, anticipatory in-ear coaching (replace post-hoc delta reporter).
 Detail: [[pr-399-coach-v2-review-loop-2026-06-30]].
 
 ## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
