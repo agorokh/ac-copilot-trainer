@@ -93,6 +93,17 @@ def _corner_reference_scores(
     return scores or None
 
 
+def _archive_lap_is_valid(archive: dict | None) -> bool:
+    lap = archive.get("lap") if isinstance(archive, dict) else None
+    return not (isinstance(lap, dict) and lap.get("is_valid") is False)
+
+
+def _same_lap_scope(candidate: LapTrace, anchor: LapTrace) -> bool:
+    if anchor.car_id is not None and candidate.car_id != anchor.car_id:
+        return False
+    return not (anchor.track_id is not None and candidate.track_id != anchor.track_id)
+
+
 def format_debrief(
     corners: list[CornerCoaching],
     balance: BalanceFinding | None = None,
@@ -411,15 +422,19 @@ def _analyze(
     trail_braking = [f for f in analyze_trail_braking(lap) if f.classification != "no_braking"]
     sector_deltas = build_sector_delta_report(lap, ref) if ref is not None else None
     corpus_laps: list[LapTrace] = []
-    if ref is not None:
+    if ref is not None and _archive_lap_is_valid(reference_archive) and _same_lap_scope(ref, lap):
         corpus_laps.append(ref)
-    if ref is not None or corpus_archives:
+    if (ref is not None or corpus_archives) and _archive_lap_is_valid(lap_archive):
         corpus_laps.append(lap)
     for archive in corpus_archives or []:
+        if not _archive_lap_is_valid(archive):
+            continue
         try:
-            corpus_laps.append(lap_trace_from_archive(archive))
+            corpus_lap = lap_trace_from_archive(archive)
         except ValueError:
             continue
+        if _same_lap_scope(corpus_lap, lap):
+            corpus_laps.append(corpus_lap)
     superlap = build_superlap(corpus_laps) if corpus_laps else None
     return {
         "lap": lap,

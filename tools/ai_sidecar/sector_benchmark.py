@@ -217,7 +217,7 @@ def build_superlap(
             )
         )
 
-    if not segments:
+    if len(segments) != len(smap.micro_sectors):
         return None
     lap_time_s = sum(s.duration_s for s in segments)
     lap_durations = [d for lap in valid_laps if (d := _lap_duration_s(lap)) is not None]
@@ -258,14 +258,27 @@ def _delta_windows(
 
 
 def _time_at_spline(lap: LapTrace, spline_pos: float) -> float | None:
-    points = sorted(
-        (float(sp), float(t))
-        for sp, t in zip(lap.spline, lap.t_s, strict=False)
-        if math.isfinite(float(sp)) and math.isfinite(float(t))
-    )
+    points: list[tuple[float, float]] = []
+    for raw_sp, raw_t in zip(lap.spline, lap.t_s, strict=False):
+        try:
+            sp = float(raw_sp)
+            t = float(raw_t)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(sp) and math.isfinite(t):
+            points.append((sp, t))
+    points.sort()
     if len(points) < 2:
         return None
-    sp = min(1.0, max(0.0, float(spline_pos)))
+    try:
+        sp = float(spline_pos)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(sp):
+        return None
+    eps = 1e-6
+    if sp < points[0][0] - eps or sp > points[-1][0] + eps:
+        return None
     if sp <= points[0][0]:
         return points[0][1]
     if sp >= points[-1][0]:

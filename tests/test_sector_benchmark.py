@@ -7,6 +7,7 @@ from tools.ai_sidecar.sector_benchmark import (
     build_sector_delta_report,
     build_sector_map,
     build_superlap,
+    segment_duration_s,
 )
 
 
@@ -65,3 +66,43 @@ def test_superlap_stitches_fastest_micro_sectors() -> None:
     assert superlap.baseline_best_lap_s == pytest.approx(90.0)
     assert superlap.gain_vs_best_s == pytest.approx(2.0)
     assert {seg.label: seg.source_index for seg in superlap.segments}["S1.3"] == 1
+
+
+def test_segment_duration_requires_sampled_window_edges() -> None:
+    lap = _lap_from_micro_durations([10.0] * 9)
+    sparse = LapTrace(
+        spline=lap.spline[1:],
+        t_s=lap.t_s[1:],
+        v_ms=lap.v_ms[1:],
+        brake=lap.brake[1:],
+        throttle=lap.throttle[1:],
+        steer=lap.steer[1:],
+        gear=lap.gear[1:],
+        x=lap.x[1:],
+        z=lap.z[1:],
+        lap_ms=lap.lap_ms,
+        car_id=lap.car_id,
+        track_id=lap.track_id,
+    )
+
+    assert segment_duration_s(sparse, build_sector_map().micro_sectors[0]) is None
+
+
+def test_superlap_requires_complete_micro_sector_coverage() -> None:
+    lap = _lap_from_micro_durations([10.0] * 9)
+    sparse = LapTrace(
+        spline=lap.spline[1:],
+        t_s=lap.t_s[1:],
+        v_ms=lap.v_ms[1:],
+        brake=lap.brake[1:],
+        throttle=lap.throttle[1:],
+        steer=lap.steer[1:],
+        gear=lap.gear[1:],
+        x=lap.x[1:],
+        z=lap.z[1:],
+        lap_ms=lap.lap_ms,
+        car_id=lap.car_id,
+        track_id=lap.track_id,
+    )
+
+    assert build_superlap([sparse]) is None

@@ -66,6 +66,13 @@ def _corner_archive(*, degrade: float = 0.0) -> dict:
     }
 
 
+def _scale_archive_time(archive: dict, factor: float) -> None:
+    e_ms_idx = archive["trace"]["fields"].index("eMs")
+    for sample in archive["trace"]["samples"]:
+        sample[e_ms_idx] *= factor
+    archive["lap"]["lap_ms"] = int(archive["lap"]["lap_ms"] * factor)
+
+
 def test_build_debrief_renders_sections():
     text = build_debrief(_corner_archive(), grip_ceiling_g=2.5)
     assert "Coaching debrief" in text
@@ -171,6 +178,38 @@ def test_structured_debrief_includes_sector_deltas_and_superlap():
     assert superlap is not None
     assert superlap["segments"][0]["label"] == "S1.1"
     assert superlap["source_count"] >= 1
+
+
+def test_superlap_ignores_invalid_current_lap():
+    ref = _corner_archive(degrade=8.0)
+    student = _corner_archive(degrade=0.0)
+    _scale_archive_time(student, 0.5)
+    student["lap"]["is_valid"] = False
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    superlap = d["superlap"]
+    assert superlap is not None
+    assert {seg["source_index"] for seg in superlap["segments"]} == {0}
+
+
+def test_superlap_filters_corpus_to_same_car_and_track():
+    ref = _corner_archive(degrade=8.0)
+    student = _corner_archive(degrade=8.0)
+    wrong_track = _corner_archive(degrade=0.0)
+    _scale_archive_time(wrong_track, 0.5)
+    wrong_track["track"]["id"] = "spa"
+
+    d = build_structured_debrief(
+        student,
+        reference_archive=ref,
+        corpus_archives=[wrong_track],
+        grip_ceiling_g=2.5,
+    )
+
+    superlap = d["superlap"]
+    assert superlap is not None
+    assert {seg["track_id"] for seg in superlap["segments"]} == {"magione"}
 
 
 def test_debrief_text_includes_tyre_and_conditions_sections():
