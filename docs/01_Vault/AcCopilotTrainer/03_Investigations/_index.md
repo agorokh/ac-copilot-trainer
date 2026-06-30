@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-06-29
+updated: 2026-06-30
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [pr-410-racing-atelier-design-package-2026-06-30.md](pr-410-racing-atelier-design-package-2026-06-30.md) | PR #410 / #400 Racing Atelier design package: docs/assets source of truth, rendered target gate, retired AG Porsche Academy removal, review hardening, ZIP reconciliation, and browser visual verification. |
 | [pr-399-coach-v2-review-loop-2026-06-30.md](pr-399-coach-v2-review-loop-2026-06-30.md) | PR #399 / #396 Coach v2 review-resolution loop: merge conflict with main, ci-conventional title, Qodo wrap/PRIME/grip-gate fixes; merge-ready on `8e6135a`. |
 | [coach-v2-real-coaching-2026-06-29.md](coach-v2-real-coaching-2026-06-29.md) | Coach v2 (#396 / PR #399): diagnosed anticipatory in-ear coaching — root-error diagnosis, pass ledger, PRIME/SAVE/CONFIRM runtime, grip-gate via `lat_g`, deterministic E2E + live-audible proof on Magione/911. |
 | [voice-368-merge-contention-2026-06-29.md](voice-368-merge-contention-2026-06-29.md) | #368 / PR #371 voice-intensity review resolution: concurrent branch/worktree contention, `origin/main` voice overlap, and final reconciliation through `382b090` (wrap-aware lead windows, lead-brake latch, register barge-in, WS cooldown bypass). |

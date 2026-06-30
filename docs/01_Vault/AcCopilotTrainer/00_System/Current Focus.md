@@ -105,6 +105,15 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-30** - PR [#410](https://github.com/agorokh/ac-copilot-trainer/pull/410)
+  **MERGED** at `d669b19` - **Racing Atelier design package** ([#400](https://github.com/agorokh/ac-copilot-trainer/issues/400)
+  **CLOSED**): committed the canonical handoff package and render-target gate, removed the retired
+  AG Porsche Academy components, and added review hardening for offline/CDN warnings plus safer
+  prototype `postMessage` origin handling. Post-merge classification found no flags. ZIP
+  reconciliation showed all 95 package files present; real drift from the raw ZIP is intentional
+  hardening, not missing content. Browser verification loaded Game Point, in-game HUD, and ESP32 rig
+  kits over localhost with the expected Racing Atelier palette and instrument geometry. Details:
+  [`pr-410-racing-atelier-design-package-2026-06-30`](../03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md).
 - **2026-06-30** — PR [#394](https://github.com/agorokh/ac-copilot-trainer/pull/394) **MERGED** at
   `b14c984` — **voice reliability for packaged Game Point** ([#392](https://github.com/agorokh/ac-copilot-trainer/issues/392)
   **CLOSED**): sidecar `/health.voice` is the launcher source of truth; Game Point now reports

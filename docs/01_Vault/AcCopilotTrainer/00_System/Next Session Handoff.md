@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T16:24:53Z
+last_updated: 2026-06-30T19:36:03Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/tt-services-sigv4-crack-2026-06-29.md
@@ -58,11 +59,32 @@ relates_to:
 
 # Next session handoff
 
-## Delivered (2026-06-30) — PR #410 Racing Atelier Design System Mitigations
+## Delivered (2026-06-30) - PR #410 MERGED: Racing Atelier design package (#400)
 
-PR [#410](https://github.com/agorokh/ac-copilot-trainer/pull/410) is OPEN and review-resolved.
-**Shipped:** Added offline reliability and third-party JS/font warnings to the Racing Atelier design package. Mitigated wildcard `postMessage` origin by using `document.referrer`. Added missing `Roadmap.md` vault node to satisfy vault link invariants.
-CI checks are green, and bot findings have been addressed.
+PR [#410](https://github.com/agorokh/ac-copilot-trainer/pull/410) squash-merged to `main` as
+[`d669b19`](https://github.com/agorokh/ac-copilot-trainer/commit/d669b19c001e79b751ad625599a82c32e9ce38f8)
+at 2026-06-30T19:19:18Z. Issue [#400](https://github.com/agorokh/ac-copilot-trainer/issues/400)
+is **CLOSED**.
+
+**Shipped:** Preserved the Racing Atelier handoff package under
+`docs/10_Development/design/racing-atelier/`, added the rendered target gate under
+`docs/10_Development/design/racing-atelier-renders/`, removed the retired AG Porsche Academy
+design components, and documented the new design source of truth. Review fixes added offline
+reliability / third-party JS/font warnings and narrowed prototype `postMessage` target origin
+from unconditional `"*"` to the referrer origin when available. Post-merge classification found no
+migration/env/deps/script/workflow flags.
+
+**Verification:** GitHub checks passed (`build`, `Canonical docs exist`, `conformance`,
+`classify`, `score`; vault automerge skipped). Local `python -m pytest
+tests/test_design_conformance.py` passed (`21 passed`). ZIP reconciliation against
+`C:\Users\arsen\Downloads\Racing Atelier-handoff (1).zip`: all 95 expected package files are
+present in repo; 80 hash differences are newline-only from `core.autocrlf=true`; the remaining
+drift is the intentional PR hardening above (`fonts.css`, `readme.md`, four `support.js` files)
+plus the reviewed Track Atlas thumbnail. Browser verification loaded the committed Game Point,
+in-game HUD, and ESP32 rig kits via a temporary `127.0.0.1` static server; all rendered with the
+Racing Atelier carbon/brass/brake/lift/clear palette, square instrument geometry, segment bars /
+delta blocks, and no console errors beyond the known Babel CDN warning documented by the PR.
+Detail: [[pr-410-racing-atelier-design-package-2026-06-30]].
 
 ## Delivered (2026-06-30) — PR #399 MERGED: Coach v2 (#396)
 
