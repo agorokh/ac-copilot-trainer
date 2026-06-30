@@ -61,6 +61,19 @@ def test_front_locks_complaint_gets_911_bias_caution() -> None:
     assert any("911" in note for note in first["caution"])
 
 
+def test_plural_lockup_complaints_stay_on_braking_rules() -> None:
+    out = advise_from_complaint(
+        "front lockups under braking at apex",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"]["issue"] == "lockup_front"
+    assert out["parsed"]["phase"] == "braking"
+    assert out["suggestions"][0]["section"] == "FRONT_BIAS"
+
+
 def test_high_speed_understeer_prefers_aero_lever() -> None:
     out = advise_from_complaint(
         "high speed understeer mid corner",
@@ -183,6 +196,20 @@ def test_setup_diff_without_schema_uses_click_units_for_raw_alignment() -> None:
     assert out["rows"][0]["display"].endswith("clicks (decrease)")
 
 
+def test_setup_diff_uses_click_units_when_schema_lacks_spinner() -> None:
+    schema = load_latest_schema("ks_porsche_911_gt3_r_2016")
+    baseline = from_snapshot({"CAMBER_RF.VALUE": "-18"}, car_id="ks_porsche_911_gt3_r_2016")
+    candidate = from_snapshot({"CAMBER_RF.VALUE": "-19"}, car_id="ks_porsche_911_gt3_r_2016")
+
+    out = setup_diff_summary(baseline, candidate, schema=schema)
+
+    row = out["rows"][0]
+    assert row["units"] == "clicks"
+    assert row["from_display"] == "-18"
+    assert row["to_display"] == "-19"
+    assert row["display"].endswith("clicks (decrease)")
+
+
 def test_setup_diff_uses_camber_semantic_direction_with_schema() -> None:
     schema = load_latest_schema("ks_porsche_911_gt3_r_2016")
     baseline = from_snapshot({"CAMBER_LF.VALUE": "-18"}, car_id="ks_porsche_911_gt3_r_2016")
@@ -194,6 +221,22 @@ def test_setup_diff_uses_camber_semantic_direction_with_schema() -> None:
     assert row["direction"] == "increase"
     assert row["effect"].startswith("More negative")
     assert row["display"].endswith("deg (increase)")
+
+
+def test_setup_diff_suppresses_numeric_direction_for_schema_enum() -> None:
+    schema = load_latest_schema("ks_porsche_911_gt3_r_2016")
+    baseline = from_snapshot({"TYRES.VALUE": "0"}, car_id="ks_porsche_911_gt3_r_2016")
+    candidate = from_snapshot({"TYRES.VALUE": "1"}, car_id="ks_porsche_911_gt3_r_2016")
+
+    out = setup_diff_summary(baseline, candidate, schema=schema)
+
+    row = out["rows"][0]
+    assert row["direction"] == "changed"
+    assert row["effect"] == ""
+    assert row["units"] == ""
+    assert row["from_display"] == "Soft"
+    assert row["to_display"] == "Medium"
+    assert row["display"] == "Tyre compound: Soft -> Medium"
 
 
 def test_diff_setup_files_loads_car_schema_for_display_units(tmp_path: Path) -> None:

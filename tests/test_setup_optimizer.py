@@ -304,6 +304,51 @@ def test_closed_loop_rejects_confounded_latest_pair() -> None:
     assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
 
 
+def test_closed_loop_uses_latest_pair_where_param_changed() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="new",
+                setup_name="candidate-repeat",
+                lap_ms=97_900,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["previous_result"]["from"] == 64.0
+    assert suggestion["previous_result"]["to"] == 65.0
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
 def test_closed_loop_treats_zero_measured_delta_as_inconclusive() -> None:
     records = [
         record_from_lap_archive(

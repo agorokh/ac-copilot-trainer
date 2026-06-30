@@ -212,7 +212,7 @@ def _has_phrase(text: str, *phrases: str) -> bool:
 
 def _parse_issue(text: str) -> str | None:
     words = _tokens(text)
-    lock_words = {"lock", "locks", "locking", "lockup"}
+    lock_words = {"lock", "locked", "locking", "locks", "lockup", "lockups"}
     if "front" in words and words & lock_words:
         return "lockup_front"
     if "rear" in words and words & lock_words:
@@ -247,14 +247,14 @@ def _parse_phase(text: str, issue: str | None) -> str:
     words = _tokens(text)
     if {"kerb", "curb", "bump", "bumpy"} & words:
         return "kerb"
+    if issue in {"lockup", "lockup_front", "lockup_rear"}:
+        return "braking"
     if {"exit", "power", "throttle", "traction"} & words or _has_phrase(text, "corner exit"):
         return "exit"
     if {"mid", "apex", "middle", "center", "centre"} & words or _has_phrase(text, "mid corner"):
         return "mid"
     if {"entry", "turn", "turnin", "turn-in", "braking", "brake", "trail"} & words:
-        return "entry" if issue not in {"lockup", "lockup_front", "lockup_rear"} else "braking"
-    if issue in {"lockup", "lockup_front", "lockup_rear"}:
-        return "braking"
+        return "entry"
     if issue == "wheelspin":
         return "exit"
     if issue == "instability":
@@ -317,12 +317,13 @@ def _decoded(
 
 
 def _display_units(schema: CarSetupSchema | None, section: str, fallback: str) -> str:
-    if schema is None and _base_section(section) in {"CAMBER", "TOE_OUT", "ROD_LENGTH"}:
+    sp = schema.get(section) if schema is not None else None
+    if sp is not None and sp.items:
+        return sp.units or ""
+    if sp is None and _base_section(section) in {"CAMBER", "TOE_OUT", "ROD_LENGTH"}:
         return "clicks"
-    if schema is not None:
-        sp = schema.get(section)
-        if sp is not None and sp.units is not None:
-            return sp.units
+    if sp is not None and sp.units is not None:
+        return sp.units
     return fallback
 
 
@@ -356,9 +357,29 @@ def _semantic_delta(
     if not isinstance(before, int | float) or not isinstance(after, int | float):
         return float(to_v) - float(from_v)
     delta = float(after) - float(before)
-    if schema is not None and _base_section(section) == "CAMBER":
+    if (
+        schema is not None
+        and schema.get(section) is not None
+        and _base_section(section) == "CAMBER"
+    ):
         return -delta
     return delta
+
+
+def _diff_direction(
+    schema: CarSetupSchema | None,
+    section: str,
+    from_v: float | None,
+    to_v: float | None,
+) -> str:
+    if from_v is None:
+        return "added"
+    if to_v is None:
+        return "removed"
+    sp = schema.get(section) if schema is not None else None
+    if sp is not None and sp.items:
+        return "changed"
+    return _direction_from_delta(_semantic_delta(schema, section, from_v, to_v))
 
 
 def _move_to_suggestion(
@@ -553,13 +574,7 @@ def setup_diff_summary(
         spec = spec_for(section)
         effect = effect_for(section)
         delta = None if from_v is None or to_v is None else float(to_v) - float(from_v)
-        direction = (
-            "added"
-            if from_v is None
-            else "removed"
-            if to_v is None
-            else _direction_from_delta(_semantic_delta(schema, section, from_v, to_v))
-        )
+        direction = _diff_direction(schema, section, from_v, to_v)
         effect_text = ""
         if effect is not None and direction in {"increase", "decrease"}:
             effect_text = effect.increase_does if direction == "increase" else effect.decrease_does

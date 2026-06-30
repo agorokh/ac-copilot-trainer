@@ -662,6 +662,23 @@ def _changed_param_keys(
     return changed
 
 
+def _latest_param_changed_pair(
+    ordered: list[dict[str, Any]], key: str
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for idx in range(len(ordered) - 1, 0, -1):
+        prev = ordered[idx - 1]
+        curr = ordered[idx]
+        prev_params = _finite_setup_params(prev)
+        curr_params = _finite_setup_params(curr)
+        prev_value = prev_params.get(key)
+        curr_value = curr_params.get(key)
+        if prev_value is None or curr_value is None:
+            continue
+        if abs(curr_value - prev_value) > 1e-9:
+            return prev, curr
+    return None
+
+
 def suggest_closed_loop(
     records: list[dict[str, Any]],
     *,
@@ -696,7 +713,11 @@ def suggest_closed_loop(
             "min_required": 2,
         }
     ordered = sorted(complete, key=_chronological_key)
-    prev, curr = ordered[-2], ordered[-1]
+    pair = _latest_param_changed_pair(ordered, key)
+    if pair is None:
+        prev, curr = ordered[-2], ordered[-1]
+    else:
+        prev, curr = pair
     prev_params = _finite_setup_params(prev)
     curr_params = _finite_setup_params(curr)
     prev_value = prev_params[key]
@@ -714,7 +735,7 @@ def suggest_closed_loop(
         "measured_delta_ms": round(measured_delta_ms, 3),
     }
     changed_keys = _changed_param_keys(prev_params, curr_params)
-    if abs(value_delta) <= 1e-9:
+    if pair is None:
         return {
             "ok": False,
             "status": "latest_laps_did_not_change_param",

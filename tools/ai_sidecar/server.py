@@ -534,7 +534,7 @@ def _setup_record_car_id(
             continue
         car = record.get("car") if isinstance(record.get("car"), dict) else {}
         car_id = car.get("id")
-        if isinstance(car_id, str) and car_id.strip():
+        if isinstance(car_id, str) and car_id.strip().lower() != "unknown":
             car_ids.add(car_id.strip())
     return next(iter(car_ids)) if len(car_ids) == 1 else None
 
