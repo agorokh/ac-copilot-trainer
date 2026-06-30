@@ -19,6 +19,7 @@ I/O — so it is unit-tested by feeding synthetic injected-mistake frame streams
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,7 +29,12 @@ from tools.ai_sidecar.coaching_diagnosis import (
     RootError,
     classify_root_error,
 )
-from tools.ai_sidecar.coaching_ledger import CoachingLedger
+from tools.ai_sidecar.coaching_ledger import (
+    ASSESS_LAPS,
+    HYSTERESIS_PASSES,
+    LAP_CUE_BUDGET,
+    CoachingLedger,
+)
 from tools.ai_sidecar.lap_dynamics import CornerSignature, corner_signatures, lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import Advisory
 from tools.ai_sidecar.track_reference import CornerReference, build_references
@@ -381,4 +387,20 @@ def build_coach_runtime(
         for row in tr.get("samples") or []
     ]
     ref_sigs = _reference_signatures(refs, anchors, ref_frames)
-    return CoachRuntime(refs=refs, ref_sigs=ref_sigs, anchors=anchors, track_length_m=track_m)
+    # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
+    # (lower assess/hysteresis); production defaults stay conservative.
+    ledger = CoachingLedger(
+        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", HYSTERESIS_PASSES),
+        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", ASSESS_LAPS),
+        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", LAP_CUE_BUDGET),
+    )
+    return CoachRuntime(
+        refs=refs, ref_sigs=ref_sigs, anchors=anchors, track_length_m=track_m, ledger=ledger
+    )
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
