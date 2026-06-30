@@ -28,6 +28,15 @@ DEFAULT_DRIVER_ID = "local-driver"
 # Runtime app state derived from lap journals, not agent memory; keep it beside AC journal data.
 DEFAULT_PROFILE_PATH = Path("journal/driver/profile.json")
 NON_DRIVER_LAP_SOURCES = frozenset({"imported", "reference", "reference_archive"})
+CORNER_SAMPLE_FIELDS = (
+    "entry_speed_kmh",
+    "min_speed_kmh",
+    "exit_speed_kmh",
+    "trail_brake_ratio",
+    "throttle_avg",
+    "steer_reversals",
+    "traction_circle_proxy",
+)
 
 
 class ProfileLoadError(ValueError):
@@ -117,6 +126,23 @@ def _numeric_mapping(value: Any) -> dict[str, float]:
         parsed = _num(item)
         if parsed is not None:
             out[str(key)] = parsed
+    return out
+
+
+def _corner_sample_mapping(value: Any) -> dict[str, dict[str, float]]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for lap_uuid, row in value.items():
+        if not isinstance(row, Mapping):
+            continue
+        sample = {
+            field: parsed
+            for field in CORNER_SAMPLE_FIELDS
+            if (parsed := _num(row.get(field))) is not None
+        }
+        if sample:
+            out[str(lap_uuid)] = sample
     return out
 
 
@@ -318,10 +344,22 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
             ),
         )
         first = ordered[0]
+        corner_samples_by_lap_uuid: dict[str, dict[str, float]] = {}
+        for row in ordered:
+            lap_uuid = row.get("lap_uuid")
+            if not lap_uuid:
+                continue
+            sample = {
+                field: parsed
+                for field in CORNER_SAMPLE_FIELDS
+                if (parsed := _num(row.get(field))) is not None
+            }
+            if sample:
+                corner_samples_by_lap_uuid[str(lap_uuid)] = sample
         min_speed_by_lap_uuid = {
-            str(row.get("lap_uuid")): speed
-            for row in ordered
-            if row.get("lap_uuid") and (speed := _num(row.get("min_speed_kmh"))) is not None
+            lap_uuid: sample["min_speed_kmh"]
+            for lap_uuid, sample in corner_samples_by_lap_uuid.items()
+            if "min_speed_kmh" in sample
         }
         min_speeds = [row.get("min_speed_kmh") for row in ordered]
         finite_min_speeds = list(min_speed_by_lap_uuid.values()) or [
@@ -356,6 +394,7 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max((v for v in min_speeds if v is not None), default=None),
             "median_min_speed_kmh": _median_float(min_speeds),
+            "corner_samples_by_lap_uuid": corner_samples_by_lap_uuid,
             "min_speed_by_lap_uuid": min_speed_by_lap_uuid,
             "min_speed_samples_kmh": finite_min_speeds,
             "lap_uuids": _sorted_texts(row.get("lap_uuid") for row in ordered),
@@ -383,6 +422,20 @@ def _first_text(*values: Any) -> str | None:
 def _last_text(*values: Any) -> str | None:
     texts = [value for value in values if isinstance(value, str) and value]
     return max(texts) if texts else None
+
+
+def _timed_num(
+    *pairs: tuple[Any, Any],
+    latest: bool = False,
+) -> float | None:
+    candidates: list[tuple[str, float]] = []
+    for timestamp, value in pairs:
+        parsed = _num(value)
+        if isinstance(timestamp, str) and timestamp and parsed is not None:
+            candidates.append((timestamp, parsed))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0], reverse=latest)[0][1]
 
 
 def _merge_session_rollup(
@@ -490,10 +543,23 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
     elif new_laps >= old_laps and new_laps > 0:
         return dict(incoming)
 
-    first_min = _num(existing.get("first_min_speed_kmh"))
-    last_min = _num(incoming.get("last_min_speed_kmh"))
+    first_min = _timed_num(
+        (existing.get("first_exported_at"), existing.get("first_min_speed_kmh")),
+        (incoming.get("first_exported_at"), incoming.get("first_min_speed_kmh")),
+    )
+    if first_min is None:
+        first_min = _num(existing.get("first_min_speed_kmh"))
+        if first_min is None:
+            first_min = _num(incoming.get("first_min_speed_kmh"))
+    last_min = _timed_num(
+        (existing.get("last_exported_at"), existing.get("last_min_speed_kmh")),
+        (incoming.get("last_exported_at"), incoming.get("last_min_speed_kmh")),
+        latest=True,
+    )
     if last_min is None:
         last_min = _num(existing.get("last_min_speed_kmh"))
+        if last_min is None:
+            last_min = _num(incoming.get("last_min_speed_kmh"))
     best_values = [
         value
         for value in (
@@ -510,7 +576,15 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
         if merged_lap_ids
         else old_laps + new_laps
     )
+    corner_samples_by_lap_uuid = {
+        **_corner_sample_mapping(existing.get("corner_samples_by_lap_uuid")),
+        **_corner_sample_mapping(incoming.get("corner_samples_by_lap_uuid")),
+    }
     min_speed_by_lap_uuid = {
+        lap_uuid: sample["min_speed_kmh"]
+        for lap_uuid, sample in corner_samples_by_lap_uuid.items()
+        if "min_speed_kmh" in sample
+    } or {
         **_numeric_mapping(existing.get("min_speed_by_lap_uuid")),
         **_numeric_mapping(incoming.get("min_speed_by_lap_uuid")),
     }
@@ -525,6 +599,15 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
         if min_speed_samples
         else incoming.get("median_min_speed_kmh") or existing.get("median_min_speed_kmh")
     )
+
+    def sample_avg(field: str, output_field: str) -> float | None:
+        sampled = _avg(sample.get(field) for sample in corner_samples_by_lap_uuid.values())
+        if sampled is not None:
+            return sampled
+        return _weighted_avg(
+            existing.get(output_field), old_laps, incoming.get(output_field), new_laps
+        )
+
     merged = dict(existing)
     merged.update(
         {
@@ -540,47 +623,26 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
             "last_exported_at": _last_text(
                 existing.get("last_exported_at"), incoming.get("last_exported_at")
             ),
+            "first_min_speed_kmh": first_min,
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max(best_values, default=None),
             "median_min_speed_kmh": median_min_speed,
+            "corner_samples_by_lap_uuid": corner_samples_by_lap_uuid
+            if corner_samples_by_lap_uuid
+            else existing.get("corner_samples_by_lap_uuid"),
             "min_speed_by_lap_uuid": min_speed_by_lap_uuid
             if min_speed_by_lap_uuid
             else existing.get("min_speed_by_lap_uuid"),
             "min_speed_samples_kmh": min_speed_samples
             if min_speed_samples
             else existing.get("min_speed_samples_kmh"),
-            "avg_entry_speed_kmh": _weighted_avg(
-                existing.get("avg_entry_speed_kmh"),
-                old_laps,
-                incoming.get("avg_entry_speed_kmh"),
-                new_laps,
-            ),
-            "avg_exit_speed_kmh": _weighted_avg(
-                existing.get("avg_exit_speed_kmh"),
-                old_laps,
-                incoming.get("avg_exit_speed_kmh"),
-                new_laps,
-            ),
-            "avg_trail_brake_ratio": _weighted_avg(
-                existing.get("avg_trail_brake_ratio"),
-                old_laps,
-                incoming.get("avg_trail_brake_ratio"),
-                new_laps,
-            ),
-            "avg_throttle": _weighted_avg(
-                existing.get("avg_throttle"), old_laps, incoming.get("avg_throttle"), new_laps
-            ),
-            "avg_steer_reversals": _weighted_avg(
-                existing.get("avg_steer_reversals"),
-                old_laps,
-                incoming.get("avg_steer_reversals"),
-                new_laps,
-            ),
-            "avg_traction_circle_proxy": _weighted_avg(
-                existing.get("avg_traction_circle_proxy"),
-                old_laps,
-                incoming.get("avg_traction_circle_proxy"),
-                new_laps,
+            "avg_entry_speed_kmh": sample_avg("entry_speed_kmh", "avg_entry_speed_kmh"),
+            "avg_exit_speed_kmh": sample_avg("exit_speed_kmh", "avg_exit_speed_kmh"),
+            "avg_trail_brake_ratio": sample_avg("trail_brake_ratio", "avg_trail_brake_ratio"),
+            "avg_throttle": sample_avg("throttle_avg", "avg_throttle"),
+            "avg_steer_reversals": sample_avg("steer_reversals", "avg_steer_reversals"),
+            "avg_traction_circle_proxy": sample_avg(
+                "traction_circle_proxy", "avg_traction_circle_proxy"
             ),
             "latest_source_file": incoming.get("latest_source_file")
             or existing.get("latest_source_file"),

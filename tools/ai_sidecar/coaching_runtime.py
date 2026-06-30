@@ -499,6 +499,55 @@ def _profile_for_runtime(
     return load_profile(path)
 
 
+def _combo_text(value: Any) -> str:
+    return str(value or "")
+
+
+def _archive_combo(reference_archive: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    car = reference_archive.get("car") if isinstance(reference_archive.get("car"), Mapping) else {}
+    track = (
+        reference_archive.get("track")
+        if isinstance(reference_archive.get("track"), Mapping)
+        else {}
+    )
+    car_id = car.get("id") or car.get("car_id")
+    track_id = track.get("id") or track.get("track_id")
+    if not car_id or not track_id:
+        return None
+    return (_combo_text(car_id), _combo_text(track_id), _combo_text(track.get("layout")))
+
+
+def _row_matches_combo(row: Mapping[str, Any], combo: tuple[str, str, str]) -> bool:
+    car_id, track_id, track_layout = combo
+    return (
+        _combo_text(row.get("car_id")) == car_id
+        and _combo_text(row.get("track_id")) == track_id
+        and _combo_text(row.get("track_layout")) == track_layout
+    )
+
+
+def _profile_for_reference_combo(
+    profile: Mapping[str, Any] | None, reference_archive: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    if not isinstance(profile, Mapping):
+        return profile
+    combo = _archive_combo(reference_archive)
+    if combo is None:
+        return profile
+    filtered = dict(profile)
+    for key in ("corner_history", "consistency", "session_rollups", "personal_bests"):
+        rows = profile.get(key)
+        if not isinstance(rows, Mapping):
+            filtered[key] = {}
+            continue
+        filtered[key] = {
+            row_key: row
+            for row_key, row in rows.items()
+            if isinstance(row, Mapping) and _row_matches_combo(row, combo)
+        }
+    return filtered
+
+
 def build_coach_runtime(
     reference_archive: dict,
     *,
@@ -544,7 +593,10 @@ def build_coach_runtime(
     ref_sigs = _reference_signatures(refs, anchors, ref_frames)
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
-    policy = cue_policy_from_profile(_profile_for_runtime(driver_profile, driver_profile_path))
+    profile = _profile_for_reference_combo(
+        _profile_for_runtime(driver_profile, driver_profile_path), reference_archive
+    )
+    policy = cue_policy_from_profile(profile)
     ledger = CoachingLedger(
         hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1),
         assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),

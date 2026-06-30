@@ -347,7 +347,7 @@ def classify_driver_level(skills: Mapping[str, SkillAssessment]) -> str:
     if not skills or all(skill.level == LEVEL_UNKNOWN for skill in skills.values()):
         return LEVEL_UNKNOWN
     core = (skills.get("apex_speed"), skills.get("consistency"))
-    if any(skill is not None and skill.level == LEVEL_NOVICE for skill in core):
+    if any(skill is None or skill.level in {LEVEL_UNKNOWN, LEVEL_NOVICE} for skill in core):
         return LEVEL_NOVICE
     known = [skill for skill in skills.values() if skill.level != LEVEL_UNKNOWN]
     if not known:

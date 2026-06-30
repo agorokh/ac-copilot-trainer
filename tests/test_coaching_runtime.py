@@ -72,6 +72,42 @@ def test_runtime_builds_from_reference():
     assert rt is not None and rt.refs, "runtime must build corners from the reference"
 
 
+def test_runtime_policy_ignores_profile_history_for_other_combo():
+    profile = {
+        "schema_version": 1,
+        "driver_id": "driver-a",
+        "corner_history": {
+            "other-car|other-track||corner:0": {
+                "car_id": "other-car",
+                "track_id": "other-track",
+                "track_layout": "",
+                "valid_laps": 8,
+                "delta_min_speed_kmh": 3.0,
+                "avg_trail_brake_ratio": 0.4,
+                "avg_throttle": 0.7,
+                "avg_steer_reversals": 1.0,
+            }
+        },
+        "consistency": {
+            "other-car|other-track|": {
+                "car_id": "other-car",
+                "track_id": "other-track",
+                "track_layout": "",
+                "session_count": 3,
+                "valid_laps": 12,
+                "median_session_best_ms": 100000,
+                "consistency_ms": 1000.0,
+            }
+        },
+    }
+
+    rt = build_coach_runtime(_ref(), driver_profile=profile)
+
+    assert rt is not None
+    assert rt.cue_policy.level == "unknown"
+    assert rt.ledger.lap_budget == 4
+
+
 def test_perfect_reference_is_silent_after_assess():
     rt = build_coach_runtime(_ref())
     base = _lap_frames(_ref())

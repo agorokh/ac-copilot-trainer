@@ -370,6 +370,7 @@ def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) ->
         lap_n=1,
         exported_at="2026-06-01T10:00:00Z",
         min_speed=80.0,
+        traction=0.2,
     )
     _write_archive(
         first / "lap_002.json",
@@ -379,6 +380,7 @@ def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) ->
         lap_n=2,
         exported_at="2026-06-01T10:05:00Z",
         min_speed=84.0,
+        traction=0.4,
     )
     _write_archive(
         second / "lap_002.json",
@@ -388,6 +390,7 @@ def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) ->
         lap_n=2,
         exported_at="2026-06-01T10:05:00Z",
         min_speed=84.0,
+        traction=0.4,
     )
     _write_archive(
         second / "lap_003.json",
@@ -397,6 +400,7 @@ def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) ->
         lap_n=3,
         exported_at="2026-06-01T10:10:00Z",
         min_speed=86.0,
+        traction=1.0,
     )
 
     merged = build_profile([second], existing=build_profile([first]))
@@ -405,6 +409,39 @@ def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) ->
     assert corner["valid_laps"] == 3
     assert corner["min_speed_samples_kmh"] == [80.0, 84.0, 86.0]
     assert corner["median_min_speed_kmh"] == 84.0
+    assert corner["avg_traction_circle_proxy"] == pytest.approx((0.2 + 0.4 + 1.0) / 3)
+
+
+def test_corner_merge_orders_endpoints_by_export_time(tmp_path: Path) -> None:
+    newer = tmp_path / "newer"
+    older = tmp_path / "older"
+    newer.mkdir()
+    older.mkdir()
+    _write_archive(
+        newer / "lap_002.json",
+        lap_uuid="lap-new",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-02T10:00:00Z",
+        min_speed=84.0,
+    )
+    _write_archive(
+        older / "lap_001.json",
+        lap_uuid="lap-old",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+
+    merged = build_profile([older], existing=build_profile([newer]))
+    corner = next(iter(merged["corner_history"].values()))
+
+    assert corner["first_min_speed_kmh"] == 80.0
+    assert corner["last_min_speed_kmh"] == 84.0
+    assert corner["delta_min_speed_kmh"] == 4.0
 
 
 def test_rebuilding_same_lap_corpus_is_idempotent(tmp_path: Path) -> None:
@@ -477,6 +514,24 @@ def test_advanced_profile_graduates_curriculum() -> None:
     assert report["level"] == LEVEL_ADVANCED
     assert report["next_drill"] is None
     assert {row["status"] for row in report["drills"]} == {"graduated"}
+
+
+def test_advanced_corner_metrics_without_consistency_stay_novice() -> None:
+    profile = _profile(
+        corner_count=8,
+        apex_delta=3.0,
+        trail=0.4,
+        throttle=0.7,
+        steer=1.0,
+        corner_valid_laps=8,
+    )
+    profile.pop("consistency")
+
+    report = build_progression_report(profile)
+
+    assert report["skills"]["apex_speed"]["level"] == LEVEL_ADVANCED
+    assert report["skills"]["consistency"]["level"] == "unknown"
+    assert report["level"] == LEVEL_NOVICE
 
 
 def test_corner_count_alone_cannot_unlock_advanced_policy() -> None:
