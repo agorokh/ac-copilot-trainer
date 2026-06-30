@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T08:36:35Z
+last_updated: 2026-06-30T16:24:53Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
@@ -51,10 +51,16 @@ relates_to:
   - AcCopilotTrainer/01_Decisions/curated-setup-as-data-platform-entity-2026-06-28.md
   - AcCopilotTrainer/01_Decisions/setup-intelligence-platform-2026-06-29.md
   - AcCopilotTrainer/03_Investigations/curated-setup-hash-bridge-2026-06-28.md
+  - AcCopilotTrainer/03_Investigations/pr-399-coach-v2-review-loop-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/porsche-911-gt3r-magione-balanced-setup-2026-06-28.md
 ---
 
 # Next session handoff
+
+## In flight (2026-06-30) — PR #399 Coach v2
+
+Merge-ready (OPEN) on [`2908fc6`](https://github.com/agorokh/ac-copilot-trainer/commit/2908fc61fed5a43f489f422671a9234751d6406b).
+Detail: [[pr-399-coach-v2-review-loop-2026-06-30]].
 
 ## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
 

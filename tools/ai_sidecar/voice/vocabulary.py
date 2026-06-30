@@ -48,7 +48,20 @@ from dataclasses import dataclass
 #: EMITTED by the observer — we do not bake clips a cue never produces. ``turn_in`` /
 #: ``hold`` / ``unwind`` / ``throttle`` / ``track_out`` / ``gear`` are the documented next slice
 #: (they need steering / line-error grounding the live payload does not yet support honestly).
-KINDS: tuple[str, ...] = ("late_brake", "brake_release", "apex_deficit")
+KINDS: tuple[str, ...] = (
+    "late_brake",
+    "brake_release",
+    "apex_deficit",
+    # Coach v2 (diagnosed, anticipatory, paced — emitted by tools.ai_sidecar.coaching_runtime):
+    # one verb-first imperative per diagnosed root error, plus the live SAVE and the fix CONFIRM.
+    "early_brake",
+    "brake_late",
+    "slow_apex",
+    "no_trail",
+    "late_throttle",
+    "save",
+    "confirm",
+)
 
 #: Advisory ``urgency`` tiers, low -> high (mirrors ``realtime_observer.Advisory.urgency``). Drives
 #: SCHEDULING only (priority / barge-in / verbosity), never tone.
@@ -119,6 +132,22 @@ _STEMS: dict[tuple[str, str, str], str] = {
     # apex_deficit: the text-HUD min-speed verdict. Voice keeps it as a calm heads-up that LOW
     # verbosity suppresses (issue #368 AC e: no post-fact narration in low verbosity).
     ("apex_deficit", "info", "calm"): "More entry speed{turn}.",
+    # --- Coach v2: verb-first imperatives, corner-LESS (the cue lands AT the corner, so timing
+    # carries the location — no spoken number). One register each (firm correction / critical
+    # alarm / calm acknowledge); magnitude grading is a later slice. ---
+    ("early_brake", "prepare", "firm"): "Brake later.",
+    ("brake_late", "prepare", "firm"): "Brake earlier.",
+    ("no_trail", "prepare", "firm"): "Trail it.",
+    ("slow_apex", "prepare", "firm"): "Carry more.",
+    ("late_throttle", "act", "firm"): "Power.",
+    # magnitude grading (P2): the SAME word, hotter tone, for a gross miss — second register tier.
+    ("early_brake", "prepare", "critical"): "Brake later.",
+    ("brake_late", "prepare", "critical"): "Brake earlier.",
+    ("no_trail", "prepare", "critical"): "Trail it.",
+    ("slow_apex", "prepare", "critical"): "Carry more.",
+    ("late_throttle", "act", "critical"): "Power.",
+    ("save", "act", "critical"): "Brake!",
+    ("confirm", "info", "calm"): "Good.",
 }
 
 
