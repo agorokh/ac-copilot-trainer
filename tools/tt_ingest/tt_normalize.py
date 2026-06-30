@@ -140,6 +140,20 @@ class ReferenceCoverage:
     partial: bool
 
 
+@dataclass(frozen=True)
+class ReferenceIdentity:
+    """Identity and lap timing metadata for a stitched Track Titan archive."""
+
+    game_id: str | None
+    car_id: str | None
+    track_id: str | None
+    source_session_key: str | None
+    source_lap_number: str | None
+    session_key: str | None
+    lap_number: str | None
+    lap_ms: int | None
+
+
 def _finite_float(raw: Any, field: str) -> float:
     try:
         value = float(raw)
@@ -166,7 +180,7 @@ def _services_data(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return the services ``data`` object from an enveloped or already-unwrapped payload."""
     if not isinstance(payload, Mapping):
         raise TTNormalizeError("Track Titan payload must be a JSON object")
-    data = payload.get("data") if "data" in payload and "success" in payload else payload
+    data = payload.get("data") if "success" in payload else payload
     if not isinstance(data, Mapping):
         raise TTNormalizeError("Track Titan services payload missing data object")
     return data
@@ -220,18 +234,76 @@ def _identity_value(value: Any) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
-def _session_identity(session: Mapping[str, Any]) -> dict[str, str | None]:
-    return {
-        "game_id": _identity_value(session.get("game_id")),
-        "car_id": _resolve_car_id(session),
-        "track_id": _identity_value(session.get("track_id")),
-        "session_key": _session_key(session),
-        "lap_number": _identity_value(session.get("lap_number")),
-    }
+def _positive_int_ms(raw: Any, field: str) -> int | None:
+    if raw in (None, ""):
+        return None
+    value = _finite_float(raw, field)
+    if value <= 0:
+        raise TTNormalizeError(f"{field} must be positive, got {raw!r}")
+    return int(round(value))
 
 
-def _validated_session_identity(payloads: list[Mapping[str, Any]]) -> dict[str, str | None]:
-    identities = [_session_identity(_payload_session(payload)) for payload in payloads]
+def _session_lap_ms(session: Mapping[str, Any]) -> int | None:
+    for key in ("lap_time", "lapTime", "lastLapTime", "bestLapTime"):
+        if session.get(key) not in (None, ""):
+            return _positive_int_ms(session.get(key), f"session.{key}")
+    return None
+
+
+def _reference_lap_identity(
+    session: Mapping[str, Any],
+    ref: Mapping[str, Any],
+) -> ReferenceIdentity:
+    if not ref:
+        raise TTNormalizeError(
+            "Track Titan reference-channel payload missing referenceLap metadata"
+        )
+    lap_ms = _positive_int_ms(ref.get("lap_time"), "referenceLap.lap_time")
+    if lap_ms is None:
+        raise TTNormalizeError(
+            "Track Titan reference-channel payload missing referenceLap.lap_time"
+        )
+    return ReferenceIdentity(
+        game_id=_identity_value(session.get("game_id")),
+        car_id=_resolve_car_id(session),
+        track_id=_identity_value(session.get("track_id")),
+        source_session_key=_session_key(session),
+        source_lap_number=_identity_value(session.get("lap_number")),
+        session_key=_identity_value(ref.get("session_key") or ref.get("id")),
+        lap_number=_identity_value(ref.get("lap_number")),
+        lap_ms=lap_ms,
+    )
+
+
+def _session_identity(session: Mapping[str, Any]) -> ReferenceIdentity:
+    return ReferenceIdentity(
+        game_id=_identity_value(session.get("game_id")),
+        car_id=_resolve_car_id(session),
+        track_id=_identity_value(session.get("track_id")),
+        source_session_key=_session_key(session),
+        source_lap_number=_identity_value(session.get("lap_number")),
+        session_key=_session_key(session),
+        lap_number=_identity_value(session.get("lap_number")),
+        lap_ms=_session_lap_ms(session),
+    )
+
+
+def _payload_identity(payload: Mapping[str, Any], *, channel: str) -> ReferenceIdentity:
+    session = _payload_session(payload)
+    if channel == "reference":
+        ref = _reference_lap_from_payload([payload])
+        return _reference_lap_identity(session, ref)
+    if channel == "user":
+        return _session_identity(session)
+    raise TTNormalizeError(f"unsupported Track Titan telemetry channel: {channel}")
+
+
+def _validated_payload_identity(
+    payloads: list[Mapping[str, Any]],
+    *,
+    channel: str,
+) -> ReferenceIdentity:
+    identities = [_payload_identity(payload, channel=channel) for payload in payloads]
     if not identities:
         return _session_identity({})
     first = identities[0]
@@ -379,25 +451,34 @@ def build_reference_archive(
     """
     if not payloads:
         raise TTNormalizeError("no Track Titan payloads supplied")
+    identity = _validated_payload_identity(payloads, channel=channel)
     frames = merge_reference_frames(payloads, channel=channel)
     coverage = reference_coverage(
         frames, max_spline_gap=max_spline_gap, threshold=coverage_threshold
     )
-    if coverage.partial and not allow_partial:
+    trace_lap_ms = int(round(frames[-1]["eMs"]))
+    lap_time_mismatch_ms = (
+        abs(identity.lap_ms - trace_lap_ms) if identity.lap_ms is not None else None
+    )
+    lap_time_partial = lap_time_mismatch_ms is not None and lap_time_mismatch_ms > 1
+    partial = coverage.partial or lap_time_partial
+    if partial and not allow_partial:
+        timing_detail = (
+            f", reference_lap_ms={identity.lap_ms}, trace_lap_ms={trace_lap_ms}"
+            if lap_time_partial
+            else ""
+        )
         raise TTNormalizeError(
             "Track Titan reference telemetry is partial "
             f"(coverage={coverage.coverage:.3f}, threshold={coverage_threshold:.3f}, "
             f"min={coverage.min_spline:.3f}, max={coverage.max_spline:.3f}, "
-            f"max_gap={coverage.max_gap:.3f}); capture/stitch more segment windows "
+            f"max_gap={coverage.max_gap:.3f}{timing_detail}); capture/stitch more segment windows "
             "or pass --allow-partial for a debug-only archive"
         )
 
-    identity = _validated_session_identity(payloads)
-    session = _session_from_payload(payloads)
-    ref = _reference_lap_from_payload(payloads)
-    car_id = identity["car_id"] or "track_titan_car"
-    track_id = identity["track_id"] or "track_titan_track"
-    lap_n = identity["lap_number"] or ref.get("lap_number") or session.get("lap_number") or 1
+    car_id = identity.car_id or "track_titan_car"
+    track_id = identity.track_id or "track_titan_track"
+    lap_n = identity.lap_number or 1
     record = build_archive_record(
         frames,
         car_id=str(car_id),
@@ -417,13 +498,19 @@ def build_reference_archive(
         "schema_version": 1,
         "channel": channel,
         "payload_count": len(payloads),
-        "partial": coverage.partial,
+        "partial": partial,
         "coverage": coverage.coverage,
         "coverage_threshold": coverage_threshold,
         "min_spline": coverage.min_spline,
         "max_spline": coverage.max_spline,
         "max_spline_gap": max_spline_gap,
         "observed_max_spline_gap": coverage.max_gap,
+        "source_session_key": identity.source_session_key,
+        "source_lap_number": identity.source_lap_number,
+        "reference_session_key": identity.session_key,
+        "reference_lap_ms": identity.lap_ms,
+        "trace_lap_ms": trace_lap_ms,
+        "lap_time_mismatch_ms": lap_time_mismatch_ms,
         "samples": coverage.samples,
         "format": TT_REFERENCE_IMPORT_FORMAT,
     }

@@ -20,6 +20,7 @@ from tools.tt_ingest.cli import (
     coaching_endpoint,
     discover_reference_payloads,
     last_session_endpoint,
+    last_session_window_endpoint,
     main,
     retain_coaching,
     retain_sessions,
@@ -196,6 +197,26 @@ def test_retain_coaching_is_write_once(tmp_path) -> None:
     assert "nothing new" in again.render()
 
 
+def test_retain_coaching_writes_distinct_segment_windows(tmp_path) -> None:
+    first = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
+    second = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
+    second["data"]["telemetry"]["telemetry"]["reference"][0]["dist"] = 0.333333
+
+    retain_coaching(
+        _last_session(), _bundle(), lap=5, last_session_payload=first, lake_base=tmp_path
+    )
+    summary = retain_coaching(
+        _last_session(), _bundle(), lap=5, last_session_payload=second, lake_base=tmp_path
+    )
+
+    root = tmp_path / "journal" / "tt"
+    session_dir = root / "assettoCorsa" / "ks_porsche_911_gt3_r_2016" / "magione" / "20260629005756"
+    endpoint = last_session_window_endpoint(5, second)
+    assert endpoint in summary.written
+    assert (session_dir / f"{endpoint}.json").exists()
+    assert (session_dir / f"{last_session_endpoint(5)}.json").exists()
+
+
 def test_retain_coaching_summary_render(tmp_path) -> None:
     rendered = retain_coaching(_last_session(), _bundle(), lap=5, lake_base=tmp_path).render()
     assert "session 20260629005756" in rendered
@@ -297,15 +318,31 @@ def test_build_reference_archive_from_files_wraps_write_error(tmp_path) -> None:
 def test_discover_reference_payloads_filters_lake(tmp_path) -> None:
     root = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
     root.mkdir(parents=True)
+    raw = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
     target = root / f"{last_session_endpoint(5)}.json"
-    target.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    window = root / f"{last_session_window_endpoint(5, raw)}.json"
+    target.write_text(json.dumps(raw), encoding="utf-8")
+    window.write_text(json.dumps(raw), encoding="utf-8")
 
-    assert discover_reference_payloads(lake_base=tmp_path, session_key="sess-1", lap=5) == [target]
+    assert discover_reference_payloads(lake_base=tmp_path, session_key="sess-1", lap=5) == [
+        target,
+        window,
+    ]
     with pytest.raises(TTNormalizeError, match="no retained"):
-        discover_reference_payloads(lake_base=tmp_path, session_key="sess-2")
+        discover_reference_payloads(lake_base=tmp_path, session_key="sess-2", lap=5)
 
 
-def test_reference_cli_rejects_mixed_discovered_sessions(tmp_path) -> None:
+def test_discover_reference_payloads_requires_scope(tmp_path) -> None:
+    root = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    root.mkdir(parents=True)
+
+    with pytest.raises(TTNormalizeError, match="requires both"):
+        discover_reference_payloads(lake_base=tmp_path, session_key="sess-1")
+    with pytest.raises(TTNormalizeError, match="requires both"):
+        discover_reference_payloads(lake_base=tmp_path, lap=5)
+
+
+def test_reference_cli_requires_discovery_scope(tmp_path) -> None:
     first = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
     second = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-2"
     first.mkdir(parents=True)

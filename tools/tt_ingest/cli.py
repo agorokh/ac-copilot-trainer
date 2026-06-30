@@ -75,6 +75,16 @@ def last_session_endpoint(lap: Any) -> str:
     return f"{LAST_SESSION_ENDPOINT_PREFIX}{lap}"
 
 
+def last_session_window_endpoint(lap: Any, payload: Mapping[str, Any]) -> str:
+    """Endpoint for an additional distinct /last-session segment window for one lap."""
+    return f"{last_session_endpoint(lap)}_window_{stable_fingerprint(dict(payload))}"
+
+
+def _last_session_endpoint_matches_lap(stem: str, lap: Any) -> bool:
+    base = last_session_endpoint(lap)
+    return stem == base or stem.startswith(f"{base}_window_")
+
+
 def coaching_endpoint(lap: Any) -> str:
     """Endpoint (file stem) for a lap's coaching bundle: ``coaching_lap{lap}``."""
     return f"{COACHING_ENDPOINT_PREFIX}{lap}"
@@ -327,10 +337,12 @@ def retain_coaching(
     ``coaching_lap{lap}.json`` **write-once** under ``journal/tt/{game}/{car}/{track}/{sk}/``
     keyed by the given ``session``. BOTH files are **per-lap**: the /last-session telemetry is
     lap-specific, so lap-keying it keeps each lap's raw evidence coherent with its coaching even
-    when the same session later gains another lap (#353 review). ``last_session_payload`` is the
-    FULL raw services response (session + referenceLap + telemetry) — preserved so the lake
-    reconstructs exactly what the endpoint returned (the M-TT2 reference-lap input); it defaults
-    to ``session`` when not supplied.
+    when the same session later gains another lap (#353 review). Distinct later captures for the
+    same lap are retained as ``last_session_lap{lap}_window_{fingerprint}.json`` so M-TT2 lake
+    discovery can stitch multiple segment windows without overwriting the first capture.
+    ``last_session_payload`` is the FULL raw services response (session + referenceLap + telemetry)
+    — preserved so the lake reconstructs exactly what the endpoint returned (the M-TT2
+    reference-lap input); it defaults to ``session`` when not supplied.
     After writing, the lake indexes are rebuilt from disk (:func:`reindex_lake`) so the new
     services endpoints are discoverable and integrity-checkable. ``allow_nan`` keeps
     non-finite telemetry floats lossless, matching raw session retention.
@@ -343,13 +355,26 @@ def retain_coaching(
     )
     last_payload = dict(last_session_payload) if last_session_payload is not None else dict(session)
     written: list[str] = []
-    for endpoint, payload in (
-        (last_session_endpoint(lap), last_payload),
-        (coaching_endpoint(lap), dict(bundle)),
-    ):
-        result = write_immutable_json(endpoint_file(target_dir, endpoint), payload, allow_nan=True)
-        if result.written:
-            written.append(endpoint)
+    base_last_endpoint = last_session_endpoint(lap)
+    last_result = write_immutable_json(
+        endpoint_file(target_dir, base_last_endpoint), last_payload, allow_nan=True
+    )
+    if last_result.written:
+        written.append(base_last_endpoint)
+    elif last_result.sha256[:12] != stable_fingerprint(last_payload):
+        window_endpoint = last_session_window_endpoint(lap, last_payload)
+        window_result = write_immutable_json(
+            endpoint_file(target_dir, window_endpoint), last_payload, allow_nan=True
+        )
+        if window_result.written:
+            written.append(window_endpoint)
+
+    coaching_name = coaching_endpoint(lap)
+    coaching_result = write_immutable_json(
+        endpoint_file(target_dir, coaching_name), dict(bundle), allow_nan=True
+    )
+    if coaching_result.written:
+        written.append(coaching_name)
     indexed = reindex_lake(root, generated_at=stamp)
     return CoachingSummary(
         session_key=key["session_key"],
@@ -380,6 +405,8 @@ def discover_reference_payloads(
     lap: str | int | None = None,
 ) -> list[Path]:
     """Discover retained ``last_session_lap*.json`` payloads in the TT lake."""
+    if not session_key or lap is None:
+        raise TTNormalizeError("--discover-lake requires both --session-key and --lap")
     root = lake_root(lake_base)
     if not root.exists():
         raise TTNormalizeError(f"Track Titan lake not found: {root}")
@@ -387,9 +414,9 @@ def discover_reference_payloads(
     for path in sorted(root.rglob(REFERENCE_INPUT_GLOB)):
         if path.is_symlink() or not path.is_file():
             continue
-        if session_key and path.parent.name != str(session_key):
+        if path.parent.name != str(session_key):
             continue
-        if lap is not None and path.stem != last_session_endpoint(lap):
+        if not _last_session_endpoint_matches_lap(path.stem, lap):
             continue
         paths.append(path)
     if not paths:
@@ -511,13 +538,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     reference.add_argument(
         "--discover-lake",
         action="store_true",
-        help="Discover retained last_session_lap*.json files under --lake-base/journal/tt.",
+        help=(
+            "Discover retained last_session_lap*.json files for --session-key/--lap under "
+            "--lake-base/journal/tt."
+        ),
     )
     reference.add_argument("--lake-base", type=Path, default=None)
     reference.add_argument(
-        "--session-key", default=None, help="Filter lake discovery to a session key."
+        "--session-key", default=None, help="Required with --discover-lake; retained session key."
     )
-    reference.add_argument("--lap", default=None, help="Filter lake discovery to one lap number.")
+    reference.add_argument("--lap", default=None, help="Required with --discover-lake; one lap.")
     reference.add_argument(
         "--channel",
         choices=("reference", "user"),

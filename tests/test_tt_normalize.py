@@ -17,6 +17,7 @@ from tools.tt_ingest.tt_normalize import (
     build_sessions_index,
     normalize_session,
     normalize_sessions,
+    reference_coverage,
     reference_frames_from_payload,
     split_session_id,
 )
@@ -173,6 +174,11 @@ def test_reference_frames_from_payload_maps_tt_channels() -> None:
     assert frame["pz"] == pytest.approx(19.2)
 
 
+def test_reference_frames_reject_malformed_services_envelope() -> None:
+    with pytest.raises(TTNormalizeError, match="missing data object"):
+        reference_frames_from_payload({"success": True})
+
+
 def test_reference_frames_clamp_minor_pedal_noise() -> None:
     payload = _tt_reference_payload(0.4, 0.41, samples=2)
     payload["data"]["telemetry"]["telemetry"]["reference"][0]["throt"] = 1.00001
@@ -221,7 +227,30 @@ def test_build_reference_archive_stitches_full_lap_windows() -> None:
     assert record["generator"]["tt_reference"]["payload_count"] == 2
     assert record["generator"]["tt_reference"]["max_spline_gap"] == pytest.approx(0.08)
     assert record["generator"]["tt_reference"]["observed_max_spline_gap"] < 0.08
+    assert record["generator"]["tt_reference"]["reference_lap_ms"] == 71000
+    assert record["generator"]["tt_reference"]["lap_time_mismatch_ms"] == 0
     assert record["corners"]  # non-vacuous for the M0 observer path
+
+
+def test_build_reference_archive_uses_reference_lap_identity() -> None:
+    first = _tt_reference_payload(0.0, 0.5, samples=26)
+    second = _tt_reference_payload(0.5, 1.0, samples=26)
+    for payload in (first, second):
+        payload["data"]["session"]["lap_number"] = 5
+        payload["data"]["referenceLap"]["lap_number"] = 4
+        payload["data"]["referenceLap"]["session_key"] = "pro-reference-session"
+
+    record = build_reference_archive([first, second], exported_at="2026-06-30T00:00:00Z")
+
+    assert record["lap"]["lap_n"] == 4
+    assert record["lap"]["lap_ms"] == 71000
+
+
+def test_build_reference_archive_rejects_incomplete_lap_time() -> None:
+    payload = _tt_reference_payload(0.02, 0.98, samples=80)
+
+    with pytest.raises(TTNormalizeError, match="reference_lap_ms=71000"):
+        build_reference_archive([payload], max_spline_gap=0.05)
 
 
 def test_build_reference_archive_rejects_spatial_gaps_even_with_wide_range() -> None:
@@ -244,15 +273,28 @@ def test_build_reference_archive_rejects_single_corner_sized_hole() -> None:
         )
 
 
-def test_build_reference_archive_counts_start_finish_wrap_as_closed_loop() -> None:
+def test_reference_coverage_counts_start_finish_wrap_as_closed_loop() -> None:
+    frames = reference_frames_from_payload(_tt_reference_payload(0.02, 0.98, samples=80))
+
+    coverage = reference_coverage(frames, max_spline_gap=0.05)
+
+    assert coverage.partial is False
+    assert coverage.coverage == pytest.approx(1.0)
+
+
+def test_build_reference_archive_marks_lap_time_mismatch_partial() -> None:
     record = build_reference_archive(
         [_tt_reference_payload(0.02, 0.98, samples=80)],
         max_spline_gap=0.05,
+        allow_partial=True,
         exported_at="2026-06-30T00:00:00Z",
     )
 
-    assert record["generator"]["tt_reference"]["partial"] is False
+    assert record["generator"]["tt_reference"]["partial"] is True
     assert record["generator"]["tt_reference"]["coverage"] == pytest.approx(1.0)
+    assert record["generator"]["tt_reference"]["reference_lap_ms"] == 71000
+    assert record["generator"]["tt_reference"]["trace_lap_ms"] == 69580
+    assert record["generator"]["tt_reference"]["lap_time_mismatch_ms"] == 1420
 
 
 def test_build_reference_archive_resolves_car_id_from_object() -> None:
