@@ -109,6 +109,17 @@ def _numeric_list(value: Any) -> list[float]:
     return out
 
 
+def _numeric_mapping(value: Any) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, float] = {}
+    for key, item in value.items():
+        parsed = _num(item)
+        if parsed is not None:
+            out[str(key)] = parsed
+    return out
+
+
 def _avg(values: Iterable[float | None]) -> float | None:
     finite = [v for v in values if v is not None and math.isfinite(v)]
     if not finite:
@@ -307,8 +318,15 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
             ),
         )
         first = ordered[0]
+        min_speed_by_lap_uuid = {
+            str(row.get("lap_uuid")): speed
+            for row in ordered
+            if row.get("lap_uuid") and (speed := _num(row.get("min_speed_kmh"))) is not None
+        }
         min_speeds = [row.get("min_speed_kmh") for row in ordered]
-        finite_min_speeds = [speed for speed in min_speeds if speed is not None]
+        finite_min_speeds = list(min_speed_by_lap_uuid.values()) or [
+            speed for speed in min_speeds if speed is not None
+        ]
         first_min = next((speed for speed in min_speeds if speed is not None), None)
         last_min = next(
             (
@@ -338,6 +356,7 @@ def _corner_history(rows_by_key: Mapping[str, list[dict[str, Any]]]) -> dict[str
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max((v for v in min_speeds if v is not None), default=None),
             "median_min_speed_kmh": _median_float(min_speeds),
+            "min_speed_by_lap_uuid": min_speed_by_lap_uuid,
             "min_speed_samples_kmh": finite_min_speeds,
             "lap_uuids": _sorted_texts(row.get("lap_uuid") for row in ordered),
             "delta_min_speed_kmh": (
@@ -491,8 +510,15 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
         if merged_lap_ids
         else old_laps + new_laps
     )
-    min_speed_samples = _numeric_list(existing.get("min_speed_samples_kmh")) + _numeric_list(
-        incoming.get("min_speed_samples_kmh")
+    min_speed_by_lap_uuid = {
+        **_numeric_mapping(existing.get("min_speed_by_lap_uuid")),
+        **_numeric_mapping(incoming.get("min_speed_by_lap_uuid")),
+    }
+    min_speed_samples = (
+        [min_speed_by_lap_uuid[key] for key in sorted(min_speed_by_lap_uuid)]
+        if min_speed_by_lap_uuid
+        else _numeric_list(existing.get("min_speed_samples_kmh"))
+        + _numeric_list(incoming.get("min_speed_samples_kmh"))
     )
     median_min_speed = (
         _median_float(min_speed_samples)
@@ -517,6 +543,9 @@ def _merge_corner_row(existing: Mapping[str, Any], incoming: Mapping[str, Any]) 
             "last_min_speed_kmh": last_min,
             "best_min_speed_kmh": max(best_values, default=None),
             "median_min_speed_kmh": median_min_speed,
+            "min_speed_by_lap_uuid": min_speed_by_lap_uuid
+            if min_speed_by_lap_uuid
+            else existing.get("min_speed_by_lap_uuid"),
             "min_speed_samples_kmh": min_speed_samples
             if min_speed_samples
             else existing.get("min_speed_samples_kmh"),

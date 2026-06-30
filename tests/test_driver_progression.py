@@ -357,6 +357,56 @@ def test_incremental_corner_merge_updates_derived_stats(tmp_path: Path) -> None:
     assert corner["avg_traction_circle_proxy"] == pytest.approx(0.7)
 
 
+def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_archive(
+        first / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+    _write_archive(
+        first / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+    )
+    _write_archive(
+        second / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+    )
+    _write_archive(
+        second / "lap_003.json",
+        lap_uuid="lap-3",
+        session_uuid="session-1",
+        lap_ms=89500,
+        lap_n=3,
+        exported_at="2026-06-01T10:10:00Z",
+        min_speed=86.0,
+    )
+
+    merged = build_profile([second], existing=build_profile([first]))
+    corner = next(iter(merged["corner_history"].values()))
+
+    assert corner["valid_laps"] == 3
+    assert corner["min_speed_samples_kmh"] == [80.0, 84.0, 86.0]
+    assert corner["median_min_speed_kmh"] == 84.0
+
+
 def test_rebuilding_same_lap_corpus_is_idempotent(tmp_path: Path) -> None:
     lap_dir = tmp_path / "laps"
     lap_dir.mkdir()
