@@ -94,6 +94,18 @@ def advisory_to_phrase(advisory: dict[str, Any]) -> str:
         return "Release." if register == "firm" else "Ease off."
     if kind == "apex_deficit":
         return f"More entry speed, {_turn(corner)}."
+    if kind == "fuel_status":
+        return "Fuel check."
+    if kind == "fuel_save":
+        return "Lift and coast." if register == "critical" else "Save fuel."
+    if kind == "tyre_manage":
+        if register == "critical":
+            return "Save tyres!"
+        return "Save tyres." if advisory.get("urgency") == "act" else "Manage tyres."
+    if kind == "brake_manage":
+        return "Cool brakes!" if register == "critical" else "Cool brakes."
+    if kind == "conditions_strategy":
+        return "Smooth inputs." if advisory.get("urgency") == "act" else "Adjust to track."
     # Unknown kind: fall back to the observer's own message (already human-readable), trimmed.
     message = advisory.get("message")
     if isinstance(message, str) and message.strip():

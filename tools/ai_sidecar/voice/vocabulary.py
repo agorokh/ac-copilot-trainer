@@ -61,6 +61,11 @@ KINDS: tuple[str, ...] = (
     "late_throttle",
     "save",
     "confirm",
+    "fuel_status",
+    "fuel_save",
+    "tyre_manage",
+    "brake_manage",
+    "conditions_strategy",
 )
 
 #: Advisory ``urgency`` tiers, low -> high (mirrors ``realtime_observer.Advisory.urgency``). Drives
@@ -148,6 +153,20 @@ _STEMS: dict[tuple[str, str, str], str] = {
     ("late_throttle", "act", "critical"): "Power.",
     ("save", "act", "critical"): "Brake!",
     ("confirm", "info", "calm"): "Good.",
+    # Stint-level race-management cues. These are generic by design: the detailed fuel/tyre/brake
+    # numbers ride in the advisory payload for screens/logs, while the voice keeps the hot path
+    # short enough to act on.
+    ("fuel_status", "info", "calm"): "Fuel check.",
+    ("fuel_save", "act", "firm"): "Save fuel.",
+    ("fuel_save", "act", "critical"): "Lift and coast.",
+    ("tyre_manage", "prepare", "firm"): "Manage tyres.",
+    ("tyre_manage", "act", "firm"): "Save tyres.",
+    ("tyre_manage", "act", "critical"): "Save tyres!",
+    ("brake_manage", "prepare", "firm"): "Cool brakes.",
+    ("brake_manage", "act", "critical"): "Cool brakes!",
+    ("conditions_strategy", "prepare", "calm"): "Track is green.",
+    ("conditions_strategy", "prepare", "firm"): "Adjust to track.",
+    ("conditions_strategy", "act", "firm"): "Smooth inputs.",
 }
 
 
