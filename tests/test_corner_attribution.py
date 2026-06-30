@@ -12,6 +12,7 @@ from tools.ai_sidecar.corner_attribution import (
     _corner_history_matches,
     _match_corner_signature,
     analyze_balance,
+    analyze_corner_consistency,
     attribute_corner,
     coach_lap,
     compare_laps,
@@ -326,6 +327,22 @@ def test_corner_history_matching_consumes_candidates_once(monkeypatch):
     assert matched_history_count == 1
 
 
+def test_analyze_corner_consistency_reuses_precomputed_matches(monkeypatch):
+    def fail_if_segmented(_lap):
+        raise AssertionError("precomputed matches should not re-segment history")
+
+    monkeypatch.setattr(ca, "corner_signatures", fail_if_segmented)
+    matches = {
+        0: [
+            _sig(index=0, entry_speed_kmh=160.0, min_speed_kmh=95.0, exit_speed_kmh=140.0),
+            _sig(index=7, entry_speed_kmh=150.0, min_speed_kmh=88.0, exit_speed_kmh=132.0),
+        ]
+    }
+    consistency = analyze_corner_consistency(matches=matches)
+    assert consistency[0].sample_count == 2
+    assert consistency[0].score < 100.0
+
+
 # --- analyze_balance (the master discriminator) -----------------------------
 def test_balance_routes_high_speed_saturation_to_aero():
     # grip-limited (saturated) in HIGH-speed corners, grip in hand at low speed -> aero
@@ -588,6 +605,62 @@ def test_coach_lap_preserves_caller_supplied_exit_width():
     assert diagnostics["source"] == "track_edge"
     assert diagnostics["under_used_exit_width_m"] == 2.0
     assert any(a.key == "exit_road_usage" for a in report[0].attributions)
+
+
+def test_coach_lap_uses_matched_reference_window_for_delta(monkeypatch):
+    n = 10
+    spline = [i / (n - 1) for i in range(n)]
+    ref_t = [float(i) for i in range(n)]
+    cand_t = [float(i) for i in range(n)]
+    cand_t[7] += 0.2
+    cand_t[8] += 0.4
+    lap = LapTrace(
+        spline=spline,
+        t_s=cand_t,
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.0] * n,
+        gear=[4] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+    )
+    reference = LapTrace(
+        spline=spline,
+        t_s=ref_t,
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.0] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+    )
+    cand_sig = _sig(
+        index=0,
+        entry_i=4,
+        apex_i=5,
+        exit_i=6,
+        apex_spline=spline[5],
+        gear_at_apex=4,
+    )
+    ref_sigs = [
+        _sig(index=0, entry_i=1, apex_i=2, exit_i=3, apex_spline=spline[2], gear_at_apex=4),
+        _sig(index=1, entry_i=6, apex_i=7, exit_i=8, apex_spline=spline[5], gear_at_apex=3),
+    ]
+
+    monkeypatch.setattr(ca, "segment_corners", lambda _lap: [(4, 5, 6)])
+    monkeypatch.setattr(
+        ca,
+        "corner_signatures",
+        lambda lap_arg, _corners=None: [cand_sig] if lap_arg is lap else ref_sigs,
+    )
+    monkeypatch.setattr(ca, "analyze_trail_braking", lambda *_args, **_kw: [])
+
+    report = coach_lap(lap, SETUP, reference=reference)
+    assert report[0].delta_s == 0.4
+    assert report[0].diagnostics["gear"]["reference_apex_gear"] == 3
+    assert any(a.key == "gear_selection" for a in report[0].attributions)
 
 
 # --- trail-braking folded into the attribution layer (#301) ------------------

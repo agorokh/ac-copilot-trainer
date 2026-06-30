@@ -112,6 +112,17 @@ def _same_lap_scope(candidate: LapTrace, anchor: LapTrace) -> bool:
     )
 
 
+def _archive_track_length_m(archive: dict | None) -> float | None:
+    track = archive.get("track") if isinstance(archive, dict) else None
+    if not isinstance(track, dict):
+        return None
+    try:
+        length = float(track.get("lengthM"))
+    except (TypeError, ValueError):
+        return None
+    return length if length > 0 else None
+
+
 def _archive_track_layout(archive: dict | None) -> str | None:
     track = archive.get("track") if isinstance(archive, dict) else None
     layout = track.get("layout") if isinstance(track, dict) else None
@@ -125,6 +136,36 @@ def _same_archive_layout(candidate: dict | None, anchor: dict | None) -> bool:
     if anchor_layout is None:
         return True
     return _archive_track_layout(candidate) == anchor_layout
+
+
+def _same_archive_track_fingerprint(candidate: dict | None, anchor: dict | None) -> bool:
+    candidate_layout = _archive_track_layout(candidate)
+    anchor_layout = _archive_track_layout(anchor)
+    if candidate_layout is not None and anchor_layout is not None:
+        return candidate_layout == anchor_layout
+    candidate_length = _archive_track_length_m(candidate)
+    anchor_length = _archive_track_length_m(anchor)
+    if candidate_length is None or anchor_length is None:
+        return False
+    return abs(candidate_length - anchor_length) <= 1.0
+
+
+def _same_archive_scope(
+    candidate_lap: LapTrace,
+    anchor_lap: LapTrace,
+    candidate_archive: dict | None,
+    anchor_archive: dict | None,
+) -> bool:
+    if not _same_lap_scope(candidate_lap, anchor_lap):
+        return False
+    # Car identity has no reliable fallback fingerprint in lap archives.
+    if (candidate_lap.car_id is None) != (anchor_lap.car_id is None):
+        return False
+    if (candidate_lap.track_id is None) != (anchor_lap.track_id is None):
+        return _same_archive_track_fingerprint(candidate_archive, anchor_archive)
+    if candidate_lap.track_id is None and anchor_lap.track_id is None:
+        return _same_archive_track_fingerprint(candidate_archive, anchor_archive)
+    return _same_archive_layout(candidate_archive, anchor_archive)
 
 
 def format_debrief(
@@ -434,8 +475,7 @@ def _analyze(
         raw_ref
         if raw_ref is not None
         and _archive_lap_is_valid(reference_archive)
-        and _same_lap_scope(raw_ref, lap)
-        and _same_archive_layout(reference_archive, lap_archive)
+        and _same_archive_scope(raw_ref, lap, reference_archive, lap_archive)
         else None
     )
     history_laps: list[LapTrace] = []
@@ -446,7 +486,7 @@ def _analyze(
             history_lap = lap_trace_from_archive(history_archive)
         except ValueError:
             continue
-        if _same_lap_scope(history_lap, lap) and _same_archive_layout(history_archive, lap_archive):
+        if _same_archive_scope(history_lap, lap, history_archive, lap_archive):
             history_laps.append(history_lap)
     report = coach_lap(
         lap,
@@ -481,7 +521,7 @@ def _analyze(
             corpus_lap = lap_trace_from_archive(archive)
         except ValueError:
             continue
-        if _same_lap_scope(corpus_lap, lap) and _same_archive_layout(archive, lap_archive):
+        if _same_archive_scope(corpus_lap, lap, archive, lap_archive):
             corpus_laps.append(corpus_lap)
     superlap = build_superlap(corpus_laps) if corpus_laps else None
     return {

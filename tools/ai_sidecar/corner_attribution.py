@@ -122,6 +122,49 @@ def _min_speed_in_window(lap: LapTrace, lo: float, hi: float) -> float:
     return (min(vals) if vals else 0.0) * 3.6
 
 
+def _corner_delta_for_window(
+    candidate: LapTrace,
+    reference: LapTrace,
+    *,
+    index: int,
+    lo: float,
+    hi: float,
+) -> CornerDelta:
+    c_t = _interp_time(candidate, hi) - _interp_time(candidate, lo)
+    r_t = _interp_time(reference, hi) - _interp_time(reference, lo)
+    c_min = _min_speed_in_window(candidate, lo, hi)
+    r_min = _min_speed_in_window(reference, lo, hi)
+    return CornerDelta(
+        index=index,
+        spline_lo=round(lo, 4),
+        spline_hi=round(hi, 4),
+        cand_time_s=round(c_t, 3),
+        ref_time_s=round(r_t, 3),
+        delta_s=round(c_t - r_t, 3),
+        cand_min_kmh=round(c_min, 1),
+        ref_min_kmh=round(r_min, 1),
+        min_speed_delta_kmh=round(c_min - r_min, 1),
+    )
+
+
+def _corner_delta_for_match(
+    candidate: LapTrace,
+    reference: LapTrace,
+    cand_sig: CornerSignature,
+    ref_sig: CornerSignature,
+) -> CornerDelta:
+    """Compare candidate against the same physical reference corner used by diagnostics."""
+    lo = reference.spline[ref_sig.entry_i]
+    hi = reference.spline[ref_sig.exit_i]
+    return _corner_delta_for_window(
+        candidate,
+        reference,
+        index=cand_sig.index,
+        lo=lo,
+        hi=hi,
+    )
+
+
 def compare_laps(
     candidate: LapTrace,
     reference: LapTrace,
@@ -139,23 +182,7 @@ def compare_laps(
     for idx, (entry_i, _apex_i, exit_i) in enumerate(corners):
         lo = reference.spline[entry_i]
         hi = reference.spline[exit_i]
-        c_t = _interp_time(candidate, hi) - _interp_time(candidate, lo)
-        r_t = _interp_time(reference, hi) - _interp_time(reference, lo)
-        c_min = _min_speed_in_window(candidate, lo, hi)
-        r_min = _min_speed_in_window(reference, lo, hi)
-        out.append(
-            CornerDelta(
-                index=idx,
-                spline_lo=round(lo, 4),
-                spline_hi=round(hi, 4),
-                cand_time_s=round(c_t, 3),
-                ref_time_s=round(r_t, 3),
-                delta_s=round(c_t - r_t, 3),
-                cand_min_kmh=round(c_min, 1),
-                ref_min_kmh=round(r_min, 1),
-                min_speed_delta_kmh=round(c_min - r_min, 1),
-            )
-        )
+        out.append(_corner_delta_for_window(candidate, reference, index=idx, lo=lo, hi=hi))
     return out
 
 
@@ -197,9 +224,10 @@ def _corner_history_matches(
 
 
 def analyze_corner_consistency(
-    laps: list[LapTrace],
+    laps: list[LapTrace] | None = None,
     *,
     anchors: list[CornerSignature] | None = None,
+    matches: dict[int, list[CornerSignature]] | None = None,
 ) -> dict[int, CornerConsistency]:
     """Per-corner lap-to-lap variance, mirroring the Lua HUD consistency score.
 
@@ -207,10 +235,13 @@ def analyze_corner_consistency(
     more variance), with speed spread carrying most of the weight and brake-point spline spread
     down-weighted because spline wrap/segmentation noise is more fragile.
     """
-    if len(laps) < 2:
-        return {}
-    anchors = anchors if anchors is not None else corner_signatures(laps[-1])
-    by_idx = _corner_history_matches(laps[:-1], anchors)
+    if matches is None:
+        if laps is None or len(laps) < 2:
+            return {}
+        anchors = anchors if anchors is not None else corner_signatures(laps[-1])
+        by_idx = _corner_history_matches(laps[:-1], anchors)
+    else:
+        by_idx = matches
     out: dict[int, CornerConsistency] = {}
     for idx, sigs in by_idx.items():
         if len(sigs) < 2:
@@ -481,15 +512,24 @@ def coach_lap(
     """Full per-corner coaching pass over a lap (optionally vs reference, optionally with setup)."""
     corners = segment_corners(lap)
     sigs = corner_signatures(lap, corners)
-    deltas = compare_laps(lap, reference, corners=corners) if reference is not None else []
-    by_idx = {d.index: d for d in deltas}
     ref_sigs = corner_signatures(reference) if reference is not None else []
+    ref_by_idx: dict[int, CornerSignature] = {}
+    delta_by_idx: dict[int, CornerDelta] = {}
+    if reference is not None:
+        unused_ref_sigs = list(ref_sigs)
+        for sig in sigs:
+            ref_sig = _match_corner_signature(sig, unused_ref_sigs)
+            if ref_sig is None:
+                continue
+            ref_by_idx[sig.index] = ref_sig
+            unused_ref_sigs.remove(ref_sig)
+            delta_by_idx[sig.index] = _corner_delta_for_match(lap, reference, sig, ref_sig)
     history_laps = [*(history or []), lap]
     history_matches = (
         _corner_history_matches(history_laps[:-1], sigs) if len(history_laps) >= 2 else {}
     )
     consistency = (
-        analyze_corner_consistency(history_laps, anchors=sigs) if len(history_laps) >= 2 else {}
+        analyze_corner_consistency(matches=history_matches) if len(history_laps) >= 2 else {}
     )
     # Trail-braking technique read (#301): computed once over the SAME segmentation as the
     # signatures so the per-corner finding lines up with sig.index, then injected into each corner's
@@ -500,7 +540,7 @@ def coach_lap(
     }
     out: list[CornerCoaching] = []
     for sig in sigs:
-        ref_sig = _match_corner_signature(sig, ref_sigs)
+        ref_sig = ref_by_idx.get(sig.index)
         diagnostics = _corner_diagnostics(
             lap=lap,
             reference=reference,
@@ -541,7 +581,7 @@ def coach_lap(
         ctx = CornerContext(
             sig=sig,
             setup=setup,
-            delta=by_idx.get(sig.index),
+            delta=delta_by_idx.get(sig.index),
             reference_sig=ref_sig,
             grip_ceiling_g=grip_ceiling_g,
             extra=extra,

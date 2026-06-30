@@ -353,3 +353,31 @@ def test_structured_debrief_allows_history_when_current_track_id_missing():
     diag = d["corners"][0]["diagnostics"]["consistency"]
     assert diag["available"] is True
     assert diag["sample_count"] == 2
+
+
+def test_structured_debrief_rejects_missing_track_id_history_with_different_fingerprint():
+    current = _corner_archive(degrade=2.0)
+    del current["track"]["id"]
+    other = _corner_archive(degrade=4.0)
+    other["track"]["lengthM"] = current["track"]["lengthM"] + 500.0
+    d = build_structured_debrief(
+        current,
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_rejects_history_with_missing_car_id():
+    other = _corner_archive(degrade=4.0)
+    del other["car"]["id"]
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
