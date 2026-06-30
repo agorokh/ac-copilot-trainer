@@ -771,7 +771,7 @@ def test_build_pyinstaller_args_collects_voice_runtime_floor(tmp_path: Path) -> 
     args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
 
     assert _has_option_value(args, "--collect-data", "_sounddevice_data")
-    assert _has_option_value(args, "--collect-dynamic-libs", "sounddevice")
+    assert _has_option_value(args, "--collect-binaries", "sounddevice")
     assert _has_option_value(args, "--hidden-import", "numpy")
     assert _has_option_value(args, "--hidden-import", "sounddevice")
     assert _has_option_value(args, "--hidden-import", "pyttsx3")
@@ -790,9 +790,9 @@ def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
     args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
 
     assert _has_option_value(args, "--hidden-import", "rtmixer")
-    assert _has_option_value(args, "--collect-dynamic-libs", "rtmixer")
+    assert _has_option_value(args, "--collect-binaries", "rtmixer")
     assert _has_option_value(args, "--hidden-import", "pa_ringbuffer")
-    assert _has_option_value(args, "--collect-dynamic-libs", "pa_ringbuffer")
+    assert _has_option_value(args, "--collect-binaries", "pa_ringbuffer")
 
 
 def _has_option_value(args: list[str], option: str, value: str) -> bool:

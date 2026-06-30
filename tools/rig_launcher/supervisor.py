@@ -560,7 +560,7 @@ def build_pyinstaller_args(
         "tools.ai_sidecar",
         "--collect-data",
         "_sounddevice_data",
-        "--collect-dynamic-libs",
+        "--collect-binaries",
         "sounddevice",
         "--hidden-import",
         "tools.ai_sidecar.voice.engine",
@@ -590,7 +590,7 @@ def build_pyinstaller_args(
 def _append_optional_pyinstaller_module(args: list[str], module: str) -> None:
     if find_spec(module) is None:
         return
-    args.extend(["--hidden-import", module, "--collect-dynamic-libs", module])
+    args.extend(["--hidden-import", module, "--collect-binaries", module])
 
 
 def _screen_from_health(health: ProbeResult) -> ProbeResult:
