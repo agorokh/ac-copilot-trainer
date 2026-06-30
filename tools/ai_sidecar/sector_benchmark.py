@@ -159,7 +159,7 @@ def build_sector_delta_report(
     reference: LapTrace,
     *,
     sector_map: SectorMap | None = None,
-) -> SectorDeltaReport:
+) -> SectorDeltaReport | None:
     """Compare candidate vs reference by sector and micro-sector.
 
     Positive deltas mean the candidate was slower than the reference over that
@@ -169,6 +169,8 @@ def build_sector_delta_report(
     smap = sector_map or build_sector_map()
     sectors = _delta_windows(candidate, reference, smap.sectors)
     micro_sectors = _delta_windows(candidate, reference, smap.micro_sectors)
+    if len(sectors) != len(smap.sectors) or len(micro_sectors) != len(smap.micro_sectors):
+        return None
     total_delta_s = sum(s.delta_s for s in sectors)
     return SectorDeltaReport(
         total_delta_s=total_delta_s,

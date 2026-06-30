@@ -33,6 +33,23 @@ def _lap_from_micro_durations(durations: list[float], *, car: str = "car", track
     )
 
 
+def _drop_first_sample(lap: LapTrace) -> LapTrace:
+    return LapTrace(
+        spline=lap.spline[1:],
+        t_s=lap.t_s[1:],
+        v_ms=lap.v_ms[1:],
+        brake=lap.brake[1:],
+        throttle=lap.throttle[1:],
+        steer=lap.steer[1:],
+        gear=lap.gear[1:],
+        x=lap.x[1:],
+        z=lap.z[1:],
+        lap_ms=lap.lap_ms,
+        car_id=lap.car_id,
+        track_id=lap.track_id,
+    )
+
+
 def test_sector_map_defaults_to_three_by_three_micro_sectors() -> None:
     smap = build_sector_map()
     assert [s.label for s in smap.sectors] == ["S1", "S2", "S3"]
@@ -70,39 +87,20 @@ def test_superlap_stitches_fastest_micro_sectors() -> None:
 
 def test_segment_duration_requires_sampled_window_edges() -> None:
     lap = _lap_from_micro_durations([10.0] * 9)
-    sparse = LapTrace(
-        spline=lap.spline[1:],
-        t_s=lap.t_s[1:],
-        v_ms=lap.v_ms[1:],
-        brake=lap.brake[1:],
-        throttle=lap.throttle[1:],
-        steer=lap.steer[1:],
-        gear=lap.gear[1:],
-        x=lap.x[1:],
-        z=lap.z[1:],
-        lap_ms=lap.lap_ms,
-        car_id=lap.car_id,
-        track_id=lap.track_id,
-    )
+    sparse = _drop_first_sample(lap)
 
     assert segment_duration_s(sparse, build_sector_map().micro_sectors[0]) is None
 
 
+def test_sector_delta_report_requires_complete_sector_coverage() -> None:
+    reference = _lap_from_micro_durations([10.0] * 9)
+    sparse_candidate = _drop_first_sample(_lap_from_micro_durations([10.0] * 9))
+
+    assert build_sector_delta_report(sparse_candidate, reference) is None
+
+
 def test_superlap_requires_complete_micro_sector_coverage() -> None:
     lap = _lap_from_micro_durations([10.0] * 9)
-    sparse = LapTrace(
-        spline=lap.spline[1:],
-        t_s=lap.t_s[1:],
-        v_ms=lap.v_ms[1:],
-        brake=lap.brake[1:],
-        throttle=lap.throttle[1:],
-        steer=lap.steer[1:],
-        gear=lap.gear[1:],
-        x=lap.x[1:],
-        z=lap.z[1:],
-        lap_ms=lap.lap_ms,
-        car_id=lap.car_id,
-        track_id=lap.track_id,
-    )
+    sparse = _drop_first_sample(lap)
 
     assert build_superlap([sparse]) is None
