@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,7 @@ import pytest
 from tools.ai_sidecar.car_schema import CarSetupSchema, SpinnerDesc
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXAMPLE = REPO_ROOT / "assets/setups/_schema/ks_porsche_911_gt3_r_2016/5c2e8707648a.json"
+EXAMPLE = REPO_ROOT / "assets/setups/_schema/ks_porsche_911_gt3_r_2016/4fcbe0406992.json"
 
 
 def _spinner(**kw) -> SpinnerDesc:
@@ -30,6 +32,12 @@ def test_decode_enum_by_items_and_item_values() -> None:
     assert sp.decode(5) is None  # out of range
 
 
+def test_decode_enum_with_item_values_does_not_fall_back_to_index() -> None:
+    sp = _spinner(items=["Short", "Medium", "Long"], itemValues=[10, 20, 30], min=0, max=2, step=1)
+    assert sp.decode(20) == "Medium"
+    assert sp.decode(1) is None
+
+
 def test_clamp_snaps_to_range_and_step() -> None:
     sp = _spinner(min=0, max=20, step=1)
     assert sp.clamp(25) == 20.0
@@ -37,6 +45,9 @@ def test_clamp_snaps_to_range_and_step() -> None:
     sp2 = _spinner(min=0, max=10, step=2)
     assert sp2.clamp(5.4) == 6.0  # round(2.7)=3 -> 6
     assert sp2.clamp(4.9) == 4.0  # round(2.45)=2 -> 4
+    sp3 = _spinner(min=1, max=8, step=2)
+    assert sp3.clamp(8) == 7.0
+    assert sp3.is_valid(sp3.clamp(8)) is True
 
 
 def test_is_valid_rejects_out_of_range_offstep_and_readonly() -> None:
@@ -51,15 +62,81 @@ def test_is_valid_rejects_out_of_range_offstep_and_readonly() -> None:
 
 
 def test_schema_hash_is_deterministic_and_structure_only() -> None:
-    dump = [{"name": "A", "min": 0, "max": 10, "step": 1, "value": 5}]
+    dump = [{"name": "A", "min": 0, "max": 10, "step": 1, "value": 5, "units": "click"}]
     s1 = CarSetupSchema.from_spinners_dump("car", dump)
     # same structure, different current value -> same hash
-    dump2 = [{"name": "A", "min": 0, "max": 10, "step": 1, "value": 7}]
+    dump2 = [{"name": "A", "min": 0, "max": 10, "step": 1, "value": 7, "units": "click"}]
     s2 = CarSetupSchema.from_spinners_dump("car", dump2)
     assert s1.schema_hash == s2.schema_hash and len(s1.schema_hash) == 12
     # different range -> different hash
-    dump3 = [{"name": "A", "min": 0, "max": 12, "step": 1, "value": 5}]
+    dump3 = [{"name": "A", "min": 0, "max": 12, "step": 1, "value": 5, "units": "click"}]
     assert CarSetupSchema.from_spinners_dump("car", dump3).schema_hash != s1.schema_hash
+
+
+def test_schema_hash_changes_when_decode_metadata_changes() -> None:
+    base = CarSetupSchema.from_spinners_dump(
+        "car",
+        [
+            {
+                "name": "CAMBER_LF",
+                "min": -40,
+                "max": 0,
+                "step": 1,
+                "displayMultiplier": 0.1,
+                "units": "deg",
+            },
+            {"name": "TYRES", "items": ["Soft", "Medium"], "itemValues": [0, 1]},
+        ],
+    )
+    changed_multiplier = CarSetupSchema.from_spinners_dump(
+        "car",
+        [
+            {
+                "name": "CAMBER_LF",
+                "min": -40,
+                "max": 0,
+                "step": 1,
+                "displayMultiplier": 0.01,
+                "units": "deg",
+            },
+            {"name": "TYRES", "items": ["Soft", "Medium"], "itemValues": [0, 1]},
+        ],
+    )
+    changed_units = CarSetupSchema.from_spinners_dump(
+        "car",
+        [
+            {
+                "name": "CAMBER_LF",
+                "min": -40,
+                "max": 0,
+                "step": 1,
+                "displayMultiplier": 0.1,
+                "units": "rad",
+            },
+            {"name": "TYRES", "items": ["Soft", "Medium"], "itemValues": [0, 1]},
+        ],
+    )
+    changed_items = CarSetupSchema.from_spinners_dump(
+        "car",
+        [
+            {
+                "name": "CAMBER_LF",
+                "min": -40,
+                "max": 0,
+                "step": 1,
+                "displayMultiplier": 0.1,
+                "units": "deg",
+            },
+            {"name": "TYRES", "items": ["Soft", "Medium"], "itemValues": [10, 20]},
+        ],
+    )
+    assert changed_multiplier.schema_hash != base.schema_hash
+    assert changed_units.schema_hash != base.schema_hash
+    assert changed_items.schema_hash != base.schema_hash
+
+
+def test_from_dump_preserves_csp_singular_unit_field() -> None:
+    assert SpinnerDesc.from_dump({"name": "CAMBER_LF", "unit": "deg"}).units == "deg"
 
 
 def test_schema_level_validate_clamp_decode_and_unknown_passthrough() -> None:
@@ -145,6 +222,18 @@ def test_from_spinners_captures_ranges() -> None:
     assert sch is not None and sch.validate("WING_2", 25) is False
 
 
+def test_direct_script_help_runs_from_repo_root() -> None:
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools/ai_sidecar/car_schema.py"), "--help"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Ingest an ac.getSetupSpinners() dump" in result.stdout
+
+
 def test_optimizer_respects_schema_constraint() -> None:
     from tools.ai_sidecar.setup_optimizer import suggest_next_setup
 
@@ -170,3 +259,31 @@ def test_optimizer_respects_schema_constraint() -> None:
             assert schema.validate(key, move["to"]) is True  # no out-of-range proposal
     # backward-compat: no schema still returns a dict
     assert isinstance(suggest_next_setup(records, car_id="c", track_id="t"), dict)
+
+
+def test_optimizer_allows_unchanged_read_only_schema_params() -> None:
+    from tools.ai_sidecar.setup_optimizer import suggest_next_setup
+
+    def rec(wing: float, final_ratio: float, lap_ms: int) -> dict:
+        return {
+            "car": {"id": "c"},
+            "track": {"id": "t"},
+            "lap": {"lap_ms": lap_ms, "is_valid": True},
+            "setup": {
+                "hash": f"h{wing}",
+                "params": {"WING_2.VALUE": wing, "FINAL_RATIO.VALUE": final_ratio},
+            },
+        }
+
+    records = [rec(10, 7, 78_000), rec(9, 7, 79_000)]
+    schema = CarSetupSchema.from_spinners_dump(
+        "c",
+        [
+            {"name": "WING_2", "min": 0, "max": 20, "step": 1},
+            {"name": "FINAL_RATIO", "min": 0, "max": 12, "step": 1, "readOnly": True},
+        ],
+    )
+    out = suggest_next_setup(records, car_id="c", track_id="t", schema=schema)
+    assert out["ok"] is True
+    assert "WING_2.VALUE" in out["candidate"]["changed_params"]
+    assert "FINAL_RATIO.VALUE" not in out["candidate"]["changed_params"]

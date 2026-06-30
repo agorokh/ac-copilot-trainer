@@ -18,11 +18,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tools.ai_sidecar.setup_model import spec_for
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from tools.ai_sidecar.setup_model import spec_for  # noqa: E402
 
 SCHEMA_VERSION = 1
 DEFAULT_SCHEMA_DIR = "assets/setups/_schema"
@@ -69,11 +75,12 @@ class SpinnerDesc:
         if click is None:
             return None
         if self.items:
-            idx = int(round(float(click)))
             if self.item_values:
                 for pos, raw in enumerate(self.item_values):
                     if raw is not None and abs(raw - float(click)) < 1e-9 and pos < len(self.items):
                         return self.items[pos]
+                return None
+            idx = int(round(float(click)))
             return self.items[idx] if 0 <= idx < len(self.items) else None
         if self.display_multiplier is not None:
             return float(click) * self.display_multiplier
@@ -88,6 +95,11 @@ class SpinnerDesc:
             v = min(v, self.max)
         if self.step and self.step > 0 and self.min is not None:
             v = self.min + round((v - self.min) / self.step) * self.step
+            if self.max is not None and v > self.max:
+                max_steps = max(math.floor((self.max - self.min) / self.step), 0)
+                v = self.min + max_steps * self.step
+            if v < self.min:
+                v = self.min
         return v
 
     def is_valid(self, click: float) -> bool:
@@ -134,7 +146,7 @@ class SpinnerDesc:
             value=_f(sp.get("value")),
             default=_f(sp.get("defaultValue", sp.get("default"))),
             display_multiplier=_f(sp.get("displayMultiplier")),
-            units=sp.get("units"),
+            units=sp.get("units", sp.get("unit")),
             items=[str(x) for x in items] if isinstance(items, list) else None,
             item_values=[_f(x) for x in item_values] if isinstance(item_values, list) else None,
             read_only=bool(sp.get("readOnly", False)),
@@ -175,11 +187,24 @@ class CarSetupSchema:
 
     def compute_hash(self) -> str:
         """Stable digest over the descriptor STRUCTURE (ranges/steps/enums), not current values."""
-        parts = []
-        for name in sorted(self.spinners):
-            s = self.spinners[name]
-            parts.append(f"{name}|{s.min}|{s.max}|{s.step}|{s.read_only}|{s.items}")
-        return hashlib.sha1(";".join(parts).encode("utf-8")).hexdigest()[:12]
+        payload = {
+            "schema_version": self.schema_version,
+            "spinners": {
+                name: {
+                    "displayMultiplier": s.display_multiplier,
+                    "itemValues": s.item_values,
+                    "items": s.items,
+                    "max": s.max,
+                    "min": s.min,
+                    "readOnly": s.read_only,
+                    "step": s.step,
+                    "units": s.units,
+                }
+                for name, s in sorted(self.spinners.items())
+            },
+        }
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(body.encode("utf-8")).hexdigest()[:12]
 
     def get(self, name: str) -> SpinnerDesc | None:
         return self.spinners.get(name)
@@ -259,9 +284,4 @@ def _main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import sys
-
-    _repo_root = str(Path(__file__).resolve().parents[2])
-    if _repo_root not in sys.path:
-        sys.path.insert(0, _repo_root)
     raise SystemExit(_main())

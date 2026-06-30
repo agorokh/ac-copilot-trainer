@@ -600,7 +600,9 @@ def _expected_improvement(best_y: float, mu: float, sigma: float) -> float:
     return (best_y - mu) * _normal_cdf(z) + sigma * phi
 
 
-def _schema_allows(candidate: dict[str, float], schema: Any) -> bool:
+def _schema_allows(
+    candidate: dict[str, float], schema: Any, *, base: dict[str, float] | None = None
+) -> bool:
     """True iff every candidate knob is in-range/on-step per a CarSetupSchema (duck-typed)."""
     spinners = getattr(schema, "spinners", None)
     if not isinstance(spinners, dict):
@@ -608,7 +610,13 @@ def _schema_allows(candidate: dict[str, float], schema: Any) -> bool:
     for key, val in candidate.items():
         name = key[:-6] if key.endswith(".VALUE") else key
         sp = spinners.get(name)
-        if sp is not None and not sp.is_valid(val):
+        if sp is None:
+            continue
+        if getattr(sp, "read_only", False):
+            if base is not None and key in base and abs(float(val) - float(base[key])) <= 1e-9:
+                continue
+            return False
+        if not sp.is_valid(val):
             return False
     return True
 
@@ -659,6 +667,7 @@ def suggest_next_setup(
     global_var = _sample_variance([y for _, y, _ in vectors], global_mean)
     global_std = max(math.sqrt(global_var), 1.0)
     best_y = float(best["lap"]["lap_ms"])
+    base_params = {key: float(best["setup"]["params"][key]) for key in keys}
     observed = {tuple((key, round(vec[key], 6)) for key in keys) for vec, _, _ in vectors}
 
     scored = []
@@ -666,7 +675,7 @@ def suggest_next_setup(
         frozen = tuple((key, round(candidate[key], 6)) for key in keys)
         if frozen in observed:
             continue
-        if schema is not None and not _schema_allows(candidate, schema):
+        if schema is not None and not _schema_allows(candidate, schema, base=base_params):
             continue
         weights = []
         for vec, lap_ms, _ in vectors:
@@ -687,7 +696,6 @@ def suggest_next_setup(
         return {"ok": False, "status": "no_untried_candidate", "experiments_used": len(vectors)}
 
     ei, mu, sigma, candidate = max(scored, key=lambda item: (item[0], -item[1]))
-    base_params = {key: float(best["setup"]["params"][key]) for key in keys}
     changed = {
         key: {"from": base_params[key], "to": candidate[key]}
         for key in keys
