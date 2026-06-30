@@ -1,0 +1,747 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from tools.ai_sidecar.coaching_diagnosis import RootError
+from tools.ai_sidecar.coaching_runtime import CoachRuntime, _Anchors
+from tools.ai_sidecar.driver_profile import (
+    _merge_corner_row,
+    build_profile,
+    load_profile,
+    update_profile,
+    write_profile,
+)
+from tools.ai_sidecar.driver_progression import (
+    LEVEL_ADVANCED,
+    LEVEL_INTERMEDIATE,
+    LEVEL_NOVICE,
+    build_progression_report,
+    cue_policy_from_profile,
+)
+from tools.ai_sidecar.lap_dynamics import CornerSignature
+from tools.ai_sidecar.track_reference import CornerReference
+
+
+def _write_archive(
+    path: Path,
+    *,
+    lap_uuid: object,
+    session_uuid: str,
+    lap_ms: int,
+    lap_n: int,
+    exported_at: str,
+    min_speed: float,
+    throttle: float = 0.4,
+    trail: float = 0.1,
+    steer_reversals: float = 4.0,
+    traction: float = 0.7,
+    source: str = "test",
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source": source,
+                "lap_uuid": lap_uuid,
+                "session_uuid": session_uuid,
+                "exported_at": exported_at,
+                "car": {"id": "car-a"},
+                "track": {"id": "track-a", "layout": ""},
+                "lap": {"lap_n": lap_n, "lap_ms": lap_ms, "is_valid": True},
+                "trace": {"fields": ["spline", "speed"], "samples": [[0.0, 100.0]]},
+                "corners": [
+                    {
+                        "label": "T1",
+                        "entrySpeed": min_speed + 30.0,
+                        "minSpeed": min_speed,
+                        "exitSpeed": min_speed + 25.0,
+                        "brakePointSpline": 0.2,
+                        "trailBrakeRatio": trail,
+                        "throttleAvg": throttle,
+                        "steerReversals": steer_reversals,
+                        "tractionCircleProxy": traction,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _corner_history(
+    *,
+    count: int,
+    delta: float,
+    trail: float,
+    throttle: float,
+    steer: float,
+    valid_laps: int = 6,
+) -> dict[str, dict[str, object]]:
+    rows: dict[str, dict[str, object]] = {}
+    for idx in range(count):
+        rows[f"car-a|track-a||corner:{idx}"] = {
+            "car_id": "car-a",
+            "track_id": "track-a",
+            "track_layout": "",
+            "corner_index": idx,
+            "label": f"T{idx + 1}",
+            "session_count": 3,
+            "valid_laps": valid_laps,
+            "delta_min_speed_kmh": delta,
+            "avg_trail_brake_ratio": trail,
+            "avg_throttle": throttle,
+            "avg_steer_reversals": steer,
+        }
+    return rows
+
+
+def _profile(
+    *,
+    corner_count: int = 4,
+    apex_delta: float = -1.0,
+    trail: float = 0.1,
+    throttle: float = 0.3,
+    steer: float = 4.0,
+    consistency_ms: float = 5000.0,
+    corner_valid_laps: int = 6,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "driver_id": "driver-a",
+        "updated_at": "2026-06-30T12:00:00Z",
+        "corner_history": _corner_history(
+            count=corner_count,
+            delta=apex_delta,
+            trail=trail,
+            throttle=throttle,
+            steer=steer,
+            valid_laps=corner_valid_laps,
+        ),
+        "consistency": {
+            "car-a|track-a|": {
+                "session_count": 3,
+                "valid_laps": 12,
+                "median_session_best_ms": 100000,
+                "consistency_ms": consistency_ms,
+            }
+        },
+    }
+
+
+def test_profile_builds_session_pb_and_corner_history(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.chdir(tmp_path)
+    lap_dir = tmp_path / "journal" / "laps"
+    lap_dir.mkdir(parents=True)
+    _write_archive(
+        lap_dir / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+    _write_archive(
+        lap_dir / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-2",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-02T10:00:00Z",
+        min_speed=84.0,
+        throttle=0.5,
+        trail=0.2,
+        steer_reversals=2.0,
+    )
+
+    summary = update_profile([lap_dir], generated_at="2026-06-30T12:00:00Z")
+    profile = load_profile(summary.path)
+
+    assert summary.sessions == 2
+    assert profile["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "lap-2"
+    corner = profile["corner_history"]["car-a|track-a||corner:0"]
+    assert corner["valid_laps"] == 2
+    assert corner["delta_min_speed_kmh"] == 4.0
+    assert corner["avg_throttle"] == 0.45
+
+
+def test_existing_preferences_and_focus_survive_profile_rebuild(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "laps"
+    lap_dir.mkdir()
+    _write_archive(
+        lap_dir / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+    profile = build_profile(
+        [lap_dir],
+        existing={"preferences": {"verbosity": "low"}, "focus_corners": {"track-a": ["T1"]}},
+    )
+
+    assert profile["preferences"] == {"verbosity": "low"}
+    assert profile["focus_corners"] == {"track-a": ["T1"]}
+
+
+def test_corrupt_profile_loads_as_safe_default(tmp_path: Path) -> None:
+    profile_path = tmp_path / "journal" / "driver" / "profile.json"
+    profile_path.parent.mkdir(parents=True)
+    profile_path.write_text("{not-json", encoding="utf-8")
+
+    profile = load_profile(profile_path, driver_id="driver-safe")
+    report = build_progression_report(profile)
+
+    assert profile["driver_id"] == "driver-safe"
+    assert report["level"] == "unknown"
+    assert report["cue_policy"]["lap_budget"] == 4
+
+
+def test_structurally_bad_profile_fields_are_sanitized(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "laps"
+    lap_dir.mkdir()
+    _write_archive(
+        lap_dir / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+    profile = build_profile(
+        [lap_dir],
+        existing={
+            "schema_version": 1,
+            "driver_id": "driver-custom",
+            "preferences": "low",
+            "personal_bests": [],
+            "session_rollups": "bad",
+            "corner_history": "bad",
+        },
+    )
+
+    assert profile["driver_id"] == "driver-custom"
+    assert profile["preferences"] == {}
+    assert profile["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "lap-1"
+
+
+def test_profile_write_allows_explicit_ac_documents_journal_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_home = tmp_path / "User"
+    monkeypatch.setenv("USERPROFILE", str(user_home))
+    profile_path = (
+        user_home
+        / "Documents"
+        / "Assetto Corsa"
+        / "ac-copilot"
+        / "journal"
+        / "driver"
+        / "profile.json"
+    )
+
+    written = write_profile({"schema_version": 1, "driver_id": "driver-a"}, profile_path)
+
+    assert written == profile_path
+    assert profile_path.exists()
+
+
+def test_profile_write_rejects_arbitrary_absolute_journal_path(tmp_path: Path) -> None:
+    profile_path = tmp_path / "outside" / "journal" / "driver" / "profile.json"
+
+    with pytest.raises(ValueError, match="approved root"):
+        write_profile({"schema_version": 1, "driver_id": "driver-a"}, profile_path)
+
+
+def test_imported_reference_laps_do_not_enter_driver_profile(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "laps"
+    lap_dir.mkdir()
+    _write_archive(
+        lap_dir / "lap_001.json",
+        lap_uuid="driver-lap",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+        source="in_game",
+    )
+    _write_archive(
+        lap_dir / "lap_002.json",
+        lap_uuid="reference-lap",
+        session_uuid="reference-session",
+        lap_ms=85000,
+        lap_n=2,
+        exported_at="2026-06-02T10:00:00Z",
+        min_speed=90.0,
+        source="imported",
+    )
+
+    profile = build_profile([lap_dir])
+
+    assert profile["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "driver-lap"
+    assert profile["source"]["valid_laps"] == 1
+    assert "reference-lap" not in json.dumps(profile)
+
+
+def test_duplicate_lap_uuid_across_input_dirs_is_aggregated_once(tmp_path: Path) -> None:
+    primary = tmp_path / "primary"
+    backup = tmp_path / "backup"
+    primary.mkdir()
+    backup.mkdir()
+    for lap_dir, lap_ms in ((primary, 91000), (backup, 90500)):
+        _write_archive(
+            lap_dir / "lap_001.json",
+            lap_uuid=123,
+            session_uuid="session-1",
+            lap_ms=lap_ms,
+            lap_n=1,
+            exported_at="2026-06-01T10:00:00Z",
+            min_speed=80.0,
+        )
+
+    profile = build_profile([primary, backup])
+    rollup = next(iter(profile["session_rollups"].values()))
+    corner = next(iter(profile["corner_history"].values()))
+
+    assert profile["source"]["lap_count"] == 1
+    assert profile["source"]["valid_laps"] == 1
+    assert any("duplicate_lap_uuid:123" in item for item in profile["source"]["skipped"])
+    assert rollup["lap_count"] == 1
+    assert rollup["valid_laps"] == 1
+    assert rollup["lap_uuids"] == ["123"]
+    assert rollup["lap_times_by_lap_uuid"] == {"123": 91000}
+    assert corner["valid_laps"] == 1
+
+
+def test_incremental_same_session_update_keeps_faster_existing_pb(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_archive(
+        first / "lap_001.json",
+        lap_uuid="fast-lap",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=84.0,
+    )
+    _write_archive(
+        second / "lap_002.json",
+        lap_uuid="slow-lap",
+        session_uuid="session-1",
+        lap_ms=93000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=82.0,
+    )
+
+    first_profile = build_profile([first])
+    merged = build_profile([second], existing=first_profile)
+    rollup = next(iter(merged["session_rollups"].values()))
+
+    assert merged["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "fast-lap"
+    assert rollup["lap_count"] == 2
+    assert rollup["best_lap_uuid"] == "fast-lap"
+    assert rollup["median_lap_ms"] == 91500.0
+
+
+def test_incremental_corner_merge_updates_derived_stats(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_archive(
+        first / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+        traction=0.5,
+    )
+    _write_archive(
+        second / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+        traction=0.9,
+    )
+
+    merged = build_profile([second], existing=build_profile([first]))
+    corner = next(iter(merged["corner_history"].values()))
+
+    assert corner["valid_laps"] == 2
+    assert corner["median_min_speed_kmh"] == 82.0
+    assert corner["min_speed_samples_kmh"] == [80.0, 84.0]
+    assert corner["avg_traction_circle_proxy"] == pytest.approx(0.7)
+
+
+def test_overlapping_corner_refresh_dedupes_min_speed_samples(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    _write_archive(
+        first / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+        traction=0.2,
+    )
+    _write_archive(
+        first / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+        traction=0.4,
+    )
+    _write_archive(
+        second / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+        traction=0.4,
+    )
+    _write_archive(
+        second / "lap_003.json",
+        lap_uuid="lap-3",
+        session_uuid="session-1",
+        lap_ms=89500,
+        lap_n=3,
+        exported_at="2026-06-01T10:10:00Z",
+        min_speed=86.0,
+        traction=1.0,
+    )
+
+    merged = build_profile([second], existing=build_profile([first]))
+    corner = next(iter(merged["corner_history"].values()))
+
+    assert corner["valid_laps"] == 3
+    assert corner["min_speed_samples_kmh"] == [80.0, 84.0, 86.0]
+    assert corner["median_min_speed_kmh"] == 84.0
+    assert corner["avg_traction_circle_proxy"] == pytest.approx((0.2 + 0.4 + 1.0) / 3)
+
+
+def test_corner_merge_sanitizes_corrupt_nested_sample_maps() -> None:
+    merged = _merge_corner_row(
+        {
+            "session_count": 1,
+            "valid_laps": 1,
+            "corner_samples_by_lap_uuid": "bad",
+            "min_speed_by_lap_uuid": "bad",
+            "min_speed_samples_kmh": "bad",
+        },
+        {
+            "session_count": 1,
+            "valid_laps": 0,
+            "corner_samples_by_lap_uuid": {},
+            "min_speed_by_lap_uuid": {},
+            "min_speed_samples_kmh": [],
+        },
+    )
+
+    assert merged["corner_samples_by_lap_uuid"] == {}
+    assert merged["min_speed_by_lap_uuid"] == {}
+    assert merged["min_speed_samples_kmh"] == []
+
+
+def test_corner_merge_orders_endpoints_by_export_time(tmp_path: Path) -> None:
+    newer = tmp_path / "newer"
+    older = tmp_path / "older"
+    newer.mkdir()
+    older.mkdir()
+    _write_archive(
+        newer / "lap_002.json",
+        lap_uuid="lap-new",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-02T10:00:00Z",
+        min_speed=84.0,
+    )
+    _write_archive(
+        older / "lap_001.json",
+        lap_uuid="lap-old",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+
+    merged = build_profile([older], existing=build_profile([newer]))
+    corner = next(iter(merged["corner_history"].values()))
+
+    assert corner["first_min_speed_kmh"] == 80.0
+    assert corner["last_min_speed_kmh"] == 84.0
+    assert corner["delta_min_speed_kmh"] == 4.0
+
+
+def test_rebuilding_same_lap_corpus_is_idempotent(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "laps"
+    lap_dir.mkdir()
+    _write_archive(
+        lap_dir / "lap_001.json",
+        lap_uuid="lap-1",
+        session_uuid="session-1",
+        lap_ms=91000,
+        lap_n=1,
+        exported_at="2026-06-01T10:00:00Z",
+        min_speed=80.0,
+    )
+    _write_archive(
+        lap_dir / "lap_002.json",
+        lap_uuid="lap-2",
+        session_uuid="session-1",
+        lap_ms=90000,
+        lap_n=2,
+        exported_at="2026-06-01T10:05:00Z",
+        min_speed=84.0,
+    )
+
+    first_profile = build_profile([lap_dir])
+    rebuilt = build_profile([lap_dir], existing=first_profile)
+    rollup = next(iter(rebuilt["session_rollups"].values()))
+    corner = next(iter(rebuilt["corner_history"].values()))
+
+    assert rollup["lap_count"] == 2
+    assert rollup["valid_laps"] == 2
+    assert corner["valid_laps"] == 2
+    assert rebuilt["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "lap-2"
+
+
+def test_novice_policy_reduces_density_and_suppresses_trail_brake_roots() -> None:
+    policy = cue_policy_from_profile(_profile(apex_delta=-2.0, trail=0.05, throttle=0.2))
+
+    assert policy.level == LEVEL_NOVICE
+    assert policy.lap_budget == 2
+    assert policy.assess_laps == 3
+    assert RootError.NO_TRAIL not in policy.allowed_roots
+    assert policy.allows(RootError.SLOW_APEX)
+
+
+def test_progression_report_graduates_first_drill_and_recommends_next() -> None:
+    report = build_progression_report(
+        _profile(apex_delta=4.0, trail=0.08, throttle=0.2, consistency_ms=2000.0)
+    )
+
+    assert report["skills"]["apex_speed"]["level"] == LEVEL_INTERMEDIATE
+    assert report["drills"][0]["status"] == "graduated"
+    assert report["next_drill"]["id"] == "throttle-to-apex"
+    assert report["trends"][0]["trend"] == "improving"
+
+
+def test_advanced_profile_graduates_curriculum() -> None:
+    report = build_progression_report(
+        _profile(
+            corner_count=8,
+            apex_delta=3.0,
+            trail=0.4,
+            throttle=0.7,
+            steer=1.0,
+            consistency_ms=1000.0,
+            corner_valid_laps=8,
+        )
+    )
+
+    assert report["level"] == LEVEL_ADVANCED
+    assert report["next_drill"] is None
+    assert {row["status"] for row in report["drills"]} == {"graduated"}
+
+
+def test_advanced_corner_metrics_without_consistency_stay_novice() -> None:
+    profile = _profile(
+        corner_count=8,
+        apex_delta=3.0,
+        trail=0.4,
+        throttle=0.7,
+        steer=1.0,
+        corner_valid_laps=8,
+    )
+    profile.pop("consistency")
+
+    report = build_progression_report(profile)
+
+    assert report["skills"]["apex_speed"]["level"] == LEVEL_ADVANCED
+    assert report["skills"]["consistency"]["level"] == "unknown"
+    assert report["level"] == LEVEL_NOVICE
+
+
+def test_corner_count_alone_cannot_unlock_advanced_policy() -> None:
+    report = build_progression_report(
+        _profile(
+            corner_count=8,
+            apex_delta=3.0,
+            trail=0.4,
+            throttle=0.7,
+            steer=1.0,
+            consistency_ms=1000.0,
+            corner_valid_laps=1,
+        )
+    )
+
+    assert report["skills"]["apex_speed"]["level"] == LEVEL_NOVICE
+    assert report["level"] == LEVEL_NOVICE
+
+
+def test_single_high_sample_corner_cannot_unlock_advanced_policy() -> None:
+    profile = _profile(
+        corner_count=4,
+        apex_delta=3.0,
+        trail=0.4,
+        throttle=0.7,
+        steer=1.0,
+        consistency_ms=1000.0,
+        corner_valid_laps=1,
+    )
+    profile["corner_history"]["car-a|track-a||corner:0"]["valid_laps"] = 8
+
+    report = build_progression_report(profile)
+
+    assert report["skills"]["apex_speed"]["samples"] == 1
+    assert report["skills"]["apex_speed"]["level"] == LEVEL_NOVICE
+    assert report["level"] == LEVEL_NOVICE
+
+
+def test_malformed_nested_profile_counts_do_not_disable_progression() -> None:
+    report = build_progression_report(
+        {
+            "schema_version": 1,
+            "driver_id": "driver-a",
+            "corner_history": {
+                "car-a|track-a||corner:0": {
+                    "valid_laps": "many",
+                    "delta_min_speed_kmh": 3.0,
+                    "avg_trail_brake_ratio": 0.4,
+                    "avg_throttle": 0.7,
+                    "avg_steer_reversals": 1.0,
+                }
+            },
+            "consistency": {
+                "car-a|track-a|": {
+                    "session_count": "several",
+                    "valid_laps": "many",
+                    "median_session_best_ms": 100000,
+                    "consistency_ms": 1000.0,
+                }
+            },
+        }
+    )
+
+    assert report["level"] in {"unknown", LEVEL_NOVICE}
+    assert report["skills"]["apex_speed"]["samples"] == 0
+
+
+def test_malformed_nested_profile_sections_do_not_disable_progression() -> None:
+    report = build_progression_report(
+        {
+            "schema_version": 1,
+            "driver_id": "driver-a",
+            "corner_history": "bad",
+            "consistency": "bad",
+        }
+    )
+
+    assert report["level"] == "unknown"
+    assert report["trends"] == []
+
+
+def _sig(**over: object) -> CornerSignature:
+    base = dict(
+        index=0,
+        entry_i=0,
+        apex_i=10,
+        exit_i=20,
+        apex_spline=0.30,
+        min_speed_kmh=80.0,
+        entry_speed_kmh=180.0,
+        exit_speed_kmh=150.0,
+        peak_lat_g=1.4,
+        peak_brake_g=1.2,
+        peak_accel_g=0.8,
+        brake_point_spline=0.250,
+        brake_to_apex_m=60.0,
+        throttle_on_spline=0.360,
+        apex_to_throttle_m=30.0,
+        trail_brake_frac=0.50,
+        max_abs_steer=0.6,
+        direction="right",
+    )
+    base.update(over)
+    return CornerSignature(**base)
+
+
+def test_runtime_skill_gate_suppresses_no_trail_for_novice_profile() -> None:
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.30,
+        spline_lo=0.20,
+        spline_hi=0.40,
+        optimal_apex_kmh=80.0,
+    )
+    runtime = CoachRuntime(
+        refs=[ref],
+        ref_sigs={0: _sig()},
+        anchors={0: _Anchors(brake=0.20, turn_in=0.22, apex=0.30)},
+        cue_policy=cue_policy_from_profile(_profile(apex_delta=-2.0, trail=0.05)),
+    )
+    state = runtime._pass[0]
+    state.active = True
+    state.entry_count = 8
+    state.trail_count = 0
+    state.brake_onset_spline = 0.25
+    state.min_speed_kmh = 80.0
+    state.throttle_on_spline = 0.36
+
+    runtime._finalize_pass(ref)
+
+    assert runtime.ledger.state(0).root is RootError.NONE
+
+
+def test_runtime_skill_gate_falls_through_to_allowed_slow_apex_for_novice_profile() -> None:
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.30,
+        spline_lo=0.20,
+        spline_hi=0.40,
+        optimal_apex_kmh=80.0,
+    )
+    runtime = CoachRuntime(
+        refs=[ref],
+        ref_sigs={0: _sig()},
+        anchors={0: _Anchors(brake=0.20, turn_in=0.22, apex=0.30)},
+        cue_policy=cue_policy_from_profile(_profile(apex_delta=-2.0, trail=0.05)),
+    )
+    state = runtime._pass[0]
+    state.active = True
+    state.entry_count = 8
+    state.trail_count = 0
+    state.brake_onset_spline = 0.25
+    state.min_speed_kmh = 74.0
+    state.throttle_on_spline = 0.36
+
+    runtime._finalize_pass(ref)
+
+    assert runtime.ledger.state(0).root is RootError.SLOW_APEX

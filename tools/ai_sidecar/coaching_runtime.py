@@ -20,21 +20,26 @@ I/O — so it is unit-tested by feeding synthetic injected-mistake frame streams
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.coaching_diagnosis import (
     ANCHOR,
+    APEX_KMH_FLOOR,
     PHRASE,
+    THROTTLE_SPLINE_FLOOR,
     Diagnosis,
     RootError,
     classify_root_error,
 )
-from tools.ai_sidecar.coaching_ledger import (
-    ASSESS_LAPS,
-    HYSTERESIS_PASSES,
-    LAP_CUE_BUDGET,
-    CoachingLedger,
+from tools.ai_sidecar.coaching_ledger import CoachingLedger
+from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
+from tools.ai_sidecar.driver_progression import (
+    DriverCuePolicy,
+    cue_policy_from_profile,
+    default_cue_policy,
 )
 from tools.ai_sidecar.lap_dynamics import CornerSignature, corner_signatures, lap_trace_from_archive
 from tools.ai_sidecar.realtime_observer import Advisory
@@ -113,6 +118,7 @@ class CoachRuntime:
     anchors: dict[int, _Anchors]
     track_length_m: float = _DEFAULT_TRACK_M
     ledger: CoachingLedger = field(default_factory=CoachingLedger)
+    cue_policy: DriverCuePolicy = field(default_factory=default_cue_policy)
     _pass: dict[int, _PassState] = field(default_factory=dict)
     _last_spline: float | None = None
     _last_lap: float | None = None
@@ -253,7 +259,7 @@ class CoachRuntime:
             st.reset()
             return []
         sig = _signature_from_pass(st, r)
-        diag = classify_root_error(sig, ref_sig)
+        diag = _classify_for_policy(sig, ref_sig, self.cue_policy)
         # GRIP-GATE (P3): at the lateral-grip ceiling the loss is setup/tyre, not technique —
         # demanding more speed/later braking would lie, so suppress. Fail-open: fires only when a
         # real grip signal was present this pass (see _GRIP_GATE_FRAC).
@@ -298,6 +304,30 @@ def _accumulate_core(
             st.trail_count += 1
     elif throttle >= _THROTTLE_ON and st.throttle_on_spline is None:
         st.throttle_on_spline = spline
+
+
+def _classify_for_policy(
+    sig: CornerSignature,
+    ref_sig: CornerSignature,
+    cue_policy: DriverCuePolicy,
+) -> Diagnosis:
+    diag = classify_root_error(sig, ref_sig)
+    if cue_policy.allows(diag.root):
+        return diag
+    if diag.root is RootError.NO_TRAIL:
+        apex_deficit = ref_sig.min_speed_kmh - sig.min_speed_kmh
+        if cue_policy.allows(RootError.SLOW_APEX) and apex_deficit >= APEX_KMH_FLOOR:
+            return Diagnosis(RootError.SLOW_APEX, {"apex_deficit_kmh": round(apex_deficit, 1)})
+        if sig.throttle_on_spline is not None and ref_sig.throttle_on_spline is not None:
+            throttle_delta = sig.throttle_on_spline - ref_sig.throttle_on_spline
+            if (
+                cue_policy.allows(RootError.LATE_THROTTLE)
+                and throttle_delta > THROTTLE_SPLINE_FLOOR
+            ):
+                return Diagnosis(
+                    RootError.LATE_THROTTLE, {"throttle_delta": round(throttle_delta, 4)}
+                )
+    return Diagnosis(RootError.NONE, {"skill_gated": 1.0})
 
 
 def _reference_signatures(
@@ -456,8 +486,74 @@ def _normalize(
     )
 
 
+def _profile_for_runtime(
+    driver_profile: Mapping[str, Any] | None,
+    driver_profile_path: str | Path | None,
+) -> Mapping[str, Any] | None:
+    if driver_profile is not None:
+        return driver_profile
+    configured = driver_profile_path or os.environ.get("AC_COPILOT_DRIVER_PROFILE")
+    path = Path(configured) if configured else DEFAULT_PROFILE_PATH
+    if not path.exists() and configured is None:
+        return None
+    return load_profile(path)
+
+
+def _combo_text(value: Any) -> str:
+    return str(value or "")
+
+
+def _archive_combo(reference_archive: Mapping[str, Any]) -> tuple[str, str, str] | None:
+    car = reference_archive.get("car") if isinstance(reference_archive.get("car"), Mapping) else {}
+    track = (
+        reference_archive.get("track")
+        if isinstance(reference_archive.get("track"), Mapping)
+        else {}
+    )
+    car_id = car.get("id") or car.get("car_id")
+    track_id = track.get("id") or track.get("track_id")
+    if not car_id or not track_id:
+        return None
+    return (_combo_text(car_id), _combo_text(track_id), _combo_text(track.get("layout")))
+
+
+def _row_matches_combo(row: Mapping[str, Any], combo: tuple[str, str, str]) -> bool:
+    car_id, track_id, track_layout = combo
+    return (
+        _combo_text(row.get("car_id")) == car_id
+        and _combo_text(row.get("track_id")) == track_id
+        and _combo_text(row.get("track_layout")) == track_layout
+    )
+
+
+def _profile_for_reference_combo(
+    profile: Mapping[str, Any] | None, reference_archive: Mapping[str, Any]
+) -> Mapping[str, Any] | None:
+    if not isinstance(profile, Mapping):
+        return profile
+    combo = _archive_combo(reference_archive)
+    if combo is None:
+        return None
+    filtered = dict(profile)
+    for key in ("corner_history", "consistency", "session_rollups", "personal_bests"):
+        rows = profile.get(key)
+        if not isinstance(rows, Mapping):
+            filtered[key] = {}
+            continue
+        filtered[key] = {
+            row_key: row
+            for row_key, row in rows.items()
+            if isinstance(row, Mapping) and _row_matches_combo(row, combo)
+        }
+    return filtered
+
+
 def build_coach_runtime(
-    reference_archive: dict, *, lead_s: float = _DEFAULT_LEAD_S
+    reference_archive: dict,
+    *,
+    lead_s: float = _DEFAULT_LEAD_S,
+    driver_profile: Mapping[str, Any] | None = None,
+    driver_profile_path: str | Path | None = None,
 ) -> CoachRuntime | None:
     """Build a :class:`CoachRuntime` from a reference archive (same input as the observer)."""
     try:
@@ -497,13 +593,22 @@ def build_coach_runtime(
     ref_sigs = _reference_signatures(refs, anchors, ref_frames)
     # Pacing thresholds are env-tunable so the autonomous harness can verify PRIMEs in a few laps
     # (lower assess/hysteresis); production defaults stay conservative.
+    profile = _profile_for_reference_combo(
+        _profile_for_runtime(driver_profile, driver_profile_path), reference_archive
+    )
+    policy = cue_policy_from_profile(profile)
     ledger = CoachingLedger(
-        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", HYSTERESIS_PASSES, min_value=1),
-        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", ASSESS_LAPS, min_value=0),
-        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", LAP_CUE_BUDGET, min_value=1),
+        hysteresis=_env_int("AC_COPILOT_COACH_HYSTERESIS", policy.hysteresis, min_value=1),
+        assess_laps=_env_int("AC_COPILOT_COACH_ASSESS_LAPS", policy.assess_laps, min_value=0),
+        lap_budget=_env_int("AC_COPILOT_COACH_LAP_BUDGET", policy.lap_budget, min_value=1),
     )
     return CoachRuntime(
-        refs=refs, ref_sigs=ref_sigs, anchors=anchors, track_length_m=track_m, ledger=ledger
+        refs=refs,
+        ref_sigs=ref_sigs,
+        anchors=anchors,
+        track_length_m=track_m,
+        ledger=ledger,
+        cue_policy=policy,
     )
 
 
