@@ -327,6 +327,11 @@ def _display_units(schema: CarSetupSchema | None, section: str, fallback: str) -
     return fallback
 
 
+def _raw_click_display(schema: CarSetupSchema | None, section: str) -> bool:
+    sp = schema.get(section) if schema is not None else None
+    return sp is None and _base_section(section) in {"CAMBER", "TOE_OUT", "ROD_LENGTH"}
+
+
 def _spinner_read_only(schema: CarSetupSchema | None, section: str) -> bool:
     if schema is None:
         return False
@@ -576,14 +581,15 @@ def setup_diff_summary(
         delta = None if from_v is None or to_v is None else float(to_v) - float(from_v)
         direction = _diff_direction(schema, section, from_v, to_v)
         effect_text = ""
-        if effect is not None and direction in {"increase", "decrease"}:
+        raw_click_display = _raw_click_display(schema, section)
+        if effect is not None and direction in {"increase", "decrease"} and not raw_click_display:
             effect_text = effect.increase_does if direction == "increase" else effect.decrease_does
         from_display = _format_value(_decoded(schema, section, from_v))
         to_display = _format_value(_decoded(schema, section, to_v))
         unit = _display_units(schema, section, spec.units or (effect.units if effect else ""))
         arrow = f"{from_display or '-'} -> {to_display or '-'}"
         display = f"{spec.human_name}: {arrow}{(' ' + unit) if unit else ''}"
-        if effect_text:
+        if effect_text or (raw_click_display and direction in {"increase", "decrease"}):
             display = f"{display} ({direction})"
         rows.append(
             {

@@ -193,6 +193,7 @@ def test_setup_diff_without_schema_uses_click_units_for_raw_alignment() -> None:
     assert out["rows"][0]["units"] == "clicks"
     assert out["rows"][0]["from_display"] == "-18"
     assert out["rows"][0]["to_display"] == "-19"
+    assert out["rows"][0]["effect"] == ""
     assert out["rows"][0]["display"].endswith("clicks (decrease)")
 
 
@@ -207,6 +208,7 @@ def test_setup_diff_uses_click_units_when_schema_lacks_spinner() -> None:
     assert row["units"] == "clicks"
     assert row["from_display"] == "-18"
     assert row["to_display"] == "-19"
+    assert row["effect"] == ""
     assert row["display"].endswith("clicks (decrease)")
 
 
