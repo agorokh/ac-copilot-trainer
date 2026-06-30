@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T08:36:35Z
+last_updated: 2026-06-30T16:24:53Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
@@ -55,6 +55,20 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resolved (2026-06-30T16:24:53Z) — PR #399 Coach v2 review loop
+
+PR [#399](https://github.com/agorokh/ac-copilot-trainer/pull/399) is **OPEN and merge-ready** on head
+[`577382e`](https://github.com/agorokh/ac-copilot-trainer/commit/577382ea5402392f9a6d9362fe887514f56b6b17)
+(`feat/coach-v2-real-coaching`, closes #396). CI is green (`build`, `Canonical docs exist`,
+`conformance`; `guard-and-automerge` skipped). GraphQL review threads resolved; `ci_resolve_gate.py`
+reports no substantive findings hanging. No current-SHA `ws-ops-cursor-reviewer[bot]` review (vacuous).
+
+**Resolution work this session:** merged `origin/main` (conflict in `server.py` — kept Coach v2 wiring
++ main's `_exception_detail` reference-load errors); renamed PR title to conventional
+`feat(coach): …` (fixed `ci-conventional`); addressed Qodo threads — lap-counter-aware wrap detection
+(codex #294), removed `LATE_BRAKE` from grip gate + tests, linked
+`coach-v2-real-coaching-2026-06-29.md` in investigations `_index.md`.
 
 ## Delivered (2026-06-30) — PR #394 MERGED: voice reliability for packaged Game Point (#392)
 

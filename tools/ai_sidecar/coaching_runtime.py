@@ -140,6 +140,14 @@ class CoachRuntime:
         self._pending_pre_lap = None
         self.ledger.begin_lap(self._lap)
 
+    def _advance_lap_after_wrap(self, out: list[Advisory]) -> None:
+        """Finalize open passes, then advance the ledger lap (speak-set needs fresh diagnoses)."""
+        for r in self.refs:
+            if self._pass[r.index].active:
+                out.extend(self._finalize_pass(r))
+        self._lap += 1
+        self.ledger.begin_lap(self._lap)
+
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         spline, speed, brake, throttle, steer, lap, grip = _normalize(frame)
         if spline is None or speed is None:
@@ -153,11 +161,7 @@ class CoachRuntime:
                 and self._pending_pre_lap is not None
                 and lap > self._pending_pre_lap
             ):
-                self._lap += 1
-                self.ledger.begin_lap(self._lap)
-                for r in self.refs:
-                    if self._pass[r.index].active:
-                        out.extend(self._finalize_pass(r))
+                self._advance_lap_after_wrap(out)
                 self._pending_wrap_finals = False
                 self._pending_pre_lap = None
             elif spline > _WRAP_CUR_MAX:
@@ -171,16 +175,19 @@ class CoachRuntime:
             lap_advanced = lap_known and lap > self._last_lap
             wrap_shaped = self._last_spline >= _WRAP_PREV_MIN and spline <= _WRAP_CUR_MAX
             if lap_advanced or (wrap_shaped and not lap_known):
-                self._lap += 1
-                self.ledger.begin_lap(self._lap)
-                for r in self.refs:
-                    if self._pass[r.index].active:
-                        out.extend(self._finalize_pass(r))
+                self._advance_lap_after_wrap(out)
             elif wrap_shaped and lap_known:
                 self._pending_wrap_finals = True
                 self._pending_pre_lap = self._last_lap
             else:
                 self._pass = {r.index: _PassState() for r in self.refs}
+
+        # Ambiguous wrap (lap counter lagging) must not PRIME/accumulate on the drop frame.
+        if self._pending_wrap_finals:
+            self._last_spline = spline
+            if lap is not None:
+                self._last_lap = lap
+            return out
 
         for r in self.refs:
             st = self._pass[r.index]

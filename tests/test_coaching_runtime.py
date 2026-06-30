@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tools.ai_sidecar.coaching_diagnosis import RootError
+from tools.ai_sidecar.coaching_ledger import CornerState, Status
 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
 # Prefer the committed fixture (CI); fall back to the rig capture under .scratch (gitignored).
@@ -179,3 +181,41 @@ def test_late_brake_not_suppressed_at_grip_ceiling():
     st.max_grip_used = 0.99
     rt._finalize_pass(r)
     assert rt.ledger.state(r.index) is not None
+
+
+def test_pending_wrap_suppresses_prime_on_ambiguous_frame():
+    """Qodo #3: wrap-shaped drop with stable lap counter must not PRIME on the ambiguous frame."""
+    rt = build_coach_runtime(_ref())
+    rt.ledger.assess_laps = 0
+    r = rt.refs[0]
+    st = rt.ledger._states.setdefault(r.index, CornerState(r.index))
+    st.status = Status.ARMED
+    st.root = RootError.EARLY_BRAKE
+    st.time_lost_s = 5.0
+    rt.ledger.begin_lap(1)
+    rt.ledger._speak_set = {r.index}
+    rt._last_spline = 0.92
+    rt._last_lap = 1.0
+    advs = rt.observe({"spline": 0.02, "speed": 100.0, "brake": 0.0, "lap": 1})
+    assert rt._pending_wrap_finals
+    assert not any(a.detail.get("coach") == "prime" for a in advs)
+
+
+def test_wrap_finalizes_passes_before_begin_lap():
+    """Qodo #4: wrap-finalized diagnoses must land before begin_lap() builds the speak-set."""
+    rt = build_coach_runtime(_ref())
+    rt.ledger.assess_laps = 0
+    rt.ledger.hysteresis = 1
+    r = next(ref for ref in rt.refs if rt.ref_sigs[ref.index].brake_point_spline is not None)
+    st = rt._pass[r.index]
+    st.active = True
+    st.entry_count = 5
+    st.min_speed_kmh = 70.0
+    st.brake_onset_spline = (rt.ref_sigs[r.index].brake_point_spline or 0.25) + 0.02
+    rt._last_spline = 0.92
+    rt._last_lap = 1.0
+    rt.observe({"spline": 0.02, "speed": 100.0, "brake": 0.0, "lap": 2})
+    assert rt._lap == 2
+    assert r.index in rt.ledger._speak_set
+    assert rt.ledger.state(r.index) is not None
+    assert rt.ledger.state(r.index).root is not RootError.NONE
