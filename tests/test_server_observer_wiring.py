@@ -163,6 +163,10 @@ def test_wire_voice_no_corners_reference_disables_observer(tmp_path, monkeypatch
     ref.write_text(json.dumps({}), encoding="utf-8")
     server._wire_voice(server.VoiceRuntimeConfig(reference_path=str(ref), bank_dir=None))
     assert server._observer is sentinel
+    status = server.voice_runtime_status()
+    assert status["state"] == "disabled"
+    assert status["disabled_reason"] == "reference archive has no usable corners"
+    assert str(ref) not in str(status["disabled_reason"])
 
 
 def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
@@ -175,7 +179,10 @@ def test_wire_voice_missing_reference_is_best_effort(monkeypatch):
         server.VoiceRuntimeConfig(reference_path="does-not-exist-9f3a.json", bank_dir=None)
     )
     assert server._observer is sentinel
-    assert server.voice_runtime_status()["state"] == "disabled"
+    status = server.voice_runtime_status()
+    assert status["state"] == "disabled"
+    assert "failed to load reference" in str(status["disabled_reason"])
+    assert "does-not-exist-9f3a.json" not in str(status["disabled_reason"])
 
 
 def test_wire_voice_bank_without_reference_reports_disabled(monkeypatch):
@@ -189,6 +196,33 @@ def test_wire_voice_bank_without_reference_reports_disabled(monkeypatch):
     assert status["enabled"] is False
     assert status["state"] == "disabled"
     assert "REFERENCE_ARCHIVE" in str(status["disabled_reason"])
+
+
+def test_wire_voice_tts_without_reference_reports_disabled(monkeypatch):
+    server.set_voice_coach(None)
+    monkeypatch.setattr(server, "_observer", None)
+
+    server._wire_voice(
+        server.VoiceRuntimeConfig(reference_path=None, bank_dir=None, tts_enabled=True)
+    )
+
+    status = server.voice_runtime_status()
+    assert status["configured"] is True
+    assert status["enabled"] is False
+    assert status["state"] == "disabled"
+    assert status["backend"] == "pyttsx3"
+    assert "REFERENCE_ARCHIVE" in str(status["disabled_reason"])
+
+
+def test_voice_runtime_status_replaces_snapshot_atomically():
+    server.set_voice_runtime_status(configured=True, state="initializing")
+    prior = server.voice_runtime_status()
+
+    server.set_voice_runtime_status()
+
+    assert prior["configured"] is True
+    assert prior["state"] == "initializing"
+    assert server.voice_runtime_status()["state"] == "skipped"
 
 
 def test_wire_voice_tts_installs_pyttsx3_adapter(tmp_path, monkeypatch):

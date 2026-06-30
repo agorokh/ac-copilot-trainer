@@ -181,21 +181,27 @@ def set_voice_coach(coach: Any | None) -> None:
 
 def set_voice_runtime_status(**updates: object) -> None:
     """Record the voice runtime state reported by ``/health`` and the launcher."""
-    _voice_runtime_status.clear()
-    _voice_runtime_status.update(
-        {
-            "configured": False,
-            "enabled": False,
-            "state": "skipped",
-            "disabled_reason": "",
-        }
-    )
-    _voice_runtime_status.update(updates)
+    global _voice_runtime_status
+    next_status = {
+        "configured": False,
+        "enabled": False,
+        "state": "skipped",
+        "disabled_reason": "",
+    }
+    next_status.update(updates)
+    _voice_runtime_status = next_status
 
 
 def voice_runtime_status() -> dict[str, object]:
     """Return a JSON-safe snapshot of the current voice runtime state."""
     return dict(_voice_runtime_status)
+
+
+def _exception_detail(exc: BaseException) -> str:
+    """Return useful public error text even for exceptions with an empty string form."""
+    if isinstance(exc, OSError) and getattr(exc, "filename", None):
+        return exc.strerror or type(exc).__name__
+    return str(exc) or type(exc).__name__
 
 
 class _Pyttsx3VoiceCoach:
@@ -1518,16 +1524,16 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     )
     if not configured:
         return
-    if bank_dir and not reference_path:
-        reason = "voice bank configured without AC_COPILOT_REFERENCE_ARCHIVE"
+    if (bank_dir or voice_settings.tts_enabled) and not reference_path:
+        reason = "voice configured without AC_COPILOT_REFERENCE_ARCHIVE"
         logger.error("voice: %s", reason)
         set_voice_runtime_status(
             configured=True,
             enabled=False,
             state="disabled",
             disabled_reason=reason,
-            backend=bank_backend or "",
-            bank_configured=True,
+            backend=bank_backend or ("pyttsx3" if voice_settings.tts_enabled else ""),
+            bank_configured=bool(bank_dir),
             reference_configured=False,
             tts_enabled=bool(voice_settings.tts_enabled),
         )
@@ -1542,8 +1548,10 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 archive = json.load(fh)
             observer = build_observer_from_reference(archive)
             if observer is None:
-                reason = f"reference {reference_path} has no usable corners"
-                logger.error("voice: %s — observer disabled", reason)
+                reason = "reference archive has no usable corners"
+                logger.error(
+                    "voice: reference %s has no usable corners — observer disabled", reference_path
+                )
                 set_voice_runtime_status(
                     configured=True,
                     enabled=False,
@@ -1569,7 +1577,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 )
                 logger.info("voice: realtime observer wired from reference %s", reference_path)
         except Exception as exc:  # noqa: BLE001 - malformed archive must not abort the sidecar
-            reason = f"failed to load reference {reference_path}: {exc or type(exc).__name__}"
+            reason = f"failed to load reference: {_exception_detail(exc)}"
             logger.exception("voice: failed to load reference %s", reference_path)
             set_voice_runtime_status(
                 configured=True,
@@ -1641,7 +1649,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 configured=True,
                 enabled=False,
                 state="disabled",
-                disabled_reason=f"failed to initialize voice coach: {exc or type(exc).__name__}",
+                disabled_reason=f"failed to initialize voice coach: {_exception_detail(exc)}",
                 backend=bank_backend or "",
                 bank_configured=True,
                 reference_configured=True,
@@ -1698,7 +1706,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                 volume,
             )
         except Exception as exc:  # noqa: BLE001 - pyttsx3 must never abort the sidecar
-            reason = f"failed to initialize pyttsx3 voice coach: {exc or type(exc).__name__}"
+            reason = f"failed to initialize pyttsx3 voice coach: {_exception_detail(exc)}"
             set_voice_runtime_status(
                 configured=True,
                 enabled=False,

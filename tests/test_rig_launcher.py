@@ -212,6 +212,41 @@ def test_status_uses_sidecar_voice_health(tmp_path: Path) -> None:
     assert status.voice.detail == "backend=sounddevice"
 
 
+def test_status_rejects_skipped_sidecar_voice_when_launcher_requested_voice(
+    tmp_path: Path,
+) -> None:
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        reference_archive="ref.json",
+        voice_bank="bank",
+        paths=LauncherPaths(tmp_path),
+    )
+
+    def fake_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response(
+            {
+                "status": "ok",
+                "connected_peers": 1,
+                "screen_peers": 1,
+                "voice": {
+                    "configured": False,
+                    "enabled": False,
+                    "state": "skipped",
+                },
+            }
+        )
+
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=fake_urlopen)
+    status = sup.poll_status()
+
+    assert status.ok is False
+    assert status.voice.ok is False
+    assert status.voice.state == "DISABLED"
+    assert "requested" in status.voice.detail
+
+
 def test_status_surfaces_disabled_voice_reason_and_overall_summary(tmp_path: Path) -> None:
     cfg = GamePointConfig(
         external_bind="0.0.0.0",
