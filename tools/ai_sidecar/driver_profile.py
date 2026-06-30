@@ -467,6 +467,11 @@ def _merge_session_rollup(
         best_source = incoming
     merged_lap_ids = old_lap_ids | new_lap_ids
     merged_valid_ids = old_valid_ids | new_valid_ids
+    lap_times_by_lap_uuid = {
+        **_numeric_mapping(existing.get("lap_times_by_lap_uuid")),
+        **_numeric_mapping(incoming.get("lap_times_by_lap_uuid")),
+    }
+    median_lap_ms = _median_float(lap_times_by_lap_uuid.values())
     merged_laps = (
         len(merged_lap_ids)
         if old_lap_ids and new_lap_ids
@@ -489,6 +494,9 @@ def _merge_session_rollup(
             "valid_lap_uuids": (
                 sorted(merged_valid_ids) if merged_valid_ids else existing.get("valid_lap_uuids")
             ),
+            "lap_times_by_lap_uuid": lap_times_by_lap_uuid
+            if lap_times_by_lap_uuid
+            else existing.get("lap_times_by_lap_uuid"),
             "first_exported_at": _first_text(
                 existing.get("first_exported_at"), incoming.get("first_exported_at")
             ),
@@ -506,6 +514,11 @@ def _merge_session_rollup(
             "lap_count": merged_laps,
             "valid_laps": merged_valid_laps,
             "best_lap_ms": best_source.get("best_lap_ms"),
+            "median_lap_ms": median_lap_ms
+            if median_lap_ms is not None
+            else incoming.get("median_lap_ms")
+            if incoming.get("median_lap_ms") is not None
+            else existing.get("median_lap_ms"),
             "best_lap_uuid": best_source.get("best_lap_uuid"),
             "best_source_file": best_source.get("best_source_file"),
             "consistency_ms": None,
@@ -672,16 +685,23 @@ def _rollups_from_archives(
     source_laps = 0
     valid_laps = 0
     skipped: list[str] = []
+    seen_lap_uuids: set[str] = set()
     for path in iter_lap_archive_paths(inputs):
         try:
             record = load_lap_archive(path)
         except Exception as exc:  # noqa: BLE001 - one corrupt archive must not erase a profile
             skipped.append(f"{Path(path).name}: {type(exc).__name__}")
             continue
-        source_laps += 1
         if not _is_driver_lap(record):
             skipped.append(f"{Path(path).name}: non_driver_source:{record.get('source')}")
             continue
+        lap_uuid = record.get("lap_uuid")
+        if isinstance(lap_uuid, str) and lap_uuid:
+            if lap_uuid in seen_lap_uuids:
+                skipped.append(f"{Path(path).name}: duplicate_lap_uuid:{lap_uuid}")
+                continue
+            seen_lap_uuids.add(lap_uuid)
+        source_laps += 1
         is_valid = lap_is_valid(record)
         if is_valid:
             valid_laps += 1
@@ -749,6 +769,11 @@ def _rollups_from_archives(
             "track_layout": track.get("layout"),
             "lap_uuids": _sorted_texts(record.get("lap_uuid") for _, record in rows),
             "valid_lap_uuids": _sorted_texts(record.get("lap_uuid") for _, record, _ in valid_rows),
+            "lap_times_by_lap_uuid": {
+                str(record.get("lap_uuid")): lap_ms
+                for _, record, lap_ms in valid_rows
+                if isinstance(record.get("lap_uuid"), str) and record.get("lap_uuid")
+            },
             "first_exported_at": min(exported) if exported else None,
             "last_exported_at": max(exported) if exported else None,
             "first_lap_n": min(lap_ns) if lap_ns else None,

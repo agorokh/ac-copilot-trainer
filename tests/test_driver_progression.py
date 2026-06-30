@@ -290,6 +290,34 @@ def test_imported_reference_laps_do_not_enter_driver_profile(tmp_path: Path) -> 
     assert "reference-lap" not in json.dumps(profile)
 
 
+def test_duplicate_lap_uuid_across_input_dirs_is_aggregated_once(tmp_path: Path) -> None:
+    primary = tmp_path / "primary"
+    backup = tmp_path / "backup"
+    primary.mkdir()
+    backup.mkdir()
+    for lap_dir, lap_ms in ((primary, 91000), (backup, 90500)):
+        _write_archive(
+            lap_dir / "lap_001.json",
+            lap_uuid="same-lap",
+            session_uuid="session-1",
+            lap_ms=lap_ms,
+            lap_n=1,
+            exported_at="2026-06-01T10:00:00Z",
+            min_speed=80.0,
+        )
+
+    profile = build_profile([primary, backup])
+    rollup = next(iter(profile["session_rollups"].values()))
+    corner = next(iter(profile["corner_history"].values()))
+
+    assert profile["source"]["lap_count"] == 1
+    assert profile["source"]["valid_laps"] == 1
+    assert any("duplicate_lap_uuid:same-lap" in item for item in profile["source"]["skipped"])
+    assert rollup["lap_count"] == 1
+    assert rollup["valid_laps"] == 1
+    assert corner["valid_laps"] == 1
+
+
 def test_incremental_same_session_update_keeps_faster_existing_pb(tmp_path: Path) -> None:
     first = tmp_path / "first"
     second = tmp_path / "second"
@@ -321,6 +349,7 @@ def test_incremental_same_session_update_keeps_faster_existing_pb(tmp_path: Path
     assert merged["personal_bests"]["car-a|track-a|"]["lap_uuid"] == "fast-lap"
     assert rollup["lap_count"] == 2
     assert rollup["best_lap_uuid"] == "fast-lap"
+    assert rollup["median_lap_ms"] == 91500.0
 
 
 def test_incremental_corner_merge_updates_derived_stats(tmp_path: Path) -> None:
