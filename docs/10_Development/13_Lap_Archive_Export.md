@@ -25,6 +25,15 @@ rejected. Laps with `lap.is_valid=false` are skipped by default; pass
 exports stream archive files one at a time and replace the output only after
 the export completes.
 
+Pass `--output -` to stream stable CSV rows to stdout for external tools:
+
+```bash
+python -m tools.lap_archive_export --output - /path/to/journal/laps > exports/laps.csv
+```
+
+The summary line is written to stderr in stdout-streaming mode, so the CSV stream
+stays clean for a pipe.
+
 Stable columns:
 
 ```text

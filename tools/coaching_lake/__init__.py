@@ -13,13 +13,17 @@ the JSON is never mutated (data-immutability invariant). See
 
 from __future__ import annotations
 
-from tools.coaching_lake.build_analytics import (
-    LakeSummary,
-    build_lake,
-    list_reports,
-    run_query,
-    run_report,
-)
+from importlib import import_module
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tools.coaching_lake.build_analytics import (
+        LakeSummary,
+        build_lake,
+        list_reports,
+        run_query,
+        run_report,
+    )
 
 __all__ = [
     "LakeSummary",
@@ -28,3 +32,10 @@ __all__ = [
     "run_query",
     "run_report",
 ]
+
+
+def __getattr__(name: str):
+    if name in __all__:
+        module = import_module("tools.coaching_lake.build_analytics")
+        return getattr(module, name)
+    raise AttributeError(name)
