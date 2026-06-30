@@ -166,7 +166,40 @@ def _stddev(values: list[float]) -> float:
     return (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
 
 
-def analyze_corner_consistency(laps: list[LapTrace]) -> dict[int, CornerConsistency]:
+def _match_corner_signature(
+    anchor: CornerSignature,
+    candidates: list[CornerSignature],
+    *,
+    max_apex_delta: float = 0.04,
+) -> CornerSignature | None:
+    """Closest physical corner by apex spline, not by per-lap ordinal index."""
+    if not candidates:
+        return None
+    best = min(candidates, key=lambda c: abs(c.apex_spline - anchor.apex_spline))
+    return best if abs(best.apex_spline - anchor.apex_spline) <= max_apex_delta else None
+
+
+def _corner_history_matches(
+    laps: list[LapTrace],
+    anchors: list[CornerSignature],
+) -> dict[int, list[CornerSignature]]:
+    by_idx: dict[int, list[CornerSignature]] = {anchor.index: [anchor] for anchor in anchors}
+    if not anchors:
+        return by_idx
+    for lap in laps:
+        lap_sigs = corner_signatures(lap)
+        for anchor in anchors:
+            match = _match_corner_signature(anchor, lap_sigs)
+            if match is not None:
+                by_idx.setdefault(anchor.index, []).append(match)
+    return by_idx
+
+
+def analyze_corner_consistency(
+    laps: list[LapTrace],
+    *,
+    anchors: list[CornerSignature] | None = None,
+) -> dict[int, CornerConsistency]:
     """Per-corner lap-to-lap variance, mirroring the Lua HUD consistency score.
 
     Needs at least two segmentable laps. The score is dimensionless (100 = repeatable, lower =
@@ -175,10 +208,8 @@ def analyze_corner_consistency(laps: list[LapTrace]) -> dict[int, CornerConsiste
     """
     if len(laps) < 2:
         return {}
-    by_idx: dict[int, list[CornerSignature]] = {}
-    for lap in laps:
-        for sig in corner_signatures(lap):
-            by_idx.setdefault(sig.index, []).append(sig)
+    anchors = anchors if anchors is not None else corner_signatures(laps[-1])
+    by_idx = _corner_history_matches(laps[:-1], anchors)
     out: dict[int, CornerConsistency] = {}
     for idx, sigs in by_idx.items():
         if len(sigs) < 2:
@@ -451,9 +482,14 @@ def coach_lap(
     sigs = corner_signatures(lap, corners)
     deltas = compare_laps(lap, reference, corners=corners) if reference is not None else []
     by_idx = {d.index: d for d in deltas}
-    ref_sigs = {s.index: s for s in corner_signatures(reference)} if reference is not None else {}
+    ref_sigs = corner_signatures(reference) if reference is not None else []
     history_laps = [*(history or []), lap]
-    consistency = analyze_corner_consistency(history_laps) if len(history_laps) >= 2 else {}
+    history_matches = (
+        _corner_history_matches(history_laps[:-1], sigs) if len(history_laps) >= 2 else {}
+    )
+    consistency = (
+        analyze_corner_consistency(history_laps, anchors=sigs) if len(history_laps) >= 2 else {}
+    )
     # Trail-braking technique read (#301): computed once over the SAME segmentation as the
     # signatures so the per-corner finding lines up with sig.index, then injected into each corner's
     # ``extra`` so the trail_brake rule folds it into the attribution layer (cause_class reasoning)
@@ -463,23 +499,29 @@ def coach_lap(
     }
     out: list[CornerCoaching] = []
     for sig in sigs:
-        ref_sig = ref_sigs.get(sig.index)
+        ref_sig = _match_corner_signature(sig, ref_sigs)
         diagnostics = _corner_diagnostics(
             lap=lap,
             reference=reference,
             sig=sig,
             ref_sig=ref_sig,
             consistency=consistency.get(sig.index),
-            history_count=len(history_laps),
+            consistency_sample_count=len(history_matches.get(sig.index, [sig])),
+            history_laps_loaded=len(history_laps),
         )
         # explicit caller-supplied signals win; else auto-compute Tier-B signals from per-wheel data
         extra = (extra_by_corner or {}).get(sig.index)
         if extra is None:
             extra = corner_live_signals(lap, sig) if lap.has_wheel_data else {}
         extra = {
-            **extra,
             "exit_road_usage": diagnostics["exit_road_usage"],
             "consistency": diagnostics["consistency"],
+            **extra,
+        }
+        effective_diagnostics = {
+            **diagnostics,
+            "exit_road_usage": extra["exit_road_usage"],
+            "consistency": extra["consistency"],
         }
         tb = trail_by_idx.get(sig.index)
         if tb is not None and "trail_brake" not in extra:
@@ -512,7 +554,7 @@ def coach_lap(
                 delta_s=ctx.delta.delta_s if ctx.delta else None,
                 headline=_headline(ctx, attrs),
                 attributions=attrs,
-                diagnostics=diagnostics,
+                diagnostics=effective_diagnostics,
             )
         )
     return out
@@ -525,7 +567,8 @@ def _corner_diagnostics(
     sig: CornerSignature,
     ref_sig: CornerSignature | None,
     consistency: CornerConsistency | None,
-    history_count: int,
+    consistency_sample_count: int,
+    history_laps_loaded: int,
 ) -> dict[str, Any]:
     steering = {
         "available": True,
@@ -558,7 +601,8 @@ def _corner_diagnostics(
         else {
             "available": False,
             "reason": "needs at least two segmentable laps",
-            "sample_count": history_count,
+            "sample_count": consistency_sample_count,
+            "history_laps_loaded": history_laps_loaded,
         }
     )
     return {
@@ -627,8 +671,13 @@ def _exit_road_usage(
         "source": "reference_path",
         "exit_spline": round(exit_spline, 4),
         "lateral_delta_m": round(lateral, 2),
-        "missed_exit_width_m": round(abs(lateral), 2),
-        "caveat": "reference path proxy; true curb distance requires track-edge geometry",
+        "lateral_delta_abs_m": round(abs(lateral), 2),
+        "classification": "reference_path_delta",
+        "coaching_available": False,
+        "caveat": (
+            "reference path proxy only; true under-use needs track-edge geometry or "
+            "caller-supplied under_used_exit_width_m"
+        ),
     }
 
 
@@ -793,8 +842,10 @@ def _r_exit_road_usage(ctx: CornerContext) -> float:
     road = ctx.extra.get("exit_road_usage")
     if not isinstance(road, dict) or road.get("available") is not True:
         return 0.0
-    missed = road.get("missed_exit_width_m")
+    missed = road.get("under_used_exit_width_m", road.get("missed_exit_width_m"))
     if not isinstance(missed, (int, float)) or missed < 1.5:
+        return 0.0
+    if road.get("source") == "reference_path" and "under_used_exit_width_m" not in road:
         return 0.0
     if ctx.delta is not None and ctx.delta.delta_s <= 0.03:
         return 0.0
@@ -804,6 +855,8 @@ def _r_exit_road_usage(ctx: CornerContext) -> float:
 def _r_gear_selection(ctx: CornerContext) -> float:
     ref = ctx.reference_sig
     if ref is None or ctx.sig.gear_at_apex is None or ref.gear_at_apex is None:
+        return 0.0
+    if ctx.delta is None or ctx.delta.delta_s <= 0.03:
         return 0.0
     delta = ctx.sig.gear_at_apex - ref.gear_at_apex
     if delta == 0:
@@ -988,7 +1041,11 @@ def _gear_coaching(ctx: CornerContext) -> str:
 
 def _exit_road_usage_coaching(ctx: CornerContext) -> str:
     road = ctx.extra.get("exit_road_usage") if isinstance(ctx.extra, dict) else None
-    missed = road.get("missed_exit_width_m") if isinstance(road, dict) else None
+    missed = (
+        road.get("under_used_exit_width_m", road.get("missed_exit_width_m"))
+        if isinstance(road, dict)
+        else None
+    )
     miss_text = f"{missed:.1f} m" if isinstance(missed, (int, float)) else "the reference"
     return (
         f"Exit path is {miss_text} away from the reference exit width — look through the apex and "

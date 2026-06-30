@@ -216,3 +216,16 @@ def test_structured_debrief_includes_corner_diagnostics():
     assert set(diag) >= {"steering", "brake_shape", "gear", "exit_road_usage", "consistency"}
     assert diag["exit_road_usage"]["available"] is True
     assert diag["consistency"]["available"] is True
+
+
+def test_structured_debrief_ignores_history_from_other_track():
+    other = _corner_archive(degrade=4.0)
+    other["track"]["id"] = "different_track"
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1

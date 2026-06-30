@@ -307,9 +307,12 @@ def _analyze(
     history_laps: list[LapTrace] = []
     for history_archive in history_archives or []:
         try:
-            history_laps.append(lap_trace_from_archive(history_archive))
+            history_lap = lap_trace_from_archive(history_archive)
         except ValueError:
             continue
+        if history_lap.car_id != lap.car_id or history_lap.track_id != lap.track_id:
+            continue
+        history_laps.append(history_lap)
     report = coach_lap(
         lap,
         setup,

@@ -83,7 +83,7 @@ The brain follow-up emits one object per segmented corner. Existing fields (`ind
 | `steering` | Steering smoothness score, correction count, p95 steering rate, and a scrub proxy derived from steering rate while loaded. |
 | `brake_shape` | Brake trace classification (`ideal_trace`, `increasing_pressure`, `abrupt_release`, `braking_at_apex`, or `no_brake`) plus release smoothness. |
 | `gear` | Entry/apex/exit gear, gear-change count, and apex-gear delta vs `referenceArchivePath` when a reference lap is supplied. |
-| `exit_road_usage` | Reference-path exit-width proxy. `available=false` without a reference lap; true curb/track-edge distance requires map-edge geometry. |
+| `exit_road_usage` | Reference-path lateral-delta proxy. `available=false` without a reference lap; true curb/track-edge under-use coaching requires map-edge geometry or caller-supplied `under_used_exit_width_m`. |
 | `consistency` | Lap-to-lap per-corner spread and 0-100 repeatability score when at least one valid `historyArchivePaths` lap plus the current lap segment the same corner. |
 
 ### `analysis_error` (Python → Lua)

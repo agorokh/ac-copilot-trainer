@@ -8,6 +8,7 @@ from tools.ai_sidecar.corner_attribution import (
     WHEEL_RADIUS_M,
     CornerContext,
     CornerDelta,
+    _match_corner_signature,
     analyze_balance,
     attribute_corner,
     coach_lap,
@@ -261,10 +262,21 @@ def test_gear_selection_compares_apex_gear_to_reference():
         sig=_sig(gear_at_apex=4),
         reference_sig=_sig(gear_at_apex=3),
         setup=SETUP,
+        delta=_delta(delta_s=0.2),
     )
     attr = next(a for a in attribute_corner(ctx) if a.key == "gear_selection")
     assert attr.confidence > 0.5
     assert "Apex gear 4 vs reference 3" in attr.coaching
+
+
+def test_gear_selection_ignores_stale_slower_reference():
+    ctx = CornerContext(
+        sig=_sig(gear_at_apex=4),
+        reference_sig=_sig(gear_at_apex=3),
+        setup=SETUP,
+        delta=_delta(delta_s=-0.1),
+    )
+    assert not any(a.key == "gear_selection" for a in attribute_corner(ctx))
 
 
 def test_brake_shape_attribution_names_pressure_rise():
@@ -286,6 +298,18 @@ def test_corner_consistency_attribution_uses_history_score():
     attr = next(a for a in attribute_corner(ctx) if a.key == "corner_consistency")
     assert attr.phase == "session"
     assert "repeatability" in attr.coaching
+
+
+def test_reference_matching_uses_apex_spline_not_index():
+    anchor = _sig(index=0, apex_spline=0.50)
+    ref = [
+        _sig(index=0, apex_spline=0.20, gear_at_apex=2),
+        _sig(index=1, apex_spline=0.505, gear_at_apex=3),
+    ]
+    match = _match_corner_signature(anchor, ref)
+    assert match is not None
+    assert match.index == 1
+    assert match.gear_at_apex == 3
 
 
 # --- analyze_balance (the master discriminator) -----------------------------
@@ -528,6 +552,28 @@ def test_coach_lap_exposes_diagnostics_with_reference_and_history():
     assert diagnostics["exit_road_usage"]["available"] is True
     assert diagnostics["consistency"]["available"] is True
     assert diagnostics["consistency"]["sample_count"] == 2
+
+
+def test_coach_lap_preserves_caller_supplied_exit_width():
+    lap = _corner_lap_trace()
+    report = coach_lap(
+        lap,
+        SETUP,
+        grip_ceiling_g=2.5,
+        extra_by_corner={
+            0: {
+                "exit_road_usage": {
+                    "available": True,
+                    "source": "track_edge",
+                    "under_used_exit_width_m": 2.0,
+                }
+            }
+        },
+    )
+    diagnostics = report[0].diagnostics["exit_road_usage"]
+    assert diagnostics["source"] == "track_edge"
+    assert diagnostics["under_used_exit_width_m"] == 2.0
+    assert any(a.key == "exit_road_usage" for a in report[0].attributions)
 
 
 # --- trail-braking folded into the attribution layer (#301) ------------------
