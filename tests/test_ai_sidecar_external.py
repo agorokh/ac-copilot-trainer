@@ -290,6 +290,17 @@ def test_validate_inbound_rejects_invalid() -> None:
         )
         or ""
     )
+    assert "JSON-serializable" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "loose",
+                "setup_snapshot": {"ABOUT.NOTES": "\ud800"},
+            }
+        )
+        or ""
+    )
     assert "limit must be <= 40" in (
         ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
     )
@@ -568,6 +579,37 @@ def test_external_peer_non_object_payload_returns_external_error() -> None:
     assert err["v"] == ep.ENVELOPE_VERSION
     assert err["type"] == ep.TYPE_ERROR
     assert "root must be a JSON object" in err["message"]
+
+
+def test_external_validation_exception_returns_error_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _Websocket:
+        remote_address = ("127.0.0.1", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    def _boom(_data: dict[str, object]) -> str | None:
+        raise RecursionError("deep snapshot")
+
+    async def _run() -> dict[str, object]:
+        ws = _Websocket()
+        monkeypatch.setattr(srv, "validate_inbound", _boom)
+        await srv._handle_external_frame(
+            ws,
+            {"v": 1, "type": ep.TYPE_SETUP_ADVICE, "complaint": "loose"},
+        )
+        return ws.sent[0]
+
+    err = asyncio.run(_run())
+    assert err["type"] == ep.TYPE_ERROR
+    assert "invalid frame: RecursionError" in str(err["message"])
 
 
 def test_coaching_cue_subscribe_ok_without_loopback_lua_peer() -> None:

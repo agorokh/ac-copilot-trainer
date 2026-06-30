@@ -331,7 +331,7 @@ def _validate_setup_snapshot(
         payload_bytes = len(
             json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError, OverflowError, UnicodeError):
         return f"{key} must be JSON-serializable"
     if payload_bytes > MAX_SETUP_SNAPSHOT_BYTES:
         return f"{key} must be <= {MAX_SETUP_SNAPSHOT_BYTES} bytes"

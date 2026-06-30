@@ -1366,7 +1366,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
     peer = getattr(websocket, "remote_address", None)
     t_in = data.get(TYPE_KEY, "?")
-    err = validate_inbound(data)
+    try:
+        err = validate_inbound(data)
+    except Exception as exc:  # noqa: BLE001 - validation failures must stay protocol errors
+        logger.exception("external frame validation crashed peer=%s type=%s", peer, t_in)
+        err = f"invalid frame: {type(exc).__name__}"
     if err is not None:
         logger.warning("external frame rejected peer=%s type=%s reason=%s", peer, t_in, err)
         await _safe_send(websocket, make_error(err, ref_type=data.get(TYPE_KEY)))
