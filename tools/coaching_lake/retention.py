@@ -1,0 +1,353 @@
+"""Retention planner for AC Copilot journal data (issue #402).
+
+The raw lap and Track Titan lakes are immutable evidence until an explicit lifecycle
+policy prunes them. This module makes that pruning deterministic and auditable:
+planning is pure, dry-run is the CLI default, and deletion preserves PB, imported
+reference, sidecar-pinned, and profile-ledger PB files.
+"""
+
+from __future__ import annotations
+
+import argparse
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
+from tools.lap_archive_export import LapArchiveExportError, iter_lap_archive_paths, load_lap_archive
+
+DERIVED_TT_INDEXES = frozenset({"index.json", "sessions_index.json"})
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    """Retention caps. ``None`` means that dimension is disabled."""
+
+    max_lap_files: int | None = None
+    max_lap_age_days: int | None = None
+    max_tt_files: int | None = None
+    max_tt_age_days: int | None = None
+
+
+@dataclass(frozen=True)
+class RetentionItem:
+    """One file considered by the retention planner."""
+
+    path: Path
+    domain: str
+    protected: bool
+    reasons: tuple[str, ...]
+    sort_time: datetime
+    bytes: int = 0
+
+
+@dataclass(frozen=True)
+class RetentionPlan:
+    """Deterministic retention outcome."""
+
+    policy: RetentionPolicy
+    items: tuple[RetentionItem, ...] = field(default_factory=tuple)
+    delete: tuple[RetentionItem, ...] = field(default_factory=tuple)
+
+    @property
+    def protected(self) -> tuple[RetentionItem, ...]:
+        return tuple(item for item in self.items if item.protected)
+
+    def render(self) -> str:
+        lines = [
+            f"retention plan: {len(self.delete)} delete candidate(s), "
+            f"{len(self.protected)} protected, {len(self.items)} scanned"
+        ]
+        for item in self.delete[:20]:
+            lines.append(f"  DELETE {item.domain} {item.path} ({', '.join(item.reasons)})")
+        if len(self.delete) > 20:
+            lines.append(f"  ... {len(self.delete) - 20} more")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class RetentionApplyResult:
+    """Summary of files removed by ``apply_retention``."""
+
+    deleted: int
+    bytes_deleted: int
+    failures: tuple[str, ...] = ()
+
+    def render(self) -> str:
+        text = f"retention applied: deleted={self.deleted}, bytes={self.bytes_deleted}"
+        if self.failures:
+            text += f", failures={len(self.failures)}"
+        return text
+
+
+def _parse_time(raw: Any, fallback: datetime) -> datetime:
+    if isinstance(raw, str) and raw:
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
+        except ValueError:
+            pass
+    return fallback
+
+
+def _mtime(path: Path) -> datetime:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+    except OSError:
+        return datetime.fromtimestamp(0, tz=UTC)
+
+
+def _has_pin_marker(path: Path) -> bool:
+    markers = (
+        path.with_suffix(path.suffix + ".pin"),
+        path.with_suffix(path.suffix + ".keep"),
+        path.with_suffix(".pin"),
+        path.with_suffix(".keep"),
+    )
+    return any(marker.exists() for marker in markers)
+
+
+def _profile_pb_lap_uuids(profile: Mapping[str, Any] | None) -> set[str]:
+    out: set[str] = set()
+    if not isinstance(profile, Mapping):
+        return out
+    for row in (profile.get("personal_bests") or {}).values():
+        if isinstance(row, Mapping) and isinstance(row.get("lap_uuid"), str):
+            out.add(row["lap_uuid"])
+    return out
+
+
+def _is_reference_archive(record: Mapping[str, Any]) -> bool:
+    return (
+        record.get("source") == "imported"
+        or isinstance(record.get("import_format"), str)
+        or isinstance(record.get("generator"), Mapping)
+    )
+
+
+def _lap_items(lap_dir: Path, profile: Mapping[str, Any] | None) -> list[RetentionItem]:
+    pb_lap_uuids = _profile_pb_lap_uuids(profile)
+    items: list[RetentionItem] = []
+    for path in iter_lap_archive_paths([lap_dir]):
+        reasons: list[str] = []
+        protected = False
+        fallback_time = _mtime(path)
+        sort_time = fallback_time
+        try:
+            record = load_lap_archive(path)
+        except (LapArchiveExportError, OSError, ValueError):
+            record = {}
+            protected = True
+            reasons.append("unreadable")
+        if record:
+            sort_time = _parse_time(record.get("exported_at"), fallback_time)
+            lap = record.get("lap") if isinstance(record.get("lap"), Mapping) else {}
+            if lap.get("is_pb") is True:
+                protected = True
+                reasons.append("lap-pb")
+            if record.get("lap_uuid") in pb_lap_uuids:
+                protected = True
+                reasons.append("profile-pb")
+            if _is_reference_archive(record):
+                protected = True
+                reasons.append("reference")
+        if _has_pin_marker(path):
+            protected = True
+            reasons.append("pinned")
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        items.append(
+            RetentionItem(
+                path=path,
+                domain="laps",
+                protected=protected,
+                reasons=tuple(reasons) if reasons else ("eligible",),
+                sort_time=sort_time,
+                bytes=size,
+            )
+        )
+    return sorted(items, key=lambda item: (item.sort_time, item.path.as_posix()))
+
+
+def _tt_raw_paths(tt_dir: Path) -> Iterable[Path]:
+    if not tt_dir.exists():
+        return []
+    return (
+        path
+        for path in sorted(tt_dir.rglob("*.json"))
+        if path.is_file() and path.name not in DERIVED_TT_INDEXES
+    )
+
+
+def _tt_items(tt_dir: Path) -> list[RetentionItem]:
+    items: list[RetentionItem] = []
+    for path in _tt_raw_paths(tt_dir):
+        reasons: list[str] = []
+        protected = False
+        if _has_pin_marker(path):
+            protected = True
+            reasons.append("pinned")
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        items.append(
+            RetentionItem(
+                path=path,
+                domain="tt",
+                protected=protected,
+                reasons=tuple(reasons) if reasons else ("eligible",),
+                sort_time=_mtime(path),
+                bytes=size,
+            )
+        )
+    return sorted(items, key=lambda item: (item.sort_time, item.path.as_posix()))
+
+
+def _select_by_cap(
+    items: Sequence[RetentionItem],
+    *,
+    max_files: int | None,
+    max_age_days: int | None,
+    now: datetime,
+) -> list[RetentionItem]:
+    eligible = [item for item in items if not item.protected]
+    selected: dict[Path, RetentionItem] = {}
+    if max_age_days is not None:
+        cutoff = now - timedelta(days=max_age_days)
+        for item in eligible:
+            if item.sort_time < cutoff:
+                selected[item.path] = RetentionItem(
+                    path=item.path,
+                    domain=item.domain,
+                    protected=item.protected,
+                    reasons=tuple(sorted(set(item.reasons + ("age-cap",)))),
+                    sort_time=item.sort_time,
+                    bytes=item.bytes,
+                )
+    if max_files is not None and max_files >= 0 and len(items) > max_files:
+        needed = len(items) - max_files
+        for item in eligible[:needed]:
+            selected[item.path] = RetentionItem(
+                path=item.path,
+                domain=item.domain,
+                protected=item.protected,
+                reasons=tuple(sorted(set(item.reasons + ("count-cap",)))),
+                sort_time=item.sort_time,
+                bytes=item.bytes,
+            )
+    return sorted(selected.values(), key=lambda item: (item.sort_time, item.path.as_posix()))
+
+
+def plan_retention(
+    *,
+    lap_dir: str | Path | None = None,
+    tt_dir: str | Path | None = None,
+    policy: RetentionPolicy,
+    profile_path: str | Path | None = DEFAULT_PROFILE_PATH,
+    now: datetime | None = None,
+) -> RetentionPlan:
+    """Build a deterministic retention plan without deleting anything."""
+    stamp = now or datetime.now(UTC)
+    profile = load_profile(profile_path) if profile_path is not None else None
+    items: list[RetentionItem] = []
+    delete: list[RetentionItem] = []
+
+    if lap_dir is not None:
+        lap_items = _lap_items(Path(lap_dir), profile)
+        items.extend(lap_items)
+        delete.extend(
+            _select_by_cap(
+                lap_items,
+                max_files=policy.max_lap_files,
+                max_age_days=policy.max_lap_age_days,
+                now=stamp,
+            )
+        )
+
+    if tt_dir is not None:
+        tt_items = _tt_items(Path(tt_dir))
+        items.extend(tt_items)
+        delete.extend(
+            _select_by_cap(
+                tt_items,
+                max_files=policy.max_tt_files,
+                max_age_days=policy.max_tt_age_days,
+                now=stamp,
+            )
+        )
+
+    return RetentionPlan(
+        policy=policy,
+        items=tuple(
+            sorted(items, key=lambda item: (item.domain, item.sort_time, item.path.as_posix()))
+        ),
+        delete=tuple(
+            sorted(delete, key=lambda item: (item.domain, item.sort_time, item.path.as_posix()))
+        ),
+    )
+
+
+def apply_retention(plan: RetentionPlan) -> RetentionApplyResult:
+    """Delete files selected by a plan. Pin/protection is decided only during planning."""
+    deleted = 0
+    bytes_deleted = 0
+    failures: list[str] = []
+    for item in plan.delete:
+        try:
+            item.path.unlink()
+        except OSError as exc:
+            failures.append(f"{item.path}: {exc}")
+            continue
+        deleted += 1
+        bytes_deleted += item.bytes
+    return RetentionApplyResult(
+        deleted=deleted, bytes_deleted=bytes_deleted, failures=tuple(failures)
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--lap-dir", type=Path, default=None)
+    parser.add_argument("--tt-dir", type=Path, default=None)
+    parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE_PATH)
+    parser.add_argument("--max-lap-files", type=int, default=None)
+    parser.add_argument("--max-lap-age-days", type=int, default=None)
+    parser.add_argument("--max-tt-files", type=int, default=None)
+    parser.add_argument("--max-tt-age-days", type=int, default=None)
+    parser.add_argument(
+        "--apply", action="store_true", help="delete planned files; default is dry-run"
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.lap_dir is None and args.tt_dir is None:
+        parser.error("pass --lap-dir and/or --tt-dir")
+    policy = RetentionPolicy(
+        max_lap_files=args.max_lap_files,
+        max_lap_age_days=args.max_lap_age_days,
+        max_tt_files=args.max_tt_files,
+        max_tt_age_days=args.max_tt_age_days,
+    )
+    plan = plan_retention(
+        lap_dir=args.lap_dir,
+        tt_dir=args.tt_dir,
+        policy=policy,
+        profile_path=args.profile,
+    )
+    print(plan.render())
+    if args.apply:
+        print(apply_retention(plan).render())
+    else:
+        print("dry-run only; pass --apply to delete planned files")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

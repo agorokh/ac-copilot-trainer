@@ -312,6 +312,25 @@ def export_csv(
     return rows_written
 
 
+def export_csv_stream(
+    inputs: Iterable[str | Path],
+    output: TextIO,
+    *,
+    include_invalid: bool = False,
+    include_header: bool = True,
+) -> int:
+    """Stream stable analysis CSV rows to an already-open text file."""
+    writer = csv.DictWriter(output, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    if include_header:
+        writer.writeheader()
+    rows_written = 0
+    archives = _iter_loaded_archives(inputs, include_invalid=include_invalid)
+    for row in iter_csv_rows(archives):
+        writer.writerow({column: _format_cell(row.get(column)) for column in CSV_COLUMNS})
+        rows_written += 1
+    return rows_written
+
+
 def _parse_exported_at(record: dict[str, Any]) -> datetime | None:
     raw = record.get("exported_at")
     if not isinstance(raw, str) or not raw:
@@ -580,14 +599,21 @@ def main(argv: Sequence[str] | None = None, *, stderr: TextIO | None = None) -> 
     args = parser.parse_args(argv)
     err = stderr if stderr is not None else sys.stderr
     try:
-        if args.format == "csv":
+        if args.output == "-" and args.format != "csv":
+            raise LapArchiveExportError("stdout streaming is only supported for --format csv")
+        if args.output == "-":
+            count = export_csv_stream(args.inputs, sys.stdout, include_invalid=args.include_invalid)
+        elif args.format == "csv":
             count = export_csv(args.inputs, args.output, include_invalid=args.include_invalid)
         else:
             count = export_motec_csv(args.inputs, args.output, include_invalid=args.include_invalid)
     except LapArchiveExportError as exc:
         print(f"lap-archive-export: {exc}", file=err)
         return 2
-    print(f"wrote {count} sample rows to {args.output}")
+    print(
+        f"wrote {count} sample rows to {args.output}",
+        file=err if args.output == "-" else sys.stdout,
+    )
     return 0
 
 
