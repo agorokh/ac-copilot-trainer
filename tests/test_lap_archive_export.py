@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from pathlib import Path
 
@@ -250,6 +251,27 @@ def test_cli_writes_csv(tmp_path: Path, monkeypatch, capsys) -> None:  # type: i
     assert rc == 0
     assert "wrote 3 sample rows" in captured.out
     assert _rows(out)[0]["lap_uuid"] == "lap-valid"
+
+
+def test_csv_stream_writes_to_file_like_without_temp_path() -> None:
+    out = io.StringIO()
+
+    count = lap_archive_export.export_csv_stream([_FIXTURES / "lap_archive_valid.json"], out)
+
+    assert count == 3
+    rows = list(csv.DictReader(io.StringIO(out.getvalue())))
+    assert rows[0]["lap_uuid"] == "lap-valid"
+    assert rows[0]["session_uuid"] == "session-a"
+
+
+def test_cli_streams_csv_to_stdout_and_summary_to_stderr(capsys) -> None:
+    rc = lap_archive_export.main(["--output", "-", str(_FIXTURES / "lap_archive_valid.json")])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.startswith("source_file,lap_uuid,session_uuid")
+    assert "lap-valid" in captured.out
+    assert "wrote 3 sample rows to -" in captured.err
 
 
 def test_cli_rejects_missing_input_path(tmp_path: Path, monkeypatch, capsys) -> None:  # type: ignore[no-untyped-def]
