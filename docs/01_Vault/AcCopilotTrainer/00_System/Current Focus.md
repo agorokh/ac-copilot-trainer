@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T20:49:44Z
+last_updated: 2026-06-30T22:23:39Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -105,6 +105,20 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-06-30** - PR [#419](https://github.com/agorokh/ac-copilot-trainer/pull/419)
+  **MERGED** at `14f6257` - **driver progression profile** ([#403](https://github.com/agorokh/ac-copilot-trainer/issues/403)
+  **CLOSED**): Coach v2 now derives cue density and curriculum from the persistent driver profile,
+  scoped to the active car/track/layout. Added `tools.ai_sidecar.driver_progression`, hardened
+  profile rebuild/idempotency/corner sample merging, documented `AC_COPILOT_DRIVER_PROFILE`, and
+  kept runtime profile writes constrained to approved `journal/driver/profile.json` roots.
+  Classification: `.env.example` changed for the documented profile override; no migration/deps/workflow flags.
+- **2026-06-30** - PR [#418](https://github.com/agorokh/ac-copilot-trainer/pull/418)
+  **MERGED** at `17aa36b` - **sector benchmarks and SuperLap targets** ([#408](https://github.com/agorokh/ac-copilot-trainer/issues/408)
+  epic remains **OPEN**): post-lap sector/micro-sector deltas, complete-only stitched SuperLap
+  targets, protocol/HUD surfacing, valid/same car-track-layout benchmark scoping, explicit lap-clock
+  boundary handling, and 1-based benchmark indices. Classification: no migration/env/deps/script/workflow
+  flags. Remaining #408 work: TT M-TT3 via [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)
+  and fuller reference-library management.
 - **2026-06-30** - PR [#415](https://github.com/agorokh/ac-copilot-trainer/pull/415)
   **MERGED** at `c407d46` - **telemetry data platform** ([#402](https://github.com/agorokh/ac-copilot-trainer/issues/402)
   **CLOSED**): DuckDB `sessions` / `stints` rollups, compacted driver profile ledger, dry-run-first

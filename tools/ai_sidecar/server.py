@@ -1830,12 +1830,18 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             if os.environ.get("AC_COPILOT_COACH_V2") == "1":
                 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
-                coach_rt = build_coach_runtime(archive)
+                coach_rt = build_coach_runtime(
+                    archive,
+                    driver_profile_path=os.environ.get("AC_COPILOT_DRIVER_PROFILE"),
+                )
                 if coach_rt is not None:
                     set_coach_runtime(coach_rt)
                     logger.info(
-                        "voice: Coach v2 runtime wired (%d corners) — diagnosed anticipatory cues",
+                        "voice: Coach v2 runtime wired (%d corners) - "
+                        "diagnosed anticipatory cues policy=%s budget=%d",
                         len(coach_rt.refs),
+                        coach_rt.cue_policy.level,
+                        coach_rt.ledger.lap_budget,
                     )
                 else:
                     # M1: v2 was REQUESTED but could not build — fail loud + SILENT, never degrade
