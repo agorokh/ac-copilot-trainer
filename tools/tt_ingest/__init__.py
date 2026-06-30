@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from tools.tt_ingest.cli import (
     ExportSummary,
+    ReferenceArchiveSummary,
     build_arg_parser,
+    build_reference_archive_from_files,
+    discover_reference_payloads,
     main,
     reindex_lake,
     retain_sessions,
@@ -45,9 +48,12 @@ from tools.tt_ingest.tt_export import (
     write_immutable_json,
 )
 from tools.tt_ingest.tt_normalize import (
+    TTNormalizeError,
+    build_reference_archive,
     build_sessions_index,
     normalize_session,
     normalize_sessions,
+    reference_frames_from_payload,
 )
 from tools.tt_ingest.tt_vulcan import (
     SessionsPage,
@@ -61,18 +67,23 @@ from tools.tt_ingest.tt_vulcan import (
 __all__ = [
     "ExportSummary",
     "MintedTokens",
+    "ReferenceArchiveSummary",
     "RetainedFile",
     "SessionsPage",
     "TTAuthError",
     "TTConfig",
     "TTExportError",
+    "TTNormalizeError",
     "TTVulcanError",
     "WriteResult",
     "build_arg_parser",
     "build_index",
     "build_initiate_auth_request",
+    "build_reference_archive",
+    "build_reference_archive_from_files",
     "build_sessions_index",
     "decode_jwt_payload",
+    "discover_reference_payloads",
     "extract_refresh_token_from_text",
     "extract_uid_from_text",
     "is_token_expired",
@@ -82,6 +93,7 @@ __all__ = [
     "normalize_sessions",
     "parse_initiate_auth_response",
     "parse_sessions_page",
+    "reference_frames_from_payload",
     "reindex_lake",
     "resolve_refresh_token",
     "retain_sessions",
