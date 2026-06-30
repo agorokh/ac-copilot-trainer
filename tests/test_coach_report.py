@@ -433,6 +433,22 @@ def test_structured_debrief_dedupes_repeated_history_archive():
     assert diag["sample_count"] == 2
 
 
+def test_structured_debrief_keeps_same_metadata_different_history_trace():
+    history_a = _corner_archive(degrade=4.0)
+    history_b = json.loads(json.dumps(history_a))
+    speed_idx = history_b["trace"]["fields"].index("speed")
+    for sample in history_b["trace"]["samples"][40:60]:
+        sample[speed_idx] *= 0.95
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[history_a, history_b],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is True
+    assert diag["sample_count"] == 3
+
+
 def test_structured_debrief_excludes_current_archive_from_history():
     current = _corner_archive(degrade=2.0)
     d = build_structured_debrief(

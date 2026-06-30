@@ -150,6 +150,15 @@ def _archive_content_key(archive: dict | None) -> str:
     trace_shape: dict[str, object] = {}
     if isinstance(trace, dict):
         samples = trace.get("samples")
+        samples_digest = None
+        if isinstance(samples, list):
+            digest = hashlib.sha256()
+            for sample in samples:
+                digest.update(
+                    json.dumps(sample, separators=(",", ":"), default=str).encode("utf-8")
+                )
+                digest.update(b"\n")
+            samples_digest = digest.hexdigest()
         trace_shape = {
             "fields": trace.get("fields"),
             "samples_count": trace.get("samples_count")
@@ -157,6 +166,7 @@ def _archive_content_key(archive: dict | None) -> str:
             else len(samples)
             if isinstance(samples, list)
             else None,
+            "samples_digest": samples_digest,
         }
     identity = {
         key: archive.get(key) for key in ("car", "track", "lap") if isinstance(archive, dict)
