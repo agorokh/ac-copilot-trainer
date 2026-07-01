@@ -159,6 +159,18 @@ def test_kerb_instability_takes_priority_over_rear_shorthand() -> None:
     assert out["suggestions"][0]["section"] == "ARB_REAR"
 
 
+def test_handling_complaint_keeps_explicit_phase_when_mentioning_kerb() -> None:
+    out = advise_from_complaint(
+        "understeer on exit over kerb",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"] == {"issue": "understeer", "phase": "exit", "speed_hint": None}
+    assert out["suggestions"][0]["section"] == "DIFF_POWER"
+
+
 def test_rear_unstable_exit_maps_to_oversteer_without_kerb_context() -> None:
     out = advise_from_complaint(
         "rear unstable on exit",

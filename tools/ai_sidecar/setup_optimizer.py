@@ -163,7 +163,7 @@ def is_supported_experiment_store_path(path: str | os.PathLike[str]) -> bool:
 
 def load_lap_archive(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
-        raw = Path(path).read_text(encoding="utf-8-sig")
+        raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         raise SetupExperimentError(f"cannot read lap archive: {exc}") from exc
     try:
@@ -256,7 +256,7 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8-sig") as fh:
+    with path.open("r", encoding="utf-8-sig", errors="replace") as fh:
         for line_no, line in enumerate(fh, start=1):
             text = line.strip()
             if not text:
@@ -610,6 +610,8 @@ def _clean_optional_id(value: str | None) -> str | None:
     if value is None:
         return None
     stripped = value.strip()
+    if stripped.lower() == "unknown":
+        return None
     return stripped or None
 
 

@@ -20,6 +20,7 @@ from tools.ai_sidecar.setup_optimizer import (
     SetupExperimentError,
     _candidate_grid,
     compare_setups,
+    load_lap_archive,
     load_records,
     rebuild_experiments,
     record_from_lap_archive,
@@ -168,6 +169,22 @@ def test_rebuild_experiments_handles_utf8_bom_lap_archive(tmp_path: Path) -> Non
     assert summary["skipped"] == []
 
 
+def test_load_lap_archive_wraps_decode_failures_as_json_errors(tmp_path: Path) -> None:
+    path = tmp_path / "lap_bad.json"
+    path.write_bytes(b"\xff")
+
+    with pytest.raises(SetupExperimentError, match="invalid lap archive JSON"):
+        load_lap_archive(path)
+
+
+def test_load_records_wraps_decode_failures_as_json_errors(tmp_path: Path) -> None:
+    store = tmp_path / "experiments.jsonl"
+    store.write_bytes(b"\xff\n")
+
+    with pytest.raises(SetupExperimentError, match="invalid experiment store JSON"):
+        load_records(store)
+
+
 def test_candidate_grid_clamps_nonnegative_params() -> None:
     records = [
         record_from_lap_archive(
@@ -264,6 +281,42 @@ def test_closed_loop_treats_blank_scope_filters_as_unspecified() -> None:
     ]
 
     suggestion = suggest_closed_loop(records, param="FRONT_BIAS", car_id="", track_id=" ")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
+def test_closed_loop_treats_unknown_scope_filters_as_unspecified() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(
+        records,
+        param="FRONT_BIAS",
+        car_id="unknown",
+        track_id="unknown",
+    )
 
     assert suggestion["ok"] is False
     assert suggestion["status"] == "at_param_bound"
