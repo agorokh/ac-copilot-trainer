@@ -305,6 +305,33 @@ def test_slower_reference_corners_are_not_published_as_targets():
     assert d["corner_reference"] is None
 
 
+def test_reference_still_works_when_both_archives_omit_identity():
+    ref = _corner_archive(degrade=0.0)
+    student = _corner_archive(degrade=8.0)
+    del ref["car"]["id"]
+    del student["car"]["id"]
+    del ref["track"]["id"]
+    del student["track"]["id"]
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["corner_reference"] is not None
+    assert d["corners"][0]["time_loss_s"] is not None
+
+
+def test_reference_allows_legacy_archive_with_missing_identity_and_layout():
+    ref = _corner_archive(degrade=0.0)
+    student = _corner_archive(degrade=8.0)
+    student["track"]["layout"] = "gp"
+    del ref["car"]["id"]
+    del ref["track"]["id"]
+
+    d = build_structured_debrief(student, reference_archive=ref, grip_ceiling_g=2.5)
+
+    assert d["corner_reference"] is not None
+    assert d["corners"][0]["time_loss_s"] is not None
+
+
 def test_trail_braking_block_in_structured_debrief():
     # the trail-braking analyzer's per-corner read flows into the structured debrief + text (#296)
     d = build_structured_debrief(_corner_archive(), grip_ceiling_g=2.5)
@@ -314,3 +341,138 @@ def test_trail_braking_block_in_structured_debrief():
     assert "classification" in entry and "trail_overlap" in entry and "coaching" in entry
     # the square-brake fixture is a non-"good" technique → surfaces in the text section
     assert "Trail braking" in d["text"]
+
+
+def test_structured_debrief_includes_corner_diagnostics():
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        reference_archive=_corner_archive(degrade=0.0),
+        history_archives=[_corner_archive(degrade=4.0)],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]
+    assert set(diag) >= {"steering", "brake_shape", "gear", "exit_road_usage", "consistency"}
+    assert diag["exit_road_usage"]["available"] is True
+    assert diag["consistency"]["available"] is True
+
+
+def test_structured_debrief_ignores_history_from_other_track():
+    other = _corner_archive(degrade=4.0)
+    other["track"]["id"] = "different_track"
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_rejects_history_when_current_track_id_missing():
+    current = _corner_archive(degrade=2.0)
+    del current["track"]["id"]
+    d = build_structured_debrief(
+        current,
+        history_archives=[_corner_archive(degrade=4.0)],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_rejects_history_when_history_track_id_missing():
+    other = _corner_archive(degrade=4.0)
+    del other["track"]["id"]
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_allows_history_when_both_archives_omit_identity():
+    current = _corner_archive(degrade=2.0)
+    history = _corner_archive(degrade=4.0)
+    del current["car"]["id"]
+    del history["car"]["id"]
+    del current["track"]["id"]
+    del history["track"]["id"]
+    d = build_structured_debrief(
+        current,
+        history_archives=[history],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is True
+    assert diag["sample_count"] == 2
+
+
+def test_structured_debrief_rejects_one_sided_track_layout():
+    other = _corner_archive(degrade=4.0)
+    other["track"]["layout"] = "junior"
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_rejects_history_with_missing_car_id():
+    other = _corner_archive(degrade=4.0)
+    del other["car"]["id"]
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[other],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1
+
+
+def test_structured_debrief_dedupes_repeated_history_archive():
+    history = _corner_archive(degrade=4.0)
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[history, history],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is True
+    assert diag["sample_count"] == 2
+
+
+def test_structured_debrief_keeps_same_metadata_different_history_trace():
+    history_a = _corner_archive(degrade=4.0)
+    history_b = json.loads(json.dumps(history_a))
+    speed_idx = history_b["trace"]["fields"].index("speed")
+    for sample in history_b["trace"]["samples"][40:60]:
+        sample[speed_idx] *= 0.95
+    d = build_structured_debrief(
+        _corner_archive(degrade=2.0),
+        history_archives=[history_a, history_b],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is True
+    assert diag["sample_count"] == 3
+
+
+def test_structured_debrief_excludes_current_archive_from_history():
+    current = _corner_archive(degrade=2.0)
+    d = build_structured_debrief(
+        current,
+        history_archives=[current],
+        grip_ceiling_g=2.5,
+    )
+    diag = d["corners"][0]["diagnostics"]["consistency"]
+    assert diag["available"] is False
+    assert diag["sample_count"] == 1

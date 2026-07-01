@@ -84,6 +84,28 @@ def test_brain_followup_forwards_structured_blocks(monkeypatch: pytest.MonkeyPat
     assert out["conditions"]["grip_band"] == "green"
 
 
+def test_brain_followup_loads_history_paths_for_consistency(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    monkeypatch.setattr(proto, "debrief_feature_enabled", lambda: True)
+    laps_dir = tmp_path / "journal" / "laps"
+    laps_dir.mkdir(parents=True)
+    hist_path = laps_dir / "lap_history.json"
+    history = _rich_corner_archive()
+    history["lap"] = 8
+    speed_idx = history["trace"]["fields"].index("speed")
+    for sample in history["trace"]["samples"][40:60]:
+        sample[speed_idx] *= 0.95
+    hist_path.write_text(json.dumps(history), encoding="utf-8")
+    inbound = _rich_corner_archive()
+    inbound["historyArchivePaths"] = [str(hist_path)]
+    out = build_brain_followup(inbound)
+    assert out is not None
+    diagnostics = out["cornerAnalysis"][0]["diagnostics"]
+    assert diagnostics["consistency"]["available"] is True
+    assert diagnostics["consistency"]["sample_count"] == 2
+
+
 def test_brain_followup_forwards_sector_benchmarks_with_reference(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

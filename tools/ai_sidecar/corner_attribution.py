@@ -50,6 +50,20 @@ class CornerDelta:
     min_speed_delta_kmh: float  # >0 means candidate carried MORE apex speed
 
 
+@dataclass(frozen=True)
+class CornerConsistency:
+    """Lap-to-lap spread for one corner across a same car/track history."""
+
+    index: int
+    sample_count: int
+    score: float
+    spread: float
+    entry_speed_stddev_kmh: float
+    min_speed_stddev_kmh: float
+    exit_speed_stddev_kmh: float
+    brake_point_stddev: float
+
+
 def _interp_time(lap: LapTrace, spline: float) -> float:
     """Time (s) at a spline position via linear interpolation over the monotone spline channel."""
     sp = lap.spline
@@ -69,9 +83,86 @@ def _interp_time(lap: LapTrace, spline: float) -> float:
     return lap.t_s[lo] + frac * (lap.t_s[hi] - lap.t_s[lo])
 
 
+def _interp_position(lap: LapTrace, spline: float) -> tuple[float, float]:
+    """Position (x, z) at a spline position via linear interpolation."""
+    sp = lap.spline
+    if spline <= sp[0]:
+        return lap.x[0], lap.z[0]
+    if spline >= sp[-1]:
+        return lap.x[-1], lap.z[-1]
+    lo, hi = 0, len(sp) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if sp[mid] <= spline:
+            lo = mid
+        else:
+            hi = mid
+    span = sp[hi] - sp[lo]
+    frac = 0.0 if span <= 1e-9 else (spline - sp[lo]) / span
+    return (
+        lap.x[lo] + (lap.x[hi] - lap.x[lo]) * frac,
+        lap.z[lo] + (lap.z[hi] - lap.z[lo]) * frac,
+    )
+
+
+def _interp_tangent(lap: LapTrace, spline: float) -> tuple[float, float]:
+    """Unit tangent at a spline position, from nearby interpolated points."""
+    eps = 0.002
+    lo = max(lap.spline[0], spline - eps)
+    hi = min(lap.spline[-1], spline + eps)
+    ax, az = _interp_position(lap, lo)
+    bx, bz = _interp_position(lap, hi)
+    dx, dz = bx - ax, bz - az
+    norm = (dx * dx + dz * dz) ** 0.5
+    return (1.0, 0.0) if norm <= 1e-9 else (dx / norm, dz / norm)
+
+
 def _min_speed_in_window(lap: LapTrace, lo: float, hi: float) -> float:
     vals = [lap.v_ms[i] for i in range(len(lap)) if lo <= lap.spline[i] <= hi]
     return (min(vals) if vals else 0.0) * 3.6
+
+
+def _corner_delta_for_window(
+    candidate: LapTrace,
+    reference: LapTrace,
+    *,
+    index: int,
+    lo: float,
+    hi: float,
+) -> CornerDelta:
+    c_t = _interp_time(candidate, hi) - _interp_time(candidate, lo)
+    r_t = _interp_time(reference, hi) - _interp_time(reference, lo)
+    c_min = _min_speed_in_window(candidate, lo, hi)
+    r_min = _min_speed_in_window(reference, lo, hi)
+    return CornerDelta(
+        index=index,
+        spline_lo=round(lo, 4),
+        spline_hi=round(hi, 4),
+        cand_time_s=round(c_t, 3),
+        ref_time_s=round(r_t, 3),
+        delta_s=round(c_t - r_t, 3),
+        cand_min_kmh=round(c_min, 1),
+        ref_min_kmh=round(r_min, 1),
+        min_speed_delta_kmh=round(c_min - r_min, 1),
+    )
+
+
+def _corner_delta_for_match(
+    candidate: LapTrace,
+    reference: LapTrace,
+    cand_sig: CornerSignature,
+    ref_sig: CornerSignature,
+) -> CornerDelta:
+    """Compare candidate against the same physical reference corner used by diagnostics."""
+    lo = reference.spline[ref_sig.entry_i]
+    hi = reference.spline[ref_sig.exit_i]
+    return _corner_delta_for_window(
+        candidate,
+        reference,
+        index=cand_sig.index,
+        lo=lo,
+        hi=hi,
+    )
 
 
 def compare_laps(
@@ -80,33 +171,123 @@ def compare_laps(
     *,
     corners: list[tuple[int, int, int]] | None = None,
 ) -> list[CornerDelta]:
-    """Per-corner time/speed deltas of ``candidate`` vs ``reference`` (corners from the reference).
+    """Per-corner time/speed deltas of ``candidate`` vs ``reference``.
 
-    Both laps are assumed to cover the same track with a monotone ``spline`` 0..1. Time is compared
-    over each corner's spline window, so the deltas localize where the candidate gained/lost time.
+    By default, candidate corners are matched to reference corners by apex spline so deltas describe
+    the same physical corner even when segmentation differs. Supplying ``corners`` keeps the legacy
+    explicit-window mode, where the tuples are interpreted as reference-lap sample indexes.
     """
     if corners is None:
-        corners = segment_corners(reference)
+        return [
+            delta for _ref_sig, delta in _match_reference_corners(candidate, reference).values()
+        ]
     out: list[CornerDelta] = []
     for idx, (entry_i, _apex_i, exit_i) in enumerate(corners):
         lo = reference.spline[entry_i]
         hi = reference.spline[exit_i]
-        c_t = _interp_time(candidate, hi) - _interp_time(candidate, lo)
-        r_t = _interp_time(reference, hi) - _interp_time(reference, lo)
-        c_min = _min_speed_in_window(candidate, lo, hi)
-        r_min = _min_speed_in_window(reference, lo, hi)
-        out.append(
-            CornerDelta(
-                index=idx,
-                spline_lo=round(lo, 4),
-                spline_hi=round(hi, 4),
-                cand_time_s=round(c_t, 3),
-                ref_time_s=round(r_t, 3),
-                delta_s=round(c_t - r_t, 3),
-                cand_min_kmh=round(c_min, 1),
-                ref_min_kmh=round(r_min, 1),
-                min_speed_delta_kmh=round(c_min - r_min, 1),
-            )
+        out.append(_corner_delta_for_window(candidate, reference, index=idx, lo=lo, hi=hi))
+    return out
+
+
+def _stddev(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = sum(values) / len(values)
+    return (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
+
+
+def _match_corner_signature(
+    anchor: CornerSignature,
+    candidates: list[CornerSignature],
+    *,
+    max_apex_delta: float = 0.04,
+) -> CornerSignature | None:
+    """Closest physical corner by apex spline, not by per-lap ordinal index."""
+    if not candidates:
+        return None
+    best = min(candidates, key=lambda c: abs(c.apex_spline - anchor.apex_spline))
+    return best if abs(best.apex_spline - anchor.apex_spline) <= max_apex_delta else None
+
+
+def _match_reference_corners(
+    candidate: LapTrace,
+    reference: LapTrace,
+    *,
+    anchors: list[CornerSignature] | None = None,
+) -> dict[int, tuple[CornerSignature, CornerDelta]]:
+    anchors = anchors if anchors is not None else corner_signatures(candidate)
+    unused_ref_sigs = corner_signatures(reference)
+    out: dict[int, tuple[CornerSignature, CornerDelta]] = {}
+    for sig in anchors:
+        ref_sig = _match_corner_signature(sig, unused_ref_sigs)
+        if ref_sig is None:
+            continue
+        unused_ref_sigs.remove(ref_sig)
+        out[sig.index] = (ref_sig, _corner_delta_for_match(candidate, reference, sig, ref_sig))
+    return out
+
+
+def _corner_history_matches(
+    laps: list[LapTrace],
+    anchors: list[CornerSignature],
+) -> dict[int, list[CornerSignature]]:
+    by_idx: dict[int, list[CornerSignature]] = {anchor.index: [anchor] for anchor in anchors}
+    if not anchors:
+        return by_idx
+    for lap in laps:
+        unused = corner_signatures(lap)
+        for anchor in anchors:
+            match = _match_corner_signature(anchor, unused)
+            if match is not None:
+                by_idx.setdefault(anchor.index, []).append(match)
+                unused.remove(match)
+    return by_idx
+
+
+def analyze_corner_consistency(
+    laps: list[LapTrace] | None = None,
+    *,
+    anchors: list[CornerSignature] | None = None,
+    matches: dict[int, list[CornerSignature]] | None = None,
+) -> dict[int, CornerConsistency]:
+    """Per-corner lap-to-lap variance, mirroring the Lua HUD consistency score.
+
+    Needs at least two segmentable laps. The score is dimensionless (100 = repeatable, lower =
+    more variance), with speed spread carrying most of the weight and brake-point spline spread
+    down-weighted because spline wrap/segmentation noise is more fragile.
+    """
+    if matches is None:
+        if laps is None or len(laps) < 2:
+            return {}
+        anchors = anchors if anchors is not None else corner_signatures(laps[-1])
+        by_idx = _corner_history_matches(laps[:-1], anchors)
+    else:
+        by_idx = matches
+    out: dict[int, CornerConsistency] = {}
+    for idx, sigs in by_idx.items():
+        if len(sigs) < 2:
+            continue
+        entry_sd = _stddev([s.entry_speed_kmh for s in sigs])
+        min_sd = _stddev([s.min_speed_kmh for s in sigs])
+        exit_sd = _stddev([s.exit_speed_kmh for s in sigs])
+        brake_vals = [s.brake_point_spline for s in sigs if s.brake_point_spline is not None]
+        brake_sd = _stddev(brake_vals)
+        spread = (
+            (entry_sd / 120.0) * 0.35
+            + (min_sd / 120.0) * 0.30
+            + (exit_sd / 120.0) * 0.30
+            + brake_sd * 0.05
+        )
+        score = max(0.0, min(100.0, 100.0 - spread * 45.0))
+        out[idx] = CornerConsistency(
+            index=idx,
+            sample_count=len(sigs),
+            score=round(score, 1),
+            spread=round(spread, 4),
+            entry_speed_stddev_kmh=round(entry_sd, 2),
+            min_speed_stddev_kmh=round(min_sd, 2),
+            exit_speed_stddev_kmh=round(exit_sd, 2),
+            brake_point_stddev=round(brake_sd, 5),
         )
     return out
 
@@ -256,6 +437,7 @@ class CornerContext:
     sig: CornerSignature
     setup: CarSetup
     delta: CornerDelta | None = None  # vs a reference lap, if available
+    reference_sig: CornerSignature | None = None  # same-index reference corner, if available
     grip_ceiling_g: float | None = None  # GGV/known lateral ceiling at this corner
     extra: dict[str, Any] = field(default_factory=dict)  # richer live signals (Tier-B)
 
@@ -335,6 +517,7 @@ class CornerCoaching:
     delta_s: float | None
     headline: str
     attributions: list[Attribution]
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 def coach_lap(
@@ -342,15 +525,42 @@ def coach_lap(
     setup: CarSetup,
     *,
     reference: LapTrace | None = None,
+    history: list[LapTrace] | None = None,
     grip_ceiling_g: float | None = None,
     extra_by_corner: dict[int, dict[str, Any]] | None = None,
     rules: list[DiagnosticRule] | None = None,
+    corners: list[tuple[int, int, int]] | None = None,
+    signatures: list[CornerSignature] | None = None,
+    reference_matches: dict[int, tuple[CornerSignature, CornerDelta]] | None = None,
 ) -> list[CornerCoaching]:
     """Full per-corner coaching pass over a lap (optionally vs reference, optionally with setup)."""
-    corners = segment_corners(lap)
-    sigs = corner_signatures(lap, corners)
-    deltas = compare_laps(lap, reference, corners=corners) if reference is not None else []
-    by_idx = {d.index: d for d in deltas}
+    if signatures is None:
+        corners = corners if corners is not None else segment_corners(lap)
+        sigs = corner_signatures(lap, corners)
+    else:
+        sigs = signatures
+        corners = (
+            corners
+            if corners is not None
+            else [(sig.entry_i, sig.apex_i, sig.exit_i) for sig in sigs]
+        )
+    ref_by_idx: dict[int, CornerSignature] = {}
+    delta_by_idx: dict[int, CornerDelta] = {}
+    if reference is not None:
+        ref_matches = (
+            reference_matches
+            if reference_matches is not None
+            else _match_reference_corners(lap, reference, anchors=sigs)
+        )
+        ref_by_idx = {idx: ref_sig for idx, (ref_sig, _delta) in ref_matches.items()}
+        delta_by_idx = {idx: delta for idx, (_ref_sig, delta) in ref_matches.items()}
+    history_laps = [*(history or []), lap]
+    history_matches = (
+        _corner_history_matches(history_laps[:-1], sigs) if len(history_laps) >= 2 else {}
+    )
+    consistency = (
+        analyze_corner_consistency(matches=history_matches) if len(history_laps) >= 2 else {}
+    )
     # Trail-braking technique read (#301): computed once over the SAME segmentation as the
     # signatures so the per-corner finding lines up with sig.index, then injected into each corner's
     # ``extra`` so the trail_brake rule folds it into the attribution layer (cause_class reasoning)
@@ -360,10 +570,30 @@ def coach_lap(
     }
     out: list[CornerCoaching] = []
     for sig in sigs:
+        ref_sig = ref_by_idx.get(sig.index)
+        diagnostics = _corner_diagnostics(
+            lap=lap,
+            reference=reference,
+            sig=sig,
+            ref_sig=ref_sig,
+            consistency=consistency.get(sig.index),
+            consistency_sample_count=len(history_matches.get(sig.index, [sig])),
+            history_laps_loaded=len(history_laps),
+        )
         # explicit caller-supplied signals win; else auto-compute Tier-B signals from per-wheel data
         extra = (extra_by_corner or {}).get(sig.index)
         if extra is None:
             extra = corner_live_signals(lap, sig) if lap.has_wheel_data else {}
+        extra = {
+            "exit_road_usage": diagnostics["exit_road_usage"],
+            "consistency": diagnostics["consistency"],
+            **extra,
+        }
+        effective_diagnostics = {
+            **diagnostics,
+            "exit_road_usage": extra["exit_road_usage"],
+            "consistency": extra["consistency"],
+        }
         tb = trail_by_idx.get(sig.index)
         if tb is not None and "trail_brake" not in extra:
             # Copy (never mutate a caller-supplied extra dict); a caller that already set
@@ -381,7 +611,8 @@ def coach_lap(
         ctx = CornerContext(
             sig=sig,
             setup=setup,
-            delta=by_idx.get(sig.index),
+            delta=delta_by_idx.get(sig.index),
+            reference_sig=ref_sig,
             grip_ceiling_g=grip_ceiling_g,
             extra=extra,
         )
@@ -394,9 +625,131 @@ def coach_lap(
                 delta_s=ctx.delta.delta_s if ctx.delta else None,
                 headline=_headline(ctx, attrs),
                 attributions=attrs,
+                diagnostics=effective_diagnostics,
             )
         )
     return out
+
+
+def _corner_diagnostics(
+    *,
+    lap: LapTrace,
+    reference: LapTrace | None,
+    sig: CornerSignature,
+    ref_sig: CornerSignature | None,
+    consistency: CornerConsistency | None,
+    consistency_sample_count: int,
+    history_laps_loaded: int,
+) -> dict[str, Any]:
+    steering = {
+        "available": True,
+        "smoothness_score": sig.steering_smoothness_score,
+        "correction_count": sig.steering_correction_count,
+        "rate_p95_per_s": sig.steering_rate_p95,
+        "scrub_index": sig.steering_scrub_index,
+        "max_abs_steer": sig.max_abs_steer,
+    }
+    brake_shape = {
+        "available": True,
+        "classification": sig.brake_shape,
+        "late_rise_count": sig.brake_late_rise_count,
+        "release_smoothness": sig.brake_release_smoothness,
+    }
+    gear = _gear_diagnostics(sig, ref_sig)
+    road = _exit_road_usage(lap, reference, sig, ref_sig)
+    consistency_struct = (
+        {
+            "available": True,
+            "score": consistency.score,
+            "spread": consistency.spread,
+            "sample_count": consistency.sample_count,
+            "entry_speed_stddev_kmh": consistency.entry_speed_stddev_kmh,
+            "min_speed_stddev_kmh": consistency.min_speed_stddev_kmh,
+            "exit_speed_stddev_kmh": consistency.exit_speed_stddev_kmh,
+            "brake_point_stddev": consistency.brake_point_stddev,
+        }
+        if consistency is not None
+        else {
+            "available": False,
+            "reason": "needs at least two segmentable laps",
+            "sample_count": consistency_sample_count,
+            "history_laps_loaded": history_laps_loaded,
+        }
+    )
+    return {
+        "steering": steering,
+        "brake_shape": brake_shape,
+        "gear": gear,
+        "exit_road_usage": road,
+        "consistency": consistency_struct,
+    }
+
+
+def _gear_diagnostics(sig: CornerSignature, ref_sig: CornerSignature | None) -> dict[str, Any]:
+    base = {
+        "available": sig.gear_at_apex is not None,
+        "apex_gear": sig.gear_at_apex,
+        "entry_gear": sig.entry_gear,
+        "exit_gear": sig.exit_gear,
+        "gear_change_count": sig.gear_change_count,
+    }
+    if sig.gear_at_apex is None:
+        return {**base, "reason": "no gear channel"}
+    if ref_sig is None or ref_sig.gear_at_apex is None:
+        return {
+            **base,
+            "reference_apex_gear": None,
+            "delta_vs_reference": None,
+            "classification": "no_reference",
+            "reason": "reference gear required for wrong-gear diagnosis",
+        }
+    delta = sig.gear_at_apex - ref_sig.gear_at_apex
+    classification = "matches_reference"
+    if delta > 0:
+        classification = "too_high"
+    elif delta < 0:
+        classification = "too_low"
+    return {
+        **base,
+        "reference_apex_gear": ref_sig.gear_at_apex,
+        "delta_vs_reference": delta,
+        "classification": classification,
+    }
+
+
+def _exit_road_usage(
+    lap: LapTrace,
+    reference: LapTrace | None,
+    sig: CornerSignature,
+    ref_sig: CornerSignature | None,
+) -> dict[str, Any]:
+    if reference is None or ref_sig is None:
+        return {
+            "available": False,
+            "source": "reference_path",
+            "reason": "reference path required",
+        }
+    exit_spline = reference.spline[ref_sig.exit_i]
+    cx, cz = _interp_position(lap, exit_spline)
+    rx, rz = _interp_position(reference, exit_spline)
+    tx, tz = _interp_tangent(reference, exit_spline)
+    # Lateral component of candidate-vs-reference exit displacement. Reference path is the only
+    # available proxy here; true track-edge distance needs map edge geometry.
+    dx, dz = cx - rx, cz - rz
+    lateral = dx * (-tz) + dz * tx
+    return {
+        "available": True,
+        "source": "reference_path",
+        "exit_spline": round(exit_spline, 4),
+        "lateral_delta_m": round(lateral, 2),
+        "lateral_delta_abs_m": round(abs(lateral), 2),
+        "classification": "reference_path_delta",
+        "coaching_available": False,
+        "caveat": (
+            "reference path proxy only; true under-use needs track-edge geometry or "
+            "caller-supplied under_used_exit_width_m"
+        ),
+    }
 
 
 def _headline(ctx: CornerContext, attrs: list[Attribution]) -> str:
@@ -537,6 +890,67 @@ def _r_turn_in_lag(ctx: CornerContext) -> float:
     if used is not None and used >= 0.95:
         return 0.0
     return 0.35
+
+
+def _r_steering_aggression(ctx: CornerContext) -> float:
+    sig = ctx.sig
+    if (
+        sig.steering_correction_count < 2
+        and sig.steering_smoothness_score >= 72.0
+        and sig.steering_scrub_index < 0.18
+    ):
+        return 0.0
+    raw = (
+        0.25
+        + max(0.0, 72.0 - sig.steering_smoothness_score) / 55.0
+        + min(0.25, sig.steering_correction_count * 0.07)
+        + min(0.20, sig.steering_scrub_index)
+    )
+    return min(0.82, raw)
+
+
+def _r_exit_road_usage(ctx: CornerContext) -> float:
+    road = ctx.extra.get("exit_road_usage")
+    if not isinstance(road, dict) or road.get("available") is not True:
+        return 0.0
+    missed = road.get("under_used_exit_width_m", road.get("missed_exit_width_m"))
+    if not isinstance(missed, (int, float)) or missed < 1.5:
+        return 0.0
+    if road.get("source") == "reference_path" and "under_used_exit_width_m" not in road:
+        return 0.0
+    if ctx.delta is not None and ctx.delta.delta_s <= 0.03:
+        return 0.0
+    return min(0.85, 0.35 + missed / 6.0)
+
+
+def _r_gear_selection(ctx: CornerContext) -> float:
+    ref = ctx.reference_sig
+    if ref is None or ctx.sig.gear_at_apex is None or ref.gear_at_apex is None:
+        return 0.0
+    if ctx.delta is None or ctx.delta.delta_s <= 0.03:
+        return 0.0
+    delta = ctx.sig.gear_at_apex - ref.gear_at_apex
+    if delta == 0:
+        return 0.0
+    return min(0.82, 0.45 + abs(delta) * 0.12)
+
+
+def _r_brake_shape(ctx: CornerContext) -> float:
+    return {
+        "increasing_pressure": 0.46,
+        "abrupt_release": 0.40,
+        "braking_at_apex": 0.36,
+    }.get(ctx.sig.brake_shape, 0.0)
+
+
+def _r_consistency(ctx: CornerContext) -> float:
+    cons = ctx.extra.get("consistency")
+    if not isinstance(cons, dict) or cons.get("available") is not True:
+        return 0.0
+    score = cons.get("score")
+    if not isinstance(score, (int, float)) or score >= 72.0:
+        return 0.0
+    return min(0.78, 0.32 + (72.0 - score) / 60.0)
 
 
 def _exit_setup_causes(ctx: CornerContext) -> list[str]:
@@ -681,6 +1095,55 @@ def _trail_brake_coaching(ctx: CornerContext) -> str:
     )
 
 
+def _gear_coaching(ctx: CornerContext) -> str:
+    ref = ctx.reference_sig
+    if ref is None or ctx.sig.gear_at_apex is None or ref.gear_at_apex is None:
+        return "Gear comparison needs a reference lap."
+    if ctx.sig.gear_at_apex > ref.gear_at_apex:
+        return (
+            f"Apex gear {ctx.sig.gear_at_apex} vs reference {ref.gear_at_apex} — one gear too "
+            "tall; downshift earlier so the car rotates and drives off the apex."
+        )
+    return (
+        f"Apex gear {ctx.sig.gear_at_apex} vs reference {ref.gear_at_apex} — one gear too low; "
+        "avoid over-slowing/over-revving and carry the reference gear."
+    )
+
+
+def _exit_road_usage_coaching(ctx: CornerContext) -> str:
+    road = ctx.extra.get("exit_road_usage") if isinstance(ctx.extra, dict) else None
+    missed = (
+        road.get("under_used_exit_width_m", road.get("missed_exit_width_m"))
+        if isinstance(road, dict)
+        else None
+    )
+    miss_text = f"{missed:.1f} m" if isinstance(missed, (int, float)) else "the reference"
+    return (
+        f"Exit path is {miss_text} away from the reference exit width — look through the apex and "
+        "commit to using the road on exit."
+    )
+
+
+def _brake_shape_coaching(ctx: CornerContext) -> str:
+    if ctx.sig.brake_shape == "increasing_pressure":
+        return "Brake trace rises late toward the apex — hit pressure once, then bleed it off."
+    if ctx.sig.brake_shape == "abrupt_release":
+        return "Brake release is a step — bleed pressure off smoothly as steering loads."
+    if ctx.sig.brake_shape == "braking_at_apex":
+        return "Still carrying brake at the apex — finish the release before asking for throttle."
+    return "Brake trace shape needs the four phases: attack, hold, release, off."
+
+
+def _consistency_coaching(ctx: CornerContext) -> str:
+    cons = ctx.extra.get("consistency") if isinstance(ctx.extra, dict) else None
+    score = cons.get("score") if isinstance(cons, dict) else None
+    score_text = f"{score:.0f}%" if isinstance(score, (int, float)) else "low"
+    return (
+        f"Corner repeatability is {score_text} — pick one brake marker and one throttle marker, "
+        "then repeat before chasing pace."
+    )
+
+
 RULES: list[DiagnosticRule] = [
     DiagnosticRule(
         key="grip_limited",
@@ -773,6 +1236,77 @@ RULES: list[DiagnosticRule] = [
             "Sluggish turn-in (heading lags steer) — likely technique or front load, not "
             "necessarily toe. Confirm with live yaw-rate."
         ),
+    ),
+    DiagnosticRule(
+        key="steering_aggression",
+        symptom="steering corrections / scrub proxy",
+        phase="mid",
+        tier="A",
+        channels_needed=(),
+        test=_r_steering_aggression,
+        setup_causes=lambda c: [],
+        technique_causes=(
+            "Use one deliberate steering input; avoid saw-toothing the wheel while loaded.",
+        ),
+        coaching=lambda c: (
+            f"Hands are noisy (smoothness {c.sig.steering_smoothness_score:.0f}%, "
+            f"{c.sig.steering_correction_count} correction(s)) — make one input and let the car "
+            "settle."
+        ),
+    ),
+    DiagnosticRule(
+        key="exit_road_usage",
+        symptom="not using the road on exit",
+        phase="exit",
+        tier="A",
+        channels_needed=(),
+        test=_r_exit_road_usage,
+        setup_causes=lambda c: [],
+        technique_causes=(
+            "Vision / commitment: look through the apex and let the car run to the exit width.",
+        ),
+        coaching=_exit_road_usage_coaching,
+    ),
+    DiagnosticRule(
+        key="gear_selection",
+        symptom="wrong gear vs reference",
+        phase="mid",
+        tier="A",
+        channels_needed=(),
+        test=_r_gear_selection,
+        setup_causes=lambda c: [],
+        technique_causes=(
+            "Carry the reference gear through the apex; wrong gear changes rotation and "
+            "exit drive.",
+        ),
+        coaching=_gear_coaching,
+    ),
+    DiagnosticRule(
+        key="brake_trace_shape",
+        symptom="brake trace shape",
+        phase="braking",
+        tier="A",
+        channels_needed=(),
+        test=_r_brake_shape,
+        setup_causes=lambda c: [],
+        technique_causes=(
+            "Shape the brake as attack → hold → release → off; do not add pressure late "
+            "or dump it.",
+        ),
+        coaching=_brake_shape_coaching,
+    ),
+    DiagnosticRule(
+        key="corner_consistency",
+        symptom="low lap-to-lap consistency",
+        phase="session",
+        tier="A",
+        channels_needed=(),
+        test=_r_consistency,
+        setup_causes=lambda c: [],
+        technique_causes=(
+            "Repeat the same markers before tuning pace; this feeds driver skill classification.",
+        ),
+        coaching=_consistency_coaching,
     ),
     DiagnosticRule(
         key="trail_brake",
