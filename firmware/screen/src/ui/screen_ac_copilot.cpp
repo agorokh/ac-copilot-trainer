@@ -124,7 +124,14 @@ void corner_badge_text(const char* corner, char* out, size_t n) {
     const char* t = strchr(corner, 'T');
     if (!t) t = strchr(corner, 't');
     if (t && t[1] >= '0' && t[1] <= '9') {
-        snprintf(out, n, "T%c", t[1]);
+        // Preserve every digit of the corner number so "T10"/"T12" do not
+        // collapse to "T1" (single-digit copy misreports the corner).
+        size_t w = 0;
+        if (n > 1) out[w++] = 'T';
+        for (const char* d = t + 1; *d >= '0' && *d <= '9' && w + 1 < n; ++d) {
+            out[w++] = *d;
+        }
+        out[w] = 0;
         return;
     }
     snprintf(out, n, "T?");

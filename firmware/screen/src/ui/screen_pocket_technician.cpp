@@ -473,7 +473,10 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     format_spinner_value(s, value_buf, sizeof(value_buf));
     lv_obj_t* value_lbl = lv_label_create(row);
     lv_label_set_text(value_lbl, value_buf);
-    lv_obj_set_style_text_font(value_lbl, UI_FONT_READ_MD, LV_PART_MAIN);
+    // Spinner values carry an arbitrary unit suffix from the host (e.g.
+    // "26.6psi", "3clicks"). The Saira Bold readout faces are subset to
+    // digits/symbols only, so use the full-ASCII command face to avoid tofu.
+    lv_obj_set_style_text_font(value_lbl, UI_FONT_COMMAND_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(value_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_width(value_lbl, 58);
     lv_label_set_long_mode(value_lbl, LV_LABEL_LONG_DOT);
@@ -575,8 +578,10 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
 
     if (g_setup_count == 0) {
         ctx->placeholder_lbl = lv_label_create(ctx->list_col);
+        // ASCII "..." — the mono fonts are subset to 0x20-0x7F, so the
+        // Unicode ellipsis (U+2026) would render as a missing-glyph box.
         lv_label_set_text(ctx->placeholder_lbl,
-                          g_car_id[0] ? "No saved setups for this car" : "Loading…");
+                          g_car_id[0] ? "No saved setups for this car" : "Loading...");
         lv_obj_set_style_text_font(ctx->placeholder_lbl, UI_FONT_MONO_XS, LV_PART_MAIN);
         lv_obj_set_style_text_color(ctx->placeholder_lbl, UI_TX_MUTED, LV_PART_MAIN);
         return;
