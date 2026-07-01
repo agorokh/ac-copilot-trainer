@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:13:41Z
+last_updated: 2026-07-01T02:54:17Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -59,6 +59,47 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #417 MERGED: setup intelligence (#407)
+
+PR [#417](https://github.com/agorokh/ac-copilot-trainer/pull/417) squash-merged to `main` as
+[`a4ae501`](https://github.com/agorokh/ac-copilot-trainer/commit/a4ae501e18b8630351cbbed5f06751f834a151e6)
+at 2026-07-01T02:51:39Z. Issue
+[#407](https://github.com/agorokh/ac-copilot-trainer/issues/407) is **CLOSED**.
+
+**Shipped:** Setup intelligence now includes complaint-language setup advice, setup-file diffs,
+and one-parameter closed-loop experiment suggestions. The sidecar protocol exposes bounded
+`setup.advice`, `setup.diff`, and loopback-only `setup.closed_loop` paths; remote hello hides
+loopback-only capabilities. Game Point can render setup diffs and packaged builds collect schema
+assets. The Porsche GT3 schema now carries front-bias caution rules, schema loading is path-safe and
+marker-aware, and `.secrets.baseline` scanning is handled through a Windows-safe Python policy path.
+
+**Review hardening:** The resolve loop added same-car diff guards, required advice snapshots,
+schema-driven display/click units, deterministic/marker-based schema loading, closed-loop scope and
+confound rejection, zero-delta inconclusive handling, non-UTF8 archive/store decode guards, semantic
+diff deltas, and tighter complaint parsing (`pushes`, ABS lights, kerb phase, rear shorthand). All
+actionable GraphQL review threads were resolved before merge, and the current-SHA self-hosted
+review reported no medium-or-higher findings after the final cooldown.
+
+**Verification:** Full local parity passed on Windows from the synced issue worktree with
+`make ci-fast` and `FLEET_GOVERNANCE_ROOT=.fleet-governance-vendor` (`2113 passed, 117 skipped`,
+coverage 85.83%, `ci-fast: OK`; root-file allowlist warnings only for existing
+`.copier-answers.yml` and `doppler.yaml`). Focused setup suites passed (`81 passed`) across
+`test_car_schema.py`, `test_setup_advisor.py`, and `test_setup_optimizer.py`. GitHub checks on head
+`020f1a9` passed (`build`, `Canonical docs exist`, `conformance`; vault automerge skipped).
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 417` flagged `scripts/` and
+`Makefile` only. No migration, env, dependency, or workflow action required. The script/Makefile
+changes are the Python-based policy/secret scanning path and related inventory updates; review
+before future template syncs, but no runtime operator action is needed.
+
+**Memory note:** The exact Tier-3 MCP query tool was not exposed in this Codex tool surface; a
+tool-discovery retry surfaced no agentic-memory tool. Bash was also not on PATH, so the
+`post_merge_sync.sh sync` helper could not run directly; equivalent non-destructive sync steps were
+performed with `gh`/`git` in the clean `main` worktree. The local resolve-gate helper referenced by
+the resolve workflow was also absent at `C:\Users\arsen\.fleet-governance\scripts\ci_resolve_gate.py`.
+This SAVE is grounded in vault Tier-2 context, live GitHub state (`gh pr view 417` reported
+`MERGED`; `gh issue view 407` reported `CLOSED`), local `ci-fast`, and GitHub checks.
 
 ## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #422 MERGED: coaching diagnosis depth (#405)
 

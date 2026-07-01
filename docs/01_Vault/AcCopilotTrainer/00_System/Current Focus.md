@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:13:41Z
+last_updated: 2026-07-01T02:54:17Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -105,6 +105,12 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#417](https://github.com/agorokh/ac-copilot-trainer/pull/417)
+  **MERGED** at `a4ae501` - **setup intelligence** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
+  **CLOSED**): adds complaint-language setup advice, setup diffs, loopback-only closed-loop
+  suggestions, schema-backed decoded display/cautions, packaged schema assets, and Windows-safe
+  policy secret scanning. Classification: `scripts/` and `Makefile` changed for policy/secret scan
+  plumbing; no migration/env/deps/workflow action required.
 - **2026-07-01 UTC / 2026-06-30 PT** - PR [#422](https://github.com/agorokh/ac-copilot-trainer/pull/422)
   **MERGED** at `28048c1` - **coaching diagnosis depth** ([#405](https://github.com/agorokh/ac-copilot-trainer/issues/405)
   **CLOSED**): Coach v2 now spatially matches current/reference corners by apex spline, reuses one
