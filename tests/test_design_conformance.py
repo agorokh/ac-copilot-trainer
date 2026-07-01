@@ -29,6 +29,28 @@ def _lua_text(name: str) -> str:
     return (MODULES / name).read_text(encoding="utf-8")
 
 
+def _strip_lua_comments(text: str) -> str:
+    """Drop Lua ``--`` line comments, honoring string literals (PR #173 pattern)."""
+    out: list[str] = []
+    for line in text.splitlines():
+        i, in_str, cut = 0, None, None
+        while i < len(line):
+            c = line[i]
+            if in_str is not None:
+                if c == "\\":
+                    i += 1
+                elif c == in_str:
+                    in_str = None
+            elif c in ("'", '"'):
+                in_str = c
+            elif c == "-" and line[i + 1 : i + 2] == "-":
+                cut = i
+                break
+            i += 1
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
 def _manifest_text() -> str:
     return MANIFEST.read_text(encoding="utf-8")
 
@@ -365,16 +387,22 @@ class TestApproachPanel:
 
     def test_approach_panel_design_tokens(self) -> None:
         """PC-04: Racing Atelier design tokens (epic #432)."""
-        src = _lua_text("coaching_overlay.lua")
-        assert 'require("design_tokens")' in src or "require('design_tokens')" in src, (
-            "coaching_overlay must require design_tokens"
-        )
-        assert re.search(r'COLOR_BG\s*=\s*T\.color\("carbon"', src), (
-            'COLOR_BG must use T.color("carbon")'
-        )
-        assert re.search(r"PANEL_ROUNDING\s*=\s*0", src), (
-            "PANEL_ROUNDING must be 0 (square corners)"
-        )
+        src = _strip_lua_comments(_lua_text("coaching_overlay.lua"))
+        assert re.search(
+            r'^\s*local\s+T\s*=\s*require\(["\']design_tokens["\']\)',
+            src,
+            re.M,
+        ), "coaching_overlay must require design_tokens"
+        assert re.search(
+            r'^\s*local\s+COLOR_BG\s*=\s*T\.color\(["\']carbon["\']',
+            src,
+            re.M,
+        ), 'COLOR_BG must use T.color("carbon")'
+        assert re.search(
+            r"^\s*local\s+PANEL_ROUNDING\s*=\s*0\s*(?:--.*)?$",
+            src,
+            re.M,
+        ), "PANEL_ROUNDING must be exactly 0 (square corners)"
 
     def test_window_coaching_calls_approach_panel(self) -> None:
         """PC-07: windowCoaching in entry script calls drawApproachPanel.
