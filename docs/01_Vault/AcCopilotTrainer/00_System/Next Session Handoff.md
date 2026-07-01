@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T04:30:00Z
+last_updated: 2026-07-01T06:13:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
@@ -60,6 +60,52 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-01 UTC) — PR #429 MERGED: four-tier expressive intensity ladder (#381)
+
+PR [#429](https://github.com/agorokh/ac-copilot-trainer/pull/429) squash-merged to `main` as
+[`047309e`](https://github.com/agorokh/ac-copilot-trainer/commit/047309ef450c56c6e95a886cca86724e277a64e5).
+Issue [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) delivered: the voice register
+ladder scaled from three tiers (`calm/firm/critical`) to four (`calm/alert/urgent/critical`).
+
+**Shipped (resolve-pr loop):** The PR opened green with one advisory antigravity MEDIUM (DRY: the
+observer and `voice/vocabulary` each re-declared `REGISTER_RANK` + the legacy `firm→urgent` alias).
+Folding it in became the substantive work:
+- New dependency-free [`tools/ai_sidecar/registers.py`](../../../../tools/ai_sidecar/registers.py) is
+  the single source of truth for `REGISTERS/REGISTER_ALIASES/normalize_register/REGISTER_RANK/register_rank`.
+  Lives **outside** the `voice` package on purpose: `voice/__init__` imports `realtime_observer.Advisory`,
+  so the observer (lower layer) cannot import `voice.vocabulary` without a circular import. Observer +
+  `vocabulary` (re-exporting for scheduler/client/cue/resolver/manifest) now import the shared module.
+- Fallback cue path (`voice/cue.py`) parity fixes: `brake_release` at `critical` is the terse
+  "Release." (was calm "Ease off."); new `_effective_register()` mirrors `Resolver._register_fallback_chain`
+  so an `act` advisory with the default `calm` register is treated as `urgent` (act cues never bake at
+  calm). Regression tests added.
+- Doc/test nits: `bench_voices.py` table uses `is None` (0.0 not shown as missing); stale "three
+  registers" comments → "four".
+
+**Review hardening:** 10 bot threads (Copilot/Qodo) + the antigravity finding, all resolved. **Two
+self-inflicted lessons worth keeping:** (1) a first push used `git add <newfile>` without staging the
+modified files → shipped a dead module; Copilot caught it. (2) the PR sat silently `CONFLICTING` (vault
+timestamp drift), which **stops `pull_request` CI from running at all** — merging `origin/main` in
+unblocked CI (same stale-base gotcha the #430 entry notes). One `act+calm→urgent` change I made broke
+`test_voice_client` (unrealistic fixture); fixed + regression-tested.
+
+**Deferred:** [#438](https://github.com/agorokh/ac-copilot-trainer/issues/438) — enforce
+`voice_signature` (persona/prosody) staleness in `Manifest.validate()`. The Qodo "stale bank" finding
+was mostly a false positive: `register` is already in `vocabulary_hash`, so intensity changes are
+stale-detected; only persona/prosody-**only** changes (which keep `vocabulary_hash` constant) are the
+residual gap, and `voice_signature` also carries the host ffmpeg version so it can't be enforced by
+naive equality.
+
+**Post-merge:** `post_merge_classify.py --pr 429` → no migration/env/deps/script/workflow flags.
+
+**Memory note:** Tier-3 substrate was **unreachable** all session (`[no-context]` → `query_failed`);
+grounded on vault Tier-2 + live code; gate bypass rationale in `.scratch/.memory_bypass_rationale`.
+`post_merge_sync.sh sync 429` synced `main` (`e41383e→047309e`, feature branch deleted) but exited **10**:
+its auto-stash of pre-existing primary-checkout WIP (`stash@{0}` = a stale 6-line #410 handoff draft,
+unrelated to this session) could not auto-restore against the rewritten handoff. Left the file with
+conflict markers; reset to main's version. **`stash@{0}` (`post-merge-pr429-wip`) is preserved** — a
+human should review/drop it (it calls #410 "OPEN", almost certainly stale).
 
 ## Delivered (2026-07-01 UTC) — PR #430 MERGED: Racing Atelier rig screen (#86)
 
