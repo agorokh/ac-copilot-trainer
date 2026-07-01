@@ -22,17 +22,26 @@ def test_resolve_anticipatory_brake_maps_corner_0based_to_1based() -> None:
 
 def test_act_cue_is_terse_corner_dropped() -> None:
     r = Resolver(build_manifest())
-    # An act/firm cue for a numbered corner resolves to the TERSE generic clip (no corner number).
-    utt = r.resolve(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
+    # An act/urgent cue for a numbered corner resolves to the TERSE generic clip (no corner number).
+    utt = r.resolve(make_advisory(kind="late_brake", urgency="act", register="urgent", corner=2))
     assert utt is not None
-    assert utt.clip_id == "late_brake.act.firm.generic"
+    assert utt.clip_id == "late_brake.act.urgent.generic"
     assert utt.corner is None
-    assert utt.register == "firm"
-    assert utt.dedup_key == "late_brake:2:firm"  # dedup still tracks the real corner + register
+    assert utt.register == "urgent"
+    assert utt.dedup_key == "late_brake:2:urgent"  # dedup still tracks corner + register
     assert "turn" not in utt.text.lower()
 
 
-def test_legacy_act_cue_without_register_resolves_to_playable_firm() -> None:
+def test_legacy_firm_register_alias_resolves_to_urgent() -> None:
+    r = Resolver(build_manifest())
+    utt = r.resolve(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
+    assert utt is not None
+    assert utt.clip_id == "late_brake.act.urgent.generic"
+    assert utt.register == "urgent"
+    assert utt.dedup_key == "late_brake:2:urgent"
+
+
+def test_legacy_act_cue_without_register_resolves_to_playable_urgent() -> None:
     r = Resolver(build_manifest())
     advisory = Advisory(
         kind="late_brake",
@@ -45,14 +54,14 @@ def test_legacy_act_cue_without_register_resolves_to_playable_firm() -> None:
     utt = r.resolve(advisory)
 
     assert utt is not None
-    assert utt.clip_id == "late_brake.act.firm.generic"
-    assert utt.register == "firm"
+    assert utt.clip_id == "late_brake.act.urgent.generic"
+    assert utt.register == "urgent"
     assert utt.dedup_key == "late_brake:2:calm"
 
 
-def test_register_fallback_critical_to_firm() -> None:
+def test_register_fallback_critical_to_urgent() -> None:
     # If the bank has no clip for the requested tier, fall back toward calm. Drop the critical clip
-    # and a critical advisory resolves to the firm clip (audible, never silent), and
+    # and a critical advisory resolves to the urgent clip (audible, never silent), and
     # Utterance.register reports the tier that ACTUALLY played.
     m = build_manifest()
     del m.clips["late_brake.act.critical.generic"]
@@ -60,8 +69,8 @@ def test_register_fallback_critical_to_firm() -> None:
     r = Resolver(m)
     utt = r.resolve(make_advisory(kind="late_brake", urgency="act", register="critical", corner=2))
     assert utt is not None
-    assert utt.clip_id == "late_brake.act.firm.generic"
-    assert utt.register == "firm"  # resolved tier, not the requested "critical"
+    assert utt.clip_id == "late_brake.act.urgent.generic"
+    assert utt.register == "urgent"  # resolved tier, not the requested "critical"
     assert utt.dedup_key == "late_brake:2:critical"  # dedup keyed on REQUESTED tier (escalation)
 
 
@@ -93,19 +102,23 @@ def test_unknown_kind_urgency_or_register_returns_none() -> None:
 
 def test_non_integer_corner_uses_generic() -> None:
     r = Resolver(build_manifest())
-    utt = r.resolve(make_advisory(kind="late_brake", urgency="act", register="firm", corner=None))
+    utt = r.resolve(make_advisory(kind="late_brake", urgency="act", register="urgent", corner=None))
     assert utt is not None
-    assert utt.clip_id == "late_brake.act.firm.generic"
+    assert utt.clip_id == "late_brake.act.urgent.generic"
 
 
 def test_missing_clip_in_bank_returns_none() -> None:
     # A manifest with every fallback entry removed → resolver degrades to None (no wrong clip).
     m = build_manifest()
-    for cid in ("late_brake.act.firm.generic", "late_brake.act.calm.generic"):
+    for cid in (
+        "late_brake.act.urgent.generic",
+        "late_brake.act.alert.generic",
+        "late_brake.act.calm.generic",
+    ):
         m.clips.pop(cid, None)
     m.__post_init__()
     r = Resolver(m)
     assert (
-        r.resolve(make_advisory(kind="late_brake", urgency="act", register="firm", corner=2))
+        r.resolve(make_advisory(kind="late_brake", urgency="act", register="urgent", corner=2))
         is None
     )

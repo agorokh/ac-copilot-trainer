@@ -134,7 +134,8 @@ def _inject_corner_frames(
     if bp is None:
         return [], 0.0
     apex = ref.apex_spline
-    # approach hot (well above the apex target) and not braking → forces a firm/critical brake cue
+    # approach hot (well above the apex target) and not braking → forces an urgent/critical brake
+    # cue
     speed = max(ref.target_apex_kmh + 60.0, 120.0)
     frames: list[dict[str, Any]] = []
     track_length_m = max(track_length_m, 1.0)

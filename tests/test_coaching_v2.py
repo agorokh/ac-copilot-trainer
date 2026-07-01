@@ -104,8 +104,10 @@ def test_v2_kinds_disjoint_from_legacy_observer_kinds():
 def test_severity_grades_by_magnitude():
     """severity() escalates register with the measured margin (P2)."""
     minor = Diagnosis(RootError.EARLY_BRAKE, {"brake_delta_spline": -0.006})
+    medium = Diagnosis(RootError.EARLY_BRAKE, {"brake_delta_spline": -0.012})
     gross = Diagnosis(RootError.EARLY_BRAKE, {"brake_delta_spline": -0.030})
-    assert severity(minor)[0] == "firm"
+    assert severity(minor)[0] == "alert"
+    assert severity(medium)[0] == "urgent"
     assert severity(gross)[0] == "critical"
     assert severity(gross)[1] > severity(minor)[1]  # higher intensity for the bigger miss
 

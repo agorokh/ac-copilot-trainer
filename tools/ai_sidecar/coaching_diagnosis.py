@@ -67,7 +67,7 @@ _REF_TRAIL_MIN = 0.20
 
 
 #: Magnitude at/above which a root is GROSS -> spoken in the critical register (same word, hotter
-#: tone). Keyed by the detail margin each root records. Below it (but above the floor) -> firm.
+#: tone). Keyed by the detail margin each root records. Lower misses scale alert -> urgent.
 _CRITICAL_MARGIN: dict[RootError, tuple[str, float]] = {
     RootError.EARLY_BRAKE: ("brake_delta_spline", 0.018),
     RootError.LATE_BRAKE: ("brake_delta_spline", 0.018),
@@ -96,17 +96,23 @@ class Diagnosis:
 def severity(diag: Diagnosis) -> tuple[str, float]:
     """Map a diagnosis's measured margin to a (register, intensity) — magnitude grading (P2).
 
-    A bigger miss is spoken with a hotter register (``critical`` >= the gross threshold, else
-    ``firm``) and a higher continuous ``intensity`` (0..1, capped at the threshold). The WORD does
-    not change — the tone does ("elite coaching IS the magnitude").
+    A bigger miss is spoken with a hotter register (``alert`` -> ``urgent`` -> ``critical``) and a
+    higher continuous ``intensity`` (0..1, capped at the threshold). The WORD does not change — the
+    tone does ("elite coaching IS the magnitude").
     """
     spec = _CRITICAL_MARGIN.get(diag.root)
     if spec is None:
-        return ("firm", 0.5)
+        return ("urgent", 0.5)
     key, crit = spec  # crit is always a positive threshold from _CRITICAL_MARGIN
     mag = abs(diag.detail.get(key, 0.0))
-    register = "critical" if mag >= crit else "firm"
-    return (register, round(max(0.0, min(1.0, mag / crit)), 3))
+    intensity = round(max(0.0, min(1.0, mag / crit)), 3)
+    if intensity >= 1.0:
+        register = "critical"
+    elif intensity >= 0.5:
+        register = "urgent"
+    else:
+        register = "alert"
+    return (register, intensity)
 
 
 def classify_root_error(cand: CornerSignature, ref: CornerSignature) -> Diagnosis:

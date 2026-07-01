@@ -31,19 +31,21 @@ def _ref(**kw) -> CornerReference:
 
 def test_register_for_thresholds_monotonic() -> None:
     assert _register_for(0.0, "calm") == "calm"
-    assert _register_for(0.4, "calm") == "firm"
+    assert _register_for(0.4, "calm") == "alert"
+    assert _register_for(0.62, "calm") == "urgent"
     assert _register_for(0.9, "calm") == "critical"
 
 
 def test_register_for_has_hysteresis() -> None:
     # Same severity, different incoming tier → different result (no frame-to-frame flicker).
-    s = 0.62  # between firm-rise (0.34) and crit-rise (0.67), above crit-fall (0.58)
-    assert _register_for(s, "calm") == "firm"  # rising from calm has not crossed crit-rise yet
-    assert _register_for(s, "critical") == "critical"  # falling from critical holds above crit-fall
+    s = 0.76  # below critical-rise, above critical-fall
+    assert _register_for(s, "urgent") == "urgent"  # rising has not crossed crit-rise yet
+    assert _register_for(s, "critical") == "critical"  # falling holds above crit-fall
 
 
 def test_register_for_cap_clamps() -> None:
-    assert _register_for(0.99, "calm", cap="firm") == "firm"
+    assert _register_for(0.99, "calm", cap="urgent") == "urgent"
+    assert _register_for(0.99, "calm", cap="firm") == "urgent"  # legacy alias
     assert _register_for(0.99, "calm", cap="calm") == "calm"
 
 
@@ -98,7 +100,7 @@ def test_brake_cue_escalates_calm_to_critical_across_frames() -> None:
     ]
     regs = [c.register for c in cues]
     assert "calm" in regs and "critical" in regs  # both lead-in AND the escalated alarm fired
-    rank = {"calm": 0, "firm": 1, "critical": 2}
+    rank = {"calm": 0, "alert": 1, "urgent": 2, "critical": 3}
     assert [rank[r] for r in regs] == sorted(rank[r] for r in regs)  # strictly escalating
 
 
@@ -119,8 +121,8 @@ def test_brake_release_fires_when_over_braking_past_apex_off_throttle() -> None:
     obs = RealtimeObserver([ref])
     out = obs.observe({"spline": 0.55, "speed": 80.0, "brake": 0.7, "throttle": 0.0})
     rel = [a for a in out if a.kind == "brake_release"]
-    assert rel and rel[0].register in ("calm", "firm")
-    assert rel[0].register != "critical"  # a correction, never an alarm (capped at firm)
+    assert rel and rel[0].register in ("calm", "alert", "urgent")
+    assert rel[0].register != "critical"  # a correction, never an alarm (capped at urgent)
 
 
 def test_brake_release_suppressed_when_on_throttle() -> None:

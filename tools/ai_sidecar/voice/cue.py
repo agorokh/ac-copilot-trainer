@@ -17,6 +17,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from tools.ai_sidecar.voice.vocabulary import normalize_register
+
 #: Higher rank preempts and may barge in through the global cooldown.
 _URGENCY_RANK: dict[str, int] = {"info": 1, "prepare": 2, "act": 3}
 #: Default lap length (m) for spline lookahead when track length is unknown.
@@ -73,25 +75,40 @@ def _turn(corner: Any) -> str:
         return "this corner"
 
 
+def _effective_register(advisory: dict[str, Any]) -> str:
+    """Register for the fallback path, mirroring :func:`resolver._register_fallback_chain`.
+
+    An ``act`` advisory carrying the default ``calm`` register is a legacy / register-less producer:
+    act-now cues are never baked at ``calm`` (they live at ``alert``/``urgent``/``critical``), so
+    treat that case as ``urgent`` — otherwise the WS/pyttsx3 fallback under-reacts (non-terse
+    phrasing + low rate/volume) on a time-critical cue, diverging from the in-process resolver.
+    """
+    register = normalize_register(advisory.get("register", "calm"))
+    if advisory.get("urgency") == "act" and register == "calm":
+        return "urgent"
+    return register
+
+
 def advisory_to_phrase(advisory: dict[str, Any]) -> str:
     """Short, ear-first phrasing of one observer advisory dict, register-aware (issue #368).
 
-    The terse act tier (``firm``/``critical``) drops the corner number — the driver knows the corner
-    and needs the verb now; the calm anticipatory tier keeps it. Mirrors the baked phrase-bank
-    wording (``vocabulary._STEMS``) so the WS/pyttsx3 path speaks the same words as the in-process
-    bank coach, and the speaker varies rate/volume by ``register`` to convey the intensity.
+    The terse act tier (``alert``/``urgent``/``critical``) drops the corner number — the driver
+    knows the corner and needs the verb now; the calm anticipatory tier keeps it. Mirrors the baked
+    phrase-bank wording (``vocabulary._STEMS``) so the WS/pyttsx3 path speaks the same words as the
+    in-process bank coach, and the speaker varies rate/volume by ``register`` to convey the
+    intensity.
     """
     kind = advisory.get("kind")
-    register = str(advisory.get("register", "calm"))
+    register = _effective_register(advisory)
     corner = advisory.get("corner", 0)
     if kind == "late_brake":
         if register == "critical":
             return "Brake!"
-        if register == "firm":
+        if register in {"alert", "urgent"}:
             return "Brake."
         return f"Brake point, {_turn(corner)}."
     if kind == "brake_release":
-        return "Release." if register == "firm" else "Ease off."
+        return "Release." if register in {"alert", "urgent", "critical"} else "Ease off."
     if kind == "apex_deficit":
         return f"More entry speed, {_turn(corner)}."
     if kind == "fuel_status":
@@ -133,8 +150,8 @@ class CueArbiter:
         if not advisories:
             return None
         # Drop advisories still within their per-(corner, kind) cooldown — EXCEPT an `act` cue,
-        # which bypasses the anti-nag window so a critical/firm escalation ("Brake!") is still heard
-        # after an earlier calm lead-in for the same corner (codex review #371). Mirrors the
+        # which bypasses the anti-nag window so a hotter escalation ("Brake!") is still heard after
+        # an earlier calm lead-in for the same corner (codex review #371). Mirrors the
         # in-process scheduler's act exemption.
         fresh: list[dict[str, Any]] = []
         for a in advisories:
@@ -164,7 +181,7 @@ class CueArbiter:
             urgency=str(best.get("urgency", "info")),
             corner=_corner_key(best),
             kind=str(best.get("kind", "")),
-            register=str(best.get("register", "calm")),
+            register=_effective_register(best),
         )
 
 

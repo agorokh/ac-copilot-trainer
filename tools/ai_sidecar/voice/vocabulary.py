@@ -6,11 +6,11 @@ The realtime coaching pipeline emits a *bounded* set of advisories across three 
   (``late_brake`` | ``brake_release`` | ``turn_in`` | ``apex_deficit``).
 * ``urgency`` (``info`` | ``prepare`` | ``act``) — drives the SCHEDULER (priority, barge-in,
   verbosity gating). Never a tone knob.
-* ``register`` (``calm`` | ``firm`` | ``critical``) — the **intensity tier**: which *tonal variant*
-  of the command is spoken. This is issue #368's headline — the SAME control point spoken with a
-  tone that reflects how severe the situation is ("not just 'turn left'"). The register is baked
-  into the clip's prosody (rate/pitch/loudness/brightness — see :mod:`tools.ai_sidecar.voice.bake`),
-  so tone is delivered with zero hot-path TTS.
+* ``register`` (``calm`` | ``alert`` | ``urgent`` | ``critical``) — the **intensity tier**:
+  which tonal variant of the command is spoken. This is issue #368's headline — the SAME control
+  point spoken with a tone that reflects how severe the situation is ("not just 'turn left'"). The
+  register is baked into the clip's prosody (rate/pitch/loudness/brightness — see
+  :mod:`tools.ai_sidecar.voice.bake`), so tone is delivered with zero hot-path TTS.
 
 plus a **universal corner number** (``turn one`` .. ``turn twenty`` — track-agnostic, safe to bake
 once). Because the set is finite and known ahead of time, we pre-render every utterance once and
@@ -20,9 +20,9 @@ look it up at runtime — no live TTS in the hot path.
 NOW" cue must be ≤450 ms. The corner number ("…turn seventeen") is ~700 ms of speech the driver does
 not need mid-corner — they know which corner they are in. So the **anticipatory/low-intensity** cues
 (``prepare``/``info``, where the driver has lead time) carry the corner number, while the
-**act-now** cues (``act`` urgency / ``firm``+``critical`` registers) are corner-less and terse
-("Brake.", "Brake, brake!"). A stem carries a corner number iff its text contains ``{turn}``; this
-single rule bounds the bank and guarantees the act tier stays terse.
+**act-now** cues (``act`` urgency / ``alert``+``urgent``+``critical`` registers) are corner-less and
+terse ("Brake.", "Brake, brake!"). A stem carries a corner number iff its text contains ``{turn}``;
+this single rule bounds the bank and guarantees the act tier stays terse.
 
 This module enumerates that vocabulary deterministically. Both the offline bake step
 (:mod:`tools.ai_sidecar.voice.bake`) and the runtime :mod:`~tools.ai_sidecar.voice.resolver`
@@ -41,6 +41,26 @@ import hashlib
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass
+
+# The intensity-``register`` ladder is the SHARED domain of the observer (producer) and this
+# vocabulary (consumer); it lives in the dependency-free :mod:`tools.ai_sidecar.registers` so both
+# sides import the same constants instead of re-declaring them (issue #381). Re-exported here so
+# existing importers (scheduler, client, cue, resolver, manifest, tests) keep using ``vocabulary``.
+from tools.ai_sidecar.registers import (
+    REGISTER_ALIASES,
+    REGISTER_RANK,
+    REGISTERS,
+    normalize_register,
+    register_rank,
+)
+
+__all__ = [
+    "REGISTER_ALIASES",
+    "REGISTER_RANK",
+    "REGISTERS",
+    "normalize_register",
+    "register_rank",
+]
 
 #: Advisory ``kind`` values this vocabulary covers (mirrors ``realtime_observer.Advisory.kind``).
 #: The braking cluster (issue #368 "braking first" slice): the anticipatory late-brake cue, the
@@ -72,11 +92,16 @@ KINDS: tuple[str, ...] = (
 #: SCHEDULING only (priority / barge-in / verbosity), never tone.
 URGENCIES: tuple[str, ...] = ("info", "prepare", "act")
 
-#: Intensity tiers, low -> high (issue #368). Drives the baked *tone* of a clip, never scheduling.
-#: ``calm`` = a measured heads-up; ``firm`` = a clear correction; ``critical`` = an alarm. The
-#: observer quantizes a continuous severity scalar to one of these with hysteresis
-#: (:func:`tools.ai_sidecar.realtime_observer`), and the resolver keys the manifest on it.
-REGISTERS: tuple[str, ...] = ("calm", "firm", "critical")
+# Intensity tiers (``REGISTERS``) and the legacy ``firm`` alias now live in
+# :mod:`tools.ai_sidecar.registers` and are re-exported at the top of this module.
+
+#: Original/licensed persona metadata folded into every backend ``voice_signature``. This explicitly
+#: documents that the distributed voice is a project-authored race-engineer style, not a real driver
+#: clone.
+VOICE_PERSONA_ID = "race-engineer-original-v1"
+VOICE_PERSONA_LICENSE = "project-authored; no unconsented real-person clone"
+INTENSITY_CHAIN_VERSION = 2
+
 
 #: Universal corner numbers we bake (1-based, as spoken). T21+ degrades to the generic clip.
 MAX_CORNER: int = 20
@@ -125,27 +150,34 @@ _STEMS: dict[tuple[str, str, str], str] = {
     # registers ARE the headline — the same control point spoken with a tone that escalates with how
     # late/hot the driver is ("not just 'turn left'").
     ("late_brake", "prepare", "calm"): "Brake point{turn}.",
-    ("late_brake", "act", "firm"): "Brake.",
-    # Critical is the SAME word as firm — the escalation is carried by TONE (louder, brighter,
+    ("late_brake", "act", "alert"): "Brake.",
+    ("late_brake", "act", "urgent"): "Brake.",
+    # Critical is the SAME word as urgent — the escalation is carried by TONE (louder, brighter,
     # faster: the issue #368 headline "even the tone reflects the situation"), kept to one syllable
     # so the alarm lands inside the braking window (≤450 ms). The "!" gives the synthesizer a
-    # sharper intonation than firm's ".".
+    # sharper intonation than urgent's ".".
     ("late_brake", "act", "critical"): "Brake!",
     # brake_release: over-braking past the apex while off-throttle — terse, in-corner (no number).
     ("brake_release", "prepare", "calm"): "Ease off.",
-    ("brake_release", "act", "firm"): "Release.",
+    ("brake_release", "act", "alert"): "Release.",
+    ("brake_release", "act", "urgent"): "Release.",
     # apex_deficit: the text-HUD min-speed verdict. Voice keeps it as a calm heads-up that LOW
     # verbosity suppresses (issue #368 AC e: no post-fact narration in low verbosity).
     ("apex_deficit", "info", "calm"): "More entry speed{turn}.",
     # --- Coach v2: verb-first imperatives, corner-LESS (the cue lands AT the corner, so timing
-    # carries the location — no spoken number). One register each (firm correction / critical
-    # alarm / calm acknowledge); magnitude grading is a later slice. ---
-    ("early_brake", "prepare", "firm"): "Brake later.",
-    ("brake_late", "prepare", "firm"): "Brake earlier.",
-    ("no_trail", "prepare", "firm"): "Trail it.",
-    ("slow_apex", "prepare", "firm"): "Carry more.",
-    ("late_throttle", "act", "firm"): "Power.",
-    # magnitude grading (P2): the SAME word, hotter tone, for a gross miss — second register tier.
+    # carries the location — no spoken number). The same word is baked at alert/urgent/critical so
+    # severity changes tone without changing the coaching command. ---
+    ("early_brake", "prepare", "alert"): "Brake later.",
+    ("brake_late", "prepare", "alert"): "Brake earlier.",
+    ("no_trail", "prepare", "alert"): "Trail it.",
+    ("slow_apex", "prepare", "alert"): "Carry more.",
+    ("late_throttle", "act", "alert"): "Power.",
+    ("early_brake", "prepare", "urgent"): "Brake later.",
+    ("brake_late", "prepare", "urgent"): "Brake earlier.",
+    ("no_trail", "prepare", "urgent"): "Trail it.",
+    ("slow_apex", "prepare", "urgent"): "Carry more.",
+    ("late_throttle", "act", "urgent"): "Power.",
+    # magnitude grading (P2/#381): the SAME word, hotter tone, for a gross miss.
     ("early_brake", "prepare", "critical"): "Brake later.",
     ("brake_late", "prepare", "critical"): "Brake earlier.",
     ("no_trail", "prepare", "critical"): "Trail it.",
@@ -157,16 +189,16 @@ _STEMS: dict[tuple[str, str, str], str] = {
     # numbers ride in the advisory payload for screens/logs, while the voice keeps the hot path
     # short enough to act on.
     ("fuel_status", "info", "calm"): "Fuel check.",
-    ("fuel_save", "act", "firm"): "Save fuel.",
+    ("fuel_save", "act", "urgent"): "Save fuel.",
     ("fuel_save", "act", "critical"): "Lift and coast.",
-    ("tyre_manage", "prepare", "firm"): "Manage tyres.",
-    ("tyre_manage", "act", "firm"): "Save tyres.",
+    ("tyre_manage", "prepare", "alert"): "Manage tyres.",
+    ("tyre_manage", "act", "urgent"): "Save tyres.",
     ("tyre_manage", "act", "critical"): "Save tyres!",
-    ("brake_manage", "prepare", "firm"): "Cool brakes.",
+    ("brake_manage", "prepare", "alert"): "Cool brakes.",
     ("brake_manage", "act", "critical"): "Cool brakes!",
     ("conditions_strategy", "prepare", "calm"): "Track is green.",
-    ("conditions_strategy", "prepare", "firm"): "Adjust to track.",
-    ("conditions_strategy", "act", "firm"): "Smooth inputs.",
+    ("conditions_strategy", "prepare", "alert"): "Adjust to track.",
+    ("conditions_strategy", "act", "urgent"): "Smooth inputs.",
 }
 
 
@@ -221,8 +253,9 @@ def _phrase(kind: str, urgency: str, register: str, corner: int | None) -> Phras
 def iter_vocabulary() -> Iterator[Phrase]:
     """Yield every bakeable :class:`Phrase` exactly once, in a stable, deterministic order.
 
-    Order: kind (KINDS order) -> urgency (info, prepare, act) -> register (calm, firm, critical) ->
-    corner (generic first, then 1..MAX *only* for stems that carry ``{turn}``). Only
+    Order: kind (KINDS order) -> urgency (info, prepare, act) -> register
+    (calm, alert, urgent, critical) -> corner (generic first, then 1..MAX *only* for stems that
+    carry ``{turn}``). Only
     ``(kind, urgency, register)`` triples present in :data:`_STEMS` are emitted. This ordering *is*
     part of the content-addressing contract — :func:`vocabulary_hash` depends on it being stable.
     """

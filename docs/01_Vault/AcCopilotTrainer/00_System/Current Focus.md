@@ -6,6 +6,7 @@ memory_tier: canonical
 last_updated: 2026-07-01T04:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/00_System/Project State.md
   - AcCopilotTrainer/03_Investigations/stanley-steering-live-verified-2026-06-19.md
@@ -19,6 +20,12 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Active draft (2026-07-01):** PR [#429](https://github.com/agorokh/ac-copilot-trainer/pull/429)
+implements [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) four-tier expressive
+voice intensity (`calm`/`alert`/`urgent`/`critical`, manifest v3, original race-engineer persona
+signature). Local `make ci-fast` and GitHub checks are green. It remains draft until the operator
+does the required on-rig A/B listening confirmation.
 
 **Active focus (2026-06-17):** EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) — **Part F harness daemon shipped** ([#228](https://github.com/agorokh/ac-copilot-trainer/issues/228)/PR #229) and its on-rig launch gap fixed ([#232](https://github.com/agorokh/ac-copilot-trainer/issues/232) **CLOSED** / PR [#233](https://github.com/agorokh/ac-copilot-trainer/pull/233) **MERGED** `c556dfe`): the daemon now launches AC **de-elevated via Content Manager** (`--launch-mode cm`), live-verified hands-off on `AG_PC`. The autonomous self-test is now **one command** ([#235](https://github.com/agorokh/ac-copilot-trainer/issues/235) **CLOSED** / PR [#236](https://github.com/agorokh/ac-copilot-trainer/pull/236) **MERGED** `d051096`): `python -m tools.ac_harness.self_test` drives the daemon hands-off and asserts the live coaching pipeline — **LIVE PASS** (`coaching.snapshot=335, tire_temps=168, connection=34`, no human at the wheel). The vision-oracle **"eyes"** also landed ([#238](https://github.com/agorokh/ac-copilot-trainer/issues/238) **CLOSED** / PR [#239](https://github.com/agorokh/ac-copilot-trainer/pull/239) **MERGED** `3e677c7`): `tools.ac_harness.hud_capture` (stdlib ctypes GDI, no new dep) captures the live AC HUD hands-off with a render-liveness check — **LIVE-VERIFIED** (in-cockpit at Spa, HUD text legible). [#188](https://github.com/agorokh/ac-copilot-trainer/issues/188)/[#190](https://github.com/agorokh/ac-copilot-trainer/issues/190) **CLOSED**. **The autonomous self-test now has launch + pipeline-assert + eyes, all hands-off + live-verified.**
 

@@ -98,14 +98,16 @@ def test_reference_lap_against_itself_emits_no_deficit():
     obs = build_observer_from_reference(ref)
     assert obs is not None
     advisories = _replay(obs, ref)
-    # driven == reference: on target → no apex deficit, and no brake FAULT (firm/critical "still
+    # driven == reference: on target → no apex deficit, and no brake FAULT (urgent/critical "still
     # coasting past the point"). A *calm anticipatory* brake heads-up before the mark is expected
     # and correct (#368 AC a: the cue's audio onset lands before/at the brake point). This used to
     # assert "no late_brake at all" only because the synthetic corner had no detectable brake point
     # until the corner-segmentation fix gave every real corner a valid brake point.
     assert [a for a in advisories if a.kind == "apex_deficit"] == []
     fault_brakes = [
-        a for a in advisories if a.kind == "late_brake" and a.register in ("firm", "critical")
+        a
+        for a in advisories
+        if a.kind == "late_brake" and a.register in ("alert", "urgent", "critical")
     ]
     assert fault_brakes == []
     for a in (a for a in advisories if a.kind == "late_brake"):
@@ -144,7 +146,7 @@ def test_late_brake_escalates_register_not_per_frame_when_coasting():
     assert late, "expected at least one brake cue"
     # Escalation, NOT per-frame spam (issue #368 / codex #371): the cue re-fires only when the tone
     # register steps UP, so registers are strictly increasing and there is at most one per tier.
-    rank = {"calm": 0, "firm": 1, "critical": 2}
+    rank = {"calm": 0, "alert": 1, "urgent": 2, "critical": 3}
     ranks = [rank[a.register] for a in late]
     assert ranks == sorted(ranks) and len(ranks) == len(set(ranks))
     assert len(late) <= len(frames)
@@ -246,10 +248,10 @@ def test_brake_release_can_escalate_after_calm_threshold_crossing():
     obs = RealtimeObserver([ref])
 
     calm = obs.observe({"spline": 0.52, "speed": 90.0, "brake": 0.46, "throttle": 0.0})
-    firm = obs.observe({"spline": 0.53, "speed": 88.0, "brake": 0.82, "throttle": 0.0})
+    urgent = obs.observe({"spline": 0.53, "speed": 88.0, "brake": 0.82, "throttle": 0.0})
 
-    releases = [a for a in [*calm, *firm] if a.kind == "brake_release"]
-    assert [a.register for a in releases] == ["calm", "firm"]
+    releases = [a for a in [*calm, *urgent] if a.kind == "brake_release"]
+    assert [a.register for a in releases] == ["calm", "urgent"]
     assert releases[-1].urgency == "act"
 
 

@@ -30,7 +30,9 @@ from tools.ai_sidecar.voice import vocabulary as vocab
 
 #: Manifest schema version. Bump on any breaking change to the on-disk shape.
 #: v2 (issue #368): adds ``register`` (intensity tier) to every clip + the index key.
-MANIFEST_VERSION = 2
+#: v3 (issue #381): changes canonical register values from calm/firm/critical to
+#: calm/alert/urgent/critical and folds persona/intensity-chain metadata into voice_signature.
+MANIFEST_VERSION = 3
 
 #: Canonical manifest filename inside a bank directory.
 MANIFEST_FILENAME = "manifest.json"
@@ -53,7 +55,7 @@ class ClipEntry:
     file: str  # relative to the bank directory
     kind: str
     urgency: str
-    register: str  # intensity tier (calm|firm|critical) — issue #368, v2 manifest
+    register: str  # intensity tier (calm|alert|urgent|critical) — issue #381, v3 manifest
     corner: int | None
     text: str
     sha256: str
@@ -78,11 +80,11 @@ class ClipEntry:
                 corner = int(corner)
             # ``register`` is REQUIRED in v2: a v1 manifest (no register) raises here at LOAD, so
             # ``engine.from_bank`` returns a disabled coach rather than ever playing a clip whose
-            # tier is unknown (issue #368). No lenient default — that would let a v1 bank masquerade
-            # as v2. The value is also validated against the allowed tiers (calm|firm|critical) at
+            # tier is unknown (issue #368). No lenient default — that would let an old bank
+            # masquerade as current. The value is also validated against the allowed tiers at
             # load so a hand-edited/corrupt manifest fails loudly here, not as a silent lookup miss
             # later (codex/qodo review #371).
-            register = str(d["register"])
+            register = vocab.normalize_register(d["register"])
             if register not in vocab.REGISTERS:
                 raise ValueError(f"register {register!r} not in {vocab.REGISTERS}")
             return ClipEntry(
@@ -130,7 +132,7 @@ class Manifest:
 
     def lookup(self, kind: str, urgency: str, register: str, corner: int | None) -> str | None:
         """Return the clip id for an advisory key, or ``None`` if the bank has no such clip."""
-        return self._by_key.get((kind, urgency, register, corner))
+        return self._by_key.get((kind, urgency, vocab.normalize_register(register), corner))
 
     # ---- (de)serialization -------------------------------------------------------------------
 

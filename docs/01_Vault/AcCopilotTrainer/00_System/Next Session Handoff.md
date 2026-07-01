@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-01T04:30:00Z
 relates_to:
+  - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -263,6 +264,37 @@ dependency, script, or workflow flags.
 repo-prefetch attempts returned no relevant context. This SAVE is grounded in vault Tier-2 context,
 live GitHub state (`gh pr view 422` reported `MERGED`; `gh issue view 405` reported `CLOSED`), and the
 observed local/GitHub verification above.
+
+## In progress (2026-07-01) - Draft PR #429: expressive four-tier voice (#381)
+
+Draft PR [#429](https://github.com/agorokh/ac-copilot-trainer/pull/429) is open on
+`feat/issue-381-expressive-voice`; the rebased implementation commit is `f8b31af`. It is
+intentionally **draft**: code, local CI, and bake evidence are complete, but issue
+[#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) still requires
+operator-confirmed on-rig A/B listening before the acceptance box can be honestly closed.
+
+**Delivered in branch:** voice registers are now `calm` / `alert` / `urgent` / `critical`; legacy
+`firm` advisory input normalizes to `urgent`. Manifest schema is v3. All backend
+`voice_signature` values include `race-engineer-original-v1+intensity2`, and the persona/license is
+documented as project-authored with no unconsented real-person clone. Severity mapping was updated
+across the realtime observer, Coach v2, race-management cues, scheduler/resolver, pyttsx3 fallback,
+Tone/Kokoro/Piper bake controls, benchmark tooling, and tests. A Windows CLI bug found during
+verification was fixed: `bench_voices` now prints ASCII `->` instead of a Unicode arrow.
+
+**Verification:** Focused voice/coaching suite passed (`188 passed`). Full local parity passed with
+`FLEET_GOVERNANCE_ROOT=(Resolve-Path .fleet-governance-vendor).Path; make ci-fast`:
+`2035 passed, 117 skipped`, coverage `85.91%`, `ci-fast: OK`. Local bake evidence:
+`python -m tools.ai_sidecar.voice.bake --backend tone --out .scratch\issue381-voice-bank --samplerate 22050`
+baked 76 clips, manifest v3, signature `tone-v3+race-engineer-original-v1+intensity2`. Local bench:
+`python -m tools.ai_sidecar.voice.bench_voices --out .scratch\issue381-voice-bench.md --json-out .scratch\issue381-voice-bench.json`
+measured ToneBackend act clips at `alert=165.6 ms`, `urgent=144.0 ms`, `critical=126.0 ms`.
+GitHub checks on PR #429 passed (`build`, `conformance`, `Canonical docs exist`; automerge skipped
+because draft).
+
+**Next:** On the rig, bake/listen with the intended expressive backend and drive Magione. Confirm a
+critical late-brake cue sounds materially urgent and a low-importance/minor apex cue sounds calm. If
+that passes, mark PR #429 ready and close #381 through merge; if not, tune the expressive backend or
+prosody chain on the same branch.
 
 ## Delivered (2026-06-30) - PR #423 MERGED: session review artifact (#404 Part A)
 

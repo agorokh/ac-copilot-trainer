@@ -1,13 +1,14 @@
 """Offline phrase-bank baker — render the bounded vocabulary once to WAV + a content-addressed
 manifest, with a per-register **prosody** layer so the SAME command is rendered with a tone that
-reflects the situation (issue #368).
+reflects the situation (issue #381).
 
 Baking is **not** time-critical (it runs offline, not at the wheel), so it can use a naturalistic
 neural voice and shell to ``ffmpeg`` for prosody shaping. The runtime then plays the pre-rendered
 clips with deterministic, jitter-free latency — no live TTS in the hot path (invariant #1).
 
-**Register → tone.** Every clip carries a ``register`` (calm | firm | critical). A speech backend
-renders the words once; a :class:`ProsodyShaper` then applies a per-register ``ffmpeg`` filter chain
+**Register -> tone.** Every clip carries a ``register`` (calm | alert | urgent | critical). A
+speech backend renders the words once; a :class:`ProsodyShaper` then applies a per-register
+``ffmpeg`` filter chain
 (rate / pitch / loudness / compression / brightness) so the tone escalates with the register. The
 shaping is baked into the WAV bytes — tone is delivered with zero hot-path cost. ``ffmpeg`` is run
 with ``-bitexact`` + stripped metadata so a given ffmpeg build produces **byte-identical** output
@@ -59,14 +60,23 @@ from tools.ai_sidecar.voice.manifest import (
     Manifest,
     sha256_bytes,
 )
-from tools.ai_sidecar.voice.vocabulary import iter_vocabulary, vocabulary_hash
+from tools.ai_sidecar.voice.vocabulary import (
+    INTENSITY_CHAIN_VERSION,
+    VOICE_PERSONA_ID,
+    iter_vocabulary,
+    vocabulary_hash,
+)
 
 _log = logging.getLogger("ai_sidecar.voice.bake")
 
 #: Bump when the prosody filter chains change — folded into ``voice_signature`` so a chain edit
 #: without a re-bake is surfaced (the bank's signature no longer matches what the code would
 #: render).
-PROSODY_VERSION = 1
+PROSODY_VERSION = 2
+
+
+def _signature_suffix() -> str:
+    return f"{VOICE_PERSONA_ID}+intensity{INTENSITY_CHAIN_VERSION}"
 
 
 class VoiceBackend(Protocol):
@@ -123,7 +133,10 @@ def _prosody_filter(register: str, samplerate: int, *, apply_tempo: bool) -> str
     if register == "calm":
         # measured, warm, slightly softer — a guidance tone.
         body = "highpass=f=90,acompressor=threshold=-20dB:ratio=2.5:attack=10:release=80,treble=g=2:f=3000,volume=-2dB"  # noqa: E501
-    elif register == "firm":
+    elif register == "alert":
+        tempo = "atempo=1.06," if apply_tempo else ""
+        body = f"{tempo}highpass=f=100,acompressor=threshold=-19dB:ratio=3:attack=7:release=70,treble=g=3:f=3200,volume=1.5dB"  # noqa: E501
+    elif register == "urgent":
         tempo = "atempo=1.13," if apply_tempo else ""
         body = f"{tempo}highpass=f=110,acompressor=threshold=-18dB:ratio=3.5:attack=5:release=60,treble=g=3.5:f=3300,volume=3dB"  # noqa: E501
     elif register == "critical":
@@ -178,17 +191,18 @@ class ToneBackend:
 
     Not speech; a smoke/verification voice that proves the bake + manifest + playback plumbing with
     zero third-party deps and **no ffmpeg** (stdlib ``wave`` only), so it runs in CI. Frequency and
-    duration derive from a stable hash of the text PLUS a per-register shift, so the three registers
+    duration derive from a stable hash of the text PLUS a per-register shift, so the four registers
     for one cue are **measurably distinct** (critical is higher-pitched and shorter than calm) and
     the bank is byte-reproducible across runs — CI exercises the register dimension end-to-end.
     """
 
-    voice_signature = "tone-v2"
+    voice_signature = f"tone-v3+{_signature_suffix()}"
 
     #: (frequency offset Hz, duration scale) per register — critical is brighter + shorter.
     _REGISTER_TONE: dict[str, tuple[float, float]] = {
         "calm": (0.0, 1.0),
-        "firm": (110.0, 0.85),
+        "alert": (70.0, 0.92),
+        "urgent": (140.0, 0.80),
         "critical": (240.0, 0.70),
     }
 
@@ -276,9 +290,14 @@ class KokoroBackend:
     lazily so the bake module stays importable without it.
     """
 
-    #: per-register synthesis speed (Kokoro renders neutral; the shaper adds tempo for firm/critical
+    #: per-register synthesis speed (Kokoro renders neutral; the shaper adds tempo for hot tiers
     #: too, so keep these modest to avoid double-fast unintelligibility on terse cues).
-    _REGISTER_SPEED: dict[str, float] = {"calm": 0.95, "firm": 1.0, "critical": 1.05}
+    _REGISTER_SPEED: dict[str, float] = {
+        "calm": 0.95,
+        "alert": 0.98,
+        "urgent": 1.02,
+        "critical": 1.05,
+    }
 
     def __init__(
         self,
@@ -299,7 +318,7 @@ class KokoroBackend:
 
     @property
     def voice_signature(self) -> str:
-        return f"kokoro:{self._voice}+{self._shaper.signature}"
+        return f"kokoro:{self._voice}+{self._shaper.signature}+{_signature_suffix()}"
 
     def _engine(self):
         if self._kokoro is None:
@@ -325,7 +344,12 @@ class PiperBackend:
     Renders at a register-appropriate ``length_scale`` (lower = faster), then shapes per register.
     """
 
-    _REGISTER_LENGTH_SCALE: dict[str, float] = {"calm": 1.05, "firm": 0.95, "critical": 0.88}
+    _REGISTER_LENGTH_SCALE: dict[str, float] = {
+        "calm": 1.05,
+        "alert": 1.00,
+        "urgent": 0.93,
+        "critical": 0.88,
+    }
 
     def __init__(self, model_path: str | Path, piper_bin: str = "piper") -> None:
         self._model = Path(model_path)
@@ -336,7 +360,7 @@ class PiperBackend:
 
     @property
     def voice_signature(self) -> str:
-        return f"piper:{self._model.stem}+{self._shaper.signature}"
+        return f"piper:{self._model.stem}+{self._shaper.signature}+{_signature_suffix()}"
 
     def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
         length_scale = self._REGISTER_LENGTH_SCALE.get(register, 1.0)
@@ -457,7 +481,7 @@ class MacSayExpressiveBackend:
 
     @property
     def voice_signature(self) -> str:
-        return f"macsay-expr:{self._voice}+{self._shaper.signature}"
+        return f"macsay-expr:{self._voice}+{self._shaper.signature}+{_signature_suffix()}"
 
     def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,7 +510,7 @@ class MacSayBackend:
 
     @property
     def voice_signature(self) -> str:
-        return f"macsay:{self._voice}"
+        return f"macsay:{self._voice}+{_signature_suffix()}"
 
     def synthesize(self, text: str, register: str, out_path: Path, samplerate: int) -> None:
         with tempfile.TemporaryDirectory() as tmp:

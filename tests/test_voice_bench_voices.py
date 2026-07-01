@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from tools.ai_sidecar.voice.bench_voices import (
     BackendResult,
+    main,
     run_bench,
     to_markdown,
 )
@@ -29,8 +30,8 @@ def test_bench_runs_and_covers_every_backend_row() -> None:
 def test_tone_backend_row_is_available_with_measured_act_clips() -> None:
     tone = next(r for r in _results() if "tone" in r.backend)
     assert tone.available
-    # firm + critical act clips are measured (the time-critical cues)
-    assert set(tone.act_clip_ms) == {"firm", "critical"}
+    # alert + urgent + critical act clips are measured (the time-critical cues)
+    assert set(tone.act_clip_ms) == {"alert", "urgent", "critical"}
     assert all(ms > 0 for ms in tone.act_clip_ms.values())
 
 
@@ -46,3 +47,13 @@ def test_markdown_table_renders_with_recommendation() -> None:
     assert "| backend |" in md and "verdict |" in md
     assert "kokoro-82M" in md
     assert "Recommendation" in md
+
+
+def test_cli_status_output_is_windows_codepage_safe(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setattr("tools.ai_sidecar.voice.bench_voices.run_bench", lambda **_kw: _results())
+
+    assert main(["--out", str(tmp_path / "bench.md")]) == 0
+
+    out = capsys.readouterr().out
+    assert "->" in out
+    assert "→" not in out

@@ -41,13 +41,14 @@ from tools.ai_sidecar.voice.config import Verbosity, VoiceConfig
 from tools.ai_sidecar.voice.playback import Playback
 from tools.ai_sidecar.voice.resolver import Resolver
 from tools.ai_sidecar.voice.utterance import URGENCY_RANK, Utterance
+from tools.ai_sidecar.voice.vocabulary import REGISTER_RANK
 
 _log = logging.getLogger("ai_sidecar.voice.scheduler")
 
 _ACT_RANK = URGENCY_RANK["act"]
-#: tone-register ordering (low → high) — used only to break a same-urgency barge-in tie so a
-#: critical escalation can interrupt a still-playing firm clip (issue #368 / codex review #371).
-_REGISTER_RANK: dict[str, int] = {"calm": 0, "firm": 1, "critical": 2}
+#: tone-register ordering (low -> high) — used only to break a same-urgency barge-in tie so a
+#: critical escalation can interrupt a still-playing urgent clip (issue #381).
+_REGISTER_RANK = REGISTER_RANK
 
 
 @dataclass
@@ -172,9 +173,9 @@ class Scheduler:
         current = self._playback.current
         if current is not None:
             higher_urgency = winner.rank > current.rank
-            # A critical escalation over a still-playing FIRM clip shares the `act` urgency rank, so
-            # break the tie on the tone register — the more intense alarm must be heard (codex
-            # review #371). Same urgency + same/lower register never interrupts (it would be stale).
+            # A hotter escalation over a still-playing act clip shares the `act` urgency rank, so
+            # break the tie on the tone register — the more intense alarm must be heard. Same
+            # urgency + same/lower register never interrupts (it would be stale).
             louder_same_urgency = winner.rank == current.rank and _REGISTER_RANK.get(
                 winner.register, 0
             ) > _REGISTER_RANK.get(current.register, 0)

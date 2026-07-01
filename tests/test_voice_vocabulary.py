@@ -31,8 +31,8 @@ def test_register_axis_is_present_and_bounded() -> None:
     regs = {p.register for p in vocab.vocabulary()}
     assert regs <= set(vocab.REGISTERS)
     assert "critical" in regs and "calm" in regs  # the headline escalation exists
-    # No (kind, urgency) lists ALL three registers (the anti-blowup cap) — a cue never needs every
-    # tier; terse act cues escalate firm→critical, heads-ups stay calm.
+    # No (kind, urgency) lists ALL four registers (the anti-blowup cap) — a cue never needs every
+    # tier; terse act cues escalate alert->urgent->critical, heads-ups stay calm.
     from collections import defaultdict
 
     by_ku: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -43,7 +43,7 @@ def test_register_axis_is_present_and_bounded() -> None:
 
 
 def test_clip_id_format_and_corner_words() -> None:
-    assert vocab.clip_id_for("late_brake", "act", "firm", None) == "late_brake.act.firm.generic"
+    assert vocab.clip_id_for("late_brake", "act", "urgent", None) == "late_brake.act.urgent.generic"
     assert vocab.clip_id_for("late_brake", "prepare", "calm", 3) == "late_brake.prepare.calm.t03"
     # 1-based spoken numbers map to words on the per-corner (anticipatory) clips
     t3 = next(p for p in vocab.vocabulary() if p.clip_id == "late_brake.prepare.calm.t03")
@@ -71,6 +71,6 @@ def test_vocabulary_hash_changes_when_wording_changes(monkeypatch) -> None:
     before = vocab.vocabulary_hash()
     # Simulate a wording edit and confirm the content hash moves (so a stale bank is detectable).
     patched = dict(vocab._STEMS)
-    patched[("late_brake", "act", "firm")] = "Hit the brakes!"
+    patched[("late_brake", "act", "urgent")] = "Hit the brakes!"
     monkeypatch.setattr(vocab, "_STEMS", patched)
     assert vocab.vocabulary_hash() != before

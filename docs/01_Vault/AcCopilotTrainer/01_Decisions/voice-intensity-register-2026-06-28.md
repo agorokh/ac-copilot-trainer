@@ -3,7 +3,7 @@ type: decision
 status: active
 memory_tier: canonical
 created: 2026-06-28
-updated: 2026-06-28
+updated: 2026-07-01
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/368
 relates_to:
   - AcCopilotTrainer/01_Decisions/voice-coach-architecture-2026-06-28.md
@@ -30,10 +30,11 @@ is offline, every cue is pre-rendered at a tone tier; the hot path stays jitter-
 (invariant: no live TTS). Tone is delivered with zero runtime cost.
 
 1. **Three orthogonal axes.** `urgency` (info/prepare/act) drives the SCHEDULER only (priority,
-   barge-in, verbosity). `register` (calm/firm/critical) drives the baked TONE only. The manifest key
-   grew from `(kind, urgency, corner)` → `(kind, urgency, register, corner)` (`MANIFEST_VERSION=2`);
-   `register` is in the `clip_id`, `ClipEntry`, and `vocabulary_hash`, so drift is still detected and
-   `rank` (arbitration) stays urgency-only.
+   barge-in, verbosity). `register` (calm/alert/urgent/critical) drives the baked TONE only. The
+   manifest key grew from `(kind, urgency, corner)` to `(kind, urgency, register, corner)`;
+   `MANIFEST_VERSION=3` is the current schema after issue #381 added the four-tier ladder and
+   persona/intensity metadata in `voice_signature`. `register` is in the `clip_id`, `ClipEntry`, and
+   `vocabulary_hash`, so drift is still detected and `rank` (arbitration) stays urgency-only.
 2. **Severity → register in the observer.** Each cue carries a continuous `intensity` scalar
    `s∈[0,1]` from real telemetry + the reference envelope (late_brake: zone-progress + closing speed
    above the apex target; brake_release: brake level past apex; apex_deficit: km/h deficit), quantized
@@ -54,6 +55,12 @@ is offline, every cue is pre-rendered at a tone tier; the hot path stays jitter-
    `brake_release` (over-braking past apex while off-throttle). `throttle` was emitted live but
    dropped by `_normalize_frame` — now extracted. `turn_in`/hold/unwind/throttle/track_out/gear are
    the documented next slice (need steering/line grounding to stay honest).
+7. **Issue #381 expressive ladder.** Canonical registers are now `calm`, `alert`, `urgent`, and
+   `critical`; legacy `firm` producer input is normalized to `urgent` so old logs and advisory
+   emitters do not go silent. The voice persona is explicitly project-authored:
+   `race-engineer-original-v1`, license/source `project-authored; no unconsented real-person clone`.
+   Every backend signature appends `race-engineer-original-v1+intensity2`, so a bank baked before the
+   persona/intensity-chain bump is refused as stale.
 
 ## Reconciliation that mattered
 
@@ -67,9 +74,10 @@ The stale comment was corrected. (A 5-agent design + adversary workflow had trus
 ## Verification (off-rig, observed)
 
 Acoustic measurement proves the headline rather than asserting it. Same word "Brake" across registers
-(say-expressive bank): **calm 805 ms / −26.7 dBFS / 1874 Hz → firm 428 ms / −22.9 dBFS → critical
+(say-expressive bank): **calm 805 ms / −26.7 dBFS / 1874 Hz → urgent 428 ms / −22.9 dBFS → critical
 407 ms / 1873 Hz** — monotonic shorter+louder+brighter = measurable urgency, all act cues ≤450 ms.
-ToneBackend bakes 3 byte-distinct registers (CI). ffmpeg shaper is byte-deterministic run-to-run.
+Issue #381 extends this to four baked tiers (`calm`/`alert`/`urgent`/`critical`); ToneBackend bakes
+four byte-distinct register clips in CI. ffmpeg shaper is byte-deterministic run-to-run.
 Timing-report harness + voice benchmark are durable tools (`tools/ai_sidecar/voice/{timing_report,
 bench_voices}.py`). **Perceptual** naturalness ("sounds like an authoritative engineer") remains a
 rig audit per AC d — not closed by CI.
