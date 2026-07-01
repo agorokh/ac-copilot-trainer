@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:47:02Z
+last_updated: 2026-07-01T04:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -75,7 +75,7 @@ PR #83 (WS + Lua bridge) **MERGED 2026-04-22** at `caa8a9ad` — still the found
 **Next (EPIC #86 remainder after PR #365):**
 
 - **Delivered by PR #365** — Game Point launcher, Setup Exchange screen/proxy/install path, Pocket Technician spinner controls, and environment-only sidecar token/voice routing.
-- **In flight on #86** — branch `feat/issue-86-racing-atelier-rig` now carries the Racing Atelier ESP32 firmware pass: committed Saira/Saira Semi Condensed/Spline Sans Mono `lv_font_conv` outputs, carbon/brass tokens, and a rebuilt AC Copilot instrument screen. Local PlatformIO + fast CI are green. Remaining closure gate is physical rig proof: flash/boot the screen, compare a rig photo to `docs/10_Development/design/racing-atelier-renders/esp32_rig.png`, and smoke launcher → AC Copilot live hints → Pocket Technician setup load → Setup Exchange browse/download/install. SPIFFS/persistence/backpressure/debug-screen polish remains optional unless the rig smoke exposes a real gap.
+- **Still open on #86** — Part A4 `lv_font_conv` outputs; SPIFFS/persistence/backpressure/debug-screen polish if still desired; final device smoke artifact covering launcher → AC Copilot live hints → Pocket Technician setup load → Setup Exchange browse/download/install.
 
 **Live-dev:** Hotspot + sidecar path per `[glossary/rig-network.md](../glossary/rig-network.md)`. Firmware: `python -m platformio run -e jc3248w535` under `firmware/screen/` (CI does not build firmware).
 
@@ -105,6 +105,24 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#428](https://github.com/agorokh/ac-copilot-trainer/pull/428)
+  **MERGED** at `9685155` - **Track Titan harness curriculum** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)
+  **CLOSED**): adds `track_titan_harness_curriculum_v1`, `tools.tt_ingest curriculum`, retained
+  coaching/last-session pairing, self-consistent in-lake `curriculum_lapN.json` output guards, derived
+  retention cascade planning, and docs for the M-TT3 artifact. Classification: no migration/env/deps/script/workflow flags.
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#433](https://github.com/agorokh/ac-copilot-trainer/pull/433)
+  **MERGED** at `cd17dfe` - **setup review hardening** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
+  follow-up): setup archive/store ingestion now rejects malformed UTF-8 without replacement
+  decoding, JSONL experiment-store reads stay streaming, closed-loop guards ignore later missing
+  unrelated params instead of reporting false confounds, and `.secrets.baseline` hash validation
+  accepts uppercase SHA-1 metadata. Classification: `scripts/` changed for policy hash regex only;
+  no migration/env/deps/workflow action required.
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#417](https://github.com/agorokh/ac-copilot-trainer/pull/417)
+  **MERGED** at `a4ae501` - **setup intelligence** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
+  **CLOSED**): adds complaint-language setup advice, setup diffs, loopback-only closed-loop
+  suggestions, schema-backed decoded display/cautions, packaged schema assets, and Windows-safe
+  policy secret scanning. Classification: `scripts/` and `Makefile` changed for policy/secret scan
+  plumbing; no migration/env/deps/workflow action required.
 - **2026-07-01 UTC / 2026-06-30 PT** - PR [#422](https://github.com/agorokh/ac-copilot-trainer/pull/422)
   **MERGED** at `28048c1` - **coaching diagnosis depth** ([#405](https://github.com/agorokh/ac-copilot-trainer/issues/405)
   **CLOSED**): Coach v2 now spatially matches current/reference corners by apex spline, reuses one

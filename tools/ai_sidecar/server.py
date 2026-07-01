@@ -55,8 +55,14 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_KEY,
     TYPE_SESSION_REVIEW_GENERATE,
     TYPE_SESSION_REVIEW_RESULT,
+    TYPE_SETUP_ADVICE,
+    TYPE_SETUP_ADVICE_RESULT,
+    TYPE_SETUP_CLOSED_LOOP,
+    TYPE_SETUP_CLOSED_LOOP_RESULT,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_COMPARE_RESULT,
+    TYPE_SETUP_DIFF,
+    TYPE_SETUP_DIFF_RESULT,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     TYPE_SETUP_EXCHANGE_SEARCH,
@@ -108,6 +114,12 @@ from tools.ai_sidecar.se_proxy import (
     validate_user_setups_root,
 )
 from tools.ai_sidecar.session import LapComparisonState
+from tools.ai_sidecar.setup_advisor import (
+    advise_from_complaint,
+    diff_setup_files,
+    setup_diff_summary,
+)
+from tools.ai_sidecar.setup_model import from_snapshot, load_setup_file
 from tools.ai_sidecar.setup_optimizer import (
     SetupExperimentError,
     compare_setups,
@@ -115,6 +127,7 @@ from tools.ai_sidecar.setup_optimizer import (
     load_records,
     rebuild_experiments,
     record_lap_archive,
+    suggest_closed_loop,
     suggest_next_setup,
 )
 
@@ -325,6 +338,9 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
+        TYPE_SETUP_ADVICE,
+        TYPE_SETUP_DIFF,
+        TYPE_SETUP_CLOSED_LOOP,
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
         TYPE_SESSION_REVIEW_GENERATE,
@@ -351,6 +367,9 @@ SERVER_TO_CLIENT_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
+        TYPE_SETUP_ADVICE_RESULT,
+        TYPE_SETUP_DIFF_RESULT,
+        TYPE_SETUP_CLOSED_LOOP_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     }
@@ -361,6 +380,9 @@ SIDECAR_LOCAL_TYPES = frozenset(
         TYPE_SETUP_EXPERIMENT_RECORD,
         TYPE_SETUP_COMPARE,
         TYPE_SETUP_SUGGEST,
+        TYPE_SETUP_ADVICE,
+        TYPE_SETUP_DIFF,
+        TYPE_SETUP_CLOSED_LOOP,
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
         TYPE_SESSION_REVIEW_GENERATE,
@@ -462,6 +484,43 @@ def _run_setup_suggest(store_path: str, car_id: str | None, track_id: str | None
     print(json.dumps(out, indent=2, sort_keys=True))
 
 
+def _run_setup_closed_loop(
+    store_path: str,
+    param: str,
+    car_id: str | None,
+    track_id: str | None,
+) -> None:
+    out = suggest_closed_loop(
+        load_records(store_path),
+        param=param,
+        car_id=car_id,
+        track_id=track_id,
+    )
+    print(json.dumps(out, indent=2, sort_keys=True))
+
+
+def _run_setup_advice(
+    complaint: str,
+    setup_file: str | None,
+    car_id: str | None,
+    track_id: str | None,
+) -> None:
+    if not setup_file:
+        raise SystemExit("--setup-advice requires --setup-file")
+    setup = load_setup_file(setup_file) if setup_file else None
+    out = advise_from_complaint(
+        complaint,
+        setup=setup,
+        car_id=car_id,
+        track_id=track_id,
+    )
+    print(json.dumps(out, indent=2, sort_keys=True))
+
+
+def _run_setup_diff(baseline: str, candidate: str) -> None:
+    print(json.dumps(diff_setup_files(baseline, candidate), indent=2, sort_keys=True))
+
+
 def _setup_store_record_count(store_path: str | Path) -> int:
     return len(load_records(store_path))
 
@@ -539,6 +598,21 @@ def _suggest_setup_store(
     track_id: str | None,
 ) -> dict[str, Any]:
     return suggest_next_setup(load_records(store_path), car_id=car_id, track_id=track_id)
+
+
+def _closed_loop_setup_store(
+    store_path: str | Path,
+    *,
+    param: str,
+    car_id: str | None,
+    track_id: str | None,
+) -> dict[str, Any]:
+    return suggest_closed_loop(
+        load_records(store_path),
+        param=param,
+        car_id=car_id,
+        track_id=track_id,
+    )
 
 
 def _user_setups_root_from_config(path: str | None) -> Path | None:
@@ -995,6 +1069,61 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
     global _setup_experiment_store_path, _setup_experiment_store_seeded
 
     t = data.get(TYPE_KEY)
+    if t == TYPE_SETUP_ADVICE:
+        snapshot = data.get("setup_snapshot")
+        try:
+            out = await asyncio.to_thread(
+                advise_from_complaint,
+                str(data.get("complaint") or ""),
+                setup_snapshot=snapshot if isinstance(snapshot, dict) else None,
+                car_id=data.get("car_id"),
+                track_id=data.get("track_id"),
+            )
+        except Exception as e:
+            logger.info("setup advice failed err=%s", e)
+            out = {"ok": False, "error": str(e)}
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_ADVICE_RESULT,
+                **out,
+            },
+        )
+        return
+
+    if t == TYPE_SETUP_DIFF:
+        baseline_snapshot = data.get("baseline_snapshot")
+        candidate_snapshot = data.get("candidate_snapshot")
+        try:
+            baseline = from_snapshot(
+                baseline_snapshot if isinstance(baseline_snapshot, dict) else {},
+                car_id=data.get("car_id"),
+                track_id=data.get("track_id"),
+            )
+            candidate = from_snapshot(
+                candidate_snapshot if isinstance(candidate_snapshot, dict) else {},
+                car_id=data.get("car_id"),
+                track_id=data.get("track_id"),
+            )
+            out = await asyncio.to_thread(
+                setup_diff_summary,
+                baseline,
+                candidate,
+            )
+        except Exception as e:
+            logger.info("setup diff failed err=%s", e)
+            out = {"ok": False, "error": str(e)}
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_DIFF_RESULT,
+                **out,
+            },
+        )
+        return
+
     if t == TYPE_SETUP_EXPERIMENT_STORE:
         if not _is_loopback_peer(websocket):
             await _safe_send(
@@ -1105,17 +1234,31 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         )
         return
 
-    store_path = _setup_experiment_store_path
-    if store_path is None:
+    if t == TYPE_SETUP_CLOSED_LOOP and not _is_loopback_peer(websocket):
         await _safe_send(
             websocket,
             {
                 ENVELOPE_KEY: ENVELOPE_VERSION,
-                TYPE_KEY: (
-                    TYPE_SETUP_COMPARE_RESULT
-                    if t == TYPE_SETUP_COMPARE
-                    else TYPE_SETUP_SUGGEST_RESULT
-                ),
+                TYPE_KEY: TYPE_SETUP_CLOSED_LOOP_RESULT,
+                "ok": False,
+                "error": "setup.closed_loop is loopback-only",
+            },
+        )
+        return
+
+    store_path = _setup_experiment_store_path
+    if store_path is None:
+        if t == TYPE_SETUP_COMPARE:
+            result_type = TYPE_SETUP_COMPARE_RESULT
+        elif t == TYPE_SETUP_CLOSED_LOOP:
+            result_type = TYPE_SETUP_CLOSED_LOOP_RESULT
+        else:
+            result_type = TYPE_SETUP_SUGGEST_RESULT
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: result_type,
                 "ok": False,
                 "error": "no setup experiment store is loaded yet",
             },
@@ -1160,6 +1303,29 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
             {
                 ENVELOPE_KEY: ENVELOPE_VERSION,
                 TYPE_KEY: TYPE_SETUP_SUGGEST_RESULT,
+                "store_path": str(store_path),
+                **out,
+            },
+        )
+        return
+
+    if t == TYPE_SETUP_CLOSED_LOOP:
+        try:
+            out = await asyncio.to_thread(
+                _closed_loop_setup_store,
+                store_path,
+                param=str(data.get("param") or ""),
+                car_id=data.get("car_id"),
+                track_id=data.get("track_id"),
+            )
+        except Exception as e:
+            logger.info("setup closed-loop failed store=%s err=%s", store_path, e)
+            out = {"ok": False, "error": str(e)}
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SETUP_CLOSED_LOOP_RESULT,
                 "store_path": str(store_path),
                 **out,
             },
@@ -1391,7 +1557,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Process one ``{v,type}`` frame: validate, ack, fan-out as needed."""
     peer = getattr(websocket, "remote_address", None)
     t_in = data.get(TYPE_KEY, "?")
-    err = validate_inbound(data)
+    try:
+        err = validate_inbound(data)
+    except Exception as exc:  # noqa: BLE001 - validation failures must stay protocol errors
+        logger.exception("external frame validation crashed peer=%s type=%s", peer, t_in)
+        err = f"invalid frame: {type(exc).__name__}"
     if err is not None:
         logger.warning("external frame rejected peer=%s type=%s reason=%s", peer, t_in, err)
         await _safe_send(websocket, make_error(err, ref_type=data.get(TYPE_KEY)))
@@ -1409,7 +1579,10 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             client_class,
             len(_external_peers),
         )
-        await _safe_send(websocket, make_hello_ack())
+        await _safe_send(
+            websocket,
+            make_hello_ack(include_loopback_only=_is_loopback_peer(websocket)),
+        )
         return
     if websocket not in _external_peers:
         await _safe_send(
@@ -2059,6 +2232,30 @@ def main() -> None:
         help="Return the next setup candidate from --setup-store and exit.",
     )
     p.add_argument(
+        "--setup-closed-loop",
+        metavar="PARAM",
+        help=(
+            "Return the next one-parameter setup move from --setup-store, informed by the latest "
+            "measured delta for PARAM."
+        ),
+    )
+    p.add_argument(
+        "--setup-advice",
+        metavar="COMPLAINT",
+        help="Map a driver handling complaint to ranked setup changes and exit.",
+    )
+    p.add_argument(
+        "--setup-file",
+        metavar="SETUP_INI",
+        help="Required current setup INI for --setup-advice.",
+    )
+    p.add_argument(
+        "--setup-diff",
+        nargs=2,
+        metavar=("BASELINE_INI", "CANDIDATE_INI"),
+        help="Compare two setup INI files and print display-ready diff rows.",
+    )
+    p.add_argument(
         "--setup-car-id", default=None, help="Optional car id filter for --setup-suggest."
     )
     p.add_argument(
@@ -2183,6 +2380,27 @@ def main() -> None:
         if not args.setup_store:
             raise SystemExit("--setup-suggest requires --setup-store")
         _run_setup_suggest(args.setup_store, args.setup_car_id, args.setup_track_id)
+        return
+    if args.setup_closed_loop:
+        if not args.setup_store:
+            raise SystemExit("--setup-closed-loop requires --setup-store")
+        _run_setup_closed_loop(
+            args.setup_store,
+            args.setup_closed_loop,
+            args.setup_car_id,
+            args.setup_track_id,
+        )
+        return
+    if args.setup_advice:
+        _run_setup_advice(
+            args.setup_advice,
+            args.setup_file,
+            args.setup_car_id,
+            args.setup_track_id,
+        )
+        return
+    if args.setup_diff:
+        _run_setup_diff(args.setup_diff[0], args.setup_diff[1])
         return
     reply = not args.no_reply
 

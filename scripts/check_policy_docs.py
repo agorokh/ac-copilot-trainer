@@ -16,8 +16,8 @@ REQUIRED = (
 )
 
 
-def main() -> int:
-    repo_root = Path(__file__).resolve().parents[1]
+def main(root: Path | None = None) -> int:
+    repo_root = root or Path(__file__).resolve().parents[1]
     missing = [path for path in REQUIRED if not (repo_root / path).is_file()]
     for path in missing:
         print(f"Policy check failed: {path} not found", file=sys.stderr)

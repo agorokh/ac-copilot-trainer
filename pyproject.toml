@@ -176,4 +176,9 @@ omit = [
   "tools/repo_knowledge/mcp_server.py",
   "tools/ai_sidecar/__main__.py",
   "tools/tt_ingest/__main__.py",
+  # Display-bound launcher GUI + its screenshot dev harness: the testable
+  # tone/palette/font logic lives in tools/rig_launcher/theme.py (100% covered);
+  # the Tk render path needs a display, which headless CI cannot instantiate.
+  "tools/rig_launcher/view.py",
+  "tools/rig_launcher/preview.py",
 ]

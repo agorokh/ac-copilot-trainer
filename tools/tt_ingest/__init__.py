@@ -13,10 +13,13 @@ Cognito identifiers are hardcoded (env-overridable). See :mod:`tools.tt_ingest.t
 from __future__ import annotations
 
 from tools.tt_ingest.cli import (
+    CurriculumSummary,
     ExportSummary,
     ReferenceArchiveSummary,
     build_arg_parser,
+    build_curriculum_from_files,
     build_reference_archive_from_files,
+    discover_curriculum_payloads,
     discover_reference_payloads,
     main,
     reindex_lake,
@@ -48,7 +51,9 @@ from tools.tt_ingest.tt_export import (
     write_immutable_json,
 )
 from tools.tt_ingest.tt_normalize import (
+    TT_CURRICULUM_FORMAT,
     TTNormalizeError,
+    build_harness_curriculum,
     build_reference_archive,
     build_sessions_index,
     normalize_session,
@@ -65,6 +70,7 @@ from tools.tt_ingest.tt_vulcan import (
 )
 
 __all__ = [
+    "CurriculumSummary",
     "ExportSummary",
     "MintedTokens",
     "ReferenceArchiveSummary",
@@ -72,17 +78,21 @@ __all__ = [
     "SessionsPage",
     "TTAuthError",
     "TTConfig",
+    "TT_CURRICULUM_FORMAT",
     "TTExportError",
     "TTNormalizeError",
     "TTVulcanError",
     "WriteResult",
     "build_arg_parser",
+    "build_curriculum_from_files",
+    "build_harness_curriculum",
     "build_index",
     "build_initiate_auth_request",
     "build_reference_archive",
     "build_reference_archive_from_files",
     "build_sessions_index",
     "decode_jwt_payload",
+    "discover_curriculum_payloads",
     "discover_reference_payloads",
     "extract_refresh_token_from_text",
     "extract_uid_from_text",

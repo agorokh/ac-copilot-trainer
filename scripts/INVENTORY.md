@@ -9,6 +9,7 @@ Short index of `scripts/` entry points. Classification: **CI** (automation check
 | `check_bootstrap_complete.py` | Validate bootstrap / template completeness | CI | template |
 | `check_vault_follow_up.sh` | PreToolUse Bash hook: block git commit if sensitive paths staged without vault follow-up (deterministic; works in Claude Code, Cursor, Codex) | agent | post-merge overhaul 2026-04 |
 | `ci_policy.py` | Branch name + PR title checks (conventional commits) | CI | #42 |
+| `check_policy_docs.py` | Portable policy checks on canonical docs used by `make ci-fast` | CI | #407 |
 | `check_policy_docs.sh` | Policy checks on canonical docs | CI | template |
 | `copier_post_copy.py` | Copier task: rename vault + rewrite paths after `copier copy` | bootstrap | #27 |
 | `cross_repo_aggregate.py` | CLI wrapper for cross-repo process miner aggregation | dev | template |
@@ -18,9 +19,10 @@ Short index of `scripts/` entry points. Classification: **CI** (automation check
 | `merge_settings.py` | Merge `.claude/settings.base.json` + `.claude/settings.local.json` → `settings.json` | dev | #40 |
 | `post_merge_classify.py` | Post-merge: classify PR diff paths (migrations, env, deps, scripts, workflows) | dev / CI | #50 |
 | `post_merge_sync.sh` | Post-merge two-phase steward (`sync` / `vault`): merge PR, sync main, prune; or commit vault edits to `vault/post-merge-pr<N>` branch + open `vault-only` PR. Explicit exit-code contract; never pushes to main. | agent | post-merge overhaul 2026-04 |
+| `policy_tracked_files.py` | Portable secret scan + tracked-file policy used by `make ci-fast` | CI | #407 |
 | `policy_tracked_files.sh` | Secret scan + tracked-file policy for CI | CI | template |
 | `pre_commit_check_test_artifacts.py` | Pre-commit: block test markers / data files under `src/` (and markers in `tools/`) | dev | #43 |
 | `process_miner.py` | Wrapper to run `tools.process_miner.run` | dev | template |
 | `session_debrief.py` | Stop hook: append JSONL debrief record | agent | #38 |
 
-Shell scripts are invoked from **Makefile** or GitHub Actions where noted in workflows.
+Portable Python scripts are preferred by **Makefile**; shell scripts remain available where noted in workflows or hooks.

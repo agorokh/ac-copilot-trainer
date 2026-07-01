@@ -1,59 +1,194 @@
 #!/usr/bin/env python3
-"""Scan every tracked file with detect-secrets' pre-commit hook."""
+"""Secret scan every tracked path with a Windows-safe Python entrypoint."""
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-_MAX_COMMAND_CHARS = 24_000
+POSIX_BATCH_SIZE = 100
+POSIX_MAX_ARG_CHARS = 24_000
+WINDOWS_BATCH_SIZE = 25
+WINDOWS_MAX_ARG_CHARS = 4_000
+WINDOWS_COMMAND_HEADROOM = 128
+_HASH_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+_RAW_SECRET_KEYS = frozenset({"secret", "secret_value", "raw_secret", "value"})
+BASELINE_HASH_EXCLUDE_LINES = r'^\s*"hashed_secret"\s*:\s*"[0-9a-fA-F]{40}",?\s*$'
 
 
-def _tracked_paths(repo_root: Path) -> list[str]:
-    proc = subprocess.run(
+def _repo_root() -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return Path(result.stdout.strip())
+
+
+def _tracked_files(root: Path) -> list[str]:
+    result = subprocess.run(
         ["git", "ls-files", "-z"],
-        cwd=repo_root,
+        cwd=root,
         capture_output=True,
         check=True,
     )
+    raw = result.stdout.split(b"\0")
     return [
-        raw.decode("utf-8", errors="surrogateescape") for raw in proc.stdout.split(b"\0") if raw
+        path
+        for chunk in raw
+        if (path := chunk.decode("utf-8", errors="surrogateescape")) and path != ".secrets.baseline"
     ]
 
 
-def _chunks(paths: Iterable[str]) -> Iterator[list[str]]:
-    batch: list[str] = []
-    size = 0
-    for path in paths:
-        added = len(path) + 1
-        if batch and size + added > _MAX_COMMAND_CHARS:
-            yield batch
-            batch = []
-            size = 0
-        batch.append(path)
-        size += added
-    if batch:
-        yield batch
+def _batches(
+    items: list[str],
+    size: int | None = None,
+    max_chars: int | None = None,
+) -> list[list[str]]:
+    if size is None:
+        size = WINDOWS_BATCH_SIZE if sys.platform == "win32" else POSIX_BATCH_SIZE
+    if max_chars is None:
+        max_chars = WINDOWS_MAX_ARG_CHARS if sys.platform == "win32" else POSIX_MAX_ARG_CHARS
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_chars = 0
+    for item in items:
+        item_chars = _argument_chars(item)
+        if item_chars > max_chars:
+            raise ValueError(
+                f"tracked path exceeds the platform argv budget ({item_chars}>{max_chars}): {item}"
+            )
+        if current and (len(current) >= size or current_chars + item_chars > max_chars):
+            batches.append(current)
+            current = []
+            current_chars = 0
+        current.append(item)
+        current_chars += item_chars
+    if current:
+        batches.append(current)
+    return batches
 
 
-def main() -> int:
-    repo_root = Path(__file__).resolve().parents[1]
-    paths = _tracked_paths(repo_root)
-    if not paths:
-        return 0
+def _argument_chars(value: str) -> int:
+    chars = len(value) + 1
+    if sys.platform == "win32" and (any(char.isspace() for char in value) or '"' in value):
+        chars += 2 + value.count('"')
+    return chars
+
+
+def _file_arg_budget(baseline: Path) -> int:
+    limit = WINDOWS_MAX_ARG_CHARS if sys.platform == "win32" else POSIX_MAX_ARG_CHARS
     base_cmd = [
         sys.executable,
         "-m",
         "detect_secrets.pre_commit_hook",
         "--baseline",
-        ".secrets.baseline",
+        str(baseline),
     ]
-    for batch in _chunks(paths):
-        proc = subprocess.run([*base_cmd, *batch], cwd=repo_root)
-        if proc.returncode != 0:
-            return proc.returncode
+    headroom = WINDOWS_COMMAND_HEADROOM if sys.platform == "win32" else 0
+    return limit - sum(_argument_chars(arg) for arg in base_cmd) - headroom
+
+
+def _audit_baseline(baseline: Path) -> list[str]:
+    try:
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f".secrets.baseline is not valid JSON: {exc}"]
+    results = data.get("results")
+    if not isinstance(results, dict):
+        return [".secrets.baseline missing object 'results'"]
+    errors: list[str] = []
+    for filename, findings in results.items():
+        if not isinstance(filename, str) or not isinstance(findings, list):
+            errors.append(".secrets.baseline results must map filenames to finding lists")
+            continue
+        for index, finding in enumerate(findings):
+            label = f"{filename}[{index}]"
+            if not isinstance(finding, dict):
+                errors.append(f"{label} is not an object")
+                continue
+            raw_keys = sorted(_RAW_SECRET_KEYS.intersection(finding))
+            if raw_keys:
+                errors.append(f"{label} contains raw secret field(s): {', '.join(raw_keys)}")
+            hashed = finding.get("hashed_secret")
+            if not isinstance(hashed, str) or _HASH_RE.fullmatch(hashed) is None:
+                errors.append(f"{label} missing 40-character hashed_secret")
+            finding_type = finding.get("type")
+            if not isinstance(finding_type, str) or not finding_type.strip():
+                errors.append(f"{label} missing non-empty type")
+            line_number = finding.get("line_number")
+            if line_number is not None and (
+                isinstance(line_number, bool)
+                or not isinstance(line_number, int)
+                or line_number <= 0
+            ):
+                errors.append(f"{label} line_number must be a positive integer")
+            if finding.get("filename") != filename:
+                errors.append(f"{label} filename does not match its results key")
+    return errors
+
+
+def _run_detect_secrets(
+    root: Path,
+    baseline: Path,
+    files: list[str],
+    *,
+    exclude_lines: str | None = None,
+) -> int:
+    args = [
+        sys.executable,
+        "-m",
+        "detect_secrets.pre_commit_hook",
+        "--baseline",
+        str(baseline),
+    ]
+    if exclude_lines is not None:
+        args.extend(["--exclude-lines", exclude_lines])
+    args.extend(files)
+    result = subprocess.run(
+        args,
+        cwd=root,
+    )
+    return result.returncode
+
+
+def _scan_baseline_file(root: Path, baseline: Path) -> int:
+    return _run_detect_secrets(
+        root,
+        baseline,
+        [".secrets.baseline"],
+        exclude_lines=BASELINE_HASH_EXCLUDE_LINES,
+    )
+
+
+def main() -> int:
+    root = _repo_root()
+    files = _tracked_files(root)
+    baseline = root / ".secrets.baseline"
+    baseline_errors = _audit_baseline(baseline)
+    if baseline_errors:
+        for error in baseline_errors:
+            print(f"policy_tracked_files: {error}", file=sys.stderr)
+        return 2
+    baseline_scan = _scan_baseline_file(root, baseline)
+    if baseline_scan != 0:
+        return baseline_scan
+    if not files:
+        return 0
+    try:
+        batches = _batches(files, max_chars=_file_arg_budget(baseline))
+    except ValueError as exc:
+        print(f"policy_tracked_files: {exc}", file=sys.stderr)
+        return 2
+    for batch in batches:
+        scan_result = _run_detect_secrets(root, baseline, batch)
+        if scan_result != 0:
+            return scan_result
     return 0
 
 

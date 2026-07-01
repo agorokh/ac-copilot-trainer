@@ -1,5 +1,18 @@
 {
   "car_id": "ks_porsche_911_gt3_r_2016",
+  "cautions": {
+    "FRONT_BIAS": [
+      {
+        "direction": "decrease",
+        "message": "911 GT3 R usually wants a lower front-bias window (~50-56%)."
+      },
+      {
+        "current_lt": 50,
+        "direction": "increase",
+        "message": "Do not chase stability past the 911's usual low-front-bias window."
+      }
+    ]
+  },
   "schema_version": 1,
   "spinners": {
     "ABS": {

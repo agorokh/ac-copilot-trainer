@@ -11,6 +11,7 @@ All frames are JSON objects. Unknown ``type`` values are rejected by
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -48,6 +49,9 @@ PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
     {CLIENT_CLASS_SCREEN, CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL}
 )
 HAPTIC_CLIENT_CLASSES: frozenset[str] = frozenset({CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL})
+MAX_SETUP_SNAPSHOT_KEYS = 512
+MAX_SETUP_SNAPSHOT_BYTES = 64_000
+MAX_SETUP_ADVICE_COMPLAINT_LEN = 240
 
 # Client → server.
 TYPE_HELLO = "hello"
@@ -68,6 +72,9 @@ TYPE_SETUP_EXPERIMENT_STORE = "setup.experiment.store"
 TYPE_SETUP_EXPERIMENT_RECORD = "setup.experiment.record"
 TYPE_SETUP_COMPARE = "setup.compare"
 TYPE_SETUP_SUGGEST = "setup.suggest"
+TYPE_SETUP_ADVICE = "setup.advice"
+TYPE_SETUP_DIFF = "setup.diff"
+TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
@@ -88,6 +95,9 @@ TYPE_SETUP_EXPERIMENT_STORE_ACK = "setup.experiment.store.ack"
 TYPE_SETUP_EXPERIMENT_RECORD_ACK = "setup.experiment.record.ack"
 TYPE_SETUP_COMPARE_RESULT = "setup.compare.result"
 TYPE_SETUP_SUGGEST_RESULT = "setup.suggest.result"
+TYPE_SETUP_ADVICE_RESULT = "setup.advice.result"
+TYPE_SETUP_DIFF_RESULT = "setup.diff.result"
+TYPE_SETUP_CLOSED_LOOP_RESULT = "setup.closed_loop.result"
 TYPE_SETUP_EXCHANGE_SEARCH_RESULT = "se.search.result"
 TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK = "se.download.ack"
 TYPE_SESSION_REVIEW_RESULT = "session.review.result"
@@ -127,6 +137,9 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_STATE_SUBSCRIBE,
     TYPE_SETUP_COMPARE,
     TYPE_SETUP_SUGGEST,
+    TYPE_SETUP_ADVICE,
+    TYPE_SETUP_DIFF,
+    TYPE_SETUP_CLOSED_LOOP,
     TYPE_SETUP_EXCHANGE_SEARCH,
     TYPE_SETUP_EXCHANGE_DOWNLOAD,
     TYPE_SESSION_REVIEW_GENERATE,
@@ -135,6 +148,18 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_TELEMETRY_TICK,
     TYPE_HAPTIC_EVENT,
 )
+LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset({TYPE_SETUP_CLOSED_LOOP})
+
+
+def server_capabilities(*, include_loopback_only: bool = True) -> list[str]:
+    if include_loopback_only:
+        return list(SERVER_CAPABILITIES)
+    return [
+        capability
+        for capability in SERVER_CAPABILITIES
+        if capability not in LOOPBACK_ONLY_CAPABILITIES
+    ]
+
 
 # Names a client may invoke via `action`. Mirrors the Lua dispatcher in
 # ``modules/ws_bridge.lua``; the sidecar only validates that the name is
@@ -197,12 +222,16 @@ def topics_are_sidecar_only(topics: Any) -> bool:
     return all(isinstance(t, str) and t in SIDECAR_PRODUCED_TOPICS for t in topics)
 
 
-def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
+def make_hello_ack(
+    server_version: str = SERVER_VERSION,
+    *,
+    include_loopback_only: bool = True,
+) -> dict[str, Any]:
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
         TYPE_KEY: TYPE_HELLO_ACK,
         "server_version": server_version,
-        "capabilities": list(SERVER_CAPABILITIES),
+        "capabilities": server_capabilities(include_loopback_only=include_loopback_only),
     }
 
 
@@ -299,6 +328,31 @@ def _validate_optional_number(
 def _validate_optional_string(frame: dict[str, Any], key: str) -> str | None:
     if key in frame and not isinstance(frame.get(key), str):
         return f"{key} must be a string"
+    return None
+
+
+def _validate_setup_snapshot(
+    frame: dict[str, Any],
+    key: str,
+    *,
+    required: bool,
+    frame_type: str,
+) -> str | None:
+    if key not in frame:
+        return f"{frame_type} requires object '{key}'" if required else None
+    value = frame.get(key)
+    if not isinstance(value, dict):
+        return f"{key} requires an object"
+    if len(value) > MAX_SETUP_SNAPSHOT_KEYS:
+        return f"{key} must contain <= {MAX_SETUP_SNAPSHOT_KEYS} entries"
+    try:
+        payload_bytes = len(
+            json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+    except (TypeError, ValueError, RecursionError, OverflowError, UnicodeError):
+        return f"{key} must be JSON-serializable"
+    if payload_bytes > MAX_SETUP_SNAPSHOT_BYTES:
+        return f"{key} must be <= {MAX_SETUP_SNAPSHOT_BYTES} bytes"
     return None
 
 
@@ -536,6 +590,48 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             if key in frame and not isinstance(frame.get(key), str):
                 return f"setup.suggest optional '{key}' must be a string"
         return None
+    if t == TYPE_SETUP_ADVICE:
+        complaint = frame.get("complaint")
+        if not isinstance(complaint, str):
+            return "setup.advice requires non-empty 'complaint'"
+        if len(complaint) > MAX_SETUP_ADVICE_COMPLAINT_LEN:
+            return f"setup.advice complaint must be <= {MAX_SETUP_ADVICE_COMPLAINT_LEN} characters"
+        if not complaint.strip():
+            return "setup.advice requires non-empty 'complaint'"
+        for key in ("car_id", "track_id"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return _validate_setup_snapshot(
+            frame,
+            "setup_snapshot",
+            required=True,
+            frame_type=TYPE_SETUP_ADVICE,
+        )
+    if t == TYPE_SETUP_DIFF:
+        for key in ("baseline_snapshot", "candidate_snapshot"):
+            err = _validate_setup_snapshot(
+                frame,
+                key,
+                required=True,
+                frame_type=TYPE_SETUP_DIFF,
+            )
+            if err is not None:
+                return err
+        for key in ("car_id", "track_id"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return None
+    if t == TYPE_SETUP_CLOSED_LOOP:
+        param = frame.get("param")
+        if not isinstance(param, str) or not param.strip():
+            return "setup.closed_loop requires non-empty 'param'"
+        for key in ("car_id", "track_id"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+        return None
     if t == TYPE_SETUP_EXCHANGE_SEARCH:
         for key in ("car_id", "track_id", "search", "order_by"):
             err = _validate_optional_string(frame, key)
@@ -585,6 +681,9 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         TYPE_SETUP_EXPERIMENT_RECORD_ACK,
         TYPE_SETUP_COMPARE_RESULT,
         TYPE_SETUP_SUGGEST_RESULT,
+        TYPE_SETUP_ADVICE_RESULT,
+        TYPE_SETUP_DIFF_RESULT,
+        TYPE_SETUP_CLOSED_LOOP_RESULT,
         TYPE_SETUP_EXCHANGE_SEARCH_RESULT,
         TYPE_SETUP_EXCHANGE_DOWNLOAD_ACK,
     ):
