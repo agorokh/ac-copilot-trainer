@@ -544,6 +544,74 @@ def test_closed_loop_rejects_ambiguous_track_scope() -> None:
     assert suggestion["track_ids"] == ["magione", "spa"]
 
 
+def test_closed_loop_rejects_unresolved_car_scope() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+    for record in records:
+        record["car"]["id"] = "unknown"
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "car_id"
+    assert suggestion["car_ids"] == []
+
+
+def test_closed_loop_rejects_unresolved_track_scope() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+    for record in records:
+        record["track"]["id"] = "unknown"
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "track_id"
+    assert suggestion["track_ids"] == []
+
+
 def test_closed_loop_treats_zero_measured_delta_as_inconclusive() -> None:
     records = [
         record_from_lap_archive(

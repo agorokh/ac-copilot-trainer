@@ -15,10 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.car_schema import CarSetupSchema, load_latest_schema
+from tools.ai_sidecar.external_protocol import (
+    MAX_SETUP_ADVICE_COMPLAINT_LEN as MAX_COMPLAINT_LEN,
+)
 from tools.ai_sidecar.setup_knowledge import AERO, MECHANICAL, effect_for
 from tools.ai_sidecar.setup_model import CarSetup, from_snapshot, load_setup_file, spec_for
-
-MAX_COMPLAINT_LEN = 240
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 

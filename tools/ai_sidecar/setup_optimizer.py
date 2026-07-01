@@ -506,7 +506,15 @@ def _filter_records(
     car_id: str | None = None,
     track_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    valid = _valid_records(records)
+    return _filter_valid_records(_valid_records(records), car_id=car_id, track_id=track_id)
+
+
+def _filter_valid_records(
+    valid: list[dict[str, Any]],
+    *,
+    car_id: str | None = None,
+    track_id: str | None = None,
+) -> list[dict[str, Any]]:
     if car_id:
         valid = [r for r in valid if r.get("car", {}).get("id") == car_id]
     if track_id:
@@ -533,7 +541,7 @@ def _infer_closed_loop_scope(
     effective_car_id = _clean_optional_id(car_id)
     effective_track_id = _clean_optional_id(track_id)
     valid = _valid_records(records)
-    track_scoped = _filter_records(valid, track_id=effective_track_id)
+    track_scoped = _filter_valid_records(valid, track_id=effective_track_id)
     if effective_car_id is None:
         car_ids = _scope_ids(track_scoped, "car")
         if len(car_ids) > 1:
@@ -550,8 +558,21 @@ def _infer_closed_loop_scope(
             )
         if len(car_ids) == 1:
             effective_car_id = car_ids[0]
+        elif track_scoped:
+            return (
+                None,
+                effective_track_id,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "car_id",
+                    "car_ids": [],
+                    "track_id": effective_track_id,
+                    "error": "setup.closed_loop requires a resolvable car scope",
+                },
+            )
 
-    car_scoped = _filter_records(valid, car_id=effective_car_id)
+    car_scoped = _filter_valid_records(valid, car_id=effective_car_id)
     if effective_track_id is None:
         track_ids = _scope_ids(car_scoped, "track")
         if len(track_ids) > 1:
@@ -569,6 +590,19 @@ def _infer_closed_loop_scope(
             )
         if len(track_ids) == 1:
             effective_track_id = track_ids[0]
+        elif car_scoped:
+            return (
+                effective_car_id,
+                None,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "track_id",
+                    "car_id": effective_car_id,
+                    "track_ids": [],
+                    "error": "setup.closed_loop requires a resolvable track scope",
+                },
+            )
     return effective_car_id, effective_track_id, None
 
 
