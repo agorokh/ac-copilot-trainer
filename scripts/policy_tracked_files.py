@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 POSIX_BATCH_SIZE = 100
@@ -122,6 +123,47 @@ def _audit_baseline(baseline: Path) -> list[str]:
     return errors
 
 
+def _run_detect_secrets(root: Path, baseline: Path, files: list[str]) -> int:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "detect_secrets.pre_commit_hook",
+            "--baseline",
+            str(baseline),
+            *files,
+        ],
+        cwd=root,
+    )
+    return result.returncode
+
+
+def _redact_baseline_hashes(value: object) -> object:
+    if isinstance(value, dict):
+        out: dict[str, object] = {}
+        for key, child in value.items():
+            if key == "hashed_secret":
+                out["baseline_hash"] = "redacted"
+            elif key == "type":
+                out["baseline_type"] = "redacted"
+            else:
+                out[key] = _redact_baseline_hashes(child)
+        return out
+    if isinstance(value, list):
+        return [_redact_baseline_hashes(child) for child in value]
+    return value
+
+
+def _scan_sanitized_baseline(root: Path, baseline: Path) -> int:
+    data = json.loads(baseline.read_text(encoding="utf-8"))
+    sanitized = _redact_baseline_hashes(data)
+    body = json.dumps(sanitized, indent=2, sort_keys=True) + "\n"
+    with tempfile.TemporaryDirectory(prefix="ac-copilot-baseline-scan-") as tmp_dir:
+        scan_path = Path(tmp_dir) / ".secrets.baseline"
+        scan_path.write_text(body, encoding="utf-8")
+        return _run_detect_secrets(root, baseline, [str(scan_path)])
+
+
 def main() -> int:
     root = _repo_root()
     files = _tracked_files(root)
@@ -131,6 +173,9 @@ def main() -> int:
         for error in baseline_errors:
             print(f"policy_tracked_files: {error}", file=sys.stderr)
         return 2
+    baseline_scan = _scan_sanitized_baseline(root, baseline)
+    if baseline_scan != 0:
+        return baseline_scan
     if not files:
         return 0
     try:
@@ -139,19 +184,9 @@ def main() -> int:
         print(f"policy_tracked_files: {exc}", file=sys.stderr)
         return 2
     for batch in batches:
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "detect_secrets.pre_commit_hook",
-                "--baseline",
-                str(baseline),
-                *batch,
-            ],
-            cwd=root,
-        )
-        if result.returncode != 0:
-            return result.returncode
+        scan_result = _run_detect_secrets(root, baseline, batch)
+        if scan_result != 0:
+            return scan_result
     return 0
 
 

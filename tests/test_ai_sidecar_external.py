@@ -201,7 +201,15 @@ def test_validate_inbound_accepts_known_types() -> None:
     )
     assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
     assert (
-        ep.validate_inbound({"v": 1, "type": "setup.advice", "complaint": "loose on exit"}) is None
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "loose on exit",
+                "setup_snapshot": {"FRONT_BIAS.VALUE": "66"},
+            }
+        )
+        is None
     )
     assert (
         ep.validate_inbound(
@@ -276,12 +284,16 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
     assert "complaint" in (ep.validate_inbound({"v": 1, "type": "setup.advice"}) or "")
+    assert "setup_snapshot" in (
+        ep.validate_inbound({"v": 1, "type": "setup.advice", "complaint": "loose"}) or ""
+    )
     assert "complaint must be <=" in (
         ep.validate_inbound(
             {
                 "v": 1,
                 "type": "setup.advice",
                 "complaint": "x" * (ep.MAX_SETUP_ADVICE_COMPLAINT_LEN + 1),
+                "setup_snapshot": {"FRONT_BIAS.VALUE": "66"},
             }
         )
         or ""

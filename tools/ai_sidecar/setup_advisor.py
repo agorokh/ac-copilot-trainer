@@ -230,13 +230,13 @@ def _parse_issue(text: str) -> str | None:
     ):
         return "wheelspin"
     if {"understeer", "push", "pushing", "washes", "wash", "plough", "plow"} & words or _has_phrase(
-        text, "wont turn", "won t turn", "doesnt turn", "doesn t turn"
+        text, "under steer", "wont turn", "won t turn", "doesnt turn", "doesn t turn"
     ):
         return "understeer"
     if {"kerb", "curb", "bump", "bumpy"} & words:
         return "instability"
     if {"oversteer", "loose", "snap", "snappy", "tail", "rear"} & words or _has_phrase(
-        text, "steps out", "stepping out", "rear steps"
+        text, "over steer", "steps out", "stepping out", "rear steps"
     ):
         return "oversteer"
     return None

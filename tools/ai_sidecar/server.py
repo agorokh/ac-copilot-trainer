@@ -505,6 +505,8 @@ def _run_setup_advice(
     car_id: str | None,
     track_id: str | None,
 ) -> None:
+    if not setup_file:
+        raise SystemExit("--setup-advice requires --setup-file")
     setup = load_setup_file(setup_file) if setup_file else None
     out = advise_from_complaint(
         complaint,

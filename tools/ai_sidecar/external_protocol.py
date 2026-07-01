@@ -607,7 +607,7 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             err = _validate_optional_string(frame, key)
             if err is not None:
                 return err
-        return _validate_setup_snapshot(frame, "setup_snapshot", required=False)
+        return _validate_setup_snapshot(frame, "setup_snapshot", required=True)
     if t == TYPE_SETUP_DIFF:
         for key in ("baseline_snapshot", "candidate_snapshot"):
             err = _validate_setup_snapshot(frame, key, required=True)

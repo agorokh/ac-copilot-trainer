@@ -86,6 +86,28 @@ def test_high_speed_understeer_prefers_aero_lever() -> None:
     assert sections.index("WING_1") < sections.index("ARB_FRONT")
 
 
+def test_spaced_understeer_phrase_maps_to_understeer() -> None:
+    out = advise_from_complaint(
+        "under steer mid corner",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"]["issue"] == "understeer"
+
+
+def test_spaced_oversteer_phrase_maps_to_oversteer() -> None:
+    out = advise_from_complaint(
+        "over steer on exit",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"]["issue"] == "oversteer"
+
+
 def test_mid_corner_text_overrides_generic_turn_word() -> None:
     out = advise_from_complaint(
         "won't turn mid corner",

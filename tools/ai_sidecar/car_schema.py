@@ -60,6 +60,16 @@ def _safe_schema_car_id(car_id: str | None) -> str | None:
     return text
 
 
+def _safe_schema_file(path: Path, root: Path) -> Path | None:
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not _is_relative_to(resolved, root) or not resolved.is_file():
+        return None
+    return resolved
+
+
 def load_latest_schema(
     car_id: str | None,
     schema_dir: str | Path = DEFAULT_SCHEMA_DIR,
@@ -74,14 +84,21 @@ def load_latest_schema(
         return None
     if not car_dir.is_dir():
         return None
-    candidates = sorted(
-        car_dir.glob("*.json"),
-        key=lambda path: path.name,
-    )
+    candidates = [
+        (path, resolved)
+        for path in sorted(
+            car_dir.glob("*.json"),
+            key=lambda path: path.name,
+        )
+        if (resolved := _safe_schema_file(path, root)) is not None
+    ]
     if not candidates:
         return None
     marker = car_dir / "latest.json"
-    return CarSetupSchema.load(marker if marker in candidates else candidates[-1])
+    for path, resolved in candidates:
+        if path == marker:
+            return CarSetupSchema.load(resolved)
+    return CarSetupSchema.load(candidates[-1][1])
 
 
 def _f(value: Any) -> float | None:

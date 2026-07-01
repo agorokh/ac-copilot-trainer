@@ -256,6 +256,30 @@ def test_load_latest_schema_prefers_marker_then_lexicographic(tmp_path: Path) ->
     assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 3
 
 
+def test_load_latest_schema_ignores_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "schemas"
+    car_dir = root / "car"
+    car_dir.mkdir(parents=True)
+    safe = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 1, "step": 1}]
+    )
+    outside = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 99, "step": 1}]
+    )
+    (car_dir / "001.json").write_text(json.dumps(safe.to_json()), encoding="utf-8")
+    outside_path = tmp_path / "outside.json"
+    outside_path.write_text(json.dumps(outside.to_json()), encoding="utf-8")
+    try:
+        (car_dir / "999.json").symlink_to(outside_path)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unsupported on this platform: {exc!r}")
+
+    loaded = load_latest_schema("car", schema_dir=root)
+
+    assert loaded is not None
+    assert loaded.spinners["ABS"].max == 1
+
+
 def test_load_latest_schema_rejects_unsafe_car_id(tmp_path: Path) -> None:
     root = tmp_path / "schemas"
     escape = tmp_path / "escape"

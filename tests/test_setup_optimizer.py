@@ -10,6 +10,7 @@ import pytest
 
 from tools.ai_sidecar.car_schema import CarSetupSchema
 from tools.ai_sidecar.server import (
+    _run_setup_advice,
     _run_setup_closed_loop,
     _run_setup_compare,
     _run_setup_rebuild,
@@ -333,6 +334,107 @@ def test_closed_loop_rejects_confounded_latest_pair() -> None:
     assert suggestion["status"] == "latest_pair_changed_multiple_params"
     assert suggestion["changed_params"] == ["FRONT_BIAS.VALUE", "WING_2.VALUE"]
     assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+
+
+def test_closed_loop_rejects_param_trial_after_confounded_baseline_state() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="baseline",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="wing-change",
+                setup_name="confounded",
+                lap_ms=99_000,
+                front_bias=64,
+                rear_wing=9,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=97_000,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "baseline_state_changed_multiple_params"
+    assert suggestion["changed_params"] == ["WING_2.VALUE"]
+    assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+
+
+def test_closed_loop_allows_repeated_setup_baseline_after_prior_change() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="baseline",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="wing-change",
+                setup_name="confounded",
+                lap_ms=99_000,
+                front_bias=64,
+                rear_wing=9,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="wing-change-repeat",
+                setup_name="confounded-repeat",
+                lap_ms=98_900,
+                front_bias=64,
+                rear_wing=9,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-d4",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=97_000,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["previous_result"]["measured_delta_ms"] == 1900.0
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
+def test_setup_advice_cli_requires_setup_file() -> None:
+    with pytest.raises(SystemExit, match="--setup-advice requires --setup-file"):
+        _run_setup_advice("loose on exit", None, None, None)
 
 
 def test_closed_loop_uses_latest_pair_where_param_changed() -> None:

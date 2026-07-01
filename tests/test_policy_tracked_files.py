@@ -36,7 +36,7 @@ def test_repo_root_is_anchored_to_script_location(monkeypatch) -> None:
     assert policy_tracked_files._repo_root() == REPO_ROOT
 
 
-def test_tracked_files_filters_empty_git_ls_files_sentinel(
+def test_tracked_files_filters_empty_sentinel_and_baseline(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -155,3 +155,45 @@ def test_audit_baseline_rejects_raw_or_malformed_findings(tmp_path: Path) -> Non
 
     assert any("raw secret" in error for error in errors)
     assert any("hashed_secret" in error for error in errors)
+
+
+def test_scan_sanitized_baseline_redacts_expected_hashes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / ".secrets.baseline"
+    baseline.write_text(
+        json.dumps(
+            {
+                "results": {
+                    "src/app.py": [
+                        {
+                            "filename": "src/app.py",
+                            "hashed_secret": "a" * 40,
+                            "type": "Secret Keyword",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    scanned_body = ""
+
+    def fake_run_detect_secrets(root: Path, baseline_arg: Path, files: list[str]) -> int:
+        nonlocal scanned_body
+        assert root == tmp_path
+        assert baseline_arg == baseline
+        scanned_body = Path(files[0]).read_text(encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(
+        policy_tracked_files,
+        "_run_detect_secrets",
+        fake_run_detect_secrets,
+    )
+
+    assert policy_tracked_files._scan_sanitized_baseline(tmp_path, baseline) == 0
+    assert "a" * 40 not in scanned_body
+    assert '"baseline_hash": "redacted"' in scanned_body
+    assert "hashed_secret" not in scanned_body
