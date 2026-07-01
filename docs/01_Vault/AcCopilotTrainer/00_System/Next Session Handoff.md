@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:13:41Z
+last_updated: 2026-07-01T00:47:02Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -104,6 +104,38 @@ dependency, script, or workflow flags.
 repo-prefetch attempts returned no relevant context. This SAVE is grounded in vault Tier-2 context,
 live GitHub state (`gh pr view 422` reported `MERGED`; `gh issue view 405` reported `CLOSED`), and the
 observed local/GitHub verification above.
+
+## In flight (2026-07-01) - issue #86 Racing Atelier rig-screen firmware pass
+
+Branch `feat/issue-86-racing-atelier-rig` ports the ESP32 JC3248W535 firmware
+screen to the Racing Atelier design handoff from PR #410. The work replaces the
+legacy firmware font bundle with committed `lv_font_conv` outputs for Saira,
+Saira Semi Condensed, and Spline Sans Mono; wires Racing Atelier carbon/brass
+tokens through `firmware/screen/include/ui/tokens.h`; and rebuilds the AC
+Copilot screen as a portrait instrument display with live/stale status, a
+single command (`BRAKE` / `LIFT` / `CLEAR` / `STALE`), a 12-cell brake-zone
+strip, signed delta fill, and a square footer/back affordance. Launcher, Pocket
+Technician, Setup Exchange, and toast labels/buttons now use the same font and
+square-corner token set.
+
+Verification passed locally:
+
+- `python -m platformio run -e jc3248w535` from `firmware/screen/` (clean
+  success, RAM 48.5%, flash 18.3%).
+- `python -m pytest -q tests/test_rig_screen_racing_atelier.py
+  tests/test_setup_library_summary.py` (`22 passed`).
+- `FLEET_GOVERNANCE_ROOT=.fleet-governance-vendor make ci-fast` (`2035 passed,
+  117 skipped`, coverage 85.82%, `ci-fast: OK`; root allowlist warnings only
+  for existing `.copier-answers.yml` and `doppler.yaml`).
+
+Remaining issue #86 closure gate is physical: flash/boot the real screen,
+capture the rig photo against
+`docs/10_Development/design/racing-atelier-renders/esp32_rig.png`, and smoke
+launcher -> AC Copilot live hints -> Pocket Technician setup load -> Setup
+Exchange browse/download/install. The Codex tool surface still lacks the
+Tier-3 `agentic-memory` MCP tool; the repo prefetch fallback returned stale
+issue #402 context, so this pass is grounded in Tier-2 vault plus live GitHub
+issue comments.
 
 ## Delivered (2026-06-30) - PR #423 MERGED: session review artifact (#404 Part A)
 

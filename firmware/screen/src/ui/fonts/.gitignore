@@ -1,5 +1,9 @@
-# Ignore lv_font_conv outputs generated locally per README.
-# Bundled font sources under src/, the README, and the OFL license remain
-# tracked because they are not matched by these patterns.
+# Ignore ad-hoc lv_font_conv outputs generated locally.
 *.c
 *.bin
+*.tmp.c
+
+# Racing Atelier Part A4 ships the generated LVGL C font bundle because the
+# firmware now references these faces directly.
+!font_saira_*.c
+!font_spline_*.c

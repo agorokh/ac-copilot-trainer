@@ -62,7 +62,7 @@ inline bool jc_touch_read(uint16_t* x, uint16_t* y) {
     return false;
   }
 
-  const uint8_t got = Wire.requestFrom(JC_TOUCH_I2C_ADDR, (uint8_t)8);
+  const uint8_t got = Wire.requestFrom((uint8_t)JC_TOUCH_I2C_ADDR, (uint8_t)8);
   if (got < 8) {
 #ifdef JC_TOUCH_DEBUG_I2C
     if ((++jc_touch_i2c_err % 128) == 0) {

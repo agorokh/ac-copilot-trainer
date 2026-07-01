@@ -2,7 +2,7 @@
 type: investigation
 status: active
 created: 2026-06-28
-updated: 2026-06-28
+updated: 2026-07-01
 memory_tier: canonical
 issue: https://github.com/agorokh/ac-copilot-trainer/issues/86
 relates_to:
@@ -77,3 +77,36 @@ Branch `fix/issue-86-rig-sidecar-autostart` patches the recurring startup gap:
   installed; direct recipe pieces were run instead. Repo-wide ruff format check
   still wants to rewrite hundreds of unrelated CRLF/LF files in this Windows
   checkout, while changed files pass targeted `ruff format --check`.
+
+## Racing Atelier firmware pass (2026-07-01)
+
+Branch `feat/issue-86-racing-atelier-rig` applies the PR #410 Racing Atelier
+handoff to the ESP32 JC3248W535 firmware surface:
+
+- Replaced the legacy firmware font bundle with committed `lv_font_conv`
+  outputs for Saira, Saira Semi Condensed, and Spline Sans Mono, plus source
+  TTFs and regeneration docs.
+- Rewired `firmware/screen/include/ui/tokens.h` to the carbon/brass/signal
+  palette (`#0B0C0D`, `#C8983E`, `#F23B2C`, `#F4A52C`, `#2FBE6E`,
+  `#49B6C9`) and square tile radius.
+- Rebuilt the AC Copilot screen as a portrait instrument UI: live/stale status,
+  corner badge, single command, brake-distance readout, 12-cell brake-zone
+  strip, signed delta fill, advice footer, and square back affordance.
+- Touched Launcher, Pocket Technician, Setup Exchange, and toast styling only
+  enough to use the shared Racing Atelier font/radius tokens.
+
+Verification:
+
+- `python -m platformio run -e jc3248w535` from `firmware/screen/` succeeded
+  with RAM 48.5% and flash 18.3%.
+- `python -m pytest -q tests/test_rig_screen_racing_atelier.py
+  tests/test_setup_library_summary.py` reported `22 passed`.
+- `FLEET_GOVERNANCE_ROOT=.fleet-governance-vendor make ci-fast` reported
+  `2035 passed, 117 skipped`, coverage 85.82%, and `ci-fast: OK`.
+
+Remaining closure gate: physical rig proof. Flash/boot the screen, compare a
+photo against `docs/10_Development/design/racing-atelier-renders/esp32_rig.png`,
+then smoke launcher -> AC Copilot live hints -> Pocket Technician setup load ->
+Setup Exchange browse/download/install. The Tier-3 MCP memory tool was not
+exposed in this Codex surface; repo memory prefetch returned stale #402
+context, so this pass used Tier-2 vault state plus live GitHub #86 comments.

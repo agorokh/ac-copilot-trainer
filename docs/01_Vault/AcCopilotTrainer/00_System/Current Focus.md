@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:13:41Z
+last_updated: 2026-07-01T00:47:02Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -75,7 +75,7 @@ PR #83 (WS + Lua bridge) **MERGED 2026-04-22** at `caa8a9ad` — still the found
 **Next (EPIC #86 remainder after PR #365):**
 
 - **Delivered by PR #365** — Game Point launcher, Setup Exchange screen/proxy/install path, Pocket Technician spinner controls, and environment-only sidecar token/voice routing.
-- **Still open on #86** — Part A4 `lv_font_conv` outputs; SPIFFS/persistence/backpressure/debug-screen polish if still desired; final device smoke artifact covering launcher → AC Copilot live hints → Pocket Technician setup load → Setup Exchange browse/download/install.
+- **In flight on #86** — branch `feat/issue-86-racing-atelier-rig` now carries the Racing Atelier ESP32 firmware pass: committed Saira/Saira Semi Condensed/Spline Sans Mono `lv_font_conv` outputs, carbon/brass tokens, and a rebuilt AC Copilot instrument screen. Local PlatformIO + fast CI are green. Remaining closure gate is physical rig proof: flash/boot the screen, compare a rig photo to `docs/10_Development/design/racing-atelier-renders/esp32_rig.png`, and smoke launcher → AC Copilot live hints → Pocket Technician setup load → Setup Exchange browse/download/install. SPIFFS/persistence/backpressure/debug-screen polish remains optional unless the rig smoke exposes a real gap.
 
 **Live-dev:** Hotspot + sidecar path per `[glossary/rig-network.md](../glossary/rig-network.md)`. Firmware: `python -m platformio run -e jc3248w535` under `firmware/screen/` (CI does not build firmware).
 

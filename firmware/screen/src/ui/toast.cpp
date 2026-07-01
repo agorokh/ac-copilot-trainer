@@ -64,7 +64,7 @@ extern "C" void ui_toast_show(const char* text, uint32_t ms_visible) {
     lv_obj_set_style_bg_color(toast, UI_ALERT_RED, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(toast, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(toast, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(toast, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(toast, UI_RADIUS_TILE, LV_PART_MAIN);
     lv_obj_set_style_pad_left(toast, TOAST_PAD_X, LV_PART_MAIN);
     lv_obj_set_style_pad_right(toast, TOAST_PAD_X, LV_PART_MAIN);
     lv_obj_set_style_pad_top(toast, 0, LV_PART_MAIN);
@@ -76,6 +76,7 @@ extern "C" void ui_toast_show(const char* text, uint32_t ms_visible) {
 
     lv_obj_t* lbl = lv_label_create(toast);
     lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_align(lbl, LV_ALIGN_LEFT_MID, 0, 0);
 
