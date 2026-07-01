@@ -331,12 +331,6 @@ def _validate_optional_string(frame: dict[str, Any], key: str) -> str | None:
     return None
 
 
-def _validate_optional_object(frame: dict[str, Any], key: str) -> str | None:
-    if key in frame and not isinstance(frame.get(key), dict):
-        return f"{key} requires an object"
-    return None
-
-
 def _validate_setup_snapshot(
     frame: dict[str, Any],
     key: str,
