@@ -161,7 +161,7 @@ def _scan_sanitized_baseline(root: Path, baseline: Path) -> int:
     with tempfile.TemporaryDirectory(prefix="ac-copilot-baseline-scan-") as tmp_dir:
         scan_path = Path(tmp_dir) / ".secrets.baseline"
         scan_path.write_text(body, encoding="utf-8")
-        return _run_detect_secrets(root, baseline, [str(scan_path)])
+        return _run_detect_secrets(Path(tmp_dir), scan_path, [".secrets.baseline"])
 
 
 def main() -> int:
