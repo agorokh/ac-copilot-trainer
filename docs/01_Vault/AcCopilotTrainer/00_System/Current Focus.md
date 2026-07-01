@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T02:54:17Z
+last_updated: 2026-07-01T03:40:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -105,6 +105,13 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#433](https://github.com/agorokh/ac-copilot-trainer/pull/433)
+  **MERGED** at `cd17dfe` - **setup review hardening** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
+  follow-up): setup archive/store ingestion now rejects malformed UTF-8 without replacement
+  decoding, JSONL experiment-store reads stay streaming, closed-loop guards ignore later missing
+  unrelated params instead of reporting false confounds, and `.secrets.baseline` hash validation
+  accepts uppercase SHA-1 metadata. Classification: `scripts/` changed for policy hash regex only;
+  no migration/env/deps/workflow action required.
 - **2026-07-01 UTC / 2026-06-30 PT** - PR [#417](https://github.com/agorokh/ac-copilot-trainer/pull/417)
   **MERGED** at `a4ae501` - **setup intelligence** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
   **CLOSED**): adds complaint-language setup advice, setup diffs, loopback-only closed-loop
