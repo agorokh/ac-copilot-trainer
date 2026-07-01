@@ -36,7 +36,6 @@ local function _rgb(hexstr, a)
   return rgbm(r / 255, g / 255, b / 255, a or 1.0)
 end
 
-local colorCache = {}
 
 --- Build a CSP rgbm from a token name at the given alpha (default opaque).
 ---@param name string  a key in M.HEX
@@ -46,18 +45,7 @@ function M.color(name, a)
   if hex == nil then
     error("[COPILOT][design_tokens] unknown token: " .. tostring(name))
   end
-  local alpha = a or 1.0
-  local nameCache = colorCache[name]
-  if not nameCache then
-    nameCache = {}
-    colorCache[name] = nameCache
-  end
-  local cached = nameCache[alpha]
-  if not cached then
-    cached = _rgb(hex, alpha)
-    nameCache[alpha] = cached
-  end
-  return cached
+  return _rgb(hex, a or 1.0)
 end
 
 return M
