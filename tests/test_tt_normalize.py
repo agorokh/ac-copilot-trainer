@@ -374,9 +374,9 @@ def test_build_harness_curriculum_maps_tt_advice_to_objective() -> None:
         "start": 0.04054,
         "end": 0.073504,
     }
-    assert objective["targets"]["reference_segment_time_ms"] == pytest.approx(8765.1)
+    assert objective["targets"]["reference_segment_time_ms"] is None
     assert objective["targets"]["driver_segment_time_ms"] == pytest.approx(10815.7)
-    assert objective["targets"]["segment_delta_ms"] == pytest.approx(2050.6)
+    assert objective["targets"]["segment_delta_ms"] is None
     assert objective["harness"]["acceptance"]["baseline_s"] == pytest.approx(0.001)
 
 
@@ -387,6 +387,20 @@ def test_build_harness_curriculum_uses_unwrapped_session_timing() -> None:
 
     objective = curriculum["objectives"][0]
     assert objective["targets"]["driver_segment_time_ms"] == pytest.approx(10815.7)
+    assert objective["targets"]["segment_delta_ms"] is None
+
+
+def test_build_harness_curriculum_uses_reference_times_when_advice_reference_matches() -> None:
+    bundle = _curriculum_bundle()
+    bundle["advice_reference"] = list(bundle["dynamic_reference"])
+
+    curriculum = build_harness_curriculum(
+        bundle,
+        session_payload=_load_fixture("tt_services_last_session.json"),
+    )
+
+    objective = curriculum["objectives"][0]
+    assert objective["targets"]["reference_segment_time_ms"] == pytest.approx(8765.1)
     assert objective["targets"]["segment_delta_ms"] == pytest.approx(2050.6)
 
 

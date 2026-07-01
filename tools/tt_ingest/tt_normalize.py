@@ -701,6 +701,14 @@ def _curriculum_reference_metadata(bundle: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _uses_dynamic_reference_for_advice(bundle: Mapping[str, Any]) -> bool:
+    dynamic_ref = bundle.get("dynamic_reference")
+    advice_ref = bundle.get("advice_reference")
+    return (
+        isinstance(dynamic_ref, list) and isinstance(advice_ref, list) and dynamic_ref == advice_ref
+    )
+
+
 def build_harness_curriculum(
     coaching_bundle: Mapping[str, Any],
     *,
@@ -722,7 +730,11 @@ def build_harness_curriculum(
         raise TTNormalizeError("Track Titan coaching bundle missing segments list")
     min_loss = max(0.0, float(min_time_loss_s))
     reference_lap = _as_mapping(coaching_bundle.get("reference_lap"))
-    reference_times = _segment_time_map(reference_lap.get("segments"))
+    reference_times = (
+        _segment_time_map(reference_lap.get("segments"))
+        if _uses_dynamic_reference_for_advice(coaching_bundle)
+        else {}
+    )
     session = _curriculum_session_payload(session_payload)
     user_times = _segment_time_map(session.get("segments"))
 

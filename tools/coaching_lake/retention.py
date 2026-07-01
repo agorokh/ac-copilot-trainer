@@ -285,6 +285,33 @@ def _curriculum_path_for_tt_source(path: Path) -> Path | None:
     return path.with_name(f"{CURRICULUM_ENDPOINT_PREFIX}{lap}.json")
 
 
+def _cascade_tt_items(items: Sequence[RetentionItem]) -> list[RetentionItem]:
+    cascade: list[RetentionItem] = []
+    seen: set[Path] = set()
+    for item in items:
+        curriculum_path = _curriculum_path_for_tt_source(item.path)
+        if curriculum_path is None or curriculum_path in seen:
+            continue
+        seen.add(curriculum_path)
+        if not curriculum_path.exists() or _has_pin_marker(curriculum_path):
+            continue
+        try:
+            size = curriculum_path.stat().st_size
+        except OSError:
+            size = 0
+        cascade.append(
+            RetentionItem(
+                path=curriculum_path,
+                domain="tt",
+                protected=False,
+                reasons=("cascade-from-coaching",),
+                sort_time=item.sort_time,
+                bytes=size,
+            )
+        )
+    return cascade
+
+
 def plan_retention(
     *,
     lap_dir: str | Path | None = None,
@@ -313,15 +340,17 @@ def plan_retention(
 
     if tt_dir is not None:
         tt_items = _tt_items(Path(tt_dir))
-        items.extend(tt_items)
-        delete.extend(
-            _select_by_cap(
-                tt_items,
-                max_files=policy.max_tt_files,
-                max_age_days=policy.max_tt_age_days,
-                now=stamp,
-            )
+        tt_delete = _select_by_cap(
+            tt_items,
+            max_files=policy.max_tt_files,
+            max_age_days=policy.max_tt_age_days,
+            now=stamp,
         )
+        tt_cascade = _cascade_tt_items(tt_delete)
+        items.extend(tt_items)
+        items.extend(tt_cascade)
+        delete.extend(tt_delete)
+        delete.extend(tt_cascade)
 
     return RetentionPlan(
         policy=policy,
@@ -350,16 +379,6 @@ def apply_retention(plan: RetentionPlan) -> RetentionApplyResult:
         bytes_deleted += item.bytes
         if item.domain == "tt":
             deleted_tt_items.append(item)
-            curriculum_path = _curriculum_path_for_tt_source(item.path)
-            if curriculum_path is not None and curriculum_path.exists():
-                try:
-                    curriculum_size = curriculum_path.stat().st_size
-                    curriculum_path.unlink()
-                except OSError as exc:
-                    failures.append(f"{curriculum_path}: {exc}")
-                else:
-                    deleted += 1
-                    bytes_deleted += curriculum_size
     invalidated_indexes = 0
     for index_path in _tt_index_paths_for_deleted(deleted_tt_items):
         try:

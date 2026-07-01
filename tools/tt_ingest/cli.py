@@ -448,7 +448,9 @@ def _paired_last_session_path(coaching_path: Path) -> Path | None:
         candidates.append(base)
     candidates.extend(
         path
-        for path in coaching_path.parent.glob(f"{last_session_endpoint(lap)}_window_*.json")
+        for path in coaching_path.parent.glob(
+            f"{last_session_endpoint(lap)}{LAST_SESSION_WINDOW_MARKER}*.json"
+        )
         if path.is_file() and not path.is_symlink()
     )
     if not candidates:
@@ -572,12 +574,11 @@ def _resolve_curriculum_output_path(
     tt_lake_roots = _tt_lake_roots_for_output(coaching_path=coaching_path)
     approved_roots = [
         base_dir / ".scratch",
-        base_dir / "journal",
         coaching_dir,
         *tt_lake_roots,
     ]
     if output_base is not None:
-        approved_roots.append(Path(output_base).resolve() / "journal")
+        approved_roots.append(Path(output_base).resolve() / "journal" / "tt")
     if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
         roots = ".scratch/, journal/, or the retained input directory"
         raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
@@ -587,6 +588,13 @@ def _resolve_curriculum_output_path(
                 f"{raw}: curriculum outputs inside {tt_root} must be named "
                 f"{CURRICULUM_ENDPOINT_GLOB}"
             )
+        expected_lap = _lap_from_coaching_path(coaching_path)
+        if (
+            expected_lap is not None
+            and _is_relative_to(resolved, tt_root)
+            and resolved.name != f"{curriculum_endpoint(expected_lap)}.json"
+        ):
+            raise TTNormalizeError(f"{raw}: curriculum output lap must match {coaching_path.name}")
     return resolved
 
 
@@ -617,7 +625,7 @@ def _validate_curriculum_session_pair(
         actual_lap = session.get("lap_number")
         if actual_lap is None:
             raise TTNormalizeError(
-                f"{session_payload!r}: paired last-session payload missing lap_number"
+                f"{coaching_path.name}: paired last-session payload missing lap_number"
             )
         if str(actual_lap) != str(expected_lap):
             raise TTNormalizeError(
@@ -631,7 +639,7 @@ def _validate_curriculum_session_pair(
         actual_session_key = actual_session_key or session.get("session_key")
         if not actual_session_key:
             raise TTNormalizeError(
-                f"{session_payload!r}: paired last-session payload missing session key"
+                f"{coaching_path.name}: paired last-session payload missing session key"
             )
         if str(actual_session_key) != expected_session_key:
             raise TTNormalizeError(

@@ -522,6 +522,20 @@ def test_build_curriculum_from_files_rejects_custom_name_inside_tt_lake(tmp_path
         )
 
 
+def test_build_curriculum_from_files_rejects_wrong_lap_name_inside_tt_lake(tmp_path) -> None:
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir.mkdir(parents=True)
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = session_dir / f"{last_session_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="output lap must match"):
+        build_curriculum_from_files(
+            coaching_path, output=session_dir / f"{curriculum_endpoint(6)}.json"
+        )
+
+
 def test_discover_curriculum_payloads_filters_lake(tmp_path) -> None:
     session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
     session_dir.mkdir(parents=True)
@@ -597,7 +611,7 @@ def test_curriculum_cli_discover_lake_honors_session_override(tmp_path) -> None:
     session_dir.mkdir(parents=True)
     coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
     session_path = tmp_path / "provided_last_session.json"
-    output = tmp_path / "journal" / "tt_curriculum.json"
+    output = session_dir / f"{curriculum_endpoint(5)}.json"
     coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
     session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
 
@@ -627,7 +641,7 @@ def test_curriculum_cli_discover_lake_rejects_session_override_mismatch(tmp_path
     session_dir.mkdir(parents=True)
     coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
     session_path = tmp_path / "wrong_last_session.json"
-    output = tmp_path / "journal" / "tt_curriculum.json"
+    output = session_dir / f"{curriculum_endpoint(5)}.json"
     coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
     session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
 

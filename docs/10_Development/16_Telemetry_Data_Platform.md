@@ -17,10 +17,11 @@ Derived stores:
   `python -m tools.ai_sidecar.driver_profile`.
 - `journal/tt/index.json` and `journal/tt/sessions_index.json`: derived Track Titan
   indexes rebuilt by the ingest tooling.
-- `journal/tt/**/curriculum_lapN.json` or `journal/tt_curriculum.json`: optional
-  derived Track Titan harness curriculum built from retained `coaching_lapN.json`
-  advice. Curriculum files are not raw TT evidence, are not included in the raw TT
-  content index, and do not count against raw TT retention quotas.
+- `journal/tt/**/curriculum_lapN.json`: optional derived Track Titan harness
+  curriculum built from retained `coaching_lapN.json` advice. Curriculum files are
+  not raw TT evidence and are not included in the raw TT content index. Retention
+  dry-runs show derived curricula as cascade deletes when their paired
+  `coaching_lapN.json` source is pruned; pin/keep markers are honored.
 
 ## Track Titan Derived Artifacts
 
@@ -33,13 +34,15 @@ python -m tools.tt_ingest reference --discover-lake --session-key <session> --la
 Build an M-TT3 harness curriculum from retained per-corner advice:
 
 ```bash
-python -m tools.tt_ingest curriculum --discover-lake --session-key <session> --lap <n> --output journal/tt_curriculum.json
+python -m tools.tt_ingest curriculum --discover-lake --session-key <session> --lap <n> --output journal/tt/<game>/<car>/<track>/<session>/curriculum_lap<n>.json
 ```
 
 The curriculum artifact preserves TT diagnosis keys, time loss, phase/highlight
 spans, and segment timing as objective rows. It is derived from the write-once
 services evidence; keep the raw `last_session_lapN.json` and `coaching_lapN.json`
 files as the indexed source of truth.
+Scratch/debug copies may be written under `.scratch/`; they are outside the TT
+lake lifecycle and should be regenerated after source pruning.
 
 ## Sessions And Stints
 
