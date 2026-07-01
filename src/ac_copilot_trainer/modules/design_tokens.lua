@@ -5,8 +5,9 @@
 -- values match, so this adapter cannot silently drift from the design of record (fleet pitfall:
 -- redundant-code-drift — do not hand-copy tokens into N runtimes without a conformance check).
 --
--- HEX is kept as plain strings so the conformance test needs no Lua runtime; M.color() builds a
--- CSP rgbm on demand (rgbm is a CSP global, only referenced at render time, never at require).
+-- HEX is kept as plain strings so the conformance test needs no Lua runtime. M.color() builds a
+-- CSP rgbm when invoked; hud.lua and coaching_overlay.lua call T.color() at module scope, which is
+-- safe in the CSP Lua host because rgbm is available before app modules load.
 
 local M = {}
 
