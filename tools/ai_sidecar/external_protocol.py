@@ -342,9 +342,10 @@ def _validate_setup_snapshot(
     key: str,
     *,
     required: bool,
+    frame_type: str,
 ) -> str | None:
     if key not in frame:
-        return f"setup.diff requires object '{key}'" if required else None
+        return f"{frame_type} requires object '{key}'" if required else None
     value = frame.get(key)
     if not isinstance(value, dict):
         return f"{key} requires an object"
@@ -607,10 +608,20 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             err = _validate_optional_string(frame, key)
             if err is not None:
                 return err
-        return _validate_setup_snapshot(frame, "setup_snapshot", required=True)
+        return _validate_setup_snapshot(
+            frame,
+            "setup_snapshot",
+            required=True,
+            frame_type=TYPE_SETUP_ADVICE,
+        )
     if t == TYPE_SETUP_DIFF:
         for key in ("baseline_snapshot", "candidate_snapshot"):
-            err = _validate_setup_snapshot(frame, key, required=True)
+            err = _validate_setup_snapshot(
+                frame,
+                key,
+                required=True,
+                frame_type=TYPE_SETUP_DIFF,
+            )
             if err is not None:
                 return err
         for key in ("car_id", "track_id"):

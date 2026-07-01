@@ -2247,7 +2247,7 @@ def main() -> None:
     p.add_argument(
         "--setup-file",
         metavar="SETUP_INI",
-        help="Optional current setup INI for --setup-advice.",
+        help="Required current setup INI for --setup-advice.",
     )
     p.add_argument(
         "--setup-diff",

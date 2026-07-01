@@ -284,9 +284,10 @@ def test_validate_inbound_rejects_invalid() -> None:
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
     assert "complaint" in (ep.validate_inbound({"v": 1, "type": "setup.advice"}) or "")
-    assert "setup_snapshot" in (
-        ep.validate_inbound({"v": 1, "type": "setup.advice", "complaint": "loose"}) or ""
+    advice_snapshot_error = ep.validate_inbound(
+        {"v": 1, "type": "setup.advice", "complaint": "loose"}
     )
+    assert advice_snapshot_error == "setup.advice requires object 'setup_snapshot'"
     assert "complaint must be <=" in (
         ep.validate_inbound(
             {
@@ -298,7 +299,8 @@ def test_validate_inbound_rejects_invalid() -> None:
         )
         or ""
     )
-    assert "baseline_snapshot" in (ep.validate_inbound({"v": 1, "type": "setup.diff"}) or "")
+    diff_snapshot_error = ep.validate_inbound({"v": 1, "type": "setup.diff"})
+    assert diff_snapshot_error == "setup.diff requires object 'baseline_snapshot'"
     assert "param" in (ep.validate_inbound({"v": 1, "type": "setup.closed_loop"}) or "")
     assert "entries" in (
         ep.validate_inbound(
