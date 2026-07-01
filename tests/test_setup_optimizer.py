@@ -173,16 +173,18 @@ def test_load_lap_archive_wraps_decode_failures_as_json_errors(tmp_path: Path) -
     path = tmp_path / "lap_bad.json"
     path.write_bytes(b"\xff")
 
-    with pytest.raises(SetupExperimentError, match="invalid lap archive JSON"):
+    with pytest.raises(SetupExperimentError, match="invalid lap archive JSON") as excinfo:
         load_lap_archive(path)
+    assert str(path) in str(excinfo.value)
 
 
 def test_load_records_wraps_decode_failures_as_json_errors(tmp_path: Path) -> None:
     store = tmp_path / "experiments.jsonl"
     store.write_bytes(b"\xff\n")
 
-    with pytest.raises(SetupExperimentError, match="invalid experiment store JSON"):
+    with pytest.raises(SetupExperimentError, match="invalid experiment store JSON") as excinfo:
         load_records(store)
+    assert str(store) in str(excinfo.value)
 
 
 def test_candidate_grid_clamps_nonnegative_params() -> None:
@@ -576,6 +578,50 @@ def test_closed_loop_rejects_stale_pair_after_later_setup_change() -> None:
     assert suggestion["changed_params"] == ["WING_2.VALUE"]
     assert suggestion["previous_result"]["from"] == 64.0
     assert suggestion["previous_result"]["to"] == 65.0
+
+
+def test_closed_loop_ignores_later_missing_unrelated_params() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="repeat",
+                setup_name="candidate-repeat",
+                lap_ms=97_800,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+    records[-1]["setup"]["params"].pop("WING_2.VALUE")
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
 
 
 def test_closed_loop_rejects_ambiguous_car_scope() -> None:

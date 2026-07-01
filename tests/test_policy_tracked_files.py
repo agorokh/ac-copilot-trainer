@@ -117,7 +117,7 @@ def test_audit_baseline_accepts_hashed_findings(tmp_path: Path) -> None:
                     "src/app.py": [
                         {
                             "filename": "src/app.py",
-                            "hashed_secret": "a" * 40,
+                            "hashed_secret": "A" * 40,
                             "type": "Secret",
                         }
                     ]
@@ -128,6 +128,7 @@ def test_audit_baseline_accepts_hashed_findings(tmp_path: Path) -> None:
     )
 
     assert policy_tracked_files._audit_baseline(baseline) == []
+    assert policy_tracked_files._HASH_RE.fullmatch("A" * 40) is not None
 
 
 def test_audit_baseline_rejects_raw_or_malformed_findings(tmp_path: Path) -> None:
@@ -194,3 +195,4 @@ def test_scan_baseline_file_uses_real_path_with_hash_only_metadata_exclusion(
         )
     ]
     assert "type" not in policy_tracked_files.BASELINE_HASH_EXCLUDE_LINES
+    assert "[0-9a-fA-F]" in policy_tracked_files.BASELINE_HASH_EXCLUDE_LINES

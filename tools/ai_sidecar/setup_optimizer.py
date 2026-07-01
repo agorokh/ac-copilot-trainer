@@ -163,14 +163,18 @@ def is_supported_experiment_store_path(path: str | os.PathLike[str]) -> bool:
 
 def load_lap_archive(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
-        raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
+        raw = Path(path).read_text(encoding="utf-8-sig")
     except OSError as exc:
         raise SetupExperimentError(f"cannot read lap archive: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise SetupExperimentError(
+            f"invalid lap archive JSON at {path}: invalid UTF-8 at byte {exc.start}"
+        ) from exc
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise SetupExperimentError(
-            f"invalid lap archive JSON: {exc.msg} at char {exc.pos}"
+            f"invalid lap archive JSON at {path}: {exc.msg} at char {exc.pos}"
         ) from exc
     if not isinstance(data, dict):
         raise SetupExperimentError("lap archive root must be a JSON object")
@@ -256,22 +260,27 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8-sig", errors="replace") as fh:
-        for line_no, line in enumerate(fh, start=1):
-            text = line.strip()
-            if not text:
-                continue
-            try:
-                item = json.loads(text)
-            except json.JSONDecodeError as e:
-                raise SetupExperimentError(
-                    f"invalid experiment store JSON at {path}:{line_no}: {e.msg}"
-                ) from e
-            if not isinstance(item, dict):
-                raise SetupExperimentError(
-                    f"invalid experiment store record at {path}:{line_no}: expected object"
-                )
-            out.append(item)
+    try:
+        with path.open("r", encoding="utf-8-sig") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    item = json.loads(text)
+                except json.JSONDecodeError as e:
+                    raise SetupExperimentError(
+                        f"invalid experiment store JSON at {path}:{line_no}: {e.msg}"
+                    ) from e
+                if not isinstance(item, dict):
+                    raise SetupExperimentError(
+                        f"invalid experiment store record at {path}:{line_no}: expected object"
+                    )
+                out.append(item)
+    except UnicodeDecodeError as exc:
+        raise SetupExperimentError(
+            f"invalid experiment store JSON at {path}: invalid UTF-8 at byte {exc.start}"
+        ) from exc
     return out
 
 
@@ -755,12 +764,22 @@ def _finite_setup_params(record: dict[str, Any]) -> dict[str, float]:
 def _changed_param_keys(
     prev_params: dict[str, float],
     curr_params: dict[str, float],
+    *,
+    missing_is_change: bool = True,
 ) -> list[str]:
     changed: list[str] = []
-    for key in sorted(set(prev_params) | set(curr_params)):
+    keys = (
+        set(prev_params) | set(curr_params)
+        if missing_is_change
+        else set(prev_params) & set(curr_params)
+    )
+    for key in sorted(keys):
         before = prev_params.get(key)
         after = curr_params.get(key)
-        if before is None or after is None or abs(after - before) > 1e-9:
+        if before is None or after is None:
+            if missing_is_change:
+                changed.append(key)
+        elif abs(after - before) > 1e-9:
             changed.append(key)
     return changed
 
@@ -793,7 +812,15 @@ def _prior_non_param_changes(
         return []
     prior_params = _finite_setup_params(ordered[prev_index - 1])
     prev_params = _finite_setup_params(prev)
-    return [changed for changed in _changed_param_keys(prior_params, prev_params) if changed != key]
+    return [
+        changed
+        for changed in _changed_param_keys(
+            prior_params,
+            prev_params,
+            missing_is_change=False,
+        )
+        if changed != key
+    ]
 
 
 def _subsequent_non_param_changes(
@@ -809,7 +836,11 @@ def _subsequent_non_param_changes(
         next_params = _finite_setup_params(rec)
         changed.update(
             changed_key
-            for changed_key in _changed_param_keys(prev_params, next_params)
+            for changed_key in _changed_param_keys(
+                prev_params,
+                next_params,
+                missing_is_change=False,
+            )
             if changed_key != key
         )
         prev_params = next_params
