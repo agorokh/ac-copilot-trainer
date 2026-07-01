@@ -28,7 +28,7 @@ def test_bake_renders_full_vocabulary_with_valid_manifest(tmp_path) -> None:
     assert len(manifest.clips) == len(vocab.vocabulary())
     # manifest stamps the current vocabulary hash + the backend voice signature
     assert manifest.vocabulary_hash == vocab.vocabulary_hash()
-    assert manifest.voice_signature == "tone-v2"
+    assert manifest.voice_signature.startswith("tone-v3+race-engineer-original-v1+intensity")
     # every clip file exists, is non-empty audio, and its sha matches the manifest
     for entry in manifest.clips.values():
         fp = tmp_path / entry.file
@@ -119,14 +119,14 @@ def test_bake_accepts_float32_external_backend(tmp_path) -> None:
 
 
 def test_tone_backend_registers_are_distinct(tmp_path) -> None:
-    # Issue #368: the register (intensity tier) must produce measurably distinct audio even from the
-    # stdlib CI backend, so CI exercises the tone dimension end-to-end (firm/critical differ from
-    # calm).
+    # Issue #381: the register (intensity tier) must produce measurably distinct audio even from the
+    # stdlib CI backend, so CI exercises calm/alert/urgent/critical end-to-end.
     manifest = bake_bank(tmp_path, ToneBackend())
-    firm = manifest.clips["late_brake.act.firm.generic"].sha256
+    alert = manifest.clips["late_brake.act.alert.generic"].sha256
+    urgent = manifest.clips["late_brake.act.urgent.generic"].sha256
     crit = manifest.clips["late_brake.act.critical.generic"].sha256
     calm = manifest.clips["late_brake.prepare.calm.generic"].sha256
-    assert len({firm, crit, calm}) == 3  # three distinct register clips
+    assert len({alert, urgent, crit, calm}) == 4  # four distinct register clips
 
 
 def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
@@ -143,7 +143,7 @@ def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
 
     # a plain tone WAV as the shaper input (no TTS engine needed)
     src = tmp_path / "src.wav"
-    ToneBackend().synthesize("Brake.", "firm", src, 22050)
+    ToneBackend().synthesize("Brake.", "urgent", src, 22050)
     shaper = ProsodyShaper(apply_tempo=True)
     a, b = tmp_path / "a.wav", tmp_path / "b.wav"
     shaper.shape(src, a, "critical", 22050)
@@ -203,7 +203,7 @@ def test_bake_uses_batch_backend_when_available(tmp_path) -> None:
 def test_cli_status_output_is_windows_codepage_safe(tmp_path, monkeypatch, capsys) -> None:
     def fake_bake_bank(out_dir, backend, *, samplerate: int = 48000):
         return Manifest(
-            version=1,
+            version=3,
             samplerate=samplerate,
             voice_signature=backend.voice_signature,
             vocabulary_hash=vocab.vocabulary_hash(),
@@ -261,9 +261,9 @@ def test_piper_batch_maps_clips_by_numeric_timestamp_order(tmp_path, monkeypatch
     backend = _piper_backend(tmp_path)
     out = tmp_path / "bank"
     items = [
-        ("brake one", "firm", out / "clip_a.wav"),
-        ("turn two", "firm", out / "clip_b.wav"),
-        ("apex three", "firm", out / "clip_c.wav"),
+        ("brake one", "urgent", out / "clip_a.wav"),
+        ("turn two", "urgent", out / "clip_b.wav"),
+        ("apex three", "urgent", out / "clip_c.wav"),
     ]
     names = ["8", "9", "10"]  # generation order; numeric != lexical
 
@@ -326,7 +326,10 @@ def test_piper_batch_falls_back_to_per_clip_when_batch_fails(tmp_path, monkeypat
     """
     backend = _piper_backend(tmp_path)
     out = tmp_path / "bank"
-    items = [("brake one", "firm", out / "clip_a.wav"), ("turn two", "calm", out / "clip_b.wav")]
+    items = [
+        ("brake one", "urgent", out / "clip_a.wav"),
+        ("turn two", "calm", out / "clip_b.wav"),
+    ]
     calls: list[str] = []
 
     def fake_run(cmd, *args, **kwargs):

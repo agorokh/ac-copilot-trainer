@@ -39,7 +39,7 @@ def make_advisory(
     kind: str = "late_brake",
     corner: int = 2,
     urgency: str = "act",
-    register: str = "firm",
+    register: str = "urgent",
     spline: float = 0.5,
     message: str = "",
     detail: dict | None = None,

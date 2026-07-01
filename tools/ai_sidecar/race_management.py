@@ -211,7 +211,7 @@ class RaceManagementObserver:
             detail["target_laps_remaining"] = round(target, 2)
             deficit = target - laps_remaining
             if deficit > _FUEL_SHORT_MARGIN_LAPS:
-                register = "critical" if deficit >= _FUEL_CRITICAL_DEFICIT_LAPS else "firm"
+                register = "critical" if deficit >= _FUEL_CRITICAL_DEFICIT_LAPS else "urgent"
                 key = (lap, register)
                 if self._last_fuel_cue == key:
                     return None
@@ -274,7 +274,7 @@ class RaceManagementObserver:
                 return self._tyre_cue(
                     lap,
                     "overheat",
-                    "firm",
+                    "urgent",
                     f"{axle.title()} tyres overheating; smooth inputs and protect the axle.",
                     temps,
                     wear,
@@ -285,7 +285,7 @@ class RaceManagementObserver:
                 return self._tyre_cue(
                     lap,
                     "thermal_rolloff",
-                    "firm",
+                    "alert",
                     "Tyres are near thermal roll-off; smooth the stint and stop sliding them.",
                     temps,
                     wear,
@@ -298,7 +298,7 @@ class RaceManagementObserver:
             return self._tyre_cue(
                 lap,
                 "wear",
-                "firm",
+                "alert",
                 f"{axle.title()} tyre wear is high without an overheat signal; "
                 "protect it from slides.",
                 temps,
@@ -336,7 +336,7 @@ class RaceManagementObserver:
                 "wear_signal": bool(wear),
                 "findings": _serial_findings(findings[:3]),
             },
-            intensity=1.0 if register == "critical" else 0.55,
+            intensity=1.0 if register == "critical" else 0.65 if register == "urgent" else 0.35,
             register=register,
         )
 
@@ -355,12 +355,12 @@ class RaceManagementObserver:
             message = "Brakes are in the critical heat band; cool them with earlier lifts."
         elif hot:
             classification = "hot"
-            register = "firm"
+            register = "alert"
             urgency = "prepare"
             message = "Brake temps are hot; stop dragging brake and add cooling laps."
         elif high_wear:
             classification = "wear"
-            register = "firm"
+            register = "alert"
             urgency = "prepare"
             message = "Brake wear is building; reduce peak brake time over the stint."
         else:
@@ -380,7 +380,7 @@ class RaceManagementObserver:
                 "brake_temps_c": {k: round(v, 1) for k, v in temps.items()},
                 "brake_wear_pct": {k: round(v, 1) for k, v in wear.items()},
             },
-            intensity=1.0 if register == "critical" else 0.55,
+            intensity=1.0 if register == "critical" else 0.35,
             register=register,
         )
 
@@ -404,15 +404,15 @@ class RaceManagementObserver:
         self._conditions_seen.add(finding.key)
         if finding.key == "wet_regime":
             urgency = "act"
-            register = "firm"
+            register = "urgent"
             message = "Wet track strategy: brake earlier, use smoother throttle, and avoid puddles."
         elif finding.key == "cold_track":
             urgency = "prepare"
-            register = "firm"
+            register = "alert"
             message = "Cold track strategy: build tyre heat before pushing."
         elif finding.key == "hot_track":
             urgency = "prepare"
-            register = "firm"
+            register = "alert"
             message = "Hot track strategy: manage tyre temperature over the stint."
         else:
             urgency = "prepare"
@@ -429,7 +429,7 @@ class RaceManagementObserver:
                 "conditions": conditions,
                 "finding": _serial_findings([finding])[0],
             },
-            intensity=0.55 if register == "firm" else 0.25,
+            intensity=0.65 if register == "urgent" else 0.35 if register == "alert" else 0.25,
             register=register,
         )
 

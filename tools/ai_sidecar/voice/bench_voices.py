@@ -1,7 +1,7 @@
 """Voice-path benchmark (issue #368 AC d) — record which backend is accepted/rejected, with
 evidence.
 
-Bakes the time-critical brake cluster (the act/critical "Brake" clips + the calm heads-up) with each
+Bakes the time-critical brake cluster (the act "Brake" tiers + the calm heads-up) with each
 *available* backend and measures the objective evidence the acceptance criterion names:
 
 * **clip duration** (ms, from the WAV header) — the ≤450 ms act-cue budget.
@@ -46,7 +46,8 @@ from tools.ai_sidecar.voice.bake import (
 #: The cues the benchmark renders — the time-critical brake cluster across registers.
 _BENCH_CLIPS: tuple[tuple[str, str], ...] = (
     ("calm", "Brake point."),
-    ("firm", "Brake."),
+    ("alert", "Brake."),
+    ("urgent", "Brake."),
     ("critical", "Brake!"),
 )
 
@@ -122,7 +123,7 @@ def _bench_backend(name: str, backend: VoiceBackend, samplerate: int = 22050) ->
             fp = Path(tmp) / f"{register}.wav"
             backend.synthesize(text, register, fp, samplerate)
             feats[register] = _measure(fp)
-            if register in ("firm", "critical"):
+            if register in ("alert", "urgent", "critical"):
                 act_ms[register] = feats[register][0]
     cpu = round(time.perf_counter() - t0, 2)
     within = all(ms <= 450.0 for ms in act_ms.values())
@@ -197,31 +198,34 @@ def to_markdown(results: list[BackendResult]) -> str:
         "# Voice-path benchmark (issue #368 AC d)",
         "",
         "Objective columns are measured by `tools/ai_sidecar/voice/bench_voices.py`; **naturalness**",  # noqa: E501
-        "and cut-through are perceptual (rig audit). `firm`/`critical` are the time-critical act cues.",  # noqa: E501
+        "and cut-through are perceptual (rig audit). `alert`/`urgent`/`critical` are act cues.",  # noqa: E501
         "",
-        "| backend | avail | firm ms | crit ms | calm→crit dBFS | calm→crit centroid | bake s | license | dep risk | naturalness | verdict |",  # noqa: E501
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| backend | avail | alert ms | urgent ms | crit ms | calm->crit dBFS | calm->crit centroid | bake s | license | dep risk | naturalness | verdict |",  # noqa: E501
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for r in results:
-        fm = r.act_clip_ms.get("firm")
+        am = r.act_clip_ms.get("alert")
+        um = r.act_clip_ms.get("urgent")
         cm = r.act_clip_ms.get("critical")
-        dbfs = f"{r.calm_dbfs}→{r.critical_dbfs}" if r.calm_dbfs is not None else "—"
+        dbfs = f"{r.calm_dbfs}->{r.critical_dbfs}" if r.calm_dbfs is not None else "-"
         cen = (
-            f"{r.calm_centroid_hz}→{r.critical_centroid_hz}"
+            f"{r.calm_centroid_hz}->{r.critical_centroid_hz}"
             if r.calm_centroid_hz is not None
-            else "—"
+            else "-"
         )
         lines.append(
-            f"| {r.backend} | {'yes' if r.available else 'no'} | {fm or '—'} | {cm or '—'} | "
-            f"{dbfs} | {cen} | {r.bake_cpu_s or '—'} | {r.license} | {r.dep_risk} | "
-            f"{r.naturalness} | {r.verdict}{(' — ' + r.note) if r.note else ''} |"
+            f"| {r.backend} | {'yes' if r.available else 'no'} | {am or '-'} | "
+            f"{um or '-'} | {cm or '-'} | {dbfs} | {cen} | {r.bake_cpu_s or '-'} | "
+            f"{r.license} | {r.dep_risk} | {r.naturalness} | "
+            f"{r.verdict}{(' - ' + r.note) if r.note else ''} |"
         )
     lines += [
         "",
         "**Recommendation:** ship **kokoro-82M** (Apache-2.0, no GPL dep, best permissive naturalness)",  # noqa: E501
         "as the production rig voice; **macsay-expressive** is the macOS dev/listen path; **tone** is",  # noqa: E501
         "the deterministic CI smoke voice. `pyttsx3/SAPI` and flat `say` are the rejected flat baselines",  # noqa: E501
-        "(no tone variation). Centroid/dBFS deltas show the calm→critical tone escalation is real.",
+        "(no tone variation). Centroid/dBFS deltas show the calm->critical tone escalation is",
+        "real.",
         "",
     ]
     return "\n".join(lines)
@@ -243,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     md = to_markdown(results)
     if args.out:
         Path(args.out).write_text(md, encoding="utf-8")
-        print(f"wrote benchmark → {args.out}")
+        print(f"wrote benchmark -> {args.out}")
     else:
         print(md)
     if args.json_out:

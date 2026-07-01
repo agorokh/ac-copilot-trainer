@@ -22,7 +22,8 @@ def test_manifest_roundtrip_and_lookup() -> None:
     assert restored.samplerate == m.samplerate
     # lookup by the 4-axis advisory key (kind, urgency, register, corner)
     assert restored.lookup("late_brake", "prepare", "calm", 3) == "late_brake.prepare.calm.t03"
-    assert restored.lookup("late_brake", "act", "firm", None) == "late_brake.act.firm.generic"
+    assert restored.lookup("late_brake", "act", "urgent", None) == "late_brake.act.urgent.generic"
+    assert restored.lookup("late_brake", "act", "firm", None) == "late_brake.act.urgent.generic"
     assert (
         restored.lookup("late_brake", "act", "critical", None) == "late_brake.act.critical.generic"
     )
@@ -50,9 +51,9 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
     good.write_bytes(b"RIFFfake-wav-bytes")
     good_sha = sha256_bytes(good.read_bytes())
     data = {
-        "version": 2,
+        "version": 3,
         "samplerate": 22050,
-        "voice_signature": "tone-v2",
+        "voice_signature": "tone-v3+race-engineer-original-v1+intensity2",
         "vocabulary_hash": vocab.vocabulary_hash(),
         "clips": {
             "late_brake.act.t01": {
@@ -60,7 +61,7 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
                 "file": "late_brake.act.t01.wav",
                 "kind": "late_brake",
                 "urgency": "act",
-                "register": "firm",
+                "register": "urgent",
                 "corner": 1,
                 "text": "Brake turn one.",
                 "sha256": good_sha,
@@ -70,7 +71,7 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
                 "file": "late_brake.act.t02.wav",  # never written → missing
                 "kind": "late_brake",
                 "urgency": "act",
-                "register": "firm",
+                "register": "urgent",
                 "corner": 2,
                 "text": "Brake turn two.",
                 "sha256": "0" * 64,
@@ -143,15 +144,15 @@ def test_manifest_version_must_match_schema_even_if_fields_look_current() -> Non
     data = {
         "version": 1,
         "samplerate": 22050,
-        "voice_signature": "tone-v2",
+        "voice_signature": "tone-v3+race-engineer-original-v1+intensity2",
         "vocabulary_hash": "0" * 64,
         "clips": {
-            "late_brake.act.firm.generic": {
-                "clip_id": "late_brake.act.firm.generic",
+            "late_brake.act.urgent.generic": {
+                "clip_id": "late_brake.act.urgent.generic",
                 "file": "x.wav",
                 "kind": "late_brake",
                 "urgency": "act",
-                "register": "firm",
+                "register": "urgent",
                 "corner": None,
                 "text": "Brake.",
                 "sha256": "0" * 64,
@@ -164,11 +165,12 @@ def test_manifest_version_must_match_schema_even_if_fields_look_current() -> Non
 
 def test_unknown_register_is_rejected_at_load() -> None:
     # qodo/codex review #371: a hand-edited/corrupt manifest with a register outside the allowed
-    # tiers (calm|firm|critical) must fail loudly at LOAD, not as a silent lookup miss later.
+    # tiers (calm|alert|urgent|critical) must fail loudly at LOAD, not as a silent lookup miss
+    # later.
     data = {
-        "version": 2,
+        "version": 3,
         "samplerate": 22050,
-        "voice_signature": "tone-v2",
+        "voice_signature": "tone-v3+race-engineer-original-v1+intensity2",
         "vocabulary_hash": "0" * 64,
         "clips": {
             "late_brake.act.loud.generic": {
@@ -176,7 +178,7 @@ def test_unknown_register_is_rejected_at_load() -> None:
                 "file": "x.wav",
                 "kind": "late_brake",
                 "urgency": "act",
-                "register": "loud",  # not in calm|firm|critical
+                "register": "loud",  # not in calm|alert|urgent|critical
                 "corner": None,
                 "text": "Brake!",
                 "sha256": "0" * 64,

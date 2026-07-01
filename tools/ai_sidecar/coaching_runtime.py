@@ -205,7 +205,7 @@ class CoachRuntime:
                 spoken = self.ledger.due_prime(r.index)
                 if spoken is not None:
                     gst = self.ledger.state(r.index)
-                    reg = gst.register if gst else "firm"
+                    reg = gst.register if gst else "urgent"
                     inten = gst.intensity if gst else 0.5
                     out.append(_prime(r, spoken, spline, register=reg, intensity=inten))
 
@@ -363,7 +363,7 @@ def _prime(
     root: RootError,
     spline: float,
     *,
-    register: str = "firm",
+    register: str = "urgent",
     intensity: float = 0.5,
 ) -> Advisory:
     return Advisory(

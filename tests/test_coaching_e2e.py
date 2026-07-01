@@ -198,7 +198,10 @@ def test_root_error_spoken_at_anchor(t, inject, phrase, anchor_attr):
 
 
 # --- magnitude grading (P2): same word, register escalates with the size of the miss -------------
-@pytest.mark.parametrize("amount, expect_register", [(0.008, "firm"), (0.030, "critical")])
+@pytest.mark.parametrize(
+    "amount, expect_register",
+    [(0.008, "alert"), (0.012, "urgent"), (0.030, "critical")],
+)
 def test_magnitude_grades_register(amount, expect_register):
     sim = CoachSim()
     idx, ref = sim.corner(1)

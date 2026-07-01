@@ -5,19 +5,20 @@ against the :class:`~tools.ai_sidecar.voice.manifest.Manifest`; a future number-
 will slot in behind this *same* signature without the scheduler or playback knowing.
 
 Keying (issue #368): the manifest is keyed on ``(kind, urgency, register, corner)``. ``register`` is
-the intensity tier the observer chose for the situation (calm|firm|critical). Two fallbacks keep a
-cue audible rather than silent:
+the intensity tier the observer chose for the situation (calm|alert|urgent|critical). Two fallbacks
+keep a cue audible rather than silent:
 
 * **register fallback** — if the bank has no clip for the requested tier (the vocabulary may not
-  bake every register for every cue), fall back toward ``calm`` (critical -> firm -> calm).
-  ``calm`` is the always-present base tier.
+  bake every register for every cue), fall back toward ``calm`` (critical -> urgent -> alert ->
+  calm). Legacy ``firm`` input is normalized to ``urgent``.
+``calm`` is the base tier for measured heads-ups.
 * **corner fallback** — a corner beyond the baked range (T21+) or the terse act tier (which is
   corner-less by design) degrades to the generic, corner-less clip.
 
 ``Utterance.register`` is set to the register that was *actually resolved* (after fallback), so
 logs and the timing report never claim a tier that did not play. The ``dedup_key`` is keyed on the
-*requested* register, so a genuine escalation (calm -> firm -> critical for one corner) is treated
-as distinct coaching events.
+*requested* register, so a genuine escalation (calm -> alert -> urgent -> critical for one corner)
+is treated as distinct coaching events.
 
 Corner-number convention: ``Advisory.corner`` is **0-based** (``realtime_observer`` uses 0-based
 ``CornerReference.index``); the spoken vocabulary is **1-based** ("turn one"). The resolver bridges
@@ -59,14 +60,15 @@ def _spoken_corner(corner: object) -> int | None:
 def _register_fallback_chain(register: str, *, urgency: str) -> tuple[str, ...]:
     """Registers to try, from the requested tier down toward the always-present ``calm`` base.
 
-    ``critical`` -> ``(critical, firm, calm)``; ``firm`` -> ``(firm, calm)``;
-    ``calm`` -> ``(calm,)``.
+    ``critical`` -> ``(critical, urgent, alert, calm)``; ``urgent`` -> ``(urgent, alert, calm)``;
+    ``alert`` -> ``(alert, calm)``; ``calm`` -> ``(calm,)``.
     """
     if urgency == "act" and register == "calm":
         # Legacy Advisory construction predates the register field and therefore carries the
-        # dataclass default "calm". The v2 vocabulary intentionally bakes act-now clips at firm /
-        # critical, not calm, so try the playable firm act clip before dropping the cue.
-        return ("firm", "calm")
+        # dataclass default "calm". The v2 vocabulary intentionally baked act-now clips at
+        # firm/critical, not calm. In v3, try the playable urgent/alert act clips before dropping
+        # it.
+        return ("urgent", "alert", "calm")
     idx = vocab.REGISTERS.index(register)
     return tuple(reversed(vocab.REGISTERS[: idx + 1]))
 
@@ -85,7 +87,7 @@ class Resolver:
         """
         kind = getattr(advisory, "kind", None)
         urgency = getattr(advisory, "urgency", None)
-        register = getattr(advisory, "register", "calm")
+        register = vocab.normalize_register(getattr(advisory, "register", "calm"))
         if kind not in vocab.KINDS:
             _log.warning("voice: dropping advisory with unknown kind=%r", kind)
             return None
@@ -129,9 +131,9 @@ class Resolver:
         entry = self._manifest.clips.get(clip_id)
         text = entry.text if entry is not None else ""
         # Dedup is keyed on the *advisory's* identity (kind + 0-based corner + REQUESTED register),
-        # so a genuine escalation (calm→firm→critical for one corner) is distinct, while a repeat at
-        # the same register within a pass collapses to one utterance regardless of corner/register
-        # fallback.
+        # so a genuine escalation (calm→alert→urgent→critical for one corner) is distinct, while a
+        # repeat at the same register within a pass collapses to one utterance regardless of
+        # corner/register fallback.
         dedup_key = f"{kind}:{getattr(advisory, 'corner', None)}:{register}"
         return Utterance(
             clip_id=clip_id,

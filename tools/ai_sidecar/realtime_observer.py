@@ -48,7 +48,7 @@ _THROTTLE_ON = 0.1
 
 # --- Intensity model (issue #368) -----------------------------------------------------------------
 # The observer computes a continuous severity scalar ``s ∈ [0,1]`` for each cue from telemetry +
-# the reference envelope, then quantizes it to a tone ``register`` (calm|firm|critical) with
+# the reference envelope, then quantizes it to a tone ``register`` (calm|alert|urgent|critical) with
 # hysteresis. ``register`` is what the manifest keys on; ``intensity`` (the float) rides on the
 # Advisory too (logs, haptics, the timing report). These constants are documented TUNING references,
 # NOT fabricated physical ceilings (the project's honesty invariant): they set how aggressively the
@@ -74,8 +74,9 @@ _MAX_LEAD_SPLINE = 0.05
 #: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
 #: sits below the rising edge so a severity hovering near a boundary does not flicker tone
 #: frame-to-frame.
-_REG_FIRM_RISE, _REG_FIRM_FALL = 0.34, 0.27
-_REG_CRIT_RISE, _REG_CRIT_FALL = 0.67, 0.58
+_REG_ALERT_RISE, _REG_ALERT_FALL = 0.25, 0.18
+_REG_URGENT_RISE, _REG_URGENT_FALL = 0.55, 0.46
+_REG_CRIT_RISE, _REG_CRIT_FALL = 0.82, 0.72
 
 
 def _clamp01(x: float) -> float:
@@ -92,13 +93,16 @@ def _register_for(s: float, prev: str, *, cap: str = "critical") -> str:
     ``cap`` clamps the result for cues whose tone must not reach the top tier (e.g. a slow-loss cue
     that should never sound like an alarm).
     """
+    prev = "urgent" if prev == "firm" else prev
+    cap = "urgent" if cap == "firm" else cap
     cap_rank = REGISTER_RANK.get(cap, REGISTER_RANK["critical"])
     prev_rank = REGISTER_RANK.get(prev, 0)
-    # Critical band (with hysteresis against the current tier).
     if s >= _REG_CRIT_RISE or (prev_rank >= REGISTER_RANK["critical"] and s >= _REG_CRIT_FALL):
         out = "critical"
-    elif s >= _REG_FIRM_RISE or (prev_rank >= REGISTER_RANK["firm"] and s >= _REG_FIRM_FALL):
-        out = "firm"
+    elif s >= _REG_URGENT_RISE or (prev_rank >= REGISTER_RANK["urgent"] and s >= _REG_URGENT_FALL):
+        out = "urgent"
+    elif s >= _REG_ALERT_RISE or (prev_rank >= REGISTER_RANK["alert"] and s >= _REG_ALERT_FALL):
+        out = "alert"
     else:
         out = "calm"
     if REGISTER_RANK[out] > cap_rank:
@@ -107,11 +111,16 @@ def _register_for(s: float, prev: str, *, cap: str = "critical") -> str:
 
 
 #: Register ordering (low → high) for the cap/hysteresis comparisons above.
-REGISTER_RANK: dict[str, int] = {"calm": 0, "firm": 1, "critical": 2}
-#: urgency a given register rides on: a calm heads-up is anticipatory (``prepare``); a firm/critical
-#: correction must be acted on now (``act``). Keeps tone (register) and scheduling (urgency)
+REGISTER_RANK: dict[str, int] = {"calm": 0, "alert": 1, "urgent": 2, "critical": 3}
+#: urgency a given register rides on: a calm heads-up is anticipatory (``prepare``);
+#: alert/urgent/critical correction must be acted on now (``act``). Keeps tone and scheduling
 #: correlated but distinct — the scheduler still arbitrates on urgency alone.
-_URGENCY_FOR_REGISTER: dict[str, str] = {"calm": "prepare", "firm": "act", "critical": "act"}
+_URGENCY_FOR_REGISTER: dict[str, str] = {
+    "calm": "prepare",
+    "alert": "act",
+    "urgent": "act",
+    "critical": "act",
+}
 
 
 def _target_source(ref: CornerReference) -> str:
@@ -129,9 +138,9 @@ class Advisory:
 
     ``intensity`` / ``register`` (issue #368): ``intensity`` is the continuous severity scalar
     ``s ∈ [0,1]`` the observer computed for the situation; ``register`` is its quantized tone tier
-    (calm|firm|critical), which the voice path keys on so the SPOKEN TONE reflects the situation
-    ("not just 'turn left'"). Both default to the calm/zero base so every existing construction and
-    the server's ``_advisory_to_payload`` keep working.
+    (calm|alert|urgent|critical), which the voice path keys on so the SPOKEN TONE reflects the
+    situation ("not just 'turn left'"). Both default to the calm/zero base so every existing
+    construction and the server's ``_advisory_to_payload`` keep working.
     """
 
     kind: str  # "late_brake" | "brake_release" | "turn_in" | "apex_deficit"
@@ -152,11 +161,11 @@ class _CornerPass:
     min_speed_kmh: float | None = None
     has_braked: bool = False  # any braking seen this pass — suppresses a false late-brake cue
     #: rank of the HIGHEST brake-cue register emitted this pass (-1 = none). A cue re-fires only
-    #: when severity escalates to a strictly higher tier (calm→firm→critical), so a calm lead-in
-    #: never locks out the later critical alarm (issue #368 escalation; codex review #371).
+    #: when severity escalates to a strictly higher tier (calm→alert→urgent→critical), so a calm
+    #: lead-in never locks out the later critical alarm (issue #368 escalation; codex review #371).
     brake_cue_rank: int = -1
     #: rank of the highest brake-release register emitted this pass. A barely-over-threshold
-    #: release warning can still escalate to firm if the driver stays hard on the brake.
+    #: release warning can still escalate to urgent if the driver stays hard on the brake.
     release_cue_rank: int = -1
     exit_emitted: bool = False
     #: last tone register spoken for this corner pass — feeds register hysteresis (issue #368).
@@ -418,13 +427,14 @@ class RealtimeObserver:
         """Fire an anticipatory brake cue whose TONE register reflects the situation (#368).
 
         Fires when the car is within the actionable brake window (from the anticipatory lead before
-        the brake point through the apex) and is not yet braking. The register (calm|firm|critical)
-        comes from :meth:`_brake_severity`, so a car arriving on pace gets a calm anticipatory
+        the brake point through the apex) and is not yet braking. The register
+        (calm|alert|urgent|critical) comes from :meth:`_brake_severity`, so a car arriving on pace
+        gets a calm anticipatory
         "brake point" while a car carrying far too much speed — or coasting past the point — gets a
-        firm/critical "Brake." / "Brake!".
+        alert/urgent/critical "Brake." / "Brake!".
 
         **Escalation (codex review #371):** the cue re-fires within one pass only when severity
-        rises to a *strictly higher* register (calm→firm→critical), so a calm lead-in never
+        rises to a *strictly higher* register (calm→alert→urgent→critical), so a calm lead-in never
         suppresses the later urgent alarm; the scheduler's register-keyed dedup + act barge-in
         deliver the escalation. A same- or lower-tier repeat is dropped.
 
@@ -448,8 +458,8 @@ class RealtimeObserver:
         anticipatory = 0.0 < _forward_spline_delta(spline, bp) <= _LAP_WRAP_DROP
         # BEFORE the brake point it is a calm anticipatory heads-up regardless of closing speed (the
         # driver hasn't missed anything yet — main's `brake_prepare` contract). Severity-based
-        # escalation (firm/critical) applies only AT/PAST the point, where coasting on is a real
-        # fault (#368 escalation; preserves the merged main brake_prepare semantics).
+        # escalation (alert/urgent/critical) applies only AT/PAST the point, where coasting on is a
+        # real fault (#368 escalation; preserves the merged main brake_prepare semantics).
         register = "calm" if anticipatory else _register_for(s, st.last_register, cap="critical")
         rank = REGISTER_RANK[register]
         if rank <= st.brake_cue_rank:
@@ -498,14 +508,14 @@ class RealtimeObserver:
 
         Heavy braking after the apex (still off the power) scrubs exit speed instead of releasing
         toward the throttle. Gated conservatively on a HIGH brake level and no throttle so a normal
-        trail-brake release is not flagged. Register caps at firm (a clear correction, never an
-        alarm), but can start calm near the threshold and escalate once if braking stays heavy.
+        trail-brake release is not flagged. Register caps at urgent (a clear correction, never an
+        alarm), but can start calm near the threshold and escalate if braking stays heavy.
         """
         past_apex = ref.apex_spline < spline <= ref.spline_hi
         if not past_apex or brake < _RELEASE_BRAKE_MIN or throttle >= _THROTTLE_ON:
             return None
         s = _clamp01((brake - _RELEASE_BRAKE_MIN) / max(1.0 - _RELEASE_BRAKE_MIN, 1e-6))
-        register = _register_for(s, st.last_register, cap="firm")  # a correction, never an alarm
+        register = _register_for(s, st.last_register, cap="urgent")  # a correction, never an alarm
         rank = REGISTER_RANK[register]
         if rank <= st.release_cue_rank:
             return None
@@ -535,7 +545,7 @@ class RealtimeObserver:
         # be honest about what the target IS: a demonstrated corpus best vs a GGV theoretical
         # ceiling (which the live TC-off car may not reach — see the #244 frontier diagnostics).
         target_label = "the best lap" if source == "corpus_best" else "the GGV optimum (a ceiling)"
-        # Severity from the magnitude of the deficit; register capped at firm (a slow-loss verdict
+        # Severity from the magnitude of the deficit; register capped at calm (a slow-loss verdict
         # is never an alarm). This is the suppressible heads-up — it rides `info` urgency so LOW
         # verbosity drops it from voice (issue #368 AC e: no post-fact narration in low verbosity).
         s = _clamp01(deficit / _DEFICIT_REF_KMH)

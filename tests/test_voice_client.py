@@ -203,8 +203,8 @@ def test_pyttsx3_register_tuning_is_centered_on_configured_values(monkeypatch):
     while not spoken and time.monotonic() < deadline:
         time.sleep(0.01)
     assert spoken == ["Brake"]
-    assert ("rate", 275) in props
-    assert ("volume", 0.9) in props
+    assert ("rate", 280) in props
+    assert ("volume", 0.92) in props
 
 
 def test_standalone_speaker_does_not_require_fallback_env_opt_in(monkeypatch):

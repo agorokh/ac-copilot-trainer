@@ -48,7 +48,7 @@ class CornerState:
     time_lost_s: float = 0.0
     coached_count: int = 0
     clean_streak: int = 0  # consecutive passes the primed root was absent (fixed)
-    register: str = "firm"  # magnitude tier of the latest diagnosis (P2)
+    register: str = "urgent"  # magnitude tier of the latest diagnosis (P2/#381)
     intensity: float = 0.5
 
 

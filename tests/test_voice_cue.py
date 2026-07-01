@@ -19,15 +19,16 @@ def _adv(
 
 
 def test_advisory_to_phrase_is_register_aware_and_terse():
-    # the act tier (firm/critical) is terse + corner-less; the calm anticipatory tier keeps the
+    # the act tier (alert/urgent/critical) is terse + corner-less; calm anticipatory keeps the
     # corner number.
+    assert advisory_to_phrase(_adv("late_brake", 3, "act", register="urgent")) == "Brake."
     assert advisory_to_phrase(_adv("late_brake", 3, "act", register="firm")) == "Brake."
     assert advisory_to_phrase(_adv("late_brake", 3, "act", register="critical")) == "Brake!"
     assert (
         advisory_to_phrase(_adv("late_brake", 3, "prepare", register="calm"))
         == "Brake point, Turn 4."
     )
-    assert advisory_to_phrase(_adv("brake_release", 0, "act", register="firm")) == "Release."
+    assert advisory_to_phrase(_adv("brake_release", 0, "act", register="urgent")) == "Release."
     assert advisory_to_phrase(_adv("apex_deficit", 6, "info")) == "More entry speed, Turn 7."
 
 
@@ -47,12 +48,12 @@ def test_advisory_to_phrase_handles_bad_corner():
 def test_arbiter_speaks_one_cue_highest_urgency():
     arb = CueArbiter()
     cue = arb.select(
-        [_adv("apex_deficit", 1, "info"), _adv("late_brake", 2, "act", register="firm")],
+        [_adv("apex_deficit", 1, "info"), _adv("late_brake", 2, "act", register="urgent")],
         now_s=0.0,
     )
     assert isinstance(cue, SpokenCue)
     assert cue.kind == "late_brake"  # 'act' beats 'info'
-    assert cue.register == "firm"  # register carried through for the WS speaker
+    assert cue.register == "urgent"  # register carried through for the WS speaker
     assert cue.text == "Brake."  # terse act phrasing
 
 
@@ -82,7 +83,7 @@ def test_arbiter_per_corner_cooldown_avoids_nagging():
 
 
 def test_arbiter_act_escalation_bypasses_corner_cooldown():
-    # codex review #371: a critical/firm "Brake!" escalation must be heard even within the corner
+    # codex review #371: a critical/urgent "Brake!" escalation must be heard even within the corner
     # anti-nag window after an earlier calm lead-in for the SAME corner.
     arb = CueArbiter(global_cooldown_s=0.0, corner_cooldown_s=6.0)
     assert arb.select([_adv("late_brake", 4, "prepare", register="calm")], now_s=0.0) is not None

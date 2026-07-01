@@ -41,11 +41,11 @@ def test_anticipatory_cue_onset_is_before_its_mark() -> None:
 
 
 def test_tone_register_escalates_with_situation() -> None:
-    # The headline: a hot approach yields a firm/critical brake cue (not a flat calm one).
+    # The headline: a hot approach yields an urgent/critical brake cue (not a flat calm one).
     rep = _report(Verbosity.NORMAL)
     spoken_brake = [c for c in rep.cues if c.kind == "late_brake" and c.spoken]
     assert spoken_brake
-    assert any(c.register in ("firm", "critical") for c in spoken_brake)
+    assert any(c.register in ("urgent", "critical") for c in spoken_brake)
 
 
 def test_low_verbosity_speaks_no_info() -> None:
@@ -76,7 +76,7 @@ def test_same_frame_advisories_are_arbitrated_as_one_batch() -> None:
         emitted = True
         return [
             make_advisory(kind="apex_deficit", urgency="info", register="calm", corner=0),
-            make_advisory(kind="late_brake", urgency="act", register="firm", corner=0),
+            make_advisory(kind="late_brake", urgency="act", register="urgent", corner=0),
         ]
 
     obs.observe = observe  # type: ignore[method-assign]

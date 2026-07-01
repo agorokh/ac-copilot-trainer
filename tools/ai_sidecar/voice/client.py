@@ -29,6 +29,7 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_STATE_SUBSCRIBE,
 )
 from tools.ai_sidecar.voice.cue import CueArbiter, SpokenCue
+from tools.ai_sidecar.voice.vocabulary import normalize_register
 
 #: Max pending TTS phrases; when full, drop the oldest so memory stays bounded under cue bursts.
 _VOICE_QUEUE_MAX = 4
@@ -38,8 +39,18 @@ DEFAULT_TTS_VOLUME = 1.0
 #: pyttsx3 rate/volume offsets per intensity register. The configured base rate/volume remains the
 #: center point so rig tuning knobs still work; the WS/pyttsx3 path just nudges calm down and
 #: critical up to convey intensity when there is no baked prosody.
-_REGISTER_RATE_DELTA: dict[str, int] = {"calm": -15, "firm": 0, "critical": 15}
-_REGISTER_VOLUME_DELTA: dict[str, float] = {"calm": -0.1, "firm": 0.0, "critical": 0.1}
+_REGISTER_RATE_DELTA: dict[str, int] = {
+    "calm": -18,
+    "alert": -6,
+    "urgent": 8,
+    "critical": 20,
+}
+_REGISTER_VOLUME_DELTA: dict[str, float] = {
+    "calm": -0.12,
+    "alert": -0.03,
+    "urgent": 0.05,
+    "critical": 0.12,
+}
 
 
 def extract_advisory(frame: dict[str, Any]) -> dict[str, Any] | None:
@@ -101,11 +112,14 @@ def _env_truthy(value: str | None) -> bool:
 
 
 def _register_rate(base_rate: int, register: str) -> int:
-    return max(1, base_rate + _REGISTER_RATE_DELTA.get(register, 0))
+    return max(1, base_rate + _REGISTER_RATE_DELTA.get(normalize_register(register), 0))
 
 
 def _register_volume(base_volume: float, register: str) -> float:
-    return min(1.0, max(0.0, base_volume + _REGISTER_VOLUME_DELTA.get(register, 0.0)))
+    return min(
+        1.0,
+        max(0.0, base_volume + _REGISTER_VOLUME_DELTA.get(normalize_register(register), 0.0)),
+    )
 
 
 def _disabled_speaker(reason: str) -> Callable[[str, str], None]:
