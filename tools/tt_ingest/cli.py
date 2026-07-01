@@ -714,6 +714,7 @@ def build_curriculum_from_files(
     output: Path,
     session_path: Path | None = None,
     output_base: Path | None = None,
+    generated_at: str | None = None,
     min_time_loss_s: float = DEFAULT_CURRICULUM_MIN_TIME_LOSS_S,
     overwrite: bool = False,
     pretty: bool = False,
@@ -737,9 +738,11 @@ def build_curriculum_from_files(
     coaching = _load_json_file(coaching_path)
     session_payload = _load_json_file(paired_session_path)
     _validate_curriculum_session_pair(coaching_path, session_payload=session_payload)
+    stamp = generated_at or _iso_now()
     curriculum = build_harness_curriculum(
         coaching,
         session_payload=session_payload,
+        exported_at=stamp,
         min_time_loss_s=min_time_loss_s,
     )
     if pretty:

@@ -452,11 +452,17 @@ def test_build_curriculum_from_files_writes_artifact_and_pairs_session(tmp_path)
     session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
     output = session_dir / f"{curriculum_endpoint(5)}.json"
 
-    summary = build_curriculum_from_files(coaching_path, output=output, pretty=True)
+    summary = build_curriculum_from_files(
+        coaching_path,
+        output=output,
+        generated_at="2026-06-30T00:00:00Z",
+        pretty=True,
+    )
 
     curriculum = json.loads(output.read_text(encoding="utf-8"))
     assert summary.objectives == 1
     assert summary.total_time_loss_s == pytest.approx(0.001)
+    assert curriculum["generated_at"] == "2026-06-30T00:00:00Z"
     assert curriculum["session"]["session_key"] == "20260629005756"
     assert curriculum["objectives"][0]["intent"] == "improve_rotation_to_apex"
 
