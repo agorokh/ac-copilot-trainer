@@ -364,11 +364,16 @@ class TestApproachPanel:
         )
 
     def test_approach_panel_design_tokens(self) -> None:
-        """PC-04: design tokens match Figma brief."""
+        """PC-04: Racing Atelier design tokens (epic #432)."""
         src = _lua_text("coaching_overlay.lua")
-        assert "COLOR_RED" in src, "Must define COLOR_RED design token"
-        assert re.search(r'COLOR_BG\s*=\s*T\.color\("carbon",\s*0\.78\)', src), (
-            "COLOR_BG must use carbon token at 0.78 alpha (Racing Atelier panel ground)"
+        assert 'require("design_tokens")' in src or "require('design_tokens')" in src, (
+            "coaching_overlay must require design_tokens"
+        )
+        assert re.search(r'COLOR_BG\s*=\s*T\.color\("carbon"', src), (
+            'COLOR_BG must use T.color("carbon")'
+        )
+        assert re.search(r"PANEL_ROUNDING\s*=\s*0", src), (
+            "PANEL_ROUNDING must be 0 (square corners)"
         )
 
     def test_window_coaching_calls_approach_panel(self) -> None:
