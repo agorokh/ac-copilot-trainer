@@ -728,17 +728,15 @@ def build_curriculum_from_files(
         raise TTNormalizeError(
             f"no paired last-session payload found for {coaching_path} (pass --session)"
         )
-    if paired_session_path is not None:
-        inputs.append(paired_session_path)
+    inputs.append(paired_session_path)
     for path in inputs:
         if resolved_output == path.resolve():
             raise TTNormalizeError(f"output must not overwrite retained input: {output}")
     if resolved_output.exists() and not overwrite:
         raise TTNormalizeError(f"output already exists (pass --overwrite): {output}")
     coaching = _load_json_file(coaching_path)
-    session_payload = _load_json_file(paired_session_path) if paired_session_path else None
-    if session_payload is not None:
-        _validate_curriculum_session_pair(coaching_path, session_payload=session_payload)
+    session_payload = _load_json_file(paired_session_path)
+    _validate_curriculum_session_pair(coaching_path, session_payload=session_payload)
     curriculum = build_harness_curriculum(
         coaching,
         session_payload=session_payload,
