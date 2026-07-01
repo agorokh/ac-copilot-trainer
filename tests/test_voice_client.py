@@ -58,7 +58,9 @@ def test_extract_advisory_ignores_other_topics_and_types():
 def test_voice_client_speaks_selected_cue():
     spoken: list[tuple[str, str]] = []  # (text, register) — the speaker is register-aware (#368)
     vc = VoiceClient(lambda text, register: spoken.append((text, register)))
-    cue = vc.handle_frame(_cue_frame(), now_s=100.0)
+    # A realistic anticipatory late_brake: the observer emits calm register with `prepare` urgency
+    # (calm -> _URGENCY_FOR_REGISTER["prepare"]), so the phrasing keeps the corner number.
+    cue = vc.handle_frame(_cue_frame(urgency="prepare"), now_s=100.0)
     assert cue is not None
     assert cue.kind == "late_brake"
     assert spoken == [(cue.text, cue.register)]

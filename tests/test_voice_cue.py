@@ -32,6 +32,29 @@ def test_advisory_to_phrase_is_register_aware_and_terse():
     assert advisory_to_phrase(_adv("apex_deficit", 6, "info")) == "More entry speed, Turn 7."
 
 
+def test_act_advisory_with_default_calm_register_is_treated_as_urgent():
+    # A legacy / register-less producer emits an `act` advisory whose register defaults to `calm`.
+    # The observer never emits act+calm (calm -> urgency `prepare`), so this is the legacy case the
+    # in-process resolver upgrades to a hot tier (Resolver._register_fallback_chain). The fallback
+    # cue path must match (issue #381, PR #429) rather than under-react with anticipatory phrasing +
+    # calm intensity.
+    adv = {"kind": "late_brake", "corner": 3, "urgency": "act", "message": "m"}  # no register
+    assert advisory_to_phrase(adv) == "Brake."  # terse + corner-less, NOT "Brake point, Turn 4."
+    cue = CueArbiter().select([adv], now_s=100.0)
+    assert cue is not None
+    assert cue.register == "urgent"  # upgraded from the default calm for the time-critical act cue
+    # A genuine anticipatory cue (calm register, `prepare` urgency) stays calm and keeps the corner.
+    calm = advisory_to_phrase(_adv("late_brake", 3, "prepare", register="calm"))
+    assert calm == "Brake point, Turn 4."
+
+
+def test_brake_release_critical_is_terse():
+    # brake_release at the top tier is the same terse word as urgent (escalated by tone), not the
+    # calm "Ease off." (PR #429).
+    assert advisory_to_phrase(_adv("brake_release", 0, "act", register="critical")) == "Release."
+    assert advisory_to_phrase(_adv("brake_release", 0, "act", register="alert")) == "Release."
+
+
 def test_advisory_to_phrase_unknown_kind_falls_back_to_message():
     assert (
         advisory_to_phrase({"kind": "weird", "corner": 0, "message": "Do the thing"})
