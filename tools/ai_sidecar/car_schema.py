@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,6 +33,79 @@ from tools.ai_sidecar.setup_model import spec_for  # noqa: E402
 
 SCHEMA_VERSION = 1
 DEFAULT_SCHEMA_DIR = "assets/setups/_schema"
+_SAFE_SCHEMA_CAR_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _schema_root(schema_dir: str | Path = DEFAULT_SCHEMA_DIR) -> Path:
+    root = Path(schema_dir)
+    if root.is_absolute():
+        return root
+    return Path(__file__).resolve().parents[2] / root
+
+
+def _is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return False
+    return True
+
+
+def _safe_schema_car_id(car_id: str | None) -> str | None:
+    if not car_id:
+        return None
+    text = car_id.strip()
+    if (
+        not text
+        or ".." in text
+        or not any(char.isalnum() for char in text)
+        or not _SAFE_SCHEMA_CAR_ID.fullmatch(text)
+    ):
+        return None
+    return text
+
+
+def _safe_schema_file(path: Path, root: Path) -> Path | None:
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not _is_relative_to(resolved, root) or not resolved.is_file():
+        return None
+    return resolved
+
+
+def load_latest_schema(
+    car_id: str | None,
+    schema_dir: str | Path = DEFAULT_SCHEMA_DIR,
+) -> CarSetupSchema | None:
+    """Load the newest checked-in schema asset for ``car_id``, if one exists."""
+    safe_car_id = _safe_schema_car_id(car_id)
+    if safe_car_id is None:
+        return None
+    root = _schema_root(schema_dir).resolve()
+    car_dir = (root / safe_car_id).resolve()
+    if not _is_relative_to(car_dir, root):
+        return None
+    if not car_dir.is_dir():
+        return None
+    candidates = [
+        (path, resolved)
+        for path in sorted(
+            car_dir.glob("*.json"),
+            key=lambda path: path.name,
+        )
+        if (resolved := _safe_schema_file(path, root)) is not None
+    ]
+    if not candidates:
+        return None
+    marker = car_dir / "latest.json"
+    for path, resolved in candidates:
+        if path == marker:
+            return CarSetupSchema.load(resolved)
+    if len(candidates) == 1:
+        return CarSetupSchema.load(candidates[0][1])
+    return None
 
 
 def _f(value: Any) -> float | None:
@@ -164,6 +238,7 @@ class CarSetupSchema:
 
     car_id: str
     spinners: dict[str, SpinnerDesc] = field(default_factory=dict)
+    cautions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     schema_hash: str = ""
     schema_version: int = SCHEMA_VERSION
 
@@ -238,11 +313,33 @@ class CarSetupSchema:
             out[key] = self.clamp(key, val)
         return out
 
+    def caution_notes(
+        self,
+        name: str,
+        *,
+        direction: str | None = None,
+        current: float | None = None,
+    ) -> list[str]:
+        notes: list[str] = []
+        for rule in self.cautions.get(self._spinner_name(name), []):
+            if not isinstance(rule, dict):
+                continue
+            rule_direction = rule.get("direction")
+            if rule_direction is not None and rule_direction != direction:
+                continue
+            if not _current_matches_rule(current, rule):
+                continue
+            message = rule.get("message")
+            if isinstance(message, str) and message.strip():
+                notes.append(message.strip())
+        return notes
+
     def to_json(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "car_id": self.car_id,
             "schema_hash": self.schema_hash,
+            "cautions": self.cautions,
             "spinners": {name: sp.to_json() for name, sp in sorted(self.spinners.items())},
         }
 
@@ -256,6 +353,7 @@ class CarSetupSchema:
         out = cls(
             car_id=str(obj.get("car_id", "unknown")),
             spinners=spinners,
+            cautions=_parse_cautions(obj.get("cautions")),
             schema_hash=str(obj.get("schema_hash") or ""),
             schema_version=int(obj.get("schema_version", SCHEMA_VERSION)),
         )
@@ -277,8 +375,35 @@ class CarSetupSchema:
         return cls.from_json(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def _current_matches_rule(current: float | None, rule: dict[str, Any]) -> bool:
+    for key, predicate in (
+        ("current_lt", lambda value, limit: value < limit),
+        ("current_lte", lambda value, limit: value <= limit),
+        ("current_gt", lambda value, limit: value > limit),
+        ("current_gte", lambda value, limit: value >= limit),
+    ):
+        limit = _f(rule.get(key))
+        if limit is not None:
+            if current is None or not predicate(current, limit):
+                return False
+    return True
+
+
+def _parse_cautions(value: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, list[dict[str, Any]]] = {}
+    for name, rules in value.items():
+        if not isinstance(name, str) or not isinstance(rules, list):
+            continue
+        parsed[name] = [dict(rule) for rule in rules if isinstance(rule, dict)]
+    return parsed
+
+
 def _main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Ingest an ac.getSetupSpinners() dump to schema asset.")
+    p = argparse.ArgumentParser(
+        description="Ingest an ac.getSetupSpinners() dump into a schema asset."
+    )
     p.add_argument("dump", help="JSON file: a list of getSetupSpinners() descriptors")
     p.add_argument("--car-id", required=True)
     p.add_argument("--schema-dir", default=DEFAULT_SCHEMA_DIR)

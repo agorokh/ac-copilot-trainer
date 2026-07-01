@@ -8,7 +8,10 @@ from typing import Any
 
 import pytest
 
+from tools.ai_sidecar.car_schema import CarSetupSchema
 from tools.ai_sidecar.server import (
+    _run_setup_advice,
+    _run_setup_closed_loop,
     _run_setup_compare,
     _run_setup_rebuild,
     _run_setup_suggest,
@@ -17,10 +20,12 @@ from tools.ai_sidecar.setup_optimizer import (
     SetupExperimentError,
     _candidate_grid,
     compare_setups,
+    load_lap_archive,
     load_records,
     rebuild_experiments,
     record_from_lap_archive,
     record_lap_archive,
+    suggest_closed_loop,
     suggest_next_setup,
 )
 
@@ -140,6 +145,46 @@ def test_rebuild_compare_and_suggest(tmp_path: Path) -> None:
     assert suggestion["rationale"]
 
 
+def test_rebuild_experiments_handles_utf8_bom_lap_archive(tmp_path: Path) -> None:
+    lap_dir = tmp_path / "journal" / "laps"
+    lap_dir.mkdir(parents=True)
+    path = lap_dir / "lap_20260616-000001-bom.json"
+    path.write_text(
+        json.dumps(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        encoding="utf-8-sig",
+    )
+
+    summary = rebuild_experiments(lap_dir)
+
+    assert summary["records"] == 1
+    assert summary["skipped"] == []
+
+
+def test_load_lap_archive_wraps_decode_failures_as_json_errors(tmp_path: Path) -> None:
+    path = tmp_path / "lap_bad.json"
+    path.write_bytes(b"\xff")
+
+    with pytest.raises(SetupExperimentError, match="invalid lap archive JSON"):
+        load_lap_archive(path)
+
+
+def test_load_records_wraps_decode_failures_as_json_errors(tmp_path: Path) -> None:
+    store = tmp_path / "experiments.jsonl"
+    store.write_bytes(b"\xff\n")
+
+    with pytest.raises(SetupExperimentError, match="invalid experiment store JSON"):
+        load_records(store)
+
+
 def test_candidate_grid_clamps_nonnegative_params() -> None:
     records = [
         record_from_lap_archive(
@@ -171,6 +216,607 @@ def test_candidate_grid_clamps_nonnegative_params() -> None:
     assert all(candidate["FRONT_BIAS.VALUE"] >= 0 for candidate in grid)
 
 
+def test_closed_loop_continues_improving_one_parameter_move() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(
+        records,
+        param="FRONT_BIAS",
+        car_id="ks_porsche_911_gt3_r_2016",
+        track_id="magione",
+    )
+
+    assert suggestion["ok"] is True
+    assert suggestion["method"] == "one_param_measured_delta"
+    assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
+def test_closed_loop_treats_blank_scope_filters_as_unspecified() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS", car_id="", track_id=" ")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
+def test_closed_loop_treats_unknown_scope_filters_as_unspecified() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(
+        records,
+        param="FRONT_BIAS",
+        car_id="unknown",
+        track_id="unknown",
+    )
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
+def test_closed_loop_reverses_hurting_one_parameter_move() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=101_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["previous_result"]["improved"] is False
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 64.0,
+    }
+
+
+def test_closed_loop_rejects_confounded_latest_pair() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "latest_pair_changed_multiple_params"
+    assert suggestion["changed_params"] == ["FRONT_BIAS.VALUE", "WING_2.VALUE"]
+    assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+
+
+def test_closed_loop_rejects_param_trial_after_confounded_baseline_state() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="baseline",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="wing-change",
+                setup_name="confounded",
+                lap_ms=99_000,
+                front_bias=64,
+                rear_wing=9,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=97_000,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "baseline_state_changed_multiple_params"
+    assert suggestion["changed_params"] == ["WING_2.VALUE"]
+    assert suggestion["previous_result"]["measured_delta_ms"] == 2000.0
+
+
+def test_closed_loop_allows_repeated_setup_baseline_after_prior_change() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="baseline",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="wing-change",
+                setup_name="confounded",
+                lap_ms=99_000,
+                front_bias=64,
+                rear_wing=9,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="wing-change-repeat",
+                setup_name="confounded-repeat",
+                lap_ms=98_900,
+                front_bias=64,
+                rear_wing=9,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-d4",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=97_000,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["previous_result"]["measured_delta_ms"] == 1900.0
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
+def test_setup_advice_cli_requires_setup_file() -> None:
+    with pytest.raises(SystemExit, match="--setup-advice requires --setup-file"):
+        _run_setup_advice("loose on exit", None, None, None)
+
+
+def test_closed_loop_uses_latest_pair_where_param_changed() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="new",
+                setup_name="candidate-repeat",
+                lap_ms=97_900,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is True
+    assert suggestion["previous_result"]["from"] == 64.0
+    assert suggestion["previous_result"]["to"] == 65.0
+    assert suggestion["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
+def test_closed_loop_rejects_stale_pair_after_later_setup_change() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="wing-change",
+                setup_name="current",
+                lap_ms=97_800,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "current_state_changed_multiple_params"
+    assert suggestion["changed_params"] == ["WING_2.VALUE"]
+    assert suggestion["previous_result"]["from"] == 64.0
+    assert suggestion["previous_result"]["to"] == 65.0
+
+
+def test_closed_loop_rejects_ambiguous_car_scope() -> None:
+    first = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-a1",
+            setup_hash="old",
+            setup_name="baseline",
+            lap_ms=100_000,
+            front_bias=64,
+            rear_wing=8,
+        )
+    )
+    second = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-b2",
+            setup_hash="new",
+            setup_name="candidate",
+            lap_ms=98_000,
+            front_bias=65,
+            rear_wing=8,
+        )
+    )
+    second["car"]["id"] = "bmw_z4_gt3"
+
+    suggestion = suggest_closed_loop([first, second], param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "car_id"
+    assert suggestion["car_ids"] == ["bmw_z4_gt3", "ks_porsche_911_gt3_r_2016"]
+
+
+def test_closed_loop_rejects_ambiguous_track_scope() -> None:
+    first = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-a1",
+            setup_hash="old",
+            setup_name="baseline",
+            lap_ms=100_000,
+            front_bias=64,
+            rear_wing=8,
+        )
+    )
+    second = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-b2",
+            setup_hash="new",
+            setup_name="candidate",
+            lap_ms=98_000,
+            front_bias=65,
+            rear_wing=8,
+        )
+    )
+    second["track"]["id"] = "spa"
+
+    suggestion = suggest_closed_loop([first, second], param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "track_id"
+    assert suggestion["track_ids"] == ["magione", "spa"]
+
+
+def test_closed_loop_rejects_unresolved_car_scope() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+    for record in records:
+        record["car"]["id"] = "unknown"
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "car_id"
+    assert suggestion["car_ids"] == []
+
+
+def test_closed_loop_rejects_unresolved_track_scope() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+    for record in records:
+        record["track"]["id"] = "unknown"
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "ambiguous_scope"
+    assert suggestion["scope"] == "track_id"
+    assert suggestion["track_ids"] == []
+
+
+def test_closed_loop_treats_zero_measured_delta_as_inconclusive() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=100_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "inconclusive_no_lap_delta"
+    assert suggestion["previous_result"]["measured_delta_ms"] == 0.0
+
+
+def test_closed_loop_respects_schema_bounds() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+    schema = CarSetupSchema.from_spinners_dump(
+        "ks_porsche_911_gt3_r_2016",
+        [{"name": "FRONT_BIAS", "min": 50, "max": 70, "step": 1}],
+    )
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS", schema=schema)
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
+def test_closed_loop_infers_schema_while_ignoring_unknown_car_sentinel() -> None:
+    unknown = record_from_lap_archive(
+        _lap(
+            lap_uuid="lap-u0",
+            setup_hash="unknown",
+            setup_name="unknown",
+            lap_ms=101_000,
+            front_bias=68,
+            rear_wing=8,
+        )
+    )
+    unknown["car"]["id"] = "unknown"
+    records = [
+        unknown,
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS", track_id="magione")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
 def test_record_lap_archive_upserts_without_duplicates(tmp_path: Path) -> None:
     lap_dir = tmp_path / "journal" / "laps"
     path = _write_laps(lap_dir)[0]
@@ -190,6 +836,13 @@ def test_load_records_rejects_corrupt_store(tmp_path: Path) -> None:
 
     with pytest.raises(SetupExperimentError, match=r"experiments\.jsonl:2"):
         load_records(store)
+
+
+def test_load_records_handles_utf8_bom_store(tmp_path: Path) -> None:
+    store = tmp_path / "experiments.jsonl"
+    store.write_text('{"ok": true}\n', encoding="utf-8-sig")
+
+    assert load_records(store) == [{"ok": True}]
 
 
 def test_rebuild_experiments_rejects_missing_lap_dir_without_rewriting_store(
@@ -263,3 +916,13 @@ def test_setup_optimizer_cli_smoke(tmp_path: Path, capsys) -> None:
     suggest_out = json.loads(capsys.readouterr().out)
     assert suggest_out["ok"] is True
     assert suggest_out["candidate"]["changed_params"]
+
+    _run_setup_closed_loop(str(store), "WING_2", "ks_porsche_911_gt3_r_2016", "magione")
+    closed_loop_out = json.loads(capsys.readouterr().out)
+    assert closed_loop_out["ok"] is True
+    assert closed_loop_out["method"] == "one_param_measured_delta"
+    assert closed_loop_out["previous_result"]["measured_delta_ms"] == -1100.0
+    assert closed_loop_out["candidate"]["changed_params"]["WING_2.VALUE"] == {
+        "from": 10.0,
+        "to": 9.0,
+    }

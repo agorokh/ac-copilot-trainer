@@ -29,6 +29,8 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    _handle_external_frame,
+    _handle_setup_experiment_frame,
     _handler,
     _is_loopback,
     _RateLimiter,
@@ -198,6 +200,29 @@ def test_validate_inbound_accepts_known_types() -> None:
         is None
     )
     assert ep.validate_inbound({"v": 1, "type": "setup.suggest", "track_id": "magione"}) is None
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "loose on exit",
+                "setup_snapshot": {"FRONT_BIAS.VALUE": "66"},
+            }
+        )
+        is None
+    )
+    assert (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.diff",
+                "baseline_snapshot": {"FRONT_BIAS.VALUE": "66"},
+                "candidate_snapshot": {"FRONT_BIAS.VALUE": "64"},
+            }
+        )
+        is None
+    )
+    assert ep.validate_inbound({"v": 1, "type": "setup.closed_loop", "param": "FRONT_BIAS"}) is None
     assert ep.validate_inbound({"v": 1, "type": "se.search", "limit": 10}) is None
     assert (
         ep.validate_inbound(
@@ -258,6 +283,60 @@ def test_validate_inbound_rejects_invalid() -> None:
     )
     assert "store_path" in (ep.validate_inbound({"v": 1, "type": "setup.experiment.store"}) or "")
     assert "baseline_setup" in (ep.validate_inbound({"v": 1, "type": "setup.compare"}) or "")
+    assert "complaint" in (ep.validate_inbound({"v": 1, "type": "setup.advice"}) or "")
+    advice_snapshot_error = ep.validate_inbound(
+        {"v": 1, "type": "setup.advice", "complaint": "loose"}
+    )
+    assert advice_snapshot_error == "setup.advice requires object 'setup_snapshot'"
+    assert "complaint must be <=" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "x" * (ep.MAX_SETUP_ADVICE_COMPLAINT_LEN + 1),
+                "setup_snapshot": {"FRONT_BIAS.VALUE": "66"},
+            }
+        )
+        or ""
+    )
+    diff_snapshot_error = ep.validate_inbound({"v": 1, "type": "setup.diff"})
+    assert diff_snapshot_error == "setup.diff requires object 'baseline_snapshot'"
+    assert "param" in (ep.validate_inbound({"v": 1, "type": "setup.closed_loop"}) or "")
+    assert "entries" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "loose",
+                "setup_snapshot": {
+                    f"PARAM_{idx}.VALUE": idx for idx in range(ep.MAX_SETUP_SNAPSHOT_KEYS + 1)
+                },
+            }
+        )
+        or ""
+    )
+    assert "bytes" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.diff",
+                "baseline_snapshot": {"FRONT_BIAS.VALUE": "66"},
+                "candidate_snapshot": {"ABOUT.NOTES": "x" * (ep.MAX_SETUP_SNAPSHOT_BYTES + 1)},
+            }
+        )
+        or ""
+    )
+    assert "JSON-serializable" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "setup.advice",
+                "complaint": "loose",
+                "setup_snapshot": {"ABOUT.NOTES": "\ud800"},
+            }
+        )
+        or ""
+    )
     assert "limit must be <= 40" in (
         ep.validate_inbound({"v": 1, "type": "se.search", "limit": 80}) or ""
     )
@@ -478,6 +557,36 @@ def test_upgrade_accepted_with_token() -> None:
     assert "config.set" in ack["capabilities"]
 
 
+def test_remote_hello_hides_loopback_only_capabilities() -> None:
+    class _RemoteWebsocket:
+        remote_address = ("192.168.1.50", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    async def _run() -> dict[str, object]:
+        _reset_external_state()
+        ws = _RemoteWebsocket()
+        await _handle_external_frame(
+            ws,
+            {
+                "v": 1,
+                "type": "hello",
+                "client": "screen",
+                "client_class": ep.CLIENT_CLASS_SCREEN,
+            },
+        )
+        return ws.sent[0]
+
+    ack = asyncio.run(_run())
+    assert ack["type"] == ep.TYPE_HELLO_ACK
+    assert ep.TYPE_SETUP_DIFF in ack["capabilities"]
+    assert ep.TYPE_SETUP_CLOSED_LOOP not in ack["capabilities"]
+
+
 def test_upgrade_accepted_with_token_for_non_loopback_peer() -> None:
     token_check = make_token_check("s3cret")
     assert token_check is not None
@@ -548,6 +657,37 @@ def test_external_peer_non_object_payload_returns_external_error() -> None:
     assert err["v"] == ep.ENVELOPE_VERSION
     assert err["type"] == ep.TYPE_ERROR
     assert "root must be a JSON object" in err["message"]
+
+
+def test_external_validation_exception_returns_error_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.ai_sidecar import server as srv
+
+    class _Websocket:
+        remote_address = ("127.0.0.1", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    def _boom(_data: dict[str, object]) -> str | None:
+        raise RecursionError("deep snapshot")
+
+    async def _run() -> dict[str, object]:
+        ws = _Websocket()
+        monkeypatch.setattr(srv, "validate_inbound", _boom)
+        await srv._handle_external_frame(
+            ws,
+            {"v": 1, "type": ep.TYPE_SETUP_ADVICE, "complaint": "loose"},
+        )
+        return ws.sent[0]
+
+    err = asyncio.run(_run())
+    assert err["type"] == ep.TYPE_ERROR
+    assert "invalid frame: RecursionError" in str(err["message"])
 
 
 def test_coaching_cue_subscribe_ok_without_loopback_lua_peer() -> None:
@@ -777,6 +917,322 @@ def test_setup_experiment_record_and_suggest_roundtrip(tmp_path: Path) -> None:
     assert result["type"] == ep.TYPE_SETUP_SUGGEST_RESULT
     assert result["ok"] is True
     assert result["candidate"]["changed_params"]
+
+
+def test_setup_advice_and_diff_roundtrip() -> None:
+    async def _run() -> tuple[dict, dict]:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.advice",
+                            "complaint": "car is loose on exit",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "setup_snapshot": {
+                                "FRONT_BIAS.VALUE": "66",
+                                "TRACTION_CONTROL.VALUE": "3",
+                                "DIFF_POWER.VALUE": "40",
+                            },
+                        }
+                    )
+                )
+                advice = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.diff",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                            "baseline_snapshot": {
+                                "FRONT_BIAS.VALUE": "66",
+                                "TRACTION_CONTROL.VALUE": "3",
+                            },
+                            "candidate_snapshot": {
+                                "FRONT_BIAS.VALUE": "64",
+                                "TRACTION_CONTROL.VALUE": "4",
+                            },
+                        }
+                    )
+                )
+                diff = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                return advice, diff
+
+    advice, diff = asyncio.run(_run())
+    assert advice["type"] == ep.TYPE_SETUP_ADVICE_RESULT
+    assert advice["ok"] is True
+    assert advice["suggestions"][0]["section"] == "TRACTION_CONTROL"
+    assert advice["suggestions"][0]["target"] == 4.0
+    assert diff["type"] == ep.TYPE_SETUP_DIFF_RESULT
+    assert diff["ok"] is True
+    assert diff["changed_count"] == 2
+    assert any("Brake bias" in line for line in diff["display_lines"])
+
+
+def test_setup_diff_roundtrip_uses_snapshot_car_model_for_schema() -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.diff",
+                            "baseline_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "CAMBER_LF.VALUE": "-18",
+                            },
+                            "candidate_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "CAMBER_LF.VALUE": "-19",
+                            },
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    diff = asyncio.run(_run())
+    assert diff["type"] == ep.TYPE_SETUP_DIFF_RESULT
+    assert diff["ok"] is True
+    row = diff["rows"][0]
+    assert row["units"] == "deg"
+    assert row["from_display"] == "-1.8"
+    assert row["to_display"] == "-1.9"
+
+
+def test_setup_diff_roundtrip_preserves_snapshot_car_mismatch() -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.diff",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "baseline_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "FRONT_BIAS.VALUE": "66",
+                            },
+                            "candidate_snapshot": {
+                                "CAR.MODEL": "bmw_z4_gt3",
+                                "FRONT_BIAS.VALUE": "64",
+                            },
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    diff = asyncio.run(_run())
+    assert diff["type"] == ep.TYPE_SETUP_DIFF_RESULT
+    assert diff["ok"] is False
+    assert diff["status"] == "car_mismatch"
+    assert diff["baseline"]["car_id"] == "ks_porsche_911_gt3_r_2016"
+    assert diff["candidate"]["car_id"] == "bmw_z4_gt3"
+
+
+def test_setup_advice_roundtrip_uses_snapshot_car_model_for_schema() -> None:
+    async def _run() -> dict:
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.advice",
+                            "complaint": "rear locks on entry",
+                            "setup_snapshot": {
+                                "CAR.MODEL": "ks_porsche_911_gt3_r_2016",
+                                "FRONT_BIAS.VALUE": "70",
+                                "BRAKE_POWER_MULT.VALUE": "100",
+                                "ABS.VALUE": "7",
+                            },
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    advice = asyncio.run(_run())
+    assert advice["type"] == ep.TYPE_SETUP_ADVICE_RESULT
+    assert advice["ok"] is True
+    assert all(suggestion["section"] != "FRONT_BIAS" for suggestion in advice["suggestions"])
+    assert advice["suggestions"][0]["section"] == "BRAKE_POWER_MULT"
+
+
+def test_setup_closed_loop_roundtrip(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 64)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 65)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.closed_loop",
+                            "param": "FRONT_BIAS",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is True
+    assert result["method"] == "one_param_measured_delta"
+    assert result["previous_result"]["measured_delta_ms"] == 2000.0
+    assert result["candidate"]["changed_params"]["FRONT_BIAS.VALUE"] == {
+        "from": 65.0,
+        "to": 66.0,
+    }
+
+
+def test_setup_closed_loop_roundtrip_uses_car_schema_bounds(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 69)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 70)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.closed_loop",
+                            "param": "FRONT_BIAS",
+                            "car_id": "ks_porsche_911_gt3_r_2016",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is False
+    assert result["status"] == "at_param_bound"
+    assert result["current"] == 70.0
+
+
+def test_setup_closed_loop_roundtrip_infers_schema_from_records(tmp_path: Path) -> None:
+    async def _run() -> dict:
+        from tools.ai_sidecar import server as srv
+
+        srv._setup_experiment_store_path = None
+        lap_dir = tmp_path / "journal" / "laps"
+        first = _write_setup_lap(lap_dir, "lap-a", "old", 100_000, 69)
+        second = _write_setup_lap(lap_dir, "lap-b", "new", 98_000, 70)
+        async with _running_sidecar() as port:
+            async with ws_connect(f"ws://127.0.0.1:{port}/") as ws:
+                await ws.send(json.dumps({"v": 1, "type": "hello", "client": "lua"}))
+                await asyncio.wait_for(ws.recv(), timeout=2.0)  # hello_ack
+                for lap_path in (first, second):
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "v": 1,
+                                "type": "setup.experiment.record",
+                                "archive_path": str(lap_path),
+                            }
+                        )
+                    )
+                    ack = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                    assert ack["type"] == ep.TYPE_SETUP_EXPERIMENT_RECORD_ACK
+                    assert ack["ok"] is True
+                await ws.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "setup.closed_loop",
+                            "param": "FRONT_BIAS",
+                            "track_id": "magione",
+                        }
+                    )
+                )
+                return json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is False
+    assert result["status"] == "at_param_bound"
+    assert result["current"] == 70.0
+
+
+def test_setup_closed_loop_rejects_non_loopback_peer() -> None:
+    class _RemoteWebsocket:
+        remote_address = ("192.168.1.50", 49152)
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, object]] = []
+
+        async def send(self, payload: str) -> None:
+            self.sent.append(json.loads(payload))
+
+    async def _run() -> dict[str, object]:
+        ws = _RemoteWebsocket()
+        await _handle_setup_experiment_frame(
+            ws,
+            {
+                "type": ep.TYPE_SETUP_CLOSED_LOOP,
+                "param": "FRONT_BIAS",
+            },
+        )
+        return ws.sent[0]
+
+    result = asyncio.run(_run())
+    assert result["type"] == ep.TYPE_SETUP_CLOSED_LOOP_RESULT
+    assert result["ok"] is False
+    assert "loopback-only" in str(result["error"])
 
 
 def test_setup_experiment_store_registration_loads_rebuilt_rows(tmp_path: Path) -> None:

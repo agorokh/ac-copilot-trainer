@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from tools.ai_sidecar.car_schema import load_latest_schema
+
 SCHEMA_VERSION = 1
 DEFAULT_STORE_NAME = "experiments.jsonl"
 DEFAULT_STORE_DIR = "setup_experiments"
@@ -161,7 +163,7 @@ def is_supported_experiment_store_path(path: str | os.PathLike[str]) -> bool:
 
 def load_lap_archive(path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
-        raw = Path(path).read_text(encoding="utf-8")
+        raw = Path(path).read_text(encoding="utf-8-sig", errors="replace")
     except OSError as exc:
         raise SetupExperimentError(f"cannot read lap archive: {exc}") from exc
     try:
@@ -254,7 +256,7 @@ def load_records(store_path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8-sig", errors="replace") as fh:
         for line_no, line in enumerate(fh, start=1):
             text = line.strip()
             if not text:
@@ -504,12 +506,113 @@ def _filter_records(
     car_id: str | None = None,
     track_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    valid = _valid_records(records)
+    return _filter_valid_records(_valid_records(records), car_id=car_id, track_id=track_id)
+
+
+def _filter_valid_records(
+    valid: list[dict[str, Any]],
+    *,
+    car_id: str | None = None,
+    track_id: str | None = None,
+) -> list[dict[str, Any]]:
     if car_id:
         valid = [r for r in valid if r.get("car", {}).get("id") == car_id]
     if track_id:
         valid = [r for r in valid if r.get("track", {}).get("id") == track_id]
     return valid
+
+
+def _scope_ids(records: list[dict[str, Any]], group: str) -> list[str]:
+    ids: set[str] = set()
+    for rec in records:
+        obj = rec.get(group) if isinstance(rec.get(group), dict) else {}
+        value = obj.get("id")
+        if isinstance(value, str) and value.strip() and value.strip().lower() != "unknown":
+            ids.add(value.strip())
+    return sorted(ids)
+
+
+def _infer_closed_loop_scope(
+    records: list[dict[str, Any]],
+    *,
+    car_id: str | None,
+    track_id: str | None,
+) -> tuple[str | None, str | None, dict[str, Any] | None]:
+    effective_car_id = _clean_optional_id(car_id)
+    effective_track_id = _clean_optional_id(track_id)
+    valid = _valid_records(records)
+    track_scoped = _filter_valid_records(valid, track_id=effective_track_id)
+    if effective_car_id is None:
+        car_ids = _scope_ids(track_scoped, "car")
+        if len(car_ids) > 1:
+            return (
+                None,
+                None,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "car_id",
+                    "car_ids": car_ids,
+                    "error": "setup.closed_loop requires a single car scope",
+                },
+            )
+        if len(car_ids) == 1:
+            effective_car_id = car_ids[0]
+        elif track_scoped:
+            return (
+                None,
+                effective_track_id,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "car_id",
+                    "car_ids": [],
+                    "track_id": effective_track_id,
+                    "error": "setup.closed_loop requires a resolvable car scope",
+                },
+            )
+
+    car_scoped = _filter_valid_records(valid, car_id=effective_car_id)
+    if effective_track_id is None:
+        track_ids = _scope_ids(car_scoped, "track")
+        if len(track_ids) > 1:
+            return (
+                effective_car_id,
+                None,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "track_id",
+                    "car_id": effective_car_id,
+                    "track_ids": track_ids,
+                    "error": "setup.closed_loop requires a single track scope",
+                },
+            )
+        if len(track_ids) == 1:
+            effective_track_id = track_ids[0]
+        elif car_scoped:
+            return (
+                effective_car_id,
+                None,
+                {
+                    "ok": False,
+                    "status": "ambiguous_scope",
+                    "scope": "track_id",
+                    "car_id": effective_car_id,
+                    "track_ids": [],
+                    "error": "setup.closed_loop requires a resolvable track scope",
+                },
+            )
+    return effective_car_id, effective_track_id, None
+
+
+def _clean_optional_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if stripped.lower() == "unknown":
+        return None
+    return stripped or None
 
 
 def _select_params(records: list[dict[str, Any]], best: dict[str, Any]) -> list[str]:
@@ -554,6 +657,13 @@ def _candidate_value(records: list[dict[str, Any]], key: str, value: float) -> f
     if observed and min(observed) >= 0 and value < 0:
         return 0.0
     return value
+
+
+def _normalize_param_key(param: str) -> str:
+    text = param.strip().upper()
+    if not text:
+        raise SetupExperimentError("param is required")
+    return text if text.endswith(".VALUE") else f"{text}.VALUE"
 
 
 def _candidate_grid(
@@ -619,6 +729,268 @@ def _schema_allows(
         if not sp.is_valid(val):
             return False
     return True
+
+
+def _chronological_key(record: dict[str, Any]) -> tuple[str, str, int, str]:
+    lap = record.get("lap") if isinstance(record.get("lap"), dict) else {}
+    return (
+        str(record.get("exported_at") or ""),
+        str(record.get("session_uuid") or ""),
+        int(_as_finite_float(lap.get("lap_n")) or 0),
+        str(record.get("experiment_id") or ""),
+    )
+
+
+def _finite_setup_params(record: dict[str, Any]) -> dict[str, float]:
+    setup = record.get("setup") if isinstance(record.get("setup"), dict) else {}
+    params = setup.get("params") if isinstance(setup.get("params"), dict) else {}
+    out: dict[str, float] = {}
+    for raw_key, value in params.items():
+        val = _as_finite_float(value)
+        if val is not None:
+            out[_normalize_param_key(str(raw_key))] = val
+    return out
+
+
+def _changed_param_keys(
+    prev_params: dict[str, float],
+    curr_params: dict[str, float],
+) -> list[str]:
+    changed: list[str] = []
+    for key in sorted(set(prev_params) | set(curr_params)):
+        before = prev_params.get(key)
+        after = curr_params.get(key)
+        if before is None or after is None or abs(after - before) > 1e-9:
+            changed.append(key)
+    return changed
+
+
+def _latest_param_changed_pair(
+    ordered: list[dict[str, Any]], key: str
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for idx in range(len(ordered) - 1, 0, -1):
+        prev = ordered[idx - 1]
+        curr = ordered[idx]
+        prev_params = _finite_setup_params(prev)
+        curr_params = _finite_setup_params(curr)
+        prev_value = prev_params.get(key)
+        curr_value = curr_params.get(key)
+        if prev_value is None or curr_value is None:
+            continue
+        if abs(curr_value - prev_value) > 1e-9:
+            return prev, curr
+    return None
+
+
+def _prior_non_param_changes(
+    ordered: list[dict[str, Any]], prev: dict[str, Any], key: str
+) -> list[str]:
+    try:
+        prev_index = next(index for index, rec in enumerate(ordered) if rec is prev)
+    except StopIteration:
+        return []
+    if prev_index == 0:
+        return []
+    prior_params = _finite_setup_params(ordered[prev_index - 1])
+    prev_params = _finite_setup_params(prev)
+    return [changed for changed in _changed_param_keys(prior_params, prev_params) if changed != key]
+
+
+def _subsequent_non_param_changes(
+    ordered: list[dict[str, Any]], curr: dict[str, Any], key: str
+) -> list[str]:
+    try:
+        curr_index = next(index for index, rec in enumerate(ordered) if rec is curr)
+    except StopIteration:
+        return []
+    changed: set[str] = set()
+    prev_params = _finite_setup_params(curr)
+    for rec in ordered[curr_index + 1 :]:
+        next_params = _finite_setup_params(rec)
+        changed.update(
+            changed_key
+            for changed_key in _changed_param_keys(prev_params, next_params)
+            if changed_key != key
+        )
+        prev_params = next_params
+    return sorted(changed)
+
+
+def suggest_closed_loop(
+    records: list[dict[str, Any]],
+    *,
+    param: str,
+    car_id: str | None = None,
+    track_id: str | None = None,
+    schema: Any = None,
+) -> dict[str, Any]:
+    """Suggest the next one-parameter move from the measured previous move.
+
+    This is deliberately simple and auditable: compare the latest two valid laps
+    where ``param`` exists, measure whether the previous value change improved
+    lap time, then continue in the same direction or reverse by one observed
+    step.  The broader surrogate optimizer remains available for exploratory
+    multi-param moves; this function is the closed suggest -> test -> measure
+    loop a driver can reason about at the rig.
+    """
+
+    key = _normalize_param_key(param)
+    effective_car_id, effective_track_id, scope_error = _infer_closed_loop_scope(
+        records,
+        car_id=car_id,
+        track_id=track_id,
+    )
+    if scope_error is not None:
+        return {
+            **scope_error,
+            "param": key,
+            "experiments_used": len(_valid_records(records)),
+        }
+    if schema is None:
+        schema = load_latest_schema(effective_car_id)
+    scoped = _filter_records(records, car_id=effective_car_id, track_id=effective_track_id)
+    complete = [
+        rec
+        for rec in scoped
+        if _as_finite_float(rec.get("setup", {}).get("params", {}).get(key)) is not None
+    ]
+    if len(complete) < 2:
+        return {
+            "ok": False,
+            "status": "not_enough_param_experiments",
+            "param": key,
+            "experiments_used": len(complete),
+            "min_required": 2,
+        }
+    ordered = sorted(complete, key=_chronological_key)
+    pair = _latest_param_changed_pair(ordered, key)
+    if pair is None:
+        prev, curr = ordered[-2], ordered[-1]
+    else:
+        prev, curr = pair
+    prev_params = _finite_setup_params(prev)
+    curr_params = _finite_setup_params(curr)
+    prev_value = prev_params[key]
+    curr_value = curr_params[key]
+    prev_lap_ms = float(prev["lap"]["lap_ms"])
+    curr_lap_ms = float(curr["lap"]["lap_ms"])
+    value_delta = curr_value - prev_value
+    measured_delta_ms = prev_lap_ms - curr_lap_ms
+    previous_result = {
+        "from": prev_value,
+        "to": curr_value,
+        "delta": round(value_delta, 6),
+        "lap_ms_before": int(round(prev_lap_ms)),
+        "lap_ms_after": int(round(curr_lap_ms)),
+        "measured_delta_ms": round(measured_delta_ms, 3),
+    }
+    changed_keys = _changed_param_keys(prev_params, curr_params)
+    if pair is None:
+        return {
+            "ok": False,
+            "status": "latest_laps_did_not_change_param",
+            "param": key,
+            "experiments_used": len(complete),
+            "changed_params": changed_keys,
+            "previous_result": previous_result,
+        }
+    if changed_keys != [key]:
+        return {
+            "ok": False,
+            "status": "latest_pair_changed_multiple_params",
+            "param": key,
+            "experiments_used": len(complete),
+            "changed_params": changed_keys,
+            "previous_result": previous_result,
+        }
+    prior_confounds = _prior_non_param_changes(ordered, prev, key)
+    if prior_confounds:
+        return {
+            "ok": False,
+            "status": "baseline_state_changed_multiple_params",
+            "param": key,
+            "experiments_used": len(complete),
+            "changed_params": prior_confounds,
+            "previous_result": previous_result,
+        }
+    subsequent_confounds = _subsequent_non_param_changes(ordered, curr, key)
+    if subsequent_confounds:
+        return {
+            "ok": False,
+            "status": "current_state_changed_multiple_params",
+            "param": key,
+            "experiments_used": len(complete),
+            "changed_params": subsequent_confounds,
+            "previous_result": previous_result,
+        }
+    if abs(measured_delta_ms) <= 1e-9:
+        return {
+            "ok": False,
+            "status": "inconclusive_no_lap_delta",
+            "param": key,
+            "experiments_used": len(complete),
+            "previous_result": {
+                **previous_result,
+                "improved": False,
+            },
+        }
+
+    step = _param_step(scoped, key)
+    previous_direction = 1.0 if value_delta > 0 else -1.0
+    next_direction = previous_direction if measured_delta_ms > 0 else -previous_direction
+    raw_target = _candidate_value(scoped, key, curr_value + next_direction * step)
+    candidate = {key: raw_target}
+    if schema is not None and hasattr(schema, "constrain_params"):
+        candidate = schema.constrain_params(candidate)
+    target_value = float(candidate[key])
+    if schema is not None and not _schema_allows(candidate, schema, base={key: curr_value}):
+        return {
+            "ok": False,
+            "status": "candidate_out_of_schema",
+            "param": key,
+            "candidate": candidate,
+            "previous_result": {
+                **previous_result,
+            },
+        }
+    if abs(target_value - curr_value) <= 1e-9:
+        return {
+            "ok": False,
+            "status": "at_param_bound",
+            "param": key,
+            "experiments_used": len(complete),
+            "current": curr_value,
+            "previous_result": {
+                **previous_result,
+                "improved": measured_delta_ms > 0,
+            },
+        }
+
+    improved = measured_delta_ms > 0
+    direction_word = "continue" if improved else "reverse"
+    change = {"from": curr_value, "to": target_value}
+    return {
+        "ok": True,
+        "status": "suggested",
+        "method": "one_param_measured_delta",
+        "param": key,
+        "experiments_used": len(complete),
+        "previous_result": {
+            **previous_result,
+            "improved": improved,
+        },
+        "candidate": {
+            "params": {key: target_value},
+            "changed_params": {key: change},
+        },
+        "rationale": [
+            (
+                f"Previous {key} move {'improved' if improved else 'hurt'} lap time by "
+                f"{abs(measured_delta_ms):.0f} ms."
+            ),
+            f"Next suggestion: {direction_word} that one-parameter direction by one step.",
+        ],
+    }
 
 
 def suggest_next_setup(

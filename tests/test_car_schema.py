@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from tools.ai_sidecar.car_schema import CarSetupSchema, SpinnerDesc
+from tools.ai_sidecar.car_schema import CarSetupSchema, SpinnerDesc, load_latest_schema
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "assets/setups/_schema/ks_porsche_911_gt3_r_2016/4fcbe0406992.json"
@@ -182,6 +183,27 @@ def test_json_roundtrip_and_save_load(tmp_path: Path) -> None:
     assert loaded.schema_hash == s.schema_hash
 
 
+def test_schema_caution_notes_roundtrip() -> None:
+    s = CarSetupSchema.from_json(
+        {
+            "car_id": "car",
+            "spinners": {"FRONT_BIAS": {"name": "FRONT_BIAS"}},
+            "cautions": {
+                "FRONT_BIAS": [
+                    {"direction": "decrease", "message": "move carefully"},
+                    {"direction": "increase", "current_lt": 50, "message": "too low"},
+                ]
+            },
+        }
+    )
+
+    again = CarSetupSchema.from_json(s.to_json())
+
+    assert again.caution_notes("FRONT_BIAS", direction="decrease", current=66) == ["move carefully"]
+    assert again.caution_notes("FRONT_BIAS", direction="increase", current=49) == ["too low"]
+    assert again.caution_notes("FRONT_BIAS", direction="increase", current=51) == []
+
+
 def test_from_car_setup_reads_spinner_schema() -> None:
     class _FakeSetup:
         car_id = "car"
@@ -201,6 +223,77 @@ def test_example_asset_decodes_known_values() -> None:
     assert s.decode("TYRES", 1) == "Medium"  # enum
     assert s.validate("WING_2", 25) is False and s.clamp("WING_2", 25) == 20.0
     assert s.validate("FINAL_RATIO", 7) is False  # read-only in the example
+
+
+def test_load_latest_schema_loads_checked_in_car_asset() -> None:
+    s = load_latest_schema("ks_porsche_911_gt3_r_2016")
+    assert s is not None
+    assert s.car_id == "ks_porsche_911_gt3_r_2016"
+    assert s.clamp("FRONT_BIAS", 71) == 70.0
+    assert s.validate("FRONT_BIAS", 71) is False
+
+
+def test_load_latest_schema_requires_marker_when_multiple_hashes_exist(tmp_path: Path) -> None:
+    root = tmp_path / "schemas"
+    car_dir = root / "car"
+    car_dir.mkdir(parents=True)
+    first = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 1, "step": 1}]
+    )
+    second = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 2, "step": 1}]
+    )
+    marked = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 3, "step": 1}]
+    )
+    (car_dir / "001.json").write_text(json.dumps(first.to_json()), encoding="utf-8")
+
+    assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 1
+
+    (car_dir / "002.json").write_text(json.dumps(second.to_json()), encoding="utf-8")
+
+    assert load_latest_schema("car", schema_dir=root) is None
+
+    (car_dir / "latest.json").write_text(json.dumps(marked.to_json()), encoding="utf-8")
+
+    assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 3
+
+
+def test_load_latest_schema_ignores_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "schemas"
+    car_dir = root / "car"
+    car_dir.mkdir(parents=True)
+    safe = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 1, "step": 1}]
+    )
+    outside = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 99, "step": 1}]
+    )
+    (car_dir / "001.json").write_text(json.dumps(safe.to_json()), encoding="utf-8")
+    outside_path = tmp_path / "outside.json"
+    outside_path.write_text(json.dumps(outside.to_json()), encoding="utf-8")
+    try:
+        (car_dir / "999.json").symlink_to(outside_path)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation unsupported on this platform: {exc!r}")
+
+    loaded = load_latest_schema("car", schema_dir=root)
+
+    assert loaded is not None
+    assert loaded.spinners["ABS"].max == 1
+
+
+def test_load_latest_schema_rejects_unsafe_car_id(tmp_path: Path) -> None:
+    root = tmp_path / "schemas"
+    escape = tmp_path / "escape"
+    escape.mkdir()
+    (escape / "fake.json").write_text("{}", encoding="utf-8")
+
+    assert load_latest_schema("../escape", schema_dir=root) is None
+    assert load_latest_schema("ks/porsche", schema_dir=root) is None
+    assert load_latest_schema("ks_porsche..911", schema_dir=root) is None
+    assert load_latest_schema(".", schema_dir=root) is None
+    assert load_latest_schema("---", schema_dir=root) is None
 
 
 def test_from_spinners_captures_ranges() -> None:

@@ -8,7 +8,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
+from tools.ai_sidecar.setup_advisor import diff_setup_files
 from tools.rig_launcher.install import default_exe_path, install_desktop_shortcut
 from tools.rig_launcher.settings import ensure_settings_file
 from tools.rig_launcher.supervisor import (
@@ -38,7 +40,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="AC Copilot Game Point launcher")
     parser.add_argument("--once", action="store_true", help="Probe once and exit.")
     parser.add_argument("--start", action="store_true", help="Start supervised processes first.")
-    parser.add_argument("--json", action="store_true", help="Print status JSON in --once mode.")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print status or setup output as JSON where supported.",
+    )
     parser.add_argument("--no-gui", action="store_true", help="Do not open the Tk status window.")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--external-bind", default=None)
@@ -58,6 +64,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--shortcut-target",
         default=None,
         help="Override the exe path used by --install-shortcut.",
+    )
+    parser.add_argument(
+        "--setup-diff",
+        nargs=2,
+        metavar=("BASELINE_INI", "CANDIDATE_INI"),
+        help="Compare two setup INI files and show a driver-readable setup diff.",
     )
     return parser
 
@@ -82,6 +94,71 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         start_simhub=args.start_simhub or config.start_simhub,
         paths=paths,
     )
+
+
+def render_setup_diff_lines(diff: dict[str, Any]) -> list[str]:
+    if not diff.get("ok", False):
+        return [f"setup diff: {diff.get('error', 'failed')}"]
+    changed_count = int(diff.get("changed_count") or 0)
+    lines = [f"setup diff: {changed_count} changed knob{'s' if changed_count != 1 else ''}"]
+    baseline = diff.get("baseline")
+    candidate = diff.get("candidate")
+    if isinstance(baseline, dict) and isinstance(candidate, dict):
+        base_path = baseline.get("path")
+        candidate_path = candidate.get("path")
+        if base_path and candidate_path:
+            lines.append(f"baseline: {base_path}")
+            lines.append(f"candidate: {candidate_path}")
+    display_lines = diff.get("display_lines")
+    if isinstance(display_lines, list) and display_lines:
+        lines.extend(str(line) for line in display_lines)
+    else:
+        lines.append("no setup changes")
+    return lines
+
+
+def _setup_diff_error(baseline_path: str, candidate_path: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "setup_diff_failed",
+        "baseline": {"path": baseline_path},
+        "candidate": {"path": candidate_path},
+        "changed_count": 0,
+        "rows": [],
+        "display_lines": [],
+        "error": str(exc) or exc.__class__.__name__,
+    }
+
+
+def _open_setup_diff_window(diff: dict[str, Any], *, parent: Any | None = None) -> int:
+    import tkinter as tk
+    from tkinter import ttk
+
+    root = tk.Toplevel(parent) if parent is not None else tk.Tk()
+    root.title("Setup Diff")
+    root.geometry("760x460")
+    root.minsize(560, 320)
+
+    frame = ttk.Frame(root, padding=16)
+    frame.pack(fill="both", expand=True)
+    ttk.Label(frame, text="Setup Diff", font=("", 16, "bold")).pack(anchor="w")
+    text = tk.Text(frame, wrap="word", height=16)
+    text.pack(fill="both", expand=True, pady=(12, 0))
+    text.insert("1.0", "\n".join(render_setup_diff_lines(diff)))
+    text.configure(state="disabled")
+    ttk.Button(frame, text="Close", command=root.destroy).pack(anchor="e", pady=(12, 0))
+    if parent is None:
+        root.mainloop()
+    return 0 if diff.get("ok", False) else 1
+
+
+def run_setup_diff_gui(diff: dict[str, Any]) -> int:
+    try:
+        return _open_setup_diff_window(diff)
+    except Exception as exc:  # noqa: BLE001 - keep launcher useful on headless machines
+        print(f"Setup diff window unavailable: {exc}", file=sys.stderr)
+        print("\n".join(render_setup_diff_lines(diff)))
+        return 0 if diff.get("ok", False) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -110,6 +187,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Installed Desktop shortcut: {result.shortcut_path}")
         print(f"Target: {result.target_path}")
         return 0
+
+    if args.setup_diff:
+        baseline_path, candidate_path = args.setup_diff
+        try:
+            diff = diff_setup_files(baseline_path, candidate_path)
+        except Exception as exc:  # noqa: BLE001 - CLI should report bad setup files plainly
+            diff = _setup_diff_error(baseline_path, candidate_path, exc)
+        if args.json:
+            print(json.dumps(diff, indent=2, sort_keys=True))
+            return 0 if diff.get("ok", False) else 1
+        if args.no_gui:
+            print("\n".join(render_setup_diff_lines(diff)))
+            return 0 if diff.get("ok", False) else 1
+        return run_setup_diff_gui(diff)
 
     supervisor = GamePointSupervisor(config_from_args(args))
     try:
@@ -174,10 +265,33 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         path = ensure_settings_file(supervisor.paths)
         _open_path(path)
 
+    def open_setup_diff() -> None:
+        from tkinter import filedialog, messagebox
+
+        baseline = filedialog.askopenfilename(
+            parent=root,
+            title="Choose baseline setup",
+            filetypes=[("Assetto Corsa setup", "*.ini"), ("All files", "*.*")],
+        )
+        if not baseline:
+            return
+        candidate = filedialog.askopenfilename(
+            parent=root,
+            title="Choose candidate setup",
+            filetypes=[("Assetto Corsa setup", "*.ini"), ("All files", "*.*")],
+        )
+        if not candidate:
+            return
+        try:
+            _open_setup_diff_window(diff_setup_files(baseline, candidate), parent=root)
+        except Exception as exc:  # noqa: BLE001 - surface file/UI errors in the launcher
+            messagebox.showerror("Setup Diff", str(exc), parent=root)
+
     ttk.Button(button_row, text="Start", command=start).pack(side="left", padx=(0, 8))
     ttk.Button(button_row, text="Refresh", command=refresh).pack(side="left", padx=(0, 8))
     ttk.Button(button_row, text="Logs", command=open_logs).pack(side="left", padx=(0, 8))
-    ttk.Button(button_row, text="Settings", command=open_settings).pack(side="left")
+    ttk.Button(button_row, text="Settings", command=open_settings).pack(side="left", padx=(0, 8))
+    ttk.Button(button_row, text="Setup Diff", command=open_setup_diff).pack(side="left")
     ttk.Label(frame, text=f"Status: {supervisor.paths.status_path}").pack(anchor="w", pady=(16, 0))
 
     refresh()

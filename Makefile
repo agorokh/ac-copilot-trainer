@@ -31,7 +31,7 @@ ci-security:
 # pre_commit_hook exits non-zero when tracked files contain secrets not in the baseline;
 # plain `scan --baseline` updates the baseline and does not fail CI.
 ci-secrets:
-	$(PYTHON) scripts/policy_tracked_files.py
+	$(PYTHON) scripts/policy_tracked_files.py  # pragma: allowlist secret
 
 init-knowledge:
 	$(PYTHON) scripts/init_knowledge_db.py
