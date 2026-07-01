@@ -430,6 +430,11 @@ def _load_json_file(path: Path) -> Mapping[str, Any]:
     return payload
 
 
+def _validate_curriculum_input_file(path: Path, *, label: str) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise TTNormalizeError(f"{path}: curriculum {label} input must be a regular file")
+
+
 def _lap_from_coaching_path(path: Path) -> str | None:
     stem = path.stem
     if not stem.startswith(COACHING_ENDPOINT_PREFIX):
@@ -720,6 +725,9 @@ def build_curriculum_from_files(
     pretty: bool = False,
 ) -> CurriculumSummary:
     """Build and write a TT harness curriculum from retained coaching evidence."""
+    _validate_curriculum_input_file(coaching_path, label="coaching")
+    if session_path is not None:
+        _validate_curriculum_input_file(session_path, label="last-session")
     resolved_output = _resolve_curriculum_output_path(
         output, coaching_path=coaching_path, output_base=output_base
     )

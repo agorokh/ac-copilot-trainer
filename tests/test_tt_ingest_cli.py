@@ -479,6 +479,34 @@ def test_build_curriculum_from_files_accepts_utf8_bom_json(tmp_path) -> None:
     assert summary.objectives == 1
 
 
+def test_build_curriculum_from_files_rejects_symlinked_inputs(tmp_path) -> None:
+    real_coaching = tmp_path / "real" / f"{coaching_endpoint(5)}.json"
+    real_session = tmp_path / "real" / f"{last_session_endpoint(5)}.json"
+    real_coaching.parent.mkdir()
+    real_coaching.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    real_session.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    coaching_link = tmp_path / f"{coaching_endpoint(5)}.json"
+    session_link = tmp_path / f"{last_session_endpoint(5)}.json"
+    try:
+        coaching_link.symlink_to(real_coaching)
+        session_link.symlink_to(real_session)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unsupported on this platform: {exc!r}")
+
+    with pytest.raises(TTNormalizeError, match="coaching input must be a regular file"):
+        build_curriculum_from_files(
+            coaching_link,
+            session_path=real_session,
+            output=tmp_path / f"{curriculum_endpoint(5)}.json",
+        )
+    with pytest.raises(TTNormalizeError, match="last-session input must be a regular file"):
+        build_curriculum_from_files(
+            real_coaching,
+            session_path=session_link,
+            output=tmp_path / f"{curriculum_endpoint(5)}.json",
+        )
+
+
 def test_build_curriculum_from_files_refuses_overwrite_input(tmp_path) -> None:
     coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
     session_path = tmp_path / f"{last_session_endpoint(5)}.json"
