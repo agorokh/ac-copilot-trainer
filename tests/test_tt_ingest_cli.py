@@ -536,6 +536,29 @@ def test_build_curriculum_from_files_rejects_wrong_lap_name_inside_tt_lake(tmp_p
         )
 
 
+def test_build_curriculum_from_files_validates_lake_base_output_root(tmp_path) -> None:
+    input_dir = tmp_path / "inputs"
+    input_dir.mkdir()
+    coaching_path = input_dir / f"{coaching_endpoint(5)}.json"
+    session_path = input_dir / f"{last_session_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    output_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+
+    with pytest.raises(TTNormalizeError, match="must be named curriculum_lap"):
+        build_curriculum_from_files(
+            coaching_path,
+            output=output_dir / "custom.json",
+            output_base=tmp_path,
+        )
+    with pytest.raises(TTNormalizeError, match="output lap must match"):
+        build_curriculum_from_files(
+            coaching_path,
+            output=output_dir / f"{curriculum_endpoint(6)}.json",
+            output_base=tmp_path,
+        )
+
+
 def test_discover_curriculum_payloads_filters_lake(tmp_path) -> None:
     session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
     session_dir.mkdir(parents=True)

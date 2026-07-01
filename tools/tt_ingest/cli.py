@@ -571,14 +571,15 @@ def _resolve_curriculum_output_path(
     base_dir = Path.cwd().resolve()
     resolved = output.resolve() if output.is_absolute() else (base_dir / output).resolve()
     coaching_dir = coaching_path.resolve().parent
-    tt_lake_roots = _tt_lake_roots_for_output(coaching_path=coaching_path)
+    tt_lake_roots = set(_tt_lake_roots_for_output(coaching_path=coaching_path))
+    if output_base is not None:
+        tt_lake_roots.add(Path(output_base).resolve() / "journal" / "tt")
+    tt_lake_roots = tuple(sorted(tt_lake_roots, key=str))
     approved_roots = [
         base_dir / ".scratch",
         coaching_dir,
         *tt_lake_roots,
     ]
-    if output_base is not None:
-        approved_roots.append(Path(output_base).resolve() / "journal" / "tt")
     if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
         roots = ".scratch/, journal/, or the retained input directory"
         raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
