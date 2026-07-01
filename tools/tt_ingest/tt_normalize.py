@@ -654,10 +654,7 @@ def _merged_advice_stories(segment: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _curriculum_session_metadata(session_payload: Mapping[str, Any] | None) -> dict[str, Any]:
-    payload = _as_mapping(session_payload)
-    session = _payload_session(payload) if payload else {}
-    if not session and payload:
-        session = payload
+    session = _curriculum_session_payload(session_payload)
     attrs = session.get("attributes")
     if not isinstance(attrs, Mapping):
         attrs = session.get("lap_attributes")
@@ -678,6 +675,14 @@ def _curriculum_session_metadata(session_payload: Mapping[str, Any] | None) -> d
         "setup_name": _identity_value(attrs.get("carSetupName")),
         "tyre_compound": _identity_value(attrs.get("tyreCompound")),
     }
+
+
+def _curriculum_session_payload(session_payload: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    payload = _as_mapping(session_payload)
+    if not payload:
+        return {}
+    session = _payload_session(payload)
+    return session if session else payload
 
 
 def _curriculum_reference_metadata(bundle: Mapping[str, Any]) -> dict[str, Any]:
@@ -718,7 +723,7 @@ def build_harness_curriculum(
     min_loss = max(0.0, float(min_time_loss_s))
     reference_lap = _as_mapping(coaching_bundle.get("reference_lap"))
     reference_times = _segment_time_map(reference_lap.get("segments"))
-    session = _payload_session(session_payload or {}) if session_payload else {}
+    session = _curriculum_session_payload(session_payload)
     user_times = _segment_time_map(session.get("segments"))
 
     objectives: list[dict[str, Any]] = []

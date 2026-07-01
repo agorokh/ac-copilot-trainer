@@ -380,6 +380,16 @@ def test_build_harness_curriculum_maps_tt_advice_to_objective() -> None:
     assert objective["harness"]["acceptance"]["baseline_s"] == pytest.approx(0.001)
 
 
+def test_build_harness_curriculum_uses_unwrapped_session_timing() -> None:
+    session = _load_fixture("tt_services_last_session.json")["data"]["session"]
+
+    curriculum = build_harness_curriculum(_curriculum_bundle(), session_payload=session)
+
+    objective = curriculum["objectives"][0]
+    assert objective["targets"]["driver_segment_time_ms"] == pytest.approx(10815.7)
+    assert objective["targets"]["segment_delta_ms"] == pytest.approx(2050.6)
+
+
 def test_build_harness_curriculum_filters_non_actionable_stories() -> None:
     curriculum = build_harness_curriculum(_curriculum_bundle(), min_time_loss_s=0.01)
 

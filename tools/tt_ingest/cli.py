@@ -538,19 +538,36 @@ def _is_relative_to(path: Path, root: Path) -> bool:
     return True
 
 
+def _tt_lake_roots_for_output(*, coaching_path: Path) -> tuple[Path, ...]:
+    roots = {Path.cwd().resolve() / "journal" / "tt"}
+    resolved_coaching = coaching_path.resolve()
+    for parent in resolved_coaching.parents:
+        if parent.name == "tt" and parent.parent.name == "journal":
+            roots.add(parent)
+    return tuple(sorted(roots, key=str))
+
+
 def _resolve_curriculum_output_path(output: Path, *, coaching_path: Path) -> Path:
     raw = output
     base_dir = Path.cwd().resolve()
     resolved = output.resolve() if output.is_absolute() else (base_dir / output).resolve()
     coaching_dir = coaching_path.resolve().parent
+    tt_lake_roots = _tt_lake_roots_for_output(coaching_path=coaching_path)
     approved_roots = (
         base_dir / ".scratch",
         base_dir / "journal",
         coaching_dir,
+        *tt_lake_roots,
     )
     if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
         roots = ".scratch/, journal/, or the retained input directory"
         raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
+    for tt_root in tt_lake_roots:
+        if _is_relative_to(resolved, tt_root) and not resolved.match(CURRICULUM_ENDPOINT_GLOB):
+            raise TTNormalizeError(
+                f"{raw}: curriculum outputs inside {tt_root} must be named "
+                f"{CURRICULUM_ENDPOINT_GLOB}"
+            )
     return resolved
 
 
