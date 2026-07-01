@@ -367,8 +367,8 @@ class TestApproachPanel:
         """PC-04: design tokens match Figma brief."""
         src = _lua_text("coaching_overlay.lua")
         assert "COLOR_RED" in src, "Must define COLOR_RED design token"
-        assert re.search(r"COLOR_BG\s*=\s*rgbm\([^)]+0\.60\)", src), (
-            "COLOR_BG must use 0.60 alpha (Figma: rgba(17,17,17,0.6))"
+        assert re.search(r'COLOR_BG\s*=\s*T\.color\("carbon",\s*0\.78\)', src), (
+            "COLOR_BG must use carbon token at 0.78 alpha (Racing Atelier panel ground)"
         )
 
     def test_window_coaching_calls_approach_panel(self) -> None:

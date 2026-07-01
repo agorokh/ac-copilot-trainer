@@ -809,12 +809,12 @@ def test_ete08c_coaching_overlay_bottom_tile_always_renders(lua):
     approachData is nil. Today it returns false and renders nothing."""
     overlay = lua.execute('local m = require("coaching_overlay"); return m')
     lua.execute("_reset_recorders()")
-    # nil approach data — should still render chrome + AG PORSCHE ACADEMY footer
+    # nil approach data — should still render chrome + RACING ATELIER footer
     overlay["drawApproachPanel"](None)
     rects = lua.execute("return #_draw_rect_filled_calls")
     assert rects >= 1, "drawApproachPanel(nil) must still render panel chrome"
-    assert lua.execute('return _count_dwrite_text("AG PORSCHE ACADEMY")') >= 1, (
-        "drawApproachPanel(nil) must render 'AG PORSCHE ACADEMY' footer"
+    assert lua.execute('return _count_dwrite_text("RACING ATELIER")') >= 1, (
+        "drawApproachPanel(nil) must render 'RACING ATELIER' footer"
     )
 
 

@@ -24,10 +24,9 @@ local COLOR_RED          = T.color("brake")         -- danger / warning
 local COLOR_AMBER        = T.color("lift")          -- caution / approaching
 local COLOR_BAR_BG       = T.color("raise", 0.85)   -- progress bar trough
 local COLOR_BAR_FILL     = T.color("brake", 0.95)   -- braking-urgency fill
-local COLOR_BAR_GLOW     = T.color("brake", 0.35)   -- glow
 local COLOR_BRAND        = T.color("dim")           -- branding
 
-local PANEL_ROUNDING = 12
+local PANEL_ROUNDING = 0  -- Racing Atelier: square corners (--r: 0px)
 local PANEL_PAD_X    = 24
 local PANEL_PAD_Y    = 20
 
@@ -81,11 +80,6 @@ local function drawProgressBar(x, y, w, h, pct)
   -- Fill
   local fillW = math.max(0, math.min(1, pct)) * w
   if fillW > 1 then
-    -- Glow layer behind fill (subtle wider bar for bloom effect)
-    if fillW > 4 then
-      ui.drawRectFilled(vec2(x, y - 1), vec2(x + fillW, y + h + 1), COLOR_BAR_GLOW, h / 2)
-    end
-    -- Fill layer on top
     ui.drawRectFilled(p0, vec2(x + fillW, y + h), COLOR_BAR_FILL, h / 2)
   end
 end
@@ -325,7 +319,7 @@ function M.drawApproachPanel(approachData)
   drawProgressBar(padX, barY, barW, barH, progressPct or 0)
 
   ------------------------------------------------------------------
-  -- Footer: AG PORSCHE ACADEMY (Syncopate brand)
+  -- Footer: RACING ATELIER (brand)
   ------------------------------------------------------------------
   local divY = barY + barH + 14
   ui.drawRectFilled(

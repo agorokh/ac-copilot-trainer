@@ -24,7 +24,7 @@ local COLOR_GREEN     = T.color("clear")         -- #2FBE6E on line / faster
 local COLOR_WHITE     = T.color("chalk")         -- #EEF1F3 primary text
 local COLOR_TEXT_GREY = T.color("mute")          -- #9BA1A8 labels
 
-local PANEL_ROUNDING = 8
+local PANEL_ROUNDING = 0  -- Racing Atelier: square corners (--r: 0px)
 local PANEL_PAD_Y    = 14
 
 --- CSP: `ui.dwriteDrawText` is often a cdata callable, not `type(...) == "function"`.
