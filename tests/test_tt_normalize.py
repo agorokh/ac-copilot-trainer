@@ -11,8 +11,10 @@ from tools.ac_harness.reference_lap import validate_lap_archive_record
 from tools.tt_ingest.tt_normalize import (
     DEFAULT_REFERENCE_COVERAGE_THRESHOLD,
     INDEX_SCHEMA_VERSION,
+    TT_CURRICULUM_FORMAT,
     TT_REFERENCE_IMPORT_FORMAT,
     TTNormalizeError,
+    build_harness_curriculum,
     build_reference_archive,
     build_sessions_index,
     normalize_session,
@@ -23,10 +25,15 @@ from tools.tt_ingest.tt_normalize import (
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tt_sessions_page.json"
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _sessions() -> list[dict]:
     return json.loads(FIXTURE.read_text(encoding="utf-8"))["data"]["sessions"]
+
+
+def _load_fixture(name: str) -> dict:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
 def test_split_session_id() -> None:
@@ -327,3 +334,115 @@ def test_build_reference_archive_rejects_mixed_sessions() -> None:
                 _session_payload(0.5, 1.0, session_key="sess-b"),
             ],
         )
+
+
+def _curriculum_bundle() -> dict:
+    return {
+        "reference_lap": _load_fixture("tt_services_dynamic_reference.json")["lap"],
+        "dynamic_reference": ["ref-uid-002", "20220611194228"],
+        "advice_reference": ["fake-uid-001", "20260629005756", "theoreticalBestRef"],
+        "segments": [
+            {"segment": 3, "advice_raw": _load_fixture("tt_services_advice.json")},
+            {"segment": 4, "stories": [{"diagnosis": "Good corner", "time_loss": 0.0}]},
+        ],
+    }
+
+
+def test_build_harness_curriculum_maps_tt_advice_to_objective() -> None:
+    curriculum = build_harness_curriculum(
+        _curriculum_bundle(),
+        session_payload=_load_fixture("tt_services_last_session.json"),
+        exported_at="2026-06-30T00:00:00Z",
+    )
+
+    assert curriculum["format"] == TT_CURRICULUM_FORMAT
+    assert curriculum["generator"]["decision_issue"] == 353
+    assert curriculum["session"]["car_id"] == "ks_porsche_911_gt3_r_2016"
+    assert curriculum["session"]["track_id"] == "magione"
+    assert curriculum["reference"]["username"] == "Reference Driver"
+    assert curriculum["summary"] == {
+        "segments": 2,
+        "objectives": 1,
+        "total_time_loss_s": 0.001,
+        "primary_objective_id": "tt-c03-coaching-diagnosis-rotation-insufficient-1",
+    }
+    objective = curriculum["objectives"][0]
+    assert objective["corner"] == 3
+    assert objective["skill"] == "rotation"
+    assert objective["intent"] == "improve_rotation_to_apex"
+    assert objective["diagnosis_key"] == "coaching.diagnosis.rotation_insufficient"
+    assert objective["highlight_norm"] == {
+        "start": 0.04054,
+        "end": 0.073504,
+    }
+    assert objective["targets"]["reference_segment_time_ms"] is None
+    assert objective["targets"]["driver_segment_time_ms"] == pytest.approx(10815.7)
+    assert objective["targets"]["segment_delta_ms"] is None
+    assert objective["harness"]["acceptance"]["baseline_s"] == pytest.approx(0.001)
+
+
+def test_build_harness_curriculum_uses_unwrapped_session_timing() -> None:
+    session = _load_fixture("tt_services_last_session.json")["data"]["session"]
+
+    curriculum = build_harness_curriculum(_curriculum_bundle(), session_payload=session)
+
+    objective = curriculum["objectives"][0]
+    assert objective["targets"]["driver_segment_time_ms"] == pytest.approx(10815.7)
+    assert objective["targets"]["segment_delta_ms"] is None
+
+
+def test_build_harness_curriculum_uses_reference_times_when_advice_reference_matches() -> None:
+    bundle = _curriculum_bundle()
+    bundle["advice_reference"] = list(bundle["dynamic_reference"])
+
+    curriculum = build_harness_curriculum(
+        bundle,
+        session_payload=_load_fixture("tt_services_last_session.json"),
+    )
+
+    objective = curriculum["objectives"][0]
+    assert objective["targets"]["reference_segment_time_ms"] == pytest.approx(8765.1)
+    assert objective["targets"]["segment_delta_ms"] == pytest.approx(2050.6)
+
+
+def test_build_harness_curriculum_filters_non_actionable_stories() -> None:
+    curriculum = build_harness_curriculum(_curriculum_bundle(), min_time_loss_s=0.01)
+
+    assert curriculum["objectives"] == []
+    assert curriculum["summary"]["objectives"] == 0
+
+
+def test_build_harness_curriculum_rejects_fractional_segment_numbers() -> None:
+    bundle = _curriculum_bundle()
+    bundle["segments"][0]["segment"] = "3.9"
+
+    curriculum = build_harness_curriculum(
+        bundle,
+        session_payload=_load_fixture("tt_services_last_session.json"),
+    )
+
+    assert curriculum["objectives"] == []
+    assert curriculum["summary"]["objectives"] == 0
+
+
+def test_build_harness_curriculum_falls_back_when_advice_raw_is_malformed() -> None:
+    bundle = _curriculum_bundle()
+    bundle["segments"][0] = {
+        "segment": 3,
+        "advice_raw": {"success": True, "data": []},
+        "stories": [
+            {
+                "diagnosis": "Turn in earlier",
+                "diagnosis_key": "coaching.diagnosis.rotation_insufficient",
+                "time_loss": 0.2,
+            }
+        ],
+    }
+
+    curriculum = build_harness_curriculum(
+        bundle,
+        session_payload=_load_fixture("tt_services_last_session.json"),
+    )
+
+    assert curriculum["summary"]["objectives"] == 1
+    assert curriculum["objectives"][0]["time_loss_s"] == pytest.approx(0.2)

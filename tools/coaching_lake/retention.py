@@ -17,8 +17,10 @@ from typing import Any
 
 from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
 from tools.lap_archive_export import LapArchiveExportError, iter_lap_archive_paths, load_lap_archive
+from tools.tt_ingest.tt_export import COACHING_ENDPOINT_PREFIX, CURRICULUM_ENDPOINT_PREFIX
 
 DERIVED_TT_INDEXES = frozenset({"index.json", "sessions_index.json"})
+DERIVED_TT_PATTERNS = (f"{CURRICULUM_ENDPOINT_PREFIX}*.json",)
 
 
 @dataclass(frozen=True)
@@ -192,7 +194,9 @@ def _tt_raw_paths(tt_dir: Path) -> Iterable[Path]:
     return (
         path
         for path in sorted(tt_dir.rglob("*.json"))
-        if path.is_file() and path.name not in DERIVED_TT_INDEXES
+        if path.is_file()
+        and path.name not in DERIVED_TT_INDEXES
+        and not any(path.match(pattern) for pattern in DERIVED_TT_PATTERNS)
     )
 
 
@@ -271,6 +275,47 @@ def _tt_index_paths_for_deleted(items: Sequence[RetentionItem]) -> list[Path]:
     )
 
 
+def _curriculum_path_for_tt_source(path: Path) -> Path | None:
+    stem = path.stem
+    if not stem.startswith(COACHING_ENDPOINT_PREFIX):
+        return None
+    lap = stem[len(COACHING_ENDPOINT_PREFIX) :]
+    if not lap:
+        return None
+    return path.with_name(f"{CURRICULUM_ENDPOINT_PREFIX}{lap}.json")
+
+
+def _cascade_tt_items(items: Sequence[RetentionItem]) -> list[RetentionItem]:
+    cascade: list[RetentionItem] = []
+    seen: set[Path] = set()
+    for item in items:
+        curriculum_path = _curriculum_path_for_tt_source(item.path)
+        if curriculum_path is None or curriculum_path in seen:
+            continue
+        seen.add(curriculum_path)
+        if (
+            curriculum_path.is_symlink()
+            or not curriculum_path.is_file()
+            or _has_pin_marker(curriculum_path)
+        ):
+            continue
+        try:
+            size = curriculum_path.stat().st_size
+        except OSError:
+            size = 0
+        cascade.append(
+            RetentionItem(
+                path=curriculum_path,
+                domain="tt",
+                protected=False,
+                reasons=("cascade-from-coaching",),
+                sort_time=item.sort_time,
+                bytes=size,
+            )
+        )
+    return cascade
+
+
 def plan_retention(
     *,
     lap_dir: str | Path | None = None,
@@ -299,15 +344,17 @@ def plan_retention(
 
     if tt_dir is not None:
         tt_items = _tt_items(Path(tt_dir))
-        items.extend(tt_items)
-        delete.extend(
-            _select_by_cap(
-                tt_items,
-                max_files=policy.max_tt_files,
-                max_age_days=policy.max_tt_age_days,
-                now=stamp,
-            )
+        tt_delete = _select_by_cap(
+            tt_items,
+            max_files=policy.max_tt_files,
+            max_age_days=policy.max_tt_age_days,
+            now=stamp,
         )
+        tt_cascade = _cascade_tt_items(tt_delete)
+        items.extend(tt_items)
+        items.extend(tt_cascade)
+        delete.extend(tt_delete)
+        delete.extend(tt_cascade)
 
     return RetentionPlan(
         policy=policy,
