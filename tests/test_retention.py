@@ -229,6 +229,70 @@ def test_tt_retention_cascades_curriculum_when_source_is_deleted(tmp_path: Path)
     assert survivor.exists()
 
 
+def test_tt_retention_skips_non_file_curriculum_during_cascade(tmp_path: Path) -> None:
+    tt = tmp_path / "journal" / "tt"
+    raw_dir = tt / "assettoCorsa" / "car" / "spa" / "sess"
+    raw_dir.mkdir(parents=True)
+    source = raw_dir / "coaching_lap5.json"
+    curriculum_dir = raw_dir / "curriculum_lap5.json"
+    survivor = raw_dir / "session.json"
+    source.write_text('{"raw":true}', encoding="utf-8")
+    curriculum_dir.mkdir()
+    survivor.write_text('{"raw":2}', encoding="utf-8")
+    old = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+    os.utime(source, (old, old))
+    os.utime(survivor, (old + 2, old + 2))
+
+    plan = plan_retention(
+        tt_dir=tt,
+        policy=RetentionPolicy(max_tt_files=1),
+        profile_path=None,
+        now=datetime(2026, 6, 30, tzinfo=UTC),
+    )
+
+    assert [item.path for item in plan.delete] == [source]
+    result = apply_retention(plan)
+    assert result.deleted == 1
+    assert not source.exists()
+    assert curriculum_dir.exists()
+    assert survivor.exists()
+
+
+def test_tt_retention_skips_symlinked_curriculum_during_cascade(tmp_path: Path) -> None:
+    tt = tmp_path / "journal" / "tt"
+    raw_dir = tt / "assettoCorsa" / "car" / "spa" / "sess"
+    raw_dir.mkdir(parents=True)
+    source = raw_dir / "coaching_lap5.json"
+    curriculum_link = raw_dir / "curriculum_lap5.json"
+    survivor = raw_dir / "session.json"
+    target = tmp_path / "external_curriculum.json"
+    source.write_text('{"raw":true}', encoding="utf-8")
+    target.write_text('{"derived":true}', encoding="utf-8")
+    try:
+        curriculum_link.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unsupported on this platform: {exc!r}")
+    survivor.write_text('{"raw":2}', encoding="utf-8")
+    old = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
+    os.utime(source, (old, old))
+    os.utime(survivor, (old + 2, old + 2))
+
+    plan = plan_retention(
+        tt_dir=tt,
+        policy=RetentionPolicy(max_tt_files=1),
+        profile_path=None,
+        now=datetime(2026, 6, 30, tzinfo=UTC),
+    )
+
+    assert [item.path for item in plan.delete] == [source]
+    result = apply_retention(plan)
+    assert result.deleted == 1
+    assert not source.exists()
+    assert curriculum_link.exists()
+    assert target.exists()
+    assert survivor.exists()
+
+
 def test_tt_retention_honors_pinned_curriculum_during_cascade(tmp_path: Path) -> None:
     tt = tmp_path / "journal" / "tt"
     raw_dir = tt / "assettoCorsa" / "car" / "spa" / "sess"

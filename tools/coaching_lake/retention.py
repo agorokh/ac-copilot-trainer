@@ -293,7 +293,11 @@ def _cascade_tt_items(items: Sequence[RetentionItem]) -> list[RetentionItem]:
         if curriculum_path is None or curriculum_path in seen:
             continue
         seen.add(curriculum_path)
-        if not curriculum_path.exists() or _has_pin_marker(curriculum_path):
+        if (
+            curriculum_path.is_symlink()
+            or not curriculum_path.is_file()
+            or _has_pin_marker(curriculum_path)
+        ):
             continue
         try:
             size = curriculum_path.stat().st_size
