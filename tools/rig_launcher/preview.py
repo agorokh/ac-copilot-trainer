@@ -61,9 +61,7 @@ def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
     root = tk.Tk()
     root.title("AC Copilot Game Point")
     root.geometry("660x440+140+140")
-    view = build_launcher_view(
-        root, actions=_NOOP_ACTIONS, status_path=demo_status().status_path
-    )
+    view = build_launcher_view(root, actions=_NOOP_ACTIONS, status_path=demo_status().status_path)
     view.update(status or demo_status())
     root.update_idletasks()
     root.deiconify()
