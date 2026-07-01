@@ -37,7 +37,6 @@ local function _rgb(hexstr, a)
 end
 
 local colorCache = {}
-local _warnedUnknown = {}
 
 --- Build a CSP rgbm from a token name at the given alpha (default opaque).
 ---@param name string  a key in M.HEX
@@ -45,13 +44,7 @@ local _warnedUnknown = {}
 function M.color(name, a)
   local hex = M.HEX[name]
   if hex == nil then
-    if not _warnedUnknown[name] then
-      _warnedUnknown[name] = true
-      if ac and type(ac.log) == "function" then
-        ac.log("[COPILOT][design_tokens] unknown token: " .. tostring(name))
-      end
-    end
-    hex = M.HEX.chalk
+    error("[COPILOT][design_tokens] unknown token: " .. tostring(name))
   end
   local alpha = a or 1.0
   local nameCache = colorCache[name]
