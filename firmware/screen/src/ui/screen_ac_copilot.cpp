@@ -219,7 +219,12 @@ void update_delta(ac_copilot_ctx_t* ctx, bool stale) {
     if (capped < -20) capped = -20;
     int width = (abs(capped) * max_w) / 20;
     if (width < 3) width = 3;
-    int x = capped >= 0 ? center_x : center_x - width;
+    // Positive delta grows right of center, negative grows left. An exact
+    // zero (current == target) straddles the center line so an on-target
+    // reading does not lean right and imply a positive delta.
+    int x = capped > 0 ? center_x
+          : capped < 0 ? center_x - width
+                       : center_x - width / 2;
     lv_obj_set_pos(ctx->delta_fill, x, trough_y);
     lv_obj_set_size(ctx->delta_fill, width, 20);
     lv_obj_set_style_bg_color(ctx->delta_fill,
