@@ -437,27 +437,24 @@ def _paired_last_session_path(coaching_path: Path) -> Path | None:
     lap = _lap_from_coaching_path(coaching_path)
     if not lap:
         return None
+    candidates: list[Path] = []
     base = coaching_path.with_name(f"{last_session_endpoint(lap)}.json")
     if base.exists() and base.is_file() and not base.is_symlink():
-        return base
-    candidates = [
+        candidates.append(base)
+    candidates.extend(
         path
-        for path in coaching_path.parent.glob(f"{LAST_SESSION_ENDPOINT_PREFIX}*.json")
-        if path.is_file()
-        and not path.is_symlink()
-        and _last_session_endpoint_matches_lap(path.stem, lap)
-    ]
+        for path in coaching_path.parent.glob(f"{last_session_endpoint(lap)}_window_*.json")
+        if path.is_file() and not path.is_symlink()
+    )
     if not candidates:
         return None
-
-    def sort_key(path: Path) -> tuple[float, str]:
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
-            mtime = 0.0
-        return (mtime, path.name)
-
-    return max(candidates, key=sort_key)
+    if len(candidates) > 1:
+        rel = ", ".join(path.name for path in sorted(candidates))
+        raise TTNormalizeError(
+            f"multiple paired last-session payloads found for {coaching_path}: {rel}; "
+            "pass --session explicitly"
+        )
+    return candidates[0]
 
 
 def discover_reference_payloads(
@@ -492,13 +489,13 @@ def discover_reference_payloads(
     return paths
 
 
-def discover_curriculum_payloads(
+def _discover_curriculum_coaching_path(
     *,
     lake_base: Path | None = None,
     session_key: str | None = None,
     lap: str | int | None = None,
-) -> tuple[Path, Path]:
-    """Discover the retained coaching bundle and paired last-session payload for M-TT3."""
+) -> Path:
+    """Discover the retained coaching bundle for one lake session/lap."""
     if not session_key or lap is None:
         raise TTNormalizeError("--discover-lake requires both --session-key and --lap")
     root = lake_root(lake_base)
@@ -522,12 +519,25 @@ def discover_curriculum_payloads(
             f"multiple retained coaching payloads matched session_key={session_key}, "
             f"lap={lap}: {rel}"
         )
-    session_path = _paired_last_session_path(matches[0])
+    return matches[0]
+
+
+def discover_curriculum_payloads(
+    *,
+    lake_base: Path | None = None,
+    session_key: str | None = None,
+    lap: str | int | None = None,
+) -> tuple[Path, Path]:
+    """Discover the retained coaching bundle and paired last-session payload for M-TT3."""
+    coaching_path = _discover_curriculum_coaching_path(
+        lake_base=lake_base, session_key=session_key, lap=lap
+    )
+    session_path = _paired_last_session_path(coaching_path)
     if session_path is None:
         raise TTNormalizeError(
-            f"no paired last-session payload found for {matches[0]} (pass --session)"
+            f"no paired last-session payload found for {coaching_path} (pass --session)"
         )
-    return matches[0], session_path
+    return coaching_path, session_path
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -547,18 +557,22 @@ def _tt_lake_roots_for_output(*, coaching_path: Path) -> tuple[Path, ...]:
     return tuple(sorted(roots, key=str))
 
 
-def _resolve_curriculum_output_path(output: Path, *, coaching_path: Path) -> Path:
+def _resolve_curriculum_output_path(
+    output: Path, *, coaching_path: Path, output_base: Path | None = None
+) -> Path:
     raw = output
     base_dir = Path.cwd().resolve()
     resolved = output.resolve() if output.is_absolute() else (base_dir / output).resolve()
     coaching_dir = coaching_path.resolve().parent
     tt_lake_roots = _tt_lake_roots_for_output(coaching_path=coaching_path)
-    approved_roots = (
+    approved_roots = [
         base_dir / ".scratch",
         base_dir / "journal",
         coaching_dir,
         *tt_lake_roots,
-    )
+    ]
+    if output_base is not None:
+        approved_roots.append(Path(output_base).resolve() / "journal")
     if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
         roots = ".scratch/, journal/, or the retained input directory"
         raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
@@ -623,12 +637,15 @@ def build_curriculum_from_files(
     *,
     output: Path,
     session_path: Path | None = None,
+    output_base: Path | None = None,
     min_time_loss_s: float = DEFAULT_CURRICULUM_MIN_TIME_LOSS_S,
     overwrite: bool = False,
     pretty: bool = False,
 ) -> CurriculumSummary:
     """Build and write a TT harness curriculum from retained coaching evidence."""
-    resolved_output = _resolve_curriculum_output_path(output, coaching_path=coaching_path)
+    resolved_output = _resolve_curriculum_output_path(
+        output, coaching_path=coaching_path, output_base=output_base
+    )
     inputs = [coaching_path]
     paired_session_path = session_path or _paired_last_session_path(coaching_path)
     if paired_session_path is None:
@@ -931,14 +948,20 @@ def cmd_curriculum(args: argparse.Namespace) -> int:
         coaching_path = args.coaching
         session_path = args.session
     else:
-        coaching_path, discovered_session = discover_curriculum_payloads(
-            lake_base=args.lake_base, session_key=args.session_key, lap=args.lap
-        )
-        session_path = args.session or discovered_session
+        if args.session:
+            coaching_path = _discover_curriculum_coaching_path(
+                lake_base=args.lake_base, session_key=args.session_key, lap=args.lap
+            )
+            session_path = args.session
+        else:
+            coaching_path, session_path = discover_curriculum_payloads(
+                lake_base=args.lake_base, session_key=args.session_key, lap=args.lap
+            )
     summary = build_curriculum_from_files(
         coaching_path,
         output=args.output,
         session_path=session_path,
+        output_base=args.lake_base,
         min_time_loss_s=args.min_time_loss_s,
         overwrite=args.overwrite,
         pretty=args.pretty,

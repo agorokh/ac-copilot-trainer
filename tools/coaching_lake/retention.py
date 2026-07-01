@@ -20,6 +20,10 @@ from tools.lap_archive_export import LapArchiveExportError, iter_lap_archive_pat
 
 DERIVED_TT_INDEXES = frozenset({"index.json", "sessions_index.json"})
 DERIVED_TT_PATTERNS = ("curriculum_lap*.json",)
+TT_COACHING_PREFIX = "coaching_lap"
+TT_LAST_SESSION_PREFIX = "last_session_lap"
+TT_LAST_SESSION_WINDOW_MARKER = "_window_"
+TT_CURRICULUM_PREFIX = "curriculum_lap"
 
 
 @dataclass(frozen=True)
@@ -274,6 +278,19 @@ def _tt_index_paths_for_deleted(items: Sequence[RetentionItem]) -> list[Path]:
     )
 
 
+def _curriculum_path_for_tt_source(path: Path) -> Path | None:
+    stem = path.stem
+    lap: str | None = None
+    if stem.startswith(TT_COACHING_PREFIX):
+        lap = stem[len(TT_COACHING_PREFIX) :]
+    elif stem.startswith(TT_LAST_SESSION_PREFIX):
+        tail = stem[len(TT_LAST_SESSION_PREFIX) :]
+        lap = tail.split(TT_LAST_SESSION_WINDOW_MARKER, 1)[0]
+    if not lap:
+        return None
+    return path.with_name(f"{TT_CURRICULUM_PREFIX}{lap}.json")
+
+
 def plan_retention(
     *,
     lap_dir: str | Path | None = None,
@@ -339,6 +356,16 @@ def apply_retention(plan: RetentionPlan) -> RetentionApplyResult:
         bytes_deleted += item.bytes
         if item.domain == "tt":
             deleted_tt_items.append(item)
+            curriculum_path = _curriculum_path_for_tt_source(item.path)
+            if curriculum_path is not None and curriculum_path.exists():
+                try:
+                    curriculum_size = curriculum_path.stat().st_size
+                    curriculum_path.unlink()
+                except OSError as exc:
+                    failures.append(f"{curriculum_path}: {exc}")
+                else:
+                    deleted += 1
+                    bytes_deleted += curriculum_size
     invalidated_indexes = 0
     for index_path in _tt_index_paths_for_deleted(deleted_tt_items):
         try:

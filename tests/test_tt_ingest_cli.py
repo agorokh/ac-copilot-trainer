@@ -553,6 +553,22 @@ def test_discover_curriculum_payloads_pairs_window_when_base_missing(tmp_path) -
     )
 
 
+def test_discover_curriculum_payloads_rejects_ambiguous_session_windows(tmp_path) -> None:
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir.mkdir(parents=True)
+    raw = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    base_path = session_dir / f"{last_session_endpoint(5)}.json"
+    window_path = session_dir / f"{last_session_window_endpoint(5, raw)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    base_path.write_text(json.dumps(raw), encoding="utf-8")
+    raw["data"]["telemetry"]["telemetry"]["reference"][0]["dist"] = 0.444444
+    window_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="multiple paired last-session payloads"):
+        discover_curriculum_payloads(lake_base=tmp_path, session_key="sess-1", lap=5)
+
+
 def test_curriculum_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
     coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
     session_path = tmp_path / f"{last_session_endpoint(5)}.json"
@@ -573,6 +589,36 @@ def test_curriculum_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
     assert rc == 0
     assert output.exists()
     assert "TT harness curriculum" in capsys.readouterr().out
+    assert json.loads(output.read_text(encoding="utf-8"))["summary"]["objectives"] == 1
+
+
+def test_curriculum_cli_discover_lake_honors_session_override(tmp_path) -> None:
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir.mkdir(parents=True)
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = tmp_path / "provided_last_session.json"
+    output = tmp_path / "journal" / "tt_curriculum.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    rc = main(
+        [
+            "curriculum",
+            "--discover-lake",
+            "--lake-base",
+            str(tmp_path),
+            "--session-key",
+            "sess-1",
+            "--lap",
+            "5",
+            "--session",
+            str(session_path),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
     assert json.loads(output.read_text(encoding="utf-8"))["summary"]["objectives"] == 1
 
 
