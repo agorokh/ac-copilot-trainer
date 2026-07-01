@@ -69,11 +69,20 @@ void uppercase_copy(const char* src, char* dst, size_t n) {
 
 bool contains_ascii(const char* haystack, const char* needle) {
     if (!haystack || !needle || !*needle) return false;
-    char h[48];
-    char n[24];
-    uppercase_copy(haystack, h, sizeof(h));
-    uppercase_copy(needle, n, sizeof(n));
-    return strstr(h, n) != nullptr;
+    // Case-insensitive substring scan over the full strings — no fixed-size
+    // copy, so keywords are still found past the old 48-char buffer (e.g.
+    // "brake"/"lift" late in the 96-char primary_line).
+    for (const char* h = haystack; *h; ++h) {
+        const char* hp = h;
+        const char* np = needle;
+        while (*hp && *np &&
+               toupper((unsigned char)*hp) == toupper((unsigned char)*np)) {
+            ++hp;
+            ++np;
+        }
+        if (!*np) return true;
+    }
+    return false;
 }
 
 bool snapshot_is_stale() {
@@ -121,14 +130,26 @@ void corner_badge_text(const char* corner, char* out, size_t n) {
         snprintf(out, n, "T-");
         return;
     }
+    // Prefer digits after an explicit T/t marker ("T3", "T10"); otherwise fall
+    // back to the first digit run anywhere in the label so descriptive corner
+    // names ("Lesmo 1") still surface a number instead of "T?".
     const char* t = strchr(corner, 'T');
     if (!t) t = strchr(corner, 't');
-    if (t && t[1] >= '0' && t[1] <= '9') {
-        // Preserve every digit of the corner number so "T10"/"T12" do not
+    const char* d = (t && t[1] >= '0' && t[1] <= '9') ? t + 1 : nullptr;
+    if (!d) {
+        for (const char* p = corner; *p; ++p) {
+            if (*p >= '0' && *p <= '9') {
+                d = p;
+                break;
+            }
+        }
+    }
+    if (d) {
+        // Copy "T" + the full consecutive digit run so "T10"/"T12" do not
         // collapse to "T1" (single-digit copy misreports the corner).
         size_t w = 0;
         if (n > 1) out[w++] = 'T';
-        for (const char* d = t + 1; *d >= '0' && *d <= '9' && w + 1 < n; ++d) {
+        for (; *d >= '0' && *d <= '9' && w + 1 < n; ++d) {
             out[w++] = *d;
         }
         out[w] = 0;
