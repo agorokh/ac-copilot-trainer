@@ -41,7 +41,7 @@ end
 function M.color(name, a)
   local hex = M.HEX[name]
   if hex == nil then
-    return rgbm(1, 0, 1, 1) -- magenta = "unknown token" tell
+    error("Unknown design token: " .. tostring(name))
   end
   return _rgb(hex, a)
 end

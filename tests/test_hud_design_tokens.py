@@ -26,9 +26,11 @@ def _css_tokens() -> dict[str, str]:
 
 
 def _lua_tokens() -> dict[str, str]:
-    return {
-        n: v.upper() for n, v in _LUA_HEX.findall(_DESIGN_TOKENS_LUA.read_text(encoding="utf-8"))
-    }
+    text = _DESIGN_TOKENS_LUA.read_text(encoding="utf-8")
+    hex_block = re.search(r"M\.HEX\s*=\s*\{(.*?)\}", text, re.DOTALL)
+    if not hex_block:
+        return {}
+    return {n: v.upper() for n, v in _LUA_HEX.findall(hex_block.group(1))}
 
 
 def test_hud_design_tokens_match_colors_css() -> None:
