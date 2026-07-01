@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T23:41:32Z
+last_updated: 2026-07-01T00:13:41Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -59,6 +59,51 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #422 MERGED: coaching diagnosis depth (#405)
+
+PR [#422](https://github.com/agorokh/ac-copilot-trainer/pull/422) squash-merged to `main` as
+[`28048c1`](https://github.com/agorokh/ac-copilot-trainer/commit/28048c16d356f1becd8d7d87f2a77d06798cd23e)
+at 2026-07-01T00:08:27Z. Issue
+[#405](https://github.com/agorokh/ac-copilot-trainer/issues/405) is **CLOSED**.
+
+**Shipped:** Coach v2 corner attribution now compares the current lap to the same physical
+reference corner by apex spline instead of relying on list-order/window coupling. Corner signatures
+carry deeper braking, steering, gear, and consistency signals; `coach_lap()` reuses precomputed
+corner/signature/reference-match state from `coach_report` so report generation, balance analysis,
+and protocol follow-up speak from the same matched corners. Diagnostics now include `steering`,
+`brake_shape`, `gear`, `exit_road_usage`, and `consistency`. Reference-derived exit road usage is
+explicitly informational unless a caller supplies real under-used-exit-width data, and caller-supplied
+diagnostic extras win over defaults. History archives are bounded, scoped to the same car/track/layout,
+deduped against the current archive by metadata plus streaming trace digest, and passed through
+`historyArchivePaths` from the sidecar protocol.
+
+**Review hardening:** Bot review drove the physical-corner matching API, duplicate historical-corner
+consumption guards, strict history/corpus scope rules, streaming history digesting instead of whole
+trace stringification, reference-vs-history metadata semantics, caller-supplied diagnostic precedence,
+and conservative gear advice gated on a positive corner delta. Documentation in
+`docs/10_Development/12_WS_Sidecar_Protocol.md` records the new diagnostics and
+`historyArchivePaths` payload.
+
+**Verification:** Full local parity passed on Windows from the clean issue #405 worktree with
+`make ci-fast PYTHON=python` (`2030 passed, 77 skipped`, coverage 85.63%, `ci-fast: OK`; root-file
+allowlist warnings only for existing `.copier-answers.yml` and `doppler.yaml`). Focused sidecar
+diagnosis/report/protocol/lap-dynamics suites passed (`144 passed`). The observed sidecar protocol
+path used `tools.ai_sidecar.protocol.build_brain_followup()` against a temp `journal/laps` corpus and
+returned `debriefSource=brain`, diagnostic keys `brake_shape`, `consistency`, `exit_road_usage`,
+`gear`, `steering`, `consistency_sample_count=2`, and both `sectorDeltas` and `superLap` present.
+GitHub checks on PR #422 passed (`build`, `Canonical docs exist`, `conformance`, post-merge
+`classify`/`score`; vault automerge skipped). GraphQL review-thread audit resolved the actionable
+review threads before merge; the self-hosted reviewer had no current-SHA high-or-above finding after
+the final cooldown.
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 422` reported no migration, env,
+dependency, script, or workflow flags.
+
+**Memory note:** The exact Tier-3 MCP tool was not exposed in this Codex tool surface; prior
+repo-prefetch attempts returned no relevant context. This SAVE is grounded in vault Tier-2 context,
+live GitHub state (`gh pr view 422` reported `MERGED`; `gh issue view 405` reported `CLOSED`), and the
+observed local/GitHub verification above.
 
 ## Delivered (2026-06-30) - PR #423 MERGED: session review artifact (#404 Part A)
 

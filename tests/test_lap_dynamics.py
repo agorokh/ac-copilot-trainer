@@ -184,6 +184,51 @@ def test_trail_brake_detected_when_braking_into_steer():
     assert sig.trail_brake_frac > 0.0
 
 
+def test_signature_records_steering_smoothness_and_scrub_proxy():
+    arch = _make_corner_archive()
+    fields = arch["trace"]["fields"]
+    si = fields.index("steer")
+    flip = 1.0
+    for row in arch["trace"]["samples"]:
+        if abs(row[si]) > 0.05:
+            row[si] = flip * 0.45
+            flip *= -1.0
+    sig = corner_signatures(lap_trace_from_archive(arch))[0]
+    assert sig.steering_correction_count >= 10
+    assert sig.steering_rate_p95 > 0.0
+    assert sig.steering_smoothness_score < 80.0
+    assert sig.steering_scrub_index > 0.0
+
+
+def test_signature_records_gear_selection_through_corner():
+    arch = _make_corner_archive()
+    fields = arch["trace"]["fields"]
+    gi, si = fields.index("gear"), fields.index("steer")
+    for i, row in enumerate(arch["trace"]["samples"]):
+        row[gi] = 3 if 40 <= i < 60 and abs(row[si]) > 0.05 else 4
+    sig = corner_signatures(lap_trace_from_archive(arch))[0]
+    assert sig.entry_gear == 4
+    assert sig.gear_at_apex == 3
+    assert sig.exit_gear == 4
+    assert sig.gear_change_count >= 2
+
+
+def test_signature_classifies_late_brake_pressure_rise():
+    arch = _make_corner_archive()
+    fields = arch["trace"]["fields"]
+    bi = fields.index("brake")
+    for i, row in enumerate(arch["trace"]["samples"]):
+        if 25 <= i < 40:
+            row[bi] = 0.15
+        elif 40 <= i <= 55:
+            row[bi] = min(0.95, 0.15 + (i - 40) * 0.06)
+        else:
+            row[bi] = 0.0
+    sig = corner_signatures(lap_trace_from_archive(arch))[0]
+    assert sig.brake_shape == "increasing_pressure"
+    assert sig.brake_late_rise_count >= 2
+
+
 def test_real_fixture_too_short_yields_no_corners():
     archive = json.loads((FIXTURES / "lap_archive_valid.json").read_text(encoding="utf-8"))
     lap = lap_trace_from_archive(archive)

@@ -24,6 +24,7 @@ Sent after each completed lap when `config.wsSidecarUrl` is set and the socket i
 | `telemetry`     | object      | no       | Optional structured lap data for sidecar analysis (issue **#49**); see below |
 | `archivePath`   | string      | no       | Issue **#277**: archive-backed follow-up path, sent only after the async lap archive write completes |
 | `referenceArchivePath` | string | no    | Optional safe lap archive path for the driver's written PB/reference, enabling delta-based brain rules |
+| `historyArchivePaths` | string[] | no    | Optional bounded list of recent safe lap archive paths; enables per-corner lap-to-lap consistency diagnostics |
 | `brainOnly`     | bool        | no       | When `true`, the sidecar skips the generic immediate ack and only emits the archive-backed brain follow-up |
 
 \*Missing `protocol` on `lap_complete` is accepted with a server warning (legacy); new clients should always send `protocol: 1`.
@@ -72,6 +73,18 @@ When present, `improvementRanking` is a JSON array of objects, **highest priorit
 | `suggestion`  | string | yes      | Human-readable line for UI or logging. |
 
 For the current speed metrics, **higher** telemetry is better; an item usually indicates a possible gain when `reference > last`. Consumers may ignore unknown fields for forward compatibility.
+
+#### `cornerAnalysis` items (issue **#405**)
+
+The brain follow-up emits one object per segmented corner. Existing fields (`index`, `apex_spline`, `min_speed_kmh`, `time_loss_s`, `headline`, `attributions`) remain stable. Issue **#405** adds `diagnostics`, a machine-readable block that lets clients render deeper coach tiles even when an attribution does not rank in the top prose lines.
+
+| Diagnostic key | Meaning |
+| -------------- | ------- |
+| `steering` | Steering smoothness score, correction count, p95 steering rate, and a scrub proxy derived from steering rate while loaded. |
+| `brake_shape` | Brake trace classification (`ideal_trace`, `increasing_pressure`, `abrupt_release`, `braking_at_apex`, or `no_brake`) plus release smoothness. |
+| `gear` | Entry/apex/exit gear, gear-change count, and apex-gear delta vs `referenceArchivePath` when a reference lap is supplied. |
+| `exit_road_usage` | Reference-path lateral-delta proxy. `available=false` without a reference lap; true curb/track-edge under-use coaching requires map-edge geometry or caller-supplied `under_used_exit_width_m`. |
+| `consistency` | Lap-to-lap per-corner spread and 0-100 repeatability score when at least one valid `historyArchivePaths` lap plus the current lap segment the same corner. |
 
 ### `analysis_error` (Python → Lua)
 
