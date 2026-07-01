@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T03:40:00Z
+last_updated: 2026-07-01T04:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -59,6 +59,44 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #428 MERGED: Track Titan harness curriculum (#353)
+
+PR [#428](https://github.com/agorokh/ac-copilot-trainer/pull/428) squash-merged to `main` as
+[`9685155`](https://github.com/agorokh/ac-copilot-trainer/commit/9685155e5a0e9e33428d2465fc12445ee18f49f3).
+Issue [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) is **CLOSED**.
+
+**Shipped:** Track Titan M-TT3 now emits a versioned
+`track_titan_harness_curriculum_v1` artifact from retained per-corner TT coaching evidence. The
+`tools.tt_ingest curriculum` command supports lake discovery by session/lap, validates paired
+`last_session_lap*.json` evidence, writes only under `.scratch/`, the retained input directory, or a
+self-consistent `journal/tt/**/curriculum_lapN.json` sibling, and stamps curriculum provenance under
+`generator.decision_issue`. Retention treats curricula as derived artifacts: raw indexes ignore them,
+coaching-source pruning plans a visible `cascade-from-coaching` delete for regular-file siblings only,
+and `.pin` markers protect manual curriculum artifacts.
+
+**Review hardening:** The resolve loop tightened same-lap filename checks, lake-root validation,
+same-session adjacency, symlink/non-file input rejection, non-leaky validation errors, dynamic-reference
+timing provenance, generated timestamps, integral segment parsing, and non-file retention cascade
+skips. Stale generated-at review feedback was replied to with evidence and resolved after the code
+started passing `exported_at=stamp` into `build_harness_curriculum()`.
+
+**Verification:** Focused TT/retention suites passed (`89 passed`). Full local parity passed on
+Windows with `FLEET_GOVERNANCE_ROOT=C:/Users/arsen/Projects/governance-hub make ci-fast`
+(`2067 passed, 116 skipped`, coverage 86.13%, `ci-fast: OK`; existing root-file allowlist warnings
+only for `.copier-answers.yml` and `doppler.yaml`). GitHub checks on head `372ef5b` passed (`build`,
+`Canonical docs exist`, `conformance`; vault automerge skipped). GraphQL review threads were clean,
+`ci_resolve_gate.py` reported no substantive findings, and Copilot's current-head review generated no
+new comments.
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 428` reported no migration, env,
+dependency, script, or workflow flags.
+
+**Memory note:** The exact Tier-3 MCP query tool was not exposed in this Codex tool surface, so this
+SAVE is grounded in vault Tier-2 context, local/GitHub verification, and the deterministic post-merge
+sync/classification output. `post_merge_sync.sh sync 428` ran successfully from the clean `main`
+worktree because `main` was checked out there; it could not delete local branch
+`feat/issue-353-mtt3-curriculum` while the issue worktree was still checked out.
 
 ## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #433 MERGED: setup review hardening (#407 follow-up)
 
