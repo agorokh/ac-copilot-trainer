@@ -145,7 +145,7 @@ def run_setup_diff_gui(diff: dict[str, Any]) -> int:
     except Exception as exc:  # noqa: BLE001 - keep launcher useful on headless machines
         print(f"Setup diff window unavailable: {exc}", file=sys.stderr)
         print("\n".join(render_setup_diff_lines(diff)))
-        return 1
+        return 0 if diff.get("ok", False) else 1
 
 
 def main(argv: list[str] | None = None) -> int:

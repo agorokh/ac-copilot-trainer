@@ -76,11 +76,12 @@ def load_latest_schema(
         return None
     candidates = sorted(
         car_dir.glob("*.json"),
-        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        key=lambda path: path.name,
     )
     if not candidates:
         return None
-    return CarSetupSchema.load(candidates[-1])
+    marker = car_dir / "latest.json"
+    return CarSetupSchema.load(marker if marker in candidates else candidates[-1])
 
 
 def _f(value: Any) -> float | None:
@@ -213,6 +214,7 @@ class CarSetupSchema:
 
     car_id: str
     spinners: dict[str, SpinnerDesc] = field(default_factory=dict)
+    cautions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     schema_hash: str = ""
     schema_version: int = SCHEMA_VERSION
 
@@ -287,11 +289,33 @@ class CarSetupSchema:
             out[key] = self.clamp(key, val)
         return out
 
+    def caution_notes(
+        self,
+        name: str,
+        *,
+        direction: str | None = None,
+        current: float | None = None,
+    ) -> list[str]:
+        notes: list[str] = []
+        for rule in self.cautions.get(self._spinner_name(name), []):
+            if not isinstance(rule, dict):
+                continue
+            rule_direction = rule.get("direction")
+            if rule_direction is not None and rule_direction != direction:
+                continue
+            if not _current_matches_rule(current, rule):
+                continue
+            message = rule.get("message")
+            if isinstance(message, str) and message.strip():
+                notes.append(message.strip())
+        return notes
+
     def to_json(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "car_id": self.car_id,
             "schema_hash": self.schema_hash,
+            "cautions": self.cautions,
             "spinners": {name: sp.to_json() for name, sp in sorted(self.spinners.items())},
         }
 
@@ -305,6 +329,7 @@ class CarSetupSchema:
         out = cls(
             car_id=str(obj.get("car_id", "unknown")),
             spinners=spinners,
+            cautions=_parse_cautions(obj.get("cautions")),
             schema_hash=str(obj.get("schema_hash") or ""),
             schema_version=int(obj.get("schema_version", SCHEMA_VERSION)),
         )
@@ -324,6 +349,31 @@ class CarSetupSchema:
     @classmethod
     def load(cls, path: str | Path) -> CarSetupSchema:
         return cls.from_json(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def _current_matches_rule(current: float | None, rule: dict[str, Any]) -> bool:
+    for key, predicate in (
+        ("current_lt", lambda value, limit: value < limit),
+        ("current_lte", lambda value, limit: value <= limit),
+        ("current_gt", lambda value, limit: value > limit),
+        ("current_gte", lambda value, limit: value >= limit),
+    ):
+        limit = _f(rule.get(key))
+        if limit is not None:
+            if current is None or not predicate(current, limit):
+                return False
+    return True
+
+
+def _parse_cautions(value: Any) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict):
+        return {}
+    parsed: dict[str, list[dict[str, Any]]] = {}
+    for name, rules in value.items():
+        if not isinstance(name, str) or not isinstance(rules, list):
+            continue
+        parsed[name] = [dict(rule) for rule in rules if isinstance(rule, dict)]
+    return parsed
 
 
 def _main(argv: list[str] | None = None) -> int:

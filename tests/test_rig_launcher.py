@@ -18,6 +18,7 @@ from tools.rig_launcher.app import (
     main,
     render_setup_diff_lines,
     run_gui,
+    run_setup_diff_gui,
     run_sidecar_child,
 )
 from tools.rig_launcher.install import (
@@ -750,6 +751,26 @@ def test_launcher_setup_diff_json(tmp_path: Path, capsys: pytest.CaptureFixture[
     lines = render_setup_diff_lines(out)
     assert lines[0] == "setup diff: 2 changed knobs"
     assert any(str(candidate) in line for line in lines)
+
+
+def test_setup_diff_gui_fallback_keeps_success_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail_window(_diff: dict[str, Any], *, parent: Any | None = None) -> int:
+        del parent
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr("tools.rig_launcher.app._open_setup_diff_window", fail_window)
+
+    rc = run_setup_diff_gui(
+        {"ok": True, "changed_count": 1, "display_lines": ["Brake bias: 66 -> 64 %"]}
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "Setup diff window unavailable" in captured.err
+    assert "setup diff: 1 changed knob" in captured.out
 
 
 def test_direct_config_default_is_loopback_safe(tmp_path: Path) -> None:

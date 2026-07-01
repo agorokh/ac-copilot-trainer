@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -182,6 +183,27 @@ def test_json_roundtrip_and_save_load(tmp_path: Path) -> None:
     assert loaded.schema_hash == s.schema_hash
 
 
+def test_schema_caution_notes_roundtrip() -> None:
+    s = CarSetupSchema.from_json(
+        {
+            "car_id": "car",
+            "spinners": {"FRONT_BIAS": {"name": "FRONT_BIAS"}},
+            "cautions": {
+                "FRONT_BIAS": [
+                    {"direction": "decrease", "message": "move carefully"},
+                    {"direction": "increase", "current_lt": 50, "message": "too low"},
+                ]
+            },
+        }
+    )
+
+    again = CarSetupSchema.from_json(s.to_json())
+
+    assert again.caution_notes("FRONT_BIAS", direction="decrease", current=66) == ["move carefully"]
+    assert again.caution_notes("FRONT_BIAS", direction="increase", current=49) == ["too low"]
+    assert again.caution_notes("FRONT_BIAS", direction="increase", current=51) == []
+
+
 def test_from_car_setup_reads_spinner_schema() -> None:
     class _FakeSetup:
         car_id = "car"
@@ -209,6 +231,29 @@ def test_load_latest_schema_loads_checked_in_car_asset() -> None:
     assert s.car_id == "ks_porsche_911_gt3_r_2016"
     assert s.clamp("FRONT_BIAS", 71) == 70.0
     assert s.validate("FRONT_BIAS", 71) is False
+
+
+def test_load_latest_schema_prefers_marker_then_lexicographic(tmp_path: Path) -> None:
+    root = tmp_path / "schemas"
+    car_dir = root / "car"
+    car_dir.mkdir(parents=True)
+    first = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 1, "step": 1}]
+    )
+    second = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 2, "step": 1}]
+    )
+    marked = CarSetupSchema.from_spinners_dump(
+        "car", [{"name": "ABS", "min": 0, "max": 3, "step": 1}]
+    )
+    (car_dir / "001.json").write_text(json.dumps(first.to_json()), encoding="utf-8")
+    (car_dir / "002.json").write_text(json.dumps(second.to_json()), encoding="utf-8")
+
+    assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 2
+
+    (car_dir / "latest.json").write_text(json.dumps(marked.to_json()), encoding="utf-8")
+
+    assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 3
 
 
 def test_load_latest_schema_rejects_unsafe_car_id(tmp_path: Path) -> None:

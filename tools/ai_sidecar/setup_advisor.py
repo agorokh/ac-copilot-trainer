@@ -21,7 +21,6 @@ from tools.ai_sidecar.setup_model import CarSetup, from_snapshot, load_setup_fil
 MAX_COMPLAINT_LEN = 240
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
-_PORSCHE_911_IDS = ("ks_porsche_911_gt3_r_2016", "porsche_911", "911_gt3")
 
 _DEFAULT_STEPS: dict[str, float] = {
     "FRONT_BIAS": 1.0,
@@ -234,7 +233,7 @@ def _parse_issue(text: str) -> str | None:
         text, "wont turn", "won t turn", "doesnt turn", "doesn t turn"
     ):
         return "understeer"
-    if {"kerb", "curb", "bump", "bumpy", "unstable", "nervous", "darty"} & words:
+    if {"kerb", "curb", "bump", "bumpy"} & words:
         return "instability"
     if {"oversteer", "loose", "snap", "snappy", "tail", "rear"} & words or _has_phrase(
         text, "steps out", "stepping out", "rear steps"
@@ -293,11 +292,6 @@ def _step_for(section: str, schema: CarSetupSchema | None) -> float:
         if sp is not None and sp.step is not None and sp.step > 0:
             return float(sp.step)
     return _DEFAULT_STEPS.get(_base_section(section), 1.0)
-
-
-def _is_911(car_id: str | None) -> bool:
-    low = (car_id or "").lower()
-    return any(marker in low for marker in _PORSCHE_911_IDS)
 
 
 def _format_value(value: float | int | str | None) -> str | None:
@@ -397,6 +391,8 @@ def _move_to_suggestion(
     section = move.section.strip().upper()
     if _spinner_read_only(schema, section):
         return None
+    if schema is not None and _base_section(section) == "PRESSURE" and schema.get(section) is None:
+        return None
     spec = spec_for(section)
     effect = effect_for(section)
     current = setup.value(section)
@@ -418,11 +414,8 @@ def _move_to_suggestion(
     caution: list[str] = []
     if effect is not None and effect.car_dependent:
         caution.append("Car-specific lever; verify this car's spinner label before applying.")
-    if section == "FRONT_BIAS" and _is_911(setup.car_id):
-        if move.direction < 0:
-            caution.append("911 GT3 R usually wants a lower front-bias window (~50-56%).")
-        elif current is not None and current < 50:
-            caution.append("Do not chase stability past the 911's usual low-front-bias window.")
+    if schema is not None:
+        caution.extend(schema.caution_notes(section, direction=direction, current=current))
     return {
         "rank": rank,
         "section": section,
@@ -447,17 +440,18 @@ def _rank_moves(moves: tuple[ComplaintMove, ...], speed_hint: str | None) -> lis
     if speed_hint is None:
         return list(moves)
 
-    def score(move: ComplaintMove) -> tuple[int, str]:
+    def score(indexed_move: tuple[int, ComplaintMove]) -> tuple[int, int]:
+        index, move = indexed_move
         effect = effect_for(move.section)
         if effect is None:
-            return (1, move.section)
+            return (1, index)
         if speed_hint == "high" and effect.speed_dependence == AERO:
-            return (0, move.section)
+            return (0, index)
         if speed_hint == "low" and effect.speed_dependence == MECHANICAL:
-            return (0, move.section)
-        return (1, move.section)
+            return (0, index)
+        return (1, index)
 
-    return sorted(moves, key=score)
+    return [move for _, move in sorted(enumerate(moves), key=score)]
 
 
 def advise_from_complaint(
@@ -580,6 +574,17 @@ def setup_diff_summary(
             "rows": [],
             "display_lines": [],
             "error": "cannot compare setup files from different cars",
+        }
+    if bool(baseline.car_id) != bool(candidate.car_id):
+        return {
+            "ok": False,
+            "status": "incomplete_identity",
+            "baseline": {"car_id": baseline.car_id, "track_id": baseline.track_id},
+            "candidate": {"car_id": candidate.car_id, "track_id": candidate.track_id},
+            "changed_count": 0,
+            "rows": [],
+            "display_lines": [],
+            "error": "both setup files must identify the same car before diffing",
         }
     if schema is None:
         schema = load_latest_schema(candidate.car_id or baseline.car_id)

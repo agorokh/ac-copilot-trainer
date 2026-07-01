@@ -1577,7 +1577,10 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             client_class,
             len(_external_peers),
         )
-        await _safe_send(websocket, make_hello_ack())
+        await _safe_send(
+            websocket,
+            make_hello_ack(include_loopback_only=_is_loopback_peer(websocket)),
+        )
         return
     if websocket not in _external_peers:
         await _safe_send(

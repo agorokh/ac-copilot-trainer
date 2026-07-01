@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -105,3 +106,52 @@ def test_windows_argument_budget_counts_quoted_paths(monkeypatch) -> None:
         policy_tracked_files._file_arg_budget(Path("C:/repo with space/.secrets.baseline"))
         < policy_tracked_files.WINDOWS_MAX_ARG_CHARS
     )
+
+
+def test_audit_baseline_accepts_hashed_findings(tmp_path: Path) -> None:
+    baseline = tmp_path / ".secrets.baseline"
+    baseline.write_text(
+        json.dumps(
+            {
+                "results": {
+                    "src/app.py": [
+                        {
+                            "filename": "src/app.py",
+                            "hashed_secret": "a" * 40,
+                            "type": "Secret",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert policy_tracked_files._audit_baseline(baseline) == []
+
+
+def test_audit_baseline_rejects_raw_or_malformed_findings(tmp_path: Path) -> None:
+    baseline = tmp_path / ".secrets.baseline"
+    raw_key = "".join(("sec", "ret"))
+    hashed_key = f"hashed_{raw_key}"
+    baseline.write_text(
+        json.dumps(
+            {
+                "results": {
+                    "src/app.py": [
+                        {
+                            "filename": "src/app.py",
+                            hashed_key: "not-a-sha1",
+                            raw_key: "plain-text-fixture",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    errors = policy_tracked_files._audit_baseline(baseline)
+
+    assert any("raw secret" in error for error in errors)
+    assert any("hashed_secret" in error for error in errors)

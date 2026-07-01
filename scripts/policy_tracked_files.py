@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +14,8 @@ POSIX_MAX_ARG_CHARS = 24_000
 WINDOWS_BATCH_SIZE = 25
 WINDOWS_MAX_ARG_CHARS = 4_000
 WINDOWS_COMMAND_HEADROOM = 128
+_HASH_RE = re.compile(r"^[0-9a-f]{40}$")
+_RAW_SECRET_KEYS = frozenset({"secret", "secret_value", "raw_secret", "value"})
 
 
 def _repo_root() -> Path:
@@ -89,10 +93,44 @@ def _file_arg_budget(baseline: Path) -> int:
     return limit - sum(_argument_chars(arg) for arg in base_cmd) - headroom
 
 
+def _audit_baseline(baseline: Path) -> list[str]:
+    try:
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f".secrets.baseline is not valid JSON: {exc}"]
+    results = data.get("results")
+    if not isinstance(results, dict):
+        return [".secrets.baseline missing object 'results'"]
+    errors: list[str] = []
+    for filename, findings in results.items():
+        if not isinstance(filename, str) or not isinstance(findings, list):
+            errors.append(".secrets.baseline results must map filenames to finding lists")
+            continue
+        for index, finding in enumerate(findings):
+            label = f"{filename}[{index}]"
+            if not isinstance(finding, dict):
+                errors.append(f"{label} is not an object")
+                continue
+            raw_keys = sorted(_RAW_SECRET_KEYS.intersection(finding))
+            if raw_keys:
+                errors.append(f"{label} contains raw secret field(s): {', '.join(raw_keys)}")
+            hashed = finding.get("hashed_secret")
+            if not isinstance(hashed, str) or _HASH_RE.fullmatch(hashed) is None:
+                errors.append(f"{label} missing 40-character hashed_secret")
+            if finding.get("filename") != filename:
+                errors.append(f"{label} filename does not match its results key")
+    return errors
+
+
 def main() -> int:
     root = _repo_root()
     files = _tracked_files(root)
     baseline = root / ".secrets.baseline"
+    baseline_errors = _audit_baseline(baseline)
+    if baseline_errors:
+        for error in baseline_errors:
+            print(f"policy_tracked_files: {error}", file=sys.stderr)
+        return 2
     if not files:
         return 0
     try:

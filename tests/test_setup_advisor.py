@@ -124,6 +124,33 @@ def test_kerb_instability_takes_priority_over_rear_shorthand() -> None:
     assert out["suggestions"][0]["section"] == "ARB_REAR"
 
 
+def test_rear_unstable_exit_maps_to_oversteer_without_kerb_context() -> None:
+    out = advise_from_complaint(
+        "rear unstable on exit",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"] == {"issue": "oversteer", "phase": "exit", "speed_hint": None}
+    assert out["suggestions"][0]["section"] == "TRACTION_CONTROL"
+
+
+def test_high_speed_hint_preserves_braking_rule_order_when_no_aero_match() -> None:
+    out = advise_from_complaint(
+        "high speed front locks on entry",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert [suggestion["section"] for suggestion in out["suggestions"][:3]] == [
+        "FRONT_BIAS",
+        "BRAKE_POWER_MULT",
+        "ABS",
+    ]
+
+
 def test_schema_bound_noop_suggestions_are_skipped() -> None:
     out = advise_from_complaint(
         "rear locks on entry",
@@ -149,19 +176,18 @@ def test_schema_read_only_suggestions_are_skipped() -> None:
     assert all(suggestion["section"] != "FINAL_RATIO" for suggestion in out["suggestions"])
 
 
-def test_partial_schema_missing_spinner_uses_generic_nonnegative_clamp() -> None:
+def test_partial_schema_missing_paired_pressure_spinner_is_skipped() -> None:
     out = advise_from_complaint(
         "low speed understeer mid corner",
-        setup_snapshot={**GT3_SNAPSHOT, "PRESSURE_LF.VALUE": "0", "PRESSURE_RF.VALUE": "0"},
+        setup_snapshot={**GT3_SNAPSHOT, "PRESSURE_LF.VALUE": "10", "PRESSURE_RF.VALUE": "10"},
         car_id="ks_porsche_911_gt3_r_2016",
         schema=load_latest_schema("ks_porsche_911_gt3_r_2016"),
     )
 
     assert out["ok"] is True
-    assert all(
-        not (suggestion["section"] == "PRESSURE_RF" and suggestion["target"] < 0)
-        for suggestion in out["suggestions"]
-    )
+    sections = [suggestion["section"] for suggestion in out["suggestions"]]
+    assert "PRESSURE_LF" in sections
+    assert "PRESSURE_RF" not in sections
 
 
 def test_advice_skips_moves_when_current_value_is_unknown() -> None:
@@ -224,6 +250,17 @@ def test_setup_diff_rejects_different_cars() -> None:
 
     assert out["ok"] is False
     assert out["status"] == "car_mismatch"
+    assert out["changed_count"] == 0
+
+
+def test_setup_diff_rejects_one_sided_car_identity() -> None:
+    baseline = from_snapshot(GT3_SNAPSHOT, car_id="ks_porsche_911_gt3_r_2016")
+    candidate = from_snapshot(GT3_SNAPSHOT)
+
+    out = setup_diff_summary(baseline, candidate)
+
+    assert out["ok"] is False
+    assert out["status"] == "incomplete_identity"
     assert out["changed_count"] == 0
 
 

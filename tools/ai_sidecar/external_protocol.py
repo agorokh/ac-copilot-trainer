@@ -148,6 +148,18 @@ SERVER_CAPABILITIES: tuple[str, ...] = (
     TYPE_TELEMETRY_TICK,
     TYPE_HAPTIC_EVENT,
 )
+LOOPBACK_ONLY_CAPABILITIES: frozenset[str] = frozenset({TYPE_SETUP_CLOSED_LOOP})
+
+
+def server_capabilities(*, include_loopback_only: bool = True) -> list[str]:
+    if include_loopback_only:
+        return list(SERVER_CAPABILITIES)
+    return [
+        capability
+        for capability in SERVER_CAPABILITIES
+        if capability not in LOOPBACK_ONLY_CAPABILITIES
+    ]
+
 
 # Names a client may invoke via `action`. Mirrors the Lua dispatcher in
 # ``modules/ws_bridge.lua``; the sidecar only validates that the name is
@@ -210,12 +222,16 @@ def topics_are_sidecar_only(topics: Any) -> bool:
     return all(isinstance(t, str) and t in SIDECAR_PRODUCED_TOPICS for t in topics)
 
 
-def make_hello_ack(server_version: str = SERVER_VERSION) -> dict[str, Any]:
+def make_hello_ack(
+    server_version: str = SERVER_VERSION,
+    *,
+    include_loopback_only: bool = True,
+) -> dict[str, Any]:
     return {
         ENVELOPE_KEY: ENVELOPE_VERSION,
         TYPE_KEY: TYPE_HELLO_ACK,
         "server_version": server_version,
-        "capabilities": list(SERVER_CAPABILITIES),
+        "capabilities": server_capabilities(include_loopback_only=include_loopback_only),
     }
 
 
