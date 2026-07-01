@@ -60,6 +60,50 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-01 UTC) — PR #430 MERGED: Racing Atelier rig screen (#86)
+
+PR [#430](https://github.com/agorokh/ac-copilot-trainer/pull/430) squash-merged to `main` as
+[`5fc085a`](https://github.com/agorokh/ac-copilot-trainer/commit/5fc085a96c609412f5b086264239d27662e36bb5).
+Epic [#86](https://github.com/agorokh/ac-copilot-trainer/issues/86) stays **OPEN** (this PR delivered
+one part — the rig-screen Racing Atelier application — not the whole epic).
+
+**Shipped:** Applied the Racing Atelier design language to the ESP32 rig screens
+(`firmware/screen/src/ui/screen_ac_copilot.cpp`, `screen_pocket_technician.cpp`) with the new
+Saira / Spline Sans Mono font bundle, retiring the Michroma/Montserrat/Syncopate faces.
+
+**Review hardening (resolve loop):** Fixed a batch of font-subset / rendering bugs surfaced by
+Copilot, Codex, Qodo, and the self-hosted daemon:
+- corner badge preserves all digits ("T10" no longer collapses to "T1") and falls back to the first
+  digit run for descriptive labels ("Lesmo 1");
+- Pocket Technician spinner values render with full-ASCII `UI_FONT_COMMAND_SM` — arbitrary host units
+  like "26.6psi" no longer show tofu on the numeric-only Saira Bold subset;
+- ASCII "Loading..." placeholder (mono fonts are `0x20-0x7F`);
+- zero speed-delta straddles the delta-bar center instead of leaning right;
+- `contains_ascii()` scans full strings (no 48-char truncation of the 96-char `primary_line`, which
+  had caused false-negative command detection);
+- `snapshot_is_stale()` dropped the `millis()==0` boot edge case;
+- fonts README documents the trailing space glyph.
+The Qodo "missing Michroma/Montserrat fonts" finding was rebutted as a false positive (the migration
+is intentional; the green test encodes the current requirement).
+
+**Verification:** Merge CI green (`CI`, `Policy (Canonical Docs)`, `governance-conformance`;
+vault-automerge skipped). All GraphQL review threads resolved, `ci_resolve_gate.py` reported no
+substantive findings, and Copilot's final-head review generated no new comments. **Gotcha:** the
+mid-loop CI "failure" was on GitHub's synthetic `pull_request` merge commit — the branch was 21
+commits behind `main` and hit unrelated stale-base Lua-overlay tests (`test_design_conformance`,
+`test_phase5_rebuild_ete`); merging `origin/main` into the branch resolved it, and the PR's effective
+diff stayed cleanly firmware/docs-only.
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 430` reported no migration, env,
+dependency, script, or workflow flags.
+
+**Memory note:** Tier-3 substrate was unreachable during this SAVE; grounded on vault Tier-2 plus
+GitHub/local verification. `post_merge_sync.sh sync 430` could **not** ff-update local `main`: it is
+checked out and dirty in the primary worktree (`/Users/.../ac-copilot-trainer`) with another session's
+**uncommitted #410 handoff WIP**, so the ff-pull would have clobbered it. Local-main sync is deferred
+to that session's owner; `origin/main` (`5fc085a`) is authoritative. This vault handoff shipped from a
+`vault/post-merge-pr430` branch cut from `origin/main` so it did not disturb the concurrent edit.
+
 ## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #428 MERGED: Track Titan harness curriculum (#353)
 
 PR [#428](https://github.com/agorokh/ac-copilot-trainer/pull/428) squash-merged to `main` as
