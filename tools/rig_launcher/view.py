@@ -48,8 +48,10 @@ class LauncherView:
         *,
         actions: Mapping[str, Callable[[], None]],
         status_path: str,
+        port: int = 8765,
     ) -> None:
         self._root = root
+        self._port = port
         families = set(tkfont.families(root))
         self._f_disp = theme.resolve_font(theme.FONT_DISPLAY, families)
         self._f_read = theme.resolve_font(theme.FONT_READ, families)
@@ -81,7 +83,7 @@ class LauncherView:
         self._build_buttons(panel, actions)
         tk.Label(
             panel,
-            text=f"status.json · {status_path}",
+            text=status_path,
             bg=theme.GRAPHITE,
             fg=theme.FAINT,
             font=(self._f_mono, 8),
@@ -122,7 +124,7 @@ class LauncherView:
         ).pack(side="left", padx=(10, 0))
         tk.Label(
             header,
-            text=":8765",
+            text=f":{self._port}",
             bg=theme.GRAPHITE,
             fg=theme.DIM,
             font=(self._f_mono, 10),
@@ -180,7 +182,7 @@ class LauncherView:
             button = tk.Button(
                 row,
                 text=label,
-                command=actions.get(key),
+                command=actions[key],
                 cursor="hand2",
                 relief="flat",
                 bd=0,
@@ -225,6 +227,7 @@ def build_launcher_view(
     *,
     actions: Mapping[str, Callable[[], None]],
     status_path: str,
+    port: int = 8765,
 ) -> LauncherView:
     """Construct the themed launcher panel inside ``root`` and return its handle."""
-    return LauncherView(root, actions=actions, status_path=status_path)
+    return LauncherView(root, actions=actions, status_path=status_path, port=port)

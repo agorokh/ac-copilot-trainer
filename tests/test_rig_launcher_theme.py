@@ -14,7 +14,10 @@ from pathlib import Path
 
 from tools.rig_launcher import theme
 
-_COLORS_CSS = Path("docs/10_Development/design/racing-atelier/project/tokens/colors.css")
+_COLORS_CSS = (
+    Path(__file__).resolve().parents[1]
+    / "docs/10_Development/design/racing-atelier/project/tokens/colors.css"
+)
 _HEX_TOKEN = re.compile(r"--([a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})\b")
 
 

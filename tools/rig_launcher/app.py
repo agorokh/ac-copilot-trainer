@@ -287,6 +287,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
             "setup_diff": open_setup_diff,
         },
         status_path=str(supervisor.paths.status_path),
+        port=supervisor.config.port,
     )
     refresh()
     root.mainloop()

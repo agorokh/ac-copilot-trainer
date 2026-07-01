@@ -40,12 +40,14 @@ def demo_status() -> GamePointStatus:
 
 
 def _capture_region(x: int, y: int, width: int, height: int, out_path: str) -> None:
+    # Escape single quotes so a path containing one can't break out of the PS string literal.
+    safe_path = out_path.replace("'", "''")
     script = (
         "Add-Type -AssemblyName System.Drawing;"
         f"$b=New-Object System.Drawing.Bitmap {width},{height};"
         "$g=[System.Drawing.Graphics]::FromImage($b);"
         f"$g.CopyFromScreen({x},{y},0,0,$b.Size);"
-        f"$b.Save('{out_path}',[System.Drawing.Imaging.ImageFormat]::Png);"
+        f"$b.Save('{safe_path}',[System.Drawing.Imaging.ImageFormat]::Png);"
         "$g.Dispose();$b.Dispose()"
     )
     subprocess.run(
@@ -61,7 +63,9 @@ def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
     root = tk.Tk()
     root.title("AC Copilot Game Point")
     root.geometry("660x440+140+140")
-    view = build_launcher_view(root, actions=_NOOP_ACTIONS, status_path=demo_status().status_path)
+    view = build_launcher_view(
+        root, actions=_NOOP_ACTIONS, status_path=demo_status().status_path, port=8765
+    )
     view.update(status or demo_status())
     root.update_idletasks()
     root.deiconify()
