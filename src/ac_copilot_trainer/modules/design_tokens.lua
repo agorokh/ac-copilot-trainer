@@ -43,7 +43,7 @@ end
 function M.color(name, a)
   local hex = M.HEX[name]
   if hex == nil then
-    error("[COPILOT][design_tokens] unknown token: " .. tostring(name))
+    error("[COPILOT][design_tokens] unknown token: " .. tostring(name), 2)
   end
   return _rgb(hex, a or 1.0)
 end
