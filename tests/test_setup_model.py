@@ -119,6 +119,30 @@ def test_value_key_preferred_over_other_keys_same_section():
     assert s.compound_index == 2.0
 
 
+def test_from_snapshot_uses_snapshot_car_model_before_fallback():
+    s = from_snapshot(
+        {"CAR.MODEL": "ks_porsche_911_gt3_r_2016", "FRONT_BIAS.VALUE": "66"},
+        car_id="fallback_car",
+    )
+
+    assert s.car_id == "ks_porsche_911_gt3_r_2016"
+
+
+def test_from_snapshot_uses_fallback_car_id_without_snapshot_identity():
+    s = from_snapshot({"FRONT_BIAS.VALUE": "66"}, car_id="fallback_car")
+
+    assert s.car_id == "fallback_car"
+
+
+def test_from_snapshot_does_not_use_screen_name_as_schema_identity():
+    s = from_snapshot(
+        {"CAR.SCREEN_NAME": "Porsche 911 GT3 R", "FRONT_BIAS.VALUE": "66"},
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert s.car_id == "ks_porsche_911_gt3_r_2016"
+
+
 # --- ini parsing ------------------------------------------------------------
 def test_parse_setup_ini_and_load_real_fixture():
     setup = load_setup_file(FIXTURES / "setups" / "pt_chip_summary.ini")
@@ -131,6 +155,13 @@ def test_parse_setup_ini_and_load_real_fixture():
 
 def test_parse_setup_ini_handles_comments_and_blanks():
     text = "[FRONT_BIAS]\nVALUE=64  ; comment\n\n// stray\n[ABS]\nVALUE=5\n"
+    snap = parse_setup_ini(text)
+    assert snap["FRONT_BIAS.VALUE"] == "64"
+    assert snap["ABS.VALUE"] == "5"
+
+
+def test_parse_setup_ini_handles_utf8_bom():
+    text = "\ufeff[FRONT_BIAS]\nVALUE=64\n[ABS]\nVALUE=5\n"
     snap = parse_setup_ini(text)
     assert snap["FRONT_BIAS.VALUE"] == "64"
     assert snap["ABS.VALUE"] == "5"

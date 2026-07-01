@@ -579,6 +579,8 @@ def build_pyinstaller_args(
         "tools.ai_sidecar",
         "--collect-data",
         "_sounddevice_data",
+        "--add-data",
+        f"{project_root / 'assets' / 'setups' / '_schema'}{os.pathsep}assets/setups/_schema",
         "--collect-binaries",
         "sounddevice",
         "--hidden-import",

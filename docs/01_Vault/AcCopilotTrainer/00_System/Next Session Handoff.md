@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:51:00Z
+last_updated: 2026-07-01T04:30:00Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
@@ -60,6 +60,121 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #428 MERGED: Track Titan harness curriculum (#353)
+
+PR [#428](https://github.com/agorokh/ac-copilot-trainer/pull/428) squash-merged to `main` as
+[`9685155`](https://github.com/agorokh/ac-copilot-trainer/commit/9685155e5a0e9e33428d2465fc12445ee18f49f3).
+Issue [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) is **CLOSED**.
+
+**Shipped:** Track Titan M-TT3 now emits a versioned
+`track_titan_harness_curriculum_v1` artifact from retained per-corner TT coaching evidence. The
+`tools.tt_ingest curriculum` command supports lake discovery by session/lap, validates paired
+`last_session_lap*.json` evidence, writes only under `.scratch/`, the retained input directory, or a
+self-consistent `journal/tt/**/curriculum_lapN.json` sibling, and stamps curriculum provenance under
+`generator.decision_issue`. Retention treats curricula as derived artifacts: raw indexes ignore them,
+coaching-source pruning plans a visible `cascade-from-coaching` delete for regular-file siblings only,
+and `.pin` markers protect manual curriculum artifacts.
+
+**Review hardening:** The resolve loop tightened same-lap filename checks, lake-root validation,
+same-session adjacency, symlink/non-file input rejection, non-leaky validation errors, dynamic-reference
+timing provenance, generated timestamps, integral segment parsing, and non-file retention cascade
+skips. Stale generated-at review feedback was replied to with evidence and resolved after the code
+started passing `exported_at=stamp` into `build_harness_curriculum()`.
+
+**Verification:** Focused TT/retention suites passed (`89 passed`). Full local parity passed on
+Windows with `FLEET_GOVERNANCE_ROOT=C:/Users/arsen/Projects/governance-hub make ci-fast`
+(`2067 passed, 116 skipped`, coverage 86.13%, `ci-fast: OK`; existing root-file allowlist warnings
+only for `.copier-answers.yml` and `doppler.yaml`). GitHub checks on head `372ef5b` passed (`build`,
+`Canonical docs exist`, `conformance`; vault automerge skipped). GraphQL review threads were clean,
+`ci_resolve_gate.py` reported no substantive findings, and Copilot's current-head review generated no
+new comments.
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 428` reported no migration, env,
+dependency, script, or workflow flags.
+
+**Memory note:** The exact Tier-3 MCP query tool was not exposed in this Codex tool surface, so this
+SAVE is grounded in vault Tier-2 context, local/GitHub verification, and the deterministic post-merge
+sync/classification output. `post_merge_sync.sh sync 428` ran successfully from the clean `main`
+worktree because `main` was checked out there; it could not delete local branch
+`feat/issue-353-mtt3-curriculum` while the issue worktree was still checked out.
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #433 MERGED: setup review hardening (#407 follow-up)
+
+PR [#433](https://github.com/agorokh/ac-copilot-trainer/pull/433) squash-merged to `main` as
+[`cd17dfe`](https://github.com/agorokh/ac-copilot-trainer/commit/cd17dfed38ab23e23356e34454deb17e445ff1c6)
+at 2026-07-01T03:35:07Z. Issue
+[#407](https://github.com/agorokh/ac-copilot-trainer/issues/407) was already **CLOSED** by PR #417;
+this was a follow-up hardening PR under roadmap [#401](https://github.com/agorokh/ac-copilot-trainer/issues/401).
+
+**Shipped:** Setup experiment ingestion now fails fast on malformed UTF-8 instead of
+replacement-decoding corrupted JSON, and lap/archive error messages include the offending path.
+`load_records()` preserves streaming JSONL iteration while wrapping decode failures as
+`SetupExperimentError`. Closed-loop follow-up guards no longer treat later missing/non-finite
+unrelated setup params as real setup changes, so filtered snapshot gaps do not create false
+`current_state_changed_multiple_params` results. `.secrets.baseline` hash validation and the
+hash-only scan exclusion now accept uppercase SHA-1 hex as well as lowercase.
+
+**Verification:** Focused regression suite passed (`40 passed`) across `test_setup_optimizer.py`,
+the sidecar closed-loop unknown-car sentinel roundtrip, and `test_policy_tracked_files.py`. Full
+local parity passed on Windows with `make ci-fast` (`2115 passed, 117 skipped`, coverage 85.82%,
+`ci-fast: OK`; existing root-file allowlist warnings only for `.copier-answers.yml` and
+`doppler.yaml`). GitHub checks on head `ca89b53` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). Copilot's current-SHA review generated no new comments,
+GraphQL review threads were clean, and `ci_resolve_gate.py` reported no substantive findings.
+Qodo's updated summary still displayed the resolved JSONL read-all finding; an evidence reply was
+posted on PR #433 showing the current streaming `path.open(...)` implementation and green checks.
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 433` flagged `scripts/` only
+because `scripts/policy_tracked_files.py` changed its hash regex. No migration, env, dependency, or
+workflow action required.
+
+**Memory note:** The exact Tier-3 MCP query tool was not exposed in this Codex tool surface. This
+SAVE is grounded in vault Tier-2 context, live GitHub PR/check state, local `ci-fast`, and the
+post-merge sync/classification output. The deterministic sync helper initially failed from the
+feature worktree because `main` was owned by another local worktree; rerunning it from the clean
+`main` worktree completed the fast-forward and safe cleanup.
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #417 MERGED: setup intelligence (#407)
+
+PR [#417](https://github.com/agorokh/ac-copilot-trainer/pull/417) squash-merged to `main` as
+[`a4ae501`](https://github.com/agorokh/ac-copilot-trainer/commit/a4ae501e18b8630351cbbed5f06751f834a151e6)
+at 2026-07-01T02:51:39Z. Issue
+[#407](https://github.com/agorokh/ac-copilot-trainer/issues/407) is **CLOSED**.
+
+**Shipped:** Setup intelligence now includes complaint-language setup advice, setup-file diffs,
+and one-parameter closed-loop experiment suggestions. The sidecar protocol exposes bounded
+`setup.advice`, `setup.diff`, and loopback-only `setup.closed_loop` paths; remote hello hides
+loopback-only capabilities. Game Point can render setup diffs and packaged builds collect schema
+assets. The Porsche GT3 schema now carries front-bias caution rules, schema loading is path-safe and
+marker-aware, and `.secrets.baseline` scanning is handled through a Windows-safe Python policy path.
+
+**Review hardening:** The resolve loop added same-car diff guards, required advice snapshots,
+schema-driven display/click units, deterministic/marker-based schema loading, closed-loop scope and
+confound rejection, zero-delta inconclusive handling, non-UTF8 archive/store decode guards, semantic
+diff deltas, and tighter complaint parsing (`pushes`, ABS lights, kerb phase, rear shorthand). All
+actionable GraphQL review threads were resolved before merge, and the current-SHA self-hosted
+review reported no medium-or-higher findings after the final cooldown.
+
+**Verification:** Full local parity passed on Windows from the synced issue worktree with
+`make ci-fast` and `FLEET_GOVERNANCE_ROOT=.fleet-governance-vendor` (`2113 passed, 117 skipped`,
+coverage 85.83%, `ci-fast: OK`; root-file allowlist warnings only for existing
+`.copier-answers.yml` and `doppler.yaml`). Focused setup suites passed (`81 passed`) across
+`test_car_schema.py`, `test_setup_advisor.py`, and `test_setup_optimizer.py`. GitHub checks on head
+`020f1a9` passed (`build`, `Canonical docs exist`, `conformance`; vault automerge skipped).
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 417` flagged `scripts/` and
+`Makefile` only. No migration, env, dependency, or workflow action required. The script/Makefile
+changes are the Python-based policy/secret scanning path and related inventory updates; review
+before future template syncs, but no runtime operator action is needed.
+
+**Memory note:** The exact Tier-3 MCP query tool was not exposed in this Codex tool surface; a
+tool-discovery retry surfaced no agentic-memory tool. Bash was also not on PATH, so the
+`post_merge_sync.sh sync` helper could not run directly; equivalent non-destructive sync steps were
+performed with `gh`/`git` in the clean `main` worktree. The local resolve-gate helper referenced by
+the resolve workflow was also absent at `C:\Users\arsen\.fleet-governance\scripts\ci_resolve_gate.py`.
+This SAVE is grounded in vault Tier-2 context, live GitHub state (`gh pr view 417` reported
+`MERGED`; `gh issue view 407` reported `CLOSED`), local `ci-fast`, and GitHub checks.
 
 ## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #422 MERGED: coaching diagnosis depth (#405)
 

@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T00:51:00Z
+last_updated: 2026-07-01T04:30:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
@@ -112,6 +112,24 @@ Stream A (rig screen Phase-2 LVGL + Figma UI + final on-device proof) is the hot
 
 ## Recently landed (reverse chronological)
 
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#428](https://github.com/agorokh/ac-copilot-trainer/pull/428)
+  **MERGED** at `9685155` - **Track Titan harness curriculum** ([#353](https://github.com/agorokh/ac-copilot-trainer/issues/353)
+  **CLOSED**): adds `track_titan_harness_curriculum_v1`, `tools.tt_ingest curriculum`, retained
+  coaching/last-session pairing, self-consistent in-lake `curriculum_lapN.json` output guards, derived
+  retention cascade planning, and docs for the M-TT3 artifact. Classification: no migration/env/deps/script/workflow flags.
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#433](https://github.com/agorokh/ac-copilot-trainer/pull/433)
+  **MERGED** at `cd17dfe` - **setup review hardening** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
+  follow-up): setup archive/store ingestion now rejects malformed UTF-8 without replacement
+  decoding, JSONL experiment-store reads stay streaming, closed-loop guards ignore later missing
+  unrelated params instead of reporting false confounds, and `.secrets.baseline` hash validation
+  accepts uppercase SHA-1 metadata. Classification: `scripts/` changed for policy hash regex only;
+  no migration/env/deps/workflow action required.
+- **2026-07-01 UTC / 2026-06-30 PT** - PR [#417](https://github.com/agorokh/ac-copilot-trainer/pull/417)
+  **MERGED** at `a4ae501` - **setup intelligence** ([#407](https://github.com/agorokh/ac-copilot-trainer/issues/407)
+  **CLOSED**): adds complaint-language setup advice, setup diffs, loopback-only closed-loop
+  suggestions, schema-backed decoded display/cautions, packaged schema assets, and Windows-safe
+  policy secret scanning. Classification: `scripts/` and `Makefile` changed for policy/secret scan
+  plumbing; no migration/env/deps/workflow action required.
 - **2026-07-01 UTC / 2026-06-30 PT** - PR [#422](https://github.com/agorokh/ac-copilot-trainer/pull/422)
   **MERGED** at `28048c1` - **coaching diagnosis depth** ([#405](https://github.com/agorokh/ac-copilot-trainer/issues/405)
   **CLOSED**): Coach v2 now spatially matches current/reference corners by apex spline, reuses one
