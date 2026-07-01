@@ -583,19 +583,30 @@ def _resolve_curriculum_output_path(
     if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
         roots = ".scratch/, journal/, or the retained input directory"
         raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
+    resolved_coaching = coaching_path.resolve()
+    expected_lap = _lap_from_coaching_path(coaching_path)
     for tt_root in tt_lake_roots:
-        if _is_relative_to(resolved, tt_root) and not resolved.match(CURRICULUM_ENDPOINT_GLOB):
+        resolved_tt_root = tt_root.resolve()
+        output_in_tt_root = _is_relative_to(resolved, resolved_tt_root)
+        if output_in_tt_root and not resolved.match(CURRICULUM_ENDPOINT_GLOB):
             raise TTNormalizeError(
                 f"{raw}: curriculum outputs inside {tt_root} must be named "
                 f"{CURRICULUM_ENDPOINT_GLOB}"
             )
-        expected_lap = _lap_from_coaching_path(coaching_path)
         if (
             expected_lap is not None
-            and _is_relative_to(resolved, tt_root)
+            and output_in_tt_root
             and resolved.name != f"{curriculum_endpoint(expected_lap)}.json"
         ):
             raise TTNormalizeError(f"{raw}: curriculum output lap must match {coaching_path.name}")
+        if (
+            output_in_tt_root
+            and _is_relative_to(resolved_coaching, resolved_tt_root)
+            and resolved.parent != resolved_coaching.parent
+        ):
+            raise TTNormalizeError(
+                f"{raw}: curriculum output inside {tt_root} must stay next to {coaching_path.name}"
+            )
     return resolved
 
 
