@@ -593,6 +593,12 @@ def _resolve_curriculum_output_path(
     for tt_root in tt_lake_roots:
         resolved_tt_root = tt_root.resolve()
         output_in_tt_root = _is_relative_to(resolved, resolved_tt_root)
+        coaching_in_tt_root = _is_relative_to(resolved_coaching, resolved_tt_root)
+        if output_in_tt_root and not coaching_in_tt_root:
+            raise TTNormalizeError(
+                f"{raw}: curriculum outputs inside {tt_root} require coaching input from "
+                "the same journal/tt lake"
+            )
         if output_in_tt_root and not resolved.match(CURRICULUM_ENDPOINT_GLOB):
             raise TTNormalizeError(
                 f"{raw}: curriculum outputs inside {tt_root} must be named "
@@ -606,7 +612,7 @@ def _resolve_curriculum_output_path(
             raise TTNormalizeError(f"{raw}: curriculum output lap must match {coaching_path.name}")
         if (
             output_in_tt_root
-            and _is_relative_to(resolved_coaching, resolved_tt_root)
+            and coaching_in_tt_root
             and resolved.parent != resolved_coaching.parent
         ):
             raise TTNormalizeError(
