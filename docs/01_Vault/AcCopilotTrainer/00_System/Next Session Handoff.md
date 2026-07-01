@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T02:54:17Z
+last_updated: 2026-07-01T03:40:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -59,6 +59,42 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #433 MERGED: setup review hardening (#407 follow-up)
+
+PR [#433](https://github.com/agorokh/ac-copilot-trainer/pull/433) squash-merged to `main` as
+[`cd17dfe`](https://github.com/agorokh/ac-copilot-trainer/commit/cd17dfed38ab23e23356e34454deb17e445ff1c6)
+at 2026-07-01T03:35:07Z. Issue
+[#407](https://github.com/agorokh/ac-copilot-trainer/issues/407) was already **CLOSED** by PR #417;
+this was a follow-up hardening PR under roadmap [#401](https://github.com/agorokh/ac-copilot-trainer/issues/401).
+
+**Shipped:** Setup experiment ingestion now fails fast on malformed UTF-8 instead of
+replacement-decoding corrupted JSON, and lap/archive error messages include the offending path.
+`load_records()` preserves streaming JSONL iteration while wrapping decode failures as
+`SetupExperimentError`. Closed-loop follow-up guards no longer treat later missing/non-finite
+unrelated setup params as real setup changes, so filtered snapshot gaps do not create false
+`current_state_changed_multiple_params` results. `.secrets.baseline` hash validation and the
+hash-only scan exclusion now accept uppercase SHA-1 hex as well as lowercase.
+
+**Verification:** Focused regression suite passed (`40 passed`) across `test_setup_optimizer.py`,
+the sidecar closed-loop unknown-car sentinel roundtrip, and `test_policy_tracked_files.py`. Full
+local parity passed on Windows with `make ci-fast` (`2115 passed, 117 skipped`, coverage 85.82%,
+`ci-fast: OK`; existing root-file allowlist warnings only for `.copier-answers.yml` and
+`doppler.yaml`). GitHub checks on head `ca89b53` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). Copilot's current-SHA review generated no new comments,
+GraphQL review threads were clean, and `ci_resolve_gate.py` reported no substantive findings.
+Qodo's updated summary still displayed the resolved JSONL read-all finding; an evidence reply was
+posted on PR #433 showing the current streaming `path.open(...)` implementation and green checks.
+
+**Post-merge classification:** `scripts/post_merge_classify.py --pr 433` flagged `scripts/` only
+because `scripts/policy_tracked_files.py` changed its hash regex. No migration, env, dependency, or
+workflow action required.
+
+**Memory note:** The exact Tier-3 MCP query tool was not exposed in this Codex tool surface. This
+SAVE is grounded in vault Tier-2 context, live GitHub PR/check state, local `ci-fast`, and the
+post-merge sync/classification output. The deterministic sync helper initially failed from the
+feature worktree because `main` was owned by another local worktree; rerunning it from the clean
+`main` worktree completed the fast-forward and safe cleanup.
 
 ## Delivered (2026-07-01 UTC / 2026-06-30 PT) - PR #417 MERGED: setup intelligence (#407)
 
