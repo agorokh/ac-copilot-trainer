@@ -17,8 +17,8 @@ _ROOT = Path(__file__).resolve().parents[1]
 _COLORS_CSS = _ROOT / "docs/10_Development/design/racing-atelier/project/tokens/colors.css"
 _DESIGN_TOKENS_LUA = _ROOT / "src/ac_copilot_trainer/modules/design_tokens.lua"
 
-_CSS_HEX = re.compile(r"--([a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})\b")
-_LUA_HEX = re.compile(r'(\w+)\s*=\s*"(#[0-9A-Fa-f]{6})"')
+_CSS_HEX = re.compile(r"--([a-zA-Z0-9-]+)\s*:\s*(#[0-9A-Fa-f]{6})\b")
+_LUA_HEX = re.compile(r'(\w+)\s*=\s*["\'](#[0-9A-Fa-f]{6})["\']')
 
 
 def _css_tokens() -> dict[str, str]:
