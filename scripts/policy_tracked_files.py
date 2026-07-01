@@ -7,7 +7,6 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 POSIX_BATCH_SIZE = 100
@@ -17,6 +16,7 @@ WINDOWS_MAX_ARG_CHARS = 4_000
 WINDOWS_COMMAND_HEADROOM = 128
 _HASH_RE = re.compile(r"^[0-9a-f]{40}$")
 _RAW_SECRET_KEYS = frozenset({"secret", "secret_value", "raw_secret", "value"})
+BASELINE_METADATA_EXCLUDE_LINES = r'^\s*"(hashed_secret|type)"\s*:'
 
 
 def _repo_root() -> Path:
@@ -123,45 +123,37 @@ def _audit_baseline(baseline: Path) -> list[str]:
     return errors
 
 
-def _run_detect_secrets(root: Path, baseline: Path, files: list[str]) -> int:
+def _run_detect_secrets(
+    root: Path,
+    baseline: Path,
+    files: list[str],
+    *,
+    exclude_lines: str | None = None,
+) -> int:
+    args = [
+        sys.executable,
+        "-m",
+        "detect_secrets.pre_commit_hook",
+        "--baseline",
+        str(baseline),
+    ]
+    if exclude_lines is not None:
+        args.extend(["--exclude-lines", exclude_lines])
+    args.extend(files)
     result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "detect_secrets.pre_commit_hook",
-            "--baseline",
-            str(baseline),
-            *files,
-        ],
+        args,
         cwd=root,
     )
     return result.returncode
 
 
-def _redact_baseline_hashes(value: object) -> object:
-    if isinstance(value, dict):
-        out: dict[str, object] = {}
-        for key, child in value.items():
-            if key == "hashed_secret":
-                out["baseline_hash"] = "redacted"
-            elif key == "type":
-                out["baseline_type"] = "redacted"
-            else:
-                out[key] = _redact_baseline_hashes(child)
-        return out
-    if isinstance(value, list):
-        return [_redact_baseline_hashes(child) for child in value]
-    return value
-
-
-def _scan_sanitized_baseline(root: Path, baseline: Path) -> int:
-    data = json.loads(baseline.read_text(encoding="utf-8"))
-    sanitized = _redact_baseline_hashes(data)
-    body = json.dumps(sanitized, indent=2, sort_keys=True) + "\n"
-    with tempfile.TemporaryDirectory(prefix="ac-copilot-baseline-scan-") as tmp_dir:
-        scan_path = Path(tmp_dir) / ".secrets.baseline"
-        scan_path.write_text(body, encoding="utf-8")
-        return _run_detect_secrets(Path(tmp_dir), scan_path, [".secrets.baseline"])
+def _scan_baseline_file(root: Path, baseline: Path) -> int:
+    return _run_detect_secrets(
+        root,
+        baseline,
+        [".secrets.baseline"],
+        exclude_lines=BASELINE_METADATA_EXCLUDE_LINES,
+    )
 
 
 def main() -> int:
@@ -173,7 +165,7 @@ def main() -> int:
         for error in baseline_errors:
             print(f"policy_tracked_files: {error}", file=sys.stderr)
         return 2
-    baseline_scan = _scan_sanitized_baseline(root, baseline)
+    baseline_scan = _scan_baseline_file(root, baseline)
     if baseline_scan != 0:
         return baseline_scan
     if not files:

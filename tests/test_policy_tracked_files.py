@@ -157,34 +157,21 @@ def test_audit_baseline_rejects_raw_or_malformed_findings(tmp_path: Path) -> Non
     assert any("hashed_secret" in error for error in errors)
 
 
-def test_scan_sanitized_baseline_redacts_expected_hashes(
+def test_scan_baseline_file_uses_real_path_with_metadata_exclusion(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     baseline = tmp_path / ".secrets.baseline"
-    baseline.write_text(
-        json.dumps(
-            {
-                "results": {
-                    "src/app.py": [
-                        {
-                            "filename": "src/app.py",
-                            "hashed_secret": "a" * 40,
-                            "type": "Secret Keyword",
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    scanned_body = ""
+    calls: list[tuple[Path, Path, list[str], str | None]] = []
 
-    def fake_run_detect_secrets(root: Path, baseline_arg: Path, files: list[str]) -> int:
-        nonlocal scanned_body
-        assert root == tmp_path
-        assert baseline_arg == baseline
-        scanned_body = Path(files[0]).read_text(encoding="utf-8")
+    def fake_run_detect_secrets(
+        root: Path,
+        baseline_arg: Path,
+        files: list[str],
+        *,
+        exclude_lines: str | None = None,
+    ) -> int:
+        calls.append((root, baseline_arg, files, exclude_lines))
         return 0
 
     monkeypatch.setattr(
@@ -193,7 +180,12 @@ def test_scan_sanitized_baseline_redacts_expected_hashes(
         fake_run_detect_secrets,
     )
 
-    assert policy_tracked_files._scan_sanitized_baseline(tmp_path, baseline) == 0
-    assert "a" * 40 not in scanned_body
-    assert '"baseline_hash": "redacted"' in scanned_body
-    assert "hashed_secret" not in scanned_body
+    assert policy_tracked_files._scan_baseline_file(tmp_path, baseline) == 0
+    assert calls == [
+        (
+            tmp_path,
+            baseline,
+            [".secrets.baseline"],
+            policy_tracked_files.BASELINE_METADATA_EXCLUDE_LINES,
+        )
+    ]
