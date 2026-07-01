@@ -75,6 +75,20 @@ def _turn(corner: Any) -> str:
         return "this corner"
 
 
+def _effective_register(advisory: dict[str, Any]) -> str:
+    """Register for the fallback path, mirroring :func:`resolver._register_fallback_chain`.
+
+    An ``act`` advisory carrying the default ``calm`` register is a legacy / register-less producer:
+    act-now cues are never baked at ``calm`` (they live at ``alert``/``urgent``/``critical``), so
+    treat that case as ``urgent`` — otherwise the WS/pyttsx3 fallback under-reacts (non-terse
+    phrasing + low rate/volume) on a time-critical cue, diverging from the in-process resolver.
+    """
+    register = normalize_register(advisory.get("register", "calm"))
+    if advisory.get("urgency") == "act" and register == "calm":
+        return "urgent"
+    return register
+
+
 def advisory_to_phrase(advisory: dict[str, Any]) -> str:
     """Short, ear-first phrasing of one observer advisory dict, register-aware (issue #368).
 
@@ -85,7 +99,7 @@ def advisory_to_phrase(advisory: dict[str, Any]) -> str:
     intensity.
     """
     kind = advisory.get("kind")
-    register = normalize_register(advisory.get("register", "calm"))
+    register = _effective_register(advisory)
     corner = advisory.get("corner", 0)
     if kind == "late_brake":
         if register == "critical":
@@ -94,7 +108,7 @@ def advisory_to_phrase(advisory: dict[str, Any]) -> str:
             return "Brake."
         return f"Brake point, {_turn(corner)}."
     if kind == "brake_release":
-        return "Release." if register in {"alert", "urgent"} else "Ease off."
+        return "Release." if register in {"alert", "urgent", "critical"} else "Ease off."
     if kind == "apex_deficit":
         return f"More entry speed, {_turn(corner)}."
     if kind == "fuel_status":
@@ -167,7 +181,7 @@ class CueArbiter:
             urgency=str(best.get("urgency", "info")),
             corner=_corner_key(best),
             kind=str(best.get("kind", "")),
-            register=normalize_register(best.get("register", "calm")),
+            register=_effective_register(best),
         )
 
 
