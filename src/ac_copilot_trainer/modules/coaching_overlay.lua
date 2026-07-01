@@ -2,6 +2,7 @@
 -- Approach telemetry panel: polished structured data display (issue #57 Part C).
 
 local fontMod = require("coaching_font")
+local T = require("design_tokens")
 
 local M = {}
 
@@ -9,22 +10,23 @@ local M = {}
 -- Design tokens (Figma design brief, issue #57 Part C)
 -- ---------------------------------------------------------------------------
 
-local COLOR_BG           = rgbm(0.067, 0.067, 0.067, 0.60)   -- rgba(17,17,17,0.6)
-local COLOR_BG_BORDER    = rgbm(0.30, 0.32, 0.38, 0.40)
-local COLOR_LABEL        = rgbm(0.55, 0.58, 0.65, 1.0)       -- muted labels (legacy)
-local COLOR_LABEL_GREY   = rgbm(0.549, 0.565, 0.612, 1.0)    -- #8C909C small caps labels
-local COLOR_BRAND_GREY   = rgbm(0.435, 0.459, 0.522, 1.0)    -- #6F7585 footer branding
-local COLOR_TITLE        = rgbm(0.35, 0.82, 0.95, 1.0)       -- accent cyan (legacy)
-local COLOR_WHITE        = rgbm(0.949, 0.949, 0.960, 1.0)    -- #F2F2F5 primary text
-local COLOR_GREEN        = rgbm(0.20, 0.85, 0.35, 1.0)       -- speed OK
-local COLOR_RED          = rgbm(0.937, 0.267, 0.267, 1.0)    -- #EF4444 warning
-local COLOR_AMBER        = rgbm(1.000, 0.769, 0.239, 1.0)    -- #FFC43D secondary hint
-local COLOR_BAR_BG       = rgbm(0.15, 0.15, 0.18, 0.85)      -- progress bar background
-local COLOR_BAR_FILL     = rgbm(0.937, 0.267, 0.267, 0.95)   -- #EF4444 red progress fill
-local COLOR_BAR_GLOW     = rgbm(0.937, 0.267, 0.267, 0.35)   -- red glow
-local COLOR_BRAND        = rgbm(0.45, 0.48, 0.52, 1.0)       -- legacy branding
+-- Racing Atelier palette (epic #432 Part A) — sourced from design_tokens.lua (single source of
+-- truth, validated against the design colors.css). Carbon ground, brass accent, signal fields.
+local COLOR_BG           = T.color("carbon", 0.78)  -- carbon panel ground
+local COLOR_BG_BORDER    = T.color("edge", 0.60)    -- structural edge
+local COLOR_LABEL        = T.color("mute")          -- muted labels
+local COLOR_LABEL_GREY   = T.color("mute")          -- small-caps labels
+local COLOR_BRAND_GREY   = T.color("dim")           -- footer branding
+local COLOR_TITLE        = T.color("brass")         -- house accent (was legacy cyan)
+local COLOR_WHITE        = T.color("chalk")         -- primary text
+local COLOR_GREEN        = T.color("clear")         -- on line / faster
+local COLOR_RED          = T.color("brake")         -- danger / warning
+local COLOR_AMBER        = T.color("lift")          -- caution / approaching
+local COLOR_BAR_BG       = T.color("raise", 0.85)   -- progress bar trough
+local COLOR_BAR_FILL     = T.color("brake", 0.95)   -- braking-urgency fill
+local COLOR_BRAND        = T.color("dim")           -- branding
 
-local PANEL_ROUNDING = 12
+local PANEL_ROUNDING = 0  -- Racing Atelier: square corners (--r: 0px)
 local PANEL_PAD_X    = 24
 local PANEL_PAD_Y    = 20
 
@@ -78,11 +80,6 @@ local function drawProgressBar(x, y, w, h, pct)
   -- Fill
   local fillW = math.max(0, math.min(1, pct)) * w
   if fillW > 1 then
-    -- Glow layer behind fill (subtle wider bar for bloom effect)
-    if fillW > 4 then
-      ui.drawRectFilled(vec2(x, y - 1), vec2(x + fillW, y + h + 1), COLOR_BAR_GLOW, h / 2)
-    end
-    -- Fill layer on top
     ui.drawRectFilled(p0, vec2(x + fillW, y + h), COLOR_BAR_FILL, h / 2)
   end
 end
@@ -322,7 +319,7 @@ function M.drawApproachPanel(approachData)
   drawProgressBar(padX, barY, barW, barH, progressPct or 0)
 
   ------------------------------------------------------------------
-  -- Footer: AG PORSCHE ACADEMY (Syncopate brand)
+  -- Footer: RACING ATELIER (brand)
   ------------------------------------------------------------------
   local divY = barY + barH + 14
   ui.drawRectFilled(
@@ -333,7 +330,7 @@ function M.drawApproachPanel(approachData)
   )
 
   do
-    local footerStr = "AG PORSCHE ACADEMY"
+    local footerStr = "RACING ATELIER"
     local fontPx = 12
     local footerSize = _measureDW(footerStr, fontPx)
     local footerX = math.floor(w * 0.5 - footerSize.x * 0.5)

@@ -5,6 +5,7 @@
 -- Always renders panel chrome + title even in the empty state — never blank.
 
 local fontMod = require("coaching_font")
+local T = require("design_tokens")
 
 local M = {}
 
@@ -12,16 +13,18 @@ local M = {}
 -- Design tokens (Figma CoachingHUD.tsx — see issue #72)
 -- ---------------------------------------------------------------------------
 
-local COLOR_BG_DARK   = rgbm(17 / 255, 17 / 255, 17 / 255, 0.60)
-local COLOR_BG_BORDER = rgbm(0.30, 0.32, 0.38, 0.40)  -- grey, matches coaching_overlay (round 5: user reverted to grey)
-local COLOR_RED       = rgbm(239 / 255, 68 / 255, 68 / 255, 1.0)   -- #EF4444 (per spec)
-local COLOR_RED_HARD  = COLOR_RED                                  -- back-compat alias
-local COLOR_AMBER     = rgbm(251 / 255, 191 / 255, 36 / 255, 1.0)  -- amber-400
-local COLOR_GREEN     = rgbm(74 / 255, 222 / 255, 128 / 255, 1.0)
-local COLOR_WHITE     = rgbm(255 / 255, 255 / 255, 255 / 255, 1.0)
-local COLOR_TEXT_GREY = rgbm(212 / 255, 212 / 255, 212 / 255, 1.0) -- neutral-300
+-- Racing Atelier palette (epic #432 Part A) — sourced from design_tokens.lua (single source of
+-- truth, validated against the design colors.css).
+local COLOR_BG_DARK   = T.color("carbon", 0.78)  -- carbon panel ground
+local COLOR_BG_BORDER = T.color("edge", 0.60)    -- structural edge
+local COLOR_RED       = T.color("brake")         -- #F23B2C danger
+local COLOR_RED_HARD  = COLOR_RED                -- back-compat alias
+local COLOR_AMBER     = T.color("lift")          -- #F4A52C caution
+local COLOR_GREEN     = T.color("clear")         -- #2FBE6E on line / faster
+local COLOR_WHITE     = T.color("chalk")         -- #EEF1F3 primary text
+local COLOR_TEXT_GREY = T.color("mute")          -- #9BA1A8 labels
 
-local PANEL_ROUNDING = 8
+local PANEL_ROUNDING = 0  -- Racing Atelier: square corners (--r: 0px)
 local PANEL_PAD_Y    = 14
 
 --- CSP: `ui.dwriteDrawText` is often a cdata callable, not `type(...) == "function"`.

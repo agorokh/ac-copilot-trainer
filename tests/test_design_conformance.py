@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.lua_text_helpers import strip_lua_comments
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULES = REPO_ROOT / "src" / "ac_copilot_trainer" / "modules"
 ENTRY = REPO_ROOT / "src" / "ac_copilot_trainer" / "ac_copilot_trainer.lua"
@@ -364,12 +366,23 @@ class TestApproachPanel:
         )
 
     def test_approach_panel_design_tokens(self) -> None:
-        """PC-04: design tokens match Figma brief."""
-        src = _lua_text("coaching_overlay.lua")
-        assert "COLOR_RED" in src, "Must define COLOR_RED design token"
-        assert re.search(r"COLOR_BG\s*=\s*rgbm\([^)]+0\.60\)", src), (
-            "COLOR_BG must use 0.60 alpha (Figma: rgba(17,17,17,0.6))"
-        )
+        """PC-04: Racing Atelier design tokens (epic #432)."""
+        src = strip_lua_comments(_lua_text("coaching_overlay.lua"))
+        assert re.search(
+            r'^\s*local\s+T\s*=\s*require\(["\']design_tokens["\']\)',
+            src,
+            re.M,
+        ), "coaching_overlay must require design_tokens"
+        assert re.search(
+            r'^\s*local\s+COLOR_BG\s*=\s*T\.color\(["\']carbon["\']',
+            src,
+            re.M,
+        ), 'COLOR_BG must use T.color("carbon")'
+        assert re.search(
+            r"^\s*local\s+PANEL_ROUNDING\s*=\s*0\s*(?:--.*)?$",
+            src,
+            re.M,
+        ), "PANEL_ROUNDING must be exactly 0 (square corners)"
 
     def test_window_coaching_calls_approach_panel(self) -> None:
         """PC-07: windowCoaching in entry script calls drawApproachPanel.
