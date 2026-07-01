@@ -535,6 +535,49 @@ def test_closed_loop_uses_latest_pair_where_param_changed() -> None:
     }
 
 
+def test_closed_loop_rejects_stale_pair_after_later_setup_change() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=64,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="bias-change",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=65,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-c3",
+                setup_hash="wing-change",
+                setup_name="current",
+                lap_ms=97_800,
+                front_bias=65,
+                rear_wing=9,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "current_state_changed_multiple_params"
+    assert suggestion["changed_params"] == ["WING_2.VALUE"]
+    assert suggestion["previous_result"]["from"] == 64.0
+    assert suggestion["previous_result"]["to"] == 65.0
+
+
 def test_closed_loop_rejects_ambiguous_car_scope() -> None:
     first = record_from_lap_archive(
         _lap(

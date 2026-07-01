@@ -146,6 +146,29 @@ def test_low_speed_hint_prefers_mechanical_lever() -> None:
     assert sections.index("ARB_FRONT") < sections.index("WING_1")
 
 
+def test_pushes_phrase_maps_to_understeer() -> None:
+    out = advise_from_complaint(
+        "car pushes mid corner",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"] == {"issue": "understeer", "phase": "mid", "speed_hint": None}
+
+
+def test_abs_lights_under_braking_map_to_lockup() -> None:
+    out = advise_from_complaint(
+        "ABS lights under braking",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"] == {"issue": "lockup", "phase": "braking", "speed_hint": None}
+    assert out["suggestions"][0]["section"] == "BRAKE_POWER_MULT"
+
+
 def test_kerb_instability_takes_priority_over_rear_shorthand() -> None:
     out = advise_from_complaint(
         "rear unstable over kerb",
@@ -359,6 +382,7 @@ def test_setup_diff_uses_camber_semantic_direction_with_schema() -> None:
 
     row = out["rows"][0]
     assert row["direction"] == "increase"
+    assert row["delta"] == 0.1
     assert row["effect"].startswith("More negative")
     assert row["display"].endswith("deg (increase)")
 

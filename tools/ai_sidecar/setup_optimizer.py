@@ -796,6 +796,26 @@ def _prior_non_param_changes(
     return [changed for changed in _changed_param_keys(prior_params, prev_params) if changed != key]
 
 
+def _subsequent_non_param_changes(
+    ordered: list[dict[str, Any]], curr: dict[str, Any], key: str
+) -> list[str]:
+    try:
+        curr_index = next(index for index, rec in enumerate(ordered) if rec is curr)
+    except StopIteration:
+        return []
+    changed: set[str] = set()
+    prev_params = _finite_setup_params(curr)
+    for rec in ordered[curr_index + 1 :]:
+        next_params = _finite_setup_params(rec)
+        changed.update(
+            changed_key
+            for changed_key in _changed_param_keys(prev_params, next_params)
+            if changed_key != key
+        )
+        prev_params = next_params
+    return sorted(changed)
+
+
 def suggest_closed_loop(
     records: list[dict[str, Any]],
     *,
@@ -891,6 +911,16 @@ def suggest_closed_loop(
             "param": key,
             "experiments_used": len(complete),
             "changed_params": prior_confounds,
+            "previous_result": previous_result,
+        }
+    subsequent_confounds = _subsequent_non_param_changes(ordered, curr, key)
+    if subsequent_confounds:
+        return {
+            "ok": False,
+            "status": "current_state_changed_multiple_params",
+            "param": key,
+            "experiments_used": len(complete),
+            "changed_params": subsequent_confounds,
             "previous_result": previous_result,
         }
     if abs(measured_delta_ms) <= 1e-9:

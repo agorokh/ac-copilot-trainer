@@ -219,19 +219,30 @@ def _parse_issue(text: str) -> str | None:
         return "lockup_rear"
     if (lock_words | {"flatspot", "flatspots"}) & words:
         return "lockup"
+    if "abs" in words and "lights" in words:
+        return "lockup"
     if (
         _has_phrase(text, "wheel spin", "wheelspin")
-        or {
-            "traction",
-            "spin",
-            "spinning",
-            "lights",
-        }
-        & words
+        or {"traction", "spin", "spinning"} & words
+        or ("lights" in words and {"tc", "traction"} & words)
     ):
         return "wheelspin"
-    if {"understeer", "push", "pushing", "washes", "wash", "plough", "plow"} & words or _has_phrase(
-        text, "under steer", "wont turn", "won t turn", "doesnt turn", "doesn t turn"
+    if {
+        "understeer",
+        "push",
+        "pushes",
+        "pushing",
+        "washes",
+        "wash",
+        "plough",
+        "plow",
+    } & words or _has_phrase(
+        text,
+        "under steer",
+        "wont turn",
+        "won t turn",
+        "doesnt turn",
+        "doesn t turn",
     ):
         return "understeer"
     if {"kerb", "curb", "bump", "bumpy"} & words:
@@ -257,7 +268,7 @@ def _parse_phase(text: str, issue: str | None) -> str:
         return "exit"
     if {"mid", "apex", "middle", "center", "centre"} & words or _has_phrase(text, "mid corner"):
         return "mid"
-    if {"entry", "turn", "turnin", "turn-in", "braking", "brake", "trail"} & words:
+    if {"entry", "turn", "turnin", "braking", "brake", "trail"} & words:
         return "entry"
     if issue == "wheelspin":
         return "exit"
@@ -602,7 +613,8 @@ def setup_diff_summary(
         to_v = values.get("to")
         spec = spec_for(section)
         effect = effect_for(section)
-        delta = None if from_v is None or to_v is None else float(to_v) - float(from_v)
+        delta = _semantic_delta(schema, section, from_v, to_v)
+        display_delta = None if delta is None else round(delta, 6)
         direction = _diff_direction(schema, section, from_v, to_v)
         effect_text = ""
         raw_click_display = _raw_click_display(schema, section)
@@ -623,7 +635,7 @@ def setup_diff_summary(
                 "category": spec.category,
                 "from": from_v,
                 "to": to_v,
-                "delta": delta,
+                "delta": display_delta,
                 "from_display": from_display,
                 "to_display": to_display,
                 "units": unit,

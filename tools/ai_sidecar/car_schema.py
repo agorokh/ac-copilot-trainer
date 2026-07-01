@@ -103,7 +103,9 @@ def load_latest_schema(
     for path, resolved in candidates:
         if path == marker:
             return CarSetupSchema.load(resolved)
-    return CarSetupSchema.load(candidates[-1][1])
+    if len(candidates) == 1:
+        return CarSetupSchema.load(candidates[0][1])
+    return None
 
 
 def _f(value: Any) -> float | None:

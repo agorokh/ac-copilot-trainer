@@ -233,7 +233,7 @@ def test_load_latest_schema_loads_checked_in_car_asset() -> None:
     assert s.validate("FRONT_BIAS", 71) is False
 
 
-def test_load_latest_schema_prefers_marker_then_lexicographic(tmp_path: Path) -> None:
+def test_load_latest_schema_requires_marker_when_multiple_hashes_exist(tmp_path: Path) -> None:
     root = tmp_path / "schemas"
     car_dir = root / "car"
     car_dir.mkdir(parents=True)
@@ -247,9 +247,12 @@ def test_load_latest_schema_prefers_marker_then_lexicographic(tmp_path: Path) ->
         "car", [{"name": "ABS", "min": 0, "max": 3, "step": 1}]
     )
     (car_dir / "001.json").write_text(json.dumps(first.to_json()), encoding="utf-8")
+
+    assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 1
+
     (car_dir / "002.json").write_text(json.dumps(second.to_json()), encoding="utf-8")
 
-    assert load_latest_schema("car", schema_dir=root).spinners["ABS"].max == 2
+    assert load_latest_schema("car", schema_dir=root) is None
 
     (car_dir / "latest.json").write_text(json.dumps(marked.to_json()), encoding="utf-8")
 
