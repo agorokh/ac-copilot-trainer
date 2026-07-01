@@ -24,6 +24,7 @@ import re
 
 import pytest
 
+from tests.lua_text_helpers import strip_lua_comments
 from tools.ai_sidecar.external_protocol import (
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
@@ -49,37 +50,10 @@ _DEF_RE = re.compile(r"\bfunction\s+[\w.]*\w$")
 _STR_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
 
 
-def _strip_lua_comments(text: str) -> str:
-    """Drop Lua `--` line comments, honoring string literals (a `--` inside a string
-    is not a comment, and an escaped quote doesn't end one). This is done ONCE up
-    front so neither a commented-out call nor a commented-out `NAME = "..."` decoy
-    assignment can be mistaken for live code. Block comments (`--[[ ]]`) are out of
-    scope — no producer wraps a publishTopic call in one.
-    """
-    out: list[str] = []
-    for line in text.splitlines():
-        i, in_str, cut = 0, None, None
-        while i < len(line):
-            c = line[i]
-            if in_str is not None:
-                if c == "\\":
-                    i += 1  # skip the escaped char
-                elif c == in_str:
-                    in_str = None
-            elif c in ("'", '"'):
-                in_str = c
-            elif c == "-" and line[i + 1 : i + 2] == "-":
-                cut = i
-                break
-            i += 1
-        out.append(line if cut is None else line[:cut])
-    return "\n".join(out)
-
-
 def _resolve_calls(text: str) -> tuple[set[str], list[str]]:
     """Return ({topics}, [unresolved]) for `.publishTopic(` CALLS in one Lua blob.
 
-    Comments are stripped first (`_strip_lua_comments`), so commented calls and
+    Comments are stripped first (`strip_lua_comments`), so commented calls and
     commented decoy assignments are gone before parsing. Each call's first arg is
     resolved to a string literal: direct ('"coaching.snapshot"') or via a
     `local NAME = "..."` / `NAME = "..."` assignment in the same blob (covers
@@ -89,7 +63,7 @@ def _resolve_calls(text: str) -> tuple[set[str], list[str]]:
     cannot be resolved to a literal is reported as unresolved so the guard fails
     loud rather than silently passing a producer it can't verify.
     """
-    text = _strip_lua_comments(text)
+    text = strip_lua_comments(text)
     topics: set[str] = set()
     unresolved: list[str] = []
     for m in _CALL_RE.finditer(text):

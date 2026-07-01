@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.lua_text_helpers import strip_lua_comments
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODULES = REPO_ROOT / "src" / "ac_copilot_trainer" / "modules"
 ENTRY = REPO_ROOT / "src" / "ac_copilot_trainer" / "ac_copilot_trainer.lua"
@@ -27,28 +29,6 @@ MANIFEST = REPO_ROOT / "src" / "ac_copilot_trainer" / "manifest.ini"
 def _lua_text(name: str) -> str:
     """Return full text of a module under ``src/ac_copilot_trainer/modules/``."""
     return (MODULES / name).read_text(encoding="utf-8")
-
-
-def _strip_lua_comments(text: str) -> str:
-    """Drop Lua ``--`` line comments, honoring string literals (PR #173 pattern)."""
-    out: list[str] = []
-    for line in text.splitlines():
-        i, in_str, cut = 0, None, None
-        while i < len(line):
-            c = line[i]
-            if in_str is not None:
-                if c == "\\":
-                    i += 1
-                elif c == in_str:
-                    in_str = None
-            elif c in ("'", '"'):
-                in_str = c
-            elif c == "-" and line[i + 1 : i + 2] == "-":
-                cut = i
-                break
-            i += 1
-        out.append(line if cut is None else line[:cut])
-    return "\n".join(out)
 
 
 def _manifest_text() -> str:
@@ -387,7 +367,7 @@ class TestApproachPanel:
 
     def test_approach_panel_design_tokens(self) -> None:
         """PC-04: Racing Atelier design tokens (epic #432)."""
-        src = _strip_lua_comments(_lua_text("coaching_overlay.lua"))
+        src = strip_lua_comments(_lua_text("coaching_overlay.lua"))
         assert re.search(
             r'^\s*local\s+T\s*=\s*require\(["\']design_tokens["\']\)',
             src,
