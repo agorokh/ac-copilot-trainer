@@ -753,6 +753,24 @@ def test_launcher_setup_diff_json(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert any(str(candidate) in line for line in lines)
 
 
+def test_launcher_setup_diff_json_reports_file_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "missing.ini"
+    candidate = tmp_path / "candidate.ini"
+    candidate.write_text("[FRONT_BIAS]\nVALUE=64\n", encoding="utf-8")
+
+    assert main(["--setup-diff", str(missing), str(candidate), "--json"]) == 1
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["status"] == "setup_diff_failed"
+    assert out["baseline"]["path"] == str(missing)
+    assert out["candidate"]["path"] == str(candidate)
+    assert "missing.ini" in out["error"]
+
+
 def test_setup_diff_gui_fallback_keeps_success_exit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

@@ -117,6 +117,19 @@ def render_setup_diff_lines(diff: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _setup_diff_error(baseline_path: str, candidate_path: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "status": "setup_diff_failed",
+        "baseline": {"path": baseline_path},
+        "candidate": {"path": candidate_path},
+        "changed_count": 0,
+        "rows": [],
+        "display_lines": [],
+        "error": str(exc) or exc.__class__.__name__,
+    }
+
+
 def _open_setup_diff_window(diff: dict[str, Any], *, parent: Any | None = None) -> int:
     import tkinter as tk
     from tkinter import ttk
@@ -176,7 +189,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.setup_diff:
-        diff = diff_setup_files(args.setup_diff[0], args.setup_diff[1])
+        baseline_path, candidate_path = args.setup_diff
+        try:
+            diff = diff_setup_files(baseline_path, candidate_path)
+        except Exception as exc:  # noqa: BLE001 - CLI should report bad setup files plainly
+            diff = _setup_diff_error(baseline_path, candidate_path, exc)
         if args.json:
             print(json.dumps(diff, indent=2, sort_keys=True))
             return 0 if diff.get("ok", False) else 1

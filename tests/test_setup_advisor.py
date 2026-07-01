@@ -158,6 +158,17 @@ def test_rear_unstable_exit_maps_to_oversteer_without_kerb_context() -> None:
     assert out["suggestions"][0]["section"] == "TRACTION_CONTROL"
 
 
+def test_rear_reference_without_handling_token_is_unknown() -> None:
+    out = advise_from_complaint(
+        "rear tyre temps are high",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is False
+    assert out["status"] == "unknown_complaint"
+
+
 def test_high_speed_hint_preserves_braking_rule_order_when_no_aero_match() -> None:
     out = advise_from_complaint(
         "high speed front locks on entry",

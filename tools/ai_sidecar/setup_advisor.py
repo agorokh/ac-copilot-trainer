@@ -235,8 +235,12 @@ def _parse_issue(text: str) -> str | None:
         return "understeer"
     if {"kerb", "curb", "bump", "bumpy"} & words:
         return "instability"
-    if {"oversteer", "loose", "snap", "snappy", "tail", "rear"} & words or _has_phrase(
-        text, "over steer", "steps out", "stepping out", "rear steps"
+    oversteer_words = {"oversteer", "loose", "snap", "snappy", "tail"}
+    rear_instability_words = {"unstable", "nervous"}
+    if (
+        oversteer_words & words
+        or ("rear" in words and rear_instability_words & words)
+        or _has_phrase(text, "over steer", "steps out", "stepping out", "rear steps")
     ):
         return "oversteer"
     return None
