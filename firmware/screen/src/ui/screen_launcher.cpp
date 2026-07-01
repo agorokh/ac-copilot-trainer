@@ -184,12 +184,14 @@ lv_obj_t* make_tile(lv_obj_t* parent,
     // Title (top-left).
     lv_obj_t* title_lbl = lv_label_create(tile);
     lv_label_set_text(title_lbl, title);
+    lv_obj_set_style_text_font(title_lbl, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(title_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_align(title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Subtitle below title.
     lv_obj_t* sub_lbl = lv_label_create(tile);
     lv_label_set_text(sub_lbl, subtitle);
+    lv_obj_set_style_text_font(sub_lbl, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(sub_lbl, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_align(sub_lbl, LV_ALIGN_TOP_LEFT, 0, 22);
 
@@ -199,6 +201,7 @@ lv_obj_t* make_tile(lv_obj_t* parent,
     // finding on PR #91.)
     lv_obj_t* chev = lv_label_create(tile);
     lv_label_set_text(chev, ">");
+    lv_obj_set_style_text_font(chev, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(chev, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_width(chev, CHEVRON_W);
     lv_obj_set_style_text_align(chev, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
@@ -233,6 +236,7 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
 
     lv_obj_t* brand = lv_label_create(header);
     lv_label_set_text(brand, "AC LAUNCHER");
+    lv_obj_set_style_text_font(brand, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(brand, UI_TX_PRIMARY, LV_PART_MAIN);
     // Letter-spacing approximation: LVGL 8.3 supports `text_letter_space`.
     lv_obj_set_style_text_letter_space(brand, 2, LV_PART_MAIN);
@@ -257,6 +261,7 @@ void make_header(lv_obj_t* parent, launcher_ctx_t* ctx) {
 
     ctx->status_label = lv_label_create(pill);
     lv_label_set_text(ctx->status_label, "DISCONNECTED");
+    lv_obj_set_style_text_font(ctx->status_label, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_align(ctx->status_label, LV_ALIGN_LEFT_MID, STATUS_DOT_DIA + 6, 0);
 
     // Spinner: smaller diameter so it nests inside the pill instead of

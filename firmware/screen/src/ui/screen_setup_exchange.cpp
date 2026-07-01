@@ -202,6 +202,7 @@ lv_obj_t* make_row(se_ctx_t* ctx, int idx, const se_result_t& result) {
     lv_label_set_text(name, result.name);
     lv_obj_set_width(name, 232);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(name, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(name, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -215,6 +216,7 @@ lv_obj_t* make_row(se_ctx_t* ctx, int idx, const se_result_t& result) {
     lv_label_set_text(author, line);
     lv_obj_set_width(author, 232);
     lv_label_set_long_mode(author, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(author, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(author, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_align(author, LV_ALIGN_TOP_LEFT, 0, 24);
 
@@ -227,11 +229,13 @@ lv_obj_t* make_row(se_ctx_t* ctx, int idx, const se_result_t& result) {
     lv_label_set_text(dl, line);
     lv_obj_set_width(dl, 232);
     lv_label_set_long_mode(dl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(dl, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(dl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_align(dl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     lv_obj_t* chevron = lv_label_create(row);
     lv_label_set_text(chevron, ">");
+    lv_obj_set_style_text_font(chevron, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(chevron, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_align(chevron, LV_ALIGN_RIGHT_MID, 0, 0);
     return row;
@@ -299,6 +303,7 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
 
     lv_obj_t* title = lv_label_create(header);
     lv_label_set_text(title, "SETUP EXCHANGE");
+    lv_obj_set_style_text_font(title, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(title, 2, LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 12, 0);
@@ -308,11 +313,12 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
     lv_obj_align(back, LV_ALIGN_RIGHT_MID, -2, 0);
     lv_obj_set_style_bg_color(back, UI_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(back, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(back, UI_RADIUS_TILE, LV_PART_MAIN);
     lv_obj_set_style_border_width(back, 0, LV_PART_MAIN);
     lv_obj_add_event_cb(back, on_back_clicked, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* back_lbl = lv_label_create(back);
     lv_label_set_text(back_lbl, "< BACK");
+    lv_obj_set_style_text_font(back_lbl, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(back_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(back_lbl);
 
@@ -327,18 +333,21 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
     ctx->meta_car = lv_label_create(meta);
     lv_obj_set_width(ctx->meta_car, SCREEN_W - 2 * OUTER_PAD - 84);
     lv_label_set_long_mode(ctx->meta_car, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(ctx->meta_car, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_car, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_align(ctx->meta_car, LV_ALIGN_TOP_LEFT, 0, 0);
 
     ctx->meta_track = lv_label_create(meta);
     lv_obj_set_width(ctx->meta_track, SCREEN_W - 2 * OUTER_PAD - 84);
     lv_label_set_long_mode(ctx->meta_track, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(ctx->meta_track, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_track, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_align(ctx->meta_track, LV_ALIGN_TOP_LEFT, 0, 22);
 
     ctx->status = lv_label_create(meta);
     lv_obj_set_width(ctx->status, SCREEN_W - 2 * OUTER_PAD);
     lv_label_set_long_mode(ctx->status, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(ctx->status, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->status, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_align(ctx->status, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
@@ -347,10 +356,11 @@ extern "C" lv_obj_t* screen_setup_exchange_create(void) {
     lv_obj_align(refresh, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(refresh, UI_BG_HEADER, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(refresh, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(refresh, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(refresh, UI_RADIUS_TILE, LV_PART_MAIN);
     lv_obj_add_event_cb(refresh, on_refresh_clicked, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* refresh_lbl = lv_label_create(refresh);
     lv_label_set_text(refresh_lbl, "REFRESH");
+    lv_obj_set_style_text_font(refresh_lbl, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(refresh_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(refresh_lbl);
 

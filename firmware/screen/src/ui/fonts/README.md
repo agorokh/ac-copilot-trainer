@@ -1,89 +1,69 @@
-# Rig screen fonts (LVGL 8.3 binaries)
+# Rig screen fonts (Racing Atelier / LVGL 8.3)
 
-This directory ships the **source** TTFs (`src/`) and the **SIL OFL v1.1**
-license (`OFL.txt`) bundled with the firmware so the board build is
-self-contained. Parts C–F of issue #86 will start using custom faces and
-will reference the converted **`.c`** outputs that LVGL's `lv_font_conv`
-produces from these TTFs.
+This directory ships the Racing Atelier firmware font bundle for issue #86
+Part A4. The generated `font_*.c` files are committed because the LVGL screens
+reference them directly through `firmware/screen/include/ui/tokens.h`.
 
-**Conversion is optional today.** Part A/B firmware does not yet declare or
-use any of the generated faces — the launcher and placeholders fall back to
-LVGL's built-in Montserrat 14 (set as `LV_FONT_DEFAULT` in
-`firmware/screen/include/lv_conf.h`). When a screen in Parts C–F adds a
-`LV_FONT_DECLARE(font_xxx)` and a corresponding style hook, run the
-converter (instructions below) before flashing that build.
+Source guidance:
 
-The font sources are the same files used by the in-game HUD, copied from
-`src/ac_copilot_trainer/content/fonts/`. Keep the two trees in sync if
-you ever rebuild the HUD font set.
+- `docs/10_Development/design/racing-atelier/project/guidelines/firmware-fonts.md`
+- `docs/10_Development/design/racing-atelier/project/tokens/typography.css`
+- Visual gate: `docs/10_Development/design/racing-atelier-renders/esp32_rig.png`
 
-## Glyph range
+## Source Fonts
 
-All four faces should be converted with the same range:
+The source TTFs under `src/` come from the Google Fonts repository and are
+licensed under SIL OFL v1.1 (`OFL.txt`):
+
+| Source | Use |
+|---|---|
+| `Saira-wdth-wght.ttf` | upstream variable font |
+| `Saira-Bold.ttf` | frozen `wght=700, wdth=100` instance for readouts |
+| `SairaSemiCondensed-Black.ttf` | command hero |
+| `SairaSemiCondensed-Bold.ttf` | command and title labels |
+| `SairaSemiCondensed-SemiBold.ttf` | tight-caps labels |
+| `SplineSansMono-wght.ttf` | upstream variable mono font |
+| `SplineSansMono-Medium.ttf` | frozen `wght=500` instance for units/status text |
+
+The frozen variable instances were generated with `fontTools.varLib.instancer`.
+They are committed so `lv_font_conv` can be rerun without installing fonttools.
+
+## Glyph Range
+
+Firmware copy remains ASCII-safe. The generated command/label/mono fonts use
+`0x20-0x7F`; the numeric readout fonts are subset to the glyphs below **plus a
+trailing space**. The space glyph is required for readout spacing and is part
+of every `--symbols "… "` argument in the regeneration commands — keep it when
+re-running `lv_font_conv`:
 
 ```text
-0x20-0x7F,0x2022,0x00D7
+0123456789:.+-/%kmhM<SPACE>
 ```
 
-That covers basic Latin (`!`–`~`), the bullet (`•`, U+2022), and the
-multiplication sign (`×`, U+00D7) used for the delta chip. Add more code
-points if a screen ever needs accented glyphs.
+Add more glyphs only when a screen actually prints them.
 
-## Conversion commands
+## Regeneration
 
-Install the converter once: `npm i -g lv_font_conv`. Then from the repo
-root run the four commands below; outputs land next to this README as
-`.c` files referenced by `firmware/screen/src/ui/`.
+Install the converter once:
 
 ```bash
-lv_font_conv \
-  --font firmware/screen/src/ui/fonts/src/Syncopate-Bold.ttf \
-  --size 14 --bpp 4 --no-compress \
-  --range '0x20-0x7F,0x2022,0x00D7' \
-  --format lvgl \
-  --output firmware/screen/src/ui/fonts/font_syncopate_bold_14.c
-
-lv_font_conv \
-  --font firmware/screen/src/ui/fonts/src/Michroma-Regular.ttf \
-  --size 18 --bpp 4 --no-compress \
-  --range '0x20-0x7F,0x2022,0x00D7' \
-  --format lvgl \
-  --output firmware/screen/src/ui/fonts/font_michroma_18.c
-
-lv_font_conv \
-  --font firmware/screen/src/ui/fonts/src/Montserrat-Regular.ttf \
-  --size 11 --bpp 4 --no-compress \
-  --range '0x20-0x7F,0x2022,0x00D7' \
-  --format lvgl \
-  --output firmware/screen/src/ui/fonts/font_montserrat_11.c
-
-lv_font_conv \
-  --font firmware/screen/src/ui/fonts/src/Montserrat-Bold.ttf \
-  --size 12 --bpp 4 --no-compress \
-  --range '0x20-0x7F,0x2022,0x00D7' \
-  --format lvgl \
-  --output firmware/screen/src/ui/fonts/font_montserrat_bold_12.c
+npm i -g lv_font_conv
 ```
 
-## Symbols exported by the `.c` files
+Then run these commands from the repo root. `--no-compress` is required because
+`firmware/screen/include/lv_conf.h` has `LV_USE_FONT_COMPRESSED` disabled.
 
-LVGL declares converted faces as `LV_FONT_DECLARE(font_xxx)` in the
-firmware. The symbol name comes from the `.c` filename, so the four
-generated symbols you can use from the screens (Parts C–F) are:
-
-| Symbol                       | Use                                  |
-|------------------------------|--------------------------------------|
-| `font_syncopate_bold_14`     | Screen titles                        |
-| `font_michroma_18`           | Numbers, corner labels, setup names  |
-| `font_montserrat_11`         | Body / descriptions                  |
-| `font_montserrat_bold_12`    | Emphasis                             |
-
-These symbols become valid the first time a screen pulls one in via
-`LV_FONT_DECLARE(...)`; until then the build is unaffected by whether
-the `.c` files exist on disk.
-
-## License
-
-`OFL.txt` is a verbatim copy of the SIL Open Font License v1.1 that
-covers all four bundled TTFs. Re-ship it with any binary that embeds
-the converted glyphs.
+```bash
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SairaSemiCondensed-Black.ttf --size 54 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_saira_sc_black_54.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SairaSemiCondensed-Bold.ttf --size 34 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_saira_sc_bold_34.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SairaSemiCondensed-Bold.ttf --size 28 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_saira_sc_bold_28.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SairaSemiCondensed-SemiBold.ttf --size 12 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_saira_sc_semibold_12.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SairaSemiCondensed-SemiBold.ttf --size 11 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_saira_sc_semibold_11.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SairaSemiCondensed-SemiBold.ttf --size 9 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_saira_sc_semibold_9.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/Saira-Bold.ttf --size 46 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols "0123456789:.+-/%kmhM " --output firmware/screen/src/ui/fonts/font_saira_bold_46.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/Saira-Bold.ttf --size 34 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols "0123456789:.+-/%kmhM " --output firmware/screen/src/ui/fonts/font_saira_bold_34.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/Saira-Bold.ttf --size 26 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --symbols "0123456789:.+-/%kmhM " --output firmware/screen/src/ui/fonts/font_saira_bold_26.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SplineSansMono-Medium.ttf --size 12 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_spline_mono_12.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SplineSansMono-Medium.ttf --size 11 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_spline_mono_11.c
+lv_font_conv --font firmware/screen/src/ui/fonts/src/SplineSansMono-Medium.ttf --size 10 --bpp 4 --no-compress --format lvgl --lv-include lvgl.h --range 0x20-0x7F --output firmware/screen/src/ui/fonts/font_spline_mono_10.c
+```

@@ -450,6 +450,7 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
 
     lv_obj_t* name_lbl = lv_label_create(row);
     lv_label_set_text(name_lbl, s.label);
+    lv_obj_set_style_text_font(name_lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_width(name_lbl, 128);
     lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
@@ -458,12 +459,13 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_t* minus = lv_btn_create(row);
     lv_obj_set_size(minus, 34, 32);
     lv_obj_align(minus, LV_ALIGN_RIGHT_MID, -112, 0);
-    lv_obj_set_style_radius(minus, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(minus, UI_RADIUS_TILE, LV_PART_MAIN);
     lv_obj_set_style_bg_color(minus, UI_BG_HEADER, LV_PART_MAIN);
     lv_obj_add_event_cb(minus, on_spinner_minus_clicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
     lv_obj_t* minus_lbl = lv_label_create(minus);
     lv_label_set_text(minus_lbl, "-");
+    lv_obj_set_style_text_font(minus_lbl, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(minus_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(minus_lbl);
 
@@ -471,6 +473,10 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     format_spinner_value(s, value_buf, sizeof(value_buf));
     lv_obj_t* value_lbl = lv_label_create(row);
     lv_label_set_text(value_lbl, value_buf);
+    // Spinner values carry an arbitrary unit suffix from the host (e.g.
+    // "26.6psi", "3clicks"). The Saira Bold readout faces are subset to
+    // digits/symbols only, so use the full-ASCII command face to avoid tofu.
+    lv_obj_set_style_text_font(value_lbl, UI_FONT_COMMAND_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(value_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_width(value_lbl, 58);
     lv_label_set_long_mode(value_lbl, LV_LABEL_LONG_DOT);
@@ -479,12 +485,13 @@ lv_obj_t* make_spinner_row(lv_obj_t* parent, int idx, const spinner_row_t& s) {
     lv_obj_t* plus = lv_btn_create(row);
     lv_obj_set_size(plus, 34, 32);
     lv_obj_align(plus, LV_ALIGN_RIGHT_MID, -4, 0);
-    lv_obj_set_style_radius(plus, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(plus, UI_RADIUS_TILE, LV_PART_MAIN);
     lv_obj_set_style_bg_color(plus, UI_BG_HEADER, LV_PART_MAIN);
     lv_obj_add_event_cb(plus, on_spinner_plus_clicked, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(static_cast<intptr_t>(idx)));
     lv_obj_t* plus_lbl = lv_label_create(plus);
     lv_label_set_text(plus_lbl, "+");
+    lv_obj_set_style_text_font(plus_lbl, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(plus_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(plus_lbl);
 
@@ -510,6 +517,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     // Row 1: name (left) + BEST lap (right)
     lv_obj_t* name_lbl = lv_label_create(row);
     lv_label_set_text(name_lbl, s.name);
+    lv_obj_set_style_text_font(name_lbl, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(name_lbl, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_width(name_lbl, lv_pct(60));
     lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
@@ -519,6 +527,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     format_lap_ms(s.best_ms, lap_buf, sizeof(lap_buf));
     lv_obj_t* best_val = lv_label_create(row);
     lv_label_set_text(best_val, lap_buf);
+    lv_obj_set_style_text_font(best_val, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(best_val, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_align(best_val, LV_ALIGN_TOP_RIGHT, -16, 0);
 
@@ -527,6 +536,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
     format_setup_chips(s, chip_buf, sizeof(chip_buf));
     lv_obj_t* chips = lv_label_create(row);
     lv_label_set_text(chips, chip_buf);
+    lv_obj_set_style_text_font(chips, UI_FONT_MONO_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(chips, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(chips, 1, LV_PART_MAIN);
     lv_obj_align(chips, LV_ALIGN_TOP_LEFT, 0, 26);
@@ -536,6 +546,7 @@ lv_obj_t* make_row(lv_obj_t* parent, int idx, const setup_row_t& s) {
 
     lv_obj_t* chev = lv_label_create(row);
     lv_label_set_text(chev, ">");
+    lv_obj_set_style_text_font(chev, UI_FONT_LABEL_MD, LV_PART_MAIN);
     lv_obj_set_style_text_color(chev, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_align(chev, LV_ALIGN_RIGHT_MID, -4, 0);
 
@@ -557,6 +568,7 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
     if (g_spinner_count > 0) {
         lv_obj_t* heading = lv_label_create(ctx->list_col);
         lv_label_set_text(heading, "ADJUST");
+        lv_obj_set_style_text_font(heading, UI_FONT_LABEL_XS, LV_PART_MAIN);
         lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
         lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
         for (int i = 0; i < g_spinner_count; ++i) {
@@ -566,8 +578,11 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
 
     if (g_setup_count == 0) {
         ctx->placeholder_lbl = lv_label_create(ctx->list_col);
+        // ASCII "..." — the mono fonts are subset to 0x20-0x7F, so the
+        // Unicode ellipsis (U+2026) would render as a missing-glyph box.
         lv_label_set_text(ctx->placeholder_lbl,
-                          g_car_id[0] ? "No saved setups for this car" : "Loading…");
+                          g_car_id[0] ? "No saved setups for this car" : "Loading...");
+        lv_obj_set_style_text_font(ctx->placeholder_lbl, UI_FONT_MONO_XS, LV_PART_MAIN);
         lv_obj_set_style_text_color(ctx->placeholder_lbl, UI_TX_MUTED, LV_PART_MAIN);
         return;
     }
@@ -575,6 +590,7 @@ void rebuild_list_widgets(pt_ctx_t* ctx) {
 
     lv_obj_t* heading = lv_label_create(ctx->list_col);
     lv_label_set_text(heading, "SAVED");
+    lv_obj_set_style_text_font(heading, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(heading, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(heading, 2, LV_PART_MAIN);
     for (int i = 0; i < g_setup_count; ++i) {
@@ -698,6 +714,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
 
     lv_obj_t* title = lv_label_create(header);
     lv_label_set_text(title, "POCKET TECHNICIAN");
+    lv_obj_set_style_text_font(title, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(title, 2, LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
@@ -708,10 +725,11 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_set_style_bg_color(back, UI_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(back, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(back, 0, LV_PART_MAIN);
-    lv_obj_set_style_radius(back, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(back, UI_RADIUS_TILE, LV_PART_MAIN);
     lv_obj_add_event_cb(back, on_back_clicked, LV_EVENT_CLICKED, nullptr);
     lv_obj_t* back_lbl = lv_label_create(back);
     lv_label_set_text(back_lbl, "< BACK");
+    lv_obj_set_style_text_font(back_lbl, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(back_lbl, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_center(back_lbl);
 
@@ -726,6 +744,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
 
     // Stack: TRACK / BRAND-letterspaced / MODEL / ACTIVE.
     ctx->meta_track = lv_label_create(meta);
+    lv_obj_set_style_text_font(ctx->meta_track, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_track, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_track, 1, LV_PART_MAIN);
     lv_obj_set_width(ctx->meta_track, SCREEN_W - 2 * OUTER_PAD);
@@ -733,6 +752,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_align(ctx->meta_track, LV_ALIGN_TOP_LEFT, 0, 0);
 
     ctx->meta_brand = lv_label_create(meta);
+    lv_obj_set_style_text_font(ctx->meta_brand, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_brand, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_brand, 2, LV_PART_MAIN);
     lv_obj_set_width(ctx->meta_brand, SCREEN_W - 2 * OUTER_PAD);
@@ -742,6 +762,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_add_flag(ctx->meta_brand, LV_OBJ_FLAG_HIDDEN);
 
     ctx->meta_car = lv_label_create(meta);
+    lv_obj_set_style_text_font(ctx->meta_car, UI_FONT_LABEL_SM, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_car, UI_TX_PRIMARY, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_car, 1, LV_PART_MAIN);
     lv_obj_set_width(ctx->meta_car, SCREEN_W - 2 * OUTER_PAD);
@@ -749,6 +770,7 @@ extern "C" lv_obj_t* screen_pocket_technician_create(void) {
     lv_obj_align(ctx->meta_car, LV_ALIGN_TOP_LEFT, 0, 40);
 
     ctx->meta_active = lv_label_create(meta);
+    lv_obj_set_style_text_font(ctx->meta_active, UI_FONT_LABEL_XS, LV_PART_MAIN);
     lv_obj_set_style_text_color(ctx->meta_active, UI_ACCENT_GOLD, LV_PART_MAIN);
     lv_obj_set_style_text_letter_space(ctx->meta_active, 1, LV_PART_MAIN);
     lv_obj_set_width(ctx->meta_active, SCREEN_W - 2 * OUTER_PAD);
