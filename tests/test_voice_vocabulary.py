@@ -31,7 +31,7 @@ def test_register_axis_is_present_and_bounded() -> None:
     regs = {p.register for p in vocab.vocabulary()}
     assert regs <= set(vocab.REGISTERS)
     assert "critical" in regs and "calm" in regs  # the headline escalation exists
-    # No (kind, urgency) lists ALL three registers (the anti-blowup cap) — a cue never needs every
+    # No (kind, urgency) lists ALL four registers (the anti-blowup cap) — a cue never needs every
     # tier; terse act cues escalate alert->urgent->critical, heads-ups stay calm.
     from collections import defaultdict
 

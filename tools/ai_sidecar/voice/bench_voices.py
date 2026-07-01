@@ -214,8 +214,10 @@ def to_markdown(results: list[BackendResult]) -> str:
             else "-"
         )
         lines.append(
-            f"| {r.backend} | {'yes' if r.available else 'no'} | {am or '-'} | "
-            f"{um or '-'} | {cm or '-'} | {dbfs} | {cen} | {r.bake_cpu_s or '-'} | "
+            f"| {r.backend} | {'yes' if r.available else 'no'} "
+            f"| {am if am is not None else '-'} | {um if um is not None else '-'} "
+            f"| {cm if cm is not None else '-'} | {dbfs} | {cen} "
+            f"| {r.bake_cpu_s if r.bake_cpu_s is not None else '-'} | "
             f"{r.license} | {r.dep_risk} | {r.naturalness} | "
             f"{r.verdict}{(' - ' + r.note) if r.note else ''} |"
         )
