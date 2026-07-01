@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.lua_text_helpers import strip_lua_comments
+
 _ROOT = Path(__file__).resolve().parents[1]
 _COLORS_CSS = _ROOT / "docs/10_Development/design/racing-atelier/project/tokens/colors.css"
 _DESIGN_TOKENS_LUA = _ROOT / "src/ac_copilot_trainer/modules/design_tokens.lua"
@@ -26,7 +28,7 @@ def _css_tokens() -> dict[str, str]:
 
 
 def _lua_tokens() -> dict[str, str]:
-    text = _DESIGN_TOKENS_LUA.read_text(encoding="utf-8")
+    text = strip_lua_comments(_DESIGN_TOKENS_LUA.read_text(encoding="utf-8"))
     hex_block = re.search(r"M\.HEX\s*=\s*\{(.*?)\}", text, re.DOTALL)
     if not hex_block:
         return {}
