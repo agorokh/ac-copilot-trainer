@@ -17,6 +17,27 @@ Derived stores:
   `python -m tools.ai_sidecar.driver_profile`.
 - `journal/tt/index.json` and `journal/tt/sessions_index.json`: derived Track Titan
   indexes rebuilt by the ingest tooling.
+- `journal/tt/**/curriculum_lapN.json`: optional derived Track Titan harness
+  curriculum built from retained `coaching_lapN.json` advice.
+
+## Track Titan Derived Artifacts
+
+Build an M0 reference archive from retained full-lap TT reference windows:
+
+```bash
+python -m tools.tt_ingest reference --discover-lake --session-key <session> --lap <n> --output journal/tt_ref.json
+```
+
+Build an M-TT3 harness curriculum from retained per-corner advice:
+
+```bash
+python -m tools.tt_ingest curriculum --discover-lake --session-key <session> --lap <n> --output journal/tt_curriculum.json
+```
+
+The curriculum artifact preserves TT diagnosis keys, time loss, phase/highlight
+spans, and segment timing as objective rows. It is derived from the write-once
+services evidence; keep the raw `last_session_lapN.json` and `coaching_lapN.json`
+files as the source of truth.
 
 ## Sessions And Stints
 

@@ -40,9 +40,11 @@ from tools.tt_ingest.tt_export import (
     write_immutable_json,
 )
 from tools.tt_ingest.tt_normalize import (
+    DEFAULT_CURRICULUM_MIN_TIME_LOSS_S,
     DEFAULT_REFERENCE_COVERAGE_THRESHOLD,
     DEFAULT_REFERENCE_MAX_SPLINE_GAP,
     TTNormalizeError,
+    build_harness_curriculum,
     build_reference_archive,
     build_sessions_index,
     normalize_session,
@@ -68,6 +70,8 @@ LAST_SESSION_ENDPOINT_GLOB = f"{LAST_SESSION_ENDPOINT_PREFIX}*.json"
 COACHING_ENDPOINT_PREFIX = "coaching_lap"
 COACHING_ENDPOINT_GLOB = f"{COACHING_ENDPOINT_PREFIX}*.json"
 REFERENCE_INPUT_GLOB = LAST_SESSION_ENDPOINT_GLOB
+CURRICULUM_ENDPOINT_PREFIX = "curriculum_lap"
+CURRICULUM_ENDPOINT_GLOB = f"{CURRICULUM_ENDPOINT_PREFIX}*.json"
 
 
 def last_session_endpoint(lap: Any) -> str:
@@ -88,6 +92,11 @@ def _last_session_endpoint_matches_lap(stem: str, lap: Any) -> bool:
 def coaching_endpoint(lap: Any) -> str:
     """Endpoint (file stem) for a lap's coaching bundle: ``coaching_lap{lap}``."""
     return f"{COACHING_ENDPOINT_PREFIX}{lap}"
+
+
+def curriculum_endpoint(lap: Any) -> str:
+    """Endpoint (file stem) for a derived M-TT3 curriculum: ``curriculum_lap{lap}``."""
+    return f"{CURRICULUM_ENDPOINT_PREFIX}{lap}"
 
 
 @dataclass(frozen=True)
@@ -123,6 +132,7 @@ INDEXED_ENDPOINT_GLOBS = (
     f"{RAW_SESSION_ENDPOINT}.json",
     LAST_SESSION_ENDPOINT_GLOB,
     COACHING_ENDPOINT_GLOB,
+    CURRICULUM_ENDPOINT_GLOB,
 )
 
 
@@ -278,6 +288,23 @@ class ReferenceArchiveSummary:
         )
 
 
+@dataclass(frozen=True)
+class CurriculumSummary:
+    """Outcome of building one M-TT3 Track Titan harness curriculum."""
+
+    output: Path
+    objectives: int
+    total_time_loss_s: float
+    source: Path
+
+    def render(self) -> str:
+        return (
+            f"wrote TT harness curriculum to {self.output} "
+            f"({self.objectives} objective(s), "
+            f"total_loss={self.total_time_loss_s:.3f}s, source={self.source.name})"
+        )
+
+
 def _car_segment(session: Mapping[str, Any]) -> Any:
     """Resolve a STRING car id for the lake path.
 
@@ -388,7 +415,7 @@ def retain_coaching(
 
 def _load_json_file(path: Path) -> Mapping[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
     except OSError as exc:
         raise TTNormalizeError(f"could not read {path}: {exc}") from exc
     except ValueError as exc:
@@ -396,6 +423,22 @@ def _load_json_file(path: Path) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise TTNormalizeError(f"{path} did not contain a JSON object")
     return payload
+
+
+def _lap_from_coaching_path(path: Path) -> str | None:
+    stem = path.stem
+    if not stem.startswith(COACHING_ENDPOINT_PREFIX):
+        return None
+    lap = stem[len(COACHING_ENDPOINT_PREFIX) :]
+    return lap or None
+
+
+def _paired_last_session_path(coaching_path: Path) -> Path | None:
+    lap = _lap_from_coaching_path(coaching_path)
+    if not lap:
+        return None
+    candidate = coaching_path.with_name(f"{last_session_endpoint(lap)}.json")
+    return candidate if candidate.exists() else None
 
 
 def discover_reference_payloads(
@@ -428,6 +471,39 @@ def discover_reference_payloads(
         suffix = f" ({', '.join(details)})" if details else ""
         raise TTNormalizeError(f"no retained last-session payloads found under {root}{suffix}")
     return paths
+
+
+def discover_curriculum_payloads(
+    *,
+    lake_base: Path | None = None,
+    session_key: str | None = None,
+    lap: str | int | None = None,
+) -> tuple[Path, Path | None]:
+    """Discover the retained coaching bundle and paired last-session payload for M-TT3."""
+    if not session_key or lap is None:
+        raise TTNormalizeError("--discover-lake requires both --session-key and --lap")
+    root = lake_root(lake_base)
+    if not root.exists():
+        raise TTNormalizeError(f"Track Titan lake not found: {root}")
+    matches: list[Path] = []
+    target_name = f"{coaching_endpoint(lap)}.json"
+    for path in sorted(root.rglob(target_name)):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path.parent.name == str(session_key):
+            matches.append(path)
+    if not matches:
+        raise TTNormalizeError(
+            f"no retained coaching payload found under {root} "
+            f"(session_key={session_key}, lap={lap})"
+        )
+    if len(matches) > 1:
+        rel = ", ".join(str(p.relative_to(root)) for p in matches[:5])
+        raise TTNormalizeError(
+            f"multiple retained coaching payloads matched session_key={session_key}, "
+            f"lap={lap}: {rel}"
+        )
+    return matches[0], _paired_last_session_path(matches[0])
 
 
 def build_reference_archive_from_files(
@@ -474,6 +550,51 @@ def build_reference_archive_from_files(
         coverage=float(meta["coverage"]),
         partial=bool(meta["partial"]),
         payload_count=int(meta["payload_count"]),
+    )
+
+
+def build_curriculum_from_files(
+    coaching_path: Path,
+    *,
+    output: Path,
+    session_path: Path | None = None,
+    min_time_loss_s: float = DEFAULT_CURRICULUM_MIN_TIME_LOSS_S,
+    overwrite: bool = False,
+    pretty: bool = False,
+) -> CurriculumSummary:
+    """Build and write a TT harness curriculum from retained coaching evidence."""
+    resolved_output = output.resolve()
+    inputs = [coaching_path]
+    paired_session_path = session_path or _paired_last_session_path(coaching_path)
+    if paired_session_path is not None:
+        inputs.append(paired_session_path)
+    for path in inputs:
+        if resolved_output == path.resolve():
+            raise TTNormalizeError(f"output must not overwrite retained input: {output}")
+    if output.exists() and not overwrite:
+        raise TTNormalizeError(f"output already exists (pass --overwrite): {output}")
+    coaching = _load_json_file(coaching_path)
+    session_payload = _load_json_file(paired_session_path) if paired_session_path else None
+    curriculum = build_harness_curriculum(
+        coaching,
+        session_payload=session_payload,
+        min_time_loss_s=min_time_loss_s,
+    )
+    if pretty:
+        text = json.dumps(curriculum, indent=2, sort_keys=True) + "\n"
+    else:
+        text = json.dumps(curriculum, separators=(",", ":"), sort_keys=True) + "\n"
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise TTNormalizeError(f"could not write {output}: {exc}") from exc
+    summary = curriculum["summary"]
+    return CurriculumSummary(
+        output=output,
+        objectives=int(summary["objectives"]),
+        total_time_loss_s=float(summary["total_time_loss_s"]),
+        source=coaching_path,
     )
 
 
@@ -586,6 +707,45 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     reference.add_argument("--overwrite", action="store_true")
     reference.add_argument("--pretty", action="store_true")
+
+    curriculum = sub.add_parser(
+        "curriculum",
+        help=("Build an M-TT3 harness curriculum from retained TT coaching_lap*.json advice."),
+    )
+    curriculum.add_argument(
+        "--coaching",
+        type=Path,
+        default=None,
+        help="Retained coaching_lap*.json bundle to normalize.",
+    )
+    curriculum.add_argument(
+        "--session",
+        type=Path,
+        default=None,
+        help=(
+            "Optional paired last_session_lap*.json payload; defaults to the sibling "
+            "last_session file when present."
+        ),
+    )
+    curriculum.add_argument(
+        "--discover-lake",
+        action="store_true",
+        help="Discover coaching_lap*.json for --session-key/--lap under --lake-base/journal/tt.",
+    )
+    curriculum.add_argument("--lake-base", type=Path, default=None)
+    curriculum.add_argument(
+        "--session-key", default=None, help="Required with --discover-lake; retained session key."
+    )
+    curriculum.add_argument("--lap", default=None, help="Required with --discover-lake; one lap.")
+    curriculum.add_argument(
+        "--min-time-loss-s",
+        type=float,
+        default=DEFAULT_CURRICULUM_MIN_TIME_LOSS_S,
+        help="Only emit objectives whose TT time loss is above this threshold (default 0).",
+    )
+    curriculum.add_argument("--output", type=Path, required=True)
+    curriculum.add_argument("--overwrite", action="store_true")
+    curriculum.add_argument("--pretty", action="store_true")
     return parser
 
 
@@ -695,6 +855,29 @@ def cmd_reference(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_curriculum(args: argparse.Namespace) -> int:
+    if bool(args.coaching) == bool(args.discover_lake):
+        raise TTNormalizeError("curriculum requires exactly one of --coaching or --discover-lake")
+    if args.coaching:
+        coaching_path = args.coaching
+        session_path = args.session
+    else:
+        coaching_path, discovered_session = discover_curriculum_payloads(
+            lake_base=args.lake_base, session_key=args.session_key, lap=args.lap
+        )
+        session_path = args.session or discovered_session
+    summary = build_curriculum_from_files(
+        coaching_path,
+        output=args.output,
+        session_path=session_path,
+        min_time_loss_s=args.min_time_loss_s,
+        overwrite=args.overwrite,
+        pretty=args.pretty,
+    )
+    _print(summary.render())
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
@@ -707,6 +890,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return cmd_coaching(args)
         if args.command == "reference":
             return cmd_reference(args)
+        if args.command == "curriculum":
+            return cmd_curriculum(args)
     except (
         TTAuthError,
         TTServicesError,

@@ -16,8 +16,11 @@ from tools.tt_ingest.cli import (
     INDEX_FILENAME,
     SESSIONS_INDEX_FILENAME,
     build_arg_parser,
+    build_curriculum_from_files,
     build_reference_archive_from_files,
     coaching_endpoint,
+    curriculum_endpoint,
+    discover_curriculum_payloads,
     discover_reference_payloads,
     last_session_endpoint,
     last_session_window_endpoint,
@@ -29,6 +32,10 @@ from tools.tt_ingest.tt_normalize import TTNormalizeError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tt_sessions_page.json"
 LAST_SESSION_FIXTURE = Path(__file__).parent / "fixtures" / "tt_services_last_session.json"
+DYNAMIC_REFERENCE_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "tt_services_dynamic_reference.json"
+)
+ADVICE_FIXTURE = Path(__file__).parent / "fixtures" / "tt_services_advice.json"
 
 
 def _sessions() -> list[dict]:
@@ -46,6 +53,17 @@ def _bundle() -> dict:
         "segments": [
             {"segment": 1, "stories": [{"diagnosis": "Brake later", "time_loss": 0.12}]},
             {"segment": 2, "stories": [{"diagnosis": "Good corner", "time_loss": 0.0}]},
+        ],
+    }
+
+
+def _curriculum_bundle() -> dict:
+    return {
+        "reference_lap": json.loads(DYNAMIC_REFERENCE_FIXTURE.read_text(encoding="utf-8"))["lap"],
+        "dynamic_reference": ["ref-uid-002", "20220611194228"],
+        "advice_reference": ["fake-uid-001", "20260629005756", "theoreticalBestRef"],
+        "segments": [
+            {"segment": 3, "advice_raw": json.loads(ADVICE_FIXTURE.read_text(encoding="utf-8"))}
         ],
     }
 
@@ -247,6 +265,18 @@ def test_retain_coaching_indexes_endpoint_files(tmp_path) -> None:
     assert summary.indexed == file_index["file_count"] >= 2
 
 
+def test_reindex_lake_includes_curriculum_endpoint(tmp_path) -> None:
+    root = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    root.mkdir(parents=True)
+    (root / f"{curriculum_endpoint(5)}.json").write_text("{}", encoding="utf-8")
+
+    indexed = retain_sessions([], lake_base=tmp_path, generated_at="2026-06-30T00:00:00Z").indexed
+
+    file_index = json.loads((tmp_path / "journal" / "tt" / INDEX_FILENAME).read_text())
+    assert indexed == 1
+    assert file_index["files"][0]["endpoint"] == curriculum_endpoint(5)
+
+
 def test_retain_coaching_keys_on_given_session(tmp_path) -> None:
     # The lake key comes from the GIVEN session (game/car/track/session_key); a car object
     # (sessions-list shape) is unwrapped to its string id, never a dict-repr (#353 review).
@@ -408,6 +438,87 @@ def test_reference_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
 def test_reference_cli_requires_one_input_mode(tmp_path) -> None:
     with pytest.raises(SystemExit):
         main(["reference", "--output", str(tmp_path / "ref.json")])
+
+
+# --- harness curriculum (M-TT3) ---------------------------------------------------
+
+
+def test_build_curriculum_from_files_writes_artifact_and_pairs_session(tmp_path) -> None:
+    session_dir = tmp_path / "lake" / "assettoCorsa" / "car" / "track" / "20260629005756"
+    session_dir.mkdir(parents=True)
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = session_dir / f"{last_session_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+    output = session_dir / f"{curriculum_endpoint(5)}.json"
+
+    summary = build_curriculum_from_files(coaching_path, output=output, pretty=True)
+
+    curriculum = json.loads(output.read_text(encoding="utf-8"))
+    assert summary.objectives == 1
+    assert summary.total_time_loss_s == pytest.approx(0.001)
+    assert curriculum["session"]["session_key"] == "20260629005756"
+    assert curriculum["objectives"][0]["intent"] == "improve_rotation_to_apex"
+
+
+def test_build_curriculum_from_files_accepts_utf8_bom_json(tmp_path) -> None:
+    coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    output = tmp_path / f"{curriculum_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8-sig")
+
+    summary = build_curriculum_from_files(coaching_path, output=output)
+
+    assert summary.objectives == 1
+
+
+def test_build_curriculum_from_files_refuses_overwrite_input(tmp_path) -> None:
+    coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="must not overwrite retained input"):
+        build_curriculum_from_files(coaching_path, output=coaching_path, overwrite=True)
+
+
+def test_discover_curriculum_payloads_filters_lake(tmp_path) -> None:
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir.mkdir(parents=True)
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = session_dir / f"{last_session_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert discover_curriculum_payloads(lake_base=tmp_path, session_key="sess-1", lap=5) == (
+        coaching_path,
+        session_path,
+    )
+    with pytest.raises(TTNormalizeError, match="no retained coaching"):
+        discover_curriculum_payloads(lake_base=tmp_path, session_key="sess-2", lap=5)
+
+
+def test_curriculum_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
+    coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    output = tmp_path / "curriculum.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+
+    rc = main(
+        [
+            "curriculum",
+            "--coaching",
+            str(coaching_path),
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    assert output.exists()
+    assert "TT harness curriculum" in capsys.readouterr().out
+    assert json.loads(output.read_text(encoding="utf-8"))["summary"]["objectives"] == 1
+
+
+def test_curriculum_cli_requires_one_input_mode(tmp_path) -> None:
+    with pytest.raises(SystemExit):
+        main(["curriculum", "--output", str(tmp_path / "curriculum.json")])
 
 
 def test_parser_requires_subcommand() -> None:

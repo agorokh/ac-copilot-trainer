@@ -17,6 +17,7 @@ Pure functions only — fixture-tested, no network.
 from __future__ import annotations
 
 import math
+import re
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -26,8 +27,10 @@ from tools.ac_harness.reference_lap import DEFAULT_TRACK_LENGTH_M, build_archive
 
 INDEX_SCHEMA_VERSION = 1
 TT_REFERENCE_IMPORT_FORMAT = "track_titan_reference_v1"
+TT_CURRICULUM_FORMAT = "track_titan_harness_curriculum_v1"
 DEFAULT_REFERENCE_COVERAGE_THRESHOLD = 0.9
 DEFAULT_REFERENCE_MAX_SPLINE_GAP = 0.08
+DEFAULT_CURRICULUM_MIN_TIME_LOSS_S = 0.0
 
 #: ``lap_attributes`` keys we lift into the flat conditions block. Anything absent
 #: degrades to ``None`` rather than raising — retention must never drop a session.
@@ -515,3 +518,282 @@ def build_reference_archive(
         "format": TT_REFERENCE_IMPORT_FORMAT,
     }
     return record
+
+
+def _as_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _as_float_optional(value: Any) -> float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _as_int_optional(value: Any) -> int | None:
+    parsed = _as_float_optional(value)
+    return None if parsed is None else int(parsed)
+
+
+def _round_optional(value: float | None, digits: int = 3) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def _norm_pair(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    start = _as_float_optional(value[0])
+    end = _as_float_optional(value[1])
+    if start is None or end is None:
+        return None
+    if not 0.0 <= start <= 1.0 or not 0.0 <= end <= 1.0:
+        return None
+    lo, hi = (start, end) if start <= end else (end, start)
+    return {"start": round(lo, 6), "end": round(hi, 6)}
+
+
+def _slug(value: Any) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text[:48] or "objective"
+
+
+def _story_value(story: Mapping[str, Any], snake: str, camel: str | None = None) -> Any:
+    if snake in story:
+        return story.get(snake)
+    if camel and camel in story:
+        return story.get(camel)
+    return None
+
+
+def _story_time_loss(story: Mapping[str, Any]) -> float | None:
+    for key in ("time_loss", "timeLoss", "time_loss_shown", "timeLossShown", "timeLoss_shown"):
+        value = _as_float_optional(story.get(key))
+        if value is not None:
+            return value
+    vars_obj = _as_mapping(story.get("vars"))
+    return _as_float_optional(vars_obj.get("timeLoss"))
+
+
+def _story_skill(story: Mapping[str, Any]) -> str:
+    key = str(
+        _story_value(story, "diagnosis_key", "diagnosisKey")
+        or _story_value(story, "phase_mistake")
+        or _story_value(story, "diagnosis")
+        or ""
+    ).lower()
+    if "brak" in key:
+        return "braking"
+    if any(token in key for token in ("throttle", "power", "fte", "exit")):
+        return "throttle_commitment"
+    if any(token in key for token in ("rotation", "steer", "line", "nfta")):
+        return "rotation"
+    if "apex" in key:
+        return "apex_speed"
+    return "technique"
+
+
+def _harness_intent(skill: str) -> str:
+    return {
+        "braking": "brake_to_reference",
+        "throttle_commitment": "earlier_power_application",
+        "rotation": "improve_rotation_to_apex",
+        "apex_speed": "raise_apex_speed",
+    }.get(skill, "reduce_corner_time_loss")
+
+
+def _segment_time_map(raw: Any) -> dict[int, float]:
+    out: dict[int, float] = {}
+    if isinstance(raw, Mapping):
+        for key, value in raw.items():
+            segment = _as_int_optional(key)
+            item = _as_mapping(value)
+            time_ms = _as_float_optional(item.get("segment_time") if item else value)
+            if segment is not None and time_ms is not None:
+                out[segment] = time_ms
+        return out
+    if isinstance(raw, list):
+        for item_raw in raw:
+            item = _as_mapping(item_raw)
+            segment = _as_int_optional(
+                item.get("segment_number") or item.get("segment") or item.get("number")
+            )
+            time_ms = _as_float_optional(item.get("segment_time") or item.get("time"))
+            if segment is not None and time_ms is not None:
+                out[segment] = time_ms
+    return out
+
+
+def _merged_advice_stories(segment: Mapping[str, Any]) -> list[dict[str, Any]]:
+    parsed = segment.get("stories")
+    parsed_items = [s for s in parsed if isinstance(s, Mapping)] if isinstance(parsed, list) else []
+    raw_items: list[Mapping[str, Any]] = []
+    raw = segment.get("advice_raw")
+    if isinstance(raw, Mapping):
+        data = _services_data(raw)
+        stories = data.get("stories")
+        if isinstance(stories, list):
+            raw_items = [s for s in stories if isinstance(s, Mapping)]
+    count = max(len(parsed_items), len(raw_items))
+    out: list[dict[str, Any]] = []
+    for index in range(count):
+        merged: dict[str, Any] = {}
+        if index < len(raw_items):
+            merged.update(dict(raw_items[index]))
+        if index < len(parsed_items):
+            merged.update(dict(parsed_items[index]))
+        out.append(merged)
+    return out
+
+
+def _curriculum_session_metadata(session_payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    payload = _as_mapping(session_payload)
+    session = _payload_session(payload) if payload else {}
+    if not session and payload:
+        session = payload
+    attrs = session.get("attributes")
+    if not isinstance(attrs, Mapping):
+        attrs = session.get("lap_attributes")
+    attrs = attrs if isinstance(attrs, Mapping) else {}
+    uid, split_key = split_session_id(str(session.get("id") or session.get("session_id") or ""))
+    lap_ms = _positive_int_ms(
+        session.get("lap_time") or session.get("lapTime") or session.get("bestLapTime"),
+        "session.lap_time",
+    )
+    return {
+        "uid": uid or _identity_value(session.get("user_id")),
+        "session_key": _session_key(session) or split_key,
+        "lap_number": _identity_value(session.get("lap_number")),
+        "lap_time_ms": lap_ms,
+        "game_id": _identity_value(session.get("game_id")),
+        "car_id": _resolve_car_id(session),
+        "track_id": _identity_value(session.get("track_id")),
+        "setup_name": _identity_value(attrs.get("carSetupName")),
+        "tyre_compound": _identity_value(attrs.get("tyreCompound")),
+    }
+
+
+def _curriculum_reference_metadata(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    lap = _as_mapping(bundle.get("reference_lap"))
+    lap_ms = _positive_int_ms(lap.get("lap_time"), "reference_lap.lap_time")
+    dynamic_ref = bundle.get("dynamic_reference")
+    advice_ref = bundle.get("advice_reference")
+    return {
+        "user_id": _identity_value(lap.get("user_id")),
+        "session_key": _identity_value(lap.get("session_key")),
+        "lap_number": _identity_value(lap.get("lap_number")),
+        "lap_time_ms": lap_ms,
+        "username": _identity_value(lap.get("username")),
+        "dynamic_reference": list(dynamic_ref) if isinstance(dynamic_ref, list) else None,
+        "advice_reference": list(advice_ref) if isinstance(advice_ref, list) else None,
+    }
+
+
+def build_harness_curriculum(
+    coaching_bundle: Mapping[str, Any],
+    *,
+    session_payload: Mapping[str, Any] | None = None,
+    min_time_loss_s: float = DEFAULT_CURRICULUM_MIN_TIME_LOSS_S,
+    exported_at: str | None = None,
+) -> dict[str, Any]:
+    """Project retained TT per-corner advice into a harness-consumable curriculum.
+
+    The output is deliberately a derived artifact, not a replacement for the retained raw
+    services evidence. It keeps Track Titan's diagnosis keys, phase/highlight spans, time
+    loss, and reference segment timing so the autonomous harness can pick concrete
+    drive-to-reference objectives without reparsing the API envelope.
+    """
+    if not isinstance(coaching_bundle, Mapping):
+        raise TTNormalizeError("Track Titan coaching bundle must be a JSON object")
+    segments = coaching_bundle.get("segments")
+    if not isinstance(segments, list):
+        raise TTNormalizeError("Track Titan coaching bundle missing segments list")
+    min_loss = max(0.0, float(min_time_loss_s))
+    reference_lap = _as_mapping(coaching_bundle.get("reference_lap"))
+    reference_times = _segment_time_map(reference_lap.get("segments"))
+    session = _payload_session(session_payload or {}) if session_payload else {}
+    user_times = _segment_time_map(session.get("segments"))
+
+    objectives: list[dict[str, Any]] = []
+    for segment_obj in segments:
+        segment = _as_mapping(segment_obj)
+        segment_number = _as_int_optional(segment.get("segment"))
+        if segment_number is None:
+            continue
+        for story_index, story in enumerate(_merged_advice_stories(segment), start=1):
+            time_loss_s = _story_time_loss(story)
+            if time_loss_s is None or time_loss_s <= min_loss:
+                continue
+            skill = _story_skill(story)
+            intent = _harness_intent(skill)
+            diagnosis_key = _identity_value(_story_value(story, "diagnosis_key", "diagnosisKey"))
+            consequence_key = _identity_value(
+                _story_value(story, "consequence_key", "consequenceKey")
+            )
+            highlight = _norm_pair(story.get("highlight")) or _norm_pair(
+                story.get("phase_dists_norm")
+            )
+            ref_ms = reference_times.get(segment_number)
+            user_ms = user_times.get(segment_number)
+            delta_ms = user_ms - ref_ms if user_ms is not None and ref_ms is not None else None
+            vars_obj = _as_mapping(story.get("vars"))
+            objective = {
+                "id": f"tt-c{segment_number:02d}-{_slug(diagnosis_key or skill)}-{story_index}",
+                "priority": 0,
+                "corner": segment_number,
+                "segment": segment_number,
+                "skill": skill,
+                "intent": intent,
+                "time_loss_s": round(time_loss_s, 3),
+                "diagnosis": _identity_value(_story_value(story, "diagnosis")) or "",
+                "consequence": _identity_value(_story_value(story, "consequence")) or "",
+                "diagnosis_key": diagnosis_key,
+                "consequence_key": consequence_key,
+                "phase": _identity_value(_story_value(story, "phase_mistake")),
+                "highlight_norm": highlight,
+                "targets": {
+                    "reference_segment_time_ms": _round_optional(ref_ms, 3),
+                    "driver_segment_time_ms": _round_optional(user_ms, 3),
+                    "segment_delta_ms": _round_optional(delta_ms, 3),
+                },
+                "harness": {
+                    "objective": intent,
+                    "focus_window_norm": highlight,
+                    "acceptance": {
+                        "metric": "track_titan_time_loss_s",
+                        "baseline_s": round(time_loss_s, 3),
+                        "target": "reduce_or_clear",
+                    },
+                },
+                "evidence": {
+                    "source": "track_titan_services_advice",
+                    "vars": dict(vars_obj) if vars_obj else None,
+                },
+            }
+            objectives.append(objective)
+
+    objectives.sort(key=lambda row: (-float(row["time_loss_s"]), int(row["segment"]), row["id"]))
+    for priority, objective in enumerate(objectives, start=1):
+        objective["priority"] = priority
+
+    total_loss = round(sum(float(row["time_loss_s"]) for row in objectives), 3)
+    return {
+        "schema_version": 1,
+        "format": TT_CURRICULUM_FORMAT,
+        "source": "track_titan_services",
+        "generated_at": exported_at,
+        "issue": 353,
+        "session": _curriculum_session_metadata(session_payload),
+        "reference": _curriculum_reference_metadata(coaching_bundle),
+        "summary": {
+            "segments": len(segments),
+            "objectives": len(objectives),
+            "total_time_loss_s": total_loss,
+            "primary_objective_id": objectives[0]["id"] if objectives else None,
+        },
+        "objectives": objectives,
+    }
