@@ -412,6 +412,19 @@ def test_build_harness_curriculum_filters_non_actionable_stories() -> None:
     assert curriculum["summary"]["objectives"] == 0
 
 
+def test_build_harness_curriculum_rejects_fractional_segment_numbers() -> None:
+    bundle = _curriculum_bundle()
+    bundle["segments"][0]["segment"] = "3.9"
+
+    curriculum = build_harness_curriculum(
+        bundle,
+        session_payload=_load_fixture("tt_services_last_session.json"),
+    )
+
+    assert curriculum["objectives"] == []
+    assert curriculum["summary"]["objectives"] == 0
+
+
 def test_build_harness_curriculum_falls_back_when_advice_raw_is_malformed() -> None:
     bundle = _curriculum_bundle()
     bundle["segments"][0] = {

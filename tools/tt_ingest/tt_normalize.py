@@ -536,7 +536,9 @@ def _as_float_optional(value: Any) -> float | None:
 
 def _as_int_optional(value: Any) -> int | None:
     parsed = _as_float_optional(value)
-    return None if parsed is None else int(parsed)
+    if parsed is None or not parsed.is_integer():
+        return None
+    return int(parsed)
 
 
 def _round_optional(value: float | None, digits: int = 3) -> float | None:
