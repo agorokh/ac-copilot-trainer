@@ -16,7 +16,7 @@ WINDOWS_MAX_ARG_CHARS = 4_000
 WINDOWS_COMMAND_HEADROOM = 128
 _HASH_RE = re.compile(r"^[0-9a-f]{40}$")
 _RAW_SECRET_KEYS = frozenset({"secret", "secret_value", "raw_secret", "value"})
-BASELINE_METADATA_EXCLUDE_LINES = r'^\s*"(hashed_secret|type)"\s*:'
+BASELINE_HASH_EXCLUDE_LINES = r'^\s*"hashed_secret"\s*:\s*"[0-9a-f]{40}",?\s*$'
 
 
 def _repo_root() -> Path:
@@ -118,6 +118,16 @@ def _audit_baseline(baseline: Path) -> list[str]:
             hashed = finding.get("hashed_secret")
             if not isinstance(hashed, str) or _HASH_RE.fullmatch(hashed) is None:
                 errors.append(f"{label} missing 40-character hashed_secret")
+            finding_type = finding.get("type")
+            if not isinstance(finding_type, str) or not finding_type.strip():
+                errors.append(f"{label} missing non-empty type")
+            line_number = finding.get("line_number")
+            if line_number is not None and (
+                isinstance(line_number, bool)
+                or not isinstance(line_number, int)
+                or line_number <= 0
+            ):
+                errors.append(f"{label} line_number must be a positive integer")
             if finding.get("filename") != filename:
                 errors.append(f"{label} filename does not match its results key")
     return errors
@@ -152,7 +162,7 @@ def _scan_baseline_file(root: Path, baseline: Path) -> int:
         root,
         baseline,
         [".secrets.baseline"],
-        exclude_lines=BASELINE_METADATA_EXCLUDE_LINES,
+        exclude_lines=BASELINE_HASH_EXCLUDE_LINES,
     )
 
 

@@ -143,6 +143,8 @@ def test_audit_baseline_rejects_raw_or_malformed_findings(tmp_path: Path) -> Non
                             "filename": "src/app.py",
                             hashed_key: "not-a-sha1",
                             raw_key: "plain-text-fixture",
+                            "type": "",
+                            "line_number": 0,
                         }
                     ]
                 }
@@ -155,9 +157,11 @@ def test_audit_baseline_rejects_raw_or_malformed_findings(tmp_path: Path) -> Non
 
     assert any("raw secret" in error for error in errors)
     assert any("hashed_secret" in error for error in errors)
+    assert any("type" in error for error in errors)
+    assert any("line_number" in error for error in errors)
 
 
-def test_scan_baseline_file_uses_real_path_with_metadata_exclusion(
+def test_scan_baseline_file_uses_real_path_with_hash_only_metadata_exclusion(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -186,6 +190,7 @@ def test_scan_baseline_file_uses_real_path_with_metadata_exclusion(
             tmp_path,
             baseline,
             [".secrets.baseline"],
-            policy_tracked_files.BASELINE_METADATA_EXCLUDE_LINES,
+            policy_tracked_files.BASELINE_HASH_EXCLUDE_LINES,
         )
     ]
+    assert "type" not in policy_tracked_files.BASELINE_HASH_EXCLUDE_LINES

@@ -74,6 +74,19 @@ def test_plural_lockup_complaints_stay_on_braking_rules() -> None:
     assert out["suggestions"][0]["section"] == "FRONT_BIAS"
 
 
+def test_lockup_kerb_complaints_stay_on_braking_rules() -> None:
+    out = advise_from_complaint(
+        "front locks over kerb under braking",
+        setup_snapshot=GT3_SNAPSHOT,
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is True
+    assert out["parsed"]["issue"] == "lockup_front"
+    assert out["parsed"]["phase"] == "braking"
+    assert out["suggestions"][0]["section"] == "FRONT_BIAS"
+
+
 def test_high_speed_understeer_prefers_aero_lever() -> None:
     out = advise_from_complaint(
         "high speed understeer mid corner",

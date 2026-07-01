@@ -289,6 +289,8 @@ def test_load_latest_schema_rejects_unsafe_car_id(tmp_path: Path) -> None:
     assert load_latest_schema("../escape", schema_dir=root) is None
     assert load_latest_schema("ks/porsche", schema_dir=root) is None
     assert load_latest_schema("ks_porsche..911", schema_dir=root) is None
+    assert load_latest_schema(".", schema_dir=root) is None
+    assert load_latest_schema("---", schema_dir=root) is None
 
 
 def test_from_spinners_captures_ranges() -> None:

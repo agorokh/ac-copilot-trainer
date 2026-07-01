@@ -248,10 +248,10 @@ def _parse_issue(text: str) -> str | None:
 
 def _parse_phase(text: str, issue: str | None) -> str:
     words = _tokens(text)
-    if {"kerb", "curb", "bump", "bumpy"} & words:
-        return "kerb"
     if issue in {"lockup", "lockup_front", "lockup_rear"}:
         return "braking"
+    if {"kerb", "curb", "bump", "bumpy"} & words:
+        return "kerb"
     if {"exit", "power", "throttle", "traction"} & words or _has_phrase(text, "corner exit"):
         return "exit"
     if {"mid", "apex", "middle", "center", "centre"} & words or _has_phrase(text, "mid corner"):

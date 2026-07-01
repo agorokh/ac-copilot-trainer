@@ -55,7 +55,12 @@ def _safe_schema_car_id(car_id: str | None) -> str | None:
     if not car_id:
         return None
     text = car_id.strip()
-    if not text or ".." in text or not _SAFE_SCHEMA_CAR_ID.fullmatch(text):
+    if (
+        not text
+        or ".." in text
+        or not any(char.isalnum() for char in text)
+        or not _SAFE_SCHEMA_CAR_ID.fullmatch(text)
+    ):
         return None
     return text
 
