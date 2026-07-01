@@ -42,6 +42,26 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+# The intensity-``register`` ladder is the SHARED domain of the observer (producer) and this
+# vocabulary (consumer); it lives in the dependency-free :mod:`tools.ai_sidecar.registers` so both
+# sides import the same constants instead of re-declaring them (issue #381). Re-exported here so
+# existing importers (scheduler, client, cue, resolver, manifest, tests) keep using ``vocabulary``.
+from tools.ai_sidecar.registers import (
+    REGISTER_ALIASES,
+    REGISTER_RANK,
+    REGISTERS,
+    normalize_register,
+    register_rank,
+)
+
+__all__ = [
+    "REGISTER_ALIASES",
+    "REGISTER_RANK",
+    "REGISTERS",
+    "normalize_register",
+    "register_rank",
+]
+
 #: Advisory ``kind`` values this vocabulary covers (mirrors ``realtime_observer.Advisory.kind``).
 #: The braking cluster (issue #368 "braking first" slice): the anticipatory late-brake cue, the
 #: over-braking release cue, and the (text-HUD) apex-deficit verdict. Every kind here is actually
@@ -72,16 +92,8 @@ KINDS: tuple[str, ...] = (
 #: SCHEDULING only (priority / barge-in / verbosity), never tone.
 URGENCIES: tuple[str, ...] = ("info", "prepare", "act")
 
-#: Intensity tiers, low -> high (issue #381). Drives the baked *tone* of a clip, never scheduling.
-#: ``calm`` = measured heads-up; ``alert`` = clear attention cue; ``urgent`` = act-now correction;
-#: ``critical`` = alarm. The observer quantizes a continuous severity scalar to one of these with
-#: hysteresis (:func:`tools.ai_sidecar.realtime_observer`), and the resolver keys the manifest on
-#: it.
-REGISTERS: tuple[str, ...] = ("calm", "alert", "urgent", "critical")
-
-#: Backward-compatible input aliases for advisory producers and older tests/log replays. New banks
-#: bake ``urgent``; legacy ``firm`` advisories resolve to that tier instead of going silent.
-REGISTER_ALIASES: dict[str, str] = {"firm": "urgent"}
+# Intensity tiers (``REGISTERS``) and the legacy ``firm`` alias now live in
+# :mod:`tools.ai_sidecar.registers` and are re-exported at the top of this module.
 
 #: Original/licensed persona metadata folded into every backend ``voice_signature``. This explicitly
 #: documents that the distributed voice is a project-authored race-engineer style, not a real driver
@@ -89,25 +101,6 @@ REGISTER_ALIASES: dict[str, str] = {"firm": "urgent"}
 VOICE_PERSONA_ID = "race-engineer-original-v1"
 VOICE_PERSONA_LICENSE = "project-authored; no unconsented real-person clone"
 INTENSITY_CHAIN_VERSION = 2
-
-
-def normalize_register(register: object) -> str:
-    """Return the canonical intensity tier for ``register``.
-
-    ``firm`` is accepted as a legacy alias for ``urgent`` so old advisory logs and producers keep
-    speaking after the #381 vocabulary change. Unknown values are returned unchanged; callers still
-    validate against :data:`REGISTERS`.
-    """
-    raw = str(register)
-    return REGISTER_ALIASES.get(raw, raw)
-
-
-REGISTER_RANK: dict[str, int] = {register: rank for rank, register in enumerate(REGISTERS)}
-
-
-def register_rank(register: object, default: int = 0) -> int:
-    """Ordering helper for intensity comparisons, accepting legacy aliases."""
-    return REGISTER_RANK.get(normalize_register(register), default)
 
 
 #: Universal corner numbers we bake (1-based, as spoken). T21+ degrades to the generic clip.

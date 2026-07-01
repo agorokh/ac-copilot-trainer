@@ -191,7 +191,7 @@ class ToneBackend:
 
     Not speech; a smoke/verification voice that proves the bake + manifest + playback plumbing with
     zero third-party deps and **no ffmpeg** (stdlib ``wave`` only), so it runs in CI. Frequency and
-    duration derive from a stable hash of the text PLUS a per-register shift, so the three registers
+    duration derive from a stable hash of the text PLUS a per-register shift, so the four registers
     for one cue are **measurably distinct** (critical is higher-pitched and shorter than calm) and
     the bank is byte-reproducible across runs — CI exercises the register dimension end-to-end.
     """

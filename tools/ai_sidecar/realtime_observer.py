@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from tools.ai_sidecar.lap_dynamics import LapTrace, lap_trace_from_archive
+from tools.ai_sidecar.registers import REGISTER_RANK, normalize_register
 from tools.ai_sidecar.track_reference import (
     CornerReference,
     add_corpus_lap,
@@ -93,8 +94,8 @@ def _register_for(s: float, prev: str, *, cap: str = "critical") -> str:
     ``cap`` clamps the result for cues whose tone must not reach the top tier (e.g. a slow-loss cue
     that should never sound like an alarm).
     """
-    prev = "urgent" if prev == "firm" else prev
-    cap = "urgent" if cap == "firm" else cap
+    prev = normalize_register(prev)
+    cap = normalize_register(cap)
     cap_rank = REGISTER_RANK.get(cap, REGISTER_RANK["critical"])
     prev_rank = REGISTER_RANK.get(prev, 0)
     if s >= _REG_CRIT_RISE or (prev_rank >= REGISTER_RANK["critical"] and s >= _REG_CRIT_FALL):
@@ -110,8 +111,6 @@ def _register_for(s: float, prev: str, *, cap: str = "critical") -> str:
     return out
 
 
-#: Register ordering (low → high) for the cap/hysteresis comparisons above.
-REGISTER_RANK: dict[str, int] = {"calm": 0, "alert": 1, "urgent": 2, "critical": 3}
 #: urgency a given register rides on: a calm heads-up is anticipatory (``prepare``);
 #: alert/urgent/critical correction must be acted on now (``act``). Keeps tone and scheduling
 #: correlated but distinct — the scheduler still arbitrates on urgency alone.
