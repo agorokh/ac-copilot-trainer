@@ -265,7 +265,7 @@ def test_retain_coaching_indexes_endpoint_files(tmp_path) -> None:
     assert summary.indexed == file_index["file_count"] >= 2
 
 
-def test_reindex_lake_includes_curriculum_endpoint(tmp_path) -> None:
+def test_reindex_lake_excludes_curriculum_endpoint(tmp_path) -> None:
     root = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
     root.mkdir(parents=True)
     (root / f"{curriculum_endpoint(5)}.json").write_text("{}", encoding="utf-8")
@@ -273,8 +273,8 @@ def test_reindex_lake_includes_curriculum_endpoint(tmp_path) -> None:
     indexed = retain_sessions([], lake_base=tmp_path, generated_at="2026-06-30T00:00:00Z").indexed
 
     file_index = json.loads((tmp_path / "journal" / "tt" / INDEX_FILENAME).read_text())
-    assert indexed == 1
-    assert file_index["files"][0]["endpoint"] == curriculum_endpoint(5)
+    assert indexed == 0
+    assert file_index["files"] == []
 
 
 def test_retain_coaching_keys_on_given_session(tmp_path) -> None:
@@ -463,8 +463,10 @@ def test_build_curriculum_from_files_writes_artifact_and_pairs_session(tmp_path)
 
 def test_build_curriculum_from_files_accepts_utf8_bom_json(tmp_path) -> None:
     coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    session_path = tmp_path / f"{last_session_endpoint(5)}.json"
     output = tmp_path / f"{curriculum_endpoint(5)}.json"
     coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8-sig")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
 
     summary = build_curriculum_from_files(coaching_path, output=output)
 
@@ -473,10 +475,37 @@ def test_build_curriculum_from_files_accepts_utf8_bom_json(tmp_path) -> None:
 
 def test_build_curriculum_from_files_refuses_overwrite_input(tmp_path) -> None:
     coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    session_path = tmp_path / f"{last_session_endpoint(5)}.json"
     coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
 
     with pytest.raises(TTNormalizeError, match="must not overwrite retained input"):
         build_curriculum_from_files(coaching_path, output=coaching_path, overwrite=True)
+
+
+def test_build_curriculum_from_files_requires_session_payload(tmp_path) -> None:
+    coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="no paired last-session payload"):
+        build_curriculum_from_files(
+            coaching_path, output=tmp_path / f"{curriculum_endpoint(5)}.json"
+        )
+
+
+def test_build_curriculum_from_files_rejects_unapproved_output_root(tmp_path) -> None:
+    session_dir = tmp_path / "lake" / "assettoCorsa" / "car" / "track" / "sess-1"
+    other_dir = tmp_path / "elsewhere"
+    session_dir.mkdir(parents=True)
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = session_dir / f"{last_session_endpoint(5)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(TTNormalizeError, match="curriculum output must stay"):
+        build_curriculum_from_files(
+            coaching_path, output=other_dir / f"{curriculum_endpoint(5)}.json"
+        )
 
 
 def test_discover_curriculum_payloads_filters_lake(tmp_path) -> None:
@@ -495,10 +524,27 @@ def test_discover_curriculum_payloads_filters_lake(tmp_path) -> None:
         discover_curriculum_payloads(lake_base=tmp_path, session_key="sess-2", lap=5)
 
 
+def test_discover_curriculum_payloads_pairs_window_when_base_missing(tmp_path) -> None:
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir.mkdir(parents=True)
+    raw = json.loads(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"))
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = session_dir / f"{last_session_window_endpoint(5, raw)}.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    assert discover_curriculum_payloads(lake_base=tmp_path, session_key="sess-1", lap=5) == (
+        coaching_path,
+        session_path,
+    )
+
+
 def test_curriculum_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
     coaching_path = tmp_path / f"{coaching_endpoint(5)}.json"
+    session_path = tmp_path / f"{last_session_endpoint(5)}.json"
     output = tmp_path / "curriculum.json"
     coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
 
     rc = main(
         [

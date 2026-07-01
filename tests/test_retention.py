@@ -163,10 +163,12 @@ def test_tt_retention_excludes_indexes_and_honors_pins(tmp_path: Path) -> None:
     raw_dir.mkdir(parents=True)
     delete_me = raw_dir / "session.json"
     keep_me = raw_dir / "coaching_lap1.json"
+    curriculum = raw_dir / "curriculum_lap1.json"
     index = tt / "index.json"
     sessions_index = tt / "sessions_index.json"
     delete_me.write_text('{"raw":1}', encoding="utf-8")
     keep_me.write_text('{"raw":2}', encoding="utf-8")
+    curriculum.write_text('{"derived":true}', encoding="utf-8")
     keep_me.with_suffix(".pin").write_text("manual", encoding="utf-8")
     index.write_text('{"derived":true}', encoding="utf-8")
     sessions_index.write_text('{"derived":true}', encoding="utf-8")
@@ -183,9 +185,11 @@ def test_tt_retention_excludes_indexes_and_honors_pins(tmp_path: Path) -> None:
 
     assert [item.path for item in plan.delete] == [delete_me]
     assert index not in {item.path for item in plan.items}
+    assert curriculum not in {item.path for item in plan.items}
     result = apply_retention(plan)
     assert result.invalidated_indexes == 2
     assert not delete_me.exists()
     assert keep_me.exists()
+    assert curriculum.exists()
     assert not index.exists()
     assert not sessions_index.exists()

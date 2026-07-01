@@ -634,7 +634,10 @@ def _merged_advice_stories(segment: Mapping[str, Any]) -> list[dict[str, Any]]:
     raw_items: list[Mapping[str, Any]] = []
     raw = segment.get("advice_raw")
     if isinstance(raw, Mapping):
-        data = _services_data(raw)
+        try:
+            data = _services_data(raw)
+        except TTNormalizeError:
+            data = {}
         stories = data.get("stories")
         if isinstance(stories, list):
             raw_items = [s for s in stories if isinstance(s, Mapping)]

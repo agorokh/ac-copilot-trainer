@@ -385,3 +385,26 @@ def test_build_harness_curriculum_filters_non_actionable_stories() -> None:
 
     assert curriculum["objectives"] == []
     assert curriculum["summary"]["objectives"] == 0
+
+
+def test_build_harness_curriculum_falls_back_when_advice_raw_is_malformed() -> None:
+    bundle = _curriculum_bundle()
+    bundle["segments"][0] = {
+        "segment": 3,
+        "advice_raw": {"success": True, "data": []},
+        "stories": [
+            {
+                "diagnosis": "Turn in earlier",
+                "diagnosis_key": "coaching.diagnosis.rotation_insufficient",
+                "time_loss": 0.2,
+            }
+        ],
+    }
+
+    curriculum = build_harness_curriculum(
+        bundle,
+        session_payload=_load_fixture("tt_services_last_session.json"),
+    )
+
+    assert curriculum["summary"]["objectives"] == 1
+    assert curriculum["objectives"][0]["time_loss_s"] == pytest.approx(0.2)

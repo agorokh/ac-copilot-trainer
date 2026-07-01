@@ -19,6 +19,7 @@ from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
 from tools.lap_archive_export import LapArchiveExportError, iter_lap_archive_paths, load_lap_archive
 
 DERIVED_TT_INDEXES = frozenset({"index.json", "sessions_index.json"})
+DERIVED_TT_PATTERNS = ("curriculum_lap*.json",)
 
 
 @dataclass(frozen=True)
@@ -192,7 +193,9 @@ def _tt_raw_paths(tt_dir: Path) -> Iterable[Path]:
     return (
         path
         for path in sorted(tt_dir.rglob("*.json"))
-        if path.is_file() and path.name not in DERIVED_TT_INDEXES
+        if path.is_file()
+        and path.name not in DERIVED_TT_INDEXES
+        and not any(path.match(pattern) for pattern in DERIVED_TT_PATTERNS)
     )
 
 

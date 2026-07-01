@@ -34,6 +34,7 @@ from tools.tt_ingest.tt_export import (
     endpoint_file,
     lake_root,
     relative_to_lake,
+    sanitize_segment,
     session_lake_dir,
     sha256_hex,
     stable_fingerprint,
@@ -132,7 +133,6 @@ INDEXED_ENDPOINT_GLOBS = (
     f"{RAW_SESSION_ENDPOINT}.json",
     LAST_SESSION_ENDPOINT_GLOB,
     COACHING_ENDPOINT_GLOB,
-    CURRICULUM_ENDPOINT_GLOB,
 )
 
 
@@ -437,8 +437,27 @@ def _paired_last_session_path(coaching_path: Path) -> Path | None:
     lap = _lap_from_coaching_path(coaching_path)
     if not lap:
         return None
-    candidate = coaching_path.with_name(f"{last_session_endpoint(lap)}.json")
-    return candidate if candidate.exists() else None
+    base = coaching_path.with_name(f"{last_session_endpoint(lap)}.json")
+    if base.exists() and base.is_file() and not base.is_symlink():
+        return base
+    candidates = [
+        path
+        for path in coaching_path.parent.glob(f"{LAST_SESSION_ENDPOINT_PREFIX}*.json")
+        if path.is_file()
+        and not path.is_symlink()
+        and _last_session_endpoint_matches_lap(path.stem, lap)
+    ]
+    if not candidates:
+        return None
+
+    def sort_key(path: Path) -> tuple[float, str]:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (mtime, path.name)
+
+    return max(candidates, key=sort_key)
 
 
 def discover_reference_payloads(
@@ -478,20 +497,20 @@ def discover_curriculum_payloads(
     lake_base: Path | None = None,
     session_key: str | None = None,
     lap: str | int | None = None,
-) -> tuple[Path, Path | None]:
+) -> tuple[Path, Path]:
     """Discover the retained coaching bundle and paired last-session payload for M-TT3."""
     if not session_key or lap is None:
         raise TTNormalizeError("--discover-lake requires both --session-key and --lap")
     root = lake_root(lake_base)
     if not root.exists():
         raise TTNormalizeError(f"Track Titan lake not found: {root}")
-    matches: list[Path] = []
     target_name = f"{coaching_endpoint(lap)}.json"
-    for path in sorted(root.rglob(target_name)):
+    session_leaf = sanitize_segment(session_key, fallback="unknown_session")
+    matches: list[Path] = []
+    for path in sorted(root.glob(f"*/*/*/{session_leaf}/{target_name}")):
         if path.is_symlink() or not path.is_file():
             continue
-        if path.parent.name == str(session_key):
-            matches.append(path)
+        matches.append(path)
     if not matches:
         raise TTNormalizeError(
             f"no retained coaching payload found under {root} "
@@ -503,7 +522,36 @@ def discover_curriculum_payloads(
             f"multiple retained coaching payloads matched session_key={session_key}, "
             f"lap={lap}: {rel}"
         )
-    return matches[0], _paired_last_session_path(matches[0])
+    session_path = _paired_last_session_path(matches[0])
+    if session_path is None:
+        raise TTNormalizeError(
+            f"no paired last-session payload found for {matches[0]} (pass --session)"
+        )
+    return matches[0], session_path
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_curriculum_output_path(output: Path, *, coaching_path: Path) -> Path:
+    raw = output
+    base_dir = Path.cwd().resolve()
+    resolved = output.resolve() if output.is_absolute() else (base_dir / output).resolve()
+    coaching_dir = coaching_path.resolve().parent
+    approved_roots = (
+        base_dir / ".scratch",
+        base_dir / "journal",
+        coaching_dir,
+    )
+    if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
+        roots = ".scratch/, journal/, or the retained input directory"
+        raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
+    return resolved
 
 
 def build_reference_archive_from_files(
@@ -563,15 +611,19 @@ def build_curriculum_from_files(
     pretty: bool = False,
 ) -> CurriculumSummary:
     """Build and write a TT harness curriculum from retained coaching evidence."""
-    resolved_output = output.resolve()
+    resolved_output = _resolve_curriculum_output_path(output, coaching_path=coaching_path)
     inputs = [coaching_path]
     paired_session_path = session_path or _paired_last_session_path(coaching_path)
+    if paired_session_path is None:
+        raise TTNormalizeError(
+            f"no paired last-session payload found for {coaching_path} (pass --session)"
+        )
     if paired_session_path is not None:
         inputs.append(paired_session_path)
     for path in inputs:
         if resolved_output == path.resolve():
             raise TTNormalizeError(f"output must not overwrite retained input: {output}")
-    if output.exists() and not overwrite:
+    if resolved_output.exists() and not overwrite:
         raise TTNormalizeError(f"output already exists (pass --overwrite): {output}")
     coaching = _load_json_file(coaching_path)
     session_payload = _load_json_file(paired_session_path) if paired_session_path else None
@@ -585,13 +637,13 @@ def build_curriculum_from_files(
     else:
         text = json.dumps(curriculum, separators=(",", ":"), sort_keys=True) + "\n"
     try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(text, encoding="utf-8")
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        resolved_output.write_text(text, encoding="utf-8")
     except OSError as exc:
         raise TTNormalizeError(f"could not write {output}: {exc}") from exc
     summary = curriculum["summary"]
     return CurriculumSummary(
-        output=output,
+        output=resolved_output,
         objectives=int(summary["objectives"]),
         total_time_loss_s=float(summary["total_time_loss_s"]),
         source=coaching_path,
