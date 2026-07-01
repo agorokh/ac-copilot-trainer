@@ -221,7 +221,6 @@ def main(argv: list[str] | None = None) -> int:
 def run_gui(supervisor: GamePointSupervisor) -> int:
     try:
         import tkinter as tk
-        from tkinter import ttk
 
         root = tk.Tk()
     except Exception as exc:  # noqa: BLE001 - fall back to visible CLI status
@@ -230,27 +229,18 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         print("\n".join(render_status_lines(status)))
         return 1 if not status.ok else 0
 
+    from tools.rig_launcher.view import build_launcher_view
+
     root.title("AC Copilot Game Point")
-    root.geometry("620x360")
-    root.minsize(560, 320)
-
-    frame = ttk.Frame(root, padding=16)
-    frame.pack(fill="both", expand=True)
-    header = ttk.Label(frame, text="AC Copilot Game Point", font=("", 16, "bold"))
-    header.pack(anchor="w")
-    status_var = tk.StringVar(value="Starting")
-    status_label = ttk.Label(frame, textvariable=status_var, justify="left")
-    status_label.pack(anchor="w", fill="x", pady=(12, 8))
-
-    button_row = ttk.Frame(frame)
-    button_row.pack(anchor="w", pady=(8, 0))
+    root.geometry("660x440")
+    root.minsize(620, 400)
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
 
     def refresh() -> None:
         status = supervisor.poll_status()
         last_status["status"] = status
-        status_var.set("\n".join(render_status_lines(status)))
+        view.update(status)
 
     def start() -> None:
         supervisor.start_sidecar()
@@ -287,13 +277,18 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         except Exception as exc:  # noqa: BLE001 - surface file/UI errors in the launcher
             messagebox.showerror("Setup Diff", str(exc), parent=root)
 
-    ttk.Button(button_row, text="Start", command=start).pack(side="left", padx=(0, 8))
-    ttk.Button(button_row, text="Refresh", command=refresh).pack(side="left", padx=(0, 8))
-    ttk.Button(button_row, text="Logs", command=open_logs).pack(side="left", padx=(0, 8))
-    ttk.Button(button_row, text="Settings", command=open_settings).pack(side="left", padx=(0, 8))
-    ttk.Button(button_row, text="Setup Diff", command=open_setup_diff).pack(side="left")
-    ttk.Label(frame, text=f"Status: {supervisor.paths.status_path}").pack(anchor="w", pady=(16, 0))
-
+    view = build_launcher_view(
+        root,
+        actions={
+            "start": start,
+            "refresh": refresh,
+            "logs": open_logs,
+            "settings": open_settings,
+            "setup_diff": open_setup_diff,
+        },
+        status_path=str(supervisor.paths.status_path),
+        port=supervisor.config.port,
+    )
     refresh()
     root.mainloop()
     status = last_status["status"]
