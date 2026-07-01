@@ -581,7 +581,7 @@ def _resolve_curriculum_output_path(
         *tt_lake_roots,
     ]
     if not any(_is_relative_to(resolved, root.resolve()) for root in approved_roots):
-        roots = ".scratch/, journal/, or the retained input directory"
+        roots = ".scratch/, journal/tt/, or the retained input directory"
         raise TTNormalizeError(f"{raw}: curriculum output must stay under {roots}")
     resolved_coaching = coaching_path.resolve()
     expected_lap = _lap_from_coaching_path(coaching_path)

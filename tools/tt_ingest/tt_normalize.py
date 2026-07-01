@@ -806,7 +806,11 @@ def build_harness_curriculum(
         "format": TT_CURRICULUM_FORMAT,
         "source": "track_titan_services",
         "generated_at": exported_at,
-        "issue": 353,
+        "generator": {
+            "name": "tools.tt_ingest.tt_normalize",
+            "version": 1,
+            "decision_issue": 353,
+        },
         "session": _curriculum_session_metadata(session_payload),
         "reference": _curriculum_reference_metadata(coaching_bundle),
         "summary": {

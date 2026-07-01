@@ -356,6 +356,7 @@ def test_build_harness_curriculum_maps_tt_advice_to_objective() -> None:
     )
 
     assert curriculum["format"] == TT_CURRICULUM_FORMAT
+    assert curriculum["generator"]["decision_issue"] == 353
     assert curriculum["session"]["car_id"] == "ks_porsche_911_gt3_r_2016"
     assert curriculum["session"]["track_id"] == "magione"
     assert curriculum["reference"]["username"] == "Reference Driver"
