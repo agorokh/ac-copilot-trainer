@@ -593,7 +593,7 @@ def test_curriculum_cli_writes_from_explicit_input(tmp_path, capsys) -> None:
 
 
 def test_curriculum_cli_discover_lake_honors_session_override(tmp_path) -> None:
-    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "20260629005756"
     session_dir.mkdir(parents=True)
     coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
     session_path = tmp_path / "provided_last_session.json"
@@ -608,7 +608,7 @@ def test_curriculum_cli_discover_lake_honors_session_override(tmp_path) -> None:
             "--lake-base",
             str(tmp_path),
             "--session-key",
-            "sess-1",
+            "20260629005756",
             "--lap",
             "5",
             "--session",
@@ -620,6 +620,34 @@ def test_curriculum_cli_discover_lake_honors_session_override(tmp_path) -> None:
 
     assert rc == 0
     assert json.loads(output.read_text(encoding="utf-8"))["summary"]["objectives"] == 1
+
+
+def test_curriculum_cli_discover_lake_rejects_session_override_mismatch(tmp_path) -> None:
+    session_dir = tmp_path / "journal" / "tt" / "assettoCorsa" / "car" / "track" / "sess-1"
+    session_dir.mkdir(parents=True)
+    coaching_path = session_dir / f"{coaching_endpoint(5)}.json"
+    session_path = tmp_path / "wrong_last_session.json"
+    output = tmp_path / "journal" / "tt_curriculum.json"
+    coaching_path.write_text(json.dumps(_curriculum_bundle()), encoding="utf-8")
+    session_path.write_text(LAST_SESSION_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "curriculum",
+                "--discover-lake",
+                "--lake-base",
+                str(tmp_path),
+                "--session-key",
+                "sess-1",
+                "--lap",
+                "5",
+                "--session",
+                str(session_path),
+                "--output",
+                str(output),
+            ]
+        )
 
 
 def test_curriculum_cli_requires_one_input_mode(tmp_path) -> None:

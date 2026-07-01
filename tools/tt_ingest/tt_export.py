@@ -25,6 +25,10 @@ from typing import Any
 LAKE_SUBDIR = "tt"
 INDEX_FILENAME = "index.json"
 INDEX_SCHEMA_VERSION = 1
+LAST_SESSION_ENDPOINT_PREFIX = "last_session_lap"
+LAST_SESSION_WINDOW_MARKER = "_window_"
+COACHING_ENDPOINT_PREFIX = "coaching_lap"
+CURRICULUM_ENDPOINT_PREFIX = "curriculum_lap"
 
 #: Characters allowed in a single lake path segment; everything else collapses to ``_``.
 _SAFE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._-]+")

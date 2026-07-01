@@ -17,13 +17,10 @@ from typing import Any
 
 from tools.ai_sidecar.driver_profile import DEFAULT_PROFILE_PATH, load_profile
 from tools.lap_archive_export import LapArchiveExportError, iter_lap_archive_paths, load_lap_archive
+from tools.tt_ingest.tt_export import COACHING_ENDPOINT_PREFIX, CURRICULUM_ENDPOINT_PREFIX
 
 DERIVED_TT_INDEXES = frozenset({"index.json", "sessions_index.json"})
-DERIVED_TT_PATTERNS = ("curriculum_lap*.json",)
-TT_COACHING_PREFIX = "coaching_lap"
-TT_LAST_SESSION_PREFIX = "last_session_lap"
-TT_LAST_SESSION_WINDOW_MARKER = "_window_"
-TT_CURRICULUM_PREFIX = "curriculum_lap"
+DERIVED_TT_PATTERNS = (f"{CURRICULUM_ENDPOINT_PREFIX}*.json",)
 
 
 @dataclass(frozen=True)
@@ -280,15 +277,12 @@ def _tt_index_paths_for_deleted(items: Sequence[RetentionItem]) -> list[Path]:
 
 def _curriculum_path_for_tt_source(path: Path) -> Path | None:
     stem = path.stem
-    lap: str | None = None
-    if stem.startswith(TT_COACHING_PREFIX):
-        lap = stem[len(TT_COACHING_PREFIX) :]
-    elif stem.startswith(TT_LAST_SESSION_PREFIX):
-        tail = stem[len(TT_LAST_SESSION_PREFIX) :]
-        lap = tail.split(TT_LAST_SESSION_WINDOW_MARKER, 1)[0]
+    if not stem.startswith(COACHING_ENDPOINT_PREFIX):
+        return None
+    lap = stem[len(COACHING_ENDPOINT_PREFIX) :]
     if not lap:
         return None
-    return path.with_name(f"{TT_CURRICULUM_PREFIX}{lap}.json")
+    return path.with_name(f"{CURRICULUM_ENDPOINT_PREFIX}{lap}.json")
 
 
 def plan_retention(

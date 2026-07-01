@@ -27,7 +27,11 @@ from tools.tt_ingest.tt_auth import (
     uid_from_token,
 )
 from tools.tt_ingest.tt_export import (
+    COACHING_ENDPOINT_PREFIX,
+    CURRICULUM_ENDPOINT_PREFIX,
     INDEX_FILENAME,
+    LAST_SESSION_ENDPOINT_PREFIX,
+    LAST_SESSION_WINDOW_MARKER,
     RetainedFile,
     TTExportError,
     build_index,
@@ -66,12 +70,9 @@ RAW_SESSION_ENDPOINT = "session"
 # lap-specific, so lap-keying it keeps each lap's raw evidence COHERENT with its coaching even
 # when the same session later gains another lap (a single write-once ``last_session.json``
 # would otherwise go stale against a newer lap's bundle).
-LAST_SESSION_ENDPOINT_PREFIX = "last_session_lap"
 LAST_SESSION_ENDPOINT_GLOB = f"{LAST_SESSION_ENDPOINT_PREFIX}*.json"
-COACHING_ENDPOINT_PREFIX = "coaching_lap"
 COACHING_ENDPOINT_GLOB = f"{COACHING_ENDPOINT_PREFIX}*.json"
 REFERENCE_INPUT_GLOB = LAST_SESSION_ENDPOINT_GLOB
-CURRICULUM_ENDPOINT_PREFIX = "curriculum_lap"
 CURRICULUM_ENDPOINT_GLOB = f"{CURRICULUM_ENDPOINT_PREFIX}*.json"
 
 
@@ -82,12 +83,16 @@ def last_session_endpoint(lap: Any) -> str:
 
 def last_session_window_endpoint(lap: Any, payload: Mapping[str, Any]) -> str:
     """Endpoint for an additional distinct /last-session segment window for one lap."""
-    return f"{last_session_endpoint(lap)}_window_{stable_fingerprint(dict(payload))}"
+    return (
+        f"{last_session_endpoint(lap)}"
+        f"{LAST_SESSION_WINDOW_MARKER}"
+        f"{stable_fingerprint(dict(payload))}"
+    )
 
 
 def _last_session_endpoint_matches_lap(stem: str, lap: Any) -> bool:
     base = last_session_endpoint(lap)
-    return stem == base or stem.startswith(f"{base}_window_")
+    return stem == base or stem.startswith(f"{base}{LAST_SESSION_WINDOW_MARKER}")
 
 
 def coaching_endpoint(lap: Any) -> str:
@@ -585,6 +590,57 @@ def _resolve_curriculum_output_path(
     return resolved
 
 
+def _services_session_for_validation(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    data = payload.get("data") if "success" in payload else payload
+    if not isinstance(data, Mapping):
+        return {}
+    session = data.get("session")
+    return session if isinstance(session, Mapping) else data
+
+
+def _lake_session_key_for_path(path: Path) -> str | None:
+    for parent in path.resolve().parents:
+        if parent.name == "tt" and parent.parent.name == "journal":
+            try:
+                return path.parent.relative_to(parent).parts[-1]
+            except (IndexError, ValueError):
+                return None
+    return None
+
+
+def _validate_curriculum_session_pair(
+    coaching_path: Path, *, session_payload: Mapping[str, Any]
+) -> None:
+    expected_lap = _lap_from_coaching_path(coaching_path)
+    session = _services_session_for_validation(session_payload)
+    if expected_lap is not None:
+        actual_lap = session.get("lap_number")
+        if actual_lap is None:
+            raise TTNormalizeError(
+                f"{session_payload!r}: paired last-session payload missing lap_number"
+            )
+        if str(actual_lap) != str(expected_lap):
+            raise TTNormalizeError(
+                f"paired last-session lap {actual_lap} does not match {coaching_path.name}"
+            )
+
+    expected_session_key = _lake_session_key_for_path(coaching_path)
+    if expected_session_key:
+        raw_id = session.get("id") or session.get("session_id") or ""
+        _, actual_session_key = split_session_id(str(raw_id))
+        actual_session_key = actual_session_key or session.get("session_key")
+        if not actual_session_key:
+            raise TTNormalizeError(
+                f"{session_payload!r}: paired last-session payload missing session key"
+            )
+        if str(actual_session_key) != expected_session_key:
+            raise TTNormalizeError(
+                "paired last-session session key "
+                f"{actual_session_key} does not match retained coaching session "
+                f"{expected_session_key}"
+            )
+
+
 def build_reference_archive_from_files(
     paths: Sequence[Path],
     *,
@@ -661,6 +717,8 @@ def build_curriculum_from_files(
         raise TTNormalizeError(f"output already exists (pass --overwrite): {output}")
     coaching = _load_json_file(coaching_path)
     session_payload = _load_json_file(paired_session_path) if paired_session_path else None
+    if session_payload is not None:
+        _validate_curriculum_session_pair(coaching_path, session_payload=session_payload)
     curriculum = build_harness_curriculum(
         coaching,
         session_payload=session_payload,
