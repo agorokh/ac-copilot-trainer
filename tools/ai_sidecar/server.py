@@ -25,6 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from tools.ai_sidecar import observability
@@ -39,6 +40,8 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_VERSION,
     HAPTIC_CLIENT_CLASSES,
     PHYSICAL_CLIENT_CLASSES,
+    SIDECAR_PRODUCED_TOPICS,
+    TOPIC_SESSION_REVIEW,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
     TYPE_CONFIG_ACK,
@@ -50,6 +53,8 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_HELLO,
     TYPE_HELLO_ACK,
     TYPE_KEY,
+    TYPE_SESSION_REVIEW_GENERATE,
+    TYPE_SESSION_REVIEW_RESULT,
     TYPE_SETUP_ADVICE,
     TYPE_SETUP_ADVICE_RESULT,
     TYPE_SETUP_CLOSED_LOOP,
@@ -143,6 +148,7 @@ _setup_experiment_store_seeded = False
 _setup_exchange_endpoint: str | None = None
 _setup_exchange_user_setups_root: Path | None = None
 _external_peer_classes: dict[Any, str] = {}
+_sidecar_state_cache: dict[str, dict[str, Any]] = {}
 # M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
 # advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
@@ -304,6 +310,7 @@ def _env_float(name: str, default: float, *, min_value: float, max_value: float)
 TELEMETRY_TICK_MAX_HZ = 20.0
 HAPTIC_EVENT_MAX_HZ = 25.0
 LEGACY_SCREEN_CLIENT_PREFIXES = ("ac-copilot-screen",)
+SESSION_REVIEW_DEFAULT_SESSION = "latest"
 
 # Windows reports a port-in-use bind as WSAEADDRINUSE (10048), which is distinct from the POSIX
 # errno.EADDRINUSE value; accept both so the clean-exit path fires on every platform.
@@ -336,6 +343,7 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_CLOSED_LOOP,
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
+        TYPE_SESSION_REVIEW_GENERATE,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -377,6 +385,7 @@ SIDECAR_LOCAL_TYPES = frozenset(
         TYPE_SETUP_CLOSED_LOOP,
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
+        TYPE_SESSION_REVIEW_GENERATE,
     }
 )
 
@@ -406,6 +415,7 @@ def _reset_external_state() -> None:
     global _observer_feed_peer, _observer_feed_warned
     _external_peers.clear()
     _external_peer_classes.clear()
+    _sidecar_state_cache.clear()
     _peripheral_rate_limiter.reset()
     if _race_manager is not None:
         _race_manager.reset()
@@ -515,6 +525,55 @@ def _setup_store_record_count(store_path: str | Path) -> int:
 
 def _record_lap_archive_safe(archive_path: str) -> dict[str, Any]:
     return record_lap_archive(archive_path, require_safe_path=True)
+
+
+def _resolve_session_review_lap_dir(lap_dir: str | Path) -> Path:
+    raw = Path(lap_dir)
+    resolved = raw.resolve() if raw.is_absolute() else (Path.cwd() / raw).resolve()
+    if resolved.name != "laps" or resolved.parent.name != "journal":
+        raise ValueError("lap_dir must point to journal/laps")
+    return resolved
+
+
+def _generate_session_review_safe(
+    lap_dir: str,
+    *,
+    session: str = SESSION_REVIEW_DEFAULT_SESSION,
+    driver_id: str = "local-driver",
+    output_dir: str | None = None,
+) -> dict[str, Any]:
+    from tools.session_review import (
+        build_session_report,
+        write_session_report,
+    )
+
+    safe_lap_dir = _resolve_session_review_lap_dir(lap_dir)
+    target_dir = safe_lap_dir.parent / "reports"
+    if output_dir:
+        requested_output_dir = (
+            Path(output_dir).resolve()
+            if Path(output_dir).is_absolute()
+            else (Path.cwd() / output_dir).resolve()
+        )
+        if requested_output_dir != target_dir:
+            raise ValueError("output_dir must be the sibling journal/reports for lap_dir")
+    report = build_session_report([safe_lap_dir], session=session, driver_id=driver_id)
+    written = write_session_report(report, output_dir=target_dir)
+    session_meta = report.get("session") if isinstance(report.get("session"), dict) else {}
+    return {
+        "ok": True,
+        "markdown_path": str(written.markdown_path),
+        "json_path": str(written.json_path),
+        "session_uuid": session_meta.get("session_uuid"),
+        "car_id": session_meta.get("car_id"),
+        "track_id": session_meta.get("track_id"),
+        "best_lap_ms": session_meta.get("best_lap_ms"),
+        "spoken_summary": report.get("spoken_summary"),
+        "screen_summary": report.get("screen_summary"),
+        "problems": report.get("problems"),
+        "next_session_prep": report.get("next_session_prep"),
+        "source": report.get("source"),
+    }
 
 
 def _compare_setup_store(
@@ -1272,6 +1331,136 @@ async def _handle_setup_experiment_frame(websocket: Any, data: dict[str, Any]) -
         return
 
 
+def _session_review_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_SESSION_REVIEW,
+        "payload": payload,
+        "source": "sidecar.session_review",
+    }
+
+
+def _session_review_error_snapshot(*, session: str, error: str) -> dict[str, Any]:
+    return _session_review_snapshot(
+        {
+            "ok": False,
+            "session_uuid": session if session != SESSION_REVIEW_DEFAULT_SESSION else None,
+            "error": error,
+            "screen_summary": [],
+            "problems": [],
+            "next_session_prep": [],
+        }
+    )
+
+
+def _cache_sidecar_snapshot(frame: dict[str, Any]) -> None:
+    topic = frame.get("topic")
+    if frame.get(TYPE_KEY) == TYPE_STATE_SNAPSHOT and topic in SIDECAR_PRODUCED_TOPICS:
+        _sidecar_state_cache[str(topic)] = frame
+
+
+def _sanitize_session_review_result(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop host-local paths before broadcasting session-review results to clients."""
+    sanitized = dict(payload)
+    for path_key, file_key in (("markdown_path", "markdown_file"), ("json_path", "json_file")):
+        path = sanitized.pop(path_key, None)
+        if isinstance(path, str) and path:
+            sanitized[file_key] = Path(path).name
+    return sanitized
+
+
+def _session_review_cue_payload(result: dict[str, Any]) -> dict[str, Any] | None:
+    message = result.get("spoken_summary")
+    if not isinstance(message, str) or not message.strip():
+        return None
+    detail: dict[str, Any] = {"session_uuid": result.get("session_uuid")}
+    for path_key, file_key in (("markdown_path", "markdown_file"), ("json_path", "json_file")):
+        path = result.get(path_key)
+        if isinstance(path, str) and path:
+            detail[file_key] = Path(path).name
+    return {
+        "kind": "session_review",
+        "corner": None,
+        "urgency": "info",
+        "register": "calm",
+        "intensity": 0.0,
+        "message": message.strip(),
+        "spline": None,
+        "detail": detail,
+    }
+
+
+async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> None:
+    """Generate and fan out the post-session review artifact (#404 Part A)."""
+    if not _is_loopback_peer(websocket):
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SESSION_REVIEW_RESULT,
+                "ok": False,
+                "error": "session review generation is loopback-only",
+            },
+        )
+        return
+
+    lap_dir = str(data.get("lap_dir") or "")
+    session = str(data.get("session") or SESSION_REVIEW_DEFAULT_SESSION)
+    driver_id = str(data.get("driver_id") or "local-driver")
+    try:
+        result = await asyncio.to_thread(
+            _generate_session_review_safe,
+            lap_dir,
+            session=session,
+            driver_id=driver_id,
+        )
+    except Exception as e:
+        error = str(e)
+        logger.info(
+            "session review generation failed lap_dir=%s session=%s err=%s", lap_dir, session, e
+        )
+        snapshot = _session_review_error_snapshot(session=session, error=error)
+        _cache_sidecar_snapshot(snapshot)
+        await _broadcast_external(snapshot, exclude=websocket)
+        await _safe_send(
+            websocket,
+            {
+                ENVELOPE_KEY: ENVELOPE_VERSION,
+                TYPE_KEY: TYPE_SESSION_REVIEW_RESULT,
+                "ok": False,
+                "lap_dir": lap_dir,
+                "session": session,
+                "error": error,
+            },
+        )
+        return
+
+    ack = {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_SESSION_REVIEW_RESULT,
+        **result,
+    }
+    await _safe_send(websocket, ack)
+    snapshot = _session_review_snapshot(_sanitize_session_review_result(result))
+    _cache_sidecar_snapshot(snapshot)
+    await _broadcast_external(
+        snapshot,
+        exclude=websocket,
+    )
+
+    cue_payload = _session_review_cue_payload(result)
+    if cue_payload is None:
+        return
+    coach = _voice_coach
+    if coach is not None:
+        try:
+            coach.subscribe(SimpleNamespace(**cue_payload))
+        except Exception:
+            logger.exception("voice coach subscribe failed for session review")
+    await _broadcast_external(make_coaching_cue(cue_payload), exclude=websocket)
+
+
 async def _handle_setup_exchange_frame(websocket: Any, data: dict[str, Any]) -> None:
     """Handle Setup Exchange search/download frames in the sidecar (#363)."""
 
@@ -1399,6 +1588,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t in (TYPE_SETUP_EXCHANGE_SEARCH, TYPE_SETUP_EXCHANGE_DOWNLOAD):
         await _handle_setup_exchange_frame(websocket, data)
         return
+    if t == TYPE_SESSION_REVIEW_GENERATE:
+        await _handle_session_review_frame(websocket, data)
+        return
     if t in SIDECAR_LOCAL_TYPES:
         await _handle_setup_experiment_frame(websocket, data)
         return
@@ -1455,6 +1647,11 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             peer,
             data.get("topics"),
         )
+        if t == TYPE_STATE_SUBSCRIBE:
+            for topic in data.get("topics") or []:
+                cached = _sidecar_state_cache.get(str(topic))
+                if cached is not None:
+                    await _safe_send(websocket, cached)
         return
     if (
         t in CLIENT_TO_SERVER_TYPES
@@ -1801,12 +1998,18 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             if os.environ.get("AC_COPILOT_COACH_V2") == "1":
                 from tools.ai_sidecar.coaching_runtime import build_coach_runtime
 
-                coach_rt = build_coach_runtime(archive)
+                coach_rt = build_coach_runtime(
+                    archive,
+                    driver_profile_path=os.environ.get("AC_COPILOT_DRIVER_PROFILE"),
+                )
                 if coach_rt is not None:
                     set_coach_runtime(coach_rt)
                     logger.info(
-                        "voice: Coach v2 runtime wired (%d corners) — diagnosed anticipatory cues",
+                        "voice: Coach v2 runtime wired (%d corners) - "
+                        "diagnosed anticipatory cues policy=%s budget=%d",
                         len(coach_rt.refs),
+                        coach_rt.cue_policy.level,
+                        coach_rt.ledger.lap_budget,
                     )
                 else:
                     # M1: v2 was REQUESTED but could not build — fail loud + SILENT, never degrade

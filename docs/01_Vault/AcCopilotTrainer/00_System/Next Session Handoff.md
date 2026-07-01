@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-06-30T21:44:31Z
+last_updated: 2026-06-30T23:41:32Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/voice-368-merge-contention-2026-06-29.md
@@ -58,6 +59,104 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-06-30) - PR #423 MERGED: session review artifact (#404 Part A)
+
+PR [#423](https://github.com/agorokh/ac-copilot-trainer/pull/423) squash-merged to `main` as
+[`d374d33`](https://github.com/agorokh/ac-copilot-trainer/commit/d374d337bcfc5e3efda8e567aa697cff32478b78)
+at 2026-06-30T23:40:21Z. Epic [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404)
+stays **OPEN** for Parts B-D.
+
+**Shipped:** `tools.session_review` reads immutable `journal/laps/lap_*.json` archives,
+selects the latest or requested session, compares it with the fastest valid same car/track/layout
+reference lap, and writes Markdown + JSON reports under `journal/reports/`. The report includes a
+ranked per-corner problem list, ranked fixes, `next_session_prep`, `spoken_summary`, and
+`screen_summary` payloads for voice/launcher consumers. Review hardening now filters missing
+`exported_at` timestamps, falls back to lap-only analysis when the fastest reference lap has an
+unusable trace, and fails closed when a selected session has no usable trace at all. Lua session-end
+now drains lap-archive jobs, sends `session.review.generate` to the loopback sidecar, and the sidecar
+writes the sibling report plus `session.review` / `coaching.cue` frames for screen and voice clients.
+Second review hardening sanitized broadcast payloads so full report paths stay only in the loopback
+ack, added a one-shot guard so menu-frame retries do not repeat voice/report generation, broadened
+sidecar error acks for unexpected generator exceptions, and renamed the Lua path-frame guard so the
+feature is not coupled to setup-experiment naming.
+Third review hardening changed the retry guard so it is marked requested only after a sent frame,
+added a 60-frame retry backoff, cached the sanitized `session.review` snapshot for late subscribers,
+rejected inbound `session.review.result` relays, and constrained sidecar generation to a resolved
+`journal/laps` corpus plus its sibling `journal/reports` output.
+Fourth review hardening moved the send retry into a pending menu-work item that survives runtime
+reset until the frame is actually sent, and sidecar generation failures now cache/broadcast an
+`ok:false` `session.review` snapshot so late screens do not replay the previous session's debrief.
+Fifth review hardening lets pending menu review work tick/poll the WS bridge after reset so reconnect
+can complete, replaces stale pending review requests when the session UUID changes, and clears any
+unsent pending request on the next driving stint so stale debriefs cannot bleed into a new session.
+Docs landed in `docs/10_Development/17_Session_Review.md`. `make ci-fast` is now Windows-friendly by routing
+policy-doc and tracked-file secret scans through Python wrappers instead of invoking Bash with a
+`PYTHON=python` prefix that PowerShell misparsed.
+
+**Verification:** Local artifact smoke generated both report files from a synthetic corpus through
+the unmodified CLI path:
+`python -m tools.session_review --lap-dir journal/laps --json` with `PYTHONPATH` set to the repo root
+from scratch cwd. The JSON output carried `screen_summary=["T1: 0.74s - technique"]` and spoken
+summary `Session debrief for ks_porsche_911_gt3_r_2016 at magione: best lap 5.079s. Next session,
+focus T1.` The Markdown named session `sess-latest`, best lap `5.079s`, reference
+`lap_ref.json (4.773s)`, the T1 problem list, and next-session prep. Focused checks passed
+(`217 passed, 1 skipped`) across session review, sidecar external protocol, topic allowlist, lap
+archive source-structure, Coach v2/report/runtime, voice wiring, sector benchmark, and driver
+progression overlap tests after merging current `main`. Full local parity passed on Windows with
+`FLEET_GOVERNANCE_ROOT=C:\Users\arsen\Projects\governance-hub make ci-fast PYTHON=python`
+(`2003 passed, 117 skipped`, coverage 85.67%, `ci-fast: OK`; only existing root-file allowlist
+warnings for `.copier-answers.yml` and `doppler.yaml`). GitHub checks passed on head `4e49f6c`
+before merge (`build`, `Canonical docs exist`, `conformance`; vault automerge skipped). GraphQL
+review threads were resolved; resolve-gate reported no substantive findings; the current-SHA
+self-hosted review reported no medium-or-higher findings.
+
+**Post-merge classification:** `scripts/` and `Makefile` changed because `ci-fast` now routes the
+policy-doc and tracked-file secret scans through Python wrappers. No migration/env/dependency/workflow
+action required.
+
+**Memory note:** The exact Tier-3 MCP tool was not exposed in this Codex tool surface. The repo
+prefetch fallback was run before implementation and returned no relevant context; the final resolve
+loop armed `forward_capture.py` for `agorokh/ac-copilot-trainer#404`. Vault Tier-2 context and live
+issue state were used instead. Live reconciliation on 2026-06-30:
+`gh issue view 404 --json number,title,state,url` reported issue #404 **OPEN**. This branch covers
+Part A only; Parts B-D (history/replay browser, trend dashboards, shareable report) remain on the
+epic unless the operator explicitly splits or closes them after this PR.
+
+Detail: [[issue-404-session-review-artifact-2026-06-30]].
+
+## Delivered (2026-06-30) - PR #419 MERGED: driver progression profile (#403)
+
+PR [#419](https://github.com/agorokh/ac-copilot-trainer/pull/419) squash-merged to `main` as
+[`14f6257`](https://github.com/agorokh/ac-copilot-trainer/commit/14f625775863f44f03cf7685b7e8918f53492321)
+at 2026-06-30T22:21:09Z. Issue [#403](https://github.com/agorokh/ac-copilot-trainer/issues/403)
+is **CLOSED**.
+
+**Shipped:** Coach v2 now has a longitudinal driver progression layer on top of the compacted
+profile ledger from #402. `tools.ai_sidecar.driver_progression` classifies skills and selects
+foundation/intermediate/advanced cue policies and drills. The live runtime scopes profile history
+to the active reference car/track/layout before deriving cue density, and falls back to the baseline
+policy when reference combo metadata is missing. `AC_COPILOT_DRIVER_PROFILE` is documented as the
+override for the persisted `journal/driver/profile.json` runtime state.
+
+**Review hardening:** Bot review drove fail-closed profile path containment, imported/reference lap
+skips, idempotent rebuilds, same-session incremental merges, corner sample de-dupe, median sample
+gating, exact per-lap corner medians, active-combo filtering, chronological endpoint ordering, and
+UUID normalization across overlapping lap corpora. Qodo's remaining summary-only notes on corner
+derived stats and sample gating were stale against current code/tests; its tiers note was answered
+as a runtime telemetry-state false positive, not agent memory.
+
+**Verification:** GitHub checks on head `9149930` passed (`build`, `Canonical docs exist`,
+`conformance`; vault automerge skipped). GraphQL review threads were resolved; Gemini and Codex
+review reruns were quota-limited after earlier passes, so current thread state plus Qodo's updated
+summary were used as the final gate. Local focused regression passed (`82 passed`) across driver
+profile/progression, Coach v2 runtime, observer wiring, and retention. Ruff check/format, policy,
+diff whitespace, Bandit, secret scan, policy docs, agent-forbidden, CSP API, and CSP UI checks were
+clean, with only existing root-file allowlist warnings for `.copier-answers.yml` and `doppler.yaml`.
+Local `make ci-fast` could not be used as a single command in the Windows checkout because the
+repo-wide formatter target wants to reformat unrelated baseline files; the changed-file formatter
+and all runnable component gates passed. Post-merge classification: `.env.example` changed for the
+new documented `AC_COPILOT_DRIVER_PROFILE`; no migration/dependency/workflow action required.
 
 ## Delivered (2026-06-30) - PR #418 MERGED: sector benchmarks + SuperLap targets (#408)
 

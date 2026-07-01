@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 REQUIRED = (
@@ -19,7 +20,7 @@ def main(root: Path | None = None) -> int:
     repo_root = root or Path(__file__).resolve().parents[1]
     missing = [path for path in REQUIRED if not (repo_root / path).is_file()]
     for path in missing:
-        print(f"Policy check failed: {path} not found")
+        print(f"Policy check failed: {path} not found", file=sys.stderr)
     if missing:
         return 1
     print("Policy docs: OK")

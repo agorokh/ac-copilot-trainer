@@ -38,10 +38,51 @@ def test_session_end_flushes_pending_lap_archive() -> None:
     anchor = src.index("sessionJournal.writeSessionEnd")
     menu_kw = src.rindex("if sim.isInMainMenu then", 0, anchor)
     branch_body = src[menu_kw:anchor]
+    menu_prefix = branch_body.split("if state.wasDriving then", maxsplit=1)[0]
+    assert "pendingSessionReview ~= nil" in menu_prefix
+    assert "wsBridge.tick(ch.simSeconds(sim))" in menu_prefix
+    assert "wsBridge.pollInbound(8)" in menu_prefix
+    assert menu_prefix.index("wsBridge.tick(ch.simSeconds(sim))") < menu_prefix.index(
+        "pumpSessionReviewRequest()"
+    )
     assert "flushPendingLapArchiveJobs(" in branch_body, (
         "session-end branch must drain pending lap-archive jobs before its session-end "
         "work (issue #305)"
     )
+    assert "wsBridge.sendSessionReviewGenerate" in src, (
+        "session-end branch must ask the sidecar to generate the post-session review "
+        "after the lap archives are final"
+    )
+    assert "not state.sessionReviewRequested" in branch_body
+    assert "queueSessionReviewRequest(persistence.lapArchiveDir(), SESSION_UUID)" in branch_body
+    assert "pumpSessionReviewRequest()" in branch_body
+    assert branch_body.index("pumpLapArchiveNotifications()") < branch_body.index(
+        "queueSessionReviewRequest"
+    )
+    assert "pendingSessionReview" in src
+    assert "pendingSessionReview.sessionUuid == sessionUuid" in src
+    assert "pendingSessionReview = nil" in src
+    assert "pending.retryFrames = 60" in src
+    assert "state.sessionReviewRetryFrames = pending.retryFrames" in src
+    assert src.index("reviewOk and reviewSentOrErr == true") < src.index(
+        "state.sessionReviewRequested = true"
+    )
+
+
+def test_session_review_bridge_uses_generic_local_path_gate() -> None:
+    """#404: report generation carries local archive paths but is not setup-experiment logic."""
+    bridge = (REPO / "src" / "ac_copilot_trainer" / "modules" / "ws_bridge.lua").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(
+        r"function M\.sendSessionReviewGenerate.*?\nend\n",
+        bridge,
+        flags=re.S,
+    )
+    assert match is not None
+    body = match.group(0)
+    assert "localPathFramesAllowed()" in body
+    assert "setupExperimentPathFramesAllowed" not in body
 
 
 def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
@@ -60,13 +101,10 @@ def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:
     assert "lapArchive.write" not in block
     assert "lapArchive.buildRecord" not in block
 
-    ws_match = re.search(
-        r"wsBridge\.tick\(ch\.simSeconds\(sim\)\).*?-- Issue #180 Part D step 2",
-        src,
-        flags=re.S,
-    )
-    assert ws_match is not None
-    ws_block = ws_match.group(0)
+    drive_start = src.index("lastDriveCar = car")
+    marker = src.index("-- Issue #180 Part D step 2", drive_start)
+    ws_block = src[drive_start:marker]
+    assert "wsBridge.tick(ch.simSeconds(sim))" in ws_block
     assert ws_block.index("wsBridge.pollInbound(8)") < ws_block.index("pumpLapArchiveJobs()")
     assert ws_block.index("pumpLapArchiveJobs()") < ws_block.index("pumpLapArchiveNotifications()")
     assert "pendingLapArchiveRecordPaths" in src

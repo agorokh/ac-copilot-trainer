@@ -32,7 +32,9 @@ def _tracked_files(root: Path) -> list[str]:
     )
     raw = result.stdout.split(b"\0")
     return [
-        path for chunk in raw if (path := chunk.decode("utf-8")) and path != ".secrets.baseline"
+        path
+        for chunk in raw
+        if (path := chunk.decode("utf-8", errors="surrogateescape")) and path != ".secrets.baseline"
     ]
 
 
