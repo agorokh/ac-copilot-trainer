@@ -530,9 +530,10 @@ def _infer_closed_loop_scope(
     car_id: str | None,
     track_id: str | None,
 ) -> tuple[str | None, str | None, dict[str, Any] | None]:
-    effective_car_id = car_id
+    effective_car_id = _clean_optional_id(car_id)
+    effective_track_id = _clean_optional_id(track_id)
     valid = _valid_records(records)
-    track_scoped = _filter_records(valid, track_id=track_id)
+    track_scoped = _filter_records(valid, track_id=effective_track_id)
     if effective_car_id is None:
         car_ids = _scope_ids(track_scoped, "car")
         if len(car_ids) > 1:
@@ -551,7 +552,6 @@ def _infer_closed_loop_scope(
             effective_car_id = car_ids[0]
 
     car_scoped = _filter_records(valid, car_id=effective_car_id)
-    effective_track_id = track_id
     if effective_track_id is None:
         track_ids = _scope_ids(car_scoped, "track")
         if len(track_ids) > 1:
@@ -570,6 +570,13 @@ def _infer_closed_loop_scope(
         if len(track_ids) == 1:
             effective_track_id = track_ids[0]
     return effective_car_id, effective_track_id, None
+
+
+def _clean_optional_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _select_params(records: list[dict[str, Any]], best: dict[str, Any]) -> list[str]:

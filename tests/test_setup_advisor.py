@@ -149,6 +149,49 @@ def test_schema_read_only_suggestions_are_skipped() -> None:
     assert all(suggestion["section"] != "FINAL_RATIO" for suggestion in out["suggestions"])
 
 
+def test_partial_schema_missing_spinner_uses_generic_nonnegative_clamp() -> None:
+    out = advise_from_complaint(
+        "low speed understeer mid corner",
+        setup_snapshot={**GT3_SNAPSHOT, "PRESSURE_LF.VALUE": "0", "PRESSURE_RF.VALUE": "0"},
+        car_id="ks_porsche_911_gt3_r_2016",
+        schema=load_latest_schema("ks_porsche_911_gt3_r_2016"),
+    )
+
+    assert out["ok"] is True
+    assert all(
+        not (suggestion["section"] == "PRESSURE_RF" and suggestion["target"] < 0)
+        for suggestion in out["suggestions"]
+    )
+
+
+def test_advice_skips_moves_when_current_value_is_unknown() -> None:
+    out = advise_from_complaint(
+        "car is loose on exit",
+        setup_snapshot={},
+        car_id="ks_porsche_911_gt3_r_2016",
+    )
+
+    assert out["ok"] is False
+    assert out["status"] == "no_applicable_moves"
+
+
+def test_advice_does_not_mutate_supplied_setup_identity() -> None:
+    setup = from_snapshot(GT3_SNAPSHOT)
+
+    out = advise_from_complaint(
+        "front locks on entry",
+        setup=setup,
+        car_id="ks_porsche_911_gt3_r_2016",
+        track_id="magione",
+    )
+
+    assert out["ok"] is True
+    assert out["car_id"] == "ks_porsche_911_gt3_r_2016"
+    assert out["track_id"] == "magione"
+    assert setup.car_id is None
+    assert setup.track_id is None
+
+
 def test_setup_diff_summary_returns_display_ready_rows() -> None:
     baseline = from_snapshot(GT3_SNAPSHOT, car_id="ks_porsche_911_gt3_r_2016")
     candidate = from_snapshot(

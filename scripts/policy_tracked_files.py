@@ -11,11 +11,13 @@ POSIX_BATCH_SIZE = 100
 POSIX_MAX_ARG_CHARS = 24_000
 WINDOWS_BATCH_SIZE = 25
 WINDOWS_MAX_ARG_CHARS = 4_000
+WINDOWS_COMMAND_HEADROOM = 128
 
 
 def _repo_root() -> Path:
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
+        cwd=Path(__file__).resolve().parents[1],
         capture_output=True,
         check=True,
         text=True,
@@ -51,7 +53,7 @@ def _batches(
     current: list[str] = []
     current_chars = 0
     for item in items:
-        item_chars = len(item) + 1
+        item_chars = _argument_chars(item)
         if item_chars > max_chars:
             raise ValueError(
                 f"tracked path exceeds the platform argv budget ({item_chars}>{max_chars}): {item}"
@@ -67,6 +69,26 @@ def _batches(
     return batches
 
 
+def _argument_chars(value: str) -> int:
+    chars = len(value) + 1
+    if sys.platform == "win32" and (any(char.isspace() for char in value) or '"' in value):
+        chars += 2 + value.count('"')
+    return chars
+
+
+def _file_arg_budget(baseline: Path) -> int:
+    limit = WINDOWS_MAX_ARG_CHARS if sys.platform == "win32" else POSIX_MAX_ARG_CHARS
+    base_cmd = [
+        sys.executable,
+        "-m",
+        "detect_secrets.pre_commit_hook",
+        "--baseline",
+        str(baseline),
+    ]
+    headroom = WINDOWS_COMMAND_HEADROOM if sys.platform == "win32" else 0
+    return limit - sum(_argument_chars(arg) for arg in base_cmd) - headroom
+
+
 def main() -> int:
     root = _repo_root()
     files = _tracked_files(root)
@@ -74,7 +96,7 @@ def main() -> int:
     if not files:
         return 0
     try:
-        batches = _batches(files)
+        batches = _batches(files, max_chars=_file_arg_budget(baseline))
     except ValueError as exc:
         print(f"policy_tracked_files: {exc}", file=sys.stderr)
         return 2

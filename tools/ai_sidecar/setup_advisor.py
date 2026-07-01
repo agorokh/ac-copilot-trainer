@@ -400,17 +400,17 @@ def _move_to_suggestion(
     spec = spec_for(section)
     effect = effect_for(section)
     current = setup.value(section)
+    if current is None:
+        return None
     step = _step_for(section, schema)
     delta = move.direction * step
-    target = None
-    if current is not None:
-        target = current + delta
-        if schema is not None:
-            target = schema.clamp(section, target)
-        elif target < 0:
-            target = 0.0
-        if abs(target - current) <= 1e-9:
-            return None
+    target = current + delta
+    if schema is not None and schema.get(section) is not None:
+        target = schema.clamp(section, target)
+    elif target < 0:
+        target = 0.0
+    if abs(target - current) <= 1e-9:
+        return None
     direction = "increase" if move.direction > 0 else "decrease"
     effect_text = ""
     if effect is not None:
@@ -485,13 +485,25 @@ def advise_from_complaint(
     phase = _parse_phase(text, issue)
     speed_hint = _parse_speed_hint(text)
     if setup is None:
-        setup = from_snapshot(setup_snapshot or {}, car_id=car_id, track_id=track_id)
-    elif car_id and setup.car_id is None:
-        setup.car_id = car_id
-    if track_id and setup.track_id is None:
-        setup.track_id = track_id
+        effective_setup = from_snapshot(setup_snapshot or {}, car_id=car_id, track_id=track_id)
+    else:
+        effective_setup = setup
+        if car_id and effective_setup.car_id is None:
+            effective_setup = CarSetup(
+                params=effective_setup.params,
+                car_id=car_id,
+                track_id=effective_setup.track_id,
+                spinner_schema=effective_setup.spinner_schema,
+            )
+        if track_id and effective_setup.track_id is None:
+            effective_setup = CarSetup(
+                params=effective_setup.params,
+                car_id=effective_setup.car_id,
+                track_id=track_id,
+                spinner_schema=effective_setup.spinner_schema,
+            )
     if schema is None:
-        schema = load_latest_schema(setup.car_id)
+        schema = load_latest_schema(effective_setup.car_id)
     if issue is None:
         return {
             "ok": False,
@@ -517,7 +529,7 @@ def advise_from_complaint(
     for move in moves:
         suggestion = _move_to_suggestion(
             move,
-            setup=setup,
+            setup=effective_setup,
             schema=schema,
             rank=len(suggestions) + 1,
         )
@@ -531,8 +543,8 @@ def advise_from_complaint(
             "status": "no_applicable_moves",
             "complaint": text,
             "parsed": {"issue": issue, "phase": phase, "speed_hint": speed_hint},
-            "car_id": setup.car_id,
-            "track_id": setup.track_id,
+            "car_id": effective_setup.car_id,
+            "track_id": effective_setup.track_id,
             "error": "recognized setup levers are unavailable or already at their bounds",
         }
     return {
@@ -540,8 +552,8 @@ def advise_from_complaint(
         "status": "suggested",
         "complaint": text,
         "parsed": {"issue": issue, "phase": phase, "speed_hint": speed_hint},
-        "car_id": setup.car_id,
-        "track_id": setup.track_id,
+        "car_id": effective_setup.car_id,
+        "track_id": effective_setup.track_id,
         "suggestions": suggestions,
         "rationale": [
             "Complaint mapped through deterministic handling vocabulary.",

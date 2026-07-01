@@ -416,10 +416,9 @@ def parse_setup_ini(text: str) -> dict[str, str]:
 
 
 def _snapshot_car_id(snapshot: dict[str, Any]) -> str | None:
-    for key in ("CAR.MODEL", "CAR.SCREEN_NAME"):
-        value = snapshot.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    value = snapshot.get("CAR.MODEL")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None
 
 

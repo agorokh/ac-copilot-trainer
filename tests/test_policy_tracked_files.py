@@ -14,6 +14,27 @@ policy_tracked_files = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(policy_tracked_files)
 
 
+def test_repo_root_is_anchored_to_script_location(monkeypatch) -> None:
+    def fake_run(
+        args: list[str],
+        *,
+        cwd: Path,
+        capture_output: bool,
+        check: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert args == ["git", "rev-parse", "--show-toplevel"]
+        assert cwd == REPO_ROOT
+        assert capture_output is True
+        assert check is True
+        assert text is True
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=f"{REPO_ROOT}\n")
+
+    monkeypatch.setattr(policy_tracked_files.subprocess, "run", fake_run)
+
+    assert policy_tracked_files._repo_root() == REPO_ROOT
+
+
 def test_tracked_files_filters_empty_git_ls_files_sentinel(
     monkeypatch,
     tmp_path: Path,
@@ -69,6 +90,18 @@ def test_batches_use_smaller_windows_defaults(monkeypatch) -> None:
     assert len(batches) > 1
     assert all(len(batch) <= policy_tracked_files.WINDOWS_BATCH_SIZE for batch in batches)
     assert all(
-        sum(len(item) + 1 for item in batch) <= policy_tracked_files.WINDOWS_MAX_ARG_CHARS
+        sum(policy_tracked_files._argument_chars(item) for item in batch)
+        <= policy_tracked_files.WINDOWS_MAX_ARG_CHARS
         for batch in batches
+    )
+
+
+def test_windows_argument_budget_counts_quoted_paths(monkeypatch) -> None:
+    monkeypatch.setattr(policy_tracked_files.sys, "platform", "win32")
+    path = "docs/with space/report.md"
+
+    assert policy_tracked_files._argument_chars(path) > len(path) + 1
+    assert (
+        policy_tracked_files._file_arg_budget(Path("C:/repo with space/.secrets.baseline"))
+        < policy_tracked_files.WINDOWS_MAX_ARG_CHARS
     )

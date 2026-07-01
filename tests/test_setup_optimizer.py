@@ -238,6 +238,37 @@ def test_closed_loop_continues_improving_one_parameter_move() -> None:
     }
 
 
+def test_closed_loop_treats_blank_scope_filters_as_unspecified() -> None:
+    records = [
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-a1",
+                setup_hash="old",
+                setup_name="baseline",
+                lap_ms=100_000,
+                front_bias=69,
+                rear_wing=8,
+            )
+        ),
+        record_from_lap_archive(
+            _lap(
+                lap_uuid="lap-b2",
+                setup_hash="new",
+                setup_name="candidate",
+                lap_ms=98_000,
+                front_bias=70,
+                rear_wing=8,
+            )
+        ),
+    ]
+
+    suggestion = suggest_closed_loop(records, param="FRONT_BIAS", car_id="", track_id=" ")
+
+    assert suggestion["ok"] is False
+    assert suggestion["status"] == "at_param_bound"
+    assert suggestion["current"] == 70.0
+
+
 def test_closed_loop_reverses_hurting_one_parameter_move() -> None:
     records = [
         record_from_lap_archive(
