@@ -14,9 +14,9 @@ POSIX_MAX_ARG_CHARS = 24_000
 WINDOWS_BATCH_SIZE = 25
 WINDOWS_MAX_ARG_CHARS = 4_000
 WINDOWS_COMMAND_HEADROOM = 128
-_HASH_RE = re.compile(r"^[0-9a-f]{40}$")
+_HASH_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 _RAW_SECRET_KEYS = frozenset({"secret", "secret_value", "raw_secret", "value"})
-BASELINE_HASH_EXCLUDE_LINES = r'^\s*"hashed_secret"\s*:\s*"[0-9a-f]{40}",?\s*$'
+BASELINE_HASH_EXCLUDE_LINES = r'^\s*"hashed_secret"\s*:\s*"[0-9a-fA-F]{40}",?\s*$'
 
 
 def _repo_root() -> Path:
