@@ -5,9 +5,9 @@
 -- values match, so this adapter cannot silently drift from the design of record (fleet pitfall:
 -- redundant-code-drift — do not hand-copy tokens into N runtimes without a conformance check).
 --
--- HEX is kept as plain strings so the conformance test needs no Lua runtime. M.color() builds a
--- CSP rgbm when invoked; hud.lua and coaching_overlay.lua call T.color() at module scope, which is
--- safe in the CSP Lua host because rgbm is available before app modules load.
+-- HEX is kept as plain strings so the conformance test needs no Lua runtime. M.color()
+-- builds a CSP rgbm on demand; hud.lua and coaching_overlay.lua call it at require
+-- time to define module-level COLOR_* constants (rgbm is available when AC loads Lua apps).
 
 local M = {}
 
@@ -37,6 +37,7 @@ local function _rgb(hexstr, a)
 end
 
 local colorCache = {}
+local _warnedUnknown = {}
 
 --- Build a CSP rgbm from a token name at the given alpha (default opaque).
 ---@param name string  a key in M.HEX
@@ -44,7 +45,13 @@ local colorCache = {}
 function M.color(name, a)
   local hex = M.HEX[name]
   if hex == nil then
-    error("Unknown design token: " .. tostring(name))
+    if not _warnedUnknown[name] then
+      _warnedUnknown[name] = true
+      if ac and type(ac.log) == "function" then
+        ac.log("[COPILOT][design_tokens] unknown token: " .. tostring(name))
+      end
+    end
+    hex = M.HEX.chalk
   end
   local alpha = a or 1.0
   local nameCache = colorCache[name]
