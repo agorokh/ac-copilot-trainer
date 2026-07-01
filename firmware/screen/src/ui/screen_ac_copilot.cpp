@@ -86,7 +86,10 @@ bool contains_ascii(const char* haystack, const char* needle) {
 }
 
 bool snapshot_is_stale() {
-    if (!g_snap.has_data || g_last_snapshot_ms == 0) return false;
+    // `!has_data` already covers "no snapshot yet"; a separate
+    // `g_last_snapshot_ms == 0` guard would wedge staleness off forever if the
+    // first snapshot happened to land at millis() == 0 right after boot.
+    if (!g_snap.has_data) return false;
     return (uint32_t)(millis() - g_last_snapshot_ms) > SNAPSHOT_STALE_MS;
 }
 

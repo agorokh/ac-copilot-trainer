@@ -31,10 +31,13 @@ They are committed so `lv_font_conv` can be rerun without installing fonttools.
 ## Glyph Range
 
 Firmware copy remains ASCII-safe. The generated command/label/mono fonts use
-`0x20-0x7F`; the numeric readout fonts are subset to:
+`0x20-0x7F`; the numeric readout fonts are subset to the glyphs below **plus a
+trailing space**. The space glyph is required for readout spacing and is part
+of every `--symbols "… "` argument in the regeneration commands — keep it when
+re-running `lv_font_conv`:
 
 ```text
-0123456789:.+-/%kmhM
+0123456789:.+-/%kmhM<SPACE>
 ```
 
 Add more glyphs only when a screen actually prints them.
