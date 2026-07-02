@@ -32,6 +32,23 @@
 #define PHASE1_FALLBACK 0
 #endif
 
+// ---------------------------------------------------------------------------
+// SCREEN_TRANSPORT_SERIAL (issue #463): 1 → speak protocol v1 over the native
+// USB CDC (COM port) instead of WiFi + WebSocket. This removes the Windows
+// Mobile Hotspot dependency (a 2.4GHz SoftAP on the rig PC's single-radio
+// adapter drops the main WiFi). The same `dispatch_phase2_message` handler and
+// `ws_state` machine are reused; only the byte transport changes — outbound
+// frames are newline-delimited JSON on Serial, inbound frames are read the same
+// way. Default 0 keeps the WebSocket build byte-identical.
+// ---------------------------------------------------------------------------
+#ifndef SCREEN_TRANSPORT_SERIAL
+#define SCREEN_TRANSPORT_SERIAL 0
+#endif
+
+#if SCREEN_TRANSPORT_SERIAL && PHASE1_FALLBACK
+#error "SCREEN_TRANSPORT_SERIAL requires the Phase-2 build (PHASE1_FALLBACK=0)"
+#endif
+
 #if PHASE1_FALLBACK == 0
 #include <lvgl.h>
 #include <esp_heap_caps.h>   // heap_caps_malloc / MALLOC_CAP_SPIRAM
@@ -410,6 +427,19 @@ static void lvgl_tick() {
 
 // -- Network -----------------------------------------------------------------
 
+// Transport-agnostic frame send. In serial mode (issue #463) every protocol
+// frame is one newline-delimited JSON line on the USB CDC; the write is atomic
+// on the single Arduino thread, so interleaved debug prints (their own lines)
+// never split a frame. In WebSocket mode it is the unchanged `ws.send`.
+static void transport_send(const String& out) {
+#if SCREEN_TRANSPORT_SERIAL
+  Serial.print(out);
+  Serial.write('\n');
+#else
+  ws.send(out);
+#endif
+}
+
 static void send_demo_action() {
   if (!ENABLE_DEMO_ACTION) {
     return;
@@ -420,7 +450,7 @@ static void send_demo_action() {
   doc["name"] = "toggleFocusPractice";
   String out;
   serializeJson(doc, out);
-  ws.send(out);
+  transport_send(out);
   Serial.printf("[ws] -> %s\n", out.c_str());
 }
 
@@ -586,7 +616,7 @@ static void phase2_send_setup_load(const char* name, const char* path) {
   if (path && *path) doc["path"] = path;
   String out;
   serializeJson(doc, out);
-  ws.send(out);
+  transport_send(out);
   Serial.printf("[ws] -> %s\n", out.c_str());
 }
 
@@ -836,7 +866,7 @@ static void ws_on_event(WebsocketsEvent ev, String data) {
       doc["client"]  = CLIENT_ID;
       String out;
       serializeJson(doc, out);
-      ws.send(out);
+      transport_send(out);
       demo_next_at = millis() + DEMO_INTERVAL_MS;
       break;
     }
@@ -991,6 +1021,77 @@ static void sweep_rotations() {
 }
 #endif
 
+#if SCREEN_TRANSPORT_SERIAL
+// -- USB-serial transport (issue #463) --------------------------------------
+// The screen speaks the same protocol v1 over the native USB CDC. We reuse the
+// `ws_state`/`app_state` machine: the link is "Open" once the sidecar answers,
+// which drives the CONNECTED pill and the pt/se request drains exactly as the
+// WebSocket path does.
+static String   serial_rx_line;
+static uint32_t serial_hello_next_ms = 0;
+static bool     serial_link_up = false;
+
+static void serial_send_hello() {
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["type"] = "hello";
+  doc["client"] = CLIENT_ID;
+  doc["client_class"] = "screen";
+  String out;
+  serializeJson(doc, out);
+  transport_send(out);
+}
+
+static void serial_mark_link_up() {
+  if (serial_link_up) return;
+  serial_link_up = true;
+  ws_state = WsState::Open;
+  Serial.println("[serial] link up (sidecar answered)");
+  disconnect_grace_clear();
+  app_state_set(APP_CONNECTED);
+  app_state_set(APP_LAUNCHER_IDLE);
+}
+
+static void serial_transport_begin() {
+  ws_state = WsState::Connecting;
+  serial_rx_line = "";
+  serial_rx_line.reserve(512);
+  serial_send_hello();               // greet immediately; resent until answered
+  serial_hello_next_ms = millis() + 1000;
+  Serial.println("[serial] transport begin — hello sent over USB CDC");
+}
+
+static void serial_transport_tick() {
+  // Heartbeat hello: announce ourselves fast (1 s) until the sidecar answers,
+  // then slowly (5 s) forever. The slow beat lets a *restarted* sidecar — or a
+  // reopened COM port — re-register this screen peer without a board reboot
+  // (`hello` is idempotent server-side). Issue #463.
+  if ((int32_t)(millis() - serial_hello_next_ms) >= 0) {
+    serial_send_hello();
+    serial_hello_next_ms = millis() + (serial_link_up ? 5000 : 1000);
+  }
+  // Pump inbound newline-delimited JSON frames into the shared dispatcher.
+  while (Serial.available() > 0) {
+    int c = Serial.read();
+    if (c < 0) break;
+    if (c == '\n') {
+      serial_rx_line.trim();  // strip trailing \r / whitespace
+      if (serial_rx_line.length() > 0) {
+        serial_mark_link_up();
+        dispatch_phase2_message(serial_rx_line);
+      }
+      serial_rx_line = "";
+    } else if (c != '\r') {
+      if (serial_rx_line.length() < 4096) {
+        serial_rx_line += (char)c;
+      } else {
+        serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
+      }
+    }
+  }
+}
+#endif  // SCREEN_TRANSPORT_SERIAL
+
 void setup() {
   Serial.begin(115200);
   delay(250);
@@ -1086,10 +1187,15 @@ void setup() {
 #endif
 
   // WiFi.
+#if SCREEN_TRANSPORT_SERIAL
+  // Issue #463: USB-serial transport — no WiFi, no WebSocket, no hotspot.
+  serial_transport_begin();
+#else
   wifi_try_begin();
 
   // First WS attempt shortly after WiFi is up; the state machine handles it.
   ws_retry_at = millis() + 500;
+#endif
 }
 
 #if PHASE1_FALLBACK == 0
@@ -1126,7 +1232,7 @@ static void pt_request_drain() {
     }
     String out;
     serializeJson(doc, out);
-    ws.send(out);
+    transport_send(out);
     Serial.printf("[ws] -> %s\n", out.c_str());
   }
 }
@@ -1156,15 +1262,19 @@ static void se_request_drain() {
     }
     String out;
     serializeJson(doc, out);
-    ws.send(out);
+    transport_send(out);
     Serial.printf("[ws] -> %s\n", out.c_str());
   }
 }
 #endif
 
 void loop() {
+#if SCREEN_TRANSPORT_SERIAL
+  serial_transport_tick();
+#else
   wifi_tick();
   ws_tick();
+#endif
 #if PHASE1_FALLBACK == 0
   screen_pocket_technician_set_sidecar_link_up(ws_state == WsState::Open);
   screen_setup_exchange_set_sidecar_link_up(ws_state == WsState::Open);

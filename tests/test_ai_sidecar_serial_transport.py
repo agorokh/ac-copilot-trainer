@@ -132,7 +132,7 @@ def test_serial_peer_send_writes_ndjson() -> None:
     assert not srv._is_loopback_peer(peer)
 
 
-def test_open_serial_holds_dtr_rts_low_before_open() -> None:
+def test_open_serial_asserts_dtr_keeps_rts_low_before_open() -> None:
     import serial
 
     events: list[tuple[str, object]] = []
@@ -175,8 +175,8 @@ def test_open_serial_holds_dtr_rts_low_before_open() -> None:
         serial.Serial = original  # type: ignore[misc]
 
     open_event = next(e for e in events if e[0] == "open")
-    # DTR and RTS must both be LOW at the moment of open (no ESP32 auto-reset).
-    assert open_event[1] == (False, False)
+    # At open: DTR asserted (RX works on the S3 CDC), RTS low (no auto-reset).
+    assert open_event[1] == (True, False)
     assert ser.port == "COM9"
     assert ser.baudrate == 115200
 

@@ -17,9 +17,9 @@ serial path only needs:
   writes newline-delimited JSON to the port, with a non-loopback
   ``remote_address`` so the screen is classified as an external client (matching
   the WS screen peer).
-* :func:`run_serial_transport` — opens the port with **DTR/RTS held LOW** (so the
-  ESP32-S3 native USB CDC does not auto-reset on open — verified live on COM6),
-  reads NDJSON frames on a background thread, and feeds each into the injected
+* :func:`run_serial_transport` — opens the port with **DTR asserted, RTS low** (RX
+  works and the ESP32-S3 does not auto-reset — both verified live on COM6), reads
+  NDJSON frames on a background thread, and feeds each into the injected
   ``handle_frame(peer, data)`` coroutine. It reconnects on USB drop/replug.
 
 ``pyserial`` is imported lazily inside :func:`open_serial` so the sidecar core
@@ -79,11 +79,14 @@ class SerialPeer:
 
 
 def open_serial(port: str, baud: int) -> Any:
-    """Open ``port`` with DTR/RTS held LOW so the ESP32-S3 does not reset on open.
+    """Open ``port`` with DTR asserted and RTS low — RX works, board does not reset.
 
-    ``pyserial`` asserts DTR/RTS on open by default, which pulses the ESP32 auto-reset
-    circuit. Setting them ``False`` **before** ``open()`` configures the initial line
-    state so the board keeps running across a sidecar (re)connect.
+    On the ESP32-S3 native USB CDC, the device only delivers host→device (RX) bytes
+    to the sketch once the host asserts **DTR** ("terminal ready"); with DTR low the
+    board never sees the sidecar's frames (verified live: it kept re-``hello``-ing).
+    The board's auto-reset is driven by the **RTS** line pulse (and pyserial/.NET's
+    default of toggling *both* on open), not by a steady DTR — so DTR=True + RTS=False,
+    applied **before** ``open()`` as a steady state, gives working RX with no reset.
     """
     import serial  # lazy: only required when the serial transport is enabled
 
@@ -92,13 +95,13 @@ def open_serial(port: str, baud: int) -> Any:
     ser.baudrate = baud
     ser.timeout = _READ_TIMEOUT_S
     ser.write_timeout = _WRITE_TIMEOUT_S
-    ser.dtr = False
-    ser.rts = False
+    ser.rts = False  # never pulse RTS -> no ESP32 auto-reset
+    ser.dtr = True  # assert DTR so the S3 CDC delivers RX to the firmware
     ser.open()
     # Some drivers only apply line state after open; reassert defensively.
     try:
-        ser.dtr = False
         ser.rts = False
+        ser.dtr = True
     except OSError:
         pass
     return ser
@@ -183,7 +186,7 @@ async def run_serial_transport(
             await asyncio.sleep(reconnect_delay)
             continue
 
-        logger.info("serial transport open port=%s baud=%s (DTR/RTS low)", port, baud)
+        logger.info("serial transport open port=%s baud=%s (DTR high, RTS low)", port, baud)
         inbound: asyncio.Queue = asyncio.Queue()
         reader_stop = threading.Event()
         _spawn_reader(ser, loop, inbound, reader_stop, port)
