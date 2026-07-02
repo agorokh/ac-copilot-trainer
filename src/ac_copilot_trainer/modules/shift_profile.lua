@@ -11,6 +11,8 @@ local DEFAULT_REDLINE_FRAC = 0.97
 local MIN_SHIFT_RPM = 1000
 local MIN_SHIFT_GAS = 0.45
 local MAX_SHIFT_WINDOW_MS = 1500
+local CORNER_EXIT_FRAC = 0.30
+local CORNER_EXIT_MAX_SPLINE = 0.03
 
 M.DEFAULT_SHIFT_ZONE_FRAC = DEFAULT_SHIFT_ZONE_FRAC
 M.DEFAULT_REDLINE_FRAC = DEFAULT_REDLINE_FRAC
@@ -107,7 +109,8 @@ local function nearestFrameInWindow(trace, s0, s1)
   if span <= 1e-6 then
     return nil
   end
-  local target = (s0 + span * 0.85) % 1
+  local exitLen = math.min(span * CORNER_EXIT_FRAC, CORNER_EXIT_MAX_SPLINE)
+  local target = (s0 + exitLen) % 1
   local best, bestD
   for i = 1, #trace do
     local frame = trace[i]

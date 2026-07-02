@@ -579,6 +579,25 @@ def test_ete03d_shift_cue_uses_learned_reference_rpm_before_heuristic_zone(lua):
     assert view["shiftProvenance"] == "learned"
     assert view["shiftZonePct"] == pytest.approx(7200 / 8400)
 
+    rtc["reset"]()
+    no_limiter = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 200,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7300, gas = 0.95, gear = 2, gearCount = 6,
+        }
+    """)
+    no_limiter["bestSortedTrace"] = trace
+    no_limiter["brakingPoints"] = brakes
+    no_limiter["segments"] = segments
+    no_limiter["shiftProfile"] = profile
+    view_no_limiter = rtc["tick"](no_limiter)
+    assert (view_no_limiter["primaryLine"] or "") == "SHIFT UP"
+    assert view_no_limiter["shiftProvenance"] == "learned"
+    assert view_no_limiter["shiftTargetRpm"] == 7200
+
 
 def test_ete03e_shift_profile_learns_upshift_through_neutral(lua):
     """#442: manual/mod traces can report Neutral between two active gears.
@@ -632,6 +651,29 @@ def test_ete03f_shift_profile_ignores_skipped_gear_jump(lua):
 
     assert profile["hasLearnedShift"] is False
     assert profile["byGear"][2] is None
+
+
+def test_ete03g_shift_profile_samples_corner_exit_before_straight(lua):
+    """#442: corner segments can include the following exit straight.
+
+    The learned per-corner exit gear should sample near the early corner/apex
+    window, not 85% through a brake-to-brake segment after later upshifts.
+    """
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    trace = lua.execute("""
+        return {
+            { spline = 0.50, eMs = 10000, speed = 95, throttle = 0.7, gear = 3, rpm = 6200 },
+            { spline = 0.70, eMs = 18000, speed = 180, throttle = 1.0, gear = 5, rpm = 7600 },
+        }
+    """)
+    segments = lua.execute("""
+        return {
+            { kind = "corner", s0 = 0.45, s1 = 0.75, label = "T4", brakeSpline = 0.43 },
+        }
+    """)
+    profile = shift["learnFromReferenceTrace"](trace, segments, lua.eval("{ source = 'test' }"))
+
+    assert profile["cornerExitGears"]["T4"] == 3
 
 
 # ---------------------------------------------------------------------------

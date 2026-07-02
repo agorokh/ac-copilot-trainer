@@ -248,7 +248,7 @@ local function shiftCueActive(o)
   if targetRpm == nil then
     targetRpm = shiftProfile.resolveShiftTarget(o.shiftProfile, o.gear, o.rpmLimiter)
   end
-  return o.rpm ~= nil and o.rpmLimiter ~= nil and o.rpmLimiter > 0
+  return o.rpm ~= nil
     and (o.gas or 0) >= SHIFT_MIN_GAS
     and targetRpm ~= nil
     and o.rpm >= targetRpm
