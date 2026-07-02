@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T08:12:00Z
+last_updated: 2026-07-02T08:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -62,6 +62,36 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-02 UTC) - PR #452 MERGED: telemetry-learned shift points (#442)
+
+PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452) squash-merged to `main` as
+[`ff65522`](https://github.com/agorokh/ac-copilot-trainer/commit/ff6552271107884222dd20c6b3420921e71318f9).
+Issue [#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) is **CLOSED**.
+
+**Shipped:** live telemetry and schema-v1 lap archives now carry `rpm`; MoTeC import/export and
+reference archive validation preserve the signal across legacy, legacy+rpm, #266 per-wheel, and full
+#442 field layouts. New `shift_profile.lua` derives per-gear upshift RPMs and corner-exit gear
+provenance from the active reference trace. Realtime coaching and the Racing Atelier dashboard now
+use learned shift targets before the fixed 92% limiter heuristic, and Settings surfaces whether shift
+coaching is learned or heuristic.
+
+**Review hardening:** fixed optional-`rpm` archive loading for old traces, neutral-frame
+`1 -> 0 -> 2` upshift learning, skipped-gear downsample jumps (`2 -> 4`) being ignored instead of
+mislearned, learned shift cues when `rpmLimiter` is unavailable, and corner-exit gear sampling before
+the following straight.
+
+**Verification:** local `make ci-fast` green after the final review batch (`2211 passed, 117 skipped`,
+`ci-fast: OK`). GitHub #452 checks green (`CI/build`, canonical docs, conformance; vault guard skipped
+as expected). GraphQL review threads have no current unresolved blockers; resolve-gate reported no
+substantive findings; Qodo updated to head with `Bugs (0)`; Gemini's current-SHA review says it has no
+feedback. `python3 scripts/post_merge_classify.py --pr 452` reported no classification flags.
+
+**Post-merge:** `post_merge_sync.sh sync 452` fast-forwarded the clean `main` worktree
+`5c582f7 -> ff65522`. The first sync attempt from the isolated #442 worktree failed because local
+`main` is owned by `.claude/worktrees/codex-issue-381-voice-bank-timing`; rerunning from that clean
+main worktree succeeded. The local #442 branch could not be deleted only because it remains checked
+out in `.claude/worktrees/codex-issue-442`; remove that worktree after the vault handoff PR lands.
 
 ## Delivered (2026-07-02 UTC) - PR #455 MERGED: reference selection review hardening (#408)
 

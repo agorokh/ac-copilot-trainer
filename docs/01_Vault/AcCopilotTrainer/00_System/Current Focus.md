@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T08:12:00Z
+last_updated: 2026-07-02T08:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -21,6 +21,16 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-02):** PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452)
+**MERGED** at [`ff65522`](https://github.com/agorokh/ac-copilot-trainer/commit/ff6552271107884222dd20c6b3420921e71318f9) -
+telemetry-learned shift points for [#442](https://github.com/agorokh/ac-copilot-trainer/issues/442).
+Lap/reference traces now carry `rpm`; `shift_profile.lua` learns per-gear upshift RPMs and
+corner-exit gear provenance from the active reference; SHIFT UP coaching and the Racing Atelier RPM
+zones use learned targets before heuristic limiter fractions. Review hardening covered old archives
+without `rpm`, neutral/manual shift frames, skipped downsampled gear jumps, missing limiter readings,
+and corner-exit sampling before the following straight. GitHub checks green, resolve gate clean, Qodo
+`Bugs (0)`, Gemini current-SHA no feedback. #442 is **CLOSED**.
 
 **Delivered (2026-07-02):** PR [#455](https://github.com/agorokh/ac-copilot-trainer/pull/455)
 **MERGED** at [`5c582f7`](https://github.com/agorokh/ac-copilot-trainer/commit/5c582f7f7be166c8b10901d1116f268e7e214fef) -
@@ -62,8 +72,8 @@ SHIFT UP verb; live-verified in-sim), [#445](https://github.com/agorokh/ac-copil
 fixes the operator found on the glass — flashed to the device). Detail:
 [[pr-444-atelier-main-dashboard-2026-07-01]]. **Operator-pending:** rig-screen photo vs
 `esp32_rig.png`; in-sim BRAKE-state glance. **Open flake:** autonomous driver stalls ~500m from
-pit start (both drivers) — file vs the harness next session. Follow-up:
-[#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) telemetry-learned shift points.
+pit start (both drivers) — file vs the harness next session. Follow-up
+[#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) is now delivered by PR #452.
 
 **Delivered (2026-07-01):** PR [#429](https://github.com/agorokh/ac-copilot-trainer/pull/429)
 **MERGED** ([`047309e`](https://github.com/agorokh/ac-copilot-trainer/commit/047309ef450c56c6e95a886cca86724e277a64e5))
