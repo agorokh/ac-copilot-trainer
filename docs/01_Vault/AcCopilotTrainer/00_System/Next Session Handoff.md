@@ -75,8 +75,9 @@ Local proof: `python -m tools.rig_launcher --once --json` and the rebuilt packag
 `simhub.state=available` with `C:\Program Files (x86)\SimHub\SimHubWPF.exe`. Rebuilt
 `dist\AC-Copilot-Game-Point.exe`, refreshed the Desktop shortcut, and reopened the launcher. Focused
 checks passed (`ruff check`, `ruff format --check` on touched files, `pytest tests/test_rig_launcher.py`,
-plus `pytest -k simhub`). GitHub CI green on #449 head SHA (`build`, `Policy (Canonical Docs)`,
-`governance-conformance`).
+plus `pytest -k simhub`). GitHub CI green on #449 as
+[`475a1b1`](https://github.com/agorokh/ac-copilot-trainer/commit/475a1b1)
+(`build`, `Policy (Canonical Docs)`, `governance-conformance`).
 
 ## Delivered (2026-07-02 UTC) - PR #452 MERGED: telemetry-learned shift points (#442)
 
