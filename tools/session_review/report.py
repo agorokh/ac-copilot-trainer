@@ -278,7 +278,7 @@ def _reference_matches_source(lap: LoadedLap, source: str) -> bool:
     if source == "auto":
         return True
     if source == "imported":
-        return lap.source == "imported"
+        return lap.reference_kind == "imported"
     return lap.reference_kind == source
 
 
@@ -933,7 +933,7 @@ def _comparison_payload(
     reference: LoadedLap | None,
     reference_comparison_enabled: bool = True,
 ) -> dict[str, Any]:
-    same_combo = sorted(_valid_laps(_same_combo_laps(laps, selected)), key=_lap_sort_key)
+    same_combo = sorted(_reference_candidates(_same_combo_laps(laps, selected)), key=_lap_sort_key)
     best_selected = _best_valid_lap(selected)
     best_path = best_selected.path if best_selected is not None else None
     default_b = reference if reference is not None and reference.path != best_path else None
