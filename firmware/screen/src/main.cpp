@@ -1029,7 +1029,14 @@ static void sweep_rotations() {
 // WebSocket path does.
 static String   serial_rx_line;
 static uint32_t serial_hello_next_ms = 0;
+static uint32_t serial_last_rx_ms = 0;
 static bool     serial_link_up = false;
+// If no frame arrives for this long while linked, treat the link as DOWN. The
+// sidecar answers every heartbeat hello with a hello_ack (~5 s cadence once
+// linked), so this fires only on a real drop (sidecar crash/restart, USB
+// unplug) — 12 s tolerates ~2 missed acks without a false disconnect. This is
+// the serial analogue of the WebSocket `ConnectionClosed` event.
+static constexpr uint32_t SERIAL_RX_TIMEOUT_MS = 12000;
 
 static void serial_send_hello() {
   JsonDocument doc;
@@ -1043,6 +1050,7 @@ static void serial_send_hello() {
 }
 
 static void serial_mark_link_up() {
+  serial_last_rx_ms = millis();  // any inbound frame keeps the link alive
   if (serial_link_up) return;
   serial_link_up = true;
   ws_state = WsState::Open;
@@ -1052,10 +1060,25 @@ static void serial_mark_link_up() {
   app_state_set(APP_LAUNCHER_IDLE);
 }
 
+// Mirror the WebSocket `ConnectionClosed` path: the sidecar went silent, so drop
+// back to CONNECTING, arm the DISCONNECTED grace (the launcher pill flips after
+// WS_DISCONNECT_GRACE_MS), and resume the fast 1 s hello so we re-register the
+// instant it returns. Without this the pill would stay CONNECTED forever after a
+// sidecar crash (self-hosted reviewer HIGH on #464).
+static void serial_mark_link_down(const char* why) {
+  if (!serial_link_up) return;
+  serial_link_up = false;
+  ws_state = WsState::Connecting;
+  Serial.printf("[serial] link down (%s) — re-announcing\n", why);
+  disconnect_grace_arm();
+  serial_hello_next_ms = 0;  // fast re-hello on the next tick
+}
+
 static void serial_transport_begin() {
   ws_state = WsState::Connecting;
   serial_rx_line = "";
   serial_rx_line.reserve(512);
+  serial_last_rx_ms = millis();
   serial_send_hello();               // greet immediately; resent until answered
   serial_hello_next_ms = millis() + 1000;
   Serial.println("[serial] transport begin — hello sent over USB CDC");
@@ -1077,7 +1100,7 @@ static void serial_transport_tick() {
     if (c == '\n') {
       serial_rx_line.trim();  // strip trailing \r / whitespace
       if (serial_rx_line.length() > 0) {
-        serial_mark_link_up();
+        serial_mark_link_up();  // refreshes serial_last_rx_ms
         dispatch_phase2_message(serial_rx_line);
       }
       serial_rx_line = "";
@@ -1089,6 +1112,14 @@ static void serial_transport_tick() {
       }
     }
   }
+  // Down-transition: no frame (not even a heartbeat ack) for the timeout window
+  // means the sidecar is gone. Flip toward DISCONNECTED like the WS path does.
+  if (serial_link_up && (int32_t)(millis() - serial_last_rx_ms) > (int32_t)SERIAL_RX_TIMEOUT_MS) {
+    serial_mark_link_down("rx timeout");
+  }
+  // Surface DISCONNECTED to the launcher pill once the grace window elapses
+  // (mirrors ws_tick()'s call so the armed grace actually fires in serial mode).
+  disconnect_grace_evaluate();
 }
 #endif  // SCREEN_TRANSPORT_SERIAL
 
