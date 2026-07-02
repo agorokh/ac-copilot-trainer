@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T07:05:00Z
+last_updated: 2026-07-02T07:36:28Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -63,24 +63,32 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-07-02 UTC) - #408 reference-library selection
+## Delivered (2026-07-02 UTC) - PR #453 MERGED: session review browser/report products (#404) + reference selection (#408)
 
-Branch `codex/issue-408-reference-library` from `origin/main` completes the remaining
-[#408](https://github.com/agorokh/ac-copilot-trainer/issues/408) Part D scope after PR
-[#418](https://github.com/agorokh/ac-copilot-trainer/pull/418) delivered sectors/SuperLap and
-[#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) is closed. The report builder now
-classifies reference archives as `your-best`, `pro`, `tt`, `generated`, `imported`, or `none`;
-`tools.session_review` accepts `--reference-source` / `--reference-path`; sidecar
-`session.review.generate` accepts `reference_source` / basename-only `reference_file`; broadcasts
-keep local paths redacted while preserving `reference` / `reference_selection` metadata.
+PR [#453](https://github.com/agorokh/ac-copilot-trainer/pull/453) squash-merged to `main` as
+[`97a963f`](https://github.com/agorokh/ac-copilot-trainer/commit/97a963f). Issue
+[#404](https://github.com/agorokh/ac-copilot-trainer/issues/404) is **CLOSED**: Part A shipped in
+[#423](https://github.com/agorokh/ac-copilot-trainer/pull/423), and this PR delivered Parts B-D with
+session history, lap A/B comparison traces, lap-time and per-corner trends, and self-contained
+Markdown/JSON/HTML report products. Issue [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408)
+is also **CLOSED** after manual closeout: Parts A-B shipped in #418, Part C through the #353/#428 Track
+Titan line, and #453 delivered Part D reference-library selection.
 
-Proof so far: `ruff check` + `ruff format --check` on touched Python files, `git diff --check`,
-`pytest tests/test_session_review.py tests/test_ai_sidecar_external.py tests/test_lap_archive_source_structure.py tests/test_ws_bridge_hello_handshake.py -q`
-(97 passed after adding review-hardening regressions), and scratch CLI proof selecting Track Titan
-`lap_tt.json` with JSON + self-contained HTML.
-`make ci-fast` still stops at repo-wide `ruff format --check src tests tools scripts` because this
-Windows checkout has broad CRLF/LF drift across untouched files; do not fold that 226-file formatting
-churn into this PR unless the operator explicitly chooses a separate hygiene pass.
+**Shipped:** session review schema v2, local report HTML with embedded review JSON, reference-source
+selection (`auto`, `your-best`, `pro`, `tt`, `generated`, `imported`, `none`), explicit
+`--reference-path`, loopback `reference_file`, sidecar result metadata (`reference`,
+`reference_selection`, `html_path`), and external broadcasts that expose report/reference basenames
+instead of host-local paths. Review hardening fixed duplicated `_trend_sessions` logic and a
+basename-only error regression for explicit reference path resolution failures.
+
+**Verification:** GitHub CI green on #453 (`CI`, `Policy (Canonical Docs)`,
+`governance-conformance`); GraphQL review threads resolved. Local focused checks after review fixes:
+`ruff check` / `ruff format --check` on touched report/sidecar tests and
+`pytest tests/test_session_review.py tests/test_ai_sidecar_external.py -q` (61 passed; Windows pytest
+cache permission warning only). Earlier full proof for the same tree: `make PYTHON=python ci-test`
+(2208 passed, 117 skipped), `ci-lint`, security/secrets/policy/CSP checks, plus scratch CLI and
+localhost browser proof of Debrief, Next Session, History, Lap-Time Trend, Corner Trends, and Lap
+Compare rendering. Post-merge classification for #453: no flags.
 
 ## Delivered (2026-07-02 UTC) — PRs #444/#445/#446 MERGED: Racing Atelier runtime adoption (#432 Parts A2+B, #86 fix)
 

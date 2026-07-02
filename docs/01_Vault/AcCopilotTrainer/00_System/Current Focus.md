@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T07:05:00Z
+last_updated: 2026-07-02T07:36:28Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -22,16 +22,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**In flight (2026-07-02):** branch `codex/issue-408-reference-library` completes the remaining
-[#408](https://github.com/agorokh/ac-copilot-trainer/issues/408) reference-library selection slice
-after PR [#418](https://github.com/agorokh/ac-copilot-trainer/pull/418) delivered sectors/SuperLap
-and [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) closed Track Titan curriculum.
-Session Review now tags/selects `your-best` / `pro` / `tt` / `generated` / `imported` / `none`,
-CLI accepts `--reference-source` / `--reference-path`, and loopback `session.review.generate`
-accepts `reference_source` / `reference_file` while external broadcasts keep host paths redacted.
-Focused proof: 97 tests passing plus scratch CLI JSON/HTML proof selecting `lap_tt.json`. Local
-`make ci-fast` still trips on repo-wide Windows CRLF/LF drift across untouched files; touched-file
-Ruff checks and `git diff --check` are clean.
+**Delivered (2026-07-02):** PR [#453](https://github.com/agorokh/ac-copilot-trainer/pull/453)
+**MERGED** at [`97a963f`](https://github.com/agorokh/ac-copilot-trainer/commit/97a963f) - session
+review browser/report products for [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404)
+and reference selection for [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408). #404
+is **CLOSED** (Part A in #423; Parts B-D in #453), and #408 is **CLOSED** (Parts A-B in #418, Part C
+through #353/#428, Part D in #453). Session Review now writes schema-v2 Markdown/JSON/HTML with
+Debrief, Next Session, History, Lap-Time Trend, Corner Trends, and Lap Compare; CLI/sidecar reference
+selection supports `auto` / `your-best` / `pro` / `tt` / `generated` / `imported` / `none`; external
+broadcasts expose basenames only. CI green, review threads resolved, post-merge classification clean.
 
 **Delivered (2026-07-02):** Racing Atelier **runtime adoption complete on all three surfaces**
 ([#432](https://github.com/agorokh/ac-copilot-trainer/issues/432) Parts A2+B; #86 conformance fix):
