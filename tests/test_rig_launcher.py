@@ -700,6 +700,16 @@ def test_launcher_env_reads_are_case_insensitive(tmp_path: Path) -> None:
     assert paths.root == tmp_path / "LocalAppData" / "AC Copilot Trainer" / "GamePoint"
 
 
+def test_launcher_env_snapshot_preserves_exact_case_values(tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={"Path": "mixed", "PATH": "upper"})
+
+    env = sup.sidecar_environment()
+
+    assert env["Path"] == "mixed"
+    assert env["PATH"] == "upper"
+
+
 def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> None:
     exe = tmp_path / "SimHub" / "SimHubWPF.exe"
     exe.parent.mkdir()

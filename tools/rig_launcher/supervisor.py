@@ -35,6 +35,8 @@ class _CaseInsensitiveEnv(Mapping[str, str]):
         self._keys = {key.upper(): key for key in self._data}
 
     def __getitem__(self, key: str) -> str:
+        if key in self._data:
+            return self._data[key]
         return self._data[self._keys[key.upper()]]
 
     def __iter__(self) -> Iterable[str]:
@@ -44,6 +46,8 @@ class _CaseInsensitiveEnv(Mapping[str, str]):
         return len(self._data)
 
     def get(self, key: str, default: str | None = None) -> str | None:
+        if key in self._data:
+            return self._data[key]
         original = self._keys.get(key.upper())
         if original is None:
             return default
