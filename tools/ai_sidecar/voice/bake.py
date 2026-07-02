@@ -61,22 +61,22 @@ from tools.ai_sidecar.voice.manifest import (
     sha256_bytes,
 )
 from tools.ai_sidecar.voice.vocabulary import (
-    INTENSITY_CHAIN_VERSION,
-    VOICE_PERSONA_ID,
+    EXPECTED_SIGNATURE_SUFFIX,
     iter_vocabulary,
     vocabulary_hash,
 )
 
 _log = logging.getLogger("ai_sidecar.voice.bake")
 
-#: Bump when the prosody filter chains change — folded into ``voice_signature`` so a chain edit
-#: without a re-bake is surfaced (the bank's signature no longer matches what the code would
-#: render).
-PROSODY_VERSION = 2
+# PROSODY_VERSION moved to tools.ai_sidecar.voice.vocabulary and is folded into
+# EXPECTED_SIGNATURE_SUFFIX, so the stdlib-only manifest gate enforces prosody staleness too
+# (codex review #441).
 
 
 def _signature_suffix() -> str:
-    return f"{VOICE_PERSONA_ID}+intensity{INTENSITY_CHAIN_VERSION}"
+    # Manifest.validate anchors on this exact suffix with ``endswith`` (issue #438) — it must stay
+    # the FINAL segment of every backend's voice_signature.
+    return EXPECTED_SIGNATURE_SUFFIX
 
 
 class VoiceBackend(Protocol):
@@ -162,7 +162,9 @@ class ProsodyShaper:
 
     @property
     def signature(self) -> str:
-        return f"{ffmpeg_version()}+prosody{PROSODY_VERSION}"
+        # Host-varying part only (ffmpeg major). The code-owned prosody-chain version rides in
+        # EXPECTED_SIGNATURE_SUFFIX so the runtime gate enforces it (codex review #441).
+        return ffmpeg_version()
 
     def shape(self, in_wav: Path, out_wav: Path, register: str, samplerate: int) -> None:
         filt = _prosody_filter(register, samplerate, apply_tempo=self._apply_tempo)
@@ -535,7 +537,20 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 4
     The manifest stamps the current :func:`vocabulary_hash` and the backend's ``voice_signature``,
     so a later wording/register change (or a different voice / prosody chain / ffmpeg build) is
     detected at load. Returns the in-memory manifest.
+
+    Raises :class:`ValueError` when the backend's ``voice_signature`` lacks the enforced
+    persona/prosody/intensity suffix — such a bank would pass the bake but be refused by
+    ``Manifest.validate`` on every load (qodo review #441).
     """
+    if not backend.voice_signature.endswith(EXPECTED_SIGNATURE_SUFFIX):
+        # Fail loudly BEFORE rendering a single clip — and never auto-append: stamping a
+        # persona/prosody provenance the backend did not declare would forge exactly what the
+        # runtime gate exists to verify.
+        raise ValueError(
+            f"backend voice_signature {backend.voice_signature!r} must end with "
+            f"vocabulary.EXPECTED_SIGNATURE_SUFFIX {EXPECTED_SIGNATURE_SUFFIX!r} — append "
+            "bake._signature_suffix() to the backend's signature"
+        )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     phrases = list(iter_vocabulary())

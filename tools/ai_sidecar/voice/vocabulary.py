@@ -102,6 +102,22 @@ VOICE_PERSONA_ID = "race-engineer-original-v1"
 VOICE_PERSONA_LICENSE = "project-authored; no unconsented real-person clone"
 INTENSITY_CHAIN_VERSION = 2
 
+#: Bump when the per-register prosody delivery changes: the ffmpeg filter chains in
+#: ``bake._prosody_filter`` (shaped speech backends) or ``bake.ToneBackend``'s register tone table
+#: (the CI voice). Lives here — not in ``bake`` — so the stdlib-only ``manifest`` gate can enforce
+#: it without importing the bake stack (moved from ``bake.PROSODY_VERSION``, codex review #441).
+PROSODY_VERSION = 2
+
+#: The persona/prosody/intensity-chain suffix every backend appends as the FINAL segment of its
+#: ``voice_signature`` at bake time (``bake._signature_suffix``). ``Manifest.validate`` anchors on
+#: this suffix (issue #438): a persona swap, prosody-chain edit, or intensity-chain bump with
+#: identical wording keeps ``vocabulary_hash`` constant, so this suffix is the only stale-bank
+#: detector for those changes. Host-varying signature parts (backend id, voice name, ffmpeg major)
+#: stay OUT of the suffix so baked banks remain portable across hosts.
+EXPECTED_SIGNATURE_SUFFIX = (
+    f"{VOICE_PERSONA_ID}+prosody{PROSODY_VERSION}+intensity{INTENSITY_CHAIN_VERSION}"
+)
+
 
 #: Universal corner numbers we bake (1-based, as spoken). T21+ degrades to the generic clip.
 MAX_CORNER: int = 20

@@ -69,6 +69,23 @@ def test_disabled_on_vocabulary_drift(tmp_path) -> None:
     assert pb.played == []  # never plays a possibly-wrong clip
 
 
+def test_disabled_on_signature_drift(tmp_path) -> None:
+    # Issue #438: persona/intensity-chain drift keeps vocabulary_hash constant (wording identical),
+    # so the voice_signature suffix gate is what must disable the coach.
+    _baked(tmp_path)
+    mfp = tmp_path / MANIFEST_FILENAME
+    data = json.loads(mfp.read_text())
+    # Older prosody chain, same persona/intensity/wording — the sharpest form of the gap.
+    data["voice_signature"] = "tone-v3+race-engineer-original-v1+prosody1+intensity2"
+    mfp.write_text(json.dumps(data))
+    pb = RecordingPlayback()
+    coach = VoiceCoach.from_bank(tmp_path, VoiceConfig(), playback=pb)
+    assert not coach.enabled
+    assert "voice_signature" in coach.disabled_reason
+    coach.subscribe(make_advisory(kind="late_brake", urgency="act", corner=2))
+    assert pb.played == []  # never plays clips whose baked persona/tone is stale
+
+
 def test_disabled_coach_factory() -> None:
     coach = VoiceCoach.disabled("test reason")
     assert not coach.enabled
