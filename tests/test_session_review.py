@@ -240,6 +240,89 @@ def test_reference_source_selects_track_titan_over_faster_candidate(
     assert any(row["reference_kind"] == "tt" for row in report["history"]["laps"])
 
 
+def test_reference_source_imported_excludes_specialized_imports(session_corpus: Path) -> None:
+    _write_lap(
+        session_corpus,
+        "imported",
+        _corner_archive(
+            lap_uuid="lap-imported",
+            session_uuid="sess-imported",
+            lap_n=1,
+            exported_at="2026-06-29T10:40:00Z",
+            degrade=5.0,
+            source="imported",
+            import_format="unknown_import",
+        ),
+    )
+    _write_lap(
+        session_corpus,
+        "pro",
+        _corner_archive(
+            lap_uuid="lap-pro",
+            session_uuid="sess-pro",
+            lap_n=1,
+            exported_at="2026-06-29T10:45:00Z",
+            degrade=0.0,
+            source="imported",
+            import_format="motec_csv",
+        ),
+    )
+    _write_lap(
+        session_corpus,
+        "generated",
+        _corner_archive(
+            lap_uuid="lap-generated",
+            session_uuid="sess-generated",
+            lap_n=1,
+            exported_at="2026-06-29T10:50:00Z",
+            degrade=0.0,
+            source="imported",
+            import_format="generated_reference_v1",
+            generator={"name": "tools.ac_harness.reference_lap.synthetic"},
+        ),
+    )
+
+    report = build_session_report(
+        [session_corpus],
+        session="sess-latest",
+        reference_source="imported",
+        grip_ceiling_g=2.5,
+        generated_at="stamp",
+    )
+
+    assert report["reference"]["source_file"] == "lap_imported.json"
+    assert report["reference"]["kind"] == "imported"
+    assert report["reference_selection"]["requested_source"] == "imported"
+
+
+def test_comparison_fallback_excludes_partial_track_titan_laps(session_corpus: Path) -> None:
+    partial_tt = _corner_archive(
+        lap_uuid="lap-tt-partial",
+        session_uuid="sess-tt-partial",
+        lap_n=1,
+        exported_at="2026-06-29T10:50:00Z",
+        degrade=0.0,
+        source="imported",
+        import_format="track_titan_reference_v1",
+        generator={"tt_reference": {"partial": True}},
+    )
+    partial_tt["lap"]["lap_ms"] = 1
+    _write_lap(session_corpus, "tt-partial", partial_tt)
+
+    report = build_session_report(
+        [session_corpus],
+        session="sess-reference",
+        reference_source="auto",
+        grip_ceiling_g=2.5,
+        generated_at="stamp",
+    )
+
+    assert report["reference"]["source_file"] == "lap_ref.json"
+    assert report["comparison"]["default_pair"]["a"] == "lap-ref"
+    assert report["comparison"]["default_pair"]["b"] != "lap-tt-partial"
+    assert all(row.get("lap_uuid") != "lap-tt-partial" for row in report["comparison"]["laps"])
+
+
 def test_reference_source_none_disables_reference_comparison(session_corpus: Path) -> None:
     report = build_session_report(
         [session_corpus],
