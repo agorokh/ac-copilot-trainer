@@ -329,7 +329,8 @@ def test_ete01_empty_session_returns_placeholder(lua):
         f"empty state subState must be 'no_reference', got {view['subState']}"
     )
 
-    # hud.draw still renders chrome + ACTIVE SUGGESTION title
+    # hud.draw still renders chrome + the COACHING wordmark (#432 Part A2:
+    # WINDOW_0 is the qualitative coaching voice, no verb/corner duplication)
     lua.execute("_reset_recorders()")
     hud = lua.execute('local m = require("hud"); return m')
     vm = lua.eval("""
@@ -350,11 +351,14 @@ def test_ete01_empty_session_returns_placeholder(lua):
     hud["draw"](vm)
     rect_count = lua.execute("return #_draw_rect_filled_calls")
     assert rect_count >= 1, "hud.draw must render at least one drawRectFilled (panel chrome)"
-    assert lua.execute('return _count_dwrite_text("ACTIVE SUGGESTION")') >= 1, (
-        "hud.draw must render 'ACTIVE SUGGESTION' title via dwriteDrawText"
+    assert lua.execute('return _count_dwrite_text("COACHING")') >= 1, (
+        "hud.draw must render the COACHING wordmark via dwriteDrawText"
     )
     assert lua.execute('return _count_dwrite_text("DRIVE A LAP")') >= 1, (
         "empty state must render 'DRIVE A LAP' placeholder"
+    )
+    assert lua.execute('return _count_dwrite_text("reference will appear")') >= 1, (
+        "empty state keeps the coaching-oracle OCR anchor line"
     )
     assert lua.execute('return _count_dwrite_text("S1: 0.20 S FASTER")') >= 1, (
         "sector delta toast must render in WINDOW_0"

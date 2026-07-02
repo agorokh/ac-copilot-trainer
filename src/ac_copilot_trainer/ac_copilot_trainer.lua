@@ -2103,7 +2103,9 @@ local function autoPlaceOnce()
   -- 1080p display, re-forced every load (#432 Part A2 review).
   local coach = MANIFEST_WINDOW_SIZES["Coaching"]
   local positions = {
-    ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
+    -- COACHING tile sits RIGHT of the virtual rear-view mirror (operator
+    -- report, #432: the old 0.5-centered anchor rendered it ON the mirror).
+    ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.60), math.floor(screenH * 0.03)),
     ["Coaching"]           = vec2(
       math.floor(screenW * 0.5 - coach[1] * 0.5),
       math.min(math.floor(screenH * 0.78), screenH - coach[2] - 8)),

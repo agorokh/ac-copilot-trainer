@@ -373,6 +373,42 @@ def test_verb_vocabulary_preserved(lua):
         assert verb in texts, f"{primary!r} must render verb {verb!r}"
 
 
+def test_coaching_tile_is_coaching_voice_not_card_duplicate(lua):
+    """WINDOW_0 (#432 operator direction): qualitative coaching only — the
+    LLM advisory renders big; the verb / corner id / target numbers that
+    live on the main card must NOT re-render here."""
+    lua.execute('_hud = require("hud")')
+    lua.execute(
+        "_hud.draw({realtimeView={primaryLine='BRAKE NOW', "
+        "secondaryLine='TARGET 120 KM/H', cornerLabel='T4', kind='brake', "
+        "subState='braking', advisory='Ease off to 120 and trail to apex'}, "
+        "sectorMessage='S1: 0.20 s faster than ref lap'})"
+    )
+    texts = [t["text"] for t in lua.globals()["_texts"].values()]
+    joined = " | ".join(texts)
+    assert any("EASE OFF TO 120" in t for t in texts), f"advisory must render: {joined}"
+    assert "COACHING" in texts, "brass-mark COACHING wordmark"
+    assert "BRAKE NOW" not in texts, "verb belongs to the main card only"
+    assert "T4" not in texts, "corner id belongs to the main card only"
+    assert "TARGET 120 KM/H" not in texts, "target speed belongs to the main card only"
+    assert any("S1: 0.20 S FASTER" in t for t in texts), "sector strip renders"
+
+
+def test_coaching_tile_hint_ladder(lua):
+    """Without an advisory, active post-lap hints render with the +N counter."""
+    lua.execute('_hud = require("hud")')
+    lua.execute(
+        "_hud.draw({realtimeView={primaryLine='ON PACE', secondaryLine='NEXT: T2', "
+        "kind='info', subState='cruising'}, "
+        "coachingLines={{kind='brake', text='Brake later into T3'}, "
+        "{kind='line', text='Wider entry at T5'}}, coachingRemaining=12})"
+    )
+    texts = [t["text"] for t in lua.globals()["_texts"].values()]
+    assert any("BRAKE LATER INTO T3" in t for t in texts), f"first hint renders: {texts}"
+    assert any("+1 more this lap" in t for t in texts), "hint counter renders"
+    assert "NEXT: T2" not in texts, "rules-engine context line is card data, not coaching"
+
+
 def test_atelier_fonts_bundled():
     """The Racing Atelier faces ship with the app (single font source for the
     Lua HUD; same OFL families the firmware embeds)."""

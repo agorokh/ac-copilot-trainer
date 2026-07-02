@@ -1,9 +1,12 @@
--- WINDOW_0 — Active Suggestions tile (issue #72 rebuild; #432 Part A2 typography).
+-- WINDOW_0 — COACHING tile (issue #72 rebuild; #432 Part A2 coaching voice).
 --
--- Style adapted from CMRT-Essential-HUD/gearbox/first.lua: absolute-positioned
--- ui.dwriteDrawText / ui.drawRectFilled / ui.pathArcTo. NO ImGui widgets.
--- Always renders panel chrome + title even in the empty state — never blank.
--- Fonts follow the Racing Atelier roles (Saira Semi Condensed via coaching_font).
+-- Operator direction (#432): this tile is the qualitative COACHING voice —
+-- LLM per-corner advisories, post-lap hints, debrief, sector deltas. The
+-- command verb, corner id and target numbers live on the main instrument
+-- card (WINDOW_1) and are deliberately NOT duplicated here. Racing Atelier
+-- chrome (carbon, brass seg-mark header) keeps the two windows one family.
+-- Absolute-positioned ui.dwriteDrawText / ui.drawRectFilled; NO ImGui
+-- widgets. Always renders chrome + placeholder — never blank.
 
 local fontMod = require("coaching_font")
 local T = require("design_tokens")
@@ -212,122 +215,107 @@ function M.draw(vm)
   local sz = safeWindowSize()
   local w = sz.x
   local h = sz.y
-  local centerX = w * 0.5
 
-  -- Panel background — dark rounded rect with red bottom border accent
+  -- Card ground — same Racing Atelier chrome family as the main card
   ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG_DARK, PANEL_ROUNDING)
   ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
 
-  -- Top section: "ACTIVE SUGGESTION" small caps in red, centered
+  local padX = 16
+
+  -- Header: brass seg-mark + COACHING wordmark (launcher/rig header idiom).
+  -- This tile is the COACHING voice — qualitative advice only. The verb,
+  -- corner id and target numbers live on the main card and are deliberately
+  -- NOT repeated here (#432 operator direction: no duplication).
   do
-    local titleFontPx = 11
-    local titleSize = measure("ACTIVE SUGGESTION", titleFontPx)
-    local titlePos = vec2(centerX - titleSize.x * 0.5, PANEL_PAD_Y)
-    local tk = fontMod.pushNamed("label", titleFontPx)
-    dwriteSafe("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
+    ui.drawRectFilled(vec2(padX, 14), vec2(padX + 6, 30), T.color("brass"), 0)
+    local tk = fontMod.pushNamed("label", 12)
+    dwriteSafe("COACHING", 12, vec2(padX + 12, 16), COLOR_TEXT_GREY)
     fontMod.pop(tk)
+    ui.drawRectFilled(vec2(padX, 42), vec2(w - padX, 43), T.color("chalk", 0.07), 0)
   end
 
-  -- Corner label (when known) — large Michroma centered
-  local y = PANEL_PAD_Y + 22
-  local cornerLabel = view.cornerLabel
-  if type(cornerLabel) == "string" and cornerLabel ~= "" then
-    local cornerFontPx = 22
-    local cornerStr = string.upper(cornerLabel)
-    local cornerSize = measure(cornerStr, cornerFontPx)
-    local cornerPos = vec2(centerX - cornerSize.x * 0.5, y)
-    local ck = fontMod.pushNamed("disp", cornerFontPx)
-    dwriteSafe(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
-    fontMod.pop(ck)
-    y = y + 30
-  end
-
-  -- Primary line (white Michroma uppercase, large)
-  if type(view.primaryLine) == "string" and view.primaryLine ~= "" then
-    local primaryFontPx = 18
-    local primaryStr = string.upper(view.primaryLine)
-    local primarySize = measure(primaryStr, primaryFontPx)
-    local primaryPos = vec2(centerX - primarySize.x * 0.5, y)
-    local pColor = colorForKind(view.kind)
-    local pk = fontMod.pushNamed("disp", primaryFontPx)
-    dwriteSafe(primaryStr, primaryFontPx, primaryPos, pColor)
-    fontMod.pop(pk)
-    y = y + 24
-  end
-
-  -- Secondary line (amber Michroma uppercase, slightly smaller)
-  if type(view.secondaryLine) == "string" and view.secondaryLine ~= "" then
-    local secFontPx = 14
-    local secStr = string.upper(view.secondaryLine)
-    local secSize = measure(secStr, secFontPx)
-    local secPos = vec2(centerX - secSize.x * 0.5, y)
-    local sColor = COLOR_AMBER
-    if view.kind == "brake" then
-      sColor = COLOR_TEXT_GREY
-    elseif view.kind == "placeholder" then
-      sColor = COLOR_TEXT_GREY
-    end
-    local sk = fontMod.pushNamed("disp", secFontPx)
-    dwriteSafe(secStr, secFontPx, secPos, sColor)
-    fontMod.pop(sk)
-    y = y + 20
-  end
-
-  -- Sector/micro-sector delta toast from the live delta pipeline.
-  if type(vm.sectorMessage) == "string" and vm.sectorMessage ~= "" then
-    local sectorFontPx = 11
-    local sectorStr = string.upper(vm.sectorMessage)
-    local sectorSize = measure(sectorStr, sectorFontPx)
-    local sectorPos = vec2(centerX - sectorSize.x * 0.5, y)
-    local sk = fontMod.pushNamed("label", sectorFontPx)
-    dwriteSafe(sectorStr, sectorFontPx, sectorPos, colorForSectorMessage(vm.sectorMessage))
-    fontMod.pop(sk)
-    y = y + 16
-  end
-
-  -- Sidecar debrief (rules + optional Ollama follow-up); keeps LLM output visible
-  -- on WINDOW_0 without the removed coaching-window panel (Bugbot).
-  if type(vm.debriefText) == "string" and vm.debriefText ~= "" then
-    local raw = vm.debriefText
-    if string.len(raw) > 140 then
-      raw = string.sub(raw, 1, 137) .. "..."
-    end
-    local df = 10
-    local dk = fontMod.pushNamed("label", df)
-    if ui and ui.dwriteDrawText ~= nil then
-      local lines = {}
-      local maxW = w - 24
-      local curLine = ""
-      local cappedLines = false
-      for word in string.gmatch(raw, "%S+") do
-        local trial = (curLine == "") and word or (curLine .. " " .. word)
-        local tw = measure(trial, df)
-        if tw.x > maxW and curLine ~= "" then
-          lines[#lines + 1] = curLine
-          curLine = word
-          if #lines >= 3 then
-            cappedLines = true
-            break
-          end
-        else
-          curLine = trial
-        end
-      end
-      if curLine ~= "" and #lines < 3 then
+  --- Word-wrap helper: draw `raw` from yTop, capped at maxLines; returns next y.
+  local function drawWrapped(raw, px, yTop, color, maxLines, role)
+    local lines = {}
+    local maxW = w - padX * 2
+    local curLine = ""
+    local capped = false
+    for word in string.gmatch(raw, "%S+") do
+      local trial = (curLine == "") and word or (curLine .. " " .. word)
+      if measure(trial, px).x > maxW and curLine ~= "" then
         lines[#lines + 1] = curLine
-      end
-      local yy = math.max(y, h - 56)
-      for li = 1, #lines do
-        local ln = lines[li]
-        if li == 3 and #lines == 3 and cappedLines then
-          ln = ln .. "..."
+        curLine = word
+        if #lines >= maxLines then
+          capped = true
+          break
         end
-        local ls = measure(ln, df)
-        local lp = vec2(centerX - ls.x * 0.5, yy + (li - 1) * (df + 3))
-        dwriteSafe(ln, df, lp, COLOR_TEXT_GREY)
+      else
+        curLine = trial
       end
     end
-    fontMod.pop(dk)
+    if curLine ~= "" and #lines < maxLines then
+      lines[#lines + 1] = curLine
+    end
+    local fk = fontMod.pushNamed(role or "disp", px)
+    for li = 1, #lines do
+      local ln = lines[li]
+      if li == maxLines and capped then
+        ln = ln .. "..."
+      end
+      dwriteSafe(ln, px, vec2(padX, yTop + (li - 1) * (px + 6)), color)
+    end
+    fontMod.pop(fk)
+    return yTop + #lines * (px + 6)
+  end
+
+  -- Coaching content ladder (most valuable voice wins; never blank):
+  --   1. Live per-corner LLM advisory (the coaching gold) — amber
+  --   2. Post-lap coaching hints while their timer runs — kind-toned
+  --   3. Post-lap LLM debrief — mute
+  --   4. Placeholder guidance for a fresh session
+  local contentY = 56
+  local advisory = view.advisory
+  local hints = vm.coachingLines
+  local hintsActive = type(hints) == "table" and #hints > 0
+    and tonumber(vm.coachingRemaining or 0) > 0
+
+  if type(advisory) == "string" and advisory ~= "" then
+    drawWrapped(string.upper(advisory), 19, contentY, COLOR_AMBER, 3, "disp")
+  elseif hintsActive then
+    local first = hints[1]
+    local text = (type(first) == "table" and first.text) or tostring(first)
+    local kind = (type(first) == "table" and first.kind) or "general"
+    local tone = colorForKind(kind)
+    if tone == COLOR_TEXT_GREY then tone = COLOR_WHITE end
+    local yAfter = drawWrapped(string.upper(text or ""), 19, contentY, tone, 3, "disp")
+    if #hints > 1 then
+      local mk = fontMod.pushNamed("mono", 11)
+      dwriteSafe(string.format("+%d more this lap", #hints - 1), 11,
+        vec2(padX, yAfter + 6), COLOR_TEXT_GREY)
+      fontMod.pop(mk)
+    end
+  elseif type(vm.debriefText) == "string" and vm.debriefText ~= "" then
+    local raw = vm.debriefText
+    if string.len(raw) > 160 then
+      raw = string.sub(raw, 1, 157) .. "..."
+    end
+    drawWrapped(raw, 13, contentY, COLOR_TEXT_GREY, 4, "label")
+  else
+    local pk = fontMod.pushNamed("disp", 19)
+    dwriteSafe("DRIVE A LAP", 19, vec2(padX, contentY), COLOR_WHITE)
+    fontMod.pop(pk)
+    local mk = fontMod.pushNamed("mono", 11)
+    dwriteSafe("reference will appear", 11, vec2(padX, contentY + 28), COLOR_TEXT_GREY)
+    fontMod.pop(mk)
+  end
+
+  -- Sector delta strip (bottom-anchored, mono, signal-toned) — the one piece
+  -- of quantitative feedback that belongs to coaching, not the instrument.
+  if type(vm.sectorMessage) == "string" and vm.sectorMessage ~= "" then
+    local sectorStr = string.upper(vm.sectorMessage)
+    local sk = fontMod.pushNamed("mono", 11)
+    dwriteSafe(sectorStr, 11, vec2(padX, h - 26), colorForSectorMessage(vm.sectorMessage))
+    fontMod.pop(sk)
   end
 end
 

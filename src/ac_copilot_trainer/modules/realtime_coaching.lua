@@ -424,6 +424,10 @@ function M.tick(opts)
       local advice = opts.cornerAdvisories[topLabel]
       if type(advice) == "string" and advice ~= "" then
         view.secondaryLine = advice
+        -- Marked separately so the coaching tile can distinguish real LLM
+        -- coaching from rules-engine context lines (which duplicate the main
+        -- card's data and must not re-render on WINDOW_0 — #432 Part A2).
+        view.advisory = advice
         -- Keep view.kind from rules engine (e.g. brake red) — advisory is secondary only.
       end
     end
