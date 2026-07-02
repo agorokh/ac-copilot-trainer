@@ -22,6 +22,7 @@ local MAX_LAP_TRACE = 2000
 ---@field throttle number
 ---@field steering number
 ---@field gear integer
+---@field rpm number
 ---@field spline number
 ---@field px number
 ---@field py number
@@ -35,6 +36,7 @@ local MAX_LAP_TRACE = 2000
 ---@field throttle number
 ---@field steer number
 ---@field gear integer
+---@field rpm number
 ---@field px number
 ---@field py number
 ---@field pz number
@@ -145,6 +147,7 @@ function Telemetry:update(dt, car, sim)
   if car.gear ~= nil then
     gear = math.floor(tonumber(car.gear) or 0)
   end
+  local rpm = tonumber(car.rpm) or 0
   ---@type TelemetrySample
   local s = {
     t = t,
@@ -153,6 +156,7 @@ function Telemetry:update(dt, car, sim)
     throttle = car.gas or 0,
     steering = steer,
     gear = gear,
+    rpm = rpm,
     spline = car.splinePosition or 0,
     px = px,
     py = py,
@@ -188,6 +192,7 @@ function Telemetry:update(dt, car, sim)
       throttle = s.throttle,
       steer = steer,
       gear = s.gear,
+      rpm = s.rpm,
       px = px,
       py = py,
       pz = pz,

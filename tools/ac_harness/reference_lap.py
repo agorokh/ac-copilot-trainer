@@ -51,6 +51,17 @@ TRACE_FIELDS: tuple[str, ...] = (
     "tyreCoreTemp_fr",
     "tyreCoreTemp_rl",
     "tyreCoreTemp_rr",
+    "rpm",
+)
+
+_LEGACY_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
+_LEGACY_RPM_TRACE_FIELDS: tuple[str, ...] = _LEGACY_TRACE_FIELDS + ("rpm",)
+_PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[10:22]
+_TRACE_FIELD_VARIANTS: tuple[tuple[str, ...], ...] = (
+    _LEGACY_TRACE_FIELDS,
+    _LEGACY_RPM_TRACE_FIELDS,
+    _LEGACY_TRACE_FIELDS + _PER_WHEEL_TRACE_FIELDS,
+    TRACE_FIELDS,
 )
 
 SCHEMA_VERSION = 1
@@ -82,9 +93,9 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-#: The original required trace columns. Fields beyond these (the per-wheel #266 channels) are
-#: OPTIONAL and default to 0.0 when a frame omits them, so hand-built / pre-#266 traces stay valid.
-_REQUIRED_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
+#: The original required trace columns. Fields beyond these (the per-wheel #266 channels and
+#: #442 rpm) are OPTIONAL and default to 0.0 when a frame omits them.
+_REQUIRED_TRACE_FIELDS: tuple[str, ...] = _LEGACY_TRACE_FIELDS
 
 
 def _normalize_trace_frame(frame: Mapping[str, Any], index: int) -> dict[str, float]:
@@ -273,13 +284,11 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if not isinstance(trace, Mapping):
         raise LapArchiveSchemaError("trace must be an object")
     fields = trace.get("fields")
-    # Accept the pre-#266 10-field trace AND the per-wheel-extended set: SCHEMA_VERSION is still 1
-    # and existing archives carry only the required columns. A valid trace is the required columns,
-    # optionally followed by the #266 per-wheel channels (exact, in order).
-    if fields not in (list(_REQUIRED_TRACE_FIELDS), list(TRACE_FIELDS)):
-        raise LapArchiveSchemaError(
-            f"trace.fields must be {list(_REQUIRED_TRACE_FIELDS)!r} or {list(TRACE_FIELDS)!r}"
-        )
+    # Accept pre-#266 10-field, importer 10+rpm, #266 22-field, and full #442 traces:
+    # SCHEMA_VERSION is still 1 and existing archives carry older column sets.
+    allowed_fields = [list(variant) for variant in _TRACE_FIELD_VARIANTS]
+    if fields not in allowed_fields:
+        raise LapArchiveSchemaError(f"trace.fields must be one of {allowed_fields!r}")
     samples = trace.get("samples")
     if not isinstance(samples, list):
         raise LapArchiveSchemaError("trace.samples must be a list")
@@ -288,7 +297,7 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if trace.get("samples_count") != len(samples):
         raise LapArchiveSchemaError("trace.samples_count must equal len(trace.samples)")
     last_elapsed = -math.inf
-    # Row width must match the DECLARED fields (10 pre-#266, 22 with per-wheel channels).
+    # Row width must match the DECLARED fields (old archives can carry fewer optional columns).
     n_cols = len(fields)
     for row_index, row in enumerate(samples):
         if not isinstance(row, list) or len(row) != n_cols:
@@ -312,8 +321,8 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
 def archive_trace_to_object_trace(record: Mapping[str, Any]) -> list[dict[str, float]]:
     """Convert archive column rows into the live trainer's ``bestLapTrace`` shape."""
     validate_lap_archive_record(record)
-    # Iterate the DECLARED fields, not TRACE_FIELDS: a pre-#266 archive declares only the 10
-    # required columns, so indexing all 22 would IndexError. Old records degrade to 10-field frames.
+    # Iterate the DECLARED fields, not TRACE_FIELDS: old schema-v1 archives declare only the
+    # columns they actually captured, so optional extensions degrade by field name.
     fields = list(record["trace"]["fields"])
     rows = record["trace"]["samples"]
     frames: list[dict[str, float]] = []

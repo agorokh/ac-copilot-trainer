@@ -17,6 +17,8 @@
 
 local M = {}
 
+local shiftProfile = require("shift_profile")
+
 -- ---------------------------------------------------------------------------
 -- Tunable thresholds (live-frame deltas, not lap aggregates).
 -- ---------------------------------------------------------------------------
@@ -34,10 +36,10 @@ M.BRAKE_NOW_DIST_M = BRAKE_NOW_DIST_M
 
 -- Gear-shift coaching (#432 Part A2 main-dashboard evolution): the RPM strip's
 -- shift/redline zones and the SHIFT UP verb share these fractions of the car's
--- rpmLimiter. v1 heuristic (shift lights at ~92%, redline band at ~97%);
--- telemetry-learned per-car/per-corner shift points are follow-up scope.
-local SHIFT_ZONE_FRAC   = 0.92
-local REDLINE_FRAC      = 0.97
+-- rpmLimiter. The heuristic stays as a fallback; learned reference-lap
+-- upshift RPM replaces it when a shift profile is present (#442).
+local SHIFT_ZONE_FRAC   = shiftProfile.DEFAULT_SHIFT_ZONE_FRAC
+local REDLINE_FRAC      = shiftProfile.DEFAULT_REDLINE_FRAC
 local SHIFT_MIN_GAS     = 0.55  -- only coach upshifts under real throttle
 M.SHIFT_ZONE_FRAC = SHIFT_ZONE_FRAC
 M.REDLINE_FRAC = REDLINE_FRAC
@@ -242,17 +244,26 @@ end
 --- for BOTH the no-reference path and the main cascade — shift coaching needs
 --- no reference lap (PR #444 review).
 local function shiftCueActive(o)
+  local targetRpm = o.shiftTargetRpm
+  if targetRpm == nil then
+    targetRpm = shiftProfile.resolveShiftTarget(o.shiftProfile, o.gear, o.rpmLimiter)
+  end
   return o.rpm ~= nil and o.rpmLimiter ~= nil and o.rpmLimiter > 0
     and (o.gas or 0) >= SHIFT_MIN_GAS
-    and o.rpm >= o.rpmLimiter * SHIFT_ZONE_FRAC
+    and targetRpm ~= nil
+    and o.rpm >= targetRpm
     and not (o.gear and o.gearCount and o.gearCount > 0
              and o.gear >= o.gearCount)
 end
 
 local function applyShiftCue(view, o)
+  local targetRpm = o.shiftTargetRpm
+  if targetRpm == nil then
+    targetRpm = shiftProfile.resolveShiftTarget(o.shiftProfile, o.gear, o.rpmLimiter)
+  end
   view.primaryLine = "SHIFT UP"
   view.secondaryLine = string.format(
-    "RPM %d · SHIFT AT %d", o.rpm, math.floor(o.rpmLimiter * SHIFT_ZONE_FRAC + 0.5))
+    "RPM %d · SHIFT AT %d", o.rpm, math.floor((targetRpm or 0) + 0.5))
   view.kind = "line"
   return view
 end
@@ -276,6 +287,12 @@ function M.tick(opts)
   if not approachM or approachM ~= approachM or approachM <= 0 then
     approachM = APPROACH_DEFAULT_M
   end
+  local shiftTargetRpm, shiftZonePct, shiftProvenance =
+    shiftProfile.resolveShiftTarget(opts.shiftProfile, opts.gear, opts.rpmLimiter)
+  opts.shiftTargetRpm = shiftTargetRpm
+  opts.shiftZonePct = shiftZonePct
+  opts.redZonePct = shiftProfile.redZonePctFor(shiftZonePct)
+  opts.shiftProvenance = shiftProvenance
 
   -- Empty state — no reference at all. The gear-shift cue still coaches
   -- here: it is reference-independent (fresh install / new track / out-lap).
@@ -287,6 +304,10 @@ function M.tick(opts)
     if shiftCueActive(opts) then
       applyShiftCue(lastView, opts)
     end
+    lastView.shiftTargetRpm = opts.shiftTargetRpm
+    lastView.shiftZonePct = opts.shiftZonePct
+    lastView.redZonePct = opts.redZonePct
+    lastView.shiftProvenance = opts.shiftProvenance
     return lastView
   end
 
@@ -337,6 +358,10 @@ function M.tick(opts)
     distToBrakeM    = distToBrakeM,
     progressPct     = 0,
     brakeIndex      = nil,
+    shiftTargetRpm  = opts.shiftTargetRpm,
+    shiftZonePct    = opts.shiftZonePct,
+    redZonePct      = opts.redZonePct,
+    shiftProvenance = opts.shiftProvenance,
   }
 
   if distToBrakeM and distToBrakeM <= approachM then

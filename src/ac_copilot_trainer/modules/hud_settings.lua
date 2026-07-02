@@ -13,6 +13,7 @@ local M = {}
 ---@field consistencyHud string|nil
 ---@field styleHud string|nil
 ---@field tireHud string|nil
+---@field shiftProfile string|nil
 
 ---@class HudSettingsViewModel
 ---@field config table
@@ -69,6 +70,10 @@ local function drawStats(st)
   if st.tireHud and st.tireHud ~= "" then
     ui.textColored("Tires (last lap)", rgbm(0.75, 0.78, 0.85, 1))
     textWrappedMaybe(st.tireHud)
+  end
+  if st.shiftProfile and st.shiftProfile ~= "" then
+    ui.textColored("Shift coaching", rgbm(0.75, 0.78, 0.85, 1))
+    textWrappedMaybe(st.shiftProfile)
   end
   if st.refAiDistanceM ~= nil and st.refAiDistanceM == st.refAiDistanceM then
     ui.text(string.format("AI line lateral (XZ): ~%.1f m", st.refAiDistanceM))
