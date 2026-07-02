@@ -28,7 +28,7 @@ def test_bake_renders_full_vocabulary_with_valid_manifest(tmp_path) -> None:
     assert len(manifest.clips) == len(vocab.vocabulary())
     # manifest stamps the current vocabulary hash + the backend voice signature
     assert manifest.vocabulary_hash == vocab.vocabulary_hash()
-    assert manifest.voice_signature.startswith("tone-v3+race-engineer-original-v1+intensity")
+    assert manifest.voice_signature == f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
     # every clip file exists, is non-empty audio, and its sha matches the manifest
     for entry in manifest.clips.values():
         fp = tmp_path / entry.file

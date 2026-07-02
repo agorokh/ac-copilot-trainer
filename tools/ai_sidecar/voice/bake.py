@@ -68,10 +68,9 @@ from tools.ai_sidecar.voice.vocabulary import (
 
 _log = logging.getLogger("ai_sidecar.voice.bake")
 
-#: Bump when the prosody filter chains change — folded into ``voice_signature`` so a chain edit
-#: without a re-bake is surfaced (the bank's signature no longer matches what the code would
-#: render).
-PROSODY_VERSION = 2
+# PROSODY_VERSION moved to tools.ai_sidecar.voice.vocabulary and is folded into
+# EXPECTED_SIGNATURE_SUFFIX, so the stdlib-only manifest gate enforces prosody staleness too
+# (codex review #441).
 
 
 def _signature_suffix() -> str:
@@ -163,7 +162,9 @@ class ProsodyShaper:
 
     @property
     def signature(self) -> str:
-        return f"{ffmpeg_version()}+prosody{PROSODY_VERSION}"
+        # Host-varying part only (ffmpeg major). The code-owned prosody-chain version rides in
+        # EXPECTED_SIGNATURE_SUFFIX so the runtime gate enforces it (codex review #441).
+        return ffmpeg_version()
 
     def shape(self, in_wav: Path, out_wav: Path, register: str, samplerate: int) -> None:
         filt = _prosody_filter(register, samplerate, apply_tempo=self._apply_tempo)

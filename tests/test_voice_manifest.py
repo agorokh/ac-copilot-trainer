@@ -47,14 +47,21 @@ def test_validate_detects_vocabulary_drift() -> None:
 
 
 def test_validate_detects_signature_drift() -> None:
-    # Issue #438: a persona swap or intensity-chain bump with identical wording keeps
-    # vocabulary_hash constant, so the signature suffix is the only stale-bank detector.
-    m = build_manifest(voice_signature="tone-v3+race-engineer-original-v0+intensity1")
-    report = m.validate()
-    assert report.vocabulary_matches  # wording unchanged — vocabulary_hash cannot see this
-    assert not report.signature_matches
-    assert not report.ok
-    assert any("voice_signature mismatch" in p for p in report.problems)
+    # Issue #438: a persona swap, prosody-chain edit, or intensity-chain bump with identical
+    # wording keeps vocabulary_hash constant, so the signature suffix is the only stale-bank
+    # detector for those changes.
+    stale_signatures = [
+        "tone-v3+race-engineer-original-v0+prosody2+intensity2",  # persona swap
+        "tone-v3+race-engineer-original-v1+prosody1+intensity2",  # older prosody chain (codex #441)
+        "tone-v3+race-engineer-original-v1+prosody2+intensity1",  # older intensity chain
+        "tone-v3+race-engineer-original-v1+intensity2",  # pre-prosody suffix shape
+    ]
+    for sig in stale_signatures:
+        report = build_manifest(voice_signature=sig).validate()
+        assert report.vocabulary_matches, sig  # wording unchanged — vocabulary_hash cannot see it
+        assert not report.signature_matches, sig
+        assert not report.ok, sig
+        assert any("voice_signature mismatch" in p for p in report.problems), sig
 
 
 def test_signature_check_is_anchored_at_the_end() -> None:
@@ -62,7 +69,7 @@ def test_signature_check_is_anchored_at_the_end() -> None:
     # must not reject a portable bank, while "…+intensity2" must NOT accept an "…+intensity21"
     # bank.
     portable = build_manifest(
-        voice_signature=f"kokoro:af_bella+prosody2+ff8+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
+        voice_signature=f"kokoro:af_bella+ff8+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
     )
     assert portable.validate().signature_matches
     near_miss = build_manifest(voice_signature=f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}1")
@@ -77,7 +84,7 @@ def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:
     data = {
         "version": 3,
         "samplerate": 22050,
-        "voice_signature": "tone-v3+race-engineer-original-v1+intensity2",
+        "voice_signature": f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}",
         "vocabulary_hash": vocab.vocabulary_hash(),
         "clips": {
             "late_brake.act.t01": {
@@ -168,7 +175,7 @@ def test_manifest_version_must_match_schema_even_if_fields_look_current() -> Non
     data = {
         "version": 1,
         "samplerate": 22050,
-        "voice_signature": "tone-v3+race-engineer-original-v1+intensity2",
+        "voice_signature": f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}",
         "vocabulary_hash": "0" * 64,
         "clips": {
             "late_brake.act.urgent.generic": {
@@ -194,7 +201,7 @@ def test_unknown_register_is_rejected_at_load() -> None:
     data = {
         "version": 3,
         "samplerate": 22050,
-        "voice_signature": "tone-v3+race-engineer-original-v1+intensity2",
+        "voice_signature": f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}",
         "vocabulary_hash": "0" * 64,
         "clips": {
             "late_brake.act.loud.generic": {

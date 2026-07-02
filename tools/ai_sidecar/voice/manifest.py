@@ -200,9 +200,9 @@ class Manifest:
           current :func:`vocabulary.vocabulary_hash` — i.e. the wording changed but the bank was not
           re-baked. When this is false the engine MUST NOT play any clip (it could be stale).
         * ``signature_matches`` is ``False`` when ``voice_signature`` does not end with the current
-          :data:`vocabulary.EXPECTED_SIGNATURE_SUFFIX` — the persona or intensity chain changed
-          without a re-bake (issue #438). Wording-identical persona/prosody changes keep
-          ``vocabulary_hash`` constant, so this suffix is the only detector for that drift. The
+          :data:`vocabulary.EXPECTED_SIGNATURE_SUFFIX` — the persona, prosody chain, or intensity
+          chain changed without a re-bake (issue #438). Wording-identical persona/prosody changes
+          keep ``vocabulary_hash`` constant, so this suffix is the only detector for that drift. The
           check is ``endswith`` (the suffix is the final signature segment on every backend), NOT
           full equality — ``voice_signature`` also carries host-varying parts (backend id, voice,
           ffmpeg major) that must not reject portable banks — and NOT a plain substring, which
@@ -222,8 +222,8 @@ class Manifest:
         sig_ok = self.voice_signature.endswith(vocab.EXPECTED_SIGNATURE_SUFFIX)
         if not sig_ok:
             problems.append(
-                "voice_signature mismatch: bank was baked with a different persona/intensity "
-                f"chain (bank={self.voice_signature!r}, expected suffix "
+                "voice_signature mismatch: bank was baked with a different persona/prosody/"
+                f"intensity chain (bank={self.voice_signature!r}, expected suffix "
                 f"{vocab.EXPECTED_SIGNATURE_SUFFIX!r}) — re-bake the phrase bank"
             )
         if bank_dir is not None:
