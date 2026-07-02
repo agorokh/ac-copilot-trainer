@@ -59,6 +59,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field, replace
+from datetime import UTC
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -202,8 +203,7 @@ class AutoDriveReport:
             ack_err = (self.setup_ack or {}).get("error")
             detail = f" path={ack_path}" if ack_path else (f" error={ack_err}" if ack_err else "")
             lines.append(
-                f"  setup: requested={self.setup_requested} "
-                f"applied={self.setup_applied}{detail}"
+                f"  setup: requested={self.setup_requested} applied={self.setup_applied}{detail}"
             )
         if self.drive is not None:
             d = self.drive
@@ -1164,8 +1164,7 @@ def rig_drive(  # pragma: no cover - rig-only
         stats.recoveries += 1
         if stats.recoveries > config.max_recoveries:
             stats.reason = (
-                f"recovery cap ({config.max_recoveries}) exceeded at "
-                f"{stats.total_distance_m:.0f}m"
+                f"recovery cap ({config.max_recoveries}) exceeded at {stats.total_distance_m:.0f}m"
             )
             return False
         recovered_to_line = False
@@ -1310,9 +1309,9 @@ def _capture_hud_evidence(evidence_dir: Path, region: str) -> dict:  # pragma: n
 
 
 def _utc_stamp() -> str:  # pragma: no cover - trivial clock wrapper
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
