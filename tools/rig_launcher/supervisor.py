@@ -209,6 +209,7 @@ class GamePointSupervisor:
         self.config = config
         self.paths = config.paths or default_paths(environ)
         self._environ = dict(environ if environ is not None else os.environ)
+        self._environ_upper = {key.upper(): value for key, value in self._environ.items()}
         self._popen = popen
         self._run = run
         self._urlopen = urlopen
@@ -526,7 +527,7 @@ class GamePointSupervisor:
         if self.config.simhub_exe:
             candidates.append(Path(self.config.simhub_exe))
         for env_key in ("ProgramFiles(x86)", "ProgramFiles"):
-            base = _env_get(self._environ, env_key)
+            base = _env_get(self._environ, env_key, case_insensitive=self._environ_upper)
             if base:
                 candidates.append(Path(base) / "SimHub" / "SimHubWPF.exe")
         for path in candidates:
@@ -741,15 +742,16 @@ def _put_if_present(env: MutableMapping[str, str], key: str, value: str | None) 
         env[key] = value
 
 
-def _env_get(env: Mapping[str, str], key: str) -> str | None:
+def _env_get(
+    env: Mapping[str, str],
+    key: str,
+    *,
+    case_insensitive: Mapping[str, str],
+) -> str | None:
     value = env.get(key)
     if value is not None:
         return value
-    wanted = key.upper()
-    for actual_key, actual_value in env.items():
-        if actual_key.upper() == wanted:
-            return actual_value
-    return None
+    return case_insensitive.get(key.upper())
 
 
 def _is_loopback(host: str) -> bool:
