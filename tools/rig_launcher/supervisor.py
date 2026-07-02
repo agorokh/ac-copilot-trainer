@@ -598,6 +598,12 @@ def build_pyinstaller_args(
         "--hidden-import",
         "pyttsx3.drivers.sapi5",
     ]
+    fonts_dir = project_root / "src" / "ac_copilot_trainer" / "content" / "fonts"
+    if fonts_dir.is_dir():
+        # Racing Atelier design faces, loaded FR_PRIVATE by tools.rig_launcher.fonts
+        # from sys._MEIPASS/fonts. Present only on packaging branches — guarded so
+        # a checkout without the TTFs still builds.
+        args.extend(["--add-data", f"{fonts_dir}{os.pathsep}fonts"])
     _append_optional_pyinstaller_module(args, "rtmixer")
     _append_optional_pyinstaller_module(args, "pa_ringbuffer")
     if onefile:

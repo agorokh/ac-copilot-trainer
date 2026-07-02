@@ -998,6 +998,23 @@ def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
     assert _has_option_value(args, "--collect-binaries", "pa_ringbuffer")
 
 
+def test_build_pyinstaller_args_bundles_design_fonts_when_present(tmp_path: Path) -> None:
+    fonts_dir = tmp_path / "src" / "ac_copilot_trainer" / "content" / "fonts"
+    fonts_dir.mkdir(parents=True)
+
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    # Destination "fonts" matches the sys._MEIPASS/fonts lookup in
+    # tools.rig_launcher.fonts.load_private_fonts.
+    assert _has_option_value(args, "--add-data", f"{fonts_dir}{os.pathsep}fonts")
+
+
+def test_build_pyinstaller_args_omits_fonts_when_dir_missing(tmp_path: Path) -> None:
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    assert not any(value.endswith(f"{os.pathsep}fonts") for value in args)
+
+
 def _has_option_value(args: list[str], option: str, value: str) -> bool:
     return any(
         left == option and right == value for left, right in zip(args, args[1:], strict=False)

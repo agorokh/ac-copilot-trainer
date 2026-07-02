@@ -17,6 +17,7 @@ import argparse
 import subprocess
 import time
 
+from tools.rig_launcher.fonts import load_private_fonts
 from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
 from tools.rig_launcher.view import build_launcher_view
 
@@ -60,6 +61,7 @@ def render(out_path: str, *, status: GamePointStatus | None = None) -> int:
     """Show the themed launcher and save its client rectangle to ``out_path``."""
     import tkinter as tk
 
+    load_private_fonts()  # register design faces so the capture matches the rig
     root = tk.Tk()
     root.title("AC Copilot Game Point")
     root.geometry("660x440+140+140")

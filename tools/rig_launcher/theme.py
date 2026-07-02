@@ -15,6 +15,10 @@ approximation and is intentionally *not* part of the conformance set.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, keeps theme display/runtime free
+    from tools.rig_launcher.supervisor import GamePointStatus
 
 # --- Carbon ground (mirrors colors.css :root) ---
 CARBON = "#0B0C0D"
@@ -44,6 +48,15 @@ DATA = "#49B6C9"
 # Not part of the conformance set (the CSS value is rgba, not hex).
 LINE = "#22262B"
 
+# Tk-only approximation of the stronger --line-2 rgba(255,255,255,0.16) hairline
+# over graphite — the secondary-button border. Not in the conformance set.
+LINE_2 = "#3A3F46"
+
+# Primary-button press state. The design darkens the brass field with a press
+# opacity; Tk has no opacity, so this is a pre-multiplied darker brass. It is
+# deliberately NOT the amber LIFT signal (state colors never double as chrome).
+BRASS_PRESS = "#A87F33"
+
 #: hex tokens validated against colors.css by the conformance test.
 TOKENS: dict[str, str] = {
     "carbon": CARBON,
@@ -68,6 +81,10 @@ TOKENS: dict[str, str] = {
 # with Windows (Bahnschrift is condensed like Saira SC; Consolas is the mono
 # default), so the launcher looks on-brand even before the design fonts install.
 FONT_DISPLAY: tuple[str, ...] = (
+    # Real name-table family of the bundled SemiCondensed statics loaded by
+    # tools.rig_launcher.fonts (note: no space inside "SemiCondensed").
+    "Saira SemiCondensed",
+    # Family name Windows uses when the face is system-installed from Google.
     "Saira Semi Condensed",
     "Bahnschrift",
     "Segoe UI Semibold",
@@ -84,10 +101,18 @@ TONE_COLORS: dict[str, str] = {
     "idle": DIM,
 }
 
+#: StatusField ink-on-fill per tone (mirrors the design StatusField TONES ink).
+FIELD_INK: dict[str, str] = {
+    "clear": "#06140C",
+    "brake": CHALK,
+}
+
 # States that are healthy-but-quiescent (nothing wrong, nothing lit).
 _IDLE_STATES = {"absent", "skipped", "loopback", "available", "stopped"}
-# States that are in-progress / attention-but-not-failure.
-_WARN_STATES = {"waiting", "initializing", "starting", "unavailable", "unknown"}
+# States that are in-progress / attention-but-not-failure. "waiting" is NOT in
+# this set: a missing screen peer is a failure the driver must fix (the render
+# shows SCREEN WAITING in brake red), not progress.
+_WARN_STATES = {"initializing", "starting", "unavailable", "unknown"}
 
 
 def tone_for(ok: bool, state: str) -> str:
@@ -109,6 +134,36 @@ def tone_for(ok: bool, state: str) -> str:
 def color_for_tone(tone: str) -> str:
     """Return the hex for a tone, defaulting to the demoted dim ink."""
     return TONE_COLORS.get(tone, DIM)
+
+
+#: sidecar states that mean "no server on the port yet" (ui-kit recovery state).
+_SIDECAR_DOWN_STATES = {"stopped", "unreachable"}
+
+
+def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, str]:
+    """Map a status snapshot onto the summary StatusField chip + mono caption.
+
+    Returns ``(text, tone, caption)`` — the uppercase chip word, the signal tone
+    keying :data:`TONE_COLORS` / :data:`FIELD_INK`, and the mono caption beside
+    the chip. Mirrors the design ui-kit's two states: ready ("Ready to drive" on
+    the CLEAR field) and recovery ("Press start" on the BRAKE field). Total: it
+    always returns a caption, deriving it from the first failing row when the
+    sidecar itself is up.
+    """
+    if status.ok:
+        return ("READY TO DRIVE", "clear", "sidecar · screen · hotspot live")
+    if (status.sidecar.state or "").strip().lower() in _SIDECAR_DOWN_STATES:
+        return ("PRESS START", "brake", f"nothing on port {port} yet")
+    rows = (status.sidecar, status.screen, status.hotspot, status.voice, status.simhub)
+    caption = next(
+        (
+            row.detail or row.state
+            for row in (*rows, *status.checks)
+            if not row.ok and (row.detail or row.state)
+        ),
+        "needs attention",
+    )
+    return ("PRESS START", "brake", caption)
 
 
 def resolve_font(preferences: Iterable[str], available: Iterable[str]) -> str:
