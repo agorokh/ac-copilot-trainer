@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-06-30
+updated: 2026-07-02
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [pr-441-voice-signature-gate-2026-07-01.md](pr-441-voice-signature-gate-2026-07-01.md) | PR #441 / #438: `Manifest.validate()` enforces the persona/prosody/intensity `voice_signature` suffix (`endswith`; ffmpeg major stays unenforced for portability), `from_bank()` disables on drift, `bake_bank()` fails fast on suffix-less backends (auto-append rejected as provenance forgery). Also: governance-hub 100-commit refresh, Windows `python3` PATH gaps, MSYS `/command` mangling pitfall, post-merge stash@{0} #402 WIP awaiting review. |
 | [pr-410-racing-atelier-design-package-2026-06-30.md](pr-410-racing-atelier-design-package-2026-06-30.md) | PR #410 / #400 Racing Atelier design package: docs/assets source of truth, rendered target gate, retired AG Porsche Academy removal, review hardening, ZIP reconciliation, and browser visual verification. |
 | [pr-399-coach-v2-review-loop-2026-06-30.md](pr-399-coach-v2-review-loop-2026-06-30.md) | PR #399 / #396 Coach v2 review-resolution loop: merge conflict with main, ci-conventional title, Qodo wrap/PRIME/grip-gate fixes; merge-ready on `8e6135a`. |
 | [coach-v2-real-coaching-2026-06-29.md](coach-v2-real-coaching-2026-06-29.md) | Coach v2 (#396 / PR #399): diagnosed anticipatory in-ear coaching — root-error diagnosis, pass ledger, PRIME/SAVE/CONFIRM runtime, grip-gate via `lat_g`, deterministic E2E + live-audible proof on Magione/911. |

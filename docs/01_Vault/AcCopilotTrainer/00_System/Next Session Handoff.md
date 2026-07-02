@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-01T06:13:00Z
+last_updated: 2026-07-02T03:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/pr-410-racing-atelier-design-package-2026-06-30.md
@@ -60,6 +61,49 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-02 UTC) — PR #441 MERGED: voice_signature staleness gate (#438)
+
+PR [#441](https://github.com/agorokh/ac-copilot-trainer/pull/441) squash-merged to `main` as
+[`65e9d42`](https://github.com/agorokh/ac-copilot-trainer/commit/65e9d42c4de469d20483cbd6da7b29341b20465d)
+at 2026-07-02T03:35:12Z. Issue [#438](https://github.com/agorokh/ac-copilot-trainer/issues/438)
+(the #429 deferral) is **CLOSED**.
+
+**Shipped:** `Manifest.validate()` now enforces the persona/prosody/intensity suffix of
+`voice_signature` via `endswith(vocabulary.EXPECTED_SIGNATURE_SUFFIX)` — closing the
+wording-identical staleness gap `vocabulary_hash` cannot see. New
+`ValidationReport.signature_matches` (folded into `.ok`, so `timing_report --bank` also refuses
+stale banks); `VoiceCoach.from_bank()` disables on drift; `PROSODY_VERSION` moved into
+`vocabulary.py` and into the enforced suffix (codex P2 — prosody-only edits were still unenforced
+in the first cut); `bake_bank()` fails fast (`ValueError`, before rendering) on a backend
+signature missing the suffix (Qodo finding; auto-append deliberately rejected as provenance
+forgery — Qodo accepted the deviation on the PR). Host-varying parts (backend id, voice, ffmpeg
+major) stay unenforced so banks remain portable.
+
+**Verification:** `make ci-fast` green ×3 locally (Windows, `PYTHON=python` + venv `python3.exe`
+alias); 92-test voice suite green each round; new negative-path tests observed failing the right
+way (disabled coach, nothing played). Merge gate: checks green on `cfeab20`, zero unresolved
+GraphQL threads, Qodo persistent review updated to head with **Bugs (0)** and finding #1 struck
+through, one full post-push cooldown per round (3 rounds). Gemini was quota-capped for 24h
+(external, non-required); no daemon head-SHA review after cooldowns (vacuous per anti-hang).
+
+**Post-merge:** `post_merge_classify.py --pr 441` → no flags. `post_merge_sync.sh sync 441`
+synced `main` `640af7e→65e9d42`, deleted the PR branch, pruned gone `feat/issue-402-data-platform`
+— and exited **10**: the primary checkout's dirty #402-branch WIP could not pop against new main.
+**Preserved as `stash@{0}` (`post-merge-pr441-wip`)** — contains 6 tracked-file edits + unshipped
+vault investigation drafts + `docs/05_Architecture/` diagrams; the failed partial application was
+cleared so `main` is clean. `stash@{1}` (`post-merge-pr417-detached-residue`) also awaits review.
+**Next session: inspect both stashes in a scratch worktree and promote/drop.**
+
+**Environment (owned this session, Windows `pc`):** governance-hub fast-forwarded 100 commits
+(626266f→b08f6c9; local installer/wrapper mods preserved on hub branch
+`wip/windows-install-mods-2026-07-01` — operator reconcile); `python3` PATH gap fixed via venv
+`python3.exe` alias (durable fix belongs in hub `install.ps1`); pitfall: MSYS path conversion
+mangles `/gemini review`-style bot triggers — use `MSYS_NO_PATHCONV=1`. Tier-3 substrate returned
+`[no-context]` for all voice-code queries (vault ingest appears to predate the
+`ac_copilot`→`ac_copilot_trainer` key rename; PR-pattern queries hit old-key chunks) — worth an
+ingest-freshness check against workstation-ops. Detail:
+[[pr-441-voice-signature-gate-2026-07-01]].
 
 ## Delivered (2026-07-01 UTC) — PR #429 MERGED: four-tier expressive intensity ladder (#381)
 
