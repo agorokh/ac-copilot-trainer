@@ -125,8 +125,10 @@ def _drive_returning(stats: DriveStats, record: dict):
     return _drive
 
 
-def _tap_returning(frames: list[dict]):
-    async def _tap(url, *, seconds, wait_for_lap):  # noqa: ANN001
+def _tap_returning(frames: list[dict], record: dict | None = None):
+    async def _tap(url, *, seconds, wait_for_lap, **kwargs):  # noqa: ANN001
+        if record is not None:
+            record.update(seconds=seconds, wait_for_lap=wait_for_lap, **kwargs)
         return frames
 
     return _tap
@@ -266,16 +268,19 @@ def test_pipeline_failure_when_continuous_topic_missing():
 
 def test_wait_lap_requires_a_lap_frame():
     # wait_lap but no lap frame -> require_lap fails the sequence.
+    tap_record: dict = {}
     no_lap = asyncio.run(
         run_auto_drive(
-            _cfg(wait_lap=True),
+            _cfg(wait_lap=True, drive_seconds=420.0),
             launch=_ok_launch,
             hijack=lambda c: FakeController(),
             drive=_drive_returning(DriveStats(drove=True), {}),
-            tap=_tap_returning(CONTINUOUS),
+            tap=_tap_returning(CONTINUOUS, tap_record),
         )
     )
     assert no_lap.ok is False
+    # The lap wait scales with the drive budget (a Spa lap outlives the 180 s tap default).
+    assert tap_record["lap_timeout"] == 420.0
     # lap frame present -> passes.
     with_lap = asyncio.run(
         run_auto_drive(
@@ -309,7 +314,7 @@ def test_tap_exception_marks_pipeline_stage_and_still_tears_down():
     record: dict = {}
     ctrl = FakeController()
 
-    async def _boom(url, *, seconds, wait_for_lap):  # noqa: ANN001
+    async def _boom(url, *, seconds, wait_for_lap, **kwargs):  # noqa: ANN001
         raise RuntimeError("sidecar exploded")
 
     report = asyncio.run(

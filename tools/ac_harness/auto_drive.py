@@ -415,9 +415,13 @@ async def run_auto_drive(
     error: str | None = None
     stage = "done"
     try:
-        frames = await tap(
-            config.sidecar_url, seconds=config.tap_seconds, wait_for_lap=config.wait_lap
-        )
+        tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
+        if config.wait_lap:
+            # A full lap at harness pace can exceed tap_frames' 180 s default (Spa ~7 km) —
+            # wait as long as the drive leg is allowed to run, or the tap gives up on the lap
+            # while the car is still mid-lap and the run false-fails (#459 Part F).
+            tap_kwargs["lap_timeout"] = max(180.0, config.drive_seconds)
+        frames = await tap(config.sidecar_url, **tap_kwargs)
         result = evaluate_sequence(
             frames, strict_lifecycle=config.strict, require_lap=config.wait_lap
         )
