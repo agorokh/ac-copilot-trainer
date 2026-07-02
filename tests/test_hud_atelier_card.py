@@ -290,6 +290,21 @@ def test_delta_bar_matches_design_algorithm(card):
     assert _is_color(status, BRAKE)
 
 
+def test_delta_number_clamps_without_overshoot(lua):
+    """Live-capture regression: v=-60 clamps to -20 and renders '-20' —
+    floor(v - 0.5) rounding overshot the clamp to '-21' on the rig."""
+    lua.execute('_ov = require("coaching_overlay")')
+    lua.execute(
+        "_ov.drawApproachPanel({turnLabel='T1', targetSpeedKmh=160, "
+        "currentSpeedKmh=100, distanceToBrakeM=90, approachMeters=200, "
+        "progressPct=0.5, zonePct=0.25, subState='approaching', "
+        "primaryLine='APPROACHING', kind='info'})"
+    )
+    texts = [t["text"] for t in lua.globals()["_texts"].values()]
+    assert "-20" in texts, f"clamped delta must render -20, texts={texts}"
+    assert "-21" not in texts, "clamp overshoot regression"
+
+
 def test_segment_captions(card):
     _, texts = card
     now = [t for t in texts if t["text"] == "NOW" and t["px"] == 11]

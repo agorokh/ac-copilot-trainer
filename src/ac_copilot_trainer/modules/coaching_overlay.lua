@@ -425,10 +425,12 @@ function M.drawApproachPanel(approachData)
     end
     _drawDW(wordU, verbPx, vec2(padX, cmdY), tone)
     fontMod.pop(vk)
+    -- Arrow sits clearly BELOW the word (live capture showed it touching the
+    -- glyph baseline at +0.92; the render has a visible gap under the B).
     if arrow == "down" then
-      drawDownTriangle(padX + verbPx * 0.21 + 4, cmdY + verbPx * 0.92 + 4, verbPx * 0.30, verbPx * 0.24, tone)
+      drawDownTriangle(padX + verbPx * 0.21 + 4, cmdY + verbPx + 6, verbPx * 0.30, verbPx * 0.24, tone)
     elseif arrow == "up" then
-      drawUpTriangle(padX + verbPx * 0.21 + 4, cmdY + verbPx * 0.92 + 4, verbPx * 0.30, verbPx * 0.24, tone)
+      drawUpTriangle(padX + verbPx * 0.21 + 4, cmdY + verbPx + 6, verbPx * 0.30, verbPx * 0.24, tone)
     end
   end
 
@@ -544,29 +546,43 @@ function M.drawApproachPanel(approachData)
     -- center tick (2px, overhangs 3px top/bottom)
     local tickX = troughX + troughW * 0.5 - 1
     ui.drawRectFilled(vec2(tickX, troughY - 3), vec2(tickX + 2, troughY + TROUGH_H + 3), COLOR_LABEL, 0)
-    -- tone fill from center
+    -- tone fill from center (neutral reference fill stays QUIET outside the
+    -- approach window — full-alpha mute dominated the row in the live capture)
     if hasRef and math.abs(v) > 0.01 then
       local halfFrac = math.abs(v) / vMax * 0.5
       local fillW = troughW * halfFrac
+      local fillColor = tone
+      if tone == COLOR_LABEL then
+        fillColor = T.color("mute", 0.40)
+      end
       if v >= 0 then
-        ui.drawRectFilled(vec2(troughX + troughW * 0.5, troughY), vec2(troughX + troughW * 0.5 + fillW, troughY + TROUGH_H), tone, 0)
+        ui.drawRectFilled(vec2(troughX + troughW * 0.5, troughY), vec2(troughX + troughW * 0.5 + fillW, troughY + TROUGH_H), fillColor, 0)
       else
-        ui.drawRectFilled(vec2(troughX + troughW * 0.5 - fillW, troughY), vec2(troughX + troughW * 0.5, troughY + TROUGH_H), tone, 0)
+        ui.drawRectFilled(vec2(troughX + troughW * 0.5 - fillW, troughY), vec2(troughX + troughW * 0.5, troughY + TROUGH_H), fillColor, 0)
       end
     end
-    -- big signed number, right-aligned, vertically centered on the trough
+    -- big signed number, right-aligned, vertically centered on the trough.
+    -- Round half-away-from-zero WITHOUT overshooting the ±vMax clamp
+    -- (floor(v - 0.5) turned a clamped -20.0 into -21 in the live capture).
     local numStr = "—"
     if hasRef then
-      local vInt = math.floor(v + (v >= 0 and 0.5 or -0.5))
+      local vInt
+      if v >= 0 then
+        vInt = math.floor(v + 0.5)
+      else
+        vInt = -math.floor(-v + 0.5)
+      end
       numStr = (vInt > 0 and "+" or "") .. string.format("%d", vInt)
     end
     local nk = fontMod.pushNamed("read", 40)
     local numW = _measureDW(numStr, 40).x
-    _drawDW(numStr, 40, vec2(w - padX - numW, troughY - 4), tone)
+    _drawDW(numStr, 40, vec2(w - padX - numW, troughY - 6), tone)
     fontMod.pop(nk)
 
-    -- scale row: −20 / ref (mono) / +20
-    local scaleY = troughY + TROUGH_H + 6
+    -- scale row: −20 / ref (mono) / +20. Dropped a few px below the design's
+    -- +6 so the DWrite glyph box of the 40px number clears the "+20" label
+    -- (they collided in the live capture).
+    local scaleY = troughY + TROUGH_H + 10
     local lk = fontMod.pushNamed("label", 9)
     _drawDW("-20", 9, vec2(padX, scaleY), COLOR_BRAND_GREY)
     local p20W = _measureDW("+20", 9).x
