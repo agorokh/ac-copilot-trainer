@@ -146,8 +146,13 @@ def test_speech_backends_keep_act_registers_fast() -> None:
     assert (
         PiperBackend._REGISTER_LENGTH_SCALE["calm"] > PiperBackend._REGISTER_LENGTH_SCALE["alert"]
     )
-    assert PiperBackend._REGISTER_LENGTH_SCALE["alert"] <= 0.75
-    assert PiperBackend._REGISTER_LENGTH_SCALE["urgent"] <= 0.75
+    assert (
+        PiperBackend._REGISTER_LENGTH_SCALE["alert"] > PiperBackend._REGISTER_LENGTH_SCALE["urgent"]
+    )
+    assert (
+        PiperBackend._REGISTER_LENGTH_SCALE["urgent"]
+        > PiperBackend._REGISTER_LENGTH_SCALE["critical"]
+    )
     assert PiperBackend._REGISTER_LENGTH_SCALE["critical"] <= 0.75
 
 
@@ -351,7 +356,7 @@ def test_piper_batch_preserves_register_length_scale(tmp_path, monkeypatch) -> N
     backend.synthesize_many(items, 48000)
 
     assert ("1.05", ["calm one"]) in seen
-    assert ("0.72", ["critical two"]) in seen
+    assert ("0.69", ["critical two"]) in seen
     assert _first_sample(items[0][2]) == 1000
     assert _first_sample(items[1][2]) == 1000
 

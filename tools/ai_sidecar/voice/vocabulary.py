@@ -100,7 +100,7 @@ URGENCIES: tuple[str, ...] = ("info", "prepare", "act")
 #: clone.
 VOICE_PERSONA_ID = "race-engineer-original-v1"
 VOICE_PERSONA_LICENSE = "project-authored; no unconsented real-person clone"
-INTENSITY_CHAIN_VERSION = 2
+INTENSITY_CHAIN_VERSION = 3
 
 #: Bump when the per-register prosody delivery changes: the ffmpeg filter chains in
 #: ``bake._prosody_filter`` (shaped speech backends) or ``bake.ToneBackend``'s register tone table

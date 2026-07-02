@@ -76,7 +76,7 @@ def test_disabled_on_signature_drift(tmp_path) -> None:
     mfp = tmp_path / MANIFEST_FILENAME
     data = json.loads(mfp.read_text())
     # Older prosody chain, same persona/intensity/wording — the sharpest form of the gap.
-    data["voice_signature"] = "tone-v3+race-engineer-original-v1+prosody1+intensity2"
+    data["voice_signature"] = "tone-v3+race-engineer-original-v1+prosody1+intensity3"
     mfp.write_text(json.dumps(data))
     pb = RecordingPlayback()
     coach = VoiceCoach.from_bank(tmp_path, VoiceConfig(), playback=pb)

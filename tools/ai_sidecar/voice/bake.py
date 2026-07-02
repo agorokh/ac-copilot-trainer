@@ -349,9 +349,9 @@ class PiperBackend:
 
     _REGISTER_LENGTH_SCALE: dict[str, float] = {
         "calm": 1.05,
-        "alert": 0.72,
+        "alert": 0.75,
         "urgent": 0.72,
-        "critical": 0.72,
+        "critical": 0.69,
     }
 
     def __init__(self, model_path: str | Path, piper_bin: str = "piper") -> None:

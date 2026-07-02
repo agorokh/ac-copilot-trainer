@@ -206,7 +206,7 @@ class Manifest:
           check is ``endswith`` (the suffix is the final signature segment on every backend), NOT
           full equality — ``voice_signature`` also carries host-varying parts (backend id, voice,
           ffmpeg major) that must not reject portable banks — and NOT a plain substring, which
-          would let ``…+intensity2`` accept an ``…+intensity21`` bank.
+          would let the current suffix plus extra trailing characters pass as a valid bank.
         * ``problems`` lists missing clip files and sha256 mismatches when ``bank_dir`` is supplied.
 
         Never raises on content problems — it *reports* them so the caller can degrade per clip.
