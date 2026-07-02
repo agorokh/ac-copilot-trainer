@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T05:15:00Z
+last_updated: 2026-07-02T06:28:31Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -62,6 +62,22 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-02 UTC) - Game Point SimHub detection hotfix
+
+Operator reported the Windows Game Point launcher showing `SIMHUB absent` even though SimHub was
+installed. Root cause: `GamePointSupervisor` copied Windows `os.environ` into a plain dict, whose keys
+were uppercase (`PROGRAMFILES(X86)`), then `_simhub_exe()` looked up `ProgramFiles(x86)` exactly.
+`tools/rig_launcher/supervisor.py` now uses a case-insensitive Windows env lookup for SimHub install
+roots, with regression coverage in `tests/test_rig_launcher.py`.
+
+Local proof: `python -m tools.rig_launcher --once --json` and the rebuilt packaged exe both wrote
+`simhub.state=available` with `C:\Program Files (x86)\SimHub\SimHubWPF.exe`. Rebuilt
+`dist\AC-Copilot-Game-Point.exe`, refreshed the Desktop shortcut, and reopened the launcher. Focused
+checks passed (`ruff check`, `ruff format --check`, `pytest tests/test_rig_launcher.py`, plus
+`pytest -k simhub`). `make PYTHON=python ci-fast` was attempted but stopped at repo-wide
+`ci-format`: this checkout has broad unrelated Ruff format drift (227 files), so it was not fixed in
+this hotfix.
 
 ## Delivered (2026-07-02 UTC) — PRs #444/#445/#446 MERGED: Racing Atelier runtime adoption (#432 Parts A2+B, #86 fix)
 

@@ -526,7 +526,7 @@ class GamePointSupervisor:
         if self.config.simhub_exe:
             candidates.append(Path(self.config.simhub_exe))
         for env_key in ("ProgramFiles(x86)", "ProgramFiles"):
-            base = self._environ.get(env_key)
+            base = _env_get(self._environ, env_key)
             if base:
                 candidates.append(Path(base) / "SimHub" / "SimHubWPF.exe")
         for path in candidates:
@@ -739,6 +739,17 @@ def _none_if_blank(value: str | None) -> str | None:
 def _put_if_present(env: MutableMapping[str, str], key: str, value: str | None) -> None:
     if value:
         env[key] = value
+
+
+def _env_get(env: Mapping[str, str], key: str) -> str | None:
+    value = env.get(key)
+    if value is not None or os.name != "nt":
+        return value
+    wanted = key.upper()
+    for actual_key, actual_value in env.items():
+        if actual_key.upper() == wanted:
+            return actual_value
+    return None
 
 
 def _is_loopback(host: str) -> bool:

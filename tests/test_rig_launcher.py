@@ -668,6 +668,26 @@ def test_simhub_absence_is_visible_but_not_fatal(tmp_path: Path) -> None:
     assert "not found" in result.detail
 
 
+def test_simhub_discovery_treats_windows_env_keys_case_insensitively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exe = tmp_path / "SimHub" / "SimHubWPF.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    monkeypatch.setattr(supervisor_module.os, "name", "nt")
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"PROGRAMFILES(X86)": str(tmp_path)},
+        run=_no_simhub_run,
+    )
+
+    result = sup.probe_simhub(start=False)
+
+    assert result.state == "available"
+    assert result.detail == str(exe)
+
+
 def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> None:
     exe = tmp_path / "SimHub" / "SimHubWPF.exe"
     exe.parent.mkdir()
