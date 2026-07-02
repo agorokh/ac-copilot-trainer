@@ -146,9 +146,7 @@ def _spawn_reader(
                     if text:
                         _push((text, None))
                 if len(buf) > _MAX_LINE_BYTES:
-                    logger.warning(
-                        "serial %s: dropping %d bytes with no newline", port, len(buf)
-                    )
+                    logger.warning("serial %s: dropping %d bytes with no newline", port, len(buf))
                     buf.clear()
         finally:
             _push((_DISCONNECT, "reader-exit"))
