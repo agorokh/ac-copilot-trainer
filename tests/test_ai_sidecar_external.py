@@ -233,6 +233,8 @@ def test_validate_inbound_accepts_known_types() -> None:
                 "type": "session.review.generate",
                 "lap_dir": "journal/laps",
                 "session": "sess",
+                "reference_source": "track-titan",
+                "reference_file": "lap_tt.json",
             }
         )
         is None
@@ -350,6 +352,28 @@ def test_validate_inbound_rejects_invalid() -> None:
                 "type": "session.review.generate",
                 "lap_dir": "journal/laps",
                 "output_dir": "journal/reports",
+            }
+        )
+        or ""
+    )
+    assert "reference_source" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "session.review.generate",
+                "lap_dir": "journal/laps",
+                "reference_source": "aliens",
+            }
+        )
+        or ""
+    )
+    assert "reference_file" in (
+        ep.validate_inbound(
+            {
+                "v": 1,
+                "type": "session.review.generate",
+                "lap_dir": "journal/laps",
+                "reference_file": "../lap_tt.json",
             }
         )
         or ""
@@ -1517,6 +1541,8 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
         session: str,
         driver_id: str,
         output_dir: str | None = None,
+        reference_source: str = "auto",
+        reference_file: str | None = None,
     ) -> dict[str, object]:
         calls.append(
             {
@@ -1524,6 +1550,8 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
                 "session": session,
                 "driver_id": driver_id,
                 "output_dir": output_dir,
+                "reference_source": reference_source,
+                "reference_file": reference_file,
             }
         )
         report_dir = tmp_path / "journal" / "reports"
@@ -1531,6 +1559,7 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
             "ok": True,
             "markdown_path": str(report_dir / "session_sess.md"),
             "json_path": str(report_dir / "session_sess.json"),
+            "html_path": str(report_dir / "session_sess.html"),
             "session_uuid": "sess",
             "car_id": "ks_porsche_911_gt3_r_2016",
             "track_id": "magione",
@@ -1539,6 +1568,14 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
             "screen_summary": ["T1: 0.74s - technique"],
             "problems": [],
             "next_session_prep": [],
+            "reference": {"source_file": "lap_tt.json", "kind": "tt", "lap_ms": 97_000},
+            "reference_selection": {
+                "requested_source": "tt",
+                "active": True,
+                "active_source": "tt",
+                "source_file": "lap_tt.json",
+                "reason": "fastest valid same car/track tt reference",
+            },
             "source": {"lap_dirs": [lap_dir]},
         }
 
@@ -1568,6 +1605,8 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
                             "type": ep.TYPE_SESSION_REVIEW_GENERATE,
                             "lap_dir": str(lap_dir),
                             "session": "sess",
+                            "reference_source": "tt",
+                            "reference_file": "lap_tt.json",
                         }
                     )
                 )
@@ -1601,25 +1640,38 @@ def test_session_review_generate_publishes_result_snapshot_and_voice_cue(
             "session": "sess",
             "driver_id": "local-driver",
             "output_dir": None,
+            "reference_source": "tt",
+            "reference_file": "lap_tt.json",
         }
     ]
     assert ack["type"] == ep.TYPE_SESSION_REVIEW_RESULT
     assert ack["ok"] is True
     assert ack["markdown_path"].endswith("session_sess.md")
+    assert ack["html_path"].endswith("session_sess.html")
+    assert ack["reference"]["kind"] == "tt"
+    assert ack["reference_selection"]["requested_source"] == "tt"
     review = next(frame for frame in frames if frame.get("topic") == ep.TOPIC_SESSION_REVIEW)
     cue = next(frame for frame in frames if frame.get("topic") == ep.TOPIC_COACHING_CUE)
     assert review["type"] == ep.TYPE_STATE_SNAPSHOT
     assert review["payload"]["session_uuid"] == "sess"
     assert "markdown_path" not in review["payload"]
     assert "json_path" not in review["payload"]
+    assert "html_path" not in review["payload"]
     assert review["payload"]["markdown_file"] == "session_sess.md"
     assert review["payload"]["json_file"] == "session_sess.json"
+    assert review["payload"]["html_file"] == "session_sess.html"
+    assert review["payload"]["reference"]["kind"] == "tt"
+    assert review["payload"]["reference_selection"]["active_source"] == "tt"
     assert cue["payload"]["kind"] == "session_review"
     assert cue["payload"]["message"] == "Session debrief for Magione: focus T1."
     assert "markdown_path" not in cue["payload"]["detail"]
     assert "json_path" not in cue["payload"]["detail"]
+    assert "html_path" not in cue["payload"]["detail"]
     assert cue["payload"]["detail"]["markdown_file"] == "session_sess.md"
     assert cue["payload"]["detail"]["json_file"] == "session_sess.json"
+    assert cue["payload"]["detail"]["html_file"] == "session_sess.html"
+    assert cue["payload"]["detail"]["reference"]["kind"] == "tt"
+    assert cue["payload"]["detail"]["reference_selection"]["active_source"] == "tt"
     assert cached == review
     assert voice.messages == ["Session debrief for Magione: focus T1."]
 
@@ -1670,8 +1722,10 @@ def test_failed_session_review_replaces_cached_snapshot_with_error(
         session: str,
         driver_id: str,
         output_dir: str | None = None,
+        reference_source: str = "auto",
+        reference_file: str | None = None,
     ) -> dict[str, object]:
-        del driver_id, output_dir
+        del driver_id, output_dir, reference_source, reference_file
         if mode[0] == "fail":
             raise ValueError("session has no valid timed laps")
         report_dir = tmp_path / "journal" / "reports"
@@ -1679,6 +1733,7 @@ def test_failed_session_review_replaces_cached_snapshot_with_error(
             "ok": True,
             "markdown_path": str(report_dir / "session_good.md"),
             "json_path": str(report_dir / "session_good.json"),
+            "html_path": str(report_dir / "session_good.html"),
             "session_uuid": session,
             "car_id": "ks_porsche_911_gt3_r_2016",
             "track_id": "magione",
@@ -1752,6 +1807,7 @@ def test_failed_session_review_replaces_cached_snapshot_with_error(
     assert fail_snapshot["payload"]["ok"] is False
     assert fail_snapshot["payload"]["session_uuid"] == "sess-empty"
     assert "markdown_path" not in fail_snapshot["payload"]
+    assert "html_path" not in fail_snapshot["payload"]
     assert cached == fail_snapshot
 
 
@@ -1767,8 +1823,10 @@ def test_session_review_generate_returns_structured_error_on_unexpected_exceptio
         session: str,
         driver_id: str,
         output_dir: str | None = None,
+        reference_source: str = "auto",
+        reference_file: str | None = None,
     ) -> dict[str, object]:
-        del lap_dir, session, driver_id, output_dir
+        del lap_dir, session, driver_id, output_dir, reference_source, reference_file
         raise RuntimeError("analysis worker exploded")
 
     monkeypatch.setattr(srv, "_generate_session_review_safe", _boom)

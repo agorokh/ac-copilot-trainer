@@ -1239,8 +1239,10 @@ end
 --- Ask the Python sidecar to generate a saved post-session review artifact.
 ---@param lapDir string|nil
 ---@param sessionUuid string|nil
+---@param referenceSource string|nil
+---@param referenceFile string|nil
 ---@return boolean
-function M.sendSessionReviewGenerate(lapDir, sessionUuid)
+function M.sendSessionReviewGenerate(lapDir, sessionUuid, referenceSource, referenceFile)
   if type(lapDir) ~= "string" or lapDir == "" then return false end
   if not (sock and externalHelloAcked) then return false end
   if not localPathFramesAllowed() then return false end
@@ -1252,6 +1254,12 @@ function M.sendSessionReviewGenerate(lapDir, sessionUuid)
   }
   if type(sessionUuid) == "string" and sessionUuid ~= "" then
     payload.session = sessionUuid
+  end
+  if type(referenceSource) == "string" and referenceSource ~= "" then
+    payload.reference_source = referenceSource
+  end
+  if type(referenceFile) == "string" and referenceFile ~= "" then
+    payload.reference_file = referenceFile
   end
   return M.sendJson(payload)
 end
