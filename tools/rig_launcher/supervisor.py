@@ -27,6 +27,33 @@ GAME_POINT_FOLDER_NAME = "GamePoint"
 _WINDOWS_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
+class _CaseInsensitiveEnv(Mapping[str, str]):
+    """Mapping view that preserves original keys but reads env names like Windows."""
+
+    def __init__(self, env: Mapping[str, str]) -> None:
+        self._data = dict(env)
+        self._keys = {key.upper(): key for key in self._data}
+
+    def __getitem__(self, key: str) -> str:
+        return self._data[self._keys[key.upper()]]
+
+    def __iter__(self) -> Iterable[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        original = self._keys.get(key.upper())
+        if original is None:
+            return default
+        return self._data[original]
+
+
+def _env_view(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    return _CaseInsensitiveEnv(env if env is not None else os.environ)
+
+
 def _subprocess_kwargs(**kwargs: Any) -> dict[str, Any]:
     if os.name == "nt":
         kwargs.setdefault("creationflags", _WINDOWS_NO_WINDOW)
@@ -118,7 +145,7 @@ class GamePointConfig:
         *,
         paths: LauncherPaths | None = None,
     ) -> GamePointConfig:
-        env_map = env if env is not None else os.environ
+        env_map = _env_view(env)
         resolved_paths = paths or default_paths(env_map)
         from tools.rig_launcher.settings import LauncherSettings
 
@@ -208,8 +235,7 @@ class GamePointSupervisor:
     ) -> None:
         self.config = config
         self.paths = config.paths or default_paths(environ)
-        self._environ = dict(environ if environ is not None else os.environ)
-        self._environ_upper = {key.upper(): value for key, value in self._environ.items()}
+        self._environ = _env_view(environ)
         self._popen = popen
         self._run = run
         self._urlopen = urlopen
@@ -527,7 +553,7 @@ class GamePointSupervisor:
         if self.config.simhub_exe:
             candidates.append(Path(self.config.simhub_exe))
         for env_key in ("ProgramFiles(x86)", "ProgramFiles"):
-            base = self._environ_upper.get(env_key.upper())
+            base = self._environ.get(env_key)
             if base:
                 candidates.append(Path(base) / "SimHub" / "SimHubWPF.exe")
         for path in candidates:
@@ -549,7 +575,7 @@ class GamePointSupervisor:
 
 
 def default_paths(env: Mapping[str, str] | None = None) -> LauncherPaths:
-    env_map = env if env is not None else os.environ
+    env_map = _env_view(env)
     override = _none_if_blank(env_map.get("AC_COPILOT_GAME_POINT_DIR"))
     if override:
         return LauncherPaths(Path(override).expanduser())

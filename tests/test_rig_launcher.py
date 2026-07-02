@@ -685,6 +685,21 @@ def test_simhub_discovery_treats_windows_env_keys_case_insensitively(tmp_path: P
     assert result.detail == str(exe)
 
 
+def test_launcher_env_reads_are_case_insensitive(tmp_path: Path) -> None:
+    env = {
+        "ac_copilot_start_simhub": "1",
+        "ac_copilot_simhub_exe": "C:/SimHub/SimHubWPF.exe",
+        "localappdata": str(tmp_path / "LocalAppData"),
+    }
+
+    cfg = GamePointConfig.from_env(env, paths=LauncherPaths(tmp_path))
+    paths = supervisor_module.default_paths(env)
+
+    assert cfg.start_simhub is True
+    assert cfg.simhub_exe == "C:/SimHub/SimHubWPF.exe"
+    assert paths.root == tmp_path / "LocalAppData" / "AC Copilot Trainer" / "GamePoint"
+
+
 def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> None:
     exe = tmp_path / "SimHub" / "SimHubWPF.exe"
     exe.parent.mkdir()
