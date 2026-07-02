@@ -20,7 +20,7 @@
 --     setup = { hash, path?, snapshot = { <flat INI key=value map> } },
 --     trace = {
 --       samples_count = N,
---       fields = { "spline","speed","eMs","throttle","brake","steer","gear","px","py","pz" },
+--       fields = { "spline","speed","eMs","throttle","brake","steer","gear","px","py","pz", ... },
 --       samples = { { ...10 numbers... }, ... }   -- columnar; ~50% smaller than per-sample objects
 --     },
 --     corners = [ { label, entrySpeed, minSpeed, exitSpeed, brakePointSpline, trailBrakeRatio, throttleAvg, steerReversals, tractionCircleProxy } ],
@@ -56,12 +56,14 @@ end
 -- Trace sample field order. `traceToColumns` builds rows by iterating this list (single source of
 -- truth). MUST stay byte-identical to tools/ac_harness/reference_lap.py::TRACE_FIELDS (the Python
 -- generator + analysis loader read by name, and test_reference_lap asserts the two agree).
--- Per-wheel channels (issue #266) are appended last; older archives lacking them export as blanks.
+-- rpm (#442) is appended after the #266 per-wheel channels so every older
+-- column position stays stable; older archives lacking it export as blanks.
 local TRACE_FIELDS = {
   "spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz",
   "wheelAngularSpeed_fl", "wheelAngularSpeed_fr", "wheelAngularSpeed_rl", "wheelAngularSpeed_rr",
   "wheelSlip_fl", "wheelSlip_fr", "wheelSlip_rl", "wheelSlip_rr",
   "tyreCoreTemp_fl", "tyreCoreTemp_fr", "tyreCoreTemp_rl", "tyreCoreTemp_rr",
+  "rpm",
 }
 
 local function lapArchiveDir()

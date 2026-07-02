@@ -39,7 +39,7 @@ SCHEMA_PATH = _HARNESS_DIR / "ac_schema.json"
 # A telemetry frame the modules consume. Field names match exactly what
 # telemetry.lua / brake_detection.lua / corner_analysis.lua read off the trace
 # rows and the live car table (see ac_schema.json / the module sources):
-#   spline, speed, eMs, throttle, brake, steer, gear, px, py, pz
+#   spline, speed, eMs, throttle, brake, steer, gear, rpm, px, py, pz
 TraceFrame = dict[str, float]
 
 
@@ -345,6 +345,7 @@ def _base_frame(
         "brake": brake,
         "steer": steer,
         "gear": float(gear),
+        "rpm": 0.0,
         "px": px,
         "py": py,
         "pz": pz,

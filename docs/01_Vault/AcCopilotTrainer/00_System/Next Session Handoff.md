@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T06:28:31Z
+last_updated: 2026-07-02T08:20:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -78,6 +78,110 @@ checks passed (`ruff check`, `ruff format --check`, `pytest tests/test_rig_launc
 `pytest -k simhub`). `make PYTHON=python ci-fast` was attempted but stopped at repo-wide
 `ci-format`: this checkout has broad unrelated Ruff format drift (227 files), so it was not fixed in
 this hotfix.
+
+## Delivered (2026-07-02 UTC) - PR #452 MERGED: telemetry-learned shift points (#442)
+
+PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452) squash-merged to `main` as
+[`ff65522`](https://github.com/agorokh/ac-copilot-trainer/commit/ff6552271107884222dd20c6b3420921e71318f9).
+Issue [#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) is **CLOSED**.
+
+**Shipped:** live telemetry and schema-v1 lap archives now carry `rpm`; MoTeC import/export and
+reference archive validation preserve the signal across legacy, legacy+rpm, #266 per-wheel, and full
+#442 field layouts. New `shift_profile.lua` derives per-gear upshift RPMs and corner-exit gear
+provenance from the active reference trace. Realtime coaching and the Racing Atelier dashboard now
+use learned shift targets before the fixed 92% limiter heuristic, and Settings surfaces whether shift
+coaching is learned or heuristic.
+
+**Review hardening:** fixed optional-`rpm` archive loading for old traces, neutral-frame
+`1 -> 0 -> 2` upshift learning, skipped-gear downsample jumps (`2 -> 4`) being ignored instead of
+mislearned, learned shift cues when `rpmLimiter` is unavailable, and corner-exit gear sampling before
+the following straight.
+
+**Verification:** local `make ci-fast` green after the final review batch (`2211 passed, 117 skipped`,
+`ci-fast: OK`). GitHub #452 checks green (`CI/build`, canonical docs, conformance; vault guard skipped
+as expected). GraphQL review threads have no current unresolved blockers; resolve-gate reported no
+substantive findings; Qodo updated to head with `Bugs (0)`; Gemini's current-SHA review says it has no
+feedback. `python3 scripts/post_merge_classify.py --pr 452` reported no classification flags.
+
+**Post-merge:** `post_merge_sync.sh sync 452` fast-forwarded the clean `main` worktree
+`5c582f7 -> ff65522`. The first sync attempt from the isolated #442 worktree failed because local
+`main` is owned by `.claude/worktrees/codex-issue-381-voice-bank-timing`; rerunning from that clean
+main worktree succeeded. The local #442 branch could not be deleted only because it remains checked
+out in `.claude/worktrees/codex-issue-442`; remove that worktree after the vault handoff PR lands.
+
+## Delivered (2026-07-02 UTC) - PR #455 MERGED: reference selection review hardening (#408)
+
+PR [#455](https://github.com/agorokh/ac-copilot-trainer/pull/455) squash-merged to `main` as
+[`5c582f7`](https://github.com/agorokh/ac-copilot-trainer/commit/5c582f7f7be166c8b10901d1116f268e7e214fef).
+It closes the late post-merge bot findings from #453: `reference_source=imported` now matches only
+generic imported references (`reference_kind == "imported"`) instead of all `source="imported"`
+specialized references, and comparison fallback candidates now use the same partial-Track-Titan
+filter as reference selection.
+
+**Verification:** local `ruff check` / `ruff format --check` on `tools/session_review/report.py` and
+`tests/test_session_review.py`; `pytest tests/test_session_review.py -q` (16 passed); and the broader
+focused suite `pytest tests/test_session_review.py tests/test_ai_sidecar_external.py tests/test_lap_archive_source_structure.py tests/test_ws_bridge_hello_handshake.py tests/test_ai_sidecar_protocol.py -q`
+(100 passed). GitHub build/conformance/canonical-doc checks green; Qodo follow-up found no material
+issues. `python scripts/post_merge_classify.py --pr 455` reported no classification flags.
+
+## Delivered (2026-07-02 UTC) - PR #451 MERGED: voice bank timing + stale-bank invalidation (#381)
+
+PR [#451](https://github.com/agorokh/ac-copilot-trainer/pull/451) squash-merged to `main` as
+[`81be1f3`](https://github.com/agorokh/ac-copilot-trainer/commit/81be1f33f52dcd3efe08c6bcc0582e1307a3a62c).
+Issue [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) is intentionally **OPEN**:
+the code/runtime side is delivered, but the acceptance criteria still require human at-wheel A/B
+listening confirmation that a critical brake cue sounds urgent versus a low-importance cue calm.
+
+**Shipped:** Kokoro hot-register speeds now keep terse neural act cues under the 450 ms brake-alarm
+budget; Piper hot-register `length_scale` is a strict alert > urgent > critical ladder; and
+`INTENSITY_CHAIN_VERSION` is bumped to `3` so old schema-v3 banks baked before the timing tune fail
+the `voice_signature` suffix gate instead of playing stale, too-slow clips. The current verified
+bank is
+`C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\coach-bank-kokoro-fenrir-v3-intensity3-20260702`,
+signature `kokoro:am_fenrir+ff8+race-engineer-original-v1+prosody2+intensity3`. The user-level
+`AC_COPILOT_VOICE_BANK` now points at that path.
+
+**Verification:** focused voice/manifest/engine/timing tests (54 passed), full `test_voice_*.py`
+suite (142 passed), and `make PYTHON=python ci-fast` (2205 passed, 117 skipped, `ci-fast: OK`).
+Real backend bench: Piper Lessac act cues 445.7 / 309.6 / 328.4 ms; Kokoro am_fenrir act cues
+428.5 / 379.5 / 365.2 ms; both `act<=450ms`. Runtime timing report on the new bank:
+`late_brake.act.urgent.generic` 379.6 ms, `late_brake.act.critical.generic` 361.4 ms,
+`brake_alarm_within_450ms=true`. Sidecar smoke on `127.0.0.1:9876` reported
+`/health.voice.enabled=true` and `rtmixer stream open on device index 18 @ 48000 Hz` for
+`USB Sound Device` / `Windows WASAPI`.
+
+**Post-merge:** CI green, zero unresolved review threads, resolve gate clean. `post_merge_sync.sh
+sync 451` fast-forwarded this worktree's `main` and deleted the local PR branch; it exited non-zero
+only because linked issue #381 remains open by design. `post_merge_classify.py --pr 451` reported no
+post-merge classification flags. Remaining next action: operator listens on the rig and either
+checks off/closes #381 or records what still feels wrong.
+
+## Delivered (2026-07-02 UTC) - PR #453 MERGED: session review browser/report products (#404) + reference selection (#408)
+
+PR [#453](https://github.com/agorokh/ac-copilot-trainer/pull/453) squash-merged to `main` as
+[`97a963f`](https://github.com/agorokh/ac-copilot-trainer/commit/97a963f). Issue
+[#404](https://github.com/agorokh/ac-copilot-trainer/issues/404) is **CLOSED**: Part A shipped in
+[#423](https://github.com/agorokh/ac-copilot-trainer/pull/423), and this PR delivered Parts B-D with
+session history, lap A/B comparison traces, lap-time and per-corner trends, and self-contained
+Markdown/JSON/HTML report products. Issue [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408)
+is also **CLOSED** after manual closeout: Parts A-B shipped in #418, Part C through the #353/#428 Track
+Titan line, and #453 delivered Part D reference-library selection.
+
+**Shipped:** session review schema v2, local report HTML with embedded review JSON, reference-source
+selection (`auto`, `your-best`, `pro`, `tt`, `generated`, `imported`, `none`), explicit
+`--reference-path`, loopback `reference_file`, sidecar result metadata (`reference`,
+`reference_selection`, `html_path`), and external broadcasts that expose report/reference basenames
+instead of host-local paths. Review hardening fixed duplicated `_trend_sessions` logic and a
+basename-only error regression for explicit reference path resolution failures.
+
+**Verification:** GitHub CI green on #453 (`CI`, `Policy (Canonical Docs)`,
+`governance-conformance`); GraphQL review threads resolved. Local focused checks after review fixes:
+`ruff check` / `ruff format --check` on touched report/sidecar tests and
+`pytest tests/test_session_review.py tests/test_ai_sidecar_external.py -q` (61 passed; Windows pytest
+cache permission warning only). Earlier full proof for the same tree: `make PYTHON=python ci-test`
+(2208 passed, 117 skipped), `ci-lint`, security/secrets/policy/CSP checks, plus scratch CLI and
+localhost browser proof of Debrief, Next Session, History, Lap-Time Trend, Corner Trends, and Lap
+Compare rendering. Post-merge classification for #453: no flags.
 
 ## Delivered (2026-07-02 UTC) — PRs #444/#445/#446 MERGED: Racing Atelier runtime adoption (#432 Parts A2+B, #86 fix)
 

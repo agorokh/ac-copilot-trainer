@@ -29,6 +29,16 @@
       "read_by": ["telemetry.lua"],
       "note": "Current gear (floored to integer)."
     },
+    "rpm": {
+      "type": "number",
+      "read_by": ["telemetry.lua", "entry"],
+      "note": "Current engine RPM; telemetry persists it into lap traces for learned shift coaching."
+    },
+    "rpmLimiter": {
+      "type": "number",
+      "read_by": ["entry"],
+      "note": "Current rev limiter RPM; used to scale shift-zone HUD bands and fallback SHIFT UP coaching."
+    },
     "splinePosition": {
       "type": "number",
       "read_by": ["telemetry.lua", "brake_detection.lua", "entry"],

@@ -543,6 +543,8 @@ def _generate_session_review_safe(
     session: str = SESSION_REVIEW_DEFAULT_SESSION,
     driver_id: str = "local-driver",
     output_dir: str | None = None,
+    reference_source: str = "auto",
+    reference_file: str | None = None,
 ) -> dict[str, Any]:
     from tools.session_review import (
         build_session_report,
@@ -559,13 +561,32 @@ def _generate_session_review_safe(
         )
         if requested_output_dir != target_dir:
             raise ValueError("output_dir must be the sibling journal/reports for lap_dir")
-    report = build_session_report([safe_lap_dir], session=session, driver_id=driver_id)
+    reference_path = None
+    if reference_file:
+        reference_file = reference_file.strip()
+        ref_name = Path(reference_file)
+        if (
+            not reference_file
+            or reference_file in {".", ".."}
+            or ref_name.name != reference_file
+            or ref_name.is_absolute()
+        ):
+            raise ValueError("reference_file must be a file name under journal/laps")
+        reference_path = safe_lap_dir / reference_file
+    report = build_session_report(
+        [safe_lap_dir],
+        session=session,
+        driver_id=driver_id,
+        reference_source=reference_source,
+        reference_path=reference_path,
+    )
     written = write_session_report(report, output_dir=target_dir)
     session_meta = report.get("session") if isinstance(report.get("session"), dict) else {}
     return {
         "ok": True,
         "markdown_path": str(written.markdown_path),
         "json_path": str(written.json_path),
+        "html_path": str(written.html_path),
         "session_uuid": session_meta.get("session_uuid"),
         "car_id": session_meta.get("car_id"),
         "track_id": session_meta.get("track_id"),
@@ -574,6 +595,8 @@ def _generate_session_review_safe(
         "screen_summary": report.get("screen_summary"),
         "problems": report.get("problems"),
         "next_session_prep": report.get("next_session_prep"),
+        "reference": report.get("reference"),
+        "reference_selection": report.get("reference_selection"),
         "source": report.get("source"),
     }
 
@@ -1365,7 +1388,11 @@ def _cache_sidecar_snapshot(frame: dict[str, Any]) -> None:
 def _sanitize_session_review_result(payload: dict[str, Any]) -> dict[str, Any]:
     """Drop host-local paths before broadcasting session-review results to clients."""
     sanitized = dict(payload)
-    for path_key, file_key in (("markdown_path", "markdown_file"), ("json_path", "json_file")):
+    for path_key, file_key in (
+        ("markdown_path", "markdown_file"),
+        ("json_path", "json_file"),
+        ("html_path", "html_file"),
+    ):
         path = sanitized.pop(path_key, None)
         if isinstance(path, str) and path:
             sanitized[file_key] = Path(path).name
@@ -1377,10 +1404,20 @@ def _session_review_cue_payload(result: dict[str, Any]) -> dict[str, Any] | None
     if not isinstance(message, str) or not message.strip():
         return None
     detail: dict[str, Any] = {"session_uuid": result.get("session_uuid")}
-    for path_key, file_key in (("markdown_path", "markdown_file"), ("json_path", "json_file")):
+    for path_key, file_key in (
+        ("markdown_path", "markdown_file"),
+        ("json_path", "json_file"),
+        ("html_path", "html_file"),
+    ):
         path = result.get(path_key)
         if isinstance(path, str) and path:
             detail[file_key] = Path(path).name
+    reference = result.get("reference")
+    if isinstance(reference, dict):
+        detail["reference"] = reference
+    reference_selection = result.get("reference_selection")
+    if isinstance(reference_selection, dict):
+        detail["reference_selection"] = reference_selection
     return {
         "kind": "session_review",
         "corner": None,
@@ -1410,12 +1447,17 @@ async def _handle_session_review_frame(websocket: Any, data: dict[str, Any]) -> 
     lap_dir = str(data.get("lap_dir") or "")
     session = str(data.get("session") or SESSION_REVIEW_DEFAULT_SESSION)
     driver_id = str(data.get("driver_id") or "local-driver")
+    reference_source = str(data.get("reference_source") or data.get("referenceSource") or "auto")
+    reference_file_raw = data.get("reference_file") or data.get("referenceFile")
+    reference_file = reference_file_raw if isinstance(reference_file_raw, str) else None
     try:
         result = await asyncio.to_thread(
             _generate_session_review_safe,
             lap_dir,
             session=session,
             driver_id=driver_id,
+            reference_source=reference_source,
+            reference_file=reference_file,
         )
     except Exception as e:
         error = str(e)

@@ -64,6 +64,7 @@ def test_csv_export_produces_stable_columns_from_fixture(tmp_path: Path, monkeyp
     assert rows[1]["throttle"] == "0.7"
     assert rows[1]["steering"] == "-0.05"
     assert rows[1]["gear"] == "4"
+    assert rows[1]["rpm"] == ""
     assert rows[1]["spline"] == "0.5"
     assert rows[1]["lap_distance_m"] == "1262.5"
     assert rows[1]["position_x_m"] == "20"
@@ -106,6 +107,7 @@ def test_missing_trace_fields_export_as_blank_cells(tmp_path: Path, monkeypatch)
     assert row["throttle"] == ""
     assert row["steering"] == ""
     assert row["gear"] == ""
+    assert row["rpm"] == ""
     assert row["position_x_m"] == ""
     assert row["lap_distance_m"] == ""
 
@@ -157,7 +159,7 @@ def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path, mon
     assert rows[8] == ["Beacon Markers", "3 5"]
     data_rows = rows[11:]
     assert [row[0] for row in data_rows] == ["0", "1", "3", "3", "5"]
-    assert [row[12] for row in data_rows] == ["3", "3", "3", "2", "2"]
+    assert [row[13] for row in data_rows] == ["3", "3", "3", "2", "2"]
 
 
 def test_motec_csv_beacons_follow_exported_sample_range(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -190,7 +192,7 @@ def test_motec_csv_beacons_follow_exported_sample_range(tmp_path: Path, monkeypa
     assert rows[8] == ["Beacon Markers", "3 8"]
     data_rows = rows[11:]
     assert [row[0] for row in data_rows] == ["0", "3", "3", "8"]
-    assert [row[12] for row in data_rows] == ["3", "3", "91", "91"]
+    assert [row[13] for row in data_rows] == ["3", "3", "91", "91"]
 
 
 def test_motec_csv_ignores_empty_trace_for_beacons_and_offsets(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

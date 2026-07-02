@@ -29,13 +29,13 @@ def test_import_motec_writes_schema_v1_reference_lap(tmp_path: Path) -> None:
     _write_csv(
         csv_path,
         [
-            ["Lap", "Time", "Distance", "Speed", "Throttle", "Brake", "Steering", "Gear"],
+            ["Lap", "Time", "Distance", "Speed", "Throttle", "Brake", "Steering", "Gear", "RPM"],
             ["", "s", "m", "km/h", "%", "%", "deg", ""],
-            [1, 0.0, 0, 100, 0, 0, 0, 2],
-            [1, 2.5, 250, 140, 50, 0, 45, 3],
-            [1, 5.0, 500, 120, 100, 20, 90, 4],
-            [1, 7.5, 750, 130, 80, 0, 45, 4],
-            [1, 10.0, 1000, 150, 100, 0, 0, 5],
+            [1, 0.0, 0, 100, 0, 0, 0, 2, 5000],
+            [1, 2.5, 250, 140, 50, 0, 45, 3, 6500],
+            [1, 5.0, 500, 120, 100, 20, 90, 4, 7000],
+            [1, 7.5, 750, 130, 80, 0, 45, 4, 7200],
+            [1, 10.0, 1000, 150, 100, 0, 0, 5, 7400],
         ],
     )
 
@@ -69,6 +69,7 @@ def test_import_motec_writes_schema_v1_reference_lap(tmp_path: Path) -> None:
         "px",
         "py",
         "pz",
+        "rpm",
     ]
     assert record["trace"]["samples_count"] == 2000
     assert len(record["trace"]["samples"]) == 2000
@@ -77,6 +78,7 @@ def test_import_motec_writes_schema_v1_reference_lap(tmp_path: Path) -> None:
     assert mid[3] == pytest.approx(1.0)
     assert mid[4] == pytest.approx(0.2)
     assert mid[5] == pytest.approx(0.2)  # 90 deg / default 450 deg steering lock
+    assert mid[-1] == pytest.approx(7000)
     assert record["lap"]["lap_ms"] == pytest.approx(9995, abs=5)
 
 

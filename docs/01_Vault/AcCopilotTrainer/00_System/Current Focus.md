@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T05:15:00Z
+last_updated: 2026-07-02T08:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -22,6 +22,46 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-02):** PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452)
+**MERGED** at [`ff65522`](https://github.com/agorokh/ac-copilot-trainer/commit/ff6552271107884222dd20c6b3420921e71318f9) -
+telemetry-learned shift points for [#442](https://github.com/agorokh/ac-copilot-trainer/issues/442).
+Lap/reference traces now carry `rpm`; `shift_profile.lua` learns per-gear upshift RPMs and
+corner-exit gear provenance from the active reference; SHIFT UP coaching and the Racing Atelier RPM
+zones use learned targets before heuristic limiter fractions. Review hardening covered old archives
+without `rpm`, neutral/manual shift frames, skipped downsampled gear jumps, missing limiter readings,
+and corner-exit sampling before the following straight. GitHub checks green, resolve gate clean, Qodo
+`Bugs (0)`, Gemini current-SHA no feedback. #442 is **CLOSED**.
+
+**Delivered (2026-07-02):** PR [#455](https://github.com/agorokh/ac-copilot-trainer/pull/455)
+**MERGED** at [`5c582f7`](https://github.com/agorokh/ac-copilot-trainer/commit/5c582f7f7be166c8b10901d1116f268e7e214fef) -
+post-merge review hardening for [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408).
+`reference_source=imported` now matches only generic imported references, not `pro` / `tt` /
+`generated`, and partial Track Titan debug archives are excluded from comparison fallback candidates.
+GitHub build/conformance/docs green; Qodo follow-up reported no material issues.
+
+**Delivered (2026-07-02):** PR [#451](https://github.com/agorokh/ac-copilot-trainer/pull/451)
+**MERGED** at
+[`81be1f3`](https://github.com/agorokh/ac-copilot-trainer/commit/81be1f33f52dcd3efe08c6bcc0582e1307a3a62c) -
+voice-bank timing and stale-bank invalidation for
+[#381](https://github.com/agorokh/ac-copilot-trainer/issues/381). Kokoro hot-register speeds and the
+Piper alert/urgent/critical ladder now keep neural act cues inside the 450 ms brake-alarm budget;
+`INTENSITY_CHAIN_VERSION=3` forces old `prosody2+intensity2` banks to fail validation; user
+`AC_COPILOT_VOICE_BANK` points at
+`C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\coach-bank-kokoro-fenrir-v3-intensity3-20260702`.
+Runtime proof: timing report urgent 379.6 ms, critical 361.4 ms,
+`brake_alarm_within_450ms=true`; sidecar `/health.voice.enabled=true` with `rtmixer` on the USB
+Sound Device. **#381 remains OPEN** only for the human-gated at-wheel A/B listening confirmation.
+
+**Delivered (2026-07-02):** PR [#453](https://github.com/agorokh/ac-copilot-trainer/pull/453)
+**MERGED** at [`97a963f`](https://github.com/agorokh/ac-copilot-trainer/commit/97a963f) - session
+review browser/report products for [#404](https://github.com/agorokh/ac-copilot-trainer/issues/404)
+and reference selection for [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408). #404
+is **CLOSED** (Part A in #423; Parts B-D in #453), and #408 is **CLOSED** (Parts A-B in #418, Part C
+through #353/#428, Part D in #453). Session Review now writes schema-v2 Markdown/JSON/HTML with
+Debrief, Next Session, History, Lap-Time Trend, Corner Trends, and Lap Compare; CLI/sidecar reference
+selection supports `auto` / `your-best` / `pro` / `tt` / `generated` / `imported` / `none`; external
+broadcasts expose basenames only. CI green, review threads resolved, post-merge classification clean.
+
 **Delivered (2026-07-02):** Racing Atelier **runtime adoption complete on all three surfaces**
 ([#432](https://github.com/agorokh/ac-copilot-trainer/issues/432) Parts A2+B; #86 conformance fix):
 PRs [#444](https://github.com/agorokh/ac-copilot-trainer/pull/444) (`82ced33`, in-game
@@ -32,8 +72,8 @@ SHIFT UP verb; live-verified in-sim), [#445](https://github.com/agorokh/ac-copil
 fixes the operator found on the glass — flashed to the device). Detail:
 [[pr-444-atelier-main-dashboard-2026-07-01]]. **Operator-pending:** rig-screen photo vs
 `esp32_rig.png`; in-sim BRAKE-state glance. **Open flake:** autonomous driver stalls ~500m from
-pit start (both drivers) — file vs the harness next session. Follow-up:
-[#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) telemetry-learned shift points.
+pit start (both drivers) — file vs the harness next session. Follow-up
+[#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) is now delivered by PR #452.
 
 **Delivered (2026-07-01):** PR [#429](https://github.com/agorokh/ac-copilot-trainer/pull/429)
 **MERGED** ([`047309e`](https://github.com/agorokh/ac-copilot-trainer/commit/047309ef450c56c6e95a886cca86724e277a64e5))

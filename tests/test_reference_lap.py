@@ -59,18 +59,48 @@ def test_validator_accepts_old_10_field_schema_v1_trace() -> None:
 
 
 def test_generated_archive_carries_per_wheel_channels() -> None:
-    # #266: a generated reference archive must include the per-wheel columns with physically
-    # plausible synthetic values (free-rolling omega = v/radius, zero slip, warm tyres).
+    # #266/#442: a generated reference archive must include the per-wheel columns plus rpm,
+    # with physically plausible synthetic wheel values.
     record = build_archive_record_from_scenario("brake_too_late")
     fields = record["trace"]["fields"]
     for name in ("wheelAngularSpeed_fl", "wheelSlip_rr", "tyreCoreTemp_fl"):
         assert name in fields
+    assert fields[-1] == "rpm"
     frames = archive_trace_to_object_trace(record)
     f0 = frames[0]
     speed_ms = f0["speed"] / 3.6
     assert f0["wheelAngularSpeed_fl"] == pytest.approx(speed_ms / 0.347, rel=1e-6)
     assert f0["wheelSlip_fl"] == pytest.approx(0.0)
     assert f0["tyreCoreTemp_rr"] == pytest.approx(80.0)
+    assert f0["rpm"] == pytest.approx(0.0)
+
+
+def test_validator_accepts_old_22_field_schema_v1_trace() -> None:
+    # #442: rpm is appended after the #266 fields; archives captured between #266 and #442
+    # remain schema-v1-valid and convert without an rpm key.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    keep = list(fields[:22])
+    idxs = list(range(22))
+    record["trace"]["fields"] = keep
+    record["trace"]["samples"] = [[row[i] for i in idxs] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)
+    frames = archive_trace_to_object_trace(record)
+    assert "rpm" not in frames[0]
+
+
+def test_validator_accepts_legacy_trace_with_rpm_extension() -> None:
+    # #442: the MoTeC importer can carry rpm without claiming the optional #266 wheel channels.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    keep = list(fields[:10]) + ["rpm"]
+    idxs = list(range(10)) + [fields.index("rpm")]
+    record["trace"]["fields"] = keep
+    record["trace"]["samples"] = [[row[i] for i in idxs] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)
+    frames = archive_trace_to_object_trace(record)
+    assert "rpm" in frames[0]
+    assert "wheelAngularSpeed_fl" not in frames[0]
 
 
 def test_archive_trace_converts_to_live_best_lap_trace_shape() -> None:

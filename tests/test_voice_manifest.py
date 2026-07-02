@@ -51,10 +51,10 @@ def test_validate_detects_signature_drift() -> None:
     # wording keeps vocabulary_hash constant, so the signature suffix is the only stale-bank
     # detector for those changes.
     stale_signatures = [
-        "tone-v3+race-engineer-original-v0+prosody2+intensity2",  # persona swap
-        "tone-v3+race-engineer-original-v1+prosody1+intensity2",  # older prosody chain (codex #441)
-        "tone-v3+race-engineer-original-v1+prosody2+intensity1",  # older intensity chain
-        "tone-v3+race-engineer-original-v1+intensity2",  # pre-prosody suffix shape
+        "tone-v3+race-engineer-original-v0+prosody2+intensity3",  # persona swap
+        "tone-v3+race-engineer-original-v1+prosody1+intensity3",  # older prosody chain (codex #441)
+        "tone-v3+race-engineer-original-v1+prosody2+intensity2",  # older intensity chain
+        "tone-v3+race-engineer-original-v1+intensity3",  # pre-prosody suffix shape
     ]
     for sig in stale_signatures:
         report = build_manifest(voice_signature=sig).validate()
@@ -66,7 +66,7 @@ def test_validate_detects_signature_drift() -> None:
 
 def test_signature_check_is_anchored_at_the_end() -> None:
     # endswith, not equality or substring: the host-varying prefix (backend, voice, ffmpeg major)
-    # must not reject a portable bank, while "…+intensity2" must NOT accept an "…+intensity21"
+    # must not reject a portable bank, while "…+intensity3" must NOT accept an "…+intensity31"
     # bank.
     portable = build_manifest(
         voice_signature=f"kokoro:af_bella+ff8+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
