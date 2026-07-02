@@ -66,7 +66,7 @@ def test_bake_resamples_external_backend_to_requested_samplerate(tmp_path) -> No
     pytest.importorskip("numpy")
 
     class _Native22050Backend:
-        voice_signature = "native-22050-test"
+        voice_signature = f"native-22050-test+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
 
         def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
             del text, register, samplerate
@@ -94,7 +94,7 @@ def test_bake_accepts_float32_external_backend(tmp_path) -> None:
     pytest.importorskip("numpy")
 
     class _Float32Backend:
-        voice_signature = "float32-test"
+        voice_signature = f"float32-test+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
 
         def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
             del text, register
@@ -189,6 +189,21 @@ class _BatchToneBackend:
         tone = ToneBackend()
         for text, register, target in items:
             tone.synthesize(text, register, target, samplerate)
+
+
+def test_bake_rejects_backend_missing_signature_suffix(tmp_path) -> None:
+    # qodo review #441: a backend whose voice_signature lacks the enforced suffix would bake a
+    # bank Manifest.validate always refuses (from_bank disables the coach). Fail at bake time,
+    # before any clip is rendered — never auto-append a provenance the backend did not declare.
+    class _NoSuffixBackend:
+        voice_signature = "custom-v1"
+
+        def synthesize(self, text, register, out_path, samplerate):  # noqa: ANN001
+            raise AssertionError("bake must fail before any clip is rendered")
+
+    with pytest.raises(ValueError, match="EXPECTED_SIGNATURE_SUFFIX"):
+        bake_bank(tmp_path, _NoSuffixBackend())
+    assert not (tmp_path / MANIFEST_FILENAME).exists()
 
 
 def test_bake_uses_batch_backend_when_available(tmp_path) -> None:

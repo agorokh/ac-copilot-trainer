@@ -537,7 +537,20 @@ def bake_bank(out_dir: str | Path, backend: VoiceBackend, *, samplerate: int = 4
     The manifest stamps the current :func:`vocabulary_hash` and the backend's ``voice_signature``,
     so a later wording/register change (or a different voice / prosody chain / ffmpeg build) is
     detected at load. Returns the in-memory manifest.
+
+    Raises :class:`ValueError` when the backend's ``voice_signature`` lacks the enforced
+    persona/prosody/intensity suffix — such a bank would pass the bake but be refused by
+    ``Manifest.validate`` on every load (qodo review #441).
     """
+    if not backend.voice_signature.endswith(EXPECTED_SIGNATURE_SUFFIX):
+        # Fail loudly BEFORE rendering a single clip — and never auto-append: stamping a
+        # persona/prosody provenance the backend did not declare would forge exactly what the
+        # runtime gate exists to verify.
+        raise ValueError(
+            f"backend voice_signature {backend.voice_signature!r} must end with "
+            f"vocabulary.EXPECTED_SIGNATURE_SUFFIX {EXPECTED_SIGNATURE_SUFFIX!r} — append "
+            "bake._signature_suffix() to the backend's signature"
+        )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     phrases = list(iter_vocabulary())
