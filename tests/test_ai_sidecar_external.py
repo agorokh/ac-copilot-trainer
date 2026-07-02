@@ -446,6 +446,8 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
         setup_store: str | None,
         setup_exchange_endpoint: str | None,
         user_setups_root: str | None,
+        serial_port: str | None,
+        serial_baud: int,
     ):
         seen.update(
             {
@@ -456,6 +458,8 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
                 "setup_store": setup_store,
                 "setup_exchange_endpoint": setup_exchange_endpoint,
                 "user_setups_root": user_setups_root,
+                "serial_port": serial_port,
+                "serial_baud": serial_baud,
             }
         )
 
@@ -481,6 +485,8 @@ def test_external_bind_accepts_env_token(monkeypatch: pytest.MonkeyPatch) -> Non
         "setup_store": None,
         "setup_exchange_endpoint": None,
         "user_setups_root": None,
+        "serial_port": None,
+        "serial_baud": 115200,
     }
 
 
@@ -498,8 +504,11 @@ def test_main_wires_voice_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
         setup_store: str | None,
         setup_exchange_endpoint: str | None,
         user_setups_root: str | None,
+        serial_port: str | None,
+        serial_baud: int,
     ):
         del host, port, reply, token, setup_store, setup_exchange_endpoint, user_setups_root
+        del serial_port, serial_baud
 
     def fake_wire_voice(config: srv.VoiceRuntimeConfig) -> None:
         seen["ref_path"] = config.reference_path
