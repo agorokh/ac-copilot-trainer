@@ -609,6 +609,31 @@ def test_ete03e_shift_profile_learns_upshift_through_neutral(lua):
     assert profile["byGear"][1] == 7000
 
 
+def test_ete03f_shift_profile_ignores_skipped_gear_jump(lua):
+    """#442: downsampled traces can skip intermediate gear states.
+
+    A retained 2->4 jump is not a reliable 2->3 shift sample, so the learner
+    should prefer no sample over a wrong per-gear target.
+    """
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    trace = lua.execute("""
+        return {
+            {
+                spline = 0.30, eMs = 9000, speed = 160,
+                throttle = 1.0, gear = 2, rpm = 7100,
+            },
+            {
+                spline = 0.34, eMs = 9400, speed = 180,
+                throttle = 1.0, gear = 4, rpm = 7400,
+            },
+        }
+    """)
+    profile = shift["learnFromReferenceTrace"](trace, lua.table(), lua.eval("{ source = 'test' }"))
+
+    assert profile["hasLearnedShift"] is False
+    assert profile["byGear"][2] is None
+
+
 # ---------------------------------------------------------------------------
 # ETE-04: In a corner segment, slower than reference
 # ---------------------------------------------------------------------------

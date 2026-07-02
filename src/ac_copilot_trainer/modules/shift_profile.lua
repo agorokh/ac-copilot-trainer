@@ -10,6 +10,7 @@ local DEFAULT_SHIFT_ZONE_FRAC = 0.92
 local DEFAULT_REDLINE_FRAC = 0.97
 local MIN_SHIFT_RPM = 1000
 local MIN_SHIFT_GAS = 0.45
+local MAX_SHIFT_WINDOW_MS = 1500
 
 M.DEFAULT_SHIFT_ZONE_FRAC = DEFAULT_SHIFT_ZONE_FRAC
 M.DEFAULT_REDLINE_FRAC = DEFAULT_REDLINE_FRAC
@@ -83,6 +84,15 @@ local function mergeShiftWindow(window, frame)
   return window
 end
 
+local function elapsedMs(prev, cur)
+  local a = tonumber(prev and prev.eMs)
+  local b = tonumber(cur and cur.eMs)
+  if a and b and a == a and b == b then
+    return math.abs(b - a)
+  end
+  return nil
+end
+
 local function forwardDelta(s0, s1)
   local d = (s1 - s0) % 1
   if d < 0 then d = d + 1 end
@@ -153,9 +163,10 @@ function M.learnFromReferenceTrace(trace, segments, opts)
       local cur = trace[i]
       local curGear = roundedGear(cur and cur.gear)
       if curGear then
-        if lastActive and curGear > lastActive.gear then
+        if lastActive and curGear == lastActive.gear + 1 then
           local gas = maxThrottle(lastActive.frame, neutralWindow, cur)
-          if gas >= MIN_SHIFT_GAS then
+          local elapsed = elapsedMs(lastActive.frame, cur)
+          if gas >= MIN_SHIFT_GAS and (elapsed == nil or elapsed <= MAX_SHIFT_WINDOW_MS) then
             local rpm = transitionRpm(lastActive.frame, neutralWindow, cur)
             if rpm then
               buckets[lastActive.gear] = buckets[lastActive.gear] or {}
