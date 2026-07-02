@@ -613,6 +613,20 @@ def test_resolve_setup_ini_rejects_traversal_and_outside_paths(tmp_path):
         resolve_setup_ini(user, car, "spa", "../../evil.ini")
 
 
+def test_resolve_setup_ini_rejects_path_shaped_car_and_track_ids(tmp_path):
+    # car/track/layout become path segments under the setups root — a separator or `..` in them
+    # must be rejected before they join the root (#460 review: no containment on the id join).
+    user = _setups_tree(tmp_path)
+    with pytest.raises(ValueError, match="unsafe car id"):
+        resolve_setup_ini(user, "../evil", "spa", "Realistic_BB_v3")
+    with pytest.raises(ValueError, match="unsafe track id"):
+        resolve_setup_ini(user, "ks_porsche_911_gt3_r_2016", "../../etc", "Realistic_BB_v3")
+    with pytest.raises(ValueError, match="unsafe layout id"):
+        resolve_setup_ini(
+            user, "ks_porsche_911_gt3_r_2016", "spa", "Realistic_BB_v3", layout="../x"
+        )
+
+
 def test_resolve_setup_ini_accepts_path_inside_setups_root(tmp_path):
     user = _setups_tree(tmp_path)
     car = "ks_porsche_911_gt3_r_2016"
@@ -686,13 +700,12 @@ def test_setup_leg_verified_run_proceeds_and_reports_applied():
     assert "Realistic_BB_v3" in report.summary()
 
 
-def test_setup_leg_refusal_fails_at_stage_setup_without_driving():
-    ctrl = FakeController()
+def test_setup_leg_refusal_fails_at_stage_setup_before_hijack():
     report = asyncio.run(
         run_auto_drive(
             _cfg(setup="Realistic_BB_v3"),
             launch=_ok_launch,
-            hijack=lambda c: ctrl,
+            hijack=lambda c: pytest.fail("hijack must not run after a setup refusal"),
             drive=lambda *a: pytest.fail("must not drive with an unverified setup"),
             tap=_tap_returning(CONTINUOUS),
             apply_setup=_apply_returning({"ok": False, "error": "not found"}, {}),
@@ -700,9 +713,32 @@ def test_setup_leg_refusal_fails_at_stage_setup_without_driving():
     )
     assert report.ok is False
     assert report.stage == "setup"
+    assert report.hijacked is False  # setup applies BEFORE the hijack (pits gate closes under it)
     assert report.setup_applied is False
     assert "not found" in (report.error or "")
-    assert ctrl.closed is True  # hijack released even though the run aborted
+
+
+def test_setup_reapplies_after_hijack_relaunch():
+    # A hijack miss relaunches AC — a NEW session — so the setup must re-apply each launch.
+    applies: list[int] = []
+
+    async def _apply(config):  # noqa: ANN001
+        applies.append(1)
+        return {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"}
+
+    hijacks: list[FakeController | None] = [None, FakeController()]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3", max_launches=2),
+            launch=_ok_launch,
+            hijack=lambda c: hijacks.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+        )
+    )
+    assert report.ok is True
+    assert len(applies) == 2  # once per launch attempt — never a stale prior-session load
 
 
 def test_setup_leg_wrong_setup_in_ack_fails():
@@ -710,7 +746,7 @@ def test_setup_leg_wrong_setup_in_ack_fails():
         run_auto_drive(
             _cfg(setup="Realistic_BB_v3"),
             launch=_ok_launch,
-            hijack=lambda c: FakeController(),
+            hijack=lambda c: pytest.fail("hijack must not run"),
             drive=lambda *a: pytest.fail("must not drive"),
             tap=_tap_returning(CONTINUOUS),
             apply_setup=_apply_returning({"ok": True, "name": "SomethingElse"}, {}),
@@ -720,9 +756,7 @@ def test_setup_leg_wrong_setup_in_ack_fails():
     assert report.ok is False
 
 
-def test_setup_leg_exception_fails_and_releases_controller():
-    ctrl = FakeController()
-
+def test_setup_leg_exception_fails_before_hijack():
     async def _boom(config):  # noqa: ANN001
         raise RuntimeError("sidecar vanished")
 
@@ -730,7 +764,7 @@ def test_setup_leg_exception_fails_and_releases_controller():
         run_auto_drive(
             _cfg(setup="X"),
             launch=_ok_launch,
-            hijack=lambda c: ctrl,
+            hijack=lambda c: pytest.fail("hijack must not run"),
             drive=lambda *a: pytest.fail("must not drive"),
             tap=_tap_returning(CONTINUOUS),
             apply_setup=_boom,
@@ -738,7 +772,7 @@ def test_setup_leg_exception_fails_and_releases_controller():
     )
     assert report.stage == "setup"
     assert "sidecar vanished" in (report.error or "")
-    assert ctrl.closed is True
+    assert report.hijacked is False
 
 
 def test_setup_requested_without_apply_leg_fails_explicitly():
@@ -746,7 +780,7 @@ def test_setup_requested_without_apply_leg_fails_explicitly():
         run_auto_drive(
             _cfg(setup="X"),
             launch=_ok_launch,
-            hijack=lambda c: FakeController(),
+            hijack=lambda c: pytest.fail("hijack must not run"),
             drive=lambda *a: pytest.fail("must not drive"),
             tap=_tap_returning(CONTINUOUS),
         )
@@ -803,7 +837,8 @@ def test_progress_watchdog_rejects_nonpositive_params():
         ProgressWatchdog(stall_seconds=1.0, min_progress_m=0.0)
 
 
-def test_recovery_cap_reason_vetoes_success():
+def test_recovery_capped_flag_vetoes_success():
+    # The veto is a structured flag, NOT a magic substring in `reason` (#460 review).
     report = asyncio.run(
         run_auto_drive(
             _cfg(),
@@ -814,6 +849,7 @@ def test_recovery_cap_reason_vetoes_success():
                     drove=True,
                     total_distance_m=560.0,
                     recoveries=7,
+                    recovery_capped=True,
                     reason="recovery cap (6) exceeded at 560m",
                 ),
                 {},
@@ -824,6 +860,102 @@ def test_recovery_cap_reason_vetoes_success():
     assert report.sequence_ok is True
     assert report.ok is False  # capped-out stall must not report success
     assert "recovery cap" in report.summary()
+
+
+def test_recovery_capped_flag_is_what_vetoes_not_the_reason_string():
+    # Even if `reason` were reworded, the flag alone must veto — proves the contract is the flag.
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(
+                DriveStats(drove=True, total_distance_m=560.0, recovery_capped=True, reason=""),
+                {},
+            ),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is False
+
+
+def test_setup_leg_retryable_launch_relaunches_then_fails_if_never_answered():
+    # rig_apply_setup returns retryable_launch=True when the Lua peer never answered (pre-drive
+    # screen). run_auto_drive must relaunch, not hard-fail — and if it never answers, fail at
+    # stage=setup after exhausting launches (with hijack never consulted).
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply_never_answers(config):  # noqa: ANN001
+        return {"ok": False, "error": "no loopback Lua peer connected", "retryable_launch": True}
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3", max_launches=3),
+            launch=_launch,
+            hijack=lambda c: pytest.fail("hijack must not run while the session never entered"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply_never_answers,
+        )
+    )
+    assert launches == [1, 1, 1]  # relaunched to exhaustion
+    assert report.stage == "setup"
+    assert report.ok is False
+    assert "after 3 launch attempt(s)" in (report.error or "")
+
+
+def test_setup_leg_retryable_launch_succeeds_on_later_attempt():
+    # First launch lands at the pre-drive screen (retryable), the relaunch enters the session.
+    attempts: list[dict] = [
+        {"ok": False, "error": "no loopback Lua peer connected", "retryable_launch": True},
+        {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"},
+    ]
+
+    async def _apply(config):  # noqa: ANN001
+        return attempts.pop(0)
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3", max_launches=3),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+        )
+    )
+    assert report.ok is True
+    assert report.setup_applied is True
+
+
+def test_dual_failure_keeps_pipeline_stage_and_records_drive_crash_in_notes():
+    # Sidecar death makes the tap raise AND the drive thread raise. The report must keep the
+    # first (pipeline) stage/error and surface the drive crash in notes, never silently drop it.
+    async def _boom_tap(url, *, seconds, wait_for_lap, **kwargs):  # noqa: ANN001
+        raise RuntimeError("tap exploded")
+
+    def _boom_drive(controller, config, stop):  # noqa: ANN001
+        raise RuntimeError("drive exploded too")
+
+    ctrl = FakeController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_boom_drive,
+            tap=_boom_tap,
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "pipeline"  # first failure wins the stage
+    assert "tap exploded" in (report.error or "")
+    assert any("drive exploded too" in n for n in report.notes)  # drive crash not dropped
+    assert ctrl.closed is True
 
 
 # ---------------------------------------------------------------------------
@@ -932,6 +1064,28 @@ def test_custom_ai_enabled_user_file_overrides_root(tmp_path):
 def test_custom_ai_enabled_unknown_when_no_file_carries_the_key(tmp_path):
     enabled, detail = custom_ai_enabled(tmp_path / "ac", tmp_path / "user")
     assert enabled is None and "new_behaviour.ini" in detail
+
+
+def test_custom_ai_enabled_tolerates_utf8_bom(tmp_path):
+    # CM/CSP tooling writes some ini files with a UTF-8 BOM — a BOM'd first section header used
+    # to raise MissingSectionHeaderError and falsely block preflight (#460 review).
+    ac_root = tmp_path / "ac"
+    (ac_root / "extension" / "config").mkdir(parents=True)
+    path = ac_root / "extension" / "config" / "new_behaviour.ini"
+    path.write_text("[CUSTOM_AI]\nENABLED=1\n", encoding="utf-8-sig")  # BOM prefix
+    enabled, _ = custom_ai_enabled(ac_root, tmp_path / "user")
+    assert enabled is True
+
+
+def test_custom_ai_enabled_does_not_crash_on_undecodable_bytes(tmp_path):
+    ac_root = tmp_path / "ac"
+    (ac_root / "extension" / "config").mkdir(parents=True)
+    path = ac_root / "extension" / "config" / "new_behaviour.ini"
+    path.write_bytes(b"[CUSTOM_AI]\nENABLED=1\n\xff\xfe not utf-8 \x80\x81")
+    # Must not raise — returns (None, detail) so preflight can report, not blow up.
+    enabled, detail = custom_ai_enabled(ac_root, tmp_path / "user")
+    assert enabled in (True, None)
+    assert isinstance(detail, str)
 
 
 # ---------------------------------------------------------------------------

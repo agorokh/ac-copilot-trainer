@@ -29,10 +29,13 @@ That single command owns the whole loop:
    de-elevated Content Manager URL, with relaunch retries on the menu-skip race.
    Hand-authored presets: `--cm-preset <file>` (the preflight cross-checks its CarId/TrackId).
 4. **Setup applied AND verified** — `--setup <name>` resolves under
-   `Documents/Assetto Corsa/setups/<car>/<track|generic>/`, is applied in-sim through the
-   sidecar `setup.load` relay (`ac.loadSetup`, pits gate), and the run **fails at
-   `stage="setup"`** unless the in-sim ack names the requested setup. Setup runs spawn in the
-   pit box (`StartType=PIT`); plain runs spawn at the start line.
+   `Documents/Assetto Corsa/setups/<car>/<track|layout|generic>/`, is applied in-sim through the
+   sidecar `setup.load` relay (`ac.loadSetup`, pits gate) **before the carcsw hijack** — CSP holds
+   `ac.isCarResetAllowed()` false while a Custom-AI controller owns the car, so the load must
+   happen while the car is still human-controllable in the pit box (live-found on Spa,
+   2026-07-02). The run **fails at `stage="setup"`** unless the in-sim ack names the requested
+   setup. Setup runs spawn in the pit box (`StartType=PIT`); plain runs spawn at the start line.
+   A relaunch re-applies the setup (each launch is a fresh session).
 5. **Drive** — `--driver ggv` (flat-out friction-circle min-time), `racing` (AI-line pace,
    default), or `cruise` (slow lane-keeper). Guards: sim-death detection, a **no-progress
    watchdog** (recovers stalls regardless of throttle), a **recovery cap** (default 6) that fails

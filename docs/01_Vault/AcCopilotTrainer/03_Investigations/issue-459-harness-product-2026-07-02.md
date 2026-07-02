@@ -49,9 +49,37 @@ resilient habit — one command, any downstream task, no reinvented `.scratch` d
   `<user>/cfg/extension/state/lua/app/AC_Copilot_Trainer/ac_copilot_trainer/journal/laps`.
 - Rig has 911 GT3 R Spa setups: `Realistic_BB_v1/2/3.ini`; Spa `ai/fast_lane.ai` present.
 
+## Live findings (Spa, 2026-07-02 — PR #460)
+
+- **The pits gate closes under the carcsw hijack.** First live run failed `stage=setup` with
+  "must be in pits" even though the car was in the pit box — CSP holds `ac.isCarResetAllowed()`
+  false while a Custom-AI controller owns car 0. **Fix:** apply + verify the setup *before* the
+  hijack, inside the launch loop (a relaunch is a fresh session, so re-apply each attempt).
+- **Menu-skip race is invisible to the LIVE gate.** After a cold relaunch AC can sit at the
+  pre-drive "Drive/Setup/Exit" screen with `status=LIVE` and physics **advancing** — the launch
+  gate cannot tell it from a real session, but the trainer Lua app never ticks, so the sidecar
+  answers "no loopback Lua peer connected" forever. `rig_apply_setup` now flags
+  `retryable_launch=True` when the Lua peer never answers, and the orchestrator **relaunches**
+  (like a failed hijack) rather than hard-failing. Confirmed live: pkt advancing, `in_pit=True`,
+  Lua peer never connected across a 150 s window; also observed the agent's own foreground window
+  losing the menu-skip race → added a best-effort foreground-minimize before each CM launch.
+- **Setup timeout raised 60→150 s**: the Lua peer reconnect after a cold relaunch measured
+  well over a minute.
+
+## Review hardening (PR #460, 15-agent adversarial workflow → 12 confirmed, all fixed)
+
+- Setup leg moved before the hijack (the HIGH above); `<car>/generic/` now enumerated by
+  `setup_library.lua M.list()` (it resolved off-sim but `loadByName` reported "not found");
+  `loadByName` path match normalized (separator + case) so path-first disambiguation works;
+  `custom_ai_enabled` reads `utf-8-sig` and catches `UnicodeDecodeError` (BOM'd CSP inis);
+  car/track/layout ids validated before they become path segments (evidence dir / setups join);
+  `ensure_sidecar` timeout path kills its half-started child (no orphan on :8765); recovery-cap
+  veto is now a structured `DriveStats.recovery_capped` flag, not a magic substring; dual
+  tap+drive failure keeps the pipeline stage and records the drive crash in `notes`.
+
 ## Remaining (this issue)
 
 Part F live proof: Spa + `ks_porsche_911_gt3_r_2016` + `Realistic_BB_v3` via the one command,
 evidence bundle on #154/#459; TT Spa reference ingest + session-review comparison. Live checks
-during the run: does `ac.loadSetup` succeed under carcsw hijack; do the custom-teleport offsets
-land (else pit-exit fallback); root-cause the 450–580 m stall with the watchdog telemetry.
+still open: confirm `ac.loadSetup` succeeds pre-hijack in the pit box; do the custom-teleport
+offsets land (else pit-exit fallback); root-cause the 450–580 m stall with the watchdog telemetry.

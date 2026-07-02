@@ -10,8 +10,8 @@ modules into the loop the EPIC claimed** —
     preflight (content / CSP / CM / setup asserts)  -> fail fast, actionably (#459 Part B)
     CM-URL launch (entry_launcher)            -> AC on track, non-elevated
     wait LIVE + settle                        -> CSP ready to accept the Custom-AI hijack
-    carcsw hijack of car 0 (custom_ai)        -> retry / relaunch on the early-LIVE race
     apply + verify car setup (sidecar WS)     -> the run drives the setup you asked for (#459 A)
+    carcsw hijack of car 0 (custom_ai)        -> retry / relaunch on the early-LIVE race
     autonomous drive (racing_driver / ggv)     -> RACES any track: shifts gears, flat-out min-time
     tap the sidecar WS (sequence_probe)        -> assert the live coaching producer contract
     evidence bundle (report.json + HUD png)    -> proof any downstream task can point at (#459 C)
@@ -116,7 +116,9 @@ class AutoDriveConfig:
     # drove whatever setup happened to be active.
     setup: str | None = None
     setup_ini: Path | None = None
-    setup_timeout: float = 60.0  # trainer Lua connects to the sidecar within seconds of LIVE
+    # Live-measured (Spa, 2026-07-02): after a cold relaunch the trainer Lua peer can take well
+    # over a minute to (re)connect to the sidecar — 60 s timed out with "no loopback Lua peer".
+    setup_timeout: float = 150.0
     # Drive. ``driver="racing"`` (default) follows fast_lane.ai's embedded speed profile with real
     # braking points + gear shifting (RacingDriver) — the car actually races (shifts through gears,
     # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
@@ -161,6 +163,7 @@ class DriveStats:
     samples: int = 0
     sim_dead: bool = False
     recoveries: int = 0  # stuck/no-progress recoveries taken (capped by max_recoveries)
+    recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
     reason: str = ""
 
@@ -314,17 +317,25 @@ async def run_auto_drive(
     tap: TapFn = tap_frames,
     apply_setup: ApplySetupFn | None = None,
 ) -> AutoDriveReport:
-    """Compose launch → hijack → setup → (background drive) → WS assert → teardown into one report.
+    """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
     The legs are injectable so the orchestration is unit-testable with fakes — no AC, no
     Windows, no real sidecar. On the rig the defaults (:func:`rig_launch`, :func:`rig_hijack`,
     :func:`rig_apply_setup`, :func:`rig_drive`, :func:`tap_frames`) wire it to the live game.
 
     When ``config.setup`` is set and ``apply_setup`` is provided, the setup is applied and
-    verified **before** the drive leg; an unverified setup FAILS the run at ``stage="setup"`` —
-    driving with the wrong setup is the "half-done run" this exists to prevent (#459 Part A).
+    verified **before the carcsw hijack**: live-observed (Spa, 2026-07-02) that CSP keeps
+    ``ac.isCarResetAllowed()`` false while a Custom-AI controller holds the car, so a
+    post-hijack ``setup.load`` is refused with "must be in pits" even in the pit box. The
+    setup re-applies on every relaunch (a relaunch is a fresh session). An unverified setup
+    FAILS the run at ``stage="setup"`` — driving with the wrong setup is the "half-done run"
+    this exists to prevent (#459 Part A).
     """
     identity = dict(car_id=config.car_id, track_id=config.track_id or None)
+    setup_requested = Path(config.setup).stem if config.setup else None
+    setup_ack: dict | None = None
+    setup_applied: bool | None = None
+    setup_session_failure: str | None = None  # session-never-entered shape (relaunch-worthy)
     controller: Controller | None = None
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
     launch_config = replace(config, max_launches=1)
@@ -337,6 +348,54 @@ async def run_auto_drive(
                 last_launch_error = reason
                 continue
             launched_once = True
+        if config.setup:
+            # BEFORE the hijack (see docstring), and inside the loop: a relaunch starts a new
+            # session, so the previous iteration's setup load no longer applies.
+            if apply_setup is None:
+                return AutoDriveReport(
+                    ok=False,
+                    stage="setup",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=False,
+                    error="setup requested but no apply_setup leg wired",
+                    **identity,
+                )
+            try:
+                setup_ack = await apply_setup(config)
+            except Exception as exc:  # noqa: BLE001 - a setup-leg crash is a run FAIL
+                return AutoDriveReport(
+                    ok=False,
+                    stage="setup",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=False,
+                    error=f"setup apply failed: {type(exc).__name__}: {exc}",
+                    **identity,
+                )
+            ok_setup, detail = verify_setup_ack(setup_ack, setup_requested)
+            setup_applied = ok_setup
+            if not ok_setup:
+                if isinstance(setup_ack, dict) and setup_ack.get("retryable_launch"):
+                    # The Lua peer never appeared: the menu-skip race was lost and the session
+                    # was never entered — a LAUNCH failure the LIVE+advancing gate cannot see
+                    # (live-observed Spa 2026-07-02: pre-drive screen up, physics advancing).
+                    # Relaunch, exactly like a failed hijack.
+                    setup_session_failure = detail
+                    continue
+                # A refused/mismatched setup is a hard run FAIL, not a relaunch trigger:
+                # rig_apply_setup already retried the transient shapes internally.
+                return AutoDriveReport(
+                    ok=False,
+                    stage="setup",
+                    launched=not config.skip_launch,
+                    setup_requested=setup_requested,
+                    setup_applied=False,
+                    setup_ack=setup_ack,
+                    error=f"setup not applied: {detail}",
+                    **identity,
+                )
+            setup_session_failure = None
         controller = hijack(config)
         if controller is not None:
             break
@@ -352,59 +411,29 @@ async def run_auto_drive(
                 error=last_launch_error or "sim never reached LIVE",
                 **identity,
             )
+        if setup_session_failure is not None:
+            return AutoDriveReport(
+                ok=False,
+                stage="setup",
+                launched=True,
+                setup_requested=setup_requested,
+                setup_applied=False,
+                setup_ack=setup_ack,
+                error=(
+                    f"setup not applied after {attempts} launch attempt(s): {setup_session_failure}"
+                ),
+                **identity,
+            )
         return AutoDriveReport(
             ok=False,
             stage="hijack",
             launched=not config.skip_launch,
+            setup_requested=setup_requested,
+            setup_applied=setup_applied,
+            setup_ack=setup_ack,
             error="CSP did not accept the carcsw hijack",
             **identity,
         )
-
-    setup_ack: dict | None = None
-    setup_applied: bool | None = None
-    if config.setup:
-        requested = Path(config.setup).stem
-        if apply_setup is None:
-            controller.close()
-            return AutoDriveReport(
-                ok=False,
-                stage="setup",
-                launched=not config.skip_launch,
-                hijacked=True,
-                setup_requested=requested,
-                setup_applied=False,
-                error="setup requested but no apply_setup leg wired",
-                **identity,
-            )
-        try:
-            setup_ack = await apply_setup(config)
-        except Exception as exc:  # noqa: BLE001 - a setup-leg crash is a run FAIL, not a leak
-            controller.close()
-            return AutoDriveReport(
-                ok=False,
-                stage="setup",
-                launched=not config.skip_launch,
-                hijacked=True,
-                setup_requested=requested,
-                setup_applied=False,
-                error=f"setup apply failed: {type(exc).__name__}: {exc}",
-                **identity,
-            )
-        ok_setup, detail = verify_setup_ack(setup_ack, requested)
-        setup_applied = ok_setup
-        if not ok_setup:
-            controller.close()
-            return AutoDriveReport(
-                ok=False,
-                stage="setup",
-                launched=not config.skip_launch,
-                hijacked=True,
-                setup_requested=requested,
-                setup_applied=False,
-                setup_ack=setup_ack,
-                error=f"setup not applied: {detail}",
-                **identity,
-            )
 
     stop = threading.Event()
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, config, stop))
@@ -437,16 +466,26 @@ async def run_auto_drive(
         try:
             stats = await drive_task
         except Exception as exc:  # noqa: BLE001 - drive thread crashed; record, don't leak
-            stage = "drive"
-            error = error or f"drive: {type(exc).__name__}: {exc}"
+            drive_error = f"drive: {type(exc).__name__}: {exc}"
+            if error is None:
+                stage, error = "drive", drive_error
+            else:
+                # Dual failure (tap AND drive both raised): keep the first stage/error pair
+                # coherent and surface the drive crash in notes instead of dropping it.
+                notes.append(drive_error)
         finally:
             controller.close()
 
     # Success needs a clean pipeline AND a real drive that did not die mid-run: sim_dead can be set
     # after the car already passed the distance/speed thresholds (drove=True), so veto on it too.
     # A recovery-capped run also vetoes: the car never sustained progress, whatever the totals say.
-    capped = bool(stats.reason and "recovery cap" in stats.reason)
-    ok = bool(seq_ok) and stats.drove and not stats.sim_dead and not capped and error is None
+    ok = (
+        bool(seq_ok)
+        and stats.drove
+        and not stats.sim_dead
+        and not stats.recovery_capped
+        and error is None
+    )
     return AutoDriveReport(
         ok=ok,
         stage=stage,
@@ -457,7 +496,7 @@ async def run_auto_drive(
         counts=counts,
         notes=notes,
         error=error,
-        setup_requested=Path(config.setup).stem if config.setup else None,
+        setup_requested=setup_requested,
         setup_applied=setup_applied,
         setup_ack=setup_ack,
         **identity,
@@ -501,6 +540,16 @@ def resolve_fast_lane(ac_root: Path, track_id: str, layout: str | None = None) -
 # characters and reject traversal outright (this repo already shipped one path-injection bug;
 # see the #459 pitfall list).
 _SETUP_NAME_RE = re.compile(r"^[A-Za-z0-9 ._()\[\]-]+$")
+# AC content ids (car/track/layout) are folder basenames; they also become path segments under
+# the setups root and the evidence-dir name, so reject anything that is not a plain id.
+_AC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_ac_id(kind: str, value: str) -> str:
+    """Reject a car/track/layout id that could act as a path (separator, ``..``, drive colon)."""
+    if not value or ".." in value or not _AC_ID_RE.match(value):
+        raise ValueError(f"unsafe {kind} id {value!r} (allowed: letters/digits/._-)")
+    return value
 
 
 def resolve_setup_ini(
@@ -523,6 +572,10 @@ def resolve_setup_ini(
     an unsafe name/path.
     """
     setups_root = (user_dir / "setups").resolve()
+    validate_ac_id("car", car_id)
+    validate_ac_id("track", track_id)
+    if layout:
+        validate_ac_id("layout", layout)
     raw = setup.strip()
     if not raw:
         raise ValueError("setup name is empty")
@@ -657,8 +710,10 @@ def custom_ai_enabled(ac_root: Path, user_dir: Path) -> tuple[bool | None, str]:
         parser = configparser.ConfigParser(strict=False, inline_comment_prefixes=(";", "#"))
         parser.optionxform = str  # preserve CSP's uppercase keys
         try:
-            parser.read(path, encoding="utf-8")
-        except (OSError, configparser.Error) as exc:
+            # utf-8-sig: CM/CSP tooling writes these files with a BOM on some installs, and a
+            # BOM'd first section header otherwise raises MissingSectionHeaderError (review #460).
+            parser.read(path, encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError, configparser.Error) as exc:
             return None, f"could not parse {path}: {exc}"
         if parser.has_option("CUSTOM_AI", "ENABLED"):
             raw = parser.get("CUSTOM_AI", "ENABLED").strip().lower()
@@ -849,6 +904,31 @@ def collect_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[s
 # ---------------------------------------------------------------------------
 # Rig wiring (Windows/AC only; not exercised by CI — validated on the rig).
 # ---------------------------------------------------------------------------
+def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
+    """Best-effort: minimize whatever window holds the foreground before a CM launch.
+
+    Live-found on the rig (2026-06-22 vault note; re-confirmed 2026-07-02 with the agent's own
+    window in the attempt-3 HUD capture): a foreground window that is not CM/AC makes the CM
+    auto-start's menu-skip race lose almost every time — AC sits at the pre-drive screen with
+    LIVE status and advancing physics. Never minimizes AC or Content Manager themselves.
+    """
+    import ctypes
+
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return
+        buf = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, buf, 255)
+        title = (buf.value or "").lower()
+        if "assetto corsa" in title or "content manager" in title:
+            return
+        user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+    except Exception:  # noqa: BLE001 - purely best-effort; a launch retry covers a miss
+        return
+
+
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
     """Launch AC via the de-elevated Content-Manager URL and wait for the sim to go LIVE.
 
@@ -861,6 +941,7 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
     actuator.normalize_prior_state()
     for attempt in range(1, config.max_launches + 1):
+        _minimize_foreground_window()  # the menu-skip race needs the desktop foreground free
         actuator.launch() if attempt == 1 else actuator.relaunch()
         if _wait_live(config.attempt_timeout):
             time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
@@ -954,6 +1035,12 @@ async def rig_apply_setup(config: AutoDriveConfig) -> dict:  # pragma: no cover 
     connect to the sidecar a few seconds after LIVE (sidecar answers "no loopback Lua peer
     connected"), and the pits gate may report "must be in pits" while the session finishes
     settling into the pit box. Any other refusal is final (e.g. "not found").
+
+    When the whole window elapses without the Lua peer EVER answering, the returned ack carries
+    ``retryable_launch=True``: live-observed (Spa, 2026-07-02) that the menu-skip race can leave
+    AC at the pre-drive screen with LIVE status and advancing physics — a state the launch gate
+    cannot distinguish from a real session, but in which the trainer app never ticks and so never
+    reaches the sidecar. The orchestrator answers it with a relaunch, like a failed hijack.
     """
     from tools.ai_sidecar.harness_client import HarnessClient
 
@@ -976,6 +1063,7 @@ async def rig_apply_setup(config: AutoDriveConfig) -> dict:  # pragma: no cover 
             return f.get("type") == "error" and f.get("ref_type") == "setup.load"
 
         deadline = time.monotonic() + config.setup_timeout
+        lua_ever_answered = False
         last: dict = {"ok": False, "error": "setup.load timed out"}
         while time.monotonic() < deadline:
             await hc.send({"v": 1, "type": "setup.load", "name": name, "path": path_fwd})
@@ -986,6 +1074,7 @@ async def rig_apply_setup(config: AutoDriveConfig) -> dict:  # pragma: no cover 
                 last = {"ok": False, "error": str(reply.get("message") or "sidecar error")}
                 await asyncio.sleep(2.0)  # "no loopback Lua peer connected" — trainer still booting
                 continue
+            lua_ever_answered = True  # a real ack — the session was entered and the app ticks
             last = {k: reply.get(k) for k in ("ok", "name", "path", "error", "message")}
             if reply.get("ok") is True:
                 return last
@@ -994,6 +1083,8 @@ async def rig_apply_setup(config: AutoDriveConfig) -> dict:  # pragma: no cover 
                 await asyncio.sleep(2.0)  # session still settling into the pit box
                 continue
             return last  # hard refusal (not found / loadSetup refused) — retrying won't help
+        if not lua_ever_answered:
+            last["retryable_launch"] = True  # pre-drive screen: relaunch, don't hard-fail
         return last
     finally:
         await hc.close()
@@ -1167,6 +1258,7 @@ def rig_drive(  # pragma: no cover - rig-only
         """Shared recovery for driver-flagged stuck AND watchdog stalls. False = cap exceeded."""
         stats.recoveries += 1
         if stats.recoveries > config.max_recoveries:
+            stats.recovery_capped = True
             stats.reason = (
                 f"recovery cap ({config.max_recoveries}) exceeded at {stats.total_distance_m:.0f}m"
             )
@@ -1287,9 +1379,12 @@ def ensure_sidecar(  # pragma: no cover - rig-only
         if _up():
             return True, f"sidecar auto-started on {host}:{port} (pid {proc.pid})", proc
         if proc.poll() is not None:
-            return False, f"sidecar exited immediately (code {proc.returncode})", proc
+            return False, f"sidecar exited immediately (code {proc.returncode})", None
         time.sleep(0.5)
-    return False, f"sidecar did not open {host}:{port} within {startup_timeout:.0f}s", proc
+    # Kill the half-started child here: the failure path in _main returns before its
+    # terminate-at-teardown, and an orphan would squat the port forever (review #460).
+    proc.terminate()
+    return False, f"sidecar did not open {host}:{port} within {startup_timeout:.0f}s", None
 
 
 def _capture_hud_evidence(evidence_dir: Path, region: str) -> dict:  # pragma: no cover - rig-only
@@ -1344,6 +1439,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="car setup to apply + verify in-sim: a name under Documents/Assetto Corsa/setups/"
         "<car>/<track|generic>/ (no .ini), or a path inside the setups folder",
+    )
+    p.add_argument(
+        "--setup-timeout",
+        type=float,
+        default=150.0,
+        help="seconds to wait for the in-sim setup.load ack (Lua peer connect + pits gate)",
     )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument(
@@ -1428,6 +1529,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         cm_exe=args.cm_exe,
         sidecar_url=args.sidecar_url,
         setup=args.setup,
+        setup_timeout=args.setup_timeout,
         driver=args.driver,
         pace=args.pace,
         ggv_scale=args.ggv_scale,
@@ -1454,6 +1556,18 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         print("auto-drive: pass --car (preset is generated) or --cm-preset (hand-authored)")
         return 2
     config = _config_from_args(args)
+    try:
+        # Ids become path segments (evidence dir, preset, setups) — reject path-shaped input
+        # before anything touches the filesystem (review #460: a hostile --car could otherwise
+        # steer the evidence mkdir outside .scratch).
+        validate_ac_id("track", config.track_id)
+        if config.car_id:
+            validate_ac_id("car", config.car_id)
+        if config.track_layout:
+            validate_ac_id("layout", config.track_layout)
+    except ValueError as exc:
+        print(f"auto-drive: {exc}")
+        return 2
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
 
     car_tag = config.car_id or "car"
