@@ -43,11 +43,35 @@ Copy-Item secrets\sidecar.h.example secrets\sidecar.h
 # edit secrets\wifi_secrets.h -> real SSID + password
 # edit secrets\sidecar.h -> LAN IP of the PC + token
 
-# Build + flash + monitor
-pio run -e jc3248w535
+# Build + flash + monitor (USB-serial transport — the rig default)
+pio run                          # default env = jc3248w535_serial
+pio run -t upload
+# NOTE: don't `pio device monitor` in serial mode — the sidecar owns the port
+# (it IS the protocol link). Monitoring would fight it for COM6.
+
+# WebSocket/hotspot variant (LAN deployments, CI build coverage):
 pio run -e jc3248w535 -t upload
-pio device monitor -e jc3248w535
 ```
+
+## Transport: USB serial (default) vs WebSocket (issue #463)
+
+The rig runs the **USB-serial transport**: the screen speaks protocol v1 as
+newline-delimited JSON over the native USB CDC (the same COM port used to flash),
+so it needs **no WiFi and no Windows Mobile Hotspot**. This removes the failure
+mode where hosting a 2.4 GHz SoftAP on the rig PC's single-radio adapter drops the
+main WiFi. Selected by the `SCREEN_TRANSPORT_SERIAL=1` build flag in env
+`jc3248w535_serial` (the default). The screen `secrets/wifi_secrets.h` values are
+unused in this mode (only `CLIENT_ID` from `secrets/sidecar.h` is needed).
+
+Run the sidecar pointed at the screen's COM port:
+
+```powershell
+py -3 -m tools.ai_sidecar --serial-port COM6      # or set AC_COPILOT_SIDECAR_SERIAL_PORT
+```
+
+The launcher auto-forwards `--serial-port` when `AC_COPILOT_SIDECAR_SERIAL_PORT`
+is set in the user environment. The legacy WebSocket build (`jc3248w535`) is kept
+for LAN deployments and CI; it still dials `ws://SIDECAR_HOST:SIDECAR_PORT/`.
 
 ## Before you flash: back up the factory firmware
 
@@ -69,8 +93,12 @@ to force ROM DFU, then `esptool.py ... write_flash 0 <factory.bin>`.
 
 ## Troubleshooting
 
-- **Port open resets the board.** Native-USB CDC on the S3 toggles DTR/RTS on
-  `open`. Don't monitor the port from two processes at once.
+- **Port open resets the board / screen never receives.** Native-USB CDC on the
+  S3 resets on an **RTS** pulse (esptool's reset line), and only delivers RX to
+  the firmware once **DTR** is asserted. The sidecar's serial transport opens with
+  **DTR high, RTS low** — RX works and the board does not reset. A plain
+  `pio device monitor` may toggle both and reset the board; don't run it while the
+  sidecar owns the port.
 - **Backlight never turns on / black screen.** Suspect the pins in
   `include/board/LGFX_JC3248W535.h` first — they are community defaults and
   have not yet been verified on this physical board.
@@ -100,9 +128,11 @@ Optional overrides:
 ```
 
 Restart Content Manager / Assetto Corsa after changing user environment variables.
-For the current rig firmware, `SIDECAR_HOST` in `secrets/sidecar.h` must match
-the Windows Mobile Hotspot gateway address shown on the rig PC, and the screen
-must join the 2.4 GHz hotspot SSID from `secrets/wifi_secrets.h`.
+
+For the **USB-serial** rig firmware (the default) there is no hotspot and no
+`SIDECAR_HOST` to match — set `AC_COPILOT_SIDECAR_SERIAL_PORT` (e.g. `COM6`) so
+the launcher forwards `--serial-port` to the sidecar. `SIDECAR_HOST` / the
+2.4 GHz hotspot only apply to the legacy WebSocket build (`jc3248w535`).
 
 ### Token rotation
 
