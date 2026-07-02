@@ -564,7 +564,15 @@ def test_schema_marks_itself_a_bootstrap() -> None:
     assert "bootstrap" in schema.note.lower(), "schema _note must say it is a bootstrap"
     assert "dump_schema.lua" in schema.note, "schema _note must point at dump_schema.lua"
     # The fields the modules actually read must be present.
-    assert {"speedKmh", "brake", "splinePosition", "position", "look"} <= schema.car_fields
+    assert {
+        "speedKmh",
+        "brake",
+        "splinePosition",
+        "position",
+        "look",
+        "rpm",
+        "rpmLimiter",
+    } <= schema.car_fields
     assert {"isInMainMenu", "gameTime"} <= schema.sim_fields
 
 
@@ -579,6 +587,7 @@ def test_synthesize_trace_scenarios_have_expected_shape(harness: TraceReplayHarn
         "brake",
         "steer",
         "gear",
+        "rpm",
         "px",
         "py",
         "pz",

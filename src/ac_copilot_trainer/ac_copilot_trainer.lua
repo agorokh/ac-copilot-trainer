@@ -34,6 +34,7 @@ local focusPractice = require("focus_practice")
 local cornerNames = require("corner_names")
 local hudSettings = require("hud_settings")
 local realtimeCoaching = require("realtime_coaching")
+local shiftProfile = require("shift_profile")
 -- Issue #86 Part C/D: rig-screen-driven features.
 local coachingPublisher = require("coaching_publisher")
 local lifecyclePublisher = require("lifecycle_publisher")
@@ -979,6 +980,7 @@ local function copyTrace(list)
       throttle = e.throttle,
       steer = e.steer,
       gear = e.gear,
+      rpm = e.rpm,
       px = e.px,
       py = e.py,
       pz = e.pz,
@@ -1003,6 +1005,7 @@ local function normalizeTrace(t)
         throttle = tonumber(r.throttle) or 0,
         steer = tonumber(r.steer) or 0,
         gear = math.floor(tonumber(r.gear) or 0),
+        rpm = tonumber(r.rpm) or 0,
         px = tonumber(r.px) or 0,
         py = tonumber(r.py) or 0,
         pz = tonumber(r.pz) or 0,
@@ -1227,6 +1230,7 @@ state = {
   activeReferenceFormat = nil,
   activeReferenceLapMs = nil,
   activeReferencePath = nil,
+  shiftProfile = nil,
   bestSortedTrace = nil,
   bestSectorMs = { 0, 0, 0 },
   sectorIndex = 1,
@@ -1350,6 +1354,9 @@ local function rebuildBestReference()
   else
     state.bestSectorMs = { 0, 0, 0 }
   end
+  state.shiftProfile = shiftProfile.learnFromReferenceTrace(state.bestLapTrace, state.trackSegments, {
+    source = state.activeReferenceSource or "reference",
+  })
   resetDeltaSmoother()
   state.cornerSteerSideCacheKey = nil
 end
@@ -1456,7 +1463,6 @@ local function applyLoaded(data)
   else
     state.bestReferenceLapMs = nil
   end
-  rebuildBestReference()
   if state.bestLapTrace and #state.bestLapTrace >= 2 then
     state.racingBestLine = racingLine.traceToLine(state.bestLapTrace)
   else
@@ -1485,6 +1491,7 @@ local function applyLoaded(data)
   state.activeReferenceFormat = nil
   state.activeReferenceLapMs = state.bestReferenceLapMs or state.bestLapMs
   state.activeReferencePath = nil
+  rebuildBestReference()
 end
 
 local function persistPayload()
@@ -1556,6 +1563,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.activeReferenceFormat = nil
   state.activeReferenceLapMs = nil
   state.activeReferencePath = nil
+  state.shiftProfile = nil
   state.bestSortedTrace = nil
   state.bestSectorMs = { 0, 0, 0 }
   state.sectorIndex = 1
@@ -1977,6 +1985,7 @@ function script.windowSettings(_dt)
       consistencyHud = state.consistencyHud,
       styleHud = state.styleHud,
       tireHud = state.tireHud,
+      shiftProfile = shiftProfile.statsLine(state.shiftProfile),
     },
     focusPracticeUi = focusPracticeUiProxy,
     -- Issue #77 Part A: Settings UI shows sidecar process + connection status.
@@ -2065,8 +2074,8 @@ function script.windowCoaching(_dt)
       -- Vitals for the main-dashboard card (RPM strip + shift zones)
       rpm             = car and tonumber(car.rpm) or nil,
       rpmLimiter      = car and tonumber(car.rpmLimiter) or nil,
-      shiftZonePct    = realtimeCoaching.SHIFT_ZONE_FRAC,
-      redZonePct      = realtimeCoaching.REDLINE_FRAC,
+      shiftZonePct    = view.shiftZonePct or realtimeCoaching.SHIFT_ZONE_FRAC,
+      redZonePct      = view.redZonePct or realtimeCoaching.REDLINE_FRAC,
     }
   end
   -- Round 10: the approach panel is the sole content of WINDOW_1.
@@ -2207,6 +2216,7 @@ function script.update(dt)
       gas = car and tonumber(car.gas) or nil,
       gear = car and tonumber(car.gear) or nil,
       gearCount = car and tonumber(car.gearCount) or nil,
+      shiftProfile = state.shiftProfile,
     })
     state._cachedRealtimeView = rtView
     state.realtimeActiveHint = rtView

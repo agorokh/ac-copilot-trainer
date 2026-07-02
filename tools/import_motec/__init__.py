@@ -20,7 +20,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-TRACE_FIELDS = ["spline", "speed", "eMs", "throttle", "brake", "steer", "gear", "px", "py", "pz"]
+TRACE_FIELDS = [
+    "spline",
+    "speed",
+    "eMs",
+    "throttle",
+    "brake",
+    "steer",
+    "gear",
+    "px",
+    "py",
+    "pz",
+    "rpm",
+]
 DEFAULT_SAMPLE_COUNT = 2000
 
 CHANNEL_ALIASES: dict[str, tuple[str, ...]] = {
@@ -68,6 +80,7 @@ CHANNEL_ALIASES: dict[str, tuple[str, ...]] = {
         "sa",
     ),
     "gear": ("gear", "gearnumber", "selectedgear"),
+    "rpm": ("rpm", "rpms", "enginerpm", "revs"),
     "lap": ("lap", "lapnumber", "lapno", "lapnum"),
     "px": ("px", "posx", "positionx", "worldx", "x"),
     "py": ("py", "posy", "positiony", "worldy", "y"),
@@ -351,6 +364,7 @@ def _points_for_lap(
         brake = _parse_float(_cell(row, m.get("brake")))
         steer = _parse_float(_cell(row, m.get("steer")))
         gear = _parse_gear(_cell(row, m.get("gear")))
+        rpm = _parse_float(_cell(row, m.get("rpm"))) or 0.0
         pos = _parse_float(_cell(row, m.get("spline")))
         distance = _parse_float(_cell(row, m.get("distance")))
         if speed is None or throttle is None or brake is None or steer is None:
@@ -372,6 +386,7 @@ def _points_for_lap(
                 "px": _parse_float(_cell(row, m.get("px"))) or 0.0,
                 "py": _parse_float(_cell(row, m.get("py"))) or 0.0,
                 "pz": _parse_float(_cell(row, m.get("pz"))) or 0.0,
+                "rpm": rpm,
                 "time_s": _parse_time_seconds(_cell(row, m.get("time"))),
             }
         )
@@ -432,6 +447,7 @@ def _points_for_lap(
                 "px": p["px"],
                 "py": p["py"],
                 "pz": p["pz"],
+                "rpm": p["rpm"],
             }
         )
 

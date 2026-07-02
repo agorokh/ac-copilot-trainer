@@ -302,6 +302,41 @@ def _build_segments(lua):  # noqa: ANN001,ANN202
     """)
 
 
+def _build_shift_trace(lua):  # noqa: ANN001,ANN202
+    return lua.execute("""
+        return {
+            {
+                spline = 0.01, eMs = 0, speed = 80, throttle = 1.0,
+                brake = 0, steer = 0, gear = 1, rpm = 6800,
+            },
+            {
+                spline = 0.02, eMs = 500, speed = 95, throttle = 1.0,
+                brake = 0, steer = 0, gear = 2, rpm = 7200,
+            },
+            {
+                spline = 0.30, eMs = 9000, speed = 160, throttle = 1.0,
+                brake = 0, steer = 0, gear = 2, rpm = 7100,
+            },
+            {
+                spline = 0.34, eMs = 9800, speed = 172, throttle = 1.0,
+                brake = 0, steer = 0, gear = 3, rpm = 7200,
+            },
+            {
+                spline = 0.49, eMs = 16000, speed = 105, throttle = 0.6,
+                brake = 0, steer = 0.2, gear = 3, rpm = 6100,
+            },
+            {
+                spline = 0.60, eMs = 22000, speed = 150, throttle = 1.0,
+                brake = 0, steer = 0, gear = 3, rpm = 7350,
+            },
+            {
+                spline = 0.64, eMs = 23000, speed = 165, throttle = 1.0,
+                brake = 0, steer = 0, gear = 4, rpm = 7400,
+            },
+        }
+    """)
+
+
 # ---------------------------------------------------------------------------
 # ETE-01: Empty session (no persistence, no laps)
 # ---------------------------------------------------------------------------
@@ -504,6 +539,141 @@ def test_ete03c_shift_cue_fires_without_any_reference(lua):
         f"no-reference state must still coach the upshift, got {view['primaryLine']!r}"
     )
     assert view["subState"] == "no_reference"
+
+
+def test_ete03d_shift_cue_uses_learned_reference_rpm_before_heuristic_zone(lua):
+    """#442: learned reference shifts replace the old 92% limiter heuristic.
+
+    7300 rpm is below the old 8400*0.92=7728 heuristic target, but above the
+    reference-observed 2->3 shift at 7200, so SHIFT UP must fire.
+    """
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+    profile = shift["learnFromReferenceTrace"](
+        _build_shift_trace(lua), segments, lua.eval("{ source = 'imported' }")
+    )
+    assert profile["hasLearnedShift"] is True
+    assert profile["byGear"][2] == 7200
+    assert profile["cornerExitGears"]["T4"] == 3
+
+    opts = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 200,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7300, rpmLimiter = 8400, gas = 0.95, gear = 2, gearCount = 6,
+        }
+    """)
+    opts["bestSortedTrace"] = trace
+    opts["brakingPoints"] = brakes
+    opts["segments"] = segments
+    opts["shiftProfile"] = profile
+    view = rtc["tick"](opts)
+    assert (view["primaryLine"] or "") == "SHIFT UP"
+    assert "SHIFT AT 7200" in (view["secondaryLine"] or "")
+    assert view["shiftProvenance"] == "learned"
+    assert view["shiftZonePct"] == pytest.approx(7200 / 8400)
+
+    rtc["reset"]()
+    no_limiter = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 200,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7300, gas = 0.95, gear = 2, gearCount = 6,
+        }
+    """)
+    no_limiter["bestSortedTrace"] = trace
+    no_limiter["brakingPoints"] = brakes
+    no_limiter["segments"] = segments
+    no_limiter["shiftProfile"] = profile
+    view_no_limiter = rtc["tick"](no_limiter)
+    assert (view_no_limiter["primaryLine"] or "") == "SHIFT UP"
+    assert view_no_limiter["shiftProvenance"] == "learned"
+    assert view_no_limiter["shiftTargetRpm"] == 7200
+
+
+def test_ete03e_shift_profile_learns_upshift_through_neutral(lua):
+    """#442: manual/mod traces can report Neutral between two active gears.
+
+    A 1->0->2 transition must still learn the upshift point instead of losing
+    the sample because the adjacent gear pair includes Neutral.
+    """
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    trace = lua.execute("""
+        return {
+            {
+                spline = 0.10, eMs = 0, speed = 90,
+                throttle = 1.0, gear = 1, rpm = 6800,
+            },
+            {
+                spline = 0.11, eMs = 100, speed = 94,
+                throttle = 1.0, gear = 0, rpm = 7000,
+            },
+            {
+                spline = 0.12, eMs = 200, speed = 98,
+                throttle = 1.0, gear = 2, rpm = 6600,
+            },
+        }
+    """)
+    profile = shift["learnFromReferenceTrace"](trace, lua.table(), lua.eval("{ source = 'test' }"))
+
+    assert profile["hasLearnedShift"] is True
+    assert profile["byGear"][1] == 7000
+
+
+def test_ete03f_shift_profile_ignores_skipped_gear_jump(lua):
+    """#442: downsampled traces can skip intermediate gear states.
+
+    A retained 2->4 jump is not a reliable 2->3 shift sample, so the learner
+    should prefer no sample over a wrong per-gear target.
+    """
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    trace = lua.execute("""
+        return {
+            {
+                spline = 0.30, eMs = 9000, speed = 160,
+                throttle = 1.0, gear = 2, rpm = 7100,
+            },
+            {
+                spline = 0.34, eMs = 9400, speed = 180,
+                throttle = 1.0, gear = 4, rpm = 7400,
+            },
+        }
+    """)
+    profile = shift["learnFromReferenceTrace"](trace, lua.table(), lua.eval("{ source = 'test' }"))
+
+    assert profile["hasLearnedShift"] is False
+    assert profile["byGear"][2] is None
+
+
+def test_ete03g_shift_profile_samples_corner_exit_before_straight(lua):
+    """#442: corner segments can include the following exit straight.
+
+    The learned per-corner exit gear should sample near the early corner/apex
+    window, not 85% through a brake-to-brake segment after later upshifts.
+    """
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    trace = lua.execute("""
+        return {
+            { spline = 0.50, eMs = 10000, speed = 95, throttle = 0.7, gear = 3, rpm = 6200 },
+            { spline = 0.70, eMs = 18000, speed = 180, throttle = 1.0, gear = 5, rpm = 7600 },
+        }
+    """)
+    segments = lua.execute("""
+        return {
+            { kind = "corner", s0 = 0.45, s1 = 0.75, label = "T4", brakeSpline = 0.43 },
+        }
+    """)
+    profile = shift["learnFromReferenceTrace"](trace, segments, lua.eval("{ source = 'test' }"))
+
+    assert profile["cornerExitGears"]["T4"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -910,6 +1080,13 @@ def test_ete_realtime_does_not_use_last_lap_corner_feats():
     assert "buildRealTime" not in src, (
         "realtime_coaching.lua must not call coaching_hints.buildRealTime"
     )
+
+
+def test_ete_settings_surface_shift_profile_provenance():
+    settings_src = MODULES.joinpath("hud_settings.lua").read_text(encoding="utf-8")
+    entry_src = ENTRY.read_text(encoding="utf-8")
+    assert "Shift coaching" in settings_src
+    assert "shiftProfile.statsLine(state.shiftProfile)" in entry_src
 
 
 def test_ete_build_realtime_deleted():
