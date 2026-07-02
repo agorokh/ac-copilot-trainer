@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T07:36:28Z
+last_updated: 2026-07-02T07:53:20Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -21,6 +21,19 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-02):** PR [#451](https://github.com/agorokh/ac-copilot-trainer/pull/451)
+**MERGED** at
+[`81be1f3`](https://github.com/agorokh/ac-copilot-trainer/commit/81be1f33f52dcd3efe08c6bcc0582e1307a3a62c) -
+voice-bank timing and stale-bank invalidation for
+[#381](https://github.com/agorokh/ac-copilot-trainer/issues/381). Kokoro hot-register speeds and the
+Piper alert/urgent/critical ladder now keep neural act cues inside the 450 ms brake-alarm budget;
+`INTENSITY_CHAIN_VERSION=3` forces old `prosody2+intensity2` banks to fail validation; user
+`AC_COPILOT_VOICE_BANK` points at
+`C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\coach-bank-kokoro-fenrir-v3-intensity3-20260702`.
+Runtime proof: timing report urgent 379.6 ms, critical 361.4 ms,
+`brake_alarm_within_450ms=true`; sidecar `/health.voice.enabled=true` with `rtmixer` on the USB
+Sound Device. **#381 remains OPEN** only for the human-gated at-wheel A/B listening confirmation.
 
 **Delivered (2026-07-02):** PR [#453](https://github.com/agorokh/ac-copilot-trainer/pull/453)
 **MERGED** at [`97a963f`](https://github.com/agorokh/ac-copilot-trainer/commit/97a963f) - session

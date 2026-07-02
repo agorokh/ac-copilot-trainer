@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T07:36:28Z
+last_updated: 2026-07-02T07:53:20Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -62,6 +62,38 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-02 UTC) - PR #451 MERGED: voice bank timing + stale-bank invalidation (#381)
+
+PR [#451](https://github.com/agorokh/ac-copilot-trainer/pull/451) squash-merged to `main` as
+[`81be1f3`](https://github.com/agorokh/ac-copilot-trainer/commit/81be1f33f52dcd3efe08c6bcc0582e1307a3a62c).
+Issue [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) is intentionally **OPEN**:
+the code/runtime side is delivered, but the acceptance criteria still require human at-wheel A/B
+listening confirmation that a critical brake cue sounds urgent versus a low-importance cue calm.
+
+**Shipped:** Kokoro hot-register speeds now keep terse neural act cues under the 450 ms brake-alarm
+budget; Piper hot-register `length_scale` is a strict alert > urgent > critical ladder; and
+`INTENSITY_CHAIN_VERSION` is bumped to `3` so old schema-v3 banks baked before the timing tune fail
+the `voice_signature` suffix gate instead of playing stale, too-slow clips. The current verified
+bank is
+`C:\Users\arsen\Projects\ac-copilot-trainer\.scratch\coach-bank-kokoro-fenrir-v3-intensity3-20260702`,
+signature `kokoro:am_fenrir+ff8+race-engineer-original-v1+prosody2+intensity3`. The user-level
+`AC_COPILOT_VOICE_BANK` now points at that path.
+
+**Verification:** focused voice/manifest/engine/timing tests (54 passed), full `test_voice_*.py`
+suite (142 passed), and `make PYTHON=python ci-fast` (2205 passed, 117 skipped, `ci-fast: OK`).
+Real backend bench: Piper Lessac act cues 445.7 / 309.6 / 328.4 ms; Kokoro am_fenrir act cues
+428.5 / 379.5 / 365.2 ms; both `act<=450ms`. Runtime timing report on the new bank:
+`late_brake.act.urgent.generic` 379.6 ms, `late_brake.act.critical.generic` 361.4 ms,
+`brake_alarm_within_450ms=true`. Sidecar smoke on `127.0.0.1:9876` reported
+`/health.voice.enabled=true` and `rtmixer stream open on device index 18 @ 48000 Hz` for
+`USB Sound Device` / `Windows WASAPI`.
+
+**Post-merge:** CI green, zero unresolved review threads, resolve gate clean. `post_merge_sync.sh
+sync 451` fast-forwarded this worktree's `main` and deleted the local PR branch; it exited non-zero
+only because linked issue #381 remains open by design. `post_merge_classify.py --pr 451` reported no
+post-merge classification flags. Remaining next action: operator listens on the rig and either
+checks off/closes #381 or records what still feels wrong.
 
 ## Delivered (2026-07-02 UTC) - PR #453 MERGED: session review browser/report products (#404) + reference selection (#408)
 
