@@ -1039,18 +1039,21 @@ def _gui_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-on
 
 
 def _enable_force_start(gui_ini: Path) -> tuple[bool, str | None]:  # pragma: no cover - rig-only
-    """Set ``[GUI] FORCE_START=1``; return ``(ok, original_text)`` for a verbatim restore.
+    """Set ``[GUI] FORCE_START=1``; return ``(ok, original_text)`` for a **lossless** restore.
 
     A direct acs relaunch lands at AC's pre-drive Drive/Setup/Exit menu, where CSP Custom-AI never
     arms and OS input injection is blocked — so the hijack cannot land. ``FORCE_START=1`` makes acs
     skip that menu and go straight to driving (live-verified Spa 2026-07-02). acs reads gui.ini only
-    at startup, so the caller sets it, launches, then restores the ORIGINAL text byte-for-byte
-    (returning it makes the restore unconditional and exact — no "was the key absent?" ambiguity
-    that could leave `FORCE_START=1` behind after the run, #460 review). ``ok=False`` means the file
+    at startup, so the caller sets it, launches, then restores the ORIGINAL text — unconditionally
+    (no "was the key absent?" ambiguity that could leave `FORCE_START=1` behind, #460 review).
+
+    Read/write use ``errors="surrogateescape"``, which **round-trips** any non-UTF-8 byte, so the
+    restore is byte-for-byte exact and cannot corrupt a user's CSP config (qodo #460 review — plain
+    ``errors="replace"`` would irreversibly rewrite undecodable bytes). ``ok=False`` means the file
     could not be read/written, so the caller must not proceed into a known-menu-blocked relaunch.
     """
     try:
-        original = gui_ini.read_text(encoding="utf-8", errors="replace")
+        original = gui_ini.read_text(encoding="utf-8", errors="surrogateescape")
     except OSError:
         return False, None
     if re.search(r"^FORCE_START=\d+", original, re.M):
@@ -1060,16 +1063,16 @@ def _enable_force_start(gui_ini: Path) -> tuple[bool, str | None]:  # pragma: no
     else:
         new = original.rstrip("\n") + "\n[GUI]\nFORCE_START=1\n"  # no [GUI] section — append one
     try:
-        gui_ini.write_text(new, encoding="utf-8")
+        gui_ini.write_text(new, encoding="utf-8", errors="surrogateescape")
     except OSError:
         return False, original
     return True, original
 
 
 def _restore_gui_ini(gui_ini: Path, original_text: str) -> None:  # pragma: no cover - rig-only
-    """Write ``original_text`` back verbatim (best-effort) — the exact pre-run gui.ini."""
+    """Write ``original_text`` back byte-for-byte (best-effort) — the exact pre-run gui.ini."""
     try:
-        gui_ini.write_text(original_text, encoding="utf-8")
+        gui_ini.write_text(original_text, encoding="utf-8", errors="surrogateescape")
     except OSError:
         pass
 
