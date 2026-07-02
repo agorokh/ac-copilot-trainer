@@ -737,7 +737,7 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
         """
 MANIFEST_WINDOW_SIZES = {
   ["AC Copilot Trainer"] = {520, 200},
-  ["Coaching"]           = {640, 240},
+  ["Coaching"]           = {560, 338},
   ["Settings"]           = {480, 580},
 }
 """

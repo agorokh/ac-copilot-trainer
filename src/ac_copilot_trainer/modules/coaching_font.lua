@@ -45,9 +45,14 @@ local function loadCache()
     --   --font-disp "Saira Semi Condensed" (display, commands, labels)
     --   --font-read "Saira" (big readouts, tabular)
     --   --font-mono "Spline Sans Mono" (units, ids, provenance)
-    atelier_verb = safeDWrite("Saira Semi Condensed:/content/fonts;Weight=ExtraBold"),
-    atelier_disp = safeDWrite("Saira Semi Condensed:/content/fonts;Weight=Bold"),
-    atelier_label = safeDWrite("Saira Semi Condensed:/content/fonts;Weight=SemiBold"),
+    -- NOTE: the DirectWrite family in the bundled TTFs' name tables is
+    -- "Saira SemiCondensed" (no space) — the spaced form is only the Google
+    -- Fonts web/CSS name and FindFamilyName would miss it. The verb weight
+    -- uses the numeric form (800 = ExtraBold) because CSP's DWriteFont
+    -- descriptor documents named weights only up to Bold/Black tiers.
+    atelier_verb = safeDWrite("Saira SemiCondensed:/content/fonts;Weight=800"),
+    atelier_disp = safeDWrite("Saira SemiCondensed:/content/fonts;Weight=Bold"),
+    atelier_label = safeDWrite("Saira SemiCondensed:/content/fonts;Weight=SemiBold"),
     atelier_read = safeDWrite("Saira:/content/fonts;Weight=Bold"),
     atelier_mono = safeDWrite("Spline Sans Mono:/content/fonts;Weight=Medium"),
   }
@@ -111,7 +116,10 @@ end
 
 ---@param token string|nil
 function M.pop(token)
-  if token == "dwrite" and type(ui) == "table" and type(ui.popDWriteFont) == "function" then
+  -- Mirror pushNamed's cdata-safe guard: popDWriteFont is an FFI cdata
+  -- callable on some CSP builds (type() == "cdata"), and an asymmetric
+  -- type()=="function" gate here would leak the font stack every frame.
+  if token == "dwrite" and type(ui) == "table" and ui.popDWriteFont ~= nil then
     pcall(ui.popDWriteFont)
   end
 end

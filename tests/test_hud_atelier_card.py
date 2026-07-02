@@ -311,12 +311,56 @@ def test_atelier_fonts_bundled():
 
 
 def test_coaching_font_registers_atelier_roles():
+    """The DWrite specs must use the TTFs' REAL family names — the bundled
+    statics say 'Saira SemiCondensed' (no space; the spaced form is only the
+    Google Fonts web name and FindFamilyName is exact) — and the numeric 800
+    weight (ExtraBold is not a documented CSP weight token)."""
     src = (MODULES_DIR / "coaching_font.lua").read_text(encoding="utf-8")
     for spec in (
-        "Saira Semi Condensed:/content/fonts;Weight=ExtraBold",
-        "Saira Semi Condensed:/content/fonts;Weight=Bold",
-        "Saira Semi Condensed:/content/fonts;Weight=SemiBold",
+        "Saira SemiCondensed:/content/fonts;Weight=800",
+        "Saira SemiCondensed:/content/fonts;Weight=Bold",
+        "Saira SemiCondensed:/content/fonts;Weight=SemiBold",
         "Saira:/content/fonts;Weight=Bold",
         "Spline Sans Mono:/content/fonts;Weight=Medium",
     ):
         assert spec in src, f"coaching_font.lua must register {spec!r}"
+    assert "Saira Semi Condensed:/content/fonts" not in src, (
+        "spaced family name would miss DirectWrite's FindFamilyName"
+    )
+
+
+def test_bundled_font_family_names_match_specs():
+    """Anti-drift lock: parse the bundled TTF name tables and assert the
+    families the Lua registers actually exist in the files (would have caught
+    both the spaced-family miss and the mislabeled Saira-Bold-that-was-Thin)."""
+    fontTools = pytest.importorskip("fontTools.ttLib", reason="fontTools not installed")
+    expectations = {
+        "SairaSemiCondensed-ExtraBold.ttf": ("Saira SemiCondensed", 800),
+        "SairaSemiCondensed-Bold.ttf": ("Saira SemiCondensed", 700),
+        "SairaSemiCondensed-SemiBold.ttf": ("Saira SemiCondensed", 600),
+        "Saira-Bold.ttf": ("Saira", 700),
+        "SplineSansMono-Medium.ttf": ("Spline Sans Mono", 500),
+    }
+    for fname, (family, weight) in expectations.items():
+        font = fontTools.TTFont(FONTS_DIR / fname)
+        name = font["name"]
+        got_family = name.getDebugName(16) or name.getDebugName(1)
+        assert got_family == family, f"{fname}: family {got_family!r} != {family!r}"
+        assert font["OS/2"].usWeightClass == weight, (
+            f"{fname}: usWeightClass {font['OS/2'].usWeightClass} != {weight}"
+        )
+
+
+def test_delta_signal_tones_gated_by_approach_window(lua):
+    """Outside the approach window the entry delta is reference data, not a
+    command: no red TOO HOT — LIFT while the verb ladder says ON PACE."""
+    lua.execute('_ov = require("coaching_overlay")')
+    lua.execute(
+        "_ov.drawApproachPanel({turnLabel='T1', targetSpeedKmh=120, "
+        "currentSpeedKmh=250, distanceToBrakeM=500, approachMeters=200, "
+        "progressPct=0, zonePct=0.25, subState='cruising', "
+        "primaryLine='ON PACE', kind='positive'})"
+    )
+    texts = [t["text"] for t in lua.globals()["_texts"].values()]
+    assert "TOO HOT — LIFT" not in texts, "imperative must not fire on a straight"
+    assert "ABOVE REF" in texts, "neutral reference status expected outside the window"

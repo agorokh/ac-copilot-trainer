@@ -22,8 +22,7 @@ local COLOR_WHITE        = T.color("chalk")         -- primary text
 local COLOR_GREEN        = T.color("clear")         -- on line / faster
 local COLOR_RED          = T.color("brake")         -- danger / warning
 local COLOR_AMBER        = T.color("lift")          -- caution / approaching
-local COLOR_BAR_BG       = T.color("raise", 0.85)   -- progress bar trough
-local COLOR_BAR_FILL     = T.color("brake", 0.95)   -- braking-urgency fill
+local COLOR_BAR_BG       = T.color("raise", 0.85)   -- delta bar trough
 local COLOR_BRAND        = T.color("dim")           -- branding
 
 local PANEL_ROUNDING = 0  -- Racing Atelier: square corners (--r: 0px)
@@ -63,28 +62,6 @@ local function speedColor(currentSpd, targetSpd)
 end
 
 -- ---------------------------------------------------------------------------
--- Progress bar widget
--- ---------------------------------------------------------------------------
-
----@param x number    left edge
----@param y number    top edge
----@param w number    total width
----@param h number    bar height
----@param pct number  0..1 fill percentage
-local function drawProgressBar(x, y, w, h, pct)
-  if not ui or ui.drawRectFilled == nil or vec2 == nil then return end
-  local p0 = vec2(x, y)
-  local p1 = vec2(x + w, y + h)
-  -- Background
-  ui.drawRectFilled(p0, p1, COLOR_BAR_BG, h / 2)
-  -- Fill
-  local fillW = math.max(0, math.min(1, pct)) * w
-  if fillW > 1 then
-    ui.drawRectFilled(p0, vec2(x + fillW, y + h), COLOR_BAR_FILL, h / 2)
-  end
-end
-
--- ---------------------------------------------------------------------------
 -- Approach instrument card (issue #432 Part A2 — photo-identical rebuild)
 -- One unified 560px card mirroring templates/ingame-hud/InGameHud.dc.html:
 -- header (corner badge + name + gear/speed columns) → CommandVerb + brake-point
@@ -92,22 +69,25 @@ end
 -- origin; all px values are the design's own (no scaling).
 -- ---------------------------------------------------------------------------
 
---- Helper: measure DWrite text safely (returns vec2)
+--- Helper: measure DWrite text safely (returns vec2). CSP cdata-safe:
+--- measureDWriteText can be an FFI cdata callable (type() == "cdata"), so
+--- presence-check + pcall, never type() == "function". Fallback counts UTF-8
+--- codepoints (not bytes) so "—" measures as one glyph.
 local function _measureDW(text, fontPx)
-  if type(ui.measureDWriteText) == "function" then
-    local sz = ui.measureDWriteText(text, fontPx)
-    if sz then return sz end
+  if ui ~= nil and ui.measureDWriteText ~= nil then
+    local ok, sz = pcall(function() return ui.measureDWriteText(text, fontPx) end)
+    if ok and sz and sz.x and sz.x > 0 then return sz end
   end
-  return vec2(string.len(text or "") * fontPx * 0.55, fontPx)
+  local _, n = string.gsub(text or "", "[^\128-\191]", "")
+  return vec2(n * fontPx * 0.55, fontPx)
 end
 
---- Helper: draw DWrite text safely
+--- Helper: draw DWrite text safely (same cdata-safe pattern as hud.dwriteSafe)
 local function _drawDW(text, fontPx, position, color)
-  if type(ui.dwriteDrawText) == "function" then
-    pcall(function()
-      ui.dwriteDrawText(text, fontPx, position, color)
-    end)
-  end
+  if ui == nil or ui.dwriteDrawText == nil then return end
+  pcall(function()
+    ui.dwriteDrawText(text, fontPx, position, color)
+  end)
 end
 
 --- ASCII-only uppercase. Lua's string.upper is locale/byte-wise and MANGLES
@@ -200,12 +180,22 @@ end
 
 --- Entry-delta status label (right side of the delta header). Replaces the
 --- old WAITING/APPROACHING state word; tones follow DeltaBar.jsx (slack=4).
-local function deltaStatus(v, hasRef)
+--- The imperative wording + signal tone only fire INSIDE the approach window
+--- (mirroring the verb ladder) — the reference target always points at the
+--- NEXT brake point, so flat-out on a straight being "+20 over" is normal
+--- and must read as neutral reference data, not a red LIFT command.
+local function deltaStatus(v, hasRef, inWindow)
   if not hasRef then
     return "WAITING", COLOR_LABEL
   end
-  if v > 4 then return "TOO HOT — LIFT", COLOR_RED end
-  if v < -4 then return "TOO SLOW", COLOR_AMBER end
+  if v > 4 then
+    if inWindow then return "TOO HOT — LIFT", COLOR_RED end
+    return "ABOVE REF", COLOR_LABEL
+  end
+  if v < -4 then
+    if inWindow then return "TOO SLOW", COLOR_AMBER end
+    return "BELOW REF", COLOR_LABEL
+  end
   return "ON LINE", COLOR_GREEN
 end
 
@@ -239,13 +229,13 @@ function M.drawApproachPanel(approachData)
       szStr = "missing"
     end
     ac.log(string.format(
-      "[COPILOT][OV-DIAG] win1 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s payload=%s",
+      "[COPILOT][OV-DIAG] win1 winSize=%s ui=%s vec2=%s rgbm=%s drawRectFilled=%s drawRect=%s dwriteDrawText=%s measureDWriteText=%s payload=%s",
       szStr,
       type(ui),
       type(vec2),
       type(rgbm),
       tt(ui, "drawRectFilled"), tt(ui, "drawRect"),
-      tt(ui, "dwriteDrawText"),
+      tt(ui, "dwriteDrawText"), tt(ui, "measureDWriteText"),
       (type(approachData) == "table") and "y" or "N"
     ))
   end
@@ -271,6 +261,8 @@ function M.drawApproachPanel(approachData)
   local zonePct       = hasData and tonumber(approachData.zonePct) or 0.25
   local kind          = hasData and approachData.kind or nil
   local primaryLine   = hasData and approachData.primaryLine or nil
+  local approachM     = hasData and tonumber(approachData.approachMeters) or 200
+  local inWindow      = (distanceM ~= nil) and (distanceM <= approachM)
 
   -- Window dimensions (from manifest FIXED_SIZE 560x338 — the card IS the window)
   local w, h = 560, 338
@@ -459,6 +451,11 @@ function M.drawApproachPanel(approachData)
 
   ------------------------------------------------------------------
   -- ENTRY DELTA: header row, center-anchored DeltaBar, big signed number
+  -- Design decision (#432 Part A2, recorded for the substance-preservation
+  -- review): the pre-restyle 26px TARGET ENTRY readout is intentionally
+  -- demoted to the 12px REF header + 10px scale caption per
+  -- InGameHud.dc.html / ELEMENTS.md "one decision, sized to matter" — the
+  -- 40px signed delta is the primary coaching cue now.
   ------------------------------------------------------------------
   local dltHdrY = capY + 11 + 22
   local troughY = dltHdrY + 12 + 10
@@ -473,19 +470,21 @@ function M.drawApproachPanel(approachData)
       or "ENTRY Δ"
     local lk = fontMod.pushNamed("label", 12)
     _drawDW(hdrLeft, 12, vec2(padX, dltHdrY), COLOR_LABEL)
-    local statusText, statusColor = deltaStatus(v, hasRef)
+    local statusText, statusColor = deltaStatus(v, hasRef, inWindow)
     local stW = _measureDW(statusText, 12).x
     _drawDW(statusText, 12, vec2(w - padX - stW, dltHdrY), statusColor)
     fontMod.pop(lk)
   end
 
   do
-    -- DeltaBar.jsx: tone by slack, fill grows from the center tick
+    -- DeltaBar.jsx: tone by slack, fill grows from the center tick.
+    -- Signal tones only inside the approach window (same gate as the
+    -- status label); outside it the bar shows neutral reference data.
     local tone = COLOR_GREEN
     if v > 4 then
-      tone = COLOR_RED
+      tone = inWindow and COLOR_RED or COLOR_LABEL
     elseif v < -4 then
-      tone = COLOR_AMBER
+      tone = inWindow and COLOR_AMBER or COLOR_LABEL
     end
     if not hasRef then tone = COLOR_LABEL end
 
@@ -526,10 +525,13 @@ function M.drawApproachPanel(approachData)
     _drawDW("+20", 9, vec2(w - padX - p20W, scaleY), COLOR_BRAND_GREY)
     fontMod.pop(lk)
     if targetSpd then
+      -- Centered on the FULL content row (DeltaBar.jsx scale row is a
+      -- space-between flex across trough + gap + number column), not on
+      -- the trough midline — the render shows it right of the center tick.
       local refStr = string.format("%.0f km/h", targetSpd)
       local mk = fontMod.pushNamed("mono", 10)
       local refW = _measureDW(refStr, 10).x
-      _drawDW(refStr, 10, vec2(troughX + troughW * 0.5 - refW * 0.5, scaleY), COLOR_BRAND_GREY)
+      _drawDW(refStr, 10, vec2(padX + contentW * 0.5 - refW * 0.5, scaleY), COLOR_BRAND_GREY)
       fontMod.pop(mk)
     end
   end

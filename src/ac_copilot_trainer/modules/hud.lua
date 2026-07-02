@@ -71,6 +71,7 @@ end
 ---@field gear integer|nil          @header GEAR column (#432 Part A2 card)
 ---@field trackName string|nil      @header name next to the corner badge
 ---@field zonePct number|nil        @SegmentBar brake-zone fraction 0..1
+---@field approachMeters number|nil @approach window: gates delta signal tones
 ---@field kind string|nil           @realtime view kind (verb tone)
 ---@field primaryLine string|nil    @realtime view primary line (CommandVerb word)
 
@@ -107,11 +108,14 @@ local function colorForSectorMessage(text)
 end
 
 local function measure(text, fontPx)
-  if type(ui) == "table" and type(ui.measureDWriteText) == "function" then
-    local sz = ui.measureDWriteText(text, fontPx)
-    if sz then return sz end
+  -- CSP cdata-safe: measureDWriteText can be an FFI cdata callable
+  -- (type() == "cdata") — presence-check + pcall, never type()=="function".
+  if type(ui) == "table" and ui.measureDWriteText ~= nil then
+    local ok, sz = pcall(function() return ui.measureDWriteText(text, fontPx) end)
+    if ok and sz and sz.x and sz.x > 0 then return sz end
   end
-  return vec2(string.len(text or "") * fontPx * 0.55, fontPx)
+  local _, n = string.gsub(text or "", "[^\128-\191]", "")
+  return vec2(n * fontPx * 0.55, fontPx)
 end
 
 --- Resolve a viewmodel from `vm.realtimeView`. Falls back to a generic

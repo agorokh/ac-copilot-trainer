@@ -351,19 +351,21 @@ class TestApproachPanel:
         assert "COLOR_WHITE" in body, "within-band delta must map to COLOR_WHITE"
 
     def test_approach_panel_progress_bar(self) -> None:
-        """PC-03: drawProgressBar renders fill based on pct with clamping."""
+        """PC-03: braking urgency renders through the SegmentBar (#432 Part A2).
+
+        The legacy drawProgressBar widget was replaced by the design's
+        12-cell SegmentBar; progressPct still drives the fill (clamped) and
+        COLOR_BAR_BG survives as the DeltaBar trough.
+        """
         src = _lua_text("coaching_overlay.lua")
-        assert re.search(r"function\s+drawProgressBar\s*\(", src), (
-            "drawProgressBar function must exist"
+        assert "local count = 12" in src, "SegmentBar must render 12 cells (SegmentBar.jsx)"
+        assert re.search(r"math\.max\(0,\s*math\.min\(1,\s*progressPct", src), (
+            "SegmentBar fill must clamp progressPct to 0..1"
         )
-        assert "COLOR_BAR_FILL" in src, "Progress bar must use COLOR_BAR_FILL"
-        assert "COLOR_BAR_BG" in src, "Progress bar must use COLOR_BAR_BG"
-        # pct must scale fill width
-        assert re.search(r"pct\).*?\*\s*w", src), "drawProgressBar must scale fill width by pct"
-        # pct must be clamped
-        assert re.search(r"math\.(?:max|min)\s*\([^)]*pct[^)]*\)", src), (
-            "drawProgressBar must clamp pct via math.max/min"
+        assert re.search(r"math\.floor\(f\s*\*\s*count\s*\+\s*0\.5\)", src), (
+            "filledCount must round(fill * count) per SegmentBar.jsx"
         )
+        assert "COLOR_BAR_BG" in src, "DeltaBar trough must use COLOR_BAR_BG"
 
     def test_approach_panel_design_tokens(self) -> None:
         """PC-04: Racing Atelier design tokens (epic #432)."""

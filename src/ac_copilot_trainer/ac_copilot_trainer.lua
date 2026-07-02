@@ -2054,6 +2054,7 @@ function script.windowCoaching(_dt)
       gear            = car and car.gear or nil,
       trackName       = state._trackDisplayName or nil,
       zonePct         = zonePct,
+      approachMeters  = approachM,
       kind            = view.kind,
       primaryLine     = view.primaryLine,
     }
@@ -2091,9 +2092,16 @@ local function autoPlaceOnce()
   for title, wh in pairs(MANIFEST_WINDOW_SIZES) do
     sizes[title] = vec2(wh[1], wh[2])
   end
+  -- Derive the Coaching anchor from the manifest size (single source) and
+  -- clamp so the card's bottom edge stays on screen — the 338px Atelier card
+  -- at the old 0.78H anchor pushed the whole ENTRY DELTA section off a
+  -- 1080p display, re-forced every load (#432 Part A2 review).
+  local coach = MANIFEST_WINDOW_SIZES["Coaching"]
   local positions = {
     ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
-    ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
+    ["Coaching"]           = vec2(
+      math.floor(screenW * 0.5 - coach[1] * 0.5),
+      math.min(math.floor(screenH * 0.78), screenH - coach[2] - 8)),
     ["Settings"]           = vec2(math.floor(screenW * 0.05),     math.floor(screenH * 0.10)),
   }
   local required = 0
