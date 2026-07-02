@@ -24,6 +24,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from tools.ai_sidecar import server as srv
 from tools.ai_sidecar.serial_transport import (
     SerialPeer,
@@ -133,7 +135,9 @@ def test_serial_peer_send_writes_ndjson() -> None:
 
 
 def test_open_serial_asserts_dtr_keeps_rts_low_before_open() -> None:
-    import serial
+    # pyserial is an optional runtime dep (lazy-imported by open_serial); skip when
+    # it is not installed, like the duckdb/sentence-transformers tests.
+    serial = pytest.importorskip("serial")
 
     events: list[tuple[str, object]] = []
 

@@ -26,6 +26,7 @@ dev = [
   "requests>=2.33.1",
   "websockets>=16.0",
   "lupa>=2.7",  # Lua runtime for HUD smoke tests (issue #66)
+  "pyserial>=3.5",  # USB-serial rig-screen transport (issue #463); lazy-imported by the sidecar
 ]
 mining = [
   # Security floor: requests 2.33.0+ fixes CVE-2026-25645 (surfaced in pip-audit with dev+mining+knowledge).
@@ -51,6 +52,7 @@ coaching = [
     "numpy>=2.4.4",
     "scikit-learn>=1.8.0",
     "shap>=0.51.0",
+    "pyserial>=3.5",  # USB-serial rig-screen transport (issue #463)
 ]
 # Issue #340: in-the-ear phrase-bank playback (lazy-imported in voice/playback.py).
 # Install on the rig to render/play clips: pip install -e ".[voice]".
@@ -90,6 +92,7 @@ launcher = [
   "numpy>=2.4.4",
   "sounddevice>=0.5.1",
   "pyttsx3>=2.90",
+  "pyserial>=3.5",  # sidecar USB-serial rig-screen transport (issue #463)
 ]
 # Issue #368: OFFLINE neural-voice bake (recommended Kokoro-82M backend, Apache-2.0). Used only by
 # the rig/dev bake step (tools/ai_sidecar/voice/bake.py KokoroBackend, lazy-imported); never on the
