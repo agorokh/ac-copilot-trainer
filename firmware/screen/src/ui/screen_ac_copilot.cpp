@@ -28,6 +28,13 @@ constexpr int SCREEN_H = 480;
 constexpr int HEADER_H = 28;
 constexpr int FOOTER_H = 36;
 constexpr int PAD = 13;
+// Entry-delta bar geometry, shared by widget creation AND the refresh path
+// (they carried separate copies of 312 and drifted). The meta label above the
+// bar overlapped the trough/center tick on-device (operator report, #86):
+// label at y=304 ran into the tick at y=308. 296/316 give each row clear air.
+constexpr int DELTA_META_Y = 296;
+constexpr int DELTA_TROUGH_Y = 316;
+constexpr int DELTA_TROUGH_H = 20;
 constexpr int SEGMENT_COUNT = 12;
 constexpr uint32_t SNAPSHOT_STALE_MS = 3000;
 
@@ -224,7 +231,7 @@ void update_segments(ac_copilot_ctx_t* ctx, bool stale) {
 void update_delta(ac_copilot_ctx_t* ctx, bool stale) {
     if (!ctx) return;
     const int trough_x = PAD;
-    const int trough_y = 312;
+    const int trough_y = DELTA_TROUGH_Y;
     const int trough_w = SCREEN_W - 2 * PAD - 104;
     const int center_x = trough_x + trough_w / 2;
     const int max_w = trough_w / 2;
@@ -250,7 +257,7 @@ void update_delta(ac_copilot_ctx_t* ctx, bool stale) {
           : capped < 0 ? center_x - width
                        : center_x - width / 2;
     lv_obj_set_pos(ctx->delta_fill, x, trough_y);
-    lv_obj_set_size(ctx->delta_fill, width, 20);
+    lv_obj_set_size(ctx->delta_fill, width, DELTA_TROUGH_H);
     lv_obj_set_style_bg_color(ctx->delta_fill,
                               delta > 8 ? UI_ALERT_RED :
                               delta <= 0 ? UI_OK_GREEN : UI_LINE_AMBER,
@@ -420,15 +427,19 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
 
     ctx->corner_badge = lv_label_create(scr);
     lv_label_set_text(ctx->corner_badge, "T-");
-    style_label(ctx->corner_badge, UI_FONT_LABEL_MD, UI_BRASS_INK);
-    lv_obj_set_size(ctx->corner_badge, 38, 30);
-    lv_obj_set_pos(ctx->corner_badge, PAD, 52);
+    // Badge text matches the corner name's 28px face — the 12px LABEL_MD
+    // read as a speck inside the brass field on-device (operator report, #86;
+    // the design render's T4 badge is nearly as tall as the ASCARI name).
+    style_label(ctx->corner_badge, UI_FONT_COMMAND_SM, UI_BRASS_INK);
+    lv_obj_set_size(ctx->corner_badge, 46, 34);
+    lv_obj_set_pos(ctx->corner_badge, PAD, 48);
     lv_obj_set_style_bg_color(ctx->corner_badge, UI_BRASS, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(ctx->corner_badge, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_align(ctx->corner_badge, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(ctx->corner_badge, 1, LV_PART_MAIN);
 
     ctx->corner_label = make_label(scr, "--", UI_FONT_COMMAND_SM,
-                                   UI_TX_PRIMARY, PAD + 50, 50, 166);
+                                   UI_TX_PRIMARY, PAD + 58, 50, 158);
     ctx->current_speed = make_label(scr, "--", UI_FONT_READ_LG,
                                     UI_TX_PRIMARY, SCREEN_W - 82, 48, 68);
     lv_obj_set_style_text_align(ctx->current_speed, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
@@ -453,24 +464,24 @@ extern "C" lv_obj_t* screen_ac_copilot_create(void) {
                SCREEN_W - 104, 282, 91);
 
     ctx->delta_meta = make_label(scr, "ENTRY D - REF --", UI_FONT_LABEL_SM,
-                                 UI_TX_MUTED, PAD, 304, 190);
+                                 UI_TX_MUTED, PAD, DELTA_META_Y, 190);
     lv_obj_t* trough = lv_obj_create(scr);
-    lv_obj_set_size(trough, SCREEN_W - 2 * PAD - 104, 20);
-    lv_obj_set_pos(trough, PAD, 312);
+    lv_obj_set_size(trough, SCREEN_W - 2 * PAD - 104, DELTA_TROUGH_H);
+    lv_obj_set_pos(trough, PAD, DELTA_TROUGH_Y);
     lv_obj_set_style_bg_color(trough, UI_BG_RAISE, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(trough, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_border_width(trough, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(trough, 0, LV_PART_MAIN);
     lv_obj_clear_flag(trough, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t* center = lv_obj_create(scr);
-    lv_obj_set_size(center, 2, 28);
-    lv_obj_set_pos(center, PAD + (SCREEN_W - 2 * PAD - 104) / 2, 308);
+    lv_obj_set_size(center, 2, DELTA_TROUGH_H + 8);
+    lv_obj_set_pos(center, PAD + (SCREEN_W - 2 * PAD - 104) / 2, DELTA_TROUGH_Y - 4);
     lv_obj_set_style_bg_color(center, UI_TX_MUTED, LV_PART_MAIN);
     lv_obj_set_style_border_width(center, 0, LV_PART_MAIN);
     lv_obj_clear_flag(center, LV_OBJ_FLAG_SCROLLABLE);
     ctx->delta_fill = lv_obj_create(scr);
-    lv_obj_set_size(ctx->delta_fill, 3, 20);
-    lv_obj_set_pos(ctx->delta_fill, PAD + 86, 312);
+    lv_obj_set_size(ctx->delta_fill, 3, DELTA_TROUGH_H);
+    lv_obj_set_pos(ctx->delta_fill, PAD + 86, DELTA_TROUGH_Y);
     lv_obj_set_style_border_width(ctx->delta_fill, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(ctx->delta_fill, 0, LV_PART_MAIN);
     lv_obj_add_flag(ctx->delta_fill, LV_OBJ_FLAG_HIDDEN);
