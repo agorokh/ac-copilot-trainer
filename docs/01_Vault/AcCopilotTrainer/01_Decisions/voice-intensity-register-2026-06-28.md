@@ -59,8 +59,9 @@ is offline, every cue is pre-rendered at a tone tier; the hot path stays jitter-
    `critical`; legacy `firm` producer input is normalized to `urgent` so old logs and advisory
    emitters do not go silent. The voice persona is explicitly project-authored:
    `race-engineer-original-v1`, license/source `project-authored; no unconsented real-person clone`.
-   Every backend signature appends `race-engineer-original-v1+intensity2`, so a bank baked before the
-   persona/intensity-chain bump is refused as stale.
+   Every backend signature appends the current `EXPECTED_SIGNATURE_SUFFIX`
+   (`race-engineer-original-v1+prosody2+intensity3` as of #381 timing fix), so a bank baked before a
+   persona/prosody/intensity-chain bump is refused as stale.
 
 ## Reconciliation that mattered
 
