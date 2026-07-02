@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T07:53:20Z
+last_updated: 2026-07-02T08:12:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -21,6 +21,13 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-02):** PR [#455](https://github.com/agorokh/ac-copilot-trainer/pull/455)
+**MERGED** at [`5c582f7`](https://github.com/agorokh/ac-copilot-trainer/commit/5c582f7f7be166c8b10901d1116f268e7e214fef) -
+post-merge review hardening for [#408](https://github.com/agorokh/ac-copilot-trainer/issues/408).
+`reference_source=imported` now matches only generic imported references, not `pro` / `tt` /
+`generated`, and partial Track Titan debug archives are excluded from comparison fallback candidates.
+GitHub build/conformance/docs green; Qodo follow-up reported no material issues.
 
 **Delivered (2026-07-02):** PR [#451](https://github.com/agorokh/ac-copilot-trainer/pull/451)
 **MERGED** at

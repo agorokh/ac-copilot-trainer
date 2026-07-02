@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T07:53:20Z
+last_updated: 2026-07-02T08:12:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -62,6 +62,21 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-02 UTC) - PR #455 MERGED: reference selection review hardening (#408)
+
+PR [#455](https://github.com/agorokh/ac-copilot-trainer/pull/455) squash-merged to `main` as
+[`5c582f7`](https://github.com/agorokh/ac-copilot-trainer/commit/5c582f7f7be166c8b10901d1116f268e7e214fef).
+It closes the late post-merge bot findings from #453: `reference_source=imported` now matches only
+generic imported references (`reference_kind == "imported"`) instead of all `source="imported"`
+specialized references, and comparison fallback candidates now use the same partial-Track-Titan
+filter as reference selection.
+
+**Verification:** local `ruff check` / `ruff format --check` on `tools/session_review/report.py` and
+`tests/test_session_review.py`; `pytest tests/test_session_review.py -q` (16 passed); and the broader
+focused suite `pytest tests/test_session_review.py tests/test_ai_sidecar_external.py tests/test_lap_archive_source_structure.py tests/test_ws_bridge_hello_handshake.py tests/test_ai_sidecar_protocol.py -q`
+(100 passed). GitHub build/conformance/canonical-doc checks green; Qodo follow-up found no material
+issues. `python scripts/post_merge_classify.py --pr 455` reported no classification flags.
 
 ## Delivered (2026-07-02 UTC) - PR #451 MERGED: voice bank timing + stale-bank invalidation (#381)
 
