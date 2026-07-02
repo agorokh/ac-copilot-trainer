@@ -122,6 +122,21 @@ python -m tools.ai_sidecar --setup-store "<...>/experiments.jsonl" --host 127.0.
 
 See [13_Setup_Experiments.md](13_Setup_Experiments.md) for data location, reset, and rebuild.
 
+## Session Review Reports
+
+Loopback Lua/client -> sidecar: `{"v":1,"type":"session.review.generate","lap_dir":".../journal/laps"}` writes a derived post-session review to the sibling `journal/reports` directory.
+
+Optional fields:
+
+| Field | Type | Notes |
+| ----- | ---- | ----- |
+| `session` | string | Session UUID to review, or omit for latest. |
+| `driver_id` | string | Driver profile key; defaults to `local-driver`. |
+| `reference_source` | string | `auto`, `your-best`, `pro`, `tt`, `generated`, `imported`, or `none`; aliases such as `track-titan` are accepted. |
+| `reference_file` | string | Basename under the same `journal/laps` directory to pin one same-car/track/layout reference archive. |
+
+The loopback ack is `session.review.result` with local `markdown_path`, `json_path`, and `html_path` plus `reference` / `reference_selection` metadata. External `session.review` snapshots and `coaching.cue` details redact host paths to `markdown_file`, `json_file`, and `html_file` basenames while preserving the reference metadata.
+
 ## Tests
 
 `tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`). `tests/test_llm_coach.py` — Ollama debrief helpers with mocked HTTP (issue **#46**).

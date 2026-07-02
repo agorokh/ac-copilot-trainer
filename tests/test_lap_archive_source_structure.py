@@ -83,6 +83,8 @@ def test_session_review_bridge_uses_generic_local_path_gate() -> None:
     body = match.group(0)
     assert "localPathFramesAllowed()" in body
     assert "setupExperimentPathFramesAllowed" not in body
+    assert "reference_source" in body
+    assert "reference_file" in body
 
 
 def test_lap_boundary_queues_archive_instead_of_sync_write() -> None:

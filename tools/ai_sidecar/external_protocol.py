@@ -78,6 +78,26 @@ TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
+SESSION_REVIEW_REFERENCE_SOURCES: frozenset[str] = frozenset(
+    {
+        "auto",
+        "your-best",
+        "pro",
+        "tt",
+        "generated",
+        "imported",
+        "none",
+        "pb",
+        "personal",
+        "personal-best",
+        "your-best-lap",
+        "your-best-reference",
+        "track-titan",
+        "tracktitan",
+        "disabled",
+        "off",
+    }
+)
 
 # Server → client.
 TYPE_HELLO_ACK = "hello_ack"
@@ -663,10 +683,26 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             return "session.review.generate requires non-empty 'lap_dir'"
         if "output_dir" in frame:
             return "session.review.generate does not accept 'output_dir'"
-        for key in ("session", "driver_id"):
+        for key in ("session", "driver_id", "reference_source", "referenceSource"):
             err = _validate_optional_string(frame, key)
             if err is not None:
                 return err
+        for key in ("reference_file", "referenceFile"):
+            err = _validate_optional_string(frame, key)
+            if err is not None:
+                return err
+            value = frame.get(key)
+            if isinstance(value, str) and ("/" in value or "\\" in value or value in {".", ".."}):
+                return f"{key} must be a file name under journal/laps"
+        source_key = "reference_source" if "reference_source" in frame else "referenceSource"
+        source = frame.get(source_key)
+        if isinstance(source, str):
+            normalized = source.strip().lower().replace("_", "-")
+            if normalized not in SESSION_REVIEW_REFERENCE_SOURCES:
+                return (
+                    "reference_source must be one of: auto, your-best, pro, tt, "
+                    "generated, imported, none"
+                )
         return None
     if t in (
         TYPE_SETUP_LIST_RESULT,
