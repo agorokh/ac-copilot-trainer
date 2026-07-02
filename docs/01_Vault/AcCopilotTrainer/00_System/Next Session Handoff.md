@@ -63,6 +63,45 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-02 UTC) — PR #460 MERGED: autonomous harness as a product + setup verify (#459)
+
+PR [#460](https://github.com/agorokh/ac-copilot-trainer/pull/460) squash-merged to `main` as
+[`4af915f`](https://github.com/agorokh/ac-copilot-trainer/commit/4af915fd). Issue
+[#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) delivered (the harness-as-product
+child of EPIC #154). Operator reframing: launches were a struggle, runs were half-done because no
+car setup was picked/verified, and proof looked overfit to Magione+911.
+
+**The flagship — pick a setup and CHECK it, proven end-to-end automated (Spa + 911 GT3 R):** AC
+applies a car setup **only at car spawn from `race.ini`** — the in-sim WS `setup.load` path is gated
+shut for an autonomous car (`ac.isCarResetAllowed()` false, "must be in pits" even before any
+hijack). So the harness bakes `[CAR_0] _EXT_SETUP_FILENAME` (CM's own key) + `SETUP=` into race.ini,
+direct-relaunches acs, and **verifies via `acpmf_physics.fuel`** vs the setup's `[FUEL] VALUE`. One
+command reported `setup_applied=True, "fuel 45.0L matches setup FUEL 45.0L"` for Realistic_BB_v3;
+AC's own log confirmed the spawn (`Setup change ... SPRING_RATE_RR ...`). Also shipped: zero-lore
+preflight (content/CSP-CustomAI/CM/setup asserts, actionable), `--car`/`--track` deterministic
+practice preset, evidence bundle (`report.json` + `hud.png` + lap-archive paths), driver-agnostic
+no-progress watchdog + capped recovery, one-command runbook `docs/10_Development/18_Autonomous_Harness.md`
++ repo skill `.claude/skills/ac-harness` (+ `.cursor` mirror).
+
+**Real bug fixed:** the sim-death guard keyed on the Car0 (Custom-AI) packet_id, which CSP does NOT
+bump per frame (constant for a stationary car) → it false-declared "acs.exe died" 4 s into a
+start-line spawn before the car could shift out of neutral. Now keys on the **main `acpmf_physics`
+packet_id** (advances every frame, freezes only on a real crash).
+
+**Review:** 15-agent adversarial workflow + Gemini/Qodo/codex over 5 resolve rounds → all findings
+fixed (FORCE_START install-tree write removed for the domain rule; open-existing fuel read so a dead
+sim can't spoof 0; bare-`.ini` name search; surrogateescape round-trip; layout-in-preset;
+skip-launch+setup rejection; missing-preset preflight; `<car>/generic/` Lua enumeration). CI green,
+0 unresolved threads, one full cooldown after the last push.
+
+**Genuine residual → [#461](https://github.com/agorokh/ac-copilot-trainer/issues/461)
+(child of #154):** setup runs vs. a completed autonomous DRIVE don't compose in one command — the
+drive needs a CM/grid launch (arms the hijack, live-proven Spa Z4 211 km/h), the setup needs a
+direct relaunch (which lands at the pre-drive menu / freezes Car0 on START). The setup-verify and
+the drive are each proven separately; composing them (CM setup-carry, or a non-install-tree
+menu-skip, or verified pit-escape teleport offsets) is #461. TT Spa reference comparison rides on
+#461's drive-produced lap archive. Detail: [[issue-459-harness-product-2026-07-02]].
+
 ## Delivered (2026-07-02 UTC) - Game Point SimHub detection hotfix
 
 Operator reported the Windows Game Point launcher showing `SIMHUB absent` even though SimHub was
