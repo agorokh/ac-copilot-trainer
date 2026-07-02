@@ -277,8 +277,6 @@ def _reference_sort_key(lap: LoadedLap) -> tuple[int, datetime, str]:
 def _reference_matches_source(lap: LoadedLap, source: str) -> bool:
     if source == "auto":
         return True
-    if source == "imported":
-        return lap.reference_kind == "imported"
     return lap.reference_kind == source
 
 
