@@ -630,6 +630,15 @@ def test_resolve_setup_ini_rejects_path_shaped_car_and_track_ids(tmp_path):
         )
 
 
+def test_resolve_setup_ini_bare_ini_basename_uses_name_search(tmp_path):
+    # A bare "Foo.ini" (no separator) an operator copies from disk must search the car/track/generic
+    # candidates, not resolve as a setups-root-relative path that skips the combo folders.
+    user = _setups_tree(tmp_path)
+    car = "ks_porsche_911_gt3_r_2016"
+    hit = resolve_setup_ini(user, car, "spa", "Realistic_BB_v3.ini")
+    assert hit.name == "Realistic_BB_v3.ini" and hit.parent.name == "spa"
+
+
 def test_resolve_setup_ini_accepts_path_inside_setups_root(tmp_path):
     user = _setups_tree(tmp_path)
     car = "ks_porsche_911_gt3_r_2016"

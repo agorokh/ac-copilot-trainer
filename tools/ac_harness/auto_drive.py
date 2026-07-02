@@ -123,9 +123,6 @@ class AutoDriveConfig:
     setup_ini: Path | None = None
     setup_fuel_tolerance_l: float = 2.5  # observed fuel within this of the setup's FUEL => applied
     setup_timeout: float = 20.0  # seconds to wait for acpmf_physics.fuel to confirm the bake
-    # A direct acs relaunch lands at AC's pre-drive menu unless CSP ``gui.ini [GUI] FORCE_START=1``
-    # skips it (arms Custom-AI without OS input injection, which CSP blocks). The harness sets it
-    # for the setup relaunch and restores the prior value at teardown (live-verified, Spa).
     # Drive. ``driver="racing"`` (default) follows fast_lane.ai's embedded speed profile with real
     # braking points + gear shifting (RacingDriver) — the car actually races (shifts through gears,
     # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
@@ -571,7 +568,10 @@ def resolve_setup_ini(
     if not raw:
         raise ValueError("setup name is empty")
 
-    looks_like_path = any(sep in raw for sep in ("/", "\\")) or raw.lower().endswith(".ini")
+    # Only a string with a path SEPARATOR is treated as a path — a bare ``Foo.ini`` basename (which
+    # an operator naturally copies from disk) goes through the same car/track/generic name search
+    # as ``Foo``, not a setups-root-relative path that skips the combo folders (#460 review).
+    looks_like_path = any(sep in raw for sep in ("/", "\\"))
     if looks_like_path:
         candidate = Path(raw)
         if not candidate.is_absolute():
@@ -1033,50 +1033,6 @@ def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-o
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
 
 
-def _gui_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
-    """CSP ``extension/config/gui.ini`` — holds ``[GUI] FORCE_START`` (pre-drive menu skip)."""
-    return config.ac_root / "extension" / "config" / "gui.ini"
-
-
-def _enable_force_start(gui_ini: Path) -> tuple[bool, str | None]:  # pragma: no cover - rig-only
-    """Set ``[GUI] FORCE_START=1``; return ``(ok, original_text)`` for a **lossless** restore.
-
-    A direct acs relaunch lands at AC's pre-drive Drive/Setup/Exit menu, where CSP Custom-AI never
-    arms and OS input injection is blocked — so the hijack cannot land. ``FORCE_START=1`` makes acs
-    skip that menu and go straight to driving (live-verified Spa 2026-07-02). acs reads gui.ini only
-    at startup, so the caller sets it, launches, then restores the ORIGINAL text — unconditionally
-    (no "was the key absent?" ambiguity that could leave `FORCE_START=1` behind, #460 review).
-
-    Read/write use ``errors="surrogateescape"``, which **round-trips** any non-UTF-8 byte, so the
-    restore is byte-for-byte exact and cannot corrupt a user's CSP config (qodo #460 review — plain
-    ``errors="replace"`` would irreversibly rewrite undecodable bytes). ``ok=False`` means the file
-    could not be read/written, so the caller must not proceed into a known-menu-blocked relaunch.
-    """
-    try:
-        original = gui_ini.read_text(encoding="utf-8", errors="surrogateescape")
-    except OSError:
-        return False, None
-    if re.search(r"^FORCE_START=\d+", original, re.M):
-        new = re.sub(r"^FORCE_START=\d+", "FORCE_START=1", original, count=1, flags=re.M)
-    elif re.search(r"^\[GUI\]\s*$", original, re.M):
-        new = re.sub(r"^\[GUI\]\s*$", "[GUI]\nFORCE_START=1", original, count=1, flags=re.M)
-    else:
-        new = original.rstrip("\n") + "\n[GUI]\nFORCE_START=1\n"  # no [GUI] section — append one
-    try:
-        gui_ini.write_text(new, encoding="utf-8", errors="surrogateescape")
-    except OSError:
-        return False, original
-    return True, original
-
-
-def _restore_gui_ini(gui_ini: Path, original_text: str) -> None:  # pragma: no cover - rig-only
-    """Write ``original_text`` back byte-for-byte (best-effort) — the exact pre-run gui.ini."""
-    try:
-        gui_ini.write_text(original_text, encoding="utf-8", errors="surrogateescape")
-    except OSError:
-        pass
-
-
 def _direct_acs_launch(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
     """Kill any acs and launch ``acs.exe`` directly (non-elevated shell avoids the Steam trip)."""
     import subprocess
@@ -1090,34 +1046,29 @@ def _direct_acs_launch(config: AutoDriveConfig) -> None:  # pragma: no cover - r
 def _bake_and_relaunch_with_setup(
     config: AutoDriveConfig,
 ) -> tuple[bool, str]:  # pragma: no cover - rig-only
-    """Bake ``config.setup_ini`` into race.ini + FORCE_START, direct-relaunch acs, wait LIVE.
+    """Bake ``config.setup_ini`` into race.ini and direct-relaunch acs so the car respawns with it.
 
     Called after a CM launch has written a correct race.ini for the combo. AC applies a setup only
-    at spawn, so this rewrites race.ini (``_EXT_SETUP_FILENAME`` + ``SETUP`` + ``SPAWN_SET=START``),
-    enables the pre-drive-menu skip, and relaunches acs directly so the car respawns WITH the setup.
-    Restores FORCE_START afterwards (acs already read it at startup).
+    at spawn, so this rewrites race.ini (``_EXT_SETUP_FILENAME`` + ``SETUP`` + ``SPAWN_SET=START``)
+    and relaunches acs directly — the car respawns WITH the setup and ``acpmf_physics.fuel`` reads
+    it back (live-verified even at the pre-drive menu). The harness deliberately writes **only**
+    race.ini (under AC Documents), never CSP install-tree config: the earlier ``gui.ini
+    FORCE_START`` menu-skip was removed (#460 review — writes stay out of the AC install tree, and a
+    killed harness must not leave a global CSP setting changed). Skipping the pre-drive menu to arm
+    the carcsw hijack/drive for a setup run is deferred to #461; this leg proves the setup applied.
     """
     race_ini = _race_ini_path(config)
-    gui_ini = _gui_ini_path(config)
     if config.setup_ini is None or not race_ini.is_file():
         return False, f"cannot bake setup: race.ini missing at {race_ini}"
     baked = bake_setup_into_race_ini(
-        race_ini.read_text(encoding="utf-8", errors="replace"), config.setup_ini
+        race_ini.read_text(encoding="utf-8", errors="surrogateescape"), config.setup_ini
     )
     race_ini.write_text(baked, encoding="utf-8", newline="\n")
-    ok_force, original_gui = _enable_force_start(gui_ini)
-    if not ok_force:
-        # Could not enable the menu-skip — a direct relaunch would strand at the pre-drive menu.
-        return False, f"could not set FORCE_START in {gui_ini}"
-    try:
-        _direct_acs_launch(config)
-        if not _wait_live(config.attempt_timeout):
-            return False, "sim never reached LIVE after the setup relaunch"
-        time.sleep(config.settle_seconds)
-        return True, "relaunched with setup baked"
-    finally:
-        if original_gui is not None:
-            _restore_gui_ini(gui_ini, original_gui)  # exact pre-run gui.ini, unconditionally
+    _direct_acs_launch(config)
+    if not _wait_live(config.attempt_timeout):
+        return False, "sim never reached LIVE after the setup relaunch"
+    time.sleep(config.settle_seconds)
+    return True, "relaunched with setup baked"
 
 
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
@@ -1228,18 +1179,27 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
 
 
 def _read_physics_fuel() -> float | None:  # pragma: no cover - rig-only
-    """Read ``acpmf_physics.fuel`` (litres, offset 12) from AC shared memory, or None if closed."""
-    import mmap
+    """Read ``acpmf_physics.fuel`` (litres, offset 12), or None when the sim did not publish it.
+
+    Uses the shared-memory reader's **open-existing** opener (``OpenFileMappingW``), NOT
+    ``mmap.mmap(-1, …, tag)``: the latter CREATES a zero-filled named section when AC has not
+    published one, and a spurious ``fuel=0.0`` could fall within tolerance of a low-fuel setup and
+    falsely verify a dead sim (#460 review). Open-existing returns None when the section is absent.
+    """
     import struct
 
+    from tools.ac_harness.shared_memory import open_shared_memory
+
     try:
-        m = mmap.mmap(-1, 2048, "acpmf_physics", access=mmap.ACCESS_READ)
-    except OSError:
+        section = open_shared_memory("acpmf_physics", 64)
+    except Exception:  # noqa: BLE001 - SharedMemoryUnavailable or platform error → treat as absent
+        return None
+    if section is None:
         return None
     try:
-        return struct.unpack_from("<f", m.read(16), 12)[0]
+        return struct.unpack_from("<f", section.read(16), 12)[0]
     finally:
-        m.close()
+        section.close()
 
 
 async def rig_apply_setup(config: AutoDriveConfig) -> dict:  # pragma: no cover - rig-only

@@ -68,8 +68,10 @@ investigation:
   bakes + direct-relaunches.
 - **`gui.ini [GUI] FORCE_START=1` skips AC's pre-drive Drive/Setup/Exit menu** on a direct launch
   (OS input injection to that menu is CSP-blocked; computer-use `request_access` times out here).
-  Live-verified: with it, the hijack lands first attempt. The harness sets it for the relaunch and
-  restores it after (acs reads gui.ini only at startup).
+  Live-verified: with it, the hijack lands first attempt. **Removed from the shipped code** (PR #460
+  review — the harness must not write CSP install-tree config, and a killed harness would leave a
+  global CSP setting changed); the menu-skip that would let a setup run also *drive* is deferred to
+  #461. The setup **verification** does not need it — fuel reads back at the pre-drive menu too.
 - **Shared-memory offsets used:** `acpmf_graphics` status @4 (2=LIVE; 8 is session type, an easy
   mis-read), `acpmf_physics` fuel @12, gear @16, speed @28.
 

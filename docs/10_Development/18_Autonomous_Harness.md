@@ -8,15 +8,22 @@ driven autonomously and evidence collected — testing car setups, verifying a d
 exercising voice coaching, capturing telemetry. Do **not** write throwaway `.scratch` drivers;
 compose on this harness. (Repo skill pointer: `.claude/skills/ac-harness/SKILL.md`.)
 
-## The one command
+## The commands
+
+Two working paths today — **prove the drive** (no setup), or **prove a setup applies** (no
+completed drive). They do not yet compose in one command; see *Known limitation* below.
 
 ```bash
-python -m tools.ac_harness.auto_drive \
-    --car ks_porsche_911_gt3_r_2016 --track spa \
-    --setup Realistic_BB_v3 --driver ggv --wait-lap
+# Prove the autonomous DRIVE (live-verified: Spa flat-out, gears 1→6, reference coaching):
+python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track spa \
+    --driver ggv --wait-lap
+
+# Prove a car SETUP applies + is verified (fuel-checked against the setup's [FUEL] VALUE):
+python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track spa \
+    --setup Realistic_BB_v3
 ```
 
-That single command owns the whole loop:
+The full loop each command owns:
 
 1. **Preflight** — content installed, CSP `[CUSTOM_AI] ENABLED=1`, Content Manager present,
    setup resolvable, preset↔CLI combo consistency. Fails fast with an actionable message
@@ -35,12 +42,11 @@ That single command owns the whole loop:
    "must be in pits", Spa 2026-07-02, even before any hijack). So the harness **bakes the setup into
    `race.ini`** (`_EXT_SETUP_FILENAME` — Content Manager's own key — plus vanilla `SETUP=`) and
    direct-relaunches acs so the car respawns with it, then **verifies** by reading
-   `acpmf_physics.fuel` back against the setup's `[FUEL] VALUE`. A match (±2.5 L default) confirms
-   it (live-verified: fuel 45.0 L == Realistic_BB_v3 `FUEL=45`); a mismatch **fails the run at
-   `stage="setup"`**. A direct relaunch skips AC's pre-drive menu via CSP `gui.ini [GUI]
-   FORCE_START=1` (set for the relaunch, restored after — OS input injection to the menu is blocked,
-   so this is the only headless way past it). A setup with no `[FUEL]` section is reported
-   baked-but-unconfirmed rather than failing.
+   `acpmf_physics.fuel` (via the open-existing shared-memory reader, so a dead sim can't spoof a
+   zero) back against the setup's `[FUEL] VALUE`. A match (±2.5 L default) confirms it (live-verified:
+   fuel 45.0 L == Realistic_BB_v3 `FUEL=45`); a mismatch **fails the run at `stage="setup"`**. A
+   setup with no `[FUEL]` section is reported baked-but-unconfirmed. The harness deliberately writes
+   **only** `race.ini` (under AC Documents) — never CSP install-tree config.
 5. **Drive** — `--driver ggv` (flat-out friction-circle min-time), `racing` (AI-line pace,
    default), or `cruise` (slow lane-keeper). Guards: sim-death detection, a **no-progress
    watchdog** (recovers stalls regardless of throttle), a **recovery cap** (default 6) that fails
@@ -77,25 +83,23 @@ long-term storage (scratch-dir disposability pitfall).
 - **Reference laps / TT comparison**: `--wait-lap` guarantees at least one archived lap;
   feed it to `tools.tt_ingest` / session review with `--reference-source tt`.
 
-## Known limitation — setup runs vs. the autonomous drive (tracked)
+## Known limitation — setup runs vs. the autonomous drive (tracked: #461)
 
 The setup path (bake + fuel-verify) and the autonomous drive **do not yet compose in one command**,
 because they need different launch modes:
 
 - The **drive** needs a **CM launch from the start line** (grid): CM skips the pre-drive menu and
-  arms CSP Custom-AI, and the car has open track ahead. This is live-proven (multi-track: Spa + BMW
-  Z4 GT3 flat-out, 211 km/h).
+  arms CSP Custom-AI, and the car has open track ahead. Live-proven (multi-track: Spa + BMW Z4 GT3
+  flat-out, 211 km/h).
 - The **setup** needs a **direct acs relaunch** (to bake `race.ini` — CM regenerates it and its
-  Quick-Drive preset carries no setup). But the direct relaunch's spawn states each block the drive:
-  a **`START` spawn freezes the Car0 (Custom-AI) mmap** so the hijack never lands, and a **`PIT`
-  spawn** hijacks fine but the car can't escape Spa's pit box (the custom-teleport offsets that
-  would jump it to the racing line are unverified).
+  Quick-Drive preset carries no setup). That relaunch lands at AC's pre-drive menu, where the
+  carcsw hijack can't arm, so a `--setup` run **applies + fuel-verifies the setup** (proven: fuel
+  45.0 L == Realistic_BB_v3 `FUEL=45`) and then reports `stage="hijack"` — the drive is not reached.
 
-So today: `--setup` **applies + verifies** the setup (proven) but the drive leg then fails to move
-the car; and a plain `--driver` run drives (proven) without a chosen setup. Resolving the
-composition — CM setup-carry, or fixing the `START`-spawn Custom-AI freeze, or verifying the
-custom-teleport offsets — is tracked as a follow-up on #154. Use `--setup` today to **prove a setup
-loads** (fuel-verified evidence bundle); use a no-setup run to **prove the drive**.
+Resolving the composition (`#461`) — CM setup-carry (spawn with the setup via CM so the drive path
+is unchanged), or a headless menu-skip that doesn't write CSP install-tree config, or verified
+custom-teleport pit-escape offsets. Use `--setup` today to **prove a setup loads** (fuel-verified
+evidence bundle); use a no-setup run to **prove the drive**.
 
 ## Troubleshooting (hard-won rig lore — read before debugging)
 
