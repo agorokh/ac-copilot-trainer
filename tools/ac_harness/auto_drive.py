@@ -27,10 +27,12 @@ Rig robustness baked in (live-found 2026-06-27 on Imola/Mugello; #459 Part D):
 * **Hijack retry/relaunch.** CSP only creates the ``Car<N>`` read section once its Custom-AI
   subsystem is watching; creating ``CarControls0`` too soon after ``AC_STATUS`` flips LIVE loses
   the race and the hijack silently no-ops. We settle, retry the hijack, and relaunch on failure.
-* **Sim-death detection (anti-false-green).** When ``acs.exe`` crashes the Car0 mmap freezes and
-  ``read_car_data()`` returns the last frame forever — a parked car reported as "still driving".
-  The drive loop watches the Car0 ``packet_id`` and stops on stagnation rather than spinning on
-  stale data and reporting a false success.
+* **Sim-death detection (anti-false-green).** When ``acs.exe`` crashes the mmap freezes and reads
+  return the last frame forever — a parked car reported as "still driving". The drive loop watches
+  the **main ``acpmf_physics`` packet_id** (which advances every frame while the sim runs) and stops
+  on stagnation. It deliberately does NOT watch the Car0 (Custom-AI) packet_id: CSP does not bump
+  that every frame — it holds constant for a stationary car — so watching it falsely declared death
+  4 s into a start-line spawn before the car ever moved (#459 review).
 * **No-progress watchdog + recovery cap.** The drivers' own stuck detector requires commanded
   throttle above a floor, so a low-throttle stall never trips it (the 450–580 m practice-start
   stall, #459). A driver-agnostic watchdog recovers on "no forward progress for N seconds"
@@ -111,14 +113,19 @@ class AutoDriveConfig:
     sidecar_url: str = "ws://127.0.0.1:8765"
     # Setup selection (#459 Part A). ``setup`` is a setup name (basename, no ``.ini``) or a path
     # under the user setups folder; ``setup_ini`` is the resolved absolute INI (filled by the CLI
-    # via resolve_setup_ini). When set, the run applies it via the sidecar `setup.load` relay and
-    # FAILS (stage="setup") unless the in-sim ack confirms the load — no more half-done runs that
-    # drove whatever setup happened to be active.
+    # via resolve_setup_ini). AC applies a car setup ONLY at car spawn, from ``race.ini`` — the
+    # in-sim WS ``setup.load`` path is gated by ``ac.isCarResetAllowed()``, which is false for a
+    # freshly-spawned autonomous car (live-found "must be in pits", Spa 2026-07-02). So the harness
+    # BAKES the setup into ``race.ini`` (``_EXT_SETUP_FILENAME`` — CM's own key) and relaunches, and
+    # VERIFIES it via ``acpmf_physics.fuel`` matching the setup's ``[FUEL] VALUE``. A verified setup
+    # is required; otherwise the run FAILS at stage="setup" — no half-done run on the wrong setup.
     setup: str | None = None
     setup_ini: Path | None = None
-    # Live-measured (Spa, 2026-07-02): after a cold relaunch the trainer Lua peer can take well
-    # over a minute to (re)connect to the sidecar — 60 s timed out with "no loopback Lua peer".
-    setup_timeout: float = 150.0
+    setup_fuel_tolerance_l: float = 2.5  # observed fuel within this of the setup's FUEL => applied
+    setup_timeout: float = 20.0  # seconds to wait for acpmf_physics.fuel to confirm the bake
+    # A direct acs relaunch lands at AC's pre-drive menu unless CSP ``gui.ini [GUI] FORCE_START=1``
+    # skips it (arms Custom-AI without OS input injection, which CSP blocks). The harness sets it
+    # for the setup relaunch and restores the prior value at teardown (live-verified, Spa).
     # Drive. ``driver="racing"`` (default) follows fast_lane.ai's embedded speed profile with real
     # braking points + gear shifting (RacingDriver) — the car actually races (shifts through gears,
     # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
@@ -251,22 +258,24 @@ TapFn = Callable[..., Awaitable[list[dict]]]
 
 
 def verify_setup_ack(ack: dict | None, requested: str) -> tuple[bool, str]:
-    """Pure check that an in-sim ``setup.load.ack`` confirms the requested setup was applied.
+    """Pure check that a setup ack confirms the requested setup was applied AND verified.
 
     ``requested`` is the setup stem (basename without ``.ini``). The ack must carry ``ok=true``
-    AND name (or the ack path's basename) matching the request — an ``ok`` for a *different*
-    setup (same-basename collision across folders) must not verify.
+    (the rig leg sets this only when the observed fuel matched the setup's ``FUEL``) AND name (or
+    the ack path's basename) matching the request — an ``ok`` for a *different* setup (same-basename
+    collision across folders) must not verify.
     """
     if not isinstance(ack, dict):
-        return False, "no setup.load.ack received"
+        return False, "no setup ack received"
     if ack.get("ok") is not True:
-        return False, str(ack.get("error") or "setup.load refused")
+        return False, str(ack.get("error") or "setup not applied")
     want = requested.lower()
     name = str(ack.get("name") or "").lower()
     path = str(ack.get("path") or "")
     path_stem = re.sub(r"\.ini$", "", path.replace("\\", "/").rsplit("/", 1)[-1]).lower()
     if name == want or path_stem == want:
-        return True, f"applied {ack.get('path') or ack.get('name')}"
+        detail = ack.get("detail") or f"applied {ack.get('path') or ack.get('name')}"
+        return True, str(detail)
     return False, f"ack names a different setup: name={ack.get('name')!r} path={path!r}"
 
 
@@ -335,7 +344,6 @@ async def run_auto_drive(
     setup_requested = Path(config.setup).stem if config.setup else None
     setup_ack: dict | None = None
     setup_applied: bool | None = None
-    setup_session_failure: str | None = None  # session-never-entered shape (relaunch-worthy)
     controller: Controller | None = None
     attempts = 1 if config.skip_launch else max(1, config.max_launches)
     launch_config = replace(config, max_launches=1)
@@ -348,9 +356,11 @@ async def run_auto_drive(
                 last_launch_error = reason
                 continue
             launched_once = True
+        # The setup is BAKED at launch (AC only applies setups at spawn; the WS load is gated shut
+        # for an autonomous car). Verify it BEFORE the hijack — the fuel read needs no hijack, and
+        # a wrong setup must fail the run before it drives (#459 Part A). On a relaunch the launch
+        # leg re-bakes, so this re-verifies each attempt.
         if config.setup:
-            # BEFORE the hijack (see docstring), and inside the loop: a relaunch starts a new
-            # session, so the previous iteration's setup load no longer applies.
             if apply_setup is None:
                 return AutoDriveReport(
                     ok=False,
@@ -370,21 +380,12 @@ async def run_auto_drive(
                     launched=not config.skip_launch,
                     setup_requested=setup_requested,
                     setup_applied=False,
-                    error=f"setup apply failed: {type(exc).__name__}: {exc}",
+                    error=f"setup verify failed: {type(exc).__name__}: {exc}",
                     **identity,
                 )
             ok_setup, detail = verify_setup_ack(setup_ack, setup_requested)
             setup_applied = ok_setup
             if not ok_setup:
-                if isinstance(setup_ack, dict) and setup_ack.get("retryable_launch"):
-                    # The Lua peer never appeared: the menu-skip race was lost and the session
-                    # was never entered — a LAUNCH failure the LIVE+advancing gate cannot see
-                    # (live-observed Spa 2026-07-02: pre-drive screen up, physics advancing).
-                    # Relaunch, exactly like a failed hijack.
-                    setup_session_failure = detail
-                    continue
-                # A refused/mismatched setup is a hard run FAIL, not a relaunch trigger:
-                # rig_apply_setup already retried the transient shapes internally.
                 return AutoDriveReport(
                     ok=False,
                     stage="setup",
@@ -395,7 +396,6 @@ async def run_auto_drive(
                     error=f"setup not applied: {detail}",
                     **identity,
                 )
-            setup_session_failure = None
         controller = hijack(config)
         if controller is not None:
             break
@@ -409,19 +409,6 @@ async def run_auto_drive(
                 stage="launch",
                 launched=False,
                 error=last_launch_error or "sim never reached LIVE",
-                **identity,
-            )
-        if setup_session_failure is not None:
-            return AutoDriveReport(
-                ok=False,
-                stage="setup",
-                launched=True,
-                setup_requested=setup_requested,
-                setup_applied=False,
-                setup_ack=setup_ack,
-                error=(
-                    f"setup not applied after {attempts} launch attempt(s): {setup_session_failure}"
-                ),
                 **identity,
             )
         return AutoDriveReport(
@@ -613,6 +600,68 @@ def resolve_setup_ini(
     raise FileNotFoundError(
         f"setup {raw!r} not found for {car_id} @ {track_id}; searched:\n  {searched}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Launch-time setup baking + fuel verification (pure; #459 Part A — the mechanism that
+# actually applies a setup to an autonomous car, since AC only applies setups at spawn).
+# ---------------------------------------------------------------------------
+def bake_setup_into_race_ini(
+    race_ini_text: str, setup_ini: Path, *, spawn_set: str = "START"
+) -> str:
+    """Return ``race_ini_text`` with the setup baked under ``[CAR_0]`` and the spawn set.
+
+    Writes both ``_EXT_SETUP_FILENAME=<abs path>`` (Content Manager's own key; what CM writes when
+    a setup is chosen) and vanilla ``SETUP=<name>.ini`` so either code path in acs applies it, plus
+    ``[SESSION_0] SPAWN_SET`` (``START`` puts the car on the racing line where the drivers work; a
+    pit-box spawn is not needed because the setup applies at spawn regardless). Pure text transform
+    via ``configparser`` — the caller writes the result and relaunches acs so the car spawns with
+    the setup. Live-verified (Spa 2026-07-02): AC logs ``Setup change ... SPRING_RATE_RR ...`` and
+    ``acpmf_physics.fuel`` reads the setup's ``FUEL`` value.
+    """
+    parser = configparser.ConfigParser(strict=False)
+    parser.optionxform = str  # preserve AC's uppercase keys
+    parser.read_string(race_ini_text)
+    if not parser.has_section("CAR_0"):
+        parser.add_section("CAR_0")
+    parser.set("CAR_0", "SETUP", setup_ini.name)
+    parser.set("CAR_0", "_EXT_SETUP_FILENAME", str(setup_ini))
+    if not parser.has_section("SESSION_0"):
+        parser.add_section("SESSION_0")
+    parser.set("SESSION_0", "SPAWN_SET", spawn_set)
+    from io import StringIO
+
+    out = StringIO()
+    parser.write(out, space_around_delimiters=False)
+    return out.getvalue()
+
+
+def parse_setup_fuel(setup_ini_text: str) -> float | None:
+    """Parse ``[FUEL] VALUE`` (litres) from a setup INI, or ``None`` when the setup omits fuel.
+
+    Fuel is the universal, cheap verification discriminator: nearly every race setup pins it, and
+    it reads back directly from ``acpmf_physics.fuel`` after spawn. A setup without a ``[FUEL]``
+    section cannot be fuel-verified (the caller then reports the setup as baked-but-unconfirmed).
+    """
+    parser = configparser.ConfigParser(strict=False, inline_comment_prefixes=(";", "#"))
+    parser.optionxform = str
+    try:
+        parser.read_string(setup_ini_text)
+    except configparser.Error:
+        return None
+    if not parser.has_option("FUEL", "VALUE"):
+        return None
+    try:
+        return float(parser.get("FUEL", "VALUE").strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def fuel_matches(expected_l: float | None, observed_l: float | None, tolerance_l: float) -> bool:
+    """True when ``observed`` fuel is within ``tolerance`` of the setup's ``expected`` fuel."""
+    if expected_l is None or observed_l is None:
+        return False
+    return abs(observed_l - expected_l) <= tolerance_l
 
 
 # ---------------------------------------------------------------------------
@@ -929,12 +978,93 @@ def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
         return
 
 
+def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
+    """``<AC user data>/cfg/race.ini`` — the file CM regenerates and acs reads at spawn."""
+    return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
+
+
+def _gui_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
+    """CSP ``extension/config/gui.ini`` — holds ``[GUI] FORCE_START`` (pre-drive menu skip)."""
+    return config.ac_root / "extension" / "config" / "gui.ini"
+
+
+def _set_force_start(gui_ini: Path, enabled: bool) -> str | None:  # pragma: no cover - rig-only
+    """Set ``[GUI] FORCE_START`` and return the prior value (for restore), or None on failure.
+
+    A direct acs relaunch lands at AC's pre-drive Drive/Setup/Exit menu, where CSP Custom-AI never
+    arms and OS input injection is blocked — so the hijack cannot land. ``FORCE_START=1`` makes acs
+    skip that menu and go straight to driving (live-verified Spa 2026-07-02). acs reads gui.ini only
+    at startup, so the caller sets it, launches, then restores.
+    """
+    try:
+        text = gui_ini.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    m = re.search(r"^FORCE_START=(\d+)", text, re.M)
+    prior = m.group(1) if m else None
+    want = "1" if enabled else "0"
+    if m:
+        new = re.sub(r"^FORCE_START=\d+", f"FORCE_START={want}", text, count=1, flags=re.M)
+    else:
+        new = re.sub(r"^\[GUI\]\s*$", f"[GUI]\nFORCE_START={want}", text, count=1, flags=re.M)
+    try:
+        gui_ini.write_text(new, encoding="utf-8")
+    except OSError:
+        return None
+    return prior
+
+
+def _direct_acs_launch(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
+    """Kill any acs and launch ``acs.exe`` directly (non-elevated shell avoids the Steam trip)."""
+    import subprocess
+
+    subprocess.run(["taskkill", "/IM", "acs.exe", "/F", "/T"], capture_output=True)
+    time.sleep(2.0)
+    acs = config.ac_root / "acs.exe"
+    subprocess.Popen([str(acs)], cwd=str(acs.parent))
+
+
+def _bake_and_relaunch_with_setup(
+    config: AutoDriveConfig,
+) -> tuple[bool, str]:  # pragma: no cover - rig-only
+    """Bake ``config.setup_ini`` into race.ini + FORCE_START, direct-relaunch acs, wait LIVE.
+
+    Called after a CM launch has written a correct race.ini for the combo. AC applies a setup only
+    at spawn, so this rewrites race.ini (``_EXT_SETUP_FILENAME`` + ``SETUP`` + ``SPAWN_SET=START``),
+    enables the pre-drive-menu skip, and relaunches acs directly so the car respawns WITH the setup.
+    Restores FORCE_START afterwards (acs already read it at startup).
+    """
+    race_ini = _race_ini_path(config)
+    gui_ini = _gui_ini_path(config)
+    if config.setup_ini is None or not race_ini.is_file():
+        return False, f"cannot bake setup: race.ini missing at {race_ini}"
+    baked = bake_setup_into_race_ini(
+        race_ini.read_text(encoding="utf-8", errors="replace"), config.setup_ini
+    )
+    race_ini.write_text(baked, encoding="utf-8", newline="\n")
+    prior_force = _set_force_start(gui_ini, True)
+    try:
+        _direct_acs_launch(config)
+        if not _wait_live(config.attempt_timeout):
+            return False, "sim never reached LIVE after the setup relaunch"
+        time.sleep(config.settle_seconds)
+        return True, "relaunched with setup baked"
+    finally:
+        if prior_force is not None:
+            _set_force_start(gui_ini, prior_force == "1")
+
+
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
     """Launch AC via the de-elevated Content-Manager URL and wait for the sim to go LIVE.
 
     Unlike the daemon's strict ``driving`` gate (which needs the car already moving — a
     chicken-and-egg for an autonomous launch), this waits only for LIVE + advancing physics, then
     the hijack+drive supplies the motion. Relaunches on the menu-skip race up to ``max_launches``.
+
+    For a setup run (``config.setup_ini`` set): after CM reaches LIVE (which writes a correct
+    race.ini for the combo), the setup is baked into that race.ini and acs is direct-relaunched
+    with the pre-drive-menu skip, so the car respawns WITH the setup — AC applies setups only at
+    spawn, and the in-sim WS load is gated shut for an autonomous car.
     """
     from tools.ac_harness.entry_launcher import ContentManagerActuator
 
@@ -945,6 +1075,11 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
         actuator.launch() if attempt == 1 else actuator.relaunch()
         if _wait_live(config.attempt_timeout):
             time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
+            if config.setup_ini is not None:
+                ok, reason = _bake_and_relaunch_with_setup(config)
+                if not ok:
+                    continue  # relaunch from scratch on a failed setup respawn
+                return True, f"LIVE with setup after {attempt} launch attempt(s) — {reason}"
             return True, f"LIVE after {attempt} launch attempt(s)"
     return False, f"sim never reached LIVE after {config.max_launches} attempt(s)"
 
@@ -1026,68 +1161,78 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
     return None
 
 
+def _read_physics_fuel() -> float | None:  # pragma: no cover - rig-only
+    """Read ``acpmf_physics.fuel`` (litres, offset 12) from AC shared memory, or None if closed."""
+    import mmap
+    import struct
+
+    try:
+        m = mmap.mmap(-1, 2048, "acpmf_physics", access=mmap.ACCESS_READ)
+    except OSError:
+        return None
+    try:
+        return struct.unpack_from("<f", m.read(16), 12)[0]
+    finally:
+        m.close()
+
+
 async def rig_apply_setup(config: AutoDriveConfig) -> dict:  # pragma: no cover - rig-only
-    """Apply ``config.setup_ini`` in-sim via the sidecar's ``setup.load`` relay and return the ack.
+    """VERIFY the launch-baked setup by reading ``acpmf_physics.fuel`` (setup is applied in launch).
 
-    Connects a loopback harness client, sends ``setup.load`` (name + path — the Lua library
-    disambiguates by path first, then basename), and waits for the ``setup.load.ack`` the Lua
-    peer sends back. Two transients are retried until ``setup_timeout``: the trainer Lua peer may
-    connect to the sidecar a few seconds after LIVE (sidecar answers "no loopback Lua peer
-    connected"), and the pits gate may report "must be in pits" while the session finishes
-    settling into the pit box. Any other refusal is final (e.g. "not found").
-
-    When the whole window elapses without the Lua peer EVER answering, the returned ack carries
-    ``retryable_launch=True``: live-observed (Spa, 2026-07-02) that the menu-skip race can leave
-    AC at the pre-drive screen with LIVE status and advancing physics — a state the launch gate
-    cannot distinguish from a real session, but in which the trainer app never ticks and so never
-    reaches the sidecar. The orchestrator answers it with a relaunch, like a failed hijack.
+    ``rig_launch`` already baked ``config.setup_ini`` into race.ini and respawned the car, so the
+    setup is applied at this point. This leg proves it independently: it parses the setup's
+    ``[FUEL] VALUE`` and reads the live ``acpmf_physics.fuel``; a match within
+    ``setup_fuel_tolerance_l`` confirms the setup took (nearly every race setup pins fuel). A setup
+    with no ``[FUEL]`` section is reported baked-but-unconfirmed (``ok=True`` with a note) rather
+    than failing a real launch on a missing discriminator.
     """
-    from tools.ai_sidecar.harness_client import HarnessClient
-
     setup_ini = config.setup_ini
     if setup_ini is None:
         return {"ok": False, "error": "setup_ini not resolved (CLI wiring bug)"}
-    name = Path(setup_ini).stem
-    path_fwd = str(setup_ini).replace("\\", "/")
-
-    hc = HarnessClient(config.sidecar_url, client_id="ac-harness-setup")
+    name = setup_ini.stem
+    path = str(setup_ini)
     try:
-        await hc.connect(retries=40, retry_delay=0.25)
-        if await hc.hello(timeout=10) is None:
-            return {"ok": False, "error": "sidecar hello handshake timed out"}
-        await hc.subscribe(["setup.active"])
+        expected_fuel = parse_setup_fuel(setup_ini.read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        return {"ok": False, "name": name, "path": path, "error": f"setup ini unreadable: {exc}"}
 
-        def _is_reply(f: dict) -> bool:
-            if f.get("type") == "setup.load.ack":
-                return True
-            return f.get("type") == "error" and f.get("ref_type") == "setup.load"
+    if expected_fuel is None:
+        return {
+            "ok": True,
+            "name": name,
+            "path": path,
+            "detail": "setup baked at launch; no [FUEL] key to fuel-verify (unconfirmed)",
+            "expected_fuel": None,
+        }
 
-        deadline = time.monotonic() + config.setup_timeout
-        lua_ever_answered = False
-        last: dict = {"ok": False, "error": "setup.load timed out"}
-        while time.monotonic() < deadline:
-            await hc.send({"v": 1, "type": "setup.load", "name": name, "path": path_fwd})
-            reply = await hc.wait_for(_is_reply, timeout=6.0)
-            if reply is None:
-                continue  # no ack in the window — Lua peer likely absent; resend
-            if reply.get("type") == "error":
-                last = {"ok": False, "error": str(reply.get("message") or "sidecar error")}
-                await asyncio.sleep(2.0)  # "no loopback Lua peer connected" — trainer still booting
-                continue
-            lua_ever_answered = True  # a real ack — the session was entered and the app ticks
-            last = {k: reply.get(k) for k in ("ok", "name", "path", "error", "message")}
-            if reply.get("ok") is True:
-                return last
-            err = str(reply.get("error") or "")
-            if "must be in pits" in err:
-                await asyncio.sleep(2.0)  # session still settling into the pit box
-                continue
-            return last  # hard refusal (not found / loadSetup refused) — retrying won't help
-        if not lua_ever_answered:
-            last["retryable_launch"] = True  # pre-drive screen: relaunch, don't hard-fail
-        return last
-    finally:
-        await hc.close()
+    # Give the sim a moment; read a few samples so a transient 0 during load does not false-fail.
+    deadline = time.monotonic() + max(5.0, config.setup_timeout)
+    observed: float | None = None
+    while time.monotonic() < deadline:
+        observed = await asyncio.to_thread(_read_physics_fuel)
+        if observed is not None and fuel_matches(
+            expected_fuel, observed, config.setup_fuel_tolerance_l
+        ):
+            return {
+                "ok": True,
+                "name": name,
+                "path": path,
+                "detail": f"fuel {observed:.1f}L matches setup FUEL {expected_fuel:.1f}L",
+                "expected_fuel": expected_fuel,
+                "observed_fuel": observed,
+            }
+        await asyncio.sleep(1.0)
+    return {
+        "ok": False,
+        "name": name,
+        "path": path,
+        "error": (
+            f"fuel {observed if observed is None else round(observed, 1)}L != setup FUEL "
+            f"{expected_fuel:.1f}L (±{config.setup_fuel_tolerance_l})"
+        ),
+        "expected_fuel": expected_fuel,
+        "observed_fuel": observed,
+    }
 
 
 def generic_gt3_ggv():
@@ -1213,14 +1358,15 @@ def rig_drive(  # pragma: no cover - rig-only
     ``config.driver`` picks RacingDriver (default — shifts gears, carries pace) or the cruise
     LapDriver. Guards (#459 Part D):
 
-    * **sim-death** — a frozen Car0 ``packet_id`` for ``sim_dead_seconds`` means ``acs.exe`` died;
-      stop instead of spinning on stale telemetry and reporting a false drive.
+    * **sim-death** — a frozen **main ``acpmf_physics`` packet_id** for ``sim_dead_seconds`` means
+      ``acs.exe`` died; stop instead of spinning on stale telemetry. (Not the Car0 packet, which
+      CSP holds constant for a stationary car — that false-fired at the start line, #459 review.)
     * **no-progress watchdog** — recovers a stalled car regardless of commanded throttle (the
       drivers' own stuck detectors are gas-gated and miss low-throttle stalls).
     * **recovery cap** — a car that keeps stalling stops with an honest FAIL naming the stall
       distance instead of teleport-looping until the clock runs out.
-    * **spawn-to-line** — a pit-box spawn (``StartType=PIT``, needed for setup loads) starts off
-      the racing line behind pit geometry the controllers are blind to; a verified custom teleport
+    * **spawn-to-line** — an off-line spawn (pit box) starts behind geometry the controllers are
+      blind to; a verified custom teleport
       onto the line skips the trap. Falls back to the classic OUT-phase pit exit when the teleport
       does not land (offsets are VERIFY LIVE).
     """
@@ -1275,6 +1421,34 @@ def rig_drive(  # pragma: no cover - rig-only
         watchdog.reset(time.monotonic() - t0, stats.total_distance_m)
         return True
 
+    # Sim-death keys on the MAIN acpmf_physics packet_id, NOT the Car0 (Custom-AI) one: live-found
+    # (Spa 2026-07-02) that CSP does NOT bump Car0.packet_id every frame — it stays constant while a
+    # car is stationary — so watching Car0 falsely declared "acs.exe died" 4 s into a start-line
+    # spawn, before the driver could even shift out of neutral. The main physics packet advances
+    # every frame while the sim runs and freezes only when acs actually dies (#459 review).
+    from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
+
+    phys_reader: SharedMemoryReader | None = None
+    try:
+        phys_reader = SharedMemoryReader()
+    except SharedMemoryUnavailable:
+        phys_reader = None
+
+    def _main_packet_id() -> int | None:
+        nonlocal phys_reader
+        if phys_reader is None:
+            try:
+                phys_reader = SharedMemoryReader()
+            except SharedMemoryUnavailable:
+                return None
+        try:
+            p = phys_reader.read_physics()
+        except SharedMemoryUnavailable:
+            phys_reader.close()
+            phys_reader = None
+            return None
+        return p.packet_id if p is not None else None
+
     prev_plane: tuple[float, float] | None = None
     last_pkt: int | None = None
     last_pkt_change = time.monotonic()
@@ -1285,13 +1459,13 @@ def rig_drive(  # pragma: no cover - rig-only
             if not cd:
                 time.sleep(0.02)
                 continue
-            pkt = cd.get("packet_id")
-            if last_pkt is None or pkt != last_pkt:
-                last_pkt = pkt  # type: ignore[assignment]
+            pkt = _main_packet_id()
+            if pkt is None or last_pkt is None or pkt != last_pkt:
+                last_pkt = pkt
                 last_pkt_change = time.monotonic()
             elif time.monotonic() - last_pkt_change > config.sim_dead_seconds:
                 stats.sim_dead = True
-                stats.reason = "Car0 packet_id stagnant (acs.exe died)"
+                stats.reason = "acpmf_physics packet_id stagnant (acs.exe died)"
                 break
             now = time.monotonic() - t0
             frame = driver.step(
@@ -1330,6 +1504,8 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.laps += 1
             time.sleep(0.012)
     finally:
+        if phys_reader is not None:
+            phys_reader.close()
         for _ in range(20):
             try:
                 controller.write_controls(0.0, 0.6, 0.0)
@@ -1443,8 +1619,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--setup-timeout",
         type=float,
-        default=150.0,
-        help="seconds to wait for the in-sim setup.load ack (Lua peer connect + pits gate)",
+        default=20.0,
+        help="seconds to wait for acpmf_physics.fuel to confirm the launch-baked setup",
     )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument(
@@ -1577,12 +1753,12 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
     if config.cm_preset is None:
-        # Deterministic practice preset (#154 Part-G determinism lock). A setup load needs the
-        # pits gate open, so setup runs spawn in the pit box; plain runs use the start line.
-        start_type = "PIT" if config.setup else "START"
+        # Deterministic practice preset (#154 Part-G determinism lock), START spawn. A setup run
+        # re-bakes race.ini with SPAWN_SET=START on its direct relaunch (the setup applies at spawn
+        # regardless), so the pit box is never needed.
         preset_path = evidence_dir / "generated.cmpreset"
         preset_path.write_text(
-            build_practice_preset(config.car_id, config.track_id, start_type=start_type),
+            build_practice_preset(config.car_id, config.track_id, start_type="START"),
             encoding="utf-8",
         )
         config.cm_preset = preset_path

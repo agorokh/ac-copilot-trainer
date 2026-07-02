@@ -28,14 +28,19 @@ That single command owns the whole loop:
    weather, 26 °C, 12:00, optimum track — the #154 determinism-lock preset) and launched via the
    de-elevated Content Manager URL, with relaunch retries on the menu-skip race.
    Hand-authored presets: `--cm-preset <file>` (the preflight cross-checks its CarId/TrackId).
-4. **Setup applied AND verified** — `--setup <name>` resolves under
-   `Documents/Assetto Corsa/setups/<car>/<track|layout|generic>/`, is applied in-sim through the
-   sidecar `setup.load` relay (`ac.loadSetup`, pits gate) **before the carcsw hijack** — CSP holds
-   `ac.isCarResetAllowed()` false while a Custom-AI controller owns the car, so the load must
-   happen while the car is still human-controllable in the pit box (live-found on Spa,
-   2026-07-02). The run **fails at `stage="setup"`** unless the in-sim ack names the requested
-   setup. Setup runs spawn in the pit box (`StartType=PIT`); plain runs spawn at the start line.
-   A relaunch re-applies the setup (each launch is a fresh session).
+4. **Setup applied AND verified at launch** — `--setup <name>` resolves under
+   `Documents/Assetto Corsa/setups/<car>/<track|layout|generic>/`. AC applies a car setup **only at
+   car spawn, from `race.ini`** — the in-sim WS `setup.load` path is gated by
+   `ac.isCarResetAllowed()`, which stays false for a freshly-spawned autonomous car (live-found
+   "must be in pits", Spa 2026-07-02, even before any hijack). So the harness **bakes the setup into
+   `race.ini`** (`_EXT_SETUP_FILENAME` — Content Manager's own key — plus vanilla `SETUP=`) and
+   direct-relaunches acs so the car respawns with it, then **verifies** by reading
+   `acpmf_physics.fuel` back against the setup's `[FUEL] VALUE`. A match (±2.5 L default) confirms
+   it (live-verified: fuel 45.0 L == Realistic_BB_v3 `FUEL=45`); a mismatch **fails the run at
+   `stage="setup"`**. A direct relaunch skips AC's pre-drive menu via CSP `gui.ini [GUI]
+   FORCE_START=1` (set for the relaunch, restored after — OS input injection to the menu is blocked,
+   so this is the only headless way past it). A setup with no `[FUEL]` section is reported
+   baked-but-unconfirmed rather than failing.
 5. **Drive** — `--driver ggv` (flat-out friction-circle min-time), `racing` (AI-line pace,
    default), or `cruise` (slow lane-keeper). Guards: sim-death detection, a **no-progress
    watchdog** (recovers stalls regardless of throttle), a **recovery cap** (default 6) that fails
@@ -72,11 +77,33 @@ long-term storage (scratch-dir disposability pitfall).
 - **Reference laps / TT comparison**: `--wait-lap` guarantees at least one archived lap;
   feed it to `tools.tt_ingest` / session review with `--reference-source tt`.
 
+## Known limitation — setup runs vs. the autonomous drive (tracked)
+
+The setup path (bake + fuel-verify) and the autonomous drive **do not yet compose in one command**,
+because they need different launch modes:
+
+- The **drive** needs a **CM launch from the start line** (grid): CM skips the pre-drive menu and
+  arms CSP Custom-AI, and the car has open track ahead. This is live-proven (multi-track: Spa + BMW
+  Z4 GT3 flat-out, 211 km/h).
+- The **setup** needs a **direct acs relaunch** (to bake `race.ini` — CM regenerates it and its
+  Quick-Drive preset carries no setup). But the direct relaunch's spawn states each block the drive:
+  a **`START` spawn freezes the Car0 (Custom-AI) mmap** so the hijack never lands, and a **`PIT`
+  spawn** hijacks fine but the car can't escape Spa's pit box (the custom-teleport offsets that
+  would jump it to the racing line are unverified).
+
+So today: `--setup` **applies + verifies** the setup (proven) but the drive leg then fails to move
+the car; and a plain `--driver` run drives (proven) without a chosen setup. Resolving the
+composition — CM setup-carry, or fixing the `START`-spawn Custom-AI freeze, or verifying the
+custom-teleport offsets — is tracked as a follow-up on #154. Use `--setup` today to **prove a setup
+loads** (fuel-verified evidence bundle); use a no-setup run to **prove the drive**.
+
 ## Troubleshooting (hard-won rig lore — read before debugging)
 
 | Symptom | Cause / fix |
 |---|---|
 | Preflight `custom_ai` failure | Set `[CUSTOM_AI] ENABLED=1` in `<AC root>/extension/config/new_behaviour.ini` (user `cfg/extension/new_behaviour.ini` overrides when it carries the key) |
+| `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the direct relaunch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
+| `--setup` run: setup `applied=True` but drive fails (`stage=hijack` or `recovery cap ... at 0m`) | Known limitation (see above) — the direct-launch spawn can't compose with the drive yet. The setup IS applied/verified; the drive needs a no-setup CM run |
 | CM clicks/launch do nothing | **Foreground steal**: minimize the agent/terminal window; AC's fullscreen menu covers CM — the harness kills stale `acs.exe` before each launch |
 | "Steam API failed to initialize" | Steam elevation mismatch — restart Steam **non-elevated** (`steam -shutdown`, relaunch via `explorer.exe`) |
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |

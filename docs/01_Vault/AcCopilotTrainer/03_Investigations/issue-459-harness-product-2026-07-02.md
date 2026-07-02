@@ -49,37 +49,79 @@ resilient habit — one command, any downstream task, no reinvented `.scratch` d
   `<user>/cfg/extension/state/lua/app/AC_Copilot_Trainer/ac_copilot_trainer/journal/laps`.
 - Rig has 911 GT3 R Spa setups: `Realistic_BB_v1/2/3.ini`; Spa `ai/fast_lane.ai` present.
 
-## Live findings (Spa, 2026-07-02 — PR #460)
+## Live findings (Spa, 2026-07-02 — PR #460) — the setup mechanism, proven
 
-- **The pits gate closes under the carcsw hijack.** First live run failed `stage=setup` with
-  "must be in pits" even though the car was in the pit box — CSP holds `ac.isCarResetAllowed()`
-  false while a Custom-AI controller owns car 0. **Fix:** apply + verify the setup *before* the
-  hijack, inside the launch loop (a relaunch is a fresh session, so re-apply each attempt).
-- **Menu-skip race is invisible to the LIVE gate.** After a cold relaunch AC can sit at the
-  pre-drive "Drive/Setup/Exit" screen with `status=LIVE` and physics **advancing** — the launch
-  gate cannot tell it from a real session, but the trainer Lua app never ticks, so the sidecar
-  answers "no loopback Lua peer connected" forever. `rig_apply_setup` now flags
-  `retryable_launch=True` when the Lua peer never answers, and the orchestrator **relaunches**
-  (like a failed hijack) rather than hard-failing. Confirmed live: pkt advancing, `in_pit=True`,
-  Lua peer never connected across a 150 s window; also observed the agent's own foreground window
-  losing the menu-skip race → added a best-effort foreground-minimize before each CM launch.
-- **Setup timeout raised 60→150 s**: the Lua peer reconnect after a cold relaunch measured
-  well over a minute.
+The initial WS `setup.load` approach was **fundamentally wrong** and was replaced after live
+investigation:
+
+- **AC applies a car setup only at car spawn, from `race.ini`.** The in-sim WS `setup.load` is
+  gated by `ac.isCarResetAllowed()`, which stays **false for a freshly-spawned autonomous car**
+  ("must be in pits" even in the pit box, even *before* any carcsw hijack — the hijack was not the
+  cause). So no mid-session load works for the harness.
+- **Working mechanism (live-verified):** bake `[CAR_0] _EXT_SETUP_FILENAME=<abs path>` (CM's own
+  key) + vanilla `SETUP=<name>.ini` into `race.ini`, then **direct-launch acs** (this rig shell is
+  non-elevated, so no Steam-integrity mismatch). AC logs `Setup change ... SPRING_RATE_RR ...` at
+  spawn and `acpmf_physics.fuel` reads the setup's `FUEL` value **exactly (45.00 L ==
+  Realistic_BB_v3 `FUEL=45`)**. Verification is fuel-vs-`[FUEL] VALUE` — universal and cheap.
+- **CM regenerates `race.ini`** from its Quick-Drive preset, and that preset has **no setup key**;
+  so a setup baked before a CM launch is wiped. The harness primes with CM (correct combo), then
+  bakes + direct-relaunches.
+- **`gui.ini [GUI] FORCE_START=1` skips AC's pre-drive Drive/Setup/Exit menu** on a direct launch
+  (OS input injection to that menu is CSP-blocked; computer-use `request_access` times out here).
+  Live-verified: with it, the hijack lands first attempt. The harness sets it for the relaunch and
+  restores it after (acs reads gui.ini only at startup).
+- **Shared-memory offsets used:** `acpmf_graphics` status @4 (2=LIVE; 8 is session type, an easy
+  mis-read), `acpmf_physics` fuel @12, gear @16, speed @28.
+
+**End-to-end result:** `auto_drive --car ks_porsche_911_gt3_r_2016 --track spa --setup
+Realistic_BB_v3 …` runs the whole thing automatically and the report carries
+`setup_applied=True, detail="fuel 45.0L matches setup FUEL 45.0L"`. The operator's core ask — pick
+a setup and *check* it, at Spa on the 911 — is delivered and proven.
+
+## Sim-death guard bug (fixed) — Car0 packet_id ≠ main physics packet_id
+
+The drive's sim-death guard keyed on the **Car0 (Custom-AI) packet_id**, which live-probing showed
+**does not advance frame-to-frame** — it holds constant (`pkt=24`) for a stationary car while the
+**main `acpmf_physics` packet_id advances normally** (91235→93570). So the guard **false-declared
+"acs.exe died" 4 s into a start-line spawn, before the car could even shift out of neutral**
+(gear=1=NEUTRAL). Fixed: sim-death now keys on the main physics packet_id (advances every frame,
+freezes only on a real acs crash). After the fix a PIT-spawn drive ran the full recovery cycle and
+failed honestly via the recovery cap instead of a false sim-death.
+
+## Genuine residual (tracked follow-up) — setup runs vs. the drive don't compose yet
+
+- **`START` spawn on a direct launch freezes the Car0 mmap** → the hijack never lands.
+- **`PIT` spawn** hijacks fine (proven) but the car **can't escape Spa's pit box** — the
+  custom-teleport offsets that would jump it to the racing line are doc-extracted / unverified, and
+  the OUT-phase can't drive out of the garage. The recovery cap then fires honestly (`drove=False,
+  reason="recovery cap (6) exceeded at 0m"`).
+- The **drive itself is proven** separately (multi-track: Spa + Z4 flat-out 211 km/h via a CM
+  **grid** launch). The tension: the drive needs a CM/grid launch, the setup needs a direct
+  relaunch; each blocks the other. Resolution options: CM setup-carry, fix the `START`-spawn
+  Custom-AI freeze, or verify the custom-teleport offsets. **File as a #154 follow-up.**
 
 ## Review hardening (PR #460, 15-agent adversarial workflow → 12 confirmed, all fixed)
 
-- Setup leg moved before the hijack (the HIGH above); `<car>/generic/` now enumerated by
-  `setup_library.lua M.list()` (it resolved off-sim but `loadByName` reported "not found");
-  `loadByName` path match normalized (separator + case) so path-first disambiguation works;
-  `custom_ai_enabled` reads `utf-8-sig` and catches `UnicodeDecodeError` (BOM'd CSP inis);
-  car/track/layout ids validated before they become path segments (evidence dir / setups join);
-  `ensure_sidecar` timeout path kills its half-started child (no orphan on :8765); recovery-cap
-  veto is now a structured `DriveStats.recovery_capped` flag, not a magic substring; dual
-  tap+drive failure keeps the pipeline stage and records the drive crash in `notes`.
+- `<car>/generic/` now enumerated by `setup_library.lua M.list()` (it resolved off-sim but
+  `loadByName` reported "not found"); `loadByName` path match normalized (separator + case) so
+  path-first disambiguation works; `custom_ai_enabled` reads `utf-8-sig` and catches
+  `UnicodeDecodeError` (BOM'd CSP inis); car/track/layout ids validated before they become path
+  segments (evidence dir / setups join); `ensure_sidecar` timeout path kills its half-started child
+  (no orphan on :8765); recovery-cap veto is a structured `DriveStats.recovery_capped` flag, not a
+  magic substring; dual tap+drive failure keeps the pipeline stage and records the drive crash in
+  `notes`. (The setup-leg reorder + `retryable_launch` from the first cut were superseded by the
+  launch-bake mechanism above — the WS `setup.load` path is gone.)
 
-## Remaining (this issue)
+## Delivered vs. remaining
 
-Part F live proof: Spa + `ks_porsche_911_gt3_r_2016` + `Realistic_BB_v3` via the one command,
-evidence bundle on #154/#459; TT Spa reference ingest + session-review comparison. Live checks
-still open: confirm `ac.loadSetup` succeeds pre-hijack in the pit box; do the custom-teleport
-offsets land (else pit-exit fallback); root-cause the 450–580 m stall with the watchdog telemetry.
+**Delivered + proven (PR #460):** the setup mechanism (launch-bake `_EXT_SETUP_FILENAME` + fuel
+verify) runs automatically in one command and confirmed `setup_applied=True` (fuel 45.0==45.0) for
+Spa + 911 GT3 R + Realistic_BB_v3 — evidence bundle in
+`.scratch/harness-evidence/spa-911-bbv3-FINAL/`. Sim-death guard fixed (main physics packet_id).
+FORCE_START menu-skip proven. 15-agent review hardening (12 findings) all fixed.
+
+**Follow-up ([#461](https://github.com/agorokh/ac-copilot-trainer/issues/461), child of #154):**
+compose setup runs with a completed autonomous DRIVE — resolve the `START`-spawn Custom-AI freeze
+vs. `PIT`-spawn pit-escape tension (CM setup-carry, or fix the freeze, or verify the custom-teleport
+offsets). TT Spa reference ingest + session-review comparison depends on the drive-produced lap
+archive that composition would yield, so it rides on #461.

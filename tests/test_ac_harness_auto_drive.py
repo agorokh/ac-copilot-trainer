@@ -21,11 +21,14 @@ from tools.ac_harness.auto_drive import (
     _build_driver,
     _config_from_args,
     _wait_live,
+    bake_setup_into_race_ini,
     build_practice_preset,
     collect_lap_archives,
     custom_ai_enabled,
     default_ac_root,
+    fuel_matches,
     generic_gt3_ggv,
+    parse_setup_fuel,
     preflight,
     resolve_ac_user_dir,
     resolve_fast_lane,
@@ -649,6 +652,50 @@ def test_resolve_ac_user_dir_prefers_existing_onedrive_redirect(tmp_path):
     assert resolve_ac_user_dir(tmp_path / "explicit", home=tmp_path) == tmp_path / "explicit"
 
 
+def test_bake_setup_into_race_ini_writes_both_keys_and_spawn():
+    import configparser
+    from pathlib import Path as _P
+
+    race = "[CAR_0]\nSKIN=brg\nMODEL=-\n\n[SESSION_0]\nNAME=Practice\nTYPE=1\nSPAWN_SET=PIT\n"
+    setup = _P(r"C:\Users\x\Documents\Assetto Corsa\setups\car\spa\Realistic_BB_v3.ini")
+    out = bake_setup_into_race_ini(race, setup)
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(out)
+    assert p.get("CAR_0", "SETUP") == "Realistic_BB_v3.ini"
+    assert p.get("CAR_0", "_EXT_SETUP_FILENAME") == str(setup)
+    assert p.get("SESSION_0", "SPAWN_SET") == "START"  # start line, not pit
+    # Existing keys preserved.
+    assert p.get("CAR_0", "SKIN") == "brg"
+
+
+def test_bake_setup_creates_car0_section_if_absent():
+    import configparser
+    from pathlib import Path as _P
+
+    out = bake_setup_into_race_ini("[RACE]\nMODEL=car\n", _P("/s/My Setup.ini"), spawn_set="PIT")
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(out)
+    assert p.get("CAR_0", "SETUP") == "My Setup.ini"
+    assert p.get("SESSION_0", "SPAWN_SET") == "PIT"
+
+
+def test_parse_setup_fuel_reads_value_and_tolerates_missing():
+    assert parse_setup_fuel("[FUEL]\nVALUE=45\nMIN=2\nMAX=120\n") == 45.0
+    assert parse_setup_fuel("[FUEL]\nVALUE=63.5 ; litres\n") == 63.5
+    assert parse_setup_fuel("[FRONT_BIAS]\nVALUE=60\n") is None  # no FUEL section
+    assert parse_setup_fuel("[FUEL]\nVALUE=notanumber\n") is None
+
+
+def test_fuel_matches_within_tolerance():
+    assert fuel_matches(45.0, 45.0, 2.5) is True
+    assert fuel_matches(45.0, 43.0, 2.5) is True
+    assert fuel_matches(45.0, 40.0, 2.5) is False
+    assert fuel_matches(None, 45.0, 2.5) is False
+    assert fuel_matches(45.0, None, 2.5) is False
+
+
 def test_verify_setup_ack_accepts_matching_name_or_path():
     ok, detail = verify_setup_ack(
         {"ok": True, "name": "Realistic_BB_v3", "path": "C:/x/spa/Realistic_BB_v3.ini"},
@@ -877,59 +924,6 @@ def test_recovery_capped_flag_is_what_vetoes_not_the_reason_string():
         )
     )
     assert report.ok is False
-
-
-def test_setup_leg_retryable_launch_relaunches_then_fails_if_never_answered():
-    # rig_apply_setup returns retryable_launch=True when the Lua peer never answered (pre-drive
-    # screen). run_auto_drive must relaunch, not hard-fail — and if it never answers, fail at
-    # stage=setup after exhausting launches (with hijack never consulted).
-    launches: list[int] = []
-
-    def _launch(config):  # noqa: ANN001
-        launches.append(1)
-        return True, "live"
-
-    async def _apply_never_answers(config):  # noqa: ANN001
-        return {"ok": False, "error": "no loopback Lua peer connected", "retryable_launch": True}
-
-    report = asyncio.run(
-        run_auto_drive(
-            _cfg(setup="Realistic_BB_v3", max_launches=3),
-            launch=_launch,
-            hijack=lambda c: pytest.fail("hijack must not run while the session never entered"),
-            drive=lambda *a: pytest.fail("must not drive"),
-            tap=_tap_returning(CONTINUOUS),
-            apply_setup=_apply_never_answers,
-        )
-    )
-    assert launches == [1, 1, 1]  # relaunched to exhaustion
-    assert report.stage == "setup"
-    assert report.ok is False
-    assert "after 3 launch attempt(s)" in (report.error or "")
-
-
-def test_setup_leg_retryable_launch_succeeds_on_later_attempt():
-    # First launch lands at the pre-drive screen (retryable), the relaunch enters the session.
-    attempts: list[dict] = [
-        {"ok": False, "error": "no loopback Lua peer connected", "retryable_launch": True},
-        {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"},
-    ]
-
-    async def _apply(config):  # noqa: ANN001
-        return attempts.pop(0)
-
-    report = asyncio.run(
-        run_auto_drive(
-            _cfg(setup="Realistic_BB_v3", max_launches=3),
-            launch=_ok_launch,
-            hijack=lambda c: FakeController(),
-            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
-            tap=_tap_returning(CONTINUOUS),
-            apply_setup=_apply,
-        )
-    )
-    assert report.ok is True
-    assert report.setup_applied is True
 
 
 def test_dual_failure_keeps_pipeline_stage_and_records_drive_crash_in_notes():
