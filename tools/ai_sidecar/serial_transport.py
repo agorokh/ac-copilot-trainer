@@ -202,10 +202,19 @@ async def run_serial_transport(
                 if item is _DISCONNECT:
                     logger.info("serial %s: disconnect (%s)", port, meta)
                     break
+                # The firmware shares this CDC for both protocol frames and plain-text
+                # debug prints (`[serial] …`, `[boot] …`). Demultiplex: only a line that
+                # looks like a JSON object/array is a protocol frame; anything else is a
+                # firmware trace — log it at DEBUG, never WARNING (issue #463 log-spam fix).
+                if not item.lstrip().startswith(("{", "[")):
+                    logger.debug("serial %s [fw]: %s", port, item[:200])
+                    continue
                 try:
                     data = json.loads(item)
                 except json.JSONDecodeError:
-                    logger.warning("serial %s: invalid json (first 200): %s", port, item[:200])
+                    logger.warning(
+                        "serial %s: malformed json frame (first 200): %s", port, item[:200]
+                    )
                     continue
                 if not isinstance(data, dict):
                     logger.warning(

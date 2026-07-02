@@ -273,7 +273,7 @@ def test_serial_reassembles_split_frame_and_dispatches_batch() -> None:
     assert asyncio.run(_run()) == 1
 
 
-def test_serial_skips_malformed_json_line() -> None:
+def test_serial_skips_firmware_traces_and_malformed_frames() -> None:
     async def _run() -> tuple[int, dict]:
         srv._reset_external_state()
         fake = _FakeSerial()
@@ -288,8 +288,11 @@ def test_serial_skips_malformed_json_line() -> None:
             )
         )
         try:
-            # Garbage line must not kill the transport; a valid hello after it works.
-            fake.feed(b"not json at all\n")
+            # A firmware debug trace (shares the CDC) and a `{`-prefixed malformed
+            # frame must both be skipped without killing the transport; a valid
+            # hello after them still registers the screen (issue #463 demux).
+            fake.feed(b"[serial] link up (sidecar answered)\n")
+            fake.feed(b'{"v":1,"type":\n')  # looks like a frame but is broken
             fake.feed(
                 json.dumps(
                     {"v": 1, "type": "hello", "client": "screen", "client_class": "screen"}
