@@ -160,9 +160,8 @@ end
 ---@return string word, table toneColor, string|nil arrow
 local function verbFor(kind, primaryLine, subState)
   local p = type(primaryLine) == "string" and primaryLine or ""
-  if subState == "no_reference" or p == "" or p == "DRIVE A LAP" then
-    return "DRIVE", COLOR_LABEL, nil
-  end
+  -- Explicit verbs FIRST: the shift cue also fires in the no-reference state
+  -- (it needs no lap), so the placeholder fallback must not shadow it.
   if p == "BRAKE NOW" then return "BRAKE", COLOR_RED, "down" end
   if p == "PREPARE TO BRAKE" then return "PREPARE", COLOR_AMBER, "down" end
   if p == "EASE OFF" then return "LIFT", COLOR_AMBER, "up" end
@@ -170,6 +169,9 @@ local function verbFor(kind, primaryLine, subState)
   if p == "SHIFT UP" then return "SHIFT", COLOR_AMBER, "up" end
   if p == "APPROACHING" then return "READY", COLOR_GREEN, nil end
   if p == "ON PACE" then return "ON PACE", COLOR_GREEN, nil end
+  if subState == "no_reference" or p == "" or p == "DRIVE A LAP" then
+    return "DRIVE", COLOR_LABEL, nil
+  end
   local tone = COLOR_GREEN
   if kind == "brake" then
     tone = COLOR_RED

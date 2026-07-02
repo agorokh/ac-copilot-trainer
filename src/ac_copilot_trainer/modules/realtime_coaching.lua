@@ -237,6 +237,26 @@ local function placeholderView(curSpeed)
   }
 end
 
+--- Reference-independent gear-shift cue (#432 Part A2): revs inside the
+--- shift zone under real throttle with a higher gear available. One predicate
+--- for BOTH the no-reference path and the main cascade — shift coaching needs
+--- no reference lap (PR #444 review).
+local function shiftCueActive(o)
+  return o.rpm ~= nil and o.rpmLimiter ~= nil and o.rpmLimiter > 0
+    and (o.gas or 0) >= SHIFT_MIN_GAS
+    and o.rpm >= o.rpmLimiter * SHIFT_ZONE_FRAC
+    and not (o.gear and o.gearCount and o.gearCount > 0
+             and o.gear >= o.gearCount)
+end
+
+local function applyShiftCue(view, o)
+  view.primaryLine = "SHIFT UP"
+  view.secondaryLine = string.format(
+    "RPM %d · SHIFT AT %d", o.rpm, math.floor(o.rpmLimiter * SHIFT_ZONE_FRAC + 0.5))
+  view.kind = "line"
+  return view
+end
+
 --- Live-frame tick. Always returns a viewmodel (never nil).
 ---@param opts table  {splinePos, currentSpeedKmh, bestSortedTrace, brakingPoints, segments, trackLengthM, approachMeters, dt}
 ---@return table viewmodel
@@ -257,12 +277,16 @@ function M.tick(opts)
     approachM = APPROACH_DEFAULT_M
   end
 
-  -- Empty state — no reference at all
+  -- Empty state — no reference at all. The gear-shift cue still coaches
+  -- here: it is reference-independent (fresh install / new track / out-lap).
   local hasTrace    = type(trace) == "table" and #trace >= 2
   local hasBrakes   = type(brakes) == "table" and #brakes > 0
   local hasSegments = type(segments) == "table" and #segments > 0
   if not hasTrace and not hasBrakes and not hasSegments then
     lastView = placeholderView(cur)
+    if shiftCueActive(opts) then
+      applyShiftCue(lastView, opts)
+    end
     return lastView
   end
 
@@ -355,19 +379,12 @@ function M.tick(opts)
     view.kind = "info"
     view.subState = "approaching"
 
-  elseif opts.rpm and opts.rpmLimiter and opts.rpmLimiter > 0
-      and (opts.gas or 0) >= SHIFT_MIN_GAS
-      and opts.rpm >= opts.rpmLimiter * SHIFT_ZONE_FRAC
-      and not (opts.gear and opts.gearCount and opts.gearCount > 0
-               and opts.gear >= opts.gearCount) then
+  elseif shiftCueActive(opts) then
     -- Gear-shift coaching: on throttle, outside any braking context, revs
     -- inside the shift zone — teach the upshift moment. Braking verbs above
-    -- always outrank this rung. Suppressed in the car's top gear (no higher
-    -- gear exists — revving out on a straight is not a coachable upshift).
-    view.primaryLine = "SHIFT UP"
-    view.secondaryLine = string.format(
-      "RPM %d · SHIFT AT %d", opts.rpm, math.floor(opts.rpmLimiter * SHIFT_ZONE_FRAC + 0.5))
-    view.kind = "line"
+    -- always outrank this rung; suppressed in the car's top gear (see
+    -- shiftCueActive).
+    applyShiftCue(view, opts)
     view.subState = "cruising"
 
   else

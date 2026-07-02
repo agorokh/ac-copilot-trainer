@@ -483,6 +483,29 @@ def test_ete03b_shift_zone_on_straight_says_shift_up(lua):
     assert (view3["primaryLine"] or "") != "SHIFT UP", "SHIFT UP must be suppressed in top gear"
 
 
+def test_ete03c_shift_cue_fires_without_any_reference(lua):
+    """The shift cue is reference-independent: on a fresh install / new track
+    (no trace, no brake points, no segments) shift-zone revs under throttle
+    must still coach SHIFT UP instead of the bare placeholder (PR #444)."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    opts = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 120,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7800, rpmLimiter = 8400, gas = 0.95, gear = 3, gearCount = 6,
+        }
+    """)
+    view = rtc["tick"](opts)
+    assert view is not None
+    assert (view["primaryLine"] or "") == "SHIFT UP", (
+        f"no-reference state must still coach the upshift, got {view['primaryLine']!r}"
+    )
+    assert view["subState"] == "no_reference"
+
+
 # ---------------------------------------------------------------------------
 # ETE-04: In a corner segment, slower than reference
 # ---------------------------------------------------------------------------
