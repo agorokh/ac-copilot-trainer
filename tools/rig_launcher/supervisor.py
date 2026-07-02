@@ -134,6 +134,9 @@ class GamePointConfig:
     port: int = DEFAULT_PORT
     external_bind: str | None = None
     token: str | None = None
+    #: COM port for the USB-serial rig-screen transport (issue #463). When set, the
+    #: sidecar serves the screen over USB CDC — no Windows Mobile Hotspot needed.
+    serial_port: str | None = None
     reference_archive: str | None = None
     voice_bank: str | None = None
     voice_tts: bool = False
@@ -173,6 +176,7 @@ class GamePointConfig:
             port=port,
             external_bind=external_bind,
             token=token,
+            serial_port=_none_if_blank(env_map.get("AC_COPILOT_SIDECAR_SERIAL_PORT")),
             reference_archive=_configured_text(
                 env_map.get("AC_COPILOT_REFERENCE_ARCHIVE"),
                 settings.reference_archive,
@@ -196,7 +200,6 @@ class GamePointStatus:
     generated_at: float
     sidecar: ProbeResult
     screen: ProbeResult
-    hotspot: ProbeResult
     voice: ProbeResult
     simhub: ProbeResult
     log_path: str
@@ -205,7 +208,7 @@ class GamePointStatus:
 
     @property
     def ok(self) -> bool:
-        rows = (self.sidecar, self.screen, self.hotspot, self.voice, self.simhub, *self.checks)
+        rows = (self.sidecar, self.screen, self.voice, self.simhub, *self.checks)
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -214,7 +217,6 @@ class GamePointStatus:
             "ok": self.ok,
             "sidecar": self.sidecar.to_dict(),
             "screen": self.screen.to_dict(),
-            "hotspot": self.hotspot.to_dict(),
             "voice": self.voice.to_dict(),
             "simhub": self.simhub.to_dict(),
             "log_path": self.log_path,
@@ -258,6 +260,8 @@ class GamePointSupervisor:
             args.extend(["--external-bind", self.config.external_bind])
         else:
             args.extend(["--host", self.config.host])
+        if self.config.serial_port:
+            args.extend(["--serial-port", self.config.serial_port])
         if self.config.setup_store:
             setup_store = _resolve_launcher_path(
                 self.config.setup_store,
@@ -411,7 +415,6 @@ class GamePointSupervisor:
             generated_at=time.time(),
             sidecar=sidecar,
             screen=screen,
-            hotspot=self.probe_hotspot(),
             voice=self.probe_voice(health_payload),
             simhub=self.probe_simhub(start=self.config.start_simhub),
             log_path=str(self.paths.sidecar_log_path),
@@ -461,38 +464,6 @@ class GamePointSupervisor:
 
     def _voice_playback_requested(self) -> bool:
         return bool(self.config.voice_bank or self.config.voice_tts)
-
-    def probe_hotspot(self) -> ProbeResult:
-        if os.name != "nt":
-            return ProbeResult("hotspot", True, "skipped", "Windows hotspot probe skipped")
-        command = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            _HOTSPOT_PROBE_SCRIPT,
-        ]
-        try:
-            proc = self._run(
-                command,
-                **_subprocess_kwargs(capture_output=True, text=True, timeout=8),
-            )
-        except Exception as exc:  # noqa: BLE001 - preflight should report, not crash
-            return ProbeResult("hotspot", True, "unavailable", str(exc))
-        if proc.returncode != 0:
-            return ProbeResult("hotspot", True, "unavailable", _short(proc.stderr))
-        try:
-            payload = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            return ProbeResult("hotspot", True, "unavailable", _short(proc.stdout))
-        state = str(payload.get("state") or "unknown")
-        clients = payload.get("client_count")
-        ok = state.lower() == "on"
-        detail = f"state={state}"
-        if clients is not None:
-            detail += f" clients={clients}"
-        return ProbeResult("hotspot", ok, state.lower(), detail)
 
     def probe_simhub(self, *, start: bool = False) -> ProbeResult:
         exe = self._simhub_exe()
@@ -789,38 +760,12 @@ def _short(text: str | None, limit: int = 240) -> str:
     return cleaned[: limit - 1] + "..."
 
 
-_HOTSPOT_PROBE_SCRIPT = "\n".join(
-    [
-        "$ErrorActionPreference = 'Stop'",
-        "[Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager,"
-        "Windows.Networking.NetworkOperators,ContentType=WindowsRuntime] | Out-Null",
-        "[Windows.Networking.Connectivity.NetworkInformation,"
-        "Windows.Networking.Connectivity,ContentType=WindowsRuntime] | Out-Null",
-        "$profile = "
-        "[Windows.Networking.Connectivity.NetworkInformation]::GetInternetConnectionProfile()",
-        "if ($null -eq $profile) {",
-        "  $profile = [Windows.Networking.Connectivity.NetworkInformation]::"
-        "GetConnectionProfiles() | Select-Object -First 1",
-        "}",
-        "if ($null -eq $profile) { "
-        "throw 'No network connection profile found for Mobile Hotspot.' }",
-        "$mgr = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager]"
-        "::CreateFromConnectionProfile($profile)",
-        "[pscustomobject]@{",
-        "  state = $mgr.TetheringOperationalState.ToString()",
-        "  client_count = $mgr.ClientCount",
-        "} | ConvertTo-Json -Compress",
-    ]
-)
-
-
 def render_status_lines(status: GamePointStatus) -> list[str]:
     summary = ProbeResult("overall", status.ok, "ok" if status.ok else "needs_attention")
     rows = [
         summary,
         status.sidecar,
         status.screen,
-        status.hotspot,
         status.voice,
         status.simhub,
         *status.checks,

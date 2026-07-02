@@ -97,9 +97,9 @@ class _FakeSerial:
             self._cond.notify_all()
 
 
-async def _next_frame(fake: _FakeSerial, buf: bytearray, timeout: float = 2.0) -> dict:
+async def _next_frame(fake: _FakeSerial, buf: bytearray, max_wait: float = 2.0) -> dict:
     """Await the next complete NDJSON frame written to ``fake``."""
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + max_wait
     while True:
         buf.extend(fake.pop_written())
         nl = buf.find(b"\n")
@@ -112,8 +112,8 @@ async def _next_frame(fake: _FakeSerial, buf: bytearray, timeout: float = 2.0) -
         await asyncio.sleep(0.02)
 
 
-async def _wait_for(predicate, timeout: float = 2.0) -> None:
-    deadline = time.monotonic() + timeout
+async def _wait_for(predicate, max_wait: float = 2.0) -> None:
+    deadline = time.monotonic() + max_wait
     while not predicate():
         if time.monotonic() > deadline:
             raise AssertionError("condition not met before timeout")

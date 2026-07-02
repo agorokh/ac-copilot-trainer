@@ -39,8 +39,6 @@ def test_tone_for_maps_states_to_signals() -> None:
     assert theme.tone_for(True, "healthy") == "clear"
     assert theme.tone_for(True, "connected") == "clear"
     assert theme.tone_for(True, "enabled") == "clear"
-    # a healthy hotspot "on" is lit green, not amber (matches the design mock)
-    assert theme.tone_for(True, "on") == "clear"
     # present-but-quiescent rows are demoted, not lit green
     assert theme.tone_for(True, "absent") == "idle"
     assert theme.tone_for(True, "skipped") == "idle"
@@ -74,7 +72,6 @@ def _status(**overrides: ProbeResult) -> GamePointStatus:
     rows: dict[str, ProbeResult] = {
         "sidecar": ProbeResult("sidecar", True, "healthy", "peers=1 screen_peers=1"),
         "screen": ProbeResult("screen", True, "connected", "screen_peers=1"),
-        "hotspot": ProbeResult("hotspot", True, "on", "state=On clients=1"),
         "voice": ProbeResult("voice", True, "enabled", "backend=sounddevice"),
         "simhub": ProbeResult("simhub", True, "absent", "executable not found"),
     }
@@ -91,7 +88,7 @@ def test_summary_for_ready_state() -> None:
     assert theme.summary_for(_status()) == (
         "READY TO DRIVE",
         "clear",
-        "sidecar · screen · hotspot live",
+        "sidecar · screen live",
     )
 
 
@@ -131,7 +128,6 @@ def test_summary_for_blocking_preflight_outranks_port_copy() -> None:
         generated_at=status.generated_at,
         sidecar=status.sidecar,
         screen=status.screen,
-        hotspot=status.hotspot,
         voice=status.voice,
         simhub=status.simhub,
         log_path=status.log_path,

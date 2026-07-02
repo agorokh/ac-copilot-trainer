@@ -32,7 +32,6 @@ def demo_status() -> GamePointStatus:
         generated_at=0.0,
         sidecar=ProbeResult("sidecar", True, "healthy", "peers=1 screen_peers=1"),
         screen=ProbeResult("screen", True, "connected", "screen_peers=1"),
-        hotspot=ProbeResult("hotspot", True, "on", "state=On clients=1"),
         voice=ProbeResult("voice", True, "enabled", "backend=sounddevice"),
         simhub=ProbeResult("simhub", True, "absent", "executable not found"),
         log_path="sidecar.log",
