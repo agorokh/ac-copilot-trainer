@@ -165,11 +165,7 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
         return ("PRESS START", "brake", f"nothing on port {port} yet")
     rows = (status.sidecar, status.screen, status.hotspot, status.voice, status.simhub)
     caption = next(
-        (
-            row.detail or row.state
-            for row in rows
-            if not row.ok and (row.detail or row.state)
-        ),
+        (row.detail or row.state for row in rows if not row.ok and (row.detail or row.state)),
         "needs attention",
     )
     return ("PRESS START", "brake", caption)
