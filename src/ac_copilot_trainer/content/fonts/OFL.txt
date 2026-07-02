@@ -3,8 +3,8 @@ SIL Open Font License v1.1
 
 The fonts bundled in this directory are licensed under the SIL Open Font
 License, Version 1.1. This license is the standard license used by Google
-Fonts for the Michroma, Montserrat, and Syncopate font families. The
-following files are covered:
+Fonts for the Michroma, Montserrat, Syncopate, Saira, and Spline Sans Mono
+font families. The following files are covered:
 
 - Michroma-Regular.ttf      (c) Vernon Adams (vern@newtypography.co.uk)
 - Montserrat-Regular.ttf    (c) The Montserrat Project Authors
@@ -12,10 +12,23 @@ following files are covered:
 - Montserrat-Bold.ttf       (c) The Montserrat Project Authors
                              (https://github.com/JulietaUla/Montserrat)
 - Syncopate-Bold.ttf        (c) Tyler Finck (tyler@finck.studio)
+- SairaSemiCondensed-ExtraBold.ttf (c) The Saira Project Authors
+                                       (https://github.com/Omnibus-Type/Saira)
+- SairaSemiCondensed-Bold.ttf      (c) The Saira Project Authors
+                                       (https://github.com/Omnibus-Type/Saira)
+- SairaSemiCondensed-SemiBold.ttf  (c) The Saira Project Authors
+                                       (https://github.com/Omnibus-Type/Saira)
+- SairaSemiCondensed-Black.ttf     (c) The Saira Project Authors
+                                       (https://github.com/Omnibus-Type/Saira)
+- Saira-Bold.ttf                   (c) The Saira Project Authors
+                                       (https://github.com/Omnibus-Type/Saira)
+- SplineSansMono-Medium.ttf        (c) The Spline Sans Mono Project Authors
+                                       (https://github.com/SorkinType/SplineSansMono)
 
 Source: Google Fonts CDN (https://fonts.gstatic.com/), as served on
-2026-04-06. The full upstream font projects live at
-https://github.com/google/fonts/tree/main/ofl/{michroma,montserrat,syncopate}.
+2026-04-06 (Michroma, Montserrat, Syncopate) and 2026-07-01 (Saira, Spline
+Sans Mono). The full upstream font projects live at
+https://github.com/google/fonts/tree/main/ofl/{michroma,montserrat,syncopate,saira,splinesansmono}.
 
 The unaltered SIL OFL v1.1 license text follows:
 
