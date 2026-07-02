@@ -18,7 +18,13 @@ import pytest
 
 from tools.ai_sidecar.voice import bake as bake_mod
 from tools.ai_sidecar.voice import vocabulary as vocab
-from tools.ai_sidecar.voice.bake import PiperBackend, ToneBackend, _build_backend, bake_bank
+from tools.ai_sidecar.voice.bake import (
+    KokoroBackend,
+    PiperBackend,
+    ToneBackend,
+    _build_backend,
+    bake_bank,
+)
 from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest, sha256_bytes
 
 
@@ -127,6 +133,22 @@ def test_tone_backend_registers_are_distinct(tmp_path) -> None:
     crit = manifest.clips["late_brake.act.critical.generic"].sha256
     calm = manifest.clips["late_brake.prepare.calm.generic"].sha256
     assert len({alert, urgent, crit, calm}) == 4  # four distinct register clips
+
+
+def test_speech_backends_keep_act_registers_fast() -> None:
+    # Issue #381: the real neural backends must bake terse act registers at an assertive pace.
+    # Otherwise a valid v3 manifest can still fail the runtime brake-alarm timing report.
+    assert KokoroBackend._REGISTER_SPEED["calm"] < KokoroBackend._REGISTER_SPEED["alert"]
+    assert KokoroBackend._REGISTER_SPEED["alert"] < KokoroBackend._REGISTER_SPEED["urgent"]
+    assert KokoroBackend._REGISTER_SPEED["urgent"] < KokoroBackend._REGISTER_SPEED["critical"]
+    assert KokoroBackend._REGISTER_SPEED["critical"] >= 1.4
+
+    assert (
+        PiperBackend._REGISTER_LENGTH_SCALE["calm"] > PiperBackend._REGISTER_LENGTH_SCALE["alert"]
+    )
+    assert PiperBackend._REGISTER_LENGTH_SCALE["alert"] <= 0.75
+    assert PiperBackend._REGISTER_LENGTH_SCALE["urgent"] <= 0.75
+    assert PiperBackend._REGISTER_LENGTH_SCALE["critical"] <= 0.75
 
 
 def test_prosody_shaper_is_run_to_run_deterministic(tmp_path) -> None:
@@ -329,7 +351,7 @@ def test_piper_batch_preserves_register_length_scale(tmp_path, monkeypatch) -> N
     backend.synthesize_many(items, 48000)
 
     assert ("1.05", ["calm one"]) in seen
-    assert ("0.88", ["critical two"]) in seen
+    assert ("0.72", ["critical two"]) in seen
     assert _first_sample(items[0][2]) == 1000
     assert _first_sample(items[1][2]) == 1000
 

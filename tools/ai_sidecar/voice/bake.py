@@ -292,13 +292,14 @@ class KokoroBackend:
     lazily so the bake module stays importable without it.
     """
 
-    #: per-register synthesis speed (Kokoro renders neutral; the shaper adds tempo for hot tiers
-    #: too, so keep these modest to avoid double-fast unintelligibility on terse cues).
+    #: Per-register synthesis speed. Kokoro renders neutral speech before the shaper adds the
+    #: baked tone. The hot tiers need an assertive base pace so one-word act cues stay inside the
+    #: <=450 ms brake-alarm budget after the full 48 kHz rig bake.
     _REGISTER_SPEED: dict[str, float] = {
         "calm": 0.95,
-        "alert": 0.98,
-        "urgent": 1.02,
-        "critical": 1.05,
+        "alert": 1.26,
+        "urgent": 1.35,
+        "critical": 1.45,
     }
 
     def __init__(
@@ -348,9 +349,9 @@ class PiperBackend:
 
     _REGISTER_LENGTH_SCALE: dict[str, float] = {
         "calm": 1.05,
-        "alert": 1.00,
-        "urgent": 0.93,
-        "critical": 0.88,
+        "alert": 0.72,
+        "urgent": 0.72,
+        "critical": 0.72,
     }
 
     def __init__(self, model_path: str | Path, piper_bin: str = "piper") -> None:
