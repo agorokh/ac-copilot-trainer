@@ -173,6 +173,12 @@ def _reference_kind(record: Mapping[str, Any]) -> str:
     return "unknown"
 
 
+def _is_partial_tt_reference(record: Mapping[str, Any]) -> bool:
+    generator = record.get("generator") if isinstance(record.get("generator"), Mapping) else {}
+    tt_reference = generator.get("tt_reference") if isinstance(generator, Mapping) else None
+    return isinstance(tt_reference, Mapping) and tt_reference.get("partial") is True
+
+
 def _loaded_lap(path: Path, record: dict[str, Any]) -> LoadedLap:
     lap = record.get("lap") if isinstance(record.get("lap"), Mapping) else {}
     car = record.get("car") if isinstance(record.get("car"), Mapping) else {}
@@ -256,6 +262,10 @@ def _valid_laps(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
     return [lap for lap in laps if lap.is_valid and lap.lap_ms is not None]
 
 
+def _reference_candidates(laps: Iterable[LoadedLap]) -> list[LoadedLap]:
+    return [lap for lap in _valid_laps(laps) if not _is_partial_tt_reference(lap.record)]
+
+
 def _reference_sort_key(lap: LoadedLap) -> tuple[int, datetime, str]:
     return (
         lap.lap_ms if lap.lap_ms is not None else 999_999_999,
@@ -294,7 +304,7 @@ def _select_reference(
             reason="selected session has no valid timed laps",
         )
     combo = _combo_key(valid_selected[0])
-    candidates = [lap for lap in _valid_laps(laps) if _combo_key(lap) == combo]
+    candidates = [lap for lap in _reference_candidates(laps) if _combo_key(lap) == combo]
     if not candidates:
         return ReferenceSelection(
             requested_source=requested_source,
@@ -310,7 +320,11 @@ def _select_reference(
                 f"{requested_path}: reference path cannot be resolved"
             ) from exc
         for candidate in candidates:
-            if candidate.path.resolve() == resolved:
+            try:
+                candidate_resolved = candidate.path.resolve()
+            except (OSError, RuntimeError):
+                candidate_resolved = candidate.path.absolute()
+            if candidate_resolved == resolved:
                 return ReferenceSelection(
                     requested_source=requested_source,
                     reference=candidate,
@@ -318,7 +332,7 @@ def _select_reference(
                     reference_file=candidate.path.name,
                 )
         raise SessionReviewError(
-            f"{requested_path}: reference file is not a valid same car/track lap archive"
+            f"{requested_path.name}: reference file is not a valid same car/track lap archive"
         )
 
     source_candidates = [
@@ -613,7 +627,12 @@ def build_session_report(
         )
     prep = _prep_items(problems)
     history = _history_payload(laps, selected)
-    comparison = _comparison_payload(laps, selected, reference=reference)
+    comparison = _comparison_payload(
+        laps,
+        selected,
+        reference=reference,
+        reference_comparison_enabled=reference_selection.requested_source != "none",
+    )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at": generated_at or _iso_now(),
@@ -775,11 +794,14 @@ def _corner_trends(same_combo: list[LoadedLap]) -> list[dict[str, Any]]:
             if not isinstance(corner_raw, Mapping):
                 continue
             corner_index = corner_raw.get("index")
-            index = (
-                int(corner_index)
-                if isinstance(corner_index, int) and not isinstance(corner_index, bool)
-                else fallback_index
-            )
+            try:
+                index = (
+                    int(corner_index)
+                    if corner_index is not None and not isinstance(corner_index, bool)
+                    else fallback_index
+                )
+            except (TypeError, ValueError):
+                index = fallback_index
             label = str(corner_raw.get("label") or f"T{index + 1}")
             by_corner.setdefault(index, {"corner": index, "label": label})
             key = (index, lap.session_uuid)
@@ -853,9 +875,14 @@ def _trace_payload(lap: LoadedLap) -> dict[str, Any]:
     if not isinstance(fields, list) or not isinstance(samples, list):
         return {"sample_count": 0, "sampled_points": 0, "points": []}
     field_index = {str(name): i for i, name in enumerate(fields)}
+    spline_idx = field_index.get("spline")
+    speed_idx = field_index.get("speed")
+    brake_idx = field_index.get("brake")
+    throttle_idx = field_index.get("throttle")
+    steer_idx = field_index.get("steer")
+    ems_idx = field_index.get("eMs")
 
-    def sample_value(sample: Any, field: str) -> float | None:
-        index = field_index.get(field)
+    def sample_value(sample: Any, index: int | None) -> float | None:
         if index is None or not isinstance(sample, (list, tuple)) or index >= len(sample):
             return None
         return _as_float(sample[index])
@@ -864,14 +891,14 @@ def _trace_payload(lap: LoadedLap) -> dict[str, Any]:
     denominator = max(len(samples) - 1, 1)
     for sample_index in _sample_indices(len(samples)):
         sample = samples[sample_index]
-        spline = sample_value(sample, "spline")
+        spline = sample_value(sample, spline_idx)
         point = {
             "x": round(spline if spline is not None else sample_index / denominator, 5),
-            "speed_kmh": _round_or_none(sample_value(sample, "speed"), 2),
-            "brake": _round_or_none(sample_value(sample, "brake"), 4),
-            "throttle": _round_or_none(sample_value(sample, "throttle"), 4),
-            "steer": _round_or_none(sample_value(sample, "steer"), 4),
-            "e_ms": _round_or_none(sample_value(sample, "eMs"), 1),
+            "speed_kmh": _round_or_none(sample_value(sample, speed_idx), 2),
+            "brake": _round_or_none(sample_value(sample, brake_idx), 4),
+            "throttle": _round_or_none(sample_value(sample, throttle_idx), 4),
+            "steer": _round_or_none(sample_value(sample, steer_idx), 4),
+            "e_ms": _round_or_none(sample_value(sample, ems_idx), 1),
         }
         points.append(point)
     return {
@@ -913,12 +940,13 @@ def _comparison_payload(
     selected: list[LoadedLap],
     *,
     reference: LoadedLap | None,
+    reference_comparison_enabled: bool = True,
 ) -> dict[str, Any]:
     same_combo = sorted(_valid_laps(_same_combo_laps(laps, selected)), key=_lap_sort_key)
     best_selected = _best_valid_lap(selected)
     best_path = best_selected.path if best_selected is not None else None
     default_b = reference if reference is not None and reference.path != best_path else None
-    if default_b is None:
+    if default_b is None and reference_comparison_enabled:
         default_b = next(
             (
                 lap

@@ -185,6 +185,18 @@ def test_build_session_report_selects_latest_and_ranks_corner_problem(
 def test_reference_source_selects_track_titan_over_faster_candidate(
     session_corpus: Path,
 ) -> None:
+    partial_tt = _corner_archive(
+        lap_uuid="lap-tt-partial",
+        session_uuid="sess-tt-partial",
+        lap_n=1,
+        exported_at="2026-06-29T10:50:00Z",
+        degrade=0.0,
+        source="imported",
+        import_format="track_titan_reference_v1",
+        generator={"tt_reference": {"partial": True}},
+    )
+    partial_tt["lap"]["lap_ms"] = 1
+    _write_lap(session_corpus, "tt-partial", partial_tt)
     _write_lap(
         session_corpus,
         "tt",
@@ -244,6 +256,7 @@ def test_reference_source_none_disables_reference_comparison(session_corpus: Pat
         "source_file": None,
         "reason": "reference comparison disabled by request",
     }
+    assert report["comparison"]["default_pair"]["b"] is None
     assert "Reference: none (reference comparison disabled by request)" in render_markdown(report)
 
 
@@ -274,6 +287,23 @@ def test_reference_path_pins_generated_reference(session_corpus: Path) -> None:
     assert report["reference"]["source_file"] == "lap_generated.json"
     assert report["reference"]["kind"] == "generated"
     assert report["reference_selection"]["reason"] == "explicit reference file selected"
+
+
+def test_reference_path_error_uses_basename_only(session_corpus: Path) -> None:
+    missing = (session_corpus / "lap_missing_reference.json").resolve()
+
+    with pytest.raises(SessionReviewError) as exc_info:
+        build_session_report(
+            [session_corpus],
+            session="sess-latest",
+            reference_path=missing,
+            grip_ceiling_g=2.5,
+            generated_at="stamp",
+        )
+
+    message = str(exc_info.value)
+    assert "lap_missing_reference.json" in message
+    assert str(session_corpus) not in message
 
 
 def test_missing_exported_at_does_not_break_latest_selection(session_corpus: Path) -> None:

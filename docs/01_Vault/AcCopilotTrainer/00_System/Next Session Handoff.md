@@ -76,7 +76,8 @@ keep local paths redacted while preserving `reference` / `reference_selection` m
 
 Proof so far: `ruff check` + `ruff format --check` on touched Python files, `git diff --check`,
 `pytest tests/test_session_review.py tests/test_ai_sidecar_external.py tests/test_lap_archive_source_structure.py tests/test_ws_bridge_hello_handshake.py -q`
-(78 passed), and scratch CLI proof selecting Track Titan `lap_tt.json` with JSON + self-contained HTML.
+(97 passed after adding review-hardening regressions), and scratch CLI proof selecting Track Titan
+`lap_tt.json` with JSON + self-contained HTML.
 `make ci-fast` still stops at repo-wide `ruff format --check src tests tools scripts` because this
 Windows checkout has broad CRLF/LF drift across untouched files; do not fold that 226-file formatting
 churn into this PR unless the operator explicitly chooses a separate hygiene pass.

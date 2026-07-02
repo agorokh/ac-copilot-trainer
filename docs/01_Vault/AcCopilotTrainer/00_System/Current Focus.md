@@ -29,7 +29,7 @@ and [#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) closed Trac
 Session Review now tags/selects `your-best` / `pro` / `tt` / `generated` / `imported` / `none`,
 CLI accepts `--reference-source` / `--reference-path`, and loopback `session.review.generate`
 accepts `reference_source` / `reference_file` while external broadcasts keep host paths redacted.
-Focused proof: 78 tests passing plus scratch CLI JSON/HTML proof selecting `lap_tt.json`. Local
+Focused proof: 97 tests passing plus scratch CLI JSON/HTML proof selecting `lap_tt.json`. Local
 `make ci-fast` still trips on repo-wide Windows CRLF/LF drift across untouched files; touched-file
 Ruff checks and `git diff --check` are clean.
 
