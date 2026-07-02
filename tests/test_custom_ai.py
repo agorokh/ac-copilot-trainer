@@ -124,6 +124,23 @@ def test_car_controls_teleport_custom_position_packed():
     )
 
 
+def test_car_controls_teleport_custom_direction_packed():
+    from tools.ac_harness.custom_ai import CTRL_TELEPORT_DIR_OFFSET
+
+    buf = CarControls(
+        teleport_to=TELEPORT_TO_CUSTOM,
+        teleport_pos=(10.0, -2.5, 33.0),
+        teleport_dir=(0.6, 0.0, 0.8),
+    ).pack()
+    assert struct.unpack_from("<3f", buf, CTRL_TELEPORT_DIR_OFFSET) == pytest.approx(
+        (0.6, 0.0, 0.8)
+    )
+    # Default direction stays zeroed so unset teleports cannot aim the car.
+    assert struct.unpack_from(
+        "<3f", CarControls().pack(), CTRL_TELEPORT_DIR_OFFSET
+    ) == pytest.approx((0.0, 0.0, 0.0))
+
+
 def test_default_controls_have_no_teleport():
     buf = CarControls().pack()
     assert buf[CTRL_TELEPORT_TO_OFFSET] == 0

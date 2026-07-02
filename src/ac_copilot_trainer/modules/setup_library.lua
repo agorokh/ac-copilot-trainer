@@ -139,25 +139,28 @@ function M.list()
     }
   end
 
+  local function scanIniDir(dirPath)
+    local okIni, iniList = pcall(io.scanDir, dirPath, "*.ini")
+    if okIni and type(iniList) == "table" then
+      for j = 1, #iniList do
+        tryAdd(dirPath .. "/" .. iniList[j], iniList[j])
+      end
+    end
+  end
   -- Top-level setups in the car folder are always included (these are
   -- "global" not-yet-track-tagged setups; AC's own picker shows them too).
-  local okTop, topList = pcall(io.scanDir, carDir, "*.ini")
-  if okTop and type(topList) == "table" then
-    for i = 1, #topList do
-      tryAdd(carDir .. "/" .. topList[i], topList[i])
-    end
+  scanIniDir(carDir)
+  -- The `<car>/generic/` folder holds AC's track-agnostic setups (AC's own picker
+  -- surfaces them for every track). It is a real load target — the harness setup
+  -- resolver (`resolve_setup_ini`) searches it, so `M.list()` must enumerate it or a
+  -- generic setup resolves off-sim but `loadByName` reports "not found" (#460 review).
+  -- Guard the (impossible) trackId=="generic" so the per-track scan below can't double-add it.
+  if trackId ~= "generic" then
+    scanIniDir(carDir .. "/generic")
   end
   -- Per-track folder for the ACTIVE track only — plus its layout subfolders.
   -- We don't want Spa setups showing in the list while driving Monza.
   if hasTrack then
-    local function scanIniDir(dirPath)
-      local okIni, iniList = pcall(io.scanDir, dirPath, "*.ini")
-      if okIni and type(iniList) == "table" then
-        for j = 1, #iniList do
-          tryAdd(dirPath .. "/" .. iniList[j], iniList[j])
-        end
-      end
-    end
     local trackDir = carDir .. "/" .. trackId
     scanIniDir(trackDir)
     -- Layout subfolders (track has multiple layouts, e.g. monza/junior).
@@ -348,10 +351,22 @@ function M.loadByName(nameOrOpts)
   -- Resolve to a full path via the cached listing (busts on SetupsListRefresh).
   -- Path match wins over name when both are present so callers can carry the
   -- exact track/layout selection forward.
+  --
+  -- Path comparison is separator- and case-insensitive: an external caller (the
+  -- autonomous harness) forwards a forward-slash, host-cased path, while `M.list()`
+  -- builds `rows[i].path` from `ac.getFolder(UserSetups)` whose separators/casing vary
+  -- by CSP build. A byte-exact `==` silently missed the match and fell through to the
+  -- basename branch, so two same-basename setups across track/generic folders could load
+  -- the wrong one (#460 review). Normalizing keeps path disambiguation actually working.
+  local function normPath(p)
+    if type(p) ~= "string" then return nil end
+    return (p:gsub("\\", "/"):lower())
+  end
+  local wantPathNorm = normPath(wantPath)
   local function findMatch(rows)
-    if wantPath then
+    if wantPathNorm then
       for i = 1, #rows do
-        if rows[i].path == wantPath then return rows[i] end
+        if normPath(rows[i].path) == wantPathNorm then return rows[i] end
       end
     end
     if name ~= "" then

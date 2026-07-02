@@ -22,6 +22,19 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Active focus (2026-07-02):** [#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) —
+**autonomous harness as a product** (EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154)
+child; operator reframing: launch still a struggle, runs half-done with no setup verified, proof
+overfit — "same car at Spa" never run). Branch `feat/issue-459-harness-product` implements: setup
+selection **applied and verified in-sim** (`--setup`, sidecar `setup.load`, FAIL at `stage=setup`
+on an unverified setup), zero-lore launch (`--car` generates the determinism-lock practice preset;
+preflight asserts content/CSP-Custom-AI/CM/setup; sidecar reuse or auto-start), driver-agnostic
+no-progress watchdog + capped recovery (the ~500 m stall flake now fails honestly), spawn-to-line
+custom teleport, evidence bundle (`report.json` + `hud.png` + lap-archive paths), runbook
+`docs/10_Development/18_Autonomous_Harness.md` + repo skill `ac-harness`. **Remaining:** live Spa +
+911 GT3 R + `Realistic_BB_v3` proof, TT Spa reference comparison. Detail:
+[[issue-459-harness-product-2026-07-02]].
+
 **Delivered (2026-07-02):** PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452)
 **MERGED** at [`ff65522`](https://github.com/agorokh/ac-copilot-trainer/commit/ff6552271107884222dd20c6b3420921e71318f9) -
 telemetry-learned shift points for [#442](https://github.com/agorokh/ac-copilot-trainer/issues/442).

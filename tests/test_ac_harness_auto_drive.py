@@ -16,14 +16,26 @@ from tools.ac_harness.auto_drive import (
     AutoDriveConfig,
     AutoDriveReport,
     DriveStats,
+    ProgressWatchdog,
     _build_arg_parser,
     _build_driver,
     _config_from_args,
     _wait_live,
+    bake_setup_into_race_ini,
+    build_practice_preset,
+    collect_lap_archives,
+    custom_ai_enabled,
     default_ac_root,
+    fuel_matches,
     generic_gt3_ggv,
+    parse_setup_fuel,
+    preflight,
+    resolve_ac_user_dir,
     resolve_fast_lane,
+    resolve_setup_ini,
     run_auto_drive,
+    verify_setup_ack,
+    write_evidence,
 )
 from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot, PhysicsSnapshot
 
@@ -116,8 +128,10 @@ def _drive_returning(stats: DriveStats, record: dict):
     return _drive
 
 
-def _tap_returning(frames: list[dict]):
-    async def _tap(url, *, seconds, wait_for_lap):  # noqa: ANN001
+def _tap_returning(frames: list[dict], record: dict | None = None):
+    async def _tap(url, *, seconds, wait_for_lap, **kwargs):  # noqa: ANN001
+        if record is not None:
+            record.update(seconds=seconds, wait_for_lap=wait_for_lap, **kwargs)
         return frames
 
     return _tap
@@ -257,16 +271,19 @@ def test_pipeline_failure_when_continuous_topic_missing():
 
 def test_wait_lap_requires_a_lap_frame():
     # wait_lap but no lap frame -> require_lap fails the sequence.
+    tap_record: dict = {}
     no_lap = asyncio.run(
         run_auto_drive(
-            _cfg(wait_lap=True),
+            _cfg(wait_lap=True, drive_seconds=420.0),
             launch=_ok_launch,
             hijack=lambda c: FakeController(),
             drive=_drive_returning(DriveStats(drove=True), {}),
-            tap=_tap_returning(CONTINUOUS),
+            tap=_tap_returning(CONTINUOUS, tap_record),
         )
     )
     assert no_lap.ok is False
+    # The lap wait scales with the drive budget (a Spa lap outlives the 180 s tap default).
+    assert tap_record["lap_timeout"] == 420.0
     # lap frame present -> passes.
     with_lap = asyncio.run(
         run_auto_drive(
@@ -300,7 +317,7 @@ def test_tap_exception_marks_pipeline_stage_and_still_tears_down():
     record: dict = {}
     ctrl = FakeController()
 
-    async def _boom(url, *, seconds, wait_for_lap):  # noqa: ANN001
+    async def _boom(url, *, seconds, wait_for_lap, **kwargs):  # noqa: ANN001
         raise RuntimeError("sidecar exploded")
 
     report = asyncio.run(
@@ -540,3 +557,665 @@ def test_report_summary_renders_all_sections():
     assert "drove=True" in text
     assert "coaching.snapshot=300" in text
     assert "delta: not in window" in text
+
+
+# ---------------------------------------------------------------------------
+# Setup application + verification (#459 Part A).
+# ---------------------------------------------------------------------------
+def _setups_tree(tmp_path):
+    """A user-dir with setups for one car across track/generic/top-level folders."""
+    user = tmp_path / "Assetto Corsa"
+    car = user / "setups" / "ks_porsche_911_gt3_r_2016"
+    (car / "spa").mkdir(parents=True)
+    (car / "generic").mkdir(parents=True)
+    (car / "spa" / "Realistic_BB_v3.ini").write_text("[FRONT_BIAS]\nVALUE=60\n")
+    (car / "generic" / "AllRounder.ini").write_text("[FRONT_BIAS]\nVALUE=58\n")
+    (car / "TopLevel.ini").write_text("[FRONT_BIAS]\nVALUE=55\n")
+    return user
+
+
+def test_resolve_setup_ini_precedence_track_then_generic_then_car(tmp_path):
+    user = _setups_tree(tmp_path)
+    car = "ks_porsche_911_gt3_r_2016"
+    track_hit = resolve_setup_ini(user, car, "spa", "Realistic_BB_v3")
+    assert track_hit.name == "Realistic_BB_v3.ini" and track_hit.parent.name == "spa"
+    generic_hit = resolve_setup_ini(user, car, "spa", "AllRounder")
+    assert generic_hit.parent.name == "generic"
+    top_hit = resolve_setup_ini(user, car, "spa", "TopLevel")
+    assert top_hit.parent.name == car
+
+
+def test_resolve_setup_ini_layout_folder_wins_when_given(tmp_path):
+    user = _setups_tree(tmp_path)
+    car = "ks_porsche_911_gt3_r_2016"
+    lay = user / "setups" / car / "spa" / "gp"
+    lay.mkdir(parents=True)
+    (lay / "Realistic_BB_v3.ini").write_text("[FRONT_BIAS]\nVALUE=61\n")
+    hit = resolve_setup_ini(user, car, "spa", "Realistic_BB_v3", layout="gp")
+    assert hit.parent.name == "gp"
+
+
+def test_resolve_setup_ini_not_found_names_all_searched_locations(tmp_path):
+    user = _setups_tree(tmp_path)
+    with pytest.raises(FileNotFoundError) as err:
+        resolve_setup_ini(user, "ks_porsche_911_gt3_r_2016", "spa", "NoSuchSetup")
+    msg = str(err.value)
+    assert "spa" in msg and "generic" in msg
+
+
+def test_resolve_setup_ini_rejects_traversal_and_outside_paths(tmp_path):
+    user = _setups_tree(tmp_path)
+    car = "ks_porsche_911_gt3_r_2016"
+    with pytest.raises(ValueError, match="unsafe setup name"):
+        resolve_setup_ini(user, car, "spa", "..")
+    outside = tmp_path / "evil.ini"
+    outside.write_text("[X]\nVALUE=1\n")
+    with pytest.raises(ValueError, match="user setups folder"):
+        resolve_setup_ini(user, car, "spa", str(outside))
+    with pytest.raises(ValueError, match="user setups folder"):
+        resolve_setup_ini(user, car, "spa", "../../evil.ini")
+
+
+def test_resolve_setup_ini_rejects_path_shaped_car_and_track_ids(tmp_path):
+    # car/track/layout become path segments under the setups root — a separator or `..` in them
+    # must be rejected before they join the root (#460 review: no containment on the id join).
+    user = _setups_tree(tmp_path)
+    with pytest.raises(ValueError, match="unsafe car id"):
+        resolve_setup_ini(user, "../evil", "spa", "Realistic_BB_v3")
+    with pytest.raises(ValueError, match="unsafe track id"):
+        resolve_setup_ini(user, "ks_porsche_911_gt3_r_2016", "../../etc", "Realistic_BB_v3")
+    with pytest.raises(ValueError, match="unsafe layout id"):
+        resolve_setup_ini(
+            user, "ks_porsche_911_gt3_r_2016", "spa", "Realistic_BB_v3", layout="../x"
+        )
+
+
+def test_resolve_setup_ini_bare_ini_basename_uses_name_search(tmp_path):
+    # A bare "Foo.ini" (no separator) an operator copies from disk must search the car/track/generic
+    # candidates, not resolve as a setups-root-relative path that skips the combo folders.
+    user = _setups_tree(tmp_path)
+    car = "ks_porsche_911_gt3_r_2016"
+    hit = resolve_setup_ini(user, car, "spa", "Realistic_BB_v3.ini")
+    assert hit.name == "Realistic_BB_v3.ini" and hit.parent.name == "spa"
+
+
+def test_resolve_setup_ini_accepts_path_inside_setups_root(tmp_path):
+    user = _setups_tree(tmp_path)
+    car = "ks_porsche_911_gt3_r_2016"
+    inside = user / "setups" / car / "spa" / "Realistic_BB_v3.ini"
+    assert resolve_setup_ini(user, car, "spa", str(inside)) == inside.resolve()
+    # Relative to the setups root also resolves.
+    rel = f"{car}/spa/Realistic_BB_v3.ini"
+    assert resolve_setup_ini(user, car, "spa", rel) == inside.resolve()
+
+
+def test_resolve_ac_user_dir_prefers_existing_onedrive_redirect(tmp_path):
+    onedrive = tmp_path / "OneDrive" / "Documents" / "Assetto Corsa"
+    onedrive.mkdir(parents=True)
+    assert resolve_ac_user_dir(home=tmp_path) == onedrive
+    # Plain Documents wins when it exists (checked first).
+    plain = tmp_path / "Documents" / "Assetto Corsa"
+    plain.mkdir(parents=True)
+    assert resolve_ac_user_dir(home=tmp_path) == plain
+    # Explicit always wins.
+    assert resolve_ac_user_dir(tmp_path / "explicit", home=tmp_path) == tmp_path / "explicit"
+
+
+def test_bake_setup_into_race_ini_writes_both_keys_and_spawn():
+    import configparser
+    from pathlib import Path as _P
+
+    # POSIX path so the test is platform-independent (on the rig setup_ini is a Windows Path;
+    # Path.name only splits on the host separator, so a literal backslash path would not split
+    # under Linux CI — the real caller always passes a native path).
+    race = "[CAR_0]\nSKIN=brg\nMODEL=-\n\n[SESSION_0]\nNAME=Practice\nTYPE=1\nSPAWN_SET=PIT\n"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    out = bake_setup_into_race_ini(race, setup)
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(out)
+    assert p.get("CAR_0", "SETUP") == "Realistic_BB_v3.ini"
+    assert p.get("CAR_0", "_EXT_SETUP_FILENAME") == str(setup)
+    assert p.get("SESSION_0", "SPAWN_SET") == "START"  # start line, not pit
+    # Existing keys preserved.
+    assert p.get("CAR_0", "SKIN") == "brg"
+
+
+def test_bake_setup_creates_car0_section_if_absent():
+    import configparser
+    from pathlib import Path as _P
+
+    out = bake_setup_into_race_ini("[RACE]\nMODEL=car\n", _P("/s/My Setup.ini"), spawn_set="PIT")
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(out)
+    assert p.get("CAR_0", "SETUP") == "My Setup.ini"
+    assert p.get("SESSION_0", "SPAWN_SET") == "PIT"
+
+
+def test_parse_setup_fuel_reads_value_and_tolerates_missing():
+    assert parse_setup_fuel("[FUEL]\nVALUE=45\nMIN=2\nMAX=120\n") == 45.0
+    assert parse_setup_fuel("[FUEL]\nVALUE=63.5 ; litres\n") == 63.5
+    assert parse_setup_fuel("[FRONT_BIAS]\nVALUE=60\n") is None  # no FUEL section
+    assert parse_setup_fuel("[FUEL]\nVALUE=notanumber\n") is None
+
+
+def test_fuel_matches_within_tolerance():
+    assert fuel_matches(45.0, 45.0, 2.5) is True
+    assert fuel_matches(45.0, 43.0, 2.5) is True
+    assert fuel_matches(45.0, 40.0, 2.5) is False
+    assert fuel_matches(None, 45.0, 2.5) is False
+    assert fuel_matches(45.0, None, 2.5) is False
+
+
+def test_verify_setup_ack_accepts_matching_name_or_path():
+    ok, detail = verify_setup_ack(
+        {"ok": True, "name": "Realistic_BB_v3", "path": "C:/x/spa/Realistic_BB_v3.ini"},
+        "Realistic_BB_v3",
+    )
+    assert ok is True and "Realistic_BB_v3" in detail
+    ok_path_only, _ = verify_setup_ack(
+        {"ok": True, "name": "", "path": "C:\\x\\spa\\Realistic_BB_v3.ini"}, "Realistic_BB_v3"
+    )
+    assert ok_path_only is True
+
+
+def test_verify_setup_ack_rejects_refusal_missing_and_wrong_setup():
+    assert verify_setup_ack(None, "X")[0] is False
+    refused_ok, refused_detail = verify_setup_ack({"ok": False, "error": "must be in pits"}, "X")
+    assert refused_ok is False and "pits" in refused_detail
+    wrong_ok, wrong_detail = verify_setup_ack(
+        {"ok": True, "name": "OtherSetup", "path": "C:/x/OtherSetup.ini"}, "Realistic_BB_v3"
+    )
+    assert wrong_ok is False and "different setup" in wrong_detail
+
+
+def _apply_returning(ack: dict, record: dict):
+    async def _apply(config):  # noqa: ANN001
+        record["applied"] = True
+        return ack
+
+    return _apply
+
+
+def test_setup_leg_verified_run_proceeds_and_reports_applied():
+    record: dict = {}
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3"),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply_returning(
+                {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"}, record
+            ),
+        )
+    )
+    assert record.get("applied") is True
+    assert report.ok is True
+    assert report.setup_requested == "Realistic_BB_v3"
+    assert report.setup_applied is True
+    assert "Realistic_BB_v3" in report.summary()
+
+
+def test_setup_leg_refusal_fails_at_stage_setup_before_hijack():
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3"),
+            launch=_ok_launch,
+            hijack=lambda c: pytest.fail("hijack must not run after a setup refusal"),
+            drive=lambda *a: pytest.fail("must not drive with an unverified setup"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply_returning({"ok": False, "error": "not found"}, {}),
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "setup"
+    assert report.hijacked is False  # setup applies BEFORE the hijack (pits gate closes under it)
+    assert report.setup_applied is False
+    assert "not found" in (report.error or "")
+
+
+def test_setup_reapplies_after_hijack_relaunch():
+    # A hijack miss relaunches AC — a NEW session — so the setup must re-apply each launch.
+    applies: list[int] = []
+
+    async def _apply(config):  # noqa: ANN001
+        applies.append(1)
+        return {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"}
+
+    hijacks: list[FakeController | None] = [None, FakeController()]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3", max_launches=2),
+            launch=_ok_launch,
+            hijack=lambda c: hijacks.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+        )
+    )
+    assert report.ok is True
+    assert len(applies) == 2  # once per launch attempt — never a stale prior-session load
+
+
+def test_setup_leg_wrong_setup_in_ack_fails():
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="Realistic_BB_v3"),
+            launch=_ok_launch,
+            hijack=lambda c: pytest.fail("hijack must not run"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply_returning({"ok": True, "name": "SomethingElse"}, {}),
+        )
+    )
+    assert report.stage == "setup"
+    assert report.ok is False
+
+
+def test_setup_leg_exception_fails_before_hijack():
+    async def _boom(config):  # noqa: ANN001
+        raise RuntimeError("sidecar vanished")
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="X"),
+            launch=_ok_launch,
+            hijack=lambda c: pytest.fail("hijack must not run"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_boom,
+        )
+    )
+    assert report.stage == "setup"
+    assert "sidecar vanished" in (report.error or "")
+    assert report.hijacked is False
+
+
+def test_setup_requested_without_apply_leg_fails_explicitly():
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(setup="X"),
+            launch=_ok_launch,
+            hijack=lambda c: pytest.fail("hijack must not run"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.stage == "setup"
+    assert "no apply_setup leg" in (report.error or "")
+
+
+def test_no_setup_requested_skips_apply_leg():
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), {}),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply_returning({"ok": False}, {}),  # would fail if consulted
+        )
+    )
+    assert report.ok is True
+    assert report.setup_requested is None
+    assert report.setup_applied is None
+
+
+# ---------------------------------------------------------------------------
+# Stall recovery (#459 Part D).
+# ---------------------------------------------------------------------------
+def test_progress_watchdog_trips_only_after_stall_window():
+    dog = ProgressWatchdog(stall_seconds=10.0, min_progress_m=1.0)
+    assert dog.update(0.0, 0.0) is False  # anchor
+    assert dog.update(0.5, 5.0) is False  # <1 m progress but window not elapsed
+    assert dog.update(0.6, 10.1) is True  # stalled: <1 m for >10 s
+    # Progress re-anchors.
+    dog2 = ProgressWatchdog(stall_seconds=10.0)
+    dog2.update(0.0, 0.0)
+    assert dog2.update(50.0, 9.0) is False  # moved — new anchor
+    assert dog2.update(50.4, 18.9) is False  # window restarts from the move
+    assert dog2.update(50.4, 19.1) is True
+
+
+def test_progress_watchdog_reset_reanchors_after_recovery():
+    dog = ProgressWatchdog(stall_seconds=5.0)
+    dog.update(100.0, 0.0)
+    assert dog.update(100.1, 5.1) is True
+    dog.reset(6.0, 100.1)
+    assert dog.update(100.2, 10.0) is False  # window restarted at reset
+    assert dog.update(100.2, 11.2) is True
+
+
+def test_progress_watchdog_rejects_nonpositive_params():
+    with pytest.raises(ValueError):
+        ProgressWatchdog(stall_seconds=0.0)
+    with pytest.raises(ValueError):
+        ProgressWatchdog(stall_seconds=1.0, min_progress_m=0.0)
+
+
+def test_recovery_capped_flag_vetoes_success():
+    # The veto is a structured flag, NOT a magic substring in `reason` (#460 review).
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(
+                DriveStats(
+                    drove=True,
+                    total_distance_m=560.0,
+                    recoveries=7,
+                    recovery_capped=True,
+                    reason="recovery cap (6) exceeded at 560m",
+                ),
+                {},
+            ),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.sequence_ok is True
+    assert report.ok is False  # capped-out stall must not report success
+    assert "recovery cap" in report.summary()
+
+
+def test_recovery_capped_flag_is_what_vetoes_not_the_reason_string():
+    # Even if `reason` were reworded, the flag alone must veto — proves the contract is the flag.
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(
+                DriveStats(drove=True, total_distance_m=560.0, recovery_capped=True, reason=""),
+                {},
+            ),
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert report.ok is False
+
+
+def test_dual_failure_keeps_pipeline_stage_and_records_drive_crash_in_notes():
+    # Sidecar death makes the tap raise AND the drive thread raise. The report must keep the
+    # first (pipeline) stage/error and surface the drive crash in notes, never silently drop it.
+    async def _boom_tap(url, *, seconds, wait_for_lap, **kwargs):  # noqa: ANN001
+        raise RuntimeError("tap exploded")
+
+    def _boom_drive(controller, config, stop):  # noqa: ANN001
+        raise RuntimeError("drive exploded too")
+
+    ctrl = FakeController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=_boom_drive,
+            tap=_boom_tap,
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "pipeline"  # first failure wins the stage
+    assert "tap exploded" in (report.error or "")
+    assert any("drive exploded too" in n for n in report.notes)  # drive crash not dropped
+    assert ctrl.closed is True
+
+
+# ---------------------------------------------------------------------------
+# Deterministic preset + preflight (#459 Part B).
+# ---------------------------------------------------------------------------
+def test_build_practice_preset_is_deterministic_and_mode_correct():
+    import json as _json
+
+    a = build_practice_preset("ks_audi_r8_lms", "imola")
+    b = build_practice_preset("ks_audi_r8_lms", "imola")
+    assert a == b  # determinism-lock: identical output for identical combo
+    preset = _json.loads(a)
+    assert preset["CarId"] == "ks_audi_r8_lms"
+    assert preset["TrackId"] == "imola"
+    assert preset["Mode"].endswith("QuickDrive_Practice.xaml")
+    assert preset["RealConditions"] is False  # pinned conditions, not live weather
+    assert _json.loads(preset["ModeData"])["StartType"] == "START"
+    pit = _json.loads(build_practice_preset("x", "y", start_type="PIT"))
+    assert _json.loads(pit["ModeData"])["StartType"] == "PIT"
+    with pytest.raises(ValueError, match="start_type"):
+        build_practice_preset("x", "y", start_type="HOTLAP")
+
+
+def _fake_rig(tmp_path, *, custom_ai="ENABLED=1\n"):
+    """Minimal on-disk rig: ac_root with car/track content + CSP config, user dir, CM exe."""
+    ac_root = tmp_path / "ac"
+    (ac_root / "content" / "tracks" / "spa" / "ai").mkdir(parents=True)
+    (ac_root / "content" / "tracks" / "spa" / "ai" / "fast_lane.ai").write_bytes(b"x")
+    (ac_root / "content" / "cars" / "ks_porsche_911_gt3_r_2016").mkdir(parents=True)
+    (ac_root / "extension" / "config").mkdir(parents=True)
+    (ac_root / "extension" / "config" / "new_behaviour.ini").write_text(
+        f"[CUSTOM_AI]\n; hidden\n{custom_ai}"
+    )
+    user = _setups_tree(tmp_path)
+    cm = tmp_path / "cm" / "Content Manager.exe"
+    cm.parent.mkdir(parents=True)
+    cm.write_bytes(b"x")
+    return ac_root, user, cm
+
+
+def test_preflight_passes_on_complete_rig(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        cm_preset=None,
+    )
+    assert preflight(cfg) == []
+
+
+def test_preflight_reports_missing_content_and_disabled_custom_ai(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path, custom_ai="ENABLED=0\n")
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="nordschleife",  # not installed in the fake rig
+        car_id="ks_missing_car",
+        setup="NoSuchSetup",
+        cm_preset=None,
+    )
+    checks = {i.check for i in preflight(cfg)}
+    assert {"track", "car", "custom_ai", "setup"} <= checks
+
+
+def test_preflight_detects_preset_combo_mismatch(tmp_path):
+    import json as _json
+
+    ac_root, user, cm = _fake_rig(tmp_path)
+    preset = tmp_path / "wrong.cmpreset"
+    preset.write_text(_json.dumps({"CarId": "ks_audi_r8_lms", "TrackId": "magione"}))
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        cm_preset=preset,
+    )
+    checks = {i.check for i in preflight(cfg)}
+    assert "preset_track_mismatch" in checks
+    assert "preset_car_mismatch" in checks
+
+
+def test_preflight_flags_missing_cm_preset(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        cm_preset=tmp_path / "does-not-exist.cmpreset",
+    )
+    checks = {i.check for i in preflight(cfg)}
+    assert "preset_missing" in checks
+
+
+def test_preflight_rejects_skip_launch_with_setup(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        skip_launch=True,
+        cm_preset=None,
+    )
+    issues = [i for i in preflight(cfg) if i.check == "setup"]
+    assert any("skip-launch" in i.message for i in issues)
+
+
+def test_preflight_layout_preset_mismatch(tmp_path):
+    import json as _json
+
+    ac_root, user, cm = _fake_rig(tmp_path)
+    # add a layout fast_lane so track resolution passes
+    lay = ac_root / "content" / "tracks" / "spa" / "gp" / "ai"
+    lay.mkdir(parents=True)
+    (lay / "fast_lane.ai").write_bytes(b"x")
+    preset = tmp_path / "baselayout.cmpreset"
+    preset.write_text(_json.dumps({"CarId": "ks_porsche_911_gt3_r_2016", "TrackId": "spa"}))
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        track_layout="gp",
+        car_id="ks_porsche_911_gt3_r_2016",
+        cm_preset=preset,
+    )
+    checks = {i.check for i in preflight(cfg)}
+    assert "preset_track_mismatch" in checks  # preset TrackId "spa" != wanted "spa/gp"
+
+
+def test_build_practice_preset_folds_layout_into_trackid():
+    import json as _json
+
+    p = _json.loads(build_practice_preset("car", "monza", layout="layout_junior"))
+    assert p["TrackId"] == "monza/layout_junior"
+    # No layout → base track.
+    assert _json.loads(build_practice_preset("car", "monza"))["TrackId"] == "monza"
+
+
+def test_preflight_missing_ac_root_short_circuits(tmp_path):
+    cfg = _cfg(ac_root=tmp_path / "nope", track_id="spa", cm_preset=None)
+    issues = preflight(cfg)
+    assert len(issues) == 1 and issues[0].check == "ac_root"
+
+
+def test_custom_ai_enabled_user_file_overrides_root(tmp_path):
+    ac_root, user, _cm = _fake_rig(tmp_path, custom_ai="ENABLED=1\n")
+    enabled, _ = custom_ai_enabled(ac_root, user)
+    assert enabled is True
+    user_ini = user / "cfg" / "extension" / "new_behaviour.ini"
+    user_ini.parent.mkdir(parents=True)
+    user_ini.write_text("[CUSTOM_AI]\nENABLED=0\n")
+    enabled_after, detail = custom_ai_enabled(ac_root, user)
+    assert enabled_after is False and "cfg" in detail
+
+
+def test_custom_ai_enabled_unknown_when_no_file_carries_the_key(tmp_path):
+    enabled, detail = custom_ai_enabled(tmp_path / "ac", tmp_path / "user")
+    assert enabled is None and "new_behaviour.ini" in detail
+
+
+def test_custom_ai_enabled_tolerates_utf8_bom(tmp_path):
+    # CM/CSP tooling writes some ini files with a UTF-8 BOM — a BOM'd first section header used
+    # to raise MissingSectionHeaderError and falsely block preflight (#460 review).
+    ac_root = tmp_path / "ac"
+    (ac_root / "extension" / "config").mkdir(parents=True)
+    path = ac_root / "extension" / "config" / "new_behaviour.ini"
+    path.write_text("[CUSTOM_AI]\nENABLED=1\n", encoding="utf-8-sig")  # BOM prefix
+    enabled, _ = custom_ai_enabled(ac_root, tmp_path / "user")
+    assert enabled is True
+
+
+def test_custom_ai_enabled_does_not_crash_on_undecodable_bytes(tmp_path):
+    ac_root = tmp_path / "ac"
+    (ac_root / "extension" / "config").mkdir(parents=True)
+    path = ac_root / "extension" / "config" / "new_behaviour.ini"
+    path.write_bytes(b"[CUSTOM_AI]\nENABLED=1\n\xff\xfe not utf-8 \x80\x81")
+    # Must not raise — returns (None, detail) so preflight can report, not blow up.
+    enabled, detail = custom_ai_enabled(ac_root, tmp_path / "user")
+    assert enabled in (True, None)
+    assert isinstance(detail, str)
+
+
+# ---------------------------------------------------------------------------
+# Evidence bundle (#459 Part C).
+# ---------------------------------------------------------------------------
+def test_write_evidence_bundles_report_and_extras(tmp_path):
+    import json as _json
+
+    report = AutoDriveReport(
+        ok=True,
+        stage="done",
+        car_id="ks_porsche_911_gt3_r_2016",
+        track_id="spa",
+        setup_requested="Realistic_BB_v3",
+        setup_applied=True,
+        drive=DriveStats(drove=True, total_distance_m=7004.0, recoveries=1),
+    )
+    out = write_evidence(tmp_path / "ev", report, extras={"hud": {"rendering": True}})
+    payload = _json.loads(out.read_text(encoding="utf-8"))
+    assert payload["report"]["ok"] is True
+    assert payload["report"]["setup_applied"] is True
+    assert payload["report"]["drive"]["recoveries"] == 1
+    assert payload["hud"]["rendering"] is True
+
+
+def test_collect_lap_archives_filters_by_mtime(tmp_path):
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    old = laps / "lap_old.json"
+    new = laps / "lap_new.json"
+    old.write_text("{}")
+    new.write_text("{}")
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+    assert collect_lap_archives(laps, since_epoch=1_500_000) == [str(new)]
+    assert collect_lap_archives(None, since_epoch=0) == []
+
+
+def test_cli_new_flags_map_to_config(tmp_path):
+    args = _build_arg_parser().parse_args(
+        [
+            "--car",
+            "ks_porsche_911_gt3_r_2016",
+            "--track",
+            "spa",
+            "--setup",
+            "Realistic_BB_v3",
+            "--driver",
+            "ggv",
+            "--max-recoveries",
+            "3",
+            "--progress-stall-seconds",
+            "8",
+            "--no-spawn-line",
+        ]
+    )
+    cfg = _config_from_args(args)
+    assert cfg.cm_preset is None  # generated later from --car/--track
+    assert cfg.car_id == "ks_porsche_911_gt3_r_2016"
+    assert cfg.setup == "Realistic_BB_v3"
+    assert cfg.driver == "ggv"
+    assert cfg.max_recoveries == 3
+    assert cfg.progress_stall_seconds == 8.0
+    assert cfg.spawn_to_line is False

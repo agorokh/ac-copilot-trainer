@@ -176,6 +176,7 @@ class CarControls:
     autoclutch_on_change: bool = False
     teleport_to: int = TELEPORT_NONE
     teleport_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    teleport_dir: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def pack(self) -> bytes:
         """Serialise into a zero-filled :data:`CONTROLS_BUFFER_BYTES` buffer at the offsets.
@@ -198,6 +199,8 @@ class CarControls:
         struct.pack_into("<B", buf, CTRL_TELEPORT_TO_OFFSET, self.teleport_to & 0xFF)
         px, py, pz = self.teleport_pos
         struct.pack_into("<3f", buf, CTRL_TELEPORT_POS_OFFSET, px, py, pz)
+        dx, dy, dz = self.teleport_dir
+        struct.pack_into("<3f", buf, CTRL_TELEPORT_DIR_OFFSET, dx, dy, dz)
         return bytes(buf)
 
 
@@ -510,6 +513,26 @@ class CustomAIController:  # pragma: no cover - Windows/rig-only; validated agai
     def teleport_to_pits(self) -> None:
         """Write a one-frame teleport-to-pits command (``teleport_to == TELEPORT_TO_PITS``)."""
         self._controls.write(CarControls(teleport_to=TELEPORT_TO_PITS).pack())
+
+    def teleport_to_custom(
+        self,
+        position: tuple[float, float, float],
+        direction: tuple[float, float, float],
+    ) -> None:
+        """Write a one-frame custom teleport (``teleport_to == TELEPORT_TO_CUSTOM``).
+
+        ``position`` is the world-space target (AC x, y-up, z); ``direction`` the facing unit
+        vector. Offsets are doc-extracted (``teleport_pos@44``, ``teleport_dir@56`` — VERIFY LIVE);
+        callers must verify the car actually moved (read back the position) rather than assume the
+        command landed, and fall back to :meth:`teleport_to_pits` when it did not.
+        """
+        self._controls.write(
+            CarControls(
+                teleport_to=TELEPORT_TO_CUSTOM,
+                teleport_pos=position,
+                teleport_dir=direction,
+            ).pack()
+        )
 
     def read_car_data(self) -> dict[str, object] | None:
         """Read CSP's car-state for this car, or ``None`` until ``Car<N>`` exists (not hijacked).
