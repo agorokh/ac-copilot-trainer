@@ -106,11 +106,12 @@ class ValidationReport:
     """Outcome of :meth:`Manifest.validate` — empty ``problems`` means a clean bank."""
 
     vocabulary_matches: bool
+    signature_matches: bool
     problems: list[str]
 
     @property
     def ok(self) -> bool:
-        return self.vocabulary_matches and not self.problems
+        return self.vocabulary_matches and self.signature_matches and not self.problems
 
 
 @dataclass
@@ -198,6 +199,14 @@ class Manifest:
         * ``vocabulary_matches`` is ``False`` when the baked ``vocabulary_hash`` differs from the
           current :func:`vocabulary.vocabulary_hash` — i.e. the wording changed but the bank was not
           re-baked. When this is false the engine MUST NOT play any clip (it could be stale).
+        * ``signature_matches`` is ``False`` when ``voice_signature`` does not end with the current
+          :data:`vocabulary.EXPECTED_SIGNATURE_SUFFIX` — the persona or intensity chain changed
+          without a re-bake (issue #438). Wording-identical persona/prosody changes keep
+          ``vocabulary_hash`` constant, so this suffix is the only detector for that drift. The
+          check is ``endswith`` (the suffix is the final signature segment on every backend), NOT
+          full equality — ``voice_signature`` also carries host-varying parts (backend id, voice,
+          ffmpeg major) that must not reject portable banks — and NOT a plain substring, which
+          would let ``…+intensity2`` accept an ``…+intensity21`` bank.
         * ``problems`` lists missing clip files and sha256 mismatches when ``bank_dir`` is supplied.
 
         Never raises on content problems — it *reports* them so the caller can degrade per clip.
@@ -209,6 +218,13 @@ class Manifest:
                 "vocabulary_hash mismatch: bank was rendered against different wording "
                 f"(bank={self.vocabulary_hash[:12]}…, current={vocab.vocabulary_hash()[:12]}…) "
                 "— re-bake the phrase bank"
+            )
+        sig_ok = self.voice_signature.endswith(vocab.EXPECTED_SIGNATURE_SUFFIX)
+        if not sig_ok:
+            problems.append(
+                "voice_signature mismatch: bank was baked with a different persona/intensity "
+                f"chain (bank={self.voice_signature!r}, expected suffix "
+                f"{vocab.EXPECTED_SIGNATURE_SUFFIX!r}) — re-bake the phrase bank"
             )
         if bank_dir is not None:
             base = Path(bank_dir)
@@ -223,7 +239,9 @@ class Manifest:
                         f"{entry.clip_id}: sha256 mismatch (file={digest[:12]}…, "
                         f"manifest={entry.sha256[:12]}…)"
                     )
-        return ValidationReport(vocabulary_matches=vocab_ok, problems=problems)
+        return ValidationReport(
+            vocabulary_matches=vocab_ok, signature_matches=sig_ok, problems=problems
+        )
 
 
 def _sha256_file(path: str | Path) -> str:

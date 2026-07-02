@@ -31,8 +31,9 @@ def test_manifest_roundtrip_and_lookup() -> None:
 
 
 def test_validate_clean_vocabulary_match() -> None:
-    report = build_manifest().validate()  # no bank_dir → vocabulary-only check
+    report = build_manifest().validate()  # no bank_dir → vocabulary/signature-only check
     assert report.vocabulary_matches
+    assert report.signature_matches
     assert report.ok
     assert report.problems == []
 
@@ -43,6 +44,29 @@ def test_validate_detects_vocabulary_drift() -> None:
     report = m.validate()
     assert not report.vocabulary_matches
     assert any("vocabulary_hash mismatch" in p for p in report.problems)
+
+
+def test_validate_detects_signature_drift() -> None:
+    # Issue #438: a persona swap or intensity-chain bump with identical wording keeps
+    # vocabulary_hash constant, so the signature suffix is the only stale-bank detector.
+    m = build_manifest(voice_signature="tone-v3+race-engineer-original-v0+intensity1")
+    report = m.validate()
+    assert report.vocabulary_matches  # wording unchanged — vocabulary_hash cannot see this
+    assert not report.signature_matches
+    assert not report.ok
+    assert any("voice_signature mismatch" in p for p in report.problems)
+
+
+def test_signature_check_is_anchored_at_the_end() -> None:
+    # endswith, not equality or substring: the host-varying prefix (backend, voice, ffmpeg major)
+    # must not reject a portable bank, while "…+intensity2" must NOT accept an "…+intensity21"
+    # bank.
+    portable = build_manifest(
+        voice_signature=f"kokoro:af_bella+prosody2+ff8+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
+    )
+    assert portable.validate().signature_matches
+    near_miss = build_manifest(voice_signature=f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}1")
+    assert not near_miss.validate().signature_matches
 
 
 def test_validate_detects_missing_file_and_sha_mismatch(tmp_path) -> None:

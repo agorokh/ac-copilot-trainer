@@ -102,6 +102,14 @@ VOICE_PERSONA_ID = "race-engineer-original-v1"
 VOICE_PERSONA_LICENSE = "project-authored; no unconsented real-person clone"
 INTENSITY_CHAIN_VERSION = 2
 
+#: The persona/intensity-chain suffix every backend appends as the FINAL segment of its
+#: ``voice_signature`` at bake time (``bake._signature_suffix``). ``Manifest.validate`` anchors on
+#: this suffix (issue #438): a persona swap or intensity-chain bump with identical wording keeps
+#: ``vocabulary_hash`` constant, so this suffix is the only stale-bank detector for those changes.
+#: Host-varying signature parts (backend id, voice name, ffmpeg major) stay OUT of the suffix so
+#: baked banks remain portable across hosts.
+EXPECTED_SIGNATURE_SUFFIX = f"{VOICE_PERSONA_ID}+intensity{INTENSITY_CHAIN_VERSION}"
+
 
 #: Universal corner numbers we bake (1-based, as spoken). T21+ degrades to the generic clip.
 MAX_CORNER: int = 20

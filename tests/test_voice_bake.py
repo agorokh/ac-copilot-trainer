@@ -175,7 +175,8 @@ def test_shaped_backend_preflights_missing_ffmpeg(monkeypatch, backend: str) -> 
 
 
 class _BatchToneBackend:
-    voice_signature = "batch-tone-v1"
+    # Must end with the persona/intensity suffix — validate() gates on it (issue #438).
+    voice_signature = f"batch-tone-v1+{vocab.EXPECTED_SIGNATURE_SUFFIX}"
 
     def __init__(self) -> None:
         self.calls: list[tuple[list[tuple[str, str, Path]], int]] = []
@@ -196,7 +197,7 @@ def test_bake_uses_batch_backend_when_available(tmp_path) -> None:
 
     assert len(backend.calls) == 1
     assert len(backend.calls[0][0]) == len(vocab.vocabulary())
-    assert manifest.voice_signature == "batch-tone-v1"
+    assert manifest.voice_signature == _BatchToneBackend.voice_signature
     assert manifest.validate(tmp_path).ok
 
 

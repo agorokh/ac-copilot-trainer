@@ -14,8 +14,9 @@ Reuse, don't fork: the voice consumer subscribes in-process to the same advisory
 pipeline emits (issue #340). It never re-derives wording — the manifest is the only advisory->audio
 mapping, so the text HUD and the voice path can never drift.
 
-**Graceful degradation (issue #340 acceptance criterion).** If the manifest is unreadable, or its
-``vocabulary_hash`` no longer matches the current wording (the bank is stale), :meth:`from_bank`
+**Graceful degradation (issue #340 acceptance criterion).** If the manifest is unreadable, its
+``vocabulary_hash`` no longer matches the current wording, or its ``voice_signature`` no longer
+carries the current persona/intensity suffix (the bank is stale — issue #438), :meth:`from_bank`
 returns a **disabled** coach: :meth:`subscribe` becomes a logged no-op. It never crashes, and it
 never plays a clip that might be the wrong one. Per-clip gaps (a missing single clip) are handled
 one
@@ -110,9 +111,10 @@ class VoiceCoach:
     ) -> VoiceCoach:
         """Build a coach from a baked bank directory.
 
-        On any manifest problem that makes playback untrustworthy (unreadable manifest, or a
-        ``vocabulary_hash`` mismatch meaning the wording changed but the bank was not re-baked),
-        returns :meth:`disabled` rather than raising. ``playback`` may be injected (tests pass a
+        On any manifest problem that makes playback untrustworthy (unreadable manifest, a
+        ``vocabulary_hash`` mismatch meaning the wording changed but the bank was not re-baked, or
+        a ``voice_signature`` persona/intensity mismatch — issue #438), returns :meth:`disabled`
+        rather than raising. ``playback`` may be injected (tests pass a
         :class:`~tools.ai_sidecar.voice.playback.RecordingPlayback`); otherwise the real backend is
         built lazily from the bank.
         """
@@ -128,6 +130,11 @@ class VoiceCoach:
             # Wording drifted from the baked bank — refuse to play anything (could be the wrong
             # clip).
             return cls.disabled("; ".join(report.problems) or "vocabulary_hash mismatch")
+        if not report.signature_matches:
+            # Persona/intensity chain drifted with identical wording — vocabulary_hash cannot see
+            # this (issue #438); the baked tones are stale, so refuse rather than speak with the
+            # wrong persona.
+            return cls.disabled("; ".join(report.problems) or "voice_signature mismatch")
         for problem in report.problems:
             # File-level problems are non-fatal: the resolver/bank skip the affected clip. Log
             # loudly.

@@ -61,8 +61,7 @@ from tools.ai_sidecar.voice.manifest import (
     sha256_bytes,
 )
 from tools.ai_sidecar.voice.vocabulary import (
-    INTENSITY_CHAIN_VERSION,
-    VOICE_PERSONA_ID,
+    EXPECTED_SIGNATURE_SUFFIX,
     iter_vocabulary,
     vocabulary_hash,
 )
@@ -76,7 +75,9 @@ PROSODY_VERSION = 2
 
 
 def _signature_suffix() -> str:
-    return f"{VOICE_PERSONA_ID}+intensity{INTENSITY_CHAIN_VERSION}"
+    # Manifest.validate anchors on this exact suffix with ``endswith`` (issue #438) — it must stay
+    # the FINAL segment of every backend's voice_signature.
+    return EXPECTED_SIGNATURE_SUFFIX
 
 
 class VoiceBackend(Protocol):

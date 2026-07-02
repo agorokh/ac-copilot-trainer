@@ -11,7 +11,11 @@ from tools.ai_sidecar.voice import vocabulary as vocab
 from tools.ai_sidecar.voice.manifest import MANIFEST_VERSION, ClipEntry, Manifest
 
 
-def build_manifest(*, samplerate: int = 22050, voice_signature: str = "tone-v1") -> Manifest:
+def build_manifest(
+    *,
+    samplerate: int = 22050,
+    voice_signature: str = f"tone-v3+{vocab.EXPECTED_SIGNATURE_SUFFIX}",
+) -> Manifest:
     """A manifest covering the entire current vocabulary (dummy file/sha — no bytes on disk)."""
     clips: dict[str, ClipEntry] = {}
     for p in vocab.iter_vocabulary():
