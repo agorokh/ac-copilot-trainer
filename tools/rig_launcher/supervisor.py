@@ -743,7 +743,7 @@ def _put_if_present(env: MutableMapping[str, str], key: str, value: str | None) 
 
 def _env_get(env: Mapping[str, str], key: str) -> str | None:
     value = env.get(key)
-    if value is not None or os.name != "nt":
+    if value is not None:
         return value
     wanted = key.upper()
     for actual_key, actual_value in env.items():
