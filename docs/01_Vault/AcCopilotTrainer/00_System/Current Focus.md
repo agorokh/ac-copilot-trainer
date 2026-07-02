@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T03:50:00Z
+last_updated: 2026-07-02T05:15:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
   - AcCopilotTrainer/00_System/Project State.md
@@ -20,6 +21,19 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-02):** Racing Atelier **runtime adoption complete on all three surfaces**
+([#432](https://github.com/agorokh/ac-copilot-trainer/issues/432) Parts A2+B; #86 conformance fix):
+PRs [#444](https://github.com/agorokh/ac-copilot-trainer/pull/444) (`82ced33`, in-game
+main-dashboard card + COACHING tile — operator-directed evolution: 62px vitals, RPM shift zones,
+SHIFT UP verb; live-verified in-sim), [#445](https://github.com/agorokh/ac-copilot-trainer/pull/445)
+(`6f04755`, launcher photo-parity, real-pixel verified) and
+[#446](https://github.com/agorokh/ac-copilot-trainer/pull/446) (`91ca72a`, rig-screen badge/delta
+fixes the operator found on the glass — flashed to the device). Detail:
+[[pr-444-atelier-main-dashboard-2026-07-01]]. **Operator-pending:** rig-screen photo vs
+`esp32_rig.png`; in-sim BRAKE-state glance. **Open flake:** autonomous driver stalls ~500m from
+pit start (both drivers) — file vs the harness next session. Follow-up:
+[#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) telemetry-learned shift points.
 
 **Delivered (2026-07-01):** PR [#429](https://github.com/agorokh/ac-copilot-trainer/pull/429)
 **MERGED** ([`047309e`](https://github.com/agorokh/ac-copilot-trainer/commit/047309ef450c56c6e95a886cca86724e277a64e5))

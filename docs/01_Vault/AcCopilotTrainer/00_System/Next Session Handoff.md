@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T03:50:00Z
+last_updated: 2026-07-02T05:15:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/issue-404-session-review-artifact-2026-06-30.md
@@ -61,6 +62,36 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-02 UTC) — PRs #444/#445/#446 MERGED: Racing Atelier runtime adoption (#432 Parts A2+B, #86 fix)
+
+Three PRs merged in one autonomous session (details + reusable findings:
+[pr-444-atelier-main-dashboard-2026-07-01](../03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md)):
+
+- [#444](https://github.com/agorokh/ac-copilot-trainer/pull/444) `82ced33` — WINDOW_1 rebuilt as the
+  **main-dashboard instrument card** (operator-directed: 62px GEAR/KM-H vitals, RPM strip with
+  shift/redline zones, reference-independent SHIFT UP verb rung, template-exact SegmentBar/DeltaBar/
+  CommandVerb, Saira/Spline DWrite faces bundled) + WINDOW_0 rebuilt as the **COACHING voice tile**
+  (advisory > hints > debrief; no card duplication; right of the virtual mirror). **Live-verified
+  in-sim twice** via the autonomous harness (captures on
+  [#432](https://github.com/agorokh/ac-copilot-trainer/issues/432)); a first capture caught 4 real
+  defects the 15-agent adversarial review missed — all lupa-locked.
+- [#445](https://github.com/agorokh/ac-copilot-trainer/pull/445) `6f04755` — launcher photo-parity
+  vs `game_point.png` (StatusField chip, hairline rows, uppercase tones, weighted button grid,
+  private GDI font loading; waiting→brake). Verified with real Tk pixels in both design states.
+- [#446](https://github.com/agorokh/ac-copilot-trainer/pull/446) `91ca72a` — rig-screen badge
+  legibility (12px→28px) + delta label/bar collision, **found by the operator on the glass** and
+  **flashed to the device** (COM6, hash verified) before merge.
+
+**Operator-pending:** on-glass photo of the rig screen vs `esp32_rig.png` (#86 acceptance);
+in-sim glance at a BRAKE-state card. **Open flake for next session:** the autonomous driver
+(both `racing` and `ggv`) stalls ~450-580m from the practice-mode pit start — file against the
+harness after repro. Follow-up scope filed:
+[#442](https://github.com/agorokh/ac-copilot-trainer/issues/442) telemetry-learned shift points.
+
+**Memory note:** Tier-3 substrate reachable; `ac_copilot_trainer` workspace initially returned
+`[no-context]` for narrow prompts but grounded later queries. Session verified against live
+reality throughout (in-sim captures, real Tk pixels, esptool flash + serial boot log).
 
 ## Delivered (2026-07-02 UTC) — PR #441 MERGED: voice_signature staleness gate (#438)
 
