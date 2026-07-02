@@ -76,7 +76,7 @@ Local proof: `python -m tools.rig_launcher --once --json` and the rebuilt packag
 `dist\AC-Copilot-Game-Point.exe`, refreshed the Desktop shortcut, and reopened the launcher. Focused
 checks passed (`ruff check`, `ruff format --check` on touched files, `pytest tests/test_rig_launcher.py`,
 plus `pytest -k simhub`). GitHub CI green on #449 as
-[`6a10071`](https://github.com/agorokh/ac-copilot-trainer/commit/6a10071)
+[`11aae9d`](https://github.com/agorokh/ac-copilot-trainer/commit/11aae9d)
 (`build`, `Policy (Canonical Docs)`, `governance-conformance`).
 
 ## Delivered (2026-07-02 UTC) - PR #452 MERGED: telemetry-learned shift points (#442)
