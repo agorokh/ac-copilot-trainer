@@ -82,8 +82,14 @@ evidence: [[usb-serial-screen-transport-2026-07-02]].
 - **Live E2E (hotspot OFF, `AHOME5G` up the whole time, 68%→69%):** `screen_peers=1`,
   bidirectional round-trip (hello → hello_ack → 5 s heartbeat), `coaching.snapshot`
   fanned to the serial peer, 0 send failures. Both firmware envs build.
-- **Next:** open/land the PR; drive review to green. The screen must stay USB-tethered
-  (it already is). WebSocket env `jc3248w535` retained for LAN/CI.
+- **PR [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464): CI fully green**
+  (build/conformance/pip-audit/canonical-docs), `MERGEABLE`/`CLEAN`, 0 unresolved
+  review threads (Qodo endorsed; Gemini/Codex quota-limited). `pyserial>=3.5` added
+  to coaching/launcher/dev extras. **Merge-ready.**
+- **Only unverified piece = operator-visual:** confirm the physical screen pill shows
+  CONNECTED + live hints while driving (needs eyes on the screen; the sidecar-side
+  round-trip + fan-out are proven). The screen must stay USB-tethered (it already is).
+  WebSocket env `jc3248w535` retained for LAN/CI.
 
 ## Delivered (2026-07-02 UTC) — PR #460 MERGED: autonomous harness as a product + setup verify (#459)
 
