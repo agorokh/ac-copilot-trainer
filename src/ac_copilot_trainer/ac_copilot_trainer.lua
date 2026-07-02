@@ -2040,9 +2040,14 @@ function script.windowCoaching(_dt)
     end
     -- Brake-zone fraction of the approach window, from the SAME threshold that
     -- fires BRAKE NOW (realtime_coaching.BRAKE_NOW_DIST_M) — no magic copy.
-    local approachM = tonumber(config.approachMeters) or 200
+    -- Same NaN/<=0 sanitize as script.update so a bad config value cannot
+    -- break the card's inWindow gating or the zone fraction (Qodo, PR #444).
+    local approachM = tonumber(config.approachMeters)
+    if not approachM or approachM ~= approachM or approachM <= 0 then
+      approachM = 200
+    end
     local zonePct = math.max(0, math.min(1,
-      (realtimeCoaching.BRAKE_NOW_DIST_M or 50) / math.max(1, approachM)))
+      (realtimeCoaching.BRAKE_NOW_DIST_M or 50) / approachM))
     payload = {
       turnLabel        = view.approachLabel or view.cornerLabel,
       targetSpeedKmh   = view.targetSpeedKmh,
@@ -2195,10 +2200,13 @@ function script.update(dt)
       cornerAdvisories = state.cornerAdvisories,
       lap = state.lapsCompleted or 0,
       simT = ch.simSeconds(sim),
-      -- Gear-shift coaching inputs (#432 Part A2 main dashboard)
+      -- Gear-shift coaching inputs (#432 Part A2 main dashboard). gear and
+      -- gearCount gate SHIFT UP off in the car's top gear (Codex, PR #444).
       rpm = car and tonumber(car.rpm) or nil,
       rpmLimiter = car and tonumber(car.rpmLimiter) or nil,
       gas = car and tonumber(car.gas) or nil,
+      gear = car and tonumber(car.gear) or nil,
+      gearCount = car and tonumber(car.gearCount) or nil,
     })
     state._cachedRealtimeView = rtView
     state.realtimeActiveHint = rtView

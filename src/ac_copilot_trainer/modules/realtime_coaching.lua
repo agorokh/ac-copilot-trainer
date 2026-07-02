@@ -357,10 +357,13 @@ function M.tick(opts)
 
   elseif opts.rpm and opts.rpmLimiter and opts.rpmLimiter > 0
       and (opts.gas or 0) >= SHIFT_MIN_GAS
-      and opts.rpm >= opts.rpmLimiter * SHIFT_ZONE_FRAC then
+      and opts.rpm >= opts.rpmLimiter * SHIFT_ZONE_FRAC
+      and not (opts.gear and opts.gearCount and opts.gearCount > 0
+               and opts.gear >= opts.gearCount) then
     -- Gear-shift coaching: on throttle, outside any braking context, revs
     -- inside the shift zone — teach the upshift moment. Braking verbs above
-    -- always outrank this rung.
+    -- always outrank this rung. Suppressed in the car's top gear (no higher
+    -- gear exists — revving out on a straight is not a coachable upshift).
     view.primaryLine = "SHIFT UP"
     view.secondaryLine = string.format(
       "RPM %d · SHIFT AT %d", opts.rpm, math.floor(opts.rpmLimiter * SHIFT_ZONE_FRAC + 0.5))

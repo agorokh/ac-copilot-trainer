@@ -269,11 +269,13 @@ function M.drawApproachPanel(approachData)
   local shiftZonePct  = hasData and tonumber(approachData.shiftZonePct) or 0.92
   local redZonePct    = hasData and tonumber(approachData.redZonePct) or 0.97
 
-  -- Window dimensions (from manifest FIXED_SIZE 560x480 — the card IS the window)
+  -- Window dimensions (from manifest FIXED_SIZE 560x480 — the card IS the
+  -- window). pcall like hud.safeWindowSize: windowSize is an FFI cdata
+  -- callable on some CSP builds and must not crash the frame.
   local w, h = 560, 480
-  if ui.windowSize then
-    local sz = ui.windowSize()
-    if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
+  if ui.windowSize ~= nil then
+    local ok, sz = pcall(function() return ui.windowSize() end)
+    if ok and sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
       w, h = sz.x, sz.y
     end
   end

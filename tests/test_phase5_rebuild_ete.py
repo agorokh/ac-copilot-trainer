@@ -473,6 +473,14 @@ def test_ete03b_shift_zone_on_straight_says_shift_up(lua):
     opts["gas"] = 0.1
     view2 = rtc["tick"](opts)
     assert (view2["primaryLine"] or "") != "SHIFT UP", "SHIFT UP must not fire off-throttle"
+    # In the car's top gear no higher gear exists — the rung must stay silent
+    # even at shift-zone revs under full throttle (Codex, PR #444).
+    rtc["reset"]()
+    opts["gas"] = 0.95
+    opts["gear"] = 6
+    opts["gearCount"] = 6
+    view3 = rtc["tick"](opts)
+    assert (view3["primaryLine"] or "") != "SHIFT UP", "SHIFT UP must be suppressed in top gear"
 
 
 # ---------------------------------------------------------------------------
