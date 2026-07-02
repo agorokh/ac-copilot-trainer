@@ -329,7 +329,8 @@ def test_ete01_empty_session_returns_placeholder(lua):
         f"empty state subState must be 'no_reference', got {view['subState']}"
     )
 
-    # hud.draw still renders chrome + ACTIVE SUGGESTION title
+    # hud.draw still renders chrome + the COACHING wordmark (#432 Part A2:
+    # WINDOW_0 is the qualitative coaching voice, no verb/corner duplication)
     lua.execute("_reset_recorders()")
     hud = lua.execute('local m = require("hud"); return m')
     vm = lua.eval("""
@@ -350,11 +351,14 @@ def test_ete01_empty_session_returns_placeholder(lua):
     hud["draw"](vm)
     rect_count = lua.execute("return #_draw_rect_filled_calls")
     assert rect_count >= 1, "hud.draw must render at least one drawRectFilled (panel chrome)"
-    assert lua.execute('return _count_dwrite_text("ACTIVE SUGGESTION")') >= 1, (
-        "hud.draw must render 'ACTIVE SUGGESTION' title via dwriteDrawText"
+    assert lua.execute('return _count_dwrite_text("COACHING")') >= 1, (
+        "hud.draw must render the COACHING wordmark via dwriteDrawText"
     )
     assert lua.execute('return _count_dwrite_text("DRIVE A LAP")') >= 1, (
         "empty state must render 'DRIVE A LAP' placeholder"
+    )
+    assert lua.execute('return _count_dwrite_text("reference will appear")') >= 1, (
+        "empty state keeps the coaching-oracle OCR anchor line"
     )
     assert lua.execute('return _count_dwrite_text("S1: 0.20 S FASTER")') >= 1, (
         "sector delta toast must render in WINDOW_0"
@@ -435,6 +439,71 @@ def test_ete03_persisted_state_straight_returns_on_pace(lua):
     assert view["kind"] == "info", (
         f"kind must be 'info' on a long straight with valid persisted data, got {view['kind']}"
     )
+
+
+def test_ete03b_shift_zone_on_straight_says_shift_up(lua):
+    """Gear-shift coaching (#432 Part A2): same long-straight state as ETE-03
+    but with revs inside the shift zone under throttle must coach SHIFT UP.
+    Braking rungs still outrank it (cascade order)."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+    opts = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 200,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7800, rpmLimiter = 8400, gas = 0.95,
+        }
+    """)
+    opts["bestSortedTrace"] = trace
+    opts["brakingPoints"] = brakes
+    opts["segments"] = segments
+    view = rtc["tick"](opts)
+    assert view is not None
+    assert (view["primaryLine"] or "") == "SHIFT UP", (
+        f"shift-zone revs on throttle must coach SHIFT UP, got {view['primaryLine']!r}"
+    )
+    assert view["kind"] == "line"
+    # Off throttle the rung must NOT fire (coasting toward a corner).
+    rtc["reset"]()
+    opts["gas"] = 0.1
+    view2 = rtc["tick"](opts)
+    assert (view2["primaryLine"] or "") != "SHIFT UP", "SHIFT UP must not fire off-throttle"
+    # In the car's top gear no higher gear exists — the rung must stay silent
+    # even at shift-zone revs under full throttle (Codex, PR #444).
+    rtc["reset"]()
+    opts["gas"] = 0.95
+    opts["gear"] = 6
+    opts["gearCount"] = 6
+    view3 = rtc["tick"](opts)
+    assert (view3["primaryLine"] or "") != "SHIFT UP", "SHIFT UP must be suppressed in top gear"
+
+
+def test_ete03c_shift_cue_fires_without_any_reference(lua):
+    """The shift cue is reference-independent: on a fresh install / new track
+    (no trace, no brake points, no segments) shift-zone revs under throttle
+    must still coach SHIFT UP instead of the bare placeholder (PR #444)."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    opts = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 120,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7800, rpmLimiter = 8400, gas = 0.95, gear = 3, gearCount = 6,
+        }
+    """)
+    view = rtc["tick"](opts)
+    assert view is not None
+    assert (view["primaryLine"] or "") == "SHIFT UP", (
+        f"no-reference state must still coach the upshift, got {view['primaryLine']!r}"
+    )
+    assert view["subState"] == "no_reference"
 
 
 # ---------------------------------------------------------------------------
@@ -737,7 +806,7 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
         """
 MANIFEST_WINDOW_SIZES = {
   ["AC Copilot Trainer"] = {520, 200},
-  ["Coaching"]           = {640, 240},
+  ["Coaching"]           = {560, 480},
   ["Settings"]           = {480, 580},
 }
 """
@@ -805,16 +874,21 @@ def test_ete08b_coaching_font_uses_inline_path_syntax():
 
 
 def test_ete08c_coaching_overlay_bottom_tile_always_renders(lua):
-    """ETE-08c: drawApproachPanel ALWAYS renders chrome + footer, even when
-    approachData is nil. Today it returns false and renders nothing."""
+    """ETE-08c: drawApproachPanel ALWAYS renders chrome, even when
+    approachData is nil ("never blank" contract). The #432 Part A2 card
+    replaced the RACING ATELIER footer with the template's own anatomy, so
+    the placeholder markers are now the CommandVerb + delta-status words."""
     overlay = lua.execute('local m = require("coaching_overlay"); return m')
     lua.execute("_reset_recorders()")
-    # nil approach data — should still render chrome + RACING ATELIER footer
+    # nil approach data — should still render chrome + placeholder card
     overlay["drawApproachPanel"](None)
     rects = lua.execute("return #_draw_rect_filled_calls")
     assert rects >= 1, "drawApproachPanel(nil) must still render panel chrome"
-    assert lua.execute('return _count_dwrite_text("RACING ATELIER")') >= 1, (
-        "drawApproachPanel(nil) must render 'RACING ATELIER' footer"
+    assert lua.execute('return _count_dwrite_text("DRIVE")') >= 1, (
+        "drawApproachPanel(nil) must render the placeholder CommandVerb"
+    )
+    assert lua.execute('return _count_dwrite_text("WAITING")') >= 1, (
+        "drawApproachPanel(nil) must render the WAITING delta status"
     )
 
 

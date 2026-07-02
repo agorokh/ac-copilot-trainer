@@ -28,6 +28,20 @@ local PREPARE_OVER_KMH     = 5     -- "too fast" delta for PREPARE TO BRAKE
 local CORNER_DELTA_KMH     = 8     -- in-corner ±delta for "carry more / ease off"
 local APPROACH_DEFAULT_M   = 200   -- max distance ahead we even look at the next brake
 
+-- Exported so the HUD derives its SegmentBar brake-zone fraction from the SAME
+-- threshold that fires "BRAKE NOW" (single source of truth, #432 Part A2).
+M.BRAKE_NOW_DIST_M = BRAKE_NOW_DIST_M
+
+-- Gear-shift coaching (#432 Part A2 main-dashboard evolution): the RPM strip's
+-- shift/redline zones and the SHIFT UP verb share these fractions of the car's
+-- rpmLimiter. v1 heuristic (shift lights at ~92%, redline band at ~97%);
+-- telemetry-learned per-car/per-corner shift points are follow-up scope.
+local SHIFT_ZONE_FRAC   = 0.92
+local REDLINE_FRAC      = 0.97
+local SHIFT_MIN_GAS     = 0.55  -- only coach upshifts under real throttle
+M.SHIFT_ZONE_FRAC = SHIFT_ZONE_FRAC
+M.REDLINE_FRAC = REDLINE_FRAC
+
 -- ---------------------------------------------------------------------------
 -- Module state (reset via M.reset).
 -- ---------------------------------------------------------------------------
@@ -223,6 +237,26 @@ local function placeholderView(curSpeed)
   }
 end
 
+--- Reference-independent gear-shift cue (#432 Part A2): revs inside the
+--- shift zone under real throttle with a higher gear available. One predicate
+--- for BOTH the no-reference path and the main cascade — shift coaching needs
+--- no reference lap (PR #444 review).
+local function shiftCueActive(o)
+  return o.rpm ~= nil and o.rpmLimiter ~= nil and o.rpmLimiter > 0
+    and (o.gas or 0) >= SHIFT_MIN_GAS
+    and o.rpm >= o.rpmLimiter * SHIFT_ZONE_FRAC
+    and not (o.gear and o.gearCount and o.gearCount > 0
+             and o.gear >= o.gearCount)
+end
+
+local function applyShiftCue(view, o)
+  view.primaryLine = "SHIFT UP"
+  view.secondaryLine = string.format(
+    "RPM %d · SHIFT AT %d", o.rpm, math.floor(o.rpmLimiter * SHIFT_ZONE_FRAC + 0.5))
+  view.kind = "line"
+  return view
+end
+
 --- Live-frame tick. Always returns a viewmodel (never nil).
 ---@param opts table  {splinePos, currentSpeedKmh, bestSortedTrace, brakingPoints, segments, trackLengthM, approachMeters, dt}
 ---@return table viewmodel
@@ -243,12 +277,16 @@ function M.tick(opts)
     approachM = APPROACH_DEFAULT_M
   end
 
-  -- Empty state — no reference at all
+  -- Empty state — no reference at all. The gear-shift cue still coaches
+  -- here: it is reference-independent (fresh install / new track / out-lap).
   local hasTrace    = type(trace) == "table" and #trace >= 2
   local hasBrakes   = type(brakes) == "table" and #brakes > 0
   local hasSegments = type(segments) == "table" and #segments > 0
   if not hasTrace and not hasBrakes and not hasSegments then
     lastView = placeholderView(cur)
+    if shiftCueActive(opts) then
+      applyShiftCue(lastView, opts)
+    end
     return lastView
   end
 
@@ -341,6 +379,14 @@ function M.tick(opts)
     view.kind = "info"
     view.subState = "approaching"
 
+  elseif shiftCueActive(opts) then
+    -- Gear-shift coaching: on throttle, outside any braking context, revs
+    -- inside the shift zone — teach the upshift moment. Braking verbs above
+    -- always outrank this rung; suppressed in the car's top gear (see
+    -- shiftCueActive).
+    applyShiftCue(view, opts)
+    view.subState = "cruising"
+
   else
     -- Free flowing
     view.primaryLine = "ON PACE"
@@ -398,6 +444,10 @@ function M.tick(opts)
       local advice = opts.cornerAdvisories[topLabel]
       if type(advice) == "string" and advice ~= "" then
         view.secondaryLine = advice
+        -- Marked separately so the coaching tile can distinguish real LLM
+        -- coaching from rules-engine context lines (which duplicate the main
+        -- card's data and must not re-render on WINDOW_0 — #432 Part A2).
+        view.advisory = advice
         -- Keep view.kind from rules engine (e.g. brake red) — advisory is secondary only.
       end
     end

@@ -43,7 +43,7 @@ local setupLibrary = require("setup_library")
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
 local MANIFEST_WINDOW_SIZES = {
   ["AC Copilot Trainer"] = {520, 200},
-  ["Coaching"]           = {640, 240},
+  ["Coaching"]           = {560, 480},
   ["Settings"]           = {480, 580},
 }
 
@@ -2027,11 +2027,27 @@ function script.windowCoaching(_dt)
   local view = state._cachedRealtimeView
   local payload
   if view then
-    -- Bottom tile shows the UPCOMING brake target (always), not the current
+    -- The card shows the UPCOMING brake target (always), not the current
     -- corner. view.approachLabel/targetSpeedKmh/distToBrakeM all point to the
     -- next braking opportunity ahead. view.cornerLabel is the in-corner label
     -- (used by the TOP tile only) — falls back to approachLabel if not in a
     -- corner apex.
+    if state._trackDisplayName == nil then
+      local okTn, tn = pcall(function()
+        return ac.getTrackName and ac.getTrackName() or nil
+      end)
+      state._trackDisplayName = (okTn and type(tn) == "string" and tn ~= "") and tn or false
+    end
+    -- Brake-zone fraction of the approach window, from the SAME threshold that
+    -- fires BRAKE NOW (realtime_coaching.BRAKE_NOW_DIST_M) — no magic copy.
+    -- Same NaN/<=0 sanitize as script.update so a bad config value cannot
+    -- break the card's inWindow gating or the zone fraction (Qodo, PR #444).
+    local approachM = tonumber(config.approachMeters)
+    if not approachM or approachM ~= approachM or approachM <= 0 then
+      approachM = 200
+    end
+    local zonePct = math.max(0, math.min(1,
+      (realtimeCoaching.BRAKE_NOW_DIST_M or 50) / approachM))
     payload = {
       turnLabel        = view.approachLabel or view.cornerLabel,
       targetSpeedKmh   = view.targetSpeedKmh,
@@ -2040,6 +2056,17 @@ function script.windowCoaching(_dt)
       progressPct     = view.progressPct or 0,
       subState        = view.subState or "no_reference",
       status          = view.subState or "no_reference",
+      gear            = car and car.gear or nil,
+      trackName       = state._trackDisplayName or nil,
+      zonePct         = zonePct,
+      approachMeters  = approachM,
+      kind            = view.kind,
+      primaryLine     = view.primaryLine,
+      -- Vitals for the main-dashboard card (RPM strip + shift zones)
+      rpm             = car and tonumber(car.rpm) or nil,
+      rpmLimiter      = car and tonumber(car.rpmLimiter) or nil,
+      shiftZonePct    = realtimeCoaching.SHIFT_ZONE_FRAC,
+      redZonePct      = realtimeCoaching.REDLINE_FRAC,
     }
   end
   -- Round 10: the approach panel is the sole content of WINDOW_1.
@@ -2075,9 +2102,18 @@ local function autoPlaceOnce()
   for title, wh in pairs(MANIFEST_WINDOW_SIZES) do
     sizes[title] = vec2(wh[1], wh[2])
   end
+  -- Derive the Coaching anchor from the manifest size (single source) and
+  -- clamp so the card's bottom edge stays on screen — the 338px Atelier card
+  -- at the old 0.78H anchor pushed the whole ENTRY DELTA section off a
+  -- 1080p display, re-forced every load (#432 Part A2 review).
+  local coach = MANIFEST_WINDOW_SIZES["Coaching"]
   local positions = {
-    ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.5 - 260), math.floor(screenH * 0.04)),
-    ["Coaching"]           = vec2(math.floor(screenW * 0.5 - 320), math.floor(screenH * 0.78)),
+    -- COACHING tile sits RIGHT of the virtual rear-view mirror (operator
+    -- report, #432: the old 0.5-centered anchor rendered it ON the mirror).
+    ["AC Copilot Trainer"] = vec2(math.floor(screenW * 0.60), math.floor(screenH * 0.03)),
+    ["Coaching"]           = vec2(
+      math.floor(screenW * 0.5 - coach[1] * 0.5),
+      math.min(math.floor(screenH * 0.78), screenH - coach[2] - 8)),
     ["Settings"]           = vec2(math.floor(screenW * 0.05),     math.floor(screenH * 0.10)),
   }
   local required = 0
@@ -2164,6 +2200,13 @@ function script.update(dt)
       cornerAdvisories = state.cornerAdvisories,
       lap = state.lapsCompleted or 0,
       simT = ch.simSeconds(sim),
+      -- Gear-shift coaching inputs (#432 Part A2 main dashboard). gear and
+      -- gearCount gate SHIFT UP off in the car's top gear (Codex, PR #444).
+      rpm = car and tonumber(car.rpm) or nil,
+      rpmLimiter = car and tonumber(car.rpmLimiter) or nil,
+      gas = car and tonumber(car.gas) or nil,
+      gear = car and tonumber(car.gear) or nil,
+      gearCount = car and tonumber(car.gearCount) or nil,
     })
     state._cachedRealtimeView = rtView
     state.realtimeActiveHint = rtView
