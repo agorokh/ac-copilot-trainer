@@ -60,6 +60,7 @@ import re
 import threading
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC
 from pathlib import Path
@@ -140,14 +141,26 @@ class AutoDriveConfig:
     progress_stall_seconds: float = 10.0  # no forward progress for this long => recover
     max_recoveries: int = 6  # then FAIL honestly instead of teleport-looping
     spawn_to_line: bool = True  # teleport onto the racing line when spawned off it (pit box)
+    # Skip AC's NEW-UI pre-drive session overlay on the direct setup relaunch so the car spawns into
+    # the drivable session and the carcsw hijack lands — the immediate-start a CM launch does for
+    # free (#461). Writes CSP [BASIC] FORCE_START=1 into extension/config/gui.ini (the only file CSP
+    # honors it from; the user-tree override is ignored — live-found), snapshotted + restored +
+    # self-healed so the install-tree change never outlives the run. Both START and PIT spawns need
+    # it (each otherwise lands at the "0 seconds" overlay); the relaunch keeps SPAWN_SET=START.
+    force_start_menu_skip: bool = True
     # Assertion.
     tap_seconds: float = 30.0
     wait_lap: bool = False
     strict: bool = False
-    # Launch / hijack robustness (the early-LIVE race).
-    max_launches: int = 3
+    # Launch / hijack robustness (the early-LIVE race + the #461 direct-relaunch auto-start).
+    # 5 launch cycles: FORCE_START's auto-start past AC's "0 seconds" pre-drive overlay on the
+    # direct setup relaunch is TIMING-SENSITIVE (live-found #461 — a cycle can land the car
+    # live-driving and hijackable, or stall at the non-hijackable "0 seconds" overlay). A stalled
+    # cycle is unrecoverable within itself (Custom-AI isn't watching at the overlay), so the ONLY
+    # recovery is a fresh launch cycle — hence a generous budget. See 18_Autonomous_Harness.md.
+    max_launches: int = 5
     attempt_timeout: float = 75.0
-    settle_seconds: float = 5.0
+    settle_seconds: float = 7.0  # let CSP finish FORCE_START auto-start before hijacking (#461)
     hijack_timeout: float = 25.0
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
     # Sim-death guard.
@@ -640,6 +653,36 @@ def bake_setup_into_race_ini(
     return out.getvalue()
 
 
+def set_force_start_in_gui_ini(gui_ini_text: str, enabled: bool) -> str:
+    """Return CSP ``gui.ini`` text with ``[BASIC] FORCE_START`` set to 1 (enabled) or 0.
+
+    CSP's hidden ``[BASIC] FORCE_START=1`` skips AC's NEW-UI pre-drive session overlay so a
+    *direct* ``acs.exe`` relaunch spawns the car into the drivable session — the immediate-start a
+    Content Manager launch performs for free, and the precondition for the carcsw hijack to land on
+    a direct **setup** relaunch (live-verified for #461: with it the hijack lands; without it the
+    car sits at the overlay at "0 seconds" and Car0 never becomes hijackable, for START *and* PIT
+    spawns alike).
+
+    Pure ``configparser`` transform (CI-testable), preserving other sections. The rig caller
+    (:func:`force_start_menu_skip`) writes this into the CSP ``extension/config/gui.ini`` (the only
+    file CSP honors ``FORCE_START`` from — the user-tree override is ignored, live-found #461) and
+    restores the original afterward.
+    """
+    parser = configparser.ConfigParser(strict=False)
+    parser.optionxform = str  # preserve CSP's uppercase keys
+    # Defensive: a BOM-prefixed gui.ini (some CSP installs) would otherwise raise
+    # MissingSectionHeaderError on the first read_string; the caller restores raw bytes regardless.
+    parser.read_string((gui_ini_text or "").lstrip(chr(0xFEFF)))
+    if not parser.has_section("BASIC"):
+        parser.add_section("BASIC")
+    parser.set("BASIC", "FORCE_START", "1" if enabled else "0")
+    from io import StringIO
+
+    out = StringIO()
+    parser.write(out, space_around_delimiters=False)
+    return out.getvalue()
+
+
 def parse_setup_fuel(setup_ini_text: str) -> float | None:
     """Parse ``[FUEL] VALUE`` (litres) from a setup INI, or ``None`` when the setup omits fuel.
 
@@ -1034,13 +1077,110 @@ def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-o
 
 
 def _direct_acs_launch(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
-    """Kill any acs and launch ``acs.exe`` directly (non-elevated shell avoids the Steam trip)."""
+    """Kill any acs and launch ``acs.exe`` directly (non-elevated shell avoids the Steam trip).
+
+    Minimizes any non-AC/CM foreground window first: FORCE_START only auto-starts past the pre-drive
+    overlay when the fresh ``acs`` window can take the foreground, so a stray window in front makes
+    the overlay-skip flake (live-found #461: identical FORCE_START code drove one run and stalled at
+    the "0 seconds" overlay the next — the difference was the foreground). Mirrors ``rig_launch``'s
+    pre-CM-launch minimize.
+    """
     import subprocess
 
     subprocess.run(["taskkill", "/IM", "acs.exe", "/F", "/T"], capture_output=True)
     time.sleep(2.0)
+    _minimize_foreground_window()  # clear foreground so the fresh acs can take it (FORCE_START)
     acs = config.ac_root / "acs.exe"
     subprocess.Popen([str(acs)], cwd=str(acs.parent))
+
+
+def _gui_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
+    """CSP ``extension/config/gui.ini`` that carries the hidden ``[BASIC] FORCE_START`` key.
+
+    LIVE-FOUND (#461, 2026-07-02): CSP honors ``FORCE_START`` **only from this file**, not from the
+    user-tree ``cfg/extension/gui.ini`` override. A user-tree write left the car stuck at CSP's
+    NEW-UI pre-drive session overlay (screenshot-confirmed: setup applied, session at "0 seconds",
+    hijack refused); the same run against this file skips the overlay and the hijack lands. This dir
+    is user-writable on this Steam install (checked ``-w``), so the write is non-elevated — but it
+    IS the AC install tree, which is why :func:`force_start_menu_skip` snapshots + restores +
+    self-heals it so the change is transient and never outlives the run.
+    """
+    return config.ac_root / "extension" / "config" / "gui.ini"
+
+
+def _force_start_backup_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
+    """Sidecar recording the original gui.ini so a hard-killed run is repaired next startup."""
+    return _gui_ini_path(config).with_name(".harness_forcestart_backup.json")
+
+
+def self_heal_force_start(config: AutoDriveConfig) -> str | None:  # pragma: no cover - rig-only
+    """Restore gui.ini from a leftover backup (a run killed before its restore ran); else no-op.
+
+    ``FORCE_START`` is a global CSP setting. A hard-killed setup run (SIGKILL / taskkill, past any
+    ``finally``) could leave it ``=1``, changing behavior for a later human session. This runs at
+    harness startup and on every menu-skip entry, so the setting is guaranteed restored by the
+    next invocation at the latest — closing exactly the "killed harness leaves a global setting
+    changed" objection that removed the earlier install-tree implementation (PR #460 review).
+    """
+    backup = _force_start_backup_path(config)
+    if not backup.is_file():
+        return None
+    try:
+        data = json.loads(backup.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        backup.unlink(missing_ok=True)
+        return None
+    gui = _gui_ini_path(config)
+    if data.get("existed"):
+        gui.write_text(
+            data.get("original_text", ""),
+            encoding="utf-8",
+            errors="surrogateescape",
+            newline="\n",
+        )
+    else:
+        gui.unlink(missing_ok=True)
+    backup.unlink(missing_ok=True)
+    return f"self-healed a leftover FORCE_START menu-skip from a prior run ({gui})"
+
+
+@contextmanager
+def force_start_menu_skip(config: AutoDriveConfig):  # pragma: no cover - rig-only
+    """Enable CSP ``FORCE_START`` for the direct-relaunch spawn window, then restore it.
+
+    Writes ``[BASIC] FORCE_START=1`` into the CSP ``extension/config/gui.ini`` (the only file CSP
+    honors it from — the user-tree override is ignored, live-found #461) so the direct ``acs.exe``
+    relaunch skips AC's NEW-UI pre-drive overlay and spawns the car into the drivable session — the
+    precondition for the carcsw hijack on a setup relaunch. This IS the AC install tree, so the
+    contract is: snapshot the original text, restore it verbatim on exit (delete the file if it did
+    not exist), and persist a backup sidecar so even a hard-killed run is repaired by the next
+    session's :func:`self_heal_force_start`. The change is transient (seconds — the relaunch +
+    wait-LIVE window); ``FORCE_START`` only affects session entry, so restoring it once the car is
+    on track cannot disturb the running drive. Earlier attempts wrote the user-tree override to
+    avoid touching the install tree, but CSP does not honor ``FORCE_START`` there (screenshot-
+    proven: car stuck at the "0 seconds" overlay); the install-tree write is unavoidable here.
+    """
+    self_heal_force_start(config)  # repair any prior leak before we snapshot the current state
+    gui = _gui_ini_path(config)
+    backup = _force_start_backup_path(config)
+    existed = gui.is_file()
+    original = gui.read_text(encoding="utf-8", errors="surrogateescape") if existed else ""
+    gui.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_text(json.dumps({"existed": existed, "original_text": original}), encoding="utf-8")
+    try:
+        gui.write_text(
+            set_force_start_in_gui_ini(original, True),
+            encoding="utf-8",
+            errors="surrogateescape",
+            newline="\n",
+        )
+        yield
+    finally:
+        if existed:
+            gui.write_text(original, encoding="utf-8", errors="surrogateescape", newline="\n")
+        else:
+            gui.unlink(missing_ok=True)
+        backup.unlink(missing_ok=True)
 
 
 def _bake_and_relaunch_with_setup(
@@ -1051,11 +1191,19 @@ def _bake_and_relaunch_with_setup(
     Called after a CM launch has written a correct race.ini for the combo. AC applies a setup only
     at spawn, so this rewrites race.ini (``_EXT_SETUP_FILENAME`` + ``SETUP`` + ``SPAWN_SET=START``)
     and relaunches acs directly — the car respawns WITH the setup and ``acpmf_physics.fuel`` reads
-    it back (live-verified even at the pre-drive menu). The harness deliberately writes **only**
-    race.ini (under AC Documents), never CSP install-tree config: the earlier ``gui.ini
-    FORCE_START`` menu-skip was removed (#460 review — writes stay out of the AC install tree, and a
-    killed harness must not leave a global CSP setting changed). Skipping the pre-drive menu to arm
-    the carcsw hijack/drive for a setup run is deferred to #461; this leg proves the setup applied.
+    it back (live-verified). The harness writes race.ini (under AC Documents) and, when
+    ``config.force_start_menu_skip`` is set, CSP ``[BASIC] FORCE_START`` in the CSP
+    ``extension/config/gui.ini`` (snapshotted + restored + self-healed — see
+    :func:`force_start_menu_skip`).
+
+    The #461 composition (setup run that also DRIVES): a direct relaunch alone lands AC at its
+    NEW-UI pre-drive session overlay ("0 seconds"; no immediate-start handshake, unlike a CM
+    launch), so the car never enters the drivable session and the carcsw hijack cannot land — the
+    "START spawn freezes Car0" symptom, live-confirmed identical for a PIT spawn (car in the pit
+    box, same overlay). :func:`force_start_menu_skip` sets ``[BASIC] FORCE_START=1`` for exactly
+    the relaunch window, which spawns the car into the live session so the hijack lands.
+    ``SPAWN_SET`` stays START — the racing line where the drivers work — since the setup applies
+    at spawn regardless.
     """
     race_ini = _race_ini_path(config)
     if config.setup_ini is None or not race_ini.is_file():
@@ -1066,11 +1214,20 @@ def _bake_and_relaunch_with_setup(
     # Match the read's surrogateescape on write: race.ini is read tolerantly, so a strict UTF-8
     # write would raise UnicodeEncodeError on any preserved non-UTF-8 byte (qodo #460 review).
     race_ini.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
-    _direct_acs_launch(config)
-    if not _wait_live(config.attempt_timeout):
+    # FORCE_START only matters at session entry, so scope it to the relaunch + wait-LIVE window and
+    # restore it before we hand back — the running drive is unaffected, and the changed-state window
+    # is seconds. A relaunch on the outer retry loop re-enters here and re-enables it.
+    menu_skip = force_start_menu_skip(config) if config.force_start_menu_skip else nullcontext()
+    with menu_skip:
+        _direct_acs_launch(config)
+        live = _wait_live(config.attempt_timeout)
+        if live:
+            time.sleep(config.settle_seconds)
+    if not live:
         return False, "sim never reached LIVE after the setup relaunch"
-    time.sleep(config.settle_seconds)
-    return True, "relaunched with setup baked"
+    return True, "relaunched with setup baked" + (
+        " + FORCE_START menu-skip" if config.force_start_menu_skip else ""
+    )
 
 
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
@@ -1710,6 +1867,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="do not teleport a pit-box spawn onto the racing line (use the OUT-phase pit exit)",
     )
     p.add_argument(
+        "--no-menu-skip",
+        action="store_true",
+        help="do not FORCE_START-skip AC's pre-drive overlay on the setup relaunch (leaves CSP "
+        "gui.ini untouched; the setup then applies but the hijack cannot arm — #461)",
+    )
+    p.add_argument(
         "--no-sidecar-autostart",
         action="store_true",
         help="fail preflight instead of auto-starting a loopback sidecar",
@@ -1752,6 +1915,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         max_recoveries=args.max_recoveries,
         progress_stall_seconds=args.progress_stall_seconds,
         spawn_to_line=not args.no_spawn_line,
+        force_start_menu_skip=not args.no_menu_skip,
     )
     if args.ac_root is not None:
         kwargs["ac_root"] = args.ac_root
@@ -1777,6 +1941,12 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         print(f"auto-drive: {exc}")
         return 2
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
+
+    # Repair any FORCE_START menu-skip a prior run left behind (hard-kill past its restore) before
+    # this run touches gui.ini again — runs for every invocation, not only setup runs (#461).
+    healed = self_heal_force_start(config)
+    if healed:
+        print(f"auto-drive: {healed}")
 
     car_tag = config.car_id or "car"
     evidence_dir = args.evidence_dir or (

@@ -45,8 +45,9 @@ The full loop each command owns:
    `acpmf_physics.fuel` (via the open-existing shared-memory reader, so a dead sim can't spoof a
    zero) back against the setup's `[FUEL] VALUE`. A match (±2.5 L default) confirms it (live-verified:
    fuel 45.0 L == Realistic_BB_v3 `FUEL=45`); a mismatch **fails the run at `stage="setup"`**. A
-   setup with no `[FUEL]` section is reported baked-but-unconfirmed. The harness deliberately writes
-   **only** `race.ini` (under AC Documents) — never CSP install-tree config.
+   setup with no `[FUEL]` section is reported baked-but-unconfirmed. For a **setup + drive** run the
+   direct relaunch also skips AC's NEW-UI pre-drive overlay via CSP `[BASIC] FORCE_START=1` in
+   `extension/config/gui.ini`, written transiently and snapshot-restored + self-healed (#461, below).
 5. **Drive** — `--driver ggv` (flat-out friction-circle min-time), `racing` (AI-line pace,
    default), or `cruise` (slow lane-keeper). Guards: sim-death detection, a **no-progress
    watchdog** (recovers stalls regardless of throttle), a **recovery cap** (default 6) that fails
@@ -83,23 +84,30 @@ long-term storage (scratch-dir disposability pitfall).
 - **Reference laps / TT comparison**: `--wait-lap` guarantees at least one archived lap;
   feed it to `tools.tt_ingest` / session review with `--reference-source tt`.
 
-## Known limitation — setup runs vs. the autonomous drive (tracked: #461)
+## Setup + autonomous drive compose in one command (#461)
 
-The setup path (bake + fuel-verify) and the autonomous drive **do not yet compose in one command**,
-because they need different launch modes:
+`--setup … --wait-lap` now applies the setup AND drives — **live-proven** at Spa on the 911 GT3 R
+(setup fuel 45.0 L verified, full valid lap at 209 km/h / top gear 6, coaching live). How the
+composition was closed:
 
-- The **drive** needs a **CM launch from the start line** (grid): CM skips the pre-drive menu and
-  arms CSP Custom-AI, and the car has open track ahead. Live-proven (multi-track: Spa + BMW Z4 GT3
-  flat-out, 211 km/h).
-- The **setup** needs a **direct acs relaunch** (to bake `race.ini` — CM regenerates it and its
-  Quick-Drive preset carries no setup). That relaunch lands at AC's pre-drive menu, where the
-  carcsw hijack can't arm, so a `--setup` run **applies + fuel-verifies the setup** (proven: fuel
-  45.0 L == Realistic_BB_v3 `FUEL=45`) and then reports `stage="hijack"` — the drive is not reached.
+- The **drive** needs the car in a live-driving session so CSP's Custom-AI subsystem is watching
+  (the carcsw hijack only lands then). A **direct acs relaunch** (needed to bake `race.ini` — CM
+  regenerates it and its Quick-Drive preset carries no setup) otherwise lands at AC's NEW-UI
+  pre-drive **"0 seconds" overlay**, which is **not hijackable**.
+- CSP `[BASIC] FORCE_START=1` skips that overlay so the car auto-starts into the live session. It is
+  honored **only from the install-tree** `extension/config/gui.ini` (the user-tree override is
+  ignored — live-found). The harness writes it **transiently** (relaunch window only), **snapshots +
+  restores it verbatim**, and **self-heals** any leftover on the next run — so a hard-killed run
+  never leaves the setting changed. Ruled out (all live-tested): CM setup-carry (no preset field /
+  no settable CM state), read-only `race.ini` + CM (CM then can't launch), PIT spawn (same overlay).
 
-Resolving the composition (`#461`) — CM setup-carry (spawn with the setup via CM so the drive path
-is unchanged), or a headless menu-skip that doesn't write CSP install-tree config, or verified
-custom-teleport pit-escape offsets. Use `--setup` today to **prove a setup loads** (fuel-verified
-evidence bundle); use a no-setup run to **prove the drive**.
+> **Reliability caveat (timing-sensitive).** FORCE_START's auto-start past the "0 seconds" overlay
+> on the direct relaunch is timing-sensitive: a launch cycle can land the car live-driving
+> (hijackable) or stall at the overlay (not hijackable, unrecoverable within that cycle). The only
+> recovery is a fresh cycle, so `max_launches` defaults to **5**. A run can still `stage=hijack`-fail
+> on a bad night, especially on a rig whose CSP/AC state has degraded from many hard `acs` kills —
+> **re-run, or reboot the rig for a clean CSP state.** Hardening (deterministic overlay detect +
+> fast-fail, keypress/`PRE_DRIVE_OVERLAY` overlay-skip) is tracked as a #461 follow-up.
 
 ## Troubleshooting (hard-won rig lore — read before debugging)
 
@@ -107,7 +115,7 @@ evidence bundle); use a no-setup run to **prove the drive**.
 |---|---|
 | Preflight `custom_ai` failure | Set `[CUSTOM_AI] ENABLED=1` in `<AC root>/extension/config/new_behaviour.ini` (user `cfg/extension/new_behaviour.ini` overrides when it carries the key) |
 | `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the direct relaunch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
-| `--setup` run: setup `applied=True` but drive fails (`stage=hijack` or `recovery cap ... at 0m`) | Known limitation (see above) — the direct-launch spawn can't compose with the drive yet. The setup IS applied/verified; the drive needs a no-setup CM run |
+| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay — FORCE_START's auto-start on the direct relaunch is timing-sensitive (#461, see above). The setup IS applied/verified; **re-run** (the 5-cycle budget usually catches a good cycle), and reboot the rig if it degraded from many hard `acs` kills |
 | CM clicks/launch do nothing | **Foreground steal**: minimize the agent/terminal window; AC's fullscreen menu covers CM — the harness kills stale `acs.exe` before each launch |
 | "Steam API failed to initialize" | Steam elevation mismatch — restart Steam **non-elevated** (`steam -shutdown`, relaunch via `explorer.exe`) |
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |

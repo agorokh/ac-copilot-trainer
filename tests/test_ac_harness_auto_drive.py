@@ -34,6 +34,7 @@ from tools.ac_harness.auto_drive import (
     resolve_fast_lane,
     resolve_setup_ini,
     run_auto_drive,
+    set_force_start_in_gui_ini,
     verify_setup_ack,
     write_evidence,
 )
@@ -161,7 +162,9 @@ def test_launch_failure_exhausts_launch_budget_before_failing():
     assert report.ok is False
     assert report.stage == "launch"
     assert report.error == "no LIVE"
-    assert launches == [1, 1, 1]
+    # Each attempt launches with max_launches=1 (rig_launch does one cycle); the outer loop retries
+    # up to the config budget (5 — bumped for the #461 timing-sensitive direct-relaunch auto-start).
+    assert launches == [1, 1, 1, 1, 1]
     assert report.hijacked is False
 
 
@@ -691,6 +694,41 @@ def test_bake_setup_creates_car0_section_if_absent():
     p.read_string(out)
     assert p.get("CAR_0", "SETUP") == "My Setup.ini"
     assert p.get("SESSION_0", "SPAWN_SET") == "PIT"
+
+
+def test_set_force_start_enables_in_basic_and_preserves_other_sections():
+    import configparser
+
+    gui = "[NEW_UI]\nREPLACE_MAIN_MENU=1\n\n[TWEAKS]\nUSE_THROTTLE_TO_START=1\n"
+    out = set_force_start_in_gui_ini(gui, True)
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(out)
+    assert p.get("BASIC", "FORCE_START") == "1"  # the menu-skip is armed
+    # Unrelated user CSP settings are preserved (we merge over the packaged config, not replace it).
+    assert p.get("NEW_UI", "REPLACE_MAIN_MENU") == "1"
+    assert p.get("TWEAKS", "USE_THROTTLE_TO_START") == "1"
+
+
+def test_set_force_start_creates_basic_section_when_absent_and_can_disable():
+    import configparser
+
+    # Empty/absent gui.ini → [BASIC] is created.
+    out_on = set_force_start_in_gui_ini("", True)
+    assert "[BASIC]" in out_on and "FORCE_START=1" in out_on.replace(" ", "")
+    # Restore-to-disabled path writes 0 (no spaces around '=', matching AC/CSP convention).
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(set_force_start_in_gui_ini(out_on, False))
+    assert p.get("BASIC", "FORCE_START") == "0"
+
+
+def test_no_menu_skip_flag_disables_force_start():
+    parser = _build_arg_parser()
+    # Default: menu-skip on (the setup+drive composition needs it).
+    assert _config_from_args(parser.parse_args(["--track", "spa"])).force_start_menu_skip is True
+    args = parser.parse_args(["--track", "spa", "--no-menu-skip"])
+    assert _config_from_args(args).force_start_menu_skip is False
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():
