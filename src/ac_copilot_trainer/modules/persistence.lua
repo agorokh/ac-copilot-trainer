@@ -356,7 +356,7 @@ local function archiveTraceToObjects(rec)
           brake = tonumber(row[idx.brake]) or 0,
           steer = tonumber(row[idx.steer]) or 0,
           gear = tonumber(row[idx.gear]) or 0,
-          rpm = tonumber(row[idx.rpm]) or 0,
+          rpm = (idx.rpm and tonumber(row[idx.rpm])) or 0,
           px = tonumber(row[idx.px]) or 0,
           py = tonumber(row[idx.py]) or 0,
           pz = tonumber(row[idx.pz]) or 0,

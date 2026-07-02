@@ -1463,7 +1463,6 @@ local function applyLoaded(data)
   else
     state.bestReferenceLapMs = nil
   end
-  rebuildBestReference()
   if state.bestLapTrace and #state.bestLapTrace >= 2 then
     state.racingBestLine = racingLine.traceToLine(state.bestLapTrace)
   else
@@ -1492,9 +1491,7 @@ local function applyLoaded(data)
   state.activeReferenceFormat = nil
   state.activeReferenceLapMs = state.bestReferenceLapMs or state.bestLapMs
   state.activeReferencePath = nil
-  state.shiftProfile = shiftProfile.learnFromReferenceTrace(state.bestLapTrace, state.trackSegments, {
-    source = state.activeReferenceSource or "reference",
-  })
+  rebuildBestReference()
 end
 
 local function persistPayload()

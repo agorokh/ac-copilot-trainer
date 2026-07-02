@@ -40,15 +40,47 @@ local function roundedGear(raw)
   return g
 end
 
-local function transitionRpm(prev, cur)
-  local prevRpm = tonumber(prev and prev.rpm)
-  local curRpm = tonumber(cur and cur.rpm)
-  local rpm = math.max((prevRpm and prevRpm == prevRpm) and prevRpm or 0,
-    (curRpm and curRpm == curRpm) and curRpm or 0)
+local function transitionRpm(...)
+  local rpm = 0
+  for i = 1, select("#", ...) do
+    local frame = select(i, ...)
+    local r = tonumber(frame and frame.rpm)
+    if r and r == r and r > rpm then
+      rpm = r
+    end
+  end
   if not rpm or rpm ~= rpm or rpm < MIN_SHIFT_RPM then
     return nil
   end
   return rpm
+end
+
+local function maxThrottle(...)
+  local gas = 0
+  for i = 1, select("#", ...) do
+    local frame = select(i, ...)
+    local g = tonumber(frame and frame.throttle) or tonumber(frame and frame.gas)
+    if g and g == g and g > gas then
+      gas = g
+    end
+  end
+  return gas
+end
+
+local function mergeShiftWindow(window, frame)
+  if type(frame) ~= "table" then
+    return window
+  end
+  window = window or { rpm = 0, throttle = 0 }
+  local rpm = tonumber(frame.rpm)
+  if rpm and rpm == rpm and rpm > (tonumber(window.rpm) or 0) then
+    window.rpm = rpm
+  end
+  local gas = tonumber(frame.throttle) or tonumber(frame.gas)
+  if gas and gas == gas and gas > (tonumber(window.throttle) or 0) then
+    window.throttle = gas
+  end
+  return window
 end
 
 local function forwardDelta(s0, s1)
@@ -115,19 +147,27 @@ function M.learnFromReferenceTrace(trace, segments, opts)
   local buckets = {}
   local transitions = 0
   if type(trace) == "table" then
-    for i = 2, #trace do
-      local prev = trace[i - 1]
+    local lastActive = nil
+    local neutralWindow = nil
+    for i = 1, #trace do
       local cur = trace[i]
-      local g0 = roundedGear(prev and prev.gear)
-      local g1 = roundedGear(cur and cur.gear)
-      local gas = math.max(tonumber(prev and prev.throttle) or 0, tonumber(cur and cur.throttle) or 0)
-      if g0 and g1 and g1 > g0 and gas >= MIN_SHIFT_GAS then
-        local rpm = transitionRpm(prev, cur)
-        if rpm then
-          buckets[g0] = buckets[g0] or {}
-          buckets[g0][#buckets[g0] + 1] = rpm
-          transitions = transitions + 1
+      local curGear = roundedGear(cur and cur.gear)
+      if curGear then
+        if lastActive and curGear > lastActive.gear then
+          local gas = maxThrottle(lastActive.frame, neutralWindow, cur)
+          if gas >= MIN_SHIFT_GAS then
+            local rpm = transitionRpm(lastActive.frame, neutralWindow, cur)
+            if rpm then
+              buckets[lastActive.gear] = buckets[lastActive.gear] or {}
+              buckets[lastActive.gear][#buckets[lastActive.gear] + 1] = rpm
+              transitions = transitions + 1
+            end
+          end
         end
+        lastActive = { gear = curGear, frame = cur }
+        neutralWindow = nil
+      elseif lastActive then
+        neutralWindow = mergeShiftWindow(neutralWindow, cur)
       end
     end
   end

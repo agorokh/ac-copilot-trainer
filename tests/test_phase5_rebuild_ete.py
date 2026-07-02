@@ -580,6 +580,35 @@ def test_ete03d_shift_cue_uses_learned_reference_rpm_before_heuristic_zone(lua):
     assert view["shiftZonePct"] == pytest.approx(7200 / 8400)
 
 
+def test_ete03e_shift_profile_learns_upshift_through_neutral(lua):
+    """#442: manual/mod traces can report Neutral between two active gears.
+
+    A 1->0->2 transition must still learn the upshift point instead of losing
+    the sample because the adjacent gear pair includes Neutral.
+    """
+    shift = lua.execute('local m = require("shift_profile"); return m')
+    trace = lua.execute("""
+        return {
+            {
+                spline = 0.10, eMs = 0, speed = 90,
+                throttle = 1.0, gear = 1, rpm = 6800,
+            },
+            {
+                spline = 0.11, eMs = 100, speed = 94,
+                throttle = 1.0, gear = 0, rpm = 7000,
+            },
+            {
+                spline = 0.12, eMs = 200, speed = 98,
+                throttle = 1.0, gear = 2, rpm = 6600,
+            },
+        }
+    """)
+    profile = shift["learnFromReferenceTrace"](trace, lua.table(), lua.eval("{ source = 'test' }"))
+
+    assert profile["hasLearnedShift"] is True
+    assert profile["byGear"][1] == 7000
+
+
 # ---------------------------------------------------------------------------
 # ETE-04: In a corner segment, slower than reference
 # ---------------------------------------------------------------------------
