@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T05:15:00Z
+last_updated: 2026-07-02T07:05:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -62,6 +62,24 @@ relates_to:
 ---
 
 # Next session handoff
+
+## In flight (2026-07-02 UTC) - #408 reference-library selection
+
+Branch `codex/issue-408-reference-library` from `origin/main` completes the remaining
+[#408](https://github.com/agorokh/ac-copilot-trainer/issues/408) Part D scope after PR
+[#418](https://github.com/agorokh/ac-copilot-trainer/pull/418) delivered sectors/SuperLap and
+[#353](https://github.com/agorokh/ac-copilot-trainer/issues/353) is closed. The report builder now
+classifies reference archives as `your-best`, `pro`, `tt`, `generated`, `imported`, or `none`;
+`tools.session_review` accepts `--reference-source` / `--reference-path`; sidecar
+`session.review.generate` accepts `reference_source` / basename-only `reference_file`; broadcasts
+keep local paths redacted while preserving `reference` / `reference_selection` metadata.
+
+Proof so far: `ruff check` + `ruff format --check` on touched Python files, `git diff --check`,
+`pytest tests/test_session_review.py tests/test_ai_sidecar_external.py tests/test_lap_archive_source_structure.py tests/test_ws_bridge_hello_handshake.py -q`
+(78 passed), and scratch CLI proof selecting Track Titan `lap_tt.json` with JSON + self-contained HTML.
+`make ci-fast` still stops at repo-wide `ruff format --check src tests tools scripts` because this
+Windows checkout has broad CRLF/LF drift across untouched files; do not fold that 226-file formatting
+churn into this PR unless the operator explicitly chooses a separate hygiene pass.
 
 ## Delivered (2026-07-02 UTC) — PRs #444/#445/#446 MERGED: Racing Atelier runtime adoption (#432 Parts A2+B, #86 fix)
 

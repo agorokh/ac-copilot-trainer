@@ -10,6 +10,7 @@ from tools.session_review.report import (
     SessionReviewError,
     build_session_report,
     main,
+    render_markdown,
     report_dir_for_lap_dir,
     write_session_report,
 )
@@ -22,6 +23,9 @@ def _corner_archive(
     lap_n: int,
     exported_at: str,
     degrade: float = 0.0,
+    source: str = "in_game",
+    import_format: str | None = None,
+    generator: dict | None = None,
 ) -> dict:
     radius, ds, n_pre, n_arc, n_post = 30.0, 2.0, 40, 30, 40
     n = n_pre + n_arc + n_post
@@ -57,9 +61,9 @@ def _corner_archive(
         [spline[i], v[i] * 3.6, t_ms[i], throttle[i], brake[i], steer[i], 4, xs[i], 0.0, zs[i]]
         for i in range(n)
     ]
-    return {
+    payload = {
         "schema_version": 1,
-        "source": "in_game",
+        "source": source,
         "lap_uuid": lap_uuid,
         "session_uuid": session_uuid,
         "exported_at": exported_at,
@@ -82,7 +86,19 @@ def _corner_archive(
             ],
             "samples": samples,
         },
+        "corners": [
+            {
+                "label": "T1",
+                "minSpeed": min(v) * 3.6,
+                "exitSpeed": max(v[apex_i:]) * 3.6,
+            }
+        ],
     }
+    if import_format is not None:
+        payload["import_format"] = import_format
+    if generator is not None:
+        payload["generator"] = generator
+    return payload
 
 
 def _write_lap(root: Path, name: str, payload: dict) -> Path:
@@ -137,8 +153,17 @@ def test_build_session_report_selects_latest_and_ranks_corner_problem(
 ) -> None:
     report = build_session_report([session_corpus], grip_ceiling_g=2.5, generated_at="stamp")
 
+    assert report["schema_version"] == 2
     assert report["session"]["session_uuid"] == "sess-latest"
     assert report["reference"]["source_file"] == "lap_ref.json"
+    assert report["reference"]["kind"] == "your-best"
+    assert report["reference_selection"] == {
+        "requested_source": "auto",
+        "active": True,
+        "active_source": "your-best",
+        "source_file": "lap_ref.json",
+        "reason": "fastest valid same car/track reference",
+    }
     assert report["problems"]
     top = report["problems"][0]
     assert top["label"] == "T1"
@@ -147,6 +172,108 @@ def test_build_session_report_selects_latest_and_ranks_corner_problem(
     assert report["source"]["selected_lap_files"] == ["lap_latest-1.json", "lap_latest-2.json"]
     assert report["screen_summary"][0].startswith("T1:")
     assert report["next_session_prep"][0].startswith("T1:")
+    assert [row["session_uuid"] for row in report["history"]["trend"]["sessions"]] == [
+        "sess-reference",
+        "sess-latest",
+    ]
+    assert report["history"]["trend"]["corner_speed"][0]["points"]
+    assert report["comparison"]["default_pair"]["a"] == "lap-latest-2"
+    assert report["comparison"]["default_pair"]["b"] == "lap-ref"
+    assert report["comparison"]["laps"][0]["trace"]["points"]
+
+
+def test_reference_source_selects_track_titan_over_faster_candidate(
+    session_corpus: Path,
+) -> None:
+    _write_lap(
+        session_corpus,
+        "tt",
+        _corner_archive(
+            lap_uuid="lap-tt",
+            session_uuid="sess-tt",
+            lap_n=1,
+            exported_at="2026-06-29T11:00:00Z",
+            degrade=3.0,
+            source="imported",
+            import_format="track_titan_reference_v1",
+            generator={"tt_reference": {"partial": False}},
+        ),
+    )
+    _write_lap(
+        session_corpus,
+        "pro",
+        _corner_archive(
+            lap_uuid="lap-pro",
+            session_uuid="sess-pro",
+            lap_n=1,
+            exported_at="2026-06-29T11:10:00Z",
+            degrade=0.0,
+            source="imported",
+            import_format="motec_csv",
+        ),
+    )
+
+    report = build_session_report(
+        [session_corpus],
+        session="sess-latest",
+        reference_source="tt",
+        grip_ceiling_g=2.5,
+        generated_at="stamp",
+    )
+
+    assert report["reference"]["source_file"] == "lap_tt.json"
+    assert report["reference"]["kind"] == "tt"
+    assert report["reference_selection"]["requested_source"] == "tt"
+    assert report["reference_selection"]["active_source"] == "tt"
+    assert any(row["reference_kind"] == "tt" for row in report["history"]["laps"])
+
+
+def test_reference_source_none_disables_reference_comparison(session_corpus: Path) -> None:
+    report = build_session_report(
+        [session_corpus],
+        reference_source="none",
+        grip_ceiling_g=2.5,
+        generated_at="stamp",
+    )
+
+    assert report["reference"] is None
+    assert report["reference_selection"] == {
+        "requested_source": "none",
+        "active": False,
+        "active_source": None,
+        "source_file": None,
+        "reason": "reference comparison disabled by request",
+    }
+    assert "Reference: none (reference comparison disabled by request)" in render_markdown(report)
+
+
+def test_reference_path_pins_generated_reference(session_corpus: Path) -> None:
+    generated_path = _write_lap(
+        session_corpus,
+        "generated",
+        _corner_archive(
+            lap_uuid="lap-generated",
+            session_uuid="sess-generated",
+            lap_n=1,
+            exported_at="2026-06-29T11:20:00Z",
+            degrade=4.0,
+            source="imported",
+            import_format="generated_reference_v1",
+            generator={"name": "tools.ac_harness.reference_lap.synthetic"},
+        ),
+    )
+
+    report = build_session_report(
+        [session_corpus],
+        session="sess-latest",
+        reference_path=generated_path,
+        grip_ceiling_g=2.5,
+        generated_at="stamp",
+    )
+
+    assert report["reference"]["source_file"] == "lap_generated.json"
+    assert report["reference"]["kind"] == "generated"
+    assert report["reference_selection"]["reason"] == "explicit reference file selected"
 
 
 def test_missing_exported_at_does_not_break_latest_selection(session_corpus: Path) -> None:
@@ -207,12 +334,19 @@ def test_write_session_report_saves_markdown_and_json_under_reports(
 
     assert written.markdown_path.is_file()
     assert written.json_path.is_file()
+    assert written.html_path.is_file()
     assert written.markdown_path.parent.name == "reports"
     markdown = written.markdown_path.read_text(encoding="utf-8")
     assert "## Problem List" in markdown
     assert "## Next Session Prep" in markdown
+    assert "## Lap History" in markdown
     payload = json.loads(written.json_path.read_text(encoding="utf-8"))
     assert payload["spoken_summary"] == report["spoken_summary"]
+    assert payload["reference_selection"]["active"] is True
+    html = written.html_path.read_text(encoding="utf-8")
+    assert "Lap Compare" in html
+    assert 'id="review-data"' in html
+    assert "https://" not in html
 
 
 def test_report_output_must_stay_under_journal_reports(session_corpus: Path) -> None:
@@ -230,6 +364,7 @@ def test_absolute_sibling_report_dir_for_lap_dir_is_allowed(session_corpus: Path
 
     assert written.markdown_path.parent == output_dir
     assert written.json_path.parent == output_dir
+    assert written.html_path.parent == output_dir
 
 
 def test_cli_generates_json_result(
@@ -241,7 +376,10 @@ def test_cli_generates_json_result(
     payload = json.loads(capsys.readouterr().out)
     assert Path(payload["markdown"]).is_file()
     assert Path(payload["json"]).is_file()
+    assert Path(payload["html"]).is_file()
     assert payload["screen_summary"]
+    assert payload["reference"]["kind"] == "your-best"
+    assert payload["reference_selection"]["requested_source"] == "auto"
 
 
 def test_session_without_valid_laps_fails_closed(
