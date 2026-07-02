@@ -656,8 +656,11 @@ def test_bake_setup_into_race_ini_writes_both_keys_and_spawn():
     import configparser
     from pathlib import Path as _P
 
+    # POSIX path so the test is platform-independent (on the rig setup_ini is a Windows Path;
+    # Path.name only splits on the host separator, so a literal backslash path would not split
+    # under Linux CI — the real caller always passes a native path).
     race = "[CAR_0]\nSKIN=brg\nMODEL=-\n\n[SESSION_0]\nNAME=Practice\nTYPE=1\nSPAWN_SET=PIT\n"
-    setup = _P(r"C:\Users\x\Documents\Assetto Corsa\setups\car\spa\Realistic_BB_v3.ini")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
     out = bake_setup_into_race_ini(race, setup)
     p = configparser.ConfigParser(strict=False)
     p.optionxform = str
