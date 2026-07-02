@@ -1063,7 +1063,9 @@ def _bake_and_relaunch_with_setup(
     baked = bake_setup_into_race_ini(
         race_ini.read_text(encoding="utf-8", errors="surrogateescape"), config.setup_ini
     )
-    race_ini.write_text(baked, encoding="utf-8", newline="\n")
+    # Match the read's surrogateescape on write: race.ini is read tolerantly, so a strict UTF-8
+    # write would raise UnicodeEncodeError on any preserved non-UTF-8 byte (qodo #460 review).
+    race_ini.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
     _direct_acs_launch(config)
     if not _wait_live(config.attempt_timeout):
         return False, "sim never reached LIVE after the setup relaunch"
