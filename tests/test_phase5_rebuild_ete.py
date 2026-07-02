@@ -805,16 +805,21 @@ def test_ete08b_coaching_font_uses_inline_path_syntax():
 
 
 def test_ete08c_coaching_overlay_bottom_tile_always_renders(lua):
-    """ETE-08c: drawApproachPanel ALWAYS renders chrome + footer, even when
-    approachData is nil. Today it returns false and renders nothing."""
+    """ETE-08c: drawApproachPanel ALWAYS renders chrome, even when
+    approachData is nil ("never blank" contract). The #432 Part A2 card
+    replaced the RACING ATELIER footer with the template's own anatomy, so
+    the placeholder markers are now the CommandVerb + delta-status words."""
     overlay = lua.execute('local m = require("coaching_overlay"); return m')
     lua.execute("_reset_recorders()")
-    # nil approach data — should still render chrome + RACING ATELIER footer
+    # nil approach data — should still render chrome + placeholder card
     overlay["drawApproachPanel"](None)
     rects = lua.execute("return #_draw_rect_filled_calls")
     assert rects >= 1, "drawApproachPanel(nil) must still render panel chrome"
-    assert lua.execute('return _count_dwrite_text("RACING ATELIER")') >= 1, (
-        "drawApproachPanel(nil) must render 'RACING ATELIER' footer"
+    assert lua.execute('return _count_dwrite_text("DRIVE")') >= 1, (
+        "drawApproachPanel(nil) must render the placeholder CommandVerb"
+    )
+    assert lua.execute('return _count_dwrite_text("WAITING")') >= 1, (
+        "drawApproachPanel(nil) must render the WAITING delta status"
     )
 
 

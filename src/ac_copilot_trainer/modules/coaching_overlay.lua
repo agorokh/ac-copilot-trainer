@@ -12,7 +12,7 @@ local M = {}
 
 -- Racing Atelier palette (epic #432 Part A) — sourced from design_tokens.lua (single source of
 -- truth, validated against the design colors.css). Carbon ground, brass accent, signal fields.
-local COLOR_BG           = T.color("carbon", 0.78)  -- carbon panel ground
+local COLOR_BG           = T.color("carbon", 0.86)  -- carbon card ground (glass-fill alpha, blur waived)
 local COLOR_BG_BORDER    = T.color("edge", 0.60)    -- structural edge
 local COLOR_LABEL        = T.color("mute")          -- muted labels
 local COLOR_LABEL_GREY   = T.color("mute")          -- small-caps labels
@@ -85,7 +85,11 @@ local function drawProgressBar(x, y, w, h, pct)
 end
 
 -- ---------------------------------------------------------------------------
--- Approach telemetry panel (issue #72 rebuild — always-visible, gearbox-style)
+-- Approach instrument card (issue #432 Part A2 — photo-identical rebuild)
+-- One unified 560px card mirroring templates/ingame-hud/InGameHud.dc.html:
+-- header (corner badge + name + gear/speed columns) → CommandVerb + brake-point
+-- readout → 12-cell SegmentBar → entry-delta DeltaBar. Fixed offsets from one
+-- origin; all px values are the design's own (no scaling).
 -- ---------------------------------------------------------------------------
 
 --- Helper: measure DWrite text safely (returns vec2)
@@ -104,6 +108,105 @@ local function _drawDW(text, fontPx, position, color)
       ui.dwriteDrawText(text, fontPx, position, color)
     end)
   end
+end
+
+--- ASCII-only uppercase. Lua's string.upper is locale/byte-wise and MANGLES
+--- UTF-8 (0xE2 of "—" gets "uppercased" to 0xC2 under Windows locales),
+--- corrupting em-dash placeholders and any unicode corner name.
+local function asciiUpper(s)
+  return (string.gsub(tostring(s), "[a-z]", function(c)
+    return string.char(string.byte(c) - 32)
+  end))
+end
+
+-- Card geometry (design canvas 560x338; template padding 22px 26px)
+local CARD_PAD_X = 26
+local CARD_PAD_Y = 22
+local BRACKET_ARM = 14   -- --bracket: 14px
+local BRACKET_W   = 2    -- --bracket-w: 2px
+
+--- Brass corner brackets: four L-shapes overlapping the card border
+--- (two filled rects per corner — keeps to the proven drawRectFilled surface).
+local function drawBrackets(w, h)
+  local arm, s = BRACKET_ARM, BRACKET_W
+  local brass = T.color("brass")
+  -- top-left
+  ui.drawRectFilled(vec2(0, 0), vec2(arm, s), brass, 0)
+  ui.drawRectFilled(vec2(0, 0), vec2(s, arm), brass, 0)
+  -- top-right
+  ui.drawRectFilled(vec2(w - arm, 0), vec2(w, s), brass, 0)
+  ui.drawRectFilled(vec2(w - s, 0), vec2(w, arm), brass, 0)
+  -- bottom-left
+  ui.drawRectFilled(vec2(0, h - s), vec2(arm, h), brass, 0)
+  ui.drawRectFilled(vec2(0, h - arm), vec2(s, h), brass, 0)
+  -- bottom-right
+  ui.drawRectFilled(vec2(w - arm, h - s), vec2(w, h), brass, 0)
+  ui.drawRectFilled(vec2(w - s, h - arm), vec2(w, h), brass, 0)
+end
+
+--- CommandVerb arrow: crisp filled triangle from 1px rect slices (no glyph /
+--- font-fallback risk — the LVGL port hit tofu on subset fonts, PR #430).
+local function drawDownTriangle(cx, topY, triW, triH, color)
+  local rows = math.max(4, math.floor(triH + 0.5))
+  for i = 0, rows - 1 do
+    local t = i / rows
+    local halfW = (triW * 0.5) * (1 - t)
+    if halfW < 0.5 then break end
+    ui.drawRectFilled(
+      vec2(cx - halfW, topY + i),
+      vec2(cx + halfW, topY + i + 1),
+      color, 0)
+  end
+end
+
+local function drawUpTriangle(cx, topY, triW, triH, color)
+  local rows = math.max(4, math.floor(triH + 0.5))
+  for i = 0, rows - 1 do
+    local t = i / rows
+    local halfW = (triW * 0.5) * t
+    if halfW >= 0.5 then
+      ui.drawRectFilled(
+        vec2(cx - halfW, topY + i),
+        vec2(cx + halfW, topY + i + 1),
+        color, 0)
+    end
+  end
+end
+
+--- Map the realtime engine's primary line to the design's CommandVerb
+--- (one loud word + tone + optional arrow). The full engine vocabulary is
+--- preserved: every primaryLine value maps to a distinct verb/tone and the
+--- detailed line keeps rendering on WINDOW_0 (substance preservation, #432).
+---@return string word, table toneColor, string|nil arrow
+local function verbFor(kind, primaryLine, subState)
+  local p = type(primaryLine) == "string" and primaryLine or ""
+  if subState == "no_reference" or p == "" or p == "DRIVE A LAP" then
+    return "DRIVE", COLOR_LABEL, nil
+  end
+  if p == "BRAKE NOW" then return "BRAKE", COLOR_RED, "down" end
+  if p == "PREPARE TO BRAKE" then return "PREPARE", COLOR_AMBER, "down" end
+  if p == "EASE OFF" then return "LIFT", COLOR_AMBER, "up" end
+  if p == "CARRY MORE SPEED" then return "PUSH", COLOR_GREEN, "up" end
+  if p == "APPROACHING" then return "READY", COLOR_GREEN, nil end
+  if p == "ON PACE" then return "ON PACE", COLOR_GREEN, nil end
+  local tone = COLOR_GREEN
+  if kind == "brake" then
+    tone = COLOR_RED
+  elseif kind == "line" then
+    tone = COLOR_AMBER
+  end
+  return p, tone, nil
+end
+
+--- Entry-delta status label (right side of the delta header). Replaces the
+--- old WAITING/APPROACHING state word; tones follow DeltaBar.jsx (slack=4).
+local function deltaStatus(v, hasRef)
+  if not hasRef then
+    return "WAITING", COLOR_LABEL
+  end
+  if v > 4 then return "TOO HOT — LIFT", COLOR_RED end
+  if v < -4 then return "TOO SLOW", COLOR_AMBER end
+  return "ON LINE", COLOR_GREEN
 end
 
 --- Bottom tile: structured approach telemetry panel.
@@ -163,9 +266,14 @@ function M.drawApproachPanel(approachData)
   local distanceM     = hasData and tonumber(approachData.distanceToBrakeM) or nil
   local progressPct   = hasData and tonumber(approachData.progressPct) or 0
   local subState      = hasData and tostring(approachData.subState or approachData.status or "no_reference") or "no_reference"
+  local gear          = hasData and tonumber(approachData.gear) or nil
+  local trackName     = hasData and approachData.trackName or nil
+  local zonePct       = hasData and tonumber(approachData.zonePct) or 0.25
+  local kind          = hasData and approachData.kind or nil
+  local primaryLine   = hasData and approachData.primaryLine or nil
 
-  -- Window dimensions (from manifest FIXED_SIZE 640x240)
-  local w, h = 640, 240
+  -- Window dimensions (from manifest FIXED_SIZE 560x338 — the card IS the window)
+  local w, h = 560, 338
   if ui.windowSize then
     local sz = ui.windowSize()
     if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
@@ -173,170 +281,257 @@ function M.drawApproachPanel(approachData)
     end
   end
 
-  -- Panel background — always rendered
+  -- Card ground — glass waived per council (CSP has no backdrop blur):
+  -- flat carbon at the glass-fill alpha, 1px edge border, square corners.
   ui.drawRectFilled(vec2(0, 0), vec2(w, h), COLOR_BG, PANEL_ROUNDING)
   if type(ui.drawRect) == "function" then
     ui.drawRect(vec2(0, 0), vec2(w, h), COLOR_BG_BORDER, PANEL_ROUNDING, nil, 1)
   end
+  drawBrackets(w, h)
 
-  local padX = PANEL_PAD_X
-  local padY = PANEL_PAD_Y
+  local padX = CARD_PAD_X
+  local padY = CARD_PAD_Y
+  local contentW = w - padX * 2
 
   ------------------------------------------------------------------
-  -- ROW 1: split L/R
-  --   LEFT  : "APPROACHING" small caps + corner label (Michroma)
-  --   RIGHT : shared box → TARGET ENTRY | CURRENT  (Michroma numbers)
+  -- HEADER: [T4] ASCARI ······· GEAR 2 · KM/H 196, then 1px hairline
   ------------------------------------------------------------------
-  local row1Y      = padY
-  local leftX      = padX
-  local rightBoxX  = math.floor(w * 0.50)
-  local rightBoxW  = w - rightBoxX - padX
-  local rightBoxH  = 80
-  local rightBoxY  = row1Y - 6
+  local hairY = padY + 37 + 14  -- header block 37 tall + 14 padding-bottom
 
-  -- Shared right-side box frame
-  ui.drawRectFilled(
-    vec2(rightBoxX, rightBoxY),
-    vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
-    rgbm(0.04, 0.04, 0.05, 0.55),
-    8
-  )
-  if type(ui.drawRect) == "function" then
-    ui.drawRect(
-      vec2(rightBoxX, rightBoxY),
-      vec2(rightBoxX + rightBoxW, rightBoxY + rightBoxH),
-      COLOR_BG_BORDER,
-      8,
-      nil,
-      1
-    )
-  end
-
-  -- LEFT column: APPROACHING label
+  -- Corner badge (brass field, black ink) + track/corner name
   do
-    local labelStr = (subState == "no_reference") and "WAITING" or "APPROACHING"
-    local lk = fontMod.pushNamed("labels_bold", 11)
-    _drawDW(labelStr, 11, vec2(leftX, row1Y), COLOR_LABEL_GREY)
-    fontMod.pop(lk)
-  end
-
-  -- LEFT column: corner label (large Michroma uppercase)
-  do
-    local cornerStr = string.upper(turnLabel)
-    local ck = fontMod.pushNamed("numbers", 28)
-    _drawDW(cornerStr, 28, vec2(leftX, row1Y + 18), COLOR_WHITE)
-    fontMod.pop(ck)
-  end
-
-  -- RIGHT column: shared box vertical split
-  local subColW = math.floor(rightBoxW / 2)
-  local subPad  = 14
-  local tgtX    = rightBoxX + subPad
-  local curX    = rightBoxX + subColW + subPad
-
-  -- Vertical divider between TARGET ENTRY and CURRENT
-  ui.drawRectFilled(
-    vec2(rightBoxX + subColW, rightBoxY + 12),
-    vec2(rightBoxX + subColW + 1, rightBoxY + rightBoxH - 12),
-    COLOR_BG_BORDER,
-    0
-  )
-
-  -- TARGET ENTRY label
-  do
-    local lk = fontMod.pushNamed("labels_bold", 10)
-    _drawDW("TARGET ENTRY", 10, vec2(tgtX, rightBoxY + 12), COLOR_LABEL_GREY)
-    fontMod.pop(lk)
-  end
-
-  -- TARGET ENTRY value (placeholder when nil)
-  do
-    local tgtStr = targetSpd and string.format("%.0f", targetSpd) or "—"
-    local nk = fontMod.pushNamed("numbers", 26)
-    _drawDW(tgtStr, 26, vec2(tgtX, rightBoxY + 30), COLOR_WHITE)
-    fontMod.pop(nk)
-    -- KM/H unit
-    local tgtSize = _measureDW(tgtStr, 26)
-    local uk = fontMod.pushNamed("labels_bold", 9)
-    _drawDW("KM/H", 9, vec2(tgtX + tgtSize.x + 4, rightBoxY + 48), COLOR_LABEL_GREY)
-    fontMod.pop(uk)
-  end
-
-  -- CURRENT label
-  do
-    local lk = fontMod.pushNamed("labels_bold", 10)
-    local labelColor = (currentSpd and targetSpd and currentSpd > targetSpd + 8)
-      and COLOR_RED or COLOR_LABEL_GREY
-    _drawDW("CURRENT", 10, vec2(curX, rightBoxY + 12), labelColor)
-    fontMod.pop(lk)
-  end
-
-  -- CURRENT value (red when over target+8, white otherwise)
-  do
-    local curStr = currentSpd and string.format("%.0f", currentSpd) or "—"
-    local spdCol
-    if currentSpd and targetSpd then
-      spdCol = speedColor(currentSpd, targetSpd)
+    local badgeText, nameText
+    local digits = string.match(turnLabel, "^[Tt]?(%d+)")
+    if digits then
+      badgeText = "T" .. digits
+      nameText = trackName and tostring(trackName) or turnLabel
     else
-      spdCol = COLOR_WHITE
+      badgeText = "T—"
+      nameText = turnLabel
     end
-    local nk = fontMod.pushNamed("numbers", 28)
-    _drawDW(curStr, 28, vec2(curX, rightBoxY + 28), spdCol)
+    if not hasData then
+      badgeText, nameText = "T—", trackName and tostring(trackName) or "—"
+    end
+    local nameY = padY + 10
+    local bk = fontMod.pushNamed("disp", 14)
+    local bSize = _measureDW(badgeText, 14)
+    local badgeW = bSize.x + 12
+    local badgeH = 20
+    local badgeY = nameY + 3
+    ui.drawRectFilled(vec2(padX, badgeY), vec2(padX + badgeW, badgeY + badgeH), COLOR_TITLE, 0)
+    _drawDW(badgeText, 14, vec2(padX + 6, badgeY + 2), T.color("carbon"))
+    fontMod.pop(bk)
+    local nk = fontMod.pushNamed("disp", 22)
+    _drawDW(asciiUpper(nameText), 22, vec2(padX + badgeW + 9, nameY), COLOR_WHITE)
     fontMod.pop(nk)
-    local curSize = _measureDW(curStr, 28)
-    local uk = fontMod.pushNamed("labels_bold", 9)
-    _drawDW("KM/H", 9, vec2(curX + curSize.x + 4, rightBoxY + 48), spdCol)
-    fontMod.pop(uk)
+  end
+
+  -- Stat columns (labels 9px dim over values 24px chalk, right-aligned)
+  do
+    local gearStr
+    if gear == nil then
+      gearStr = "—"
+    elseif gear < 0 then
+      gearStr = "R"
+    elseif gear == 0 then
+      gearStr = "N"
+    else
+      gearStr = string.format("%d", gear)
+    end
+    local spdStr = currentSpd and string.format("%.0f", currentSpd) or "—"
+    local spdCol = (currentSpd and targetSpd) and speedColor(currentSpd, targetSpd) or COLOR_WHITE
+
+    local vk = fontMod.pushNamed("read", 24)
+    local spdW = _measureDW(spdStr, 24).x
+    local gearW = _measureDW(gearStr, 24).x
+    fontMod.pop(vk)
+    local lk = fontMod.pushNamed("label", 9)
+    local spdLblW = _measureDW("KM/H", 9).x
+    local gearLblW = _measureDW("GEAR", 9).x
+    fontMod.pop(lk)
+
+    local col2W = math.max(spdW, spdLblW)
+    local col1W = math.max(gearW, gearLblW)
+    local col2Right = w - padX
+    local col1Right = col2Right - col2W - 16
+
+    local lk2 = fontMod.pushNamed("label", 9)
+    _drawDW("GEAR", 9, vec2(col1Right - gearLblW, padY), COLOR_BRAND_GREY)
+    _drawDW("KM/H", 9, vec2(col2Right - spdLblW, padY), COLOR_BRAND_GREY)
+    fontMod.pop(lk2)
+    local vk2 = fontMod.pushNamed("read", 24)
+    _drawDW(gearStr, 24, vec2(col1Right - gearW, padY + 13), COLOR_WHITE)
+    _drawDW(spdStr, 24, vec2(col2Right - spdW, padY + 13), spdCol)
+    fontMod.pop(vk2)
+    local _ = col1W  -- column width kept for readability; right anchors drive layout
+  end
+
+  -- Header hairline (--line at reduced alpha over carbon ≈ chalk @ 0.07)
+  ui.drawRectFilled(vec2(padX, hairY), vec2(w - padX, hairY + 1), T.color("chalk", 0.07), 0)
+
+  ------------------------------------------------------------------
+  -- COMMAND ROW: giant verb (+ arrow) left, brake-point readout right
+  ------------------------------------------------------------------
+  local cmdY = hairY + 1 + 18
+  do
+    local word, tone, arrow = verbFor(kind, primaryLine, subState)
+    local vk = fontMod.pushNamed("verb", 66)
+    local wordU = asciiUpper(word)
+    local verbPx = 66
+    local wordW = _measureDW(wordU, verbPx).x
+    if wordW > 188 and wordW > 0 then
+      verbPx = math.max(30, math.floor(66 * 188 / wordW))
+      wordW = _measureDW(wordU, verbPx).x
+    end
+    _drawDW(wordU, verbPx, vec2(padX, cmdY), tone)
+    fontMod.pop(vk)
+    if arrow == "down" then
+      drawDownTriangle(padX + verbPx * 0.21 + 4, cmdY + verbPx * 0.92 + 4, verbPx * 0.30, verbPx * 0.24, tone)
+    elseif arrow == "up" then
+      drawUpTriangle(padX + verbPx * 0.21 + 4, cmdY + verbPx * 0.92 + 4, verbPx * 0.30, verbPx * 0.24, tone)
+    end
+  end
+
+  -- Brake-point readout (right-aligned): label 11px, number 58px, unit mono 15px
+  do
+    local lk = fontMod.pushNamed("label", 11)
+    local lblW = _measureDW("BRAKE POINT", 11).x
+    _drawDW("BRAKE POINT", 11, vec2(w - padX - lblW, cmdY), COLOR_BRAND_GREY)
+    fontMod.pop(lk)
+
+    local distStr = distanceM and string.format("%d", math.floor(distanceM + 0.5)) or "—"
+    local mk = fontMod.pushNamed("mono", 15)
+    local unitW = _measureDW("m", 15).x
+    fontMod.pop(mk)
+    local nk = fontMod.pushNamed("read", 58)
+    local numW = _measureDW(distStr, 58).x
+    local numX = w - padX - unitW - 4 - numW
+    _drawDW(distStr, 58, vec2(numX, cmdY + 16), COLOR_WHITE)
+    fontMod.pop(nk)
+    local mk2 = fontMod.pushNamed("mono", 15)
+    _drawDW("m", 15, vec2(numX + numW + 4, cmdY + 16 + 58 - 20), COLOR_LABEL)
+    fontMod.pop(mk2)
   end
 
   ------------------------------------------------------------------
-  -- ROW 2: DISTANCE TO BRAKING POINT label + big number + progress bar
+  -- SEGMENT BAR: 12 cells, SegmentBar.jsx algorithm verbatim
   ------------------------------------------------------------------
-  local row2Y = rightBoxY + rightBoxH + 18
-
+  local segY = cmdY + 80 + 16
+  local SEG_H = 26
   do
-    local lk = fontMod.pushNamed("labels_bold", 11)
-    _drawDW("DISTANCE TO BRAKING POINT", 11, vec2(padX, row2Y), COLOR_LABEL_GREY)
+    local count = 12
+    local gap = 3
+    local cellW = (contentW - gap * (count - 1)) / count
+    local f = math.max(0, math.min(1, progressPct or 0))
+    local z = math.max(0, math.min(1, zonePct or 0))
+    local filledCount = math.floor(f * count + 0.5)
+    local zoneStart = count - math.floor(z * count + 0.5)
+    for i = 0, count - 1 do
+      local inZone = i >= zoneStart
+      local filled = i < filledCount
+      local leading = i == filledCount - 1
+      local cellColor
+      if filled and inZone then
+        cellColor = COLOR_RED                    -- --seg-red
+      elseif filled and leading then
+        cellColor = COLOR_AMBER                  -- --seg-amb
+      elseif filled then
+        cellColor = COLOR_WHITE                  -- --seg-lit
+      elseif inZone then
+        cellColor = T.color("brake", 0.16)       -- --seg-zone
+      else
+        cellColor = T.color("raise")             -- --seg-off
+      end
+      local x0 = padX + i * (cellW + gap)
+      ui.drawRectFilled(vec2(x0, segY), vec2(x0 + cellW, segY + SEG_H), cellColor, 0)
+    end
+  end
+
+  -- Segment captions: NOW (dim) / BRAKE ZONE (brake)
+  local capY = segY + SEG_H + 7
+  do
+    local lk = fontMod.pushNamed("label", 11)
+    _drawDW("NOW", 11, vec2(padX, capY), COLOR_BRAND_GREY)
+    local bzW = _measureDW("BRAKE ZONE", 11).x
+    _drawDW("BRAKE ZONE", 11, vec2(w - padX - bzW, capY), COLOR_RED)
     fontMod.pop(lk)
   end
 
-  -- Big distance value, right-aligned. Shifted up (row2Y - 12 instead of
-  -- row2Y - 4) so the 24px number has visible breathing room above the
-  -- progress bar — round 6 user feedback: "number is stuck to the bar".
+  ------------------------------------------------------------------
+  -- ENTRY DELTA: header row, center-anchored DeltaBar, big signed number
+  ------------------------------------------------------------------
+  local dltHdrY = capY + 11 + 22
+  local troughY = dltHdrY + 12 + 10
+  local TROUGH_H = 24
+  local hasRef = (currentSpd ~= nil and targetSpd ~= nil)
+  local vRaw = hasRef and (currentSpd - targetSpd) or 0
+  local vMax = 20
+  local v = math.max(-vMax, math.min(vMax, vRaw))
   do
-    local distStr = distanceM and string.format("%d M", math.floor(distanceM + 0.5)) or "—"
-    local nk = fontMod.pushNamed("numbers", 24)
-    local distSize = _measureDW(distStr, 24)
-    _drawDW(distStr, 24, vec2(w - padX - distSize.x, row2Y - 12), COLOR_WHITE)
-    fontMod.pop(nk)
+    local hdrLeft = targetSpd
+      and string.format("ENTRY Δ · REF %.0f KM/H", targetSpd)
+      or "ENTRY Δ"
+    local lk = fontMod.pushNamed("label", 12)
+    _drawDW(hdrLeft, 12, vec2(padX, dltHdrY), COLOR_LABEL)
+    local statusText, statusColor = deltaStatus(v, hasRef)
+    local stW = _measureDW(statusText, 12).x
+    _drawDW(statusText, 12, vec2(w - padX - stW, dltHdrY), statusColor)
+    fontMod.pop(lk)
   end
 
-  -- Progress bar (taller, red fill per Figma). Nudged down 4px so it sits
-  -- clear of the 24px distance value above.
-  local barY = row2Y + 30
-  local barW = w - padX * 2
-  local barH = 14
-  drawProgressBar(padX, barY, barW, barH, progressPct or 0)
-
-  ------------------------------------------------------------------
-  -- Footer: RACING ATELIER (brand)
-  ------------------------------------------------------------------
-  local divY = barY + barH + 14
-  ui.drawRectFilled(
-    vec2(padX, divY),
-    vec2(w - padX, divY + 1),
-    COLOR_BG_BORDER,
-    0
-  )
-
   do
-    local footerStr = "RACING ATELIER"
-    local fontPx = 12
-    local footerSize = _measureDW(footerStr, fontPx)
-    local footerX = math.floor(w * 0.5 - footerSize.x * 0.5)
-    local fk = fontMod.pushNamed("brand", fontPx)
-    _drawDW(footerStr, fontPx, vec2(footerX, divY + 10), COLOR_WHITE)
-    fontMod.pop(fk)
+    -- DeltaBar.jsx: tone by slack, fill grows from the center tick
+    local tone = COLOR_GREEN
+    if v > 4 then
+      tone = COLOR_RED
+    elseif v < -4 then
+      tone = COLOR_AMBER
+    end
+    if not hasRef then tone = COLOR_LABEL end
+
+    local numMinW = 84
+    local rowGap = 14
+    local troughX = padX
+    local troughW = contentW - rowGap - numMinW
+    ui.drawRectFilled(vec2(troughX, troughY), vec2(troughX + troughW, troughY + TROUGH_H), COLOR_BAR_BG, 0)
+    -- center tick (2px, overhangs 3px top/bottom)
+    local tickX = troughX + troughW * 0.5 - 1
+    ui.drawRectFilled(vec2(tickX, troughY - 3), vec2(tickX + 2, troughY + TROUGH_H + 3), COLOR_LABEL, 0)
+    -- tone fill from center
+    if hasRef and math.abs(v) > 0.01 then
+      local halfFrac = math.abs(v) / vMax * 0.5
+      local fillW = troughW * halfFrac
+      if v >= 0 then
+        ui.drawRectFilled(vec2(troughX + troughW * 0.5, troughY), vec2(troughX + troughW * 0.5 + fillW, troughY + TROUGH_H), tone, 0)
+      else
+        ui.drawRectFilled(vec2(troughX + troughW * 0.5 - fillW, troughY), vec2(troughX + troughW * 0.5, troughY + TROUGH_H), tone, 0)
+      end
+    end
+    -- big signed number, right-aligned, vertically centered on the trough
+    local numStr = "—"
+    if hasRef then
+      local vInt = math.floor(v + (v >= 0 and 0.5 or -0.5))
+      numStr = (vInt > 0 and "+" or "") .. string.format("%d", vInt)
+    end
+    local nk = fontMod.pushNamed("read", 40)
+    local numW = _measureDW(numStr, 40).x
+    _drawDW(numStr, 40, vec2(w - padX - numW, troughY - 4), tone)
+    fontMod.pop(nk)
+
+    -- scale row: −20 / ref (mono) / +20
+    local scaleY = troughY + TROUGH_H + 6
+    local lk = fontMod.pushNamed("label", 9)
+    _drawDW("-20", 9, vec2(padX, scaleY), COLOR_BRAND_GREY)
+    local p20W = _measureDW("+20", 9).x
+    _drawDW("+20", 9, vec2(w - padX - p20W, scaleY), COLOR_BRAND_GREY)
+    fontMod.pop(lk)
+    if targetSpd then
+      local refStr = string.format("%.0f km/h", targetSpd)
+      local mk = fontMod.pushNamed("mono", 10)
+      local refW = _measureDW(refStr, 10).x
+      _drawDW(refStr, 10, vec2(troughX + troughW * 0.5 - refW * 0.5, scaleY), COLOR_BRAND_GREY)
+      fontMod.pop(mk)
+    end
   end
 
   return true

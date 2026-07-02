@@ -28,6 +28,10 @@ local PREPARE_OVER_KMH     = 5     -- "too fast" delta for PREPARE TO BRAKE
 local CORNER_DELTA_KMH     = 8     -- in-corner ±delta for "carry more / ease off"
 local APPROACH_DEFAULT_M   = 200   -- max distance ahead we even look at the next brake
 
+-- Exported so the HUD derives its SegmentBar brake-zone fraction from the SAME
+-- threshold that fires "BRAKE NOW" (single source of truth, #432 Part A2).
+M.BRAKE_NOW_DIST_M = BRAKE_NOW_DIST_M
+
 -- ---------------------------------------------------------------------------
 -- Module state (reset via M.reset).
 -- ---------------------------------------------------------------------------

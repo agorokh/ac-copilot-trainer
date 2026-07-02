@@ -43,7 +43,7 @@ local setupLibrary = require("setup_library")
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
 local MANIFEST_WINDOW_SIZES = {
   ["AC Copilot Trainer"] = {520, 200},
-  ["Coaching"]           = {640, 240},
+  ["Coaching"]           = {560, 338},
   ["Settings"]           = {480, 580},
 }
 
@@ -2027,11 +2027,22 @@ function script.windowCoaching(_dt)
   local view = state._cachedRealtimeView
   local payload
   if view then
-    -- Bottom tile shows the UPCOMING brake target (always), not the current
+    -- The card shows the UPCOMING brake target (always), not the current
     -- corner. view.approachLabel/targetSpeedKmh/distToBrakeM all point to the
     -- next braking opportunity ahead. view.cornerLabel is the in-corner label
     -- (used by the TOP tile only) — falls back to approachLabel if not in a
     -- corner apex.
+    if state._trackDisplayName == nil then
+      local okTn, tn = pcall(function()
+        return ac.getTrackName and ac.getTrackName() or nil
+      end)
+      state._trackDisplayName = (okTn and type(tn) == "string" and tn ~= "") and tn or false
+    end
+    -- Brake-zone fraction of the approach window, from the SAME threshold that
+    -- fires BRAKE NOW (realtime_coaching.BRAKE_NOW_DIST_M) — no magic copy.
+    local approachM = tonumber(config.approachMeters) or 200
+    local zonePct = math.max(0, math.min(1,
+      (realtimeCoaching.BRAKE_NOW_DIST_M or 50) / math.max(1, approachM)))
     payload = {
       turnLabel        = view.approachLabel or view.cornerLabel,
       targetSpeedKmh   = view.targetSpeedKmh,
@@ -2040,6 +2051,11 @@ function script.windowCoaching(_dt)
       progressPct     = view.progressPct or 0,
       subState        = view.subState or "no_reference",
       status          = view.subState or "no_reference",
+      gear            = car and car.gear or nil,
+      trackName       = state._trackDisplayName or nil,
+      zonePct         = zonePct,
+      kind            = view.kind,
+      primaryLine     = view.primaryLine,
     }
   end
   -- Round 10: the approach panel is the sole content of WINDOW_1.

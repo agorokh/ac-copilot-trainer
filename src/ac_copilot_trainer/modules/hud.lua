@@ -1,8 +1,9 @@
--- WINDOW_0 — Active Suggestions tile (issue #72 rebuild).
+-- WINDOW_0 — Active Suggestions tile (issue #72 rebuild; #432 Part A2 typography).
 --
 -- Style adapted from CMRT-Essential-HUD/gearbox/first.lua: absolute-positioned
 -- ui.dwriteDrawText / ui.drawRectFilled / ui.pathArcTo. NO ImGui widgets.
 -- Always renders panel chrome + title even in the empty state — never blank.
+-- Fonts follow the Racing Atelier roles (Saira Semi Condensed via coaching_font).
 
 local fontMod = require("coaching_font")
 local T = require("design_tokens")
@@ -67,6 +68,11 @@ end
 ---@field status string
 ---@field progressPct number
 ---@field brakeIndex integer
+---@field gear integer|nil          @header GEAR column (#432 Part A2 card)
+---@field trackName string|nil      @header name next to the corner badge
+---@field zonePct number|nil        @SegmentBar brake-zone fraction 0..1
+---@field kind string|nil           @realtime view kind (verb tone)
+---@field primaryLine string|nil    @realtime view primary line (CommandVerb word)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -209,7 +215,7 @@ function M.draw(vm)
     local titleFontPx = 11
     local titleSize = measure("ACTIVE SUGGESTION", titleFontPx)
     local titlePos = vec2(centerX - titleSize.x * 0.5, PANEL_PAD_Y)
-    local tk = fontMod.pushNamed("labels_bold", titleFontPx)
+    local tk = fontMod.pushNamed("label", titleFontPx)
     dwriteSafe("ACTIVE SUGGESTION", titleFontPx, titlePos, COLOR_RED)
     fontMod.pop(tk)
   end
@@ -222,7 +228,7 @@ function M.draw(vm)
     local cornerStr = string.upper(cornerLabel)
     local cornerSize = measure(cornerStr, cornerFontPx)
     local cornerPos = vec2(centerX - cornerSize.x * 0.5, y)
-    local ck = fontMod.pushNamed("numbers", cornerFontPx)
+    local ck = fontMod.pushNamed("disp", cornerFontPx)
     dwriteSafe(cornerStr, cornerFontPx, cornerPos, COLOR_WHITE)
     fontMod.pop(ck)
     y = y + 30
@@ -235,7 +241,7 @@ function M.draw(vm)
     local primarySize = measure(primaryStr, primaryFontPx)
     local primaryPos = vec2(centerX - primarySize.x * 0.5, y)
     local pColor = colorForKind(view.kind)
-    local pk = fontMod.pushNamed("numbers", primaryFontPx)
+    local pk = fontMod.pushNamed("disp", primaryFontPx)
     dwriteSafe(primaryStr, primaryFontPx, primaryPos, pColor)
     fontMod.pop(pk)
     y = y + 24
@@ -253,7 +259,7 @@ function M.draw(vm)
     elseif view.kind == "placeholder" then
       sColor = COLOR_TEXT_GREY
     end
-    local sk = fontMod.pushNamed("numbers", secFontPx)
+    local sk = fontMod.pushNamed("disp", secFontPx)
     dwriteSafe(secStr, secFontPx, secPos, sColor)
     fontMod.pop(sk)
     y = y + 20
@@ -265,7 +271,7 @@ function M.draw(vm)
     local sectorStr = string.upper(vm.sectorMessage)
     local sectorSize = measure(sectorStr, sectorFontPx)
     local sectorPos = vec2(centerX - sectorSize.x * 0.5, y)
-    local sk = fontMod.pushNamed("labels_bold", sectorFontPx)
+    local sk = fontMod.pushNamed("label", sectorFontPx)
     dwriteSafe(sectorStr, sectorFontPx, sectorPos, colorForSectorMessage(vm.sectorMessage))
     fontMod.pop(sk)
     y = y + 16
@@ -279,7 +285,7 @@ function M.draw(vm)
       raw = string.sub(raw, 1, 137) .. "..."
     end
     local df = 10
-    local dk = fontMod.pushNamed("labels_bold", df)
+    local dk = fontMod.pushNamed("label", df)
     if ui and ui.dwriteDrawText ~= nil then
       local lines = {}
       local maxW = w - 24
