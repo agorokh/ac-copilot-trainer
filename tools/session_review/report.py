@@ -313,11 +313,12 @@ def _select_reference(
         )
     if reference_path is not None:
         requested_path = Path(reference_path)
+        requested_name = requested_path.name or "reference file"
         try:
             resolved = requested_path.resolve()
         except (OSError, RuntimeError) as exc:
             raise SessionReviewError(
-                f"{requested_path}: reference path cannot be resolved"
+                f"{requested_name}: reference path cannot be resolved"
             ) from exc
         for candidate in candidates:
             try:

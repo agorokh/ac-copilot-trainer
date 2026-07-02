@@ -306,6 +306,34 @@ def test_reference_path_error_uses_basename_only(session_corpus: Path) -> None:
     assert str(session_corpus) not in message
 
 
+def test_reference_path_resolve_error_uses_basename_only(
+    session_corpus: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested = session_corpus / "lap_denied_reference.json"
+    original_resolve = Path.resolve
+
+    def _resolve(path: Path, *args: object, **kwargs: object) -> Path:
+        if path.name == requested.name:
+            raise OSError("permission denied")
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _resolve)
+
+    with pytest.raises(SessionReviewError) as exc_info:
+        build_session_report(
+            [session_corpus],
+            session="sess-latest",
+            reference_path=requested,
+            grip_ceiling_g=2.5,
+            generated_at="stamp",
+        )
+
+    message = str(exc_info.value)
+    assert "lap_denied_reference.json" in message
+    assert str(session_corpus) not in message
+
+
 def test_missing_exported_at_does_not_break_latest_selection(session_corpus: Path) -> None:
     lap_path = session_corpus / "lap_latest-1.json"
     payload = json.loads(lap_path.read_text(encoding="utf-8"))
