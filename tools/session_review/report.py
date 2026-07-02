@@ -759,17 +759,7 @@ def _session_history(laps: list[LoadedLap]) -> list[dict[str, Any]]:
 
 
 def _trend_sessions(same_combo: list[LoadedLap]) -> list[dict[str, Any]]:
-    rows = [
-        _session_stats(session_uuid, sorted(grouped, key=_lap_sort_key))
-        for session_uuid, grouped in _session_candidates(same_combo).items()
-    ]
-    return sorted(
-        rows,
-        key=lambda row: (
-            str(row.get("last_exported_at") or ""),
-            str(row.get("session_uuid") or ""),
-        ),
-    )
+    return _session_history(same_combo)
 
 
 def _corner_value(corner: Mapping[str, Any], *keys: str) -> float | None:
