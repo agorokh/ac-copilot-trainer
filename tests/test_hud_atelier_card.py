@@ -28,7 +28,7 @@ MODULES_DIR = REPO / "src" / "ac_copilot_trainer" / "modules"
 FONTS_DIR = REPO / "src" / "ac_copilot_trainer" / "content" / "fonts"
 
 CARD_W = 560.0
-CARD_H = 338.0
+CARD_H = 480.0
 PAD_X = 26.0
 
 STUB_LUA = r"""
@@ -57,7 +57,7 @@ function ui.measureDWriteText(text, px)
     return _vec2(string.len(text or "") * px * 0.55, px)
 end
 
-function ui.windowSize() return _vec2(560, 338) end
+function ui.windowSize() return _vec2(560, 480) end
 function ui.DWriteFont(spec) return { spec = spec } end
 function ui.pushDWriteFont() end
 function ui.popDWriteFont() end
@@ -75,7 +75,8 @@ vec2 = _vec2
 ac = { log = function() end }
 """
 
-# The state the render / template models (ui_kits/ingame_hud + InGameHud.dc.html).
+# The state the render / template models (ui_kits/ingame_hud + InGameHud.dc.html)
+# plus the main-dashboard vitals (gear/speed/rpm — operator-signed extension).
 RENDER_PAYLOAD = """
 {
   turnLabel        = "T4",
@@ -84,12 +85,17 @@ RENDER_PAYLOAD = """
   distanceToBrakeM = 86,
   progressPct      = 0.66,
   zonePct          = 0.34,
+  approachMeters   = 200,
   subState         = "braking",
   status           = "braking",
   gear             = 2,
   trackName        = "Magione",
   kind             = "brake",
   primaryLine      = "BRAKE NOW",
+  rpm              = 7412,
+  rpmLimiter       = 8400,
+  shiftZonePct     = 0.92,
+  redZonePct       = 0.97,
 }
 """
 
@@ -179,18 +185,72 @@ def test_brake_point_readout(card):
     assert _is_color(num[0], CHALK)
 
 
-def test_header_badge_name_and_stat_columns(card):
+def test_header_badge_and_name(card):
     rects, texts = card
     badge = [t for t in texts if t["text"] == "T4" and t["px"] == 14]
     name = [t for t in texts if t["text"] == "MAGIONE" and t["px"] == 22]
     assert badge and name
     badge_fields = [r for r in rects if _is_color(r, BRASS) and (r["y1"] - r["y0"]) == 20.0]
     assert badge_fields, "brass badge field behind T4"
+
+
+def test_vitals_row_gear_speed_left_and_loud(card):
+    """Main-dashboard hierarchy (operator sign-off): GEAR + KM/H are 62px
+    Saira readouts anchored LEFT — louder than any context text."""
+    _, texts = card
     for lbl in ("GEAR", "KM/H"):
-        assert [t for t in texts if t["text"] == lbl and t["px"] == 9], lbl
-    assert [t for t in texts if t["text"] == "2" and t["px"] == 24]
-    speed = [t for t in texts if t["text"] == "196" and t["px"] == 24]
-    assert speed and _is_color(speed[0], BRAKE), "196 over 182+8 renders brake-red"
+        hits = [t for t in texts if t["text"] == lbl and t["px"] == 10]
+        assert hits, f"vitals label {lbl} at 10px"
+    gear = [t for t in texts if t["text"] == "2" and t["px"] == 62]
+    speed = [t for t in texts if t["text"] == "196" and t["px"] == 62]
+    assert gear and speed, "62px gear + speed readouts"
+    assert abs(gear[0]["x"] - PAD_X) < 0.01, "GEAR value anchored at left pad"
+    assert _is_color(speed[0], BRAKE), "196 over 182+8 renders brake-red"
+
+
+def _rpm_cells(rects):
+    return [
+        r
+        for r in rects
+        if abs((r["y1"] - r["y0"]) - 18.0) < 0.01 and 15.0 < (r["x1"] - r["x0"]) < 30.0
+    ]
+
+
+def test_rpm_strip_zones(card):
+    """20-cell RPM strip: rpm 7412 / limiter 8400 -> 18 filled chalk cells,
+    standing amber shift zone from cell 18 (0.92), red band at cell 19 (0.97)."""
+    rects, texts = card
+    cells = sorted(_rpm_cells(rects), key=lambda r: r["x0"])
+    assert len(cells) == 20, f"expected 20 rpm cells, got {len(cells)}"
+    for i, cell in enumerate(cells[:18]):
+        assert _is_color(cell, CHALK), f"rpm cell {i} filled chalk"
+    assert _is_color(cells[18], LIFT) and abs(cells[18]["mult"] - 0.16) < 0.01, (
+        "cell 18 = standing shift-zone tint"
+    )
+    assert _is_color(cells[19], BRAKE) and abs(cells[19]["mult"] - 0.16) < 0.01, (
+        "cell 19 = standing redline tint"
+    )
+    assert [t for t in texts if t["text"] == "RPM · 7412" and t["px"] == 11]
+    assert [t for t in texts if t["text"] == "SHIFT ZONE" and t["px"] == 11]
+
+
+def test_rpm_strip_lights_solid_in_zone(lua):
+    """When revs enter the zones the cells light solid (amber then red)."""
+    lua.execute('_ov = require("coaching_overlay")')
+    lua.execute(
+        "_ov.drawApproachPanel({turnLabel='T1', targetSpeedKmh=100, "
+        "currentSpeedKmh=100, distanceToBrakeM=500, approachMeters=200, "
+        "progressPct=0, zonePct=0.25, subState='cruising', primaryLine='SHIFT UP', "
+        "kind='line', rpm=8380, rpmLimiter=8400, shiftZonePct=0.92, redZonePct=0.97})"
+    )
+    rects = list(lua.globals()["_rects"].values())
+    cells = sorted(_rpm_cells(rects), key=lambda r: r["x0"])
+    assert len(cells) == 20
+    assert _is_color(cells[18], LIFT) and cells[18]["mult"] > 0.9, "shift cell solid amber"
+    assert _is_color(cells[19], BRAKE) and cells[19]["mult"] > 0.9, "redline cell solid red"
+    texts = [t for t in lua.globals()["_texts"].values()]
+    shift = [t for t in texts if t["text"] == "SHIFT" and t["px"] == 66]
+    assert shift and _is_color(shift[0], LIFT), "SHIFT verb amber at 66px"
 
 
 def test_delta_bar_matches_design_algorithm(card):
@@ -282,6 +342,7 @@ def test_verb_vocabulary_preserved(lua):
         "PREPARE TO BRAKE": "PREPARE",
         "EASE OFF": "LIFT",
         "CARRY MORE SPEED": "PUSH",
+        "SHIFT UP": "SHIFT",
         "APPROACHING": "READY",
         "ON PACE": "ON PACE",
     }

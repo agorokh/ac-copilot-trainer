@@ -74,6 +74,10 @@ end
 ---@field approachMeters number|nil @approach window: gates delta signal tones
 ---@field kind string|nil           @realtime view kind (verb tone)
 ---@field primaryLine string|nil    @realtime view primary line (CommandVerb word)
+---@field rpm number|nil            @vitals: live engine rpm (RPM strip)
+---@field rpmLimiter number|nil     @vitals: rev limiter (strip scale + zones)
+---@field shiftZonePct number|nil   @shift-zone start as a fraction of limiter
+---@field redZonePct number|nil     @redline band start as a fraction of limiter
 
 -- ---------------------------------------------------------------------------
 -- Helpers

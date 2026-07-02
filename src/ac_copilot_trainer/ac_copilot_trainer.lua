@@ -43,7 +43,7 @@ local setupLibrary = require("setup_library")
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
 local MANIFEST_WINDOW_SIZES = {
   ["AC Copilot Trainer"] = {520, 200},
-  ["Coaching"]           = {560, 338},
+  ["Coaching"]           = {560, 480},
   ["Settings"]           = {480, 580},
 }
 
@@ -2057,6 +2057,11 @@ function script.windowCoaching(_dt)
       approachMeters  = approachM,
       kind            = view.kind,
       primaryLine     = view.primaryLine,
+      -- Vitals for the main-dashboard card (RPM strip + shift zones)
+      rpm             = car and tonumber(car.rpm) or nil,
+      rpmLimiter      = car and tonumber(car.rpmLimiter) or nil,
+      shiftZonePct    = realtimeCoaching.SHIFT_ZONE_FRAC,
+      redZonePct      = realtimeCoaching.REDLINE_FRAC,
     }
   end
   -- Round 10: the approach panel is the sole content of WINDOW_1.
@@ -2188,6 +2193,10 @@ function script.update(dt)
       cornerAdvisories = state.cornerAdvisories,
       lap = state.lapsCompleted or 0,
       simT = ch.simSeconds(sim),
+      -- Gear-shift coaching inputs (#432 Part A2 main dashboard)
+      rpm = car and tonumber(car.rpm) or nil,
+      rpmLimiter = car and tonumber(car.rpmLimiter) or nil,
+      gas = car and tonumber(car.gas) or nil,
     })
     state._cachedRealtimeView = rtView
     state.realtimeActiveHint = rtView

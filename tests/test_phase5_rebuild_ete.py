@@ -437,6 +437,40 @@ def test_ete03_persisted_state_straight_returns_on_pace(lua):
     )
 
 
+def test_ete03b_shift_zone_on_straight_says_shift_up(lua):
+    """Gear-shift coaching (#432 Part A2): same long-straight state as ETE-03
+    but with revs inside the shift zone under throttle must coach SHIFT UP.
+    Braking rungs still outrank it (cascade order)."""
+    rtc = lua.execute('local m = require("realtime_coaching"); return m')
+    rtc["reset"]()
+    trace = _build_trace(lua)
+    brakes = _build_brake_points(lua)
+    segments = _build_segments(lua)
+    opts = lua.eval("""
+        {
+            splinePos = 0.30,
+            currentSpeedKmh = 200,
+            bestSortedTrace = nil, brakingPoints = nil, segments = nil,
+            trackLengthM = 4500,
+            rpm = 7800, rpmLimiter = 8400, gas = 0.95,
+        }
+    """)
+    opts["bestSortedTrace"] = trace
+    opts["brakingPoints"] = brakes
+    opts["segments"] = segments
+    view = rtc["tick"](opts)
+    assert view is not None
+    assert (view["primaryLine"] or "") == "SHIFT UP", (
+        f"shift-zone revs on throttle must coach SHIFT UP, got {view['primaryLine']!r}"
+    )
+    assert view["kind"] == "line"
+    # Off throttle the rung must NOT fire (coasting toward a corner).
+    rtc["reset"]()
+    opts["gas"] = 0.1
+    view2 = rtc["tick"](opts)
+    assert (view2["primaryLine"] or "") != "SHIFT UP", "SHIFT UP must not fire off-throttle"
+
+
 # ---------------------------------------------------------------------------
 # ETE-04: In a corner segment, slower than reference
 # ---------------------------------------------------------------------------
@@ -737,7 +771,7 @@ def test_ete07_auto_place_once_runs_once_then_skips(lua) -> None:
         """
 MANIFEST_WINDOW_SIZES = {
   ["AC Copilot Trainer"] = {520, 200},
-  ["Coaching"]           = {560, 338},
+  ["Coaching"]           = {560, 480},
   ["Settings"]           = {480, 580},
 }
 """

@@ -32,6 +32,16 @@ local APPROACH_DEFAULT_M   = 200   -- max distance ahead we even look at the nex
 -- threshold that fires "BRAKE NOW" (single source of truth, #432 Part A2).
 M.BRAKE_NOW_DIST_M = BRAKE_NOW_DIST_M
 
+-- Gear-shift coaching (#432 Part A2 main-dashboard evolution): the RPM strip's
+-- shift/redline zones and the SHIFT UP verb share these fractions of the car's
+-- rpmLimiter. v1 heuristic (shift lights at ~92%, redline band at ~97%);
+-- telemetry-learned per-car/per-corner shift points are follow-up scope.
+local SHIFT_ZONE_FRAC   = 0.92
+local REDLINE_FRAC      = 0.97
+local SHIFT_MIN_GAS     = 0.55  -- only coach upshifts under real throttle
+M.SHIFT_ZONE_FRAC = SHIFT_ZONE_FRAC
+M.REDLINE_FRAC = REDLINE_FRAC
+
 -- ---------------------------------------------------------------------------
 -- Module state (reset via M.reset).
 -- ---------------------------------------------------------------------------
@@ -344,6 +354,18 @@ function M.tick(opts)
     view.secondaryLine = "NEXT: " .. cornerLabel
     view.kind = "info"
     view.subState = "approaching"
+
+  elseif opts.rpm and opts.rpmLimiter and opts.rpmLimiter > 0
+      and (opts.gas or 0) >= SHIFT_MIN_GAS
+      and opts.rpm >= opts.rpmLimiter * SHIFT_ZONE_FRAC then
+    -- Gear-shift coaching: on throttle, outside any braking context, revs
+    -- inside the shift zone — teach the upshift moment. Braking verbs above
+    -- always outrank this rung.
+    view.primaryLine = "SHIFT UP"
+    view.secondaryLine = string.format(
+      "RPM %d · SHIFT AT %d", opts.rpm, math.floor(opts.rpmLimiter * SHIFT_ZONE_FRAC + 0.5))
+    view.kind = "line"
+    view.subState = "cruising"
 
   else
     -- Free flowing

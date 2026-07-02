@@ -167,6 +167,7 @@ local function verbFor(kind, primaryLine, subState)
   if p == "PREPARE TO BRAKE" then return "PREPARE", COLOR_AMBER, "down" end
   if p == "EASE OFF" then return "LIFT", COLOR_AMBER, "up" end
   if p == "CARRY MORE SPEED" then return "PUSH", COLOR_GREEN, "up" end
+  if p == "SHIFT UP" then return "SHIFT", COLOR_AMBER, "up" end
   if p == "APPROACHING" then return "READY", COLOR_GREEN, nil end
   if p == "ON PACE" then return "ON PACE", COLOR_GREEN, nil end
   local tone = COLOR_GREEN
@@ -263,9 +264,13 @@ function M.drawApproachPanel(approachData)
   local primaryLine   = hasData and approachData.primaryLine or nil
   local approachM     = hasData and tonumber(approachData.approachMeters) or 200
   local inWindow      = (distanceM ~= nil) and (distanceM <= approachM)
+  local rpm           = hasData and tonumber(approachData.rpm) or nil
+  local rpmLimiter    = hasData and tonumber(approachData.rpmLimiter) or nil
+  local shiftZonePct  = hasData and tonumber(approachData.shiftZonePct) or 0.92
+  local redZonePct    = hasData and tonumber(approachData.redZonePct) or 0.97
 
-  -- Window dimensions (from manifest FIXED_SIZE 560x338 — the card IS the window)
-  local w, h = 560, 338
+  -- Window dimensions (from manifest FIXED_SIZE 560x480 — the card IS the window)
+  local w, h = 560, 480
   if ui.windowSize then
     local sz = ui.windowSize()
     if sz and sz.x and sz.x > 0 and sz.y and sz.y > 0 then
@@ -286,11 +291,10 @@ function M.drawApproachPanel(approachData)
   local contentW = w - padX * 2
 
   ------------------------------------------------------------------
-  -- HEADER: [T4] ASCARI ······· GEAR 2 · KM/H 196, then 1px hairline
+  -- HEADER: [T4] MAGIONE (corner badge + name — context, kept small)
   ------------------------------------------------------------------
   local hairY = padY + 37 + 14  -- header block 37 tall + 14 padding-bottom
 
-  -- Corner badge (brass field, black ink) + track/corner name
   do
     local badgeText, nameText
     local digits = string.match(turnLabel, "^[Tt]?(%d+)")
@@ -318,7 +322,15 @@ function M.drawApproachPanel(approachData)
     fontMod.pop(nk)
   end
 
-  -- Stat columns (labels 9px dim over values 24px chalk, right-aligned)
+  -- Header hairline (--line at reduced alpha over carbon ≈ chalk @ 0.07)
+  ui.drawRectFilled(vec2(padX, hairY), vec2(w - padX, hairY + 1), T.color("chalk", 0.07), 0)
+
+  ------------------------------------------------------------------
+  -- VITALS ROW (main-dashboard evolution, operator-signed #432 Part A2):
+  -- GEAR + KM/H as the loudest data on the card, LEFT-anchored, so this
+  -- card replaces the stock dashboards. Hierarchy: vitals ≥ verb > context.
+  ------------------------------------------------------------------
+  local vitY = hairY + 1 + 16
   do
     local gearStr
     if gear == nil then
@@ -333,38 +345,74 @@ function M.drawApproachPanel(approachData)
     local spdStr = currentSpd and string.format("%.0f", currentSpd) or "—"
     local spdCol = (currentSpd and targetSpd) and speedColor(currentSpd, targetSpd) or COLOR_WHITE
 
-    local vk = fontMod.pushNamed("read", 24)
-    local spdW = _measureDW(spdStr, 24).x
-    local gearW = _measureDW(gearStr, 24).x
+    local lk = fontMod.pushNamed("label", 10)
+    local gearLblW = _measureDW("GEAR", 10).x
+    _drawDW("GEAR", 10, vec2(padX, vitY), COLOR_BRAND_GREY)
+    fontMod.pop(lk)
+    local vk = fontMod.pushNamed("read", 62)
+    local gearW = _measureDW(gearStr, 62).x
+    _drawDW(gearStr, 62, vec2(padX, vitY + 14), COLOR_WHITE)
     fontMod.pop(vk)
-    local lk = fontMod.pushNamed("label", 9)
-    local spdLblW = _measureDW("KM/H", 9).x
-    local gearLblW = _measureDW("GEAR", 9).x
+
+    local col2X = padX + math.max(gearW, gearLblW) + 44
+    local lk2 = fontMod.pushNamed("label", 10)
+    _drawDW("KM/H", 10, vec2(col2X, vitY), COLOR_BRAND_GREY)
+    fontMod.pop(lk2)
+    local vk2 = fontMod.pushNamed("read", 62)
+    _drawDW(spdStr, 62, vec2(col2X, vitY + 14), spdCol)
+    fontMod.pop(vk2)
+  end
+  local vitBottom = vitY + 14 + 62
+
+  ------------------------------------------------------------------
+  -- RPM STRIP with standing shift/redline zones (gear-shift coaching):
+  -- 20 cells; filled cells chalk until the shift zone (solid lift) and
+  -- redline band (solid brake); unfilled zone cells keep the standing
+  -- tint so the driver SEES the target zone ahead — same zone language
+  -- as the braking SegmentBar.
+  ------------------------------------------------------------------
+  local rpmCapY = vitBottom + 12
+  local rpmY = rpmCapY + 11 + 7
+  local RPM_H = 18
+  do
+    local lk = fontMod.pushNamed("label", 11)
+    local rpmLbl = rpm and string.format("RPM · %d", math.floor(rpm + 0.5)) or "RPM · —"
+    _drawDW(rpmLbl, 11, vec2(padX, rpmCapY), COLOR_BRAND_GREY)
+    local zoneLbl = "SHIFT ZONE"
+    local zlW = _measureDW(zoneLbl, 11).x
+    local zoneActive = rpm and rpmLimiter and rpmLimiter > 0 and rpm >= rpmLimiter * shiftZonePct
+    _drawDW(zoneLbl, 11, vec2(w - padX - zlW, rpmCapY), zoneActive and COLOR_AMBER or COLOR_BRAND_GREY)
     fontMod.pop(lk)
 
-    local col2W = math.max(spdW, spdLblW)
-    local col1W = math.max(gearW, gearLblW)
-    local col2Right = w - padX
-    local col1Right = col2Right - col2W - 16
-
-    local lk2 = fontMod.pushNamed("label", 9)
-    _drawDW("GEAR", 9, vec2(col1Right - gearLblW, padY), COLOR_BRAND_GREY)
-    _drawDW("KM/H", 9, vec2(col2Right - spdLblW, padY), COLOR_BRAND_GREY)
-    fontMod.pop(lk2)
-    local vk2 = fontMod.pushNamed("read", 24)
-    _drawDW(gearStr, 24, vec2(col1Right - gearW, padY + 13), COLOR_WHITE)
-    _drawDW(spdStr, 24, vec2(col2Right - spdW, padY + 13), spdCol)
-    fontMod.pop(vk2)
-    local _ = col1W  -- column width kept for readability; right anchors drive layout
+    local count = 20
+    local gap = 2
+    local cellW = (contentW - gap * (count - 1)) / count
+    local frac = 0
+    if rpm and rpmLimiter and rpmLimiter > 0 then
+      frac = math.max(0, math.min(1, rpm / rpmLimiter))
+    end
+    local filledCount = math.floor(frac * count + 0.5)
+    local shiftStart = math.floor(shiftZonePct * count + 0.5)
+    local redStart = math.floor(redZonePct * count + 0.5)
+    for i = 0, count - 1 do
+      local filled = i < filledCount
+      local cellColor
+      if i >= redStart then
+        cellColor = filled and COLOR_RED or T.color("brake", 0.16)
+      elseif i >= shiftStart then
+        cellColor = filled and COLOR_AMBER or T.color("lift", 0.16)
+      else
+        cellColor = filled and COLOR_WHITE or T.color("raise")
+      end
+      local x0 = padX + i * (cellW + gap)
+      ui.drawRectFilled(vec2(x0, rpmY), vec2(x0 + cellW, rpmY + RPM_H), cellColor, 0)
+    end
   end
-
-  -- Header hairline (--line at reduced alpha over carbon ≈ chalk @ 0.07)
-  ui.drawRectFilled(vec2(padX, hairY), vec2(w - padX, hairY + 1), T.color("chalk", 0.07), 0)
 
   ------------------------------------------------------------------
   -- COMMAND ROW: giant verb (+ arrow) left, brake-point readout right
   ------------------------------------------------------------------
-  local cmdY = hairY + 1 + 18
+  local cmdY = rpmY + RPM_H + 18
   do
     local word, tone, arrow = verbFor(kind, primaryLine, subState)
     local vk = fontMod.pushNamed("verb", 66)
