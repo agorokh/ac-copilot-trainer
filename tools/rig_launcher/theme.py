@@ -152,13 +152,22 @@ def summary_for(status: GamePointStatus, port: int = 8765) -> tuple[str, str, st
     """
     if status.ok:
         return ("READY TO DRIVE", "clear", "sidecar · screen · hotspot live")
+    # A failing preflight check outranks the port-down copy: pressing Start
+    # cannot succeed until the blocker is cleared, so the caption must say
+    # what is actually wrong (PR #445 review).
+    blocker = next(
+        (chk for chk in status.checks if not chk.ok and (chk.detail or chk.state)),
+        None,
+    )
+    if blocker is not None:
+        return ("PRESS START", "brake", blocker.detail or blocker.state)
     if (status.sidecar.state or "").strip().lower() in _SIDECAR_DOWN_STATES:
         return ("PRESS START", "brake", f"nothing on port {port} yet")
     rows = (status.sidecar, status.screen, status.hotspot, status.voice, status.simhub)
     caption = next(
         (
             row.detail or row.state
-            for row in (*rows, *status.checks)
+            for row in rows
             if not row.ok and (row.detail or row.state)
         ),
         "needs attention",

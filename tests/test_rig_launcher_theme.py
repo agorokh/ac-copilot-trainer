@@ -123,6 +123,28 @@ def test_summary_for_other_failure_uses_first_failing_detail() -> None:
     )
 
 
+def test_summary_for_blocking_preflight_outranks_port_copy() -> None:
+    """A failing preflight check must surface before the port-down copy —
+    pressing Start cannot succeed until the blocker clears (PR #445 review)."""
+    status = _status(sidecar=ProbeResult("sidecar", False, "stopped", "—"))
+    status = GamePointStatus(
+        generated_at=status.generated_at,
+        sidecar=status.sidecar,
+        screen=status.screen,
+        hotspot=status.hotspot,
+        voice=status.voice,
+        simhub=status.simhub,
+        log_path=status.log_path,
+        status_path=status.status_path,
+        checks=(ProbeResult("acroot", False, "missing", "AC install not found"),),
+    )
+    assert theme.summary_for(status) == (
+        "PRESS START",
+        "brake",
+        "AC install not found",
+    )
+
+
 def test_summary_for_falls_back_to_state_word_without_detail() -> None:
     status = _status(voice=ProbeResult("voice", False, "DISABLED", ""))
     assert theme.summary_for(status) == ("PRESS START", "brake", "DISABLED")
