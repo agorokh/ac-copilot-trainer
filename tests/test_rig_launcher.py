@@ -668,6 +668,48 @@ def test_simhub_absence_is_visible_but_not_fatal(tmp_path: Path) -> None:
     assert "not found" in result.detail
 
 
+def test_simhub_discovery_treats_windows_env_keys_case_insensitively(tmp_path: Path) -> None:
+    exe = tmp_path / "SimHub" / "SimHubWPF.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"PROGRAMFILES(X86)": str(tmp_path)},
+        run=_no_simhub_run,
+    )
+
+    result = sup.probe_simhub(start=False)
+
+    assert result.state == "available"
+    assert result.detail == str(exe)
+
+
+def test_launcher_env_reads_are_case_insensitive(tmp_path: Path) -> None:
+    env = {
+        "ac_copilot_start_simhub": "1",
+        "ac_copilot_simhub_exe": "C:/SimHub/SimHubWPF.exe",
+        "localappdata": str(tmp_path / "LocalAppData"),
+    }
+
+    cfg = GamePointConfig.from_env(env, paths=LauncherPaths(tmp_path))
+    paths = supervisor_module.default_paths(env)
+
+    assert cfg.start_simhub is True
+    assert cfg.simhub_exe == "C:/SimHub/SimHubWPF.exe"
+    assert paths.root == tmp_path / "LocalAppData" / "AC Copilot Trainer" / "GamePoint"
+
+
+def test_launcher_env_snapshot_preserves_exact_case_values(tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={"Path": "mixed", "PATH": "upper"})
+
+    env = sup.sidecar_environment()
+
+    assert env["Path"] == "mixed"
+    assert env["PATH"] == "upper"
+
+
 def test_simhub_starts_when_requested_and_executable_exists(tmp_path: Path) -> None:
     exe = tmp_path / "SimHub" / "SimHubWPF.exe"
     exe.parent.mkdir()

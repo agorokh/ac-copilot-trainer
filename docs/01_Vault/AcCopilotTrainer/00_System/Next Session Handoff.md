@@ -63,6 +63,22 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-02 UTC) - Game Point SimHub detection hotfix
+
+Operator reported the Windows Game Point launcher showing `SIMHUB absent` even though SimHub was
+installed. Root cause: `GamePointSupervisor` copied Windows `os.environ` into a plain dict, whose keys
+were uppercase (`PROGRAMFILES(X86)`), then `_simhub_exe()` looked up `ProgramFiles(x86)` exactly.
+`tools/rig_launcher/supervisor.py` now uses a case-insensitive Windows env lookup for SimHub install
+roots, with regression coverage in `tests/test_rig_launcher.py`.
+
+Local proof: `python -m tools.rig_launcher --once --json` and the rebuilt packaged exe both wrote
+`simhub.state=available` with `C:\Program Files (x86)\SimHub\SimHubWPF.exe`. Rebuilt
+`dist\AC-Copilot-Game-Point.exe`, refreshed the Desktop shortcut, and reopened the launcher. Focused
+checks passed (`ruff check`, `ruff format --check` on touched files, `pytest tests/test_rig_launcher.py`,
+plus `pytest -k simhub`). GitHub CI green on #449 as
+[`11aae9d`](https://github.com/agorokh/ac-copilot-trainer/commit/11aae9d)
+(`build`, `Policy (Canonical Docs)`, `governance-conformance`).
+
 ## Delivered (2026-07-02 UTC) - PR #452 MERGED: telemetry-learned shift points (#442)
 
 PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452) squash-merged to `main` as
