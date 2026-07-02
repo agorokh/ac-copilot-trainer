@@ -1041,6 +1041,67 @@ def test_preflight_detects_preset_combo_mismatch(tmp_path):
     assert "preset_car_mismatch" in checks
 
 
+def test_preflight_flags_missing_cm_preset(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        cm_preset=tmp_path / "does-not-exist.cmpreset",
+    )
+    checks = {i.check for i in preflight(cfg)}
+    assert "preset_missing" in checks
+
+
+def test_preflight_rejects_skip_launch_with_setup(tmp_path):
+    ac_root, user, cm = _fake_rig(tmp_path)
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        car_id="ks_porsche_911_gt3_r_2016",
+        setup="Realistic_BB_v3",
+        skip_launch=True,
+        cm_preset=None,
+    )
+    issues = [i for i in preflight(cfg) if i.check == "setup"]
+    assert any("skip-launch" in i.message for i in issues)
+
+
+def test_preflight_layout_preset_mismatch(tmp_path):
+    import json as _json
+
+    ac_root, user, cm = _fake_rig(tmp_path)
+    # add a layout fast_lane so track resolution passes
+    lay = ac_root / "content" / "tracks" / "spa" / "gp" / "ai"
+    lay.mkdir(parents=True)
+    (lay / "fast_lane.ai").write_bytes(b"x")
+    preset = tmp_path / "baselayout.cmpreset"
+    preset.write_text(_json.dumps({"CarId": "ks_porsche_911_gt3_r_2016", "TrackId": "spa"}))
+    cfg = _cfg(
+        ac_root=ac_root,
+        ac_user_dir=user,
+        cm_exe=cm,
+        track_id="spa",
+        track_layout="gp",
+        car_id="ks_porsche_911_gt3_r_2016",
+        cm_preset=preset,
+    )
+    checks = {i.check for i in preflight(cfg)}
+    assert "preset_track_mismatch" in checks  # preset TrackId "spa" != wanted "spa/gp"
+
+
+def test_build_practice_preset_folds_layout_into_trackid():
+    import json as _json
+
+    p = _json.loads(build_practice_preset("car", "monza", layout="layout_junior"))
+    assert p["TrackId"] == "monza/layout_junior"
+    # No layout → base track.
+    assert _json.loads(build_practice_preset("car", "monza"))["TrackId"] == "monza"
+
+
 def test_preflight_missing_ac_root_short_circuits(tmp_path):
     cfg = _cfg(ac_root=tmp_path / "nope", track_id="spa", cm_preset=None)
     issues = preflight(cfg)

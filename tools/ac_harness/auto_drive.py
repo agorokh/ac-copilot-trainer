@@ -428,6 +428,10 @@ async def run_auto_drive(
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
     notes: list[str] = []
+    # A fuel-less setup is baked but not fuel-confirmed — surface that in the report so a setup
+    # A/B run does not read `setup_applied=True` as "independently verified" (#460 review).
+    if setup_ack is not None and setup_applied and setup_ack.get("expected_fuel") is None:
+        notes.append(f"setup baked but UNCONFIRMED: {setup_ack.get('detail', 'no fuel key')}")
     error: str | None = None
     stage = "done"
     try:
@@ -668,7 +672,9 @@ def fuel_matches(expected_l: float | None, observed_l: float | None, tolerance_l
 # Deterministic Quick Drive preset generation (pure; #459 Part B — the #154 Part-G
 # determinism-lock preset).
 # ---------------------------------------------------------------------------
-def build_practice_preset(car_id: str, track_id: str, *, start_type: str = "START") -> str:
+def build_practice_preset(
+    car_id: str, track_id: str, *, start_type: str = "START", layout: str | None = None
+) -> str:
     """Render a deterministic Content Manager Quick Drive practice preset (JSON string).
 
     Field shapes mirror a CM-exported ``.cmpreset`` proven live on this rig (Imola/Mugello/Spa
@@ -677,11 +683,14 @@ def build_practice_preset(car_id: str, track_id: str, *, start_type: str = "STAR
     of the same combo launch the same session — the determinism-lock preset from #154 Part G.
 
     ``start_type`` is CM's ``ModeData.StartType``: ``"START"`` spawns at the start line (proven
-    for plain drive runs), ``"PIT"`` spawns in the pit box — required when a setup will be
-    applied, because the in-sim ``setup.load`` gate (``ac.isCarResetAllowed``) only opens in pits.
+    for plain drive runs), ``"PIT"`` in the pit box. ``layout`` (for multi-layout tracks) is folded
+    into CM's ``TrackId`` as ``<track>/<layout>`` so the launched circuit matches the racing line
+    ``rig_drive`` follows — else CM launches the base circuit while the driver steers a different
+    layout's ``fast_lane.ai`` (#460 review).
     """
     if start_type not in ("START", "PIT"):
         raise ValueError(f"start_type must be 'START' or 'PIT', got {start_type!r}")
+    track_field = f"{track_id}/{layout}" if layout else track_id
     mode_data = {
         "StartType": start_type,
         "Penalties": False,
@@ -716,7 +725,7 @@ def build_practice_preset(car_id: str, track_id: str, *, start_type: str = "STAR
         "Mode": "/Pages/Drive/QuickDrive_Practice.xaml",
         "ModeData": json.dumps(mode_data, separators=(",", ":")),
         "CarId": car_id,
-        "TrackId": track_id,
+        "TrackId": track_field,
         "WeatherId": "3_clear",
         "RealConditions": False,
         "Temperature": 26.0,
@@ -803,7 +812,16 @@ def preflight(config: AutoDriveConfig) -> list[PreflightIssue]:
                 PreflightIssue("car", f"car content not installed: {car_dir} (check --car id)")
             )
 
-    if config.cm_preset is not None and Path(config.cm_preset).is_file():
+    if config.cm_preset is not None and not Path(config.cm_preset).is_file():
+        # A missing --cm-preset must fail here, not later as an uncaught FileNotFoundError from
+        # the CM launch — that would bypass the actionable-preflight/evidence path (#460 review).
+        issues.append(
+            PreflightIssue(
+                "preset_missing",
+                f"Quick Drive preset not found: {config.cm_preset} (check --cm-preset)",
+            )
+        )
+    elif config.cm_preset is not None and Path(config.cm_preset).is_file():
         try:
             preset = json.loads(Path(config.cm_preset).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -813,16 +831,23 @@ def preflight(config: AutoDriveConfig) -> list[PreflightIssue]:
         else:
             preset_track = str(preset.get("TrackId") or "")
             preset_car = str(preset.get("CarId") or "")
-            if (
-                config.track_id
-                and preset_track
-                and preset_track.split("/")[0].lower() != config.track_id.lower()
-            ):
+            # Compare the FULL TrackId incl. layout: on a multi-layout track a preset launching a
+            # different layout than --track-layout would drive the wrong fast_lane.ai (#460 review).
+            want_track = config.track_id.lower()
+            if config.track_layout:
+                want_track = f"{config.track_id}/{config.track_layout}".lower()
+            if config.track_id and preset_track and preset_track.lower() != want_track:
                 issues.append(
                     PreflightIssue(
                         "preset_track_mismatch",
-                        f"--track {config.track_id!r} but preset launches TrackId "
-                        f"{preset_track!r} — the driven racing line would not match the track",
+                        f"--track {config.track_id!r}"
+                        + (
+                            f" --track-layout {config.track_layout!r}"
+                            if config.track_layout
+                            else ""
+                        )
+                        + f" but preset launches TrackId {preset_track!r} — the driven racing line "
+                        "would not match the launched circuit",
                     )
                 )
             if config.car_id and preset_car and preset_car.lower() != config.car_id.lower():
@@ -860,11 +885,23 @@ def preflight(config: AutoDriveConfig) -> list[PreflightIssue]:
             )
 
     if config.setup:
+        if config.skip_launch:
+            # --skip-launch does not launch (rig_launch is the ONLY code path that bakes the
+            # setup into race.ini), so on a pre-existing session the setup would be un-baked and
+            # rig_apply_setup's fuel read could spuriously match a different same-fuel setup —
+            # false evidence. Reject the combination (#460 review).
+            issues.append(
+                PreflightIssue(
+                    "setup",
+                    "--setup cannot combine with --skip-launch: the setup is baked at launch, "
+                    "which --skip-launch bypasses. Drop one of the flags.",
+                )
+            )
         if not config.car_id:
             issues.append(
                 PreflightIssue("setup", "--setup needs --car (setups live per car id on disk)")
             )
-        else:
+        elif config.car_id:
             try:
                 resolve_setup_ini(
                     user_dir,
@@ -875,6 +912,19 @@ def preflight(config: AutoDriveConfig) -> list[PreflightIssue]:
                 )
             except (FileNotFoundError, ValueError) as exc:
                 issues.append(PreflightIssue("setup", str(exc)))
+        # A hand-authored preset for a setup run must spawn where the setup can apply; the bake
+        # forces SPAWN_SET=START on the relaunch, so this is only advisory for a preset that would
+        # otherwise be launched as-is. (Generated presets already use START.)
+
+    # A generated preset (no --cm-preset) for a multi-layout track needs the layout in its TrackId,
+    # or CM launches the base circuit while rig_drive follows --track-layout's line (#460 review).
+    # _main now bakes the layout into the generated preset; guard the hand-authored-omission case:
+    if config.track_layout and config.cm_preset is None and not config.car_id:
+        issues.append(
+            PreflightIssue(
+                "layout", "--track-layout needs --car (to generate a layout-correct preset)"
+            )
+        )
 
     return issues
 
@@ -988,30 +1038,40 @@ def _gui_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-on
     return config.ac_root / "extension" / "config" / "gui.ini"
 
 
-def _set_force_start(gui_ini: Path, enabled: bool) -> str | None:  # pragma: no cover - rig-only
-    """Set ``[GUI] FORCE_START`` and return the prior value (for restore), or None on failure.
+def _enable_force_start(gui_ini: Path) -> tuple[bool, str | None]:  # pragma: no cover - rig-only
+    """Set ``[GUI] FORCE_START=1``; return ``(ok, original_text)`` for a verbatim restore.
 
     A direct acs relaunch lands at AC's pre-drive Drive/Setup/Exit menu, where CSP Custom-AI never
     arms and OS input injection is blocked — so the hijack cannot land. ``FORCE_START=1`` makes acs
     skip that menu and go straight to driving (live-verified Spa 2026-07-02). acs reads gui.ini only
-    at startup, so the caller sets it, launches, then restores.
+    at startup, so the caller sets it, launches, then restores the ORIGINAL text byte-for-byte
+    (returning it makes the restore unconditional and exact — no "was the key absent?" ambiguity
+    that could leave `FORCE_START=1` behind after the run, #460 review). ``ok=False`` means the file
+    could not be read/written, so the caller must not proceed into a known-menu-blocked relaunch.
     """
     try:
-        text = gui_ini.read_text(encoding="utf-8", errors="replace")
+        original = gui_ini.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return None
-    m = re.search(r"^FORCE_START=(\d+)", text, re.M)
-    prior = m.group(1) if m else None
-    want = "1" if enabled else "0"
-    if m:
-        new = re.sub(r"^FORCE_START=\d+", f"FORCE_START={want}", text, count=1, flags=re.M)
+        return False, None
+    if re.search(r"^FORCE_START=\d+", original, re.M):
+        new = re.sub(r"^FORCE_START=\d+", "FORCE_START=1", original, count=1, flags=re.M)
+    elif re.search(r"^\[GUI\]\s*$", original, re.M):
+        new = re.sub(r"^\[GUI\]\s*$", "[GUI]\nFORCE_START=1", original, count=1, flags=re.M)
     else:
-        new = re.sub(r"^\[GUI\]\s*$", f"[GUI]\nFORCE_START={want}", text, count=1, flags=re.M)
+        new = original.rstrip("\n") + "\n[GUI]\nFORCE_START=1\n"  # no [GUI] section — append one
     try:
         gui_ini.write_text(new, encoding="utf-8")
     except OSError:
-        return None
-    return prior
+        return False, original
+    return True, original
+
+
+def _restore_gui_ini(gui_ini: Path, original_text: str) -> None:  # pragma: no cover - rig-only
+    """Write ``original_text`` back verbatim (best-effort) — the exact pre-run gui.ini."""
+    try:
+        gui_ini.write_text(original_text, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _direct_acs_launch(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
@@ -1042,7 +1102,10 @@ def _bake_and_relaunch_with_setup(
         race_ini.read_text(encoding="utf-8", errors="replace"), config.setup_ini
     )
     race_ini.write_text(baked, encoding="utf-8", newline="\n")
-    prior_force = _set_force_start(gui_ini, True)
+    ok_force, original_gui = _enable_force_start(gui_ini)
+    if not ok_force:
+        # Could not enable the menu-skip — a direct relaunch would strand at the pre-drive menu.
+        return False, f"could not set FORCE_START in {gui_ini}"
     try:
         _direct_acs_launch(config)
         if not _wait_live(config.attempt_timeout):
@@ -1050,8 +1113,8 @@ def _bake_and_relaunch_with_setup(
         time.sleep(config.settle_seconds)
         return True, "relaunched with setup baked"
     finally:
-        if prior_force is not None:
-            _set_force_start(gui_ini, prior_force == "1")
+        if original_gui is not None:
+            _restore_gui_ini(gui_ini, original_gui)  # exact pre-run gui.ini, unconditionally
 
 
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
@@ -1460,7 +1523,11 @@ def rig_drive(  # pragma: no cover - rig-only
                 time.sleep(0.02)
                 continue
             pkt = _main_packet_id()
-            if pkt is None or last_pkt is None or pkt != last_pkt:
+            # Reset the death timer ONLY on a real packet advance. A None (physics mmap gone) must
+            # NOT reset it — that is exactly the crash/freeze case the watchdog exists to catch, and
+            # resetting on every None would disable it (#460 review). Sustained None or a frozen
+            # packet both let the timer run out and trip sim_dead.
+            if pkt is not None and (last_pkt is None or pkt != last_pkt):
                 last_pkt = pkt
                 last_pkt_change = time.monotonic()
             elif time.monotonic() - last_pkt_change > config.sim_dead_seconds:
@@ -1758,7 +1825,9 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # regardless), so the pit box is never needed.
         preset_path = evidence_dir / "generated.cmpreset"
         preset_path.write_text(
-            build_practice_preset(config.car_id, config.track_id, start_type="START"),
+            build_practice_preset(
+                config.car_id, config.track_id, start_type="START", layout=config.track_layout
+            ),
             encoding="utf-8",
         )
         config.cm_preset = preset_path
