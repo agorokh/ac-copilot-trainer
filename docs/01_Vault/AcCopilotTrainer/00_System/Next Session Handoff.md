@@ -74,10 +74,9 @@ roots, with regression coverage in `tests/test_rig_launcher.py`.
 Local proof: `python -m tools.rig_launcher --once --json` and the rebuilt packaged exe both wrote
 `simhub.state=available` with `C:\Program Files (x86)\SimHub\SimHubWPF.exe`. Rebuilt
 `dist\AC-Copilot-Game-Point.exe`, refreshed the Desktop shortcut, and reopened the launcher. Focused
-checks passed (`ruff check`, `ruff format --check`, `pytest tests/test_rig_launcher.py`, plus
-`pytest -k simhub`). `make PYTHON=python ci-fast` was attempted but stopped at repo-wide
-`ci-format`: this checkout has broad unrelated Ruff format drift (227 files), so it was not fixed in
-this hotfix.
+checks passed (`ruff check`, `ruff format --check` on touched files, `pytest tests/test_rig_launcher.py`,
+plus `pytest -k simhub`). GitHub CI green on #449 head SHA (`build`, `Policy (Canonical Docs)`,
+`governance-conformance`).
 
 ## Delivered (2026-07-02 UTC) - PR #452 MERGED: telemetry-learned shift points (#442)
 
