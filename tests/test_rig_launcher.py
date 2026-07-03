@@ -28,7 +28,6 @@ from tools.rig_launcher.install import (
 )
 from tools.rig_launcher.settings import LauncherSettings, ensure_settings_file
 from tools.rig_launcher.supervisor import (
-    _HOTSPOT_PROBE_SCRIPT,
     _WINDOWS_NO_WINDOW,
     GamePointConfig,
     GamePointStatus,
@@ -127,6 +126,24 @@ def test_sidecar_command_uses_env_for_token_and_voice(tmp_path: Path) -> None:
     assert env["AC_COPILOT_REFERENCE_ARCHIVE"] == str((tmp_path / "ref.json").resolve())
     assert env["AC_COPILOT_VOICE_BANK"] == str((tmp_path / "voice-bank").resolve())
     assert env["AC_COPILOT_VOICE_TTS"] == "1"
+
+
+def test_sidecar_command_includes_serial_port_when_configured(tmp_path: Path) -> None:
+    """Issue #463: the launcher forwards --serial-port so the screen uses USB, not hotspot."""
+    cfg = GamePointConfig(serial_port="COM6", paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, python_executable="python")
+
+    command = sup.sidecar_command()
+
+    assert command[-2:] == ["--serial-port", "COM6"]
+
+
+def test_config_reads_serial_port_from_env(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_SIDECAR_SERIAL_PORT": "COM6"},
+        paths=LauncherPaths(tmp_path),
+    )
+    assert cfg.serial_port == "COM6"
 
 
 def test_frozen_sidecar_command_uses_bundled_child_mode(tmp_path: Path) -> None:
@@ -1023,6 +1040,15 @@ def test_build_pyinstaller_args_collects_voice_runtime_floor(tmp_path: Path) -> 
     assert _has_option_value(args, "--hidden-import", "pyttsx3.drivers.sapi5")
 
 
+def test_build_pyinstaller_args_bundles_pyserial_for_serial_transport(tmp_path: Path) -> None:
+    # Issue #463: pyserial is imported lazily by the sidecar, so it must be a
+    # declared hidden-import or the frozen --serial-port sidecar fails at runtime.
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    assert _has_option_value(args, "--hidden-import", "serial")
+    assert _has_option_value(args, "--hidden-import", "serial.tools.list_ports")
+
+
 def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1159,53 +1185,6 @@ def test_sidecar_child_entrypoint_rewrites_sys_argv(monkeypatch) -> None:
     assert seen["argv"] == ["ai_sidecar", "--port", "8765"]
 
 
-def test_hotspot_probe_parses_windows_state(tmp_path: Path) -> None:
-    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
-
-    def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout='{"state":"On","client_count":1}',
-            stderr="",
-        )
-
-    sup = GamePointSupervisor(cfg, run=fake_run)
-    result = sup.probe_hotspot()
-
-    if result.state == "skipped":
-        assert result.ok is True
-    else:
-        assert result.ok is True
-        assert result.state == "on"
-        assert "clients=1" in result.detail
-
-
-def test_hotspot_probe_failure_is_non_blocking(monkeypatch, tmp_path: Path) -> None:
-    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
-    monkeypatch.setattr(supervisor_module.os, "name", "nt")
-
-    def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=1,
-            stdout="",
-            stderr="Wi-Fi adapter not found",
-        )
-
-    sup = GamePointSupervisor(cfg, run=fake_run)
-    result = sup.probe_hotspot()
-
-    assert result.ok is True
-    assert result.state == "unavailable"
-    assert "Wi-Fi adapter" in result.detail
-
-
-def test_hotspot_probe_falls_back_without_internet_profile() -> None:
-    assert "GetConnectionProfiles() | Select-Object -First 1" in _HOTSPOT_PROBE_SCRIPT
-    assert "No network connection profile found for Mobile Hotspot." in _HOTSPOT_PROBE_SCRIPT
-
-
 def test_run_gui_falls_back_when_tk_init_fails(monkeypatch, capsys) -> None:
     tk_mod = types.ModuleType("tkinter")
     ttk_mod = types.ModuleType("tkinter.ttk")
@@ -1224,7 +1203,6 @@ def test_run_gui_falls_back_when_tk_init_fails(monkeypatch, capsys) -> None:
         generated_at=0.0,
         sidecar=ok,
         screen=ProbeResult("screen", True, "connected"),
-        hotspot=ProbeResult("hotspot", True, "skipped"),
         voice=ProbeResult("voice", True, "skipped"),
         simhub=ProbeResult("simhub", True, "absent"),
         log_path="sidecar.log",

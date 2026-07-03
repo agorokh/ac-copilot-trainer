@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-03T04:35:22Z
 relates_to:
+  - AcCopilotTrainer/01_Decisions/usb-serial-screen-transport-2026-07-02.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
@@ -97,6 +98,55 @@ unchanged writes and stops before LIVE settle; setup reader parses only `[CAR_0]
 setup per session, distinguishes transient `race.ini` read failure from confirmed no-setup, blocks
 legacy setup guessing after confirmed no-setup, and clears stale `state.lastSetupSnap`/`setupHash`
 when no setup is confirmed.
+
+## Delivered (2026-07-03 UTC) — rig screen WORKING end-to-end over USB (operator-confirmed)
+
+The USB-serial screen shipped across four merged PRs; after real deployment debugging
+the operator confirmed **"finally works"** (device screen CONNECTED). Chain:
+- [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464) — transport + hotspot removal (see below).
+- [#468](https://github.com/agorokh/ac-copilot-trainer/issues/468)/[#469](https://github.com/agorokh/ac-copilot-trainer/pull/469) — bundle `pyserial` as a PyInstaller hidden-import (frozen `.exe` sidecar).
+- [#470](https://github.com/agorokh/ac-copilot-trainer/issues/470)/[#471](https://github.com/agorokh/ac-copilot-trainer/pull/471) — **the real deploy fix: 256→8192 B USB CDC RX buffer.**
+
+**Durable gotcha (cost hours):** `screen_peers=1` in the launcher only means the sidecar
+heard the board's small `hello` — NOT that the screen works. The board's RX ring
+(256 B default) overflowed on the 326 B `hello_ack`, dropping the newline, so the board
+never linked (re-`hello`d forever) while the launcher showed CONNECTED. Full write-up in
+[[usb-serial-screen-transport-2026-07-02]] § "Second trap". Rig board is flashed with the fix;
+`AC_COPILOT_SIDECAR_SERIAL_PORT=COM6` is set in the user env; the deployed `.exe` is the rebuilt one.
+
+## Delivered (2026-07-03 UTC) — MERGED #463: USB-serial screen transport, hotspot removed
+
+PR [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464) squash-merged to `main`
+as `1bade3a`; issue [#463](https://github.com/agorokh/ac-copilot-trainer/issues/463) CLOSED.
+Operator confirmed the physical screen shows **CONNECTED** over USB. resolve-pr ran clean:
+the self-hosted reviewer's 1 HIGH (missing serial disconnect transition — added an rx-timeout
+down-transition, hardware-verified: link down fires at 12.0 s) + 2 MEDIUMs (log demux; then a
+`[`-prefix bug in that demux — narrowed to `{` + regression test) all fixed; CI green,
+resolve-gate ledger clean, 0 unresolved threads.
+
+The rig screen now speaks
+protocol v1 over the **native USB CDC** instead of WiFi/WebSocket, so the Windows
+Mobile Hotspot is gone — that hotspot forced a 2.4 GHz SoftAP onto the single-radio
+Intel AC 7260 and dropped the main WiFi (which then would not reconnect). Decision +
+evidence: [[usb-serial-screen-transport-2026-07-02]].
+
+- **Sidecar** `tools/ai_sidecar/serial_transport.py` — `SerialPeer` + read loop on
+  `_handle_external_frame`; `--serial-port` / `AC_COPILOT_SIDECAR_SERIAL_PORT`.
+- **Firmware** `firmware/screen` — `SCREEN_TRANSPORT_SERIAL` flag, env
+  `jc3248w535_serial` (rig default), heartbeat hello. Flashed + live-verified.
+- **Launcher** `tools/rig_launcher` — Mobile Hotspot probe/row/readiness removed.
+- **Hardware trap (durable):** the ESP32-S3 USB CDC needs **DTR asserted** to deliver
+  RX; auto-reset is an **RTS** pulse, not steady DTR. Sidecar opens **DTR high / RTS low**.
+- **Live E2E (hotspot OFF, `AHOME5G` up the whole time, 68%→69%):** `screen_peers=1`,
+  bidirectional round-trip (hello → hello_ack → 5 s heartbeat), `coaching.snapshot`
+  fanned to the serial peer, 0 send failures. Both firmware envs build.
+- `pyserial>=3.5` added to coaching/launcher/dev extras. The board is flashed with the
+  final firmware (the two demux fixes were sidecar-only; `main.cpp` unchanged since the
+  disconnect fix). The screen must stay USB-tethered (it already is). WebSocket env
+  `jc3248w535` retained for LAN/CI.
+- **Env note:** created a `~/bin/python3` shim (this Windows Python never made a `python3`,
+  which was breaking the git governance hooks) and copied the operator's real
+  `firmware/screen/secrets/*.h` into the worktree so the firmware could build (gitignored).
 
 ## Delivered (2026-07-02 UTC) — PR #460 MERGED: autonomous harness as a product + setup verify (#459)
 

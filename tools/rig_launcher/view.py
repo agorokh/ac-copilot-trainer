@@ -1,7 +1,7 @@
 """Racing Atelier themed Tk view for the Game Point launcher (epic #432, Part B).
 
 ``build_launcher_view`` renders the carbon/brass status panel that maps 1:1 onto
-``GamePointStatus`` (sidecar / screen / hotspot / voice / simhub). It owns
+``GamePointStatus`` (sidecar / screen / voice / simhub). It owns
 *presentation only*: every behaviour (start, refresh, open logs/settings, setup
 diff) is passed in via ``actions`` and the caller drives redraws with
 ``LauncherView.update(status)``. Keeping the view free of supervisor/polling
@@ -27,7 +27,6 @@ from tools.rig_launcher.supervisor import GamePointStatus, ProbeResult
 _ROWS: tuple[tuple[str, str], ...] = (
     ("Sidecar", "sidecar"),
     ("Screen", "screen"),
-    ("Hotspot", "hotspot"),
     ("Voice", "voice"),
     ("SimHub", "simhub"),
 )
@@ -159,7 +158,7 @@ class LauncherView:
         field.pack(side="left")
         caption = tk.Label(
             row,
-            text="sidecar · screen · hotspot live",
+            text="sidecar · screen live",
             bg=theme.GRAPHITE,
             fg=theme.MUTE,
             font=(self._f_mono, 11),

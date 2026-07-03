@@ -17,6 +17,7 @@ Architecture Decision Records for this vault.
 - [screen-firmware-in-trainer-monorepo](screen-firmware-in-trainer-monorepo.md) — `firmware/` lives inside the trainer repo.
 - [screen-firmware-toolchain](screen-firmware-toolchain.md) — Arduino_GFX 1.4.7 + ArduinoWebsockets + ArduinoJson on espressif32@6.13.0.
 - [external-ws-client-protocol-extension](external-ws-client-protocol-extension.md) — sidecar opt-in LAN bind + token + `{v,type}` envelope (issue #81).
+- [usb-serial-screen-transport-2026-07-02](usb-serial-screen-transport-2026-07-02.md) — the rig screen talks protocol v1 over **USB CDC**, not WiFi/hotspot (issue #463); removes the single-radio main-WiFi drop. Key trap: S3 CDC needs **DTR high** for RX, resets on **RTS** pulse.
 - [screen-ui-stack-lvgl-touch](screen-ui-stack-lvgl-touch.md) — LVGL 8.3 + AXS15231B touch + SquareLine for the rig screen UI.
 - [screen-and-csp-apps-integration](screen-and-csp-apps-integration.md) — bridge the rig screen to Pocket Technician + Setup Exchange via same-VM API replication, not cross-VM bridging.
 - [dashboard-visual-design-figma](dashboard-visual-design-figma.md) — Figma file is source of truth for both HUD (shipped) and rig touchscreen (Phase 2); design tokens + cockpit-UX rules captured here.
