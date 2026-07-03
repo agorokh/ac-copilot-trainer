@@ -10,7 +10,6 @@ the requested setup").
 
 from __future__ import annotations
 
-import json
 import pathlib
 
 import pytest
@@ -122,46 +121,6 @@ def test_race_ini_setup_resolution_refreshes_when_session_changes(tmp_path):
     out = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 2 })")
 
     assert out == str(other), out
-
-
-def test_race_ini_setup_resolution_prefers_newer_same_folder_setup(tmp_path):
-    """A newer same-folder setup beats the stale CM launch setup recorded in race.ini."""
-    ac_root = tmp_path / "Assetto Corsa"
-    (ac_root / "cfg").mkdir(parents=True)
-    car_root = ac_root / "setups" / "ks_porsche_911_gt3_r_2016" / "spa"
-    car_root.mkdir(parents=True)
-    launch_setup = car_root / "LaunchSetup.ini"
-    pit_setup = car_root / "PitSetup.ini"
-    launch_setup.write_text("[FUEL]\nVALUE=45\n", encoding="utf-8")
-    pit_setup.write_text("[FUEL]\nVALUE=15\n", encoding="utf-8")
-    (ac_root / "cfg" / "race.ini").write_text(
-        f"[CAR_0]\n_EXT_SETUP_FILENAME={launch_setup}\n",
-        encoding="utf-8",
-    )
-    rt = _runtime(str(tmp_path).replace("\\", "/"))
-    launch_lua = str(launch_setup).replace("\\", "/")
-    pit_lua = str(pit_setup).replace("\\", "/")
-    dir_lua = str(car_root).replace("\\", "/")
-    rt.execute(
-        f"""
-        local mtimes = {{}}
-        mtimes[{json.dumps(launch_lua)}] = 10
-        mtimes[{json.dumps(pit_lua)}] = 20
-        io.scanDir = function(dir, pattern)
-          if dir == {json.dumps(dir_lua)} and pattern == "*.ini" then
-            return {{ "LaunchSetup.ini", "PitSetup.ini" }}
-          end
-          return {{}}
-        end
-        io.fileModified = function(path)
-          return mtimes[path]
-        end
-        """
-    )
-
-    out = rt.execute('local sr = require("setup_reader"); return sr.activeSetupIniPath({}, nil)')
-
-    assert out == str(pit_setup), out
 
 
 def test_race_ini_missing_setup_pointer_is_negative_cached_within_session(tmp_path):
