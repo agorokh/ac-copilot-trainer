@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import threading
 import time
 
@@ -273,7 +274,9 @@ def test_serial_reassembles_split_frame_and_dispatches_batch() -> None:
     assert asyncio.run(_run()) == 1
 
 
-def test_serial_skips_firmware_traces_and_malformed_frames() -> None:
+def test_serial_skips_firmware_traces_and_malformed_frames(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     async def _run() -> tuple[int, dict]:
         srv._reset_external_state()
         fake = _FakeSerial()
@@ -309,9 +312,15 @@ def test_serial_skips_firmware_traces_and_malformed_frames() -> None:
                 await task
             srv._reset_external_state()
 
-    screens, ack = asyncio.run(_run())
+    with caplog.at_level(logging.DEBUG, logger="tools.ai_sidecar.serial_transport"):
+        screens, ack = asyncio.run(_run())
     assert screens == 1
     assert ack["type"] == "hello_ack"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    # A `[serial]`-prefixed firmware trace must NOT warn (it starts with '[', not '{').
+    assert not any("link up (sidecar answered)" in m for m in warnings), warnings
+    # A `{`-looking line that fails to parse IS a real malformed frame -> WARNING.
+    assert any("malformed json" in m for m in warnings), warnings
 
 
 def test_serial_disconnect_evicts_peer() -> None:

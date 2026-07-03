@@ -203,10 +203,12 @@ async def run_serial_transport(
                     logger.info("serial %s: disconnect (%s)", port, meta)
                     break
                 # The firmware shares this CDC for both protocol frames and plain-text
-                # debug prints (`[serial] …`, `[boot] …`). Demultiplex: only a line that
-                # looks like a JSON object/array is a protocol frame; anything else is a
-                # firmware trace — log it at DEBUG, never WARNING (issue #463 log-spam fix).
-                if not item.lstrip().startswith(("{", "[")):
+                # debug prints (`[serial] …`, `[ws] …`, `[boot] …`). Demultiplex: every
+                # protocol v1 frame is a JSON *object* (`{`) — never an array — so a line
+                # that doesn't start with `{` is a firmware trace. (Matching `[` too would
+                # be self-defeating: the debug tags themselves start with `[`.) Log traces
+                # at DEBUG, never WARNING (issue #463 log-spam fix).
+                if not item.lstrip().startswith("{"):
                     logger.debug("serial %s [fw]: %s", port, item[:200])
                     continue
                 try:
