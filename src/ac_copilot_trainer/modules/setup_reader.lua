@@ -5,6 +5,7 @@ local M = {}
 local ch = require("csp_helpers")
 
 local COPILOT_GLOB = "copilot_"
+local RACE_INI_RECHECK_INTERVAL_SEC = 2
 
 --- Prefer CSP-reported active setup path when the runtime exposes it (varies by CSP build).
 ---@param car ac.StateCar|nil
@@ -58,6 +59,80 @@ local function safeStringField(obj, key)
   return tostring(value)
 end
 
+local function nowSeconds()
+  if os and type(os.time) == "function" then
+    local ok, value = pcall(os.time)
+    if ok and type(value) == "number" then
+      return value
+    end
+  end
+  return 0
+end
+
+local function fileModified(path)
+  if io and type(io.fileModified) == "function" then
+    local ok, value = pcall(io.fileModified, path)
+    if ok then
+      return tonumber(value)
+    end
+  end
+  return nil
+end
+
+local function readablePath(path)
+  if not path or path == "" then
+    return nil
+  end
+  local h = io.open(path, "r")
+  if h then
+    h:close()
+    return path
+  end
+  return nil
+end
+
+local function dirname(path)
+  return path:match("^(.*)[/\\][^/\\]+$")
+end
+
+local function newestSetupInDir(dir)
+  if not dir or not (io and type(io.scanDir) == "function") then
+    return nil, nil
+  end
+  local ok, names = pcall(io.scanDir, dir, "*.ini")
+  if not ok or type(names) ~= "table" then
+    return nil, nil
+  end
+  local newestPath = nil
+  local newestMtime = nil
+  for i = 1, #names do
+    local name = names[i]
+    if type(name) == "string" and name:lower():match("%.ini$") then
+      local path = dir .. "/" .. name
+      local mtime = fileModified(path)
+      if mtime and (not newestMtime or mtime > newestMtime) and readablePath(path) then
+        newestPath = path
+        newestMtime = mtime
+      end
+    end
+  end
+  return newestPath, newestMtime
+end
+
+local function resolveRaceIniSetupPath(path)
+  path = readablePath(path)
+  if not path then
+    return nil
+  end
+  local dir = dirname(path)
+  local raceMtime = fileModified(path)
+  local newestPath, newestMtime = newestSetupInDir(dir)
+  if newestPath and raceMtime and newestMtime and newestMtime > raceMtime then
+    return newestPath
+  end
+  return path
+end
+
 --- Applied-setup INI path from the launch `cfg/race.ini` (`[CAR_0] _EXT_SETUP_FILENAME`).
 --- AC and Content Manager record the *selected* setup there as an absolute path, and the #461
 --- autonomous harness bakes it there before spawn — so it is the authoritative "which setup is
@@ -86,13 +161,7 @@ local function readActiveSetupPathFromRaceIni(doc)
       local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
       if key == "_EXT_SETUP_FILENAME" then
         local p = trim(value or "")
-        if p ~= "" then
-          local h = io.open(p, "r")
-          if h then
-            h:close()
-            return p
-          end
-        end
+        return resolveRaceIniSetupPath(p)
       end
     end
   end
@@ -100,7 +169,7 @@ local function readActiveSetupPathFromRaceIni(doc)
 end
 
 local RACE_INI_NO_SETUP = false
-local raceIniSetupCache = { key = nil, path = RACE_INI_NO_SETUP }
+local raceIniSetupCache = { key = nil, path = RACE_INI_NO_SETUP, nextCheck = 0 }
 
 local function raceIniSetupCacheKey(sim)
   local doc = documentsRoot()
@@ -123,11 +192,16 @@ local function activeSetupPathFromRaceIni(sim)
   if not key or not doc then
     return nil
   end
+  local now = nowSeconds()
   if raceIniSetupCache.key == key then
     if raceIniSetupCache.path == RACE_INI_NO_SETUP then
       return nil
     end
-    return raceIniSetupCache.path
+    if now < (raceIniSetupCache.nextCheck or 0) then
+      return raceIniSetupCache.path
+    end
+  else
+    raceIniSetupCache.nextCheck = 0
   end
   local path = readActiveSetupPathFromRaceIni(doc)
   -- Cache negative reads too: once Lua is running in acs.exe, the launch race.ini has already been
@@ -135,8 +209,10 @@ local function activeSetupPathFromRaceIni(sim)
   raceIniSetupCache.key = key
   if path then
     raceIniSetupCache.path = path
+    raceIniSetupCache.nextCheck = now + RACE_INI_RECHECK_INTERVAL_SEC
   else
     raceIniSetupCache.path = RACE_INI_NO_SETUP
+    raceIniSetupCache.nextCheck = 0
   end
   return path
 end
