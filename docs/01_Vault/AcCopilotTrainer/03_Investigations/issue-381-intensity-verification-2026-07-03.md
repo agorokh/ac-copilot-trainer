@@ -56,5 +56,7 @@ Human ~15-second confirm. Desk-listenable A/B rendered at native levels under
 `issue381-waveforms.svg` and `issue381-acoustic-ab.json`. Evidence comment:
 [#381#issuecomment-4874323968](https://github.com/agorokh/ac-copilot-trainer/issues/381#issuecomment-4874323968).
 
-**Minor separable find:** `timing_report.py` main() crashes with `UnicodeEncodeError` on its final
-`print("… → …")` under Windows cp1252 stdout (artifact is written first) — trivial `→`→`->` fix.
+**Separable find (FIXED):** `timing_report.py` main() crashed with `UnicodeEncodeError` on its final
+`print("… → …")` under Windows cp1252 stdout (artifact written first) — fixed by PR
+[#476](https://github.com/agorokh/ac-copilot-trainer/pull/476) (merged `a130abb`, issue #475 CLOSED):
+`→`→`->`, verified exit 0 under `PYTHONIOENCODING=cp1252` with/without a bank, ruff + 12 timing tests green.
