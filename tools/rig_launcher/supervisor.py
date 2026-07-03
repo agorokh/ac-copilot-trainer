@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, MutableMapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
@@ -482,6 +482,25 @@ class GamePointSupervisor:
         except Exception as exc:  # noqa: BLE001 - visible status beats hidden failure
             return ProbeResult("simhub", False, "start_failed", str(exc))
         return ProbeResult("simhub", True, "started", str(exe))
+
+    def set_start_simhub(self, enabled: bool) -> bool:
+        """Persist the SimHub auto-start preference and apply it to the live config.
+
+        Backs the launcher's SimHub auto-start toggle. Persists to the per-user
+        settings.json so the choice survives restarts, and updates the in-memory
+        config so the next :meth:`poll_status` honors it immediately (starting or
+        adopting SimHub when enabled). Returns the applied value. Persistence is
+        best-effort: a settings-write failure still applies the runtime change so
+        the UI toggle stays responsive.
+        """
+        from tools.rig_launcher.settings import update_settings
+
+        self.config = replace(self.config, start_simhub=bool(enabled))
+        try:
+            update_settings(self.paths, start_simhub=bool(enabled))
+        except OSError:
+            pass
+        return self.config.start_simhub
 
     def close(self) -> None:
         self.stop_sidecar()

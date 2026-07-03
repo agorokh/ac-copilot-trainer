@@ -59,6 +59,7 @@ class LauncherView:
         actions: Mapping[str, Callable[[], None]],
         status_path: str,
         port: int = 8765,
+        simhub_autostart: bool = False,
     ) -> None:
         self._root = root
         self._port = port
@@ -101,6 +102,13 @@ class LauncherView:
         body.pack(fill="both", expand=True, padx=16, pady=(2, 8))
         for index, (label, key) in enumerate(_ROWS):
             self._rows[key] = self._build_row(body, label, last=index == len(_ROWS) - 1)
+
+        # Optional SimHub auto-start toggle, wired only when the caller supplies
+        # the action (app.run_gui). Keeps the view presentation-only otherwise.
+        self._simhub_var: tk.BooleanVar | None = None
+        toggle_simhub = actions.get("toggle_simhub")
+        if toggle_simhub is not None:
+            self._build_simhub_toggle(body, toggle_simhub, simhub_autostart)
 
         self._build_buttons(panel, actions)
         self._add_corner_brackets(panel)
@@ -224,6 +232,42 @@ class LauncherView:
             )
             button.grid(row=0, column=column, sticky="nsew", padx=(0 if column == 0 else 9, 0))
 
+    def _build_simhub_toggle(
+        self,
+        parent: tk.Frame,
+        command: Callable[[], None],
+        initial: bool,
+    ) -> None:
+        """Render the SimHub auto-start toggle bound to the persisted setting.
+
+        A themed Checkbutton so "start SimHub with the launcher" is reachable
+        from the UI, not only by hand-editing settings.json. ``command`` flips and
+        persists the preference (see ``app.run_gui``); the var seeds from the
+        launch-time config so it reflects the current setting on open.
+        """
+        var = tk.BooleanVar(master=self._root, value=bool(initial))
+        self._simhub_var = var
+        row = tk.Frame(parent, bg=theme.GRAPHITE)
+        row.pack(fill="x", pady=(6, 2))
+        tk.Checkbutton(
+            row,
+            text="AUTO-START SIMHUB",
+            variable=var,
+            command=command,
+            onvalue=True,
+            offvalue=False,
+            bg=theme.GRAPHITE,
+            fg=theme.MUTE,
+            activebackground=theme.GRAPHITE,
+            activeforeground=theme.CHALK,
+            selectcolor=theme.SLAB,
+            font=(self._f_disp, 10),
+            anchor="w",
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+        ).pack(side="left")
+
     # -- refresh --------------------------------------------------------------
 
     def update(self, status: GamePointStatus) -> None:
@@ -254,6 +298,13 @@ def build_launcher_view(
     actions: Mapping[str, Callable[[], None]],
     status_path: str,
     port: int = 8765,
+    simhub_autostart: bool = False,
 ) -> LauncherView:
     """Construct the themed launcher panel inside ``root`` and return its handle."""
-    return LauncherView(root, actions=actions, status_path=status_path, port=port)
+    return LauncherView(
+        root,
+        actions=actions,
+        status_path=status_path,
+        port=port,
+        simhub_autostart=simhub_autostart,
+    )

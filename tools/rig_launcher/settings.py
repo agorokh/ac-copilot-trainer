@@ -62,6 +62,42 @@ def ensure_settings_file(paths: LauncherPaths) -> Path:
     return path
 
 
+def update_settings(paths: LauncherPaths, **changes: object) -> Path:
+    """Merge ``changes`` into the per-user settings.json, preserving other keys.
+
+    Backs the launcher UI toggles (e.g. ``start_simhub``): persist one setting
+    without clobbering the operator's others, and keep tokens/secrets out (they
+    live in the environment, never here). The write is atomic — a temp file plus
+    ``replace`` — so a crash mid-write cannot truncate an existing settings.json.
+    A malformed or unreadable existing file falls back to the non-secret template
+    before the merge, mirroring :meth:`LauncherSettings.load`'s fail-safe.
+    """
+    path = paths.settings_path
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeError):
+        loaded = None
+    payload = dict(loaded) if isinstance(loaded, Mapping) else default_settings_payload()
+    payload.update(changes)
+    paths.root.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        tmp.replace(path)
+    except OSError:
+        # Never leave a half-written temp file behind on a failed persist.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
 def default_settings_payload() -> dict[str, object]:
     """Return the editable settings template. Tokens intentionally stay out."""
     return {

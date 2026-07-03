@@ -26,7 +26,12 @@ from tools.rig_launcher.install import (
     default_exe_path,
     install_desktop_shortcut,
 )
-from tools.rig_launcher.settings import LauncherSettings, ensure_settings_file
+from tools.rig_launcher.settings import (
+    LauncherSettings,
+    default_settings_payload,
+    ensure_settings_file,
+    update_settings,
+)
 from tools.rig_launcher.supervisor import (
     _WINDOWS_NO_WINDOW,
     GamePointConfig,
@@ -1217,3 +1222,160 @@ def test_run_gui_falls_back_when_tk_init_fails(monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert "GUI unavailable: no display" in captured.err
     assert "sidecar: ok" in captured.out
+
+
+# -- SimHub auto-start toggle (issue #479) ------------------------------------
+
+
+def test_default_settings_keep_simhub_autostart_off(tmp_path: Path) -> None:
+    """Packaged default stays opt-in (matches the PR #207 opt-in house pattern)."""
+    assert default_settings_payload()["start_simhub"] is False
+    path = ensure_settings_file(LauncherPaths(tmp_path))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["start_simhub"] is False
+
+
+def test_update_settings_merges_and_preserves_other_keys(tmp_path: Path) -> None:
+    paths = LauncherPaths(tmp_path)
+    (tmp_path / "settings.json").write_text(
+        json.dumps(
+            {
+                "_schema": "ac-copilot-game-point-settings-v1",
+                "sidecar_port": 9999,
+                "voice_tts": True,
+                "start_simhub": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    path = update_settings(paths, start_simhub=True)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["start_simhub"] is True
+    # Untouched keys survive the merge — the toggle must not clobber other settings.
+    assert payload["sidecar_port"] == 9999
+    assert payload["voice_tts"] is True
+    # And the persisted value round-trips through the loader the config uses.
+    assert GamePointConfig.from_env({}, paths=paths).start_simhub is True
+
+
+def test_update_settings_creates_template_when_file_missing(tmp_path: Path) -> None:
+    paths = LauncherPaths(tmp_path)
+
+    path = update_settings(paths, start_simhub=True)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert path == tmp_path / "settings.json"
+    assert payload["start_simhub"] is True
+    # Falls back to the non-secret template for the other keys; never invents a token.
+    assert payload["voice_bank"] == ""
+    assert "token" not in json.dumps(payload).lower()
+
+
+def test_update_settings_recovers_from_corrupt_existing_file(tmp_path: Path) -> None:
+    paths = LauncherPaths(tmp_path)
+    (tmp_path / "settings.json").write_bytes(b"\xff\xfe not json")
+
+    path = update_settings(paths, start_simhub=True)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["start_simhub"] is True
+    assert payload["sidecar_port"] == 8765  # template default; the file was unreadable
+
+
+def test_set_start_simhub_persists_and_updates_live_config(tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={})
+
+    assert sup.set_start_simhub(True) is True
+    assert sup.config.start_simhub is True
+    persisted = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert persisted["start_simhub"] is True
+
+    assert sup.set_start_simhub(False) is False
+    assert sup.config.start_simhub is False
+    persisted = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert persisted["start_simhub"] is False
+
+
+def test_set_start_simhub_applies_runtime_change_even_if_persist_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A settings-write failure must not swallow the runtime toggle (UI stays live)."""
+
+    def boom(*_args: Any, **_kwargs: Any) -> Path:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("tools.rig_launcher.settings.update_settings", boom)
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={})
+
+    assert sup.set_start_simhub(True) is True
+    assert sup.config.start_simhub is True
+
+
+def test_toggle_then_poll_starts_simhub(tmp_path: Path) -> None:
+    """Enabling the toggle makes the next poll start SimHub — the one-icon outcome."""
+    exe = tmp_path / "SimHub" / "SimHubWPF.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+    calls: list[Any] = []
+
+    def fake_popen(*args: Any, **kwargs: Any) -> _Proc:
+        calls.append((args, kwargs))
+        return _Proc()
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"ProgramFiles": str(tmp_path)},
+        popen=fake_popen,
+        urlopen=_refused_urlopen,
+        run=_no_simhub_run,
+    )
+
+    # Before the toggle: SimHub is detected but NOT started (start=False).
+    assert sup.probe_simhub(start=sup.config.start_simhub).state == "available"
+    assert calls == []
+
+    sup.set_start_simhub(True)
+    status = sup.poll_status()
+
+    assert status.simhub.state == "started"
+    assert status.simhub.ok is True
+    assert calls[0][0][0] == [str(exe)]
+
+
+def test_simhub_started_does_not_block_overall_status(tmp_path: Path) -> None:
+    """A started SimHub row must not force overall status to needs_attention (#479)."""
+    exe = tmp_path / "SimHub" / "SimHubWPF.exe"
+    exe.parent.mkdir()
+    exe.write_text("", encoding="utf-8")
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> _Proc:
+        return _Proc()
+
+    def healthy_urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok", "connected_peers": 1, "screen_peers": 1})
+
+    cfg = GamePointConfig(
+        external_bind="0.0.0.0",
+        token="token",
+        start_simhub=True,
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"ProgramFiles": str(tmp_path)},
+        popen=fake_popen,
+        urlopen=healthy_urlopen,
+        run=_no_simhub_run,
+    )
+
+    status = sup.poll_status()
+
+    assert status.simhub.state == "started"
+    assert status.simhub.ok is True
+    assert status.ok is True
