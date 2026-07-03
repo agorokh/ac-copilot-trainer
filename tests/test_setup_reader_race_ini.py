@@ -188,10 +188,26 @@ def test_missing_setup_file_pointer_is_negative_cached_within_session(tmp_path):
     assert next_session == str(setup_ini), next_session
 
 
-def test_missing_ext_setup_falls_through_to_folder_guess(tmp_path):
-    """No ``_EXT_SETUP_FILENAME`` (and no setup file) → reader must not crash; snap stays nil."""
+def test_missing_ext_setup_reports_no_setup(tmp_path):
+    """A readable race.ini without ``_EXT_SETUP_FILENAME`` reports no applied setup."""
     ac_root = tmp_path / "Assetto Corsa"
     (ac_root / "cfg").mkdir(parents=True)
+    (ac_root / "cfg" / "race.ini").write_text("[CAR_0]\nSETUP=\n", encoding="utf-8")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    out = rt.execute(
+        'local sr = require("setup_reader"); local s = sr.snapshotActive({}, nil); '
+        'return s == nil and "nil" or "snap"'
+    )
+    assert out == "nil", out
+
+
+def test_confirmed_no_race_ini_setup_blocks_legacy_folder_guess(tmp_path):
+    """A confirmed race.ini no-setup should not hallucinate ``setups/unknown/unknown/race.ini``."""
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    fallback = ac_root / "setups" / "unknown" / "unknown" / "race.ini"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_text("[FUEL]\nVALUE=45\n", encoding="utf-8")
     (ac_root / "cfg" / "race.ini").write_text("[CAR_0]\nSETUP=\n", encoding="utf-8")
     rt = _runtime(str(tmp_path).replace("\\", "/"))
     out = rt.execute(

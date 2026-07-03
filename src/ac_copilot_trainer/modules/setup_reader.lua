@@ -133,9 +133,6 @@ local function activeSetupPathFromRaceIni(sim)
     return nil
   end
   if raceIniSetupCache.key == key then
-    if raceIniSetupCache.path == RACE_INI_NO_SETUP then
-      return nil
-    end
     return raceIniSetupCache.path
   end
   local path = readActiveSetupPathFromRaceIni(doc)
@@ -168,6 +165,9 @@ local function guessSetupIniPath(car, sim)
   -- The active setup baked/selected into race.ini beats a folder guess: it names the actual applied
   -- setup file (e.g. Realistic_BB_v3.ini), so the lap archive records that setup, not an empty snap.
   local fromRace = activeSetupPathFromRaceIni(sim)
+  if fromRace == RACE_INI_NO_SETUP then
+    return nil
+  end
   if fromRace then
     return fromRace
   end
