@@ -35,6 +35,7 @@ from tools.ac_harness.auto_drive import (
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
+    rig_hijack,
     rig_launch,
     run_auto_drive,
     verify_setup_ack,
@@ -872,6 +873,109 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
     assert "setup verification deferred" in detail
     assert "locked" in detail
     assert sleeps == [1.5]
+
+
+# ---------------------------------------------------------------------------
+# Overlay fast-fail + CLI validation (#466).
+# ---------------------------------------------------------------------------
+def test_probe_and_rebake_cli_flags_map_to_config():
+    base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
+    cfg = _config_from_args(_build_arg_parser().parse_args(base))
+    assert cfg.hijack_probe_seconds == 5.0
+    assert (
+        cfg.setup_rebake_interval == AutoDriveConfig.setup_rebake_interval
+    )  # CLI default == field
+    cfg = _config_from_args(
+        _build_arg_parser().parse_args(
+            base + ["--hijack-probe-seconds", "2.5", "--setup-rebake-interval", "0.3"]
+        )
+    )
+    assert cfg.hijack_probe_seconds == 2.5
+    assert cfg.setup_rebake_interval == 0.3
+
+
+def test_positive_float_flags_reject_bad_values():
+    # A non-positive OR non-finite value must fail at parse time (clean usage error), not deep in
+    # race_ini_setup_bake_loop, and not as a never-expiring hijack deadline (#482 review). `inf`
+    # would make `deadline = monotonic() + probe` never expire — the exact hang #466 removes.
+    base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
+    for flag in ("--setup-rebake-interval", "--hijack-probe-seconds"):
+        for bad in ("0", "-0.5", "inf", "nan"):
+            with pytest.raises(SystemExit):
+                _build_arg_parser().parse_args(base + [flag, bad])
+    # A finite positive value still parses.
+    cfg = _config_from_args(
+        _build_arg_parser().parse_args(base + ["--hijack-probe-seconds", "7.5"])
+    )
+    assert cfg.hijack_probe_seconds == 7.5
+
+
+def _fake_cai_factory(created: list, ready_when):
+    """A fake CustomAIController: ``read_car_data`` returns a dict once ``ready_when()`` is true."""
+
+    class _FakeCAI:
+        def __init__(self, index: int = 0) -> None:
+            self.index = index
+            self.closed = False
+            created.append(self)
+
+        def read_car_data(self):  # noqa: ANN201
+            return {"packet_id": 1} if ready_when() else None
+
+        def close(self) -> None:
+            self.closed = True
+
+    return _FakeCAI
+
+
+def test_rig_hijack_lands_on_a_later_recreate_probe(monkeypatch):
+    """Car0 that only appears after a CarControls0 recreate is hijacked on the later probe."""
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+    created: list = []
+    logs: list[str] = []
+
+    # Car0 appears only once a 2nd CarControls0 has been created (the early-LIVE recreate race).
+    monkeypatch.setattr(
+        "tools.ac_harness.custom_ai.CustomAIController",
+        _fake_cai_factory(created, lambda: len(created) >= 2),
+    )
+    monkeypatch.setattr(ad, "_log", lambda m: logs.append(m))
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    ctrl = rig_hijack(_cfg(hijack_attempts=3, hijack_probe_seconds=0.5))
+
+    assert ctrl is not None  # landed after the first recreate
+    assert len(created) == 2  # probe 1 recreated, probe 2 landed — no third launch cycle needed
+    assert created[0].closed is True  # the first section was released before the recreate
+    assert any("hijack landed" in m for m in logs)
+
+
+def test_rig_hijack_fast_fails_to_none_and_bounds_dead_time(monkeypatch):
+    """A hard overlay stall (Car0 never appears) fast-fails to None, bounded probe budget."""
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+    created: list = []
+
+    monkeypatch.setattr(
+        "tools.ac_harness.custom_ai.CustomAIController",
+        _fake_cai_factory(created, lambda: False),  # Car0 never appears
+    )
+    monkeypatch.setattr(ad, "_log", lambda m: None)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    ctrl = rig_hijack(_cfg(hijack_attempts=3, hijack_probe_seconds=0.5))
+
+    assert ctrl is None
+    assert len(created) == 3  # one short probe per attempt
+    assert all(c.closed for c in created)  # every section released (no controller leak)
+    # Bounded dead-wait: ~3 probes * 0.5 s (+ up to one 0.1 s poll each), NOT a single long
+    # timeout. The point is the bound, not the exact figure — this is what kills the 25 s dead-wait.
+    assert clock.now <= 3 * (0.5 + 0.1) + 1e-6
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():

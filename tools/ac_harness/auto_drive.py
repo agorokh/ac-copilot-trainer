@@ -56,6 +56,7 @@ import argparse
 import asyncio
 import configparser
 import json
+import math
 import re
 import threading
 import time
@@ -155,7 +156,16 @@ class AutoDriveConfig:
     max_launches: int = 5
     attempt_timeout: float = 75.0
     settle_seconds: float = 7.0  # let CSP arm Custom-AI before hijacking
-    hijack_timeout: float = 25.0
+    # Overlay fast-fail (#466). `_wait_live` reports LIVE the moment status==LIVE + physics advance,
+    # but AC can sit at the NEW-UI "0 seconds" pre-drive overlay WITH LIVE status and advancing
+    # physics when CM's auto-start race loses — LIVE but NOT drivable. The carcsw hijack (CSP
+    # creating Car0) is the only deterministic "session is actually drivable" signal, so each hijack
+    # attempt is a SHORT probe: a stalled overlay is detected in `hijack_probe_seconds` and the
+    # cycle recycles a fresh launch instead of burning one long ~25 s dead-wait. 5 s is generous for
+    # a hijackable session: in-sim (#482), Car0 lands within ~1-2 s of creating CarControls0 on a
+    # non-overlay launch (probe 1/3), so a shorter probe does not tear down healthy rigs. CLI-
+    # validated finite & > 0 (a non-finite probe would never expire — see `_positive_float`).
+    hijack_probe_seconds: float = 5.0
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
     # Sim-death guard.
     sim_dead_seconds: float = 4.0
@@ -1094,6 +1104,15 @@ def collect_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[s
 # ---------------------------------------------------------------------------
 # Rig wiring (Windows/AC only; not exercised by CI — validated on the rig).
 # ---------------------------------------------------------------------------
+def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
+    """Print a timestamped harness progress line so per-cycle launch/hijack timing is visible.
+
+    #466 acceptance requires proving a stalled cycle is *recycled within a few seconds* rather than
+    burning a full-timeout dead-wait; these lines (with their wall-clock stamps) are that proof.
+    """
+    print(f"[auto-drive {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
 def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
     """Best-effort: minimize whatever window holds the foreground before a CM launch.
 
@@ -1141,6 +1160,10 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
     actuator.normalize_prior_state()
     for attempt in range(1, config.max_launches + 1):
+        _log(
+            "launching AC via Content Manager"
+            + (" (setup baked into race.ini)" if config.setup_ini is not None else "")
+        )
         _minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
         if config.setup_ini is not None:
             race_ini = _race_ini_path(config)
@@ -1150,6 +1173,10 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
                 actuator.launch() if attempt == 1 else actuator.relaunch()
                 live = _wait_live(config.attempt_timeout)
             if live:
+                _log(
+                    f"LIVE reached; setup re-bake ready={bake.ready}x writes={bake.writes} "
+                    f"(interval={config.setup_rebake_interval}s)"
+                )
                 time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
                 if bake.ready > 0:
                     return (
@@ -1227,25 +1254,40 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
 
 
 def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cover - rig-only
-    """Create CarControls0 and wait for CSP to create Car0 (the hijack landing), with retry.
+    """Create CarControls0 and briefly wait for CSP to create Car0 — the hijack landing.
 
-    The early-LIVE race: CSP only creates Car0 once its Custom-AI subsystem is watching, and the
-    act that triggers it is *creating* the CarControls0 section — so a creation that lands too early
-    silently no-ops. We split ``hijack_timeout`` across ``hijack_attempts`` and **recreate** the
-    section each attempt (close + new ``CustomAIController``) so a later creation re-triggers CSP.
+    Two coupled problems this handles (#154, #466):
+
+    * **The early-LIVE race.** CSP only creates Car0 once its Custom-AI subsystem is watching, and
+      the act that triggers it is *creating* the CarControls0 section — a creation that lands too
+      early silently no-ops. We **recreate** the section each attempt (close + new
+      ``CustomAIController``) so a later creation re-triggers CSP.
+    * **The pre-drive overlay stall.** ``_wait_live`` reports LIVE even when AC is frozen at the
+      NEW-UI "0 seconds" pre-drive overlay (not drivable), so Car0 never appears no matter how long
+      we wait. Each attempt is therefore a SHORT ``hijack_probe_seconds`` probe: a stalled overlay
+      is detected in seconds and ``rig_hijack`` returns ``None`` fast, so the outer loop recycles a
+      fresh launch instead of burning one long dead-wait. (A keypress nudge to clear the overlay
+      in place was implemented and verified in-sim NOT to dismiss the CSP overlay — #466/#482 — so
+      it was removed; the relaunch is the only working recovery.)
     """
     from tools.ac_harness.custom_ai import CustomAIController
 
     attempts = max(1, config.hijack_attempts)
-    per_attempt = config.hijack_timeout / attempts
-    for _ in range(attempts):
+    probe = config.hijack_probe_seconds  # CLI-validated finite & > 0 (single source of truth)
+    for attempt in range(1, attempts + 1):
         ctrl = CustomAIController(0)
-        deadline = time.monotonic() + per_attempt
+        deadline = time.monotonic() + probe
         while time.monotonic() < deadline:
             if ctrl.read_car_data() is not None:
+                _log(f"hijack landed (Car0) on probe {attempt}/{attempts}")
                 return ctrl
             time.sleep(0.1)
         ctrl.close()  # recreate the section next attempt to re-trigger the hijack
+        # ASCII-only message: the harness prints to a Windows cp1252 console (cf. #475/#476).
+        _log(
+            f"hijack probe {attempt}/{attempts}: no Car0 in {probe:.1f}s "
+            "(LIVE but not drivable - pre-drive overlay stall?)"
+        )
     return None
 
 
@@ -1690,6 +1732,21 @@ def _utc_stamp() -> str:  # pragma: no cover - trivial clock wrapper
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _positive_float(value: str) -> float:
+    """argparse type: a strictly-positive, FINITE float.
+
+    Rejects 0, negatives, and non-finite ``inf``/``nan`` at parse time with a clean CLI error.
+    Non-finiteness matters as much as sign (#482 review): ``--hijack-probe-seconds inf`` would make
+    ``deadline = monotonic() + probe`` never expire, reintroducing the infinite overlay dead-wait
+    #466 removes; ``--setup-rebake-interval 0`` would raise an uncaught ``ValueError`` deep in
+    ``race_ini_setup_bake_loop`` mid-launch. Both fail fast here instead.
+    """
+    parsed = float(value)  # ValueError here is turned into a usage error by argparse
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number > 0, got {value!r}")
+    return parsed
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Composed autonomous self-test (#154 Part G): drive any car/track + assert"
@@ -1723,6 +1780,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=20.0,
         help="seconds to wait for acpmf_physics.fuel to confirm the launch-baked setup",
     )
+    p.add_argument(
+        "--setup-rebake-interval",
+        type=_positive_float,
+        default=AutoDriveConfig.setup_rebake_interval,
+        help="how often (s) to re-bake the setup into race.ini during the CM launch window; a very "
+        "small value fights CM's own race.ini writes and stalls the pre-drive auto-start (#466). "
+        "Must be > 0 (race_ini_setup_bake_loop rejects a non-positive interval)",
+    )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument(
         "--ac-user-dir",
@@ -1749,6 +1814,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--wait-lap", action="store_true", help="assert a completed lap (real motion)")
     p.add_argument("--strict", action="store_true", help="require session+lap, enforce ordering")
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
+    p.add_argument(
+        "--hijack-probe-seconds",
+        type=_positive_float,
+        default=5.0,
+        help="per-attempt wait for the carcsw hijack to land; a stalled pre-drive overlay is "
+        "detected within this window and the launch recycles (was one long dead-wait) (#466). "
+        "Must be finite and > 0 (a non-finite value would never expire)",
+    )
     p.add_argument(
         "--evidence-dir",
         type=Path,
@@ -1807,6 +1880,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         sidecar_url=args.sidecar_url,
         setup=args.setup,
         setup_timeout=args.setup_timeout,
+        setup_rebake_interval=args.setup_rebake_interval,
         driver=args.driver,
         pace=args.pace,
         ggv_scale=args.ggv_scale,
@@ -1818,6 +1892,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         wait_lap=args.wait_lap,
         strict=args.strict,
         skip_launch=args.skip_launch,
+        hijack_probe_seconds=args.hijack_probe_seconds,
         max_recoveries=args.max_recoveries,
         progress_stall_seconds=args.progress_stall_seconds,
         spawn_to_line=not args.no_spawn_line,
