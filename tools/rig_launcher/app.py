@@ -277,6 +277,13 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         except Exception as exc:  # noqa: BLE001 - surface file/UI errors in the launcher
             messagebox.showerror("Setup Diff", str(exc), parent=root)
 
+    def toggle_simhub(enabled: bool) -> None:
+        # Apply the checkbox's new state (the view passes it in, so the model follows the
+        # UI) and refresh so it takes effect immediately: poll_status starts/adopts SimHub
+        # when enabled, or just reports it absent — SimHub is never a blocking status row.
+        supervisor.set_start_simhub(enabled)
+        refresh()
+
     view = build_launcher_view(
         root,
         actions={
@@ -288,6 +295,8 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         },
         status_path=str(supervisor.paths.status_path),
         port=supervisor.config.port,
+        simhub_autostart=supervisor.config.start_simhub,
+        on_toggle_simhub=toggle_simhub,
     )
     refresh()
     root.mainloop()

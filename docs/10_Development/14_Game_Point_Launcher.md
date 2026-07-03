@@ -93,6 +93,29 @@ or failed audio backend reports `voice: DISABLED - <reason>` and makes the
 overall status `needs_attention`; the launcher does not treat the mere presence
 of `AC_COPILOT_VOICE_BANK` as proof that audio initialized.
 
+## SimHub auto-start
+
+SimHub is the operator's haptics/dashboard app (e.g. ShakeIt bass-shaker
+effects). The launcher treats it as an **optional peer, not a data source** — it
+reads the same Assetto Corsa shared memory the sidecar reads, so starting it adds
+tactile feedback, not telemetry.
+
+By default the launcher only **detects** SimHub and shows its status
+(`running` / `available` / `absent`); a missing SimHub is never a blocking row
+(`GamePointStatus.ok` skips `absent`/`skipped` rows). To make one launch bring up
+the whole rig, enable auto-start either way — the default is **off**, matching the
+opt-in pattern used for other behavior-changing launcher features:
+
+- **In the launcher UI** — tick **Auto-start SimHub**. The choice persists to
+  `start_simhub` in the per-user `settings.json` and applies immediately: the next
+  status poll starts SimHub, or adopts an already-running instance.
+- **By environment / CLI** — `AC_COPILOT_START_SIMHUB=1`, or `--start-simhub` for
+  a single run. Point `AC_COPILOT_SIMHUB_EXE` at `SimHubWPF.exe` if auto-discovery
+  under `Program Files` / `Program Files (x86)` misses it.
+
+The launcher never edits SimHub's own profiles and never double-launches a SimHub
+the operator already started.
+
 ## Setup Exchange
 
 The rig-screen Setup Exchange tile talks to the Python sidecar with

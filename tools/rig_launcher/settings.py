@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +61,68 @@ def ensure_settings_file(paths: LauncherPaths) -> Path:
         encoding="utf-8",
         newline="\n",
     )
+    return path
+
+
+def update_settings(paths: LauncherPaths, **changes: object) -> Path:
+    """Merge ``changes`` into the per-user settings.json, preserving other keys.
+
+    Backs the launcher UI toggles (e.g. ``start_simhub``): persist one setting without
+    clobbering the operator's others. Guarantees, in order:
+
+    * **No secrets.** Only keys in the non-secret template schema are written, so a
+      ``token`` (or any non-schema field) can never round-trip into settings.json — the
+      documented launcher contract keeps credentials environment-only.
+    * **Preserve manual work.** A *missing* file starts from the template; a *present but
+      malformed, unreadable, or non-object* file is left exactly as the operator wrote it
+      and the call raises (``ValueError`` for bad JSON or a non-object root, ``OSError``
+      for an unreadable file) rather than silently overwriting a hand-edited file.
+    * **Atomic + concurrency-safe.** Writes a *unique* temp file (never a shared fixed
+      name, so a CLI run and the UI cannot clobber each other) then ``os.replace``s it
+      into place, so a crash mid-write cannot truncate an existing settings.json.
+    """
+    path = paths.settings_path
+    loaded: Mapping[str, object]
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        loaded = {}
+    except (OSError, UnicodeError) as exc:
+        # Present but unreadable — never overwrite the operator's file with defaults.
+        raise OSError(f"cannot read {path} to update it: {exc}") from exc
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            # Preserve manual work: never clobber a malformed hand-edited settings.json.
+            raise ValueError(f"refusing to overwrite malformed {path}: {exc}") from exc
+        if not isinstance(parsed, Mapping):
+            # A valid-JSON-but-non-object root (`[]`, `null`, `"x"`) is still the
+            # operator's file — preserve it rather than overwrite with the template.
+            raise ValueError(f"refusing to overwrite non-object {path}")
+        loaded = parsed
+
+    # Baseline on the template (fills partial files), overlay existing + requested keys,
+    # and admit ONLY schema keys — dropping any stray secret-like field on the way out.
+    allowed = set(default_settings_payload())
+    payload = default_settings_payload()
+    payload.update({k: v for k, v in loaded.items() if k in allowed})
+    payload.update({k: v for k, v in changes.items() if k in allowed})
+
+    paths.root.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+    except OSError:
+        # Never leave a half-written temp file behind on a failed persist.
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
     return path
 
 
