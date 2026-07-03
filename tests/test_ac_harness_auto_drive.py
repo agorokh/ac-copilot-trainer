@@ -34,9 +34,9 @@ from tools.ac_harness.auto_drive import (
     resolve_fast_lane,
     resolve_setup_ini,
     run_auto_drive,
-    set_force_start_in_gui_ini,
     verify_setup_ack,
     write_evidence,
+    write_setup_baked_race_ini,
 )
 from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot, PhysicsSnapshot
 
@@ -163,7 +163,7 @@ def test_launch_failure_exhausts_launch_budget_before_failing():
     assert report.stage == "launch"
     assert report.error == "no LIVE"
     # Each attempt launches with max_launches=1 (rig_launch does one cycle); the outer loop retries
-    # up to the config budget (5 — bumped for the #461 timing-sensitive direct-relaunch auto-start).
+    # up to the config budget.
     assert launches == [1, 1, 1, 1, 1]
     assert report.hijacked is False
 
@@ -696,39 +696,33 @@ def test_bake_setup_creates_car0_section_if_absent():
     assert p.get("SESSION_0", "SPAWN_SET") == "PIT"
 
 
-def test_set_force_start_enables_in_basic_and_preserves_other_sections():
+def test_write_setup_baked_race_ini_updates_existing_race_ini_atomically(tmp_path):
     import configparser
+    from pathlib import Path as _P
 
-    gui = "[NEW_UI]\nREPLACE_MAIN_MENU=1\n\n[TWEAKS]\nUSE_THROTTLE_TO_START=1\n"
-    out = set_force_start_in_gui_ini(gui, True)
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    race_ini.write_text("[CAR_0]\nSKIN=brg\n\n[SESSION_0]\nSPAWN_SET=PIT\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+
+    assert write_setup_baked_race_ini(race_ini, setup) is True
+    assert not (race_ini.parent / ".race.ini.ac_copilot_setup.tmp").exists()
+
     p = configparser.ConfigParser(strict=False)
     p.optionxform = str
-    p.read_string(out)
-    assert p.get("BASIC", "FORCE_START") == "1"  # the menu-skip is armed
-    # Unrelated user CSP settings are preserved (we merge over the packaged config, not replace it).
-    assert p.get("NEW_UI", "REPLACE_MAIN_MENU") == "1"
-    assert p.get("TWEAKS", "USE_THROTTLE_TO_START") == "1"
+    p.read_string(race_ini.read_text(encoding="utf-8"))
+    assert p.get("CAR_0", "SETUP") == "Realistic_BB_v3.ini"
+    assert p.get("CAR_0", "_EXT_SETUP_FILENAME") == str(setup)
+    assert p.get("CAR_0", "SKIN") == "brg"
+    assert p.get("SESSION_0", "SPAWN_SET") == "START"
 
 
-def test_set_force_start_creates_basic_section_when_absent_and_can_disable():
-    import configparser
+def test_write_setup_baked_race_ini_waits_for_cm_to_create_race_ini(tmp_path):
+    from pathlib import Path as _P
 
-    # Empty/absent gui.ini → [BASIC] is created.
-    out_on = set_force_start_in_gui_ini("", True)
-    assert "[BASIC]" in out_on and "FORCE_START=1" in out_on.replace(" ", "")
-    # Restore-to-disabled path writes 0 (no spaces around '=', matching AC/CSP convention).
-    p = configparser.ConfigParser(strict=False)
-    p.optionxform = str
-    p.read_string(set_force_start_in_gui_ini(out_on, False))
-    assert p.get("BASIC", "FORCE_START") == "0"
-
-
-def test_no_menu_skip_flag_disables_force_start():
-    parser = _build_arg_parser()
-    # Default: menu-skip on (the setup+drive composition needs it).
-    assert _config_from_args(parser.parse_args(["--track", "spa"])).force_start_menu_skip is True
-    args = parser.parse_args(["--track", "spa", "--no-menu-skip"])
-    assert _config_from_args(args).force_start_menu_skip is False
+    missing = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    assert write_setup_baked_race_ini(missing, setup) is False
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():

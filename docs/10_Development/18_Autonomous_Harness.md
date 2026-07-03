@@ -10,17 +10,17 @@ compose on this harness. (Repo skill pointer: `.claude/skills/ac-harness/SKILL.m
 
 ## The commands
 
-Two working paths today — **prove the drive** (no setup), or **prove a setup applies** (no
-completed drive). They do not yet compose in one command; see *Known limitation* below.
+Two working paths today — **prove the drive** (no setup), or **prove a setup applies and drives** in
+one command.
 
 ```bash
 # Prove the autonomous DRIVE (live-verified: Spa flat-out, gears 1→6, reference coaching):
 python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track spa \
     --driver ggv --wait-lap
 
-# Prove a car SETUP applies + is verified (fuel-checked against the setup's [FUEL] VALUE):
+# Prove a car SETUP applies + is verified, then complete an autonomous lap:
 python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track spa \
-    --setup Realistic_BB_v3
+    --setup Realistic_BB_v3 --driver ggv --wait-lap
 ```
 
 The full loop each command owns:
@@ -33,21 +33,20 @@ The full loop each command owns:
    forbid; `--keep-sidecar` to leave it running).
 3. **Deterministic launch** — with `--car`, a pinned practice `.cmpreset` is generated (clear
    weather, 26 °C, 12:00, optimum track — the #154 determinism-lock preset) and launched via the
-   de-elevated Content Manager URL, with relaunch retries on the menu-skip race.
+   de-elevated Content Manager URL, with relaunch retries on the CM auto-start race.
    Hand-authored presets: `--cm-preset <file>` (the preflight cross-checks its CarId/TrackId).
 4. **Setup applied AND verified at launch** — `--setup <name>` resolves under
    `Documents/Assetto Corsa/setups/<car>/<track|layout|generic>/`. AC applies a car setup **only at
    car spawn, from `race.ini`** — the in-sim WS `setup.load` path is gated by
    `ac.isCarResetAllowed()`, which stays false for a freshly-spawned autonomous car (live-found
-   "must be in pits", Spa 2026-07-02, even before any hijack). So the harness **bakes the setup into
-   `race.ini`** (`_EXT_SETUP_FILENAME` — Content Manager's own key — plus vanilla `SETUP=`) and
-   direct-relaunches acs so the car respawns with it, then **verifies** by reading
+   "must be in pits", Spa 2026-07-02, even before any hijack). So the harness keeps CM's launch path
+   and **continuously re-bakes the setup into `race.ini`** during CM startup (`_EXT_SETUP_FILENAME`
+   — Content Manager's own key — plus vanilla `SETUP=`), then **verifies** by reading
    `acpmf_physics.fuel` (via the open-existing shared-memory reader, so a dead sim can't spoof a
    zero) back against the setup's `[FUEL] VALUE`. A match (±2.5 L default) confirms it (live-verified:
    fuel 45.0 L == Realistic_BB_v3 `FUEL=45`); a mismatch **fails the run at `stage="setup"`**. A
-   setup with no `[FUEL]` section is reported baked-but-unconfirmed. For a **setup + drive** run the
-   direct relaunch also skips AC's NEW-UI pre-drive overlay via CSP `[BASIC] FORCE_START=1` in
-   `extension/config/gui.ini`, written transiently and snapshot-restored + self-healed (#461, below).
+   setup with no `[FUEL]` section is reported baked-but-unconfirmed. The re-bake loop writes only
+   under `Documents/Assetto Corsa/cfg`; it does not mutate the AC/CSP install tree.
 5. **Drive** — `--driver ggv` (flat-out friction-circle min-time), `racing` (AI-line pace,
    default), or `cruise` (slow lane-keeper). Guards: sim-death detection, a **no-progress
    watchdog** (recovers stalls regardless of throttle), a **recovery cap** (default 6) that fails
@@ -86,36 +85,28 @@ long-term storage (scratch-dir disposability pitfall).
 
 ## Setup + autonomous drive compose in one command (#461)
 
-`--setup … --wait-lap` now applies the setup AND drives — **live-proven** at Spa on the 911 GT3 R
-(setup fuel 45.0 L verified, full valid lap at 209 km/h / top gear 6, coaching live). How the
-composition was closed:
+`--setup … --wait-lap` applies the setup AND drives. The compliant composition is:
 
-- The **drive** needs the car in a live-driving session so CSP's Custom-AI subsystem is watching
-  (the carcsw hijack only lands then). A **direct acs relaunch** (needed to bake `race.ini` — CM
-  regenerates it and its Quick-Drive preset carries no setup) otherwise lands at AC's NEW-UI
-  pre-drive **"0 seconds" overlay**, which is **not hijackable**.
-- CSP `[BASIC] FORCE_START=1` skips that overlay so the car auto-starts into the live session. It is
-  honored **only from the install-tree** `extension/config/gui.ini` (the user-tree override is
-  ignored — live-found). The harness writes it **transiently** (relaunch window only), **snapshots +
-  restores it verbatim**, and **self-heals** any leftover on the next run — so a hard-killed run
-  never leaves the setting changed. Ruled out (all live-tested): CM setup-carry (no preset field /
-  no settable CM state), read-only `race.ini` + CM (CM then can't launch), PIT spawn (same overlay).
+- CM remains the only launch path. It supplies the reliable session auto-start behavior that a direct
+  `acs.exe` relaunch does not.
+- While CM is launching, the harness repeatedly re-bakes `Documents/Assetto Corsa/cfg/race.ini` with
+  `CAR_0._EXT_SETUP_FILENAME=<setup.ini>`, `CAR_0.SETUP=<name>.ini`, and `SESSION_0.SPAWN_SET=START`.
+  This races CM's own `race.ini` regeneration without writing outside AC Documents.
+- Once AC reaches LIVE, `rig_apply_setup` verifies the setup via shared-memory fuel before the hijack
+  and drive legs run.
 
-> **Reliability caveat (timing-sensitive).** FORCE_START's auto-start past the "0 seconds" overlay
-> on the direct relaunch is timing-sensitive: a launch cycle can land the car live-driving
-> (hijackable) or stall at the overlay (not hijackable, unrecoverable within that cycle). The only
-> recovery is a fresh cycle, so `max_launches` defaults to **5**. A run can still `stage=hijack`-fail
-> on a bad night, especially on a rig whose CSP/AC state has degraded from many hard `acs` kills —
-> **re-run, or reboot the rig for a clean CSP state.** Hardening (deterministic overlay detect +
-> fast-fail, keypress/`PRE_DRIVE_OVERLAY` overlay-skip) is tracked as a #461 follow-up.
+> **Reliability caveat.** If the rig has been degraded by many hard `acs.exe` kills, even a plain CM
+> launch can stop at the pre-drive "0 seconds" overlay and be non-hijackable. Reboot the rig, verify a
+> no-setup CM launch is hijackable again, then rerun the setup command. Deterministic overlay
+> detection / fast-fail remains tracked in the #466 follow-up.
 
 ## Troubleshooting (hard-won rig lore — read before debugging)
 
 | Symptom | Cause / fix |
 |---|---|
 | Preflight `custom_ai` failure | Set `[CUSTOM_AI] ENABLED=1` in `<AC root>/extension/config/new_behaviour.ini` (user `cfg/extension/new_behaviour.ini` overrides when it carries the key) |
-| `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the direct relaunch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
-| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay — FORCE_START's auto-start on the direct relaunch is timing-sensitive (#461, see above). The setup IS applied/verified; **re-run** (the 5-cycle budget usually catches a good cycle), and reboot the rig if it degraded from many hard `acs` kills |
+| `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the CM launch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
+| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay during CM launch. The setup is applied/verified; reboot the rig if it degraded from many hard `acs.exe` kills, then rerun |
 | CM clicks/launch do nothing | **Foreground steal**: minimize the agent/terminal window; AC's fullscreen menu covers CM — the harness kills stale `acs.exe` before each launch |
 | "Steam API failed to initialize" | Steam elevation mismatch — restart Steam **non-elevated** (`steam -shutdown`, relaunch via `explorer.exe`) |
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |
