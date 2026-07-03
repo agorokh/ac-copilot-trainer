@@ -91,6 +91,8 @@ local function readActiveSetupPathFromRaceIni(doc)
     return nil
   end
   local section = ""
+  local ext_setup_filename = nil
+  local setup_val = nil
   for line in string.gmatch(text .. "\n", "([^\r\n]*)[\r\n]") do
     local sec = line:match("^%s*%[([^%]]+)%]%s*$")
     if sec then
@@ -98,13 +100,20 @@ local function readActiveSetupPathFromRaceIni(doc)
     elseif section == "CAR_0" then
       local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
       if key == "_EXT_SETUP_FILENAME" then
-        local p = trim(value or "")
-        if p == "" then
-          return RACE_INI_NO_SETUP
-        end
-        return readablePath(p) or RACE_INI_NO_SETUP
+        ext_setup_filename = trim(value or "")
+      elseif key == "SETUP" then
+        setup_val = trim(value or "")
       end
     end
+  end
+  if ext_setup_filename then
+    if ext_setup_filename == "" then
+      return RACE_INI_NO_SETUP
+    end
+    return readablePath(ext_setup_filename) or RACE_INI_NO_SETUP
+  end
+  if setup_val and setup_val ~= "" then
+    return nil
   end
   return RACE_INI_NO_SETUP
 end
