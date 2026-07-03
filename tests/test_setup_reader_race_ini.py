@@ -166,6 +166,28 @@ def test_race_ini_read_failure_is_not_negative_cached(tmp_path):
     assert out == str(setup_ini), out
 
 
+def test_missing_setup_file_pointer_is_negative_cached_within_session(tmp_path):
+    """A readable race.ini pointing at a missing setup is confirmed no-setup for that session."""
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    car_root = ac_root / "setups" / "ks_porsche_911_gt3_r_2016" / "spa"
+    car_root.mkdir(parents=True)
+    setup_ini = car_root / "MissingThenCreated.ini"
+    race_ini = ac_root / "cfg" / "race.ini"
+    race_ini.write_text(f"[CAR_0]\n_EXT_SETUP_FILENAME={setup_ini}\n", encoding="utf-8")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    rt.execute('sr = require("setup_reader")')
+    first = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    assert first != str(setup_ini), first
+    setup_ini.write_text("[FUEL]\nVALUE=33\n", encoding="utf-8")
+
+    same_session = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    next_session = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 2 })")
+
+    assert same_session != str(setup_ini), same_session
+    assert next_session == str(setup_ini), next_session
+
+
 def test_missing_ext_setup_falls_through_to_folder_guess(tmp_path):
     """No ``_EXT_SETUP_FILENAME`` (and no setup file) → reader must not crash; snap stays nil."""
     ac_root = tmp_path / "Assetto Corsa"

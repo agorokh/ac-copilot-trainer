@@ -102,7 +102,7 @@ local function readActiveSetupPathFromRaceIni(doc)
         if p == "" then
           return RACE_INI_NO_SETUP
         end
-        return readablePath(p)
+        return readablePath(p) or RACE_INI_NO_SETUP
       end
     end
   end
