@@ -52,13 +52,13 @@ TRACE_FIELDS: tuple[str, ...] = (
     "tyreCoreTemp_rl",
     "tyreCoreTemp_rr",
     "rpm",
-    # Chassis dynamics (issue #478 Part A) — measured g-forces + yaw rate, appended AFTER rpm so every
+    # Chassis dynamics (#478 Part A) — measured g-forces + yaw rate, appended AFTER rpm so every
     # older column position stays byte-stable. accG_long/accG_lat are in G (CSP car.acceleration:
     # x=lateral, z=longitudinal); yaw_rate is rad/s (CSP car.localAngularVelocity.y).
     "accG_long",
     "accG_lat",
     "yaw_rate",
-    # Dynamic HOT tyre pressure per wheel (issue #478 Part B), psi (CSP wheel.tyrePressure). Order FL,
+    # Dynamic HOT tyre pressure per wheel (#478 Part B), psi (wheel.tyrePressure). Order FL,
     # FR, RL, RR — matches the #266 per-wheel channels.
     "wheelsPressure_fl",
     "wheelsPressure_fr",

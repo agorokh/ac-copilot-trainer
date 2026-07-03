@@ -796,7 +796,7 @@ def corner_live_signals(
     rule table keys on (so a suspicion graduates to a verdict) plus the derived signal:
 
     * ``wheelAngularSpeed`` (#266) → ``lock_axle`` ('front'|'rear'|'both'|None) under braking and
-      ``wheelspin`` on exit. Slip is computed from angular speed (the canonical longitudinal signal),
+      ``wheelspin`` on exit. Slip is from angular speed (the canonical longitudinal signal),
       not AC's combined ``wheelSlip``.
     * ``yaw_rate`` (#478 Part A) → the measured rotation signal confirming turn-in lag / the
       under-vs-oversteer direction, as the peak |yaw| through turn-in (rad/s). ``accG_lat`` /
@@ -804,7 +804,7 @@ def corner_live_signals(
     * ``wheelsPressure`` (#478 Part B) → the mean per-wheel dynamic HOT pressure over the corner
       (psi), confirming the pressure/compound attribution.
 
-    Returns ``{}`` when the lap persists no Tier-B channel at all. Each block is independently gated,
+    Returns ``{}`` when the lap persists no Tier-B channel. Each block is independently gated,
     so a lap with only some channels still confirms the rules those channels back.
     """
     extra: dict[str, Any] = {}
@@ -1187,17 +1187,21 @@ def _consistency_coaching(ctx: CornerContext) -> str:
 
 def _grip_limited_coaching(ctx: CornerContext) -> str:
     press = ctx.extra.get("wheelsPressure") if isinstance(ctx.extra, dict) else None
+    shown: str | None = None
     if isinstance(press, dict):
         shown = ", ".join(
             f"{k.upper()} {v}" for k, v in press.items() if isinstance(v, (int, float))
         )
+    elif isinstance(press, (list, tuple)):
+        shown = ", ".join(f"{v}" for v in press if isinstance(v, (int, float)))
+    if shown:
         return (
-            "Car's at the limit mid-corner; to go faster change the setup (pressures/compound/wing), "
+            "Car's at the limit mid-corner; to go faster change setup (pressures/compound/wing), "
             f"not the line. Live hot pressures ({shown} psi) confirm it — check them against the "
             "compound's optimal window and move pressures toward it."
         )
     return (
-        "Car's at the limit mid-corner; to go faster change the setup (pressures/compound/wing), not "
+        "Car's at the limit mid-corner; to go faster change setup (pressures/compound/wing), not "
         "the line. Confirm pressure/compound with live hot-pressure + core-temp."
     )
 
@@ -1206,7 +1210,7 @@ def _turn_in_lag_coaching(ctx: CornerContext) -> str:
     yaw = ctx.extra.get("yaw_rate") if isinstance(ctx.extra, dict) else None
     if isinstance(yaw, (int, float)):
         return (
-            f"Sluggish turn-in CONFIRMED by live yaw-rate (peak {yaw} rad/s through entry) — the car "
+            f"Sluggish turn-in CONFIRMED by live yaw-rate (peak {yaw} rad/s) — the car "
             "rotates late for the steering input. Load the front on entry (trail-brake, quicker "
             "initial input); cold or under-pressure fronts are the next suspect, before caster / "
             "front springs. Front toe-out is a last, small lever."

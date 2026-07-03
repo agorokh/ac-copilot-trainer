@@ -361,7 +361,7 @@ def _base_frame(
         "tyreCoreTemp_fr": _SYNTH_TYRE_TEMP_C,
         "tyreCoreTemp_rl": _SYNTH_TYRE_TEMP_C,
         "tyreCoreTemp_rr": _SYNTH_TYRE_TEMP_C,
-        # Chassis dynamics + hot pressure (issue #478) are NOT modeled by the synthetic generator, so
+        # Chassis dynamics + hot pressure (#478) are NOT modeled by the synthetic generator, so
         # they default to 0.0 — the analysis layer's all-zero-column guard then treats them as "no
         # live data" (a generated reference honestly has no measured g / yaw / pressure). The lupa
         # round-trip test drives non-zero values through make_car to exercise the capture path.

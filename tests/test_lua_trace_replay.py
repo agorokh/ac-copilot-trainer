@@ -35,6 +35,7 @@ from tools.ac_harness.trace_replay import (  # noqa: E402 - after importorskip
     SchemaViolationError,
     TraceReplayHarness,
     available_scenarios,
+    car_chassis_from_frame,
     load_schema,
     synthesize_trace,
     wheels_from_frame,
@@ -470,6 +471,65 @@ def test_wheels_from_frame_maps_corner_order() -> None:
     assert wheels_from_frame({})[2] == {}
 
 
+def test_telemetry_captures_chassis_and_pressure_channels(harness: TraceReplayHarness) -> None:
+    """#478: telemetry.lua captures measured g-forces (car.acceleration, in G), yaw rate
+    (car.localAngularVelocity.y) and dynamic HOT pressure (wheel.tyrePressure) into the trace
+    columns. car.acceleration.x is lateral, .z is longitudinal; localAngularVelocity.y is yaw."""
+    wheels = [
+        {"angularSpeed": 100.0, "tyrePressure": 27.5},
+        {"angularSpeed": 101.0, "tyrePressure": 27.6},
+        {"angularSpeed": 102.0, "tyrePressure": 26.8},
+        {"angularSpeed": 103.0, "tyrePressure": 26.9},
+    ]
+    frames = [
+        {
+            "speedKmh": 180.0,
+            "splinePosition": 0.10 + i * 0.01,
+            "position": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "acceleration": {"x": 1.2, "y": 0.0, "z": -0.8},
+            "localAngularVelocity": {"x": 0.0, "y": 0.35, "z": 0.0},
+            "wheels": wheels,
+        }
+        for i in range(5)
+    ]
+    lap_trace = _ingest_lap(harness, frames, with_wheels=True)
+
+    def col(name: str) -> float:
+        return harness.lua.eval(f"function(tr) return tr[1].{name} end")(lap_trace)
+
+    assert col("accG_lat") == pytest.approx(1.2)  # car.acceleration.x
+    assert col("accG_long") == pytest.approx(-0.8)  # car.acceleration.z
+    assert col("yaw_rate") == pytest.approx(0.35)  # localAngularVelocity.y
+    assert col("wheelsPressure_fl") == pytest.approx(27.5)
+    assert col("wheelsPressure_rr") == pytest.approx(26.9)
+
+
+def test_car_chassis_from_frame_maps_axes() -> None:
+    """#478: car_chassis_from_frame maps accG_lat->acceleration.x, accG_long->acceleration.z,
+    yaw_rate->localAngularVelocity.y, and omits a vec3 whose columns are all absent (unreadable,
+    not a fabricated zero)."""
+    out = car_chassis_from_frame({"accG_lat": 1.1, "accG_long": -0.9, "yaw_rate": 0.4})
+    assert out["acceleration"] == {"x": 1.1, "y": 0.0, "z": -0.9}
+    assert out["localAngularVelocity"] == {"x": 0.0, "y": 0.4, "z": 0.0}
+    assert car_chassis_from_frame({}) == {}
+    assert "localAngularVelocity" not in car_chassis_from_frame({"accG_lat": 1.0})
+
+
+def test_wheels_from_frame_maps_hot_pressure() -> None:
+    """#478: wheels_from_frame carries wheelsPressure_{corner} -> tyrePressure per wheel, and omits
+    it when absent (a synthetic 0.0 and an unreadable nil are different signals)."""
+    frame = {
+        "wheelsPressure_fl": 27.0,
+        "wheelsPressure_fr": 27.1,
+        "wheelsPressure_rl": 26.5,
+        "wheelsPressure_rr": 26.6,
+    }
+    wheels = wheels_from_frame(frame)
+    assert wheels[0] == {"tyrePressure": 27.0}
+    assert wheels[3] == {"tyrePressure": 26.6}
+    assert wheels_from_frame({})[0] == {}
+
+
 def test_make_car_wheels_are_zero_indexed_for_wheel_read(harness: TraceReplayHarness) -> None:
     """L0-22: make_car(wheels=...) builds a 0-indexed car.wheels that wheel_read.readPerWheel
     reads with the correct FL/FR/RL/RR mapping (it iterates `for i = 0, 3`). A 1-based array
@@ -604,6 +664,14 @@ def test_synthesize_trace_scenarios_have_expected_shape(harness: TraceReplayHarn
         "tyreCoreTemp_fr",
         "tyreCoreTemp_rl",
         "tyreCoreTemp_rr",
+        # chassis dynamics + hot pressure (issue #478)
+        "accG_long",
+        "accG_lat",
+        "yaw_rate",
+        "wheelsPressure_fl",
+        "wheelsPressure_fr",
+        "wheelsPressure_rl",
+        "wheelsPressure_rr",
     }
     for scenario in available_scenarios():
         frames = synthesize_trace(scenario)

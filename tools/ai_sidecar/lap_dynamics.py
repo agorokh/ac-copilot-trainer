@@ -90,10 +90,8 @@ class LapTrace:
 
     @property
     def has_chassis_data(self) -> bool:
-        """True when measured chassis dynamics (accG / yaw_rate) are persisted in this lap (#478)."""
-        return (
-            self.yaw_rate is not None or self.accg_lat is not None or self.accg_long is not None
-        )
+        """True when measured chassis dynamics (accG / yaw_rate) are persisted in this lap."""
+        return self.yaw_rate is not None or self.accg_lat is not None or self.accg_long is not None
 
     @property
     def has_pressure_data(self) -> bool:

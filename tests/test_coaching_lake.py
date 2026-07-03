@@ -161,6 +161,25 @@ def test_session_and_stint_rollups_are_queryable(lake_cwd):
     assert stint_a[cols.index("lap_count")] == 3
 
 
+def test_stints_split_on_first_class_tyre_set(lake_cwd):
+    # #478 Part C AC3: two laps in one session on DIFFERENT tyre sets (identical setup_hash) split
+    # into two stints keyed on the tyre-set identity, not the setup_hash proxy.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    a = _archive("ta", "bmw_z4_gt3", "spa", 110000, session_uuid="sess-t", setup_hash="same-setup")
+    a["tyres"] = {"compoundIndex": 1, "name": "Soft (S)"}
+    a["lap"]["lap_n"] = 1
+    b = _archive("tb", "bmw_z4_gt3", "spa", 109000, session_uuid="sess-t", setup_hash="same-setup")
+    b["tyres"] = {"compoundIndex": 2, "name": "Medium (M)"}
+    b["lap"]["lap_n"] = 2
+    _write(laps, "ta", a)
+    _write(laps, "tb", b)
+    summary = build_lake(laps, _db_path())
+    assert summary.stints == 2  # split on tyre-set id despite identical setup_hash
+    cols, rows = run_report(_db_path(), "stints")
+    assert sorted(r[cols.index("tyre_set_key")] for r in rows) == ["Medium (M)", "Soft (S)"]
+
+
 def test_corner_speed_report_is_corner_grain(lake_cwd):
     db, _ = _build(lake_cwd)
     cols, rows = run_report(db, "corner-speed")

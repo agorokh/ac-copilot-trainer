@@ -223,7 +223,7 @@ def _tyre_set_key(tyres: Any) -> str | None:
     """First-class tyre identity for a lap (issue #478 Part C).
 
     Prefers the human tyre-set name (``ac.getTyresName``), else the compound index, else None so the
-    lakehouse falls back to the setup-hash proxy for archives written before the tyres block existed.
+    lakehouse falls back to the setup-hash proxy for archives written before the tyres block.
     """
     if not isinstance(tyres, dict):
         return None
@@ -325,7 +325,9 @@ def _materialize_session_tables(con) -> None:  # noqa: ANN001
                      WHEN lag(coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')) OVER (
                          PARTITION BY session_uuid
                          ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                     ) IS NOT DISTINCT FROM (coalesce(tyre_set, '') || '|' || coalesce(setup_hash, ''))
+                     ) IS NOT DISTINCT FROM (
+                         coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')
+                     )
                      THEN 0 ELSE 1
                    END AS stint_start
             FROM laps
