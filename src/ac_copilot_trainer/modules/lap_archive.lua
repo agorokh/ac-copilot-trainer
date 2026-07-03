@@ -64,6 +64,11 @@ local TRACE_FIELDS = {
   "wheelSlip_fl", "wheelSlip_fr", "wheelSlip_rl", "wheelSlip_rr",
   "tyreCoreTemp_fl", "tyreCoreTemp_fr", "tyreCoreTemp_rl", "tyreCoreTemp_rr",
   "rpm",
+  -- Chassis dynamics (issue #478 Part A): measured g-forces (accG_long/accG_lat, in G) + yaw_rate
+  -- (rad/s), then dynamic HOT tyre pressure per wheel (Part B, psi). Appended AFTER rpm so every
+  -- older column position stays stable; older archives lacking them export as blanks.
+  "accG_long", "accG_lat", "yaw_rate",
+  "wheelsPressure_fl", "wheelsPressure_fr", "wheelsPressure_rl", "wheelsPressure_rr",
 }
 
 local function lapArchiveDir()

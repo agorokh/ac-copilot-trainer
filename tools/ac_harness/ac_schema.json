@@ -83,6 +83,26 @@
       },
       "read_by": ["wheel_read.lua (via telemetry.lua / tire_monitor.lua)"],
       "note": "0-indexed array of per-wheel objects (ac.Wheel): FrontLeft=0, FrontRight=1, RearLeft=2, RearRight=3 -- see wheel_read.WHEEL_KEYS; a 1-based read shifts every corner and reads RR=0 (the #180 regression). wheel_read.lua reads angularSpeed (omega), slipRatio (slip) and tyreCoreTemperature (temp) off each wheel, every access pcall-guarded with CSP field-name fallbacks (wheelAngularSpeed / slip,ndSlip / temperature,tyreTemperature). telemetry.lua persists them as the wheelAngularSpeed_/wheelSlip_/tyreCoreTemp_ {fl,fr,rl,rr} trace columns (issue #266). The trace_replay mock synthesizes car.wheels[i] from a frame's per-wheel fields so the off-sim lupa replay exercises this capture path (issue #278). load_schema only special-cases type:vec3, so this entry's `fields` are documentation; only `wheels` being a declared car field matters to the gate."
+    },
+    "acceleration": {
+      "type": "vec3",
+      "fields": {
+        "x": "number",
+        "y": "number",
+        "z": "number"
+      },
+      "read_by": ["chassis_read.lua (via telemetry.lua / entry)"],
+      "note": "CSP car.acceleration is in G (NOT m/s^2): x=lateral (sideways relative to car), z=longitudinal (forwards/backwards). chassis_read reads accG_lat=.x, accG_long=.z; telemetry persists them as the accG_lat/accG_long trace columns (issue #478). Not historically on the confirmed-safe list, so every read is pcall-guarded."
+    },
+    "localAngularVelocity": {
+      "type": "vec3",
+      "fields": {
+        "x": "number",
+        "y": "number",
+        "z": "number"
+      },
+      "read_by": ["chassis_read.lua (via telemetry.lua / entry)"],
+      "note": "CSP local-frame angular velocity (rad/s); .y is the yaw rate (rotation about the vertical axis). chassis_read reads yaw_rate=.y, persisted as the yaw_rate trace column (issue #478). pcall-guarded."
     }
   },
   "sim": {

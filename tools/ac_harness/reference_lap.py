@@ -52,15 +52,31 @@ TRACE_FIELDS: tuple[str, ...] = (
     "tyreCoreTemp_rl",
     "tyreCoreTemp_rr",
     "rpm",
+    # Chassis dynamics (issue #478 Part A) — measured g-forces + yaw rate, appended AFTER rpm so every
+    # older column position stays byte-stable. accG_long/accG_lat are in G (CSP car.acceleration:
+    # x=lateral, z=longitudinal); yaw_rate is rad/s (CSP car.localAngularVelocity.y).
+    "accG_long",
+    "accG_lat",
+    "yaw_rate",
+    # Dynamic HOT tyre pressure per wheel (issue #478 Part B), psi (CSP wheel.tyrePressure). Order FL,
+    # FR, RL, RR — matches the #266 per-wheel channels.
+    "wheelsPressure_fl",
+    "wheelsPressure_fr",
+    "wheelsPressure_rl",
+    "wheelsPressure_rr",
 )
 
 _LEGACY_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
 _LEGACY_RPM_TRACE_FIELDS: tuple[str, ...] = _LEGACY_TRACE_FIELDS + ("rpm",)
 _PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[10:22]
+# The pre-#478 full set (10 legacy + 12 per-wheel + rpm). #478 appends the chassis + pressure
+# channels AFTER rpm, so this stays a valid prefix and older 23-column archives keep loading.
+_PRE_TIER_B_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:23]
 _TRACE_FIELD_VARIANTS: tuple[tuple[str, ...], ...] = (
     _LEGACY_TRACE_FIELDS,
     _LEGACY_RPM_TRACE_FIELDS,
     _LEGACY_TRACE_FIELDS + _PER_WHEEL_TRACE_FIELDS,
+    _PRE_TIER_B_TRACE_FIELDS,
     TRACE_FIELDS,
 )
 
@@ -93,8 +109,8 @@ def _iso_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-#: The original required trace columns. Fields beyond these (the per-wheel #266 channels and
-#: #442 rpm) are OPTIONAL and default to 0.0 when a frame omits them.
+#: The original required trace columns. Fields beyond these (the per-wheel #266 channels, #442 rpm,
+#: and the #478 chassis/pressure channels) are OPTIONAL and default to 0.0 when a frame omits them.
 _REQUIRED_TRACE_FIELDS: tuple[str, ...] = _LEGACY_TRACE_FIELDS
 
 
@@ -284,7 +300,7 @@ def validate_lap_archive_record(record: Mapping[str, Any]) -> None:
     if not isinstance(trace, Mapping):
         raise LapArchiveSchemaError("trace must be an object")
     fields = trace.get("fields")
-    # Accept pre-#266 10-field, importer 10+rpm, #266 22-field, and full #442 traces:
+    # Accept pre-#266 10-field, importer 10+rpm, #266 22-field, #442 23-field, and full #478 traces:
     # SCHEMA_VERSION is still 1 and existing archives carry older column sets.
     allowed_fields = [list(variant) for variant in _TRACE_FIELD_VARIANTS]
     if fields not in allowed_fields:

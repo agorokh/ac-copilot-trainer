@@ -580,10 +580,10 @@ def coach_lap(
             consistency_sample_count=len(history_matches.get(sig.index, [sig])),
             history_laps_loaded=len(history_laps),
         )
-        # explicit caller-supplied signals win; else auto-compute Tier-B signals from per-wheel data
+        # explicit caller-supplied signals win; else auto-compute Tier-B signals from live channels
         extra = (extra_by_corner or {}).get(sig.index)
         if extra is None:
-            extra = corner_live_signals(lap, sig) if lap.has_wheel_data else {}
+            extra = corner_live_signals(lap, sig) if lap.has_tier_b_data else {}
         extra = {
             "exit_road_usage": diagnostics["exit_road_usage"],
             "consistency": diagnostics["consistency"],
@@ -772,6 +772,7 @@ def _grip_used_frac(ctx: CornerContext) -> float | None:
 
 # --- Tier-B live signals: turn per-wheel data into CONFIRMED attribution ------
 WHEEL_RADIUS_M = 0.347  # GT3 R effective rolling radius (session plant-ID)
+_WHEEL_LABELS = ("fl", "fr", "rl", "rr")  # #266 per-wheel order (matches wheel_read.WHEEL_KEYS)
 
 
 def _slip(omega: float, r: float, v: float) -> float:
@@ -789,56 +790,96 @@ def corner_live_signals(
     lock_thresh: float = -0.06,
     spin_thresh: float = 0.10,
 ) -> dict[str, Any]:
-    """Per-corner Tier-B signals from ``wheelAngularSpeed`` — which axle locks, exit wheelspin.
+    """Per-corner Tier-B signals that turn live telemetry into CONFIRMED attribution.
 
-    Returns ``{}`` when the lap has no per-wheel data. When present, returns a dict carrying the
-    confirming channel marker(s) plus ``lock_axle`` ('front'|'rear'|'both'|None) and ``wheelspin``,
-    so the braking/exit rules graduate from a suspicion to a confirmed verdict. Slip is computed
-    from angular speed (the canonical longitudinal signal), not AC's combined ``wheelSlip``.
+    For each Tier-B channel actually persisted in ``lap``, emits the confirming channel marker the
+    rule table keys on (so a suspicion graduates to a verdict) plus the derived signal:
+
+    * ``wheelAngularSpeed`` (#266) → ``lock_axle`` ('front'|'rear'|'both'|None) under braking and
+      ``wheelspin`` on exit. Slip is computed from angular speed (the canonical longitudinal signal),
+      not AC's combined ``wheelSlip``.
+    * ``yaw_rate`` (#478 Part A) → the measured rotation signal confirming turn-in lag / the
+      under-vs-oversteer direction, as the peak |yaw| through turn-in (rad/s). ``accG_lat`` /
+      ``accG_long`` ride along (peak lateral load, peak braking decel) for the balance rules.
+    * ``wheelsPressure`` (#478 Part B) → the mean per-wheel dynamic HOT pressure over the corner
+      (psi), confirming the pressure/compound attribution.
+
+    Returns ``{}`` when the lap persists no Tier-B channel at all. Each block is independently gated,
+    so a lap with only some channels still confirms the rules those channels back.
     """
-    if lap.wheel_omega is None:
-        return {}
-    extra: dict[str, Any] = {"wheelAngularSpeed": True}
-    if lap.wheel_slip is not None:
-        extra["wheelSlip"] = True
+    extra: dict[str, Any] = {}
 
-    def _axle_slip(om: list[float], a: int, b: int, v: float) -> float | None:
-        # A 0.0 omega among real readings is the "unread wheel" sentinel (telemetry serializes a nil
-        # read as 0), NOT a lock — a truly locked wheel at speed still has a small POSITIVE omega.
-        # Exclude unread wheels so one failed corner can't fake a lockup (codex partial-read guard).
-        vals = [_slip(om[i], wheel_radius_m, v) for i in (a, b) if om[i] > 0.0]
-        return min(vals) if vals else None
+    # --- per-wheel angular speed (#266): which axle locks under braking / exit wheelspin ---
+    if lap.wheel_omega is not None:
+        extra["wheelAngularSpeed"] = True
+        if lap.wheel_slip is not None:
+            extra["wheelSlip"] = True
 
-    # braking phase (turn-in..apex with brake on): which axle reaches lock first?
-    front, rear = [], []
-    for k in range(sig.entry_i, sig.apex_i + 1):
-        if lap.brake[k] > brake_thresh:
-            v, om = lap.v_ms[k], lap.wheel_omega[k]
-            f = _axle_slip(om, 0, 1, v)
-            r = _axle_slip(om, 2, 3, v)
-            if f is not None:
-                front.append(f)
-            if r is not None:
-                rear.append(r)
-    if front and rear:
-        fl, rl = min(front), min(rear)
-        extra["front_lock"], extra["rear_lock"] = round(fl, 3), round(rl, 3)
-        if min(fl, rl) <= lock_thresh:
-            extra["lock_axle"] = "front" if fl < rl - 0.02 else "rear" if rl < fl - 0.02 else "both"
-        else:
-            extra["lock_axle"] = None
-    # exit phase (apex..exit with throttle on): rear wheelspin?
-    spins = []
-    for k in range(sig.apex_i, sig.exit_i + 1):
-        if lap.throttle[k] > throttle_thresh:
-            v, om = lap.v_ms[k], lap.wheel_omega[k]
-            rear_spin = [_slip(om[i], wheel_radius_m, v) for i in (2, 3) if om[i] > 0.0]
-            if rear_spin:
-                spins.append(max(rear_spin))
-    if spins:
-        rmax = max(spins)
-        extra["rear_exit_slip"] = round(rmax, 3)
-        extra["wheelspin"] = rmax >= spin_thresh
+        def _axle_slip(om: list[float], a: int, b: int, v: float) -> float | None:
+            # A 0.0 omega among real readings is the "unread wheel" sentinel (telemetry serializes a
+            # nil read as 0), NOT a lock — a truly locked wheel at speed still has a small POSITIVE
+            # omega. Exclude unread wheels so one failed corner can't fake a lockup (codex guard).
+            vals = [_slip(om[i], wheel_radius_m, v) for i in (a, b) if om[i] > 0.0]
+            return min(vals) if vals else None
+
+        # braking phase (turn-in..apex with brake on): which axle reaches lock first?
+        front, rear = [], []
+        for k in range(sig.entry_i, sig.apex_i + 1):
+            if lap.brake[k] > brake_thresh:
+                v, om = lap.v_ms[k], lap.wheel_omega[k]
+                f = _axle_slip(om, 0, 1, v)
+                r = _axle_slip(om, 2, 3, v)
+                if f is not None:
+                    front.append(f)
+                if r is not None:
+                    rear.append(r)
+        if front and rear:
+            fl, rl = min(front), min(rear)
+            extra["front_lock"], extra["rear_lock"] = round(fl, 3), round(rl, 3)
+            if min(fl, rl) <= lock_thresh:
+                extra["lock_axle"] = (
+                    "front" if fl < rl - 0.02 else "rear" if rl < fl - 0.02 else "both"
+                )
+            else:
+                extra["lock_axle"] = None
+        # exit phase (apex..exit with throttle on): rear wheelspin?
+        spins = []
+        for k in range(sig.apex_i, sig.exit_i + 1):
+            if lap.throttle[k] > throttle_thresh:
+                v, om = lap.v_ms[k], lap.wheel_omega[k]
+                rear_spin = [_slip(om[i], wheel_radius_m, v) for i in (2, 3) if om[i] > 0.0]
+                if rear_spin:
+                    spins.append(max(rear_spin))
+        if spins:
+            rmax = max(spins)
+            extra["rear_exit_slip"] = round(rmax, 3)
+            extra["wheelspin"] = rmax >= spin_thresh
+
+    # --- chassis dynamics (#478 Part A): measured yaw rate + g-forces confirm rotation/balance ---
+    seg = range(sig.entry_i, sig.exit_i + 1)
+    if lap.yaw_rate is not None:
+        entry_yaw = [abs(lap.yaw_rate[k]) for k in range(sig.entry_i, sig.apex_i + 1)]
+        # Peak |yaw| through turn-in is the confirming rotation magnitude; its presence flips the
+        # turn_in_lag / balance-direction rules from a suspicion to a verdict.
+        extra["yaw_rate"] = round(max(entry_yaw), 3) if entry_yaw else 0.0
+    if lap.accg_lat is not None:
+        extra["accG_lat"] = round(max(abs(lap.accg_lat[k]) for k in seg), 3)
+    if lap.accg_long is not None:
+        # Most-negative longitudinal g over the corner = peak braking decel (the braking-decel
+        # ceiling / ABS-too-high signal named in setup_knowledge TIER_B_CHANNELS).
+        extra["accG_long"] = round(min(lap.accg_long[k] for k in seg), 3)
+
+    # --- dynamic hot pressure (#478 Part B): confirms the pressure/compound attribution ---
+    if lap.wheel_pressure is not None:
+        means: list[float | None] = []
+        for wi in range(4):
+            vals = [lap.wheel_pressure[k][wi] for k in seg if lap.wheel_pressure[k][wi] > 0.0]
+            means.append(round(sum(vals) / len(vals), 2) if vals else None)
+        # Only confirm when pressure was actually observed IN this corner (mirrors the lock_axle
+        # guard) — the marker must never outrun the data.
+        if any(m is not None for m in means):
+            extra["wheelsPressure"] = dict(zip(_WHEEL_LABELS, means, strict=False))
+
     return extra
 
 
@@ -1144,6 +1185,38 @@ def _consistency_coaching(ctx: CornerContext) -> str:
     )
 
 
+def _grip_limited_coaching(ctx: CornerContext) -> str:
+    press = ctx.extra.get("wheelsPressure") if isinstance(ctx.extra, dict) else None
+    if isinstance(press, dict):
+        shown = ", ".join(
+            f"{k.upper()} {v}" for k, v in press.items() if isinstance(v, (int, float))
+        )
+        return (
+            "Car's at the limit mid-corner; to go faster change the setup (pressures/compound/wing), "
+            f"not the line. Live hot pressures ({shown} psi) confirm it — check them against the "
+            "compound's optimal window and move pressures toward it."
+        )
+    return (
+        "Car's at the limit mid-corner; to go faster change the setup (pressures/compound/wing), not "
+        "the line. Confirm pressure/compound with live hot-pressure + core-temp."
+    )
+
+
+def _turn_in_lag_coaching(ctx: CornerContext) -> str:
+    yaw = ctx.extra.get("yaw_rate") if isinstance(ctx.extra, dict) else None
+    if isinstance(yaw, (int, float)):
+        return (
+            f"Sluggish turn-in CONFIRMED by live yaw-rate (peak {yaw} rad/s through entry) — the car "
+            "rotates late for the steering input. Load the front on entry (trail-brake, quicker "
+            "initial input); cold or under-pressure fronts are the next suspect, before caster / "
+            "front springs. Front toe-out is a last, small lever."
+        )
+    return (
+        "Sluggish turn-in (heading lags steer) — likely technique or front load, not necessarily "
+        "toe. Confirm with live yaw-rate."
+    )
+
+
 RULES: list[DiagnosticRule] = [
     DiagnosticRule(
         key="grip_limited",
@@ -1163,10 +1236,7 @@ RULES: list[DiagnosticRule] = [
             + ", or more wing for fast corners.",
         ],
         technique_causes=("Driver is already using the available grip — little to gain here.",),
-        coaching=lambda c: (
-            "Car's at the limit mid-corner; to go faster change the setup (pressures/compound/"
-            "wing), not the line. Confirm pressure/compound with live hot-pressure + core-temp."
-        ),
+        coaching=_grip_limited_coaching,
     ),
     DiagnosticRule(
         key="entry_speed_left",
@@ -1232,10 +1302,7 @@ RULES: list[DiagnosticRule] = [
         technique_causes=(
             "Trail-brake to load the front on entry and use a quicker, deliberate initial input.",
         ),
-        coaching=lambda c: (
-            "Sluggish turn-in (heading lags steer) — likely technique or front load, not "
-            "necessarily toe. Confirm with live yaw-rate."
-        ),
+        coaching=_turn_in_lag_coaching,
     ),
     DiagnosticRule(
         key="steering_aggression",
