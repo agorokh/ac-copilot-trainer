@@ -1105,7 +1105,7 @@ static void serial_transport_tick() {
       }
       serial_rx_line = "";
     } else if (c != '\r') {
-      if (serial_rx_line.length() < 4096) {
+      if (serial_rx_line.length() < 8192) {
         serial_rx_line += (char)c;
       } else {
         serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
@@ -1124,6 +1124,16 @@ static void serial_transport_tick() {
 #endif  // SCREEN_TRANSPORT_SERIAL
 
 void setup() {
+#if SCREEN_TRANSPORT_SERIAL
+  // Issue #463: the native USB CDC RX ring defaults to 256 bytes. A protocol
+  // frame larger than that (e.g. the ~326-byte hello_ack with capabilities, or a
+  // coaching.snapshot) arrives as one USB burst and overflows the ring before the
+  // loop() drains it — the trailing '\n' is dropped, the line never completes, and
+  // the screen never links (the sidecar still sees our hello, so it shows
+  // screen_peers=1 while the device stays DISCONNECTED). Enlarge the RX ring so a
+  // whole frame lands intact. Must be called before Serial.begin().
+  Serial.setRxBufferSize(8192);
+#endif
   Serial.begin(115200);
   delay(250);
   Serial.println();
