@@ -1284,6 +1284,25 @@ def test_update_settings_recovers_from_corrupt_existing_file(tmp_path: Path) -> 
     assert payload["sidecar_port"] == 8765  # template default; the file was unreadable
 
 
+def test_update_settings_fills_template_for_partial_file(tmp_path: Path) -> None:
+    """An existing but partial/empty settings.json keeps template keys on merge.
+
+    Regression for the PR #480 daemon finding: merging onto ``dict(loaded)`` for any
+    Mapping would strip _schema/defaults from an existing ``{}`` and write a bare
+    ``{"start_simhub": true}``. The merge must baseline on the template instead.
+    """
+    paths = LauncherPaths(tmp_path)
+    (tmp_path / "settings.json").write_text("{}", encoding="utf-8")
+
+    path = update_settings(paths, start_simhub=True)
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["start_simhub"] is True
+    assert payload["_schema"] == "ac-copilot-game-point-settings-v1"
+    assert payload["sidecar_port"] == 8765
+    assert payload["voice_bank"] == ""
+
+
 def test_set_start_simhub_persists_and_updates_live_config(tmp_path: Path) -> None:
     cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
     sup = GamePointSupervisor(cfg, environ={})
@@ -1300,9 +1319,9 @@ def test_set_start_simhub_persists_and_updates_live_config(tmp_path: Path) -> No
 
 
 def test_set_start_simhub_applies_runtime_change_even_if_persist_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A settings-write failure must not swallow the runtime toggle (UI stays live)."""
+    """A settings-write failure must not swallow the runtime toggle — but must warn."""
 
     def boom(*_args: Any, **_kwargs: Any) -> Path:
         raise OSError("disk full")
@@ -1313,6 +1332,8 @@ def test_set_start_simhub_applies_runtime_change_even_if_persist_fails(
 
     assert sup.set_start_simhub(True) is True
     assert sup.config.start_simhub is True
+    # Not silent: the persist failure surfaces on stderr (daemon #480 review).
+    assert "could not persist start_simhub" in capsys.readouterr().err
 
 
 def test_toggle_then_poll_starts_simhub(tmp_path: Path) -> None:

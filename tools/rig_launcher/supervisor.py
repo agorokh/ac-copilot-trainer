@@ -498,8 +498,14 @@ class GamePointSupervisor:
         self.config = replace(self.config, start_simhub=bool(enabled))
         try:
             update_settings(self.paths, start_simhub=bool(enabled))
-        except OSError:
-            pass
+        except OSError as exc:
+            # Best-effort persistence: the runtime change already applied, so keep the UI
+            # responsive — but surface the failure (not silently) so a console/dev run
+            # shows why the preference won't survive a restart.
+            print(
+                f"WARNING: could not persist start_simhub to settings.json: {exc}",
+                file=sys.stderr,
+            )
         return self.config.start_simhub
 
     def close(self) -> None:

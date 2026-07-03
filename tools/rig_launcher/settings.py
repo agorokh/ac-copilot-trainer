@@ -77,7 +77,13 @@ def update_settings(paths: LauncherPaths, **changes: object) -> Path:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError, UnicodeError):
         loaded = None
-    payload = dict(loaded) if isinstance(loaded, Mapping) else default_settings_payload()
+    # Always baseline on the non-secret template so a merge can never strip _schema or
+    # default keys from an existing-but-partial settings.json (e.g. `{}` or an object
+    # missing template keys) — matching ensure_settings_file's contract and the
+    # missing/corrupt fallback. Parsed keys overlay the template; `changes` win last.
+    payload = default_settings_payload()
+    if isinstance(loaded, Mapping):
+        payload.update(loaded)
     payload.update(changes)
     paths.root.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

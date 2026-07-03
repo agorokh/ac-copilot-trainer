@@ -60,6 +60,7 @@ class LauncherView:
         status_path: str,
         port: int = 8765,
         simhub_autostart: bool = False,
+        on_toggle_simhub: Callable[[bool], None] | None = None,
     ) -> None:
         self._root = root
         self._port = port
@@ -104,11 +105,10 @@ class LauncherView:
             self._rows[key] = self._build_row(body, label, last=index == len(_ROWS) - 1)
 
         # Optional SimHub auto-start toggle, wired only when the caller supplies
-        # the action (app.run_gui). Keeps the view presentation-only otherwise.
+        # the callback (app.run_gui). Keeps the view presentation-only otherwise.
         self._simhub_var: tk.BooleanVar | None = None
-        toggle_simhub = actions.get("toggle_simhub")
-        if toggle_simhub is not None:
-            self._build_simhub_toggle(body, toggle_simhub, simhub_autostart)
+        if on_toggle_simhub is not None:
+            self._build_simhub_toggle(body, on_toggle_simhub, simhub_autostart)
 
         self._build_buttons(panel, actions)
         self._add_corner_brackets(panel)
@@ -235,15 +235,17 @@ class LauncherView:
     def _build_simhub_toggle(
         self,
         parent: tk.Frame,
-        command: Callable[[], None],
+        command: Callable[[bool], None],
         initial: bool,
     ) -> None:
         """Render the SimHub auto-start toggle bound to the persisted setting.
 
         A themed Checkbutton so "start SimHub with the launcher" is reachable
-        from the UI, not only by hand-editing settings.json. ``command`` flips and
-        persists the preference (see ``app.run_gui``); the var seeds from the
-        launch-time config so it reflects the current setting on open.
+        from the UI, not only by hand-editing settings.json. The var seeds from the
+        launch-time config so it reflects the current setting on open; on click Tk
+        flips the var first, so ``var.get()`` is the checkbox's NEW state — pass it
+        to ``command`` so the model follows the UI (single source of truth) rather
+        than the caller re-deriving it (see ``app.run_gui``).
         """
         var = tk.BooleanVar(master=self._root, value=bool(initial))
         self._simhub_var = var
@@ -253,7 +255,7 @@ class LauncherView:
             row,
             text="AUTO-START SIMHUB",
             variable=var,
-            command=command,
+            command=lambda: command(bool(var.get())),
             onvalue=True,
             offvalue=False,
             bg=theme.GRAPHITE,
@@ -299,6 +301,7 @@ def build_launcher_view(
     status_path: str,
     port: int = 8765,
     simhub_autostart: bool = False,
+    on_toggle_simhub: Callable[[bool], None] | None = None,
 ) -> LauncherView:
     """Construct the themed launcher panel inside ``root`` and return its handle."""
     return LauncherView(
@@ -307,4 +310,5 @@ def build_launcher_view(
         status_path=status_path,
         port=port,
         simhub_autostart=simhub_autostart,
+        on_toggle_simhub=on_toggle_simhub,
     )
