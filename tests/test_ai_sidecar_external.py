@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -38,6 +39,21 @@ from tools.ai_sidecar.server import (  # noqa: E402
     make_token_check,
 )
 from tools.ai_sidecar.setup_optimizer import rebuild_experiments  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_rig_ac_copilot_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear the operator's rig ``AC_COPILOT_*`` env vars so tests assert against code
+    defaults, not the local machine.
+
+    Without this, a configured rig (e.g. ``AC_COPILOT_SIDECAR_SERIAL_PORT=COM6`` from
+    #463) leaks into the sidecar's parsed defaults and reds otherwise-green tests
+    (issue #481). A test that needs a specific var still sets it via
+    ``monkeypatch.setenv``, which runs after this clear and therefore overrides it.
+    """
+    for key in list(os.environ):
+        if key.upper().startswith("AC_COPILOT_"):
+            monkeypatch.delenv(key, raising=False)
 
 
 def _free_port() -> int:
