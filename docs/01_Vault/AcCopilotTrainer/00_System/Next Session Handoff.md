@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T21:05:00Z
+last_updated: 2026-07-03T21:52:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-478-tier-b-channels-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/pr-480-simhub-launcher-toggle-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-432-atelier-insim-reverify-2026-07-03.md
@@ -67,6 +68,35 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-03 UTC) — PR #482 MERGED (`ab72152`): #466 overlay fast-fail + setup-race diagnosis
+
+`/autonomous-deliver 466` on the rig (`AG_PC`). PR [#482](https://github.com/agorokh/ac-copilot-trainer/pull/482)
+**MERGED** (squash `ab72152`) — advances EPIC #154 child [#466](https://github.com/agorokh/ac-copilot-trainer/issues/466),
+which **stays OPEN** (criterion (a) not met — see remains). Detail:
+[[issue-466-setup-drive-rebake-race-2026-07-03]].
+
+**Reconciliation:** #466's body (direct-`acs` relaunch + CSP `FORCE_START`) was stale — merged #465
+abandoned that for CM-launch + Documents-only `race.ini` re-bake. All work anchored to the evolved code.
+
+**Shipped + verified in-sim (criterion b — "recycle within seconds"):** `rig_hijack` now runs short
+`--hijack-probe-seconds` probes (default 5 s, recreating CarControls0), so a stalled "0 seconds"
+overlay is detected in seconds and the run recycles a fresh launch instead of a ~25 s dead-wait (trace:
+`probe 1/3…2/3…3/3 → relaunch`). Per-cycle `[auto-drive]` logs + re-bake stats + `--setup-rebake-interval`;
+both new float flags CLI-validated finite & > 0. The **no-setup DRIVE path is reliable** (hijacks cycle 1).
+resolve-pr drove 5 rounds to a clean primary (cursor) reviewer verdict.
+
+**Root cause pinned (why `--setup` stalls, criterion a NOT met):** the `race.ini` setup re-bake write
+races acs's spawn-read that CM's immediate-start depends on — aggressive 0.05 s applies the setup but
+breaks auto-start; gentle ≥0.1 s preserves auto-start but misses the setup. No cadence resolves it;
+`SimState.restart_session()` doesn't re-read the setup; the keypress nudge (vector 3) was implemented,
+tested with proper AC focus, verified NOT to clear the CSP overlay, and **removed** (not shipped dead).
+
+**Resume here / what remains (#466 criterion a):** a **different setup-injection mechanism** — recommended
+**PIT-spawn + pre-hijack in-sim `setup.load`** (`ac.setSetupSpinnerValue`) while `ac.isCarResetAllowed()`
+is true in the pit box (untested for PIT-spawn pre-hijack; needs the trainer app as a loopback Lua peer).
+Larger than the overlay-skip scope. (Note: the COM6 `AC_COPILOT_SIDECAR_SERIAL_PORT` test-isolation
+gap I hit locally was already fixed by #485 / #481 CLOSED.)
 
 ## Delivered (2026-07-03 UTC) — PR #483 Tier-B channel capture (#478 CLOSED)
 

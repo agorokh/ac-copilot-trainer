@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T20:10:00Z
+last_updated: 2026-07-03T21:50:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-394-voice-reliability-2026-06-30.md
@@ -21,6 +22,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-03):** PR [#482](https://github.com/agorokh/ac-copilot-trainer/pull/482)
+**MERGED** (`ab72152`) — [#466](https://github.com/agorokh/ac-copilot-trainer/issues/466) overlay
+fast-fail hardening + setup-race diagnosis (built on merged #465). `rig_hijack` short `--hijack-probe-seconds`
+probes detect a stalled "0 seconds" overlay and recycle a fresh launch in ~15 s (not ~32 s); per-cycle
+`[auto-drive]` logs + re-bake stats + `--setup-rebake-interval`; CLI-validated finite/positive float flags.
+**#466 stays OPEN** (criterion a, setup+drive ≥9/10, unmet): the `race.ini` setup re-bake fundamentally
+races CM's immediate-start (aggressive 0.05 s = setup applied but overlay stall; gentle ≥0.1 s = auto-start
+ok but setup missed; no cadence / `SimState.restart` / keypress-nudge fixes it) — needs a different
+injection (candidate: PIT-spawn + pre-hijack in-sim `setup.load`). No-setup drive path is reliable;
+resolve-pr converged in 5 rounds. Detail: [[issue-466-setup-drive-rebake-race-2026-07-03]].
 
 **Delivered (2026-07-03):** PR [#483](https://github.com/agorokh/ac-copilot-trainer/pull/483)
 **MERGED** at [`28c0fe1`](https://github.com/agorokh/ac-copilot-trainer/commit/28c0fe1b8745cef02d2cf9828502f2c21be58fcf) —
