@@ -249,11 +249,37 @@ def test_corner_live_signals_emits_chassis_and_pressure_markers():
     )
     assert lap.has_tier_b_data is True
     extra = corner_live_signals(lap, _sig(index=0, entry_i=2, apex_i=5, exit_i=9))
-    assert extra["yaw_rate"] == 0.3
+    # constant yaw tracks the (constant) steer -> responsive front, NOT lag -> no yaw_rate marker.
+    assert "yaw_rate" not in extra
     assert extra["accG_lat"] == 1.2
     assert extra["accG_long"] == -0.4
     assert set(extra["wheelsPressure"]) == {"fl", "fr", "rl", "rr"}
     assert extra["wheelsPressure"]["fl"] == 27.0
+
+
+def test_turn_in_yaw_lag_confirms_only_when_heading_trails_steer():
+    # cursor #483: turn_in_lag is confirmed by yaw ONLY when the heading TRAILS the steer input
+    # through turn-in. A responsive front (yaw tracks steer) must NOT flip to a verdict.
+    n = 12
+    base = dict(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+    )
+    sig = _sig(index=0, entry_i=0, apex_i=8, exit_i=11)
+    steer = [0.5] * 9 + [0.3] * 3  # committed early, high through entry
+    # LAGGING: yaw stays near-zero while steer is committed, builds only near the apex.
+    yaw_lag = [0.02] * 6 + [0.1, 0.2, 0.3] + [0.3] * 3
+    extra_lag = corner_live_signals(LapTrace(steer=steer, yaw_rate=yaw_lag, **base), sig)
+    assert "yaw_rate" in extra_lag  # heading trailed steer -> confirmed lag
+    # RESPONSIVE: yaw is already high when steer commits (tracks steer).
+    extra_ok = corner_live_signals(LapTrace(steer=steer, yaw_rate=[0.3] * n, **base), sig)
+    assert "yaw_rate" not in extra_ok  # yaw tracks steer -> not lag, stays advisory
 
 
 def test_corner_live_signals_zero_yaw_through_turn_in_does_not_confirm():

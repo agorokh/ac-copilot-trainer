@@ -233,15 +233,25 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   -- set serial to Lua, so this identifies the compound, not a same-compound fresh-rubber swap.
   local tyreCompoundIndex = nil
   pcall(function() tyreCompoundIndex = tonumber(opts.car and opts.car.compoundIndex) end)
+  -- Reject a non-finite read (NaN) so a garbage index can't seed a bogus identity.
+  if tyreCompoundIndex ~= nil and tyreCompoundIndex ~= tyreCompoundIndex then
+    tyreCompoundIndex = nil
+  end
   local tyreName = nil
-  pcall(function()
-    if ac and type(ac.getTyresName) == "function" then
-      local n = ac.getTyresName(0, tyreCompoundIndex or -1)
-      if type(n) == "string" and n ~= "" then
-        tyreName = n
+  -- Only claim a tyre identity when the compound index was actually read. Calling
+  -- ac.getTyresName(0, -1) on an UNREAD index would return the current tyre name with compoundIndex
+  -- still nil, letting build_analytics key stints on a name the capture couldn't confirm (cursor
+  -- #483). When the index is unread, leave BOTH fields nil so the lakehouse falls back to setup_hash.
+  if tyreCompoundIndex ~= nil then
+    pcall(function()
+      if ac and type(ac.getTyresName) == "function" then
+        local n = ac.getTyresName(0, tyreCompoundIndex)
+        if type(n) == "string" and n ~= "" then
+          tyreName = n
+        end
       end
-    end
-  end)
+    end)
+  end
 
   samplesColumnar = samplesColumnar or {}
   samplesCount = tonumber(samplesCount) or #samplesColumnar

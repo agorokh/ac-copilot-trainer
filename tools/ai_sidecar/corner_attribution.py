@@ -781,6 +781,35 @@ def _slip(omega: float, r: float, v: float) -> float:
     return 0.0 if v < 0.5 else (omega * r - v) / v
 
 
+def _turn_in_yaw_lag(lap: LapTrace, sig: CornerSignature) -> float | None:
+    """Turn-in lag score in (0, 1] when heading TRAILS the steer input through entry, else None.
+
+    'Sluggish turn-in' means the wheel is loaded but the car has not started rotating. We measure
+    that reference-free from the SAME lap: at the sample where steering first commits (>=60% of its
+    entry-window peak), how far has yaw developed toward its entry-window peak? A responsive front
+    already has yaw near its peak when steer commits (high ratio) -> NOT lag. A lagging front is
+    still near-zero yaw at steer commit -> return 1 - that ratio (bigger = laggier). This — not
+    mere yaw presence — is what confirms turn_in_lag (cursor #483).
+    """
+    if lap.yaw_rate is None:
+        return None
+    steer_abs = [abs(lap.steer[k]) for k in range(sig.entry_i, sig.apex_i + 1)]
+    yaw_abs = [abs(lap.yaw_rate[k]) for k in range(sig.entry_i, sig.apex_i + 1)]
+    if len(steer_abs) < 3:
+        return None
+    steer_pk = max(steer_abs)
+    yaw_pk = max(yaw_abs)
+    if steer_pk < 0.05 or yaw_pk <= _YAW_RATE_EPS:
+        return None  # no real steering demand, or no rotation signal at all
+    commit = next((j for j, s in enumerate(steer_abs) if s >= 0.6 * steer_pk), None)
+    if commit is None:
+        return None
+    yaw_frac_at_commit = yaw_abs[commit] / yaw_pk
+    if yaw_frac_at_commit >= 0.6:
+        return None  # yaw already tracking steer -> responsive front, not a lag
+    return round(1.0 - yaw_frac_at_commit, 3)
+
+
 def corner_live_signals(
     lap: LapTrace,
     sig: CornerSignature,
@@ -859,14 +888,13 @@ def corner_live_signals(
     # --- chassis dynamics (#478 Part A): measured yaw rate + g-forces confirm rotation/balance ---
     seg = range(sig.entry_i, sig.exit_i + 1)
     if lap.yaw_rate is not None:
-        entry_yaw = [abs(lap.yaw_rate[k]) for k in range(sig.entry_i, sig.apex_i + 1)]
-        peak_yaw = max(entry_yaw) if entry_yaw else 0.0
-        # Only confirm when rotation was actually OBSERVED through turn-in (mirrors the lock_axle /
-        # wheelspin "observed here" guard): a 0.0 peak — an all-zero turn-in window, or an empty
-        # entry window — must never fabricate a turn_in_lag verdict claiming "0.0 rad/s" just
-        # because the lap carries yaw data elsewhere (cursor #483).
-        if peak_yaw > _YAW_RATE_EPS:
-            extra["yaw_rate"] = round(peak_yaw, 3)
+        # Confirm turn_in_lag ONLY when the measured yaw actually TRAILS the steer input through
+        # turn-in (heading lags steer). Healthy rotation (yaw tracks steer) is NOT lag, so we leave
+        # the rule advisory rather than flip a false "rotates late" verdict on any observed yaw
+        # (cursor #483). accG rides along below for the balance rules regardless.
+        lag = _turn_in_yaw_lag(lap, sig)
+        if lag is not None:
+            extra["yaw_rate"] = lag
     if lap.accg_lat is not None:
         extra["accG_lat"] = round(max(abs(lap.accg_lat[k]) for k in seg), 3)
     if lap.accg_long is not None:
@@ -1212,13 +1240,13 @@ def _grip_limited_coaching(ctx: CornerContext) -> str:
 
 
 def _turn_in_lag_coaching(ctx: CornerContext) -> str:
-    yaw = ctx.extra.get("yaw_rate") if isinstance(ctx.extra, dict) else None
-    if isinstance(yaw, (int, float)):
+    lag = ctx.extra.get("yaw_rate") if isinstance(ctx.extra, dict) else None
+    if isinstance(lag, (int, float)):
         return (
-            f"Sluggish turn-in CONFIRMED by live yaw-rate (peak {yaw} rad/s) — the car "
-            "rotates late for the steering input. Load the front on entry (trail-brake, quicker "
-            "initial input); cold or under-pressure fronts are the next suspect, before caster / "
-            "front springs. Front toe-out is a last, small lever."
+            "Sluggish turn-in CONFIRMED by live yaw-rate — the heading trails the steering through "
+            f"turn-in (lag {lag}). Load the front on entry (trail-brake, quicker initial input); "
+            "cold or under-pressure fronts are the next suspect, before caster / front springs. "
+            "Front toe-out is a last, small lever."
         )
     return (
         "Sluggish turn-in (heading lags steer) — likely technique or front load, not necessarily "
