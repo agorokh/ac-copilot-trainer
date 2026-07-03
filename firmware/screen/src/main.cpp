@@ -1031,6 +1031,14 @@ static String   serial_rx_line;
 static uint32_t serial_hello_next_ms = 0;
 static uint32_t serial_last_rx_ms = 0;
 static bool     serial_link_up = false;
+// USB CDC RX ring size (transport layer). Sized to absorb one burst across a
+// loop() gap: loop() runs the LVGL render (tens of ms worst case) — longer than
+// the time for a frame to arrive as a USB burst — so a whole frame can land before
+// loop() drains it. The 256 B default therefore dropped the 326 B hello_ack. This
+// is a jitter-absorption size that here must cover a full frame (issue #463).
+static constexpr size_t SERIAL_RX_RING_BYTES = 8192;
+// App-layer overflow guard on one accumulated NDJSON line (independent of the ring).
+static constexpr size_t SERIAL_MAX_LINE_BYTES = 8192;
 // If no frame arrives for this long while linked, treat the link as DOWN. The
 // sidecar answers every heartbeat hello with a hello_ack (~5 s cadence once
 // linked), so this fires only on a real drop (sidecar crash/restart, USB
@@ -1105,7 +1113,7 @@ static void serial_transport_tick() {
       }
       serial_rx_line = "";
     } else if (c != '\r') {
-      if (serial_rx_line.length() < 4096) {
+      if (serial_rx_line.length() < SERIAL_MAX_LINE_BYTES) {
         serial_rx_line += (char)c;
       } else {
         serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
@@ -1124,6 +1132,16 @@ static void serial_transport_tick() {
 #endif  // SCREEN_TRANSPORT_SERIAL
 
 void setup() {
+#if SCREEN_TRANSPORT_SERIAL
+  // Issue #463: the native USB CDC RX ring defaults to 256 bytes. A protocol
+  // frame larger than that (e.g. the ~326-byte hello_ack with capabilities, or a
+  // coaching.snapshot) arrives as one USB burst and overflows the ring before the
+  // loop() drains it — the trailing '\n' is dropped, the line never completes, and
+  // the screen never links (the sidecar still sees our hello, so it shows
+  // screen_peers=1 while the device stays DISCONNECTED). Enlarge the RX ring so a
+  // whole frame lands intact. Must be called before Serial.begin().
+  Serial.setRxBufferSize(SERIAL_RX_RING_BYTES);
+#endif
   Serial.begin(115200);
   delay(250);
   Serial.println();
