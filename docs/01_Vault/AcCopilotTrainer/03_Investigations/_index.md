@@ -2,7 +2,7 @@
 type: index
 status: active
 created: 2026-04-08
-updated: 2026-07-02
+updated: 2026-07-03
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
 ---
@@ -13,6 +13,7 @@ Technical deep-dives and root-cause analyses from development sessions.
 
 | Node | Summary |
 |------|---------|
+| [issue-466-setup-drive-rebake-race-2026-07-03.md](issue-466-setup-drive-rebake-race-2026-07-03.md) | #466 / PR #482: the `--setup` overlay stall is the setup `race.ini` re-bake racing CM's immediate-start. no-setup CM launch hijacks cycle 1; `--setup` stalls every cycle. Aggressive 0.05 s re-bake applies the setup but breaks auto-start; gentle ≥0.1 s preserves auto-start but misses the setup — no cadence resolves it; `SimState.restart_session()` doesn't re-read the setup; keypress nudge (vector 3) verified in-sim NOT to clear the CSP overlay even with AC correctly focused (removed). Shipped: `rig_hijack` short-probe fast-fail (recycle ~15 s not ~32 s) + observability + CLI-validated flags. #466 stays OPEN (criterion a, ≥9/10) — needs a different injection (PIT-spawn + pre-hijack in-sim `setup.load`). |
 | [issue-381-intensity-verification-2026-07-03.md](issue-381-intensity-verification-2026-07-03.md) | #381 expressive-voice verification: PR #451 (`81be1f3`) shipped the code; reopened only for the human at-wheel listen. Acoustic proof on the **real** intensity3 bank — headline A/B critical "Brake!" +2.84 dB louder & 3× terser than calm apex; same-word ladder monotonically terser+brighter (RMS ~1.3 dB sub-JND dip, not a defect); `timing_report` green. Council: ship as-is, no re-bake, don't auto-close. ⚠️ run at-wheel test from `origin/main` (main tree is on the intensity2 #408 branch → voice would disable). |
 | [issue-459-harness-product-2026-07-02.md](issue-459-harness-product-2026-07-02.md) | #459 / PR #460 harness-as-product: **AC applies a car setup only at spawn from race.ini** — the WS `setup.load` path is gated shut for an autonomous car (`ac.isCarResetAllowed()` false). Proven mechanism: bake `_EXT_SETUP_FILENAME` into race.ini + `FORCE_START=1` menu-skip + direct acs relaunch, verified via `acpmf_physics.fuel` (45.0==Realistic_BB_v3 FUEL). Sim-death guard bug fixed (Car0 packet_id ≠ main physics packet). Residual (#461): setup runs vs. drive don't compose (START freezes Car0; PIT can't escape the pit). 15-agent review → 12 fixes. |
 | [pr-444-atelier-main-dashboard-2026-07-01.md](pr-444-atelier-main-dashboard-2026-07-01.md) | PRs #444/#445/#446 (#432 A2+B, #86 fix): Racing Atelier on all three runtime surfaces — main-dashboard card (vitals + RPM shift zones + SHIFT UP verb), COACHING voice tile, launcher photo-parity, rig-screen badge/delta flash. Reusable: DirectWrite family ≠ Google web name, mislabeled TTF weights, numeric Weight=800, asciiUpper vs locale upper, CSP Lua gear is normalized, live capture beats review, approach-window delta gating, coaching-oracle OCR anchor. |
