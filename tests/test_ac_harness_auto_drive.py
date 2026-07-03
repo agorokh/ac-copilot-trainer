@@ -707,7 +707,7 @@ def test_write_setup_baked_race_ini_updates_existing_race_ini_atomically(tmp_pat
     race_ini.write_text("[CAR_0]\nSKIN=brg\n\n[SESSION_0]\nSPAWN_SET=PIT\n", encoding="utf-8")
     setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
 
-    assert write_setup_baked_race_ini(race_ini, setup) is True
+    assert write_setup_baked_race_ini(race_ini, setup) == "written"
     assert not (race_ini.parent / ".race.ini.ac_copilot_setup.tmp").exists()
 
     p = configparser.ConfigParser(strict=False)
@@ -719,12 +719,32 @@ def test_write_setup_baked_race_ini_updates_existing_race_ini_atomically(tmp_pat
     assert p.get("SESSION_0", "SPAWN_SET") == "START"
 
 
+def test_write_setup_baked_race_ini_skips_replace_when_already_baked(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    race_ini.write_text(bake_setup_into_race_ini("[CAR_0]\n", setup), encoding="utf-8")
+    replace_calls: list[pathlib.Path] = []
+    original_replace = pathlib.Path.replace
+
+    def _replace_records(self, target):  # noqa: ANN001, ANN202
+        replace_calls.append(self)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", _replace_records)
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "unchanged"
+    assert replace_calls == []
+
+
 def test_write_setup_baked_race_ini_waits_for_cm_to_create_race_ini(tmp_path):
     from pathlib import Path as _P
 
     missing = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
     setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
-    assert write_setup_baked_race_ini(missing, setup) is False
+    assert write_setup_baked_race_ini(missing, setup) == "missing"
 
 
 def test_write_setup_baked_race_ini_rejects_non_ac_documents_target(tmp_path):

@@ -32,6 +32,32 @@ local function trim(s)
   return (s:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function documentsRoot()
+  local okDoc, doc = pcall(function()
+    return ac.getFolder(ac.FolderID.Documents)
+  end)
+  if not okDoc or not doc or doc == "" then
+    return nil
+  end
+  return doc
+end
+
+local function safeStringField(obj, key)
+  if not obj then
+    return nil
+  end
+  local ok, value = pcall(function()
+    return obj[key]
+  end)
+  if not ok or value == nil then
+    return nil
+  end
+  if type(value) == "string" and value == "" then
+    return nil
+  end
+  return tostring(value)
+end
+
 --- Applied-setup INI path from the launch `cfg/race.ini` (`[CAR_0] _EXT_SETUP_FILENAME`).
 --- AC and Content Manager record the *selected* setup there as an absolute path, and the #461
 --- autonomous harness bakes it there before spawn — so it is the authoritative "which setup is
@@ -39,14 +65,9 @@ end
 --- a harness-driven (or CM-selected) lap archived an EMPTY setup snapshot pointing at a
 --- non-existent `setups/<car>/<track>/race.ini` (live-found #461). Returns the absolute INI path
 --- only when it resolves to a readable file, else nil.
+---@param doc string
 ---@return string|nil
-local function readActiveSetupPathFromRaceIni()
-  local okDoc, doc = pcall(function()
-    return ac.getFolder(ac.FolderID.Documents)
-  end)
-  if not okDoc or not doc or doc == "" then
-    return nil
-  end
+local function readActiveSetupPathFromRaceIni(doc)
   local f = io.open(doc .. "/Assetto Corsa/cfg/race.ini", "r")
   if not f then
     return nil
@@ -78,16 +99,49 @@ local function readActiveSetupPathFromRaceIni()
   return nil
 end
 
-local RACE_INI_SETUP_PATH = readActiveSetupPathFromRaceIni()
+local raceIniSetupCache = { key = nil, path = nil }
 
-local function activeSetupPathFromRaceIni()
-  return RACE_INI_SETUP_PATH
+local function raceIniSetupCacheKey(sim)
+  local doc = documentsRoot()
+  if not doc then
+    return nil, nil
+  end
+  local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local layoutRaw = ch.safeTrackLayoutRaw()
+  local layoutId = layoutRaw ~= nil and ch.sanitizeId(layoutRaw, "") or ""
+  local parts = { doc, carId, trackId, layoutId }
+  for _, key in ipairs({ "currentSessionIndex", "sessionIndex", "sessionType", "raceSessionType" }) do
+    parts[#parts + 1] = key .. "=" .. (safeStringField(sim, key) or "")
+  end
+  return table.concat(parts, "|"), doc
+end
+
+local function activeSetupPathFromRaceIni(sim)
+  local key, doc = raceIniSetupCacheKey(sim)
+  if not key or not doc then
+    return nil
+  end
+  if raceIniSetupCache.key == key then
+    return raceIniSetupCache.path
+  end
+  local path = readActiveSetupPathFromRaceIni(doc)
+  -- Cache only successful spawn/session reads. A missing race.ini can appear moments later while
+  -- Content Manager is still building the launch file, so nil is intentionally retried.
+  if path then
+    raceIniSetupCache.key = key
+    raceIniSetupCache.path = path
+  else
+    raceIniSetupCache.key = nil
+    raceIniSetupCache.path = nil
+  end
+  return path
 end
 
 ---@param car ac.StateCar|nil
 ---@param sim ac.StateSim|nil
 ---@return string|nil
-local function guessSetupIniPath(car, _sim)
+local function guessSetupIniPath(car, sim)
   if not car then
     return nil
   end
@@ -97,14 +151,12 @@ local function guessSetupIniPath(car, _sim)
   end
   -- The active setup baked/selected into race.ini beats a folder guess: it names the actual applied
   -- setup file (e.g. Realistic_BB_v3.ini), so the lap archive records that setup, not an empty snap.
-  local fromRace = activeSetupPathFromRaceIni()
+  local fromRace = activeSetupPathFromRaceIni(sim)
   if fromRace then
     return fromRace
   end
-  local okDoc, doc = pcall(function()
-    return ac.getFolder(ac.FolderID.Documents)
-  end)
-  if not okDoc or not doc or doc == "" then
+  local doc = documentsRoot()
+  if not doc then
     return nil
   end
   local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")

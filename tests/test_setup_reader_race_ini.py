@@ -88,20 +88,39 @@ def test_race_ini_setup_resolution_is_scoped_to_car0(tmp_path):
     assert out == str(car0_setup), out
 
 
-def test_race_ini_setup_resolution_is_cached_at_module_load(tmp_path):
+def test_race_ini_setup_resolution_is_cached_within_session(tmp_path):
     """The applied setup is a spawn-time fact.
 
-    Later CM edits to race.ini must not alter archives.
+    Later CM edits to race.ini must not alter archives for the same sim session.
     """
     setup_ini = _write_setup_combo(tmp_path, "{setup_ini}")
     rt = _runtime(str(tmp_path).replace("\\", "/"))
     rt.execute('sr = require("setup_reader")')
+    first = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    assert first == str(setup_ini), first
     other = setup_ini.with_name("OtherSetup.ini")
     other.write_text("[FUEL]\nVALUE=15\n", encoding="utf-8")
     race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
     race_ini.write_text(f"[CAR_0]\n_EXT_SETUP_FILENAME={other}\n", encoding="utf-8")
-    out = rt.execute("return sr.activeSetupIniPath({}, nil)")
+    out = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
     assert out == str(setup_ini), out
+
+
+def test_race_ini_setup_resolution_refreshes_when_session_changes(tmp_path):
+    """A long-lived Lua VM must not carry one session's race.ini setup into the next."""
+    setup_ini = _write_setup_combo(tmp_path, "{setup_ini}")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    rt.execute('sr = require("setup_reader")')
+    first = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    assert first == str(setup_ini), first
+    other = setup_ini.with_name("OtherSetup.ini")
+    other.write_text("[FUEL]\nVALUE=15\n", encoding="utf-8")
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.write_text(f"[CAR_0]\n_EXT_SETUP_FILENAME={other}\n", encoding="utf-8")
+
+    out = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 2 })")
+
+    assert out == str(other), out
 
 
 def test_missing_ext_setup_falls_through_to_folder_guess(tmp_path):

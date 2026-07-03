@@ -651,6 +651,7 @@ def bake_setup_into_race_ini(
 class RaceIniBakeState:
     """Mutable status for the short-lived setup re-bake loop."""
 
+    ready: int = 0
     writes: int = 0
     last_error: str | None = None
 
@@ -669,19 +670,21 @@ def validate_race_ini_write_target(race_ini: Path) -> Path:
     return resolved
 
 
-def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> bool:
+def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> str:
     """Bake ``setup_ini`` into ``race.ini`` with an atomic same-directory replace.
 
-    Returns ``False`` when ``race.ini`` is not present yet; Content Manager often creates or
-    rewrites it during launch. The only accepted target is
+    Returns ``"missing"`` when ``race.ini`` is not present yet, ``"unchanged"`` when it already
+    names the requested setup/spawn, and ``"written"`` after an atomic replace. Content Manager
+    often creates or rewrites the file during launch. The only accepted target is
     ``Documents/Assetto Corsa/cfg/race.ini``.
     """
     race_ini = validate_race_ini_write_target(race_ini)
     if not race_ini.is_file():
-        return False
-    baked = bake_setup_into_race_ini(
-        race_ini.read_text(encoding="utf-8", errors="surrogateescape"), setup_ini
-    )
+        return "missing"
+    original = race_ini.read_text(encoding="utf-8", errors="surrogateescape")
+    baked = bake_setup_into_race_ini(original, setup_ini)
+    if baked == original:
+        return "unchanged"
     tmp = race_ini.with_name(f".{race_ini.name}.ac_copilot_setup.tmp")
     try:
         tmp.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
@@ -689,7 +692,7 @@ def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> bool:
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
-    return True
+    return "written"
 
 
 @contextmanager
@@ -710,7 +713,10 @@ def race_ini_setup_bake_loop(
     def _worker() -> None:
         while not stop.is_set():
             try:
-                if write_setup_baked_race_ini(race_ini, setup_ini):
+                result = write_setup_baked_race_ini(race_ini, setup_ini)
+                if result != "missing":
+                    state.ready += 1
+                if result == "written":
                     state.writes += 1
             except Exception as exc:  # noqa: BLE001 - CM can expose half-written race.ini briefly.
                 state.last_error = f"{type(exc).__name__}: {exc}"
@@ -1145,17 +1151,17 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
                 live = _wait_live(config.attempt_timeout)
                 if live:
                     time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
-            if live and bake.writes > 0:
+            if live and bake.ready > 0:
                 return (
                     True,
-                    f"LIVE with setup after {attempt} launch attempt(s) — race.ini re-baked "
-                    f"{bake.writes}x during CM launch",
+                    f"LIVE with setup after {attempt} launch attempt(s) — race.ini ready "
+                    f"{bake.ready}x during CM launch ({bake.writes} rewrite(s))",
                 )
             if live:
                 detail = f"; last error: {bake.last_error}" if bake.last_error else ""
                 return (
                     False,
-                    f"CM reached LIVE but race.ini was never re-baked at {race_ini}{detail}",
+                    f"CM reached LIVE but race.ini never carried the setup at {race_ini}{detail}",
                 )
             continue
         actuator.launch() if attempt == 1 else actuator.relaunch()
