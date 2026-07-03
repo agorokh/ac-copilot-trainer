@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T08:20:00Z
+last_updated: 2026-07-03T04:35:22Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -62,6 +62,41 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Resolved (2026-07-03 UTC) — PR #465 review loop: setup+drive compose (#461)
+
+PR [#465](https://github.com/agorokh/ac-copilot-trainer/pull/465) is review-converged at head
+[`3568cd4`](https://github.com/agorokh/ac-copilot-trainer/commit/3568cd4d4e58f7004fe61252cea3cf2cf11367ed)
+on branch `feat/issue-461-compose-setup-drive`. It is **not merged in this session**. The PR now
+keeps setup composition compliant by using the Content Manager launch path plus a short-lived
+Documents-only `race.ini` re-bake loop; the forbidden install-tree `extension/config/gui.ini`
+`FORCE_START` path was removed.
+
+Final gates at SAVE:
+
+- GitHub checks green on `3568cd4`: `build`, `conformance`, `Canonical docs exist`; `guard-and-automerge` skipped.
+- GraphQL `reviewThreads` had no unresolved blockers; old Qodo threads are resolved/outdated.
+- `ci_resolve_gate.py agorokh/ac-copilot-trainer 465` reported `No substantive findings hanging`.
+- Qodo updated through `3568cd4`; Copilot posted LGTM for the latest fixes.
+- Self-hosted reviewer daemon: `/agentic_review` was re-triggered at `2026-07-03T04:23:51Z` and a
+  full `sleep 600` elapsed. SHA-scoped review lookup returned
+  `— no current-SHA self-hosted reviewer review —`, so the daemon gate is vacuously satisfied per
+  `resolve-pr` anti-hang rules. The latest body from that bot is stale (`a3bfd8f`) and should not be
+  used as a current-head blocker.
+
+Local verification during the loop:
+
+- `python3 -m ruff check tools/ac_harness/auto_drive.py tests/test_ac_harness_auto_drive.py tests/test_setup_reader_race_ini.py`
+- `python3 -m pytest tests/test_ac_harness_auto_drive.py tests/test_setup_reader_race_ini.py -q`
+  (`76 passed, 1 skipped`; local skip is `lupa` unavailable)
+- `git diff --check origin/main...HEAD`
+
+Notable fixes added after the original PR head: install-tree writes removed; `race.ini` write target
+validated on the logical path so symlinked `Documents/Assetto Corsa` works; re-bake loop now skips
+unchanged writes and stops before LIVE settle; setup reader parses only `[CAR_0]`, caches spawn-time
+setup per session, distinguishes transient `race.ini` read failure from confirmed no-setup, blocks
+legacy setup guessing after confirmed no-setup, and clears stale `state.lastSetupSnap`/`setupHash`
+when no setup is confirmed.
 
 ## Delivered (2026-07-02 UTC) — PR #460 MERGED: autonomous harness as a product + setup verify (#459)
 
