@@ -69,6 +69,20 @@ relates_to:
 
 # Next session handoff
 
+## Research (2026-07-03 UTC) — telemetry capture surface for ML → EPIC #488 + quick-win #490
+
+3-agent research (base-AC/CSP telemetry field inventory, `tyres.ini` compound specs, ML best practices)
+mapped the **full capturable surface** vs. what we store. Durable node:
+[[telemetry-capture-surface-for-ml-2026-07-03]]. Key facts: tyre temp bands (`tyreTempI/M/O`) +
+`brakeTemp` + `wheelLoad`/`camberRAD`/`suspensionTravel`/`rideHeight`/`tyreWear` are **base-AC** (no CSP)
+— the cheap wins; `slipRatio/slipAngle/Mz/Fx/Fy` need CSP extended physics; `accG` order confirmed
+`[0]=lat,[1]=vert,[2]=long` (validates #478). Compound identity resolves via `data/tyres.ini`
+(`[FRONT_N] NAME/PRESSURE_STATIC/IDEAL/PERFORMANCE_CURVE`) + live `ac.getCar().tyresLongName`. ML needs
+**three grains** (per-sample + per-lap scalar + per-stint deg-slope) segmented by `compound × laps_on_set`.
+Filed **[#490](https://github.com/agorokh/ac-copilot-trainer/issues/490)** (Tier-1 base-AC quick win) +
+**[#488](https://github.com/agorokh/ac-copilot-trainer/issues/488)** (EPIC: Tier-2 CSP + tyre specs +
+degradation-grade serialization + setup⟷outcome linkage). Delta beyond closed #478/#345/#402/#344.
+
 ## Delivered (2026-07-03 UTC) — PR #482 MERGED (`ab72152`): #466 overlay fast-fail + setup-race diagnosis
 
 `/autonomous-deliver 466` on the rig (`AG_PC`). PR [#482](https://github.com/agorokh/ac-copilot-trainer/pull/482)
