@@ -143,7 +143,7 @@ class AutoDriveConfig:
     spawn_to_line: bool = True  # teleport onto the racing line when spawned off it (pit box)
     # Keep race.ini setup keys present during the CM launch window. CM regenerates race.ini while
     # launching; a short-lived Documents-only re-bake loop preserves the selected setup without
-    # touching the AC/CSP install tree (#461 review).
+    # touching the AC/CSP install tree (#461 review). Must stay positive to avoid hot disk loops.
     setup_rebake_interval: float = 0.05
     # Assertion.
     tap_seconds: float = 30.0
@@ -655,20 +655,40 @@ class RaceIniBakeState:
     last_error: str | None = None
 
 
+def validate_race_ini_write_target(race_ini: Path) -> Path:
+    """Return resolved ``race.ini`` path only when it is the AC Documents config file."""
+    resolved = race_ini.resolve()
+    if (
+        resolved.name.lower() != "race.ini"
+        or resolved.parent.name.lower() != "cfg"
+        or resolved.parent.parent.name.lower() != "assetto corsa"
+    ):
+        raise ValueError(
+            f"race.ini write target must be <AC Documents>/Assetto Corsa/cfg/race.ini: {resolved}"
+        )
+    return resolved
+
+
 def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> bool:
     """Bake ``setup_ini`` into ``race.ini`` with an atomic same-directory replace.
 
     Returns ``False`` when ``race.ini`` is not present yet; Content Manager often creates or
-    rewrites it during launch. The only filesystem target is ``Documents/Assetto Corsa/cfg``.
+    rewrites it during launch. The only accepted target is
+    ``Documents/Assetto Corsa/cfg/race.ini``.
     """
+    race_ini = validate_race_ini_write_target(race_ini)
     if not race_ini.is_file():
         return False
     baked = bake_setup_into_race_ini(
         race_ini.read_text(encoding="utf-8", errors="surrogateescape"), setup_ini
     )
     tmp = race_ini.with_name(f".{race_ini.name}.ac_copilot_setup.tmp")
-    tmp.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
-    tmp.replace(race_ini)
+    try:
+        tmp.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
+        tmp.replace(race_ini)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     return True
 
 
@@ -682,6 +702,8 @@ def race_ini_setup_bake_loop(
     ``_EXT_SETUP_FILENAME`` present during that short window lets the setup apply at spawn while
     respecting the repo rule that the harness only writes under AC Documents.
     """
+    if interval <= 0:
+        raise ValueError(f"setup re-bake interval must be positive, got {interval!r}")
     state = RaceIniBakeState()
     stop = threading.Event()
 
@@ -694,13 +716,13 @@ def race_ini_setup_bake_loop(
                 state.last_error = f"{type(exc).__name__}: {exc}"
             stop.wait(interval)
 
-    worker = threading.Thread(target=_worker, name="race-ini-setup-bake", daemon=True)
+    worker = threading.Thread(target=_worker, name="race-ini-setup-bake")
     worker.start()
     try:
         yield state
     finally:
         stop.set()
-        worker.join(timeout=max(1.0, interval * 4))
+        worker.join()
 
 
 def parse_setup_fuel(setup_ini_text: str) -> float | None:

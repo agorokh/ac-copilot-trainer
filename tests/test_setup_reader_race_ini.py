@@ -69,6 +69,41 @@ def test_snapshot_resolves_applied_setup_from_race_ini(tmp_path):
     assert out == (f"path={setup_ini}|snap=Realistic_BB_v3.ini|fuel=45|digest=set"), out
 
 
+def test_race_ini_setup_resolution_is_scoped_to_car0(tmp_path):
+    """An AI/opponent setup in another section must not be attributed to player car 0."""
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    car_root = ac_root / "setups" / "ks_porsche_911_gt3_r_2016" / "spa"
+    car_root.mkdir(parents=True)
+    ai_setup = car_root / "AiSetup.ini"
+    car0_setup = car_root / "Realistic_BB_v3.ini"
+    ai_setup.write_text("[FUEL]\nVALUE=20\n", encoding="utf-8")
+    car0_setup.write_text("[FUEL]\nVALUE=45\n", encoding="utf-8")
+    (ac_root / "cfg" / "race.ini").write_text(
+        f"[CAR_1]\n_EXT_SETUP_FILENAME={ai_setup}\n[CAR_0]\n_EXT_SETUP_FILENAME={car0_setup}\n",
+        encoding="utf-8",
+    )
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    out = rt.execute('local sr = require("setup_reader"); return sr.activeSetupIniPath({}, nil)')
+    assert out == str(car0_setup), out
+
+
+def test_race_ini_setup_resolution_is_cached_at_module_load(tmp_path):
+    """The applied setup is a spawn-time fact.
+
+    Later CM edits to race.ini must not alter archives.
+    """
+    setup_ini = _write_setup_combo(tmp_path, "{setup_ini}")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    rt.execute('sr = require("setup_reader")')
+    other = setup_ini.with_name("OtherSetup.ini")
+    other.write_text("[FUEL]\nVALUE=15\n", encoding="utf-8")
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.write_text(f"[CAR_0]\n_EXT_SETUP_FILENAME={other}\n", encoding="utf-8")
+    out = rt.execute("return sr.activeSetupIniPath({}, nil)")
+    assert out == str(setup_ini), out
+
+
 def test_missing_ext_setup_falls_through_to_folder_guess(tmp_path):
     """No ``_EXT_SETUP_FILENAME`` (and no setup file) → reader must not crash; snap stays nil."""
     ac_root = tmp_path / "Assetto Corsa"

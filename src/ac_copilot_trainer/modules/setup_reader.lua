@@ -28,6 +28,10 @@ local function activeSetupPathFromCar(car)
   return nil
 end
 
+local function trim(s)
+  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 --- Applied-setup INI path from the launch `cfg/race.ini` (`[CAR_0] _EXT_SETUP_FILENAME`).
 --- AC and Content Manager record the *selected* setup there as an absolute path, and the #461
 --- autonomous harness bakes it there before spawn — so it is the authoritative "which setup is
@@ -36,7 +40,7 @@ end
 --- non-existent `setups/<car>/<track>/race.ini` (live-found #461). Returns the absolute INI path
 --- only when it resolves to a readable file, else nil.
 ---@return string|nil
-local function activeSetupPathFromRaceIni()
+local function readActiveSetupPathFromRaceIni()
   local okDoc, doc = pcall(function()
     return ac.getFolder(ac.FolderID.Documents)
   end)
@@ -52,16 +56,32 @@ local function activeSetupPathFromRaceIni()
   if not text then
     return nil
   end
-  -- `_EXT_SETUP_FILENAME` is an absolute path (CM's own key); trim trailing whitespace/CR.
-  local p = (text .. "\n"):match("_EXT_SETUP_FILENAME%s*=%s*(.-)%s*[\r\n]")
-  if p and p ~= "" then
-    local h = io.open(p, "r")
-    if h then
-      h:close()
-      return p
+  local section = ""
+  for line in string.gmatch(text .. "\n", "([^\r\n]*)[\r\n]") do
+    local sec = line:match("^%s*%[([^%]]+)%]%s*$")
+    if sec then
+      section = sec
+    elseif section == "CAR_0" then
+      local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+      if key == "_EXT_SETUP_FILENAME" then
+        local p = trim(value or "")
+        if p ~= "" then
+          local h = io.open(p, "r")
+          if h then
+            h:close()
+            return p
+          end
+        end
+      end
     end
   end
   return nil
+end
+
+local RACE_INI_SETUP_PATH = readActiveSetupPathFromRaceIni()
+
+local function activeSetupPathFromRaceIni()
+  return RACE_INI_SETUP_PATH
 end
 
 ---@param car ac.StateCar|nil

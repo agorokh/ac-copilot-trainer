@@ -8,6 +8,7 @@ reporting — is verified with no Assetto Corsa, no Windows, and no real sidecar
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import threading
 
 import pytest
@@ -30,6 +31,7 @@ from tools.ac_harness.auto_drive import (
     generic_gt3_ggv,
     parse_setup_fuel,
     preflight,
+    race_ini_setup_bake_loop,
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
@@ -723,6 +725,48 @@ def test_write_setup_baked_race_ini_waits_for_cm_to_create_race_ini(tmp_path):
     missing = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
     setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
     assert write_setup_baked_race_ini(missing, setup) is False
+
+
+def test_write_setup_baked_race_ini_rejects_non_ac_documents_target(tmp_path):
+    from pathlib import Path as _P
+
+    bad = tmp_path / "cfg" / "race.ini"
+    bad.parent.mkdir()
+    bad.write_text("[CAR_0]\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    with pytest.raises(ValueError, match="Assetto Corsa/cfg/race.ini"):
+        write_setup_baked_race_ini(bad, setup)
+
+
+def test_write_setup_baked_race_ini_cleans_temp_on_replace_failure(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    race_ini.write_text("[CAR_0]\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    tmp = race_ini.parent / ".race.ini.ac_copilot_setup.tmp"
+    original_replace = pathlib.Path.replace
+
+    def _replace_raises(self, target):  # noqa: ANN001, ANN202
+        if self == tmp:
+            raise OSError("locked")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", _replace_raises)
+    with pytest.raises(OSError, match="locked"):
+        write_setup_baked_race_ini(race_ini, setup)
+    assert not tmp.exists()
+
+
+def test_race_ini_setup_bake_loop_rejects_non_positive_interval(tmp_path):
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    with pytest.raises(ValueError, match="interval"):
+        with race_ini_setup_bake_loop(race_ini, setup, interval=0):
+            pass
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():
