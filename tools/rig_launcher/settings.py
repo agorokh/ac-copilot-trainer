@@ -74,9 +74,9 @@ def update_settings(paths: LauncherPaths, **changes: object) -> Path:
       ``token`` (or any non-schema field) can never round-trip into settings.json — the
       documented launcher contract keeps credentials environment-only.
     * **Preserve manual work.** A *missing* file starts from the template; a *present but
-      malformed/unreadable* file is left exactly as the operator wrote it and the call
-      raises (``ValueError`` for bad JSON, ``OSError`` for an unreadable file) rather than
-      silently overwriting a hand-edited file with defaults.
+      malformed, unreadable, or non-object* file is left exactly as the operator wrote it
+      and the call raises (``ValueError`` for bad JSON or a non-object root, ``OSError``
+      for an unreadable file) rather than silently overwriting a hand-edited file.
     * **Atomic + concurrency-safe.** Writes a *unique* temp file (never a shared fixed
       name, so a CLI run and the UI cannot clobber each other) then ``os.replace``s it
       into place, so a crash mid-write cannot truncate an existing settings.json.
@@ -96,7 +96,11 @@ def update_settings(paths: LauncherPaths, **changes: object) -> Path:
         except json.JSONDecodeError as exc:
             # Preserve manual work: never clobber a malformed hand-edited settings.json.
             raise ValueError(f"refusing to overwrite malformed {path}: {exc}") from exc
-        loaded = parsed if isinstance(parsed, Mapping) else {}
+        if not isinstance(parsed, Mapping):
+            # A valid-JSON-but-non-object root (`[]`, `null`, `"x"`) is still the
+            # operator's file — preserve it rather than overwrite with the template.
+            raise ValueError(f"refusing to overwrite non-object {path}")
+        loaded = parsed
 
     # Baseline on the template (fills partial files), overlay existing + requested keys,
     # and admit ONLY schema keys — dropping any stray secret-like field on the way out.

@@ -1297,6 +1297,18 @@ def test_update_settings_refuses_to_overwrite_unreadable_existing_file(tmp_path:
     assert (tmp_path / "settings.json").read_bytes() == b"\xff\xfe not utf-8"
 
 
+def test_update_settings_refuses_to_overwrite_non_object_json_root(tmp_path: Path) -> None:
+    """A valid-JSON-but-non-object settings.json (e.g. a list) is preserved, raising."""
+    paths = LauncherPaths(tmp_path)
+    original = "[1, 2, 3]"
+    (tmp_path / "settings.json").write_text(original, encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        update_settings(paths, start_simhub=True)
+
+    assert (tmp_path / "settings.json").read_text(encoding="utf-8") == original
+
+
 def test_update_settings_never_persists_secret_like_keys(tmp_path: Path) -> None:
     """update_settings writes only the non-secret schema; a stray token is dropped (contract)."""
     paths = LauncherPaths(tmp_path)
