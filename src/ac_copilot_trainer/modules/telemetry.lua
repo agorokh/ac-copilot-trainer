@@ -2,6 +2,7 @@
 
 local ch = require("csp_helpers")
 local wheel_read = require("wheel_read")
+local chassis_read = require("chassis_read")
 
 local M = {}
 
@@ -40,6 +41,25 @@ local MAX_LAP_TRACE = 2000
 ---@field px number
 ---@field py number
 ---@field pz number
+---@field wheelAngularSpeed_fl number|nil
+---@field wheelAngularSpeed_fr number|nil
+---@field wheelAngularSpeed_rl number|nil
+---@field wheelAngularSpeed_rr number|nil
+---@field wheelSlip_fl number|nil
+---@field wheelSlip_fr number|nil
+---@field wheelSlip_rl number|nil
+---@field wheelSlip_rr number|nil
+---@field tyreCoreTemp_fl number|nil
+---@field tyreCoreTemp_fr number|nil
+---@field tyreCoreTemp_rl number|nil
+---@field tyreCoreTemp_rr number|nil
+---@field accG_long number|nil
+---@field accG_lat number|nil
+---@field yaw_rate number|nil
+---@field wheelsPressure_fl number|nil
+---@field wheelsPressure_fr number|nil
+---@field wheelsPressure_rl number|nil
+---@field wheelsPressure_rr number|nil
 
 local Telemetry = {}
 Telemetry.__index = Telemetry
@@ -183,6 +203,11 @@ function Telemetry:update(dt, car, sim)
     -- Python loader treats an all-zero omega column as "no live wheel data" so it never confirms a
     -- false lockup when wheels are unreadable.
     local w = wheel_read.readPerWheel(car)
+    -- Chassis dynamics (issue #478): measured g-forces (accG, in G) + yaw rate (rad/s) confirm the
+    -- balance/rotation rules; dynamic hot tyre pressure (per wheel) confirms the pressure rule. nil
+    -- reads serialize as 0 via traceSampleToColumnRow; the analysis layer treats an all-zero column
+    -- as "no live data" so an unreadable field never fabricates a verdict.
+    local chassis = chassis_read.read(car)
     ---@type LapTraceSample
     local lp = {
       spline = car.splinePosition or 0,
@@ -208,6 +233,13 @@ function Telemetry:update(dt, car, sim)
       tyreCoreTemp_fr = w.temp.fr,
       tyreCoreTemp_rl = w.temp.rl,
       tyreCoreTemp_rr = w.temp.rr,
+      accG_long = chassis.accG_long,
+      accG_lat = chassis.accG_lat,
+      yaw_rate = chassis.yaw_rate,
+      wheelsPressure_fl = w.pressure.fl,
+      wheelsPressure_fr = w.pressure.fr,
+      wheelsPressure_rl = w.pressure.rl,
+      wheelsPressure_rr = w.pressure.rr,
     }
     self.lapBuf[self.lapN] = lp
     if self.lapN > MAX_LAP_RAW then

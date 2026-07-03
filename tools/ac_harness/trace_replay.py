@@ -361,6 +361,17 @@ def _base_frame(
         "tyreCoreTemp_fr": _SYNTH_TYRE_TEMP_C,
         "tyreCoreTemp_rl": _SYNTH_TYRE_TEMP_C,
         "tyreCoreTemp_rr": _SYNTH_TYRE_TEMP_C,
+        # Chassis dynamics + hot pressure (#478) are NOT modeled by the synthetic generator, so
+        # they default to 0.0 — the analysis layer's all-zero-column guard then treats them as "no
+        # live data" (a generated reference honestly has no measured g / yaw / pressure). The lupa
+        # round-trip test drives non-zero values through make_car to exercise the capture path.
+        "accG_long": 0.0,
+        "accG_lat": 0.0,
+        "yaw_rate": 0.0,
+        "wheelsPressure_fl": 0.0,
+        "wheelsPressure_fr": 0.0,
+        "wheelsPressure_rl": 0.0,
+        "wheelsPressure_rr": 0.0,
     }
 
 
@@ -518,11 +529,39 @@ def wheels_from_frame(frame: TraceFrame) -> list[dict[str, float]]:
         omega = frame.get(f"wheelAngularSpeed_{corner}")
         slip = frame.get(f"wheelSlip_{corner}")
         temp = frame.get(f"tyreCoreTemp_{corner}")
+        pressure = frame.get(f"wheelsPressure_{corner}")
         if omega is not None:
             spec["angularSpeed"] = omega
         if slip is not None:
             spec["slipRatio"] = slip
         if temp is not None:
             spec["tyreCoreTemperature"] = temp
+        if pressure is not None:
+            # CSP ac.Wheel.tyrePressure is the DYNAMIC (hot) pressure wheel_read.pressure reads
+            # first; telemetry persists it as the wheelsPressure_{corner} column (issue #478).
+            spec["tyrePressure"] = pressure
         wheels.append(spec)
     return wheels
+
+
+def car_chassis_from_frame(frame: TraceFrame) -> dict[str, Any]:
+    """Map a frame's chassis columns into :meth:`TraceReplayHarness.make_car` kwargs (issue #478).
+
+    Returns ``{"acceleration": {...}, "localAngularVelocity": {...}}`` built from the frame's
+    ``accG_lat`` / ``accG_long`` / ``yaw_rate`` columns, ready to splat into ``make_car`` so the
+    off-sim lupa replay exercises the ``chassis_read`` capture path (the analogue of
+    :func:`wheels_from_frame` for the chassis channels). CSP ``car.acceleration`` is in G with
+    ``x`` = lateral and ``z`` = longitudinal; ``localAngularVelocity.y`` is the yaw rate. A column
+    absent from the frame omits the whole vec3 (mirroring an unreadable CSP struct → chassis_read
+    degrades to nil), rather than fabricating a zero the analysis layer can't distinguish from a
+    real reading.
+    """
+    out: dict[str, Any] = {}
+    accg_lat = frame.get("accG_lat")
+    accg_long = frame.get("accG_long")
+    if accg_lat is not None or accg_long is not None:
+        out["acceleration"] = {"x": accg_lat or 0.0, "y": 0.0, "z": accg_long or 0.0}
+    yaw = frame.get("yaw_rate")
+    if yaw is not None:
+        out["localAngularVelocity"] = {"x": 0.0, "y": yaw, "z": 0.0}
+    return out

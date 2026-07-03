@@ -64,6 +64,11 @@ local TRACE_FIELDS = {
   "wheelSlip_fl", "wheelSlip_fr", "wheelSlip_rl", "wheelSlip_rr",
   "tyreCoreTemp_fl", "tyreCoreTemp_fr", "tyreCoreTemp_rl", "tyreCoreTemp_rr",
   "rpm",
+  -- Chassis dynamics (issue #478 Part A): measured g-forces (accG_long/accG_lat, in G) + yaw_rate
+  -- (rad/s), then dynamic HOT tyre pressure per wheel (Part B, psi). Appended AFTER rpm so every
+  -- older column position stays stable; older archives lacking them export as blanks.
+  "accG_long", "accG_lat", "yaw_rate",
+  "wheelsPressure_fl", "wheelsPressure_fr", "wheelsPressure_rl", "wheelsPressure_rr",
 }
 
 local function lapArchiveDir()
@@ -218,6 +223,37 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   pcall(function() ambient = tonumber(sim and sim.ambientTemperature) end)
   local trackTemp = nil
   pcall(function() trackTemp = tonumber(sim and sim.trackTemperature) end)
+  local weatherType = nil
+  -- CSP sim.weatherType is an ac.WeatherType enum (integer-valued); capture it as a number so the
+  -- conditions model can consume it (issue #478 Part D). pcall-guarded like the other sim reads.
+  pcall(function() weatherType = tonumber(sim and sim.weatherType) end)
+
+  -- First-class tyre-set identity (issue #478 Part C), distinct from setup.hash: the tyre COMPOUND
+  -- AC exposes (compoundIndex + short name via ac.getTyresName). AC does not surface a per-physical-
+  -- set serial to Lua, so this identifies the compound, not a same-compound fresh-rubber swap.
+  local tyreCompoundIndex = nil
+  pcall(function() tyreCompoundIndex = tonumber(opts.car and opts.car.compoundIndex) end)
+  -- Reject a non-finite read (NaN or +/-inf) so a garbage index can't seed a bogus identity or crash
+  -- lakehouse ingest — build_analytics does int(compoundIndex), which raises on inf (qodo #483).
+  if tyreCompoundIndex ~= nil and (tyreCompoundIndex ~= tyreCompoundIndex
+      or tyreCompoundIndex == math.huge or tyreCompoundIndex == -math.huge) then
+    tyreCompoundIndex = nil
+  end
+  local tyreName = nil
+  -- Only claim a tyre identity when the compound index was actually read. Calling
+  -- ac.getTyresName(0, -1) on an UNREAD index would return the current tyre name with compoundIndex
+  -- still nil, letting build_analytics key stints on a name the capture couldn't confirm (cursor
+  -- #483). When the index is unread, leave BOTH fields nil so the lakehouse falls back to setup_hash.
+  if tyreCompoundIndex ~= nil then
+    pcall(function()
+      if ac and type(ac.getTyresName) == "function" then
+        local n = ac.getTyresName(0, tyreCompoundIndex)
+        if type(n) == "string" and n ~= "" then
+          tyreName = n
+        end
+      end
+    end)
+  end
 
   samplesColumnar = samplesColumnar or {}
   samplesCount = tonumber(samplesCount) or #samplesColumnar
@@ -278,7 +314,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       trackGripLevel = trackGrip,
       ambientTempC = ambient,
       trackTempC = trackTemp,
-      weatherType = nil,
+      weatherType = weatherType,
     },
     lap = {
       lap_n = tonumber(opts.lap_n) or 0,
@@ -293,6 +329,10 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
       -- is usually basename-only from `readIniSnapshot` (codex P1 on PR #91).
       path = archiveSetupPath,
       snapshot = flattenSetupSnapshot(opts.setup_snap),
+    },
+    tyres = {
+      compoundIndex = tyreCompoundIndex,
+      name = tyreName,
     },
     trace = {
       samples_count = samplesCount,
@@ -569,6 +609,7 @@ function M.createWriteJob(opts, capMB)
       { "conditions", self._rec.conditions },
       { "lap", self._rec.lap },
       { "setup", self._rec.setup },
+      { "tyres", self._rec.tyres },
     }
     for i = 1, #fields do
       ok, err = self:_writeField(fields[i][1], fields[i][2])

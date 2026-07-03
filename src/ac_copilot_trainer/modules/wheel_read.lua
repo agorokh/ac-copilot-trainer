@@ -56,12 +56,19 @@ function M.omega(one)
   return finite(M.field(one, "angularSpeed") or M.field(one, "wheelAngularSpeed"))
 end
 
---- Read all four wheels into {omega={fl,fr,rl,rr}, slip={...}, temp={...}} (each value number|nil).
---- pcall-guards the `car.wheels` access and every per-wheel read.
+--- Dynamic (HOT) tyre pressure (psi). CSP `tyrePressure` is the live/dynamic value the pressure
+--- attribution rule confirms from; `tyreStaticPressure` is the cold set value (not this). nil if
+--- unreadable (issue #478 Part B).
+function M.pressure(one)
+  return finite(M.field(one, "tyrePressure") or M.field(one, "dynamicPressure"))
+end
+
+--- Read all four wheels into {omega={fl,fr,rl,rr}, slip={...}, temp={...}, pressure={...}} (each
+--- value number|nil). pcall-guards the `car.wheels` access and every per-wheel read.
 ---@param car any
 ---@return table
 function M.readPerWheel(car)
-  local out = { omega = {}, slip = {}, temp = {} }
+  local out = { omega = {}, slip = {}, temp = {}, pressure = {} }
   if car == nil then
     return out
   end
@@ -80,6 +87,7 @@ function M.readPerWheel(car)
       out.omega[k] = M.omega(one)
       out.slip[k] = M.slip(one)
       out.temp[k] = M.temp(one)
+      out.pressure[k] = M.pressure(one)
     end
   end
   return out

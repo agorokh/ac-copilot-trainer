@@ -45,6 +45,12 @@ class LapTrace:
     # optional Tier-B live channels (per sample, 4 wheels [FL, FR, RL, RR]); None when not persisted
     wheel_omega: list[list[float]] | None = None  # wheelAngularSpeed rad/s
     wheel_slip: list[list[float]] | None = None  # AC wheelSlip (Pacejka NDslip; secondary)
+    # optional Tier-B chassis + hot-pressure channels (issue #478); None when not persisted OR
+    # present-but-all-zero (the "unreadable" sentinel — see _scalar_col / _wheel_cols).
+    accg_long: list[float] | None = None  # measured longitudinal g (accG_long, in G; -ve = braking)
+    accg_lat: list[float] | None = None  # measured lateral g (accG_lat, in G)
+    yaw_rate: list[float] | None = None  # measured yaw rate (rad/s), CSP localAngularVelocity.y
+    wheel_pressure: list[list[float]] | None = None  # dynamic HOT pressure psi [FL, FR, RL, RR]
     # lazily derived
     _kappa: list[float] | None = field(default=None, repr=False)
     _lat_g: list[float] | None = field(default=None, repr=False)
@@ -82,6 +88,21 @@ class LapTrace:
         """True when per-wheel angular speed (the Tier-B channel) is persisted in this lap."""
         return self.wheel_omega is not None
 
+    @property
+    def has_chassis_data(self) -> bool:
+        """True when measured chassis dynamics (accG / yaw_rate) are persisted in this lap."""
+        return self.yaw_rate is not None or self.accg_lat is not None or self.accg_long is not None
+
+    @property
+    def has_pressure_data(self) -> bool:
+        """True when dynamic HOT tyre pressure is persisted in this lap (issue #478)."""
+        return self.wheel_pressure is not None
+
+    @property
+    def has_tier_b_data(self) -> bool:
+        """True when ANY Tier-B live channel (per-wheel, chassis, or pressure) is persisted."""
+        return self.has_wheel_data or self.has_chassis_data or self.has_pressure_data
+
 
 def _idx(fields: list[str], *names: str) -> int | None:
     for n in names:
@@ -117,6 +138,30 @@ def _wheel_cols(fields: list[str], samples: list, base: str, n: int) -> list[lis
                 any_nonzero = True
             vals.append(v)
         out.append(vals)
+    return out if any_nonzero else None
+
+
+def _scalar_col(fields: list[str], samples: list, name: str) -> list[float] | None:
+    """Read a single channel column by ``name`` into N floats, or None.
+
+    Same all-zero guard as :func:`_wheel_cols`: #478 makes these chassis fields ALWAYS present in a
+    new trace, so a real lap whose chassis was unreadable persists zeros. A zero must read as "no
+    live data" (not a real 0 g / 0 yaw), so the confirming channel marker is never emitted off an
+    absent signal. Returns None when the column is absent OR present-but-all-zero.
+    """
+    i = _idx(fields, name)
+    if i is None:
+        return None
+    out: list[float] = []
+    any_nonzero = False
+    for row in samples:
+        try:
+            v = float(row[i])
+        except (TypeError, ValueError, IndexError):
+            v = 0.0
+        if v != 0.0:
+            any_nonzero = True
+        out.append(v)
     return out if any_nonzero else None
 
 
@@ -179,6 +224,11 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
     # optional Tier-B per-wheel channels (FL, FR, RL, RR); present only when persisted (#266)
     wheel_omega = _wheel_cols(fields, samples, "wheelAngularSpeed", n)
     wheel_slip = _wheel_cols(fields, samples, "wheelSlip", n)
+    # optional Tier-B chassis + hot-pressure channels; present only when persisted (#478)
+    accg_long = _scalar_col(fields, samples, "accG_long")
+    accg_lat = _scalar_col(fields, samples, "accG_lat")
+    yaw_rate = _scalar_col(fields, samples, "yaw_rate")
+    wheel_pressure = _wheel_cols(fields, samples, "wheelsPressure", n)
 
     car = archive.get("car") if isinstance(archive.get("car"), dict) else {}
     track = archive.get("track") if isinstance(archive.get("track"), dict) else {}
@@ -193,6 +243,10 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
         gear=col(i_g),
         wheel_omega=wheel_omega,
         wheel_slip=wheel_slip,
+        accg_long=accg_long,
+        accg_lat=accg_lat,
+        yaw_rate=yaw_rate,
+        wheel_pressure=wheel_pressure,
         x=x_col,
         z=z_col,
         lap_ms=_finite(lap.get("lap_ms")),

@@ -39,6 +39,7 @@ local shiftProfile = require("shift_profile")
 local coachingPublisher = require("coaching_publisher")
 local lifecyclePublisher = require("lifecycle_publisher")
 local telemetryPublisher = require("telemetry_publisher")
+local chassisRead = require("chassis_read")
 local setupLibrary = require("setup_library")
 
 --- Pixel sizes per window title; must match ``manifest.ini`` WINDOW_* ``SIZE=``.
@@ -2456,12 +2457,16 @@ function script.update(dt)
       temps = currentTireTemps,
       wsBridge = wsBridge,
     })
+    -- Real measured g-forces (issue #478): CSP `car.acceleration` is in G (.x lateral, .z long).
+    -- Was hardcoded 0/0; chassis_read pcall-guards the read and degrades to nil (→ 0 in the
+    -- publisher) off-rig, so the live coaching path now sees true lateral/longitudinal load.
+    local liveChassis = chassisRead.read(car)
     telemetryPublisher.publishTelemetryTickIfDue({
       dt = dt,
       car = car,
       wsBridge = wsBridge,
-      lat_g = 0,
-      long_g = 0,
+      lat_g = liveChassis.accG_lat,
+      long_g = liveChassis.accG_long,
       temps = currentTireTemps,
     })
   end)

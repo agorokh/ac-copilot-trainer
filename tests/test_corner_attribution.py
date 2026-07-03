@@ -210,6 +210,101 @@ def test_grip_limited_confirmed_with_live_pressure():
     assert grip.advisory is False  # live pressure present -> verdict
 
 
+def test_turn_in_lag_advisory_without_yaw_then_verdict_with_live_yaw():
+    # #478 AC2: turn_in_lag is advisory without yaw_rate and a verdict once the measured yaw-rate
+    # channel is supplied.
+    sig = _sig(max_abs_steer=0.5)  # high steer + no grip ceiling -> the rule fires
+    advisory = next(
+        a for a in attribute_corner(CornerContext(sig=sig, setup=SETUP)) if a.key == "turn_in_lag"
+    )
+    assert advisory.advisory is True  # yaw_rate not supplied
+    confirmed = next(
+        a
+        for a in attribute_corner(CornerContext(sig=sig, setup=SETUP, extra={"yaw_rate": 0.3}))
+        if a.key == "turn_in_lag"
+    )
+    assert confirmed.advisory is False  # live yaw-rate present -> verdict
+    assert "0.3" in confirmed.coaching or "yaw-rate" in confirmed.coaching.lower()
+
+
+def test_corner_live_signals_emits_chassis_and_pressure_markers():
+    # #478: corner_live_signals derives the confirming yaw_rate + wheelsPressure markers (and accG)
+    # from the persisted trace columns, so a lap carrying them graduates the turn_in_lag /
+    # grip_limited rules to a verdict without a caller supplying extra by hand.
+    n = 12
+    lap = LapTrace(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.1] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        yaw_rate=[0.30] * n,
+        accg_lat=[1.2] * n,
+        accg_long=[-0.4] * n,
+        wheel_pressure=[[27.0, 27.1, 26.5, 26.6] for _ in range(n)],
+    )
+    assert lap.has_tier_b_data is True
+    extra = corner_live_signals(lap, _sig(index=0, entry_i=2, apex_i=5, exit_i=9))
+    # constant yaw tracks the (constant) steer -> responsive front, NOT lag -> no yaw_rate marker.
+    assert "yaw_rate" not in extra
+    assert extra["accG_lat"] == 1.2
+    assert extra["accG_long"] == -0.4
+    assert set(extra["wheelsPressure"]) == {"fl", "fr", "rl", "rr"}
+    assert extra["wheelsPressure"]["fl"] == 27.0
+
+
+def test_turn_in_yaw_lag_confirms_only_when_heading_trails_steer():
+    # cursor #483: turn_in_lag is confirmed by yaw ONLY when the heading TRAILS the steer input
+    # through turn-in. A responsive front (yaw tracks steer) must NOT flip to a verdict.
+    n = 12
+    base = dict(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+    )
+    sig = _sig(index=0, entry_i=0, apex_i=8, exit_i=11)
+    steer = [0.5] * 9 + [0.3] * 3  # committed early, high through entry
+    # LAGGING: yaw stays near-zero while steer is committed, builds only near the apex.
+    yaw_lag = [0.02] * 6 + [0.1, 0.2, 0.3] + [0.3] * 3
+    extra_lag = corner_live_signals(LapTrace(steer=steer, yaw_rate=yaw_lag, **base), sig)
+    assert "yaw_rate" in extra_lag  # heading trailed steer -> confirmed lag
+    # RESPONSIVE: yaw is already high when steer commits (tracks steer).
+    extra_ok = corner_live_signals(LapTrace(steer=steer, yaw_rate=[0.3] * n, **base), sig)
+    assert "yaw_rate" not in extra_ok  # yaw tracks steer -> not lag, stays advisory
+
+
+def test_corner_live_signals_zero_yaw_through_turn_in_does_not_confirm():
+    # cursor #483: a lap that carries yaw data but whose peak |yaw| through THIS corner's turn-in is
+    # ~0 must NOT emit the yaw_rate marker (which would falsely confirm turn_in_lag at "0.0 rad/s").
+    n = 12
+    yaw = [0.0] * n
+    yaw[n - 1] = 0.5  # rotation only well AFTER this corner's window
+    lap = LapTrace(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.1] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        yaw_rate=yaw,
+    )
+    # entry_i..apex_i covers only the zero region -> no rotation observed here -> no marker.
+    extra = corner_live_signals(lap, _sig(index=0, entry_i=1, apex_i=4, exit_i=6))
+    assert "yaw_rate" not in extra
+
+
 def test_entry_speed_left_is_technique_verdict():
     ctx = CornerContext(
         sig=_sig(peak_lat_g=1.1),

@@ -145,7 +145,10 @@ def _create_schema(con) -> None:  # noqa: ANN001
             lap_n INTEGER, lap_ms BIGINT, lap_s DOUBLE, is_pb BOOLEAN, is_valid BOOLEAN,
             weather_type TEXT, track_grip DOUBLE, ambient_temp_c DOUBLE, track_temp_c DOUBLE,
             setup_hash TEXT, setup_path TEXT, n_setup_params INTEGER,
-            n_corners INTEGER, sample_count INTEGER, exported_at TEXT
+            n_corners INTEGER, sample_count INTEGER, exported_at TEXT,
+            -- First-class tyre identity from the lap header (issue #478 Part C), distinct from
+            -- setup_hash; NULL for archives written before the tyres block existed.
+            tyre_set TEXT
         )
         """
     )
@@ -216,6 +219,27 @@ def _iter_setup_items(snapshot: Any):
                     yield k, item[1]
 
 
+def _tyre_set_key(tyres: Any) -> str | None:
+    """First-class tyre identity for a lap (issue #478 Part C).
+
+    Prefers the human tyre-set name (``ac.getTyresName``), else the compound index, else None so the
+    lakehouse falls back to the setup-hash proxy for archives written before the tyres block.
+    """
+    if not isinstance(tyres, dict):
+        return None
+    # Canonicalize on the numeric compound INDEX whenever it is a finite number: the index is stable
+    # across laps, whereas the human name can be intermittent (getTyresName may fail on some laps),
+    # so preferring name would split one physical set into multiple stints (cursor #483). Guard
+    # non-finite (inf/NaN): int(inf) raises OverflowError and would break ingest (qodo #483).
+    idx = tyres.get("compoundIndex")
+    if isinstance(idx, (int, float)) and not isinstance(idx, bool) and math.isfinite(idx):
+        return f"compound:{int(idx)}"
+    name = tyres.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
+
+
 def _lap_row(rec: dict, path: Path) -> tuple:
     car = rec.get("car") or {}
     track = rec.get("track") or {}
@@ -226,6 +250,7 @@ def _lap_row(rec: dict, path: Path) -> tuple:
     lap_ms = lap.get("lap_ms")
     lap_ms_i = int(lap_ms) if isinstance(lap_ms, (int, float)) else None
     n_setup = sum(1 for _ in _iter_setup_items(setup.get("snapshot")))
+    tyre_set = _tyre_set_key(rec.get("tyres"))
     return (
         rec.get("lap_uuid"),
         rec.get("session_uuid"),
@@ -251,6 +276,7 @@ def _lap_row(rec: dict, path: Path) -> tuple:
         len(rec.get("corners") or []),
         trace.get("samples_count") or len(trace.get("samples") or []),
         rec.get("exported_at"),
+        tyre_set,
     )
 
 
@@ -296,11 +322,16 @@ def _materialize_session_tables(con) -> None:  # noqa: ANN001
         INSERT INTO stints
         WITH ordered AS (
             SELECT *,
+                   -- A stint boundary is a change in the tyre-set identity (issue #478 Part C) OR
+                   -- the setup; keying on both promotes stints off the raw setup_hash proxy while
+                   -- still splitting when only the setup changed.
                    CASE
-                     WHEN lag(coalesce(setup_hash, '')) OVER (
+                     WHEN lag(coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')) OVER (
                          PARTITION BY session_uuid
                          ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                     ) IS NOT DISTINCT FROM coalesce(setup_hash, '')
+                     ) IS NOT DISTINCT FROM (
+                         coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')
+                     )
                      THEN 0 ELSE 1
                    END AS stint_start
             FROM laps
@@ -320,7 +351,8 @@ def _materialize_session_tables(con) -> None:  # noqa: ANN001
                any_value(car_id),
                any_value(track_id),
                nullif(any_value(setup_hash), ''),
-               coalesce(nullif(any_value(setup_hash), ''), 'unknown-tyre-set'),
+               coalesce(nullif(any_value(tyre_set), ''), nullif(any_value(setup_hash), ''),
+                        'unknown-tyre-set'),
                min(lap_n),
                max(lap_n),
                count(*)::INTEGER,
@@ -424,7 +456,7 @@ def build_lake(
                 car = (rec.get("car") or {}).get("id")
                 track = (rec.get("track") or {}).get("id")
                 con.execute(
-                    "INSERT INTO laps VALUES (" + ", ".join("?" for _ in range(24)) + ")",
+                    "INSERT INTO laps VALUES (" + ", ".join("?" for _ in range(25)) + ")",
                     _lap_row(rec, path),
                 )
                 summary.laps += 1

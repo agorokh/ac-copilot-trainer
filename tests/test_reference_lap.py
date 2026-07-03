@@ -65,7 +65,9 @@ def test_generated_archive_carries_per_wheel_channels() -> None:
     fields = record["trace"]["fields"]
     for name in ("wheelAngularSpeed_fl", "wheelSlip_rr", "tyreCoreTemp_fl"):
         assert name in fields
-    assert fields[-1] == "rpm"
+    assert "rpm" in fields
+    # #478 chassis + pressure channels append AFTER rpm (append-only), so rpm is no longer last.
+    assert fields[-1] == "wheelsPressure_rr"
     frames = archive_trace_to_object_trace(record)
     f0 = frames[0]
     speed_ms = f0["speed"] / 3.6
@@ -73,6 +75,48 @@ def test_generated_archive_carries_per_wheel_channels() -> None:
     assert f0["wheelSlip_fl"] == pytest.approx(0.0)
     assert f0["tyreCoreTemp_rr"] == pytest.approx(80.0)
     assert f0["rpm"] == pytest.approx(0.0)
+
+
+def test_generated_archive_carries_tier_b_chassis_channels() -> None:
+    # #478: a generated reference archive includes the chassis + hot-pressure columns. The synthetic
+    # generator does not model them, so they are 0.0 -> the analysis layer's all-zero guard treats a
+    # generated reference as honestly having no measured chassis/pressure signal.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    for name in (
+        "accG_long",
+        "accG_lat",
+        "yaw_rate",
+        "wheelsPressure_fl",
+        "wheelsPressure_fr",
+        "wheelsPressure_rl",
+        "wheelsPressure_rr",
+    ):
+        assert name in fields
+    f0 = archive_trace_to_object_trace(record)[0]
+    for name in ("accG_long", "accG_lat", "yaw_rate", "wheelsPressure_fl", "wheelsPressure_rr"):
+        assert f0[name] == pytest.approx(0.0)
+
+
+def test_validator_accepts_pre_478_23_field_trace() -> None:
+    # #478: chassis/pressure append AFTER rpm; a lap captured between #442 and #478 declares 23
+    # columns (legacy + per-wheel + rpm) and stays schema-v1-valid, converting without #478 keys.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    record["trace"]["fields"] = list(fields[:23])
+    record["trace"]["samples"] = [[row[i] for i in range(23)] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)  # must not raise
+    frames = archive_trace_to_object_trace(record)
+    assert "rpm" in frames[0]
+    assert "accG_long" not in frames[0]
+    assert "wheelsPressure_fl" not in frames[0]
+
+
+def test_generated_archive_carries_tyres_header() -> None:
+    # #478 Part C: the header carries a first-class tyres block (None for a generated reference,
+    # which has no real tyre set -> the lakehouse falls back to the setup-hash proxy).
+    record = build_archive_record_from_scenario("brake_too_late")
+    assert record["tyres"] == {"compoundIndex": None, "name": None}
 
 
 def test_validator_accepts_old_22_field_schema_v1_trace() -> None:

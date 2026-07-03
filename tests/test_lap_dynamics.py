@@ -293,3 +293,45 @@ def test_spline_derived_from_positions_when_channel_missing():
     assert lap.spline[-1] == pytest.approx(1.0)
     assert all(lap.spline[i] <= lap.spline[i + 1] + 1e-9 for i in range(len(lap) - 1))
     assert max(lap.spline) - min(lap.spline) > 0.5  # not collapsed
+
+
+_TIER_B_COLS = [
+    "accG_long",
+    "accG_lat",
+    "yaw_rate",
+    "wheelsPressure_fl",
+    "wheelsPressure_fr",
+    "wheelsPressure_rl",
+    "wheelsPressure_rr",
+]
+
+
+def test_lap_trace_reads_chassis_and_pressure_channels():
+    # #478: lap_trace_from_archive reads accG/yaw/pressure columns when the trace carries them.
+    arch = _make_corner_archive()
+    arch["trace"]["fields"].extend(_TIER_B_COLS)
+    for row in arch["trace"]["samples"]:
+        row.extend([-0.5, 1.1, 0.25, 27.0, 27.1, 26.5, 26.6])
+    lap = lap_trace_from_archive(arch)
+    assert lap.has_chassis_data is True
+    assert lap.has_pressure_data is True
+    assert lap.has_tier_b_data is True
+    assert lap.accg_lat is not None and lap.accg_lat[0] == pytest.approx(1.1)
+    assert lap.accg_long is not None and lap.accg_long[0] == pytest.approx(-0.5)
+    assert lap.yaw_rate is not None and lap.yaw_rate[0] == pytest.approx(0.25)
+    assert lap.wheel_pressure is not None
+    assert lap.wheel_pressure[0] == [27.0, 27.1, 26.5, 26.6]
+
+
+def test_all_zero_chassis_and_pressure_columns_read_as_no_data():
+    # #478: an all-zero chassis/pressure column (unreadable on a real lap) reads as "no data" so a
+    # missing signal never fabricates a verdict — the same guard as the per-wheel omega column.
+    arch = _make_corner_archive()
+    arch["trace"]["fields"].extend(_TIER_B_COLS)
+    for row in arch["trace"]["samples"]:
+        row.extend([0.0] * len(_TIER_B_COLS))
+    lap = lap_trace_from_archive(arch)
+    assert lap.accg_lat is None and lap.accg_long is None and lap.yaw_rate is None
+    assert lap.wheel_pressure is None
+    assert lap.has_chassis_data is False
+    assert lap.has_pressure_data is False

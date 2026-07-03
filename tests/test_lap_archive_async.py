@@ -165,6 +165,14 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
         "tyreCoreTemp_rl",
         "tyreCoreTemp_rr",
         "rpm",
+        # chassis dynamics + hot pressure (issue #478)
+        "accG_long",
+        "accG_lat",
+        "yaw_rate",
+        "wheelsPressure_fl",
+        "wheelsPressure_fr",
+        "wheelsPressure_rl",
+        "wheelsPressure_rr",
     ]
     assert record["setup"]["hash"] == "hash1234"
     assert record["coaching"]["rules_hints"] == ["Brake earlier at T1"]

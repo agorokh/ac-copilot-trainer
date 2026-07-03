@@ -43,7 +43,9 @@ speed_kmh, brake, throttle, steering, gear,
 position_x_m, position_y_m, position_z_m,
 wheelAngularSpeed_fl, wheelAngularSpeed_fr, wheelAngularSpeed_rl, wheelAngularSpeed_rr,
 wheelSlip_fl, wheelSlip_fr, wheelSlip_rl, wheelSlip_rr,
-tyreCoreTemp_fl, tyreCoreTemp_fr, tyreCoreTemp_rl, tyreCoreTemp_rr
+tyreCoreTemp_fl, tyreCoreTemp_fr, tyreCoreTemp_rl, tyreCoreTemp_rr,
+accG_long, accG_lat, yaw_rate,
+wheelsPressure_fl, wheelsPressure_fr, wheelsPressure_rl, wheelsPressure_rr
 ```
 
 `brake`, `throttle`, and `steering` preserve the normalized CSP values from the
@@ -64,6 +66,25 @@ gracefully (they export as blank cells). The setup-coaching engine
 *suspicion* to a *confirmed* axle-level verdict (which axle locks → brake bias; rear
 wheelspin → traction/TC/diff). The trace field set is a hard contract kept byte-identical
 between `lap_archive.lua::TRACE_FIELDS` and `reference_lap.py::TRACE_FIELDS`.
+
+### Optional Tier-B chassis + hot-pressure channels (#478)
+
+When present, the trace also carries measured chassis dynamics and dynamic HOT tyre pressure:
+`accG_long` / `accG_lat` (longitudinal / lateral g-force from CSP `car.acceleration`, already in G),
+`yaw_rate` (rad/s, from `car.localAngularVelocity.y`), and `wheelsPressure_{fl,fr,rl,rr}` (psi — the
+DYNAMIC hot pressure from `wheel.tyrePressure`, not the cold set pressure). Like the #266 per-wheel
+channels they are **optional** and **append-only** after `rpm`: older archives omit them and export
+as blank cells. The setup-coaching engine consumes `yaw_rate` to confirm turn-in lag / the
+under-vs-oversteer direction and `wheelsPressure` to confirm pressure/compound attribution, upgrading
+those rules from a *suspicion* to a *confirmed verdict*. A lap whose chassis/pressure was unreadable
+persists zeros; the analysis loader treats an all-zero column as "no live data" so a missing signal
+never fabricates a verdict.
+
+The lap **header** also gains (issue #478): `conditions.weatherType` (the `ac.WeatherType` enum,
+Part D) and a first-class `tyres` block (`compoundIndex` + `name` via `ac.getTyresName`, Part C) — the
+tyre identity the coaching lakehouse now keys stints on instead of the `setup.hash` proxy. AC does not
+expose a per-physical-set serial to Lua, so `tyres` identifies the compound, not a same-compound
+fresh-rubber swap.
 
 ## MoTeC-Shaped CSV
 
