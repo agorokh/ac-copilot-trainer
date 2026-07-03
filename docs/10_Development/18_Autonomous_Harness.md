@@ -104,13 +104,16 @@ LIVE but **not drivable**, and the carcsw hijack (CSP creating `Car0`) is the on
 "session is actually drivable" signal. So the hijack is a sequence of **short `--hijack-probe-seconds`
 probes** (default 5 s, recreating `CarControls0` each time to also beat the early-LIVE race): a
 stalled overlay is detected in seconds and the run **recycles a fresh launch** instead of burning one
-long dead-wait. Between probes the harness sends a best-effort **keypress nudge** (Enter/Space) to
-AC's own window to try to clear the overlay in place. `--no-overlay-nudge` opts out. The per-cycle
-`[auto-drive HH:MM:SS] …` log lines show each launch, probe outcome, re-bake stats, and nudge so a
-recycle's timing is visible.
+long dead-wait. An **opt-in** keypress nudge (`--overlay-nudge`) can try to clear the overlay in place
+between probes: it focuses AC's own window (defeating Windows foreground-lock via `AttachThreadInput`,
+then verifying focus before injecting) and presses Enter/Space. The per-cycle `[auto-drive HH:MM:SS] …`
+log lines show each launch, probe outcome, re-bake stats, and nudge so a recycle's timing is visible.
 
-> **Verified in-sim (2026-07-03, #466).** The keypress nudge **does not** clear the overlay on this
-> CSP build (CSP blocks synthetic pre-drive input — the fast-fail relaunch is the real recovery). The
+> **Verified in-sim (2026-07-03, #466/#482).** The keypress nudge is **OFF by default** because it
+> does **not** clear the overlay: with AC correctly focused (foreground-lock defeated via
+> `AttachThreadInput`) and receiving real Enter/Space, the CSP "0 seconds" overlay does not dismiss —
+> consistent with #465's finding that only the `FORCE_START` config skips it, no keypress does. The
+> fast-fail relaunch is the real recovery. The
 > **no-setup drive path is reliable** (CM auto-starts; fast-fail retries land the hijack — e.g. LIVE
 > and hijacked on cycle 1). The **`--setup` path is not yet reliable**, and instrumentation
 > (`--setup-rebake-interval`, re-bake stats) pinned *why*: the overlay stall is the setup re-bake

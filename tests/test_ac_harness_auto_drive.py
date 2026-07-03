@@ -893,7 +893,7 @@ def test_is_ac_window_title_targets_ac_not_content_manager():
 def test_overlay_and_probe_cli_flags_map_to_config():
     base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
     cfg = _config_from_args(_build_arg_parser().parse_args(base))
-    assert cfg.overlay_nudge is True  # nudge on by default; opt-out only
+    assert cfg.overlay_nudge is False  # nudge OFF by default (verified ineffective); opt-in only
     assert cfg.hijack_probe_seconds == 5.0
     assert (
         cfg.setup_rebake_interval == AutoDriveConfig.setup_rebake_interval
@@ -902,7 +902,7 @@ def test_overlay_and_probe_cli_flags_map_to_config():
         _build_arg_parser().parse_args(
             base
             + [
-                "--no-overlay-nudge",
+                "--overlay-nudge",
                 "--hijack-probe-seconds",
                 "2.5",
                 "--setup-rebake-interval",
@@ -910,7 +910,7 @@ def test_overlay_and_probe_cli_flags_map_to_config():
             ]
         )
     )
-    assert cfg.overlay_nudge is False
+    assert cfg.overlay_nudge is True  # --overlay-nudge opts in
     assert cfg.hijack_probe_seconds == 2.5
     assert cfg.setup_rebake_interval == 0.3
 

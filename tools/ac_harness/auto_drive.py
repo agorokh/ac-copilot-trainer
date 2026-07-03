@@ -163,10 +163,11 @@ class AutoDriveConfig:
     # cycle recycles a fresh launch instead of burning one long ~25 s dead-wait.
     hijack_probe_seconds: float = 5.0
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
-    # Best-effort keypress to clear a stalled pre-drive overlay between hijack probes. OS input to
-    # the CSP pre-drive menu has been unreliable historically, so this is a last-resort nudge that
-    # the fast-fail relaunch backstops, not a primary mechanism (`--no-overlay-nudge` opts out).
-    overlay_nudge: bool = True
+    # Opt-in (`--overlay-nudge`): best-effort keypress to clear a stalled pre-drive overlay between
+    # hijack probes. VERIFIED ineffective in-sim (#466/#482): even with AC correctly focused, Enter/
+    # Space does not clear the CSP overlay (only the FORCE_START config skips it, #465). OFF by
+    # default — the fast-fail relaunch is the recovery; retained opt-in for other CSP builds/keys.
+    overlay_nudge: bool = False
     # Sim-death guard.
     sim_dead_seconds: float = 4.0
     skip_launch: bool = False
@@ -1181,6 +1182,14 @@ def _nudge_pre_drive_overlay() -> str:  # pragma: no cover - rig-only
             ctypes.c_void_p,
         ]
         user32.keybd_event.restype = None
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        user32.AttachThreadInput.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        user32.BringWindowToTop.restype = wintypes.BOOL
 
         found: list[int] = []
 
@@ -1198,15 +1207,34 @@ def _nudge_pre_drive_overlay() -> str:  # pragma: no cover - rig-only
         if not found:
             return "no AC window found to nudge"
         hwnd = found[0]
-        user32.SetForegroundWindow(hwnd)
-        time.sleep(0.2)  # let the focus change settle before the keystrokes
+        # Force foreground reliably, then VERIFY it before injecting any keys. A background/elevated
+        # process hits Windows' foreground-lock, so a bare SetForegroundWindow silently fails and a
+        # global keybd_event would land on the WRONG window (agent terminal / CM) — the #482 cursor
+        # review, and the likely reason the earlier nudge never reached AC. Attach to the current
+        # foreground thread's input queue first (the documented way past foreground-lock).
+        fg = user32.GetForegroundWindow()
+        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+        fg_tid = user32.GetWindowThreadProcessId(fg, None) if fg else 0
+        attached = bool(fg_tid) and fg_tid != target_tid
+        if attached:
+            user32.AttachThreadInput(target_tid, fg_tid, True)
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(target_tid, fg_tid, False)
+        time.sleep(0.2)  # let the focus change settle
+        if user32.GetForegroundWindow() != hwnd:
+            # Do NOT fire keys at the wrong window; the fast-fail relaunch is the backstop.
+            return f"AC window not focused (foreground-lock); no keys sent (hwnd={hwnd})"
         vk_return, vk_space, keyeventf_keyup = 0x0D, 0x20, 0x0002
         for vk in (vk_return, vk_space):
             user32.keybd_event(vk, 0, 0, None)
             time.sleep(0.05)
             user32.keybd_event(vk, 0, keyeventf_keyup, None)
             time.sleep(0.05)
-        return f"pressed Enter+Space on AC window (hwnd={hwnd})"
+        return f"pressed Enter+Space on focused AC window (hwnd={hwnd})"
     except Exception as exc:  # noqa: BLE001 - best-effort; the fast-fail relaunch backstops failure
         return f"nudge error: {type(exc).__name__}: {exc}"
 
@@ -1339,9 +1367,9 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
       NEW-UI "0 seconds" pre-drive overlay (not drivable), so Car0 never appears no matter how long
       we wait. Each attempt is therefore a SHORT ``hijack_probe_seconds`` probe: a stalled overlay
       is detected in seconds and ``rig_hijack`` returns ``None`` fast, so the outer loop recycles a
-      fresh launch instead of burning one long dead-wait. Between probes we
-      optionally **nudge** the overlay with a keypress (``overlay_nudge``); if that clears it, the
-      next probe lands the hijack with no relaunch at all.
+      fresh launch instead of burning one long dead-wait. An opt-in ``overlay_nudge`` (default OFF)
+      presses a key at the overlay between probes — verified in-sim NOT to clear it (#466/#482), so
+      the fast-fail relaunch is the recovery; the nudge is retained for other CSP builds/keys.
     """
     from tools.ac_harness.custom_ai import CustomAIController
 
@@ -1883,11 +1911,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "detected within this window and the launch recycles (was one long dead-wait) (#466)",
     )
     p.add_argument(
-        "--no-overlay-nudge",
+        "--overlay-nudge",
         dest="overlay_nudge",
-        action="store_false",
-        help="do not send a best-effort keypress to clear a stalled pre-drive overlay before "
-        "recycling the launch (#466)",
+        action="store_true",
+        help="opt in to a best-effort keypress nudge on a stalled pre-drive overlay; OFF by "
+        "default (verified not to clear the CSP overlay, #466); fast-fail relaunch recovers",
     )
     p.add_argument(
         "--evidence-dir",
