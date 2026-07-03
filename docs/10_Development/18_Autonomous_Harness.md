@@ -95,25 +95,22 @@ long-term storage (scratch-dir disposability pitfall).
 - Once AC reaches LIVE, `rig_apply_setup` verifies the setup via shared-memory fuel before the hijack
   and drive legs run.
 
-### Overlay fast-fail + keypress nudge (#466)
+### Overlay fast-fail (#466)
 
 `_wait_live` reports LIVE the instant `acpmf_graphics.status==LIVE` with advancing physics — but AC
 can sit at the NEW-UI "0 seconds" pre-drive overlay **with LIVE status and advancing physics** when
-CM's auto-start race loses (foreground steal, or degraded CSP state after many hard `acs.exe` kills).
-LIVE but **not drivable**, and the carcsw hijack (CSP creating `Car0`) is the only deterministic
-"session is actually drivable" signal. So the hijack is a sequence of **short `--hijack-probe-seconds`
-probes** (default 5 s, recreating `CarControls0` each time to also beat the early-LIVE race): a
-stalled overlay is detected in seconds and the run **recycles a fresh launch** instead of burning one
-long dead-wait. An **opt-in** keypress nudge (`--overlay-nudge`) can try to clear the overlay in place
-between probes: it focuses AC's own window (defeating Windows foreground-lock via `AttachThreadInput`,
-then verifying focus before injecting) and presses Enter/Space. The per-cycle `[auto-drive HH:MM:SS] …`
-log lines show each launch, probe outcome, re-bake stats, and nudge so a recycle's timing is visible.
+CM's auto-start race loses. LIVE but **not drivable**, and the carcsw hijack (CSP creating `Car0`) is
+the only deterministic "session is actually drivable" signal. So the hijack is a sequence of **short
+`--hijack-probe-seconds` probes** (default 5 s, recreating `CarControls0` each time to also beat the
+early-LIVE race): a stalled overlay is detected in seconds and the run **recycles a fresh launch**
+instead of burning one long dead-wait. The per-cycle `[auto-drive HH:MM:SS] …` log lines show each
+launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 
-> **Verified in-sim (2026-07-03, #466/#482).** The keypress nudge is **OFF by default** because it
-> does **not** clear the overlay: with AC correctly focused (foreground-lock defeated via
-> `AttachThreadInput`) and receiving real Enter/Space, the CSP "0 seconds" overlay does not dismiss —
-> consistent with #465's finding that only the `FORCE_START` config skips it, no keypress does. The
-> fast-fail relaunch is the real recovery. The
+> **Verified in-sim (2026-07-03, #466/#482).** A keypress nudge to clear the overlay in place was
+> implemented and tested — with AC correctly focused (foreground-lock defeated via `AttachThreadInput`)
+> and receiving real Enter/Space, the CSP "0 seconds" overlay does **not** dismiss (consistent with
+> #465: only the `FORCE_START` config skips it, no keypress) — so it was **removed**; the fast-fail
+> relaunch is the recovery. The
 > **no-setup drive path is reliable** (CM auto-starts; fast-fail retries land the hijack — e.g. LIVE
 > and hijacked on cycle 1). The **`--setup` path is not yet reliable**, and instrumentation
 > (`--setup-rebake-interval`, re-bake stats) pinned *why*: the overlay stall is the setup re-bake
@@ -132,7 +129,7 @@ log lines show each launch, probe outcome, re-bake stats, and nudge so a recycle
 |---|---|
 | Preflight `custom_ai` failure | Set `[CUSTOM_AI] ENABLED=1` in `<AC root>/extension/config/new_behaviour.ini` (user `cfg/extension/new_behaviour.ini` overrides when it carries the key) |
 | `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the CM launch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
-| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay through every launch cycle (the setup re-bake breaks CM's immediate-start, #466). The setup is applied/verified. The harness fast-fails each stalled cycle and **recycles a fresh launch**; if it still exhausts `max_launches`, reboot the rig (degraded from many hard `acs.exe` kills) and rerun. The optional `--overlay-nudge` keypress is **off by default** and verified NOT to clear the CSP overlay (#466) |
+| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay through every launch cycle (the setup re-bake breaks CM's immediate-start, #466). The setup is applied/verified. The harness fast-fails each stalled cycle and **recycles a fresh launch**; if it still exhausts `max_launches`, reboot the rig (degraded from many hard `acs.exe` kills) and rerun. (A keypress nudge to clear the overlay was tried in-sim and verified NOT to dismiss it, #466 — the relaunch is the only recovery.) |
 | CM clicks/launch do nothing | **Foreground steal**: minimize the agent/terminal window; AC's fullscreen menu covers CM — the harness kills stale `acs.exe` before each launch |
 | "Steam API failed to initialize" | Steam elevation mismatch — restart Steam **non-elevated** (`steam -shutdown`, relaunch via `explorer.exe`) |
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |
