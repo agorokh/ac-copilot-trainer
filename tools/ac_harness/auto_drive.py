@@ -1246,6 +1246,10 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
                 actuator.launch() if attempt == 1 else actuator.relaunch()
                 live = _wait_live(config.attempt_timeout)
             if live:
+                _log(
+                    f"LIVE reached; setup re-bake ready={bake.ready}x writes={bake.writes} "
+                    f"(interval={config.setup_rebake_interval}s)"
+                )
                 time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
                 if bake.ready > 0:
                     return (
@@ -1352,9 +1356,10 @@ def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cove
                 return ctrl
             time.sleep(0.1)
         ctrl.close()  # recreate the section next attempt to re-trigger the hijack
+        # ASCII-only message: the harness prints to a Windows cp1252 console (cf. #475/#476).
         _log(
             f"hijack probe {attempt}/{attempts}: no Car0 in {probe:.1f}s "
-            "(LIVE but not drivable — pre-drive overlay stall?)"
+            "(LIVE but not drivable - pre-drive overlay stall?)"
         )
         # A stalled overlay may clear on a keypress; try it between probes, then re-probe. If it
         # does nothing, the fast-fail return recycles a fresh launch cycle (the outer loop).
@@ -1837,6 +1842,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=20.0,
         help="seconds to wait for acpmf_physics.fuel to confirm the launch-baked setup",
     )
+    p.add_argument(
+        "--setup-rebake-interval",
+        type=float,
+        default=AutoDriveConfig.setup_rebake_interval,
+        help="how often (s) to re-bake the setup into race.ini during the CM launch window; a very "
+        "small value fights CM's own race.ini writes and stalls the pre-drive auto-start (#466)",
+    )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument(
         "--ac-user-dir",
@@ -1935,6 +1947,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         sidecar_url=args.sidecar_url,
         setup=args.setup,
         setup_timeout=args.setup_timeout,
+        setup_rebake_interval=args.setup_rebake_interval,
         driver=args.driver,
         pace=args.pace,
         ggv_scale=args.ggv_scale,

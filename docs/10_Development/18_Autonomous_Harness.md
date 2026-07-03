@@ -105,13 +105,23 @@ LIVE but **not drivable**, and the carcsw hijack (CSP creating `Car0`) is the on
 probes** (default 5 s, recreating `CarControls0` each time to also beat the early-LIVE race): a
 stalled overlay is detected in seconds and the run **recycles a fresh launch** instead of burning one
 long dead-wait. Between probes the harness sends a best-effort **keypress nudge** (Enter/Space) to
-AC's own window to try to clear the overlay in place; if it clears, the next probe lands the hijack
-with no relaunch. `--no-overlay-nudge` opts out. The per-cycle `[auto-drive HH:MM:SS] …` log lines
-show each launch, probe outcome, and nudge so a recycle's timing is visible.
+AC's own window to try to clear the overlay in place. `--no-overlay-nudge` opts out. The per-cycle
+`[auto-drive HH:MM:SS] …` log lines show each launch, probe outcome, re-bake stats, and nudge so a
+recycle's timing is visible.
 
-> **Reliability caveat.** The nudge is last-resort — OS input to the CSP pre-drive menu has been
-> unreliable — so a hard-degraded rig (many hard `acs.exe` kills) can still exhaust `max_launches`.
-> Reboot the rig, verify a no-setup CM launch is hijackable again, then rerun.
+> **Verified in-sim (2026-07-03, #466).** The keypress nudge **does not** clear the overlay on this
+> CSP build (CSP blocks synthetic pre-drive input — the fast-fail relaunch is the real recovery). The
+> **no-setup drive path is reliable** (CM auto-starts; fast-fail retries land the hijack — e.g. LIVE
+> and hijacked on cycle 1). The **`--setup` path is not yet reliable**, and instrumentation
+> (`--setup-rebake-interval`, re-bake stats) pinned *why*: the overlay stall is the setup re-bake
+> itself. The write that injects the setup into `race.ini` races acs's spawn-read that CM's
+> immediate-start depends on — baking aggressively (0.05 s default) applies the setup but **breaks**
+> the auto-start (overlay stall); baking gently preserves the auto-start but **misses** the setup. No
+> cadence resolves it (sharp transition ~0.05→0.1 s), and a post-hijack `SimState` restart does not
+> re-read the setup. A reliable `--setup` run needs a different injection mechanism (candidate:
+> PIT-spawn + pre-hijack in-sim `setup.load` while `ac.isCarResetAllowed()` is true in the pit box) —
+> tracked on #466. Until then a `--setup` run may stall at the overlay; a plain no-setup drive is
+> reliable.
 
 ## Troubleshooting (hard-won rig lore — read before debugging)
 

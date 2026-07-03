@@ -895,13 +895,24 @@ def test_overlay_and_probe_cli_flags_map_to_config():
     cfg = _config_from_args(_build_arg_parser().parse_args(base))
     assert cfg.overlay_nudge is True  # nudge on by default; opt-out only
     assert cfg.hijack_probe_seconds == 5.0
+    assert (
+        cfg.setup_rebake_interval == AutoDriveConfig.setup_rebake_interval
+    )  # CLI default == field
     cfg = _config_from_args(
         _build_arg_parser().parse_args(
-            base + ["--no-overlay-nudge", "--hijack-probe-seconds", "2.5"]
+            base
+            + [
+                "--no-overlay-nudge",
+                "--hijack-probe-seconds",
+                "2.5",
+                "--setup-rebake-interval",
+                "0.3",
+            ]
         )
     )
     assert cfg.overlay_nudge is False
     assert cfg.hijack_probe_seconds == 2.5
+    assert cfg.setup_rebake_interval == 0.3
 
 
 def _fake_cai_factory(created: list, ready_when):
