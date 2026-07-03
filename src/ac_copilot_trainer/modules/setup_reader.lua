@@ -5,6 +5,7 @@ local M = {}
 local ch = require("csp_helpers")
 
 local COPILOT_GLOB = "copilot_"
+local RACE_INI_NO_SETUP = false
 local RACE_INI_RECHECK_INTERVAL_SEC = 2
 
 --- Prefer CSP-reported active setup path when the runtime exposes it (varies by CSP build).
@@ -161,14 +162,16 @@ local function readActiveSetupPathFromRaceIni(doc)
       local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
       if key == "_EXT_SETUP_FILENAME" then
         local p = trim(value or "")
+        if p == "" then
+          return RACE_INI_NO_SETUP
+        end
         return resolveRaceIniSetupPath(p)
       end
     end
   end
-  return nil
+  return RACE_INI_NO_SETUP
 end
 
-local RACE_INI_NO_SETUP = false
 local raceIniSetupCache = { key = nil, path = RACE_INI_NO_SETUP, nextCheck = 0 }
 
 local function raceIniSetupCacheKey(sim)
@@ -203,9 +206,18 @@ local function activeSetupPathFromRaceIni(sim)
   else
     raceIniSetupCache.nextCheck = 0
   end
+  local previousPath = raceIniSetupCache.key == key and raceIniSetupCache.path or nil
   local path = readActiveSetupPathFromRaceIni(doc)
-  -- Cache negative reads too: once Lua is running in acs.exe, the launch race.ini has already been
-  -- created for the current session, so a missing setup pointer should not become per-frame disk IO.
+  if path == nil then
+    if previousPath and previousPath ~= RACE_INI_NO_SETUP then
+      raceIniSetupCache.nextCheck = now + RACE_INI_RECHECK_INTERVAL_SEC
+      return previousPath
+    end
+    return nil
+  end
+  -- Cache confirmed negative reads too: once Lua successfully reads race.ini in acs.exe, a missing
+  -- setup pointer for the current session should not become per-frame disk IO. Transient read
+  -- failures return nil above and are retried rather than cached as "no setup".
   raceIniSetupCache.key = key
   if path then
     raceIniSetupCache.path = path
