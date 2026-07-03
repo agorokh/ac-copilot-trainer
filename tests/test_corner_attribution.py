@@ -256,6 +256,29 @@ def test_corner_live_signals_emits_chassis_and_pressure_markers():
     assert extra["wheelsPressure"]["fl"] == 27.0
 
 
+def test_corner_live_signals_zero_yaw_through_turn_in_does_not_confirm():
+    # cursor #483: a lap that carries yaw data but whose peak |yaw| through THIS corner's turn-in is
+    # ~0 must NOT emit the yaw_rate marker (which would falsely confirm turn_in_lag at "0.0 rad/s").
+    n = 12
+    yaw = [0.0] * n
+    yaw[n - 1] = 0.5  # rotation only well AFTER this corner's window
+    lap = LapTrace(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.1] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        yaw_rate=yaw,
+    )
+    # entry_i..apex_i covers only the zero region -> no rotation observed here -> no marker.
+    extra = corner_live_signals(lap, _sig(index=0, entry_i=1, apex_i=4, exit_i=6))
+    assert "yaw_rate" not in extra
+
+
 def test_entry_speed_left_is_technique_verdict():
     ctx = CornerContext(
         sig=_sig(peak_lat_g=1.1),

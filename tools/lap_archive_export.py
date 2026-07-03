@@ -126,6 +126,12 @@ _MOTEC_CHANNELS: tuple[tuple[str, str, str], ...] = (
     ("Lap Number", "none", "lap_n"),
     ("Lap Time", "s", "lap_time_s"),
     ("Valid Lap", "none", "valid_lap"),
+    # Chassis dynamics (issue #478) — APPENDED so existing MoTeC column positions stay stable.
+    # G-forces + yaw rate are prime MoTeC analysis channels; the per-wheel arrays (#266 omega/slip/
+    # temp, #478 wheelsPressure) stay out of the curated MoTeC subset and ride the analysis CSV.
+    ("G Force Long", "G", "accG_long"),
+    ("G Force Lat", "G", "accG_lat"),
+    ("Yaw Rate", "rad/s", "yaw_rate"),
 )
 
 

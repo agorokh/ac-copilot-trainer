@@ -131,6 +131,17 @@ def test_motec_csv_export_writes_quoted_header_units_and_rows(tmp_path: Path, mo
     assert rows[12][3] == "70"
 
 
+def test_tier_b_columns_in_generic_csv_and_motec_chassis_channels() -> None:
+    # #478 + #483 review: the generic analysis CSV carries every Tier-B trace column, and the
+    # MoTeC-shaped export carries the single-value chassis channels (G-forces + yaw). Per-wheel
+    # arrays (omega/slip/temp/pressure) stay in the analysis CSV only (curated MoTeC subset).
+    for name in lap_archive_export._TIER_B_TRACE_FIELDS:
+        assert name in lap_archive_export.CSV_COLUMNS, f"{name} missing from generic CSV export"
+    motec_keys = {key for _, _, key in lap_archive_export._MOTEC_CHANNELS}
+    for name in ("accG_long", "accG_lat", "yaw_rate"):
+        assert name in motec_keys, f"{name} missing from MoTeC channels"
+
+
 def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(tmp_path)
     first = tmp_path / "lap_001.json"

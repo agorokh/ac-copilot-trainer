@@ -773,6 +773,7 @@ def _grip_used_frac(ctx: CornerContext) -> float | None:
 # --- Tier-B live signals: turn per-wheel data into CONFIRMED attribution ------
 WHEEL_RADIUS_M = 0.347  # GT3 R effective rolling radius (session plant-ID)
 _WHEEL_LABELS = ("fl", "fr", "rl", "rr")  # #266 per-wheel order (matches wheel_read.WHEEL_KEYS)
+_YAW_RATE_EPS = 1e-3  # rad/s: peak turn-in |yaw| at/below this = "no rotation observed here" (#483)
 
 
 def _slip(omega: float, r: float, v: float) -> float:
@@ -859,9 +860,13 @@ def corner_live_signals(
     seg = range(sig.entry_i, sig.exit_i + 1)
     if lap.yaw_rate is not None:
         entry_yaw = [abs(lap.yaw_rate[k]) for k in range(sig.entry_i, sig.apex_i + 1)]
-        # Peak |yaw| through turn-in is the confirming rotation magnitude; its presence flips the
-        # turn_in_lag / balance-direction rules from a suspicion to a verdict.
-        extra["yaw_rate"] = round(max(entry_yaw), 3) if entry_yaw else 0.0
+        peak_yaw = max(entry_yaw) if entry_yaw else 0.0
+        # Only confirm when rotation was actually OBSERVED through turn-in (mirrors the lock_axle /
+        # wheelspin "observed here" guard): a 0.0 peak — an all-zero turn-in window, or an empty
+        # entry window — must never fabricate a turn_in_lag verdict claiming "0.0 rad/s" just
+        # because the lap carries yaw data elsewhere (cursor #483).
+        if peak_yaw > _YAW_RATE_EPS:
+            extra["yaw_rate"] = round(peak_yaw, 3)
     if lap.accg_lat is not None:
         extra["accG_lat"] = round(max(abs(lap.accg_lat[k]) for k in seg), 3)
     if lap.accg_long is not None:
