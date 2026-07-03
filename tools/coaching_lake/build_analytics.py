@@ -227,14 +227,16 @@ def _tyre_set_key(tyres: Any) -> str | None:
     """
     if not isinstance(tyres, dict):
         return None
+    # Canonicalize on the numeric compound INDEX whenever it is a finite number: the index is stable
+    # across laps, whereas the human name can be intermittent (getTyresName may fail on some laps),
+    # so preferring name would split one physical set into multiple stints (cursor #483). Guard
+    # non-finite (inf/NaN): int(inf) raises OverflowError and would break ingest (qodo #483).
+    idx = tyres.get("compoundIndex")
+    if isinstance(idx, (int, float)) and not isinstance(idx, bool) and math.isfinite(idx):
+        return f"compound:{int(idx)}"
     name = tyres.get("name")
     if isinstance(name, str) and name.strip():
         return name.strip()
-    idx = tyres.get("compoundIndex")
-    # Guard non-finite (inf/NaN): int(inf) raises OverflowError and would break ingest for any
-    # archive that slipped a bad index through (qodo #483). Fall back to setup_hash instead.
-    if isinstance(idx, (int, float)) and not isinstance(idx, bool) and math.isfinite(idx):
-        return f"compound:{int(idx)}"
     return None
 
 

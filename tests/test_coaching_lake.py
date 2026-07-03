@@ -190,7 +190,8 @@ def test_stints_split_on_first_class_tyre_set(lake_cwd):
     summary = build_lake(laps, _db_path())
     assert summary.stints == 2  # split on tyre-set id despite identical setup_hash
     cols, rows = run_report(_db_path(), "stints")
-    assert sorted(r[cols.index("tyre_set_key")] for r in rows) == ["Medium (M)", "Soft (S)"]
+    # keyed on the canonical compound INDEX (stable), not the intermittent name (cursor #483).
+    assert sorted(r[cols.index("tyre_set_key")] for r in rows) == ["compound:1", "compound:2"]
 
 
 def test_corner_speed_report_is_corner_grain(lake_cwd):

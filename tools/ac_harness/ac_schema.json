@@ -84,10 +84,11 @@
       "fields": {
         "angularSpeed": "number",
         "slipRatio": "number",
-        "tyreCoreTemperature": "number"
+        "tyreCoreTemperature": "number",
+        "tyrePressure": "number"
       },
       "read_by": ["wheel_read.lua (via telemetry.lua / tire_monitor.lua)"],
-      "note": "0-indexed array of per-wheel objects (ac.Wheel): FrontLeft=0, FrontRight=1, RearLeft=2, RearRight=3 -- see wheel_read.WHEEL_KEYS; a 1-based read shifts every corner and reads RR=0 (the #180 regression). wheel_read.lua reads angularSpeed (omega), slipRatio (slip) and tyreCoreTemperature (temp) off each wheel, every access pcall-guarded with CSP field-name fallbacks (wheelAngularSpeed / slip,ndSlip / temperature,tyreTemperature). telemetry.lua persists them as the wheelAngularSpeed_/wheelSlip_/tyreCoreTemp_ {fl,fr,rl,rr} trace columns (issue #266). The trace_replay mock synthesizes car.wheels[i] from a frame's per-wheel fields so the off-sim lupa replay exercises this capture path (issue #278). load_schema only special-cases type:vec3, so this entry's `fields` are documentation; only `wheels` being a declared car field matters to the gate."
+      "note": "0-indexed array of per-wheel objects (ac.Wheel): FrontLeft=0, FrontRight=1, RearLeft=2, RearRight=3 -- see wheel_read.WHEEL_KEYS; a 1-based read shifts every corner and reads RR=0 (the #180 regression). wheel_read.lua reads angularSpeed (omega), slipRatio (slip), tyreCoreTemperature (temp) and tyrePressure (dynamic HOT pressure, issue #478) off each wheel, every access pcall-guarded with CSP field-name fallbacks (wheelAngularSpeed / slip,ndSlip / temperature,tyreTemperature / dynamicPressure). telemetry.lua persists them as the wheelAngularSpeed_/wheelSlip_/tyreCoreTemp_ (issue #266) and wheelsPressure_ (issue #478) {fl,fr,rl,rr} trace columns. The trace_replay mock synthesizes car.wheels[i] from a frame's per-wheel fields so the off-sim lupa replay exercises this capture path (issue #278). load_schema only special-cases type:vec3, so this entry's `fields` are documentation; only `wheels` being a declared car field matters to the gate."
     },
     "acceleration": {
       "type": "vec3",
