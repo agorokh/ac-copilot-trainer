@@ -99,7 +99,8 @@ local function readActiveSetupPathFromRaceIni(doc)
   return nil
 end
 
-local raceIniSetupCache = { key = nil, path = nil }
+local RACE_INI_NO_SETUP = false
+local raceIniSetupCache = { key = nil, path = RACE_INI_NO_SETUP }
 
 local function raceIniSetupCacheKey(sim)
   local doc = documentsRoot()
@@ -123,17 +124,19 @@ local function activeSetupPathFromRaceIni(sim)
     return nil
   end
   if raceIniSetupCache.key == key then
+    if raceIniSetupCache.path == RACE_INI_NO_SETUP then
+      return nil
+    end
     return raceIniSetupCache.path
   end
   local path = readActiveSetupPathFromRaceIni(doc)
-  -- Cache only successful spawn/session reads. A missing race.ini can appear moments later while
-  -- Content Manager is still building the launch file, so nil is intentionally retried.
+  -- Cache negative reads too: once Lua is running in acs.exe, the launch race.ini has already been
+  -- created for the current session, so a missing setup pointer should not become per-frame disk IO.
+  raceIniSetupCache.key = key
   if path then
-    raceIniSetupCache.key = key
     raceIniSetupCache.path = path
   else
-    raceIniSetupCache.key = nil
-    raceIniSetupCache.path = nil
+    raceIniSetupCache.path = RACE_INI_NO_SETUP
   end
   return path
 end
