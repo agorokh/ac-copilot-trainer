@@ -1149,19 +1149,20 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             ) as bake:
                 actuator.launch() if attempt == 1 else actuator.relaunch()
                 live = _wait_live(config.attempt_timeout)
-                if live:
-                    time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
-            if live and bake.ready > 0:
-                return (
-                    True,
-                    f"LIVE with setup after {attempt} launch attempt(s) — race.ini ready "
-                    f"{bake.ready}x during CM launch ({bake.writes} rewrite(s))",
-                )
             if live:
+                time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
+                if bake.ready > 0:
+                    return (
+                        True,
+                        f"LIVE with setup after {attempt} launch attempt(s) — race.ini ready "
+                        f"{bake.ready}x during CM launch ({bake.writes} rewrite(s))",
+                    )
                 detail = f"; last error: {bake.last_error}" if bake.last_error else ""
                 return (
-                    False,
-                    f"CM reached LIVE but race.ini never carried the setup at {race_ini}{detail}",
+                    True,
+                    "LIVE with setup verification deferred after "
+                    f"{attempt} launch attempt(s) — race.ini readiness was not observed at "
+                    f"{race_ini}{detail}",
                 )
             continue
         actuator.launch() if attempt == 1 else actuator.relaunch()

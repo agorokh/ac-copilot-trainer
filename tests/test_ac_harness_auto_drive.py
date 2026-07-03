@@ -35,6 +35,7 @@ from tools.ac_harness.auto_drive import (
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
+    rig_launch,
     run_auto_drive,
     verify_setup_ack,
     write_evidence,
@@ -787,6 +788,70 @@ def test_race_ini_setup_bake_loop_rejects_non_positive_interval(tmp_path):
     with pytest.raises(ValueError, match="interval"):
         with race_ini_setup_bake_loop(race_ini, setup, interval=0):
             pass
+
+
+def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    import tools.ac_harness.entry_launcher as entry_launcher
+
+    ac_user_dir = tmp_path / "Assetto Corsa"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    state = type("FakeBakeState", (), {"ready": 0, "writes": 0, "last_error": "locked"})()
+    active = {"loop": False}
+    sleeps: list[float] = []
+
+    class FakeBakeLoop:
+        def __enter__(self):  # noqa: ANN204
+            active["loop"] = True
+            return state
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN204
+            active["loop"] = False
+            return False
+
+    class FakeActuator:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        def normalize_prior_state(self) -> None:
+            pass
+
+        def launch(self) -> None:
+            pass
+
+        def relaunch(self) -> None:
+            pytest.fail("single-attempt rig_launch should not relaunch after LIVE")
+
+    def _fake_bake_loop(race_ini, setup_ini, *, interval):  # noqa: ANN001, ANN202
+        assert race_ini == ac_user_dir / "cfg" / "race.ini"
+        assert setup_ini == setup
+        assert interval == 0.05
+        return FakeBakeLoop()
+
+    def _sleep(seconds: float) -> None:
+        assert active["loop"] is False
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(entry_launcher, "ContentManagerActuator", FakeActuator)
+    monkeypatch.setattr("tools.ac_harness.auto_drive.race_ini_setup_bake_loop", _fake_bake_loop)
+    monkeypatch.setattr("tools.ac_harness.auto_drive._wait_live", lambda timeout: True)
+    monkeypatch.setattr("tools.ac_harness.auto_drive.time.sleep", _sleep)
+
+    ok, detail = rig_launch(
+        _cfg(
+            ac_user_dir=ac_user_dir,
+            setup="Realistic_BB_v3",
+            setup_ini=setup,
+            max_launches=1,
+            settle_seconds=1.5,
+        )
+    )
+
+    assert ok is True
+    assert "setup verification deferred" in detail
+    assert "locked" in detail
+    assert sleeps == [1.5]
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():
