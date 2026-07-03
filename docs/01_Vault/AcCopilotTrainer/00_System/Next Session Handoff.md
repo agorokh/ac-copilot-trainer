@@ -64,9 +64,17 @@ relates_to:
 
 # Next session handoff
 
-## In flight (2026-07-02 UTC) — PR for #463: USB-serial screen transport, hotspot removed
+## Delivered (2026-07-03 UTC) — MERGED #463: USB-serial screen transport, hotspot removed
 
-Branch `feat/issue-463-usb-serial-screen` (3 commits). The rig screen now speaks
+PR [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464) squash-merged to `main`
+as `1bade3a`; issue [#463](https://github.com/agorokh/ac-copilot-trainer/issues/463) CLOSED.
+Operator confirmed the physical screen shows **CONNECTED** over USB. resolve-pr ran clean:
+the self-hosted reviewer's 1 HIGH (missing serial disconnect transition — added an rx-timeout
+down-transition, hardware-verified: link down fires at 12.0 s) + 2 MEDIUMs (log demux; then a
+`[`-prefix bug in that demux — narrowed to `{` + regression test) all fixed; CI green,
+resolve-gate ledger clean, 0 unresolved threads.
+
+The rig screen now speaks
 protocol v1 over the **native USB CDC** instead of WiFi/WebSocket, so the Windows
 Mobile Hotspot is gone — that hotspot forced a 2.4 GHz SoftAP onto the single-radio
 Intel AC 7260 and dropped the main WiFi (which then would not reconnect). Decision +
@@ -82,14 +90,13 @@ evidence: [[usb-serial-screen-transport-2026-07-02]].
 - **Live E2E (hotspot OFF, `AHOME5G` up the whole time, 68%→69%):** `screen_peers=1`,
   bidirectional round-trip (hello → hello_ack → 5 s heartbeat), `coaching.snapshot`
   fanned to the serial peer, 0 send failures. Both firmware envs build.
-- **PR [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464): CI fully green**
-  (build/conformance/pip-audit/canonical-docs), `MERGEABLE`/`CLEAN`, 0 unresolved
-  review threads (Qodo endorsed; Gemini/Codex quota-limited). `pyserial>=3.5` added
-  to coaching/launcher/dev extras. **Merge-ready.**
-- **Only unverified piece = operator-visual:** confirm the physical screen pill shows
-  CONNECTED + live hints while driving (needs eyes on the screen; the sidecar-side
-  round-trip + fan-out are proven). The screen must stay USB-tethered (it already is).
-  WebSocket env `jc3248w535` retained for LAN/CI.
+- `pyserial>=3.5` added to coaching/launcher/dev extras. The board is flashed with the
+  final firmware (the two demux fixes were sidecar-only; `main.cpp` unchanged since the
+  disconnect fix). The screen must stay USB-tethered (it already is). WebSocket env
+  `jc3248w535` retained for LAN/CI.
+- **Env note:** created a `~/bin/python3` shim (this Windows Python never made a `python3`,
+  which was breaking the git governance hooks) and copied the operator's real
+  `firmware/screen/secrets/*.h` into the worktree so the firmware could build (gitignored).
 
 ## Delivered (2026-07-02 UTC) — PR #460 MERGED: autonomous harness as a product + setup verify (#459)
 
