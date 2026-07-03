@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T20:00:00Z
+last_updated: 2026-07-03T21:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-478-tier-b-channels-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/pr-480-simhub-launcher-toggle-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-432-atelier-insim-reverify-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-381-intensity-verification-2026-07-03.md
@@ -66,6 +67,35 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-03 UTC) — PR #483 Tier-B channel capture (#478 CLOSED)
+
+PR [#483](https://github.com/agorokh/ac-copilot-trainer/pull/483) **MERGED** (squash
+[`28c0fe1`](https://github.com/agorokh/ac-copilot-trainer/commit/28c0fe1b8745cef02d2cf9828502f2c21be58fcf))
+closing [#478](https://github.com/agorokh/ac-copilot-trainer/issues/478) — captures the Tier-B channels
+the coaching engine was wired to confirm from but never persisted (successor to #266 / #402). New
+`chassis_read.lua` reads `car.acceleration` (in G) + `car.localAngularVelocity.y` (yaw); `wheel_read`
+reads dynamic hot `tyrePressure`; `telemetry.lua` persists `accG_long/accG_lat/yaw_rate` +
+`wheelsPressure[4]` (TRACE_FIELDS 23→30, append-only, byte-identical Lua/Python, older archives load as
+blanks; all-zero column = "no live data" so a missing signal never fabricates a verdict). Consume:
+`turn_in_lag` flips advisory→verdict only on real heading-trails-steer lag (`_turn_in_yaw_lag`),
+`grip_limited` on live hot pressure. Header gains first-class `tyres` (compoundIndex + name) + Part-D
+`weatherType`; lakehouse `stints` split on the canonical compound index off the `setup_hash` proxy.
+Live `telemetry_tick` now sends real lat/long G. Analysis CSV + MoTeC (G-forces + yaw) export the
+channels. **Review-hardened over 4 self-hosted-reviewer rounds — all real defects, all fixed + tested:**
+zero/healthy-yaw false confirmations, tyre-identity fabrication when compoundIndex unread, ±inf
+compoundIndex ingest crash, stint-key inconsistency. `make ci-fast` 2357 passed. Detail:
+[[issue-478-tier-b-channels-2026-07-03]].
+
+**Operator-pending (not a #478 acceptance criterion): live-CSP in-sim spot-check.** The issue's ACs
+(channels captured, verdicts flip, stints split, byte-identical) are all test-verified — the lupa
+harness drives the real Lua telemetry/wheel_read/chassis_read against a car providing the CSP fields.
+The live-CSP confirmation was **deferred** (shared rig on `feat/issue-479`, AC symlink pointed there, 12
+concurrent worktrees — repointing to force a drive was unsafe; cf.
+[[issue-277-rig-verify-prepped-blocked-concurrency-2026-06-27]]). **Unblock:** with #478 active (primary
+checkout on `main`@`28c0fe1`, or AC symlink at a #478 checkout, + AC relaunch), drive a lap and confirm
+the newest `journal/laps/lap_*.json` carries non-zero `accG_long/accG_lat/yaw_rate/wheelsPressure_*` + a
+real `tyres` block, and a rotation/pressure corner reports a CONFIRMED verdict.
 
 ## Delivered (2026-07-03 UTC) — PR #480 SimHub auto-start toggle (#479 CLOSED)
 
