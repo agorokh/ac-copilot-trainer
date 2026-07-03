@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T04:35:22Z
+last_updated: 2026-07-03T05:02:30Z
 relates_to:
   - AcCopilotTrainer/01_Decisions/usb-serial-screen-transport-2026-07-02.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -67,19 +67,21 @@ relates_to:
 ## Resolved (2026-07-03 UTC) — PR #465 review loop: setup+drive compose (#461)
 
 PR [#465](https://github.com/agorokh/ac-copilot-trainer/pull/465) is review-converged at head
-[`3568cd4`](https://github.com/agorokh/ac-copilot-trainer/commit/3568cd4d4e58f7004fe61252cea3cf2cf11367ed)
+[`d4fab02`](https://github.com/agorokh/ac-copilot-trainer/commit/d4fab027657ac4dbe6be100e8325bc6b25ceeb50)
 on branch `feat/issue-461-compose-setup-drive`. It is **not merged in this session**. The PR now
 keeps setup composition compliant by using the Content Manager launch path plus a short-lived
 Documents-only `race.ini` re-bake loop; the forbidden install-tree `extension/config/gui.ini`
-`FORCE_START` path was removed.
+`FORCE_START` path was removed. The branch was merge-forwarded from `origin/main` to clear GitHub's
+dirty merge state; the merge brought in already-main USB-screen work and did not change the
+setup-reader/auto-drive/race-bake implementation.
 
 Final gates at SAVE:
 
-- GitHub checks green on `3568cd4`: `build`, `conformance`, `Canonical docs exist`; `guard-and-automerge` skipped.
+- GitHub checks green on `d4fab02`: `build`, `conformance`, `Canonical docs exist`; `guard-and-automerge` skipped.
 - GraphQL `reviewThreads` had no unresolved blockers; old Qodo threads are resolved/outdated.
 - `ci_resolve_gate.py agorokh/ac-copilot-trainer 465` reported `No substantive findings hanging`.
-- Qodo updated through `3568cd4`; Copilot posted LGTM for the latest fixes.
-- Self-hosted reviewer daemon: `/agentic_review` was re-triggered at `2026-07-03T04:23:51Z` and a
+- Qodo updated through `d4fab02`; Copilot posted LGTM for the merge-forwarded head.
+- Self-hosted reviewer daemon: `/agentic_review` was re-triggered at `2026-07-03T04:50:35Z` and a
   full `sleep 600` elapsed. SHA-scoped review lookup returned
   `— no current-SHA self-hosted reviewer review —`, so the daemon gate is vacuously satisfied per
   `resolve-pr` anti-hang rules. The latest body from that bot is stale (`a3bfd8f`) and should not be

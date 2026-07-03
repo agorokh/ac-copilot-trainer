@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T04:35:22Z
+last_updated: 2026-07-03T05:02:30Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -25,12 +25,12 @@ relates_to:
 **Active focus (2026-07-03):** PR
 [#465](https://github.com/agorokh/ac-copilot-trainer/pull/465) for
 [#461](https://github.com/agorokh/ac-copilot-trainer/issues/461) is review-converged at
-`3568cd4` but not merged in this session. It replaces the forbidden install-tree setup+drive compose
+`d4fab02` but not merged in this session. It replaces the forbidden install-tree setup+drive compose
 path with Content Manager launch plus compliant AC-Documents `race.ini` re-bake, hardens setup
-snapshot/no-setup handling, and passed CI + resolve-gate + GraphQL/Qodo/Copilot review gates. The
-self-hosted reviewer did not post a current-SHA review after the final cooldown, so its gate is
-vacuously satisfied per `resolve-pr` anti-hang rules. Next action: merge PR #465 if desired, then run
-post-merge sync/SAVE.
+snapshot/no-setup handling, and passed CI + resolve-gate + GraphQL/Qodo/Copilot review gates after
+merge-forwarding from `origin/main` to clear GitHub's dirty merge state. The self-hosted reviewer did
+not post a current-SHA review after the final cooldown, so its gate is vacuously satisfied per
+`resolve-pr` anti-hang rules. Next action: merge PR #465 if desired, then run post-merge sync/SAVE.
 
 **Delivered (2026-07-02):** PR [#460](https://github.com/agorokh/ac-copilot-trainer/pull/460)
 merged [#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) — autonomous harness as a
