@@ -8,6 +8,7 @@ reporting — is verified with no Assetto Corsa, no Windows, and no real sidecar
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import threading
 
 import pytest
@@ -30,12 +31,15 @@ from tools.ac_harness.auto_drive import (
     generic_gt3_ggv,
     parse_setup_fuel,
     preflight,
+    race_ini_setup_bake_loop,
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
+    rig_launch,
     run_auto_drive,
     verify_setup_ack,
     write_evidence,
+    write_setup_baked_race_ini,
 )
 from tools.ac_harness.shared_memory import AcGameStatus, GraphicsSnapshot, PhysicsSnapshot
 
@@ -161,7 +165,9 @@ def test_launch_failure_exhausts_launch_budget_before_failing():
     assert report.ok is False
     assert report.stage == "launch"
     assert report.error == "no LIVE"
-    assert launches == [1, 1, 1]
+    # Each attempt launches with max_launches=1 (rig_launch does one cycle); the outer loop retries
+    # up to the config budget.
+    assert launches == [1, 1, 1, 1, 1]
     assert report.hijacked is False
 
 
@@ -691,6 +697,181 @@ def test_bake_setup_creates_car0_section_if_absent():
     p.read_string(out)
     assert p.get("CAR_0", "SETUP") == "My Setup.ini"
     assert p.get("SESSION_0", "SPAWN_SET") == "PIT"
+
+
+def test_write_setup_baked_race_ini_updates_existing_race_ini_atomically(tmp_path):
+    import configparser
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    race_ini.write_text("[CAR_0]\nSKIN=brg\n\n[SESSION_0]\nSPAWN_SET=PIT\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "written"
+    assert not (race_ini.parent / ".race.ini.ac_copilot_setup.tmp").exists()
+
+    p = configparser.ConfigParser(strict=False)
+    p.optionxform = str
+    p.read_string(race_ini.read_text(encoding="utf-8"))
+    assert p.get("CAR_0", "SETUP") == "Realistic_BB_v3.ini"
+    assert p.get("CAR_0", "_EXT_SETUP_FILENAME") == str(setup)
+    assert p.get("CAR_0", "SKIN") == "brg"
+    assert p.get("SESSION_0", "SPAWN_SET") == "START"
+
+
+def test_write_setup_baked_race_ini_skips_replace_when_already_baked(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    race_ini.write_text(bake_setup_into_race_ini("[CAR_0]\n", setup), encoding="utf-8")
+    replace_calls: list[pathlib.Path] = []
+    original_replace = pathlib.Path.replace
+
+    def _replace_records(self, target):  # noqa: ANN001, ANN202
+        replace_calls.append(self)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", _replace_records)
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "unchanged"
+    assert replace_calls == []
+
+
+def test_write_setup_baked_race_ini_waits_for_cm_to_create_race_ini(tmp_path):
+    from pathlib import Path as _P
+
+    missing = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    assert write_setup_baked_race_ini(missing, setup) == "missing"
+
+
+def test_write_setup_baked_race_ini_rejects_non_ac_documents_target(tmp_path):
+    from pathlib import Path as _P
+
+    bad = tmp_path / "cfg" / "race.ini"
+    bad.parent.mkdir()
+    bad.write_text("[CAR_0]\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    with pytest.raises(ValueError, match="Assetto Corsa/cfg/race.ini"):
+        write_setup_baked_race_ini(bad, setup)
+
+
+def test_write_setup_baked_race_ini_allows_symlinked_ac_documents_dir(tmp_path):
+    from pathlib import Path as _P
+
+    real_root = tmp_path / "AC_Configs"
+    real_cfg = real_root / "cfg"
+    real_cfg.mkdir(parents=True)
+    logical_root = tmp_path / "Documents" / "Assetto Corsa"
+    logical_root.parent.mkdir(parents=True)
+    try:
+        logical_root.symlink_to(real_root, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    race_ini = logical_root / "cfg" / "race.ini"
+    race_ini.write_text("[CAR_0]\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "written"
+    assert "_EXT_SETUP_FILENAME" in (real_cfg / "race.ini").read_text(encoding="utf-8")
+
+
+def test_write_setup_baked_race_ini_cleans_temp_on_replace_failure(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    race_ini.write_text("[CAR_0]\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    tmp = race_ini.parent / ".race.ini.ac_copilot_setup.tmp"
+    original_replace = pathlib.Path.replace
+
+    def _replace_raises(self, target):  # noqa: ANN001, ANN202
+        if self == tmp:
+            raise OSError("locked")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", _replace_raises)
+    with pytest.raises(OSError, match="locked"):
+        write_setup_baked_race_ini(race_ini, setup)
+    assert not tmp.exists()
+
+
+def test_race_ini_setup_bake_loop_rejects_non_positive_interval(tmp_path):
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    with pytest.raises(ValueError, match="interval"):
+        with race_ini_setup_bake_loop(race_ini, setup, interval=0):
+            pass
+
+
+def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
+    from pathlib import Path as _P
+
+    import tools.ac_harness.entry_launcher as entry_launcher
+
+    ac_user_dir = tmp_path / "Assetto Corsa"
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    state = type("FakeBakeState", (), {"ready": 0, "writes": 0, "last_error": "locked"})()
+    active = {"loop": False}
+    sleeps: list[float] = []
+
+    class FakeBakeLoop:
+        def __enter__(self):  # noqa: ANN204
+            active["loop"] = True
+            return state
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001, ANN204
+            active["loop"] = False
+            return False
+
+    class FakeActuator:
+        def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+            pass
+
+        def normalize_prior_state(self) -> None:
+            pass
+
+        def launch(self) -> None:
+            pass
+
+        def relaunch(self) -> None:
+            pytest.fail("single-attempt rig_launch should not relaunch after LIVE")
+
+    def _fake_bake_loop(race_ini, setup_ini, *, interval):  # noqa: ANN001, ANN202
+        assert race_ini == ac_user_dir / "cfg" / "race.ini"
+        assert setup_ini == setup
+        assert interval == 0.05
+        return FakeBakeLoop()
+
+    def _sleep(seconds: float) -> None:
+        assert active["loop"] is False
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(entry_launcher, "ContentManagerActuator", FakeActuator)
+    monkeypatch.setattr("tools.ac_harness.auto_drive.race_ini_setup_bake_loop", _fake_bake_loop)
+    monkeypatch.setattr("tools.ac_harness.auto_drive._wait_live", lambda timeout: True)
+    monkeypatch.setattr("tools.ac_harness.auto_drive.time.sleep", _sleep)
+
+    ok, detail = rig_launch(
+        _cfg(
+            ac_user_dir=ac_user_dir,
+            setup="Realistic_BB_v3",
+            setup_ini=setup,
+            max_launches=1,
+            settle_seconds=1.5,
+        )
+    )
+
+    assert ok is True
+    assert "setup verification deferred" in detail
+    assert "locked" in detail
+    assert sleeps == [1.5]
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():

@@ -5,6 +5,7 @@ local M = {}
 local ch = require("csp_helpers")
 
 local COPILOT_GLOB = "copilot_"
+local RACE_INI_NO_SETUP = false
 
 --- Prefer CSP-reported active setup path when the runtime exposes it (varies by CSP build).
 ---@param car ac.StateCar|nil
@@ -28,22 +29,160 @@ local function activeSetupPathFromCar(car)
   return nil
 end
 
----@param car ac.StateCar|nil
----@param sim ac.StateSim|nil
----@return string|nil
-local function guessSetupIniPath(car, _sim)
-  if not car then
-    return nil
-  end
-  local fromCar = activeSetupPathFromCar(car)
-  if fromCar then
-    return fromCar
-  end
+local function trim(s)
+  return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function documentsRoot()
   local okDoc, doc = pcall(function()
     return ac.getFolder(ac.FolderID.Documents)
   end)
   if not okDoc or not doc or doc == "" then
     return nil
+  end
+  return doc
+end
+
+local function safeStringField(obj, key)
+  if not obj then
+    return nil
+  end
+  local ok, value = pcall(function()
+    return obj[key]
+  end)
+  if not ok or value == nil then
+    return nil
+  end
+  if type(value) == "string" and value == "" then
+    return nil
+  end
+  return tostring(value)
+end
+
+local function readablePath(path)
+  if not path or path == "" then
+    return nil
+  end
+  local h = io.open(path, "r")
+  if h then
+    h:close()
+    return path
+  end
+  return nil
+end
+
+--- Applied-setup INI path from the launch `cfg/race.ini` (`[CAR_0] _EXT_SETUP_FILENAME`).
+--- AC and Content Manager record the *selected* setup there as an absolute path, and the #461
+--- autonomous harness bakes it there before spawn — so it is the authoritative "which setup is
+--- applied" pointer whenever CSP does not expose `car.setupFilename` (most builds). Without this
+--- a harness-driven (or CM-selected) lap archived an EMPTY setup snapshot pointing at a
+--- non-existent `setups/<car>/<track>/race.ini` (live-found #461). Returns the absolute INI path
+--- only when it resolves to a readable file, else nil.
+---@param doc string
+---@return string|nil
+local function readActiveSetupPathFromRaceIni(doc)
+  local f = io.open(doc .. "/Assetto Corsa/cfg/race.ini", "r")
+  if not f then
+    return nil
+  end
+  local text = f:read("*a")
+  f:close()
+  if not text then
+    return nil
+  end
+  local section = ""
+  local ext_setup_filename = nil
+  local setup_val = nil
+  for line in string.gmatch(text .. "\n", "([^\r\n]*)[\r\n]") do
+    local sec = line:match("^%s*%[([^%]]+)%]%s*$")
+    if sec then
+      section = sec
+    elseif section == "CAR_0" then
+      local key, value = line:match("^%s*([%w_]+)%s*=%s*(.-)%s*$")
+      if key == "_EXT_SETUP_FILENAME" then
+        ext_setup_filename = trim(value or "")
+      elseif key == "SETUP" then
+        setup_val = trim(value or "")
+      end
+    end
+  end
+  if ext_setup_filename then
+    if ext_setup_filename == "" then
+      return RACE_INI_NO_SETUP
+    end
+    return readablePath(ext_setup_filename) or RACE_INI_NO_SETUP
+  end
+  if setup_val and setup_val ~= "" then
+    return nil
+  end
+  return RACE_INI_NO_SETUP
+end
+
+local raceIniSetupCache = { key = nil, path = RACE_INI_NO_SETUP }
+
+local function raceIniSetupCacheKey(sim)
+  local doc = documentsRoot()
+  if not doc then
+    return nil, nil
+  end
+  local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
+  local trackId = ch.sanitizeId(ch.safeTrackIdRaw(), "unknown")
+  local layoutRaw = ch.safeTrackLayoutRaw()
+  local layoutId = layoutRaw ~= nil and ch.sanitizeId(layoutRaw, "") or ""
+  local parts = { doc, carId, trackId, layoutId }
+  for _, key in ipairs({ "currentSessionIndex", "sessionIndex", "sessionType", "raceSessionType" }) do
+    parts[#parts + 1] = key .. "=" .. (safeStringField(sim, key) or "")
+  end
+  return table.concat(parts, "|"), doc
+end
+
+local function activeSetupPathFromRaceIni(sim)
+  local key, doc = raceIniSetupCacheKey(sim)
+  if not key or not doc then
+    return nil
+  end
+  if raceIniSetupCache.key == key then
+    return raceIniSetupCache.path
+  end
+  local path = readActiveSetupPathFromRaceIni(doc)
+  if path == nil then
+    return nil
+  end
+  -- Cache confirmed negative reads too: once Lua successfully reads race.ini in acs.exe, a missing
+  -- setup pointer for the current session should not become per-frame disk IO. Transient read
+  -- failures return nil above and are retried rather than cached as "no setup".
+  raceIniSetupCache.key = key
+  if path then
+    raceIniSetupCache.path = path
+  else
+    raceIniSetupCache.path = RACE_INI_NO_SETUP
+  end
+  return path
+end
+
+---@param car ac.StateCar|nil
+---@param sim ac.StateSim|nil
+---@return string|nil
+local function guessSetupIniPath(car, sim)
+  if not car then
+    return nil, false
+  end
+  local fromCar = activeSetupPathFromCar(car)
+  if fromCar then
+    return fromCar, false
+  end
+  -- The active setup baked/selected into race.ini beats a folder guess: it names the actual applied
+  -- setup file (e.g. Realistic_BB_v3.ini), so the lap archive records that setup, not an empty snap.
+  local fromRace = activeSetupPathFromRaceIni(sim)
+  if fromRace == RACE_INI_NO_SETUP then
+    return nil, true
+  end
+  if fromRace then
+    return fromRace, false
+  end
+  local doc = documentsRoot()
+  if not doc then
+    return nil, false
   end
   local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
   -- Use CSP global API (C-structs throw on invalid field access, not nil).
@@ -65,11 +204,11 @@ local function guessSetupIniPath(car, _sim)
       local f = io.open(p, "r")
       if f then
         f:close()
-        return p
+        return p, false
       end
     end
   end
-  return trackRoot .. "/race.ini"
+  return trackRoot .. "/race.ini", false
 end
 
 --- Absolute path to the active setup INI (same resolution as `snapshotActive`).
@@ -80,7 +219,8 @@ end
 ---@param sim ac.StateSim|nil
 ---@return string|nil
 function M.activeSetupIniPath(car, sim)
-  return guessSetupIniPath(car, sim)
+  local path = guessSetupIniPath(car, sim)
+  return path
 end
 
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.
@@ -146,13 +286,14 @@ end
 ---@param sim ac.StateSim|nil
 ---@return table|nil snap
 ---@return string digest compact hex signature for persistence/compare
+---@return boolean noSetupConfirmed true when race.ini was read and confirmed no applied setup
 function M.snapshotActive(car, sim)
-  local path = guessSetupIniPath(car, sim)
+  local path, noSetupConfirmed = guessSetupIniPath(car, sim)
   local snap = M.readIniSnapshot(path)
   if not snap then
-    return nil, ""
+    return nil, "", noSetupConfirmed == true
   end
-  return snap, digestSetup(canonicalSetupString(snap))
+  return snap, digestSetup(canonicalSetupString(snap)), false
 end
 
 --- Part I: auto-load `copilot_*.ini` — CSP setup application APIs differ by build; try pcall hooks only.

@@ -59,7 +59,8 @@ import json
 import re
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC
 from pathlib import Path
@@ -140,14 +141,20 @@ class AutoDriveConfig:
     progress_stall_seconds: float = 10.0  # no forward progress for this long => recover
     max_recoveries: int = 6  # then FAIL honestly instead of teleport-looping
     spawn_to_line: bool = True  # teleport onto the racing line when spawned off it (pit box)
+    # Keep race.ini setup keys present during the CM launch window. CM regenerates race.ini while
+    # launching; a short-lived Documents-only re-bake loop preserves the selected setup without
+    # touching the AC/CSP install tree (#461 review). Must stay positive to avoid hot disk loops.
+    setup_rebake_interval: float = 0.05
     # Assertion.
     tap_seconds: float = 30.0
     wait_lap: bool = False
     strict: bool = False
-    # Launch / hijack robustness (the early-LIVE race).
-    max_launches: int = 3
+    # Launch / hijack robustness (the early-LIVE race plus CM's setup race.ini regeneration).
+    # A setup run keeps race.ini re-baked through the CM launch window; if the session still fails
+    # to become hijackable, the only recovery is a fresh launch cycle.
+    max_launches: int = 5
     attempt_timeout: float = 75.0
-    settle_seconds: float = 5.0
+    settle_seconds: float = 7.0  # let CSP arm Custom-AI before hijacking
     hijack_timeout: float = 25.0
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
     # Sim-death guard.
@@ -640,6 +647,90 @@ def bake_setup_into_race_ini(
     return out.getvalue()
 
 
+@dataclass
+class RaceIniBakeState:
+    """Mutable status for the short-lived setup re-bake loop."""
+
+    ready: int = 0
+    writes: int = 0
+    last_error: str | None = None
+
+
+def validate_race_ini_write_target(race_ini: Path) -> Path:
+    """Return logical ``race.ini`` path only when it is the AC Documents config file."""
+    logical = race_ini.absolute()
+    if (
+        logical.name.lower() != "race.ini"
+        or logical.parent.name.lower() != "cfg"
+        or logical.parent.parent.name.lower() != "assetto corsa"
+    ):
+        raise ValueError(
+            f"race.ini write target must be <AC Documents>/Assetto Corsa/cfg/race.ini: {logical}"
+        )
+    return logical
+
+
+def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> str:
+    """Bake ``setup_ini`` into ``race.ini`` with an atomic same-directory replace.
+
+    Returns ``"missing"`` when ``race.ini`` is not present yet, ``"unchanged"`` when it already
+    names the requested setup/spawn, and ``"written"`` after an atomic replace. Content Manager
+    often creates or rewrites the file during launch. The only accepted target is
+    ``Documents/Assetto Corsa/cfg/race.ini``.
+    """
+    race_ini = validate_race_ini_write_target(race_ini)
+    if not race_ini.is_file():
+        return "missing"
+    original = race_ini.read_text(encoding="utf-8", errors="surrogateescape")
+    baked = bake_setup_into_race_ini(original, setup_ini)
+    if baked == original:
+        return "unchanged"
+    tmp = race_ini.with_name(f".{race_ini.name}.ac_copilot_setup.tmp")
+    try:
+        tmp.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
+        tmp.replace(race_ini)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+    return "written"
+
+
+@contextmanager
+def race_ini_setup_bake_loop(
+    race_ini: Path, setup_ini: Path, *, interval: float = 0.05
+) -> Iterator[RaceIniBakeState]:
+    """Continuously re-bake setup keys while CM regenerates ``race.ini``.
+
+    CM's launch path provides the reliable overlay skip, but it also rewrites ``race.ini``. Keeping
+    ``_EXT_SETUP_FILENAME`` present during that short window lets the setup apply at spawn while
+    respecting the repo rule that the harness only writes under AC Documents.
+    """
+    if interval <= 0:
+        raise ValueError(f"setup re-bake interval must be positive, got {interval!r}")
+    state = RaceIniBakeState()
+    stop = threading.Event()
+
+    def _worker() -> None:
+        while not stop.is_set():
+            try:
+                result = write_setup_baked_race_ini(race_ini, setup_ini)
+                if result != "missing":
+                    state.ready += 1
+                if result == "written":
+                    state.writes += 1
+            except Exception as exc:  # noqa: BLE001 - CM can expose half-written race.ini briefly.
+                state.last_error = f"{type(exc).__name__}: {exc}"
+            stop.wait(interval)
+
+    worker = threading.Thread(target=_worker, name="race-ini-setup-bake")
+    worker.start()
+    try:
+        yield state
+    finally:
+        stop.set()
+        worker.join()
+
+
 def parse_setup_fuel(setup_ini_text: str) -> float | None:
     """Parse ``[FUEL] VALUE`` (litres) from a setup INI, or ``None`` when the setup omits fuel.
 
@@ -1007,9 +1098,9 @@ def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
     """Best-effort: minimize whatever window holds the foreground before a CM launch.
 
     Live-found on the rig (2026-06-22 vault note; re-confirmed 2026-07-02 with the agent's own
-    window in the attempt-3 HUD capture): a foreground window that is not CM/AC makes the CM
-    auto-start's menu-skip race lose almost every time — AC sits at the pre-drive screen with
-    LIVE status and advancing physics. Never minimizes AC or Content Manager themselves.
+    window in the attempt-3 HUD capture): a foreground window that is not CM/AC makes CM's
+    auto-start race lose almost every time — AC sits at the pre-drive screen with LIVE status and
+    advancing physics. Never minimizes AC or Content Manager themselves.
     """
     import ctypes
 
@@ -1033,72 +1124,50 @@ def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-o
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
 
 
-def _direct_acs_launch(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
-    """Kill any acs and launch ``acs.exe`` directly (non-elevated shell avoids the Steam trip)."""
-    import subprocess
-
-    subprocess.run(["taskkill", "/IM", "acs.exe", "/F", "/T"], capture_output=True)
-    time.sleep(2.0)
-    acs = config.ac_root / "acs.exe"
-    subprocess.Popen([str(acs)], cwd=str(acs.parent))
-
-
-def _bake_and_relaunch_with_setup(
-    config: AutoDriveConfig,
-) -> tuple[bool, str]:  # pragma: no cover - rig-only
-    """Bake ``config.setup_ini`` into race.ini and direct-relaunch acs so the car respawns with it.
-
-    Called after a CM launch has written a correct race.ini for the combo. AC applies a setup only
-    at spawn, so this rewrites race.ini (``_EXT_SETUP_FILENAME`` + ``SETUP`` + ``SPAWN_SET=START``)
-    and relaunches acs directly — the car respawns WITH the setup and ``acpmf_physics.fuel`` reads
-    it back (live-verified even at the pre-drive menu). The harness deliberately writes **only**
-    race.ini (under AC Documents), never CSP install-tree config: the earlier ``gui.ini
-    FORCE_START`` menu-skip was removed (#460 review — writes stay out of the AC install tree, and a
-    killed harness must not leave a global CSP setting changed). Skipping the pre-drive menu to arm
-    the carcsw hijack/drive for a setup run is deferred to #461; this leg proves the setup applied.
-    """
-    race_ini = _race_ini_path(config)
-    if config.setup_ini is None or not race_ini.is_file():
-        return False, f"cannot bake setup: race.ini missing at {race_ini}"
-    baked = bake_setup_into_race_ini(
-        race_ini.read_text(encoding="utf-8", errors="surrogateescape"), config.setup_ini
-    )
-    # Match the read's surrogateescape on write: race.ini is read tolerantly, so a strict UTF-8
-    # write would raise UnicodeEncodeError on any preserved non-UTF-8 byte (qodo #460 review).
-    race_ini.write_text(baked, encoding="utf-8", errors="surrogateescape", newline="\n")
-    _direct_acs_launch(config)
-    if not _wait_live(config.attempt_timeout):
-        return False, "sim never reached LIVE after the setup relaunch"
-    time.sleep(config.settle_seconds)
-    return True, "relaunched with setup baked"
-
-
 def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover - rig-only
     """Launch AC via the de-elevated Content-Manager URL and wait for the sim to go LIVE.
 
     Unlike the daemon's strict ``driving`` gate (which needs the car already moving — a
     chicken-and-egg for an autonomous launch), this waits only for LIVE + advancing physics, then
-    the hijack+drive supplies the motion. Relaunches on the menu-skip race up to ``max_launches``.
+    the hijack+drive supplies the motion. Relaunches on the CM auto-start race up to
+    ``max_launches``.
 
-    For a setup run (``config.setup_ini`` set): after CM reaches LIVE (which writes a correct
-    race.ini for the combo), the setup is baked into that race.ini and acs is direct-relaunched
-    with the pre-drive-menu skip, so the car respawns WITH the setup — AC applies setups only at
-    spawn, and the in-sim WS load is gated shut for an autonomous car.
+    For a setup run (``config.setup_ini`` set): keep CM's own launch path, but continuously re-bake
+    ``race.ini`` while CM regenerates it. That keeps the setup in the spawn file without mutating
+    the AC/CSP install tree.
     """
     from tools.ac_harness.entry_launcher import ContentManagerActuator
 
     actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
     actuator.normalize_prior_state()
     for attempt in range(1, config.max_launches + 1):
-        _minimize_foreground_window()  # the menu-skip race needs the desktop foreground free
+        _minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
+        if config.setup_ini is not None:
+            race_ini = _race_ini_path(config)
+            with race_ini_setup_bake_loop(
+                race_ini, config.setup_ini, interval=config.setup_rebake_interval
+            ) as bake:
+                actuator.launch() if attempt == 1 else actuator.relaunch()
+                live = _wait_live(config.attempt_timeout)
+            if live:
+                time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
+                if bake.ready > 0:
+                    return (
+                        True,
+                        f"LIVE with setup after {attempt} launch attempt(s) — race.ini ready "
+                        f"{bake.ready}x during CM launch ({bake.writes} rewrite(s))",
+                    )
+                detail = f"; last error: {bake.last_error}" if bake.last_error else ""
+                return (
+                    True,
+                    "LIVE with setup verification deferred after "
+                    f"{attempt} launch attempt(s) — race.ini readiness was not observed at "
+                    f"{race_ini}{detail}",
+                )
+            continue
         actuator.launch() if attempt == 1 else actuator.relaunch()
         if _wait_live(config.attempt_timeout):
             time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
-            if config.setup_ini is not None:
-                ok, reason = _bake_and_relaunch_with_setup(config)
-                if not ok:
-                    continue  # relaunch from scratch on a failed setup respawn
-                return True, f"LIVE with setup after {attempt} launch attempt(s) — {reason}"
             return True, f"LIVE after {attempt} launch attempt(s)"
     return False, f"sim never reached LIVE after {config.max_launches} attempt(s)"
 
@@ -1786,8 +1855,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
 
     if config.cm_preset is None:
         # Deterministic practice preset (#154 Part-G determinism lock), START spawn. A setup run
-        # re-bakes race.ini with SPAWN_SET=START on its direct relaunch (the setup applies at spawn
-        # regardless), so the pit box is never needed.
+        # keeps race.ini re-baked during the CM launch window so the setup applies at spawn.
         preset_path = evidence_dir / "generated.cmpreset"
         preset_path.write_text(
             build_practice_preset(

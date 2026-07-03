@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T02:00:00Z
+last_updated: 2026-07-03T05:02:30Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -22,18 +22,19 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-07-02):** [#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) —
-**autonomous harness as a product** (EPIC [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154)
-child; operator reframing: launch still a struggle, runs half-done with no setup verified, proof
-overfit — "same car at Spa" never run). Branch `feat/issue-459-harness-product` implements: setup
-selection **applied and verified in-sim** (`--setup`, sidecar `setup.load`, FAIL at `stage=setup`
-on an unverified setup), zero-lore launch (`--car` generates the determinism-lock practice preset;
-preflight asserts content/CSP-Custom-AI/CM/setup; sidecar reuse or auto-start), driver-agnostic
-no-progress watchdog + capped recovery (the ~500 m stall flake now fails honestly), spawn-to-line
-custom teleport, evidence bundle (`report.json` + `hud.png` + lap-archive paths), runbook
-`docs/10_Development/18_Autonomous_Harness.md` + repo skill `ac-harness`. **Remaining:** live Spa +
-911 GT3 R + `Realistic_BB_v3` proof, TT Spa reference comparison. Detail:
-[[issue-459-harness-product-2026-07-02]].
+**Active focus (2026-07-03):** PR
+[#465](https://github.com/agorokh/ac-copilot-trainer/pull/465) for
+[#461](https://github.com/agorokh/ac-copilot-trainer/issues/461) is review-converged at
+`d4fab02` but not merged in this session. It replaces the forbidden install-tree setup+drive compose
+path with Content Manager launch plus compliant AC-Documents `race.ini` re-bake, hardens setup
+snapshot/no-setup handling, and passed CI + resolve-gate + GraphQL/Qodo/Copilot review gates after
+merge-forwarding from `origin/main` to clear GitHub's dirty merge state. The self-hosted reviewer did
+not post a current-SHA review after the final cooldown, so its gate is vacuously satisfied per
+`resolve-pr` anti-hang rules. Next action: merge PR #465 if desired, then run post-merge sync/SAVE.
+
+**Delivered (2026-07-02):** PR [#460](https://github.com/agorokh/ac-copilot-trainer/pull/460)
+merged [#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) — autonomous harness as a
+product + setup verify. Detail: [[issue-459-harness-product-2026-07-02]].
 
 **Delivered (2026-07-02):** PR [#452](https://github.com/agorokh/ac-copilot-trainer/pull/452)
 **MERGED** at [`ff65522`](https://github.com/agorokh/ac-copilot-trainer/commit/ff6552271107884222dd20c6b3420921e71318f9) -
