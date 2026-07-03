@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T02:00:00Z
+last_updated: 2026-07-03T20:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-432-atelier-insim-reverify-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-381-intensity-verification-2026-07-03.md
   - AcCopilotTrainer/01_Decisions/usb-serial-screen-transport-2026-07-02.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -65,6 +66,23 @@ relates_to:
 
 # Next session handoff
 
+## Verified (2026-07-03 UTC) — #432 Racing Atelier re-verified in-sim on merged main (autonomous)
+
+`/autonomous-deliver 432`: #432 was already code-complete (5 PRs merged: #437/#444 Part A,
+#434/#445 Part B, #446 Part C via #86). This session **re-verified the outcome on live
+`main` (`9e88794`)** with own tools — a verification-close, not new code. **Part A HUD
+verified live in-sim** at Spa (Porsche 911 GT3 R) via `tools.ac_harness.auto_drive` —
+inspected **ON PACE** and **READY @ brake-point 5 m** card states (report.json `ok:true
+stage:done`, `coaching.snapshot≈300`, `hud.rendering:true`, hijacked, no stall). Single-source
+conformance `23 passed`; `git grep FFD700`→**0** (`UI_ACCENT_GOLD`→`UI_BRASS` legacy alias);
+Game Point sidecar `/health`→`screen_peers:1` (rig screen fed live Spa coaching over COM6).
+**Single remaining #432 item = on-glass rig-screen photo vs `esp32_rig.png` — camera-gated
+(cannot self-verify), also #86 acceptance.** Recommend closing #432 after an eyes-on-glass
+glance. Reusable: the giant delta-driven `BRAKE / TOO HOT — LIFT` verb needs a **reference
+lap** (delta-in-window) — the reference-independent ladder shows ON PACE/READY without one;
+cold-launch carcsw hijack flake ≈ 50 % (2/4), no per-run retry flag. Detail:
+[[issue-432-atelier-insim-reverify-2026-07-03]]; [#432 verification comment](https://github.com/agorokh/ac-copilot-trainer/issues/432#issuecomment-4874464533).
+
 ## Verified (2026-07-03 UTC) — #381 expressive voice: intensity scaling acoustically PROVEN; at-wheel listen still human-gated
 
 `/autonomous-deliver 381`. #381 was reopened only for the human-gated at-wheel A/B *listening*
@@ -88,7 +106,6 @@ operator-grade acoustic proof on the **real** intensity3 bank so the human step 
   Detail: [[issue-381-intensity-verification-2026-07-03]].
 - **Resume:** operator listens → if critical reads more urgent than the calm cues, **close #381**.
   Separable trivial find: `timing_report.py` final `print("… → …")` crashes on Windows cp1252 (`→`→`->`).
-
 ## Delivered (2026-07-03 UTC) — rig screen WORKING end-to-end over USB (operator-confirmed)
 
 The USB-serial screen shipped across four merged PRs; after real deployment debugging
