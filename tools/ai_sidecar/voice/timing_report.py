@@ -396,7 +396,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         print(
-            f"wrote timing report → {args.out} ({report.covered_corners} covered corners, "
+            f"wrote timing report -> {args.out} ({report.covered_corners} covered corners, "
             f"{report.assertions['cues_spoken']} cues spoken)"
         )
     else:
