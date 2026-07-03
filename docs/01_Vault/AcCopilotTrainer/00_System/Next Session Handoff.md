@@ -105,7 +105,12 @@ operator-grade acoustic proof on the **real** intensity3 bank so the human step 
   Evidence comment: [#381#issuecomment-4874323968](https://github.com/agorokh/ac-copilot-trainer/issues/381#issuecomment-4874323968).
   Detail: [[issue-381-intensity-verification-2026-07-03]].
 - **Resume:** operator listens → if critical reads more urgent than the calm cues, **close #381**.
-  Separable trivial find: `timing_report.py` final `print("… → …")` crashes on Windows cp1252 (`→`→`->`).
+- **Delivered (2026-07-03) — PR [#476](https://github.com/agorokh/ac-copilot-trainer/pull/476) MERGED
+  (`a130abb`), issue #475 CLOSED:** the separable `timing_report.py` Windows-cp1252 crash (a literal `→`
+  in the final stdout `print`) is fixed (`→`→`->`); verified exit 0 under `PYTHONIOENCODING=cp1252`
+  with/without a bank, ruff + 12 timing tests green, self-hosted reviewer clean (0 findings). Surfaced
+  during #381 verification, independent of it.
+
 ## Delivered (2026-07-03 UTC) — rig screen WORKING end-to-end over USB (operator-confirmed)
 
 The USB-serial screen shipped across four merged PRs; after real deployment debugging
