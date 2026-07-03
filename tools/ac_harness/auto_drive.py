@@ -56,6 +56,7 @@ import argparse
 import asyncio
 import configparser
 import json
+import math
 import re
 import threading
 import time
@@ -160,7 +161,10 @@ class AutoDriveConfig:
     # physics when CM's auto-start race loses — LIVE but NOT drivable. The carcsw hijack (CSP
     # creating Car0) is the only deterministic "session is actually drivable" signal, so each hijack
     # attempt is a SHORT probe: a stalled overlay is detected in `hijack_probe_seconds` and the
-    # cycle recycles a fresh launch instead of burning one long ~25 s dead-wait.
+    # cycle recycles a fresh launch instead of burning one long ~25 s dead-wait. 5 s is generous for
+    # a hijackable session: in-sim (#482), Car0 lands within ~1-2 s of creating CarControls0 on a
+    # non-overlay launch (probe 1/3), so a shorter probe does not tear down healthy rigs. CLI-
+    # validated finite & > 0 (a non-finite probe would never expire — see `_positive_float`).
     hijack_probe_seconds: float = 5.0
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
     # Opt-in (`--overlay-nudge`): best-effort keypress to clear a stalled pre-drive overlay between
@@ -1838,15 +1842,17 @@ def _utc_stamp() -> str:  # pragma: no cover - trivial clock wrapper
 
 
 def _positive_float(value: str) -> float:
-    """argparse type: a strictly-positive float.
+    """argparse type: a strictly-positive, FINITE float.
 
-    Rejects 0 and negatives at parse time with a clean CLI error, so e.g.
-    ``--setup-rebake-interval 0`` fails fast instead of raising an uncaught ``ValueError`` deep in
-    ``race_ini_setup_bake_loop`` mid-launch (#482 review).
+    Rejects 0, negatives, and non-finite ``inf``/``nan`` at parse time with a clean CLI error.
+    Non-finiteness matters as much as sign (#482 review): ``--hijack-probe-seconds inf`` would make
+    ``deadline = monotonic() + probe`` never expire, reintroducing the infinite overlay dead-wait
+    #466 removes; ``--setup-rebake-interval 0`` would raise an uncaught ``ValueError`` deep in
+    ``race_ini_setup_bake_loop`` mid-launch. Both fail fast here instead.
     """
     parsed = float(value)  # ValueError here is turned into a usage error by argparse
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError(f"must be > 0, got {value!r}")
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number > 0, got {value!r}")
     return parsed
 
 
@@ -1919,10 +1925,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
     p.add_argument(
         "--hijack-probe-seconds",
-        type=float,
+        type=_positive_float,
         default=5.0,
         help="per-attempt wait for the carcsw hijack to land; a stalled pre-drive overlay is "
-        "detected within this window and the launch recycles (was one long dead-wait) (#466)",
+        "detected within this window and the launch recycles (was one long dead-wait) (#466). "
+        "Must be finite and > 0 (a non-finite value would never expire)",
     )
     p.add_argument(
         "--overlay-nudge",

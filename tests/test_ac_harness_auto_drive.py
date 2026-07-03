@@ -915,13 +915,20 @@ def test_overlay_and_probe_cli_flags_map_to_config():
     assert cfg.setup_rebake_interval == 0.3
 
 
-def test_setup_rebake_interval_rejects_non_positive():
-    # A non-positive interval must fail at parse time (clean usage error), not deep in
-    # race_ini_setup_bake_loop mid-launch (#482 review).
+def test_positive_float_flags_reject_bad_values():
+    # A non-positive OR non-finite value must fail at parse time (clean usage error), not deep in
+    # race_ini_setup_bake_loop, and not as a never-expiring hijack deadline (#482 review). `inf`
+    # would make `deadline = monotonic() + probe` never expire — the exact hang #466 removes.
     base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
-    for bad in ("0", "-0.5"):
-        with pytest.raises(SystemExit):
-            _build_arg_parser().parse_args(base + ["--setup-rebake-interval", bad])
+    for flag in ("--setup-rebake-interval", "--hijack-probe-seconds"):
+        for bad in ("0", "-0.5", "inf", "nan"):
+            with pytest.raises(SystemExit):
+                _build_arg_parser().parse_args(base + [flag, bad])
+    # A finite positive value still parses.
+    cfg = _config_from_args(
+        _build_arg_parser().parse_args(base + ["--hijack-probe-seconds", "7.5"])
+    )
+    assert cfg.hijack_probe_seconds == 7.5
 
 
 def _fake_cai_factory(created: list, ready_when):
