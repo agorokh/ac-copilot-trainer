@@ -1031,11 +1031,14 @@ static String   serial_rx_line;
 static uint32_t serial_hello_next_ms = 0;
 static uint32_t serial_last_rx_ms = 0;
 static bool     serial_link_up = false;
-// One constant for the largest protocol frame we accept: it sizes BOTH the USB
-// CDC RX ring (so a whole frame lands before loop() drains it — the 256 B default
-// dropped the 326 B hello_ack) AND the inbound line-accumulation cap. Keeping them
-// equal is the point — the ring must hold at least one max-length line (issue #463).
-static constexpr size_t SERIAL_MAX_FRAME_BYTES = 8192;
+// USB CDC RX ring size (transport layer). Sized to absorb one burst across a
+// loop() gap: loop() runs the LVGL render (tens of ms worst case) — longer than
+// the time for a frame to arrive as a USB burst — so a whole frame can land before
+// loop() drains it. The 256 B default therefore dropped the 326 B hello_ack. This
+// is a jitter-absorption size that here must cover a full frame (issue #463).
+static constexpr size_t SERIAL_RX_RING_BYTES = 8192;
+// App-layer overflow guard on one accumulated NDJSON line (independent of the ring).
+static constexpr size_t SERIAL_MAX_LINE_BYTES = 8192;
 // If no frame arrives for this long while linked, treat the link as DOWN. The
 // sidecar answers every heartbeat hello with a hello_ack (~5 s cadence once
 // linked), so this fires only on a real drop (sidecar crash/restart, USB
@@ -1110,7 +1113,7 @@ static void serial_transport_tick() {
       }
       serial_rx_line = "";
     } else if (c != '\r') {
-      if (serial_rx_line.length() < SERIAL_MAX_FRAME_BYTES) {
+      if (serial_rx_line.length() < SERIAL_MAX_LINE_BYTES) {
         serial_rx_line += (char)c;
       } else {
         serial_rx_line = "";  // overflow guard: drop a runaway unterminated line
@@ -1137,7 +1140,7 @@ void setup() {
   // the screen never links (the sidecar still sees our hello, so it shows
   // screen_peers=1 while the device stays DISCONNECTED). Enlarge the RX ring so a
   // whole frame lands intact. Must be called before Serial.begin().
-  Serial.setRxBufferSize(SERIAL_MAX_FRAME_BYTES);
+  Serial.setRxBufferSize(SERIAL_RX_RING_BYTES);
 #endif
   Serial.begin(115200);
   delay(250);
