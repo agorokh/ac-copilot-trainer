@@ -1837,6 +1837,19 @@ def _utc_stamp() -> str:  # pragma: no cover - trivial clock wrapper
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
+def _positive_float(value: str) -> float:
+    """argparse type: a strictly-positive float.
+
+    Rejects 0 and negatives at parse time with a clean CLI error, so e.g.
+    ``--setup-rebake-interval 0`` fails fast instead of raising an uncaught ``ValueError`` deep in
+    ``race_ini_setup_bake_loop`` mid-launch (#482 review).
+    """
+    parsed = float(value)  # ValueError here is turned into a usage error by argparse
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be > 0, got {value!r}")
+    return parsed
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Composed autonomous self-test (#154 Part G): drive any car/track + assert"
@@ -1872,10 +1885,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--setup-rebake-interval",
-        type=float,
+        type=_positive_float,
         default=AutoDriveConfig.setup_rebake_interval,
         help="how often (s) to re-bake the setup into race.ini during the CM launch window; a very "
-        "small value fights CM's own race.ini writes and stalls the pre-drive auto-start (#466)",
+        "small value fights CM's own race.ini writes and stalls the pre-drive auto-start (#466). "
+        "Must be > 0 (race_ini_setup_bake_loop rejects a non-positive interval)",
     )
     p.add_argument("--ac-root", type=Path, default=None, help="AC content root (Steam install)")
     p.add_argument(

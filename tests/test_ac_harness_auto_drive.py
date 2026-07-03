@@ -915,6 +915,15 @@ def test_overlay_and_probe_cli_flags_map_to_config():
     assert cfg.setup_rebake_interval == 0.3
 
 
+def test_setup_rebake_interval_rejects_non_positive():
+    # A non-positive interval must fail at parse time (clean usage error), not deep in
+    # race_ini_setup_bake_loop mid-launch (#482 review).
+    base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
+    for bad in ("0", "-0.5"):
+        with pytest.raises(SystemExit):
+            _build_arg_parser().parse_args(base + ["--setup-rebake-interval", bad])
+
+
 def _fake_cai_factory(created: list, ready_when):
     """A fake CustomAIController: ``read_car_data`` returns a dict once ``ready_when()`` is true."""
 
