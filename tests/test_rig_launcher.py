@@ -1040,6 +1040,15 @@ def test_build_pyinstaller_args_collects_voice_runtime_floor(tmp_path: Path) -> 
     assert _has_option_value(args, "--hidden-import", "pyttsx3.drivers.sapi5")
 
 
+def test_build_pyinstaller_args_bundles_pyserial_for_serial_transport(tmp_path: Path) -> None:
+    # Issue #463: pyserial is imported lazily by the sidecar, so it must be a
+    # declared hidden-import or the frozen --serial-port sidecar fails at runtime.
+    args = build_pyinstaller_args(tmp_path, onefile=True, windowed=True)
+
+    assert _has_option_value(args, "--hidden-import", "serial")
+    assert _has_option_value(args, "--hidden-import", "serial.tools.list_ports")
+
+
 def test_build_pyinstaller_args_collects_optional_rtmixer_when_installed(
     tmp_path: Path, monkeypatch
 ) -> None:

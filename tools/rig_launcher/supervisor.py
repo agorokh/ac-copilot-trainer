@@ -599,6 +599,14 @@ def build_pyinstaller_args(
         "pyttsx3.drivers",
         "--hidden-import",
         "pyttsx3.drivers.sapi5",
+        # Issue #463: the sidecar imports pyserial lazily (serial_transport.open_serial),
+        # so PyInstaller's static analysis misses it — the frozen --serial-port sidecar
+        # would ModuleNotFoundError without these. serial.tools.list_ports + the win32
+        # backend are pulled transitively by `serial`, but name them for robustness.
+        "--hidden-import",
+        "serial",
+        "--hidden-import",
+        "serial.tools.list_ports",
     ]
     fonts_dir = project_root / "src" / "ac_copilot_trainer" / "content" / "fonts"
     if fonts_dir.is_dir():
