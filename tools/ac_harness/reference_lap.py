@@ -231,6 +231,9 @@ def build_archive_record(
             "is_valid": True,
         },
         "setup": {"hash": "", "path": None, "snapshot": {}},
+        # First-class tyre identity (issue #478 Part C). A generated reference has no real tyre set,
+        # so both fields are None (the lakehouse then falls back to the setup-hash proxy).
+        "tyres": {"compoundIndex": None, "name": None},
         "trace": {
             "samples_count": len(rows),
             "fields": list(TRACE_FIELDS),

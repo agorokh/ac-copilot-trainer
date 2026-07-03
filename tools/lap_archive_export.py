@@ -56,6 +56,14 @@ CSV_COLUMNS: tuple[str, ...] = (
     "tyreCoreTemp_fr",
     "tyreCoreTemp_rl",
     "tyreCoreTemp_rr",
+    # chassis dynamics + hot pressure (issue #478) — blank for archives that lack them
+    "accG_long",
+    "accG_lat",
+    "yaw_rate",
+    "wheelsPressure_fl",
+    "wheelsPressure_fr",
+    "wheelsPressure_rl",
+    "wheelsPressure_rr",
 )
 
 _PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = (
@@ -73,6 +81,17 @@ _PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = (
     "tyreCoreTemp_rr",
 )
 
+# Chassis dynamics + dynamic hot pressure (issue #478); blank for archives that lack them.
+_TIER_B_TRACE_FIELDS: tuple[str, ...] = (
+    "accG_long",
+    "accG_lat",
+    "yaw_rate",
+    "wheelsPressure_fl",
+    "wheelsPressure_fr",
+    "wheelsPressure_rl",
+    "wheelsPressure_rr",
+)
+
 _TRACE_TO_CSV: dict[str, str] = {
     "eMs": "elapsed_ms",
     "spline": "spline",
@@ -87,6 +106,8 @@ _TRACE_TO_CSV: dict[str, str] = {
     "pz": "position_z_m",
     # per-wheel channels map to identically-named CSV columns
     **{name: name for name in _PER_WHEEL_TRACE_FIELDS},
+    # chassis + hot-pressure channels (issue #478) map to identically-named CSV columns
+    **{name: name for name in _TIER_B_TRACE_FIELDS},
 }
 
 _MOTEC_CHANNELS: tuple[tuple[str, str, str], ...] = (

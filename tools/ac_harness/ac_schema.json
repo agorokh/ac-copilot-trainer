@@ -44,6 +44,11 @@
       "read_by": ["telemetry.lua", "brake_detection.lua", "entry"],
       "note": "Normalized track position 0..1."
     },
+    "compoundIndex": {
+      "type": "number",
+      "read_by": ["lap_archive.lua"],
+      "note": "0-based index of the currently selected tyre compound. lap_archive captures it (+ ac.getTyresName) as the first-class tyre-set identity in the lap header (issue #478 Part C). pcall-guarded."
+    },
     "look": {
       "type": "vec3",
       "fields": {
@@ -140,6 +145,11 @@
       "type": "number",
       "read_by": ["lap_archive.lua"],
       "note": "Track temp (session metadata)."
+    },
+    "weatherType": {
+      "type": "number",
+      "read_by": ["lap_archive.lua"],
+      "note": "CSP sim.weatherType is an ac.WeatherType enum (integer-valued); lap_archive captures tonumber(sim.weatherType) into conditions.weatherType (issue #478 Part D)."
     }
   }
 }
