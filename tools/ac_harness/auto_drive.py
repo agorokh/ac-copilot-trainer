@@ -657,17 +657,17 @@ class RaceIniBakeState:
 
 
 def validate_race_ini_write_target(race_ini: Path) -> Path:
-    """Return resolved ``race.ini`` path only when it is the AC Documents config file."""
-    resolved = race_ini.resolve()
+    """Return logical ``race.ini`` path only when it is the AC Documents config file."""
+    logical = race_ini.absolute()
     if (
-        resolved.name.lower() != "race.ini"
-        or resolved.parent.name.lower() != "cfg"
-        or resolved.parent.parent.name.lower() != "assetto corsa"
+        logical.name.lower() != "race.ini"
+        or logical.parent.name.lower() != "cfg"
+        or logical.parent.parent.name.lower() != "assetto corsa"
     ):
         raise ValueError(
-            f"race.ini write target must be <AC Documents>/Assetto Corsa/cfg/race.ini: {resolved}"
+            f"race.ini write target must be <AC Documents>/Assetto Corsa/cfg/race.ini: {logical}"
         )
-    return resolved
+    return logical
 
 
 def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> str:

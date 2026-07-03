@@ -156,24 +156,24 @@ end
 ---@return string|nil
 local function guessSetupIniPath(car, sim)
   if not car then
-    return nil
+    return nil, false
   end
   local fromCar = activeSetupPathFromCar(car)
   if fromCar then
-    return fromCar
+    return fromCar, false
   end
   -- The active setup baked/selected into race.ini beats a folder guess: it names the actual applied
   -- setup file (e.g. Realistic_BB_v3.ini), so the lap archive records that setup, not an empty snap.
   local fromRace = activeSetupPathFromRaceIni(sim)
   if fromRace == RACE_INI_NO_SETUP then
-    return nil
+    return nil, true
   end
   if fromRace then
-    return fromRace
+    return fromRace, false
   end
   local doc = documentsRoot()
   if not doc then
-    return nil
+    return nil, false
   end
   local carId = ch.sanitizeId(ch.safeCarIdRaw(), "unknown")
   -- Use CSP global API (C-structs throw on invalid field access, not nil).
@@ -195,11 +195,11 @@ local function guessSetupIniPath(car, sim)
       local f = io.open(p, "r")
       if f then
         f:close()
-        return p
+        return p, false
       end
     end
   end
-  return trackRoot .. "/race.ini"
+  return trackRoot .. "/race.ini", false
 end
 
 --- Absolute path to the active setup INI (same resolution as `snapshotActive`).
@@ -210,7 +210,8 @@ end
 ---@param sim ac.StateSim|nil
 ---@return string|nil
 function M.activeSetupIniPath(car, sim)
-  return guessSetupIniPath(car, sim)
+  local path = guessSetupIniPath(car, sim)
+  return path
 end
 
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.
@@ -276,13 +277,14 @@ end
 ---@param sim ac.StateSim|nil
 ---@return table|nil snap
 ---@return string digest compact hex signature for persistence/compare
+---@return boolean noSetupConfirmed true when race.ini was read and confirmed no applied setup
 function M.snapshotActive(car, sim)
-  local path = guessSetupIniPath(car, sim)
+  local path, noSetupConfirmed = guessSetupIniPath(car, sim)
   local snap = M.readIniSnapshot(path)
   if not snap then
-    return nil, ""
+    return nil, "", noSetupConfirmed == true
   end
-  return snap, digestSetup(canonicalSetupString(snap))
+  return snap, digestSetup(canonicalSetupString(snap)), false
 end
 
 --- Part I: auto-load `copilot_*.ini` — CSP setup application APIs differ by build; try pcall hooks only.

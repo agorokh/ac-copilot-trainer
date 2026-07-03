@@ -2656,13 +2656,18 @@ function script.update(dt)
       end
     end
 
-    local _snap, hnew = setupReader.snapshotActive(car, sim)
+    local _snap, hnew, noSetupConfirmed = setupReader.snapshotActive(car, sim)
     state.setupChangeMsg = setupReader.describeChange(state.setupHash, hnew) or ""
-    if hnew and hnew ~= "" then
-      state.setupHash = hnew
-    end
-    if _snap then
+    if noSetupConfirmed then
+      state.setupHash = ""
+      state.lastSetupSnap = nil
+    elseif _snap then
+      if hnew and hnew ~= "" then
+        state.setupHash = hnew
+      end
       state.lastSetupSnap = _snap
+    elseif hnew and hnew ~= "" then
+      state.setupHash = hnew
     end
 
     state.tireHud = tires:lapSummaryLine() or ""

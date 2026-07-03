@@ -759,6 +759,26 @@ def test_write_setup_baked_race_ini_rejects_non_ac_documents_target(tmp_path):
         write_setup_baked_race_ini(bad, setup)
 
 
+def test_write_setup_baked_race_ini_allows_symlinked_ac_documents_dir(tmp_path):
+    from pathlib import Path as _P
+
+    real_root = tmp_path / "AC_Configs"
+    real_cfg = real_root / "cfg"
+    real_cfg.mkdir(parents=True)
+    logical_root = tmp_path / "Documents" / "Assetto Corsa"
+    logical_root.parent.mkdir(parents=True)
+    try:
+        logical_root.symlink_to(real_root, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    race_ini = logical_root / "cfg" / "race.ini"
+    race_ini.write_text("[CAR_0]\n", encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "written"
+    assert "_EXT_SETUP_FILENAME" in (real_cfg / "race.ini").read_text(encoding="utf-8")
+
+
 def test_write_setup_baked_race_ini_cleans_temp_on_replace_failure(tmp_path, monkeypatch):
     from pathlib import Path as _P
 

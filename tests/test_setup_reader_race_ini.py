@@ -195,10 +195,12 @@ def test_missing_ext_setup_reports_no_setup(tmp_path):
     (ac_root / "cfg" / "race.ini").write_text("[CAR_0]\nSETUP=\n", encoding="utf-8")
     rt = _runtime(str(tmp_path).replace("\\", "/"))
     out = rt.execute(
-        'local sr = require("setup_reader"); local s = sr.snapshotActive({}, nil); '
-        'return s == nil and "nil" or "snap"'
+        'local sr = require("setup_reader"); '
+        "local s, digest, no_setup = sr.snapshotActive({}, nil); "
+        'return (s == nil and "nil" or "snap") .. "|" .. tostring(digest) .. "|" '
+        ".. tostring(no_setup)"
     )
-    assert out == "nil", out
+    assert out == "nil||true", out
 
 
 def test_confirmed_no_race_ini_setup_blocks_legacy_folder_guess(tmp_path):
@@ -211,7 +213,9 @@ def test_confirmed_no_race_ini_setup_blocks_legacy_folder_guess(tmp_path):
     (ac_root / "cfg" / "race.ini").write_text("[CAR_0]\nSETUP=\n", encoding="utf-8")
     rt = _runtime(str(tmp_path).replace("\\", "/"))
     out = rt.execute(
-        'local sr = require("setup_reader"); local s = sr.snapshotActive({}, nil); '
-        'return s == nil and "nil" or "snap"'
+        'local sr = require("setup_reader"); '
+        "local s, digest, no_setup = sr.snapshotActive({}, nil); "
+        'return (s == nil and "nil" or "snap") .. "|" .. tostring(digest) .. "|" '
+        ".. tostring(no_setup)"
     )
-    assert out == "nil", out
+    assert out == "nil||true", out
