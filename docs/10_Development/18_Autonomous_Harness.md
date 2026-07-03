@@ -95,10 +95,23 @@ long-term storage (scratch-dir disposability pitfall).
 - Once AC reaches LIVE, `rig_apply_setup` verifies the setup via shared-memory fuel before the hijack
   and drive legs run.
 
-> **Reliability caveat.** If the rig has been degraded by many hard `acs.exe` kills, even a plain CM
-> launch can stop at the pre-drive "0 seconds" overlay and be non-hijackable. Reboot the rig, verify a
-> no-setup CM launch is hijackable again, then rerun the setup command. Deterministic overlay
-> detection / fast-fail remains tracked in the #466 follow-up.
+### Overlay fast-fail + keypress nudge (#466)
+
+`_wait_live` reports LIVE the instant `acpmf_graphics.status==LIVE` with advancing physics — but AC
+can sit at the NEW-UI "0 seconds" pre-drive overlay **with LIVE status and advancing physics** when
+CM's auto-start race loses (foreground steal, or degraded CSP state after many hard `acs.exe` kills).
+LIVE but **not drivable**, and the carcsw hijack (CSP creating `Car0`) is the only deterministic
+"session is actually drivable" signal. So the hijack is a sequence of **short `--hijack-probe-seconds`
+probes** (default 5 s, recreating `CarControls0` each time to also beat the early-LIVE race): a
+stalled overlay is detected in seconds and the run **recycles a fresh launch** instead of burning one
+long dead-wait. Between probes the harness sends a best-effort **keypress nudge** (Enter/Space) to
+AC's own window to try to clear the overlay in place; if it clears, the next probe lands the hijack
+with no relaunch. `--no-overlay-nudge` opts out. The per-cycle `[auto-drive HH:MM:SS] …` log lines
+show each launch, probe outcome, and nudge so a recycle's timing is visible.
+
+> **Reliability caveat.** The nudge is last-resort — OS input to the CSP pre-drive menu has been
+> unreliable — so a hard-degraded rig (many hard `acs.exe` kills) can still exhaust `max_launches`.
+> Reboot the rig, verify a no-setup CM launch is hijackable again, then rerun.
 
 ## Troubleshooting (hard-won rig lore — read before debugging)
 
@@ -106,7 +119,7 @@ long-term storage (scratch-dir disposability pitfall).
 |---|---|
 | Preflight `custom_ai` failure | Set `[CUSTOM_AI] ENABLED=1` in `<AC root>/extension/config/new_behaviour.ini` (user `cfg/extension/new_behaviour.ini` overrides when it carries the key) |
 | `stage=setup`, `applied=False`, fuel mismatch | The launch bake didn't take — check `race.ini [CAR_0] _EXT_SETUP_FILENAME` points at the setup and the CM launch reached LIVE; the setup's `[FUEL] VALUE` is the expected number |
-| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay during CM launch. The setup is applied/verified; reboot the rig if it degraded from many hard `acs.exe` kills, then rerun |
+| `--setup` run: setup `applied=True` but `stage=hijack` | The car stalled at AC's non-hijackable "0 seconds" overlay through every launch cycle. The setup is applied/verified. The harness fast-fails each stalled cycle and tries a keypress nudge (#466, `--no-overlay-nudge` to disable); if it still exhausts `max_launches`, reboot the rig (degraded from many hard `acs.exe` kills) and rerun |
 | CM clicks/launch do nothing | **Foreground steal**: minimize the agent/terminal window; AC's fullscreen menu covers CM — the harness kills stale `acs.exe` before each launch |
 | "Steam API failed to initialize" | Steam elevation mismatch — restart Steam **non-elevated** (`steam -shutdown`, relaunch via `explorer.exe`) |
 | `setup.load` error "no loopback Lua peer connected" | The trainer app isn't (yet) connected to the sidecar — the harness retries for `setup_timeout`; persistent = app not installed/enabled in CSP |

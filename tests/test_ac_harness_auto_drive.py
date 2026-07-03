@@ -29,12 +29,14 @@ from tools.ac_harness.auto_drive import (
     default_ac_root,
     fuel_matches,
     generic_gt3_ggv,
+    is_ac_window_title,
     parse_setup_fuel,
     preflight,
     race_ini_setup_bake_loop,
     resolve_ac_user_dir,
     resolve_fast_lane,
     resolve_setup_ini,
+    rig_hijack,
     rig_launch,
     run_auto_drive,
     verify_setup_ack,
@@ -872,6 +874,133 @@ def test_rig_launch_stops_rebake_loop_before_live_settle(tmp_path, monkeypatch):
     assert "setup verification deferred" in detail
     assert "locked" in detail
     assert sleeps == [1.5]
+
+
+# ---------------------------------------------------------------------------
+# Overlay fast-fail + keypress nudge (#466).
+# ---------------------------------------------------------------------------
+def test_is_ac_window_title_targets_ac_not_content_manager():
+    assert is_ac_window_title("Assetto Corsa") is True
+    assert is_ac_window_title("assetto corsa (checking integrity...)") is True
+    assert is_ac_window_title("  ASSETTO CORSA  ") is True
+    # Content Manager must never be targeted — its title can embed a preset/car name.
+    assert is_ac_window_title("Content Manager") is False
+    assert is_ac_window_title("Content Manager - Assetto Corsa quick drive") is False
+    assert is_ac_window_title("") is False
+    assert is_ac_window_title("Notepad") is False
+
+
+def test_overlay_and_probe_cli_flags_map_to_config():
+    base = ["--car", "ks_porsche_911_gt3_r_2016", "--track", "spa"]
+    cfg = _config_from_args(_build_arg_parser().parse_args(base))
+    assert cfg.overlay_nudge is True  # nudge on by default; opt-out only
+    assert cfg.hijack_probe_seconds == 5.0
+    cfg = _config_from_args(
+        _build_arg_parser().parse_args(
+            base + ["--no-overlay-nudge", "--hijack-probe-seconds", "2.5"]
+        )
+    )
+    assert cfg.overlay_nudge is False
+    assert cfg.hijack_probe_seconds == 2.5
+
+
+def _fake_cai_factory(created: list, ready_when):
+    """A fake CustomAIController: ``read_car_data`` returns a dict once ``ready_when()`` is true."""
+
+    class _FakeCAI:
+        def __init__(self, index: int = 0) -> None:
+            self.index = index
+            self.closed = False
+            created.append(self)
+
+        def read_car_data(self):  # noqa: ANN201
+            return {"packet_id": 1} if ready_when() else None
+
+        def close(self) -> None:
+            self.closed = True
+
+    return _FakeCAI
+
+
+def test_rig_hijack_recovers_in_place_after_overlay_nudge(monkeypatch):
+    """A stalled overlay that clears on the keypress nudge is hijacked WITHOUT a relaunch."""
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+    state = {"nudged": False}
+    created: list = []
+    logs: list[str] = []
+
+    def _fake_nudge() -> str:
+        state["nudged"] = True  # the nudge clears the overlay -> Car0 appears on the next probe
+        return "pressed Enter+Space on AC window (hwnd=1)"
+
+    monkeypatch.setattr(
+        "tools.ac_harness.custom_ai.CustomAIController",
+        _fake_cai_factory(created, lambda: state["nudged"]),
+    )
+    monkeypatch.setattr(ad, "_nudge_pre_drive_overlay", _fake_nudge)
+    monkeypatch.setattr(ad, "_log", lambda m: logs.append(m))
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    ctrl = rig_hijack(_cfg(hijack_attempts=3, hijack_probe_seconds=0.5, overlay_nudge=True))
+
+    assert ctrl is not None  # recovered in place
+    assert state["nudged"] is True
+    assert len(created) == 2  # probe 1 fails, nudge, probe 2 lands — no third launch cycle needed
+    assert created[0].closed is True  # the first (failed) section was recreated
+    assert any("hijack landed" in m for m in logs)
+
+
+def test_rig_hijack_fast_fails_to_none_and_bounds_dead_time(monkeypatch):
+    """A hard overlay stall (Car0 never appears) fast-fails to None, bounded probe budget."""
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+    created: list = []
+    nudges: list[int] = []
+
+    monkeypatch.setattr(
+        "tools.ac_harness.custom_ai.CustomAIController",
+        _fake_cai_factory(created, lambda: False),  # Car0 never appears
+    )
+    monkeypatch.setattr(ad, "_nudge_pre_drive_overlay", lambda: (nudges.append(1), "nudged")[1])
+    monkeypatch.setattr(ad, "_log", lambda m: None)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    ctrl = rig_hijack(_cfg(hijack_attempts=3, hijack_probe_seconds=0.5, overlay_nudge=True))
+
+    assert ctrl is None
+    assert len(created) == 3  # one short probe per attempt
+    assert all(c.closed for c in created)  # every section released (no controller leak)
+    assert len(nudges) == 2  # nudged between probes, never after the final probe
+    # Bounded dead-wait: ~3 probes * 0.5 s (+ up to one 0.1 s poll each), NOT a single long
+    # timeout. The point is the bound, not the exact figure — this is what kills the 25 s dead-wait.
+    assert clock.now <= 3 * (0.5 + 0.1) + 1e-6
+
+
+def test_rig_hijack_skips_nudge_when_disabled(monkeypatch):
+    import tools.ac_harness.auto_drive as ad
+
+    clock = _Clock()
+    created: list = []
+    nudges: list[int] = []
+
+    monkeypatch.setattr(
+        "tools.ac_harness.custom_ai.CustomAIController",
+        _fake_cai_factory(created, lambda: False),
+    )
+    monkeypatch.setattr(ad, "_nudge_pre_drive_overlay", lambda: (nudges.append(1), "nudged")[1])
+    monkeypatch.setattr(ad, "_log", lambda m: None)
+    monkeypatch.setattr(ad.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(ad.time, "sleep", clock.sleep)
+
+    ctrl = rig_hijack(_cfg(hijack_attempts=2, hijack_probe_seconds=0.5, overlay_nudge=False))
+
+    assert ctrl is None
+    assert nudges == []  # opt-out honored
 
 
 def test_parse_setup_fuel_reads_value_and_tolerates_missing():

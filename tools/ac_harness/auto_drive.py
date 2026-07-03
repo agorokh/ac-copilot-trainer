@@ -155,8 +155,18 @@ class AutoDriveConfig:
     max_launches: int = 5
     attempt_timeout: float = 75.0
     settle_seconds: float = 7.0  # let CSP arm Custom-AI before hijacking
-    hijack_timeout: float = 25.0
+    # Overlay fast-fail (#466). `_wait_live` reports LIVE the moment status==LIVE + physics advance,
+    # but AC can sit at the NEW-UI "0 seconds" pre-drive overlay WITH LIVE status and advancing
+    # physics when CM's auto-start race loses — LIVE but NOT drivable. The carcsw hijack (CSP
+    # creating Car0) is the only deterministic "session is actually drivable" signal, so each hijack
+    # attempt is a SHORT probe: a stalled overlay is detected in `hijack_probe_seconds` and the
+    # cycle recycles a fresh launch instead of burning one long ~25 s dead-wait.
+    hijack_probe_seconds: float = 5.0
     hijack_attempts: int = 3  # recreate CarControls0 N times — beats the early-LIVE hijack race
+    # Best-effort keypress to clear a stalled pre-drive overlay between hijack probes. OS input to
+    # the CSP pre-drive menu has been unreliable historically, so this is a last-resort nudge that
+    # the fast-fail relaunch backstops, not a primary mechanism (`--no-overlay-nudge` opts out).
+    overlay_nudge: bool = True
     # Sim-death guard.
     sim_dead_seconds: float = 4.0
     skip_launch: bool = False
@@ -1094,6 +1104,28 @@ def collect_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[s
 # ---------------------------------------------------------------------------
 # Rig wiring (Windows/AC only; not exercised by CI — validated on the rig).
 # ---------------------------------------------------------------------------
+def _log(msg: str) -> None:  # pragma: no cover - rig-only progress trace
+    """Print a timestamped harness progress line so per-cycle launch/hijack timing is visible.
+
+    #466 acceptance requires proving a stalled cycle is *recycled within a few seconds* rather than
+    burning a full-timeout dead-wait; these lines (with their wall-clock stamps) are that proof.
+    """
+    print(f"[auto-drive {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def is_ac_window_title(title: str) -> bool:
+    """True for the live Assetto Corsa game window (``acs.exe``), not Content Manager.
+
+    Pure so CI can verify the match with no Windows: the pre-drive overlay keypress nudge (#466)
+    targets AC's own window and must never land a keystroke on Content Manager (whose title also
+    contains "assetto corsa" as substrings of preset/car names).
+    """
+    text = (title or "").strip().lower()
+    if not text or "content manager" in text:
+        return False
+    return "assetto corsa" in text
+
+
 def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
     """Best-effort: minimize whatever window holds the foreground before a CM launch.
 
@@ -1119,6 +1151,66 @@ def _minimize_foreground_window() -> None:  # pragma: no cover - rig-only
         return
 
 
+def _nudge_pre_drive_overlay() -> str:  # pragma: no cover - rig-only
+    """Best-effort: focus the AC window and press Enter/Space to clear a stalled pre-drive overlay.
+
+    When CM's auto-start race loses, AC sits at the NEW-UI "0 seconds" pre-drive overlay ("session
+    control / skip session") — LIVE with advancing physics but not drivable, so the carcsw hijack
+    can't land (#466). This targets AC's OWN window (never Content Manager) and sends the pre-drive
+    confirm keys. OS input to the CSP pre-drive menu has been unreliable historically, so this is a
+    last-resort nudge that the fast-fail relaunch backstops. Returns a detail string; never raises.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        enum_proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows.argtypes = [enum_proc, wintypes.LPARAM]
+        user32.EnumWindows.restype = wintypes.BOOL
+        user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        user32.IsWindowVisible.restype = wintypes.BOOL
+        user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowTextW.restype = ctypes.c_int
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.keybd_event.argtypes = [
+            wintypes.BYTE,
+            wintypes.BYTE,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+        ]
+        user32.keybd_event.restype = None
+
+        found: list[int] = []
+
+        def _on_window(hwnd, _lparam):  # noqa: ANN001, ANN202
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 255)
+            if is_ac_window_title(buf.value or ""):
+                found.append(hwnd)
+                return False  # found AC; stop enumerating
+            return True
+
+        user32.EnumWindows(enum_proc(_on_window), 0)
+        if not found:
+            return "no AC window found to nudge"
+        hwnd = found[0]
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.2)  # let the focus change settle before the keystrokes
+        vk_return, vk_space, keyeventf_keyup = 0x0D, 0x20, 0x0002
+        for vk in (vk_return, vk_space):
+            user32.keybd_event(vk, 0, 0, None)
+            time.sleep(0.05)
+            user32.keybd_event(vk, 0, keyeventf_keyup, None)
+            time.sleep(0.05)
+        return f"pressed Enter+Space on AC window (hwnd={hwnd})"
+    except Exception as exc:  # noqa: BLE001 - best-effort; the fast-fail relaunch backstops failure
+        return f"nudge error: {type(exc).__name__}: {exc}"
+
+
 def _race_ini_path(config: AutoDriveConfig) -> Path:  # pragma: no cover - rig-only
     """``<AC user data>/cfg/race.ini`` — the file CM regenerates and acs reads at spawn."""
     return resolve_ac_user_dir(config.ac_user_dir) / "cfg" / "race.ini"
@@ -1141,6 +1233,10 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
     actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
     actuator.normalize_prior_state()
     for attempt in range(1, config.max_launches + 1):
+        _log(
+            "launching AC via Content Manager"
+            + (" (setup baked into race.ini)" if config.setup_ini is not None else "")
+        )
         _minimize_foreground_window()  # the CM auto-start race needs the desktop foreground free
         if config.setup_ini is not None:
             race_ini = _race_ini_path(config)
@@ -1227,25 +1323,43 @@ def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
 
 
 def rig_hijack(config: AutoDriveConfig) -> Controller | None:  # pragma: no cover - rig-only
-    """Create CarControls0 and wait for CSP to create Car0 (the hijack landing), with retry.
+    """Create CarControls0 and briefly wait for CSP to create Car0 — the hijack landing.
 
-    The early-LIVE race: CSP only creates Car0 once its Custom-AI subsystem is watching, and the
-    act that triggers it is *creating* the CarControls0 section — so a creation that lands too early
-    silently no-ops. We split ``hijack_timeout`` across ``hijack_attempts`` and **recreate** the
-    section each attempt (close + new ``CustomAIController``) so a later creation re-triggers CSP.
+    Two coupled problems this handles (#154, #466):
+
+    * **The early-LIVE race.** CSP only creates Car0 once its Custom-AI subsystem is watching, and
+      the act that triggers it is *creating* the CarControls0 section — a creation that lands too
+      early silently no-ops. We **recreate** the section each attempt (close + new
+      ``CustomAIController``) so a later creation re-triggers CSP.
+    * **The pre-drive overlay stall.** ``_wait_live`` reports LIVE even when AC is frozen at the
+      NEW-UI "0 seconds" pre-drive overlay (not drivable), so Car0 never appears no matter how long
+      we wait. Each attempt is therefore a SHORT ``hijack_probe_seconds`` probe: a stalled overlay
+      is detected in seconds and ``rig_hijack`` returns ``None`` fast, so the outer loop recycles a
+      fresh launch instead of burning one long dead-wait. Between probes we
+      optionally **nudge** the overlay with a keypress (``overlay_nudge``); if that clears it, the
+      next probe lands the hijack with no relaunch at all.
     """
     from tools.ac_harness.custom_ai import CustomAIController
 
     attempts = max(1, config.hijack_attempts)
-    per_attempt = config.hijack_timeout / attempts
-    for _ in range(attempts):
+    probe = max(0.5, config.hijack_probe_seconds)
+    for attempt in range(1, attempts + 1):
         ctrl = CustomAIController(0)
-        deadline = time.monotonic() + per_attempt
+        deadline = time.monotonic() + probe
         while time.monotonic() < deadline:
             if ctrl.read_car_data() is not None:
+                _log(f"hijack landed (Car0) on probe {attempt}/{attempts}")
                 return ctrl
             time.sleep(0.1)
         ctrl.close()  # recreate the section next attempt to re-trigger the hijack
+        _log(
+            f"hijack probe {attempt}/{attempts}: no Car0 in {probe:.1f}s "
+            "(LIVE but not drivable — pre-drive overlay stall?)"
+        )
+        # A stalled overlay may clear on a keypress; try it between probes, then re-probe. If it
+        # does nothing, the fast-fail return recycles a fresh launch cycle (the outer loop).
+        if config.overlay_nudge and attempt < attempts:
+            _log(f"overlay nudge: {_nudge_pre_drive_overlay()}")
     return None
 
 
@@ -1750,6 +1864,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="require session+lap, enforce ordering")
     p.add_argument("--skip-launch", action="store_true", help="AC already LIVE; only hijack+drive")
     p.add_argument(
+        "--hijack-probe-seconds",
+        type=float,
+        default=5.0,
+        help="per-attempt wait for the carcsw hijack to land; a stalled pre-drive overlay is "
+        "detected within this window and the launch recycles (was one long dead-wait) (#466)",
+    )
+    p.add_argument(
+        "--no-overlay-nudge",
+        dest="overlay_nudge",
+        action="store_false",
+        help="do not send a best-effort keypress to clear a stalled pre-drive overlay before "
+        "recycling the launch (#466)",
+    )
+    p.add_argument(
         "--evidence-dir",
         type=Path,
         default=None,
@@ -1818,6 +1946,8 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         wait_lap=args.wait_lap,
         strict=args.strict,
         skip_launch=args.skip_launch,
+        hijack_probe_seconds=args.hijack_probe_seconds,
+        overlay_nudge=args.overlay_nudge,
         max_recoveries=args.max_recoveries,
         progress_stall_seconds=args.progress_stall_seconds,
         spawn_to_line=not args.no_spawn_line,
