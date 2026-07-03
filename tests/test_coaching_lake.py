@@ -161,6 +161,19 @@ def test_session_and_stint_rollups_are_queryable(lake_cwd):
     assert stint_a[cols.index("lap_count")] == 3
 
 
+def test_tyre_set_key_rejects_non_finite_compound_index():
+    # qodo #483: a non-finite compoundIndex (e.g. +inf leaking from a bad CSP read) must not crash
+    # the lakehouse — _tyre_set_key falls back to None (→ setup_hash) instead of int(inf) raising.
+    from tools.coaching_lake.build_analytics import _tyre_set_key
+
+    assert _tyre_set_key({"compoundIndex": float("inf")}) is None
+    assert _tyre_set_key({"compoundIndex": float("-inf")}) is None
+    assert _tyre_set_key({"compoundIndex": float("nan")}) is None
+    assert _tyre_set_key({"compoundIndex": 2}) == "compound:2"
+    assert _tyre_set_key({"name": "Soft (S)"}) == "Soft (S)"
+    assert _tyre_set_key({}) is None
+
+
 def test_stints_split_on_first_class_tyre_set(lake_cwd):
     # #478 Part C AC3: two laps in one session on DIFFERENT tyre sets (identical setup_hash) split
     # into two stints keyed on the tyre-set identity, not the setup_hash proxy.

@@ -233,8 +233,10 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
   -- set serial to Lua, so this identifies the compound, not a same-compound fresh-rubber swap.
   local tyreCompoundIndex = nil
   pcall(function() tyreCompoundIndex = tonumber(opts.car and opts.car.compoundIndex) end)
-  -- Reject a non-finite read (NaN) so a garbage index can't seed a bogus identity.
-  if tyreCompoundIndex ~= nil and tyreCompoundIndex ~= tyreCompoundIndex then
+  -- Reject a non-finite read (NaN or +/-inf) so a garbage index can't seed a bogus identity or crash
+  -- lakehouse ingest — build_analytics does int(compoundIndex), which raises on inf (qodo #483).
+  if tyreCompoundIndex ~= nil and (tyreCompoundIndex ~= tyreCompoundIndex
+      or tyreCompoundIndex == math.huge or tyreCompoundIndex == -math.huge) then
     tyreCompoundIndex = nil
   end
   local tyreName = nil

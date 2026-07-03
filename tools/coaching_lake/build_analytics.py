@@ -231,7 +231,9 @@ def _tyre_set_key(tyres: Any) -> str | None:
     if isinstance(name, str) and name.strip():
         return name.strip()
     idx = tyres.get("compoundIndex")
-    if isinstance(idx, (int, float)) and not isinstance(idx, bool):
+    # Guard non-finite (inf/NaN): int(inf) raises OverflowError and would break ingest for any
+    # archive that slipped a bad index through (qodo #483). Fall back to setup_hash instead.
+    if isinstance(idx, (int, float)) and not isinstance(idx, bool) and math.isfinite(idx):
         return f"compound:{int(idx)}"
     return None
 
