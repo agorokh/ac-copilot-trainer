@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T08:20:00Z
+last_updated: 2026-07-03T02:00:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -64,6 +64,12 @@ Piper alert/urgent/critical ladder now keep neural act cues inside the 450 ms br
 Runtime proof: timing report urgent 379.6 ms, critical 361.4 ms,
 `brake_alarm_within_450ms=true`; sidecar `/health.voice.enabled=true` with `rtmixer` on the USB
 Sound Device. **#381 remains OPEN** only for the human-gated at-wheel A/B listening confirmation.
+**Verified (2026-07-03, `/autonomous-deliver 381`):** acoustic proof on the real intensity3 bank —
+headline A/B critical "Brake!" **+2.84 dB louder & 3× terser** than the calm apex; same-word ladder
+monotonically terser+brighter; `timing_report` green (triple-cross-validated). Council: ship as-is,
+no re-bake, don't auto-close. ⚠️ run the at-wheel test from an `origin/main` checkout (main tree is on
+the intensity2 #408 branch, which would disable voice). Desk-listen A/B WAVs + waveform SVG delivered.
+Detail: [[issue-381-intensity-verification-2026-07-03]].
 
 **Delivered (2026-07-02):** PR [#453](https://github.com/agorokh/ac-copilot-trainer/pull/453)
 **MERGED** at [`97a963f`](https://github.com/agorokh/ac-copilot-trainer/commit/97a963f) - session
