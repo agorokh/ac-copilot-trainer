@@ -5,6 +5,7 @@ memory_tier: canonical
 last_updated: 2026-07-03T20:00:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-432-atelier-insim-reverify-2026-07-03.md
+  - AcCopilotTrainer/03_Investigations/issue-381-intensity-verification-2026-07-03.md
   - AcCopilotTrainer/01_Decisions/usb-serial-screen-transport-2026-07-02.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
@@ -82,6 +83,29 @@ lap** (delta-in-window) — the reference-independent ladder shows ON PACE/READY
 cold-launch carcsw hijack flake ≈ 50 % (2/4), no per-run retry flag. Detail:
 [[issue-432-atelier-insim-reverify-2026-07-03]]; [#432 verification comment](https://github.com/agorokh/ac-copilot-trainer/issues/432#issuecomment-4874464533).
 
+## Verified (2026-07-03 UTC) — #381 expressive voice: intensity scaling acoustically PROVEN; at-wheel listen still human-gated
+
+`/autonomous-deliver 381`. #381 was reopened only for the human-gated at-wheel A/B *listening*
+confirmation — PR #451 (`81be1f3`) already shipped the code. Reconciled live, then produced
+operator-grade acoustic proof on the **real** intensity3 bank so the human step is a ~15-s desk listen.
+
+- **Headline A/B PASSES:** calm apex "More entry speed." (1109 ms, −24.78 dBFS) vs critical "Brake!"
+  (361 ms, −21.94 dBFS) → critical **+2.84 dB louder, 3× terser**. Same-word "Brake" ladder
+  alert→urgent→critical is monotonically **terser** (432.6→379.6→361.4 ms) and **brighter**
+  (2640→2967→3762 Hz); RMS near-flat (critical ~1.3 dB sub-JND below urgent — not a defect).
+- Repo `timing_report` on the bank: `brake_alarm_within_450ms=True`, `critical_brake_alarm_spoken=True`.
+  urgent 379.6 / critical 361.4 ms triple-cross-validated (PR #451 · numpy · repo tool).
+- **Council-reviewed disposition:** ship intensity3 as-is, **no re-bake** (sub-JND dip; scope
+  discipline). **Do NOT auto-close #381** — the operator's at-wheel listen is genuinely theirs.
+- **⚠️ Operator heads-up:** run the at-wheel test from an **`origin/main`** checkout. The main working
+  tree is on `fix/issue-408-reference-review-hardening` (`cd75ad5`, **intensity2**) → the coach would
+  reject the intensity3 bank as a signature mismatch and **disable voice**.
+- Desk-listen artifacts under `.scratch\`: `issue381-full-sweep.wav`,
+  `issue381-AB-calmapex-vs-criticalbrake.wav`, `issue381-ladder-brake.wav`, `issue381-waveforms.svg`.
+  Evidence comment: [#381#issuecomment-4874323968](https://github.com/agorokh/ac-copilot-trainer/issues/381#issuecomment-4874323968).
+  Detail: [[issue-381-intensity-verification-2026-07-03]].
+- **Resume:** operator listens → if critical reads more urgent than the calm cues, **close #381**.
+  Separable trivial find: `timing_report.py` final `print("… → …")` crashes on Windows cp1252 (`→`→`->`).
 ## Delivered (2026-07-03 UTC) — rig screen WORKING end-to-end over USB (operator-confirmed)
 
 The USB-serial screen shipped across four merged PRs; after real deployment debugging
