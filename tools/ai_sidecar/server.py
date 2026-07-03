@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import errno
 import ipaddress
 import json
@@ -853,6 +854,18 @@ def _release_observer_feed(websocket: Any) -> None:
             _coach_runtime.reset()
         if _race_manager is not None:
             _race_manager.reset()
+
+
+def _drop_external_peer(peer: Any) -> None:
+    """Evict a peer from the fan-out set and release any observer feed it owned.
+
+    The WebSocket path evicts inline (send failure in ``_broadcast_targets`` and
+    ``_handler`` teardown). The serial transport (issue #463) has no such loop, so it
+    calls this when the USB link drops.
+    """
+    _external_peers.discard(peer)
+    _external_peer_classes.pop(peer, None)
+    _release_observer_feed(peer)
 
 
 async def _broadcast_targets(frame: dict[str, Any], *, targets: list[Any]) -> None:
@@ -1894,6 +1907,27 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
             await asyncio.gather(*pending_followups, return_exceptions=True)
 
 
+def _maybe_start_serial(serial_port: str | None, serial_baud: int) -> asyncio.Task[Any] | None:
+    """Start the optional USB-serial screen transport (issue #463) on the running loop.
+
+    Returns the task so the caller can cancel it on shutdown. Imported lazily so the
+    sidecar core (and its pyserial dependency) stays optional for WS-only deployments.
+    """
+    if not serial_port:
+        return None
+    from tools.ai_sidecar.serial_transport import run_serial_transport
+
+    logger.info("serial transport enabled port=%s baud=%s", serial_port, serial_baud)
+    return asyncio.create_task(
+        run_serial_transport(
+            port=serial_port,
+            baud=serial_baud,
+            handle_frame=_handle_external_frame,
+            on_peer_gone=_drop_external_peer,
+        )
+    )
+
+
 async def _run(
     host: str,
     port: int,
@@ -1902,6 +1936,8 @@ async def _run(
     setup_store: str | None = None,
     setup_exchange_endpoint: str | None = None,
     user_setups_root: str | None = None,
+    serial_port: str | None = None,
+    serial_baud: int = 115_200,
 ) -> None:
     global _setup_exchange_endpoint, _setup_exchange_user_setups_root
     global _setup_experiment_store_path, _setup_experiment_store_seeded
@@ -1935,7 +1971,14 @@ async def _run(
                     reply_coaching,
                     "set" if token else "unset",
                 )
-                await asyncio.Future()
+                serial_task = _maybe_start_serial(serial_port, serial_baud)
+                try:
+                    await asyncio.Future()
+                finally:
+                    if serial_task is not None:
+                        serial_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await serial_task
         except OSError as exc:
             # WinError 10048 / errno EADDRINUSE: another sidecar already owns the port. Exit
             # cleanly with a one-line reason instead of a traceback — a frozen --noconsole build
@@ -2403,6 +2446,25 @@ def main() -> None:
             "Falls back to $AC_COPILOT_VOICE_VOLUME."
         ),
     )
+    p.add_argument(
+        "--serial-port",
+        default=os.environ.get("AC_COPILOT_SIDECAR_SERIAL_PORT"),
+        help=(
+            "Issue #463: COM port for the USB-serial rig-screen transport (e.g. COM6). "
+            "When set, the screen speaks protocol v1 over USB CDC instead of WebSocket, "
+            "removing the Windows Mobile Hotspot dependency. "
+            "Falls back to $AC_COPILOT_SIDECAR_SERIAL_PORT. Requires the `pyserial` package."
+        ),
+    )
+    p.add_argument(
+        "--serial-baud",
+        type=int,
+        default=int(os.environ.get("AC_COPILOT_SIDECAR_SERIAL_BAUD") or 115200),
+        help=(
+            "Baud for --serial-port. Native ESP32-S3 USB CDC ignores baud, so the default "
+            "(115200) is fine. Falls back to $AC_COPILOT_SIDECAR_SERIAL_BAUD."
+        ),
+    )
     args = p.parse_args()
     if args.compare_laps:
         _run_compare_laps(args.compare_laps[0], args.compare_laps[1])
@@ -2484,6 +2546,8 @@ def main() -> None:
                 args.setup_store,
                 args.se_endpoint,
                 args.user_setups_root,
+                args.serial_port,
+                args.serial_baud,
             )
         )
     except KeyboardInterrupt:

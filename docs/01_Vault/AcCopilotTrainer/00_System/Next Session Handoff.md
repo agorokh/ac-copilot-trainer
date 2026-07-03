@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-02T08:20:00Z
+last_updated: 2026-07-02T18:00:00Z
 relates_to:
+  - AcCopilotTrainer/01_Decisions/usb-serial-screen-transport-2026-07-02.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/03_Investigations/pr-441-voice-signature-gate-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
@@ -62,6 +63,33 @@ relates_to:
 ---
 
 # Next session handoff
+
+## In flight (2026-07-02 UTC) — PR for #463: USB-serial screen transport, hotspot removed
+
+Branch `feat/issue-463-usb-serial-screen` (3 commits). The rig screen now speaks
+protocol v1 over the **native USB CDC** instead of WiFi/WebSocket, so the Windows
+Mobile Hotspot is gone — that hotspot forced a 2.4 GHz SoftAP onto the single-radio
+Intel AC 7260 and dropped the main WiFi (which then would not reconnect). Decision +
+evidence: [[usb-serial-screen-transport-2026-07-02]].
+
+- **Sidecar** `tools/ai_sidecar/serial_transport.py` — `SerialPeer` + read loop on
+  `_handle_external_frame`; `--serial-port` / `AC_COPILOT_SIDECAR_SERIAL_PORT`.
+- **Firmware** `firmware/screen` — `SCREEN_TRANSPORT_SERIAL` flag, env
+  `jc3248w535_serial` (rig default), heartbeat hello. Flashed + live-verified.
+- **Launcher** `tools/rig_launcher` — Mobile Hotspot probe/row/readiness removed.
+- **Hardware trap (durable):** the ESP32-S3 USB CDC needs **DTR asserted** to deliver
+  RX; auto-reset is an **RTS** pulse, not steady DTR. Sidecar opens **DTR high / RTS low**.
+- **Live E2E (hotspot OFF, `AHOME5G` up the whole time, 68%→69%):** `screen_peers=1`,
+  bidirectional round-trip (hello → hello_ack → 5 s heartbeat), `coaching.snapshot`
+  fanned to the serial peer, 0 send failures. Both firmware envs build.
+- **PR [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464): CI fully green**
+  (build/conformance/pip-audit/canonical-docs), `MERGEABLE`/`CLEAN`, 0 unresolved
+  review threads (Qodo endorsed; Gemini/Codex quota-limited). `pyserial>=3.5` added
+  to coaching/launcher/dev extras. **Merge-ready.**
+- **Only unverified piece = operator-visual:** confirm the physical screen pill shows
+  CONNECTED + live hints while driving (needs eyes on the screen; the sidecar-side
+  round-trip + fan-out are proven). The screen must stay USB-tethered (it already is).
+  WebSocket env `jc3248w535` retained for LAN/CI.
 
 ## Delivered (2026-07-02 UTC) — PR #460 MERGED: autonomous harness as a product + setup verify (#459)
 
