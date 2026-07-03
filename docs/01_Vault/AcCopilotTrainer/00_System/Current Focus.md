@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T05:02:30Z
+last_updated: 2026-07-03T20:10:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -31,6 +31,14 @@ snapshot/no-setup handling, and passed CI + resolve-gate + GraphQL/Qodo/Copilot 
 merge-forwarding from `origin/main` to clear GitHub's dirty merge state. The self-hosted reviewer did
 not post a current-SHA review after the final cooldown, so its gate is vacuously satisfied per
 `resolve-pr` anti-hang rules. Next action: merge PR #465 if desired, then run post-merge sync/SAVE.
+
+**Delivered (2026-07-03):** PR [#480](https://github.com/agorokh/ac-copilot-trainer/pull/480)
+**MERGED** ([`d15dd28`](https://github.com/agorokh/ac-copilot-trainer/commit/d15dd28)) closing
+[#479](https://github.com/agorokh/ac-copilot-trainer/issues/479) — Game Point **AUTO-START SIMHUB** UI
+toggle (opt-in default; hardened atomic `update_settings`: no-secrets, preserve-manual-work,
+unique-tempfile; UI source-of-truth). Operator-grade verified; 4-round review-hardened. Follow-up
+[#481](https://github.com/agorokh/ac-copilot-trainer/issues/481) (hermetic serial-port test). Detail:
+[[pr-480-simhub-launcher-toggle-2026-07-03]].
 
 **Delivered (2026-07-02):** PR [#460](https://github.com/agorokh/ac-copilot-trainer/pull/460)
 merged [#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) — autonomous harness as a

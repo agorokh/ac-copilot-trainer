@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-03T20:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/pr-480-simhub-launcher-toggle-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-432-atelier-insim-reverify-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-381-intensity-verification-2026-07-03.md
   - AcCopilotTrainer/01_Decisions/usb-serial-screen-transport-2026-07-02.md
@@ -65,6 +66,23 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-03 UTC) — PR #480 SimHub auto-start toggle (#479 CLOSED)
+
+PR [#480](https://github.com/agorokh/ac-copilot-trainer/pull/480) **MERGED** (squash
+[`d15dd28`](https://github.com/agorokh/ac-copilot-trainer/commit/d15dd28)) closing
+[#479](https://github.com/agorokh/ac-copilot-trainer/issues/479): the Game Point launcher now
+surfaces **AUTO-START SIMHUB** as a themed UI checkbox (not `settings.json`-only), so one launch can
+bring up the whole rig incl. SimHub haptics. Packaged default stays opt-in (`start_simhub=False`,
+house pattern per PR #207). `settings.update_settings` is a hardened atomic merge-write: **no-secrets**
+(only the non-secret schema persists — a stray `token` can never round-trip), **preserve-manual-work**
+(a present-but-malformed/unreadable/non-object settings.json is left untouched and raises, never
+overwritten), and **unique-tempfile + `os.replace`**. UI is source-of-truth (checkbox value drives the
+model). Operator-grade verified (real launcher view → real toggle → real `settings.json` write, PASS);
+15 launcher tests; post-merge classification clean. Review-hardened over 4 rounds (cursor / antigravity
+/ Qodo). Follow-up filed: [#481](https://github.com/agorokh/ac-copilot-trainer/issues/481) (hermetic
+test — `test_ai_sidecar_external` leaks the rig `AC_COPILOT_SIDECAR_SERIAL_PORT`, local-only). Detail:
+[[pr-480-simhub-launcher-toggle-2026-07-03]].
 
 ## Resolved (2026-07-03 UTC) — PR #465 review loop: setup+drive compose (#461)
 
