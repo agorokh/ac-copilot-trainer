@@ -48,6 +48,25 @@ a steady DTR. Opening DTR-low (the intuitive "don't reset" choice) gives *no res
 but no RX* — the board never sees `hello_ack` and re-`hello`s forever. Correct:
 **DTR high, RTS low**. Verified live on COM6.
 
+## Second trap (the deploy killer): the 256-byte USB CDC RX ring (#470)
+
+After the launcher shipped, the rig showed `screen_peers=1` **but the physical
+screen stayed DISCONNECTED**. That asymmetry is the whole diagnosis: `screen_peers`
+only proves the sidecar heard the board's (small) `hello`; it says nothing about
+the board receiving the reply. The ESP32-S3 USB CDC **RX ring defaults to 256 bytes**.
+The real `hello_ack` (with capabilities) is **326 bytes**, and `coaching.snapshot`
+is larger — a frame >256 B arrives as one USB burst and overflows the ring before
+`loop()` (LVGL render, tens of ms) drains it, so the trailing `\n` is dropped, the
+line never completes, and the board never links (re-`hello`s forever). Bisected: a
+~60 B ack links the board; the 326 B ack does not. Fix: `Serial.setRxBufferSize(8192)`
+before `Serial.begin()` (firmware, serial mode). **Rule: `screen_peers=1` is NOT a
+"screen works" signal — it only means the board's hello was heard.**
+
+Two more deploy facts worth keeping: (1) the packaged `.exe` needs `pyserial` as an
+explicit PyInstaller `--hidden-import` (it's lazy-imported, so static analysis misses
+it — #468); (2) the launcher's sidecar picks up `--serial-port` from
+`AC_COPILOT_SIDECAR_SERIAL_PORT` (set it in the user env) or via the launcher forwarding it.
+
 ## Evidence (live, 2026-07-02)
 
 Mobile Hotspot OFF, main WiFi `AHOME5G` connected throughout (68%→69%, never

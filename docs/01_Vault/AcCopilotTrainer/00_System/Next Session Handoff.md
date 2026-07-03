@@ -64,6 +64,21 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-03 UTC) — rig screen WORKING end-to-end over USB (operator-confirmed)
+
+The USB-serial screen shipped across four merged PRs; after real deployment debugging
+the operator confirmed **"finally works"** (device screen CONNECTED). Chain:
+- [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464) — transport + hotspot removal (see below).
+- [#468](https://github.com/agorokh/ac-copilot-trainer/issues/468)/[#469](https://github.com/agorokh/ac-copilot-trainer/pull/469) — bundle `pyserial` as a PyInstaller hidden-import (frozen `.exe` sidecar).
+- [#470](https://github.com/agorokh/ac-copilot-trainer/issues/470)/[#471](https://github.com/agorokh/ac-copilot-trainer/pull/471) — **the real deploy fix: 256→8192 B USB CDC RX buffer.**
+
+**Durable gotcha (cost hours):** `screen_peers=1` in the launcher only means the sidecar
+heard the board's small `hello` — NOT that the screen works. The board's RX ring
+(256 B default) overflowed on the 326 B `hello_ack`, dropping the newline, so the board
+never linked (re-`hello`d forever) while the launcher showed CONNECTED. Full write-up in
+[[usb-serial-screen-transport-2026-07-02]] § "Second trap". Rig board is flashed with the fix;
+`AC_COPILOT_SIDECAR_SERIAL_PORT=COM6` is set in the user env; the deployed `.exe` is the rebuilt one.
+
 ## Delivered (2026-07-03 UTC) — MERGED #463: USB-serial screen transport, hotspot removed
 
 PR [#464](https://github.com/agorokh/ac-copilot-trainer/pull/464) squash-merged to `main`
