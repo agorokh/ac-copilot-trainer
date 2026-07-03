@@ -1273,15 +1273,47 @@ def test_update_settings_creates_template_when_file_missing(tmp_path: Path) -> N
     assert "token" not in json.dumps(payload).lower()
 
 
-def test_update_settings_recovers_from_corrupt_existing_file(tmp_path: Path) -> None:
+def test_update_settings_refuses_to_overwrite_malformed_existing_file(tmp_path: Path) -> None:
+    """Preserve manual work: a present-but-malformed settings.json is never overwritten."""
     paths = LauncherPaths(tmp_path)
-    (tmp_path / "settings.json").write_bytes(b"\xff\xfe not json")
+    original = "{ oops, hand-edited typo"  # valid utf-8, invalid JSON
+    (tmp_path / "settings.json").write_text(original, encoding="utf-8")
 
-    path = update_settings(paths, start_simhub=True)
+    with pytest.raises(ValueError):
+        update_settings(paths, start_simhub=True)
+
+    # The operator's file is left exactly as written — not clobbered with defaults.
+    assert (tmp_path / "settings.json").read_text(encoding="utf-8") == original
+
+
+def test_update_settings_refuses_to_overwrite_unreadable_existing_file(tmp_path: Path) -> None:
+    """A present-but-unreadable (bad-encoding) settings.json is preserved, raising OSError."""
+    paths = LauncherPaths(tmp_path)
+    (tmp_path / "settings.json").write_bytes(b"\xff\xfe not utf-8")
+
+    with pytest.raises(OSError):
+        update_settings(paths, start_simhub=True)
+
+    assert (tmp_path / "settings.json").read_bytes() == b"\xff\xfe not utf-8"
+
+
+def test_update_settings_never_persists_secret_like_keys(tmp_path: Path) -> None:
+    """update_settings writes only the non-secret schema; a stray token is dropped (contract)."""
+    paths = LauncherPaths(tmp_path)
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"sidecar_port": 8765, "token": "SHOULD-NOT-PERSIST", "voice_bank": "b"}),
+        encoding="utf-8",
+    )
+
+    path = update_settings(paths, start_simhub=True, token="ALSO-NOT")
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["start_simhub"] is True
-    assert payload["sidecar_port"] == 8765  # template default; the file was unreadable
+    assert payload["sidecar_port"] == 8765
+    assert payload["voice_bank"] == "b"
+    assert "token" not in payload
+    assert "SHOULD-NOT-PERSIST" not in json.dumps(payload)
+    assert "ALSO-NOT" not in json.dumps(payload)
 
 
 def test_update_settings_fills_template_for_partial_file(tmp_path: Path) -> None:
@@ -1333,6 +1365,22 @@ def test_set_start_simhub_applies_runtime_change_even_if_persist_fails(
     assert sup.set_start_simhub(True) is True
     assert sup.config.start_simhub is True
     # Not silent: the persist failure surfaces on stderr (daemon #480 review).
+    assert "could not persist start_simhub" in capsys.readouterr().err
+
+
+def test_set_start_simhub_preserves_malformed_settings_and_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Toggling with a malformed settings.json applies at runtime, warns, and leaves the
+    operator's file untouched (preserve manual work — daemon #480 antigravity HIGH)."""
+    paths = LauncherPaths(tmp_path)
+    original = "{ manual typo"
+    (tmp_path / "settings.json").write_text(original, encoding="utf-8")
+    sup = GamePointSupervisor(GamePointConfig(paths=paths), environ={})
+
+    assert sup.set_start_simhub(True) is True
+    assert sup.config.start_simhub is True
+    assert (tmp_path / "settings.json").read_text(encoding="utf-8") == original
     assert "could not persist start_simhub" in capsys.readouterr().err
 
 
