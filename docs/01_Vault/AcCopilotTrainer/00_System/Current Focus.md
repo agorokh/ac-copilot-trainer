@@ -37,8 +37,9 @@ not post a current-SHA review after the final cooldown, so its gate is vacuously
 [#479](https://github.com/agorokh/ac-copilot-trainer/issues/479) — Game Point **AUTO-START SIMHUB** UI
 toggle (opt-in default; hardened atomic `update_settings`: no-secrets, preserve-manual-work,
 unique-tempfile; UI source-of-truth). Operator-grade verified; 4-round review-hardened. Follow-up
-[#481](https://github.com/agorokh/ac-copilot-trainer/issues/481) (hermetic serial-port test). Detail:
-[[pr-480-simhub-launcher-toggle-2026-07-03]].
+[#481](https://github.com/agorokh/ac-copilot-trainer/issues/481) **CLOSED** (PR
+[#485](https://github.com/agorokh/ac-copilot-trainer/pull/485) `e126f02` — hermetic `AC_COPILOT_*` env
+in `test_ai_sidecar_external`). Detail: [[pr-480-simhub-launcher-toggle-2026-07-03]].
 
 **Delivered (2026-07-02):** PR [#460](https://github.com/agorokh/ac-copilot-trainer/pull/460)
 merged [#459](https://github.com/agorokh/ac-copilot-trainer/issues/459) — autonomous harness as a

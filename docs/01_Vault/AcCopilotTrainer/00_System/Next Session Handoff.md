@@ -80,9 +80,12 @@ house pattern per PR #207). `settings.update_settings` is a hardened atomic merg
 overwritten), and **unique-tempfile + `os.replace`**. UI is source-of-truth (checkbox value drives the
 model). Operator-grade verified (real launcher view → real toggle → real `settings.json` write, PASS);
 15 launcher tests; post-merge classification clean. Review-hardened over 4 rounds (cursor / antigravity
-/ Qodo). Follow-up filed: [#481](https://github.com/agorokh/ac-copilot-trainer/issues/481) (hermetic
-test — `test_ai_sidecar_external` leaks the rig `AC_COPILOT_SIDECAR_SERIAL_PORT`, local-only). Detail:
-[[pr-480-simhub-launcher-toggle-2026-07-03]].
+/ Qodo). Follow-up **delivered**: [#481](https://github.com/agorokh/ac-copilot-trainer/issues/481)
+**CLOSED** via PR [#485](https://github.com/agorokh/ac-copilot-trainer/pull/485) **MERGED**
+([`e126f02`](https://github.com/agorokh/ac-copilot-trainer/commit/e126f02)) — a module autouse fixture
+now clears rig `AC_COPILOT_*` env before each `test_ai_sidecar_external` test (fixing the
+`AC_COPILOT_SIDECAR_SERIAL_PORT=COM6` #463 leak that reded local `make ci-fast`; 47/47 pass with the
+rig env set; CI unaffected). Detail: [[pr-480-simhub-launcher-toggle-2026-07-03]].
 
 ## Resolved (2026-07-03 UTC) — PR #465 review loop: setup+drive compose (#461)
 
