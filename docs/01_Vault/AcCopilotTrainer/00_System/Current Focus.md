@@ -22,6 +22,23 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
+**Delivered (2026-07-03):** PR [#483](https://github.com/agorokh/ac-copilot-trainer/pull/483)
+**MERGED** at [`28c0fe1`](https://github.com/agorokh/ac-copilot-trainer/commit/28c0fe1b8745cef02d2cf9828502f2c21be58fcf) —
+**[#478](https://github.com/agorokh/ac-copilot-trainer/issues/478) CLOSED** (Capture Tier-B channels
+accG/yaw_rate/wheelsPressure + first-class tyre-set id + weatherType; #266 stretch / #402 residual).
+New `chassis_read.lua` captures measured g-forces (`car.acceleration`, in G) + yaw rate
+(`car.localAngularVelocity.y`); `wheel_read` captures dynamic hot `tyrePressure`; `telemetry.lua`
+persists them (TRACE_FIELDS 23→30, append-only, byte-identical Lua/Python, older archives load as
+blanks; all-zero column = "no live data"). Consume: `corner_attribution` `turn_in_lag` flips
+advisory→verdict only on real heading-trails-steer lag, `grip_limited` on live hot pressure. Lakehouse
+`stints` split on the canonical compound index off the `setup_hash` proxy. Live `telemetry_tick` sends
+real lat/long G. Analysis CSV + MoTeC (G-forces + yaw) export the channels. Review-hardened over 4
+self-hosted-reviewer rounds (all real defects + tests). `make ci-fast` 2357 passed. **Operator-pending
+(not a code AC):** live-CSP in-sim spot-check — deferred, shared rig on `feat/issue-479` + 12
+concurrent worktrees; drive a lap with #478 active and confirm non-zero `accG_*`/`yaw_rate`/
+`wheelsPressure_*` + `tyres` block + a confirmed verdict. Detail:
+[[issue-478-tier-b-channels-2026-07-03]].
+
 **Active focus (2026-07-03):** PR
 [#465](https://github.com/agorokh/ac-copilot-trainer/pull/465) for
 [#461](https://github.com/agorokh/ac-copilot-trainer/issues/461) is review-converged at
