@@ -115,6 +115,36 @@ TRACE_FIELDS: tuple[str, ...] = (
     "turboBoost",
     "fuel",
     "accG_vert",
+    # Tier-2 CSP force/slip channels (issue #488 Part A) — per-wheel FL/FR/RL/RR, appended AFTER
+    # accG_vert so every older column position stays byte-stable and <=76-col archives keep loading.
+    # slipRatio unitless (longitudinal, NOT the AC-ndSlip `wheelSlip` above); slipAngle DEGREES
+    # (lateral); mz Nm (self-aligning torque); fx/fy N (contact forces); dy peak mu. Populated by
+    # AC's tyre solver via CSP `ac.StateWheel`; the lap header `car.extendedPhysics` flag records
+    # whether the advanced physics model was active. Byte-identical to lap_archive.lua.
+    "slipRatio_fl",
+    "slipRatio_fr",
+    "slipRatio_rl",
+    "slipRatio_rr",
+    "slipAngle_fl",
+    "slipAngle_fr",
+    "slipAngle_rl",
+    "slipAngle_rr",
+    "mz_fl",
+    "mz_fr",
+    "mz_rl",
+    "mz_rr",
+    "fx_fl",
+    "fx_fr",
+    "fx_rl",
+    "fx_rr",
+    "fy_fl",
+    "fy_fr",
+    "fy_rl",
+    "fy_rr",
+    "dy_fl",
+    "dy_fr",
+    "dy_rl",
+    "dy_rr",
 )
 
 _LEGACY_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
@@ -128,13 +158,21 @@ _PRE_TIER_B_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:23]
 # archives keep loading and validating.
 _PRE_TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:30]
 # The 46 Tier-1 base-AC dynamic channels appended by #490 (per-wheel bands + car scalars).
-_TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[30:]
+_TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[30:76]
+# The pre-#488 full set (30 + 46 Tier-1 = 76 cols). #488 Part A appends the Tier-2 CSP force/slip
+# channels AFTER accG_vert, so this 76-col set stays a valid prefix and existing archives keep
+# loading and validating.
+_PRE_TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:76]
+# The 24 Tier-2 CSP force/slip channels appended by #488 Part A (per-wheel slipRatio/slipAngle/mz/
+# fx/fy/dy).
+_TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[76:]
 _TRACE_FIELD_VARIANTS: tuple[tuple[str, ...], ...] = (
     _LEGACY_TRACE_FIELDS,
     _LEGACY_RPM_TRACE_FIELDS,
     _LEGACY_TRACE_FIELDS + _PER_WHEEL_TRACE_FIELDS,
     _PRE_TIER_B_TRACE_FIELDS,
     _PRE_TIER1_DYNAMIC_TRACE_FIELDS,
+    _PRE_TIER2_DYNAMIC_TRACE_FIELDS,
     TRACE_FIELDS,
 )
 

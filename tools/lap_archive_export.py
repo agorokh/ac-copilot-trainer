@@ -112,6 +112,32 @@ CSV_COLUMNS: tuple[str, ...] = (
     "turboBoost",
     "fuel",
     "accG_vert",
+    # Tier-2 CSP force/slip channels (issue #488 Part A) — blank for archives that lack them.
+    # Identity CSV names; in sync with reference_lap.TRACE_FIELDS[76:] (test_lap_archive_export).
+    "slipRatio_fl",
+    "slipRatio_fr",
+    "slipRatio_rl",
+    "slipRatio_rr",
+    "slipAngle_fl",
+    "slipAngle_fr",
+    "slipAngle_rl",
+    "slipAngle_rr",
+    "mz_fl",
+    "mz_fr",
+    "mz_rl",
+    "mz_rr",
+    "fx_fl",
+    "fx_fr",
+    "fx_rl",
+    "fx_rr",
+    "fy_fl",
+    "fy_fr",
+    "fy_rl",
+    "fy_rr",
+    "dy_fl",
+    "dy_fr",
+    "dy_rl",
+    "dy_rr",
 )
 
 _PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = (
@@ -191,6 +217,35 @@ _TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = (
     "accG_vert",
 )
 
+# Tier-2 CSP force/slip channels (issue #488 Part A); blank for archives that lack them. MUST stay
+# in sync with reference_lap.TRACE_FIELDS[76:] — asserted by test_lap_archive_export.
+_TIER2_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = (
+    "slipRatio_fl",
+    "slipRatio_fr",
+    "slipRatio_rl",
+    "slipRatio_rr",
+    "slipAngle_fl",
+    "slipAngle_fr",
+    "slipAngle_rl",
+    "slipAngle_rr",
+    "mz_fl",
+    "mz_fr",
+    "mz_rl",
+    "mz_rr",
+    "fx_fl",
+    "fx_fr",
+    "fx_rl",
+    "fx_rr",
+    "fy_fl",
+    "fy_fr",
+    "fy_rl",
+    "fy_rr",
+    "dy_fl",
+    "dy_fr",
+    "dy_rl",
+    "dy_rr",
+)
+
 _TRACE_TO_CSV: dict[str, str] = {
     "eMs": "elapsed_ms",
     "spline": "spline",
@@ -209,6 +264,8 @@ _TRACE_TO_CSV: dict[str, str] = {
     **{name: name for name in _TIER_B_TRACE_FIELDS},
     # Tier-1 base-AC dynamic channels (issue #490) map to identically-named CSV columns
     **{name: name for name in _TIER1_DYNAMIC_TRACE_FIELDS},
+    # Tier-2 CSP force/slip channels (issue #488 Part A) map to identically-named CSV columns
+    **{name: name for name in _TIER2_DYNAMIC_TRACE_FIELDS},
 }
 
 _MOTEC_CHANNELS: tuple[tuple[str, str, str], ...] = (

@@ -85,6 +85,11 @@ end
 
 --- Brake disc temperature (degC). CSP `discTemperature` — brake heat into the tyre; brake-bias /
 --- duct attribution + braking-abuse. nil if unreadable.
+--- CAVEAT (#488, rig-verified 2026-07-04): `discTemperature` reads a flat ambient (~26 °C) when the
+--- car's brake-thermal model is inactive — reproduced on the 911 GT3 R across a hard-braking lap
+--- even with `car.extendedPhysics == true`. So it is CAR-physics-dependent, NOT extended-physics-
+--- gated; it stays a Tier-1 base-AC channel (it heats in sessions where the model is active). Treat
+--- a flat 26 °C as "not modelled for this car", not a capture bug.
 function M.brakeTemp(one)
   return finite(M.field(one, "discTemperature"))
 end
@@ -121,6 +126,55 @@ function M.suspTravel(one)
   return finite(M.field(one, "suspensionTravel"))
 end
 
+-- Tier-2 CSP force/slip channels (issue #488 Part A) — the dynamic tyre FORCE + SLIP state: the
+-- ground-truth grip labels ML needs and the earliest understeer-onset signal (Mz collapses before
+-- lateral force saturates). CSP field names verified against THIS rig's lua-sdk `ac.StateWheel`
+-- stubs (extension/internal/lua-sdk/*/lib.lua, class ac.StateWheel): `slipRatio` (unitless
+-- longitudinal), `slipAngle` (DEGREES lateral — "angle between desired and actual direction"),
+-- `mz` (self-aligning torque), `fx`/`fy` (contact-patch forces, N), `dy` (lateral friction
+-- coefficient / peak mu). AC's Pacejka solver populates these via CSP Lua; the car-level
+-- `extendedPhysics` flag (recorded in the lap header, not per-wheel) is the confound telling ML
+-- whether the advanced tyre model was active. Every read is pcall-guarded + finite-filtered, so an
+-- absent field degrades to nil (serialized as 0 downstream) — it never throws out of the hot loop
+-- nor fails the archive, satisfying the "gate/record availability, never fail" contract.
+
+--- Longitudinal slip ratio (unitless; CSP `slipRatio`). Traction-limit + frictional-heat driver.
+--- Reads ONLY the explicit longitudinal ratio — distinct from `M.slip`/`wheelSlip` (AC ndSlip
+--- fallback). nil if unreadable.
+function M.slipRatioLong(one)
+  return finite(M.field(one, "slipRatio"))
+end
+
+--- Lateral slip angle (DEGREES; CSP `slipAngle`). Cornering grip usage + lateral heat input; the
+--- front-vs-rear slip-angle balance is the direct under/oversteer signal. nil if unreadable.
+function M.slipAngle(one)
+  return finite(M.field(one, "slipAngle"))
+end
+
+--- Self-aligning torque Mz (Nm; CSP `mz`). Collapses BEFORE lateral force saturates → earliest
+--- understeer-onset signal. nil if unreadable.
+function M.mz(one)
+  return finite(M.field(one, "mz"))
+end
+
+--- Longitudinal contact-patch force Fx (N; CSP `fx`). Ground-truth traction/braking force label.
+--- nil if unreadable.
+function M.fx(one)
+  return finite(M.field(one, "fx"))
+end
+
+--- Lateral contact-patch force Fy (N; CSP `fy`). Ground-truth cornering-force label. nil if
+--- unreadable.
+function M.fy(one)
+  return finite(M.field(one, "fy"))
+end
+
+--- Lateral friction coefficient Dy / peak mu (unitless; CSP `dy`). Supervised grip-model label —
+--- the friction the tyre is actually delivering. nil if unreadable.
+function M.dy(one)
+  return finite(M.field(one, "dy"))
+end
+
 --- Read all four wheels into {omega={fl,fr,rl,rr}, slip={...}, temp={...}, pressure={...}, and the
 --- issue #490 Tier-1 channels tyreTempInner/Mid/Outer, brakeTemp, load, wear, dirty, camber,
 --- suspTravel} (each value number|nil). pcall-guards the `car.wheels` access and every per-wheel read.
@@ -142,6 +196,13 @@ function M.readPerWheel(car)
     dirty = {},
     camber = {},
     suspTravel = {},
+    -- issue #488 Tier-2 CSP force/slip channels
+    slipRatioLong = {},
+    slipAngle = {},
+    mz = {},
+    fx = {},
+    fy = {},
+    dy = {},
   }
   if car == nil then
     return out
@@ -172,6 +233,13 @@ function M.readPerWheel(car)
       out.dirty[k] = M.dirty(one)
       out.camber[k] = M.camber(one)
       out.suspTravel[k] = M.suspTravel(one)
+      -- issue #488 Tier-2 CSP force/slip channels
+      out.slipRatioLong[k] = M.slipRatioLong(one)
+      out.slipAngle[k] = M.slipAngle(one)
+      out.mz[k] = M.mz(one)
+      out.fx[k] = M.fx(one)
+      out.fy[k] = M.fy(one)
+      out.dy[k] = M.dy(one)
     end
   end
   return out

@@ -68,9 +68,9 @@ def test_generated_archive_carries_per_wheel_channels() -> None:
     for name in ("wheelAngularSpeed_fl", "wheelSlip_rr", "tyreCoreTemp_fl"):
         assert name in fields
     assert "rpm" in fields
-    # #490 Tier-1 dynamic channels append AFTER the #478 pressure block (append-only), so the last
-    # column is now accG_vert (was wheelsPressure_rr after #478, rpm before that).
-    assert fields[-1] == "accG_vert"
+    # Append-only history: #478 pressure block, then #490 Tier-1 (last was accG_vert at idx 75),
+    # then #488 Part A Tier-2 force/slip — so the final column is now dy_rr.
+    assert fields[-1] == "dy_rr"
     frames = archive_trace_to_object_trace(record)
     f0 = frames[0]
     speed_ms = f0["speed"] / 3.6
@@ -143,7 +143,8 @@ def test_generated_archive_carries_tier1_dynamic_channels() -> None:
         "accG_vert",
     ):
         assert name in fields
-    assert fields[-1] == "accG_vert"
+    # accG_vert is the last Tier-1 column (index 75); #488 Part A appends Tier-2 after it.
+    assert fields[75] == "accG_vert"
     f0 = archive_trace_to_object_trace(record)[0]
     for name in ("tyreTempInner_fl", "camber_rr", "rideHeightFront", "fuel", "accG_vert"):
         assert f0[name] == pytest.approx(0.0)
@@ -161,6 +162,47 @@ def test_validator_accepts_pre_490_30_field_trace() -> None:
     assert "wheelsPressure_rr" in frames[0]
     assert "tyreTempInner_fl" not in frames[0]
     assert "accG_vert" not in frames[0]
+
+
+def test_generated_archive_carries_tier2_dynamic_channels() -> None:
+    # #488 Part A: a generated reference archive includes the Tier-2 CSP force/slip columns. The
+    # synthetic generator does not model them, so they are 0.0 -> the all-zero guard treats a
+    # generated reference as honestly having no measured force/slip signal.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    for name in (
+        "slipRatio_fl",
+        "slipRatio_rr",
+        "slipAngle_fl",
+        "slipAngle_rr",
+        "mz_fl",
+        "mz_rr",
+        "fx_fl",
+        "fy_rr",
+        "dy_fl",
+        "dy_rr",
+    ):
+        assert name in fields
+    assert fields[-1] == "dy_rr"
+    assert len(fields) == 100
+    f0 = archive_trace_to_object_trace(record)[0]
+    for name in ("slipRatio_fl", "slipAngle_rr", "mz_fl", "fx_rr", "dy_rr"):
+        assert f0[name] == pytest.approx(0.0)
+
+
+def test_validator_accepts_pre_488_76_field_trace() -> None:
+    # #488 Part A: the Tier-2 force/slip channels append AFTER the #490 Tier-1 block; a lap captured
+    # between #490 and #488 declares 76 columns and stays schema-v1-valid, converting without the
+    # Tier-2 keys.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    record["trace"]["fields"] = list(fields[:76])
+    record["trace"]["samples"] = [[row[i] for i in range(76)] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)  # must not raise
+    frames = archive_trace_to_object_trace(record)
+    assert "accG_vert" in frames[0]
+    assert "slipRatio_fl" not in frames[0]
+    assert "dy_rr" not in frames[0]
 
 
 def test_validator_accepts_pre_478_23_field_trace() -> None:
