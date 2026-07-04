@@ -63,12 +63,86 @@ function M.pressure(one)
   return finite(M.field(one, "tyrePressure") or M.field(one, "dynamicPressure"))
 end
 
---- Read all four wheels into {omega={fl,fr,rl,rr}, slip={...}, temp={...}, pressure={...}} (each
---- value number|nil). pcall-guards the `car.wheels` access and every per-wheel read.
+-- Tier-1 base-AC dynamic channels (issue #490). CSP field names verified against the lua-sdk
+-- `ac.StateWheel` stubs (extension/internal/lua-sdk). All base-AC shared memory — no CSP extended
+-- physics dependency. Every read is pcall-guarded + finite-filtered so a wrong/absent field
+-- degrades to nil (serialized as 0 by traceSampleToColumnRow), never throwing out of the hot loop.
+
+--- Tyre temperature across the tread (degC): inner / middle / outer. The cross-tread gradient
+--- (inner-vs-outer) is the camber/pressure/load diagnosis signal (inner-hot=camber, outer-hot=low
+--- psi). nil if unreadable.
+function M.tyreTempInner(one)
+  return finite(M.field(one, "tyreInsideTemperature") or M.field(one, "insideTemperature"))
+end
+
+function M.tyreTempMid(one)
+  return finite(M.field(one, "tyreMiddleTemperature") or M.field(one, "middleTemperature"))
+end
+
+function M.tyreTempOuter(one)
+  return finite(M.field(one, "tyreOutsideTemperature") or M.field(one, "outsideTemperature"))
+end
+
+--- Brake disc temperature (degC). CSP `discTemperature` — brake heat into the tyre; brake-bias /
+--- duct attribution + braking-abuse. nil if unreadable.
+function M.brakeTemp(one)
+  return finite(M.field(one, "discTemperature"))
+end
+
+--- Vertical tyre load Fz (N). Normalizes slip->grip; strongest nonlinearity in wear. CSP `load` is
+--- exact for the local player car (its `loadK` sibling is the remote/replay estimate). nil if
+--- unreadable.
+function M.load(one)
+  return finite(M.field(one, "load"))
+end
+
+--- Tyre wear (0..1). AC's wear scale is NOT a simple 0-100% remaining — document before using as an
+--- ML target. nil if unreadable.
+function M.wear(one)
+  return finite(M.field(one, "tyreWear"))
+end
+
+--- Tyre dirt level (0..1) — exclude off-track/dirty samples from degradation fits. nil if unreadable.
+function M.dirty(one)
+  return finite(M.field(one, "tyreDirty") or M.field(one, "dirt"))
+end
+
+--- Dynamic (running) camber angle in DEGREES (CSP `camber`; the issue named base-SM `camberRAD` in
+--- radians, but our capture path reads CSP Lua, which exposes degrees — units recorded in the schema
+--- doc). Running vs set camber; ties the cross-tread temp gradient to geometry under load. nil if
+--- unreadable.
+function M.camber(one)
+  return finite(M.field(one, "camber"))
+end
+
+--- Suspension travel (m) — load transfer; spring/ARB attribution; the raw signal damper velocity is
+--- derived from (d/dt in telemetry.lua). nil if unreadable.
+function M.suspTravel(one)
+  return finite(M.field(one, "suspensionTravel"))
+end
+
+--- Read all four wheels into {omega={fl,fr,rl,rr}, slip={...}, temp={...}, pressure={...}, and the
+--- issue #490 Tier-1 channels tyreTempInner/Mid/Outer, brakeTemp, load, wear, dirty, camber,
+--- suspTravel} (each value number|nil). pcall-guards the `car.wheels` access and every per-wheel read.
 ---@param car any
 ---@return table
 function M.readPerWheel(car)
-  local out = { omega = {}, slip = {}, temp = {}, pressure = {} }
+  local out = {
+    omega = {},
+    slip = {},
+    temp = {},
+    pressure = {},
+    -- issue #490 Tier-1 base-AC dynamic channels
+    tyreTempInner = {},
+    tyreTempMid = {},
+    tyreTempOuter = {},
+    brakeTemp = {},
+    load = {},
+    wear = {},
+    dirty = {},
+    camber = {},
+    suspTravel = {},
+  }
   if car == nil then
     return out
   end
@@ -88,6 +162,16 @@ function M.readPerWheel(car)
       out.slip[k] = M.slip(one)
       out.temp[k] = M.temp(one)
       out.pressure[k] = M.pressure(one)
+      -- issue #490 Tier-1 base-AC dynamic channels
+      out.tyreTempInner[k] = M.tyreTempInner(one)
+      out.tyreTempMid[k] = M.tyreTempMid(one)
+      out.tyreTempOuter[k] = M.tyreTempOuter(one)
+      out.brakeTemp[k] = M.brakeTemp(one)
+      out.load[k] = M.load(one)
+      out.wear[k] = M.wear(one)
+      out.dirty[k] = M.dirty(one)
+      out.camber[k] = M.camber(one)
+      out.suspTravel[k] = M.suspTravel(one)
     end
   end
   return out
