@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from tools.ai_sidecar.tyre_specs import TyreSpec, read_tyre_specs
+
 # --- categories -------------------------------------------------------------
 BRAKES = "brakes"
 TIRES = "tires"
@@ -504,3 +506,18 @@ def from_spinners(
     if schema:
         out.spinner_schema = schema
     return out
+
+
+def resolve_tyre_spec(setup: CarSetup, car_data_dir: str | Path) -> TyreSpec | None:
+    """Resolve the CAR-true tyre specs for a setup's compound from the car's ``tyres.ini``.
+
+    The setup-side feed of the #488 Part B tyre-identity reader: a garage setup carries the
+    ``[TYRES] VALUE`` compound index, so given the car's data dir this surfaces the real compound
+    identity + specs (name, ideal cold/hot pressures, peak mu, optimal temp, size), letting the
+    coaching layer reason against car-true numbers instead of a generic bucket. ``None`` when the
+    compound index or the car's tyre data is unresolvable (ACD-aware; never raises).
+    """
+    ci = setup.compound_index
+    if ci is None or ci != ci or ci in (float("inf"), float("-inf")):
+        return None
+    return read_tyre_specs(car_data_dir, int(ci))

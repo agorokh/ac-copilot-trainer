@@ -239,3 +239,30 @@ def test_diff_handles_added_and_removed_knobs():
     cand = from_snapshot({"FRONT_BIAS.VALUE": "66", "TRACTION_CONTROL.VALUE": "5"})
     d = cand.diff(base)
     assert d["TRACTION_CONTROL"] == {"from": None, "to": 5.0}
+
+
+def test_resolve_tyre_spec_from_setup_compound(monkeypatch):
+    # #488 Part B: a setup's [TYRES] compound index resolves the car-true tyre spec (ACD-aware).
+    from types import SimpleNamespace
+
+    from tools.ai_sidecar import setup_model
+
+    setup = from_snapshot({"TYRES.VALUE": "0", "PRESSURE_LF.VALUE": "27.5"})
+    captured = {}
+
+    def _fake(car_dir, compound_index):
+        captured["ci"] = compound_index
+        return SimpleNamespace(name="Slick Soft", optimal_temp_c=70.0, pressure_ideal_psi=26.0)
+
+    monkeypatch.setattr(setup_model, "read_tyre_specs", _fake)
+    spec = setup_model.resolve_tyre_spec(setup, "/fake/car/dir")
+    assert captured["ci"] == 0  # the [TYRES] VALUE index was passed through
+    assert spec is not None
+    assert spec.name == "Slick Soft"
+
+
+def test_resolve_tyre_spec_none_without_compound():
+    from tools.ai_sidecar import setup_model
+
+    setup = from_snapshot({"PRESSURE_LF.VALUE": "27.5"})  # no [TYRES] compound index
+    assert setup_model.resolve_tyre_spec(setup, "/fake/car/dir") is None
