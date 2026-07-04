@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T01:45:00Z
+last_updated: 2026-07-04T05:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-490-tier1-dynamic-channels-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-478-tier-b-channels-2026-07-03.md
@@ -69,6 +70,37 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-04 UTC) — PR #496 MERGED (`b9f597a`): #466 Part B setup-resolution + race.ini concurrency hardening
+
+`/autonomous-deliver 466` (this session). With criterion (a) exhausted (below) and criterion (b)
+shipped (#482), the genuinely-remaining, in-scope #466 work was **Part B** — 3 self-hosted-daemon
+(cursor) MEDIUM findings, **separable from the criterion-(a) limit** (they harden the setup
+ARCHIVAL/RESOLUTION path + `race.ini` write-integrity — which work today, incl. `--setup` alone and
+manual play) and **off-rig testable**. Delivered via PR
+[#496](https://github.com/agorokh/ac-copilot-trainer/pull/496) **MERGED** (`b9f597a`):
+- **B1** — `setup_reader.resetRaceIniCache()` wired into the trainer's two spawn-reset paths
+  (`resetSessionState` / `resetRollingDrivingState`). A long-lived `acs.exe` that REUSES a
+  Quick-Drive session index with a different baked setup now refreshes on a real re-spawn, while a
+  same-spawn in-place edit still holds the spawn-time setup — the spawn signal (not the session
+  index) is the discriminator, so no existing cache test was weakened.
+- **B2** — `readActiveSetupPathFromRaceIni` returns a `transient` flag so a momentarily
+  missing/locked `race.ini` retries instead of falling through to the legacy folder guess (which can
+  archive the WRONG setup); the vanilla `SETUP=` fallback (927b07ed) is preserved.
+- **B3** — `write_setup_baked_race_ini` requires a stable two-read snapshot + treats an unparseable
+  read as a no-op, so a torn CM write can never be baked back and drop CM-owned `race.ini` sections
+  (adds an `unstable` counter to `RaceIniBakeState`).
+
+5 new tests map to the Part B acceptance criteria; `make ci-fast` green. Qodo reviewed and **endorsed**
+the double-read + unparseable-noop design (rejected lock-based / mtime alternatives); Gemini
+quota-limited (24 h, external); self-hosted daemon posted no current-SHA review after two cooldowns
+(vacuously satisfied per anti-hang). Durable node:
+[[issue-466-partb-setup-resolution-hardening-2026-07-04]].
+
+**#466 status:** ALL actionable scope now complete — criterion (b) done (#482), Part B done (#496),
+criterion (a) is a documented fundamental CSP/CM limit (#495, no harness fix possible; only an
+upstream CSP/CM change — a QuickDrive setup slot or a resettable autonomous state — could unlock it).
+Recommend **closing #466** (or relabel `blocked`/`upstream` if kept open for the upstream ask).
 
 ## #466 criterion (a) EXHAUSTED (2026-07-03 UTC) — reliable `--setup`+drive is a FUNDAMENTAL CSP/CM limit
 
