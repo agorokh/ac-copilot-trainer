@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T01:30:00Z
+last_updated: 2026-07-04T01:45:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-490-tier1-dynamic-channels-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
@@ -69,6 +69,26 @@ relates_to:
 ---
 
 # Next session handoff
+
+## #466 criterion (a) EXHAUSTED (2026-07-03 UTC) — reliable `--setup`+drive is a FUNDAMENTAL CSP/CM limit
+
+`/autonomous-deliver 466` continued (operator approved FORCE_START-hygienic, then CSP-Lua). Both
+refuted in-sim. **Every setup-injection layer is now closed** with decisive in-sim evidence — full
+table in [[issue-466-setup-drive-rebake-race-2026-07-03]]:
+- race.ini re-bake (no cadence sweet spot, #482); **FORCE_START gui.ini** (does NOT skip the overlay,
+  0/8+ on CM-launch AND direct-relaunch — the #461 "~1/5" does not reproduce; snapshot/restore
+  hygiene proven correct but reverted with the mechanism); **suspend-inject** (suspending acs is
+  benign, but the race.ini WRITE breaks CM immediate-start); **read-only race.ini** (CM can't launch);
+  **CM-native** (Quick Drive writes `SETUP=` empty, no preset/AppData slot); **CSP-Lua
+  `ac.loadSetup`** (`isCarResetAllowed` NEVER true on START or PIT autonomous launch — 0/152 samples —
+  so loadSetup can't apply on a live car).
+- **Root cause:** setup application needs a resettable/pre-live state; CM's immediate-start (the only
+  reliable overlay-skip) precludes it. Mutually exclusive at every layer.
+- **State:** FORCE_START code reverted to origin/main (no code shipped this session). Criterion (b)
+  fast-fail already merged (#482). Setup applies fine when NOT composed with a drive (fuel-verified).
+- **Recommendation for #466:** accept as a documented CSP/CM limitation; use `--no-setup` for reliable
+  autonomous drives. A real fix needs an upstream CSP/CM change (a QuickDrive setup slot, or a
+  resettable autonomous state) — out of harness scope. #466 commented with the full characterization.
 
 ## Delivered (2026-07-04 UTC) — PR #492 MERGED (`73ebe82`): #490 Tier-1 base-AC dynamic channels, RIG-VERIFIED
 

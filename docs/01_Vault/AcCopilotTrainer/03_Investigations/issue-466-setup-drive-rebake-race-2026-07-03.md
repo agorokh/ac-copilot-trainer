@@ -49,9 +49,31 @@ launch. This is the fundamental #461/#465 timing race, now characterized (not a 
   not ~32 s (#466 criterion b). Per-cycle `[auto-drive]` logs + re-bake stats + `--setup-rebake-interval`.
 - **No-setup DRIVE path reliable.** Keypress nudge kept opt-out (`--no-overlay-nudge`), documented ineffective.
 
-## Remaining on #466 (criterion a: setup+drive ≥9/10)
-Needs a different setup-injection mechanism. Top candidate: **PIT-spawn + pre-hijack in-sim
-`setup.load`** (CSP `ac.setSetupSpinnerValue`) while `ac.isCarResetAllowed()` is true in the pit box —
-the "must be in pits" refusal was seen at a START spawn / while a hijack held the car, and is untested
-for a PIT-spawn pre-hijack load. Needs the trainer app as a loopback Lua peer. Larger than the
-overlay-skip scope, so #466 stays open for it.
+## Criterion (a) is a FUNDAMENTAL limitation - every setup-injection layer closed (2026-07-03)
+
+`/autonomous-deliver 466` continued: operator approved trying FORCE_START (hygienic), then CSP-Lua.
+Both refuted in-sim. Criterion (a) (reliable `--setup` + drive) is a **fundamental limitation** of
+this AC/CSP/CM stack, not a missing mechanism. The setup-injection half works (fuel-verified
+repeatedly); the overlay-skip half works (no-setup). They **cannot coexist**: setup application needs
+a PRE-LIVE / resettable state, and CM's immediate-start (the only reliable overlay-skip) precludes it.
+Every layer, verified in-sim:
+
+| Layer / mechanism | Result | Evidence |
+|---|---|---|
+| race.ini re-bake (cadence sweep) | No sweet spot | 0.05s applies setup but breaks auto-start; >=0.1s preserves auto-start but misses setup (#482) |
+| race.ini + CSP `[BASIC] FORCE_START` (install-tree gui.ini) | **FORCE_START does NOT skip the overlay** | 0/8+ across CM-launch AND direct-acs-relaunch; `FORCE_START=1` confirmed present through acs startup + setup applied (fuel=45), overlay still stalled. The #461 "~1/5" does NOT reproduce (why #465 removed it). Snapshot/restore/self-heal hygiene proven correct but reverted with the refuted mechanism |
+| race.ini suspend-inject (freeze acs, inject, resume) | suspend BENIGN, the WRITE breaks immediate-start | suspend-only (no write) -> hijack OK; suspend+write -> setup applied (fuel=45) but overlay stalled. CM reacts to the race.ini change during launch, regardless of acs being frozen |
+| Read-only race.ini (block CM's wipe) | CM can't launch | LIVE=False: CM must write race.ini to launch |
+| CM-native setup (cmpreset / AppData) | Dead | CM Quick Drive writes `[CAR_0] SETUP=` **empty**; no preset setup field (verified real presets); no per-car AppData setup key |
+| CSP-Lua `ac.loadSetup` at car init | Blocked | `ac.isCarResetAllowed()` polled continuously 45s on START **and** PIT -> **NEVER true** (0 OK / 152 "must be in pits"). `ac.loadSetup` needs a resettable state (CSP docs + PT usage + the #91 gate); an autonomous car never has one |
+
+**Root cause (ironclad):** setup application needs a resettable/pre-live state; CM's immediate-start
+precludes it. A race.ini WRITE during the immediate-start window breaks it (CM watches the file);
+CSP `ac.loadSetup` needs `isCarResetAllowed` which is never true on an autonomous launch; CM has no
+native setup slot; FORCE_START does not skip the overlay on this CSP.
+
+**Recommendation:** treat criterion (a) as a documented CSP/CM limitation. Shipped value: criterion
+(b) fast-fail is merged (#482); the setup applies fine when NOT composed with a drive (`--setup`
+alone is fuel-verified); use `--no-setup` for reliable autonomous drives. A real fix needs an
+upstream CSP/CM change (a QuickDrive setup slot, or a resettable autonomous state) - out of harness
+scope. Probes preserved: `.scratch/issue-466/{suspend_inject,readonly_race,reset_allowed_timeline}_probe.py`.
