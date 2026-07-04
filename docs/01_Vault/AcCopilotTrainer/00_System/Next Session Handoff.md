@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T06:05:00Z
+last_updated: 2026-07-04T08:50:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-490-tier1-dynamic-channels-2026-07-03.md
@@ -71,6 +72,42 @@ relates_to:
 ---
 
 # Next session handoff
+
+## RESUME HERE — EPIC #488: Parts A+B DELIVERED & rig-verified; **Parts C + D remain**
+
+`/autonomous-deliver 488` this session delivered **Part A** (PR #497) and **Part B** (PR #500), both
+merged + rig-verified + post-merged. **EPIC #488 stays OPEN** for the last two parts (a clean pause at
+a large session budget — resume cold from here):
+- **Part C — Grain + serialization.** `tools/coaching_lake/build_analytics.py`: per-lap scalar + per-stint
+  series tables, tyre-set-age (`laps_on_set`) tracking, `dt` retention, Parquet emit + SchemaVer /
+  `union_by_name`, retention updates, docs `docs/10_Development/16_Telemetry_Data_Platform.md`. Acceptance:
+  a driven stint yields per-stint `deg_slope` vs `laps_on_set`, segmentable by `(car_id, compound_name,
+  laps_on_set)` with confound cols. NOTE: `build_analytics` already auto-widens its DuckDB schema from
+  `reference_lap.TRACE_FIELDS` (verified in Part A) — the 100-col trace + new `tyres` header
+  (`longName`/`optimalTempC`) flow in for free; Part C is the grain/Parquet/deg-slope layer on top.
+- **Part D — Setup⟷outcome linkage.** `coaching_lake` join views (`corners ⋈ setup_params ⋈` new
+  dynamic-response cols) + dynamic-vs-static delta features (running camber vs set; hot vs `PRESSURE_IDEAL`
+  — now available via Part B `tyre_specs`) + setup-snapshot reliability check (`setup_params` not empty).
+- Reusable: `tyre_specs.read_tyre_specs(car_dir, idx)` gives `optimal_temp_c`/`pressure_ideal_psi`/μ;
+  live archive `tyres` header carries `optimalTempC`/`longName`; rig drive = `auto_drive --driver ggv
+  --drive-seconds 470 --tap-seconds 450` (multi-lap so laps finalize+archive; `--wait-lap` stops at lap 1).
+
+## Delivered (2026-07-04 UTC) — PR #500 MERGED (`dd463fc`): #488 Part B tyre identity & specs, RIG-VERIFIED
+
+`/autonomous-deliver 488` (this session). Advances EPIC **#488 Part B**. Durable node:
+[[issue-488-part-b-tyre-identity-2026-07-04]].
+
+Tyre **compound identity** + **CAR-true optimal-temp window** (vs the generic bucket). Live
+`lap_archive.lua` `tyres` header: `longName` (`ac.getTyresLongName`) + `optimalTempC`
+(`wheel.tyreOptimumTemperature`) — no ACD needed for the core window. New `tyre_specs.py`: pure-stdlib
+`data.acd` reader (**cipher is SUBTRACTION not XOR** — grounded via aluigi + bovis/acd_extractor; key =
+8-subalg decimal string; bare `[FRONT]`==compound 0) → `TyreSpec` (name/size/PRESSURE_*/DX-DY_REF/
+curve-peak optimal/VERSION), bounded cache. `tyre_model` car-true window + ACD fallback;
+`setup_model.resolve_tyre_spec`. **Rig-verified** (911 GT3 R, Magione): live `longName="Slick Medium (M)"`,
+`optimalTempC=95`; ACD on real `data.acd` → Slick Soft optimal 70, PRESSURE_IDEAL 26, DX/DY 1.58, v10.
+**Caveat:** live optimum (95) > ACD first-peak (80) on a plateau curve — live is authoritative + preferred;
+ACD is a fallback approximation. **6 gemini review cycles** (all legit parser-robustness: case-insensitive
+lookup, bounded cache, commented headers, non-finite guard, basename `.lut`). `make ci-fast` OK.
 
 ## Delivered (2026-07-04 UTC) — PR #497 MERGED (`6eba176`): #488 Part A Tier-2 CSP force/slip channels, RIG-VERIFIED
 
