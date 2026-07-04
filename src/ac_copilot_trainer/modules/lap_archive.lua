@@ -69,6 +69,21 @@ local TRACE_FIELDS = {
   -- older column position stays stable; older archives lacking them export as blanks.
   "accG_long", "accG_lat", "yaw_rate",
   "wheelsPressure_fl", "wheelsPressure_fr", "wheelsPressure_rl", "wheelsPressure_rr",
+  -- Tier-1 base-AC dynamic channels (issue #490): tyre temp bands, brake temp, load, wear, dirt,
+  -- camber (deg), suspension travel + derived damper velocity (per-wheel FL/FR/RL/RR), then car
+  -- scalars ride height (front/rear), brake bias, turbo boost, fuel, and vertical g. Appended AFTER
+  -- wheelsPressure so every older column position stays stable; older archives export blanks.
+  "tyreTempInner_fl", "tyreTempInner_fr", "tyreTempInner_rl", "tyreTempInner_rr",
+  "tyreTempMid_fl", "tyreTempMid_fr", "tyreTempMid_rl", "tyreTempMid_rr",
+  "tyreTempOuter_fl", "tyreTempOuter_fr", "tyreTempOuter_rl", "tyreTempOuter_rr",
+  "brakeTemp_fl", "brakeTemp_fr", "brakeTemp_rl", "brakeTemp_rr",
+  "wheelLoad_fl", "wheelLoad_fr", "wheelLoad_rl", "wheelLoad_rr",
+  "tyreWear_fl", "tyreWear_fr", "tyreWear_rl", "tyreWear_rr",
+  "tyreDirty_fl", "tyreDirty_fr", "tyreDirty_rl", "tyreDirty_rr",
+  "camber_fl", "camber_fr", "camber_rl", "camber_rr",
+  "suspTravel_fl", "suspTravel_fr", "suspTravel_rl", "suspTravel_rr",
+  "damperVel_fl", "damperVel_fr", "damperVel_rl", "damperVel_rr",
+  "rideHeightFront", "rideHeightRear", "brakeBias", "turboBoost", "fuel", "accG_vert",
 }
 
 local function lapArchiveDir()

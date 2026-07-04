@@ -142,6 +142,22 @@ def test_tier_b_columns_in_generic_csv_and_motec_chassis_channels() -> None:
         assert name in motec_keys, f"{name} missing from MoTeC channels"
 
 
+def test_tier1_dynamic_columns_in_csv_and_match_trace_fields() -> None:
+    # #490: the generic analysis CSV carries every Tier-1 dynamic trace column, and the export's
+    # field groups stay in lock-step with the canonical reference_lap.TRACE_FIELDS tail (the three
+    # export locations — CSV_COLUMNS, _TIER1_DYNAMIC_TRACE_FIELDS, _TRACE_TO_CSV — must not drift).
+    from tools.ac_harness.reference_lap import TRACE_FIELDS
+
+    tier1 = TRACE_FIELDS[30:]
+    assert len(tier1) == 46
+    assert lap_archive_export._TIER1_DYNAMIC_TRACE_FIELDS == tier1
+    for name in tier1:
+        assert name in lap_archive_export.CSV_COLUMNS, f"{name} missing from generic CSV export"
+        assert name in lap_archive_export._TRACE_TO_CSV, f"{name} missing from trace->CSV map"
+    # every trace column maps to a CSV column (no silent drops on export)
+    assert set(TRACE_FIELDS) <= set(lap_archive_export._TRACE_TO_CSV)
+
+
 def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     monkeypatch.chdir(tmp_path)
     first = tmp_path / "lap_001.json"

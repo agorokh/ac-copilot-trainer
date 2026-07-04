@@ -44,24 +44,55 @@ local function component(vec, axis)
   return finite(M.field(vec, axis))
 end
 
---- Read chassis dynamics into {accG_long, accG_lat, yaw_rate} (each value number|nil).
---- pcall-guards `car.acceleration` and `car.localAngularVelocity` and every component read.
+--- Read a 0-indexed numeric array element (`arr[i]`), pcall-guarded and finite-filtered. CSP array
+--- fields like `car.rideHeight` are 0-based `number[]` ([0]=front, [1]=rear). nil if unreadable.
+local function indexed(arr, i)
+  if arr == nil then
+    return nil
+  end
+  return finite(M.field(arr, i))
+end
+
+--- Read chassis dynamics + car-level scalar channels into a flat table (each value number|nil):
+--- {accG_long, accG_lat, accG_vert, yaw_rate, rideHeight_front, rideHeight_rear, brakeBias,
+--- turboBoost, fuel}. pcall-guards every struct/component/index read so a missing field degrades to
+--- nil (serialized as 0 downstream). accG_vert + the car scalars are issue #490; the rest are #478.
 ---@param car any
 ---@return table
 function M.read(car)
-  local out = { accG_long = nil, accG_lat = nil, yaw_rate = nil }
+  local out = {
+    accG_long = nil,
+    accG_lat = nil,
+    accG_vert = nil,
+    yaw_rate = nil,
+    rideHeight_front = nil,
+    rideHeight_rear = nil,
+    brakeBias = nil,
+    turboBoost = nil,
+    fuel = nil,
+  }
   if car == nil then
     return out
   end
   local accel = M.field(car, "acceleration")
   if accel ~= nil then
     out.accG_lat = component(accel, "x")   -- sideways (lateral) G
+    out.accG_vert = component(accel, "y")  -- vertical G — completes the g-cube (issue #490)
     out.accG_long = component(accel, "z")  -- forwards/backwards (longitudinal) G
   end
   local angVel = M.field(car, "localAngularVelocity")
   if angVel ~= nil then
     out.yaw_rate = component(angVel, "y")  -- rotation about the vertical axis = yaw rate (rad/s)
   end
+  -- Car-level scalars (issue #490). rideHeight is a 0-indexed number[] ([0]=front, [1]=rear).
+  local rideH = M.field(car, "rideHeight")
+  if rideH ~= nil then
+    out.rideHeight_front = indexed(rideH, 0)  -- aero platform ⇒ downforce ⇒ tyre load (m)
+    out.rideHeight_rear = indexed(rideH, 1)
+  end
+  out.brakeBias = finite(M.field(car, "brakeBias"))    -- runtime bias, 0=rear .. 1=front (physics-only)
+  out.turboBoost = finite(M.field(car, "turboBoost"))  -- boost delivery, 0 and upwards
+  out.fuel = finite(M.field(car, "fuel"))              -- remaining fuel (L) ⇒ car mass ⇒ tyre load
   return out
 end
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -66,8 +68,9 @@ def test_generated_archive_carries_per_wheel_channels() -> None:
     for name in ("wheelAngularSpeed_fl", "wheelSlip_rr", "tyreCoreTemp_fl"):
         assert name in fields
     assert "rpm" in fields
-    # #478 chassis + pressure channels append AFTER rpm (append-only), so rpm is no longer last.
-    assert fields[-1] == "wheelsPressure_rr"
+    # #490 Tier-1 dynamic channels append AFTER the #478 pressure block (append-only), so the last
+    # column is now accG_vert (was wheelsPressure_rr after #478, rpm before that).
+    assert fields[-1] == "accG_vert"
     frames = archive_trace_to_object_trace(record)
     f0 = frames[0]
     speed_ms = f0["speed"] / 3.6
@@ -96,6 +99,68 @@ def test_generated_archive_carries_tier_b_chassis_channels() -> None:
     f0 = archive_trace_to_object_trace(record)[0]
     for name in ("accG_long", "accG_lat", "yaw_rate", "wheelsPressure_fl", "wheelsPressure_rr"):
         assert f0[name] == pytest.approx(0.0)
+
+
+def test_lua_and_python_trace_fields_are_byte_identical() -> None:
+    # #490 acceptance #4 (and the load-bearing contract behind #266/#442/#478): the capture-side Lua
+    # TRACE_FIELDS and the Python mirror MUST be byte-identical - a drift silently corrupts every
+    # archive's column mapping. Parse the Lua list and compare to reference_lap.TRACE_FIELDS.
+    lua_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "ac_copilot_trainer"
+        / "modules"
+        / "lap_archive.lua"
+    )
+    lua_src = lua_path.read_text(encoding="utf-8")
+    match = re.search(r"local TRACE_FIELDS = \{(.*?)\n\}", lua_src, re.S)
+    assert match is not None, "TRACE_FIELDS block not found in lap_archive.lua"
+    lua_fields = re.findall(r'"([^"]+)"', match.group(1))
+    assert lua_fields == list(TRACE_FIELDS)
+
+
+def test_generated_archive_carries_tier1_dynamic_channels() -> None:
+    # #490: a generated reference archive includes the Tier-1 dynamic columns. The synthetic
+    # generator does not model them, so they are 0.0 -> the analysis all-zero guard treats a
+    # generated reference as honestly having no measured dynamic signal.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    for name in (
+        "tyreTempInner_fl",
+        "tyreTempOuter_rr",
+        "brakeTemp_fl",
+        "wheelLoad_rr",
+        "tyreWear_fl",
+        "tyreDirty_rr",
+        "camber_fl",
+        "suspTravel_rr",
+        "damperVel_fl",
+        "rideHeightFront",
+        "rideHeightRear",
+        "brakeBias",
+        "turboBoost",
+        "fuel",
+        "accG_vert",
+    ):
+        assert name in fields
+    assert fields[-1] == "accG_vert"
+    f0 = archive_trace_to_object_trace(record)[0]
+    for name in ("tyreTempInner_fl", "camber_rr", "rideHeightFront", "fuel", "accG_vert"):
+        assert f0[name] == pytest.approx(0.0)
+
+
+def test_validator_accepts_pre_490_30_field_trace() -> None:
+    # #490: the Tier-1 dynamic channels append AFTER the #478 pressure block; a lap captured between
+    # #478 and #490 declares 30 columns and stays schema-v1-valid, converting without the #490 keys.
+    record = build_archive_record_from_scenario("brake_too_late")
+    fields = record["trace"]["fields"]
+    record["trace"]["fields"] = list(fields[:30])
+    record["trace"]["samples"] = [[row[i] for i in range(30)] for row in record["trace"]["samples"]]
+    validate_lap_archive_record(record)  # must not raise
+    frames = archive_trace_to_object_trace(record)
+    assert "wheelsPressure_rr" in frames[0]
+    assert "tyreTempInner_fl" not in frames[0]
+    assert "accG_vert" not in frames[0]
 
 
 def test_validator_accepts_pre_478_23_field_trace() -> None:

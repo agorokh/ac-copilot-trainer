@@ -913,6 +913,21 @@ def corner_live_signals(
         if any(m is not None for m in means):
             extra["wheelsPressure"] = dict(zip(_WHEEL_LABELS, means, strict=False))
 
+    # --- cross-tread tyre temps (#490): inner-vs-outer gradient confirms camber/pressure ---
+    # Per-wheel gradient = mean(inner) - mean(outer) over the corner (positive = inner edge hotter =
+    # excessive negative camber; negative = outer edge hotter = low pressure / too little camber).
+    if lap.tyre_temp_inner is not None and lap.tyre_temp_outer is not None:
+        grads: dict[str, float] = {}
+        for wi, label in enumerate(_WHEEL_LABELS):
+            inner = [lap.tyre_temp_inner[k][wi] for k in seg if lap.tyre_temp_inner[k][wi] > 0.0]
+            outer = [lap.tyre_temp_outer[k][wi] for k in seg if lap.tyre_temp_outer[k][wi] > 0.0]
+            if inner and outer:
+                grads[label] = round(sum(inner) / len(inner) - sum(outer) / len(outer), 2)
+        # Confirm only when at least one wheel had a real cross-tread reading IN this corner
+        # (mirrors the pressure/lock guards) — the marker never outruns the data.
+        if grads:
+            extra["tyreCrossGradient"] = grads
+
     return extra
 
 
@@ -1254,6 +1269,60 @@ def _turn_in_lag_coaching(ctx: CornerContext) -> str:
     )
 
 
+def _r_camber_pressure(ctx: CornerContext) -> float:
+    grads = ctx.extra.get("tyreCrossGradient")
+    if not isinstance(grads, dict) or not grads:
+        return 0.0
+    peak = max((abs(v) for v in grads.values()), default=0.0)
+    # A few °C of cross-tread spread is normal; a large inner-vs-outer delta is a real
+    # camber/pressure signal. Conservative like the sibling rules: >=12 °C strong, >=7 °C moderate.
+    if peak >= 12.0:
+        return 0.75
+    if peak >= 7.0:
+        return 0.5
+    return 0.0
+
+
+def _worst_cross_gradient(ctx: CornerContext) -> tuple[str, float] | None:
+    grads = ctx.extra.get("tyreCrossGradient")
+    if not isinstance(grads, dict) or not grads:
+        return None
+    label, value = max(grads.items(), key=lambda kv: abs(kv[1]))
+    return label, value
+
+
+def _camber_pressure_setup_causes(ctx: CornerContext) -> list[str]:
+    worst = _worst_cross_gradient(ctx)
+    if worst is None:
+        return []
+    label, value = worst
+    wheel = label.upper()
+    if value > 0:  # inner edge hotter -> too much negative camber
+        return [
+            f"CONFIRMED {wheel} cross-tread imbalance: inner {value:+.1f} °C hotter than outer "
+            "→ too much NEGATIVE CAMBER (inner edge overworked). Take camber OUT a notch, or "
+            "raise hot PRESSURE slightly to spread load outward.",
+        ]
+    return [
+        f"CONFIRMED {wheel} cross-tread imbalance: outer {-value:.1f} °C hotter than inner "
+        "→ rolling onto the OUTER shoulder. Raise hot PRESSURE toward the window, or add a "
+        "touch of NEGATIVE CAMBER to keep the contact patch flat under load.",
+    ]
+
+
+def _camber_pressure_coaching(ctx: CornerContext) -> str:
+    worst = _worst_cross_gradient(ctx)
+    if worst is None:
+        return "Cross-tread tyre temperatures look balanced."
+    label, value = worst
+    edge = "inner" if value > 0 else "outer"
+    fix = "ease camber or raise pressure" if value > 0 else "raise pressure or add camber"
+    return (
+        f"{label.upper()} tyre is running its {edge} edge {abs(value):.0f} °C hotter across the "
+        f"tread — a camber/pressure imbalance, not a line problem: {fix}."
+    )
+
+
 RULES: list[DiagnosticRule] = [
     DiagnosticRule(
         key="grip_limited",
@@ -1428,5 +1497,21 @@ RULES: list[DiagnosticRule] = [
             "releasing in one step.",
         ),
         coaching=_trail_brake_coaching,
+    ),
+    DiagnosticRule(
+        key="camber_pressure_imbalance",
+        symptom="cross-tread temperature imbalance",
+        phase="mid",
+        tier="A",
+        # 'tyreCrossGradient' is the COMPUTED signal (inner-vs-outer tyre temp, #490), present only
+        # when BOTH bands were read IN this corner — so confirmation never outruns the data.
+        channels_needed=("tyreCrossGradient",),
+        test=_r_camber_pressure,
+        setup_causes=_camber_pressure_setup_causes,
+        technique_causes=(
+            "Cross-tread heat also builds from sustained cornering load — a smoother, earlier "
+            "release can lower peak edge temps once the setup is already close.",
+        ),
+        coaching=_camber_pressure_coaching,
     ),
 ]

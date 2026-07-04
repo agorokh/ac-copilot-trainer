@@ -60,6 +60,53 @@ local MAX_LAP_TRACE = 2000
 ---@field wheelsPressure_fr number|nil
 ---@field wheelsPressure_rl number|nil
 ---@field wheelsPressure_rr number|nil
+--- issue #490 Tier-1 base-AC dynamic channels (per-wheel FL/FR/RL/RR unless noted; scalars at end)
+---@field tyreTempInner_fl number|nil
+---@field tyreTempInner_fr number|nil
+---@field tyreTempInner_rl number|nil
+---@field tyreTempInner_rr number|nil
+---@field tyreTempMid_fl number|nil
+---@field tyreTempMid_fr number|nil
+---@field tyreTempMid_rl number|nil
+---@field tyreTempMid_rr number|nil
+---@field tyreTempOuter_fl number|nil
+---@field tyreTempOuter_fr number|nil
+---@field tyreTempOuter_rl number|nil
+---@field tyreTempOuter_rr number|nil
+---@field brakeTemp_fl number|nil
+---@field brakeTemp_fr number|nil
+---@field brakeTemp_rl number|nil
+---@field brakeTemp_rr number|nil
+---@field wheelLoad_fl number|nil
+---@field wheelLoad_fr number|nil
+---@field wheelLoad_rl number|nil
+---@field wheelLoad_rr number|nil
+---@field tyreWear_fl number|nil
+---@field tyreWear_fr number|nil
+---@field tyreWear_rl number|nil
+---@field tyreWear_rr number|nil
+---@field tyreDirty_fl number|nil
+---@field tyreDirty_fr number|nil
+---@field tyreDirty_rl number|nil
+---@field tyreDirty_rr number|nil
+---@field camber_fl number|nil
+---@field camber_fr number|nil
+---@field camber_rl number|nil
+---@field camber_rr number|nil
+---@field suspTravel_fl number|nil
+---@field suspTravel_fr number|nil
+---@field suspTravel_rl number|nil
+---@field suspTravel_rr number|nil
+---@field damperVel_fl number|nil
+---@field damperVel_fr number|nil
+---@field damperVel_rl number|nil
+---@field damperVel_rr number|nil
+---@field rideHeightFront number|nil
+---@field rideHeightRear number|nil
+---@field brakeBias number|nil
+---@field turboBoost number|nil
+---@field fuel number|nil
+---@field accG_vert number|nil
 
 local Telemetry = {}
 Telemetry.__index = Telemetry
@@ -102,6 +149,9 @@ function M.new(cfg)
     lapBuf = {},
     lapN = 0,
     lapT0 = nil,
+    -- issue #490 damper-velocity carry-over (prev suspensionTravel + sim time for the d/dt derive)
+    _damperPrevT = nil,
+    _damperPrevTravel = nil,
   }, Telemetry)
 end
 
@@ -208,6 +258,25 @@ function Telemetry:update(dt, car, sim)
     -- reads serialize as 0 via traceSampleToColumnRow; the analysis layer treats an all-zero column
     -- as "no live data" so an unreadable field never fabricates a verdict.
     local chassis = chassis_read.read(car)
+    -- Damper velocity (m/s) = d(suspensionTravel)/dt per wheel, derived from the previous lap
+    -- sample's travel + the sim-time delta (issue #490). First sample, an unreadable wheel, or a
+    -- non-positive dt (e.g. the lap boundary where eMs resets) yields 0. Uses monotonic sim time
+    -- `t` (not per-lap eMs) so it stays correct across laps.
+    local damperVel = { fl = 0, fr = 0, rl = 0, rr = 0 }
+    local prevT, prevTravel = self._damperPrevT, self._damperPrevTravel
+    if prevT ~= nil and prevTravel ~= nil then
+      local dt = t - prevT
+      if dt > 1e-6 then
+        for wk in pairs(damperVel) do
+          local cur, prv = w.suspTravel[wk], prevTravel[wk]
+          if cur ~= nil and prv ~= nil then
+            damperVel[wk] = (cur - prv) / dt
+          end
+        end
+      end
+    end
+    self._damperPrevT = t
+    self._damperPrevTravel = w.suspTravel
     ---@type LapTraceSample
     local lp = {
       spline = car.splinePosition or 0,
@@ -240,6 +309,54 @@ function Telemetry:update(dt, car, sim)
       wheelsPressure_fr = w.pressure.fr,
       wheelsPressure_rl = w.pressure.rl,
       wheelsPressure_rr = w.pressure.rr,
+      -- issue #490 Tier-1 base-AC dynamic channels (per-wheel), read via wheel_read/chassis_read
+      tyreTempInner_fl = w.tyreTempInner.fl,
+      tyreTempInner_fr = w.tyreTempInner.fr,
+      tyreTempInner_rl = w.tyreTempInner.rl,
+      tyreTempInner_rr = w.tyreTempInner.rr,
+      tyreTempMid_fl = w.tyreTempMid.fl,
+      tyreTempMid_fr = w.tyreTempMid.fr,
+      tyreTempMid_rl = w.tyreTempMid.rl,
+      tyreTempMid_rr = w.tyreTempMid.rr,
+      tyreTempOuter_fl = w.tyreTempOuter.fl,
+      tyreTempOuter_fr = w.tyreTempOuter.fr,
+      tyreTempOuter_rl = w.tyreTempOuter.rl,
+      tyreTempOuter_rr = w.tyreTempOuter.rr,
+      brakeTemp_fl = w.brakeTemp.fl,
+      brakeTemp_fr = w.brakeTemp.fr,
+      brakeTemp_rl = w.brakeTemp.rl,
+      brakeTemp_rr = w.brakeTemp.rr,
+      wheelLoad_fl = w.load.fl,
+      wheelLoad_fr = w.load.fr,
+      wheelLoad_rl = w.load.rl,
+      wheelLoad_rr = w.load.rr,
+      tyreWear_fl = w.wear.fl,
+      tyreWear_fr = w.wear.fr,
+      tyreWear_rl = w.wear.rl,
+      tyreWear_rr = w.wear.rr,
+      tyreDirty_fl = w.dirty.fl,
+      tyreDirty_fr = w.dirty.fr,
+      tyreDirty_rl = w.dirty.rl,
+      tyreDirty_rr = w.dirty.rr,
+      camber_fl = w.camber.fl,
+      camber_fr = w.camber.fr,
+      camber_rl = w.camber.rl,
+      camber_rr = w.camber.rr,
+      suspTravel_fl = w.suspTravel.fl,
+      suspTravel_fr = w.suspTravel.fr,
+      suspTravel_rl = w.suspTravel.rl,
+      suspTravel_rr = w.suspTravel.rr,
+      damperVel_fl = damperVel.fl,
+      damperVel_fr = damperVel.fr,
+      damperVel_rl = damperVel.rl,
+      damperVel_rr = damperVel.rr,
+      -- issue #490 car-level scalar channels (from chassis_read)
+      rideHeightFront = chassis.rideHeight_front,
+      rideHeightRear = chassis.rideHeight_rear,
+      brakeBias = chassis.brakeBias,
+      turboBoost = chassis.turboBoost,
+      fuel = chassis.fuel,
+      accG_vert = chassis.accG_vert,
     }
     self.lapBuf[self.lapN] = lp
     if self.lapN > MAX_LAP_RAW then

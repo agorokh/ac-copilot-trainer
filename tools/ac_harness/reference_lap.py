@@ -64,6 +64,57 @@ TRACE_FIELDS: tuple[str, ...] = (
     "wheelsPressure_fr",
     "wheelsPressure_rl",
     "wheelsPressure_rr",
+    # Tier-1 base-AC dynamic channels (#490) — appended AFTER wheelsPressure so every older column
+    # position stays byte-stable. Per-wheel FL/FR/RL/RR unless noted. Units (vendor-annotated):
+    # temps °C; wheelLoad N; camber DEGREES (CSP `camber`, not base-SM radians); suspTravel m;
+    # damperVel m/s (derived d/dt suspTravel in telemetry.lua); rideHeight m; brakeBias 0..1;
+    # turboBoost 0..N; fuel L; accG_vert G. Byte-identical to lap_archive.lua::TRACE_FIELDS.
+    "tyreTempInner_fl",
+    "tyreTempInner_fr",
+    "tyreTempInner_rl",
+    "tyreTempInner_rr",
+    "tyreTempMid_fl",
+    "tyreTempMid_fr",
+    "tyreTempMid_rl",
+    "tyreTempMid_rr",
+    "tyreTempOuter_fl",
+    "tyreTempOuter_fr",
+    "tyreTempOuter_rl",
+    "tyreTempOuter_rr",
+    "brakeTemp_fl",
+    "brakeTemp_fr",
+    "brakeTemp_rl",
+    "brakeTemp_rr",
+    "wheelLoad_fl",
+    "wheelLoad_fr",
+    "wheelLoad_rl",
+    "wheelLoad_rr",
+    "tyreWear_fl",
+    "tyreWear_fr",
+    "tyreWear_rl",
+    "tyreWear_rr",
+    "tyreDirty_fl",
+    "tyreDirty_fr",
+    "tyreDirty_rl",
+    "tyreDirty_rr",
+    "camber_fl",
+    "camber_fr",
+    "camber_rl",
+    "camber_rr",
+    "suspTravel_fl",
+    "suspTravel_fr",
+    "suspTravel_rl",
+    "suspTravel_rr",
+    "damperVel_fl",
+    "damperVel_fr",
+    "damperVel_rl",
+    "damperVel_rr",
+    "rideHeightFront",
+    "rideHeightRear",
+    "brakeBias",
+    "turboBoost",
+    "fuel",
+    "accG_vert",
 )
 
 _LEGACY_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:10]
@@ -72,11 +123,18 @@ _PER_WHEEL_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[10:22]
 # The pre-#478 full set (10 legacy + 12 per-wheel + rpm). #478 appends the chassis + pressure
 # channels AFTER rpm, so this stays a valid prefix and older 23-column archives keep loading.
 _PRE_TIER_B_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:23]
+# The pre-#490 full set (23 + 3 chassis + 4 hot-pressure = 30 cols). #490 appends the Tier-1
+# dynamic channels AFTER wheelsPressure, so this 30-col set stays a valid prefix and existing
+# archives keep loading and validating.
+_PRE_TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[:30]
+# The 46 Tier-1 base-AC dynamic channels appended by #490 (per-wheel bands + car scalars).
+_TIER1_DYNAMIC_TRACE_FIELDS: tuple[str, ...] = TRACE_FIELDS[30:]
 _TRACE_FIELD_VARIANTS: tuple[tuple[str, ...], ...] = (
     _LEGACY_TRACE_FIELDS,
     _LEGACY_RPM_TRACE_FIELDS,
     _LEGACY_TRACE_FIELDS + _PER_WHEEL_TRACE_FIELDS,
     _PRE_TIER_B_TRACE_FIELDS,
+    _PRE_TIER1_DYNAMIC_TRACE_FIELDS,
     TRACE_FIELDS,
 )
 
