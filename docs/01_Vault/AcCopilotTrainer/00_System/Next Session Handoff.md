@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T21:52:00Z
+last_updated: 2026-07-04T01:30:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-490-tier1-dynamic-channels-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/issue-478-tier-b-channels-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/pr-480-simhub-launcher-toggle-2026-07-03.md
@@ -68,6 +69,24 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-04 UTC) — PR #492 MERGED (`73ebe82`): #490 Tier-1 base-AC dynamic channels, RIG-VERIFIED
+
+Appended **46 append-only trace cols** (30→**76**) — per-wheel tyre temp bands / brakeTemp / wheelLoad /
+tyreWear / tyreDirty / camber(deg) / suspTravel / damperVel + car scalars rideHeight F/R / brakeBias /
+turboBoost / fuel / accG_vert. All base-AC (CSP lua-sdk-grounded, pcall-guarded); `lap_archive.lua` ⟷
+`reference_lap.py` byte-identical (new parity test). Cross-tread gradient → `camber_pressure_imbalance`
+**verdict** wired into `corner_attribution`. Durable node: [[issue-490-tier1-dynamic-channels-2026-07-03]].
+
+**Rig-verified on a real Magione lap** (911 GT3 R, ggv, `auto_drive --wait-lap`): 41/46 cols carry real
+values; the 5 zeros are correct-for-context (tyreWear=0 fresh tyres, turboBoost=0 = NA engine). DuckDB
+`samples` auto-widened to 80 cols, queryable; attribution emitted `tyreCrossGradient` on all 5 corners.
+**Caveat:** `brakeTemp`(`discTemperature`) read constant 26°C ambient — accessor correct but brake-disc
+heating appears base-physics-inactive for this car (follow-up filed).
+
+**Grounded corrections to the #490/#488 research node below:** camber is **DEGREES** (CSP `camber`), not
+`camberRAD` radians; brakeTemp source is **`discTemperature`**; accG_lat/long + yaw + wheelsPressure were
+already captured by #478 (only **accG_vert** was genuinely new — the research `[1]=vert` axis).
 
 ## Research (2026-07-03 UTC) — telemetry capture surface for ML → EPIC #488 + quick-win #490
 
