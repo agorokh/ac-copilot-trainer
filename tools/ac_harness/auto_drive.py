@@ -663,6 +663,7 @@ class RaceIniBakeState:
 
     ready: int = 0
     writes: int = 0
+    unstable: int = 0  # #466 B3: ticks skipped because race.ini was mid-write (torn/locked read)
     last_error: str | None = None
 
 
@@ -683,16 +684,39 @@ def validate_race_ini_write_target(race_ini: Path) -> Path:
 def write_setup_baked_race_ini(race_ini: Path, setup_ini: Path) -> str:
     """Bake ``setup_ini`` into ``race.ini`` with an atomic same-directory replace.
 
-    Returns ``"missing"`` when ``race.ini`` is not present yet, ``"unchanged"`` when it already
-    names the requested setup/spawn, and ``"written"`` after an atomic replace. Content Manager
-    often creates or rewrites the file during launch. The only accepted target is
-    ``Documents/Assetto Corsa/cfg/race.ini``.
+    Returns ``"missing"`` when ``race.ini`` is not present yet, ``"unstable"`` when the file is
+    being rewritten by CM right now (see torn-read safety), ``"unchanged"`` when it already names
+    the requested setup/spawn, and ``"written"`` after an atomic replace. The only accepted target
+    is ``Documents/Assetto Corsa/cfg/race.ini``.
+
+    Torn-read safety (#466 B3): the 50 ms re-bake loop runs concurrently with CM, which rewrites
+    ``race.ini`` non-atomically during launch. A single ``read_text`` can capture a truncated file;
+    baking that back through ``configparser`` and atomically replacing it would make the truncation
+    permanent — silently dropping the CM-owned sections/keys that were cut off. Two guards prevent
+    that: (1) require a STABLE snapshot — two identical back-to-back reads — before trusting the
+    content, and (2) treat an unparseable snapshot as a no-op. Either guard failing returns
+    ``"unstable"`` and writes nothing; the loop retries on its next tick once CM's write settles.
     """
     race_ini = validate_race_ini_write_target(race_ini)
     if not race_ini.is_file():
         return "missing"
-    original = race_ini.read_text(encoding="utf-8", errors="surrogateescape")
-    baked = bake_setup_into_race_ini(original, setup_ini)
+    try:
+        first = race_ini.read_text(encoding="utf-8", errors="surrogateescape")
+        second = race_ini.read_text(encoding="utf-8", errors="surrogateescape")
+    except OSError:
+        # Momentarily unreadable (locked) mid-write; retry next tick rather than write a
+        # partial file.
+        return "unstable"
+    if first != second:
+        # The file changed between two back-to-back reads → CM is writing it now. Skip this tick.
+        return "unstable"
+    original = first
+    try:
+        baked = bake_setup_into_race_ini(original, setup_ini)
+    except configparser.Error:
+        # A stable but unparseable snapshot (e.g. a torn read halted mid-section). Never atomically
+        # replace race.ini with a bake derived from it — that would drop CM's sections/keys.
+        return "unstable"
     if baked == original:
         return "unchanged"
     tmp = race_ini.with_name(f".{race_ini.name}.ac_copilot_setup.tmp")
@@ -724,10 +748,12 @@ def race_ini_setup_bake_loop(
         while not stop.is_set():
             try:
                 result = write_setup_baked_race_ini(race_ini, setup_ini)
-                if result != "missing":
+                if result not in ("missing", "unstable"):
                     state.ready += 1
                 if result == "written":
                     state.writes += 1
+                elif result == "unstable":
+                    state.unstable += 1  # #466 B3: torn/locked read dodged (no partial write)
             except Exception as exc:  # noqa: BLE001 - CM can expose half-written race.ini briefly.
                 state.last_error = f"{type(exc).__name__}: {exc}"
             stop.wait(interval)

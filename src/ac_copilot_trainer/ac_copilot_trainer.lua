@@ -1624,6 +1624,7 @@ local function resetRuntimeAfterLeavingTrack()
   renderDiag.reset()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: re-emit `session` after a reset (else stale key suppresses it)
+  setupReader.resetRaceIniCache()  -- #466 B1: a fresh session may bake a different setup into race.ini
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   state.realtimeActiveHint = nil
   state._cachedRealtimeView = nil
@@ -1664,6 +1665,7 @@ local function resetRollingDrivingState()
   hud.reset()
   realtimeCoaching.reset()
   lifecyclePublisher.reset()  -- #180: same-session/stint restart must re-emit `session`
+  setupReader.resetRaceIniCache()  -- #466 B1: a stint restart may re-bake a different setup into race.ini
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   state.deltaRefStale = true  -- #180/#185: clock reset; delta silent until the next clean lap boundary
   state.pendingWrapResetLapCount = nil

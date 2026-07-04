@@ -801,6 +801,50 @@ def test_write_setup_baked_race_ini_cleans_temp_on_replace_failure(tmp_path, mon
     assert not tmp.exists()
 
 
+def test_write_setup_baked_race_ini_skips_torn_read_and_preserves_cm_keys(tmp_path, monkeypatch):
+    """#466 B3: a torn read (race.ini changing under us mid-CM-write) must never be baked back — an
+    atomic replace derived from a truncated read would silently drop the CM-owned sections. Two
+    non-identical back-to-back reads are detected as unstable and nothing is written."""
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    cm_content = "[RACE]\nMODEL=cm_owned\n[CAR_0]\nSKIN=brg\n[SESSION_0]\nTYPE=1\n"
+    race_ini.write_text(cm_content, encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    # Two consecutive reads return different bytes → CM is rewriting the file right now.
+    reads = iter([cm_content, "[CAR_0]\nSKIN=brg\n"])  # second read caught mid-truncation
+    monkeypatch.setattr(pathlib.Path, "read_text", lambda self, *a, **k: next(reads))
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "unstable"
+
+    monkeypatch.undo()
+    # On-disk file is byte-for-byte the CM content — the truncation was never persisted.
+    assert race_ini.read_text(encoding="utf-8") == cm_content
+    assert not (race_ini.parent / ".race.ini.ac_copilot_setup.tmp").exists()
+
+
+def test_write_setup_baked_race_ini_skips_unparseable_snapshot(tmp_path, monkeypatch):
+    """#466 B3: a STABLE but unparseable read (torn such that two reads agree yet the content is not
+    valid INI) is treated as a no-op instead of atomically replacing race.ini with a bad bake."""
+    from pathlib import Path as _P
+
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.parent.mkdir(parents=True)
+    cm_content = "[CAR_0]\nSKIN=brg\n"
+    race_ini.write_text(cm_content, encoding="utf-8")
+    setup = _P("/home/x/Documents/Assetto Corsa/setups/car/spa/Realistic_BB_v3.ini")
+    # Key=value before any [section] → MissingSectionHeaderError (a configparser.Error).
+    garbage = "torn=1\nno_section_header=2\n"
+    monkeypatch.setattr(pathlib.Path, "read_text", lambda self, *a, **k: garbage)
+
+    assert write_setup_baked_race_ini(race_ini, setup) == "unstable"
+
+    monkeypatch.undo()
+    assert race_ini.read_text(encoding="utf-8") == cm_content
+    assert not (race_ini.parent / ".race.ini.ac_copilot_setup.tmp").exists()
+
+
 def test_race_ini_setup_bake_loop_rejects_non_positive_interval(tmp_path):
     from pathlib import Path as _P
 
