@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T08:50:00Z
+last_updated: 2026-07-04T09:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/csp-telemetry-and-acd-grounding-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
@@ -74,6 +75,12 @@ relates_to:
 # Next session handoff
 
 ## RESUME HERE — EPIC #488: Parts A+B DELIVERED & rig-verified; **Parts C + D remain**
+
+**Read first:** [[csp-telemetry-and-acd-grounding-2026-07-04]] — the durable, reusable grounding from
+this session's delivery (verified CSP `ac.StateWheel`/`ac.StateCar` field surface + units + tiers, the
+`data.acd` subtraction-cipher algorithm, the live-vs-generic tyre-window insight, the rig-verify-via-
+overlay recipe + multi-lap drive command, and the busy-multi-worktree ops notes). Trust it over the
+older `telemetry-capture-surface-for-ml` research node's assumptions (several were wrong).
 
 `/autonomous-deliver 488` this session delivered **Part A** (PR #497) and **Part B** (PR #500), both
 merged + rig-verified + post-merged. **EPIC #488 stays OPEN** for the last two parts (a clean pause at
