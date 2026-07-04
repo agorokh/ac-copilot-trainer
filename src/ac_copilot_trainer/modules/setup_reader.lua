@@ -79,16 +79,18 @@ end
 --- non-existent `setups/<car>/<track>/race.ini` (live-found #461). Returns the absolute INI path
 --- only when it resolves to a readable file, else nil.
 ---@param doc string
----@return string|nil
+---@return string|false|nil value  path | RACE_INI_NO_SETUP (confirmed none) | nil (vanilla folder-guess)
+---@return boolean transient  true when race.ini could not be opened/read this call — momentarily
+---  missing or locked while CM rewrites it; the caller must retry, NOT folder-guess (#466 B2).
 local function readActiveSetupPathFromRaceIni(doc)
   local f = io.open(doc .. "/Assetto Corsa/cfg/race.ini", "r")
   if not f then
-    return nil
+    return nil, true
   end
   local text = f:read("*a")
   f:close()
   if not text then
-    return nil
+    return nil, true
   end
   local section = ""
   local ext_setup_filename = nil
@@ -108,14 +110,17 @@ local function readActiveSetupPathFromRaceIni(doc)
   end
   if ext_setup_filename then
     if ext_setup_filename == "" then
-      return RACE_INI_NO_SETUP
+      return RACE_INI_NO_SETUP, false
     end
-    return readablePath(ext_setup_filename) or RACE_INI_NO_SETUP
+    return (readablePath(ext_setup_filename) or RACE_INI_NO_SETUP), false
   end
   if setup_val and setup_val ~= "" then
-    return nil
+    -- Vanilla `SETUP=<name>` without `_EXT_SETUP_FILENAME`: a real (readable) race.ini that simply
+    -- does not name an absolute setup path. NOT transient — let the caller fall through to the
+    -- legacy folder guess (preserves the vanilla-setup fallback added in 927b07ed for #461).
+    return nil, false
   end
-  return RACE_INI_NO_SETUP
+  return RACE_INI_NO_SETUP, false
 end
 
 local raceIniSetupCache = { key = nil, path = RACE_INI_NO_SETUP }
@@ -136,28 +141,42 @@ local function raceIniSetupCacheKey(sim)
   return table.concat(parts, "|"), doc
 end
 
+---@return string|false|nil value  path | RACE_INI_NO_SETUP | nil (vanilla folder-guess this call)
+---@return boolean transient  true when race.ini was momentarily unreadable (retry, no folder guess)
 local function activeSetupPathFromRaceIni(sim)
   local key, doc = raceIniSetupCacheKey(sim)
   if not key or not doc then
-    return nil
+    return nil, false
   end
   if raceIniSetupCache.key == key then
-    return raceIniSetupCache.path
+    return raceIniSetupCache.path, false
   end
-  local path = readActiveSetupPathFromRaceIni(doc)
+  local path, transient = readActiveSetupPathFromRaceIni(doc)
+  if transient then
+    -- race.ini momentarily missing/locked while CM rewrites it: do NOT cache and do NOT let the
+    -- caller folder-guess (that can archive the wrong setup). Signal retry (#466 B2).
+    return nil, true
+  end
   if path == nil then
-    return nil
+    -- Vanilla `SETUP=` (no `_EXT_SETUP_FILENAME`): caller folder-guesses; not cached (the guess is
+    -- cheap and a later launch may bake an absolute `_EXT_SETUP_FILENAME` this session should pick up).
+    return nil, false
   end
-  -- Cache confirmed negative reads too: once Lua successfully reads race.ini in acs.exe, a missing
-  -- setup pointer for the current session should not become per-frame disk IO. Transient read
-  -- failures return nil above and are retried rather than cached as "no setup".
+  -- Cache confirmed reads (a path or a confirmed no-setup) so a stable race.ini within one spawn is
+  -- not re-parsed per frame. A new spawn/stint refreshes the cache via M.resetRaceIniCache() (#466 B1).
   raceIniSetupCache.key = key
-  if path then
-    raceIniSetupCache.path = path
-  else
-    raceIniSetupCache.path = RACE_INI_NO_SETUP
-  end
-  return path
+  raceIniSetupCache.path = path or RACE_INI_NO_SETUP
+  return path, false
+end
+
+--- Reset the per-spawn race.ini setup cache. The trainer calls this on a new session/stint (a real
+--- car re-spawn) so a long-lived acs.exe that REUSES a Quick-Drive session index with a different
+--- baked setup re-reads race.ini instead of serving the prior spawn's setup (#466 B1). Within one
+--- spawn the cache holds — the applied setup is a spawn-time fact, so an in-place race.ini edit the
+--- car has not re-read must not flap the archived setup, and resolution stays off the per-frame IO path.
+function M.resetRaceIniCache()
+  raceIniSetupCache.key = nil
+  raceIniSetupCache.path = RACE_INI_NO_SETUP
 end
 
 ---@param car ac.StateCar|nil
@@ -173,13 +192,21 @@ local function guessSetupIniPath(car, sim)
   end
   -- The active setup baked/selected into race.ini beats a folder guess: it names the actual applied
   -- setup file (e.g. Realistic_BB_v3.ini), so the lap archive records that setup, not an empty snap.
-  local fromRace = activeSetupPathFromRaceIni(sim)
+  local fromRace, transient = activeSetupPathFromRaceIni(sim)
+  if transient then
+    -- race.ini momentarily missing/locked (#466 B2): archive nothing this call and retry rather
+    -- than attributing a legacy folder guess (which can be the WRONG setup). NOT confirmed-no-setup,
+    -- so callers keep the prior spawn's snapshot instead of clearing it.
+    return nil, false
+  end
   if fromRace == RACE_INI_NO_SETUP then
     return nil, true
   end
   if fromRace then
     return fromRace, false
   end
+  -- fromRace == nil and not transient → vanilla `SETUP=` without `_EXT_SETUP_FILENAME`: fall through
+  -- to the folder guess below (the intended resolution for a vanilla-selected setup).
   local doc = documentsRoot()
   if not doc then
     return nil, false

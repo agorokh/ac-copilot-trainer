@@ -219,3 +219,78 @@ def test_confirmed_no_race_ini_setup_blocks_legacy_folder_guess(tmp_path):
         ".. tostring(no_setup)"
     )
     assert out == "nil||true", out
+
+
+def test_race_ini_setup_cache_resets_on_new_spawn_with_reused_session_index(tmp_path):
+    """#466 B1: a new Quick-Drive spawn that REUSES the session index but bakes a different setup
+    must archive the NEW setup once the trainer signals the spawn via ``resetRaceIniCache()``.
+
+    The reset is the spawn discriminator the session index alone cannot provide: without it the
+    cache holds the spawn-time setup (``test_race_ini_setup_resolution_is_cached_within_session`` —
+    the same-spawn in-place-edit case that must NOT flap the archive), and the trainer calls the
+    reset only on a real re-spawn (``resetSessionState`` / ``resetRollingDrivingState``).
+    """
+    setup_ini = _write_setup_combo(tmp_path, "{setup_ini}")  # Realistic_BB_v3.ini
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    rt.execute('sr = require("setup_reader")')
+    first = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    assert first == str(setup_ini), first
+
+    other = setup_ini.with_name("OtherSetup.ini")
+    other.write_text("[FUEL]\nVALUE=15\n", encoding="utf-8")
+    race_ini = tmp_path / "Assetto Corsa" / "cfg" / "race.ini"
+    race_ini.write_text(f"[CAR_0]\n_EXT_SETUP_FILENAME={other}\n", encoding="utf-8")
+
+    rt.execute("sr.resetRaceIniCache()")  # the trainer's new-spawn hook
+    out = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+
+    assert out == str(other), out
+
+
+def test_transient_race_ini_miss_does_not_folder_guess(tmp_path):
+    """#466 B2: a momentarily missing/locked ``cfg/race.ini`` must yield nil (retry) rather than a
+    legacy ``setups/<car>/<track>/`` folder guess, which can archive the WRONG setup. A later real
+    read then resolves the applied setup — the transient miss is not negative-cached.
+    """
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    # A folder-guess candidate (lupa car/track ids resolve to "unknown") that must NOT be attributed
+    # while race.ini is momentarily unreadable.
+    guess = ac_root / "setups" / "unknown" / "unknown" / "race.ini"
+    guess.parent.mkdir(parents=True)
+    guess.write_text("[FUEL]\nVALUE=99\n", encoding="utf-8")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    rt.execute('sr = require("setup_reader")')
+
+    # cfg/race.ini absent → transient → nil, NOT the folder guess.
+    miss = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    assert miss != str(guess), miss
+    assert miss is None, f"expected nil on a transient race.ini miss, got {miss!r}"
+
+    # CM writes race.ini naming the applied setup → resolves it (retry after the transient miss).
+    applied = ac_root / "setups" / "unknown" / "unknown" / "Applied.ini"
+    applied.write_text("[FUEL]\nVALUE=45\n", encoding="utf-8")
+    (ac_root / "cfg" / "race.ini").write_text(
+        f"[CAR_0]\n_EXT_SETUP_FILENAME={applied}\n", encoding="utf-8"
+    )
+    out = rt.execute("return sr.activeSetupIniPath({}, { currentSessionIndex = 1 })")
+    assert out == str(applied), out
+
+
+def test_vanilla_setup_without_ext_filename_still_folder_guesses(tmp_path):
+    """#466 B2 guard: a readable race.ini with vanilla ``SETUP=<name>`` and no
+    ``_EXT_SETUP_FILENAME`` must still resolve via the legacy folder guess — the
+    transient-miss fix must not re-break the vanilla-setup fallback (927b07ed, #461).
+    """
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    guess = ac_root / "setups" / "unknown" / "unknown" / "race.ini"
+    guess.parent.mkdir(parents=True)
+    guess.write_text("[FUEL]\nVALUE=45\n", encoding="utf-8")
+    (ac_root / "cfg" / "race.ini").write_text(
+        "[CAR_0]\nSETUP=Realistic_BB_v3.ini\n", encoding="utf-8"
+    )
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    out = rt.execute('local sr = require("setup_reader"); return sr.activeSetupIniPath({}, nil)')
+    # The Lua folder guess builds paths with forward slashes; normalize for the Windows comparison.
+    assert out == str(guess).replace("\\", "/"), out
