@@ -384,14 +384,9 @@ def _optimal_temp_from_curve(
     curve_text: str | None = None
     candidate = performance_curve.strip()
     if candidate.lower().endswith(".lut"):
-        # Filename reference into the same decrypted archive (match case-insensitively).
-        curve_text = archive.get(candidate)
-        if curve_text is None:
-            lowered = candidate.lower()
-            for name, body in archive.items():
-                if name.lower() == lowered:
-                    curve_text = body
-                    break
+        # Filename reference into the same archive. Archive keys are lowercased by _load_archive, so
+        # a single lowercased lookup is case-insensitive and O(1) (no linear scan needed).
+        curve_text = archive.get(candidate.lower())
     else:
         # Inline curve: AC allows the LUT written directly, sometimes wrapped in parentheses.
         curve_text = candidate.replace("(", "\n").replace(")", "\n").replace(",", "\n")
