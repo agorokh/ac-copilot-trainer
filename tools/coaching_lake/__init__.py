@@ -18,17 +18,25 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tools.coaching_lake.build_analytics import (
+        DEFAULT_FUEL_EFFECT_S_PER_KG,
+        LAKE_SCHEMA_VERSION,
         LakeSummary,
         build_lake,
+        export_parquet,
         list_reports,
+        read_parquet_surface,
         run_query,
         run_report,
     )
 
 __all__ = [
+    "DEFAULT_FUEL_EFFECT_S_PER_KG",
+    "LAKE_SCHEMA_VERSION",
     "LakeSummary",
     "build_lake",
+    "export_parquet",
     "list_reports",
+    "read_parquet_surface",
     "run_query",
     "run_report",
 ]
