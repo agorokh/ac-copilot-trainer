@@ -213,6 +213,9 @@ def _acd_unpack(data: bytes, folder_name: str) -> dict[str, bytes]:
 
 #: Per-car_dir cache of ``{archive_member_name: text}`` so repeated compound reads decrypt once.
 _ARCHIVE_CACHE: dict[str, dict[str, str] | None] = {}
+#: Bound the per-car archive cache. Distinct car dirs are few in practice, but a long-lived process
+#: (a batch lake rebuild over many cars) must never grow it without limit (Qodo reliability nit).
+_ARCHIVE_CACHE_MAX = 64
 
 _SECTION_RE = re.compile(r"^\s*\[([^\]]+)\]\s*$")
 
@@ -239,30 +242,35 @@ def _load_archive(car_dir: Path) -> dict[str, str] | None:
 
     archive: dict[str, str] | None = None
     try:
+        # Prefer an unpacked data/ folder. Read the small data files (tyres.ini + any .lut) up
+        # front, lowercasing member names so every downstream lookup is case-insensitive — AC mods
+        # ship TYRES.INI / Tyres.ini too, and a case-exact check misses them on a case-sensitive FS.
         data_dir = car_dir / "data"
-        tyres_unpacked = data_dir / "tyres.ini"
-        if tyres_unpacked.is_file():
-            # Unpacked car: lazily read members from data/ on demand via a dict-like snapshot of
-            # the files we might need (tyres.ini + any .lut). Read all small files up front.
-            members: dict[str, str] = {}
+        members: dict[str, str] = {}
+        if data_dir.is_dir():
             for child in data_dir.iterdir():
                 if child.is_file() and child.suffix.lower() in (".ini", ".lut"):
                     try:
-                        members[child.name] = _decode_text(child.read_bytes())
+                        members[child.name.lower()] = _decode_text(child.read_bytes())
                     except OSError:
                         continue
-            archive = members if "tyres.ini" in members else None
+        if "tyres.ini" in members:
+            archive = members
         else:
             acd_path = car_dir / "data.acd"
             if acd_path.is_file():
                 raw = acd_path.read_bytes()
-                folder_name = car_dir.name  # the key is derived from THIS folder's name
-                unpacked = _acd_unpack(raw, folder_name)
-                if "tyres.ini" in unpacked:
-                    archive = {name: _decode_text(blob) for name, blob in unpacked.items()}
+                unpacked = _acd_unpack(raw, car_dir.name)  # key derived from THIS folder's name
+                # Lowercase member names for the same case-insensitive lookups downstream.
+                lowered = {name.lower(): blob for name, blob in unpacked.items()}
+                if "tyres.ini" in lowered:
+                    archive = {name: _decode_text(blob) for name, blob in lowered.items()}
     except (OSError, ValueError, struct.error, IndexError):
         archive = None
 
+    # Bounded insert: evict the oldest entry (dict preserves insertion order) when at capacity.
+    if cache_key not in _ARCHIVE_CACHE and len(_ARCHIVE_CACHE) >= _ARCHIVE_CACHE_MAX:
+        _ARCHIVE_CACHE.pop(next(iter(_ARCHIVE_CACHE)))
     _ARCHIVE_CACHE[cache_key] = archive
     return archive
 

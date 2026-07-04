@@ -217,6 +217,33 @@ def test_prefers_unpacked_data_dir(tmp_path: Path) -> None:
     assert spec.optimal_temp_c == 85.0
 
 
+def test_unpacked_data_dir_is_case_insensitive(tmp_path: Path) -> None:
+    """AC mods ship TYRES.INI / Tyres.ini and .LUT in mixed case; the reader must still resolve them
+    (a case-exact lookup would miss them on a case-sensitive FS) — gemini HIGH on PR #500."""
+    car_dir = tmp_path / "mixed_case_car"
+    data_dir = car_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "TYRES.INI").write_text(_SYNTH_TYRES_INI, encoding="utf-8")
+    (data_dir / "TCurve_R888.LUT").write_text(_SYNTH_R888_LUT, encoding="utf-8")
+    spec = read_tyre_specs(car_dir, 0)
+    assert spec is not None
+    assert spec.name == "Toyo R888R"
+    assert spec.optimal_temp_c == 85.0  # the mixed-case .lut still resolves
+
+
+def test_acd_member_names_are_case_insensitive(tmp_path: Path) -> None:
+    """A data.acd whose member is packed as TYRES.INI (mod author's case) still resolves."""
+    folder = "mixed_case_acd_car"
+    car_dir = tmp_path / folder
+    car_dir.mkdir(parents=True)
+    acd = _build_acd(folder, {"TYRES.INI": _SYNTH_TYRES_INI, "TCURVE_R888.LUT": _SYNTH_R888_LUT})
+    (car_dir / "data.acd").write_bytes(acd)
+    spec = read_tyre_specs(car_dir, 0)
+    assert spec is not None
+    assert spec.name == "Toyo R888R"
+    assert spec.optimal_temp_c == 85.0
+
+
 # --------------------------------------------------------------------------------------------------
 # Tolerant parsing + graceful degradation
 # --------------------------------------------------------------------------------------------------
@@ -330,3 +357,22 @@ def test_caches_archive_per_car_dir(synth_car: Path, monkeypatch: pytest.MonkeyP
     spec = read_tyre_specs(synth_car, 1)
     assert spec is not None
     assert spec.name == "Slick Medium"
+
+
+def test_archive_cache_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The per-car archive cache evicts oldest entries at capacity (Qodo reliability finding): a
+    long-lived process reading many cars never grows the cache without limit."""
+    import tools.ai_sidecar.tyre_specs as mod
+
+    monkeypatch.setattr(mod, "_ARCHIVE_CACHE", {})
+    monkeypatch.setattr(mod, "_ARCHIVE_CACHE_MAX", 2)
+    for i in range(4):
+        folder = f"car_{i}"
+        cd = tmp_path / folder
+        cd.mkdir()
+        acd = _build_acd(
+            folder, {"tyres.ini": _SYNTH_TYRES_INI, "tcurve_r888.lut": _SYNTH_R888_LUT}
+        )
+        (cd / "data.acd").write_bytes(acd)
+        assert read_tyre_specs(cd, 0) is not None
+    assert len(mod._ARCHIVE_CACHE) <= 2
