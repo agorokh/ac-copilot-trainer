@@ -1238,6 +1238,11 @@ def _resolve_parquet_dir(out_dir: str | Path) -> Path:
         raise ValueError(f"{raw}: parquet dir must stay under journal/") from exc
     if resolved.exists() and not resolved.is_dir():
         raise ValueError(f"{raw}: parquet path must be a directory")
+    # Data-immutability guard: never emit derived Parquet INTO a raw lap-archive corpus dir. An
+    # errant ``--parquet journal/laps`` would otherwise pollute the immutable JSON system of record,
+    # and the samples-subdir cleanup (rmtree) could delete raw evidence.
+    if resolved.is_dir() and any(resolved.glob("lap_*.json")):
+        raise ValueError(f"{raw}: refusing to write parquet into a raw lap-archive dir")
     return resolved
 
 

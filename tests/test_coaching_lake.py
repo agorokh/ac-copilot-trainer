@@ -590,6 +590,17 @@ def test_part_d_setup_vs_dynamic_and_coverage(lake_cwd):
     assert "WING_FRONT" in params
 
 
+def test_parquet_refuses_raw_corpus_dir(lake_cwd):
+    # Data-immutability guard: --parquet must never target a dir holding raw lap_*.json archives.
+    raw = lake_cwd / "journal" / "laps"
+    raw.mkdir()
+    _write(raw, "a", _phys("a"))
+    db = _db_path()
+    build_lake(raw, db)
+    with pytest.raises(ValueError, match="raw lap-archive"):
+        export_parquet(db, "journal/laps")
+
+
 def test_new_reports_registered():
     assert {
         "degradation",
