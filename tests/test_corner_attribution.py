@@ -257,6 +257,58 @@ def test_corner_live_signals_emits_chassis_and_pressure_markers():
     assert extra["wheelsPressure"]["fl"] == 27.0
 
 
+def test_corner_live_signals_emits_cross_tread_gradient():
+    # #490: corner_live_signals derives the inner-vs-outer cross-tread gradient marker from the
+    # persisted tyre-band columns, so a lap carrying them graduates the camber/pressure rule to a
+    # verdict without a caller supplying extra by hand.
+    n = 12
+    inner = [[95.0, 84.0, 83.0, 83.0] for _ in range(n)]  # FL inner runs hot
+    outer = [[78.0, 83.0, 82.0, 82.0] for _ in range(n)]  # FL outer cooler -> +17 gradient
+    lap = LapTrace(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.1] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        tyre_temp_inner=inner,
+        tyre_temp_outer=outer,
+    )
+    assert lap.has_tyre_band_data is True
+    assert lap.has_tier_b_data is True
+    extra = corner_live_signals(lap, _sig(index=0, entry_i=2, apex_i=5, exit_i=9))
+    assert set(extra["tyreCrossGradient"]) == {"fl", "fr", "rl", "rr"}
+    assert extra["tyreCrossGradient"]["fl"] == 17.0
+
+
+def test_camber_pressure_imbalance_is_a_verdict_with_cross_tread_gradient():
+    # #490 acceptance: an inner/outer cross-tread imbalance yields a camber/pressure VERDICT (not
+    # advisory), routed to setup. Without the gradient channel the rule stays silent — there is no
+    # archive proxy for cross-tread temps, so the diagnosis only exists once the channel is present.
+    sig = _sig()
+    silent = [
+        a
+        for a in attribute_corner(CornerContext(sig=sig, setup=SETUP))
+        if a.key == "camber_pressure_imbalance"
+    ]
+    assert silent == []  # no cross-tread data -> the rule does not fire
+    verdict = next(
+        a
+        for a in attribute_corner(
+            CornerContext(
+                sig=sig, setup=SETUP, extra={"tyreCrossGradient": {"fl": 15.0, "fr": -3.0}}
+            )
+        )
+        if a.key == "camber_pressure_imbalance"
+    )
+    assert verdict.advisory is False  # channel present -> verdict
+    assert verdict.confidence >= 0.7
+    assert any("CAMBER" in c or "PRESSURE" in c for c in verdict.setup_causes)
+
+
 def test_turn_in_yaw_lag_confirms_only_when_heading_trails_steer():
     # cursor #483: turn_in_lag is confirmed by yaw ONLY when the heading TRAILS the steer input
     # through turn-in. A responsive front (yaw tracks steer) must NOT flip to a verdict.

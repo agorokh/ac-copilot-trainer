@@ -68,7 +68,7 @@ TRACE_FIELDS: tuple[str, ...] = (
     # position stays byte-stable. Per-wheel FL/FR/RL/RR unless noted. Units (vendor-annotated):
     # temps °C; wheelLoad N; camber DEGREES (CSP `camber`, not base-SM radians); suspTravel m;
     # damperVel m/s (derived d/dt suspTravel in telemetry.lua); rideHeight m; brakeBias 0..1;
-    # turboBoost 0..N; fuel L; accG_vert G. MUST stay byte-identical to lap_archive.lua::TRACE_FIELDS.
+    # turboBoost 0..N; fuel L; accG_vert G. Byte-identical to lap_archive.lua::TRACE_FIELDS.
     "tyreTempInner_fl",
     "tyreTempInner_fr",
     "tyreTempInner_rl",

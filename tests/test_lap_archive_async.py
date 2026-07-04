@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from tools.ac_harness.reference_lap import TRACE_FIELDS
+
 lupa = pytest.importorskip("lupa", reason="lupa Lua runtime not installed (pip install lupa)")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -140,40 +142,10 @@ def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.P
     assert record["lap"]["lap_ms"] == 81234
     assert record["trace"]["samples_count"] == 6
     assert len(record["trace"]["samples"]) == 6
-    assert record["trace"]["fields"] == [
-        "spline",
-        "speed",
-        "eMs",
-        "throttle",
-        "brake",
-        "steer",
-        "gear",
-        "px",
-        "py",
-        "pz",
-        # per-wheel channels (issue #266)
-        "wheelAngularSpeed_fl",
-        "wheelAngularSpeed_fr",
-        "wheelAngularSpeed_rl",
-        "wheelAngularSpeed_rr",
-        "wheelSlip_fl",
-        "wheelSlip_fr",
-        "wheelSlip_rl",
-        "wheelSlip_rr",
-        "tyreCoreTemp_fl",
-        "tyreCoreTemp_fr",
-        "tyreCoreTemp_rl",
-        "tyreCoreTemp_rr",
-        "rpm",
-        # chassis dynamics + hot pressure (issue #478)
-        "accG_long",
-        "accG_lat",
-        "yaw_rate",
-        "wheelsPressure_fl",
-        "wheelsPressure_fr",
-        "wheelsPressure_rl",
-        "wheelsPressure_rr",
-    ]
+    # The Lua writer emits its own TRACE_FIELDS; assert against the canonical Python mirror so this
+    # never drifts on an append-only extension (#266/#442/#478/#490). Lua==Python is guaranteed by
+    # test_reference_lap.test_lua_and_python_trace_fields_are_byte_identical.
+    assert record["trace"]["fields"] == list(TRACE_FIELDS)
     assert record["setup"]["hash"] == "hash1234"
     assert record["coaching"]["rules_hints"] == ["Brake earlier at T1"]
     assert record["coaching"]["corner_advice_used"]["T1"] == "Trail brake to apex"

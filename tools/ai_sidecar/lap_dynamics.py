@@ -51,6 +51,12 @@ class LapTrace:
     accg_lat: list[float] | None = None  # measured lateral g (accG_lat, in G)
     yaw_rate: list[float] | None = None  # measured yaw rate (rad/s), CSP localAngularVelocity.y
     wheel_pressure: list[list[float]] | None = None  # dynamic HOT pressure psi [FL, FR, RL, RR]
+    # optional Tier-1 base-AC dynamic channels (issue #490); per sample, 4 wheels [FL, FR, RL, RR];
+    # None when not persisted OR present-but-all-zero (the "unreadable" sentinel — see _wheel_cols).
+    tyre_temp_inner: list[list[float]] | None = None  # tread inner temp, °C
+    tyre_temp_mid: list[list[float]] | None = None  # tread middle temp, °C
+    tyre_temp_outer: list[list[float]] | None = None  # tread outer temp, °C
+    camber: list[list[float]] | None = None  # dynamic (running) camber, DEGREES (CSP `camber`)
     # lazily derived
     _kappa: list[float] | None = field(default=None, repr=False)
     _lat_g: list[float] | None = field(default=None, repr=False)
@@ -99,9 +105,23 @@ class LapTrace:
         return self.wheel_pressure is not None
 
     @property
+    def has_tyre_band_data(self) -> bool:
+        """True when cross-tread tyre temps (inner + outer) are persisted (issue #490).
+
+        Requires BOTH bands — the cross-tread gradient (inner-vs-outer) is the camber/pressure
+        diagnosis signal, so a lap with only one band cannot confirm the rule.
+        """
+        return self.tyre_temp_inner is not None and self.tyre_temp_outer is not None
+
+    @property
     def has_tier_b_data(self) -> bool:
-        """True when ANY Tier-B live channel (per-wheel, chassis, or pressure) is persisted."""
-        return self.has_wheel_data or self.has_chassis_data or self.has_pressure_data
+        """True when ANY live channel (per-wheel, chassis, pressure, or tyre bands) is persisted."""
+        return (
+            self.has_wheel_data
+            or self.has_chassis_data
+            or self.has_pressure_data
+            or self.has_tyre_band_data
+        )
 
 
 def _idx(fields: list[str], *names: str) -> int | None:
@@ -229,6 +249,11 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
     accg_lat = _scalar_col(fields, samples, "accG_lat")
     yaw_rate = _scalar_col(fields, samples, "yaw_rate")
     wheel_pressure = _wheel_cols(fields, samples, "wheelsPressure", n)
+    # optional Tier-1 base-AC dynamic bands (issue #490); present only when persisted
+    tyre_temp_inner = _wheel_cols(fields, samples, "tyreTempInner", n)
+    tyre_temp_mid = _wheel_cols(fields, samples, "tyreTempMid", n)
+    tyre_temp_outer = _wheel_cols(fields, samples, "tyreTempOuter", n)
+    camber = _wheel_cols(fields, samples, "camber", n)
 
     car = archive.get("car") if isinstance(archive.get("car"), dict) else {}
     track = archive.get("track") if isinstance(archive.get("track"), dict) else {}
@@ -247,6 +272,10 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
         accg_lat=accg_lat,
         yaw_rate=yaw_rate,
         wheel_pressure=wheel_pressure,
+        tyre_temp_inner=tyre_temp_inner,
+        tyre_temp_mid=tyre_temp_mid,
+        tyre_temp_outer=tyre_temp_outer,
+        camber=camber,
         x=x_col,
         z=z_col,
         lap_ms=_finite(lap.get("lap_ms")),
