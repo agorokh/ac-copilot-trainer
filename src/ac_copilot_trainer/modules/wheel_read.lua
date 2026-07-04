@@ -85,6 +85,11 @@ end
 
 --- Brake disc temperature (degC). CSP `discTemperature` — brake heat into the tyre; brake-bias /
 --- duct attribution + braking-abuse. nil if unreadable.
+--- CAVEAT (#488, rig-verified 2026-07-04): `discTemperature` reads a flat ambient (~26 °C) when the
+--- car's brake-thermal model is inactive — reproduced on the 911 GT3 R across a hard-braking lap
+--- even with `car.extendedPhysics == true`. So it is CAR-physics-dependent, NOT extended-physics-
+--- gated; it stays a Tier-1 base-AC channel (it heats in sessions where the model is active). Treat
+--- a flat 26 °C as "not modelled for this car", not a capture bug.
 function M.brakeTemp(one)
   return finite(M.field(one, "discTemperature"))
 end
