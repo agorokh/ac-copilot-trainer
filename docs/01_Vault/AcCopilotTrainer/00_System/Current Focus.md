@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T05:50:00Z
+last_updated: 2026-07-04T06:05:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
@@ -23,6 +24,20 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Active focus:** EPIC [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry
+capture completeness for ML) — **Part A DELIVERED** below; **Part B/C/D remain** the live next steps
+(B: tyre identity + `tyres.ini` specs → `tyre_model.py`; C: grain + serialization / `build_analytics.py`
+3-grain + Parquet + SchemaVer; D: setup⟷outcome linkage + dynamic-vs-static deltas).
+
+**Delivered (2026-07-04):** PR [#497](https://github.com/agorokh/ac-copilot-trainer/pull/497)
+**MERGED** ([`6eba176`](https://github.com/agorokh/ac-copilot-trainer/commit/6eba176)) — **#488 Part A**
+Tier-2 CSP force/slip channels: 24 append-only per-wheel cols (76→100) `slipRatio/slipAngle/mz/fx/fy/dy`
+(byte-identical Lua⟷Python), `car.extendedPhysics` header flag, new `handling_balance` advisory→verdict
+rule (under/oversteer from front-vs-rear slip-angle balance). **Rig-verified** (911 GT3 R, Magione, 4 laps):
+all 24 channels carry real values, `extendedPhysics=true`. **brakeTemp caveat RESOLVED** — flat 26 °C with
+`extendedPhysics=true` ⇒ NOT extended-physics-gated, stays Tier-1 (per-car brake-thermal dependency).
+`make ci-fast` 2390 passed; Qodo endorsed the append-only design. Detail: [[issue-488-part-a-tier2-csp-2026-07-04]].
 
 **Delivered (2026-07-04):** PR [#496](https://github.com/agorokh/ac-copilot-trainer/pull/496)
 **MERGED** ([`b9f597a`](https://github.com/agorokh/ac-copilot-trainer/commit/b9f597a)) — **#466 Part B**
