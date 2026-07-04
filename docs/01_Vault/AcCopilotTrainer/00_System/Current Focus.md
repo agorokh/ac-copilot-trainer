@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T22:35:00Z
+last_updated: 2026-07-04T05:50:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
   - AcCopilotTrainer/03_Investigations/pr-444-atelier-main-dashboard-2026-07-01.md
   - AcCopilotTrainer/01_Decisions/voice-intensity-register-2026-06-28.md
@@ -22,6 +23,18 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-04):** PR [#496](https://github.com/agorokh/ac-copilot-trainer/pull/496)
+**MERGED** ([`b9f597a`](https://github.com/agorokh/ac-copilot-trainer/commit/b9f597a)) — **#466 Part B**
+setup-resolution + `race.ini` concurrency hardening: the 3 self-hosted-daemon (cursor) MEDIUM findings,
+**separable from the criterion-(a) limit** and off-rig testable. **B1** `setup_reader.resetRaceIniCache()`
+on the trainer's spawn resets (a reused Quick-Drive session index with a different baked setup now
+refreshes on a real re-spawn; a same-spawn in-place edit still holds). **B2** transient-`race.ini`-miss
+retries instead of a wrong legacy folder guess (vanilla `SETUP=` fallback preserved). **B3**
+`write_setup_baked_race_ini` stable two-read snapshot + unparseable-noop so a torn CM write never drops
+CM-owned sections (`unstable` counter added). 5 tests; `make ci-fast` green; Qodo **endorsed** the design.
+**#466 actionable scope now complete** — criterion (b) #482, Part B #496, criterion (a) = documented
+CSP/CM limit #495 — recommend closing #466. Detail: [[issue-466-partb-setup-resolution-hardening-2026-07-04]].
 
 **Delivered (2026-07-03):** PR [#482](https://github.com/agorokh/ac-copilot-trainer/pull/482)
 **MERGED** (`ab72152`) — [#466](https://github.com/agorokh/ac-copilot-trainer/issues/466) overlay
