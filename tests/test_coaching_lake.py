@@ -601,6 +601,35 @@ def test_parquet_refuses_raw_corpus_dir(lake_cwd):
         export_parquet(db, "journal/laps")
 
 
+def test_non_finite_fuel_effect_rejected(lake_cwd):
+    # qodo #503: inf/nan fuel effect would corrupt fuel_corrected_lap_ms + leak into SQL literals.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a"))
+    for bad in (float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(ValueError, match="fuel_effect_s_per_kg must be finite"):
+            build_lake(laps, _db_path(), fuel_effect_s_per_kg=bad)
+
+
+def test_sql_str_escapes_single_quotes():
+    from tools.coaching_lake.build_analytics import _sql_str
+
+    assert _sql_str("a'b") == "a''b"
+    assert _sql_str("plain") == "plain"
+
+
+def test_parquet_dir_with_single_quote_roundtrips(lake_cwd):
+    # qodo #503: a parquet dir name containing a ' must not break the COPY / read_parquet SQL.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", car="nissan", track="magione"))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    export_parquet(db, "journal/pq'q")
+    cols, rows = read_parquet_surface("journal/pq'q", "lap_features", columns="count(*) n")
+    assert rows[0][0] == summary.lap_features
+
+
 def test_new_reports_registered():
     assert {
         "degradation",

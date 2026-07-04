@@ -912,6 +912,10 @@ def build_lake(
     fuel_effect_s_per_kg: float = DEFAULT_FUEL_EFFECT_S_PER_KG,
 ) -> LakeSummary:
     """Rebuild the DuckDB lake from the per-lap JSON corpus under ``lap_dir`` (idempotent)."""
+    if not math.isfinite(fuel_effect_s_per_kg):
+        # inf/nan would corrupt fuel_corrected_lap_ms and leak a non-finite literal into the
+        # stint_deg / lake_meta SQL (qodo #503).
+        raise ValueError(f"fuel_effect_s_per_kg must be finite, got {fuel_effect_s_per_kg!r}")
     resolved_db = _resolve_db_path(db_path)
     build_tmp = resolved_db.parent / f".{resolved_db.name}.build"
     if build_tmp.exists():
@@ -1222,6 +1226,13 @@ _PARQUET_FILE_GRAINS: tuple[str, ...] = (
 _PARQUET_PARTITIONED: dict[str, tuple[str, ...]] = {"samples": ("track_id", "car_id")}
 
 
+def _sql_str(value: str) -> str:
+    """Escape a value for a single-quoted DuckDB SQL string literal (e.g. a Parquet path that
+    could contain a ``'``). Paths are journal-relative, but escaping keeps the COPY/read_parquet
+    SQL well-formed regardless of the dir name (qodo #503)."""
+    return value.replace("'", "''")
+
+
 def _resolve_parquet_dir(out_dir: str | Path) -> Path:
     """Resolve ``out_dir`` under ``journal/`` (the approved derived-artifact write root)."""
     raw = Path(out_dir)
@@ -1261,14 +1272,16 @@ def export_parquet(
     con = _connect(db_path)
     try:
         for grain in _PARQUET_FILE_GRAINS:
-            target = (out / f"{grain}.parquet").as_posix()
+            target = _sql_str((out / f"{grain}.parquet").as_posix())
             con.execute(f"COPY (SELECT * FROM {grain}) TO '{target}' (FORMAT PARQUET)")
             counts[grain] = con.execute(f"SELECT count(*) FROM {grain}").fetchone()[0]
         for grain, parts in _PARQUET_PARTITIONED.items():
+            # ``samples`` carries car_id + track_id (identity keys in _SAMPLE_KEYS), so PARTITION_BY
+            # reads them directly off the table — no join back to ``laps`` is needed.
             part_dir = out / grain
             if part_dir.exists():
                 shutil.rmtree(part_dir)
-            target = part_dir.as_posix()
+            target = _sql_str(part_dir.as_posix())
             part_cols = ", ".join(parts)
             con.execute(
                 f"COPY (SELECT * FROM {grain}) TO '{target}' "
@@ -1306,10 +1319,11 @@ def read_parquet_surface(
     out = _resolve_parquet_dir(out_dir)
     part_dir = out / grain
     if part_dir.is_dir():
-        glob = (part_dir / "**" / "*.parquet").as_posix()
+        glob = _sql_str((part_dir / "**" / "*.parquet").as_posix())
         src = f"read_parquet('{glob}', union_by_name=true, hive_partitioning=true)"
     else:
-        src = f"read_parquet('{(out / f'{grain}.parquet').as_posix()}', union_by_name=true)"
+        single = _sql_str((out / f"{grain}.parquet").as_posix())
+        src = f"read_parquet('{single}', union_by_name=true)"
     sql = f"SELECT {columns} FROM {src}"
     if where:
         sql += f" WHERE {where}"
