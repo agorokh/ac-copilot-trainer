@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-03T21:50:00Z
+last_updated: 2026-07-03T22:35:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
@@ -28,11 +28,17 @@ relates_to:
 fast-fail hardening + setup-race diagnosis (built on merged #465). `rig_hijack` short `--hijack-probe-seconds`
 probes detect a stalled "0 seconds" overlay and recycle a fresh launch in ~15 s (not ~32 s); per-cycle
 `[auto-drive]` logs + re-bake stats + `--setup-rebake-interval`; CLI-validated finite/positive float flags.
-**#466 stays OPEN** (criterion a, setup+drive ≥9/10, unmet): the `race.ini` setup re-bake fundamentally
-races CM's immediate-start (aggressive 0.05 s = setup applied but overlay stall; gentle ≥0.1 s = auto-start
-ok but setup missed; no cadence / `SimState.restart` / keypress-nudge fixes it) — needs a different
-injection (candidate: PIT-spawn + pre-hijack in-sim `setup.load`). No-setup drive path is reliable;
-resolve-pr converged in 5 rounds. Detail: [[issue-466-setup-drive-rebake-race-2026-07-03]].
+**#466 criterion (a) EXHAUSTED (2026-07-03, later autonomous session):** reliable `--setup`+drive is a
+**fundamental CSP/CM limitation**, not a missing mechanism. Every setup-injection layer is now closed
+in-sim — race.ini re-bake (no cadence sweet spot); FORCE_START gui.ini (does NOT skip the overlay,
+0/8+, so the #461 "~1/5" does not reproduce); suspend-inject (suspending acs is benign but the race.ini
+WRITE breaks CM immediate-start); read-only race.ini (CM can't launch); CM-native (Quick Drive writes
+`SETUP=` empty, no slot); CSP-Lua `ac.loadSetup` (`isCarResetAllowed` NEVER true on START or PIT
+autonomous launch, 0/152). Root cause: setup application needs a resettable/pre-live state; CM's
+immediate-start (the only reliable overlay-skip) precludes it. **Recommendation:** accept as a
+documented limitation; use `--no-setup` for autonomous drives (setup applies fine when NOT composed
+with a drive). FORCE_START code reverted; criterion (b) fast-fail shipped (#482). No-setup drive path
+reliable. Full table: [[issue-466-setup-drive-rebake-race-2026-07-03]].
 
 **Delivered (2026-07-03):** PR [#483](https://github.com/agorokh/ac-copilot-trainer/pull/483)
 **MERGED** at [`28c0fe1`](https://github.com/agorokh/ac-copilot-trainer/commit/28c0fe1b8745cef02d2cf9828502f2c21be58fcf) —
