@@ -284,6 +284,67 @@ def test_corner_live_signals_emits_cross_tread_gradient():
     assert extra["tyreCrossGradient"]["fl"] == 17.0
 
 
+def test_corner_live_signals_emits_slip_angle_balance():
+    # #488 Part A: corner_live_signals derives the front-vs-rear slip-angle balance marker (plus mz,
+    # grip-mu, slip-ratio) from the persisted Tier-2 columns, so a lap carrying them graduates the
+    # handling_balance rule to a verdict without a caller supplying extra.
+    n = 12
+    # front axle (idx 0,1) at ~5°, rear axle (idx 2,3) at ~2° -> +3° balance = understeer.
+    slip_angle = [[5.0, 5.0, 2.0, 2.0] for _ in range(n)]
+    mz = [[40.0, 40.0, 30.0, 30.0] for _ in range(n)]
+    dy = [[1.45, 1.44, 1.50, 1.49] for _ in range(n)]
+    slip_ratio = [[0.02, 0.02, 0.06, 0.06] for _ in range(n)]
+    lap = LapTrace(
+        spline=[i / (n - 1) for i in range(n)],
+        t_s=[i * 0.1 for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[0.0] * n,
+        throttle=[0.0] * n,
+        steer=[0.1] * n,
+        gear=[3] * n,
+        x=[float(i) for i in range(n)],
+        z=[0.0] * n,
+        slip_angle=slip_angle,
+        mz=mz,
+        dy=dy,
+        slip_ratio=slip_ratio,
+    )
+    extra = corner_live_signals(lap, _sig(index=0, entry_i=2, apex_i=5, exit_i=9))
+    assert extra["slipAngle"]["front"] == 5.0
+    assert extra["slipAngle"]["rear"] == 2.0
+    assert extra["slipAngle"]["balance"] == 3.0  # front - rear > 0 -> understeer
+    assert extra["mz"] == 40.0  # front-axle peak self-aligning torque
+    assert extra["gripMu"] == 1.5  # peak lateral friction coefficient (any wheel)
+    assert extra["slipRatio"] == 0.06  # peak |longitudinal slip| (any wheel)
+
+
+def test_handling_balance_is_a_verdict_with_slip_angle_balance():
+    # #488 Part A: a front-vs-rear slip-angle imbalance yields an under/oversteer VERDICT (not
+    # advisory), routed to setup. Without the slipAngle channel the rule stays silent — the archive
+    # has no proxy for the handling balance, so the diagnosis exists only once the channel is here.
+    sig = _sig()
+    silent = [
+        a
+        for a in attribute_corner(CornerContext(sig=sig, setup=SETUP))
+        if a.key == "handling_balance"
+    ]
+    assert silent == []  # no slip-angle channel -> the rule does not fire
+    verdict = next(
+        a
+        for a in attribute_corner(
+            CornerContext(
+                sig=sig,
+                setup=SETUP,
+                extra={"slipAngle": {"front": 5.0, "rear": 2.0, "balance": 3.0}},
+            )
+        )
+        if a.key == "handling_balance"
+    )
+    assert verdict.advisory is False  # channel present -> verdict
+    assert any("UNDERSTEER" in c for c in verdict.setup_causes)
+    assert "understeer" in verdict.coaching.lower()
+
+
 def test_camber_pressure_imbalance_is_a_verdict_with_cross_tread_gradient():
     # #490 acceptance: an inner/outer cross-tread imbalance yields a camber/pressure VERDICT (not
     # advisory), routed to setup. Without the gradient channel the rule stays silent — there is no

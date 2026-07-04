@@ -148,7 +148,7 @@ def test_tier1_dynamic_columns_in_csv_and_match_trace_fields() -> None:
     # export locations — CSV_COLUMNS, _TIER1_DYNAMIC_TRACE_FIELDS, _TRACE_TO_CSV — must not drift).
     from tools.ac_harness.reference_lap import TRACE_FIELDS
 
-    tier1 = TRACE_FIELDS[30:]
+    tier1 = TRACE_FIELDS[30:76]
     assert len(tier1) == 46
     assert lap_archive_export._TIER1_DYNAMIC_TRACE_FIELDS == tier1
     for name in tier1:
@@ -156,6 +156,20 @@ def test_tier1_dynamic_columns_in_csv_and_match_trace_fields() -> None:
         assert name in lap_archive_export._TRACE_TO_CSV, f"{name} missing from trace->CSV map"
     # every trace column maps to a CSV column (no silent drops on export)
     assert set(TRACE_FIELDS) <= set(lap_archive_export._TRACE_TO_CSV)
+
+
+def test_tier2_dynamic_columns_in_csv_and_match_trace_fields() -> None:
+    # #488 Part A: the generic analysis CSV carries every Tier-2 CSP force/slip trace column, and
+    # the export's Tier-2 field group stays in lock-step with reference_lap.TRACE_FIELDS[76:]
+    # (CSV_COLUMNS, _TIER2_DYNAMIC_TRACE_FIELDS, _TRACE_TO_CSV must not drift).
+    from tools.ac_harness.reference_lap import TRACE_FIELDS
+
+    tier2 = TRACE_FIELDS[76:]
+    assert len(tier2) == 24
+    assert lap_archive_export._TIER2_DYNAMIC_TRACE_FIELDS == tier2
+    for name in tier2:
+        assert name in lap_archive_export.CSV_COLUMNS, f"{name} missing from generic CSV export"
+        assert name in lap_archive_export._TRACE_TO_CSV, f"{name} missing from trace->CSV map"
 
 
 def test_motec_csv_uses_trace_elapsed_when_lap_ms_is_missing(tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

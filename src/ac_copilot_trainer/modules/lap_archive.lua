@@ -84,6 +84,18 @@ local TRACE_FIELDS = {
   "suspTravel_fl", "suspTravel_fr", "suspTravel_rl", "suspTravel_rr",
   "damperVel_fl", "damperVel_fr", "damperVel_rl", "damperVel_rr",
   "rideHeightFront", "rideHeightRear", "brakeBias", "turboBoost", "fuel", "accG_vert",
+  -- Tier-2 CSP force/slip channels (issue #488 Part A): per-wheel FL/FR/RL/RR. Appended AFTER
+  -- accG_vert so every older column position stays byte-stable; older (<=76-col) archives export
+  -- these as blanks. slipRatio unitless (longitudinal — NOT the AC-ndSlip `wheelSlip` above);
+  -- slipAngle DEGREES (lateral); mz Nm (self-aligning torque); fx/fy N (contact forces); dy peak mu.
+  -- Populated by AC's tyre solver via CSP `ac.StateWheel`; the per-lap header `extendedPhysics`
+  -- flag records whether the advanced physics model was active. Byte-identical to reference_lap.py.
+  "slipRatio_fl", "slipRatio_fr", "slipRatio_rl", "slipRatio_rr",
+  "slipAngle_fl", "slipAngle_fr", "slipAngle_rl", "slipAngle_rr",
+  "mz_fl", "mz_fr", "mz_rl", "mz_rr",
+  "fx_fl", "fx_fr", "fx_rl", "fx_rr",
+  "fy_fl", "fy_fr", "fy_rl", "fy_rr",
+  "dy_fl", "dy_fr", "dy_rl", "dy_rr",
 }
 
 local function lapArchiveDir()
@@ -270,6 +282,18 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
     end)
   end
 
+  -- Tier-2 availability confound (issue #488 Part A): whether CSP extended car physics was active
+  -- (`ac.StateCar.extendedPhysics`). The Tier-2 force/slip trace channels are populated by AC's tyre
+  -- solver regardless, but this per-lap flag tells ML whether the advanced physics model was in
+  -- effect. Kept boolean|nil so an unreadable field is honestly absent (nil), never a false negative.
+  local extendedPhysics = nil
+  pcall(function()
+    local v = opts.car and opts.car.extendedPhysics
+    if type(v) == "boolean" then
+      extendedPhysics = v
+    end
+  end)
+
   samplesColumnar = samplesColumnar or {}
   samplesCount = tonumber(samplesCount) or #samplesColumnar
   local cornersOut = {}
@@ -319,6 +343,7 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
     car = {
       id = carId,
       displayName = nil,
+      extendedPhysics = extendedPhysics,
     },
     track = {
       id = trackId,

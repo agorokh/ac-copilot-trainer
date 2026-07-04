@@ -928,6 +928,47 @@ def corner_live_signals(
         if grads:
             extra["tyreCrossGradient"] = grads
 
+    # --- Tier-2 CSP force/slip (#488 Part A): front-vs-rear slip-angle balance confirms handling
+    # balance (under/oversteer) directly, with Mz / grip-mu / longitudinal-slip as corroborating
+    # context. Each block is gated on the channel being persisted AND non-zero IN this corner (a 0.0
+    # among readings is the unread sentinel), so the marker never outruns the data. ---
+    if lap.slip_angle is not None:
+        front_sa = [
+            abs(lap.slip_angle[k][i]) for k in seg for i in (0, 1) if lap.slip_angle[k][i] != 0.0
+        ]
+        rear_sa = [
+            abs(lap.slip_angle[k][i]) for k in seg for i in (2, 3) if lap.slip_angle[k][i] != 0.0
+        ]
+        if front_sa and rear_sa:
+            fsa = sum(front_sa) / len(front_sa)
+            rsa = sum(rear_sa) / len(rear_sa)
+            # balance > 0 = front at a higher slip angle than rear = understeer; < 0 = oversteer.
+            extra["slipAngle"] = {
+                "front": round(fsa, 2),
+                "rear": round(rsa, 2),
+                "balance": round(fsa - rsa, 2),
+            }
+    if lap.mz is not None:
+        # Front-axle self-aligning torque peak (Nm): its collapse is the earliest understeer-onset
+        # cue; recorded as corroboration for the slip-angle balance verdict.
+        front_mz = [abs(lap.mz[k][i]) for k in seg for i in (0, 1) if lap.mz[k][i] != 0.0]
+        if front_mz:
+            extra["mz"] = round(max(front_mz), 1)
+    if lap.dy is not None:
+        # Peak lateral friction coefficient actually delivered (μ) over the corner, any wheel — the
+        # ground-truth grip label.
+        mus = [lap.dy[k][i] for k in seg for i in range(4) if lap.dy[k][i] != 0.0]
+        if mus:
+            extra["gripMu"] = round(max(mus), 3)
+    if lap.slip_ratio is not None:
+        # Peak |longitudinal slip ratio| over the corner, any wheel — traction usage on power,
+        # corroborating the wheelspin/lock signals.
+        srs = [
+            abs(lap.slip_ratio[k][i]) for k in seg for i in range(4) if lap.slip_ratio[k][i] != 0.0
+        ]
+        if srs:
+            extra["slipRatio"] = round(max(srs), 3)
+
     return extra
 
 
@@ -1323,6 +1364,66 @@ def _camber_pressure_coaching(ctx: CornerContext) -> str:
     )
 
 
+# --- handling balance under/oversteer (#488 Part A: CSP slip-angle balance) ------------------
+#: A meaningful front-vs-rear mean |slip angle| split (degrees). Below this, the axles are working
+#: evenly enough that calling it under/oversteer would outrun the signal.
+_HANDLING_BALANCE_MIN_DEG = 1.0
+
+
+def _r_handling_balance(ctx: CornerContext) -> float:
+    # Confidence scales with the front-vs-rear slip-angle imbalance. Advisory (no verdict) until the
+    # slipAngle channel is persisted — apply_rules gates that via channels_needed=("slipAngle",).
+    sa = ctx.extra.get("slipAngle")
+    if not isinstance(sa, dict):
+        return 0.0
+    balance = sa.get("balance")
+    if not isinstance(balance, (int, float)):
+        return 0.0
+    mag = abs(float(balance))
+    if mag < _HANDLING_BALANCE_MIN_DEG:
+        return 0.0
+    return min(0.8, 0.3 + (mag - _HANDLING_BALANCE_MIN_DEG) / 8.0)
+
+
+def _handling_balance_setup_causes(ctx: CornerContext) -> list[str]:
+    sa = ctx.extra.get("slipAngle")
+    if not isinstance(sa, dict):
+        return []
+    balance = float(sa.get("balance", 0.0))
+    front, rear = sa.get("front"), sa.get("rear")
+    mz = ctx.extra.get("mz")
+    mz_txt = (
+        f" (front self-aligning torque peaked at {mz} Nm then bled off)" if mz is not None else ""
+    )
+    if balance > 0:  # front slip angle higher -> understeer
+        return [
+            f"CONFIRMED mid-corner UNDERSTEER: front runs {balance:.1f}° more slip than rear "
+            f"(front {front}° vs rear {rear}°){mz_txt} → free the front: soften ARB_FRONT, add "
+            "front wing / drop rear wing, or bring rear pressures toward the hot window.",
+        ]
+    return [  # rear slip angle higher -> oversteer
+        f"CONFIRMED mid-corner OVERSTEER: rear runs {-balance:.1f}° more slip than front "
+        f"(rear {rear}° vs front {front}°) → steady the rear: soften ARB_REAR, add rear wing, "
+        "or ease DIFF_POWER / add rear pressure.",
+    ]
+
+
+def _handling_balance_coaching(ctx: CornerContext) -> str:
+    sa = ctx.extra.get("slipAngle")
+    if not isinstance(sa, dict):
+        return "Supply live slip-angle telemetry to confirm the mid-corner balance."
+    balance = float(sa.get("balance", 0.0))
+    if balance > 0:
+        return (
+            f"Front running {balance:.1f}° more slip than rear — understeer at the limit; free the "
+            "front (ARB/wing/pressure) rather than chasing the line."
+        )
+    return (
+        f"Rear running {-balance:.1f}° more slip than front — oversteer at the limit; steady the "
+        "rear (ARB/wing/diff) and ease the throttle pickup."
+    )
+
+
 RULES: list[DiagnosticRule] = [
     DiagnosticRule(
         key="grip_limited",
@@ -1513,5 +1614,22 @@ RULES: list[DiagnosticRule] = [
             "release can lower peak edge temps once the setup is already close.",
         ),
         coaching=_camber_pressure_coaching,
+    ),
+    DiagnosticRule(
+        key="handling_balance",
+        symptom="mid-corner handling balance (under/oversteer)",
+        phase="mid",
+        tier="A",
+        # 'slipAngle' is the COMPUTED front-vs-rear slip-angle balance (#488 Part A CSP force/slip),
+        # present only when slip angle was read IN this corner — so confirmation never outruns the
+        # data. This is the direct under/oversteer verdict the archive alone cannot produce.
+        channels_needed=("slipAngle",),
+        test=_r_handling_balance,
+        setup_causes=_handling_balance_setup_causes,
+        technique_causes=(
+            "Balance also responds to technique: an earlier, smoother brake release frees a "
+            "pushing front; a gentler throttle pickup settles a loose rear.",
+        ),
+        coaching=_handling_balance_coaching,
     ),
 ]

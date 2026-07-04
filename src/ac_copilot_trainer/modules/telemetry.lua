@@ -107,6 +107,31 @@ local MAX_LAP_TRACE = 2000
 ---@field turboBoost number|nil
 ---@field fuel number|nil
 ---@field accG_vert number|nil
+--- issue #488 Tier-2 CSP extended-physics force/slip channels (per-wheel FL/FR/RL/RR)
+---@field slipRatio_fl number|nil
+---@field slipRatio_fr number|nil
+---@field slipRatio_rl number|nil
+---@field slipRatio_rr number|nil
+---@field slipAngle_fl number|nil
+---@field slipAngle_fr number|nil
+---@field slipAngle_rl number|nil
+---@field slipAngle_rr number|nil
+---@field mz_fl number|nil
+---@field mz_fr number|nil
+---@field mz_rl number|nil
+---@field mz_rr number|nil
+---@field fx_fl number|nil
+---@field fx_fr number|nil
+---@field fx_rl number|nil
+---@field fx_rr number|nil
+---@field fy_fl number|nil
+---@field fy_fr number|nil
+---@field fy_rl number|nil
+---@field fy_rr number|nil
+---@field dy_fl number|nil
+---@field dy_fr number|nil
+---@field dy_rl number|nil
+---@field dy_rr number|nil
 
 local Telemetry = {}
 Telemetry.__index = Telemetry
@@ -357,6 +382,33 @@ function Telemetry:update(dt, car, sim)
       turboBoost = chassis.turboBoost,
       fuel = chassis.fuel,
       accG_vert = chassis.accG_vert,
+      -- issue #488 Tier-2 CSP extended-physics force/slip channels (per-wheel FL/FR/RL/RR), read via
+      -- wheel_read. slipRatio unitless (longitudinal, NOT the legacy AC-ndSlip `wheelSlip`); slipAngle
+      -- DEGREES (lateral); mz Nm (self-aligning torque); fx/fy N (contact-patch forces); dy peak mu.
+      slipRatio_fl = w.slipRatioLong.fl,
+      slipRatio_fr = w.slipRatioLong.fr,
+      slipRatio_rl = w.slipRatioLong.rl,
+      slipRatio_rr = w.slipRatioLong.rr,
+      slipAngle_fl = w.slipAngle.fl,
+      slipAngle_fr = w.slipAngle.fr,
+      slipAngle_rl = w.slipAngle.rl,
+      slipAngle_rr = w.slipAngle.rr,
+      mz_fl = w.mz.fl,
+      mz_fr = w.mz.fr,
+      mz_rl = w.mz.rl,
+      mz_rr = w.mz.rr,
+      fx_fl = w.fx.fl,
+      fx_fr = w.fx.fr,
+      fx_rl = w.fx.rl,
+      fx_rr = w.fx.rr,
+      fy_fl = w.fy.fl,
+      fy_fr = w.fy.fr,
+      fy_rl = w.fy.rl,
+      fy_rr = w.fy.rr,
+      dy_fl = w.dy.fl,
+      dy_fr = w.dy.fr,
+      dy_rl = w.dy.rl,
+      dy_rr = w.dy.rr,
     }
     self.lapBuf[self.lapN] = lp
     if self.lapN > MAX_LAP_RAW then

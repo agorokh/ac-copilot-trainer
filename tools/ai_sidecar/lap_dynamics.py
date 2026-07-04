@@ -57,6 +57,12 @@ class LapTrace:
     tyre_temp_mid: list[list[float]] | None = None  # tread middle temp, °C
     tyre_temp_outer: list[list[float]] | None = None  # tread outer temp, °C
     camber: list[list[float]] | None = None  # dynamic (running) camber, DEGREES (CSP `camber`)
+    # optional Tier-2 CSP force/slip channels (issue #488 Part A); per sample, 4 wheels [FL, FR, RL,
+    # RR]; None when not persisted OR present-but-all-zero (the unreadable sentinel — _wheel_cols).
+    slip_ratio: list[list[float]] | None = None  # CSP slipRatio, unitless (longitudinal)
+    slip_angle: list[list[float]] | None = None  # CSP slipAngle, DEGREES (lateral)
+    mz: list[list[float]] | None = None  # CSP mz, self-aligning torque (Nm)
+    dy: list[list[float]] | None = None  # CSP dy, lateral friction coefficient (peak mu)
     # lazily derived
     _kappa: list[float] | None = field(default=None, repr=False)
     _lat_g: list[float] | None = field(default=None, repr=False)
@@ -254,6 +260,11 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
     tyre_temp_mid = _wheel_cols(fields, samples, "tyreTempMid", n)
     tyre_temp_outer = _wheel_cols(fields, samples, "tyreTempOuter", n)
     camber = _wheel_cols(fields, samples, "camber", n)
+    # optional Tier-2 CSP force/slip channels (issue #488 Part A); present only when persisted
+    slip_ratio = _wheel_cols(fields, samples, "slipRatio", n)
+    slip_angle = _wheel_cols(fields, samples, "slipAngle", n)
+    mz = _wheel_cols(fields, samples, "mz", n)
+    dy = _wheel_cols(fields, samples, "dy", n)
 
     car = archive.get("car") if isinstance(archive.get("car"), dict) else {}
     track = archive.get("track") if isinstance(archive.get("track"), dict) else {}
@@ -276,6 +287,10 @@ def lap_trace_from_archive(archive: dict[str, Any]) -> LapTrace:
         tyre_temp_mid=tyre_temp_mid,
         tyre_temp_outer=tyre_temp_outer,
         camber=camber,
+        slip_ratio=slip_ratio,
+        slip_angle=slip_angle,
+        mz=mz,
+        dy=dy,
         x=x_col,
         z=z_col,
         lap_ms=_finite(lap.get("lap_ms")),
