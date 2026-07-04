@@ -626,8 +626,70 @@ def _lap_row(rec: dict, path: Path) -> tuple:
     )
 
 
+def _materialize_stint_map(con) -> None:  # noqa: ANN001
+    """Single source of the stint-boundary + tyre-set-age logic (issue #488 Part C).
+
+    A stint boundary is a change in tyre-set identity (#478 Part C) OR the setup; keying on both
+    promotes stints off the raw setup_hash proxy while still splitting when only the setup changed.
+    BOTH the ``stints`` rollup and the ``lap_features`` grain read this ``lap_stints`` map, so the
+    boundary rule lives in exactly ONE place — no drift, so a lap can never be assigned to
+    mismatched stints across the two grains (ws-ops daemon review, PR #503).
+    """
+    con.execute("DROP TABLE IF EXISTS lap_stints")
+    con.execute(
+        """
+        CREATE TABLE lap_stints AS
+        WITH ordered AS (
+            SELECT lap_uuid, session_uuid, lap_n, exported_at, file,
+                   CASE
+                     WHEN lag(coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')) OVER (
+                         PARTITION BY session_uuid
+                         ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
+                     ) IS NOT DISTINCT FROM (
+                         coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')
+                     )
+                     THEN 0 ELSE 1
+                   END AS stint_start
+            FROM laps
+        ),
+        seq AS (
+            SELECT *,
+                   sum(stint_start) OVER (
+                       PARTITION BY session_uuid
+                       ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
+                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                   ) - 1 AS stint_index
+            FROM ordered
+        ),
+        aged AS (
+            SELECT lap_uuid, session_uuid, stint_index,
+                   coalesce(session_uuid, 'session') || ':' || stint_index::TEXT AS stint_id,
+                   row_number() OVER (
+                       PARTITION BY session_uuid, stint_index
+                       ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
+                   ) - 1 AS laps_on_set,
+                   max(stint_index) OVER (PARTITION BY session_uuid) AS max_stint_index,
+                   count(*) OVER (PARTITION BY session_uuid, stint_index) AS stint_len
+            FROM seq
+        )
+        SELECT lap_uuid, session_uuid, stint_index, stint_id, laps_on_set,
+               (laps_on_set = 0) AS is_new_set,
+               (laps_on_set = 0) AS out_lap,
+               -- in-lap = last lap of a stint followed by another stint in the session (a real
+               -- tyre/setup change happened after it). AC exposes no pit-in flag to Lua, so this
+               -- is the deterministic proxy; the session's final stint's last lap is NOT marked.
+               (laps_on_set = stint_len - 1 AND stint_index < max_stint_index) AS in_lap
+        FROM aged
+        """
+    )
+
+
 def _materialize_session_tables(con) -> None:  # noqa: ANN001
-    """Project first-class session/stint rollups from the loaded lap fact table."""
+    """Project first-class session/stint rollups from the loaded lap fact table.
+
+    The ``stints`` rollup reads the shared ``lap_stints`` map (from :func:`_materialize_stint_map`)
+    for stint identity, so the boundary rule is not duplicated here.
+    """
     con.execute(
         """
         INSERT INTO sessions
@@ -666,50 +728,25 @@ def _materialize_session_tables(con) -> None:  # noqa: ANN001
     con.execute(
         """
         INSERT INTO stints
-        WITH ordered AS (
-            SELECT *,
-                   -- A stint boundary is a change in the tyre-set identity (issue #478 Part C) OR
-                   -- the setup; keying on both promotes stints off the raw setup_hash proxy while
-                   -- still splitting when only the setup changed.
-                   CASE
-                     WHEN lag(coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')) OVER (
-                         PARTITION BY session_uuid
-                         ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                     ) IS NOT DISTINCT FROM (
-                         coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')
-                     )
-                     THEN 0 ELSE 1
-                   END AS stint_start
-            FROM laps
-        ),
-        grouped AS (
-            SELECT *,
-                   sum(stint_start) OVER (
-                       PARTITION BY session_uuid
-                       ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                   ) - 1 AS stint_index
-            FROM ordered
-        )
-        SELECT coalesce(session_uuid, 'session') || ':' || stint_index::TEXT AS stint_id,
-               session_uuid,
-               stint_index::INTEGER,
-               any_value(car_id),
-               any_value(track_id),
-               nullif(any_value(setup_hash), ''),
-               coalesce(nullif(any_value(tyre_set), ''), nullif(any_value(setup_hash), ''),
+        SELECT m.stint_id,
+               any_value(l.session_uuid),
+               m.stint_index::INTEGER,
+               any_value(l.car_id),
+               any_value(l.track_id),
+               nullif(any_value(l.setup_hash), ''),
+               coalesce(nullif(any_value(l.tyre_set), ''), nullif(any_value(l.setup_hash), ''),
                         'unknown-tyre-set'),
-               min(lap_n),
-               max(lap_n),
+               min(l.lap_n),
+               max(l.lap_n),
                count(*)::INTEGER,
-               count(*) FILTER (WHERE is_valid)::INTEGER,
-               min(lap_ms) FILTER (WHERE is_valid AND lap_ms > 0),
-               median(lap_ms) FILTER (WHERE is_valid AND lap_ms > 0),
-               stddev_samp(lap_ms) FILTER (WHERE is_valid AND lap_ms > 0),
-               min(file),
-               max(file)
-        FROM grouped
-        GROUP BY session_uuid, stint_index
+               count(*) FILTER (WHERE l.is_valid)::INTEGER,
+               min(l.lap_ms) FILTER (WHERE l.is_valid AND l.lap_ms > 0),
+               median(l.lap_ms) FILTER (WHERE l.is_valid AND l.lap_ms > 0),
+               stddev_samp(l.lap_ms) FILTER (WHERE l.is_valid AND l.lap_ms > 0),
+               min(l.file),
+               max(l.file)
+        FROM laps l JOIN lap_stints m USING (lap_uuid)
+        GROUP BY m.stint_id, m.stint_index
         """
     )
 
@@ -731,10 +768,10 @@ def _nan_to_null(col: str) -> str:
 def _materialize_analytics_tables(con, *, fuel_effect_s_per_kg: float) -> None:  # noqa: ANN001
     """Project the per-lap scalar staging into the lap_features + stint_deg grains (#488 Part C).
 
-    ``lap_features`` = the Python-computed scalars ⋈ window-derived tyre-set age (``laps_on_set``,
-    ``is_new_set``, ``out_lap``, ``in_lap``) using the SAME stint-boundary rule as the ``stints``
-    rollup (a change in tyre-set OR setup). ``stint_deg`` = per-stint OLS of fuel-corrected laptime
-    vs age (DuckDB ``regr_slope``), wear rate, and thermal-window residence.
+    ``lap_features`` = the Python-computed scalars ⋈ the shared ``lap_stints`` map (built by
+    :func:`_materialize_stint_map` — the one place the tyre-set-age / boundary rule lives, so it
+    can never drift from the ``stints`` rollup). ``stint_deg`` = per-stint OLS of fuel-corrected
+    laptime vs age (DuckDB ``regr_slope``), wear rate, and thermal-window residence.
     """
     scalar_select = ", ".join(f's."{name}"' for name in _LAP_SCALAR_NAMES)
     scalar_insert = ", ".join(f'"{name}"' for name in _LAP_SCALAR_NAMES)
@@ -744,49 +781,10 @@ def _materialize_analytics_tables(con, *, fuel_effect_s_per_kg: float) -> None: 
             {scalar_insert}, stint_id, stint_index, laps_on_set, is_new_set, out_lap, in_lap,
             schema_version
         )
-        WITH ordered AS (
-            SELECT lap_uuid, session_uuid, lap_n, exported_at, file,
-                   CASE
-                     WHEN lag(coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')) OVER (
-                         PARTITION BY session_uuid
-                         ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                     ) IS NOT DISTINCT FROM (
-                         coalesce(tyre_set, '') || '|' || coalesce(setup_hash, '')
-                     )
-                     THEN 0 ELSE 1
-                   END AS stint_start
-            FROM laps
-        ),
-        seq AS (
-            SELECT *,
-                   sum(stint_start) OVER (
-                       PARTITION BY session_uuid
-                       ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                   ) - 1 AS stint_index
-            FROM ordered
-        ),
-        aged AS (
-            SELECT lap_uuid, session_uuid, stint_index,
-                   coalesce(session_uuid, 'session') || ':' || stint_index::TEXT AS stint_id,
-                   row_number() OVER (
-                       PARTITION BY session_uuid, stint_index
-                       ORDER BY lap_n ASC NULLS LAST, exported_at ASC NULLS LAST, file ASC
-                   ) - 1 AS laps_on_set,
-                   max(stint_index) OVER (PARTITION BY session_uuid) AS max_stint_index,
-                   count(*) OVER (PARTITION BY session_uuid, stint_index) AS stint_len
-            FROM seq
-        )
         SELECT {scalar_select},
-               a.stint_id, a.stint_index, a.laps_on_set,
-               (a.laps_on_set = 0) AS is_new_set,
-               (a.laps_on_set = 0) AS out_lap,
-               -- in-lap = last lap of a stint that is followed by another stint in the session
-               -- (a real tyre/setup change happened after it). AC exposes no pit-in flag to Lua,
-               -- so this is the deterministic proxy; the final stint's last lap is NOT marked.
-               (a.laps_on_set = a.stint_len - 1 AND a.stint_index < a.max_stint_index) AS in_lap,
+               m.stint_id, m.stint_index, m.laps_on_set, m.is_new_set, m.out_lap, m.in_lap,
                '{LAKE_SCHEMA_VERSION}'
-        FROM lap_scalars s JOIN aged a USING (lap_uuid)
+        FROM lap_scalars s JOIN lap_stints m USING (lap_uuid)
         """
     )
     fuel_effect = float(fuel_effect_s_per_kg)
@@ -849,6 +847,7 @@ def _materialize_analytics_tables(con, *, fuel_effect_s_per_kg: float) -> None: 
         ],
     )
     con.execute("DROP TABLE IF EXISTS lap_scalars")
+    con.execute("DROP TABLE IF EXISTS lap_stints")
 
 
 class _SamplesCsvStaging:
@@ -1009,6 +1008,7 @@ def build_lake(
                         samples_staging.write_rows(rows)
             if samples_staging is not None:
                 summary.samples = samples_staging.copy_into(con)
+            _materialize_stint_map(con)
             _materialize_session_tables(con)
             _materialize_analytics_tables(con, fuel_effect_s_per_kg=fuel_effect_s_per_kg)
             con.execute("COMMIT")
