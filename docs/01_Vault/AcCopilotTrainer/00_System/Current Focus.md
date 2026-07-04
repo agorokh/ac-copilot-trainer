@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T06:05:00Z
+last_updated: 2026-07-04T08:50:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-setup-drive-rebake-race-2026-07-03.md
@@ -26,9 +27,19 @@ relates_to:
 **Repo:** ac-copilot-trainer.
 
 **Active focus:** EPIC [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry
-capture completeness for ML) — **Part A DELIVERED** below; **Part B/C/D remain** the live next steps
-(B: tyre identity + `tyres.ini` specs → `tyre_model.py`; C: grain + serialization / `build_analytics.py`
-3-grain + Parquet + SchemaVer; D: setup⟷outcome linkage + dynamic-vs-static deltas).
+capture completeness for ML) — **Parts A + B DELIVERED** (below, both rig-verified + merged); **Parts C
++ D remain** the live next steps (see the RESUME block in `Next Session Handoff.md` for the full
+checklist): **C** grain + serialization (`build_analytics.py` per-lap scalar + per-stint `deg_slope`,
+Parquet + SchemaVer, docs); **D** setup⟷outcome linkage (`coaching_lake` join views + dynamic-vs-static
+deltas + setup-snap reliability). Paused here at a large session budget — resume cold from the handoff.
+
+**Delivered (2026-07-04):** PR [#500](https://github.com/agorokh/ac-copilot-trainer/pull/500)
+**MERGED** ([`dd463fc`](https://github.com/agorokh/ac-copilot-trainer/commit/dd463fc)) — **#488 Part B**
+tyre identity & specs: live `tyres` header (`longName` via `ac.getTyresLongName` + `optimalTempC` via
+`wheel.tyreOptimumTemperature`), new pure-stdlib `tyre_specs.py` `data.acd` reader (**cipher is
+subtraction, not XOR**) → `TyreSpec`, car-true window in `tyre_model` (+ ACD fallback),
+`setup_model.resolve_tyre_spec`. **Rig-verified** (911 GT3 R: live "Slick Medium (M)" optimum 95;
+ACD Slick Soft optimum 70). 6 review-hardening cycles. Detail: [[issue-488-part-b-tyre-identity-2026-07-04]].
 
 **Delivered (2026-07-04):** PR [#497](https://github.com/agorokh/ac-copilot-trainer/pull/497)
 **MERGED** ([`6eba176`](https://github.com/agorokh/ac-copilot-trainer/commit/6eba176)) — **#488 Part A**
