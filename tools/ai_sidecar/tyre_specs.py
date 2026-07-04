@@ -385,9 +385,11 @@ def _optimal_temp_from_curve(
     curve_text: str | None = None
     candidate = performance_curve.strip()
     if candidate.lower().endswith(".lut"):
-        # Filename reference into the same archive. Archive keys are lowercased by _load_archive, so
-        # a single lowercased lookup is case-insensitive and O(1) (no linear scan needed).
-        curve_text = archive.get(candidate.lower())
+        # Filename reference into the same archive. Use the lowercased BASENAME (some mods write a
+        # path prefix like `data/tcurve.lut` or `data\tcurve.lut`) — archive keys are lowercased
+        # basenames, so this stays a case-insensitive O(1) lookup.
+        base = candidate.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        curve_text = archive.get(base)
     else:
         # Inline curve: AC allows the LUT written directly, sometimes wrapped in parentheses.
         curve_text = candidate.replace("(", "\n").replace(")", "\n").replace(",", "\n")

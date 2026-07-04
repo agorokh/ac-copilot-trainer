@@ -356,6 +356,27 @@ def test_non_finite_values_degrade_to_none(tmp_path: Path) -> None:
     assert spec.pressure_ideal_psi == 26.0  # the one finite field survives
 
 
+def test_performance_curve_with_path_prefix_resolves(tmp_path: Path) -> None:
+    """A PERFORMANCE_CURVE written with a folder prefix (`data/tcurve.lut`) resolves via its
+    basename against the archive's basename keys (gemini #500)."""
+    ini = (
+        "[FRONT]\n"
+        "NAME=Path Prefix Tyre\n"
+        "WIDTH=0.25\n"
+        "RADIUS=0.32\n"
+        "[THERMAL_FRONT]\n"
+        "PERFORMANCE_CURVE=data/tcurve_r888.lut\n"
+    )
+    car_dir = tmp_path / "path_prefix_car"
+    data_dir = car_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "tyres.ini").write_text(ini, encoding="utf-8")
+    (data_dir / "tcurve_r888.lut").write_text(_SYNTH_R888_LUT, encoding="utf-8")
+    spec = read_tyre_specs(car_dir, 0)
+    assert spec is not None
+    assert spec.optimal_temp_c == 85.0  # basename lookup found the .lut despite the path prefix
+
+
 def test_rear_fallback_for_missing_front_key(tmp_path: Path) -> None:
     """A key present only in [REAR_N] is used when [FRONT_N] omits it."""
     ini = (
