@@ -19,7 +19,10 @@ red-team corrections are encoded here and must NOT be "simplified" away:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+from tools.ai_sidecar.tyre_specs import read_tyre_specs
 
 _WHEELS = ("fl", "fr", "rl", "rr")
 #: Our front-corner wheel key (fl) → AC setup INI's side-corner key (LF). AC uses LF/RF/LR/RR.
@@ -47,6 +50,21 @@ COMPOUND_CRITICAL_C: dict[str, float] = {
     "slick": 120.0,
 }
 CRITICAL_C = COMPOUND_CRITICAL_C["soft"]  # back-compat default (most conservative)
+
+#: Car-true window from the live PERFORMANCE_CURVE peak (`wheel.tyreOptimumTemperature`, #488).
+#: When the optimum is known we re-center the window on the real peak, not a generic per-compound
+#: bucket. Grip rolls off asymmetrically (faster above than below, red-team-verified), so the band
+#: is wider below; reuses the generic 30C span + +25C critical margin, anchored on the true peak.
+OPTIMAL_BAND_BELOW_C = 20.0
+OPTIMAL_BAND_ABOVE_C = 10.0
+OPTIMAL_CRITICAL_MARGIN_C = 25.0
+
+
+def _window_from_optimal(optimal_c: float) -> tuple[tuple[float, float], float]:
+    """``(window, critical_c)`` centered on the car-true optimal core temp (the curve peak)."""
+    window = (optimal_c - OPTIMAL_BAND_BELOW_C, optimal_c + OPTIMAL_BAND_ABOVE_C)
+    return window, optimal_c + OPTIMAL_CRITICAL_MARGIN_C
+
 
 # pressure↔core coupling (ideal gas, constant V): ~+1 psi per 10 °C at GT3 pressures
 PRESSURE_PSI_PER_DEGC = 0.12
@@ -144,18 +162,28 @@ def analyze_tyres(
     cold_pressure: dict[str, float] | None = None,
     *,
     compound: str | None = None,
+    optimal_temp_c: float | None = None,
     prev_core: dict[str, float] | None = None,
     laps_since_start: int | None = None,
 ) -> TyreReport:
     """Analyze a lap's per-wheel core temps (+ optional cold pressures, compound, previous lap).
 
     ``core``/``cold_pressure`` are ``{fl,fr,rl,rr: value}`` (missing wheels tolerated). ``compound``
-    is one of COMPOUND_WINDOWS keys; unknown → generic ``slick``. ``prev_core`` +
+    is a display label (a COMPOUND_WINDOWS key, or a car-authored name like "Toyo R888R").
+    ``optimal_temp_c`` is the CAR-true optimal core temp (the PERFORMANCE_CURVE peak, live via
+    ``wheel.tyreOptimumTemperature`` or resolved from ``tyres.ini``, #488 Part B): when given, the
+    window is re-centered on the real peak instead of a generic per-compound bucket. ``prev_core`` +
     ``laps_since_start`` drive warm-up vs steady classification. Returns a :class:`TyreReport`.
     """
     comp = (compound or "slick").lower()
-    window = COMPOUND_WINDOWS.get(comp, COMPOUND_WINDOWS["slick"])
-    critical_c = COMPOUND_CRITICAL_C.get(comp, COMPOUND_CRITICAL_C["slick"])
+    # Prefer the CAR-true window (curve peak) when the optimum was captured; else the generic
+    # per-compound bucket only when it wasn't (older archive / unreadable field).
+    opt = _num(optimal_temp_c)
+    if opt is not None and opt > 0:
+        window, critical_c = _window_from_optimal(opt)
+    else:
+        window = COMPOUND_WINDOWS.get(comp, COMPOUND_WINDOWS["slick"])
+        critical_c = COMPOUND_CRITICAL_C.get(comp, COMPOUND_CRITICAL_C["slick"])
     core = {w: float(core[w]) for w in _WHEELS if w in core and core[w] is not None}
     status = {w: _status_for(core[w], window, critical_c) for w in core}
     present = list(core.values())
@@ -358,12 +386,15 @@ def _build_findings(
     return out
 
 
-def tyres_from_lap_archive(archive: dict) -> TyreReport | None:
+def tyres_from_lap_archive(
+    archive: dict, *, car_data_dir: str | Path | None = None
+) -> TyreReport | None:
     """Build a :class:`TyreReport` from a lap archive's per-wheel ``tyreCoreTemp_*`` trace columns.
 
     Averages each wheel's core temp over the lap (the trace carries per-sample core temps, #266).
-    Returns None if the archive has no per-wheel temp channels. Compound/cold-pressure are read from
-    the setup snapshot when present (compound index → unknown name, so falls back to generic slick).
+    Returns None if the archive has no per-wheel temp channels. The car-true optimum + compound name
+    come from the archive ``tyres`` header (live, #488); when ``car_data_dir`` is given and the
+    archive lacks them, they are resolved offline from the car's ``tyres.ini`` (ACD-aware).
     """
     trace = archive.get("trace") if isinstance(archive, dict) else None
     if not isinstance(trace, dict):
@@ -404,4 +435,24 @@ def tyres_from_lap_archive(archive: dict) -> TyreReport | None:
     lap = archive.get("lap") if isinstance(archive.get("lap"), dict) else {}
     lap_num = _num(lap.get("lap_n"))  # _num rejects NaN/±inf so int() below never crashes
     laps_since = int(lap_num) if lap_num is not None else None
-    return analyze_tyres(core, cold or None, laps_since_start=laps_since)
+    # Car-true optimal core temp + compound identity from the archive tyres header (#488 Part B).
+    # Prefer the LONG compound name ("Toyo R888R") as the debrief label; else the short name.
+    tyres = archive.get("tyres") if isinstance(archive.get("tyres"), dict) else {}
+    optimal = _num(tyres.get("optimalTempC"))
+    label = tyres.get("longName") or tyres.get("name")
+    compound = label if isinstance(label, str) and label else None
+    # Offline enrichment (#488 Part B): a pre-#488 archive has no live optimum/name. When the car's
+    # data dir is available, resolve them from the car's tyres.ini (ACD-aware). A bad or
+    # absent ACD leaves the live values (or None → generic bucket), never raises.
+    if (optimal is None or compound is None) and car_data_dir is not None:
+        ci = _num(tyres.get("compoundIndex"))
+        if ci is not None:
+            spec = read_tyre_specs(car_data_dir, int(ci))
+            if spec is not None:
+                if optimal is None:
+                    optimal = _num(spec.optimal_temp_c)
+                if compound is None and isinstance(spec.name, str) and spec.name:
+                    compound = spec.name
+    return analyze_tyres(
+        core, cold or None, compound=compound, optimal_temp_c=optimal, laps_since_start=laps_since
+    )

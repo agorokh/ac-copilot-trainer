@@ -5,6 +5,9 @@ from __future__ import annotations
 from tools.ai_sidecar.tyre_model import (
     COMPOUND_WINDOWS,
     CRITICAL_C,
+    OPTIMAL_BAND_ABOVE_C,
+    OPTIMAL_BAND_BELOW_C,
+    OPTIMAL_CRITICAL_MARGIN_C,
     analyze_tyres,
     tyres_from_lap_archive,
 )
@@ -203,6 +206,85 @@ def test_tyres_from_lap_archive_averages_core_and_reads_pressure():
 def test_tyres_from_lap_archive_none_without_temp_channels():
     archive = {"trace": {"fields": ["spline", "speed", "eMs"], "samples": [[0, 1, 2], [0.5, 1, 3]]}}
     assert tyres_from_lap_archive(archive) is None
+
+
+def test_optimal_temp_recenters_window_on_car_true_peak():
+    # #488 Part B: a captured car-true optimum re-centers the window on the real peak. peak=90 ->
+    # window (70, 100), critical 115. AT the peak = in-window; well above peak+ABOVE = overheat.
+    peak = 90.0
+    r = analyze_tyres(_core(peak, peak, peak, peak), compound="soft", optimal_temp_c=peak)
+    assert r.window == (peak - OPTIMAL_BAND_BELOW_C, peak + OPTIMAL_BAND_ABOVE_C)
+    assert all(s == "in_window" for s in r.status.values())
+    hot = analyze_tyres(
+        _core(peak + OPTIMAL_BAND_ABOVE_C + 5, peak, peak, peak), optimal_temp_c=peak
+    )
+    assert hot.status["fl"] == "overheat"
+    crit = analyze_tyres(
+        _core(peak + OPTIMAL_CRITICAL_MARGIN_C + 1, peak, peak, peak), optimal_temp_c=peak
+    )
+    assert crit.status["fl"] == "critical"
+
+
+def test_optimal_temp_overrides_generic_bucket():
+    # Same core, different optimum: with optimal_temp_c the window is the CAR-true band, not the
+    # generic per-compound bucket (which would be soft's (70, 100)).
+    generic = analyze_tyres(_core(90, 90, 90, 90), compound="soft")
+    car_true = analyze_tyres(_core(90, 90, 90, 90), compound="soft", optimal_temp_c=105.0)
+    assert generic.window == COMPOUND_WINDOWS["soft"]
+    assert car_true.window == (105.0 - OPTIMAL_BAND_BELOW_C, 105.0 + OPTIMAL_BAND_ABOVE_C)
+    assert car_true.window != generic.window
+
+
+def test_tyres_from_lap_archive_uses_car_true_optimum_and_longname():
+    # #488 Part B: the tyres header's optimalTempC drives a car-true window; longName is the label.
+    archive = _archive_with_temps(_core(85, 85, 83, 83))
+    archive["tyres"] = {
+        "compoundIndex": 4,
+        "name": "R888R",
+        "longName": "Toyo R888R",
+        "optimalTempC": 88.0,
+    }
+    r = tyres_from_lap_archive(archive)
+    assert r is not None
+    assert r.window == (88.0 - OPTIMAL_BAND_BELOW_C, 88.0 + OPTIMAL_BAND_ABOVE_C)
+    assert r.compound == "toyo r888r"  # long-name display label (lowercased)
+
+
+def test_tyres_from_lap_archive_without_optimum_falls_back_to_generic():
+    # Back-compat: a pre-#488 archive with no tyres.optimalTempC uses the generic slick window.
+    r = tyres_from_lap_archive(_archive_with_temps(_core(92, 92, 88, 88)))
+    assert r is not None
+    assert r.window == COMPOUND_WINDOWS["slick"]
+
+
+def test_tyres_from_lap_archive_acd_fallback_resolves_optimum(monkeypatch):
+    # #488 Part B: a pre-#488 archive (compoundIndex only, no live optimum/name) resolves the
+    # car-true optimum + compound name from the car's tyres.ini (ACD) when car_data_dir is given.
+    from types import SimpleNamespace
+
+    from tools.ai_sidecar import tyre_model
+
+    archive = _archive_with_temps(_core(72, 72, 70, 70))
+    archive["tyres"] = {"compoundIndex": 0}  # index only — the pre-#488 capture shape
+
+    def _fake_specs(car_dir, compound_index):
+        assert compound_index == 0
+        return SimpleNamespace(optimal_temp_c=70.0, name="Slick Soft")
+
+    monkeypatch.setattr(tyre_model, "read_tyre_specs", _fake_specs)
+    r = tyres_from_lap_archive(archive, car_data_dir="/fake/car/dir")
+    assert r is not None
+    assert r.window == (70.0 - OPTIMAL_BAND_BELOW_C, 70.0 + OPTIMAL_BAND_ABOVE_C)
+    assert r.compound == "slick soft"
+
+
+def test_tyres_from_lap_archive_no_car_dir_skips_acd():
+    # Without car_data_dir the ACD reader is never touched (no side effects, generic fallback).
+    archive = _archive_with_temps(_core(92, 92, 88, 88))
+    archive["tyres"] = {"compoundIndex": 0}
+    r = tyres_from_lap_archive(archive)
+    assert r is not None
+    assert r.window == COMPOUND_WINDOWS["slick"]
 
 
 def test_archive_zero_temps_are_unread_sentinel():

@@ -282,6 +282,36 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
     end)
   end
 
+  -- Tyre compound LONG name (issue #488 Part B) — e.g. "Toyo R888R" via ac.getTyresLongName. Same
+  -- unread-index guard as tyreName: only claim it when the compound index was actually read, so the
+  -- lakehouse never keys on an identity the capture couldn't confirm.
+  local tyreLongName = nil
+  if tyreCompoundIndex ~= nil then
+    pcall(function()
+      if ac and type(ac.getTyresLongName) == "function" then
+        local n = ac.getTyresLongName(0, tyreCompoundIndex)
+        if type(n) == "string" and n ~= "" then
+          tyreLongName = n
+        end
+      end
+    end)
+  end
+
+  -- Car-true optimal tyre CORE temperature (°C, issue #488 Part B) — CSP
+  -- `wheel.tyreOptimumTemperature` (the PERFORMANCE_CURVE peak the game itself uses), so the tyre
+  -- model can interpret core temps against the CAR-true window instead of a generic per-compound
+  -- bucket. Read wheel 0 (0-indexed per ac.Wheel; constant per compound), pcall + finite-guarded so
+  -- an unreadable field is honestly absent (nil). Rejects 0/negative (unread/invalid).
+  local tyreOptimalTempC = nil
+  pcall(function()
+    local wheels = opts.car and opts.car.wheels
+    local w0 = wheels and wheels[0]
+    local t = tonumber(w0 and w0.tyreOptimumTemperature)
+    if t ~= nil and t == t and t ~= math.huge and t ~= -math.huge and t > 0 then
+      tyreOptimalTempC = t
+    end
+  end)
+
   -- Tier-2 availability confound (issue #488 Part A): whether CSP extended car physics was active
   -- (`ac.StateCar.extendedPhysics`). The Tier-2 force/slip trace channels are populated by AC's tyre
   -- solver regardless, but this per-lap flag tells ML whether the advanced physics model was in
@@ -373,6 +403,8 @@ local function buildRecordEnvelope(opts, samplesColumnar, samplesCount)
     tyres = {
       compoundIndex = tyreCompoundIndex,
       name = tyreName,
+      longName = tyreLongName,
+      optimalTempC = tyreOptimalTempC,
     },
     trace = {
       samples_count = samplesCount,
