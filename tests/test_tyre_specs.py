@@ -308,6 +308,54 @@ def test_inline_comment_and_whitespace_stripping(tmp_path: Path) -> None:
     assert spec.size_label == "245/R31.5 (rim R22.0)"
 
 
+def test_section_header_with_inline_comment(tmp_path: Path) -> None:
+    """A section header with a trailing comment (`[FRONT] ; x`) still parses; the comment is
+    stripped before the anchored section-header regex runs (gemini #500)."""
+    ini = (
+        "[FRONT] ; road-legal semi-slick\n"
+        "NAME=Commented Header\n"
+        "WIDTH=0.25\n"
+        "RADIUS=0.32\n"
+        "[THERMAL_FRONT]  # hash comment on header\n"
+        "PERFORMANCE_CURVE=60|0.9,80|1.0,100|0.9\n"
+    )
+    car_dir = tmp_path / "header_comment_car"
+    data_dir = car_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "tyres.ini").write_text(ini, encoding="utf-8")
+    spec = read_tyre_specs(car_dir, 0)
+    assert spec is not None
+    assert spec.name == "Commented Header"
+    assert spec.width_m == 0.25
+    assert spec.optimal_temp_c == 80.0  # inline curve resolved despite the header comment
+
+
+def test_non_finite_values_degrade_to_none(tmp_path: Path) -> None:
+    """NaN/inf in the INI degrade to None, never crashing size/int formatting (gemini #500)."""
+    ini = (
+        "[HEADER]\n"
+        "VERSION=inf\n"
+        "[FRONT]\n"
+        "NAME=Corrupt Dims\n"
+        "WIDTH=nan\n"
+        "RADIUS=inf\n"
+        "RIM_RADIUS=-inf\n"
+        "PRESSURE_IDEAL=26\n"
+    )
+    car_dir = tmp_path / "corrupt_car"
+    data_dir = car_dir / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "tyres.ini").write_text(ini, encoding="utf-8")
+    spec = read_tyre_specs(car_dir, 0)
+    assert spec is not None  # never raises
+    assert spec.name == "Corrupt Dims"
+    assert spec.width_m is None
+    assert spec.radius_m is None
+    assert spec.version is None  # inf VERSION -> None, not an OverflowError
+    assert spec.size_label is None  # needs finite width + radius
+    assert spec.pressure_ideal_psi == 26.0  # the one finite field survives
+
+
 def test_rear_fallback_for_missing_front_key(tmp_path: Path) -> None:
     """A key present only in [REAR_N] is used when [FRONT_N] omits it."""
     ini = (

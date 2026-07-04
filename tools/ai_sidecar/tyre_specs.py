@@ -281,10 +281,13 @@ def _parse_ini_sections(text: str) -> dict[str, dict[str, str]]:
     sections: dict[str, dict[str, str]] = {}
     current: dict[str, str] | None = None
     for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith((";", "#")):
+        # Strip an inline comment (';'/'#') from the WHOLE line first, so a section header or key
+        # with a trailing comment (e.g. "[FRONT] ; road tyre") still parses — the anchored
+        # _SECTION_RE would otherwise fail to match the raw line.
+        stripped = re.split(r"[;#]", line, maxsplit=1)[0].strip()
+        if not stripped:
             continue
-        m = _SECTION_RE.match(line)
+        m = _SECTION_RE.match(stripped)
         if m:
             name = m.group(1).strip().upper()
             current = sections.setdefault(name, {})
@@ -292,8 +295,7 @@ def _parse_ini_sections(text: str) -> dict[str, dict[str, str]]:
         if current is None or "=" not in stripped:
             continue
         key, _, value = stripped.partition("=")
-        # strip inline comment (';' or '#') and surrounding whitespace/quotes
-        value = re.split(r"[;#]", value, maxsplit=1)[0].strip().strip('"').strip("'")
+        value = value.strip().strip('"').strip("'")
         current[key.strip().upper()] = value
     return sections
 
@@ -302,18 +304,17 @@ def _to_float(value: str | None) -> float | None:
     if value is None:
         return None
     try:
-        return float(value.strip())
+        f = float(value.strip())
     except (ValueError, AttributeError):
         return None
+    # Reject NaN/±inf so a corrupt INI can't propagate a non-finite into size-label formatting,
+    # window math, or int() (which raises OverflowError on inf) downstream.
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
 
 
 def _to_int(value: str | None) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(float(value.strip()))
-    except (ValueError, AttributeError):
-        return None
+    f = _to_float(value)  # inherits the non-finite guard; int() on a finite float is safe
+    return int(f) if f is not None else None
 
 
 def _section_for(
