@@ -630,6 +630,32 @@ def test_parquet_dir_with_single_quote_roundtrips(lake_cwd):
     assert rows[0][0] == summary.lap_features
 
 
+def test_read_parquet_surface_rejects_unknown_grain(lake_cwd):
+    # qodo #503: a grain outside the allowlist (e.g. traversal) must be rejected, not path-joined.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a"))
+    db = _db_path()
+    build_lake(laps, db)
+    export_parquet(db, "journal/parquet")
+    for bad in ("../../secrets", "..", "lap_features/../x"):
+        with pytest.raises(ValueError, match="unknown parquet grain"):
+            read_parquet_surface("journal/parquet", bad)
+
+
+def test_lap_features_carries_static_set_camber(lake_cwd):
+    # ws-ops daemon #503: set_camber is denormalized into lap_features alongside cold_pressure.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", snapshot={"CAMBER_LF": -3.2, "PRESSURE_LF": 24.0}))
+    db = _db_path()
+    build_lake(laps, db)
+    cols, rows = run_query(db, "SELECT set_camber_fl, cold_pressure_fl FROM lap_features")
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["set_camber_fl"] == pytest.approx(-3.2)
+    assert r["cold_pressure_fl"] == pytest.approx(24.0)
+
+
 def test_new_reports_registered():
     assert {
         "degradation",

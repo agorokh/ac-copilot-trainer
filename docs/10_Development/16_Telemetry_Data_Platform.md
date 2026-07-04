@@ -84,8 +84,8 @@ segmentation key.
   residence, and the time-grid (`sample_dt_ms_median`, `trace_hz` — derived from the retained
   `eMs` channel). It also carries the **confound metadata** every ML segmentation needs:
   `compound`, `tyre_set_key`, `laps_on_set`, `is_new_set`, `out_lap`, `in_lap`, `is_dirty`,
-  `cold_pressure_*` (from the setup snapshot), `ambient_temp_c`, `track_temp_c`, `grip_level`, and
-  `fuel_corrected_lap_ms`.
+  `cold_pressure_*` and `set_camber_*` (static baselines from the setup snapshot), `ambient_temp_c`,
+  `track_temp_c`, `grip_level`, and `fuel_corrected_lap_ms`.
 - **`stint_deg`** — one row per stint. `deg_slope_ms_per_lap` = the OLS slope (DuckDB `regr_slope`)
   of **fuel-corrected** laptime vs `laps_on_set` over valid, non-out/in laps, with `deg_r2` and
   `n_laps_in_fit`; plus `deg_slope_raw_ms_per_lap` (uncorrected), `wear_rate_pct_per_lap`, and

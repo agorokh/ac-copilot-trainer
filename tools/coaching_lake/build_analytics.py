@@ -133,6 +133,10 @@ def _lap_scalar_columns() -> tuple[tuple[str, str], ...]:
         ("cold_pressure_fr", "DOUBLE"),
         ("cold_pressure_rl", "DOUBLE"),
         ("cold_pressure_rr", "DOUBLE"),
+        ("set_camber_fl", "DOUBLE"),
+        ("set_camber_fr", "DOUBLE"),
+        ("set_camber_rl", "DOUBLE"),
+        ("set_camber_rr", "DOUBLE"),
         ("is_dirty", "BOOLEAN"),
         ("fuel_start_kg", "DOUBLE"),
         ("fuel_end_kg", "DOUBLE"),
@@ -157,6 +161,15 @@ _COLD_PRESSURE_SETUP_KEYS: dict[str, str] = {
     "fr": "PRESSURE_RF",
     "rl": "PRESSURE_LR",
     "rr": "PRESSURE_RR",
+}
+# Static set camber lives in the setup snapshot under these AC INI keys. Denormalized into
+# lap_features alongside cold_pressure so both static baselines are handled uniformly and the
+# dynamic-static-delta report needs no setup_params join (ws-ops daemon review, PR #503).
+_SET_CAMBER_SETUP_KEYS: dict[str, str] = {
+    "fl": "CAMBER_LF",
+    "fr": "CAMBER_RF",
+    "rl": "CAMBER_LR",
+    "rr": "CAMBER_RR",
 }
 
 
@@ -388,6 +401,7 @@ def _compute_lap_scalars(rec: dict, *, fuel_effect_s_per_kg: float) -> dict[str,
     }
     for w in _WHEELS:
         out[f"cold_pressure_{w}"] = _num(setup_map.get(_COLD_PRESSURE_SETUP_KEYS[w]))
+        out[f"set_camber_{w}"] = _num(setup_map.get(_SET_CAMBER_SETUP_KEYS[w]))
         out[f"core_temp_avg_{w}"] = core[w].avg
         out[f"core_temp_max_{w}"] = core[w].max
         out[f"core_temp_end_{w}"] = core[w].last
@@ -1154,23 +1168,15 @@ REPORTS: dict[str, str] = {
     # Part D — dynamic-vs-static deltas: running camber vs set value; hot running pressure vs cold
     # set pressure. The gap between what you dialled in and what the car actually did.
     "dynamic-static-delta": """
-        WITH set_camber AS (
-            SELECT lap_uuid,
-                   max(value) FILTER (WHERE key = 'CAMBER_LF') AS set_camber_fl,
-                   max(value) FILTER (WHERE key = 'CAMBER_RF') AS set_camber_fr,
-                   max(value) FILTER (WHERE key = 'CAMBER_LR') AS set_camber_rl,
-                   max(value) FILTER (WHERE key = 'CAMBER_RR') AS set_camber_rr
-            FROM setup_params GROUP BY lap_uuid
-        )
-        SELECT lf.car_id, lf.track_id, lf.lap_n, lf.laps_on_set,
-               round(lf.camber_avg_fl, 2) AS run_camber_fl,
-               round(sc.set_camber_fl, 2) AS set_camber_fl,
-               round(lf.camber_avg_fl - sc.set_camber_fl, 2) AS camber_delta_fl,
-               round(lf.pressure_avg_fl, 2) AS hot_press_fl,
-               round(lf.cold_pressure_fl, 2) AS cold_press_fl,
-               round(lf.pressure_avg_fl - lf.cold_pressure_fl, 2) AS press_rise_fl
-        FROM lap_features lf LEFT JOIN set_camber sc USING (lap_uuid)
-        ORDER BY lf.car_id, lf.track_id, lf.laps_on_set
+        SELECT car_id, track_id, lap_n, laps_on_set,
+               round(camber_avg_fl, 2) AS run_camber_fl,
+               round(set_camber_fl, 2) AS set_camber_fl,
+               round(camber_avg_fl - set_camber_fl, 2) AS camber_delta_fl,
+               round(pressure_avg_fl, 2) AS hot_press_fl,
+               round(cold_pressure_fl, 2) AS cold_press_fl,
+               round(pressure_avg_fl - cold_pressure_fl, 2) AS press_rise_fl
+        FROM lap_features
+        ORDER BY car_id, track_id, laps_on_set
     """,
     # Part D — setup-snapshot reliability: fraction of laps that actually captured setup params
     # (the historical setup_params=0 data-quality point — verify it holds now).
@@ -1224,6 +1230,11 @@ _PARQUET_FILE_GRAINS: tuple[str, ...] = (
     "lake_meta",
 )
 _PARQUET_PARTITIONED: dict[str, tuple[str, ...]] = {"samples": ("track_id", "car_id")}
+# The complete set of emittable/readable grains — an allowlist so a caller-supplied ``grain`` can
+# never be a path fragment (``..`` / separators) that escapes the parquet root (qodo #503).
+_ALL_PARQUET_GRAINS: frozenset[str] = frozenset(_PARQUET_FILE_GRAINS) | frozenset(
+    _PARQUET_PARTITIONED
+)
 
 
 def _sql_str(value: str) -> str:
@@ -1316,6 +1327,12 @@ def read_parquet_surface(
     """
     import duckdb
 
+    if grain not in _ALL_PARQUET_GRAINS:
+        # Allowlist the grain so it can't be a traversal fragment escaping the parquet root
+        # (_resolve_parquet_dir constrains out_dir, not the grain suffix — qodo #503).
+        raise ValueError(
+            f"unknown parquet grain {grain!r}; expected one of {sorted(_ALL_PARQUET_GRAINS)}"
+        )
     out = _resolve_parquet_dir(out_dir)
     part_dir = out / grain
     if part_dir.is_dir():
