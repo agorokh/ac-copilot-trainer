@@ -26,12 +26,12 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus:** EPIC [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry
-capture completeness for ML) — **Parts A + B DELIVERED** (below, both rig-verified + merged); **Parts C
-+ D remain** the live next steps (see the RESUME block in `Next Session Handoff.md` for the full
-checklist): **C** grain + serialization (`build_analytics.py` per-lap scalar + per-stint `deg_slope`,
-Parquet + SchemaVer, docs); **D** setup⟷outcome linkage (`coaching_lake` join views + dynamic-vs-static
-deltas + setup-snap reliability). Paused here at a large session budget — resume cold from the handoff.
+**Active focus:** Awaiting next focus selection (see RESUME block in `Next Session Handoff.md`). EPIC [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry capture completeness for ML) is **FULLY DELIVERED** and closed via PRs #497 (Part A), #500 (Part B), and #503 (Parts C & D).
+
+**Delivered (2026-07-04):** PR [#503](https://github.com/agorokh/ac-copilot-trainer/pull/503)
+**MERGED** ([`76a3cf6`](https://github.com/agorokh/ac-copilot-trainer/commit/76a3cf6)) — **#488 Parts C+D**
+grain + serialization (`build_analytics.py` per-lap scalar + per-stint `deg_slope`, Parquet + SchemaVer, docs)
+and setup⟷outcome linkage (`coaching_lake` join views + dynamic-vs-static deltas + setup-snap reliability).
 
 **Delivered (2026-07-04):** PR [#500](https://github.com/agorokh/ac-copilot-trainer/pull/500)
 **MERGED** ([`dd463fc`](https://github.com/agorokh/ac-copilot-trainer/commit/dd463fc)) — **#488 Part B**

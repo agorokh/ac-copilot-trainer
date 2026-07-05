@@ -74,30 +74,21 @@ relates_to:
 
 # Next session handoff
 
-## RESUME HERE — EPIC #488: Parts A+B DELIVERED & rig-verified; **Parts C + D remain**
+## RESUME HERE — Next focus
 
-**Read first:** [[csp-telemetry-and-acd-grounding-2026-07-04]] — the durable, reusable grounding from
-this session's delivery (verified CSP `ac.StateWheel`/`ac.StateCar` field surface + units + tiers, the
-`data.acd` subtraction-cipher algorithm, the live-vs-generic tyre-window insight, the rig-verify-via-
-overlay recipe + multi-lap drive command, and the busy-multi-worktree ops notes). Trust it over the
-older `telemetry-capture-surface-for-ml` research node's assumptions (several were wrong).
+EPIC #488 (telemetry capture completeness) is **FULLY DELIVERED** (Parts A, B, C, D) and closed.
+Resume cold from here by picking the next major focus. Options from the backlog include:
+- **EPIC #86 (Rig screen)** final on-device smoke artifact + A4 font outputs.
+- **EPIC #408 (SuperLap)** Part C Track Titan ingester (requires real TT reference laps).
+- **EPIC #154 Part G (Racing Driver)** path-tracking steering controller (pure-pursuit currently cuts apexes) to reach the pace bar.
 
-`/autonomous-deliver 488` this session delivered **Part A** (PR #497) and **Part B** (PR #500), both
-merged + rig-verified + post-merged. **EPIC #488 stays OPEN** for the last two parts (a clean pause at
-a large session budget — resume cold from here):
-- **Part C — Grain + serialization.** `tools/coaching_lake/build_analytics.py`: per-lap scalar + per-stint
-  series tables, tyre-set-age (`laps_on_set`) tracking, `dt` retention, Parquet emit + SchemaVer /
-  `union_by_name`, retention updates, docs `docs/10_Development/16_Telemetry_Data_Platform.md`. Acceptance:
-  a driven stint yields per-stint `deg_slope` vs `laps_on_set`, segmentable by `(car_id, compound_name,
-  laps_on_set)` with confound cols. NOTE: `build_analytics` already auto-widens its DuckDB schema from
-  `reference_lap.TRACE_FIELDS` (verified in Part A) — the 100-col trace + new `tyres` header
-  (`longName`/`optimalTempC`) flow in for free; Part C is the grain/Parquet/deg-slope layer on top.
-- **Part D — Setup⟷outcome linkage.** `coaching_lake` join views (`corners ⋈ setup_params ⋈` new
-  dynamic-response cols) + dynamic-vs-static delta features (running camber vs set; hot vs `PRESSURE_IDEAL`
-  — now available via Part B `tyre_specs`) + setup-snapshot reliability check (`setup_params` not empty).
-- Reusable: `tyre_specs.read_tyre_specs(car_dir, idx)` gives `optimal_temp_c`/`pressure_ideal_psi`/μ;
-  live archive `tyres` header carries `optimalTempC`/`longName`; rig drive = `auto_drive --driver ggv
-  --drive-seconds 470 --tap-seconds 450` (multi-lap so laps finalize+archive; `--wait-lap` stops at lap 1).
+## Delivered (2026-07-04 UTC) — PR #503 MERGED (`76a3cf6`): #488 Part C+D degradation grain & setup linkage
+
+`/autonomous-deliver 488` (this session). **Closes EPIC #488**. 
+Delivered the Parquet serialization and `coaching_lake` analytical tables to support ML training:
+- **Part C — Grain + serialization.** `lap_features` (per-lap scalar) and `stint_deg` (per-stint degradation slope) tables. Proper `laps_on_set`, fuel-correction, thermal window residence, and `dt` extraction. `--parquet` output with SchemaVer `1.1.0` and `union_by_name` backward compatibility.
+- **Part D — Setup⟷outcome linkage.** Reports mapping static setups to dynamic responses (running vs set camber in degrees; hot vs cold pressures). Correct unit translation from setup clicks to degrees (`set_camber_deg_*` via displayMultiplier fallback).
+- **Review Hardening:** Addressed camber unit mismatch, Parquet path traversal, and robust snapshot extraction. `make ci-fast` OK.
 
 ## Delivered (2026-07-04 UTC) — PR #500 MERGED (`dd463fc`): #488 Part B tyre identity & specs, RIG-VERIFIED
 
@@ -136,8 +127,7 @@ synthetic 3° imbalance. **brakeTemp caveat RESOLVED:** flat 26 °C on a hard-br
 per-car brake-thermal dependency, stays Tier-1 (caveat on `M.brakeTemp`, `6c3489d`). Qodo endorsed the
 append-only design; Gemini/Codex quota-limited; self-hosted daemon doesn't review this repo (gate vacuous).
 
-**#488 remains:** Part B (tyre identity + `tyres.ini` specs → `tyre_model.py`), Part C (grain +
-serialization, `build_analytics.py` 3-grain + Parquet + SchemaVer), Part D (setup⟷outcome linkage).
+**#488 is CLOSED:** All parts (A, B, C, D) are now delivered.
 
 ## Delivered (2026-07-04 UTC) — PR #496 MERGED (`b9f597a`): #466 Part B setup-resolution + race.ini concurrency hardening
 
