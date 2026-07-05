@@ -15,8 +15,12 @@ duckdb = pytest.importorskip("duckdb")  # analytics extra; skip if not installed
 
 from tools.ac_harness.reference_lap import TRACE_FIELDS  # noqa: E402
 from tools.coaching_lake.build_analytics import (  # noqa: E402
+    DEFAULT_FUEL_EFFECT_S_PER_KG,
+    LAKE_SCHEMA_VERSION,
     build_lake,
+    export_parquet,
     list_reports,
+    read_parquet_surface,
     run_query,
     run_report,
 )
@@ -324,3 +328,351 @@ def test_null_setup_key_skipped(lake_cwd):
     assert summary.setup_params == 1
     cols, rows = run_query(db, "SELECT key FROM setup_params")
     assert rows[0][cols.index("key")] == "WING"
+
+
+# ---------------------------------------------------------------------------
+# Issue #488 Part C + D — grain/serialization + setup⟷outcome linkage.
+# ---------------------------------------------------------------------------
+_WHEELS = ("fl", "fr", "rl", "rr")
+
+
+def _phys(
+    lap_uuid,
+    *,
+    car="nissan",
+    track="magione",
+    lap_ms=100000,
+    lap_n=1,
+    session_uuid="sess",
+    setup_hash="setupA",
+    n_samples=10,
+    fuel=50.0,
+    run_camber=-3.0,
+    core=90.0,
+    hot_press=27.0,
+    wear_base=0.0,
+    dirty=0.0,
+    optimal_temp=90.0,
+    snapshot=None,
+    is_valid=True,
+) -> dict:
+    """A physically-shaped archive with the full 100-col trace and controllable channels."""
+    fields = list(TRACE_FIELDS)
+    samples = []
+    for i in range(n_samples):
+        vals = dict.fromkeys(fields, 0.0)
+        vals["spline"] = i / max(n_samples, 1)
+        vals["eMs"] = i * 100.0  # 10 Hz => dt 100 ms
+        vals["fuel"] = fuel
+        vals["accG_long"] = 1.0
+        vals["accG_lat"] = 1.0
+        for w in _WHEELS:
+            vals[f"tyreCoreTemp_{w}"] = core
+            vals[f"tyreTempInner_{w}"] = core + 5.0
+            vals[f"tyreTempOuter_{w}"] = core - 5.0
+            vals[f"wheelsPressure_{w}"] = hot_press + i * 0.1
+            vals[f"tyreWear_{w}"] = wear_base + i * 0.01
+            vals[f"wheelLoad_{w}"] = 3000.0
+            vals[f"slipRatio_{w}"] = 0.05
+            vals[f"camber_{w}"] = run_camber
+            vals[f"tyreDirty_{w}"] = dirty
+        samples.append([vals[f] for f in fields])
+    return {
+        "schema_version": 1,
+        "source": "in_game",
+        "lap_uuid": lap_uuid,
+        "session_uuid": session_uuid,
+        "exported_at": f"2026-07-04T00:{lap_n:02d}:00Z",
+        "car": {"id": car},
+        "track": {"id": track, "lengthM": 2500.0},
+        "conditions": {"ambientTempC": 26.0, "trackTempC": 31.0, "trackGripLevel": 0.98},
+        "lap": {"lap_n": lap_n, "lap_ms": lap_ms, "is_pb": False, "is_valid": is_valid},
+        "setup": {
+            "hash": setup_hash,
+            "path": "x/race.ini",
+            "snapshot": {"CAMBER_LF": -3.2, "PRESSURE_LF": 24.0} if snapshot is None else snapshot,
+        },
+        "tyres": {"compoundIndex": 4, "name": "R888R", "optimalTempC": optimal_temp},
+        "trace": {"samples_count": n_samples, "fields": fields, "samples": samples},
+        "corners": [],
+    }
+
+
+def test_lap_features_scalars_and_confounds(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "s", _phys("s", lap_ms=95000, core=90.0, hot_press=27.0, wear_base=0.1, dirty=0.1))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    assert summary.lap_features == 1
+    cols, rows = run_query(
+        db,
+        "SELECT core_temp_avg_fl, core_temp_end_fl, tread_gradient_avg_fl, pressure_rise_fl, "
+        "wear_delta_fl, tyre_energy_fl, thermal_window_residence_pct, cold_pressure_fl, "
+        "camber_avg_fl, is_dirty, compound, tyre_set_key, ambient_temp_c, track_temp_c, "
+        "grip_level, fuel_used_kg, sample_count, schema_version FROM lap_features",
+    )
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["core_temp_avg_fl"] == pytest.approx(90.0)
+    assert r["core_temp_end_fl"] == pytest.approx(90.0)
+    assert r["tread_gradient_avg_fl"] == pytest.approx(10.0)  # inner(95) − outer(85)
+    assert r["pressure_rise_fl"] == pytest.approx(0.9)  # (10−1) samples × 0.1
+    assert r["wear_delta_fl"] == pytest.approx(0.09)  # (10−1) × 0.01
+    assert r["tyre_energy_fl"] == pytest.approx(135.0)  # 0.05 × 3000 × 0.1 × 9 intervals
+    assert r["thermal_window_residence_pct"] == pytest.approx(100.0)
+    assert r["cold_pressure_fl"] == pytest.approx(24.0)  # from setup PRESSURE_LF
+    assert r["camber_avg_fl"] == pytest.approx(-3.0)  # running (setup is −3.2)
+    assert r["is_dirty"] is True
+    assert r["compound"] == "R888R"
+    assert r["tyre_set_key"] == "compound:4"
+    assert r["ambient_temp_c"] == pytest.approx(26.0)
+    assert r["track_temp_c"] == pytest.approx(31.0)
+    assert r["grip_level"] == pytest.approx(0.98)
+    assert r["fuel_used_kg"] == pytest.approx(0.0)  # constant fuel this lap
+    assert r["sample_count"] == 10
+    assert r["schema_version"] == LAKE_SCHEMA_VERSION
+
+
+def test_laps_on_set_and_out_in_lap(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    # stint A: 2 laps (setupA); stint B: 2 laps (setupB) — a mid-session change makes A's last lap
+    # an in-lap and B's first lap an out-lap.
+    _write(laps, "a1", _phys("a1", lap_n=1, setup_hash="A"))
+    _write(laps, "a2", _phys("a2", lap_n=2, setup_hash="A"))
+    _write(laps, "b3", _phys("b3", lap_n=3, setup_hash="B"))
+    _write(laps, "b4", _phys("b4", lap_n=4, setup_hash="B"))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    assert summary.stint_deg == 2
+    cols, rows = run_query(
+        db,
+        "SELECT lap_n, laps_on_set, is_new_set, out_lap, in_lap FROM lap_features ORDER BY lap_n",
+    )
+    got = {row[0]: tuple(row[1:]) for row in rows}
+    assert got[1] == (0, True, True, False)  # stint A out-lap
+    assert got[2] == (1, False, False, True)  # stint A last lap → in-lap (B follows)
+    assert got[3] == (0, True, True, False)  # stint B out-lap
+    assert got[4] == (1, False, False, False)  # session's final lap → not an in-lap
+
+
+def test_deg_slope_and_fuel_correction(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    # one stint, 5 laps; laptime rises 500 ms per lap of age, fuel constant (fuel-corr == raw slope)
+    for k in range(5):
+        _write(laps, f"d{k}", _phys(f"d{k}", lap_ms=100000 + 500 * k, lap_n=k + 1, fuel=50.0))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    assert (summary.lap_features, summary.stint_deg) == (5, 1)
+    cols, rows = run_query(
+        db,
+        "SELECT laps_on_set, lap_ms, fuel_corrected_lap_ms FROM lap_features ORDER BY laps_on_set",
+    )
+    by_age = {row[0]: dict(zip(cols, row, strict=True)) for row in rows}
+    # fuel correction: lap_ms − fuel_effect(0.03 s/kg) × 1000 × 50 kg = lap_ms − 1500
+    expect = 100500 - DEFAULT_FUEL_EFFECT_S_PER_KG * 1000.0 * 50.0
+    assert by_age[1]["fuel_corrected_lap_ms"] == pytest.approx(expect)
+    cols, rows = run_report(db, "degradation")
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["n_laps_in_fit"] == 4  # ages 1..4 (age 0 is the excluded out-lap)
+    assert r["deg_ms_per_lap"] == pytest.approx(500.0)
+    assert r["deg_raw_ms_per_lap"] == pytest.approx(500.0)
+    assert r["deg_r2"] == pytest.approx(1.0)
+    assert r["wear_rate_pct_per_lap"] == pytest.approx(0.0)  # constant wear this synthetic stint
+
+
+def test_deg_null_when_insufficient_fit(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    # stint A is internal (out-lap + in-lap only) → 0 representative laps → deg undefined (NULL)
+    _write(laps, "a1", _phys("a1", lap_n=1, setup_hash="A"))
+    _write(laps, "a2", _phys("a2", lap_n=2, setup_hash="A"))
+    _write(laps, "b3", _phys("b3", lap_n=3, setup_hash="B"))
+    _write(laps, "b4", _phys("b4", lap_n=4, setup_hash="B"))
+    db = _db_path()
+    build_lake(laps, db)
+    cols, rows = run_query(
+        db, "SELECT stint_id, deg_slope_ms_per_lap, n_laps_in_fit FROM stint_deg ORDER BY stint_id"
+    )
+    first = dict(zip(cols, rows[0], strict=True))
+    assert first["n_laps_in_fit"] == 0
+    assert first["deg_slope_ms_per_lap"] is None  # NULL, never NaN
+
+
+def test_parquet_export_roundtrip_and_schemaver(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", car="nissan", track="magione", lap_n=1))
+    _write(laps, "b", _phys("b", car="audi", track="spa", lap_n=1, session_uuid="sess2"))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    meta = export_parquet(db, "journal/parquet")
+    assert meta["schema_version"] == LAKE_SCHEMA_VERSION
+    assert meta["grains"]["lap_features"] == summary.lap_features
+    assert (lake_cwd / "journal/parquet/_schema.json").exists()
+    cols, rows = read_parquet_surface("journal/parquet", "lap_features", columns="count(*) n")
+    assert rows[0][0] == summary.lap_features
+    # samples read back as a hive-partitioned tree — partition columns recovered
+    cols, rows = read_parquet_surface(
+        "journal/parquet",
+        "samples",
+        columns="count(*) n, count(distinct track_id) t, count(distinct car_id) c",
+    )
+    assert tuple(rows[0]) == (summary.samples, 2, 2)
+    cols, rows = run_query(db, "SELECT value FROM lake_meta WHERE key = 'schema_version'")
+    assert rows[0][0] == LAKE_SCHEMA_VERSION
+
+
+def test_parquet_union_by_name_tolerates_added_column(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", car="nissan", track="magione", lap_n=1))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    export_parquet(db, "journal/parquet")
+    # a next-generation partition file whose schema diverges (extra column, missing others)
+    con = duckdb.connect()
+    try:
+        extra = lake_cwd / "journal/parquet/samples/track_id=zzz/car_id=zzz"
+        extra.mkdir(parents=True)
+        target = (extra / "gen2.parquet").as_posix()
+        con.execute(
+            f"COPY (SELECT 0.5 AS spline, 42.0 AS future_channel) TO '{target}' (FORMAT PARQUET)"
+        )
+    finally:
+        con.close()
+    # union_by_name merges divergent schemas instead of erroring on the read
+    cols, rows = read_parquet_surface("journal/parquet", "samples", columns="count(*) n")
+    assert rows[0][0] == summary.samples + 1
+
+
+def test_part_d_dynamic_static_delta(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(
+        laps,
+        "a",
+        _phys(
+            "a",
+            lap_n=1,
+            run_camber=-3.0,
+            hot_press=27.0,
+            snapshot={"CAMBER_LF": -32.0, "PRESSURE_LF": 24.0},
+        ),
+    )
+    db = _db_path()
+    build_lake(laps, db)
+    cols, rows = run_report(db, "dynamic-static-delta")
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["run_camber_fl"] == pytest.approx(-3.0)
+    assert r["set_camber_fl"] == pytest.approx(-3.2)
+    assert r["camber_delta_fl"] == pytest.approx(0.2)  # running − set
+    assert r["cold_press_fl"] == pytest.approx(24.0)
+    assert r["hot_press_fl"] == pytest.approx(27.45)  # 27 + mean(i×0.1)
+    assert r["press_rise_fl"] == pytest.approx(3.45)  # hot − cold
+
+
+def test_part_d_setup_vs_dynamic_and_coverage(lake_cwd):
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", lap_n=1, snapshot={"WING_FRONT": 3, "PRESSURE_LF": 24.0}))
+    _write(laps, "b", _phys("b", lap_n=2, snapshot={}))  # no setup captured this lap
+    db = _db_path()
+    build_lake(laps, db)
+    cols, rows = run_report(db, "setup-coverage")
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["laps"] == 2
+    assert r["laps_with_setup"] == 1
+    assert r["setup_coverage_pct"] == pytest.approx(50.0)
+    cols, rows = run_report(db, "setup-vs-dynamic")
+    params = {row[cols.index("setup_param")] for row in rows}
+    assert "WING_FRONT" in params
+
+
+def test_parquet_refuses_raw_corpus_dir(lake_cwd):
+    # Data-immutability guard: --parquet must never target a dir holding raw lap_*.json archives.
+    raw = lake_cwd / "journal" / "laps"
+    raw.mkdir()
+    _write(raw, "a", _phys("a"))
+    db = _db_path()
+    build_lake(raw, db)
+    with pytest.raises(ValueError, match="raw lap-archive"):
+        export_parquet(db, "journal/laps")
+
+
+def test_non_finite_fuel_effect_rejected(lake_cwd):
+    # qodo #503: inf/nan fuel effect would corrupt fuel_corrected_lap_ms + leak into SQL literals.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a"))
+    for bad in (float("inf"), float("-inf"), float("nan")):
+        with pytest.raises(ValueError, match="fuel_effect_s_per_kg must be finite"):
+            build_lake(laps, _db_path(), fuel_effect_s_per_kg=bad)
+
+
+def test_sql_str_escapes_single_quotes():
+    from tools.coaching_lake.build_analytics import _sql_str
+
+    assert _sql_str("a'b") == "a''b"
+    assert _sql_str("plain") == "plain"
+
+
+def test_parquet_dir_with_single_quote_roundtrips(lake_cwd):
+    # qodo #503: a parquet dir name containing a ' must not break the COPY / read_parquet SQL.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", car="nissan", track="magione"))
+    db = _db_path()
+    summary = build_lake(laps, db)
+    export_parquet(db, "journal/pq'q")
+    cols, rows = read_parquet_surface("journal/pq'q", "lap_features", columns="count(*) n")
+    assert rows[0][0] == summary.lap_features
+
+
+def test_read_parquet_surface_rejects_unknown_grain(lake_cwd):
+    # qodo #503: a grain outside the allowlist (e.g. traversal) must be rejected, not path-joined.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a"))
+    db = _db_path()
+    build_lake(laps, db)
+    export_parquet(db, "journal/parquet")
+    for bad in ("../../secrets", "..", "lap_features/../x"):
+        with pytest.raises(ValueError, match="unknown parquet grain"):
+            read_parquet_surface("journal/parquet", bad)
+
+
+def test_lap_features_carries_static_set_camber(lake_cwd):
+    # ws-ops daemon #503: set_camber is denormalized into lap_features alongside cold_pressure.
+    laps = lake_cwd / "laps"
+    laps.mkdir()
+    _write(laps, "a", _phys("a", snapshot={"CAMBER_LF.VALUE": -18, "PRESSURE_LF.VALUE": 24.0}))
+    db = _db_path()
+    build_lake(laps, db)
+    cols, rows = run_query(
+        db, "SELECT set_camber_clicks_fl, set_camber_deg_fl, cold_pressure_fl FROM lap_features"
+    )
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["set_camber_clicks_fl"] == pytest.approx(-18.0)
+    assert r["set_camber_deg_fl"] == pytest.approx(-1.8)
+    assert r["cold_pressure_fl"] == pytest.approx(24.0)
+
+
+def test_new_reports_registered():
+    assert {
+        "degradation",
+        "lap-features",
+        "setup-vs-dynamic",
+        "dynamic-static-delta",
+        "setup-coverage",
+    } <= set(list_reports())
+
+
+def test_summary_has_new_grain_columns(lake_cwd):
+    db, _ = _build(lake_cwd)
+    cols, rows = run_report(db, "summary")
+    r = dict(zip(cols, rows[0], strict=True))
+    assert r["lap_features"] == 4  # 4 laps in the shared fixture
+    assert "stint_deg" in cols
+    assert r["setup_coverage_pct"] is not None  # 0.0 — fixture archives carry no setup snapshot
