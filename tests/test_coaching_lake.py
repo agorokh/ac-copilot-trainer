@@ -647,7 +647,7 @@ def test_lap_features_carries_static_set_camber(lake_cwd):
     # ws-ops daemon #503: set_camber is denormalized into lap_features alongside cold_pressure.
     laps = lake_cwd / "laps"
     laps.mkdir()
-    _write(laps, "a", _phys("a", snapshot={"CAMBER_LF": -3.2, "PRESSURE_LF": 24.0}))
+    _write(laps, "a", _phys("a", snapshot={"CAMBER_LF.VALUE": -3.2, "PRESSURE_LF.VALUE": 24.0}))
     db = _db_path()
     build_lake(laps, db)
     cols, rows = run_query(db, "SELECT set_camber_fl, cold_pressure_fl FROM lap_features")

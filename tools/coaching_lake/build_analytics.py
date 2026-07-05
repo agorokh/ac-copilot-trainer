@@ -400,8 +400,10 @@ def _compute_lap_scalars(rec: dict, *, fuel_effect_s_per_kg: float) -> dict[str,
         "trace_hz": (1000.0 / median_dt if median_dt else None),
     }
     for w in _WHEELS:
-        out[f"cold_pressure_{w}"] = _num(setup_map.get(_COLD_PRESSURE_SETUP_KEYS[w]))
-        out[f"set_camber_{w}"] = _num(setup_map.get(_SET_CAMBER_SETUP_KEYS[w]))
+        out[f"cold_pressure_{w}"] = _num(
+            _setup_snapshot_value(setup_map, _COLD_PRESSURE_SETUP_KEYS[w])
+        )
+        out[f"set_camber_{w}"] = _num(_setup_snapshot_value(setup_map, _SET_CAMBER_SETUP_KEYS[w]))
         out[f"core_temp_avg_{w}"] = core[w].avg
         out[f"core_temp_max_{w}"] = core[w].max
         out[f"core_temp_end_{w}"] = core[w].last
@@ -559,6 +561,14 @@ def _create_schema(con) -> None:  # noqa: ANN001
         """
     )
     con.execute("CREATE TABLE lake_meta (key TEXT, value TEXT)")
+
+
+def _setup_snapshot_value(setup_map: dict[str, Any], key: str) -> Any:
+    """Look up a setup snapshot value tolerating both `SECTION.VALUE` and `SECTION` shapes."""
+    val_key = f"{key}.VALUE"
+    if val_key in setup_map:
+        return setup_map[val_key]
+    return setup_map.get(key)
 
 
 def _iter_setup_items(snapshot: Any):
