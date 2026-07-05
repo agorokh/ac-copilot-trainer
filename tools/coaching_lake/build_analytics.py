@@ -133,10 +133,14 @@ def _lap_scalar_columns() -> tuple[tuple[str, str], ...]:
         ("cold_pressure_fr", "DOUBLE"),
         ("cold_pressure_rl", "DOUBLE"),
         ("cold_pressure_rr", "DOUBLE"),
-        ("set_camber_fl", "DOUBLE"),
-        ("set_camber_fr", "DOUBLE"),
-        ("set_camber_rl", "DOUBLE"),
-        ("set_camber_rr", "DOUBLE"),
+        ("set_camber_clicks_fl", "DOUBLE"),
+        ("set_camber_clicks_fr", "DOUBLE"),
+        ("set_camber_clicks_rl", "DOUBLE"),
+        ("set_camber_clicks_rr", "DOUBLE"),
+        ("set_camber_deg_fl", "DOUBLE"),
+        ("set_camber_deg_fr", "DOUBLE"),
+        ("set_camber_deg_rl", "DOUBLE"),
+        ("set_camber_deg_rr", "DOUBLE"),
         ("is_dirty", "BOOLEAN"),
         ("fuel_start_kg", "DOUBLE"),
         ("fuel_end_kg", "DOUBLE"),
@@ -403,7 +407,10 @@ def _compute_lap_scalars(rec: dict, *, fuel_effect_s_per_kg: float) -> dict[str,
         out[f"cold_pressure_{w}"] = _num(
             _setup_snapshot_value(setup_map, _COLD_PRESSURE_SETUP_KEYS[w])
         )
-        out[f"set_camber_{w}"] = _num(_setup_snapshot_value(setup_map, _SET_CAMBER_SETUP_KEYS[w]))
+        clicks = _num(_setup_snapshot_value(setup_map, _SET_CAMBER_SETUP_KEYS[w]))
+        out[f"set_camber_clicks_{w}"] = clicks
+        # Fallback: most AC car schemas use a displayMultiplier of 0.1 for camber clicks.
+        out[f"set_camber_deg_{w}"] = (clicks * 0.1) if clicks is not None else None
         out[f"core_temp_avg_{w}"] = core[w].avg
         out[f"core_temp_max_{w}"] = core[w].max
         out[f"core_temp_end_{w}"] = core[w].last
@@ -1180,8 +1187,8 @@ REPORTS: dict[str, str] = {
     "dynamic-static-delta": """
         SELECT car_id, track_id, lap_n, laps_on_set,
                round(camber_avg_fl, 2) AS run_camber_fl,
-               round(set_camber_fl, 2) AS set_camber_fl,
-               round(camber_avg_fl - set_camber_fl, 2) AS camber_delta_fl,
+               round(set_camber_deg_fl, 2) AS set_camber_fl,
+               round(camber_avg_fl - set_camber_deg_fl, 2) AS camber_delta_fl,
                round(pressure_avg_fl, 2) AS hot_press_fl,
                round(cold_pressure_fl, 2) AS cold_press_fl,
                round(pressure_avg_fl - cold_pressure_fl, 2) AS press_rise_fl

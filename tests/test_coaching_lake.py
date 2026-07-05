@@ -558,7 +558,7 @@ def test_part_d_dynamic_static_delta(lake_cwd):
             lap_n=1,
             run_camber=-3.0,
             hot_press=27.0,
-            snapshot={"CAMBER_LF": -3.2, "PRESSURE_LF": 24.0},
+            snapshot={"CAMBER_LF": -32.0, "PRESSURE_LF": 24.0},
         ),
     )
     db = _db_path()
@@ -647,12 +647,15 @@ def test_lap_features_carries_static_set_camber(lake_cwd):
     # ws-ops daemon #503: set_camber is denormalized into lap_features alongside cold_pressure.
     laps = lake_cwd / "laps"
     laps.mkdir()
-    _write(laps, "a", _phys("a", snapshot={"CAMBER_LF.VALUE": -3.2, "PRESSURE_LF.VALUE": 24.0}))
+    _write(laps, "a", _phys("a", snapshot={"CAMBER_LF.VALUE": -18, "PRESSURE_LF.VALUE": 24.0}))
     db = _db_path()
     build_lake(laps, db)
-    cols, rows = run_query(db, "SELECT set_camber_fl, cold_pressure_fl FROM lap_features")
+    cols, rows = run_query(
+        db, "SELECT set_camber_clicks_fl, set_camber_deg_fl, cold_pressure_fl FROM lap_features"
+    )
     r = dict(zip(cols, rows[0], strict=True))
-    assert r["set_camber_fl"] == pytest.approx(-3.2)
+    assert r["set_camber_clicks_fl"] == pytest.approx(-18.0)
+    assert r["set_camber_deg_fl"] == pytest.approx(-1.8)
     assert r["cold_pressure_fl"] == pytest.approx(24.0)
 
 
