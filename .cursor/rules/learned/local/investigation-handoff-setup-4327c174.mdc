@@ -1,0 +1,49 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 4327c174eed2e53b
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-07-06
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: security
+preventability: guideline
+---
+
+# Investigation Handoff Setup (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): add #466 setup-race investigation and update handoff after PR #482
+
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qo...
+- <h3>PR Summary by Qodo</h3>
+
+Document #466 criterion (a) as fundamental CSP/CM setup+drive limitation
+
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-conte...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): post-merge handoff for #466 Part B (PR #496)
+
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-content/uploads/2025...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

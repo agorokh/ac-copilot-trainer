@@ -1,0 +1,35 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: d055e96781cfe3ac
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-07-06
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Columns Table (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ## Re: ws-ops-cursor-reviewer `[HIGH]` "Missing partition columns in samples table" — false positive (rebutted)
+
+The `samples` table **does** carry `track_id` and `car_id`, so `COPY (SELECT * FROM sam...
+- _cursor: Vault-only documentation diff is otherwise consistent with the merged Part B code, but the new handoff NOTE falsely claims `longName`/`optimalTempC` auto-ingest via `TRACE_FIELDS`, which can ...
+- _The Parquet export attempts to hive-partition the 'samples' table by columns it does not possess, which will cause a DuckDB runtime crash._
+
+- **[HIGH]** `tools/coaching_lake/build_analytics.py`:1271...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

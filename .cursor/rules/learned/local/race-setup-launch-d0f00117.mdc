@@ -1,0 +1,46 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+  - "src/**/*"
+source: process-miner
+rule_fingerprint: d0f00117eaf0b611
+mined_from: 4 review comments across 2 PRs
+last_updated: 2026-07-06
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Race Setup Launch (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. Race.ini write encoding crash <code>🐞 Bug</code> <code>☼ Reliability</code>
+
+...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. Setup launch false-fail <code>🐞 Bug</code> <code>☼ Reliability</code>
+
+<pre>
+...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. Stale setup snapshot leaks <code>🐞 Bug</code> <code>≡ Correctness</code>
+
+<pr...
+- _cursor: The diff is directionally sound (Documents-only rebake, no install-tree writes) but introduces race.ini concurrency and setup-resolution edge cases that can mis-apply setups or archive the wr...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

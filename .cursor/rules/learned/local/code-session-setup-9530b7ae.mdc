@@ -1,0 +1,53 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 9530b7ae735806cd
+mined_from: 5 review comments across 2 PRs
+last_updated: 2026-07-06
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: typecheck
+---
+
+# Code Session Setup (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- Thanks — addressed the review in the next push. Summary of dispositions:
+
+**Fixed (code):**
+- **FORCE_START restore leak** (qodo #2 / codex 1054): `_enable_force_start` now returns the *original gui.i...
+- 
+> @copilot review
+
+Review of the two commits in this branch (`e8c6b58` harden + `5b0e1fa` reduce-churn):
+
+---
+
+### AGENTS.md §54 compliance
+✅ All writes remain under `<AC Documents>/Assetto Corsa/cfg...
+- 
+> @copilot review
+
+Two new commits since the last review (`baeb030`, `7f4d2ca`):
+
+**`setup_reader.lua` nil-guard** (`readablePath(p) or RACE_INI_NO_SETUP`): when `_EXT_SETUP_FILENAME` points to a fil...
+- 
+> @copilot review
+
+One new commit since the last review (`a3bfd8f`):
+
+**Sentinel propagation fix in `guessSetupIniPath`**: `RACE_INI_NO_SETUP` is a non-empty Lua string (truthy), so the prior `if fro...
+
+## Suggested enforcement
+
+- Strengthen typing (mypy/pyright) or narrow APIs to catch this earlier.

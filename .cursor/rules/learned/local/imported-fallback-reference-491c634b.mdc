@@ -1,0 +1,43 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 491c634bd99e9955
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-07-06
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Imported Fallback Reference (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+2\. Imported selector overmatches <code>🐞 Bug</code> <code>≡ Correctness</code>
+
+...
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Exclude partial TT laps from compare defaults**
+
+When the selected session's best lap is also the chosen referen...
+- <h3>PR Summary by Qodo</h3>
+
+Harden session-review reference selection and compare fallback filters
+
+<code>🐞 Bug fix</code> <code>🧪 Tests</code> <code>🕐 20-40 Minutes</code>
+
+<img src="https://www.qod...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

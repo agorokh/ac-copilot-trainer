@@ -1,0 +1,35 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: bdc50c0cd3e3d293
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-07-06
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Install Tree (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Keep harness writes out of the AC install tree**
+
+When a setup run reaches `_bake_and_relaunch_with_setup`, this...
+- @ws-ops-cursor-reviewer — **acknowledged, the [CRITICAL] is valid.** `AGENTS.md:54` ("No writes outside the app's own data folder and AC Documents folder") does forbid the `extension/config/gui.ini` w...
+- _The change violates the core project constraint against writing to the Assetto Corsa install directory._
+
+- **[CRITICAL]** `tools/ac_harness/auto_drive.py`:1105 — **Violation of install-tree write co...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
