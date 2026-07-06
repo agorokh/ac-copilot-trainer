@@ -155,6 +155,9 @@ phase_sync() {
   if [[ -n "$HEAD_REF" && "$HEAD_REF" != "main" ]]; then
     if git show-ref --verify --quiet "refs/heads/$HEAD_REF"; then
       echo "Deleting local branch $HEAD_REF (PR head; squash merges usually need -D)..."
+      # governance-hub#209: tear down the merged head's ephemeral agent worktree first,
+      # so the `git branch -D` below actually succeeds instead of silently failing (|| true).
+      python3 "${FLEET_GOVERNANCE_ROOT:-$HOME/.fleet-governance}/scripts/remove_worktree.py" --branch "$HEAD_REF" 2>/dev/null || true
       git branch -d "$HEAD_REF" 2>/dev/null || git branch -D "$HEAD_REF" 2>/dev/null || true
     fi
   fi
