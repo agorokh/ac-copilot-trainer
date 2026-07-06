@@ -32,7 +32,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 CANONICAL_SHIM_SHA256 = (
-    "9a794b498f2f75b55e2f4752b98fdbd94a9fd61980f4ba4a95cde5b8f4ed8da7"  # pragma: allowlist secret
+    "fcd720cb3b2af7a65fe1d3d966e5fb700864efbc5680d6e6d0fc9d85bc5ad67a"  # pragma: allowlist secret
 )
 GOVERNED_SHIMS = (
     "hook_session_start_memory_prefetch.py",

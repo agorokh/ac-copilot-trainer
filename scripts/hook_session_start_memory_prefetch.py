@@ -72,23 +72,30 @@ _RECOVERY_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def _is_relative_to(path: Path, base: Path) -> bool:
-    """Python 3.9-compatible containment check."""
-    try:
-        path.relative_to(base)
-    except ValueError:
-        return False
-    return True
-
-
 def _canonical(name: str) -> Path | None:
     """Resolve the canonical hook from a TRUSTED, configured location only."""
     here = Path(__file__).resolve()
     bases: list[Path] = []
     env_root = os.environ.get("FLEET_GOVERNANCE_ROOT", "").strip()
     if env_root:
-        bases.append(Path(env_root).expanduser())
-    bases.append(Path.home() / ".fleet-governance")
+        try:
+            bases.append(Path(env_root).expanduser())
+        except RuntimeError:
+            # expanduser() raises RuntimeError when env_root begins with ``~`` and no home
+            # directory is resolvable (minimal containers / some CI runners) — the SAME failure
+            # the Path.home() call below guards; this env-root branch was the asymmetric gap
+            # (governance-hub#213, same class as the #208 WI-shim fix). Fall back to the literal
+            # path: an unexpandable ``~`` prefix simply fails the ``.is_absolute()`` probe below
+            # (candidate skipped, then fail-closed/open per posture), while an absolute env_root —
+            # which never raises — is preserved unchanged.
+            bases.append(Path(env_root))
+    try:
+        bases.append(Path.home() / ".fleet-governance")
+    except RuntimeError:
+        # Path.home() raises when no home directory is resolvable (minimal containers / some CI
+        # runners). The env-root candidate (if any) still applies; otherwise the caller sees no
+        # hub and applies the fail posture (hard gate => fail-closed, advisory => fail-open).
+        pass
     for base in bases:
         if not base.is_absolute():
             continue
@@ -103,7 +110,7 @@ def _canonical(name: str) -> Path | None:
             except (OSError, RuntimeError):
                 continue
             if (
-                _is_relative_to(resolved, resolved_base)
+                resolved.is_relative_to(resolved_base)
                 and resolved.is_file()
                 and resolved != here
             ):
@@ -145,8 +152,12 @@ def _audit(event: str, name: str, reason: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry) + "\n")
-    except OSError:
-        pass  # audit is best-effort; never crash the shim on a write error
+    except (OSError, RuntimeError):
+        # audit is best-effort; never crash the shim on a write error (OSError) OR on an
+        # unresolvable home (RuntimeError from Path.home()/expanduser() in the darwin/XDG path
+        # branches above — same failure guarded in _canonical(), governance-hub#213). A shim that
+        # cannot even log must still return its verdict rather than die mid-gate.
+        pass
 
 
 def _recovery_command_from_stdin() -> str | None:
