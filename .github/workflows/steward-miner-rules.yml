@@ -1,0 +1,46 @@
+# Rules-miner Steward consumer — wires this repo's `chore: weekly miner rules` PRs into the
+# hub-canonical deterministic gate (agorokh/governance-hub#216, epic #197). Mirror of the
+# vault-automerge cross-repo pattern: calls the PRIVATE hub's composite action with THIS repo's
+# OWN GITHUB_TOKEN (no central fleet super-token). Actuates this repo's own PR only.
+#
+# Ships REPORT-ONLY: comments the verdict + digest and files a council issue for escalations, but
+# closes/labels NOTHING until the STEWARD_MINER_MODE repo variable is set to `enforce` after
+# observing one live report cycle. Pinned to the hub SHA that carries the full Steward stack.
+name: steward-miner-rules
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - '.claude/rules/learned/**'
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to adjudicate (this repo)."
+        required: true
+      mode:
+        description: "report | enforce"
+        required: false
+        default: "report"
+
+concurrency:
+  group: steward-miner-rules-${{ github.event.pull_request.number || github.event.inputs.pr }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  steward:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Adjudicate the miner-rules PR
+        uses: agorokh/governance-hub/.github/actions/steward-miner-rules@6d94f29a8bf8b66138a46d0dab328f452fd0c176
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repo: ${{ github.repository }}
+          pr-number: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+          # report-only until the operator opts in via the repo variable (empty -> report).
+          mode: ${{ github.event.inputs.mode || vars.STEWARD_MINER_MODE || 'report' }}
