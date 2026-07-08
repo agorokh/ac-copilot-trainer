@@ -12,7 +12,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     paths:
+      # Both learned-rule mirrors: the authoritative `.claude/.md` side AND the `.cursor/.mdc`
+      # render. A miner PR touches both, but a cursor-only mirror-drift/fixup PR would bypass the
+      # Steward gate entirely if only `.claude/` triggered it (gov-hub#228). The reference wiring a
+      # spoke copies inherits this; the engine de-duplicates the mirror pair so no rule is
+      # double-adjudicated.
       - '.claude/rules/learned/**'
+      - '.cursor/rules/learned/**'
   workflow_dispatch:
     inputs:
       pr:
