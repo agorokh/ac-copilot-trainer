@@ -189,14 +189,6 @@ def _healthy_stream() -> list[dict]:
 
 
 # --------------------------------------------------------------------------- oracle adapters
-def _verdict(oracle: str, weaken: str | None, real: Callable[[], bool]) -> bool:
-    """Return the real oracle verdict, or (when weakening this oracle for the anti-vacuity guard)
-    an unconditional "healthy" — so a defanged oracle visibly leaks its broken scenarios."""
-    if weaken == oracle:
-        return True
-    return real()
-
-
 def _sim_alive(samples: list[tuple[float, int | None]], *, sim_dead_seconds: float) -> bool:
     """Run (now, packet_id) samples through the REAL PhysicsStallDetector; alive = never tripped."""
     det = PhysicsStallDetector(sim_dead_seconds)
@@ -228,29 +220,30 @@ def _report_path_ok(frames: list[dict]) -> bool:
 
 
 # --------------------------------------------------------------------------- corpus
-def build_corpus(*, weaken: str | None = None) -> list[Scenario]:
-    """The labeled scenario corpus. ``weaken`` defangs one oracle (anti-vacuity guard only)."""
+def build_corpus() -> list[Scenario]:
+    """The labeled scenario corpus, each scenario a thunk over the REAL oracle for its class.
+
+    Anti-vacuity ("would a defanged oracle leak?") is proven in the test suite by patching an
+    oracle symbol — no test-only knob is plumbed through this production API.
+    """
     live_bgra = bytes(range(256)) * 40  # non-uniform: mean ~127, 256 distinct -> renders
     black_bgra = bytes(4 * 200)  # all-zero -> black frame
     uniform_bgra = bytes([50]) * 800  # one distinct value -> frozen/uniform frame
 
     def seq(frames: list[dict], **kw) -> bool:
-        return _verdict("sequence", weaken, lambda: evaluate_sequence(frames, **kw).ok)
+        return evaluate_sequence(frames, **kw).ok
 
     def schema(field_name: str) -> bool:
-        return _verdict("schema", weaken, lambda: field_name in load_schema().car_fields)
+        return field_name in load_schema().car_fields
 
     def sim(samples, *, sim_dead_seconds=1.0) -> bool:
-        def real() -> bool:
-            return _sim_alive(samples, sim_dead_seconds=sim_dead_seconds)
-
-        return _verdict("sim_death", weaken, real)
+        return _sim_alive(samples, sim_dead_seconds=sim_dead_seconds)
 
     def render(bgra: bytes) -> bool:
-        return _verdict("render", weaken, lambda: liveness_score(bgra).is_rendering())
+        return liveness_score(bgra).is_rendering()
 
     def report_path(frames: list[dict]) -> bool:
-        return _verdict("report_path", weaken, lambda: _report_path_ok(frames))
+        return _report_path_ok(frames)
 
     # advancing packet ids (alive) vs frozen / gone (dead)
     advancing = [(i * 0.1, i + 1) for i in range(25)]
@@ -442,9 +435,9 @@ def build_corpus(*, weaken: str | None = None) -> list[Scenario]:
     ]
 
 
-def run_kpi(scenarios: list[Scenario] | None = None, *, weaken: str | None = None) -> KpiReport:
+def run_kpi(scenarios: list[Scenario] | None = None) -> KpiReport:
     """Run the corpus through the real oracles and compute the false-green / false-red KPI."""
-    corpus = scenarios if scenarios is not None else build_corpus(weaken=weaken)
+    corpus = scenarios if scenarios is not None else build_corpus()
     per_class: dict[str, dict] = {}
     red_classes: set[str] = set()
     broken_total = broken_fg = healthy_total = healthy_fr = 0

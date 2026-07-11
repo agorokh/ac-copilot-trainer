@@ -51,19 +51,32 @@ def test_out_of_scope_is_surfaced():
 
 
 # --------------------------------------------------------------------------- anti-vacuity (teeth)
-def test_weakening_the_sequence_oracle_trips_the_gate():
-    # Defang the richest oracle; every sequence-broken scenario must now leak as a false green,
-    # pushing the rate well above the gate. Proves the KPI is sensitive to oracle strength.
-    weak = run_kpi(weaken="sequence")
-    assert weak.false_green_rate > GATE_THRESHOLD
-    assert weak.ok is False
+class _AlwaysHealthy:
+    """A defanged sequence oracle: every stream 'passes' regardless of content."""
+
+    ok = True
+
+
+def test_weakening_the_sequence_oracle_trips_the_gate(monkeypatch):
+    # Defang the REAL sequence oracle (patch the symbol build_corpus resolves at call time); every
+    # sequence-broken scenario must now leak as a false green. Proves the KPI is sensitive to oracle
+    # strength without any test-only knob in the production API.
+    monkeypatch.setattr(false_green_kpi, "evaluate_sequence", lambda *a, **k: _AlwaysHealthy())
+    weak = run_kpi()
     assert weak.broken_false_green >= 5
+    assert weak.ok is False
 
 
-def test_weakening_the_render_oracle_also_leaks():
-    weak = run_kpi(weaken="render")
+def test_weakening_the_render_oracle_also_leaks(monkeypatch):
+    # Defang the render oracle: a black/uniform frame now reads as rendering -> hud_* leak.
+    class _Live:
+        def is_rendering(self, **kw):
+            return True
+
+    monkeypatch.setattr(false_green_kpi, "liveness_score", lambda bgra: _Live())
+    weak = run_kpi()
     assert weak.broken_false_green >= 2  # hud_blank + hud_uniform leak
-    assert weak.false_green_rate > GATE_THRESHOLD
+    assert weak.ok is False
 
 
 def test_gate_is_zero_leaks_not_a_rate():
