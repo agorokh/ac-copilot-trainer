@@ -206,6 +206,10 @@ class AutoDriveReport:
     counts: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     error: str | None = None
+    # Whether the post-lap grace-drive ran (drove past S/F so the async writer finalizes the lap
+    # archive). The single source of truth the evidence-bundle poll gates on, so the grace condition
+    # and the poll condition can never diverge (#515/#516 review).
+    lap_grace_applied: bool = False
     # Combo identity + setup verification (#459 Parts A/C) — evidence consumers key on these.
     car_id: str | None = None
     track_id: str | None = None
@@ -455,6 +459,7 @@ async def run_auto_drive(
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
     notes: list[str] = []
+    grace_applied = False
     # A fuel-less setup is baked but not fuel-confirmed — surface that in the report so a setup
     # A/B run does not read `setup_applied=True` as "independently verified" (#460 review).
     if setup_ack is not None and setup_applied and setup_ack.get("expected_fuel") is None:
@@ -475,11 +480,15 @@ async def run_auto_drive(
         seq_ok = result.ok
         counts = dict(result.counts)
         notes = list(result.notes)
-        if config.wait_lap and counts.get("lap") and config.lap_finalize_grace_s > 0:
+        grace_applied = bool(
+            config.wait_lap and counts.get("lap") and config.lap_finalize_grace_s > 0
+        )
+        if grace_applied:
             # The drive thread is still running here (stop not yet set), so the car keeps driving
             # past S/F while the trainer's async writer (#246/#249) streams + finalizes lap 1's
             # archive over the following frames. Without this, stopping at the exact lap boundary
-            # loses the trace (#515 / the #305 "not followed by another lap" class).
+            # loses the trace (#515 / the #305 "not followed by another lap" class). The evidence
+            # poll gates on report.lap_grace_applied, this exact boolean, so the two never diverge.
             await asyncio.sleep(config.lap_finalize_grace_s)
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
@@ -517,6 +526,7 @@ async def run_auto_drive(
         hijacked=True,
         drive=stats,
         sequence_ok=seq_ok,
+        lap_grace_applied=grace_applied,
         counts=counts,
         notes=notes,
         error=error,
@@ -2130,17 +2140,16 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # diverge (#515 review). The async writer finalizes just after that frame, so wait briefly
     # rather than racing to []. On a fresh profile journal/laps may not exist until the writer
     # creates it, so poll the deterministic known path when discovery finds nothing yet.
-    produced_lap = bool(report.counts.get("lap"))
     journal_dir = discover_journal_laps_dir(user_dir) or known_journal_laps_dir(user_dir)
-    # The grace-drive is what finalizes the archive, so only wait when the grace actually ran, and
-    # bind the poll timeout to it — `--lap-finalize-grace-s 0` disables the grace and must NOT then
-    # hang the poll on an archive that will never arrive (#516 review).
-    grace = config.lap_finalize_grace_s
+    # Only wait when the grace-drive ACTUALLY ran — gate on the single flag run_auto_drive set
+    # (report.lap_grace_applied), not a re-derived condition, so the grace and the poll can never
+    # disagree (#516 review). On a fresh profile journal/laps may not exist until the async writer
+    # creates it, so poll the deterministic known path. No grace-drive => single scan, no hang.
     lap_archives = collect_lap_archives(
         journal_dir,
         run_started_epoch,
-        wait_for_first=produced_lap and grace > 0,
-        timeout_s=grace + 2.0,
+        wait_for_first=report.lap_grace_applied,
+        timeout_s=config.lap_finalize_grace_s + 2.0,
     )
     extras = {
         "run": {

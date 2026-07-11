@@ -333,9 +333,10 @@ def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
     )
     assert got.ok is True
     assert 5.0 in slept  # grace-drive awaited on a completed lap
+    assert got.lap_grace_applied is True  # the single flag the evidence poll gates on
 
     slept.clear()
-    asyncio.run(
+    no_lap = asyncio.run(
         run_auto_drive(
             _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
             launch=_ok_launch,
@@ -345,6 +346,22 @@ def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
         )
     )
     assert 5.0 not in slept
+    assert no_lap.lap_grace_applied is False
+
+    # Lap seen but --wait-lap disabled: the grace is gated off, so the flag is False and the poll
+    # must NOT wait for an archive the grace never created (#516 daemon review).
+    slept.clear()
+    no_wait = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=False, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning([*CONTINUOUS, _snap("lap")]),
+        )
+    )
+    assert 5.0 not in slept
+    assert no_wait.lap_grace_applied is False
 
 
 def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
