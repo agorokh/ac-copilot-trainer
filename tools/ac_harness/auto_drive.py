@@ -2132,7 +2132,16 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # creates it, so poll the deterministic known path when discovery finds nothing yet.
     produced_lap = bool(report.counts.get("lap"))
     journal_dir = discover_journal_laps_dir(user_dir) or known_journal_laps_dir(user_dir)
-    lap_archives = collect_lap_archives(journal_dir, run_started_epoch, wait_for_first=produced_lap)
+    # The grace-drive is what finalizes the archive, so only wait when the grace actually ran, and
+    # bind the poll timeout to it — `--lap-finalize-grace-s 0` disables the grace and must NOT then
+    # hang the poll on an archive that will never arrive (#516 review).
+    grace = config.lap_finalize_grace_s
+    lap_archives = collect_lap_archives(
+        journal_dir,
+        run_started_epoch,
+        wait_for_first=produced_lap and grace > 0,
+        timeout_s=grace + 2.0,
+    )
     extras = {
         "run": {
             "started_epoch": run_started_epoch,
