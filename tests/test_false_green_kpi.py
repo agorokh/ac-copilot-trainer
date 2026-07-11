@@ -186,14 +186,22 @@ def test_main_returns_zero_on_pass():
     assert false_green_kpi._main([]) == 0
 
 
-def test_main_writes_json(tmp_path):
-    out = tmp_path / "kpi.json"
-    rc = false_green_kpi._main(["--json", str(out)])
+def test_main_writes_json(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # outputs are contained under cwd (#204 convention)
+    rc = false_green_kpi._main(["--json", "kpi.json"])
     assert rc == 0
     import json
 
-    data = json.loads(out.read_text(encoding="utf-8"))
+    data = json.loads((tmp_path / "kpi.json").read_text(encoding="utf-8"))
     assert data["ok"] is True
     assert data["false_green_rate"] == 0.0
     assert data["kpi"] == "known_failure_discrimination"
     assert "out_of_scope" in data
+
+
+def test_main_rejects_json_path_escaping_cwd(tmp_path, monkeypatch):
+    # --json must not write outside cwd (qodo on #513): a `..` traversal is refused with exit 2.
+    monkeypatch.chdir(tmp_path)
+    rc = false_green_kpi._main(["--json", "../escape.json"])
+    assert rc == 2
+    assert not (tmp_path.parent / "escape.json").exists()

@@ -38,6 +38,7 @@ import argparse
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from tools.ac_harness.auto_drive import PhysicsStallDetector
 from tools.ac_harness.hud_capture import liveness_score
@@ -496,20 +497,37 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_output_path(path: str) -> Path:
+    """Resolve ``--json`` under the current working directory and reject any escape.
+
+    Tool outputs stay contained under cwd (repo convention, e.g. ``lap_archive_export`` / #204): an
+    absolute path outside cwd or a ``..`` traversal is refused, not written as an arbitrary file.
+    """
+    root = Path.cwd().resolve()
+    resolved = (root / path).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"--json path {path!r} escapes the working directory {root}")
+    return resolved
+
+
 def _main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     report = run_kpi()
     print(report.summary())
     if args.json:
-        with open(args.json, "w", encoding="utf-8") as fh:
+        try:
+            out = _resolve_output_path(args.json)
+        except ValueError as exc:
+            print(f"  error: {exc}")
+            return 2
+        with open(out, "w", encoding="utf-8") as fh:
             json.dump(report.to_dict(), fh, indent=2)
-        print(f"  wrote {args.json}")
+        print(f"  wrote {out}")
     return 0 if report.ok else 1
 
 
 if __name__ == "__main__":
     import sys
-    from pathlib import Path
 
     _repo_root = str(Path(__file__).resolve().parents[2])
     if _repo_root not in sys.path:
