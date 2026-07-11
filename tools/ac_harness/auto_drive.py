@@ -1101,14 +1101,16 @@ def write_evidence(
     return out
 
 
-def discover_journal_laps_dir(user_dir: Path) -> Path | None:
-    """Locate the trainer's per-lap archive dir under the AC user data root.
+def known_journal_laps_dir(user_dir: Path) -> Path:
+    """The trainer's canonical per-lap archive dir (may not exist yet on a fresh profile).
 
     The Lua app writes to ``ac.FolderID.ScriptConfig``/…/``journal/laps`` — on disk:
     ``<user_dir>/cfg/extension/state/lua/app/AC_Copilot_Trainer/ac_copilot_trainer/journal/laps``
-    (verified on the rig). Falls back to a bounded glob for renamed installs.
+    (verified on the rig). The async writer creates it lazily when it opens the first temp file, so
+    the directory can be absent right after a lap — poll this path so the archive is found once it
+    appears (#515 review).
     """
-    known = (
+    return (
         user_dir
         / "cfg"
         / "extension"
@@ -1120,6 +1122,11 @@ def discover_journal_laps_dir(user_dir: Path) -> Path | None:
         / "journal"
         / "laps"
     )
+
+
+def discover_journal_laps_dir(user_dir: Path) -> Path | None:
+    """Locate the EXISTING per-lap archive dir; bounded-glob fallback for renamed installs."""
+    known = known_journal_laps_dir(user_dir)
     if known.is_dir():
         return known
     state_root = user_dir / "cfg" / "extension" / "state" / "lua"
@@ -1860,6 +1867,19 @@ def _positive_float(value: str) -> float:
     return parsed
 
 
+def _nonneg_float(value: str) -> float:
+    """argparse type: a non-negative, FINITE float (``0`` allowed to disable the feature).
+
+    Like :func:`_positive_float` but permits ``0`` — ``--lap-finalize-grace-s 0`` is a valid "no
+    grace" opt-out. Still rejects negatives and non-finite ``inf``/``nan``: ``inf`` would make the
+    post-lap ``await asyncio.sleep(inf)`` never reach the teardown ``finally`` (#515 review).
+    """
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {value!r}")
+    return parsed
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Composed autonomous self-test (#154 Part G): drive any car/track + assert"
@@ -1923,9 +1943,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--drive-seconds", type=float, default=300.0)
     p.add_argument(
         "--lap-finalize-grace-s",
-        type=float,
+        type=_nonneg_float,
         default=8.0,
-        help="drive this long past S/F after the lap so the async archive writer finalizes (#515)",
+        help="drive this long past S/F after the lap so the async archive writer finalizes; "
+        "0 disables (#515)",
     )
     p.add_argument("--target-speed", type=float, default=55.0, help="cruise target speed (km/h)")
     p.add_argument("--min-corner", type=float, default=30.0, help="cruise min corner speed (km/h)")
@@ -2104,10 +2125,13 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             sidecar_proc.terminate()
 
     hud = _capture_hud_evidence(evidence_dir, args.hud_region)
-    journal_dir = discover_journal_laps_dir(user_dir)
-    # A produced lap is finalized by the async writer just after the lap WS frame the tap returned
-    # on, so wait briefly for it rather than racing to an empty list (#515). No lap -> no wait.
-    produced_lap = bool(getattr(report.drive, "laps", 0))
+    # Gate the wait on the WS `lap` frame the tap actually saw (report.counts["lap"]) — the SAME
+    # signal run_auto_drive's grace uses — not rig_drive's separate lap counter, so the two never
+    # diverge (#515 review). The async writer finalizes just after that frame, so wait briefly
+    # rather than racing to []. On a fresh profile journal/laps may not exist until the writer
+    # creates it, so poll the deterministic known path when discovery finds nothing yet.
+    produced_lap = bool(report.counts.get("lap"))
+    journal_dir = discover_journal_laps_dir(user_dir) or known_journal_laps_dir(user_dir)
     lap_archives = collect_lap_archives(journal_dir, run_started_epoch, wait_for_first=produced_lap)
     extras = {
         "run": {

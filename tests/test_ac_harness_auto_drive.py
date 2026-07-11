@@ -29,6 +29,7 @@ from tools.ac_harness.auto_drive import (
     default_ac_root,
     fuel_matches,
     generic_gt3_ggv,
+    known_journal_laps_dir,
     parse_setup_fuel,
     preflight,
     race_ini_setup_bake_loop,
@@ -1689,6 +1690,66 @@ def test_collect_lap_archives_present_first_skips_wait(tmp_path):
     )
     assert got == [str(lap)]
     assert slept == []  # found on the first scan, never polled
+
+
+def test_collect_lap_archives_waits_for_dir_created_during_poll(tmp_path):
+    # Fresh profile: journal/laps does not exist at the first scan; the async writer creates BOTH
+    # the dir and the finalized file on a later frame. Polling the (initially absent) path must
+    # still find it once it appears (#515 review — discovery would return None otherwise).
+    import os
+
+    laps = tmp_path / "cfg_laps_not_yet"
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not laps.exists():
+            laps.mkdir()
+            lap = laps / "lap_x.json"
+            lap.write_text("{}")
+            os.utime(lap, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(laps / "lap_x.json")]
+
+
+def test_known_journal_laps_dir_is_canonical(tmp_path):
+    d = known_journal_laps_dir(tmp_path)
+    assert d == (
+        tmp_path
+        / "cfg"
+        / "extension"
+        / "state"
+        / "lua"
+        / "app"
+        / "AC_Copilot_Trainer"
+        / "ac_copilot_trainer"
+        / "journal"
+        / "laps"
+    )
+
+
+def test_nonneg_float_allows_zero_rejects_inf_and_negative():
+    import argparse
+
+    from tools.ac_harness.auto_drive import _nonneg_float
+
+    assert _nonneg_float("0") == 0.0
+    assert _nonneg_float("8") == 8.0
+    for bad in ("inf", "-inf", "nan", "-1"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _nonneg_float(bad)
 
 
 def test_cli_new_flags_map_to_config(tmp_path):
