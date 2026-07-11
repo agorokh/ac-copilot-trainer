@@ -1532,10 +1532,13 @@ class PhysicsStallDetector:
     false-green KPI (``false_green_kpi.py``) exercises.
     """
 
-    def __init__(self, sim_dead_seconds: float) -> None:
+    def __init__(self, sim_dead_seconds: float, *, now: float | None = None) -> None:
         self.sim_dead_seconds = sim_dead_seconds
         self._last_pkt: int | None = None
-        self._last_change: float | None = None
+        # Anchor the death timer at construction when ``now`` is given (the drive-loop start), so a
+        # sim already dead before the first packet sample still trips after sim_dead_seconds — the
+        # inline watchdog's behaviour. Without ``now`` the timer anchors on the first update sample.
+        self._last_change: float | None = now
 
     def update(self, now: float, packet_id: int | None) -> bool:
         """Record one sample; return ``True`` once the packet has been stagnant
@@ -1649,8 +1652,10 @@ def rig_drive(  # pragma: no cover - rig-only
         return p.packet_id if p is not None else None
 
     prev_plane: tuple[float, float] | None = None
-    stall = PhysicsStallDetector(config.sim_dead_seconds)
     t0 = time.monotonic()
+    # Anchor the sim-death timer at the loop start (not the first packet sample) so a sim that is
+    # already dead trips once stale car data appears, even on a short/ending run (codex on #513).
+    stall = PhysicsStallDetector(config.sim_dead_seconds, now=t0)
     try:
         while not stop.is_set() and time.monotonic() - t0 < config.drive_seconds:
             cd = controller.read_car_data()

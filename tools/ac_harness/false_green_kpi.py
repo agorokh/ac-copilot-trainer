@@ -27,8 +27,9 @@ The report is explicit about what it *cannot* see (`OUT_OF_SCOPE`) so it never i
 human-reality coverage. Recorded live WS taps can be folded in as extra scenarios via
 `sequence_probe.frames_from_jsonl` to anchor the corpus to reality over time.
 
-CLI: ``python -m tools.ac_harness.false_green_kpi [--json OUT]`` — exits ``0`` iff
-``false_green_rate < 0.05`` **and** ``false_red_rate == 0`` **and** every declared class is covered.
+CLI: ``python -m tools.ac_harness.false_green_kpi [--json OUT]`` — exits ``0`` iff **no broken
+scenario leaks** (``broken_false_green == 0``; the deterministic bar, stricter than the reported
+``< 5%``) **and** ``false_red_rate == 0`` **and** every declared class is covered.
 """
 
 from __future__ import annotations
@@ -107,11 +108,13 @@ class KpiReport:
 
     @property
     def ok(self) -> bool:
-        """The Part-G gate: low enough false-green rate, zero false reds, full class coverage."""
+        """The Part-G gate. This OFF-SIM arm is DETERMINISTIC (no noise), so the bar is **zero
+        leaked broken scenarios**, not merely ``< 5%``: a single un-caught broken class must fail
+        and can never be diluted below the rate threshold as the corpus grows (the module invites
+        folding recorded taps in). The ``< 5%`` rate stays the *reported* KPI and the live
+        "vs human reality" arm's bar. Also requires zero false reds and full class coverage."""
         return (
-            self.false_green_rate < self.gate_threshold
-            and self.false_red_rate == 0.0
-            and not self.missing_classes
+            self.broken_false_green == 0 and self.false_red_rate == 0.0 and not self.missing_classes
         )
 
     def to_dict(self) -> dict:
@@ -138,7 +141,8 @@ class KpiReport:
         pct = self.false_green_rate * 100
         lines = [
             f"{head}: false-green KPI (known-failure discrimination) -- "
-            f"false_green_rate={pct:.1f}% (gate < {self.gate_threshold * 100:.0f}%)",
+            f"false_green_rate={pct:.1f}% "
+            f"(gate: 0 leaks; reported bar < {self.gate_threshold * 100:.0f}%)",
             f"  broken: {self.broken_total} scenarios, "
             f"{self.broken_false_green} leaked (false green)",
             f"  healthy: {self.healthy_total} scenarios, "
@@ -441,6 +445,7 @@ def run_kpi(scenarios: list[Scenario] | None = None, *, weaken: str | None = Non
     """Run the corpus through the real oracles and compute the false-green / false-red KPI."""
     corpus = scenarios if scenarios is not None else build_corpus(weaken=weaken)
     per_class: dict[str, dict] = {}
+    red_classes: set[str] = set()
     broken_total = broken_fg = healthy_total = healthy_fr = 0
     false_greens: list[str] = []
     false_reds: list[str] = []
@@ -451,6 +456,7 @@ def run_kpi(scenarios: list[Scenario] | None = None, *, weaken: str | None = Non
         pc["total"] += 1
         if sc.expected == "RED":
             broken_total += 1
+            red_classes.add(sc.failure_class)
             if healthy_verdict:  # broken input the oracle called healthy -> FALSE GREEN
                 broken_fg += 1
                 pc["false_green"] += 1
@@ -462,8 +468,11 @@ def run_kpi(scenarios: list[Scenario] | None = None, *, weaken: str | None = Non
                 pc["false_red"] += 1
                 false_reds.append(sc.id)
 
-    covered = sorted(c for c in per_class if c != "healthy")
-    missing = [c for c in BROKEN_CLASSES if c not in per_class]
+    # Coverage counts ONLY classes exercised by a broken (RED) scenario: a declared class present
+    # solely as a mislabeled GREEN scenario is NOT covered, so the gate cannot pass on a hollow
+    # failure class (codex on #513).
+    covered = sorted(red_classes)
+    missing = [c for c in BROKEN_CLASSES if c not in red_classes]
     return KpiReport(
         false_green_rate=(broken_fg / broken_total) if broken_total else 0.0,
         false_red_rate=(healthy_fr / healthy_total) if healthy_total else 0.0,

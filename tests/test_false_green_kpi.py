@@ -66,6 +66,25 @@ def test_weakening_the_render_oracle_also_leaks():
     assert weak.false_green_rate > GATE_THRESHOLD
 
 
+def test_gate_is_zero_leaks_not_a_rate():
+    # Deterministic arm: a single leaked broken scenario must FAIL even when a large caught corpus
+    # dilutes the rate below 5% (the gate must not be diluteable as the corpus grows). Predicate
+    # tested directly to isolate it from coverage (workflow review finding on #513).
+    from tools.ac_harness.false_green_kpi import KpiReport
+
+    r = KpiReport(
+        false_green_rate=1 / 21,  # 4.76% — under the reported 5% bar
+        false_red_rate=0.0,
+        broken_total=21,
+        broken_false_green=1,  # ...but one broken scenario genuinely leaked
+        healthy_total=8,
+        healthy_false_red=0,
+        missing_classes=[],
+    )
+    assert r.false_green_rate < GATE_THRESHOLD
+    assert r.ok is False  # zero-leak gate fails despite the sub-threshold rate
+
+
 def test_dropping_required_topic_is_red_but_optional_is_green():
     # Granularity: dropping a REQUIRED continuous topic must flag broken; dropping the OPTIONAL
     # `delta` (needs a reference lap) must stay healthy. Both are in the shipped corpus.
@@ -134,6 +153,32 @@ def test_physics_stall_real_advance_resets_timer():
     det.update(0.0, 5)
     assert det.update(0.9, 6) is False  # advance just before the deadline resets it
     assert det.update(1.8, 6) is False  # 0.9s since the reset -> still alive
+
+
+def test_physics_stall_anchored_at_start_trips_on_late_none():
+    # Sim already dead at loop start, packet mmap gone: the first sample arrives after the deadline.
+    # Anchored at construction (now=0.0) the veto must fire, not be delayed a full window (codex on
+    # #513) — the inline rig watchdog started its timer at loop begin; this restores that.
+    det = PhysicsStallDetector(sim_dead_seconds=1.0, now=0.0)
+    assert det.update(1.5, None) is True
+
+
+def test_physics_stall_default_anchors_on_first_update():
+    # Without a start anchor the timer begins at the first sample (the KPI oracle's per-sample mode)
+    det = PhysicsStallDetector(sim_dead_seconds=1.0)
+    assert det.update(1.5, None) is False
+
+
+def test_coverage_counts_only_broken_scenarios():
+    # A declared broken class present ONLY as a mislabeled GREEN scenario must read as NOT covered,
+    # so the gate can never pass on a hollowed-out failure class (codex on #513).
+    from tools.ac_harness.false_green_kpi import Scenario
+
+    hollow = [Scenario("mislabeled", "missing_connection", "-", "GREEN", "sequence", lambda: True)]
+    r = run_kpi(hollow)
+    assert "missing_connection" not in r.covered_classes
+    assert "missing_connection" in r.missing_classes
+    assert r.ok is False
 
 
 # --------------------------------------------------------------------------- CLI
