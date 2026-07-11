@@ -1515,6 +1515,40 @@ def _teleport_onto_line(  # pragma: no cover - rig-only
     return landed <= 25.0
 
 
+class PhysicsStallDetector:
+    """Sim-death detector: the main ``acpmf_physics`` packet_id stagnant for
+    ``sim_dead_seconds`` means ``acs.exe`` died (#459/#460).
+
+    Feed one ``(monotonic now, main packet_id)`` sample per frame via :meth:`update`.
+    A real packet advance resets the death timer; a ``None`` packet (physics mmap
+    gone) does **not** — sustained ``None`` or a frozen packet both trip, which is
+    exactly the crash/freeze case the watchdog exists to catch (resetting on every
+    ``None`` would disable it, #460 review). The Car0 (Custom-AI) packet is *not*
+    used: CSP holds it constant for a stationary car, so it false-fired at the start
+    line (#459 review).
+
+    Extracted from :func:`rig_drive` so the rule is one source of truth and is
+    unit-testable off-rig — it is the sim-death oracle the EPIC #154 Part-G
+    false-green KPI (``false_green_kpi.py``) exercises.
+    """
+
+    def __init__(self, sim_dead_seconds: float) -> None:
+        self.sim_dead_seconds = sim_dead_seconds
+        self._last_pkt: int | None = None
+        self._last_change: float | None = None
+
+    def update(self, now: float, packet_id: int | None) -> bool:
+        """Record one sample; return ``True`` once the packet has been stagnant
+        longer than ``sim_dead_seconds`` (sim-death), else ``False``."""
+        if self._last_change is None:
+            self._last_change = now
+        if packet_id is not None and (self._last_pkt is None or packet_id != self._last_pkt):
+            self._last_pkt = packet_id
+            self._last_change = now
+            return False
+        return (now - self._last_change) > self.sim_dead_seconds
+
+
 def rig_drive(  # pragma: no cover - rig-only
     controller: Controller, config: AutoDriveConfig, stop: threading.Event
 ) -> DriveStats:
@@ -1615,8 +1649,7 @@ def rig_drive(  # pragma: no cover - rig-only
         return p.packet_id if p is not None else None
 
     prev_plane: tuple[float, float] | None = None
-    last_pkt: int | None = None
-    last_pkt_change = time.monotonic()
+    stall = PhysicsStallDetector(config.sim_dead_seconds)
     t0 = time.monotonic()
     try:
         while not stop.is_set() and time.monotonic() - t0 < config.drive_seconds:
@@ -1624,15 +1657,10 @@ def rig_drive(  # pragma: no cover - rig-only
             if not cd:
                 time.sleep(0.02)
                 continue
-            pkt = _main_packet_id()
-            # Reset the death timer ONLY on a real packet advance. A None (physics mmap gone) must
-            # NOT reset it — that is exactly the crash/freeze case the watchdog exists to catch, and
-            # resetting on every None would disable it (#460 review). Sustained None or a frozen
-            # packet both let the timer run out and trip sim_dead.
-            if pkt is not None and (last_pkt is None or pkt != last_pkt):
-                last_pkt = pkt
-                last_pkt_change = time.monotonic()
-            elif time.monotonic() - last_pkt_change > config.sim_dead_seconds:
+            # Sim-death: the main acpmf_physics packet_id stagnant for sim_dead_seconds means
+            # acs.exe died. A None (physics mmap gone) does NOT reset the timer (#460 review) —
+            # sustained None or a frozen packet both trip. Rule owned by PhysicsStallDetector.
+            if stall.update(time.monotonic(), _main_packet_id()):
                 stats.sim_dead = True
                 stats.reason = "acpmf_physics packet_id stagnant (acs.exe died)"
                 break
