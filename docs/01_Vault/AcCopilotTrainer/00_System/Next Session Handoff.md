@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T09:05:00Z
+last_updated: 2026-07-11T21:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-512-false-green-kpi-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/csp-telemetry-and-acd-grounding-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
@@ -76,11 +77,27 @@ relates_to:
 
 ## RESUME HERE — Next focus
 
-EPIC #488 (telemetry capture completeness) is **FULLY DELIVERED** (Parts A, B, C, D) and closed.
-Resume cold from here by picking the next major focus. Options from the backlog include:
+**EPIC #154 (autonomous self-test harness) is CLOSED** (2026-07-11) — Closure Criterion met: children
+#277/#278/#305 + #459 + #244 all CLOSED, determinism-lock shipped (#460), and the Part-G false-green
+KPI delivered (#512 / PR #513, `28185e2`) + verified (false_green_rate 0.0%). EPIC #488 is also FULLY
+DELIVERED and closed. Resume cold by picking the next major focus. Open backlog options:
 - **EPIC #86 (Rig screen)** final on-device smoke artifact + A4 font outputs.
 - **EPIC #408 (SuperLap)** Part C Track Titan ingester (requires real TT reference laps).
-- **EPIC #154 Part G (Racing Driver)** path-tracking steering controller (pure-pursuit currently cuts apexes) to reach the pace bar.
+- **EPIC #401 (ROADMAP)** product plan & gap-closure across verticals — the live umbrella.
+
+## Delivered (2026-07-11 UTC) — PR #513 MERGED (`28185e2`): #512 false-green KPI, EPIC #154 CLOSED
+
+`/autonomous-deliver 154` (ultracode, maximum ownership). Durable node: [[issue-512-false-green-kpi-2026-07-11]].
+
+Reconciled EPIC #154 against **live** state (stale body): children #277/#278/#305 + #459 + #244 all
+CLOSED; determinism-lock shipped in #460. Delivered the last residual — the **false-green-rate KPI
+shadow-mode report** (`tools/ac_harness/false_green_kpi.py`): a CI-runnable known-failure-discrimination
+gate running a labeled corpus of the harness's real failure classes through the **real** oracles
+(`evaluate_sequence`, `load_schema`, extracted `PhysicsStallDetector`, `liveness_score`, full
+`run_self_test` report path). **Zero-leak gate** (`broken_false_green == 0`), honest `out_of_scope`
+list, anti-vacuity via test monkeypatch. 3 bot rounds (Codex ×2, Qodo, self-hosted daemon) + a 4-agent
+adversarial verification pass; each finding fixed-forward with a locking test. **Verified** from merged
+main: KPI PASS, false_green_rate 0.0%, 13/13 broken caught, 22 tests green, `make ci-fast` OK.
 
 ## Delivered (2026-07-04 UTC) — PR #503 MERGED (`76a3cf6`): #488 Part C+D degradation grain & setup linkage
 

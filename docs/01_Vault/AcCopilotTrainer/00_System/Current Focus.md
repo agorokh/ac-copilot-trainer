@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-04T08:50:00Z
+last_updated: 2026-07-11T21:05:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
@@ -26,7 +26,19 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus:** Awaiting next focus selection (see RESUME block in `Next Session Handoff.md`). EPIC [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry capture completeness for ML) is **FULLY DELIVERED** and closed via PRs #497 (Part A), #500 (Part B), and #503 (Parts C & D).
+**Active focus:** Awaiting next focus selection (see RESUME block in `Next Session Handoff.md`). EPIC
+[#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) (autonomous self-test harness) is now
+**CLOSED** (2026-07-11) — Closure Criterion met. EPIC
+[#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry capture completeness for ML)
+is **FULLY DELIVERED** and closed via PRs #497 (Part A), #500 (Part B), and #503 (Parts C & D).
+
+**Delivered (2026-07-11):** PR [#513](https://github.com/agorokh/ac-copilot-trainer/pull/513)
+**MERGED** ([`28185e2`](https://github.com/agorokh/ac-copilot-trainer/commit/28185e2)) — **#512**
+false-green-rate KPI, the last Part-G residual → **EPIC #154 CLOSED**. New
+`tools/ac_harness/false_green_kpi.py`: a CI-runnable known-failure-discrimination gate over the harness's
+**real** oracles (`evaluate_sequence`, `load_schema`, extracted `PhysicsStallDetector`, `liveness_score`,
+full `run_self_test` report path); zero-leak gate, honest `out_of_scope` list. Verified from merged main:
+false_green_rate 0.0%, 13/13 broken caught, 22 tests green. Detail: [[issue-512-false-green-kpi-2026-07-11]].
 
 **Delivered (2026-07-04):** PR [#503](https://github.com/agorokh/ac-copilot-trainer/pull/503)
 **MERGED** ([`76a3cf6`](https://github.com/agorokh/ac-copilot-trainer/commit/76a3cf6)) — **#488 Parts C+D**
