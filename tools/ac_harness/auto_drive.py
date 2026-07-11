@@ -1112,8 +1112,8 @@ def discover_journal_laps_dir(user_dir: Path) -> Path | None:
     return None
 
 
-def collect_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[str]:
-    """List lap-archive JSONs written at/after ``since_epoch`` (mtime), newest first."""
+def _scan_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[str]:
+    """List ``lap_*.json`` written at/after ``since_epoch`` (mtime), newest first."""
     if journal_dir is None or not journal_dir.is_dir():
         return []
     hits: list[tuple[float, str]] = []
@@ -1125,6 +1125,41 @@ def collect_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[s
         if mtime >= since_epoch:
             hits.append((mtime, str(path)))
     return [p for _, p in sorted(hits, reverse=True)]
+
+
+def collect_lap_archives(
+    journal_dir: Path | None,
+    since_epoch: float,
+    *,
+    wait_for_first: bool = False,
+    timeout_s: float = 8.0,
+    poll_s: float = 0.5,
+    _clock: Callable[[], float] = time.monotonic,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> list[str]:
+    """List lap-archive JSONs written at/after ``since_epoch`` (mtime), newest first.
+
+    The trainer finalizes each lap trace with an **async deferred writer** (#246/#249): it streams
+    to a temp file and atomically renames to ``lap_*.json`` *after* the ``lap`` WS frame the harness
+    waits on. So immediately after a ``--wait-lap`` drive the finalized archive frequently does not
+    exist yet (only a mid-stream temp file, which the ``lap_*.json`` glob correctly ignores) — a
+    naive single scan then reports an empty list even though a lap was produced (#515).
+
+    With ``wait_for_first`` (set when the run produced a lap) this polls up to ``timeout_s`` for the
+    first archive to appear instead of racing the writer; it returns as soon as one exists, and
+    returns immediately with no wait when ``wait_for_first`` is false (a run that produced no lap).
+    ``_clock``/``_sleep`` are injectable so the poll is deterministic in off-sim tests.
+    """
+    found = _scan_lap_archives(journal_dir, since_epoch)
+    if found or not wait_for_first:
+        return found
+    deadline = _clock() + max(0.0, timeout_s)
+    while _clock() < deadline:
+        _sleep(max(0.0, poll_s))
+        found = _scan_lap_archives(journal_dir, since_epoch)
+        if found:
+            return found
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -2044,7 +2079,10 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
 
     hud = _capture_hud_evidence(evidence_dir, args.hud_region)
     journal_dir = discover_journal_laps_dir(user_dir)
-    lap_archives = collect_lap_archives(journal_dir, run_started_epoch)
+    # A produced lap is finalized by the async writer just after the lap WS frame the tap returned
+    # on, so wait briefly for it rather than racing to an empty list (#515). No lap -> no wait.
+    produced_lap = bool(getattr(report.drive, "laps", 0))
+    lap_archives = collect_lap_archives(journal_dir, run_started_epoch, wait_for_first=produced_lap)
     extras = {
         "run": {
             "started_epoch": run_started_epoch,

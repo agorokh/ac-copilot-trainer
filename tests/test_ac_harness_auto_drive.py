@@ -1522,6 +1522,93 @@ def test_collect_lap_archives_filters_by_mtime(tmp_path):
     assert collect_lap_archives(None, since_epoch=0) == []
 
 
+def test_collect_lap_archives_no_wait_returns_immediately(tmp_path):
+    # A run that produced no lap must NOT poll — return the (empty) scan immediately, no sleeping.
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    slept: list[float] = []
+    got = collect_lap_archives(
+        laps, since_epoch=0, wait_for_first=False, _sleep=slept.append, _clock=lambda: 0.0
+    )
+    assert got == []
+    assert slept == []  # never waited
+
+
+def test_collect_lap_archives_waits_for_async_archive(tmp_path):
+    # The async writer finalizes lap_*.json a moment AFTER the lap frame (#515). With wait_for_first
+    # the poll must pick it up once it lands rather than racing to an empty list.
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    lap = laps / "lap_late.json"
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not lap.exists():  # writer finalizes ~1s in
+            lap.write_text("{}")
+            os.utime(lap, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(lap)]
+
+
+def test_collect_lap_archives_wait_times_out_bounded(tmp_path):
+    # If the archive never appears, the poll is bounded and returns [] rather than hanging.
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    clock = {"t": 0.0}
+    calls = {"n": 0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        calls["n"] += 1
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=0,
+        wait_for_first=True,
+        timeout_s=2.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == []
+    assert calls["n"] <= 5  # ~timeout_s/poll_s, bounded — did not spin forever
+
+
+def test_collect_lap_archives_present_first_skips_wait(tmp_path):
+    # An archive already on disk is returned without entering the poll loop.
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    lap = laps / "lap_present.json"
+    lap.write_text("{}")
+    os.utime(lap, (2_000_000, 2_000_000))
+    slept: list[float] = []
+    got = collect_lap_archives(
+        laps, since_epoch=1_500_000, wait_for_first=True, _sleep=slept.append, _clock=lambda: 0.0
+    )
+    assert got == [str(lap)]
+    assert slept == []  # found on the first scan, never polled
+
+
 def test_cli_new_flags_map_to_config(tmp_path):
     args = _build_arg_parser().parse_args(
         [
