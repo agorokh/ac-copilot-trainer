@@ -137,10 +137,34 @@ launch, probe outcome, and re-bake stats so a recycle's timing is visible.
 | Two agents, one rig | **Yield**: a single AC instance cannot serve two autonomous sessions (see the issue-277 investigation). Check for a running `acs.exe`/peer sidecar before launching |
 | Sidecar port already in use | That's usually the Game Point launcher's supervised sidecar — the harness reuses it; don't spawn a second |
 
+## Trusting the harness — the false-green KPI (EPIC #154 Part G)
+
+A harness is only worth its PASS if that PASS is *honest*. The ADR bar is **false-green rate vs
+human reality < 5%** — a false green is the harness reporting the pipeline healthy when a human at
+the wheel would see it broken. Two arms measure it:
+
+- **Live arm (rig-gated):** the `self_test` / `auto_drive` run itself, live-verified with no human
+  at the wheel — the ground truth against real physics.
+- **CI arm (off-sim, deterministic):** `python -m tools.ac_harness.false_green_kpi` — a shadow-mode
+  report that runs a **labeled corpus** of the real failure classes tied to historical bugs
+  (#170 missing peer, #180 tire-temps, #182 lap-before-session, #191 lap-timeout, #459/#460
+  sim-death, schema-gate, HUD blank/frozen, envelope spoof, **report-path swallowing**) through the
+  **real** production oracles (`evaluate_sequence`, `load_schema`, `PhysicsStallDetector`,
+  `liveness_score`, and the full `run_self_test` report path). It prints per-class results and
+  `false_green_rate`, exits non-zero if any broken class leaks (`--json OUT` for the full report).
+  It is honest about its boundary: an `out_of_scope` list names the human-perceptible classes it
+  cannot see (semantic coaching validity, audio, render correctness, long-run perf, persistence) —
+  those stay the live arm's job.
+
+**Fold real failures into the corpus.** When a live drive surfaces a false green, dump the WS tap to
+JSONL and load it with `sequence_probe.frames_from_jsonl(path)` as a new corpus scenario — that
+anchors the CI arm to observed reality and turns every escape into a permanent regression guard.
+
 ## Layers underneath (when you need less than the full loop)
 
 `auto_drive` composes the primitives; they remain individually usable:
 `entry_launcher` (launch only) · `custom_ai` (carcsw actuation) · `sequence_probe` (WS assert
 only, `--skip-launch` style) · `hud_capture` (render liveness) · `self_test` (producer contract
-without motion) · `daemon` (persistent rig service with `/session/start`).
+without motion) · `false_green_kpi` (off-sim discrimination KPI) · `daemon` (persistent rig service
+with `/session/start`).
 Architecture decision record: vault `01_Decisions/autonomous-self-test-harness.md`.
