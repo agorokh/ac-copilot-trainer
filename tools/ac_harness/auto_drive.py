@@ -141,6 +141,10 @@ class AutoDriveConfig:
     # Stall recovery (#459 Part D).
     progress_stall_seconds: float = 10.0  # no forward progress for this long => recover
     max_recoveries: int = 6  # then FAIL honestly instead of teleport-looping
+    # Keep driving this long past S/F after the lap frame so the trainer's async lap-archive writer
+    # (#246/#249) finalizes lap 1's trace over the following frames before teardown; stopping at the
+    # exact boundary loses the archive (#515 / the #305 "not followed by another lap" class).
+    lap_finalize_grace_s: float = 8.0
     spawn_to_line: bool = True  # teleport onto the racing line when spawned off it (pit box)
     # Keep race.ini setup keys present during the CM launch window. CM regenerates race.ini while
     # launching; a short-lived Documents-only re-bake loop preserves the selected setup without
@@ -462,6 +466,12 @@ async def run_auto_drive(
         seq_ok = result.ok
         counts = dict(result.counts)
         notes = list(result.notes)
+        if config.wait_lap and counts.get("lap") and config.lap_finalize_grace_s > 0:
+            # The drive thread is still running here (stop not yet set), so the car keeps driving
+            # past S/F while the trainer's async writer (#246/#249) streams + finalizes lap 1's
+            # archive over the following frames. Without this, stopping at the exact lap boundary
+            # loses the trace (#515 / the #305 "not followed by another lap" class).
+            await asyncio.sleep(config.lap_finalize_grace_s)
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:
@@ -1902,6 +1912,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
     p.add_argument("--max-speed", type=float, default=240.0, help="racing/ggv: speed cap (km/h)")
     p.add_argument("--drive-seconds", type=float, default=300.0)
+    p.add_argument(
+        "--lap-finalize-grace-s",
+        type=float,
+        default=8.0,
+        help="drive this long past S/F after the lap so the async archive writer finalizes (#515)",
+    )
     p.add_argument("--target-speed", type=float, default=55.0, help="cruise target speed (km/h)")
     p.add_argument("--min-corner", type=float, default=30.0, help="cruise min corner speed (km/h)")
     p.add_argument("--tap-seconds", type=float, default=30.0)
@@ -1980,6 +1996,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         ggv_scale=args.ggv_scale,
         racing_max_speed_kmh=args.max_speed,
         drive_seconds=args.drive_seconds,
+        lap_finalize_grace_s=args.lap_finalize_grace_s,
         target_speed_kmh=args.target_speed,
         min_corner_speed_kmh=args.min_corner,
         tap_seconds=args.tap_seconds,

@@ -50,7 +50,11 @@ _PROFILE = [40.0, 40.0, 40.0, 40.0]  # m/s targets
 
 
 def _cfg(**kw) -> AutoDriveConfig:
-    base = dict(cm_preset="preset.cmpreset", track_id="imola", tap_seconds=0.0)
+    # lap_finalize_grace_s=0.0 so orchestration tests don't real-sleep the post-lap grace; the grace
+    # behaviour itself is covered by test_wait_lap_grace_drive_finalizes_archive.
+    base = dict(
+        cm_preset="preset.cmpreset", track_id="imola", tap_seconds=0.0, lap_finalize_grace_s=0.0
+    )
     base.update(kw)
     return AutoDriveConfig(**base)  # type: ignore[arg-type]
 
@@ -302,6 +306,44 @@ def test_wait_lap_requires_a_lap_frame():
         )
     )
     assert with_lap.ok is True
+
+
+def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
+    # After a --wait-lap lap the car must keep driving briefly (grace) so the trainer's async
+    # lap-archive writer finalizes lap 1's trace before teardown (#515). Assert the grace is awaited
+    # when a lap is seen and NOT when no lap arrives. asyncio.sleep is spied so no real time passes.
+    import tools.ac_harness.auto_drive as ad
+
+    slept: list[float] = []
+
+    async def _spy(dt):
+        slept.append(dt)
+
+    monkeypatch.setattr(ad.asyncio, "sleep", _spy)
+
+    got = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),
+        )
+    )
+    assert got.ok is True
+    assert 5.0 in slept  # grace-drive awaited on a completed lap
+
+    slept.clear()
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning(CONTINUOUS),  # no lap frame -> no grace
+        )
+    )
+    assert 5.0 not in slept
 
 
 def test_drove_false_gates_overall_success_even_if_pipeline_ok():
