@@ -441,7 +441,16 @@ async def run_auto_drive(
         )
 
     stop = threading.Event()
-    drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, config, stop))
+    # The drive thread self-terminates on its own drive_seconds budget (rig_drive), and on exit it
+    # BRAKES the car. If a lap lands within lap_finalize_grace_s of that budget, the post-lap grace
+    # below would run against an already-stopped car and the trace would not finalize (#515 boundary
+    # case). Give the drive thread grace headroom so it keeps driving through the grace.
+    drive_config = config
+    if config.wait_lap and config.lap_finalize_grace_s > 0:
+        drive_config = replace(
+            config, drive_seconds=config.drive_seconds + config.lap_finalize_grace_s
+        )
+    drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
     counts: dict[str, int] = {}

@@ -346,6 +346,46 @@ def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
     assert 5.0 not in slept
 
 
+def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
+    # The drive thread self-terminates on drive_seconds and brakes on exit; the post-lap grace must
+    # have driving headroom or the car stops at S/F and the trace never finalizes (#515 boundary).
+    import tools.ac_harness.auto_drive as ad
+
+    async def _spy(_dt):
+        pass
+
+    monkeypatch.setattr(ad.asyncio, "sleep", _spy)
+
+    captured: dict = {}
+
+    def _capture_drive(controller, config, stop):
+        captured["drive_seconds"] = config.drive_seconds
+        return DriveStats(drove=True)
+
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, drive_seconds=100.0, lap_finalize_grace_s=8.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_capture_drive,
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),
+        )
+    )
+    assert captured["drive_seconds"] == 108.0  # base + grace headroom
+
+    captured.clear()
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=False, drive_seconds=100.0, lap_finalize_grace_s=8.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_capture_drive,
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert captured["drive_seconds"] == 100.0  # no wait_lap -> no headroom
+
+
 def test_drove_false_gates_overall_success_even_if_pipeline_ok():
     # Sim died mid-drive: pipeline frames present but the drive did not actually move the car.
     report = asyncio.run(
