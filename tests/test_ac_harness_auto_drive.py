@@ -1741,6 +1741,43 @@ def test_collect_lap_archives_waits_for_dir_created_during_poll(tmp_path):
     assert got == [str(laps / "lap_x.json")]
 
 
+def test_collect_lap_archives_rediscovers_dir_during_poll(tmp_path):
+    # Fresh profile + (possibly renamed) install: journal_dir is None at call time; the writer makes
+    # the dir at its ACTUAL path mid-poll. A `resolve` callable re-run each scan must find it, not a
+    # hardcoded path (#516 review — the known-path fallback broke renamed installs).
+    import os
+
+    target = tmp_path / "renamed_app" / "journal" / "laps"
+
+    def _resolve():
+        return target if target.is_dir() else None
+
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not target.exists():
+            target.mkdir(parents=True)
+            lap = target / "lap_y.json"
+            lap.write_text("{}")
+            os.utime(lap, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        None,
+        since_epoch=1_500_000,
+        resolve=_resolve,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(target / "lap_y.json")]
+
+
 def test_known_journal_laps_dir_is_canonical(tmp_path):
     d = known_journal_laps_dir(tmp_path)
     assert d == (

@@ -1167,6 +1167,7 @@ def collect_lap_archives(
     journal_dir: Path | None,
     since_epoch: float,
     *,
+    resolve: Callable[[], Path | None] | None = None,
     wait_for_first: bool = False,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
@@ -1184,15 +1185,23 @@ def collect_lap_archives(
     With ``wait_for_first`` (set when the run produced a lap) this polls up to ``timeout_s`` for the
     first archive to appear instead of racing the writer; it returns as soon as one exists, and
     returns immediately with no wait when ``wait_for_first`` is false (a run that produced no lap).
+
+    When ``journal_dir`` is ``None`` and ``resolve`` is given, the dir is **re-resolved each scan**
+    via ``resolve()`` — so a fresh-profile dir that the writer creates mid-poll is picked up at its
+    actual path (default OR a renamed install), rather than watching a hardcoded path (#516 review).
     ``_clock``/``_sleep`` are injectable so the poll is deterministic in off-sim tests.
     """
-    found = _scan_lap_archives(journal_dir, since_epoch)
+
+    def _current() -> Path | None:
+        return journal_dir if journal_dir is not None else (resolve() if resolve else None)
+
+    found = _scan_lap_archives(_current(), since_epoch)
     if found or not wait_for_first:
         return found
     deadline = _clock() + max(0.0, timeout_s)
     while _clock() < deadline:
         _sleep(max(0.0, poll_s))
-        found = _scan_lap_archives(journal_dir, since_epoch)
+        found = _scan_lap_archives(_current(), since_epoch)
         if found:
             return found
     return found
@@ -2140,17 +2149,21 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # diverge (#515 review). The async writer finalizes just after that frame, so wait briefly
     # rather than racing to []. On a fresh profile journal/laps may not exist until the writer
     # creates it, so poll the deterministic known path when discovery finds nothing yet.
-    journal_dir = discover_journal_laps_dir(user_dir) or known_journal_laps_dir(user_dir)
     # Only wait when the grace-drive ACTUALLY ran — gate on the single flag run_auto_drive set
     # (report.lap_grace_applied), not a re-derived condition, so the grace and the poll can never
     # disagree (#516 review). On a fresh profile journal/laps may not exist until the async writer
-    # creates it, so poll the deterministic known path. No grace-drive => single scan, no hang.
+    # creates it — pass a re-discovering resolver so the poll finds it at its real path (default or
+    # renamed install), not a hardcoded one. No grace-drive => single scan, no hang.
+    journal_dir = discover_journal_laps_dir(user_dir)
     lap_archives = collect_lap_archives(
         journal_dir,
         run_started_epoch,
+        resolve=lambda: discover_journal_laps_dir(user_dir),
         wait_for_first=report.lap_grace_applied,
         timeout_s=config.lap_finalize_grace_s + 2.0,
     )
+    # Re-discover for the report path: the writer may have created the dir during the poll.
+    journal_dir = journal_dir or discover_journal_laps_dir(user_dir)
     extras = {
         "run": {
             "started_epoch": run_started_epoch,
