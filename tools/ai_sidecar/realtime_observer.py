@@ -41,6 +41,12 @@ _LAP_WRAP_DROP = 0.5
 #: clear state WITHOUT grading the abandoned corner (mirrors delta.lua's wrap-vs-rolling-reset).
 _WRAP_PREV_MIN = 0.8
 _WRAP_CUR_MAX = 0.25
+#: frames a deferred (ambiguous) wrap may stay unresolved before it is treated as a pit return.
+#: A true wrap's lap counter advances within ~1 frame (delta.lua defers by at most one); a pit
+#: return can idle near the line for many frames, and its carried first-corner state must be
+#: reverted BEFORE the car reaches the mark, not only at the 0.25-spline drive-on discard
+#: (PR #525 review).
+_WRAP_CONFIRM_MAX_FRAMES = 3
 #: km/h a corner exit must be under the target before it's worth an advisory.
 _DEFICIT_MARGIN_KMH = 2.0
 #: brake pedal fraction above which we consider the driver "on the brakes".
@@ -349,6 +355,7 @@ class RealtimeObserver:
         # counter, not yet advanced): legitimized when the counter advances, reverted to fresh
         # state when the jump turns out to be a pit/teleport (PR #525 review).
         self._pending_carried: list[int] = []
+        self._pending_frames = 0  # frames the deferral has been unresolved (bounded)
 
     @staticmethod
     def _reference_marks(ref: CornerReference) -> list[float]:
@@ -475,6 +482,7 @@ class RealtimeObserver:
         self._pending_wrap = []
         self._pending_pre_lap = None
         self._pending_carried = []
+        self._pending_frames = 0
         return carried_ids
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
@@ -486,8 +494,12 @@ class RealtimeObserver:
         out: list[Advisory] = []
         # Resolve a wrap whose grading we deferred (a true wrap's lapCount can lag the drop by a
         # frame). Confirm the moment the counter advances; discard once the car has driven on past
-        # the wrap zone without an advance (that was a pit/teleport, not a lap).
-        if self._pending_wrap:
+        # the wrap zone without an advance (that was a pit/teleport, not a lap). Gate on EITHER
+        # deferred artifact: a pit return after a pre-wrap first-corner cue typically has NOTHING
+        # graded (no final corner in flight), so the carried-pass revert must not hide behind a
+        # non-empty grading list (PR #525 review).
+        if self._pending_wrap or self._pending_carried:
+            self._pending_frames += 1
             if (
                 lap is not None
                 and self._pending_pre_lap is not None
@@ -497,12 +509,14 @@ class RealtimeObserver:
                 self._pending_wrap = []
                 self._pending_pre_lap = None
                 self._pending_carried = []  # wrap confirmed → the carried passes are legit
-            elif spline > _WRAP_CUR_MAX:
+            elif spline > _WRAP_CUR_MAX or self._pending_frames > _WRAP_CONFIRM_MAX_FRAMES:
                 self._pending_wrap = []
                 self._pending_pre_lap = None
-                # That backward jump was a pit/teleport, not a wrap: revert any pre-wrap-armed
-                # pass carried across it — its stale zone_cued must not suppress the next
-                # legitimate first-corner heads-up of the resumed stream (PR #525 review).
+                # That backward jump was a pit/teleport, not a wrap (drove on, or the counter
+                # stayed put past its at-most-one-frame lag): revert any pre-wrap-armed pass
+                # carried across it — its stale zone_cued must not suppress the next legitimate
+                # first-corner heads-up of the resumed stream, which for a pit return near the
+                # line arrives BEFORE the 0.25-spline drive-on point (PR #525 review).
                 for ci in self._pending_carried:
                     ref_c = next((r for r in self._refs if r.index == ci), None)
                     if ref_c is not None:
@@ -554,22 +568,6 @@ class RealtimeObserver:
                     speed, self._track_length_m, self._brake_prepare_lead_s
                 )
                 lead_start = (bp - lead) % 1.0
-                wrapped_lead = zi == 0 and bp - lead < 0.0 and spline >= lead_start
-                if wrapped_lead:
-                    # For a first-corner brake point near 0.0, the next lap's lead window starts
-                    # before the spline wrap is observed (for example at s=0.995). Reset this
-                    # corner's previous-lap cue state now so the anticipatory cue can still lead
-                    # the mark instead of being suppressed until after start/finish. ONE-SHOT
-                    # per approach (``armed_prewrap``): the fresh approach's own heads-up must
-                    # not read as stale state and reset/re-fire every following frame.
-                    if not st.armed_prewrap and (
-                        st.inside
-                        or st.any_brake_state
-                        or st.release_cue_rank >= 0
-                        or st.exit_emitted
-                    ):
-                        self._passes[ref.index] = st = self._new_pass(ref)
-                    st.armed_prewrap = True
                 # A zone's braking segment runs from its mark to the next zone's mark (last
                 # zone: to the apex, or the window end for a mark past the apex) — braking
                 # there is braking FOR this zone, so a later release isn't "late to brake".
@@ -582,6 +580,28 @@ class RealtimeObserver:
                     seg_end = ref.apex_spline
                 else:
                     seg_end = ref.spline_hi
+                # The first zone's ACTIVE arc [lead_start .. mark .. seg_end] straddles
+                # start/finish whenever seg_end sits behind lead_start on the lap — either the
+                # lead window opened before the line (mark near 0.0) or a driver-calibrated
+                # mark itself sits just before the line (~0.99) with the corner beyond it
+                # (PR #525 review). In the pre-line part of that arc, re-arm for the lap that
+                # begins at the upcoming wrap.
+                wrapped_lead = zi == 0 and seg_end < lead_start and spline >= lead_start
+                if wrapped_lead:
+                    # For a first-corner arc that straddles the line, the next lap's approach
+                    # starts before the spline wrap is observed (for example at s=0.995). Reset
+                    # this corner's previous-lap cue state now so the anticipatory cue can still
+                    # lead the mark instead of being suppressed until after start/finish.
+                    # ONE-SHOT per approach (``armed_prewrap``): the fresh approach's own
+                    # heads-up must not read as stale state and reset/re-fire every frame.
+                    if not st.armed_prewrap and (
+                        st.inside
+                        or st.any_brake_state
+                        or st.release_cue_rank >= 0
+                        or st.exit_emitted
+                    ):
+                        self._passes[ref.index] = st = self._new_pass(ref)
+                    st.armed_prewrap = True
                 if _in_arc(spline, bp, seg_end) and brake >= self._brake_on:
                     st.zone_braked[zi] = True
                 # The actionable window runs from the anticipatory lead (which can wrap over

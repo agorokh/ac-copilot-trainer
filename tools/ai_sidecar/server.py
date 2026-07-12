@@ -765,6 +765,15 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
     observer = _observer
     if observer is None:
         return
+    # A frame with neither an inline trace nor an archivePath can never resolve: return WITHOUT
+    # reserving the dedup key, or the archive-backed brainOnly re-send racing this task would see
+    # the reservation, skip, and leave the lap uncalibrated after the rollback (PR #525 review).
+    trace = inbound.get("trace")
+    has_inline_trace = (
+        isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]
+    )
+    if not has_inline_trace and not str(inbound.get("archivePath") or "").strip():
+        return
     # One key per PHYSICAL lap across its resend forms: the plain lap_complete (which may carry
     # an inline trace) and the archive-backed brainOnly re-send both carry the same
     # lap + lapTimeMs identity, while their archivePath presence differs — keying on the path

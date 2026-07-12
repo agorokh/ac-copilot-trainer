@@ -246,3 +246,26 @@ def test_empty_queue_is_a_noop() -> None:
     sched, pb, clock = _scheduler()
     assert sched.process_pending(clock()) is None
     assert pb.played == []
+
+
+def test_distinct_zone_brake_cue_is_exempt_from_same_kind_cooldown() -> None:
+    """PR #525 review: two brake ZONES of a merged esses corner (#522) can sit closer than the
+    late_brake kind cooldown — the second zone's prepare heads-up is distinct coaching, not a
+    nag, and must speak; a same-zone repeat stays suppressed."""
+    sched, pb, clock = _scheduler(VoiceConfig(cooldown_s={"late_brake": 1.0}))
+    z0 = make_advisory(
+        kind="late_brake", urgency="prepare", register="calm", corner=2, detail={"zone": 0}
+    )
+    z1 = make_advisory(
+        kind="late_brake", urgency="prepare", register="calm", corner=2, detail={"zone": 1}
+    )
+    sched.submit(z0)
+    assert sched.process_pending(clock()) is not None
+    pb.finish()
+    clock.advance(0.5)  # inside the 1.0 s kind cooldown
+    sched.submit(z1)
+    assert sched.process_pending(clock()) is not None, "distinct zone must not be kind-suppressed"
+    pb.finish()
+    clock.advance(0.5)
+    sched.submit(z1)  # SAME zone again: dedup/cooldown own it
+    assert sched.process_pending(clock()) is None
