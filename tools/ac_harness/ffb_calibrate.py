@@ -29,15 +29,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 CLIP_THRESHOLD = 0.99
-TARGET_PEAK = 0.90
+# Calibrate on a high percentile, not the raw max: AC's finalFF spikes past 1.0 on kerbs
+# (live-observed peak ~1.85 on a clean 911 Spa lap), so targeting the max would gut the gain for
+# rare transients. Aim the 99th percentile of |finalFF| at TARGET_LEVEL instead.
+CALIB_PERCENTILE = 99.0
+TARGET_LEVEL = 0.95
 GAIN_FLOOR = 0.30
 GAIN_CEILING = 2.00
 DEFAULT_SAMPLE_SECONDS = 45.0
 DEFAULT_HZ = 100.0
-# A correct finalFF read stays within about [-1, 1]; allow a little headroom for transient
-# overshoot. Peaks far outside this (or an all-silent capture) mean the offset is wrong for this
-# AC/CSP build and the sample must not drive a gain write.
-OFFSET_SANE_PEAK = 1.10
+# finalFF is normalized but NOT clamped to 1.0 — kerb strikes push it to ~2 (live-observed). A
+# read far past that (or an all-silent / static capture) means the offset is wrong for this
+# AC/CSP build, so the sample must not drive a gain write.
+OFFSET_SANE_PEAK = 5.0
 OFFSET_MIN_PEAK = 0.02
 OFFSET_MIN_SAMPLES = 200
 
@@ -51,28 +55,46 @@ class FfbStats:
     rms: float
     clip_fraction: float
     clip_threshold: float
+    p95: float = 0.0
+    p99: float = 0.0
+    p999: float = 0.0
+
+
+def _percentile(sorted_values: Sequence[float], q: float) -> float:
+    """Linear-interpolated ``q``-th percentile of an already-sorted sequence (pure)."""
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    rank = (q / 100.0) * (len(sorted_values) - 1)
+    lo = int(math.floor(rank))
+    hi = min(lo + 1, len(sorted_values) - 1)
+    frac = rank - lo
+    return float(sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * frac)
 
 
 def summarize(samples: Sequence[float], *, clip_threshold: float = CLIP_THRESHOLD) -> FfbStats:
-    """Reduce raw finalFF samples to peak / rms / clipping fraction (pure).
+    """Reduce raw finalFF samples to peak / rms / clip fraction / percentiles (pure).
 
     ``clip_fraction`` is the share of samples whose magnitude reaches ``clip_threshold`` — the
-    fraction of the lap where the wheel is pinned at full force and detail is lost. NaN samples
-    are ignored.
+    fraction of the lap where the wheel is pinned at full force and detail is lost. The p95/p99/
+    p999 magnitudes drive calibration (a high percentile, not the kerb-spike max). NaN ignored.
     """
     vals = [float(s) for s in samples if not math.isnan(float(s))]
     if not vals:
         return FfbStats(n=0, peak=0.0, rms=0.0, clip_fraction=0.0, clip_threshold=clip_threshold)
-    mags = [abs(v) for v in vals]
-    peak = max(mags)
+    mags = sorted(abs(v) for v in vals)
     rms = math.sqrt(sum(v * v for v in vals) / len(vals))
     clipped = sum(1 for m in mags if m >= clip_threshold)
     return FfbStats(
         n=len(vals),
-        peak=peak,
+        peak=mags[-1],
         rms=rms,
         clip_fraction=clipped / len(vals),
         clip_threshold=clip_threshold,
+        p95=_percentile(mags, 95.0),
+        p99=_percentile(mags, 99.0),
+        p999=_percentile(mags, 99.9),
     )
 
 
@@ -80,7 +102,7 @@ def recommend_gain(
     current_gain: float,
     observed_peak: float,
     *,
-    target_peak: float = TARGET_PEAK,
+    target_peak: float = TARGET_LEVEL,
     floor: float = GAIN_FLOOR,
     ceiling: float = GAIN_CEILING,
 ) -> float:
@@ -255,20 +277,21 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         found = read_user_ff_value(user_ff.read_text(encoding="utf-8"), car)
         current = found if found is not None else 1.0
     recommended = recommend_gain(
-        current, stats.peak, target_peak=args.target_peak, floor=args.floor, ceiling=args.ceiling
+        current, stats.p99, target_peak=args.target_level, floor=args.floor, ceiling=args.ceiling
     )
 
     will_write = valid and not args.dry_run and not args.observe_only
     print("\n=== FFB calibration ===")
-    print(f"car            : {car}")
-    print(f"samples        : {stats.n}")
-    print(f"peak |finalFF| : {stats.peak:.3f}")
-    print(f"rms            : {stats.rms:.3f}")
-    print(f"clip% (>= {stats.clip_threshold:.2f}): {stats.clip_fraction * 100:.2f}%")
-    print(f"offset valid   : {valid} ({reason})")
-    print(f"current gain   : {current:.3f}")
-    print(f"recommended    : {recommended:.3f}  (target peak {args.target_peak:.2f})")
-    print(f"action         : {'WRITE user_ff.ini' if will_write else 'report only (no write)'}")
+    print(f"car             : {car}")
+    print(f"samples         : {stats.n}")
+    print(f"peak |finalFF|  : {stats.peak:.3f}  (kerb spikes; not the calibration lever)")
+    print(f"p95 / p99 / p999: {stats.p95:.3f} / {stats.p99:.3f} / {stats.p999:.3f}")
+    print(f"rms             : {stats.rms:.3f}")
+    print(f"clip% (>= {stats.clip_threshold:.2f})  : {stats.clip_fraction * 100:.2f}%")
+    print(f"offset valid    : {valid} ({reason})")
+    print(f"current gain    : {current:.3f}")
+    print(f"recommended     : {recommended:.3f}  (P99 {stats.p99:.3f} -> {args.target_level:.2f})")
+    print(f"action          : {'WRITE user_ff.ini' if will_write else 'report only (no write)'}")
 
     report = {
         "car": car,
@@ -350,7 +373,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:  # pragma: no
     p.add_argument(
         "--hz", type=float, default=DEFAULT_HZ, help="finalFF sample rate (default: 100)"
     )
-    p.add_argument("--target-peak", dest="target_peak", type=float, default=TARGET_PEAK)
+    p.add_argument(
+        "--target-level",
+        dest="target_level",
+        type=float,
+        default=TARGET_LEVEL,
+        help=f"Aim the {CALIB_PERCENTILE:.0f}th percentile of |finalFF| at this level "
+        f"(default: {TARGET_LEVEL}).",
+    )
     p.add_argument("--floor", type=float, default=GAIN_FLOOR)
     p.add_argument("--ceiling", type=float, default=GAIN_CEILING)
     p.add_argument("--ramp-seconds", dest="ramp_seconds", type=float, default=10.0)

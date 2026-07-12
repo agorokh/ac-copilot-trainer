@@ -42,6 +42,15 @@ def test_summarize_empty_is_zeroed():
     assert stats == FfbStats(n=0, peak=0.0, rms=0.0, clip_fraction=0.0, clip_threshold=0.99)
 
 
+def test_summarize_percentiles_sit_below_kerb_peak():
+    # A signal dominated by ~0.5 with a few kerb spikes to ~1.8: p99 sits well below the max, so
+    # calibration keys off p99 rather than the rare spike (the live-observed 911 behaviour).
+    stats = summarize([0.5] * 990 + [1.8] * 10)
+    assert stats.peak == pytest.approx(1.8)
+    assert stats.p99 < stats.peak
+    assert stats.p95 == pytest.approx(0.5, abs=0.1)
+
+
 # --------------------------------------------------------------------------- recommend_gain
 def test_recommend_gain_scales_down_when_clipping():
     # Peak 1.0 at gain 1.0, target 0.9 -> reduce to 0.9.
@@ -77,6 +86,15 @@ def test_recommend_gain_rejects_floor_above_ceiling():
 def test_offset_looks_valid_accepts_normal_signal():
     ok, _ = offset_looks_valid(
         FfbStats(n=1000, peak=0.85, rms=0.4, clip_fraction=0.01, clip_threshold=0.99)
+    )
+    assert ok is True
+
+
+def test_offset_looks_valid_accepts_kerb_spike_peak():
+    # finalFF is not clamped to 1.0 — a live 911 Spa lap peaked at 1.85 on kerbs. That must be
+    # accepted (regression: the original 1.10 ceiling wrongly rejected a real signal).
+    ok, _ = offset_looks_valid(
+        FfbStats(n=2692, peak=1.853, rms=0.527, clip_fraction=0.031, clip_threshold=0.99)
     )
     assert ok is True
 
