@@ -597,11 +597,13 @@ class HandshakeController:
         max_laps: int = 2,
         kappa_straight: float = 0.004,
         min_straight_m: float = 60.0,
-        pulse_steer: float = 0.12,
+        # Pulse sizing (live-safety): 0.08 normalized steer at <=75 km/h keeps a GT3 well inside
+        # its lateral grip while the ~0.15 rad heading response stays ~4x the resolve gate.
+        pulse_steer: float = 0.08,
         pulse_seconds: float = 0.9,
         pulse_gap_seconds: float = 1.2,
         pulse_count: int = 4,
-        pulse_speed_range_kmh: tuple[float, float] = (25.0, 90.0),
+        pulse_speed_range_kmh: tuple[float, float] = (25.0, 75.0),
         sweep_min_straight_m: float = 220.0,
         sweep_entry_kmh: float = 50.0,
         coast_seconds: float = 2.2,
