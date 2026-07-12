@@ -1178,18 +1178,40 @@ def discover_journal_laps_dir(user_dir: Path) -> Path | None:
     return None
 
 
-def _scan_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[str]:
-    """List ``lap_*.json`` written at/after ``since_epoch`` (mtime), newest first."""
-    if journal_dir is None or not journal_dir.is_dir():
-        return []
+def candidate_journal_laps_dirs(user_dir: Path) -> list[Path]:
+    """ALL existing per-lap archive dirs: the canonical path plus any ``app/*/*/journal/laps``.
+
+    CSP does not delete an app's old state dir on rename/move, so the canonical (default) dir can
+    persist as a STALE leftover while the active writer uses a renamed dir. Preferring the canonical
+    (`discover_journal_laps_dir`) then shadows the renamed one and the poll watches the wrong path
+    (#516 review). Scanning EVERY candidate + filtering by mtime finds the fresh archive wherever
+    the active writer put it, regardless of stale leftovers.
+    """
+    dirs: list[Path] = []
+    known = known_journal_laps_dir(user_dir)
+    if known.is_dir():
+        dirs.append(known)
+    state_root = user_dir / "cfg" / "extension" / "state" / "lua"
+    if state_root.is_dir():
+        for cand in sorted(state_root.glob("app/*/*/journal/laps")):
+            if cand.is_dir() and cand not in dirs:
+                dirs.append(cand)
+    return dirs
+
+
+def _scan_lap_archives(dirs: list[Path], since_epoch: float) -> list[str]:
+    """List ``lap_*.json`` across all ``dirs`` at/after ``since_epoch`` (mtime), newest first."""
     hits: list[tuple[float, str]] = []
-    for path in journal_dir.glob("lap_*.json"):
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
+    for journal_dir in dirs:
+        if journal_dir is None or not journal_dir.is_dir():
             continue
-        if mtime >= since_epoch:
-            hits.append((mtime, str(path)))
+        for path in journal_dir.glob("lap_*.json"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= since_epoch:
+                hits.append((mtime, str(path)))
     return [p for _, p in sorted(hits, reverse=True)]
 
 
@@ -1197,7 +1219,7 @@ def collect_lap_archives(
     journal_dir: Path | None,
     since_epoch: float,
     *,
-    resolve: Callable[[], Path | None] | None = None,
+    resolve: Callable[[], list[Path]] | None = None,
     wait_for_first: bool = False,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
@@ -1216,14 +1238,17 @@ def collect_lap_archives(
     first archive to appear instead of racing the writer; it returns as soon as one exists, and
     returns immediately with no wait when ``wait_for_first`` is false (a run that produced no lap).
 
-    When ``journal_dir`` is ``None`` and ``resolve`` is given, the dir is **re-resolved each scan**
-    via ``resolve()`` — so a fresh-profile dir that the writer creates mid-poll is picked up at its
-    actual path (default OR a renamed install), rather than watching a hardcoded path (#516 review).
+    When ``journal_dir`` is ``None`` and ``resolve`` is given, the candidate dirs are **re-resolved
+    each scan** via ``resolve()`` (which returns ALL candidate dirs) — so a fresh-profile dir the
+    writer creates mid-poll is found at its actual path, and a stale default dir cannot shadow a
+    renamed-install dir (every candidate is scanned; mtime filters stale files; #516 review).
     ``_clock``/``_sleep`` are injectable so the poll is deterministic in off-sim tests.
     """
 
-    def _current() -> Path | None:
-        return journal_dir if journal_dir is not None else (resolve() if resolve else None)
+    def _current() -> list[Path]:
+        if journal_dir is not None:
+            return [journal_dir]
+        return resolve() if resolve else []
 
     found = _scan_lap_archives(_current(), since_epoch)
     if found or not wait_for_first:
@@ -2187,15 +2212,14 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # The grace-drive already elapsed synchronously in run_auto_drive, so by here the writer has
     # streamed the trace; this poll only awaits the OS flush/rename — a short CONSTANT timeout, not
     # one scaled to the in-sim grace time (#516 review). collect_lap_archives' default covers it.
-    # journal_dir=None (not a pinned initial discover): an initial discover can return a STALE
-    # leftover dir (old/renamed install) while the current writer creates the canonical one moments
-    # later — pinning would poll the wrong path (#516 review). Re-resolving each scan follows the
-    # writer to the canonical dir (discover prefers the known path over the bounded glob fallback);
-    # stale old files there are excluded by the since_epoch mtime gate.
+    # Scan ALL candidate journal/laps dirs each poll (canonical + any renamed) and filter by mtime:
+    # CSP leaves stale default state dirs on rename, so preferring one dir lets a stale leftover
+    # shadow the active renamed dir (#516 review). The fresh archive is found wherever the active
+    # writer put it; stale files are excluded by the since_epoch gate.
     lap_archives = collect_lap_archives(
         None,
         run_started_epoch,
-        resolve=lambda: discover_journal_laps_dir(user_dir),
+        resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=report.lap_grace_applied,
     )
     journal_dir = discover_journal_laps_dir(user_dir)  # for the report path (post-poll)

@@ -24,6 +24,7 @@ from tools.ac_harness.auto_drive import (
     _wait_live,
     bake_setup_into_race_ini,
     build_practice_preset,
+    candidate_journal_laps_dirs,
     collect_lap_archives,
     custom_ai_enabled,
     default_ac_root,
@@ -1799,7 +1800,7 @@ def test_collect_lap_archives_rediscovers_dir_during_poll(tmp_path):
     target = tmp_path / "renamed_app" / "journal" / "laps"
 
     def _resolve():
-        return target if target.is_dir() else None
+        return [target] if target.is_dir() else []
 
     clock = {"t": 0.0}
 
@@ -1847,7 +1848,9 @@ def test_collect_lap_archives_follows_resolver_off_stale_dir(tmp_path):
         return clock["t"]
 
     def _resolve():
-        return canonical if canonical.is_dir() else stale
+        # Both are candidates — the stale default persists after a rename (CSP doesn't delete it).
+        # Scanning all + the mtime gate must still find the fresh archive, not shadow it with stale.
+        return [d for d in (stale, canonical) if d.is_dir()]
 
     def _sleep(dt: float) -> None:
         clock["t"] += dt
@@ -1868,6 +1871,21 @@ def test_collect_lap_archives_follows_resolver_off_stale_dir(tmp_path):
         _sleep=_sleep,
     )
     assert got == [str(canonical / "lap_new.json")]  # followed to canonical; stale old file ignored
+
+
+def test_candidate_journal_laps_dirs_includes_canonical_and_renamed(tmp_path):
+    # A stale canonical dir AND a renamed-install dir both exist; candidate_journal_laps_dirs must
+    # return BOTH so the scan finds the active writer's archive regardless of the stale leftover.
+    canonical = known_journal_laps_dir(tmp_path)
+    canonical.mkdir(parents=True)
+    renamed = tmp_path / "cfg" / "extension" / "state" / "lua" / "app" / "Renamed" / "renamed"
+    renamed_laps = renamed / "journal" / "laps"
+    renamed_laps.mkdir(parents=True)
+    dirs = candidate_journal_laps_dirs(tmp_path)
+    assert canonical in dirs
+    assert renamed_laps in dirs
+    # No dirs when nothing exists.
+    assert candidate_journal_laps_dirs(tmp_path / "empty") == []
 
 
 def test_known_journal_laps_dir_is_canonical(tmp_path):
