@@ -233,9 +233,9 @@ def normalized_match(recording: Any, template: Any, np: Any) -> Any:
     size = 1
     while size < n + length:
         size *= 2
-    corr = np.fft.irfft(
-        np.fft.rfft(rec, size) * np.conj(np.fft.rfft(tmpl, size)), size
-    )[: n - length + 1]
+    corr = np.fft.irfft(np.fft.rfft(rec, size) * np.conj(np.fft.rfft(tmpl, size)), size)[
+        : n - length + 1
+    ]
     energy = np.concatenate(([0.0], np.cumsum(rec * rec)))
     window_energy = energy[length:] - energy[: n - length + 1]
     tmpl_norm = float(np.sqrt(np.sum(tmpl * tmpl)))
@@ -621,8 +621,10 @@ def run(args: argparse.Namespace) -> int:
         )
 
         chirps.append(play_chirp("end", device=args.chirp_device, host_api=args.chirp_host_api))
-        _log.info("cue phase complete (%d coaching.voice frames); waiting for capture to close",
-                  len(collected))
+        _log.info(
+            "cue phase complete (%d coaching.voice frames); waiting for capture to close",
+            len(collected),
+        )
         try:
             proc.wait(timeout=total_s + 30)
         except subprocess.TimeoutExpired:

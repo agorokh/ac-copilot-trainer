@@ -342,8 +342,9 @@ async def _running_sidecar() -> AsyncIterator[int]:
 
 
 async def _hello(ws, client: str = "test-client", client_class: str = "voice") -> None:
-    await ws.send(json.dumps({"v": 1, "type": "hello", "client": client,
-                              "client_class": client_class}))
+    await ws.send(
+        json.dumps({"v": 1, "type": "hello", "client": client, "client_class": client_class})
+    )
     ack = json.loads(await ws.recv())
     assert ack["type"] == "hello_ack"
 
