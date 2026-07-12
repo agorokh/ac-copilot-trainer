@@ -126,7 +126,10 @@ def test_slower_lap_triggers_apex_deficit():
     assert a.detail["source"] == "corpus_best"  # honest: not a fabricated GGV optimum
 
 
-def test_late_brake_escalates_register_not_per_frame_when_coasting():
+def test_coasting_past_point_yields_one_prepare_then_silence():
+    """#522: the live brake cue is ONE calm anticipatory heads-up per pass. Coasting past the
+    point never draws a spoken imperative (after-the-fact noise); the miss is flagged for
+    corner-exit grading instead."""
     ref_lap = lap_trace_from_archive(_corner_archive())
     refs = build_references(ref_lap)
     add_corpus_lap(refs, ref_lap)
@@ -134,7 +137,6 @@ def test_late_brake_escalates_register_not_per_frame_when_coasting():
     assert r.best_brake_point_spline is not None
     obs = RealtimeObserver(refs)
     bp, apex = r.best_brake_point_spline, r.apex_spline
-    # frames coasting (brake=0) from before the brake point to past it, up to the apex
     mid = (bp + apex) / 2
     frames = [
         {"spline": bp - 0.01, "speed": 200.0, "brake": 0.0},
@@ -143,14 +145,8 @@ def test_late_brake_escalates_register_not_per_frame_when_coasting():
     ]
     fired = [a for f in frames for a in obs.observe(f)]
     late = [a for a in fired if a.kind == "late_brake"]
-    assert late, "expected at least one brake cue"
-    # Escalation, NOT per-frame spam (issue #368 / codex #371): the cue re-fires only when the tone
-    # register steps UP, so registers are strictly increasing and there is at most one per tier.
-    rank = {"calm": 0, "alert": 1, "urgent": 2, "critical": 3}
-    ranks = [rank[a.register] for a in late]
-    assert ranks == sorted(ranks) and len(ranks) == len(set(ranks))
-    assert len(late) <= len(frames)
-    assert late[-1].urgency == "act"  # the escalated tier acts now
+    assert len(late) == 1, "exactly one heads-up per pass, never a past-point imperative"
+    assert late[0].urgency == "prepare" and late[0].register == "calm"
     assert late[0].corner == r.index
     # user-facing label is 1-based: corner index 0 -> "T1", never "T0" (codex #294)
     assert "T1" in late[0].message and "T0" not in late[0].message
@@ -256,8 +252,9 @@ def test_brake_release_can_escalate_after_calm_threshold_crossing():
 
 
 def test_late_brake_fires_upstream_of_corner_window():
-    # brake point upstream of turn-in (bp 0.30 < spline_lo 0.40): a driver coasting past the real
-    # brake point must be cued THERE, not delayed until the corner window begins (codex #294)
+    # brake point upstream of turn-in (bp 0.30 < spline_lo 0.40): the anticipatory heads-up
+    # must be cued for THAT mark, not delayed until the corner window begins (codex #294;
+    # timing now via the #522 lead budget, so the cue arrives well before the mark).
     ref = CornerReference(
         index=0,
         apex_spline=0.45,
@@ -269,10 +266,12 @@ def test_late_brake_fires_upstream_of_corner_window():
         n_corpus=1,
     )
     obs = RealtimeObserver([ref])
-    out = obs.observe({"spline": 0.32, "speed": 150.0, "brake": 0.0})  # past bp, before the window
+    # inside the lead window (150 km/h x 3.2 s = 133 m = 0.053 spline on the default track)
+    out = obs.observe({"spline": 0.28, "speed": 150.0, "brake": 0.0})
     late = [a for a in out if a.kind == "late_brake"]
     assert late and late[0].corner == 0
-    assert late[0].spline < ref.spline_lo  # cued upstream of turn-in
+    assert late[0].urgency == "prepare"
+    assert late[0].spline < ref.spline_lo  # cued upstream of turn-in, at the true mark
 
 
 def _final_corner_ref() -> CornerReference:
@@ -426,3 +425,62 @@ def test_malformed_frames_are_ignored():
     assert obs.observe({"spline": float("nan"), "speed": 100.0}) == []
     # telemetry_tick with no spline in payload (current high-rate contract) → can't locate → ignored
     assert obs.observe({"payload": {"speed_kmh": 100.0, "brake": 0.0}}) == []
+
+
+# ---- issue #522: actionable cue timing ------------------------------------------------------
+
+
+def _i522_ref():
+    return CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.40,
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+    )
+
+
+def test_prepare_lead_default_covers_audibility_budget():
+    """#522: the default lead is the full audibility budget (~3.2 s), so the prepare clip
+    FINISHES with human reaction time to spare — not the old 0.8 s that made 0/8 cues
+    actionable in the instrumented lap."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0)  # default lead
+    # 110 km/h = 30.6 m/s; 3.2 s = 97.8 m = 0.0391 spline -> window opens at ~0.4109.
+    out = obs.observe({"spline": 0.412, "speed": 110.0, "brake": 0.0})
+    prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert prepare, "prepare must fire ~3.2 s before the mark (issue #522)"
+    assert prepare[0].detail["lead_s"] == pytest.approx(3.1, abs=0.15)
+    # before the window opens: silence
+    obs2 = RealtimeObserver([_i522_ref()], track_length_m=2500.0)
+    assert obs2.observe({"spline": 0.405, "speed": 110.0, "brake": 0.0}) == []
+
+
+def test_deep_past_point_imperative_is_silenced_and_graded_at_exit():
+    """#522: past 40% of the brake zone a spoken imperative is after-the-fact noise — the
+    observer stays SILENT and the miss is owned by corner-exit grading instead."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    out = obs.observe({"spline": 0.48, "speed": 140.0, "brake": 0.0})  # progress 0.6
+    assert [a for a in out if a.kind == "late_brake"] == []
+    out2 = obs.observe({"spline": 0.49, "speed": 130.0, "brake": 0.0})  # still silent
+    assert [a for a in out2 if a.kind == "late_brake"] == []
+    obs.observe({"spline": 0.50, "speed": 60.0, "brake": 0.0})  # slow apex
+    exit_out = obs.observe({"spline": 0.61, "speed": 90.0, "brake": 0.0})
+    deficits = [a for a in exit_out if a.kind == "apex_deficit"]
+    assert deficits and deficits[0].detail["braked_late_uncoached"] is True
+    assert "brake earlier next lap" in deficits[0].message
+
+
+def test_no_live_imperative_even_on_hot_arrival():
+    """#522: there is deliberately NO live brake-fault imperative — a driver braking exactly
+    at the mark is indistinguishable from one about to miss it until the mark itself, so a
+    spoken correction is either a false alarm or after-the-fact. Hot arrivals get the calm
+    heads-up; the miss (if any) is owned by exit grading."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    first = obs.observe({"spline": 0.4405, "speed": 200.0, "brake": 0.0})
+    late = [a for a in first if a.kind == "late_brake"]
+    assert late and late[0].urgency == "prepare" and late[0].register == "calm"
+    out = obs.observe({"spline": 0.458, "speed": 195.0, "brake": 0.0})  # hot, past the mark
+    assert [a for a in out if a.kind == "late_brake"] == []

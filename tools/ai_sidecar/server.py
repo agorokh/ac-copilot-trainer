@@ -2347,7 +2347,14 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
 
             with open(reference_path, encoding="utf-8") as fh:
                 archive = json.load(fh)
-            observer = build_observer_from_reference(archive)
+            # Issue #522: the anticipatory lead is the full audibility budget (clip + audio
+            # latency + human reaction). Tunable per rig; clamped to a sane coaching range.
+            observer = build_observer_from_reference(
+                archive,
+                brake_prepare_lead_s=_env_float(
+                    "AC_COPILOT_BRAKE_LEAD_S", 3.2, min_value=1.0, max_value=6.0
+                ),
+            )
             if observer is None:
                 reason = "reference archive has no usable corners"
                 logger.error(

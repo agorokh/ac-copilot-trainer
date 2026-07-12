@@ -40,12 +40,14 @@ def test_anticipatory_cue_onset_is_before_its_mark() -> None:
     assert antic and all(c.t_dispatch_ms <= c.t_mark_ms for c in antic)
 
 
-def test_tone_register_escalates_with_situation() -> None:
-    # The headline: a hot approach yields an urgent/critical brake cue (not a flat calm one).
+def test_no_live_brake_imperative_in_hot_scenario() -> None:
+    # #522: even the hot-and-coasting scenario yields ONLY the calm anticipatory heads-up —
+    # a live "Brake!" imperative is after-the-fact noise by construction and must never speak.
     rep = _report(Verbosity.NORMAL)
     spoken_brake = [c for c in rep.cues if c.kind == "late_brake" and c.spoken]
     assert spoken_brake
-    assert any(c.register in ("urgent", "critical") for c in spoken_brake)
+    assert all(c.urgency == "prepare" and c.register == "calm" for c in spoken_brake)
+    assert rep.assertions["no_live_brake_imperatives"] is True
 
 
 def test_low_verbosity_speaks_no_info() -> None:
@@ -104,7 +106,9 @@ def test_cues_spoken_is_a_gating_boolean() -> None:
     assert normal.assertions["cues_spoken_when_audible"] is True
 
 
-def test_critical_brake_alarm_clip_is_required_for_audible_report() -> None:
+def test_missing_act_clip_is_harmless_under_522_policy() -> None:
+    # #522 flipped the old contract: the critical "Brake!" clip is never spoken live, so a
+    # bank without it must still produce a clean report (no dead assertion on a dead clip).
     manifest = build_manifest()
     del manifest.clips["late_brake.act.critical.generic"]
     manifest.__post_init__()
@@ -119,7 +123,7 @@ def test_critical_brake_alarm_clip_is_required_for_audible_report() -> None:
     )
 
     assert rep.assertions["cues_spoken"] >= 1
-    assert rep.assertions["critical_brake_alarm_spoken"] is False
+    assert rep.assertions["no_live_brake_imperatives"] is True
 
 
 def test_anticipatory_clip_must_be_spoken_for_onset_proof() -> None:
