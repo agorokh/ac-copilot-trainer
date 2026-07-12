@@ -12,9 +12,13 @@ each spoken cue compute the car's true position/speed/brake at the moment the cl
     REDUNDANT    an act imperative while the driver is already braking >= 0.5
     DEBRIEF_OK   info-tier feedback delivered after the corner (its correct place)
 
-Also scores brake-zone coverage: every real braking event should have had a brake cue in
-its actionable window. The ``assert`` gate encodes #522's acceptance criteria: zero
-AFTER_FACT/TOO_LATE brake cues and >= the required fraction of brake events coached.
+Also scores brake-zone coverage: every real braking event NEAR A REFERENCE BRAKE MARK should have
+had a brake cue in its actionable window. Onsets with no reference mark within ``COACHABLE_TOL_M``
+(a mid-straight correction dab, trail-braking where no corpus brake point sits) are *off-zone* —
+they cannot be coached, so they are excluded from the coverage denominator, and repeat onsets in
+one zone count once (issue #527, split from #522). The ``assert`` gate encodes #522's acceptance
+criteria: zero AFTER_FACT/TOO_LATE brake cues and >= the required fraction of COACHABLE brake zones
+coached. The raw per-onset ratio and a reference zones-cued/zones-crossed line are reported too.
 
 Usage::
 
@@ -41,6 +45,13 @@ ACTIONABLE_MIN_S = 0.8
 ACTIONABLE_MAX_S = 6.0
 #: how far before a real brake onset a brake cue counts as having coached that event.
 COVERAGE_WINDOW_S = 6.0
+#: an onset within this many metres of a reference/calibrated brake mark is *coachable* — a brake
+#: point exists there to cue against. Farther out there is nothing to coach (a mid-straight
+#: correction dab, or trail-braking where no corpus brake point sits), so counting it in the
+#: coverage denominator penalises the coach for events it cannot address (issue #527). Mirrors the
+#: 50 m zone-match tolerance in ``realtime_observer._CAL_MATCH_TOL_M`` — kept in sync by value
+#: because the ``analyze`` path is deliberately stdlib-pure and does not import the observer.
+COACHABLE_TOL_M = 50.0
 DEFAULT_AUDIO_LATENCY_S = 0.10  # PC rtmixer path; tablet WebAudio measured ~0.45 (#511)
 
 
@@ -64,8 +75,21 @@ class CueVerdict:
 class TimelinessReport:
     cues: list[CueVerdict]
     summary: dict[str, int]
+    #: raw counts: EVERY gate-grade brake onset, and how many any brake cue covered in time. Kept
+    #: for the reported raw ratio; no longer what the gate divides on (issue #527).
     brake_events: int
     brake_events_coached: int
+    #: coachable-zone counts (issue #527): onsets within COACHABLE_TOL_M of a reference brake mark,
+    #: collapsed to one per zone. ``coachable_brake_zones_coached`` is how many of those zones had
+    #: a covering cue. This ratio is what ``brake_events_coached`` asserts on.
+    coachable_brake_zones: int = 0
+    coachable_brake_zones_coached: int = 0
+    #: onsets with no reference mark within tolerance — nothing to coach against (excluded above).
+    off_zone_brake_onsets: int = 0
+    #: per-zone coverage guarantee (#522): reference brake zones the car crossed vs zones a cue was
+    #: dispatched for. ``zones_cued == zones_crossed`` is the coverage guarantee stated directly.
+    zones_crossed: int = 0
+    zones_cued: int = 0
     assertions: dict[str, bool] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -198,26 +222,91 @@ def analyze(
     for c in cues:
         summary[c.verdict] = summary.get(c.verdict, 0) + 1
 
-    # brake-zone coverage: real brake onsets (brake crosses 0.4 upward at speed > 60)
-    onsets = []
+    # --- brake-zone coverage (issue #527) --------------------------------------------------------
+    # Real brake onsets: brake crosses 0.4 upward at speed > 60. Capture the spline at the onset so
+    # each onset can be matched to a reference brake zone.
+    onsets: list[tuple[float, float]] = []  # (t_ms, spline)
     prev_b = 0.0
-    for t, _s, v, b in ticks:
+    for t, s, v, b in ticks:
         if b >= 0.4 and prev_b < 0.4 and v > 60.0:
-            onsets.append(t)
+            onsets.append((t, s))
         prev_b = b
-    # Coverage anchors on HEARD-COMPLETE time (dispatch + audio latency + clip duration),
-    # matching the per-cue verdicts — a cue that finishes in-ear after the brake onset must
-    # not count as having coached it (PR #523 review).
+
+    # Reference brake marks the observer flagged this lap. Every ``late_brake`` advisory carries the
+    # corner it belongs to (``corner``) and the brake-point ``spline``; the anticipatory heads-up
+    # fires as the car approaches each zone, so the distinct corners here are the reference brake
+    # zones CROSSED during recording.
+    brake_marks: list[tuple[float, Any]] = [
+        (float(p["spline"]), p.get("corner"))
+        for (_t, p) in advisories
+        if p.get("kind") == "late_brake" and p.get("spline") is not None
+    ]
+
+    def _zone_of(spline: float) -> Any | None:
+        """Zone key of the reference brake mark nearest ``spline`` within tolerance, else None.
+
+        The key is the mark's ``corner`` index when present (stable across marks of the same
+        corner, so repeat onsets in one zone collapse); it falls back to the mark spline bucketed
+        to the tolerance when a tap predates the ``corner`` field. None means the onset is
+        *off-zone* — no reference brake point sits near it, so there is nothing to coach against.
+        """
+        best_key: Any | None = None
+        best_d: float | None = None
+        for ms, mc in brake_marks:
+            d = abs(_signed_gap_m(ms, spline, track_length_m))
+            if best_d is None or d < best_d:
+                best_d = d
+                best_key = mc if mc is not None else round(ms * track_length_m / COACHABLE_TOL_M)
+        if best_d is None or best_d > COACHABLE_TOL_M:
+            return None
+        return best_key
+
+    # Coverage anchors on HEARD-COMPLETE time (dispatch + audio latency + clip duration), matching
+    # the per-cue verdicts — a cue that finishes in-ear after the brake onset must not count as
+    # having coached it (PR #523 review).
     brake_cue_heard = [
         t + (audio_latency_s + float(p.get("duration_ms") or 500.0) / 1000.0) * 1000.0
         for (t, p) in dispatches
         if p.get("kind") == "late_brake"
     ]
-    coached = sum(
-        1
-        for t in onsets
-        if any(t - COVERAGE_WINDOW_S * 1000.0 <= bt <= t + 200.0 for bt in brake_cue_heard)
-    )
+
+    def _covered(t_ms: float) -> bool:
+        return any(
+            t_ms - COVERAGE_WINDOW_S * 1000.0 <= bt <= t_ms + 200.0 for bt in brake_cue_heard
+        )
+
+    # Partition onsets into coachable zones (collapsing repeats) vs off-zone. The gate divides on
+    # coachable zones only; the raw ratio (every onset) stays reported for context.
+    coachable_zones: dict[Any, bool] = {}  # zone key -> coached (any onset in the zone covered)
+    off_zone_brake_onsets = 0
+    coached_raw = 0
+    for t_ms, spline in onsets:
+        cov = _covered(t_ms)
+        if cov:
+            coached_raw += 1
+        key = _zone_of(spline)
+        if key is None:
+            off_zone_brake_onsets += 1
+            continue
+        coachable_zones[key] = coachable_zones.get(key, False) or cov
+
+    coachable_count = len(coachable_zones)
+    coachable_coached = sum(1 for v in coachable_zones.values() if v)
+
+    # Per-zone coverage guarantee (#522): every reference brake zone the car crossed should have a
+    # cue dispatched for it. Distinct corners of the ``late_brake`` advisories (crossed) vs the
+    # ``late_brake`` dispatches (cued). Reported, not gated — a crossed-but-uncued zone (e.g. the
+    # T2 heads-up lost behind a playing exit debrief) is the #522 V2 phase-slot scheduler's scope.
+    zones_crossed = {
+        p.get("corner")
+        for (_t, p) in advisories
+        if p.get("kind") == "late_brake" and p.get("corner") is not None
+    }
+    zones_cued = {
+        p.get("corner")
+        for (_t, p) in dispatches
+        if p.get("kind") == "late_brake" and p.get("corner") is not None
+    }
 
     brake_cues = [c for c in cues if c.kind == "late_brake"]
     assertions = {
@@ -226,7 +315,12 @@ def analyze(
         "evidence_present": len(ticks) >= 100 and len(cues) >= 1,
         "no_after_fact_brake_cues": all(c.verdict != "AFTER_FACT" for c in brake_cues),
         "no_too_late_brake_cues": all(c.verdict != "TOO_LATE" for c in brake_cues),
-        "brake_events_coached": (not onsets or coached / len(onsets) >= coverage_min_fraction),
+        # Gate on COACHABLE zones only (issue #527): onsets with no reference mark within
+        # COACHABLE_TOL_M cannot be coached (no brake point to cue), and repeat onsets inside one
+        # zone count once — so a scrappy lap's correction dabs no longer drag the metric red.
+        "brake_events_coached": (
+            not coachable_zones or coachable_coached / coachable_count >= coverage_min_fraction
+        ),
         "some_actionable_coaching": (
             not brake_cues or any(c.verdict == "ACTIONABLE" for c in brake_cues)
         ),
@@ -235,7 +329,12 @@ def analyze(
         cues=cues,
         summary=summary,
         brake_events=len(onsets),
-        brake_events_coached=coached,
+        brake_events_coached=coached_raw,
+        coachable_brake_zones=coachable_count,
+        coachable_brake_zones_coached=coachable_coached,
+        off_zone_brake_onsets=off_zone_brake_onsets,
+        zones_crossed=len(zones_crossed),
+        zones_cued=len(zones_cued),
         assertions=assertions,
     )
 
@@ -334,7 +433,15 @@ def main(argv: list[str] | None = None) -> int:
             f"brake={c.brake!s:>4} -> {c.verdict}"
         )
     print("summary:", json.dumps(report.summary))
-    print(f"brake events coached: {report.brake_events_coached}/{report.brake_events}")
+    print(
+        f"brake events coached (raw): {report.brake_events_coached}/{report.brake_events} "
+        f"({report.off_zone_brake_onsets} off-zone)"
+    )
+    print(
+        "coachable zones coached (gate): "
+        f"{report.coachable_brake_zones_coached}/{report.coachable_brake_zones}"
+    )
+    print(f"reference brake zones cued/crossed: {report.zones_cued}/{report.zones_crossed}")
     print("assertions:", json.dumps(report.assertions))
     if args.out:
         Path(args.out).write_text(json.dumps(report.to_dict(), indent=1), encoding="utf-8")
