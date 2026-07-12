@@ -72,3 +72,31 @@ half. When tapped: `adb reverse tcp:8765 tcp:8765` → open `http://127.0.0.1:87
 → tap ARM → `audible_latency run --burst 12` → `auto_drive` (Magione + 911 GT3 R, reference
 staged at `.scratch/coach-demo/reference.json`) with `run --observe-seconds 300` → evidence
 on #381. Operator's A/B listen then runs through the tablet earpiece.
+
+## LIVE-VERIFIED on the real P7 (2026-07-12)
+
+Full chain on the actual device over USB (scrcpy 4.0 segfaults here on both audio+video → did
+everything with plain `adb`: `exec-out screencap` to see the screen, `input tap` to drive the
+UI, `pm grant` for mic, on-device tools for capture).
+
+- **Endpoint live:** Chrome over `adb reverse tcp:8765` → WS connected, audio armed (adb tap
+  satisfies WebAudio autoplay unlock), **76/76 clips preloaded**; demo burst + a live drive
+  played cues on the tablet.
+- **In-game coaching:** autonomous Magione lap (911 GT3 R) produced **8 real `coaching.voice`
+  cues** hands-off (`coaching.snapshot=401`, `tire_temps=199`).
+- **Digital timing (`voice.echo`):** dispatch→tablet-play RTT ~50 ms (~25 ms one-way over
+  USB); WS-receive→WebAudio schedule 1-6 ms.
+- **Acoustic timing (in-browser getUserMedia speaker->air->mic loopback, 5 trials, corr 0.95):**
+  **median 605 ms**; Chrome `outputLatency` **395 ms**, `baseLatency` 120 ms. The loopback
+  (~395 output + ~210 mic-input) **corroborates** the ~395 ms WebAudio emission - not an
+  over-report.
+
+**Durable finding:** on the low-end A133 P7, WebAudio audio emission (~395 ms) dominates and
+puts a critical cue at ~420-450+ ms in the ear - **at/over the 450 ms budget**. Tablet
+WebAudio endpoint = fit for **info/prepare glanceable coaching**, NOT sub-450 ms critical
+alarms. Fix for critical alarms on the tablet = **native audio path (Fully Kiosk `playSound`)**,
+Part D v1.1 - the transport is already fast (~25 ms), only the WebAudio emission stage needs
+replacing. Primary in-ear coach (PC rtmixer/WASAPI, #350/#381) stays the fast critical path.
+This was the council's pre-flagged risk (>250 ms -> native fallback), now measured. Mic access
+via the tablet is established (on-device recorder + granted `RECORD_AUDIO`); scrcpy is NOT
+usable on this box (v4.0 crashes) - adb-native capture/UI-drive is the working path.
