@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-11T21:05:00Z
+last_updated: 2026-07-12T02:10:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-515-lap-archives-race-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/issue-512-false-green-kpi-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/csp-telemetry-and-acd-grounding-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
@@ -79,11 +80,24 @@ relates_to:
 
 **EPIC #154 (autonomous self-test harness) is CLOSED** (2026-07-11) — Closure Criterion met: children
 #277/#278/#305 + #459 + #244 all CLOSED, determinism-lock shipped (#460), and the Part-G false-green
-KPI delivered (#512 / PR #513, `28185e2`) + verified (false_green_rate 0.0%). EPIC #488 is also FULLY
-DELIVERED and closed. Resume cold by picking the next major focus. Open backlog options:
+KPI delivered (#512 / PR #513, `28185e2`) + verified (false_green_rate 0.0%). Its harness was then
+**live-verified on a never-before-driven combo** (Ferrari SF-26 @ Silverstone GP) and the lap-archive
+evidence gap that surfaced was fixed (#515 / PR #516, `49af0a7`). EPIC #488 is also FULLY DELIVERED
+and closed. Resume cold by picking the next major focus. Open backlog options:
 - **EPIC #86 (Rig screen)** final on-device smoke artifact + A4 font outputs.
 - **EPIC #408 (SuperLap)** Part C Track Titan ingester (requires real TT reference laps).
 - **EPIC #401 (ROADMAP)** product plan & gap-closure across verticals — the live umbrella.
+
+## Delivered (2026-07-12 UTC) — PR #516 MERGED (`49af0a7`): #515 lap-archive evidence fix (live-verified)
+
+Follow-up from the SF-26 @ Silverstone GP live verification of the #512 harness. A `--wait-lap` run
+reported `laps=1` but `report.lap_archives: []` — root cause was the trainer's async lap-archive
+writer (#246/#249) never getting post-S/F frames to finalize (the #305 class), not a scan race.
+Fixed with a **post-lap grace-drive** (keep driving past S/F so the archive finalizes), a drive-budget
+sized to the full tap window (settle + lap_deadline + grace), and a **multi-dir archive poll**
+(`candidate_journal_laps_dirs`) that can't be shadowed by a stale/renamed install. Live-verified from
+merged main: `lap_archives=1`, `dist=6215m`, `lap_grace_applied=True`. 10 review rounds; #517 folded in
+and closed. Durable node: [[issue-515-lap-archives-race-2026-07-11]].
 
 ## Delivered (2026-07-11 UTC) — PR #513 MERGED (`28185e2`): #512 false-green KPI, EPIC #154 CLOSED
 

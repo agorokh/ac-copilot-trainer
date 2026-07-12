@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-11T21:05:00Z
+last_updated: 2026-07-12T02:10:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
@@ -31,6 +31,13 @@ relates_to:
 **CLOSED** (2026-07-11) — Closure Criterion met. EPIC
 [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry capture completeness for ML)
 is **FULLY DELIVERED** and closed via PRs #497 (Part A), #500 (Part B), and #503 (Parts C & D).
+
+**Delivered (2026-07-12):** PR [#516](https://github.com/agorokh/ac-copilot-trainer/pull/516)
+**MERGED** ([`49af0a7`](https://github.com/agorokh/ac-copilot-trainer/commit/49af0a7)) — **#515**
+harness lap-archive evidence fix, surfaced by the live SF-26 @ Silverstone GP verification of the
+#512 harness. Post-lap grace-drive + full-tap-window drive budget + multi-dir archive poll so
+`report.lap_archives` populates on a driven lap. Live-verified from merged main (`lap_archives=1`,
+`dist=6215m`). Detail: [[issue-515-lap-archives-race-2026-07-11]].
 
 **Delivered (2026-07-11):** PR [#513](https://github.com/agorokh/ac-copilot-trainer/pull/513)
 **MERGED** ([`28185e2`](https://github.com/agorokh/ac-copilot-trainer/commit/28185e2)) — **#512**
