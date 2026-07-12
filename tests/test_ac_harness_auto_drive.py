@@ -1813,6 +1813,49 @@ def test_collect_lap_archives_rediscovers_dir_during_poll(tmp_path):
     assert got == [str(target / "lap_y.json")]
 
 
+def test_collect_lap_archives_follows_resolver_off_stale_dir(tmp_path):
+    # A stale leftover dir (old files) is returned first; the canonical dir with the NEW archive
+    # appears mid-poll. With journal_dir=None the poll re-resolves each scan and must follow the
+    # resolver to the canonical dir, not pin to stale — the stale old file is excluded by the
+    # since_epoch gate (#516 review).
+    import os
+
+    stale = tmp_path / "stale" / "laps"
+    stale.mkdir(parents=True)
+    old = stale / "lap_old.json"
+    old.write_text("{}")
+    os.utime(old, (1_000_000, 1_000_000))  # before since_epoch -> filtered out
+    canonical = tmp_path / "canonical" / "laps"
+
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _resolve():
+        return canonical if canonical.is_dir() else stale
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not canonical.exists():
+            canonical.mkdir(parents=True)
+            new = canonical / "lap_new.json"
+            new.write_text("{}")
+            os.utime(new, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        None,
+        since_epoch=1_500_000,
+        resolve=_resolve,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(canonical / "lap_new.json")]  # followed to canonical; stale old file ignored
+
+
 def test_known_journal_laps_dir_is_canonical(tmp_path):
     d = known_journal_laps_dir(tmp_path)
     assert d == (

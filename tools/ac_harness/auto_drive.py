@@ -2183,15 +2183,18 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # The grace-drive already elapsed synchronously in run_auto_drive, so by here the writer has
     # streamed the trace; this poll only awaits the OS flush/rename — a short CONSTANT timeout, not
     # one scaled to the in-sim grace time (#516 review). collect_lap_archives' default covers it.
-    journal_dir = discover_journal_laps_dir(user_dir)
+    # journal_dir=None (not a pinned initial discover): an initial discover can return a STALE
+    # leftover dir (old/renamed install) while the current writer creates the canonical one moments
+    # later — pinning would poll the wrong path (#516 review). Re-resolving each scan follows the
+    # writer to the canonical dir (discover prefers the known path over the bounded glob fallback);
+    # stale old files there are excluded by the since_epoch mtime gate.
     lap_archives = collect_lap_archives(
-        journal_dir,
+        None,
         run_started_epoch,
         resolve=lambda: discover_journal_laps_dir(user_dir),
         wait_for_first=report.lap_grace_applied,
     )
-    # Re-discover for the report path: the writer may have created the dir during the poll.
-    journal_dir = journal_dir or discover_journal_laps_dir(user_dir)
+    journal_dir = discover_journal_laps_dir(user_dir)  # for the report path (post-poll)
     extras = {
         "run": {
             "started_epoch": run_started_epoch,
