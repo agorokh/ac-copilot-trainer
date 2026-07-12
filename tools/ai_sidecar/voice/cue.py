@@ -143,7 +143,7 @@ class CueArbiter:
     global_cooldown_s: float = 2.5
     corner_cooldown_s: float = 6.0
     _last_spoken_s: float | None = None
-    _last_corner_kind_s: dict[tuple[int, str], float] = field(default_factory=dict)
+    _last_corner_kind_s: dict[tuple[int, int, str], float] = field(default_factory=dict)
 
     def select(self, advisories: list[dict[str, Any]], now_s: float) -> SpokenCue | None:
         """Choose the one cue to speak now, applying cooldowns + urgency preemption."""
@@ -162,7 +162,7 @@ class CueArbiter:
                 # arbitrate it (and never let it consume a cooldown slot).
                 continue
             is_act = _URGENCY_RANK.get(str(a.get("urgency", "")), 0) >= _URGENCY_RANK["act"]
-            key = (_corner_key(a), str(a.get("kind", "")))
+            key = (_corner_key(a), _zone_key(a), str(a.get("kind", "")))
             last = self._last_corner_kind_s.get(key)
             if not is_act and last is not None and now_s - last < self.corner_cooldown_s:
                 continue
@@ -181,7 +181,9 @@ class CueArbiter:
         ):
             return None
         self._last_spoken_s = now_s
-        self._last_corner_kind_s[(_corner_key(best), str(best.get("kind", "")))] = now_s
+        self._last_corner_kind_s[
+            (_corner_key(best), _zone_key(best), str(best.get("kind", "")))
+        ] = now_s
         return SpokenCue(
             text=advisory_to_phrase(best),
             urgency=str(best.get("urgency", "info")),
@@ -197,3 +199,15 @@ def _corner_key(advisory: dict[str, Any]) -> int:
         return int(advisory.get("corner"))
     except (TypeError, ValueError):
         return -1
+
+
+def _zone_key(advisory: dict[str, Any]) -> int:
+    """Brake-zone ordinal within a merged corner (issue #522), 0 when absent/unreadable.
+
+    Joins the per-corner cooldown key so the SECOND zone's heads-up in a merged esses corner
+    is not suppressed as a repeat of the first — mirroring the phrase-bank resolver's
+    zone-aware dedup key (PR #525 review).
+    """
+    detail = advisory.get("detail")
+    zone = detail.get("zone") if isinstance(detail, dict) else None
+    return zone if isinstance(zone, int) else 0

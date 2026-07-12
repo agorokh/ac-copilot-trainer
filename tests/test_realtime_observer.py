@@ -663,6 +663,75 @@ def test_calibration_survives_lap_wrap_reset():
     assert marks[0][1] == "driver_calibrated"
 
 
+def test_calibration_matches_wrapped_first_corner_onset():
+    """PR #525 review: for a mark near spline 0, the driver's onset sits at the END of the
+    completed lap trace (the archive finalizes before the S/F frame) — the scan must cross
+    the wrap, not clamp at 0."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.05,
+        spline_lo=0.005,
+        spline_hi=0.09,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.01,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # driver onset at ~0.992 — ~0.018 spline before the 0.01 mark, across start/finish
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.992, end=1.0)) == 1
+    marks = obs._effective_marks(ref)
+    assert marks[0][1] == "driver_calibrated"
+    assert marks[0][0] == pytest.approx(0.992, abs=0.005)
+
+
+def test_one_driver_onset_calibrates_at_most_one_zone():
+    """PR #525 review: marks closer than twice the tolerance must not both snap to a single
+    brake application — matching is one-to-one, nearest first."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.52,
+        spline_lo=0.42,
+        spline_hi=0.62,
+        optimal_apex_kmh=90.0,
+        best_observed_apex_kmh=90.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+        brake_marks=[0.45, 0.475],  # 0.025 apart < 2 x 0.02 tolerance
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # ONE sustained application between the marks: nearest zone wins, the other stays reference
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.462, end=0.50)) == 1
+    sources = [src for _m, src in obs._effective_marks(ref)]
+    assert sources.count("driver_calibrated") == 1
+
+
+def test_external_reset_clears_prewrap_armed_state():
+    """PR #525 review: reset() without the wrap carry (producer disconnect / teleport) must
+    clear a pre-wrap-armed pass — stale zone_cued state would suppress the fresh first-corner
+    heads-up of the NEW stream."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.06,
+        spline_lo=0.02,
+        spline_hi=0.10,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.03,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # pre-wrap approach: heads-up fires, pass is armed
+    fired = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0})
+    assert [a for a in fired if a.kind == "late_brake"]
+    obs.reset()  # EXTERNAL reset (no carry): a new producer/stream takes over
+    # new stream starts just after S/F, still ahead of the mark: heads-up must fire again
+    fired2 = obs.observe({"spline": 0.005, "speed": 180.0, "brake": 0.0})
+    assert [a for a in fired2 if a.kind == "late_brake"], (
+        "stale pre-wrap state must not survive an external reset"
+    )
+
+
 def test_trail_braking_previous_corner_does_not_latch_next_corner():
     """#523 review (Codex P2): with the 3.2 s lead, closely spaced corners overlap — braking
     far out in the lead window (trail-braking the previous turn) must not consume the next

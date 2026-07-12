@@ -768,9 +768,18 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
     key = str(inbound.get("archivePath") or "") or f"lap:{inbound.get('lap')}"
     if key == _last_brake_cal_key:
         return
+    # Reserve the key BEFORE the awaited loads (we are on the event loop here, so the
+    # check-and-set is atomic): two archive-backed frames for the same lap arriving
+    # back-to-back must not both pass the guard while the first is still off-loop reading the
+    # file — that would double-weight the EMA (PR #525 review). A failed LOAD rolls the
+    # reservation back so a later frame with the same archive (e.g. after the async archive
+    # write completes) still calibrates; a deliberate skip (invalid lap) keeps it.
+    _last_brake_cal_key = key
     try:
         archive = await asyncio.to_thread(resolve_lap_archive, inbound)
         if not isinstance(archive, dict):
+            if _last_brake_cal_key == key:
+                _last_brake_cal_key = None
             return
         lap_meta = archive.get("lap")
         if isinstance(lap_meta, dict) and lap_meta.get("is_valid") is False:
@@ -782,8 +791,9 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
         raise
     except Exception as e:
         logger.info("brake calibration skipped: %s", e)
+        if _last_brake_cal_key == key:
+            _last_brake_cal_key = None
         return
-    _last_brake_cal_key = key
     track_obj = archive.get("track")
     track_id = track_obj.get("id") if isinstance(track_obj, dict) else None
     updated = observer.calibrate_from_driver_lap(

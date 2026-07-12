@@ -133,3 +133,18 @@ def test_arbiter_holds_info_cue_until_spline_lookahead_window():
     near = dict(far)
     near["car_spline"] = 0.495
     assert arb.select([near], now_s=0.0) is not None
+
+
+def test_second_zone_of_merged_corner_not_suppressed_by_corner_cooldown():
+    """PR #525 review: the per-corner cooldown key carries the brake-zone ordinal — a merged
+    esses corner's SECOND zone heads-up inside the 6 s window must speak, while a repeat of
+    the SAME zone stays suppressed."""
+    arb = CueArbiter()
+    z0 = _adv("late_brake", 2, "prepare", register="calm", zone=0)
+    z1 = _adv("late_brake", 2, "prepare", register="calm", zone=1)
+    assert arb.select([z0], now_s=100.0) is not None
+    # same zone again within the cooldown: suppressed (anti-nag unchanged)
+    assert arb.select([z0], now_s=103.0) is None
+    # DIFFERENT zone, same corner, still inside the 6 s corner window: must speak
+    cue = arb.select([z1], now_s=103.0)
+    assert cue is not None and cue.corner == 2

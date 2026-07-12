@@ -374,8 +374,11 @@ class RealtimeObserver:
 
         For each corner zone, the driver's sustained brake onset nearest the current reference
         mark (within ``_CAL_MATCH_TOL_SPLINE`` — the same zone, not a different line) updates
-        that zone's EMA. Returns the number of zones updated. A lap from a different track (when
-        both track ids are known) never calibrates.
+        that zone's EMA. Matching is one-to-one (greedy nearest-first): a single brake
+        application between two closely spaced marks calibrates ONE zone, never both — else the
+        per-zone distinction #522 adds would collapse (PR #525 review). Returns the number of
+        zones updated. A lap from a different track (when both track ids are known) never
+        calibrates.
         """
         if track_id and self._track_id and track_id != self._track_id:
             return 0
@@ -385,17 +388,30 @@ class RealtimeObserver:
             if not ref_marks:
                 continue
             # scan slightly upstream of the window too — a slower driver brakes EARLIER than the
-            # reference lap's deceleration onset that defined the window entry.
-            onsets = sustained_brake_onsets(
-                lap, max(0.0, ref.spline_lo - _CAL_MATCH_TOL_SPLINE), ref.spline_hi
-            )
+            # reference lap's deceleration onset that defined the window entry. A first-corner
+            # window whose upstream margin crosses start/finish also scans the trace TAIL: the
+            # archive finalizes the lap before the S/F frame, so the driver's onset for a mark
+            # near spline 0 can sit at ~0.99 (PR #525 review).
+            lo = ref.spline_lo - _CAL_MATCH_TOL_SPLINE
+            onsets = sustained_brake_onsets(lap, max(0.0, lo), ref.spline_hi)
+            if lo < 0.0:
+                onsets += sustained_brake_onsets(lap, lo % 1.0, 1.0)
             if not onsets:
                 continue
-            for zi, mark in enumerate(ref_marks):
-                deltas = [(abs(_signed_spline_delta(o, mark)), o) for o in onsets]
-                dist, onset = min(deltas)
+            pairs = sorted(
+                (abs(_signed_spline_delta(onset, mark)), zi, onset)
+                for zi, mark in enumerate(ref_marks)
+                for onset in onsets
+            )
+            matched_zones: set[int] = set()
+            consumed_onsets: set[float] = set()
+            for dist, zi, onset in pairs:
                 if dist > _CAL_MATCH_TOL_SPLINE:
+                    break  # sorted ascending: everything after is farther
+                if zi in matched_zones or onset in consumed_onsets:
                     continue
+                matched_zones.add(zi)
+                consumed_onsets.add(onset)
                 cur = self._driver_marks.get((ref.index, zi))
                 if cur is None:
                     self._driver_marks[(ref.index, zi)] = (onset % 1.0, 1)
@@ -406,19 +422,22 @@ class RealtimeObserver:
                 updated += 1
         return updated
 
-    def reset(self) -> None:
+    def reset(self, *, carry_prewrap: bool = False) -> None:
         """Clear per-corner pass state (start of a fresh lap). The lap counter — and the
         per-driver brake-mark calibration, which is knowledge about the driver — persist.
 
-        A pass re-armed pre-wrap (a first-corner lead window that opened before start/finish)
-        already belongs to the lap that begins at this wrap: it carries across — heads-up and
-        near-mark braking observed before the line stay valid — with its one-shot flag cleared
-        so the NEXT lap's pre-wrap approach can re-arm it again.
+        With ``carry_prewrap`` (the true start/finish-wrap path only), a pass re-armed
+        pre-wrap (a first-corner lead window that opened before start/finish) already belongs
+        to the lap that begins at this wrap: it carries across — heads-up and near-mark braking
+        observed before the line stay valid — with its one-shot flag cleared so the NEXT lap's
+        pre-wrap approach can re-arm it again. External resets (producer disconnect) and
+        same-lap rewinds (pit/teleport) must NOT carry: the stream is discontinuous, and stale
+        ``zone_cued`` state would suppress a fresh first-corner heads-up (PR #525 review).
         """
         carried: dict[int, _CornerPass] = {}
         for r in self._refs:
             p = self._passes.get(r.index)
-            if p is not None and p.armed_prewrap:
+            if carry_prewrap and p is not None and p.armed_prewrap:
                 p.armed_prewrap = False
                 carried[r.index] = p
             else:
@@ -468,7 +487,9 @@ class RealtimeObserver:
                     if a is not None:
                         graded.append(a)
             pre_lap = self._last_lap
-            self.reset()
+            # A pre-wrap-armed first-corner pass carries only through a genuine start/finish
+            # crossing; a same-lap rewind (pit/teleport) clears everything (PR #525 review).
+            self.reset(carry_prewrap=lap_advanced or wrap_shaped)
             if lap_advanced or (wrap_shaped and not lap_known):
                 out.extend(graded)  # definite lap completion → grade now
             elif wrap_shaped and lap_known:
