@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -86,7 +87,10 @@ from tools.ai_sidecar.external_protocol import (
     TYPE_STATE_SUBSCRIBE,
     TYPE_STATE_UNSUBSCRIBE,
     TYPE_TELEMETRY_TICK,
+    TYPE_VOICE_DEMO,
+    TYPE_VOICE_ECHO,
     make_coaching_cue,
+    make_coaching_voice,
     make_error,
     make_hello_ack,
     topics_are_sidecar_only,
@@ -179,6 +183,22 @@ _voice_runtime_status: dict[str, object] = {
     "disabled_reason": "",
 }
 _ABSOLUTE_PATH_RE = re.compile(r"(?:(?:[A-Za-z]:[\\/]|/)[^\s'\"<>]+)")
+
+# Issue #511 Part D — remote voice endpoint state. ``_voice_dispatch_log`` records every clip
+# the scheduler actually dispatched (mirrors the ``coaching.voice`` broadcast); the tablet page
+# posts ``voice.echo`` frames into ``_voice_echo_log``. Both are bounded ring buffers exposed
+# read-only over HTTP for the #381 audible-latency harness. ``_event_loop`` is the running
+# asyncio loop captured by ``_run`` so the scheduler worker thread can hand dispatch events
+# across to async fan-out via ``call_soon_threadsafe``.
+_VOICE_EVENT_LOG_MAX = 512
+_voice_dispatch_log: deque[dict[str, Any]] = deque(maxlen=_VOICE_EVENT_LOG_MAX)
+_voice_echo_log: deque[dict[str, Any]] = deque(maxlen=_VOICE_EVENT_LOG_MAX)
+_event_loop: asyncio.AbstractEventLoop | None = None
+# Static-serving allow-list for the tablet page: the bank dir plus the EXACT clip file names
+# listed in its manifest. ``/voice/clips/<name>`` serves only names in this set, so no path
+# traversal is possible regardless of what the URL contains.
+_voice_bank_dir: Path | None = None
+_voice_clip_files: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -345,6 +365,9 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
         TYPE_SESSION_REVIEW_GENERATE,
+        # Issue #511 Part D: remote voice endpoint timestamps + loopback demo-cue injection.
+        TYPE_VOICE_ECHO,
+        TYPE_VOICE_DEMO,
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -418,6 +441,8 @@ def _reset_external_state() -> None:
     _external_peer_classes.clear()
     _sidecar_state_cache.clear()
     _peripheral_rate_limiter.reset()
+    _voice_dispatch_log.clear()
+    _voice_echo_log.clear()
     if _race_manager is not None:
         _race_manager.reset()
     # The single-producer observer feed is external-peer state: a full reset (server (re)start or
@@ -768,6 +793,84 @@ def make_token_check(token: str | None):
     return _check
 
 
+def _on_voice_dispatch(dispatch: Any) -> None:
+    """Listener for the voice dispatch tap (issue #511 Part D).
+
+    Runs on the SCHEDULER WORKER THREAD, so it must stay cheap and thread-safe: append the
+    record to the bounded ring buffer (deque append is atomic) and hand the async fan-out to
+    the event loop via ``call_soon_threadsafe``. Any fault is contained — the audio path and
+    the scheduler never see an exception from here (the tap also guards, belt-and-braces).
+    """
+    try:
+        payload = dispatch.to_payload()
+        _voice_dispatch_log.append(payload)
+        loop = _event_loop
+        if loop is None or loop.is_closed():
+            return
+        frame = make_coaching_voice(payload)
+
+        def _schedule() -> None:
+            task = asyncio.ensure_future(_broadcast_external(frame, exclude=None))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+
+        loop.call_soon_threadsafe(_schedule)
+    except RuntimeError:
+        # Loop shut down between the check and the call — a teardown race, not an error.
+        logger.debug("voice: dispatch broadcast skipped (event loop closed)")
+    except Exception:  # noqa: BLE001 — never propagate into the scheduler thread
+        logger.exception("voice: failed to record/broadcast dispatch")
+
+
+def _set_voice_web_bank(bank_dir: Path) -> None:
+    """Arm the tablet-page static routes for ``bank_dir`` (issue #511 Part D).
+
+    Loads the manifest once to build the EXACT-filename allow-list for ``/voice/clips/<name>``
+    — serving is impossible for any file the manifest does not list, so no traversal or
+    sibling-file exposure regardless of URL contents. On any manifest fault the routes stay
+    disarmed (404) and the coach itself is unaffected.
+    """
+    global _voice_bank_dir, _voice_clip_files
+    try:
+        from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest
+
+        manifest = Manifest.load(bank_dir / MANIFEST_FILENAME)
+        files = frozenset(
+            entry.file
+            for entry in manifest.clips.values()
+            if isinstance(entry.file, str)
+            and entry.file
+            and "/" not in entry.file
+            and "\\" not in entry.file
+            and entry.file not in {".", ".."}
+        )
+        _voice_bank_dir = bank_dir
+        _voice_clip_files = files
+        logger.info(
+            "voice: tablet endpoint armed — %d clips servable from %s", len(files), bank_dir
+        )
+    except Exception:  # noqa: BLE001 — web serving is optional; never break voice wiring
+        _voice_bank_dir = None
+        _voice_clip_files = frozenset()
+        logger.exception("voice: failed to arm tablet endpoint from %s", bank_dir)
+
+
+_TABLET_PAGE_PATH = Path(__file__).resolve().parent / "voice" / "web" / "tablet_voice.html"
+_tablet_page_cache: str | None = None
+
+
+def _tablet_voice_page() -> str | None:
+    """Read (and cache) the self-contained tablet voice page shipped with the package."""
+    global _tablet_page_cache
+    if _tablet_page_cache is None:
+        try:
+            _tablet_page_cache = _TABLET_PAGE_PATH.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("voice: tablet page missing at %s", _TABLET_PAGE_PATH)
+            return None
+    return _tablet_page_cache
+
+
 def _http_response(connection: Any, status: HTTPStatus, body: str, content_type: str) -> Any:
     """Build a plain HTTP response on the WS connection with a SINGLE, correct
     Content-Type.
@@ -784,6 +887,26 @@ def _http_response(connection: Any, status: HTTPStatus, body: str, content_type:
     except KeyError:  # pragma: no cover - defensive across websockets versions
         pass
     response.headers["Content-Type"] = content_type
+    return response
+
+
+def _http_response_bytes(
+    connection: Any, status: HTTPStatus, body: bytes, content_type: str
+) -> Any:
+    """Binary variant of :func:`_http_response` (WAV clips for the tablet page).
+
+    ``connection.respond`` only takes text, so build from an empty response and replace the
+    body — Content-Length must be rewritten to match or strict clients truncate/over-read.
+    """
+    response = connection.respond(status, "")
+    for header in ("Content-Type", "Content-Length"):
+        try:
+            del response.headers[header]
+        except KeyError:  # pragma: no cover - defensive across websockets versions
+            pass
+    response.headers["Content-Type"] = content_type
+    response.headers["Content-Length"] = str(len(body))
+    response.body = body
     return response
 
 
@@ -820,6 +943,58 @@ def make_process_request(token: str | None):
                 HTTPStatus.OK,
                 observability.build_metrics_text(connected_peers, screen_peers=screen_peers),
                 observability.PROM_CONTENT_TYPE,
+            )
+        # Issue #511 Part D — tablet voice endpoint. Same trust model as /health: read-only,
+        # no secrets (the page, the bank manifest, baked clip audio, and bounded event logs),
+        # so not token-gated; the WS upgrade below keeps the gate. Clip serving is exact-match
+        # against the manifest allow-list — no traversal surface.
+        if path == "/tablet/voice":
+            page = _tablet_voice_page()
+            if page is None:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "tablet page unavailable\n", "text/plain"
+                )
+            return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
+        if path == "/voice/manifest.json":
+            bank_dir = _voice_bank_dir
+            if bank_dir is None:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "no voice bank configured\n", "text/plain"
+                )
+            try:
+                body = (bank_dir / "manifest.json").read_text(encoding="utf-8")
+            except OSError:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "manifest unavailable\n", "text/plain"
+                )
+            return _http_response(connection, HTTPStatus.OK, body, "application/json")
+        if path.startswith("/voice/clips/"):
+            bank_dir = _voice_bank_dir
+            name = path[len("/voice/clips/") :]
+            if bank_dir is None or name not in _voice_clip_files:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "unknown clip\n", "text/plain"
+                )
+            try:
+                data = (bank_dir / name).read_bytes()
+            except OSError:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "clip unavailable\n", "text/plain"
+                )
+            return _http_response_bytes(connection, HTTPStatus.OK, data, "audio/wav")
+        if path == "/voice/dispatches":
+            return _http_response(
+                connection,
+                HTTPStatus.OK,
+                json.dumps({"dispatches": list(_voice_dispatch_log)}),
+                "application/json",
+            )
+        if path == "/voice/echoes":
+            return _http_response(
+                connection,
+                HTTPStatus.OK,
+                json.dumps({"echoes": list(_voice_echo_log)}),
+                "application/json",
             )
         # A rig-screen sighting rides on the WS upgrade (the client header is on
         # the upgrade request), then the token gate applies if one is configured.
@@ -1654,6 +1829,43 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     if t in SIDECAR_LOCAL_TYPES:
         await _handle_setup_experiment_frame(websocket, data)
         return
+    if t == TYPE_VOICE_ECHO:
+        # Issue #511 Part D: per-cue client timestamps from a remote voice endpoint. Recorded
+        # for the audible-latency harness (/voice/echoes); never relayed to other peers.
+        record = {
+            "seq": data.get("seq"),
+            "clip_id": data.get("clip_id"),
+            "t_dispatch_ms": data.get("t_dispatch_ms"),
+            "t_receive_ms": data.get("t_receive_ms"),
+            "t_play_ms": data.get("t_play_ms"),
+            "buffer_state": data.get("buffer_state"),
+            "audio_armed": data.get("audio_armed"),
+            "t_server_ms": time.time() * 1000.0,
+        }
+        _voice_echo_log.append(record)
+        # rtt_ms is dispatch→echo-receipt on the SERVER clock (valid interval); js_ms is
+        # receive→play on the TABLET clock (valid interval). t_receive - t_dispatch would mix
+        # the two clocks, so it is never logged as a latency.
+        logger.info(
+            "CUE-ECHO seq=%s clip=%s rtt_ms=%s js_ms=%s",
+            record["seq"],
+            record["clip_id"],
+            _echo_interval(record, "t_dispatch_ms", "t_server_ms"),
+            _echo_interval(record, "t_receive_ms", "t_play_ms"),
+        )
+        return
+    if t == TYPE_VOICE_DEMO:
+        # Issue #511 Part D / #381: loopback-only synthetic advisory through the REAL voice
+        # path (scheduler arbitration → dispatch tap → coaching.voice broadcast). Bench
+        # entrypoint for the audible-latency harness; never a remote control surface.
+        if not _is_loopback_peer(websocket):
+            await _safe_send(
+                websocket,
+                make_error("voice.demo is accepted only from loopback peers", ref_type=t),
+            )
+            return
+        await _handle_voice_demo(websocket, data)
+        return
     if t in SERVER_TO_CLIENT_TYPES and not _is_loopback_peer(websocket):
         await _safe_send(
             websocket,
@@ -1733,6 +1945,44 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         len(_external_peers),
     )
     await _broadcast_external(data, exclude=websocket)
+
+
+def _echo_interval(record: dict[str, Any], start_key: str, end_key: str) -> str:
+    start = record.get(start_key)
+    end = record.get(end_key)
+    if not isinstance(start, int | float) or not isinstance(end, int | float):
+        return "?"
+    return f"{float(end) - float(start):.1f}"
+
+
+async def _handle_voice_demo(websocket: Any, data: dict[str, Any]) -> None:
+    """Feed one validated ``voice.demo`` frame into the in-process coach + cue fan-out."""
+    from tools.ai_sidecar.registers import REGISTERS, normalize_register
+
+    raw_register = data.get("register")
+    register = normalize_register(raw_register) if isinstance(raw_register, str) else "calm"
+    if register not in REGISTERS:
+        register = "calm"
+    corner = data.get("corner")
+    advisory = SimpleNamespace(
+        kind=data["kind"],
+        urgency=data["urgency"],
+        register=register,
+        corner=corner if isinstance(corner, int) else None,
+        intensity=0.0,
+        message=data.get("message") or f"demo {data['kind']}",
+        spline=None,
+        detail={"demo": True},
+    )
+    coach = _voice_coach
+    if coach is not None:
+        try:
+            coach.subscribe(advisory)
+        except Exception:
+            logger.exception("voice coach subscribe failed for voice.demo")
+    cue_payload = _advisory_to_payload(advisory)
+    if cue_payload is not None:
+        await _broadcast_external(make_coaching_cue(cue_payload), exclude=websocket)
 
 
 async def _handler(websocket: Any, reply_coaching: bool) -> None:
@@ -1940,7 +2190,7 @@ async def _run(
     serial_baud: int = 115_200,
 ) -> None:
     global _setup_exchange_endpoint, _setup_exchange_user_setups_root
-    global _setup_experiment_store_path, _setup_experiment_store_seeded
+    global _setup_experiment_store_path, _setup_experiment_store_seeded, _event_loop
     try:
         import websockets
     except ImportError as e:
@@ -1948,6 +2198,9 @@ async def _run(
 
     process_request = make_process_request(token)
     _reset_external_state()
+    # Issue #511 Part D: the voice scheduler's worker thread hands dispatch broadcasts to this
+    # loop via call_soon_threadsafe; captured here (the one place the serve loop is known).
+    _event_loop = asyncio.get_running_loop()
     _setup_experiment_store_path = Path(setup_store) if setup_store else None
     _setup_experiment_store_seeded = setup_store is not None
     _setup_exchange_endpoint = setup_exchange_endpoint or os.environ.get(
@@ -1992,6 +2245,7 @@ async def _run(
                 ) from exc
             raise
     finally:
+        _event_loop = None
         _reset_external_state()
 
 
@@ -2140,7 +2394,9 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
                     or "low"
                 ),
             )
-            coach = VoiceCoach.from_bank(bank_dir, config, backend=backend)
+            coach = VoiceCoach.from_bank(
+                bank_dir, config, backend=backend, dispatch_listener=_on_voice_dispatch
+            )
             if not coach.enabled:
                 set_voice_coach(coach)
                 set_voice_runtime_status(
@@ -2159,6 +2415,7 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
             else:
                 coach.start()
                 set_voice_coach(coach)
+                _set_voice_web_bank(Path(bank_dir))
                 set_voice_runtime_status(
                     configured=True,
                     enabled=True,

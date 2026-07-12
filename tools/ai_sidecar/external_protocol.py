@@ -78,6 +78,16 @@ TYPE_SETUP_CLOSED_LOOP = "setup.closed_loop"
 TYPE_SETUP_EXCHANGE_SEARCH = "se.search"
 TYPE_SETUP_EXCHANGE_DOWNLOAD = "se.download"
 TYPE_SESSION_REVIEW_GENERATE = "session.review.generate"
+# Issue #511 Part D: a remote voice endpoint (tablet page) reports per-cue client-side
+# timestamps back to the sidecar so the audible-latency harness can decompose network-hop
+# vs audio-stack delay. Accepted from any authenticated peer; never relayed.
+TYPE_VOICE_ECHO = "voice.echo"
+# Issue #511 Part D / #381 verification: inject one synthetic advisory into the REAL
+# in-process voice path (scheduler arbitration + dispatch + coaching.voice broadcast).
+# Loopback-only — a bench/measurement entrypoint, never a remote control surface.
+TYPE_VOICE_DEMO = "voice.demo"
+VOICE_DEMO_URGENCIES: frozenset[str] = frozenset({"info", "prepare", "act"})
+VOICE_ECHO_BUFFER_STATES: frozenset[str] = frozenset({"preloaded", "decoded", "missing"})
 SESSION_REVIEW_REFERENCE_SOURCES: frozenset[str] = frozenset(
     {
         "auto",
@@ -208,10 +218,18 @@ KNOWN_ACTIONS: frozenset[str] = frozenset(
 #: Lua `publishTopic` drift-guard does not cover it — it is listed here so a `voice`-class client
 #: can legitimately subscribe.
 TOPIC_COACHING_CUE = "coaching.cue"
+#: Topic the sidecar publishes actually-DISPATCHED voice clips on (issue #511 Part D). Unlike
+#: ``coaching.cue`` (every advisory the observer emits), ``coaching.voice`` carries only what the
+#: in-process VoiceCoach scheduler decided to SPEAK (post cooldown/dedup/barge-in arbitration),
+#: stamped at dispatch time. A remote audio endpoint (the tablet page) mirrors exactly what the
+#: in-ear coach says without re-implementing the arbitration client-side.
+TOPIC_COACHING_VOICE = "coaching.voice"
 TOPIC_SESSION_REVIEW = "session.review"
 # Topics the sidecar produces directly (no loopback Lua relay). Voice/offline clients may
 # state.subscribe to these without a Lua peer connected.
-SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset({TOPIC_COACHING_CUE, TOPIC_SESSION_REVIEW})
+SIDECAR_PRODUCED_TOPICS: frozenset[str] = frozenset(
+    {TOPIC_COACHING_CUE, TOPIC_COACHING_VOICE, TOPIC_SESSION_REVIEW}
+)
 KNOWN_TOPICS: frozenset[str] = frozenset(
     {
         # Declared topics (EPIC #154 Part D wires producers for these).
@@ -225,6 +243,8 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         "setup.active",
         # Sidecar-originated live coaching cues (issue #341).
         TOPIC_COACHING_CUE,
+        # Sidecar-originated dispatched-voice-clip events (issue #511 Part D).
+        TOPIC_COACHING_VOICE,
         # Sidecar-originated post-session debrief report (issue #404 Part A).
         TOPIC_SESSION_REVIEW,
     }
@@ -294,6 +314,25 @@ def make_coaching_cue(payload: dict[str, Any], *, ts_sim: float | None = None) -
     if ts_sim is not None:
         frame["ts_sim"] = ts_sim
     return frame
+
+
+def make_coaching_voice(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build a ``coaching.voice`` topic frame for one DISPATCHED clip (issue #511 Part D).
+
+    Emitted by the sidecar at the moment the in-process VoiceCoach scheduler dispatches a
+    clip to playback — i.e. after cooldown/dedup/barge-in arbitration, so a remote audio
+    endpoint plays exactly what the in-ear coach speaks. ``payload`` carries
+    ``seq``/``clip_id``/``kind``/``urgency``/``register``/``corner``/``duration_ms`` plus the
+    dispatch timestamps ``t_wall_ms`` (Unix epoch ms) and ``t_mono_ms`` (server monotonic ms)
+    the audible-latency harness anchors on.
+    """
+    return {
+        ENVELOPE_KEY: ENVELOPE_VERSION,
+        TYPE_KEY: TYPE_STATE_SNAPSHOT,
+        "topic": TOPIC_COACHING_VOICE,
+        "payload": payload,
+        "source": "sidecar.voice",
+    }
 
 
 def make_error(message: str, *, ref_type: str | None = None) -> dict[str, Any]:
@@ -728,6 +767,50 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         return _validate_telemetry_tick(frame)
     if t == TYPE_HAPTIC_EVENT:
         return _validate_haptic_event(frame)
+    if t == TYPE_VOICE_ECHO:
+        seq = frame.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+            return "voice.echo requires non-negative integer 'seq'"
+        clip_id = frame.get("clip_id")
+        if not isinstance(clip_id, str) or not clip_id or len(clip_id) > 128:
+            return "voice.echo requires non-empty 'clip_id' (<=128 chars)"
+        for key in ("t_dispatch_ms", "t_receive_ms"):
+            err = _validate_number(frame, key, min_value=0)
+            if err is not None:
+                return err
+        err = _validate_optional_number(frame, "t_play_ms", min_value=0)
+        if err is not None:
+            return err
+        buffer_state = frame.get("buffer_state")
+        if buffer_state is not None and (
+            not isinstance(buffer_state, str) or buffer_state not in VOICE_ECHO_BUFFER_STATES
+        ):
+            return "voice.echo optional 'buffer_state' must be one of: " + ", ".join(
+                sorted(VOICE_ECHO_BUFFER_STATES)
+            )
+        audio_armed = frame.get("audio_armed")
+        if audio_armed is not None and not isinstance(audio_armed, bool):
+            return "voice.echo optional 'audio_armed' must be a boolean"
+        return None
+    if t == TYPE_VOICE_DEMO:
+        kind = frame.get("kind")
+        if not isinstance(kind, str) or not kind or len(kind) > 64:
+            return "voice.demo requires non-empty 'kind' (<=64 chars)"
+        urgency = frame.get("urgency")
+        if not isinstance(urgency, str) or urgency not in VOICE_DEMO_URGENCIES:
+            return "voice.demo requires 'urgency' in: " + ", ".join(sorted(VOICE_DEMO_URGENCIES))
+        register = frame.get("register")
+        if register is not None and not isinstance(register, str):
+            return "voice.demo optional 'register' must be a string"
+        corner = frame.get("corner")
+        if corner is not None and (
+            isinstance(corner, bool) or not isinstance(corner, int) or corner < 0 or corner > 40
+        ):
+            return "voice.demo optional 'corner' must be an integer between 0 and 40"
+        err = _validate_optional_string(frame, "message")
+        if err is not None:
+            return err
+        return None
     if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE):
         topics = frame.get("topics")
         if not isinstance(topics, list) or not topics:
