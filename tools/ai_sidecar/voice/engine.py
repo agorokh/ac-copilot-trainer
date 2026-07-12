@@ -42,6 +42,28 @@ from tools.ai_sidecar.voice.scheduler import Scheduler
 _log = logging.getLogger("ai_sidecar.voice.engine")
 
 
+def _bank_duration_lookup(playback: Playback) -> Callable[[str], float | None] | None:
+    """Best-effort clip-duration lookup from a real backend's pre-decoded bank.
+
+    The real backends (:class:`RtMixerPlayback` / :class:`SoundDevicePlayback`) hold their
+    ``Bank`` privately; the dispatch tap only needs read-only durations for the
+    ``coaching.voice`` payload, so duck-read it rather than widening the Playback protocol.
+    Returns ``None`` (durations omitted) for playbacks without a bank (injected test doubles).
+    """
+    bank = getattr(playback, "_bank", None)
+    samplerate = getattr(bank, "samplerate", 0)
+    if bank is None or not samplerate:
+        return None
+
+    def _duration_ms(clip_id: str) -> float | None:
+        pcm = bank.get(clip_id)
+        if pcm is None:
+            return None
+        return len(pcm) / samplerate * 1000.0
+
+    return _duration_ms
+
+
 class VoiceCoach:
     """Wires resolver + scheduler + playback. One coach per output channel."""
 
@@ -108,6 +130,7 @@ class VoiceCoach:
         playback: Playback | None = None,
         clock: Callable[[], float] = time.monotonic,
         backend: str = "rtmixer",
+        dispatch_listener: Callable[..., None] | None = None,
     ) -> VoiceCoach:
         """Build a coach from a baked bank directory.
 
@@ -117,6 +140,11 @@ class VoiceCoach:
         :meth:`disabled` rather than raising. ``playback`` may be injected (tests pass a
         :class:`~tools.ai_sidecar.voice.playback.RecordingPlayback`); otherwise the real backend is
         built lazily from the bank.
+
+        ``dispatch_listener`` (issue #511 Part D) is called with one
+        :class:`~tools.ai_sidecar.voice.dispatch.VoiceDispatch` per clip the scheduler actually
+        dispatches — the seam the sidecar uses to broadcast ``coaching.voice`` frames to remote
+        audio endpoints. ``None`` (the default) leaves the playback unwrapped.
         """
         config = config or VoiceConfig()
         base = Path(bank_dir)
@@ -144,6 +172,15 @@ class VoiceCoach:
             playback = cls._build_playback(manifest, base, config, backend)
             if playback is None:
                 return cls.disabled(f"could not initialize audio backend {backend!r}")
+
+        if dispatch_listener is not None:
+            from tools.ai_sidecar.voice.dispatch import DispatchTapPlayback
+
+            playback = DispatchTapPlayback(
+                playback,
+                dispatch_listener,
+                duration_lookup=_bank_duration_lookup(playback),
+            )
 
         resolver = Resolver(manifest)
         scheduler = Scheduler(resolver, playback, config, clock=clock)

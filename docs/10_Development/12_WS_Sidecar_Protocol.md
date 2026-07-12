@@ -137,6 +137,27 @@ Optional fields:
 
 The loopback ack is `session.review.result` with local `markdown_path`, `json_path`, and `html_path` plus `reference` / `reference_selection` metadata. External `session.review` snapshots and `coaching.cue` details redact host paths to `markdown_file`, `json_file`, and `html_file` basenames while preserving the reference metadata.
 
+## Tablet voice endpoint (issue #511 Part D)
+
+Additive surface for a remote coaching-audio endpoint (7" tablet page over `adb reverse`):
+
+- Topic `coaching.voice` (sidecar-produced, subscribable like `coaching.cue`): one
+  `state.snapshot` frame per clip the in-process VoiceCoach scheduler **actually dispatched**
+  (post cooldown/dedup/barge-in), payload
+  `{seq, clip_id, kind, urgency, register, corner, text, duration_ms, t_wall_ms, t_mono_ms}`.
+  A remote endpoint plays exactly what the in-ear coach speaks — it never re-arbitrates.
+- client → sidecar `{"v":1,"type":"voice.echo","seq":N,"clip_id":"…","t_dispatch_ms":…,"t_receive_ms":…}`
+  (optional `t_play_ms`, `buffer_state` ∈ preloaded/decoded/missing, `audio_armed`): per-cue
+  client timestamps, recorded server-side for the audible-latency harness. Never relayed.
+- loopback-only `{"v":1,"type":"voice.demo","kind":"late_brake","urgency":"act","register":"critical"}`
+  (optional `corner`, `message`): injects one synthetic advisory through the REAL voice path
+  (scheduler → dispatch tap → `coaching.voice`). Bench entrypoint for #381 timeliness runs.
+- HTTP on the same port (read-only, ungated like `/health`): `/tablet/voice` (self-contained
+  page), `/voice/manifest.json`, `/voice/clips/<file>` (exact-match against the bank manifest
+  allow-list — no traversal), `/voice/dispatches`, `/voice/echoes` (bounded ring buffers).
+
+Full runbook + measurement methodology: [19_Tablet_Voice_Endpoint.md](19_Tablet_Voice_Endpoint.md).
+
 ## Tests
 
-`tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`). `tests/test_llm_coach.py` — Ollama debrief helpers with mocked HTTP (issue **#46**).
+`tests/test_ai_sidecar_protocol.py` — `prepare_outbound_message` unit tests and asyncio WebSocket round-trip (requires `websockets`). `tests/test_llm_coach.py` — Ollama debrief helpers with mocked HTTP (issue **#46**). `tests/test_voice_tablet_endpoint.py` — coaching.voice/voice.echo/voice.demo protocol, dispatch tap, and tablet HTTP routes. `tests/test_audible_latency.py` — matched-filter + clock-map math on synthetic room recordings.

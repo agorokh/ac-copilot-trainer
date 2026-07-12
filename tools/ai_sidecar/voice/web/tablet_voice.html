@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Tablet coaching-audio endpoint (issue #511 Part D).
+
+  Served by the sidecar at /tablet/voice on the same port as the WebSocket (default 8765).
+  Deployment (USB, no WiFi): on the rig PC run `adb reverse tcp:8765 tcp:8765`, then open
+  http://127.0.0.1:8765/tablet/voice in the tablet browser / Fully Kiosk.
+
+  Design constraints (PRITOM P7 — Android 13 Go, 2 GB RAM, 1024x600, WebView Chrome 149):
+  DOM/CSS only, no frameworks, no WebGL, throttled DOM writes, self-contained single file.
+
+  Behavior: registers as a `voice`-class WS client, subscribes to `coaching.voice` (the
+  post-scheduler dispatch stream — this page never re-arbitrates cues), preloads every bank
+  clip into WebAudio buffers, plays each dispatch with seq-based barge-in, keeps the Android
+  audio HAL warm with a silent loop, and reports per-cue timestamps back as `voice.echo`
+  frames for the #381 audible-latency harness.
+-->
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC Copilot — Voice Endpoint</title>
+<style>
+  :root {
+    --bg: #101114; --panel: #1a1c21; --edge: #2a2d34; --text: #e8e6e0; --dim: #8a8d94;
+    --ok: #35c46f; --warn: #e0a93c; --bad: #e05b4c;
+    --calm: #7fb4d9; --alert: #e0c85a; --urgent: #e08a3c; --critical: #e04a3a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: system-ui, sans-serif; overflow: hidden; }
+  #app { display: flex; flex-direction: column; height: 100%; padding: 12px; gap: 10px; }
+  #statusbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .pill { padding: 4px 12px; border-radius: 4px; background: var(--panel);
+    border: 1px solid var(--edge); font-size: 15px; white-space: nowrap; }
+  .pill b { font-weight: 600; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  #cue { flex: 1; display: flex; flex-direction: column; justify-content: center;
+    align-items: center; background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 6px; text-align: center; padding: 10px; min-height: 120px; }
+  #cue-text { font-size: 44px; font-weight: 700; line-height: 1.15; }
+  #cue-meta { font-size: 17px; color: var(--dim); margin-top: 8px;
+    font-variant-numeric: tabular-nums; }
+  #log { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px;
+    padding: 8px 10px; font-size: 14px; font-family: ui-monospace, monospace;
+    color: var(--dim); height: 152px; overflow: hidden; line-height: 1.35;
+    font-variant-numeric: tabular-nums; }
+  #arm { position: fixed; inset: 0; background: rgba(10,11,13,.94); display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    z-index: 10; }
+  #arm button { font-size: 30px; padding: 22px 56px; border-radius: 8px; border: 0;
+    background: var(--ok); color: #06130b; font-weight: 700; }
+  #arm p { color: var(--dim); font-size: 16px; max-width: 640px; text-align: center; }
+  .r-calm { color: var(--calm); } .r-alert { color: var(--alert); }
+  .r-urgent { color: var(--urgent); } .r-critical { color: var(--critical); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="statusbar">
+    <span class="pill">WS <b id="s-ws" class="bad">connecting…</b></span>
+    <span class="pill">Audio <b id="s-audio" class="bad">locked</b></span>
+    <span class="pill">Clips <b id="s-clips">0/0</b></span>
+    <span class="pill">Latency <b id="s-lat">out=?</b></span>
+    <span class="pill">Cues <b id="s-count">0</b></span>
+  </div>
+  <div id="cue">
+    <div id="cue-text" class="r-calm">— waiting for coaching —</div>
+    <div id="cue-meta"></div>
+  </div>
+  <div id="log"></div>
+</div>
+<div id="arm">
+  <button id="arm-btn">TAP TO ARM AUDIO</button>
+  <p>One tap unlocks WebAudio (browser autoplay policy) and starts the silent keep-warm
+     loop so the first coaching cue plays without the Android audio-HAL wake-up penalty.
+     Plug the earpiece in first.</p>
+</div>
+<script>
+"use strict";
+(function () {
+  var WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+  var $ = function (id) { return document.getElementById(id); };
+  var state = {
+    ws: null, wsOpen: false, armed: false, ctx: null,
+    buffers: {},           // clip_id -> AudioBuffer
+    clipFiles: {},         // clip_id -> wav file name (for on-demand re-preload)
+    clipsLoaded: 0, clipsTotal: 0, bankLoading: false,
+    currentSource: null, currentSeq: -1,
+    cueCount: 0, logLines: [],
+    reconnectDelay: 1000,
+  };
+
+  function setPill(id, text, cls) {
+    var el = $(id);
+    el.textContent = text;
+    if (cls !== undefined) el.className = cls;
+  }
+  function logLine(text) {
+    state.logLines.push(text);
+    if (state.logLines.length > 8) state.logLines.shift();
+    $("log").textContent = state.logLines.join("\n");
+  }
+
+  // ---- audio ---------------------------------------------------------------------------
+  function armAudio() {
+    if (!state.ctx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      state.ctx = new AC({ latencyHint: "interactive" });
+    }
+    state.ctx.resume().then(function () {
+      state.armed = true;
+      $("arm").style.display = "none";
+      setPill("s-audio", "armed", "ok");
+      startKeepWarm();
+      updateLatencyPill();
+      loadBank(); // (re)load once armed so decodeAudioData has a running context
+    });
+  }
+  function startKeepWarm() {
+    // A near-silent looping buffer keeps the Android audio HAL out of its low-power sleep;
+    // without it the first cue after ~30 s of silence pays a 100-200 ms wake-up penalty.
+    var ctx = state.ctx;
+    var buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    var src = ctx.createBufferSource();
+    var gain = ctx.createGain();
+    gain.gain.value = 0.0001; // inaudible, but keeps the output stream running
+    src.buffer = buf; src.loop = true;
+    src.connect(gain); gain.connect(ctx.destination);
+    src.start();
+  }
+  function updateLatencyPill() {
+    var ctx = state.ctx;
+    if (!ctx) return;
+    var base = ctx.baseLatency !== undefined ? Math.round(ctx.baseLatency * 1000) : "?";
+    var out = ctx.outputLatency !== undefined && ctx.outputLatency > 0
+      ? Math.round(ctx.outputLatency * 1000) : "?";
+    setPill("s-lat", "base=" + base + "ms out=" + out + "ms");
+  }
+
+  function loadBank() {
+    // Guard BOTH completed and in-flight loads: a double-tap on ARM before the manifest
+    // resolves must not fetch+decode the whole 76-clip bank twice (2 GB device).
+    if (state.clipsTotal > 0 || state.bankLoading) return;
+    state.bankLoading = true;
+    fetch("/voice/manifest.json").then(function (r) {
+      if (!r.ok) throw new Error("manifest " + r.status);
+      return r.json();
+    }).then(function (manifest) {
+      var clips = manifest.clips || [];
+      // Manifest `clips` may be a list of entries or an object keyed by clip_id.
+      var entries = Array.isArray(clips) ? clips : Object.keys(clips).map(function (k) {
+        return clips[k];
+      });
+      state.clipsTotal = entries.length;
+      setPill("s-clips", "0/" + state.clipsTotal);
+      entries.forEach(function (entry) {
+        if (entry && entry.file && entry.clip_id) {
+          state.clipFiles[entry.clip_id] = entry.file;
+          preloadClip(entry.clip_id);
+        }
+      });
+    }).catch(function (err) {
+      state.bankLoading = false;
+      logLine("manifest load failed: " + err.message);
+      setTimeout(loadBank, 5000);
+    });
+  }
+  function preloadClip(clipId) {
+    var file = state.clipFiles[clipId];
+    if (!file || state.buffers[clipId]) return Promise.resolve(null);
+    return fetch("/voice/clips/" + encodeURIComponent(file)).then(function (r) {
+      if (!r.ok) throw new Error("clip " + r.status);
+      return r.arrayBuffer();
+    }).then(function (raw) {
+      return state.ctx.decodeAudioData(raw);
+    }).then(function (buf) {
+      if (!state.buffers[clipId]) {
+        state.buffers[clipId] = buf;
+        state.clipsLoaded += 1;
+        setPill("s-clips", state.clipsLoaded + "/" + state.clipsTotal,
+          state.clipsLoaded === state.clipsTotal ? "ok" : "");
+      }
+      return buf;
+    }).catch(function (err) {
+      // Not permanent: a missed clip is retried on demand when a dispatch names it.
+      logLine("preload failed " + clipId + ": " + err.message);
+      return null;
+    });
+  }
+
+  function playDispatch(p, tReceive) {
+    // seq-based barge-in: every new dispatch stops whatever is sounding. The PC-side
+    // scheduler already arbitrated (cooldown/dedup/urgency); this page mirrors its output.
+    var bufferState = "preloaded";
+    if (state.currentSource) {
+      try { state.currentSource.stop(); } catch (e) { /* already ended */ }
+      state.currentSource = null;
+    }
+    var tPlay = null;
+    var buf = state.buffers[p.clip_id];
+    // Android Go can suspend the context behind our back (backgrounding, route change);
+    // a suspended context makes source.start() a silent no-op — never report a fake
+    // t_play_ms for audio that cannot be sounding.
+    var ctxRunning = state.ctx && state.ctx.state === "running";
+    if (state.armed && !ctxRunning) {
+      state.armed = false;
+      setPill("s-audio", "suspended", "bad");
+      document.getElementById("arm").style.display = "flex";
+      if (state.ctx) state.ctx.resume();
+    }
+    if (buf && state.armed && ctxRunning) {
+      var src = state.ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(state.ctx.destination);
+      src.start(0);
+      tPlay = Date.now();
+      state.currentSource = src;
+      src.onended = function () { if (state.currentSource === src) state.currentSource = null; };
+    } else {
+      bufferState = buf ? "decoded" : "missing";
+      if (!buf && state.ctx) preloadClip(p.clip_id); // retry on demand — not permanent
+    }
+    state.currentSeq = p.seq;
+    state.cueCount += 1;
+    setPill("s-count", String(state.cueCount));
+    var reg = p.register || "calm";
+    var cueText = $("cue-text");
+    cueText.textContent = p.text || p.clip_id;
+    cueText.className = "r-" + reg;
+    $("cue-meta").textContent = "#" + p.seq + "  " + p.clip_id + "  " +
+      (p.duration_ms ? Math.round(p.duration_ms) + "ms" : "");
+    logLine("#" + p.seq + " " + reg + " " + p.clip_id +
+      (tPlay !== null ? " js+" + (tPlay - tReceive) + "ms" : " [" + bufferState + "]"));
+    updateLatencyPill();
+    return { t_play_ms: tPlay, buffer_state: bufferState };
+  }
+
+  // ---- websocket -----------------------------------------------------------------------
+  function connect() {
+    var ws = new WebSocket(WS_URL);
+    state.ws = ws;
+    ws.onopen = function () {
+      state.wsOpen = true;
+      state.reconnectDelay = 1000;
+      setPill("s-ws", "connected", "ok");
+      ws.send(JSON.stringify({ v: 1, type: "hello", client: "tablet-voice",
+        client_class: "voice" }));
+      ws.send(JSON.stringify({ v: 1, type: "state.subscribe",
+        topics: ["coaching.voice"] }));
+    };
+    ws.onmessage = function (event) {
+      var tReceive = Date.now();
+      var frame;
+      try { frame = JSON.parse(event.data); } catch (e) { return; }
+      if (frame.type !== "state.snapshot" || frame.topic !== "coaching.voice") return;
+      var p = frame.payload || {};
+      if (typeof p.seq !== "number" || !p.clip_id) return;
+      var played = playDispatch(p, tReceive);
+      var echo = { v: 1, type: "voice.echo", seq: p.seq, clip_id: p.clip_id,
+        t_dispatch_ms: p.t_wall_ms || 0, t_receive_ms: tReceive,
+        buffer_state: played.buffer_state, audio_armed: state.armed };
+      if (played.t_play_ms !== null) echo.t_play_ms = played.t_play_ms;
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(echo));
+    };
+    ws.onclose = function () {
+      state.wsOpen = false;
+      setPill("s-ws", "reconnecting…", "warn");
+      setTimeout(connect, state.reconnectDelay);
+      state.reconnectDelay = Math.min(state.reconnectDelay * 2, 10000);
+    };
+    ws.onerror = function () { ws.close(); };
+  }
+
+  $("arm-btn").addEventListener("click", armAudio);
+  connect();
+})();
+</script>
+</body>
+</html>
