@@ -31,6 +31,7 @@ from tools.ai_sidecar.track_reference import (
     CornerReference,
     add_corpus_lap,
     build_references,
+    sustained_brake_onsets,
 )
 
 #: Spline drop between consecutive frames that signals a backward jump (wrap OR same-lap rewind).
@@ -86,6 +87,20 @@ _MAX_LEAD_SPLINE = 0.09
 #: corner (suppresses its heads-up); farther out it is likely trail-braking the previous
 #: corner inside an overlapping #522 lead window and must not latch (PR #523 review).
 _LEAD_LATCH_TTA_S = 1.5
+
+# --- Per-driver brake-mark calibration (issue #522 part 2) ---------------------------------------
+# The shipped reference is a synthetic ideal lap whose brake points sit ~25 m from where a real
+# driver on a real line brakes, so a fixed mark misclassifies an on-pace driver every pass. Each
+# completed VALID lap of the driver's own folds into a per-zone EMA of their demonstrated brake
+# onsets; once a zone has been observed, the cue mark (and the late/"ran deep" judgement) anchors
+# on the driver's demonstrated point instead of the synthetic one. Provenance rides on the
+# advisory (``mark_source: driver_calibrated``) — a calibrated mark is never passed off as the
+# reference's.
+#: a driver onset within this normalized-spline distance of a reference mark is the SAME zone
+#: (~50 m on a 2.5 km track); farther away it is a different line/zone and does not calibrate.
+_CAL_MATCH_TOL_SPLINE = 0.02
+#: weight of the newest lap in the per-zone EMA (recent laps dominate, old habits decay).
+_CAL_EMA_ALPHA = 0.4
 #: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
 #: sits below the rising edge so a severity hovering near a boundary does not flicker tone
 #: frame-to-frame.
@@ -168,24 +183,38 @@ class Advisory:
 
 @dataclass
 class _CornerPass:
-    """Mutable per-corner state for the current lap pass (reset on wrap)."""
+    """Mutable per-corner state for the current lap pass (reset on wrap).
+
+    Brake-cue state is PER ZONE (issue #522 coverage): a merged esses corner holds several real
+    brake zones, and braking for / being cued about one zone must not consume the next zone's
+    heads-up. The three parallel lists are indexed by the corner's zone ordinal.
+    """
 
     inside: bool = False
     min_speed_kmh: float | None = None
-    has_braked: bool = False  # any braking seen this pass — suppresses a false late-brake cue
-    #: rank of the HIGHEST brake-cue register emitted this pass (-1 = none). A cue re-fires only
-    #: when severity escalates to a strictly higher tier (calm→alert→urgent→critical), so a calm
-    #: lead-in never locks out the later critical alarm (issue #368 escalation; codex review #371).
-    brake_cue_rank: int = -1
+    #: per zone: braking observed FOR that zone this pass — suppresses its heads-up.
+    zone_braked: list[bool] = field(default_factory=list)
+    #: per zone: the one calm anticipatory heads-up was emitted (or locked out past the mark).
+    zone_cued: list[bool] = field(default_factory=list)
     #: rank of the highest brake-release register emitted this pass. A barely-over-threshold
     #: release warning can still escalate to urgent if the driver stays hard on the brake.
     release_cue_rank: int = -1
-    #: the driver ran too deep past the brake point for a spoken imperative to be actionable
+    #: the driver ran too deep past a brake mark for a spoken imperative to be actionable
     #: (issue #522) — the pass stayed silent and the miss is surfaced in exit grading instead.
     late_uncoached: bool = False
     exit_emitted: bool = False
     #: last tone register spoken for this corner pass — feeds register hysteresis (issue #368).
     last_register: str = "calm"
+    #: this pass was already re-armed for the NEXT lap by a wrapped lead window (a first-corner
+    #: mark near spline 0.0 whose lead opens BEFORE start/finish). One-shot: without it the
+    #: re-arm check sees the state the fresh approach itself creates (its own heads-up) and
+    #: resets again every frame — re-firing the first corner's cue for the rest of the lap.
+    armed_prewrap: bool = False
+
+    @property
+    def any_brake_state(self) -> bool:
+        """Any brake-cue/braking state accumulated this pass (drives the wrapped-lead reset)."""
+        return any(self.zone_braked) or any(self.zone_cued)
 
 
 def _num(value: Any) -> float | None:
@@ -237,6 +266,11 @@ def _forward_spline_delta(current: float, target: float) -> float:
     return (target - current) % 1.0
 
 
+def _signed_spline_delta(a: float, b: float) -> float:
+    """Shortest signed normalized distance from ``b`` to ``a``, wrap-aware, in [-0.5, 0.5)."""
+    return ((a - b + 0.5) % 1.0) - 0.5
+
+
 def _in_arc(x: float, lo: float, hi: float) -> bool:
     """True if normalized spline ``x`` is in the arc ``[lo, hi]``, wrap-aware (``lo`` may exceed
     ``hi`` when the arc crosses the start/finish line)."""
@@ -286,6 +320,7 @@ class RealtimeObserver:
         track_length_m: float | None = _DEFAULT_TRACK_LENGTH_M,
         brake_prepare_lead_s: float = _BRAKE_PREPARE_LEAD_S,
         lap_length_m: float | None = None,
+        track_id: str | None = None,
     ) -> None:
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
@@ -298,7 +333,12 @@ class RealtimeObserver:
             lap_length_m if lap_length_m is not None else track_length_m
         )
         self._brake_prepare_lead_s = max(0.0, brake_prepare_lead_s)
-        self._passes: dict[int, _CornerPass] = {r.index: _CornerPass() for r in self._refs}
+        # per-driver brake-mark calibration state (issue #522 part 2): zone (corner idx, zone
+        # ordinal) -> (EMA of the driver's demonstrated onset spline, laps folded in). Survives
+        # lap wraps and reset() — it is knowledge about the driver, not pass state.
+        self._driver_marks: dict[tuple[int, int], tuple[float, int]] = {}
+        self._track_id = track_id  # when known, guards calibration against a wrong-track lap
+        self._passes: dict[int, _CornerPass] = {r.index: self._new_pass(r) for r in self._refs}
         self._last_spline: float | None = None
         self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
         # end-of-lap grading held across the wrap when a known lapCount may lag the spline drop by
@@ -306,9 +346,84 @@ class RealtimeObserver:
         self._pending_wrap: list[Advisory] = []
         self._pending_pre_lap: float | None = None
 
+    @staticmethod
+    def _reference_marks(ref: CornerReference) -> list[float]:
+        """All of a corner's reference brake marks (multi-zone when the corpus lap had them)."""
+        if ref.brake_marks:
+            return list(ref.brake_marks)
+        return [] if ref.best_brake_point_spline is None else [ref.best_brake_point_spline]
+
+    def _new_pass(self, ref: CornerReference) -> _CornerPass:
+        n = len(self._reference_marks(ref))
+        return _CornerPass(zone_braked=[False] * n, zone_cued=[False] * n)
+
+    def _effective_marks(self, ref: CornerReference) -> list[tuple[float, str]]:
+        """The cue marks actually in force for a corner: driver-calibrated where a zone has been
+        observed on the driver's own laps, else the reference's — with honest provenance."""
+        out: list[tuple[float, str]] = []
+        for zi, mark in enumerate(self._reference_marks(ref)):
+            cal = self._driver_marks.get((ref.index, zi))
+            if cal is not None:
+                out.append((cal[0] % 1.0, "driver_calibrated"))
+            else:
+                out.append((mark, _target_source(ref)))
+        return out
+
+    def calibrate_from_driver_lap(self, lap: LapTrace, *, track_id: str | None = None) -> int:
+        """Fold one of the driver's own completed laps into the per-zone brake-mark EMA.
+
+        For each corner zone, the driver's sustained brake onset nearest the current reference
+        mark (within ``_CAL_MATCH_TOL_SPLINE`` — the same zone, not a different line) updates
+        that zone's EMA. Returns the number of zones updated. A lap from a different track (when
+        both track ids are known) never calibrates.
+        """
+        if track_id and self._track_id and track_id != self._track_id:
+            return 0
+        updated = 0
+        for ref in self._refs:
+            ref_marks = self._reference_marks(ref)
+            if not ref_marks:
+                continue
+            # scan slightly upstream of the window too — a slower driver brakes EARLIER than the
+            # reference lap's deceleration onset that defined the window entry.
+            onsets = sustained_brake_onsets(
+                lap, max(0.0, ref.spline_lo - _CAL_MATCH_TOL_SPLINE), ref.spline_hi
+            )
+            if not onsets:
+                continue
+            for zi, mark in enumerate(ref_marks):
+                deltas = [(abs(_signed_spline_delta(o, mark)), o) for o in onsets]
+                dist, onset = min(deltas)
+                if dist > _CAL_MATCH_TOL_SPLINE:
+                    continue
+                cur = self._driver_marks.get((ref.index, zi))
+                if cur is None:
+                    self._driver_marks[(ref.index, zi)] = (onset % 1.0, 1)
+                else:
+                    ema, n = cur
+                    step = _CAL_EMA_ALPHA * _signed_spline_delta(onset, ema)
+                    self._driver_marks[(ref.index, zi)] = ((ema + step) % 1.0, n + 1)
+                updated += 1
+        return updated
+
     def reset(self) -> None:
-        """Clear per-corner pass state (start of a fresh lap). The lap counter persists."""
-        self._passes = {r.index: _CornerPass() for r in self._refs}
+        """Clear per-corner pass state (start of a fresh lap). The lap counter — and the
+        per-driver brake-mark calibration, which is knowledge about the driver — persist.
+
+        A pass re-armed pre-wrap (a first-corner lead window that opened before start/finish)
+        already belongs to the lap that begins at this wrap: it carries across — heads-up and
+        near-mark braking observed before the line stay valid — with its one-shot flag cleared
+        so the NEXT lap's pre-wrap approach can re-arm it again.
+        """
+        carried: dict[int, _CornerPass] = {}
+        for r in self._refs:
+            p = self._passes.get(r.index)
+            if p is not None and p.armed_prewrap:
+                p.armed_prewrap = False
+                carried[r.index] = p
+            else:
+                carried[r.index] = self._new_pass(r)
+        self._passes = carried
         self._last_spline = None
         self._pending_wrap = []
         self._pending_pre_lap = None
@@ -365,36 +480,48 @@ class RealtimeObserver:
 
         for ref in self._refs:
             st = self._passes[ref.index]
-            # Braking-evaluation region: from the (corpus/GGV) brake point to the apex — which may
-            # begin UPSTREAM of the lateral-g corner window, so a driver coasting past the real
-            # brake point is cued there, not only once the window starts (codex #294 @176). The
-            # window now opens a tone-register-independent anticipatory LEAD before the brake point
-            # so the cue's audio onset lands before/at the mark (issue #368 AC a).
-            bp = ref.best_brake_point_spline
-            if bp is not None:
+            # Braking-evaluation region PER BRAKE ZONE (issue #522 coverage: a merged esses
+            # corner holds several real zones and each needs its own heads-up): from a zone's
+            # mark back through its anticipatory lead — which may begin UPSTREAM of the
+            # lateral-g corner window, so a driver coasting past the real brake point is cued
+            # there, not only once the window starts (codex #294 @176).
+            marks = self._effective_marks(ref)
+            for zi, (bp, mark_source) in enumerate(marks):
                 lead = _lead_spline_fraction(
                     speed, self._track_length_m, self._brake_prepare_lead_s
                 )
                 lead_start = (bp - lead) % 1.0
-                wrapped_lead = bp - lead < 0.0 and spline >= lead_start
-                if wrapped_lead and (
-                    st.inside
-                    or st.has_braked
-                    or st.brake_cue_rank >= 0
-                    or st.release_cue_rank >= 0
-                    or st.exit_emitted
-                ):
+                wrapped_lead = zi == 0 and bp - lead < 0.0 and spline >= lead_start
+                if wrapped_lead:
                     # For a first-corner brake point near 0.0, the next lap's lead window starts
                     # before the spline wrap is observed (for example at s=0.995). Reset this
                     # corner's previous-lap cue state now so the anticipatory cue can still lead
-                    # the mark instead of being suppressed until after start/finish.
-                    self._passes[ref.index] = st = _CornerPass()
-                if bp <= spline <= ref.apex_spline and brake >= self._brake_on:
-                    st.has_braked = True  # so a later release before apex isn't "late to brake"
+                    # the mark instead of being suppressed until after start/finish. ONE-SHOT
+                    # per approach (``armed_prewrap``): the fresh approach's own heads-up must
+                    # not read as stale state and reset/re-fire every following frame.
+                    if not st.armed_prewrap and (
+                        st.inside
+                        or st.any_brake_state
+                        or st.release_cue_rank >= 0
+                        or st.exit_emitted
+                    ):
+                        self._passes[ref.index] = st = self._new_pass(ref)
+                    st.armed_prewrap = True
+                # A zone's braking segment runs from its mark to the next zone's mark (last
+                # zone: to the apex, or the window end for a mark past the apex) — braking
+                # there is braking FOR this zone, so a later release isn't "late to brake".
+                seg_end = (
+                    marks[zi + 1][0]
+                    if zi + 1 < len(marks)
+                    else (ref.apex_spline if bp <= ref.apex_spline else ref.spline_hi)
+                )
+                if bp <= spline <= seg_end and brake >= self._brake_on:
+                    st.zone_braked[zi] = True
                 # The actionable window runs from the anticipatory lead (which can wrap over
-                # start/finish for a first corner with bp≈0) through the apex (codex review #371).
-                if _in_arc(spline, lead_start, ref.apex_spline):
-                    a = self._brake_cue(ref, st, spline, speed, brake)
+                # start/finish for a first corner with bp≈0) through the zone's segment end
+                # (codex review #371).
+                if _in_arc(spline, lead_start, seg_end):
+                    a = self._brake_cue(ref, st, zi, bp, mark_source, spline, speed, brake)
                     if a is not None:
                         out.append(a)
             # Over-braking past the apex while still off-throttle → "release / ease" (#368). Needs
@@ -409,8 +536,11 @@ class RealtimeObserver:
                 st.min_speed_kmh = (
                     speed if st.min_speed_kmh is None else min(st.min_speed_kmh, speed)
                 )
-                if brake >= self._brake_on:
-                    st.has_braked = True
+                if brake >= self._brake_on and marks and spline < marks[0][0]:
+                    # braking inside the window before the FIRST mark is early braking for this
+                    # corner's first zone (normal trail-brake / rotation — codex #294); braking
+                    # at/past a mark is credited per zone segment above.
+                    st.zone_braked[0] = True
             elif st.inside and spline > ref.spline_hi and not st.exit_emitted:
                 # just left the corner (downstream of exit) → grade the apex
                 a = self._apex_deficit(ref, st)
@@ -420,39 +550,47 @@ class RealtimeObserver:
         return out
 
     def _brake_cue(
-        self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
+        self,
+        ref: CornerReference,
+        st: _CornerPass,
+        zi: int,
+        bp: float,
+        mark_source: str,
+        spline: float,
+        speed: float,
+        brake: float,
     ) -> Advisory | None:
-        """Fire ONE calm anticipatory heads-up per corner pass — the only live brake cue.
+        """Fire ONE calm anticipatory heads-up per brake zone per pass — the only live brake cue.
 
         Issue #522 (supersedes the #368/#371 escalation ladder): the cue fires when the lead
-        window opens (default ~3.2 s of audibility budget before the brake point) so the
+        window opens (default ~3.2 s of audibility budget before the zone's mark) so the
         clip FINISHES with human reaction time to spare. It is always ``prepare``/``calm``
         and never re-fires within a pass — there is deliberately no second-stage live
         imperative and no register escalation: a driver braking exactly at the mark is
         indistinguishable from one about to miss it until the mark itself, so a spoken
         correction is either a false alarm or after-the-fact noise (measured on the #522
         instrumented lap: every past-point "Brake!" completed with the mark already behind
-        the car). AT/PAST the mark the pass is flagged (``late_uncoached``) and corner-exit
-        grading owns the feedback.
+        the car). AT/PAST the mark the zone is locked out (``late_uncoached``) and
+        corner-exit grading owns the feedback.
 
-        Suppressed once the driver has braked anywhere in this pass (``has_braked``):
-        braking early and trailing off before the apex — normal trail-braking — is not a
-        fault and must not draw a cue (codex #294).
+        Suppressed once the driver has braked FOR this zone (``zone_braked[zi]``): braking
+        early and trailing off before the apex — normal trail-braking — is not a fault and
+        must not draw a cue (codex #294). Braking for one zone of a merged esses corner
+        must not consume the next zone's heads-up (issue #522 coverage).
         """
-        bp = ref.best_brake_point_spline
-        if bp is None or st.has_braked:
+        if st.zone_braked[zi]:
             return None
         if brake >= self._brake_on:
-            # Braking near the mark IS braking this pass (codex review #371) — but with the
-            # #522 lead the window can overlap the PREVIOUS corner on closely spaced turns,
-            # and trail-braking that corner must not latch has_braked for this one (PR #523
-            # review). Discriminator: only braking within the last _LEAD_LATCH_TTA_S of the
-            # approach counts as braking FOR this corner; farther out we just stay quiet on
-            # this frame and let the heads-up fire once the driver is off the brakes.
+            # Braking near the mark IS braking for this zone (codex review #371) — but with
+            # the #522 lead the window can overlap the PREVIOUS corner/zone on closely spaced
+            # turns, and trail-braking that one must not latch this zone (PR #523 review).
+            # Discriminator: only braking within the last _LEAD_LATCH_TTA_S of the approach
+            # counts as braking FOR this zone; farther out we just stay quiet on this frame
+            # and let the heads-up fire once the driver is off the brakes.
             delta = _forward_spline_delta(spline, bp)
             tta_now = delta * self._track_length_m / max(speed / 3.6, 0.1)
             if not (0.0 < delta <= _LAP_WRAP_DROP) or tta_now <= _LEAD_LATCH_TTA_S:
-                st.has_braked = True
+                st.zone_braked[zi] = True
             return None
         # "anticipatory" = the car has not yet reached the brake point — robust to a lead window
         # wraps over start/finish (a first corner with bp≈0): the forward distance to bp is a small
@@ -462,21 +600,21 @@ class RealtimeObserver:
             # Issue #522: an imperative spoken AT/PAST the mark cannot complete before it —
             # measured on the instrumented lap, every past-point "Brake!" was heard with the
             # mark already behind the car. The moment has passed: stay silent, lock out
-            # further imperatives this pass, and flag it so corner-exit grading owns the
+            # further imperatives for this zone, and flag it so corner-exit grading owns the
             # feedback ("brake earlier next lap") where it is actionable.
-            st.brake_cue_rank = REGISTER_RANK["critical"]
+            st.zone_cued[zi] = True
             st.late_uncoached = True
             return None
-        # One calm anticipatory heads-up per pass — the ONLY live brake cue (#522). A live
-        # fault imperative is unfixable in principle: a driver braking exactly at the mark is
-        # indistinguishable from one about to miss it until the mark itself, so a spoken
+        if st.zone_cued[zi]:
+            return None  # already gave this zone its heads-up
+        # One calm anticipatory heads-up per zone per pass — the ONLY live brake cue (#522). A
+        # live fault imperative is unfixable in principle: a driver braking exactly at the mark
+        # is indistinguishable from one about to miss it until the mark itself, so a spoken
         # correction is either a false alarm (on-pace driver) or after-the-fact (late one).
         # Real coaching splits the roles: anticipatory mark before, debrief after.
         tta_s = _forward_spline_delta(spline, bp) * self._track_length_m / max(speed / 3.6, 0.1)
         closing = _clamp01((speed - ref.target_apex_kmh) / _CLOSING_REF_KMH)
-        if st.brake_cue_rank >= 0:
-            return None  # already gave this pass its heads-up
-        st.brake_cue_rank = REGISTER_RANK["calm"]
+        st.zone_cued[zi] = True
         st.last_register = "calm"
         return Advisory(
             kind="late_brake",
@@ -492,7 +630,12 @@ class RealtimeObserver:
                 "lead_s": round(tta_s, 2),
                 "current_kmh": round(speed, 1),
                 "anticipatory": True,
+                # apex-target provenance (corpus vs GGV) — unchanged contract
                 "source": _target_source(ref),
+                # issue #522: which zone of the corner this mark belongs to, and whether the
+                # mark is the reference's or learned from the driver's own laps.
+                "zone": zi,
+                "mark_source": mark_source,
             },
         )
 
@@ -638,10 +781,12 @@ def build_observer_from_reference(
     add_corpus_lap(refs, ref_lap)  # the reference lap IS the corpus best
     track_obj = reference_archive.get("track")
     track = track_obj if isinstance(track_obj, dict) else {}
+    track_id = track.get("id")
     return RealtimeObserver(
         refs,
         track_length_m=_positive_track_length_m(track.get("lengthM")),
         brake_prepare_lead_s=(
             brake_prepare_lead_s if brake_prepare_lead_s is not None else _BRAKE_PREPARE_LEAD_S
         ),
+        track_id=track_id if isinstance(track_id, str) and track_id else None,
     )

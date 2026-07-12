@@ -79,10 +79,12 @@ def _load_safe_archive_paths(raw_paths: Any) -> list[dict[str, Any]]:
     return out
 
 
-def _resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
-    """Resolve a full lap-archive dict (with a trace) for the brain, or None.
+def resolve_lap_archive(inbound: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve a full lap-archive dict (with a trace) from a lap_complete-style message, or None.
 
-    Prefers an inline ``trace`` on the message; else loads a safe ``archivePath``. Never raises.
+    Prefers an inline ``trace`` on the message; else loads a safe ``archivePath`` (traversal- and
+    size-guarded). Never raises. Shared by the attribution brain and the #522 per-driver
+    brake-mark calibration.
     """
     trace = inbound.get("trace")
     if isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]:
@@ -101,7 +103,7 @@ def build_brain_followup(inbound: dict[str, Any]) -> dict[str, Any] | None:
     """
     if not debrief_feature_enabled():
         return None
-    archive = _resolve_lap_archive(inbound)
+    archive = resolve_lap_archive(inbound)
     if archive is None:
         return None
     # Normalize the lap counter: a lap_complete frame carries it as a top-level int (`lap: 9`), but

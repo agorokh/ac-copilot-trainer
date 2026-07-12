@@ -20,6 +20,26 @@ def test_resolve_anticipatory_brake_maps_corner_0based_to_1based() -> None:
     assert "turn three" in utt.text
 
 
+def test_second_zone_of_a_merged_corner_gets_its_own_dedup_key() -> None:
+    """#522 coverage: a merged esses corner emits one heads-up PER BRAKE ZONE inside the 8 s
+    dedup window — a later zone's cue must not be swallowed as a repeat of the first."""
+    r = Resolver(build_manifest())
+    z0 = r.resolve(
+        make_advisory(
+            kind="late_brake", urgency="prepare", register="calm", corner=2, detail={"zone": 0}
+        )
+    )
+    z1 = r.resolve(
+        make_advisory(
+            kind="late_brake", urgency="prepare", register="calm", corner=2, detail={"zone": 1}
+        )
+    )
+    assert z0 is not None and z1 is not None
+    assert z0.dedup_key == "late_brake:2:calm"  # zone 0 keeps the pre-#522 key shape
+    assert z1.dedup_key == "late_brake:2z1:calm"
+    assert z0.dedup_key != z1.dedup_key
+
+
 def test_act_cue_is_terse_corner_dropped() -> None:
     r = Resolver(build_manifest())
     # An act/urgent cue for a numbered corner resolves to the TERSE generic clip (no corner number).

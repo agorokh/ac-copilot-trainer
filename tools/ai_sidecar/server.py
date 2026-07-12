@@ -105,6 +105,7 @@ from tools.ai_sidecar.protocol import (
     build_brain_followup,
     build_ollama_followup,
     prepare_outbound_message,
+    resolve_lap_archive,
 )
 from tools.ai_sidecar.race_management import RaceManagementObserver
 from tools.ai_sidecar.realtime_observer import (
@@ -738,6 +739,58 @@ async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
     if followup is None:
         return
     await _safe_send(websocket, followup)
+
+
+def _brake_calibration_enabled() -> bool:
+    """Per-driver brake-mark calibration (issue #522): on by default, ``AC_COPILOT_BRAKE_CAL=0``
+    disables."""
+    return os.environ.get("AC_COPILOT_BRAKE_CAL", "1").strip().lower() not in ("0", "false", "off")
+
+
+#: last lap_complete identity already folded into calibration — the plain lap_complete frame and
+#: its archive-backed ``brainOnly`` re-send both carry the same lap; the same lap must not be
+#: EMA-weighted twice.
+_last_brake_cal_key: str | None = None
+
+
+async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
+    """Fold the driver's completed lap into the observer's per-zone brake-mark EMA (#522).
+
+    Runs as a background task on lap_complete: loads the lap archive off the loop (safe-path
+    validated by :func:`resolve_lap_archive`), skips explicitly-invalid laps (a cut lap's brake
+    points are not calibration data), and applies the EMA update on the event loop — the same
+    loop that calls ``observer.observe``, so there is no cross-thread mutation.
+    """
+    global _last_brake_cal_key
+    observer = _observer
+    if observer is None:
+        return
+    key = str(inbound.get("archivePath") or "") or f"lap:{inbound.get('lap')}"
+    if key == _last_brake_cal_key:
+        return
+    try:
+        archive = await asyncio.to_thread(resolve_lap_archive, inbound)
+        if not isinstance(archive, dict):
+            return
+        lap_meta = archive.get("lap")
+        if isinstance(lap_meta, dict) and lap_meta.get("is_valid") is False:
+            return
+        from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
+
+        trace = await asyncio.to_thread(lap_trace_from_archive, archive)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.info("brake calibration skipped: %s", e)
+        return
+    _last_brake_cal_key = key
+    track_obj = archive.get("track")
+    track_id = track_obj.get("id") if isinstance(track_obj, dict) else None
+    updated = observer.calibrate_from_driver_lap(
+        trace, track_id=track_id if isinstance(track_id, str) else None
+    )
+    if updated:
+        logger.info("brake marks calibrated from the driver's lap: %d zone(s) updated", updated)
 
 
 async def _safe_send(websocket: Any, payload: dict[str, Any]) -> None:
@@ -2098,6 +2151,15 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     data.get("lapTimeMs"),
                     hints,
                 )
+                # Issue #522 part 2: each completed lap of the driver's own folds into the
+                # observer's per-zone brake-mark EMA so the cue marks anchor on where THIS
+                # driver demonstrably brakes, not the synthetic reference's points. Background
+                # task — never blocks the <100ms ack path; dedup inside guards the brainOnly
+                # re-send of the same lap.
+                if _observer is not None and _brake_calibration_enabled():
+                    cal_task = asyncio.create_task(_calibrate_brake_marks_from_lap(data))
+                    _background_tasks.add(cal_task)
+                    cal_task.add_done_callback(_background_tasks.discard)
 
             # Archive-backed activation frames are emitted after Lua knows the final archive path.
             # They should only run the brain, not the generic rules ack or Ollama narration.

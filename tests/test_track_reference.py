@@ -6,9 +6,11 @@ import math
 
 from tools.ai_sidecar.lap_dynamics import LapTrace
 from tools.ai_sidecar.track_reference import (
+    CornerReference,
     add_corpus_lap,
     build_references,
     score_lap,
+    sustained_brake_onsets,
 )
 
 
@@ -125,3 +127,89 @@ def test_score_lap_on_target_no_finding():
 
 def _approx_kmh(v_ms: float) -> float:
     return round(v_ms * 3.6, 1)
+
+
+# ---- issue #522: multi-zone brake marks -----------------------------------------------------
+
+
+def _flat_trace(brake_by_spline: list[tuple[float, float]], *, n: int = 200) -> LapTrace:
+    """A constant-speed straight-line LapTrace whose brake pedal follows ``brake_by_spline``
+    ranges ``(lo, hi) -> 0.8`` (else 0), for exercising the brake-zone extraction directly."""
+    spline = [i / (n - 1) for i in range(n)]
+
+    def pedal(s: float) -> float:
+        return 0.8 if any(lo <= s <= hi for lo, hi in brake_by_spline) else 0.0
+
+    return LapTrace(
+        spline=spline,
+        t_s=[0.1 * i for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=[pedal(s) for s in spline],
+        throttle=[0.0] * n,
+        steer=[0.0] * n,
+        gear=[4] * n,
+        x=[2.0 * i for i in range(n)],
+        z=[0.0] * n,
+    )
+
+
+def test_sustained_brake_onsets_splits_distinct_zones():
+    lap = _flat_trace([(0.30, 0.33), (0.40, 0.42)])
+    onsets = sustained_brake_onsets(lap, 0.25, 0.50)
+    assert len(onsets) == 2
+    assert onsets[0] == _approx_spline(0.30)
+    assert onsets[1] == _approx_spline(0.40)
+
+
+def test_sustained_brake_onsets_filters_light_lifts_and_blips():
+    lap = _flat_trace([(0.30, 0.33)])
+    # a light lift (peak 0.2 < min_peak) between real zones is NOT a coachable mark
+    lift = [0.2 if 0.40 <= s <= 0.42 else b for s, b in zip(lap.spline, lap.brake, strict=True)]
+    lap2 = LapTrace(
+        spline=lap.spline,
+        t_s=lap.t_s,
+        v_ms=lap.v_ms,
+        brake=lift,
+        throttle=lap.throttle,
+        steer=lap.steer,
+        gear=lap.gear,
+        x=lap.x,
+        z=lap.z,
+    )
+    onsets = sustained_brake_onsets(lap2, 0.25, 0.50)
+    assert len(onsets) == 1 and onsets[0] == _approx_spline(0.30)
+    # a single-sample blip is not a zone either (min_run)
+    blip = list(lap.brake)
+    blip[150] = 0.9  # isolated sample at spline ~0.754
+    lap3 = LapTrace(
+        spline=lap.spline,
+        t_s=lap.t_s,
+        v_ms=lap.v_ms,
+        brake=blip,
+        throttle=lap.throttle,
+        steer=lap.steer,
+        gear=lap.gear,
+        x=lap.x,
+        z=lap.z,
+    )
+    assert sustained_brake_onsets(lap3, 0.70, 0.80) == []
+
+
+def test_add_corpus_lap_captures_every_zone_of_a_merged_window():
+    """#522 coverage: a merged esses window holds several real brake zones — the best lap's
+    EVERY sustained zone becomes a mark, with best_brake_point_spline staying the first."""
+    ref = CornerReference(
+        index=0, apex_spline=0.45, spline_lo=0.25, spline_hi=0.55, optimal_apex_kmh=90.0
+    )
+    lap = _flat_trace([(0.30, 0.33), (0.40, 0.42)])
+    add_corpus_lap([ref], lap)
+    assert len(ref.brake_marks) == 2
+    assert ref.best_brake_point_spline == _approx_spline(ref.brake_marks[0])
+    assert ref.brake_marks[0] == _approx_spline(0.30)
+    assert ref.brake_marks[1] == _approx_spline(0.40)
+
+
+def _approx_spline(x: float):
+    import pytest
+
+    return pytest.approx(x, abs=0.011)

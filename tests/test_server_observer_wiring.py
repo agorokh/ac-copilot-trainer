@@ -413,3 +413,53 @@ def test_handler_routes_telemetry_tick_into_observer(monkeypatch):
     assert len(sent) == 1
     assert sent[0][0]["topic"] == TOPIC_COACHING_CUE
     assert sent[0][1] is ws  # producer excluded from its own cue fan-out
+
+
+# ---- issue #522 part 2: lap_complete -> per-driver brake-mark calibration --------------------
+
+
+def _write_lap_archive(tmp_path, archive: dict, name: str = "lap_0001.json") -> str:
+    laps = tmp_path / "journal" / "laps"
+    laps.mkdir(parents=True, exist_ok=True)
+    p = laps / name
+    p.write_text(json.dumps(archive), encoding="utf-8")
+    return str(p)
+
+
+def _real_observer():
+    from tools.ai_sidecar.realtime_observer import build_observer_from_reference
+
+    obs = build_observer_from_reference(_corner_archive())
+    assert obs is not None
+    return obs
+
+
+def test_calibrate_brake_marks_from_lap_updates_observer(tmp_path, monkeypatch):
+    obs = _real_observer()
+    monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    path = _write_lap_archive(tmp_path, _corner_archive())
+    asyncio.run(server._calibrate_brake_marks_from_lap({"archivePath": path, "lap": 3}))
+    assert obs._driver_marks, "the driver's own lap must calibrate at least one zone"
+    laps_folded = next(iter(obs._driver_marks.values()))[1]
+    # the brainOnly re-send of the SAME lap must not double-weight the EMA
+    asyncio.run(server._calibrate_brake_marks_from_lap({"archivePath": path, "lap": 3}))
+    assert next(iter(obs._driver_marks.values()))[1] == laps_folded
+
+
+def test_calibration_skips_explicitly_invalid_lap(tmp_path, monkeypatch):
+    obs = _real_observer()
+    monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    archive = _corner_archive()
+    archive["lap"]["is_valid"] = False  # a cut lap's brake points are not calibration data
+    path = _write_lap_archive(tmp_path, archive)
+    asyncio.run(server._calibrate_brake_marks_from_lap({"archivePath": path, "lap": 4}))
+    assert obs._driver_marks == {}
+
+
+def test_calibration_env_kill_switch(monkeypatch):
+    monkeypatch.setenv("AC_COPILOT_BRAKE_CAL", "0")
+    assert server._brake_calibration_enabled() is False
+    monkeypatch.delenv("AC_COPILOT_BRAKE_CAL")
+    assert server._brake_calibration_enabled() is True
