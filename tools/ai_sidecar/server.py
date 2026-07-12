@@ -822,6 +822,20 @@ def _on_voice_dispatch(dispatch: Any) -> None:
         logger.exception("voice: failed to record/broadcast dispatch")
 
 
+def _disarm_voice_web_bank() -> None:
+    """Clear the tablet-endpoint serving state (no bank routes; /voice/* return 404).
+
+    Called at the START of ``_wire_voice`` (so a re-wire with voice disabled or a different
+    bank can never keep serving the previous bank's clips — self-hosted reviewer finding on
+    PR #519) and at ``_run`` teardown. Deliberately NOT part of ``_reset_external_state``:
+    that reset runs at serve START, *after* ``main()`` has already wired voice, so clearing
+    there would disarm a freshly-armed endpoint (verified live — arm happens pre-serve).
+    """
+    global _voice_bank_dir, _voice_clip_files
+    _voice_bank_dir = None
+    _voice_clip_files = frozenset()
+
+
 def _set_voice_web_bank(bank_dir: Path) -> None:
     """Arm the tablet-page static routes for ``bank_dir`` (issue #511 Part D).
 
@@ -2247,6 +2261,9 @@ async def _run(
     finally:
         _event_loop = None
         _reset_external_state()
+        # Teardown-only (never at serve start — voice is wired BEFORE _run): stop serving
+        # bank clips once the server is gone so an embedded/test re-serve starts disarmed.
+        _disarm_voice_web_bank()
 
 
 def _is_loopback(host: str) -> bool:
@@ -2267,6 +2284,10 @@ def _wire_voice(voice_settings: VoiceRuntimeConfig) -> None:
     are imported lazily here (only when ``--voice-bank`` is supplied), so the sidecar core stays
     dep-free for users who never enable voice.
     """
+    # Re-wiring is authoritative for the tablet-endpoint serving state: disarm first so a
+    # voice-disabled (or different-bank) configuration can never keep serving stale clips;
+    # the enabled path below re-arms via _set_voice_web_bank (PR #519 review).
+    _disarm_voice_web_bank()
     reference_path = voice_settings.reference_path
     bank_dir = voice_settings.bank_dir
     bank_backend = (

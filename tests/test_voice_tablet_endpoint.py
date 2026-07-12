@@ -308,6 +308,29 @@ def test_http_dispatch_and_echo_logs() -> None:
     assert e["echoes"][-1]["seq"] == 9
 
 
+def test_rewire_disarms_stale_bank_but_serve_start_reset_does_not(tmp_path: Path) -> None:
+    """PR #519 review (self-hosted MEDIUM): a re-wire with voice disabled must stop serving
+    the previous bank's clips. The fix lives in ``_wire_voice`` (+ ``_run`` teardown), NOT in
+    ``_reset_external_state`` — main() wires voice BEFORE the serve loop runs the reset, so a
+    reset-side clear would disarm a freshly-armed endpoint (the ordering trap)."""
+    bake_bank(tmp_path, ToneBackend())
+    server._set_voice_web_bank(tmp_path)
+    assert server._voice_bank_dir == tmp_path
+    assert server._voice_clip_files
+
+    # Serve-start reset keeps the armed endpoint (arm happens pre-serve in main()).
+    _reset_external_state()
+    assert server._voice_bank_dir == tmp_path
+    assert server._voice_clip_files
+
+    # A re-wire with voice fully disabled disarms it (no stale bank serving).
+    server._wire_voice(server.VoiceRuntimeConfig(reference_path=None, bank_dir=None))
+    assert server._voice_bank_dir is None
+    assert server._voice_clip_files == frozenset()
+    assert _get("/voice/manifest.json").status == HTTPStatus.NOT_FOUND
+    assert _get("/voice/clips/anything.wav").status == HTTPStatus.NOT_FOUND
+
+
 # --------------------------------------------------------------------------------------------
 # Server: WS voice.echo / voice.demo flows (real sockets, loopback)
 # --------------------------------------------------------------------------------------------
