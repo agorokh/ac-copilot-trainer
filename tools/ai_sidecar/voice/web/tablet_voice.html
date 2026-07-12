@@ -84,8 +84,8 @@
   var state = {
     ws: null, wsOpen: false, armed: false, ctx: null,
     buffers: {},           // clip_id -> AudioBuffer
-    fileToClip: {},        // wav file name -> clip_id
-    clipsLoaded: 0, clipsTotal: 0,
+    clipFiles: {},         // clip_id -> wav file name (for on-demand re-preload)
+    clipsLoaded: 0, clipsTotal: 0, bankLoading: false,
     currentSource: null, currentSeq: -1,
     cueCount: 0, logLines: [],
     reconnectDelay: 1000,
@@ -139,7 +139,10 @@
   }
 
   function loadBank() {
-    if (state.clipsTotal > 0) return; // already loaded
+    // Guard BOTH completed and in-flight loads: a double-tap on ARM before the manifest
+    // resolves must not fetch+decode the whole 76-clip bank twice (2 GB device).
+    if (state.clipsTotal > 0 || state.bankLoading) return;
+    state.bankLoading = true;
     fetch("/voice/manifest.json").then(function (r) {
       if (!r.ok) throw new Error("manifest " + r.status);
       return r.json();
@@ -151,27 +154,38 @@
       });
       state.clipsTotal = entries.length;
       setPill("s-clips", "0/" + state.clipsTotal);
-      entries.forEach(function (entry) { preloadClip(entry); });
+      entries.forEach(function (entry) {
+        if (entry && entry.file && entry.clip_id) {
+          state.clipFiles[entry.clip_id] = entry.file;
+          preloadClip(entry.clip_id);
+        }
+      });
     }).catch(function (err) {
+      state.bankLoading = false;
       logLine("manifest load failed: " + err.message);
       setTimeout(loadBank, 5000);
     });
   }
-  function preloadClip(entry) {
-    if (!entry || !entry.file || !entry.clip_id) return;
-    state.fileToClip[entry.file] = entry.clip_id;
-    fetch("/voice/clips/" + encodeURIComponent(entry.file)).then(function (r) {
+  function preloadClip(clipId) {
+    var file = state.clipFiles[clipId];
+    if (!file || state.buffers[clipId]) return Promise.resolve(null);
+    return fetch("/voice/clips/" + encodeURIComponent(file)).then(function (r) {
       if (!r.ok) throw new Error("clip " + r.status);
       return r.arrayBuffer();
     }).then(function (raw) {
       return state.ctx.decodeAudioData(raw);
     }).then(function (buf) {
-      state.buffers[entry.clip_id] = buf;
-      state.clipsLoaded += 1;
-      setPill("s-clips", state.clipsLoaded + "/" + state.clipsTotal,
-        state.clipsLoaded === state.clipsTotal ? "ok" : "");
+      if (!state.buffers[clipId]) {
+        state.buffers[clipId] = buf;
+        state.clipsLoaded += 1;
+        setPill("s-clips", state.clipsLoaded + "/" + state.clipsTotal,
+          state.clipsLoaded === state.clipsTotal ? "ok" : "");
+      }
+      return buf;
     }).catch(function (err) {
-      logLine("preload failed " + entry.clip_id + ": " + err.message);
+      // Not permanent: a missed clip is retried on demand when a dispatch names it.
+      logLine("preload failed " + clipId + ": " + err.message);
+      return null;
     });
   }
 
@@ -185,7 +199,17 @@
     }
     var tPlay = null;
     var buf = state.buffers[p.clip_id];
-    if (buf && state.armed) {
+    // Android Go can suspend the context behind our back (backgrounding, route change);
+    // a suspended context makes source.start() a silent no-op — never report a fake
+    // t_play_ms for audio that cannot be sounding.
+    var ctxRunning = state.ctx && state.ctx.state === "running";
+    if (state.armed && !ctxRunning) {
+      state.armed = false;
+      setPill("s-audio", "suspended", "bad");
+      document.getElementById("arm").style.display = "flex";
+      if (state.ctx) state.ctx.resume();
+    }
+    if (buf && state.armed && ctxRunning) {
       var src = state.ctx.createBufferSource();
       src.buffer = buf;
       src.connect(state.ctx.destination);
@@ -195,6 +219,7 @@
       src.onended = function () { if (state.currentSource === src) state.currentSource = null; };
     } else {
       bufferState = buf ? "decoded" : "missing";
+      if (!buf && state.ctx) preloadClip(p.clip_id); // retry on demand — not permanent
     }
     state.currentSeq = p.seq;
     state.cueCount += 1;

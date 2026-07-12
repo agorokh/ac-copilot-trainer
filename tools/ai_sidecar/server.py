@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import time
+import urllib.parse
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -365,9 +366,9 @@ CLIENT_TO_SERVER_TYPES = frozenset(
         TYPE_SETUP_EXCHANGE_SEARCH,
         TYPE_SETUP_EXCHANGE_DOWNLOAD,
         TYPE_SESSION_REVIEW_GENERATE,
-        # Issue #511 Part D: remote voice endpoint timestamps + loopback demo-cue injection.
-        TYPE_VOICE_ECHO,
-        TYPE_VOICE_DEMO,
+        # NOTE: TYPE_VOICE_ECHO / TYPE_VOICE_DEMO are deliberately NOT listed here — they
+        # are handled explicitly (and early-return) in _handle_external_frame before the
+        # type-set routing runs, so membership would be dead configuration (PR #519 review).
     }
 )
 SERVER_TO_CLIENT_TYPES = frozenset(
@@ -958,10 +959,22 @@ def make_process_request(token: str | None):
                 observability.build_metrics_text(connected_peers, screen_peers=screen_peers),
                 observability.PROM_CONTENT_TYPE,
             )
-        # Issue #511 Part D — tablet voice endpoint. Same trust model as /health: read-only,
-        # no secrets (the page, the bank manifest, baked clip audio, and bounded event logs),
-        # so not token-gated; the WS upgrade below keeps the gate. Clip serving is exact-match
+        # Issue #511 Part D — tablet voice endpoint. Read-only and secret-free, but unlike
+        # /health it carries product content (bank audio, dispatch/echo logs), so on an
+        # authenticated external bind these routes honor the same token as the WS upgrade:
+        # loopback (the USB `adb reverse` deployment) passes untokened; a LAN client needs
+        # the X-AC-Copilot-Token header (PR #519 review). Clip serving stays exact-match
         # against the manifest allow-list — no traversal surface.
+        if path == "/tablet/voice" or path.startswith("/voice/"):
+            if token and not _is_loopback_peer(connection):
+                supplied = request.headers.get(AUTH_HEADER)
+                if supplied is None or not secrets.compare_digest(supplied, token):
+                    return _http_response(
+                        connection,
+                        HTTPStatus.UNAUTHORIZED,
+                        "missing or invalid X-AC-Copilot-Token\n",
+                        "text/plain",
+                    )
         if path == "/tablet/voice":
             page = _tablet_voice_page()
             if page is None:
@@ -984,7 +997,11 @@ def make_process_request(token: str | None):
             return _http_response(connection, HTTPStatus.OK, body, "application/json")
         if path.startswith("/voice/clips/"):
             bank_dir = _voice_bank_dir
-            name = path[len("/voice/clips/") :]
+            # The page requests encodeURIComponent(file); decode before the allow-list so
+            # the cross-boundary contract holds for any manifest filename. Exact-match
+            # against manifest entries (which never contain separators) still forbids
+            # traversal — a decoded "../x" simply isn't in the set (PR #519 review).
+            name = urllib.parse.unquote(path[len("/voice/clips/") :])
             if bank_dir is None or name not in _voice_clip_files:
                 return _http_response(
                     connection, HTTPStatus.NOT_FOUND, "unknown clip\n", "text/plain"

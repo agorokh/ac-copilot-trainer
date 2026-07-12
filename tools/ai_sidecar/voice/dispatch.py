@@ -86,7 +86,14 @@ class DispatchTapPlayback:
         return self._inner.current
 
     def play(self, utterance: Utterance) -> None:
-        # Play FIRST: if the backend raises, no dispatch happened and no event is emitted.
+        # Stamp the clocks BEFORE the backend call: on the sounddevice fallback, play()
+        # opens a fresh output stream (tens of ms on WASAPI), and a post-play stamp would
+        # silently exclude that interval from every downstream latency measurement — a
+        # one-sided bias toward false PASS on the 450 ms act budget (PR #519 adversarial
+        # review). The event itself is still emitted only after play() returns, so the
+        # no-event-on-failure invariant holds.
+        t_wall_ms = self._wall_clock() * 1000.0
+        t_mono_ms = self._mono_clock() * 1000.0
         self._inner.play(utterance)
         duration_ms = self._duration(utterance.clip_id)
         if self._duration_lookup is not None and duration_ms is None:
@@ -109,8 +116,8 @@ class DispatchTapPlayback:
             corner=utterance.corner,
             text=utterance.text,
             duration_ms=duration_ms,
-            t_wall_ms=self._wall_clock() * 1000.0,
-            t_mono_ms=self._mono_clock() * 1000.0,
+            t_wall_ms=t_wall_ms,
+            t_mono_ms=t_mono_ms,
         )
         try:
             self._listener(dispatch)

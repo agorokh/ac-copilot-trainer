@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
 # Envelope key that identifies a v1 external-client frame.
@@ -88,6 +89,9 @@ TYPE_VOICE_ECHO = "voice.echo"
 TYPE_VOICE_DEMO = "voice.demo"
 VOICE_DEMO_URGENCIES: frozenset[str] = frozenset({"info", "prepare", "act"})
 VOICE_ECHO_BUFFER_STATES: frozenset[str] = frozenset({"preloaded", "decoded", "missing"})
+# Clip ids are `kind.urgency.register.suffix` — restrict echo clip_id to that shape so a
+# client-supplied value can never smuggle newlines/control chars into server log lines.
+VOICE_CLIP_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SESSION_REVIEW_REFERENCE_SOURCES: frozenset[str] = frozenset(
     {
         "auto",
@@ -774,6 +778,8 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
         clip_id = frame.get("clip_id")
         if not isinstance(clip_id, str) or not clip_id or len(clip_id) > 128:
             return "voice.echo requires non-empty 'clip_id' (<=128 chars)"
+        if not VOICE_CLIP_ID_RE.fullmatch(clip_id):
+            return "voice.echo 'clip_id' must match [A-Za-z0-9._-]+"
         for key in ("t_dispatch_ms", "t_receive_ms"):
             err = _validate_number(frame, key, min_value=0)
             if err is not None:

@@ -169,6 +169,128 @@ def test_unmatched_cue_fails_assertions_not_silently(tmp_path: Path) -> None:
     assert not report.assertions["act_cues_within_budget"]
 
 
+def test_same_clip_repeats_do_not_cross_assign_onsets(tmp_path: Path) -> None:
+    """Two dispatches of the SAME clip inside one search window must each match their own
+    acoustic instance (onset consumption), never both lock onto the later/louder one
+    (PR #519 adversarial review)."""
+    bake_bank(tmp_path, ToneBackend())
+    manifest = Manifest.load(tmp_path / MANIFEST_FILENAME)
+    bank = Bank.from_manifest(manifest, tmp_path)
+    clip_id = "late_brake.act.critical.generic"
+    clip = np.asarray(bank.get(clip_id), dtype=np.float64)
+
+    chirp = al.make_chirp(SR, np)
+    recording = 0.04 * RNG.standard_normal(SR * 10)
+    w0 = 100_000.0
+    _place(recording, chirp, SR)
+    # Two acoustic instances of the SAME clip, 1.5 s apart; the second slightly louder.
+    a_at = SR + 2 * SR
+    b_at = a_at + int(1.5 * SR)
+    _place(recording, clip, a_at, gain=0.5)
+    _place(recording, clip, b_at, gain=0.7)
+    rec_path = tmp_path / "room.wav"
+    _write_wav(rec_path, recording)
+
+    dispatches = [
+        {
+            "seq": 1,
+            "clip_id": clip_id,
+            "kind": "late_brake",
+            "urgency": "act",
+            "register": "critical",
+            "t_wall_ms": w0 + 2_000.0 - 150.0,
+        },
+        {
+            "seq": 2,
+            "clip_id": clip_id,
+            "kind": "late_brake",
+            "urgency": "act",
+            "register": "critical",
+            "t_wall_ms": w0 + 3_500.0 - 150.0,
+        },
+    ]
+    report = al.analyze(
+        recording_path=rec_path,
+        bank_dir=tmp_path,
+        dispatches=dispatches,
+        chirps=[al.ChirpMark("start", w0, w0, 10.0)],
+    )
+    lats = [c.audible_latency_ms for c in report.cues]
+    assert all(c.matched for c in report.cues), lats
+    # Each cue matched its OWN instance: ~150 ms each, not ~1650 ms for the first.
+    assert lats[0] == pytest.approx(150.0, abs=20.0)
+    assert lats[1] == pytest.approx(150.0, abs=20.0)
+
+
+def test_missed_end_chirp_fails_drift_assertion(tmp_path: Path) -> None:
+    """When two chirps were played but only one is locatable, the run must FAIL loudly
+    (clock_map_drift_corrected=False), never silently fall back (PR #519 review)."""
+    bake_bank(tmp_path, ToneBackend())
+    chirp = al.make_chirp(SR, np)
+    recording = 0.04 * RNG.standard_normal(SR * 8)
+    w0 = 50_000.0
+    _place(recording, chirp, SR)  # start chirp only — the end chirp never made it
+    rec_path = tmp_path / "room.wav"
+    _write_wav(rec_path, recording)
+    report = al.analyze(
+        recording_path=rec_path,
+        bank_dir=tmp_path,
+        dispatches=[],
+        chirps=[
+            al.ChirpMark("start", w0, w0, 10.0),
+            al.ChirpMark("end", w0 + 6_000.0, w0 + 6_000.0, 10.0),
+        ],
+    )
+    assert report.clock_map["anchors_used"] == 1
+    assert report.assertions["clock_map_drift_corrected"] is False
+
+
+def test_burst_count_assertion_fails_on_suppressed_cues(tmp_path: Path) -> None:
+    """Burst mode must assert every injected cue was dispatched — scheduler suppression
+    silently shrinking the sample is a FAIL, not a smaller PASS (PR #519 review)."""
+    bake_bank(tmp_path, ToneBackend())
+    manifest = Manifest.load(tmp_path / MANIFEST_FILENAME)
+    bank = Bank.from_manifest(manifest, tmp_path)
+    clip_id = "late_brake.act.critical.generic"
+    clip = np.asarray(bank.get(clip_id), dtype=np.float64)
+    chirp = al.make_chirp(SR, np)
+    recording = 0.04 * RNG.standard_normal(SR * 8)
+    w0 = 70_000.0
+    _place(recording, chirp, SR)
+    _place(recording, clip, 3 * SR)
+    rec_path = tmp_path / "room.wav"
+    _write_wav(rec_path, recording)
+    dispatches = [
+        {
+            "seq": 1,
+            "clip_id": clip_id,
+            "kind": "late_brake",
+            "urgency": "act",
+            "register": "critical",
+            "t_wall_ms": w0 + 2_000.0 - 150.0,
+        },
+    ]
+    report = al.analyze(
+        recording_path=rec_path,
+        bank_dir=tmp_path,
+        dispatches=dispatches,
+        chirps=[al.ChirpMark("start", w0, w0, 10.0)],
+        expected_dispatches=3,  # 3 injected, only 1 dispatched
+    )
+    assert report.assertions["all_burst_cues_dispatched"] is False
+
+
+def test_http_get_json_rejects_lookalike_loopback_hosts() -> None:
+    for bad in [
+        "http://127.0.0.1.evil.example/voice/dispatches",
+        "http://localhost.evil.example/voice/dispatches",
+        "https://127.0.0.1:8765/voice/dispatches",  # https ≠ the loopback sidecar
+        "http://192.168.1.10:8765/voice/dispatches",
+    ]:
+        with pytest.raises(ValueError):
+            al._http_get_json(bad)
+
+
 def test_filter_dispatches_to_window() -> None:
     """Only cues dispatched inside THIS run's chirp-bounded window are analyzed — the ring
     buffer spans the whole sidecar process (PR #519 review)."""

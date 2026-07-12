@@ -98,6 +98,7 @@ def test_validate_voice_echo_accepts_valid_and_rejects_bad() -> None:
         ({"seq": -1}, "seq"),
         ({"seq": True}, "seq"),
         ({"clip_id": ""}, "clip_id"),
+        ({"clip_id": "evil\nCUE-ECHO forged=1"}, "clip_id"),  # log-forging guard
         ({"t_dispatch_ms": "x"}, "t_dispatch_ms"),
         ({"buffer_state": "weird"}, "buffer_state"),
         ({"audio_armed": "yes"}, "audio_armed"),
@@ -160,6 +161,41 @@ def test_dispatch_tap_listener_fault_never_breaks_audio() -> None:
     tap = DispatchTapPlayback(inner, _boom)
     tap.play(_utterance())
     assert len(inner.played) == 1  # audio path wins
+
+
+def test_dispatch_tap_stamps_clocks_before_backend_play() -> None:
+    """t_wall_ms anchors the audible-latency measurement at the scheduler's dispatch
+    DECISION. Stamping after inner.play() would exclude the sounddevice fallback's
+    stream-open time (tens of ms on WASAPI) — a one-sided bias toward false PASS on the
+    450 ms act budget (PR #519 adversarial review)."""
+    order: list[str] = []
+
+    class _SlowInner:
+        current = None
+
+        def play(self, _utt: Utterance) -> None:
+            order.append("play")
+
+        def cancel(self) -> None:  # pragma: no cover - interface completeness
+            pass
+
+        def close(self) -> None:  # pragma: no cover
+            pass
+
+    def _wall() -> float:
+        order.append("wall")
+        return 100.0
+
+    def _mono() -> float:
+        order.append("mono")
+        return 5.0
+
+    events: list[VoiceDispatch] = []
+    tap = DispatchTapPlayback(_SlowInner(), events.append, wall_clock=_wall, mono_clock=_mono)
+    tap.play(_utterance())
+    assert order.index("wall") < order.index("play")
+    assert order.index("mono") < order.index("play")
+    assert events and events[0].t_wall_ms == 100.0 * 1000.0
 
 
 def test_dispatch_tap_suppresses_event_for_bank_skipped_clip() -> None:
@@ -275,14 +311,14 @@ class _FakeConnection:
 
 
 class _FakeRequest:
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, headers: dict[str, str] | None = None) -> None:
         self.path = path
-        self.headers: dict[str, str] = {}
+        self.headers: dict[str, str] = headers or {}
 
 
-def _get(path: str):
-    handler = make_process_request(None)
-    return handler(_FakeConnection(), _FakeRequest(path))
+def _get(path: str, *, token: str | None = None, headers: dict[str, str] | None = None):
+    handler = make_process_request(token)
+    return handler(_FakeConnection(), _FakeRequest(path, headers))
 
 
 def test_http_tablet_page_served() -> None:
@@ -309,10 +345,34 @@ def test_http_clip_serving_is_allowlisted(tmp_path: Path) -> None:
     assert ok.headers.get("Content-Type") == "audio/wav"
     assert ok.headers.get("Content-Length") == str(len(ok.body))
     assert ok.body[:4] == b"RIFF"
-    # Traversal / non-manifest names never resolve, even when the file exists on disk.
+    # The page URL-encodes filenames; the server must decode before the allow-list so the
+    # cross-boundary contract holds for any manifest name (PR #519 review, cursor HIGH).
+    encoded = entry["file"].replace(".", "%2E", 1)
+    assert _get(f"/voice/clips/{encoded}").status == HTTPStatus.OK
+    # Traversal / non-manifest names never resolve, even when the file exists on disk —
+    # including AFTER percent-decoding.
     assert _get("/voice/clips/../manifest.json").status == HTTPStatus.NOT_FOUND
     assert _get("/voice/clips/manifest.json").status == HTTPStatus.NOT_FOUND
     assert _get("/voice/clips/..%2Fmanifest.json").status == HTTPStatus.NOT_FOUND
+
+
+def test_http_voice_routes_token_gated_for_non_loopback(tmp_path: Path) -> None:
+    """With a token configured, non-loopback clients need X-AC-Copilot-Token for the voice
+    routes (the fake connection has no remote_address → treated as non-loopback); /health
+    stays ungated (PR #519 review, Codex P2)."""
+    bake_bank(tmp_path, ToneBackend())
+    server._set_voice_web_bank(tmp_path)
+    assert _get("/tablet/voice", token="sekret").status == HTTPStatus.UNAUTHORIZED
+    assert _get("/voice/manifest.json", token="sekret").status == HTTPStatus.UNAUTHORIZED
+    assert _get("/voice/dispatches", token="sekret").status == HTTPStatus.UNAUTHORIZED
+    ok = _get("/tablet/voice", token="sekret", headers={"X-AC-Copilot-Token": "sekret"})
+    assert ok.status == HTTPStatus.OK
+    assert (
+        _get("/voice/manifest.json", token="sekret", headers={"X-AC-Copilot-Token": "sekret"})
+    ).status == HTTPStatus.OK
+    assert _get("/health", token="sekret").status == HTTPStatus.OK  # unchanged trust model
+    # No token configured (loopback-only bind is enforced at startup) -> unchanged.
+    assert _get("/tablet/voice").status == HTTPStatus.OK
 
 
 def test_http_dispatch_and_echo_logs() -> None:

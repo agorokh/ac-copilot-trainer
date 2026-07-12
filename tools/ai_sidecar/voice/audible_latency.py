@@ -44,6 +44,7 @@ import logging
 import statistics
 import subprocess
 import time
+import urllib.parse
 import urllib.request
 import wave
 from dataclasses import asdict, dataclass, field
@@ -61,6 +62,11 @@ CHIRP_AMPLITUDE = 0.7
 #: with a specific speech waveform; validated by the synthetic-noise unit tests).
 MATCH_MIN_SCORE = 0.20
 MATCH_MIN_PROMINENCE = 3.0
+#: A candidate region counts as a real instance only when its peak reaches this fraction of
+#: the window's global max — separates a genuinely earlier same-clip instance (normalized
+#: score is gain-invariant, so comparable) from the match's own correlation sidelobes
+#: (structurally ~-13 dB / ~4x lower for the log chirp).
+_REGION_DOMINANCE = 0.6
 #: How long after a dispatch stamp the clip onset is searched for. Covers WS hop + a slow
 #: Android audio stack with margin; anything later is reported unmatched rather than guessed.
 SEARCH_WINDOW_MS = 3_000.0
@@ -262,22 +268,51 @@ def find_onset(
     scores = normalized_match(segment, template, np)
     if len(scores) == 0:
         return None, 0.0, 0.0
-    peak_idx = int(np.argmax(scores))
-    peak = float(scores[peak_idx])
     median = float(np.median(scores))
+    peak_idx = int(np.argmax(scores))
+    if float(scores[peak_idx]) < MATCH_MIN_SCORE:
+        peak = float(scores[peak_idx])
+        return None, peak, peak / max(median, 1e-9)
+    # EARLIEST comparable instance, not the loudest: with two instances of the same clip in
+    # one window, a bare argmax locks onto the louder LATER one and reports an absurd
+    # latency for the earlier cue (PR #519 adversarial review). An earlier candidate counts
+    # as a distinct instance only when it is (a) separated from the current peak by more
+    # than one template length — the same instance's own correlation ramp/sidelobes span
+    # +/-L by construction (periodic tone clips ramp for the full overlap range; a chirp's
+    # -13 dB sidelobes hug the main lobe) — and (b) comparable in normalized score
+    # (gain-invariant, so a true instance scores near the max while noise does not).
+    length = len(template)
+    while True:
+        cutoff = peak_idx - length
+        if cutoff <= 0:
+            break
+        earlier = scores[:cutoff]
+        candidate = int(np.argmax(earlier))
+        if float(earlier[candidate]) < max(
+            MATCH_MIN_SCORE, _REGION_DOMINANCE * float(scores[peak_idx])
+        ):
+            break
+        peak_idx = candidate
+    peak = float(scores[peak_idx])
     prominence = peak / max(median, 1e-9)
-    if peak < MATCH_MIN_SCORE or prominence < MATCH_MIN_PROMINENCE:
+    if prominence < MATCH_MIN_PROMINENCE:
         return None, peak, prominence
     return start + peak_idx, peak, prominence
 
 
 @dataclass
 class ClockMap:
-    """Linear map recording-sample → PC wall ms, anchored on one or two chirps."""
+    """Linear map recording-sample → PC wall ms, anchored on one or two chirps.
+
+    ``anchors_used`` records whether the slope came from a two-chirp drift fit (2) or the
+    nominal samplerate (1) — the report asserts on it so a missed end chirp can never
+    silently downgrade a drift-corrected run (PR #519 adversarial review).
+    """
 
     anchor_sample: int
     anchor_wall_ms: float
     ms_per_sample: float
+    anchors_used: int = 1
 
     def wall_ms(self, sample: int) -> float:
         return self.anchor_wall_ms + (sample - self.anchor_sample) * self.ms_per_sample
@@ -302,11 +337,18 @@ def build_clock_map(
     third = len(recording) // 3
     found: list[tuple[ChirpMark, int]] = []
     detail: list[dict[str, Any]] = []
+    start_onset: int | None = None
     for mark in chirps:
         if mark.label == "start":
             onset, score, prom = find_onset(recording, template, np, start=0, end=2 * third)
+            if onset is not None:
+                start_onset = onset
         else:
-            onset, score, prom = find_onset(recording, template, np, start=third)
+            # Search for the END chirp strictly AFTER the located start chirp — the naive
+            # overlapping regions could lock both anchors onto the SAME chirp instance on a
+            # short run, degenerating the pair (PR #519 adversarial review).
+            search_from = start_onset + 2 * len(template) if start_onset is not None else third
+            onset, score, prom = find_onset(recording, template, np, start=search_from)
         detail.append(
             {
                 "label": mark.label,
@@ -327,7 +369,7 @@ def build_clock_map(
             slope = (m1.anchor_wall_ms() - m0.anchor_wall_ms()) / (s1 - s0)
             # A capture clock more than 5% off nominal means a mis-located chirp, not drift.
             if abs(slope - nominal) / nominal < 0.05:
-                return ClockMap(s0, m0.anchor_wall_ms(), slope), detail
+                return ClockMap(s0, m0.anchor_wall_ms(), slope, anchors_used=2), detail
             _log.warning(
                 "chirp-pair slope %.6f ms/sample deviates >5%% from nominal %.6f — "
                 "falling back to single-anchor map",
@@ -335,7 +377,7 @@ def build_clock_map(
                 nominal,
             )
     mark, sample = found[0]
-    return ClockMap(sample, mark.anchor_wall_ms(), nominal), detail
+    return ClockMap(sample, mark.anchor_wall_ms(), nominal, anchors_used=1), detail
 
 
 def _load_wav_mono(path: Path, np: Any) -> tuple[Any, int]:
@@ -376,8 +418,14 @@ def analyze(
     chirps: list[ChirpMark],
     echoes: list[dict[str, Any]] | None = None,
     act_budget_ms: float = DEFAULT_ACT_BUDGET_MS,
+    expected_dispatches: int | None = None,
 ) -> AudibleLatencyReport:
-    """Locate every dispatched clip in the room recording and build the timeliness report."""
+    """Locate every dispatched clip in the room recording and build the timeliness report.
+
+    ``expected_dispatches`` (burst mode) asserts the scheduler actually spoke every injected
+    cue — without it, scheduler suppression would silently shrink the sample and a partial
+    run could read as a full PASS (PR #519 adversarial review).
+    """
     import numpy as np
 
     from tools.ai_sidecar.voice.manifest import MANIFEST_FILENAME, Manifest
@@ -391,6 +439,11 @@ def analyze(
     echo_by_seq = {e.get("seq"): e for e in (echoes or [])}
 
     cues: list[CueResult] = []
+    # Same-clip repeats inside one search window must not cross-assign onsets: process in
+    # dispatch order and start each same-clip search after the previous match (PR #519
+    # adversarial review).
+    next_allowed_start: dict[str, int] = {}
+    dispatches = sorted(dispatches, key=lambda d: float(d.get("t_wall_ms", 0.0)))
     for d in dispatches:
         seq = int(d.get("seq", -1))
         clip_id = str(d.get("clip_id", ""))
@@ -422,14 +475,20 @@ def analyze(
             continue
         template = _resample_linear(np.asarray(pcm, dtype=np.float64), bank.samplerate, rec_sr, np)
         # Search from the dispatch stamp forward; a small negative margin absorbs clock-map
-        # uncertainty without letting a pre-dispatch sound masquerade as the cue.
+        # uncertainty without letting a pre-dispatch sound masquerade as the cue. The end is
+        # extended by the template length: normalized_match only scores FULL alignments, so
+        # without the extension an onset near the window edge could never match and the
+        # effective window would silently shrink by the clip duration (PR #519 review).
         start_wall = t_dispatch - 100.0
         start_sample = clock_map.anchor_sample + int(
             (start_wall - clock_map.anchor_wall_ms) / clock_map.ms_per_sample
         )
-        end_sample = start_sample + int((SEARCH_WINDOW_MS + 100.0) / clock_map.ms_per_sample)
+        start_sample = max(0, start_sample, next_allowed_start.get(clip_id, 0))
+        end_sample = (
+            start_sample + int((SEARCH_WINDOW_MS + 100.0) / clock_map.ms_per_sample) + len(template)
+        )
         onset, score, prom = find_onset(
-            recording, template, np, start=max(0, start_sample), end=max(0, end_sample)
+            recording, template, np, start=start_sample, end=max(0, end_sample)
         )
         cue.match_score = round(score, 4)
         cue.match_prominence = round(prom, 2)
@@ -437,6 +496,7 @@ def analyze(
             cue.matched = True
             cue.onset_wall_ms = clock_map.wall_ms(onset)
             cue.audible_latency_ms = cue.onset_wall_ms - t_dispatch
+            next_allowed_start[clip_id] = onset + len(template) // 2
         cues.append(cue)
 
     matched = [c for c in cues if c.matched and c.audible_latency_ms is not None]
@@ -463,10 +523,15 @@ def analyze(
 
     assertions = {
         "clock_map_anchored": True,
+        # A missed/degenerate end chirp must FAIL loudly, never silently drop the drift fit.
+        "clock_map_drift_corrected": clock_map.anchors_used >= 2 if len(chirps) >= 2 else True,
         "all_dispatched_cues_matched": len(matched) == len(cues) and len(cues) > 0,
         "act_cues_within_budget": bool(act_latencies)
         and max(act_latencies) + systematic <= act_budget_ms,
     }
+    if expected_dispatches is not None:
+        # Burst mode: every injected cue must have actually been dispatched by the scheduler.
+        assertions["all_burst_cues_dispatched"] = len(cues) == expected_dispatches
     return AudibleLatencyReport(
         recording=str(recording_path),
         recording_samplerate=rec_sr,
@@ -548,7 +613,10 @@ def filter_dispatches_to_window(
 
 
 def _http_get_json(url: str, timeout: float = 10.0) -> dict[str, Any]:
-    if not url.startswith(("http://127.0.0.1", "http://localhost")):
+    # Parse the actual host — a prefix check would accept e.g. 127.0.0.1.evil.example
+    # (PR #519 adversarial review).
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError(f"refusing non-loopback sidecar URL: {url}")
     with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310 - loopback-only
         return json.loads(resp.read().decode("utf-8"))
@@ -691,6 +759,7 @@ def run(args: argparse.Namespace) -> int:
         chirps=chirps,
         echoes=echoes,
         act_budget_ms=args.act_budget_ms,
+        expected_dispatches=args.burst if args.burst > 0 else None,
     )
     return _emit_report(report, out_dir)
 
