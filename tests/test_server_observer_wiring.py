@@ -466,3 +466,23 @@ def test_calibration_env_kill_switch(monkeypatch):
     assert server._brake_calibration_enabled() is False
     monkeypatch.delenv("AC_COPILOT_BRAKE_CAL")
     assert server._brake_calibration_enabled() is True
+
+
+def test_unresolvable_frame_does_not_reserve_the_calibration_key(tmp_path, monkeypatch):
+    """PR #525 review: a lap_complete with neither an inline trace nor an archivePath must not
+    reserve the dedup key — the archive-backed re-send of the SAME lap must still calibrate."""
+    obs = _real_observer()
+    monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    # plain frame: same lap identity, nothing loadable -> returns without reserving
+    asyncio.run(server._calibrate_brake_marks_from_lap({"lap": 3, "lapTimeMs": 133498}))
+    assert server._last_brake_cal_key is None
+    assert obs._driver_marks == {}
+    # archive-backed re-send of the same physical lap -> calibrates
+    path = _write_lap_archive(tmp_path, _corner_archive())
+    asyncio.run(
+        server._calibrate_brake_marks_from_lap(
+            {"lap": 3, "lapTimeMs": 133498, "archivePath": path}
+        )
+    )
+    assert obs._driver_marks, "the archive-backed re-send must not be starved by the empty frame"
