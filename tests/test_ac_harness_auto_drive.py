@@ -309,10 +309,16 @@ def test_wait_lap_requires_a_lap_frame():
     assert with_lap.ok is True
 
 
+def _timed_lap(ms: int = 90_000) -> dict:
+    """A `lap` snapshot carrying a positive lap time (an archiveable, timed lap)."""
+    return {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": ms}}
+
+
 def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
-    # After a --wait-lap lap the car must keep driving briefly (grace) so the trainer's async
+    # After a --wait-lap TIMED lap the car must keep driving briefly (grace) so the trainer's async
     # lap-archive writer finalizes lap 1's trace before teardown (#515). Assert the grace is awaited
-    # when a lap is seen and NOT when no lap arrives. asyncio.sleep is spied so no real time passes.
+    # for a timed lap and NOT for: no lap, --wait-lap off, or an untimed (unarchiveable) out-lap
+    # (#516). asyncio.sleep is spied so no real time passes.
     import tools.ac_harness.auto_drive as ad
 
     slept: list[float] = []
@@ -328,11 +334,11 @@ def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
             launch=_ok_launch,
             hijack=lambda c: FakeController(),
             drive=_drive_returning(DriveStats(drove=True), {}),
-            tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _timed_lap()]),
         )
     )
     assert got.ok is True
-    assert 5.0 in slept  # grace-drive awaited on a completed lap
+    assert 5.0 in slept  # grace-drive awaited on a completed timed lap
     assert got.lap_grace_applied is True  # the single flag the evidence poll gates on
 
     slept.clear()
@@ -348,8 +354,7 @@ def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
     assert 5.0 not in slept
     assert no_lap.lap_grace_applied is False
 
-    # Lap seen but --wait-lap disabled: the grace is gated off, so the flag is False and the poll
-    # must NOT wait for an archive the grace never created (#516 daemon review).
+    # Lap seen but --wait-lap disabled: grace gated off, flag False, poll must not wait (#516).
     slept.clear()
     no_wait = asyncio.run(
         run_auto_drive(
@@ -357,16 +362,45 @@ def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
             launch=_ok_launch,
             hijack=lambda c: FakeController(),
             drive=_drive_returning(DriveStats(drove=True), {}),
-            tap=_tap_returning([*CONTINUOUS, _snap("lap")]),
+            tap=_tap_returning([*CONTINUOUS, _timed_lap()]),
         )
     )
     assert 5.0 not in slept
     assert no_wait.lap_grace_applied is False
 
+    # Untimed out-lap (last_lap_ms absent): the trainer archives only timed laps, so the grace must
+    # NOT fire on an unarchiveable boundary (#516 codex).
+    slept.clear()
+    untimed = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),  # lap frame, no time
+        )
+    )
+    assert 5.0 not in slept
+    assert untimed.lap_grace_applied is False
+
+
+def test_has_timed_lap_detects_only_positive_time():
+    from tools.ac_harness.auto_drive import _has_timed_lap
+
+    assert _has_timed_lap([_timed_lap(90_000)]) is True
+    assert _has_timed_lap([_snap("connection"), _timed_lap()]) is True
+    assert _has_timed_lap([_snap("lap")]) is False  # lap frame, no last_lap_ms
+    zero = {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 0}}
+    assert _has_timed_lap([zero]) is False  # untimed boundary
+    diag = {"v": 1, "type": "diagnostic", "topic": "lap", "payload": {"last_lap_ms": 5}}
+    assert _has_timed_lap([diag]) is False  # not a state.snapshot
+    assert _has_timed_lap([]) is False
+
 
 def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
     # The drive thread self-terminates on drive_seconds and brakes on exit; the post-lap grace must
-    # have driving headroom or the car stops at S/F and the trace never finalizes (#515 boundary).
+    # have driving headroom or the car stops at S/F and the trace never finalizes (#515/#516). The
+    # budget must outlive the LATEST lap the tap accepts (max(180, drive_seconds)) PLUS the grace.
     import tools.ac_harness.auto_drive as ad
 
     async def _spy(_dt):
@@ -389,7 +423,8 @@ def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
             tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),
         )
     )
-    assert captured["drive_seconds"] == 108.0  # base + grace headroom
+    # max(180, 100) + 8 = 188 — outlives the tap's lap deadline, not merely drive_seconds+grace.
+    assert captured["drive_seconds"] == 188.0
 
     captured.clear()
     asyncio.run(

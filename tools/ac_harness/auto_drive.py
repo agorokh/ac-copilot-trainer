@@ -339,6 +339,31 @@ class ProgressWatchdog:
         self._anchor_time = now
 
 
+def _has_timed_lap(frames: list[dict]) -> bool:
+    """True if a produced ``lap`` snapshot carries a positive time (``payload.last_lap_ms > 0``).
+
+    An out-lap / teleport boundary still emits a ``lap`` frame but with no time, and the trainer
+    only archives a TIMED lap (``lastMs > 0``). So the post-lap grace-drive + archive poll must fire
+    on a timed lap, not merely on a ``lap`` frame, or an unarchiveable boundary wastes the grace and
+    then times out the poll (#516 review).
+    """
+    for frame in frames:
+        if (
+            not isinstance(frame, dict)
+            or frame.get("type") != "state.snapshot"
+            or frame.get("topic") != "lap"
+        ):
+            continue
+        payload = frame.get("payload")
+        ms = payload.get("last_lap_ms") if isinstance(payload, dict) else None
+        try:
+            if ms is not None and float(ms) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 async def run_auto_drive(
     config: AutoDriveConfig,
     *,
@@ -445,15 +470,16 @@ async def run_auto_drive(
         )
 
     stop = threading.Event()
-    # The drive thread self-terminates on its own drive_seconds budget (rig_drive), and on exit it
-    # BRAKES the car. If a lap lands within lap_finalize_grace_s of that budget, the post-lap grace
-    # below would run against an already-stopped car and the trace would not finalize (#515 boundary
-    # case). Give the drive thread grace headroom so it keeps driving through the grace.
+    # The tap waits up to `lap_deadline` for the lap (a full lap at harness pace can exceed 180s /
+    # drive_seconds — Spa ~7km). The drive thread self-terminates on its own drive_seconds budget
+    # and BRAKES the car on exit, so to keep it driving through the post-lap grace it must outlive
+    # the LATEST lap the tap accepts PLUS the grace — not merely drive_seconds (which can be < the
+    # tap deadline, breaking headroom for a late lap; #515/#516). One `lap_deadline` feeds both the
+    # tap timeout and the drive budget so they cannot diverge.
+    lap_deadline = max(180.0, config.drive_seconds)
     drive_config = config
     if config.wait_lap and config.lap_finalize_grace_s > 0:
-        drive_config = replace(
-            config, drive_seconds=config.drive_seconds + config.lap_finalize_grace_s
-        )
+        drive_config = replace(config, drive_seconds=lap_deadline + config.lap_finalize_grace_s)
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
@@ -469,10 +495,10 @@ async def run_auto_drive(
     try:
         tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
         if config.wait_lap:
-            # A full lap at harness pace can exceed tap_frames' 180 s default (Spa ~7 km) —
-            # wait as long as the drive leg is allowed to run, or the tap gives up on the lap
-            # while the car is still mid-lap and the run false-fails (#459 Part F).
-            tap_kwargs["lap_timeout"] = max(180.0, config.drive_seconds)
+            # Wait as long as the drive leg is allowed to run (a full lap at harness pace can exceed
+            # the 180 s tap default, Spa ~7 km) — the SAME `lap_deadline` the drive budget is sized
+            # to, so the tap never gives up on a lap the drive thread can still complete (#459 F).
+            tap_kwargs["lap_timeout"] = lap_deadline
         frames = await tap(config.sidecar_url, **tap_kwargs)
         result = evaluate_sequence(
             frames, strict_lifecycle=config.strict, require_lap=config.wait_lap
@@ -481,7 +507,7 @@ async def run_auto_drive(
         counts = dict(result.counts)
         notes = list(result.notes)
         grace_applied = bool(
-            config.wait_lap and counts.get("lap") and config.lap_finalize_grace_s > 0
+            config.wait_lap and _has_timed_lap(frames) and config.lap_finalize_grace_s > 0
         )
         if grace_applied:
             # The drive thread is still running here (stop not yet set), so the car keeps driving
@@ -2154,13 +2180,15 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # disagree (#516 review). On a fresh profile journal/laps may not exist until the async writer
     # creates it — pass a re-discovering resolver so the poll finds it at its real path (default or
     # renamed install), not a hardcoded one. No grace-drive => single scan, no hang.
+    # The grace-drive already elapsed synchronously in run_auto_drive, so by here the writer has
+    # streamed the trace; this poll only awaits the OS flush/rename — a short CONSTANT timeout, not
+    # one scaled to the in-sim grace time (#516 review). collect_lap_archives' default covers it.
     journal_dir = discover_journal_laps_dir(user_dir)
     lap_archives = collect_lap_archives(
         journal_dir,
         run_started_epoch,
         resolve=lambda: discover_journal_laps_dir(user_dir),
         wait_for_first=report.lap_grace_applied,
-        timeout_s=config.lap_finalize_grace_s + 2.0,
     )
     # Re-discover for the report path: the writer may have created the dir during the poll.
     journal_dir = journal_dir or discover_journal_laps_dir(user_dir)
