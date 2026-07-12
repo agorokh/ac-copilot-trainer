@@ -24,11 +24,13 @@ from tools.ac_harness.auto_drive import (
     _wait_live,
     bake_setup_into_race_ini,
     build_practice_preset,
+    candidate_journal_laps_dirs,
     collect_lap_archives,
     custom_ai_enabled,
     default_ac_root,
     fuel_matches,
     generic_gt3_ggv,
+    known_journal_laps_dir,
     parse_setup_fuel,
     preflight,
     race_ini_setup_bake_loop,
@@ -50,7 +52,11 @@ _PROFILE = [40.0, 40.0, 40.0, 40.0]  # m/s targets
 
 
 def _cfg(**kw) -> AutoDriveConfig:
-    base = dict(cm_preset="preset.cmpreset", track_id="imola", tap_seconds=0.0)
+    # lap_finalize_grace_s=0.0 so orchestration tests don't real-sleep the post-lap grace; the grace
+    # behaviour itself is covered by test_wait_lap_grace_drive_finalizes_archive.
+    base = dict(
+        cm_preset="preset.cmpreset", track_id="imola", tap_seconds=0.0, lap_finalize_grace_s=0.0
+    )
     base.update(kw)
     return AutoDriveConfig(**base)  # type: ignore[arg-type]
 
@@ -302,6 +308,150 @@ def test_wait_lap_requires_a_lap_frame():
         )
     )
     assert with_lap.ok is True
+
+
+def _timed_lap(ms: int = 90_000) -> dict:
+    """A `lap` snapshot carrying a positive lap time (an archiveable, timed lap)."""
+    return {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": ms}}
+
+
+def test_wait_lap_grace_drive_finalizes_archive(monkeypatch):
+    # After a --wait-lap TIMED lap the car must keep driving briefly (grace) so the trainer's async
+    # lap-archive writer finalizes lap 1's trace before teardown (#515). Assert the grace is awaited
+    # for a timed lap and NOT for: no lap, --wait-lap off, or an untimed (unarchiveable) out-lap
+    # (#516). asyncio.sleep is spied so no real time passes.
+    import tools.ac_harness.auto_drive as ad
+
+    slept: list[float] = []
+
+    async def _spy(dt):
+        slept.append(dt)
+
+    monkeypatch.setattr(ad.asyncio, "sleep", _spy)
+
+    got = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _timed_lap()]),
+        )
+    )
+    assert got.ok is True
+    assert 5.0 in slept  # grace-drive awaited on a completed timed lap
+    assert got.lap_grace_applied is True  # the single flag the evidence poll gates on
+
+    slept.clear()
+    no_lap = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning(CONTINUOUS),  # no lap frame -> no grace
+        )
+    )
+    assert 5.0 not in slept
+    assert no_lap.lap_grace_applied is False
+
+    # Lap seen but --wait-lap disabled: grace gated off, flag False, poll must not wait (#516).
+    slept.clear()
+    no_wait = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=False, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning([*CONTINUOUS, _timed_lap()]),
+        )
+    )
+    assert 5.0 not in slept
+    assert no_wait.lap_grace_applied is False
+
+    # Untimed out-lap (last_lap_ms absent): the trainer archives only timed laps, so the grace must
+    # NOT fire on an unarchiveable boundary (#516 codex).
+    slept.clear()
+    untimed = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, lap_finalize_grace_s=5.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True), {}),
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),  # lap frame, no time
+        )
+    )
+    assert 5.0 not in slept
+    assert untimed.lap_grace_applied is False
+
+
+def test_has_timed_lap_detects_only_positive_time():
+    from tools.ac_harness.auto_drive import _has_timed_lap
+
+    assert _has_timed_lap([_timed_lap(90_000)]) is True
+    assert _has_timed_lap([_snap("connection"), _timed_lap()]) is True
+    assert _has_timed_lap([_snap("lap")]) is False  # lap frame, no last_lap_ms
+    zero = {"v": 1, "type": "state.snapshot", "topic": "lap", "payload": {"last_lap_ms": 0}}
+    assert _has_timed_lap([zero]) is False  # untimed boundary
+    diag = {"v": 1, "type": "diagnostic", "topic": "lap", "payload": {"last_lap_ms": 5}}
+    assert _has_timed_lap([diag]) is False  # not a state.snapshot
+    assert _has_timed_lap([]) is False
+
+
+def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
+    # The drive thread self-terminates on drive_seconds and brakes on exit; the post-lap grace must
+    # have driving headroom or the car stops at S/F and the trace never finalizes (#515/#516). The
+    # budget must outlive the LATEST lap the tap accepts (max(180, drive_seconds)) PLUS the grace.
+    import tools.ac_harness.auto_drive as ad
+
+    async def _spy(_dt):
+        pass
+
+    monkeypatch.setattr(ad.asyncio, "sleep", _spy)
+
+    captured: dict = {}
+
+    def _capture_drive(controller, config, stop):
+        captured["drive_seconds"] = config.drive_seconds
+        return DriveStats(drove=True)
+
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, drive_seconds=100.0, lap_finalize_grace_s=8.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_capture_drive,
+            tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),
+        )
+    )
+    # settle(120) + max(180, 100) + grace(8) = 308 — outlives the full tap window + grace
+    assert captured["drive_seconds"] == 308.0
+
+    # grace=0 with wait_lap must STILL align to the full tap window (else the drive stops early and
+    # the tap hangs on a stopped car): 120 + max(180, 50) + 0 = 300 (#516 daemon review).
+    captured.clear()
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, drive_seconds=50.0, lap_finalize_grace_s=0.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_capture_drive,
+            tap=_tap_returning([*CONTINUOUS, _timed_lap()]),
+        )
+    )
+    assert captured["drive_seconds"] == 300.0
+
+    captured.clear()
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=False, drive_seconds=100.0, lap_finalize_grace_s=8.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_capture_drive,
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert captured["drive_seconds"] == 100.0  # no wait_lap -> no headroom
 
 
 def test_drove_false_gates_overall_success_even_if_pipeline_ok():
@@ -1520,6 +1670,250 @@ def test_collect_lap_archives_filters_by_mtime(tmp_path):
     os.utime(new, (2_000_000, 2_000_000))
     assert collect_lap_archives(laps, since_epoch=1_500_000) == [str(new)]
     assert collect_lap_archives(None, since_epoch=0) == []
+
+
+def test_collect_lap_archives_no_wait_returns_immediately(tmp_path):
+    # A run that produced no lap must NOT poll — return the (empty) scan immediately, no sleeping.
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    slept: list[float] = []
+    got = collect_lap_archives(
+        laps, since_epoch=0, wait_for_first=False, _sleep=slept.append, _clock=lambda: 0.0
+    )
+    assert got == []
+    assert slept == []  # never waited
+
+
+def test_collect_lap_archives_waits_for_async_archive(tmp_path):
+    # The async writer finalizes lap_*.json a moment AFTER the lap frame (#515). With wait_for_first
+    # the poll must pick it up once it lands rather than racing to an empty list.
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    lap = laps / "lap_late.json"
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not lap.exists():  # writer finalizes ~1s in
+            lap.write_text("{}")
+            os.utime(lap, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(lap)]
+
+
+def test_collect_lap_archives_wait_times_out_bounded(tmp_path):
+    # If the archive never appears, the poll is bounded and returns [] rather than hanging.
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    clock = {"t": 0.0}
+    calls = {"n": 0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        calls["n"] += 1
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=0,
+        wait_for_first=True,
+        timeout_s=2.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == []
+    assert calls["n"] <= 5  # ~timeout_s/poll_s, bounded — did not spin forever
+
+
+def test_collect_lap_archives_present_first_skips_wait(tmp_path):
+    # An archive already on disk is returned without entering the poll loop.
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    lap = laps / "lap_present.json"
+    lap.write_text("{}")
+    os.utime(lap, (2_000_000, 2_000_000))
+    slept: list[float] = []
+    got = collect_lap_archives(
+        laps, since_epoch=1_500_000, wait_for_first=True, _sleep=slept.append, _clock=lambda: 0.0
+    )
+    assert got == [str(lap)]
+    assert slept == []  # found on the first scan, never polled
+
+
+def test_collect_lap_archives_waits_for_dir_created_during_poll(tmp_path):
+    # Fresh profile: journal/laps does not exist at the first scan; the async writer creates BOTH
+    # the dir and the finalized file on a later frame. Polling the (initially absent) path must
+    # still find it once it appears (#515 review — discovery would return None otherwise).
+    import os
+
+    laps = tmp_path / "cfg_laps_not_yet"
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not laps.exists():
+            laps.mkdir()
+            lap = laps / "lap_x.json"
+            lap.write_text("{}")
+            os.utime(lap, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(laps / "lap_x.json")]
+
+
+def test_collect_lap_archives_rediscovers_dir_during_poll(tmp_path):
+    # Fresh profile + (possibly renamed) install: journal_dir is None at call time; the writer makes
+    # the dir at its ACTUAL path mid-poll. A `resolve` callable re-run each scan must find it, not a
+    # hardcoded path (#516 review — the known-path fallback broke renamed installs).
+    import os
+
+    target = tmp_path / "renamed_app" / "journal" / "laps"
+
+    def _resolve():
+        return [target] if target.is_dir() else []
+
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not target.exists():
+            target.mkdir(parents=True)
+            lap = target / "lap_y.json"
+            lap.write_text("{}")
+            os.utime(lap, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        None,
+        since_epoch=1_500_000,
+        resolve=_resolve,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(target / "lap_y.json")]
+
+
+def test_collect_lap_archives_follows_resolver_off_stale_dir(tmp_path):
+    # A stale leftover dir (old files) is returned first; the canonical dir with the NEW archive
+    # appears mid-poll. With journal_dir=None the poll re-resolves each scan and must follow the
+    # resolver to the canonical dir, not pin to stale — the stale old file is excluded by the
+    # since_epoch gate (#516 review).
+    import os
+
+    stale = tmp_path / "stale" / "laps"
+    stale.mkdir(parents=True)
+    old = stale / "lap_old.json"
+    old.write_text("{}")
+    os.utime(old, (1_000_000, 1_000_000))  # before since_epoch -> filtered out
+    canonical = tmp_path / "canonical" / "laps"
+
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _resolve():
+        # Both are candidates — the stale default persists after a rename (CSP doesn't delete it).
+        # Scanning all + the mtime gate must still find the fresh archive, not shadow it with stale.
+        return [d for d in (stale, canonical) if d.is_dir()]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not canonical.exists():
+            canonical.mkdir(parents=True)
+            new = canonical / "lap_new.json"
+            new.write_text("{}")
+            os.utime(new, (2_000_000, 2_000_000))
+
+    got = collect_lap_archives(
+        None,
+        since_epoch=1_500_000,
+        resolve=_resolve,
+        wait_for_first=True,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(canonical / "lap_new.json")]  # followed to canonical; stale old file ignored
+
+
+def test_candidate_journal_laps_dirs_includes_canonical_and_renamed(tmp_path):
+    # A stale canonical dir AND a renamed-install dir both exist; candidate_journal_laps_dirs must
+    # return BOTH so the scan finds the active writer's archive regardless of the stale leftover.
+    canonical = known_journal_laps_dir(tmp_path)
+    canonical.mkdir(parents=True)
+    renamed = tmp_path / "cfg" / "extension" / "state" / "lua" / "app" / "Renamed" / "renamed"
+    renamed_laps = renamed / "journal" / "laps"
+    renamed_laps.mkdir(parents=True)
+    dirs = candidate_journal_laps_dirs(tmp_path)
+    assert canonical in dirs
+    assert renamed_laps in dirs
+    # No dirs when nothing exists.
+    assert candidate_journal_laps_dirs(tmp_path / "empty") == []
+
+
+def test_known_journal_laps_dir_is_canonical(tmp_path):
+    d = known_journal_laps_dir(tmp_path)
+    assert d == (
+        tmp_path
+        / "cfg"
+        / "extension"
+        / "state"
+        / "lua"
+        / "app"
+        / "AC_Copilot_Trainer"
+        / "ac_copilot_trainer"
+        / "journal"
+        / "laps"
+    )
+
+
+def test_nonneg_float_allows_zero_rejects_inf_and_negative():
+    import argparse
+
+    from tools.ac_harness.auto_drive import _nonneg_float
+
+    assert _nonneg_float("0") == 0.0
+    assert _nonneg_float("8") == 8.0
+    for bad in ("inf", "-inf", "nan", "-1"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _nonneg_float(bad)
 
 
 def test_cli_new_flags_map_to_config(tmp_path):

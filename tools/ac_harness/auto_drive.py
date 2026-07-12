@@ -141,6 +141,10 @@ class AutoDriveConfig:
     # Stall recovery (#459 Part D).
     progress_stall_seconds: float = 10.0  # no forward progress for this long => recover
     max_recoveries: int = 6  # then FAIL honestly instead of teleport-looping
+    # Keep driving this long past S/F after the lap frame so the trainer's async lap-archive writer
+    # (#246/#249) finalizes lap 1's trace over the following frames before teardown; stopping at the
+    # exact boundary loses the archive (#515 / the #305 "not followed by another lap" class).
+    lap_finalize_grace_s: float = 8.0
     spawn_to_line: bool = True  # teleport onto the racing line when spawned off it (pit box)
     # Keep race.ini setup keys present during the CM launch window. CM regenerates race.ini while
     # launching; a short-lived Documents-only re-bake loop preserves the selected setup without
@@ -202,6 +206,10 @@ class AutoDriveReport:
     counts: dict[str, int] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     error: str | None = None
+    # Whether the post-lap grace-drive ran (drove past S/F so the async writer finalizes the lap
+    # archive). The single source of truth the evidence-bundle poll gates on, so the grace condition
+    # and the poll condition can never diverge (#515/#516 review).
+    lap_grace_applied: bool = False
     # Combo identity + setup verification (#459 Parts A/C) — evidence consumers key on these.
     car_id: str | None = None
     track_id: str | None = None
@@ -331,6 +339,31 @@ class ProgressWatchdog:
         self._anchor_time = now
 
 
+def _has_timed_lap(frames: list[dict]) -> bool:
+    """True if a produced ``lap`` snapshot carries a positive time (``payload.last_lap_ms > 0``).
+
+    An out-lap / teleport boundary still emits a ``lap`` frame but with no time, and the trainer
+    only archives a TIMED lap (``lastMs > 0``). So the post-lap grace-drive + archive poll must fire
+    on a timed lap, not merely on a ``lap`` frame, or an unarchiveable boundary wastes the grace and
+    then times out the poll (#516 review).
+    """
+    for frame in frames:
+        if (
+            not isinstance(frame, dict)
+            or frame.get("type") != "state.snapshot"
+            or frame.get("topic") != "lap"
+        ):
+            continue
+        payload = frame.get("payload")
+        ms = payload.get("last_lap_ms") if isinstance(payload, dict) else None
+        try:
+            if ms is not None and float(ms) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 async def run_auto_drive(
     config: AutoDriveConfig,
     *,
@@ -437,11 +470,31 @@ async def run_auto_drive(
         )
 
     stop = threading.Event()
-    drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, config, stop))
+    # The tap waits up to `lap_deadline` for the lap (a full lap at harness pace can exceed 180s /
+    # drive_seconds — Spa ~7km). The drive thread self-terminates on its own drive_seconds budget
+    # and BRAKES the car on exit, so to keep it driving through the post-lap grace it must outlive
+    # the LATEST lap the tap accepts PLUS the grace — not merely drive_seconds (which can be < the
+    # tap deadline, breaking headroom for a late lap; #515/#516). One `lap_deadline` feeds both the
+    # tap timeout and the drive budget so they cannot diverge.
+    # tap_frames waits in TWO phases: up to `tap_settle_s` for the car-on-track (any continuous
+    # topic), THEN up to lap_deadline for the lap. So the tap can accept a lap as late as
+    # tap_settle_s + lap_deadline, and the drive thread must outlive that whole window + grace (it
+    # brakes on budget exit; a premature stop leaves the tap hanging on a stopped car, #515/#516).
+    # One tap_settle_s + lap_deadline feeds BOTH the tap and the budget so they cannot diverge.
+    tap_settle_s = 120.0  # matches tap_frames' default settle_timeout
+    lap_deadline = max(180.0, config.drive_seconds)
+    drive_config = config
+    if config.wait_lap:
+        drive_config = replace(
+            config,
+            drive_seconds=tap_settle_s + lap_deadline + config.lap_finalize_grace_s,
+        )
+    drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
     counts: dict[str, int] = {}
     notes: list[str] = []
+    grace_applied = False
     # A fuel-less setup is baked but not fuel-confirmed — surface that in the report so a setup
     # A/B run does not read `setup_applied=True` as "independently verified" (#460 review).
     if setup_ack is not None and setup_applied and setup_ack.get("expected_fuel") is None:
@@ -451,10 +504,11 @@ async def run_auto_drive(
     try:
         tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
         if config.wait_lap:
-            # A full lap at harness pace can exceed tap_frames' 180 s default (Spa ~7 km) —
-            # wait as long as the drive leg is allowed to run, or the tap gives up on the lap
-            # while the car is still mid-lap and the run false-fails (#459 Part F).
-            tap_kwargs["lap_timeout"] = max(180.0, config.drive_seconds)
+            # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
+            # waits past what the drive thread can still drive (a full lap at pace can exceed
+            # the 180 s default, Spa ~7 km); #459 F / #516.
+            tap_kwargs["settle_timeout"] = tap_settle_s
+            tap_kwargs["lap_timeout"] = lap_deadline
         frames = await tap(config.sidecar_url, **tap_kwargs)
         result = evaluate_sequence(
             frames, strict_lifecycle=config.strict, require_lap=config.wait_lap
@@ -462,6 +516,16 @@ async def run_auto_drive(
         seq_ok = result.ok
         counts = dict(result.counts)
         notes = list(result.notes)
+        grace_applied = bool(
+            config.wait_lap and _has_timed_lap(frames) and config.lap_finalize_grace_s > 0
+        )
+        if grace_applied:
+            # The drive thread is still running here (stop not yet set), so the car keeps driving
+            # past S/F while the trainer's async writer (#246/#249) streams + finalizes lap 1's
+            # archive over the following frames. Without this, stopping at the exact lap boundary
+            # loses the trace (#515 / the #305 "not followed by another lap" class). The evidence
+            # poll gates on report.lap_grace_applied, this exact boolean, so the two never diverge.
+            await asyncio.sleep(config.lap_finalize_grace_s)
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:
@@ -498,6 +562,7 @@ async def run_auto_drive(
         hijacked=True,
         drive=stats,
         sequence_ok=seq_ok,
+        lap_grace_applied=grace_applied,
         counts=counts,
         notes=notes,
         error=error,
@@ -1082,14 +1147,16 @@ def write_evidence(
     return out
 
 
-def discover_journal_laps_dir(user_dir: Path) -> Path | None:
-    """Locate the trainer's per-lap archive dir under the AC user data root.
+def known_journal_laps_dir(user_dir: Path) -> Path:
+    """The trainer's canonical per-lap archive dir (may not exist yet on a fresh profile).
 
     The Lua app writes to ``ac.FolderID.ScriptConfig``/…/``journal/laps`` — on disk:
     ``<user_dir>/cfg/extension/state/lua/app/AC_Copilot_Trainer/ac_copilot_trainer/journal/laps``
-    (verified on the rig). Falls back to a bounded glob for renamed installs.
+    (verified on the rig). The async writer creates it lazily when it opens the first temp file, so
+    the directory can be absent right after a lap — poll this path so the archive is found once it
+    appears (#515 review).
     """
-    known = (
+    return (
         user_dir
         / "cfg"
         / "extension"
@@ -1101,6 +1168,11 @@ def discover_journal_laps_dir(user_dir: Path) -> Path | None:
         / "journal"
         / "laps"
     )
+
+
+def discover_journal_laps_dir(user_dir: Path) -> Path | None:
+    """Locate the EXISTING per-lap archive dir; bounded-glob fallback for renamed installs."""
+    known = known_journal_laps_dir(user_dir)
     if known.is_dir():
         return known
     state_root = user_dir / "cfg" / "extension" / "state" / "lua"
@@ -1112,19 +1184,92 @@ def discover_journal_laps_dir(user_dir: Path) -> Path | None:
     return None
 
 
-def collect_lap_archives(journal_dir: Path | None, since_epoch: float) -> list[str]:
-    """List lap-archive JSONs written at/after ``since_epoch`` (mtime), newest first."""
-    if journal_dir is None or not journal_dir.is_dir():
-        return []
+def candidate_journal_laps_dirs(user_dir: Path) -> list[Path]:
+    """ALL existing per-lap archive dirs: the canonical path plus any ``app/*/*/journal/laps``.
+
+    CSP does not delete an app's old state dir on rename/move, so the canonical (default) dir can
+    persist as a STALE leftover while the active writer uses a renamed dir. Preferring the canonical
+    (`discover_journal_laps_dir`) then shadows the renamed one and the poll watches the wrong path
+    (#516 review). Scanning EVERY candidate + filtering by mtime finds the fresh archive wherever
+    the active writer put it, regardless of stale leftovers.
+    """
+    dirs: list[Path] = []
+    known = known_journal_laps_dir(user_dir)
+    if known.is_dir():
+        dirs.append(known)
+    state_root = user_dir / "cfg" / "extension" / "state" / "lua"
+    if state_root.is_dir():
+        for cand in sorted(state_root.glob("app/*/*/journal/laps")):
+            if cand.is_dir() and cand not in dirs:
+                dirs.append(cand)
+    return dirs
+
+
+def _scan_lap_archives(dirs: list[Path], since_epoch: float) -> list[str]:
+    """List ``lap_*.json`` across all ``dirs`` at/after ``since_epoch`` (mtime), newest first."""
     hits: list[tuple[float, str]] = []
-    for path in journal_dir.glob("lap_*.json"):
-        try:
-            mtime = path.stat().st_mtime
-        except OSError:
+    for journal_dir in dirs:
+        if journal_dir is None or not journal_dir.is_dir():
             continue
-        if mtime >= since_epoch:
-            hits.append((mtime, str(path)))
+        for path in journal_dir.glob("lap_*.json"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= since_epoch:
+                hits.append((mtime, str(path)))
     return [p for _, p in sorted(hits, reverse=True)]
+
+
+def collect_lap_archives(
+    journal_dir: Path | None,
+    since_epoch: float,
+    *,
+    resolve: Callable[[], list[Path]] | None = None,
+    wait_for_first: bool = False,
+    timeout_s: float = 8.0,
+    poll_s: float = 0.5,
+    _clock: Callable[[], float] = time.monotonic,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> list[str]:
+    """List lap-archive JSONs written at/after ``since_epoch`` (mtime), newest first.
+
+    The trainer finalizes each lap trace with an **async deferred writer** (#246/#249): it streams
+    to a temp file and atomically renames to ``lap_*.json`` *after* the ``lap`` WS frame the harness
+    waits on. So immediately after a ``--wait-lap`` drive the finalized archive frequently does not
+    exist yet (only a mid-stream temp file, which the ``lap_*.json`` glob correctly ignores) — a
+    naive single scan then reports an empty list even though a lap was produced (#515).
+
+    With ``wait_for_first`` (set when the run produced a lap) this polls up to ``timeout_s`` for the
+    first archive to appear instead of racing the writer; it returns as soon as one exists, and
+    returns immediately with no wait when ``wait_for_first`` is false (a run that produced no lap).
+
+    When ``journal_dir`` is ``None`` and ``resolve`` is given, the candidate dirs are **re-resolved
+    each scan** via ``resolve()`` (which returns ALL candidate dirs) — so a fresh-profile dir the
+    writer creates mid-poll is found at its actual path, and a stale default dir cannot shadow a
+    renamed-install dir (every candidate is scanned; mtime filters stale files; #516 review).
+
+    A single ``journal_dir`` is for **tests / a known-good dir only**. Production MUST pass
+    ``journal_dir=None`` + a ``resolve`` returning every candidate (`candidate_journal_laps_dirs`);
+    passing one resolved dir would bypass the multi-dir scan and re-open the stale-shadowing bug.
+    ``_clock``/``_sleep`` are injectable so the poll is deterministic in off-sim tests.
+    """
+
+    def _current() -> list[Path]:
+        if journal_dir is not None:
+            return [journal_dir]
+        return resolve() if resolve else []
+
+    found = _scan_lap_archives(_current(), since_epoch)
+    if found or not wait_for_first:
+        return found
+    deadline = _clock() + max(0.0, timeout_s)
+    while _clock() < deadline:
+        _sleep(max(0.0, poll_s))
+        found = _scan_lap_archives(_current(), since_epoch)
+        if found:
+            return found
+    return found
 
 
 # ---------------------------------------------------------------------------
@@ -1806,6 +1951,19 @@ def _positive_float(value: str) -> float:
     return parsed
 
 
+def _nonneg_float(value: str) -> float:
+    """argparse type: a non-negative, FINITE float (``0`` allowed to disable the feature).
+
+    Like :func:`_positive_float` but permits ``0`` — ``--lap-finalize-grace-s 0`` is a valid "no
+    grace" opt-out. Still rejects negatives and non-finite ``inf``/``nan``: ``inf`` would make the
+    post-lap ``await asyncio.sleep(inf)`` never reach the teardown ``finally`` (#515 review).
+    """
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {value!r}")
+    return parsed
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Composed autonomous self-test (#154 Part G): drive any car/track + assert"
@@ -1867,6 +2025,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
     p.add_argument("--max-speed", type=float, default=240.0, help="racing/ggv: speed cap (km/h)")
     p.add_argument("--drive-seconds", type=float, default=300.0)
+    p.add_argument(
+        "--lap-finalize-grace-s",
+        type=_nonneg_float,
+        default=8.0,
+        help="drive this long past S/F after the lap so the async archive writer finalizes; "
+        "0 disables (#515)",
+    )
     p.add_argument("--target-speed", type=float, default=55.0, help="cruise target speed (km/h)")
     p.add_argument("--min-corner", type=float, default=30.0, help="cruise min corner speed (km/h)")
     p.add_argument("--tap-seconds", type=float, default=30.0)
@@ -1945,6 +2110,7 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
         ggv_scale=args.ggv_scale,
         racing_max_speed_kmh=args.max_speed,
         drive_seconds=args.drive_seconds,
+        lap_finalize_grace_s=args.lap_finalize_grace_s,
         target_speed_kmh=args.target_speed,
         min_corner_speed_kmh=args.min_corner,
         tap_seconds=args.tap_seconds,
@@ -2043,8 +2209,34 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             sidecar_proc.terminate()
 
     hud = _capture_hud_evidence(evidence_dir, args.hud_region)
-    journal_dir = discover_journal_laps_dir(user_dir)
-    lap_archives = collect_lap_archives(journal_dir, run_started_epoch)
+    # Gate the wait on the WS `lap` frame the tap actually saw (report.counts["lap"]) — the SAME
+    # signal run_auto_drive's grace uses — not rig_drive's separate lap counter, so the two never
+    # diverge (#515 review). The async writer finalizes just after that frame, so wait briefly
+    # rather than racing to []. On a fresh profile journal/laps may not exist until the writer
+    # creates it, so poll the deterministic known path when discovery finds nothing yet.
+    # Only wait when the grace-drive ACTUALLY ran — gate on the single flag run_auto_drive set
+    # (report.lap_grace_applied), not a re-derived condition, so the grace and the poll can never
+    # disagree (#516 review). On a fresh profile journal/laps may not exist until the async writer
+    # creates it — pass a re-discovering resolver so the poll finds it at its real path (default or
+    # renamed install), not a hardcoded one. No grace-drive => single scan, no hang.
+    # The grace-drive already elapsed synchronously in run_auto_drive, so by here the writer has
+    # streamed the trace; this poll only awaits the OS flush/rename — a short CONSTANT timeout, not
+    # one scaled to the in-sim grace time (#516 review). collect_lap_archives' default covers it.
+    # Scan ALL candidate journal/laps dirs each poll (canonical + any renamed) and filter by mtime:
+    # CSP leaves stale default state dirs on rename, so preferring one dir lets a stale leftover
+    # shadow the active renamed dir (#516 review). The fresh archive is found wherever the active
+    # writer put it; stale files are excluded by the since_epoch gate.
+    lap_archives = collect_lap_archives(
+        None,
+        run_started_epoch,
+        resolve=lambda: candidate_journal_laps_dirs(user_dir),
+        wait_for_first=report.lap_grace_applied,
+    )
+    # Report the dir the archive was actually found in (correct even for a renamed install), so the
+    # metadata matches the multi-dir scan, not the canonical-preferring discover (#516 review).
+    journal_dir = (
+        Path(lap_archives[0]).parent if lap_archives else discover_journal_laps_dir(user_dir)
+    )
     extras = {
         "run": {
             "started_epoch": run_started_epoch,
