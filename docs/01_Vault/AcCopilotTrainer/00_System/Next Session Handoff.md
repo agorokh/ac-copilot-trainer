@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-12T14:20:00Z
+last_updated: 2026-07-12T21:00:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-522-parts12-coverage-calibration-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-actionable-coaching-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-511-partd-tablet-voice-endpoint-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/issue-515-lap-archives-race-2026-07-11.md
@@ -78,24 +79,32 @@ relates_to:
 
 # Next session handoff
 
-## RESUME HERE — #522 remaining parts (coaching quality)
+## RESUME HERE — #522 V2 (the only remaining #522 scope) + operator listen
 
-**PR [#523](https://github.com/agorokh/ac-copilot-trainer/pull/523) MERGED (`56dd3a4`)** — the
-#522 V1 coaching-timing redesign is live: 3.2 s audibility-budget heads-up, NO live brake-fault
-imperative (silence past the mark + exit debrief), and the `semantic_timeliness` gate
-(record/analyze/`--assert-coaching`). Live-proven on 3 identical autonomous laps: junk cues
-8 → 0, ACTIONABLE 0 → 4. Full detail: [[issue-522-actionable-coaching-2026-07-12]].
+**PR [#525](https://github.com/agorokh/ac-copilot-trainer/pull/525) MERGED (`56048ae`,
+2026-07-12)** — #522 parts 1-2 are live: **every gate-grade brake zone is coached**
+(`CornerReference.brake_marks`, per-zone observer state, zone-aware voice dedup/cooldowns —
+Magione marks 5 → 8) and **per-driver brake-mark calibration** (per-zone EMA of the driver's
+own onsets on each valid `lap_complete`; 50 m metric tolerance, wrap/layout/order-guarded;
+`AC_COPILOT_BRAKE_CAL=0` disables). LIVE-VERIFIED pre-merge on 2 autonomous runs:
+`--assert-coaching` exit 0, `brake_events_coached` **80% and 89%** (V1 was red at 78%), junk
+0, and run 2's cues carried `mark_source: driver_calibrated` (T4 mark moved ~42 m). Also
+fixed a latent T1 wrapped-lead cue spam (~55×/lap on the cue stream). Full detail:
+[[issue-522-parts12-coverage-calibration-2026-07-12]].
 
-Resume with the remaining #522 parts (both have research grounding on the issue):
-1. **Corner coverage** — reference segmentation finds 5 of Magione's 9 brake zones; the
-   `brake_events_coached` gate is honestly red at 78% (<80%). Fix corner extraction in
-   `track_reference.build_references` so every brake zone yields a coachable mark.
-2. **Per-driver brake-point calibration** — coach against marks learned from the driver's
-   own recent laps (EMA per corner) instead of the synthetic 77.8 s ideal whose marks sit
-   ~25 m early. `.env.example` gained optional `AC_COPILOT_BRAKE_LEAD_S` (default 3.2).
-3. **Operator listen**: drive with the merged coach (any sidecar from main) — brake cues
-   now land ~1.5 s before the mark and nothing speaks after it. Tablet earpiece path from
-   #519 works over `adb reverse tcp:8765 tcp:8765` → `http://127.0.0.1:8765/tablet/voice`.
+Resume with:
+1. **#522 V2** (research grounding on the issue): phase-slot scheduler; LLM (in-repo Ollama
+   `corner_advice`, off hot path) selecting the ONE between-lap improvement point; coach-v2
+   runtime calibration (`_brake_calibration_active` deliberately skips when
+   `AC_COPILOT_COACH_V2=1` owns the cue path).
+2. **Operator listen**: drive with any sidecar from main — every brake zone now gets its
+   heads-up and marks adapt to your braking after one valid lap. Tablet earpiece path from
+   #519: `adb reverse tcp:8765 tcp:8765` → `http://127.0.0.1:8765/tablet/voice`.
+3. Rig note (this session): the stale plain sidecar on :8765 was replaced by a
+   voice+reference one from the PR branch for verification — **restart it from main** on the
+   next rig session (`--voice-reference .scratch/coach-demo/reference.json --voice-bank
+   .scratch/coach-bank-kokoro-fenrir-v3-intensity3-20260702`). Taps + reports in
+   `.scratch/pr525-tap*.jsonl` / `pr525-tap*-report.json`.
 
 
 ## Previous RESUME (2026-07-12 early) — tablet voice hardware verification (DONE — see #511/#381 comments)

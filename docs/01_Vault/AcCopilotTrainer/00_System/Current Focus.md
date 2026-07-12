@@ -26,15 +26,26 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-07-12, later):** Coaching QUALITY —
+**Active focus (2026-07-12, latest):** Coaching QUALITY —
+[#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) V2 (the only remaining
+scope). PR [#525](https://github.com/agorokh/ac-copilot-trainer/pull/525) **MERGED**
+([`56048ae`](https://github.com/agorokh/ac-copilot-trainer/commit/56048ae)) closed parts 1-2:
+every gate-grade brake zone coached (marks 5 → 8 on the Magione reference; per-zone observer
+state + zone-aware voice dedup) and per-driver brake-mark calibration (per-zone EMA of the
+driver's own onsets, 50 m metric tolerance, wrap/layout/order-guarded). LIVE-VERIFIED
+pre-merge: `--assert-coaching` exit 0 twice, coverage 80%/89% (was red 78%), junk 0,
+`mark_source: driver_calibrated` on the wire. Remaining: V2 phase-slot scheduler + Ollama
+`corner_advice` between-lap point + coach-v2-runtime calibration. Detail:
+[[issue-522-parts12-coverage-calibration-2026-07-12]].
+
+**Prior focus (2026-07-12, later):** Coaching QUALITY —
 [#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) remaining parts. PR
 [#523](https://github.com/agorokh/ac-copilot-trainer/pull/523) **MERGED**
 ([`56dd3a4`](https://github.com/agorokh/ac-copilot-trainer/commit/56dd3a4)) — operator verdict
 ("Brake arrives 4 s late — useless") measured (0/8 actionable), root-caused (0.8 s lead vs a
 3.2 s audibility budget; reactive act tier unfixable in principle; synthetic 77.8 s reference),
 and fixed: one calm heads-up per pass, silence past the mark, exit debrief, `semantic_timeliness`
-gate. Live-proven junk 8 → 0 on identical laps. Remaining: corner-coverage extraction (5/9
-zones), per-driver brake-point calibration. Detail:
+gate. Live-proven junk 8 → 0 on identical laps. Detail:
 [[issue-522-actionable-coaching-2026-07-12]].
 
 **Prior focus (2026-07-12, earlier):** Tablet voice hardware verification for
