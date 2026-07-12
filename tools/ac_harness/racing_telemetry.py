@@ -54,6 +54,9 @@ class PhysFrame:
     accg_lat: float
     accg_lon: float
     slip: tuple[float, float, float, float]
+    # wheelAngularSpeed[4]@104 (rad/s, FL FR RL RR) — the r_eff / slip-ratio channel (#532 P1
+    # handshake). Defaulted so pre-existing positional constructions stay valid.
+    wheel_omega: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
@@ -74,6 +77,7 @@ def parse_physics(buf: bytes) -> PhysFrame:
     steer, speed = struct.unpack_from("<2f", buf, 24)
     accg = struct.unpack_from("<3f", buf, 44)  # [lateral, vertical, longitudinal]
     slip = struct.unpack_from("<4f", buf, 56)
+    omega = struct.unpack_from("<4f", buf, 104)  # wheelAngularSpeed[4] rad/s
     _require_finite(
         gas=gas,
         brake=brake,
@@ -85,8 +89,12 @@ def parse_physics(buf: bytes) -> PhysFrame:
         slip_fr=slip[1],
         slip_rl=slip[2],
         slip_rr=slip[3],
+        omega_fl=omega[0],
+        omega_fr=omega[1],
+        omega_rl=omega[2],
+        omega_rr=omega[3],
     )
-    return PhysFrame(packet_id, gas, brake, gear, rpm, steer, speed, accg[0], accg[2], slip)
+    return PhysFrame(packet_id, gas, brake, gear, rpm, steer, speed, accg[0], accg[2], slip, omega)
 
 
 def parse_graphics(buf: bytes) -> GfxFrame:

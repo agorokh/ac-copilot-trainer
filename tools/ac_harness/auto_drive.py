@@ -129,8 +129,15 @@ class AutoDriveConfig:
     # braking points + gear shifting (RacingDriver) — the car actually races (shifts through gears,
     # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
     # (LapDriver) for a guaranteed-clean slow lap when pace is not the point.
+    # ``driver="handshake"`` runs the #532 plant-ID handshake instead of a plain drive: guided
+    # probes measure ff_sign / steer-FF / shift points / r_eff and the result lands in
+    # ``handshake_sink`` (shared dict — survives dataclasses.replace) for the CLI to persist.
     driver: str = "racing"
     drive_seconds: float = 300.0
+    # Plant-artifact consumption (#532): RacingDriver kwargs derived from the combo's identified
+    # plant (see plant_id.plant_driver_kwargs), applied on the ggv path. None => generic plant.
+    plant_kwargs: dict | None = None
+    handshake_sink: dict = field(default_factory=dict)
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
     racing_max_speed_kmh: float = (
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
@@ -1653,8 +1660,27 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             fast_line, generic_gt3_ggv(), v_top_kmh=config.racing_max_speed_kmh
         )
         v_target = [v * config.ggv_scale for v in v_target]
-        return RacingDriver.from_ggv_profile(fast_line, v_target)
-    raise ValueError(f"unknown driver {config.driver!r} (expected 'ggv', 'racing', or 'cruise')")
+        # #532: consume the combo's machine-measured plant constants when the CLI resolved an
+        # artifact (shift points always; measured curvature-FF steering with --use-plant full).
+        return RacingDriver.from_ggv_profile(fast_line, v_target, **(config.plant_kwargs or {}))
+    if config.driver == "handshake":
+        from tools.ac_harness.plant_id import HandshakeController
+
+        if speed_profile is None:
+            raise ValueError(
+                "handshake driver requires a speed_profile from the track's fast_lane.ai"
+            )
+        return HandshakeController(
+            fast_line,
+            speed_profile,
+            car_id=config.car_id or "",
+            track_id=config.track_id,
+            sink=config.handshake_sink,
+            phys_read="auto",
+        )
+    raise ValueError(
+        f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
+    )
 
 
 def _teleport_onto_line(  # pragma: no cover - rig-only
@@ -1765,7 +1791,7 @@ def rig_drive(  # pragma: no cover - rig-only
     fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
     line = load_ai_line(fast_path)
     speed_profile = None
-    if config.driver == "racing":
+    if config.driver in ("racing", "handshake"):
         from tools.ac_harness.racing_driver import load_speed_profile
 
         speed_profile = load_speed_profile(fast_path)
@@ -1887,6 +1913,11 @@ def rig_drive(  # pragma: no cover - rig-only
                 cd["gear"],
                 now,
             )
+            if getattr(driver, "finished", False):
+                # A self-terminating driver (the #532 handshake) reports completion; stop the
+                # loop instead of burning the remaining drive budget (teardown brakes the car).
+                stats.reason = stats.reason or "driver finished"
+                break
             stalled = watchdog.update(stats.total_distance_m, now)
             if frame.needs_recovery or stalled:
                 if not _recover(now):
@@ -2080,10 +2111,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
     p.add_argument(
         "--driver",
-        choices=("ggv", "racing", "cruise"),
+        choices=("ggv", "racing", "cruise", "handshake"),
         default="racing",
         help="ggv = flat-out min-time (top gears, 200+); racing = AI-line pace (default); "
-        "cruise = slow 1st-gear lane-keeper",
+        "cruise = slow 1st-gear lane-keeper; handshake = #532 plant-ID probes (measures "
+        "ff_sign/steer-FF/shift points/r_eff in <=2 laps, persists a per-combo plant artifact)",
+    )
+    p.add_argument(
+        "--use-plant",
+        choices=("off", "auto", "full"),
+        default="auto",
+        help="consume the combo's identified plant artifact on the ggv path: auto = measured "
+        "shift points when an artifact exists (default); full = also the measured "
+        "curvature-feedforward steering (ff_sign/ff_c1/ff_c2); off = generic plant only",
     )
     p.add_argument("--pace", type=float, default=0.9, help="racing: fraction of AI-line speed")
     p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
@@ -2211,6 +2251,34 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         return 2
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
 
+    # #532: resolve the combo's identified plant for the ggv path. `auto` silently falls back to
+    # the generic plant when no artifact exists; `full` REQUIRES one (measured steering must never
+    # silently degrade to hand constants — that is the failure mode the handshake exists to end).
+    plant_artifact_used: str | None = None
+    if config.driver == "ggv" and args.use_plant != "off" and config.car_id:
+        from tools.ac_harness.plant_id import (
+            load_plant_artifact,
+            plant_artifact_path,
+            plant_driver_kwargs,
+        )
+
+        artifact = load_plant_artifact(user_dir, config.car_id, config.track_id)
+        if artifact is not None:
+            config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
+            plant_artifact_used = str(plant_artifact_path(user_dir, config.car_id, config.track_id))
+            print(
+                f"auto-drive: plant artifact loaded ({args.use_plant}: "
+                f"{sorted(config.plant_kwargs)}) <- {plant_artifact_used}"
+            )
+        elif args.use_plant == "full":
+            print(
+                "auto-drive: --use-plant full requires a plant artifact for this combo; "
+                "run --driver handshake first"
+            )
+            return 2
+        else:
+            print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
+
     car_tag = config.car_id or "car"
     evidence_dir = args.evidence_dir or (
         Path(".scratch") / "harness-evidence" / f"{_utc_stamp()}_{car_tag}_{config.track_id}"
@@ -2308,12 +2376,25 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             "cm_preset": str(config.cm_preset),
             "setup_ini": str(config.setup_ini) if config.setup_ini else None,
             "driver": config.driver,
+            "use_plant": args.use_plant,
+            "plant_artifact": plant_artifact_used,
             "sidecar": sidecar_detail,
         },
         "hud": hud,
         "lap_archives": lap_archives,
         "journal_dir": str(journal_dir) if journal_dir else None,
     }
+    if config.driver == "handshake":
+        # #532: fold the handshake outcome into the report (FAIL at stage="handshake" when a
+        # probe missed its gate) and persist a PASSED result as the combo's plant artifact.
+        from tools.ac_harness.plant_id import apply_handshake_outcome, save_plant_artifact
+
+        apply_handshake_outcome(report, config.handshake_sink)
+        extras["handshake"] = dict(config.handshake_sink)
+        if config.handshake_sink.get("ok"):
+            artifact_path = save_plant_artifact(user_dir, config.handshake_sink["result"])
+            extras["plant_artifact_saved"] = str(artifact_path)
+            print(f"auto-drive: plant artifact saved -> {artifact_path}")
     report_path = write_evidence(evidence_dir, report, extras=extras)
 
     print(report.summary())

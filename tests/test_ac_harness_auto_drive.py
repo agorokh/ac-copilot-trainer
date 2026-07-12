@@ -658,6 +658,49 @@ def test_build_driver_rejects_unknown_driver():
         _build_driver(_cfg(driver="bogus"), _LINE, _PROFILE)
 
 
+def test_build_driver_ggv_consumes_plant_kwargs():
+    # #532: measured plant constants flow into the GGV driver (shift points + measured steering).
+    d = _build_driver(
+        _cfg(
+            driver="ggv",
+            racing_max_speed_kmh=200.0,
+            plant_kwargs={
+                "rpm_up": 7600.0,
+                "rpm_dn": 5100.0,
+                "steering_mode": "curvature_ff",
+                "ff_sign": 1.0,
+                "ff_c1": 6.0,
+                "ff_c2": 0.015,
+            },
+        ),
+        _LINE,
+        None,
+    )
+    assert d.rpm_up == 7600.0
+    assert d.rpm_dn == 5100.0
+    assert d.steering_mode == "curvature_ff"
+    assert d.cff is not None
+    assert d.cff.ff_sign == 1.0
+    assert d.cff.c1 == 6.0
+
+
+def test_build_driver_handshake_builds_controller_wired_to_sink():
+    from tools.ac_harness.plant_id import HandshakeController
+
+    sink: dict = {}
+    cfg = _cfg(driver="handshake", car_id="test_car", handshake_sink=sink)
+    d = _build_driver(cfg, _LINE, _PROFILE)
+    assert isinstance(d, HandshakeController)
+    assert d._sink is sink
+    assert d.car_id == "test_car"
+    assert d.finished is False
+
+
+def test_build_driver_handshake_requires_speed_profile():
+    with pytest.raises(ValueError, match="speed_profile"):
+        _build_driver(_cfg(driver="handshake"), _LINE, None)
+
+
 def test_racing_driver_step_upshifts_at_high_rpm():
     # Direct evidence the racing controller commands an upshift out of 1st when revving + moving.
     racing = _build_driver(_cfg(pace=1.0, racing_max_speed_kmh=240.0), _LINE, _PROFILE)

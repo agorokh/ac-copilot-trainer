@@ -72,6 +72,31 @@ Bundles live under `.scratch/` — **session ephemera**. A consuming task promot
 keep (reference archives, curated comparisons) to a durable location; never treat the bundle as
 long-term storage (scratch-dir disposability pitfall).
 
+## Plant-ID handshake (#529 P1 / #532 — measure the controller constants, then consume them)
+
+The GGV driver's constants (`ff_sign`, `ff_c1/ff_c2`, shift points, `r_eff`) used to be
+hand-tuned per combo. The **handshake** measures them from designed in-sim probes in ≤2 laps
+and persists a per-combo artifact:
+
+```bash
+# 1) Measure the plant (guided probes: steer pulses, WOT sweep, coast, corner mining):
+python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track magione \
+    --driver handshake --drive-seconds 600
+
+# 2) Drive with the measured constants (shift points by default; measured steering with full):
+python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track magione \
+    --driver ggv --use-plant full --wait-lap
+```
+
+- Artifacts persist under `<AC user data>/plant_id/<car>__<track>.json` — a **durable** path,
+  never `.scratch` (the original offline `model_id.py` was lost to scratch disposal).
+- Every measured constant carries a quality metric + provenance in `report.json`
+  (`extras.handshake`); a probe that fails its gate **FAILs the run at `stage="handshake"`**
+  naming the probe and the observed values — no silent fallback to hand constants.
+- `--use-plant auto` (default) applies measured shift points when an artifact exists;
+  `full` also enables the measured curvature-feedforward steering; `off` forces the generic
+  GT3 plant. `full` without an artifact fails fast — run the handshake first.
+
 ## Composing downstream tasks (don't reinvent)
 
 - **Setup A/B**: run twice with different `--setup` names; compare the runs' lap archives with
