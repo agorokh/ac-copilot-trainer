@@ -81,13 +81,20 @@ GRAPHICS_IS_IN_PIT_OFFSET = 160
 # Minimum bytes that must be readable to decode every field above (isInPit + its 4 bytes).
 GRAPHICS_MIN_BYTES = GRAPHICS_IS_IN_PIT_OFFSET + 4  # 164
 
-# acpmf_physics (SPageFilePhysics): the only field used here is the leading packetId,
-# whose stagnation distinguishes a genuinely-live frame from a paused/menu frame that AC
-# left flagged LIVE (AcSharedMemory.cs documents that AC "sometimes doesn't bother setting
-# Status to Pause" and derives pause from packetId stagnation instead).
-#   int packetId @ 0
+# acpmf_physics (SPageFilePhysics): two fields are read here — the leading packetId (whose
+# stagnation distinguishes a genuinely-live frame from a paused/menu frame that AC left flagged
+# LIVE; AcSharedMemory.cs documents AC "sometimes doesn't bother setting Status to Pause" and
+# derives pause from packetId stagnation) and finalFF, the normalized force sent to the wheel.
+#   int   packetId @ 0
+#   float finalFF  @ 308  — after gas/brake/fuel/gear/rpms/steerAngle/speedKmh, velocity[3],
+#     accG[3], nine float[4] wheel/tyre arrays, drs/tc/heading/pitch/roll/cgHeight, carDamage[5],
+#     numberOfTyresOut, pitLimiterOn, abs, kersCharge/kersInput, autoShifterOn, rideHeight[2],
+#     turboBoost, ballast, airDensity, airTemp, roadTemp, localAngularVel[3]. The offset is
+#     validated against a live drive before any gain is written (tools/ac_harness/ffb_calibrate).
 PHYSICS_PACKET_ID_OFFSET = 0
+PHYSICS_FINAL_FF_OFFSET = 308
 PHYSICS_MIN_BYTES = PHYSICS_PACKET_ID_OFFSET + 4  # 4
+PHYSICS_FINAL_FF_MIN_BYTES = PHYSICS_FINAL_FF_OFFSET + 4  # 312
 
 # Windows named shared-memory objects created by acs.exe. AC creates them in the session
 # namespace as ``Local\<name>``; a bare name resolves to ``Local\`` for processes in the
@@ -100,11 +107,12 @@ SHM_STATIC = "acpmf_static"
 # safe prefix avoids over-mapping while covering every field we read.
 GRAPHICS_MAP_BYTES = 256
 # One consistent physics-page map size that covers EVERY field any reader unpacks from
-# ``acpmf_physics``. ``shared_memory.parse_physics`` here only needs ``packet_id@0`` (4 bytes), but
-# ``racing_telemetry.parse_physics`` unpacks through ``wheelAngularSpeed[4]@104`` (120 bytes); a
-# single page mapped 160 wide keeps the two same-named parsers from disagreeing on buffer size
-# (cross-file trap flagged in review) at negligible cost — it is one mmap view of the same page.
-PHYSICS_MAP_BYTES = 160
+# ``acpmf_physics``: ``shared_memory.parse_physics`` reads ``packet_id@0`` (4 bytes) AND ``finalFF``
+# @308 (=> >= ``PHYSICS_FINAL_FF_MIN_BYTES``=312, #533), and ``racing_telemetry.parse_physics``
+# unpacks through ``wheelAngularSpeed[4]@104`` (120 bytes). One page mapped 512 wide keeps the
+# same-named parsers from disagreeing on buffer size (cross-file trap flagged in review) at
+# negligible cost — it is one mmap view of the same page.
+PHYSICS_MAP_BYTES = 512
 # acpmf_static: wide-char (UTF-16LE) strings; ``carModel`` is a 33-char field at byte offset 68 and
 # ``track`` a 33-char field at byte offset 134 (live-verified against a running session:
 # smVersion@0, carModel@68, track@134). Mapping 260 bytes covers both with headroom.
@@ -168,9 +176,15 @@ class GraphicsSnapshot:
 
 @dataclass(frozen=True)
 class PhysicsSnapshot:
-    """The single ``acpmf_physics`` field used for the stagnation guard."""
+    """The ``acpmf_physics`` fields read here: ``packet_id`` (stagnation guard) and ``final_ff``.
+
+    ``final_ff`` is AC's normalized force-feedback value in roughly [-1, 1] (the signal sent to
+    the wheel). It is ``None`` when the mapped buffer is too short to contain it (callers that
+    read only the packetId prefix), so existing ``packet_id``-only consumers are unaffected.
+    """
 
     packet_id: int
+    final_ff: float | None = None
 
 
 class SharedMemoryUnavailable(RuntimeError):
@@ -199,11 +213,18 @@ def parse_graphics(buf: bytes) -> GraphicsSnapshot:
 
 
 def parse_physics(buf: bytes) -> PhysicsSnapshot:
-    """Decode an ``acpmf_physics`` byte buffer into a :class:`PhysicsSnapshot` (pure)."""
+    """Decode an ``acpmf_physics`` byte buffer into a :class:`PhysicsSnapshot` (pure).
+
+    ``packet_id`` requires only :data:`PHYSICS_MIN_BYTES`; ``final_ff`` is decoded when the buffer
+    reaches :data:`PHYSICS_FINAL_FF_MIN_BYTES` and is ``None`` otherwise.
+    """
     if len(buf) < PHYSICS_MIN_BYTES:
         raise ValueError(f"acpmf_physics buffer too short: {len(buf)} < {PHYSICS_MIN_BYTES} bytes")
     packet_id = struct.unpack_from("<i", buf, PHYSICS_PACKET_ID_OFFSET)[0]
-    return PhysicsSnapshot(packet_id=packet_id)
+    final_ff: float | None = None
+    if len(buf) >= PHYSICS_FINAL_FF_MIN_BYTES:
+        final_ff = struct.unpack_from("<f", buf, PHYSICS_FINAL_FF_OFFSET)[0]
+    return PhysicsSnapshot(packet_id=packet_id, final_ff=final_ff)
 
 
 class DrivingEntryDetector:
@@ -433,7 +454,9 @@ class SharedMemoryReader:  # pragma: no cover - Windows/rig-only; validated via 
     def read_physics(self) -> PhysicsSnapshot | None:
         if self._physics is None:
             return None
-        return parse_physics(self._physics.read(PHYSICS_MIN_BYTES))
+        # Read through finalFF (offset 308) so PhysicsSnapshot.final_ff is populated; the mapped
+        # section is PHYSICS_MAP_BYTES, which is >= PHYSICS_FINAL_FF_MIN_BYTES.
+        return parse_physics(self._physics.read(PHYSICS_FINAL_FF_MIN_BYTES))
 
     def read_physics_bytes(self, nbytes: int) -> bytes | None:
         """Raw ``acpmf_physics`` prefix (up to ``nbytes``), or ``None`` when physics is unmapped.
