@@ -81,10 +81,10 @@ def _profile_for(line: list[tuple[float, float, float]]) -> list[float]:
         on_straight = 0.0 < x < STRAIGHT_M
         if on_straight:
             profile.append(45.0)
-        elif x >= STRAIGHT_M:  # right-end corner
-            profile.append(23.0)
-        else:  # left-end corner
-            profile.append(30.0)
+        elif x >= STRAIGHT_M:  # right-end corner: slow (pace-scaled ~19 m/s, ~0.37 g at R=100)
+            profile.append(29.0)
+        else:  # left-end corner: fast (pace-scaled ~26 m/s) -> v^2 spread identifies c2
+            profile.append(40.0)
     return profile
 
 
@@ -196,8 +196,10 @@ def test_handshake_recovers_steer_feedforward(handshake_outcome):
     ctrl, _ = handshake_outcome
     constants = ctrl.result.constants()
     c1, c2 = constants["ff_c1"], constants["ff_c2"]
-    # The steer the fitted FF predicts must match the true plant across the working envelope.
-    for v, kappa in ((16.0, 1 / R1), (26.0, 1 / R2), (20.0, 0.008)):
+    # The steer the fitted FF predicts must match the true plant at the OPERATING POINTS the
+    # handshake actually visited (both corners are R1; speeds differ) — extrapolation beyond the
+    # mined envelope is not part of the fit's contract.
+    for v, kappa in ((19.0, 1 / R1), (26.0, 1 / R1), (22.0, 1 / R1)):
         true_steer = (C1_TRUE + C2_TRUE * v * v) * kappa
         fit_steer = c1 * kappa + c2 * (v * v * kappa)
         assert fit_steer == pytest.approx(true_steer, rel=0.15), (

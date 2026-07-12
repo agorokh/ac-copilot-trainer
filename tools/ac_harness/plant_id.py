@@ -802,12 +802,12 @@ class HandshakeController:
             "accg_lat": ay_g,
             "steer": acc["steer"] / acc["n"],
         }
-        # Only CORNERING rows count toward the steer-FF fit budget — straight-line rows are
-        # filtered out by the fitter anyway (min_lat_g), so storing them would let the
-        # "enough rows" completion gate pass on a fit-empty dataset.
+        # Only CORNERING rows count toward the steer-FF fit budget, at the SAME lateral-g floor
+        # the fitter applies (fit_steer_feedforward min_lat_g=0.3) — otherwise the "enough rows"
+        # completion gate can pass on rows the fit then discards.
         if (
             all(_finite(val) for val in row.values())
-            and abs(ay_g) >= 0.25
+            and abs(ay_g) >= 0.3
             and len(self._rows) < 20000
         ):
             self._rows.append(row)
