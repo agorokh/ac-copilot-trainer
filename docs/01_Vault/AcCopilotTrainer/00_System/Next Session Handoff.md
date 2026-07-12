@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-12T04:40:00Z
+last_updated: 2026-07-12T14:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-522-actionable-coaching-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-511-partd-tablet-voice-endpoint-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/issue-515-lap-archives-race-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/issue-512-false-green-kpi-2026-07-11.md
@@ -77,7 +78,27 @@ relates_to:
 
 # Next session handoff
 
-## RESUME HERE — tablet voice hardware verification (one tap away)
+## RESUME HERE — #522 remaining parts (coaching quality)
+
+**PR [#523](https://github.com/agorokh/ac-copilot-trainer/pull/523) MERGED (`56dd3a4`)** — the
+#522 V1 coaching-timing redesign is live: 3.2 s audibility-budget heads-up, NO live brake-fault
+imperative (silence past the mark + exit debrief), and the `semantic_timeliness` gate
+(record/analyze/`--assert-coaching`). Live-proven on 3 identical autonomous laps: junk cues
+8 → 0, ACTIONABLE 0 → 4. Full detail: [[issue-522-actionable-coaching-2026-07-12]].
+
+Resume with the remaining #522 parts (both have research grounding on the issue):
+1. **Corner coverage** — reference segmentation finds 5 of Magione's 9 brake zones; the
+   `brake_events_coached` gate is honestly red at 78% (<80%). Fix corner extraction in
+   `track_reference.build_references` so every brake zone yields a coachable mark.
+2. **Per-driver brake-point calibration** — coach against marks learned from the driver's
+   own recent laps (EMA per corner) instead of the synthetic 77.8 s ideal whose marks sit
+   ~25 m early. `.env.example` gained optional `AC_COPILOT_BRAKE_LEAD_S` (default 3.2).
+3. **Operator listen**: drive with the merged coach (any sidecar from main) — brake cues
+   now land ~1.5 s before the mark and nothing speaks after it. Tablet earpiece path from
+   #519 works over `adb reverse tcp:8765 tcp:8765` → `http://127.0.0.1:8765/tablet/voice`.
+
+
+## Previous RESUME (2026-07-12 early) — tablet voice hardware verification (DONE — see #511/#381 comments)
 
 `/autonomous-deliver 381` (2026-07-11, ultracode) shipped **PR
 [#519](https://github.com/agorokh/ac-copilot-trainer/pull/519) MERGED (`fb54b9d`)** — the 7"
