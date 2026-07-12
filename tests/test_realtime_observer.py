@@ -498,3 +498,38 @@ def test_late_brake_feedback_survives_without_apex_deficit():
     late_info = [a for a in exit_out if a.kind == "late_brake" and a.urgency == "info"]
     assert late_info and late_info[0].detail["braked_late_uncoached"] is True
     assert "brake earlier next lap" in late_info[0].message
+
+
+def test_trail_braking_previous_corner_does_not_latch_next_corner():
+    """#523 review (Codex P2): with the 3.2 s lead, closely spaced corners overlap — braking
+    far out in the lead window (trail-braking the previous turn) must not consume the next
+    corner's heads-up; braking near the mark (<= ~1.5 s) still does."""
+
+    def _tight_ref():
+        # corner window starts only just before the apex, so the 3.2 s lead window sits
+        # UPSTREAM of it — the overlap shape closely spaced corners produce.
+        return CornerReference(
+            index=0,
+            apex_spline=0.50,
+            spline_lo=0.47,
+            spline_hi=0.60,
+            optimal_apex_kmh=100.0,
+            best_observed_apex_kmh=100.0,
+            best_brake_point_spline=0.45,
+            n_corpus=1,
+        )
+
+    obs = RealtimeObserver([_tight_ref()], track_length_m=2500.0)  # default 3.2 s lead
+    # 110 km/h: lead window opens ~0.412; trail-brake at 0.413 (tta ~3 s) -> must NOT latch
+    out = obs.observe({"spline": 0.413, "speed": 110.0, "brake": 0.6})
+    assert out == []
+    # off the brakes closer in -> heads-up still fires for THIS corner
+    out = obs.observe({"spline": 0.430, "speed": 110.0, "brake": 0.0})
+    prepare = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert prepare, "trail-braking the previous corner must not eat the heads-up"
+
+    # control: braking NEAR the mark (tta <= 1.5 s) is braking for this corner -> latched
+    obs2 = RealtimeObserver([_tight_ref()], track_length_m=2500.0)
+    obs2.observe({"spline": 0.440, "speed": 110.0, "brake": 0.6})  # tta ~0.8 s
+    out2 = obs2.observe({"spline": 0.444, "speed": 110.0, "brake": 0.0})
+    assert [a for a in out2 if a.kind == "late_brake"] == []

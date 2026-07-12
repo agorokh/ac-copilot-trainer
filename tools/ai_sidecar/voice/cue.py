@@ -155,6 +155,12 @@ class CueArbiter:
         # in-process scheduler's act exemption.
         fresh: list[dict[str, Any]] = []
         for a in advisories:
+            if a.get("kind") == "late_brake" and a.get("urgency") == "info":
+                # #522 exit debrief ("you ran deep past your brake point"): HUD/text-bound
+                # by design. Speaking the anticipatory "Brake point, Turn N." phrase AFTER
+                # the corner would be exactly the after-the-fact noise #522 removed — never
+                # arbitrate it (and never let it consume a cooldown slot).
+                continue
             is_act = _URGENCY_RANK.get(str(a.get("urgency", "")), 0) >= _URGENCY_RANK["act"]
             key = (_corner_key(a), str(a.get("kind", "")))
             last = self._last_corner_kind_s.get(key)

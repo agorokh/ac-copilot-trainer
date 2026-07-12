@@ -92,7 +92,11 @@ def _load_tap(path: Path) -> tuple[list, list, list]:
                 advisories.append((r["t"], r["payload"]))
             elif r.get("k") == "coaching.voice":
                 p = r["payload"]
-                dispatches.append((float(p.get("t_wall_ms", r["t"])), p))
+                # Recorder-clock timestamp keeps ticks/advisories/dispatches on ONE clock even
+                # when the recorder runs on a different host than the sidecar (PR #523 review).
+                # Loopback receive lag is ~1-5 ms; the sidecar's own t_wall_ms stays in the
+                # payload as metadata.
+                dispatches.append((float(r["t"]), p))
     ticks.sort(key=lambda x: x[0])
     # key= is load-bearing: tuples ending in dicts raise TypeError on timestamp ties.
     return ticks, advisories, sorted(dispatches, key=lambda x: x[0])
@@ -198,15 +202,25 @@ def analyze(
         if b >= 0.4 and prev_b < 0.4 and v > 60.0:
             onsets.append(t)
         prev_b = b
-    brake_cue_times = [t for (t, p) in dispatches if p.get("kind") == "late_brake"]
+    # Coverage anchors on HEARD-COMPLETE time (dispatch + audio latency + clip duration),
+    # matching the per-cue verdicts — a cue that finishes in-ear after the brake onset must
+    # not count as having coached it (PR #523 review).
+    brake_cue_heard = [
+        t + (audio_latency_s + float(p.get("duration_ms") or 500.0) / 1000.0) * 1000.0
+        for (t, p) in dispatches
+        if p.get("kind") == "late_brake"
+    ]
     coached = sum(
         1
         for t in onsets
-        if any(t - COVERAGE_WINDOW_S * 1000.0 <= bt <= t + 200.0 for bt in brake_cue_times)
+        if any(t - COVERAGE_WINDOW_S * 1000.0 <= bt <= t + 200.0 for bt in brake_cue_heard)
     )
 
     brake_cues = [c for c in cues if c.kind == "late_brake"]
     assertions = {
+        # A tap with no telemetry or no dispatched cues proves nothing — it must FAIL the
+        # gate, never pass it vacuously (PR #523 review).
+        "evidence_present": len(ticks) >= 100 and len(cues) >= 1,
         "no_after_fact_brake_cues": all(c.verdict != "AFTER_FACT" for c in brake_cues),
         "no_too_late_brake_cues": all(c.verdict != "TOO_LATE" for c in brake_cues),
         "brake_events_coached": (not onsets or coached / len(onsets) >= coverage_min_fraction),

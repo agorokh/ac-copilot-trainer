@@ -82,6 +82,10 @@ _MAX_LEAD_SPLINE = 0.09
 #: so a spoken correction is either a false alarm or after-the-fact noise. The live cue is
 #: the calm anticipatory heads-up above; a missed brake point is owned by corner-exit
 #: grading ("brake earlier next lap") where feedback is actionable for the NEXT pass.
+#: Braking observed within this many seconds of the brake point counts as braking FOR that
+#: corner (suppresses its heads-up); farther out it is likely trail-braking the previous
+#: corner inside an overlapping #522 lead window and must not latch (PR #523 review).
+_LEAD_LATCH_TTA_S = 1.5
 #: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
 #: sits below the rising edge so a severity hovering near a boundary does not flicker tone
 #: frame-to-frame.
@@ -439,10 +443,16 @@ class RealtimeObserver:
         if bp is None or st.has_braked:
             return None
         if brake >= self._brake_on:
-            # Braking inside the anticipatory lead (before the brake point) IS braking this pass —
-            # record it so a later release-and-coast does not draw a false late-brake alarm
-            # (codex review #371). Mirrors the in-window has_braked latch.
-            st.has_braked = True
+            # Braking near the mark IS braking this pass (codex review #371) — but with the
+            # #522 lead the window can overlap the PREVIOUS corner on closely spaced turns,
+            # and trail-braking that corner must not latch has_braked for this one (PR #523
+            # review). Discriminator: only braking within the last _LEAD_LATCH_TTA_S of the
+            # approach counts as braking FOR this corner; farther out we just stay quiet on
+            # this frame and let the heads-up fire once the driver is off the brakes.
+            delta = _forward_spline_delta(spline, bp)
+            tta_now = delta * self._track_length_m / max(speed / 3.6, 0.1)
+            if not (0.0 < delta <= _LAP_WRAP_DROP) or tta_now <= _LEAD_LATCH_TTA_S:
+                st.has_braked = True
             return None
         # "anticipatory" = the car has not yet reached the brake point — robust to a lead window
         # wraps over start/finish (a first corner with bp≈0): the forward distance to bp is a small

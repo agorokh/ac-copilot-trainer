@@ -99,3 +99,11 @@ def test_after_fact_cue_fails_assertions(tmp_path):
     report = analyze(tap, track_length_m=2500.0)
     assert report.summary.get("AFTER_FACT") == 1
     assert report.assertions["no_after_fact_brake_cues"] is False
+
+
+def test_empty_tap_fails_evidence_assertion(tmp_path):
+    """#523 review (Codex P2): an empty/no-voice tap proves nothing and must FAIL the gate."""
+    tap = tmp_path / "tap.jsonl"
+    _write_tap(tap, _ticks(1_000.0, 2.0, 0.1, 0.12, 80.0))  # a few ticks, zero cues
+    report = analyze(tap, track_length_m=2500.0)
+    assert report.assertions["evidence_present"] is False
