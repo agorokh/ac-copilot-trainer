@@ -107,3 +107,39 @@ def test_empty_tap_fails_evidence_assertion(tmp_path):
     _write_tap(tap, _ticks(1_000.0, 2.0, 0.1, 0.12, 80.0))  # a few ticks, zero cues
     report = analyze(tap, track_length_m=2500.0)
     assert report.assertions["evidence_present"] is False
+
+
+def test_just_late_act_cue_is_too_late_not_redundant(tmp_path):
+    """#523 review (Codex P2): timing verdicts precede REDUNDANT — a late act cue with the
+    pedal already down must fail the gate as TOO_LATE, not hide as (non-gating) REDUNDANT."""
+    t0 = 3_000_000.0
+    rows = _ticks(t0, 8.0, 0.40, 0.48, 90.0, brake_at=1.0)  # braking from early on
+    mark = 0.425  # heard-complete lands just ~0.35 s before the mark -> TOO_LATE territory
+    rows.append(
+        {
+            "t": t0 + 1500.0,
+            "k": "coaching.cue",
+            "payload": {"kind": "late_brake", "urgency": "act", "spline": mark},
+        }
+    )
+    rows.append(
+        {
+            "t": t0 + 1500.0,
+            "k": "coaching.voice",
+            "payload": {
+                "seq": 1,
+                "clip_id": "late_brake.act.urgent.generic",
+                "kind": "late_brake",
+                "urgency": "act",
+                "register": "urgent",
+                "duration_ms": 380,
+                "t_wall_ms": t0 + 1500.0,
+            },
+        }
+    )
+    tap = tmp_path / "tap.jsonl"
+    _write_tap(tap, rows)
+    report = analyze(tap, track_length_m=2500.0)
+    brake = [c for c in report.cues if c.kind == "late_brake"][0]
+    assert brake.verdict == "TOO_LATE", (brake.verdict, brake.tta_s, brake.brake)
+    assert report.assertions["no_too_late_brake_cues"] is False

@@ -166,10 +166,13 @@ def analyze(
                     verdict = "DEBRIEF_OK" if gap < 20.0 else "INFO_BEFORE_CORNER"
                 elif gap < -30.0:
                     verdict = "AFTER_FACT"
+                elif tta < ACTIONABLE_MIN_S:
+                    # Timing verdicts FIRST: a just-late cue while the pedal is already down
+                    # must read TOO_LATE (gated), never hide behind REDUNDANT (non-gating) —
+                    # PR #523 review.
+                    verdict = "TOO_LATE"
                 elif urg == "act" and b >= 0.5:
                     verdict = "REDUNDANT"
-                elif tta < ACTIONABLE_MIN_S:
-                    verdict = "TOO_LATE"
                 elif tta > ACTIONABLE_MAX_S:
                     verdict = "TOO_EARLY"
                 else:
