@@ -438,6 +438,9 @@ def test_calibrate_brake_marks_from_lap_updates_observer(tmp_path, monkeypatch):
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
     monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    # calibration is core telemetry learning, deliberately INDEPENDENT of the optional LLM
+    # debrief pipeline: it must fold with the debrief feature disabled (PR #525 review).
+    monkeypatch.delenv("AC_COPILOT_OLLAMA_ENABLE", raising=False)
     path = _write_lap_archive(tmp_path, _corner_archive())
     asyncio.run(server._calibrate_brake_marks_from_lap({"archivePath": path, "lap": 3}))
     assert obs._driver_marks, "the driver's own lap must calibrate at least one zone"
