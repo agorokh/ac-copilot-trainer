@@ -701,6 +701,40 @@ def test_build_driver_handshake_requires_speed_profile():
         _build_driver(_cfg(driver="handshake"), _LINE, None)
 
 
+def test_run_auto_drive_handshake_drive_outlives_the_tap():
+    # #532: the handshake self-terminates (driver.finished); the orchestrator must NOT stop it at
+    # the tap boundary or the probe schedule dies mid-maneuver.
+    import time
+
+    from tools.ac_harness.auto_drive import DriveStats, run_auto_drive
+
+    seen: dict = {}
+
+    def drive(controller, config, stop):
+        time.sleep(0.15)  # tap below returns immediately; a premature stop would be set by now
+        seen["stop_was_set"] = stop.is_set()
+        return DriveStats(drove=True, laps=0, max_speed_kmh=90.0, total_distance_m=500.0)
+
+    async def tap(url, **kw):
+        return [
+            {"topic": "connection"},
+            {"topic": "tire_temps"},
+            {"topic": "coaching.snapshot"},
+        ]
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(driver="handshake", skip_launch=True),
+            launch=lambda c: (True, "ok"),
+            hijack=lambda c: FakeController(),
+            drive=drive,
+            tap=tap,
+        )
+    )
+    assert seen["stop_was_set"] is False
+    assert report.drive is not None and report.drive.drove is True
+
+
 def test_racing_driver_step_upshifts_at_high_rpm():
     # Direct evidence the racing controller commands an upshift out of 1st when revving + moving.
     racing = _build_driver(_cfg(pace=1.0, racing_max_speed_kmh=240.0), _LINE, _PROFILE)

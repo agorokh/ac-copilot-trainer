@@ -582,8 +582,12 @@ async def run_auto_drive(
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:
-        stop.set()
-        # Always stop the drive AND release the controller — even if the drive thread raised, the
+        # A handshake drive (#532) self-terminates (`driver.finished` breaks the rig loop) and
+        # must OUTLIVE the tap: stopping at the tap boundary would kill the probe schedule
+        # mid-maneuver. Its honest cap is drive_seconds. A tap/eval failure still stops it.
+        if config.driver != "handshake" or error is not None:
+            stop.set()
+        # Always await the drive AND release the controller — even if the drive thread raised, the
         # control mmap (the carcsw hijack) must be released, or it leaks and keeps holding the car.
         try:
             stats = await drive_task
