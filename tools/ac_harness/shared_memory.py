@@ -94,11 +94,27 @@ PHYSICS_MIN_BYTES = PHYSICS_PACKET_ID_OFFSET + 4  # 4
 # same logon session, so the opener tries the bare name first then the explicit prefix.
 SHM_GRAPHICS = "acpmf_graphics"
 SHM_PHYSICS = "acpmf_physics"
+SHM_STATIC = "acpmf_static"
 
 # How many bytes of each section to map. The real sections are multiple KB; mapping a small
 # safe prefix avoids over-mapping while covering every field we read.
 GRAPHICS_MAP_BYTES = 256
 PHYSICS_MAP_BYTES = 64
+# acpmf_static: wide-char (UTF-16LE) strings; ``track`` is a 33-char field at byte offset 134
+# (live-verified against a running session: smVersion@0, carModel@68, track@134). Mapping 260
+# bytes covers it with headroom.
+STATIC_MAP_BYTES = 260
+STATIC_TRACK_OFFSET = 134
+STATIC_TRACK_CHARS = 33
+
+
+def parse_static_track(buf: bytes) -> str:
+    """Decode the ``track`` id from an ``acpmf_static`` buffer (pure, UTF-16LE, NUL-terminated)."""
+    end = STATIC_TRACK_OFFSET + STATIC_TRACK_CHARS * 2
+    if len(buf) < end:
+        raise ValueError(f"static buffer too short for track: {len(buf)} < {end}")
+    raw = buf[STATIC_TRACK_OFFSET:end].decode("utf-16-le", "replace")
+    return raw.split("\x00", 1)[0].strip()
 
 
 class AcGameStatus(IntEnum):

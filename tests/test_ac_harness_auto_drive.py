@@ -701,6 +701,54 @@ def test_build_driver_handshake_requires_speed_profile():
         _build_driver(_cfg(driver="handshake"), _LINE, None)
 
 
+def test_track_ids_match_rules():
+    from tools.ac_harness.auto_drive import track_ids_match
+
+    assert track_ids_match("magione", "magione")
+    assert track_ids_match("Magione", "magione")  # case-insensitive
+    assert not track_ids_match("magione", "spa")
+    # empty/unknown loaded id => cannot confirm => match (never block on a missing read)
+    assert track_ids_match("magione", "")
+    assert track_ids_match("", "spa")
+
+
+def test_run_auto_drive_fails_fast_on_track_mismatch():
+    # #532: CM launched a cached session (spa) instead of the requested track (magione). The
+    # harness must FAIL at stage="launch", not drive the requested line on the wrong track.
+    ctrl = FakeController()
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: "spa",
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "launch"
+    assert "spa" in report.error and "magione" in report.error
+    assert ctrl.closed is True  # controller released before bailing
+
+
+def test_run_auto_drive_track_match_proceeds():
+    record: dict = {}
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: "magione",
+        )
+    )
+    assert report.stage != "launch"
+    assert record["controller"] is not None  # the drive leg ran
+
+
 def test_run_auto_drive_handshake_drive_outlives_the_tap():
     # #532: the handshake self-terminates (driver.finished); the orchestrator must NOT stop it at
     # the tap boundary or the probe schedule dies mid-maneuver.

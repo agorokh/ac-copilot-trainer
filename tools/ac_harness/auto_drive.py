@@ -330,6 +330,49 @@ HijackFn = Callable[[AutoDriveConfig], "Controller | None"]
 ApplySetupFn = Callable[[AutoDriveConfig], Awaitable[dict]]
 DriveFn = Callable[[Controller, AutoDriveConfig, threading.Event], DriveStats]
 TapFn = Callable[..., Awaitable[list[dict]]]
+VerifyTrackFn = Callable[[AutoDriveConfig], "str | None"]
+
+
+def rig_verify_track(config: AutoDriveConfig) -> str | None:  # pragma: no cover - rig-only
+    """Read the loaded track id from ``acpmf_static``; ``None`` when it cannot be read.
+
+    Returning ``None`` (static page absent/short) makes the track guard skip rather than block —
+    a missing read must never fail a run; only a POSITIVE mismatch does.
+    """
+    from tools.ac_harness.shared_memory import (
+        SHM_STATIC,
+        STATIC_MAP_BYTES,
+        parse_static_track,
+    )
+
+    try:
+        from tools.ac_harness.shared_memory import open_shared_memory
+
+        section = open_shared_memory(SHM_STATIC, STATIC_MAP_BYTES)
+    except Exception:  # noqa: BLE001 - unavailable/platform error → cannot confirm, skip guard
+        return None
+    try:
+        return parse_static_track(section.read(STATIC_MAP_BYTES))
+    except Exception:  # noqa: BLE001 - short/garbled read → cannot confirm, skip guard
+        return None
+    finally:
+        section.close()
+
+
+def track_ids_match(requested: str, loaded: str) -> bool:
+    """Whether a loaded AC track id satisfies the requested one (pure, case-insensitive).
+
+    AC track ids are plain folder names (``magione``, ``spa``); a multi-layout track reports the
+    base id in ``acpmf_static.track`` (the layout lives in a separate field), so an exact,
+    case-insensitive base-id comparison is correct. An empty loaded id (static page not yet
+    published) is treated as "cannot confirm" -> match, so the guard never blocks on a missing
+    read; only a POSITIVE, different id fails.
+    """
+    want = (requested or "").strip().lower()
+    got = (loaded or "").strip().lower()
+    if not want or not got:
+        return True
+    return want == got
 
 
 def verify_setup_ack(ack: dict | None, requested: str) -> tuple[bool, str]:
@@ -425,6 +468,7 @@ async def run_auto_drive(
     drive: DriveFn,
     tap: TapFn = tap_frames,
     apply_setup: ApplySetupFn | None = None,
+    verify_track: VerifyTrackFn | None = None,
 ) -> AutoDriveReport:
     """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
@@ -498,6 +542,27 @@ async def run_auto_drive(
                 )
         controller = hijack(config)
         if controller is not None:
+            # Guard: CM sometimes launches its cached last session instead of the requested
+            # preset (#532 rig-found). Driving the requested line on a different track is a
+            # guaranteed false failure, so verify the loaded track and FAIL fast at launch.
+            loaded = verify_track(config) if verify_track is not None else None
+            if loaded is not None and not track_ids_match(config.track_id, loaded):
+                controller.close()
+                return AutoDriveReport(
+                    ok=False,
+                    stage="launch",
+                    launched=not config.skip_launch,
+                    hijacked=True,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=(
+                        f"loaded track {loaded!r} != requested {config.track_id!r} — Content "
+                        "Manager launched a cached session; relaunch with the correct preset "
+                        "(the harness will not drive the requested line on a different track)"
+                    ),
+                    **identity,
+                )
             break
         if config.skip_launch:
             break
@@ -2338,6 +2403,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
                 drive=rig_drive,
                 tap=tap_frames,
                 apply_setup=rig_apply_setup,
+                verify_track=rig_verify_track,
             )
         )
     finally:

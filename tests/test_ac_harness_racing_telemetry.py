@@ -62,6 +62,21 @@ def test_parse_physics_rejects_non_finite_wheel_omega():
         parse_physics(bytes(bad))
 
 
+def test_parse_static_track_decodes_utf16():
+    from tools.ac_harness.shared_memory import STATIC_TRACK_OFFSET, parse_static_track
+
+    b = bytearray(260)
+    b[STATIC_TRACK_OFFSET : STATIC_TRACK_OFFSET + 2 * 4] = "spa\x00".encode("utf-16-le")
+    assert parse_static_track(bytes(b)) == "spa"
+
+
+def test_parse_static_track_rejects_short_buffer():
+    from tools.ac_harness.shared_memory import parse_static_track
+
+    with pytest.raises(ValueError, match="too short"):
+        parse_static_track(b"\x00" * 100)
+
+
 def test_parse_graphics_reads_lap_and_position():
     g = parse_graphics(_gfx_buf())
     assert g.packet_id == 11
