@@ -105,6 +105,7 @@ from tools.ai_sidecar.protocol import (
     build_brain_followup,
     build_ollama_followup,
     prepare_outbound_message,
+    resolve_lap_archive,
 )
 from tools.ai_sidecar.race_management import RaceManagementObserver
 from tools.ai_sidecar.realtime_observer import (
@@ -738,6 +739,100 @@ async def _send_brain_followup(websocket: Any, inbound: dict[str, Any]) -> None:
     if followup is None:
         return
     await _safe_send(websocket, followup)
+
+
+def _brake_calibration_enabled() -> bool:
+    """Per-driver brake-mark calibration (issue #522): on by default, ``AC_COPILOT_BRAKE_CAL=0``
+    disables."""
+    return os.environ.get("AC_COPILOT_BRAKE_CAL", "1").strip().lower() not in ("0", "false", "off")
+
+
+def _brake_calibration_active() -> bool:
+    """Calibration folds into the LEGACY observer's marks — the default live cue producer.
+
+    With coach v2 active (``AC_COPILOT_COACH_V2=1``), ``_publish_coaching_cues`` routes
+    telemetry through ``_coach_runtime`` instead, so folding laps into ``_observer`` would log
+    "calibrated" while having zero effect on the spoken cues — misleading. Skip; v2-side
+    calibration is tracked as #522 V2 scope (PR #525 review).
+    """
+    return _observer is not None and _coach_runtime is None and _brake_calibration_enabled()
+
+
+#: recent lap_complete identities already folded into calibration — the plain lap_complete frame
+#: and its archive-backed ``brainOnly`` re-send both carry the same lap; the same lap must not be
+#: EMA-weighted twice, even when the re-send arrives late (after a NEWER lap has folded), so a
+#: bounded set of recent keys is kept, not just the last one (PR #525 review). The most recent
+#: reservation is tracked separately so a failed load can roll itself back.
+_recent_brake_cal_keys: deque[str] = deque(maxlen=8)
+
+
+async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
+    """Fold the driver's completed lap into the observer's per-zone brake-mark EMA (#522).
+
+    Runs as a background task on lap_complete: loads the lap archive off the loop (safe-path
+    validated by :func:`resolve_lap_archive`), skips explicitly-invalid laps (a cut lap's brake
+    points are not calibration data), and applies the EMA update on the event loop — the same
+    loop that calls ``observer.observe``, so there is no cross-thread mutation.
+    """
+    observer = _observer
+    if observer is None:
+        return
+    # A frame with neither an inline trace nor an archivePath can never resolve: return WITHOUT
+    # reserving the dedup key, or the archive-backed brainOnly re-send racing this task would see
+    # the reservation, skip, and leave the lap uncalibrated after the rollback (PR #525 review).
+    trace = inbound.get("trace")
+    has_inline_trace = (
+        isinstance(trace, dict) and isinstance(trace.get("samples"), list) and trace["samples"]
+    )
+    if not has_inline_trace and not str(inbound.get("archivePath") or "").strip():
+        return
+    # One key per PHYSICAL lap across its resend forms: the plain lap_complete (which may carry
+    # an inline trace) and the archive-backed brainOnly re-send both carry the same
+    # lap + lapTimeMs identity, while their archivePath presence differs — keying on the path
+    # alone would fold the same lap twice (PR #525 review).
+    lap_n, lap_ms = inbound.get("lap"), inbound.get("lapTimeMs")
+    if lap_n is not None and lap_ms is not None:
+        key = f"lap:{lap_n}:{lap_ms}"
+    else:
+        key = str(inbound.get("archivePath") or "") or f"lap:{lap_n}"
+    if key in _recent_brake_cal_keys:
+        return
+    # Reserve the key BEFORE the awaited loads (we are on the event loop here, so the
+    # check-and-set is atomic): two archive-backed frames for the same lap arriving
+    # back-to-back must not both pass the guard while the first is still off-loop reading the
+    # file — that would double-weight the EMA (PR #525 review). A failed LOAD rolls the
+    # reservation back so a later frame with the same archive (e.g. after the async archive
+    # write completes) still calibrates; a deliberate skip (invalid lap) keeps it.
+    _recent_brake_cal_keys.append(key)
+    try:
+        archive = await asyncio.to_thread(resolve_lap_archive, inbound)
+        if not isinstance(archive, dict):
+            with contextlib.suppress(ValueError):
+                _recent_brake_cal_keys.remove(key)
+            return
+        lap_meta = archive.get("lap")
+        if isinstance(lap_meta, dict) and lap_meta.get("is_valid") is False:
+            return
+        from tools.ai_sidecar.lap_dynamics import lap_trace_from_archive
+
+        trace = await asyncio.to_thread(lap_trace_from_archive, archive)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.info("brake calibration skipped: %s", e)
+        with contextlib.suppress(ValueError):
+            _recent_brake_cal_keys.remove(key)
+        return
+    track_obj = archive.get("track")
+    track_id = track_obj.get("id") if isinstance(track_obj, dict) else None
+    track_layout = track_obj.get("layout") if isinstance(track_obj, dict) else None
+    updated = observer.calibrate_from_driver_lap(
+        trace,
+        track_id=track_id if isinstance(track_id, str) else None,
+        track_layout=track_layout if isinstance(track_layout, str) else None,
+    )
+    if updated:
+        logger.info("brake marks calibrated from the driver's lap: %d zone(s) updated", updated)
 
 
 async def _safe_send(websocket: Any, payload: dict[str, Any]) -> None:
@@ -2098,6 +2193,15 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
                     data.get("lapTimeMs"),
                     hints,
                 )
+                # Issue #522 part 2: each completed lap of the driver's own folds into the
+                # observer's per-zone brake-mark EMA so the cue marks anchor on where THIS
+                # driver demonstrably brakes, not the synthetic reference's points. Background
+                # task — never blocks the <100ms ack path; dedup inside guards the brainOnly
+                # re-send of the same lap.
+                if _brake_calibration_active():
+                    cal_task = asyncio.create_task(_calibrate_brake_marks_from_lap(data))
+                    _background_tasks.add(cal_task)
+                    cal_task.add_done_callback(_background_tasks.discard)
 
             # Archive-backed activation frames are emitted after Lua knows the final archive path.
             # They should only run the brain, not the generic rules ack or Ollama narration.

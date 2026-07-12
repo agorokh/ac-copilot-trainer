@@ -133,8 +133,15 @@ class Resolver:
         # Dedup is keyed on the *advisory's* identity (kind + 0-based corner + REQUESTED register),
         # so a genuine escalation (calm→alert→urgent→critical for one corner) is distinct, while a
         # repeat at the same register within a pass collapses to one utterance regardless of
-        # corner/register fallback.
-        dedup_key = f"{kind}:{getattr(advisory, 'corner', None)}:{register}"
+        # corner/register fallback. A merged esses corner holds several brake ZONES (issue #522
+        # coverage) whose heads-ups land within the dedup window — a later zone's cue must not be
+        # swallowed as a repeat of the first, so a non-zero zone ordinal joins the corner key.
+        corner_key = f"{getattr(advisory, 'corner', None)}"
+        detail = getattr(advisory, "detail", None)
+        zone = detail.get("zone") if isinstance(detail, dict) else None
+        if isinstance(zone, int) and zone > 0:
+            corner_key = f"{corner_key}z{zone}"
+        dedup_key = f"{kind}:{corner_key}:{register}"
         return Utterance(
             clip_id=clip_id,
             kind=kind,

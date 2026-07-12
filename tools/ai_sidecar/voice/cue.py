@@ -142,8 +142,12 @@ class CueArbiter:
 
     global_cooldown_s: float = 2.5
     corner_cooldown_s: float = 6.0
+    #: floor between two DIFFERENT brake-zone heads-ups chaining through the global cooldown —
+    #: enough for the previous short clip to finish, well under the 2.5 s anti-chatter window.
+    zone_chain_min_gap_s: float = 1.2
     _last_spoken_s: float | None = None
-    _last_corner_kind_s: dict[tuple[int, str], float] = field(default_factory=dict)
+    _last_spoken_key: tuple[int, int, str] | None = None
+    _last_corner_kind_s: dict[tuple[int, int, str], float] = field(default_factory=dict)
 
     def select(self, advisories: list[dict[str, Any]], now_s: float) -> SpokenCue | None:
         """Choose the one cue to speak now, applying cooldowns + urgency preemption."""
@@ -162,7 +166,7 @@ class CueArbiter:
                 # arbitrate it (and never let it consume a cooldown slot).
                 continue
             is_act = _URGENCY_RANK.get(str(a.get("urgency", "")), 0) >= _URGENCY_RANK["act"]
-            key = (_corner_key(a), str(a.get("kind", "")))
+            key = (_corner_key(a), _zone_key(a), str(a.get("kind", "")))
             last = self._last_corner_kind_s.get(key)
             if not is_act and last is not None and now_s - last < self.corner_cooldown_s:
                 continue
@@ -173,15 +177,31 @@ class CueArbiter:
         # Highest urgency wins (ties: keep input order, i.e. the observer's per-frame order).
         best = max(fresh, key=lambda a: _URGENCY_RANK.get(str(a.get("urgency", "")), 0))
         is_act = _URGENCY_RANK.get(str(best.get("urgency", "")), 0) >= _URGENCY_RANK["act"]
-        # Global cooldown: stay silent unless this is an urgent 'act' cue (which may barge in).
+        best_key = (_corner_key(best), _zone_key(best), str(best.get("kind", "")))
+        # A DIFFERENT brake zone's heads-up may chain through the global cooldown after a short
+        # floor: two zones of a merged esses corner can sit < 2.5 s apart, the #522 observer
+        # emits only calm `prepare` brake cues (no act tier to barge in), and the second mark's
+        # coaching is lost if it waits out the full window (PR #525 review). Same-key repeats
+        # still respect the full cooldown (anti-chatter unchanged).
+        zone_chain = (
+            str(best.get("kind", "")) == "late_brake"
+            and self._last_spoken_key is not None
+            and best_key != self._last_spoken_key
+            and self._last_spoken_s is not None
+            and now_s - self._last_spoken_s >= self.zone_chain_min_gap_s
+        )
+        # Global cooldown: stay silent unless this is an urgent 'act' cue (which may barge in)
+        # or a distinct brake-zone heads-up past the chain floor.
         if (
             self._last_spoken_s is not None
             and now_s - self._last_spoken_s < self.global_cooldown_s
             and not is_act
+            and not zone_chain
         ):
             return None
         self._last_spoken_s = now_s
-        self._last_corner_kind_s[(_corner_key(best), str(best.get("kind", "")))] = now_s
+        self._last_spoken_key = best_key
+        self._last_corner_kind_s[best_key] = now_s
         return SpokenCue(
             text=advisory_to_phrase(best),
             urgency=str(best.get("urgency", "info")),
@@ -197,3 +217,15 @@ def _corner_key(advisory: dict[str, Any]) -> int:
         return int(advisory.get("corner"))
     except (TypeError, ValueError):
         return -1
+
+
+def _zone_key(advisory: dict[str, Any]) -> int:
+    """Brake-zone ordinal within a merged corner (issue #522), 0 when absent/unreadable.
+
+    Joins the per-corner cooldown key so the SECOND zone's heads-up in a merged esses corner
+    is not suppressed as a repeat of the first — mirroring the phrase-bank resolver's
+    zone-aware dedup key (PR #525 review).
+    """
+    detail = advisory.get("detail")
+    zone = detail.get("zone") if isinstance(detail, dict) else None
+    return zone if isinstance(zone, int) else 0

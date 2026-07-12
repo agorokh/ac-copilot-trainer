@@ -133,3 +133,36 @@ def test_arbiter_holds_info_cue_until_spline_lookahead_window():
     near = dict(far)
     near["car_spline"] = 0.495
     assert arb.select([near], now_s=0.0) is not None
+
+
+def test_second_zone_of_merged_corner_not_suppressed_by_corner_cooldown():
+    """PR #525 review: the per-corner cooldown key carries the brake-zone ordinal — a merged
+    esses corner's SECOND zone heads-up inside the 6 s window must speak, while a repeat of
+    the SAME zone stays suppressed."""
+    arb = CueArbiter()
+    z0 = _adv("late_brake", 2, "prepare", register="calm", zone=0)
+    z1 = _adv("late_brake", 2, "prepare", register="calm", zone=1)
+    assert arb.select([z0], now_s=100.0) is not None
+    # same zone again within the cooldown: suppressed (anti-nag unchanged)
+    assert arb.select([z0], now_s=103.0) is None
+    # DIFFERENT zone, same corner, still inside the 6 s corner window: must speak
+    cue = arb.select([z1], now_s=103.0)
+    assert cue is not None and cue.corner == 2
+
+
+def test_distinct_zone_heads_up_chains_through_global_cooldown():
+    """PR #525 review: two DIFFERENT brake zones < 2.5 s apart must both speak on the
+    WS/pyttsx3 path — the #522 observer emits only calm prepare cues, so without the zone
+    chain the second mark's coaching is silently dropped."""
+    arb = CueArbiter()
+    z0 = _adv("late_brake", 2, "prepare", register="calm", zone=0)
+    z1 = _adv("late_brake", 2, "prepare", register="calm", zone=1)
+    assert arb.select([z0], now_s=100.0) is not None
+    # different zone 1.8 s later (inside the 2.5 s global window, past the 1.2 s chain floor)
+    assert arb.select([z1], now_s=101.8) is not None
+    # but a repeat of the SAME zone inside the window stays suppressed (anti-chatter)
+    assert arb.select([z1], now_s=103.2) is None
+    # and a different zone under the chain floor stays suppressed (no talk-over)
+    arb2 = CueArbiter()
+    assert arb2.select([z0], now_s=200.0) is not None
+    assert arb2.select([z1], now_s=200.8) is None

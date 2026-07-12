@@ -18,6 +18,13 @@ from dataclasses import dataclass, field
 
 from tools.ai_sidecar.lap_dynamics import LapTrace, segment_corners
 
+#: peak pedal fraction a sustained application must reach to count as a distinct BRAKE ZONE.
+#: ``segment_corners`` deliberately merges an esses complex into ONE driver-perceived corner, so a
+#: merged window can hold several real brake zones (issue #522: Magione's back half — 4 of 9 zones
+#: sat inside merged windows and got no mark). A lighter touch than this is a lift/drag on the way
+#: to an apex, not a coachable brake mark.
+_ZONE_MIN_PEAK_BRAKE = 0.35
+
 
 @dataclass
 class CornerReference:
@@ -31,6 +38,10 @@ class CornerReference:
     best_observed_apex_kmh: float | None = None  # fastest corpus lap through this window
     best_brake_point_spline: float | None = None  # earliest sustained brake of the best corpus lap
     n_corpus: int = 0
+    #: onset splines of EVERY distinct sustained brake zone of the best corpus lap in this window
+    #: (issue #522 coverage). ``best_brake_point_spline`` stays the first of these for consumers
+    #: that only understand one mark per corner.
+    brake_marks: list[float] = field(default_factory=list)
 
     @property
     def target_apex_kmh(self) -> float:
@@ -48,27 +59,38 @@ def _min_speed_kmh_in_window(lap: LapTrace, lo: float, hi: float) -> float | Non
     return min(vals) * 3.6 if vals else None
 
 
-def _first_brake_spline(
-    lap: LapTrace, lo: float, hi: float, thresh: float = 0.05, min_run: int = 3
-) -> float | None:
-    """Spline of the first SUSTAINED braking onset within [lo, hi] (the corpus lap's brake point).
+def sustained_brake_onsets(
+    lap: LapTrace,
+    lo: float,
+    hi: float,
+    *,
+    thresh: float = 0.05,
+    min_run: int = 3,
+    min_peak: float = _ZONE_MIN_PEAK_BRAKE,
+) -> list[float]:
+    """Onset splines of every DISTINCT sustained brake zone within [lo, hi], in lap order.
 
-    Requires ``min_run`` consecutive in-window samples above ``thresh`` so a single-frame blip is
-    not taken as the brake point — consistent with ``lap_dynamics`` treating a brake zone as
-    near-continuous rather than a lone sample.
+    A zone is ``min_run`` consecutive in-window samples above ``thresh`` (so a single-frame blip is
+    not a brake point — consistent with ``lap_dynamics`` treating a brake zone as near-continuous)
+    whose peak pedal reaches ``min_peak`` (so a light lift/drag between apexes is not promoted to a
+    coachable mark). Zones split where the pedal drops back to/below ``thresh``.
     """
     n = len(lap)
-    for i in range(n):
+    out: list[float] = []
+    i = 0
+    while i < n:
         if not (lo <= lap.spline[i] <= hi and lap.brake[i] > thresh):
+            i += 1
             continue
-        run = 1
+        peak = lap.brake[i]
         j = i + 1
         while j < n and lap.spline[j] <= hi and lap.brake[j] > thresh:
-            run += 1
+            peak = max(peak, lap.brake[j])
             j += 1
-        if run >= min_run:
-            return lap.spline[i]
-    return None
+        if j - i >= min_run and peak >= min_peak:
+            out.append(lap.spline[i])
+        i = j
+    return out
 
 
 def build_references(optimal_lap: LapTrace) -> list[CornerReference]:
@@ -106,7 +128,10 @@ def add_corpus_lap(references: list[CornerReference], lap: LapTrace) -> None:
         ref.n_corpus += 1
         if ref.best_observed_apex_kmh is None or v > ref.best_observed_apex_kmh:
             ref.best_observed_apex_kmh = round(v, 1)
-            ref.best_brake_point_spline = _first_brake_spline(lap, ref.spline_lo, ref.spline_hi)
+            # EVERY distinct sustained brake zone of the best lap becomes a mark (issue #522:
+            # a merged esses window holds several real zones and each needs a coachable cue).
+            ref.brake_marks = sustained_brake_onsets(lap, ref.spline_lo, ref.spline_hi)
+            ref.best_brake_point_spline = ref.brake_marks[0] if ref.brake_marks else None
 
 
 @dataclass

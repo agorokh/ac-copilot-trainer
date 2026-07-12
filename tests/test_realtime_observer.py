@@ -500,6 +500,239 @@ def test_late_brake_feedback_survives_without_apex_deficit():
     assert "brake earlier next lap" in late_info[0].message
 
 
+# ---- issue #522 part 1: every brake zone of a merged corner gets its own heads-up ------------
+
+
+def _esses_ref() -> CornerReference:
+    """A merged esses corner: ONE driver-perceived corner window holding TWO brake zones."""
+    return CornerReference(
+        index=2,
+        apex_spline=0.52,
+        spline_lo=0.42,
+        spline_hi=0.62,
+        optimal_apex_kmh=90.0,
+        best_observed_apex_kmh=90.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+        brake_marks=[0.45, 0.50],
+    )
+
+
+def test_each_zone_of_a_merged_corner_gets_its_own_heads_up():
+    """#522 coverage: braking for (and being cued about) the first zone must not consume the
+    second zone's heads-up — each real brake zone gets exactly one calm anticipatory cue."""
+    obs = RealtimeObserver([_esses_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    fired = []
+    # 110 km/h -> 1 s lead = ~0.0122 spline: zone 1 window opens ~0.4378, zone 2 ~0.4878
+    fired += obs.observe({"spline": 0.440, "speed": 110.0, "brake": 0.0})  # zone 1 heads-up
+    fired += obs.observe({"spline": 0.449, "speed": 110.0, "brake": 0.7})  # brakes at mark 1
+    fired += obs.observe({"spline": 0.470, "speed": 95.0, "brake": 0.0})  # released between zones
+    fired += obs.observe({"spline": 0.490, "speed": 95.0, "brake": 0.0})  # zone 2 heads-up
+    fired += obs.observe({"spline": 0.499, "speed": 90.0, "brake": 0.7})  # brakes at mark 2
+    cues = [a for a in fired if a.kind == "late_brake"]
+    assert len(cues) == 2, f"one heads-up per ZONE, got {[(c.spline, c.detail) for c in cues]}"
+    assert [c.detail["zone"] for c in cues] == [0, 1]
+    assert [c.spline for c in cues] == [0.45, 0.50]
+    assert all(c.urgency == "prepare" and c.register == "calm" for c in cues)
+
+
+def test_missed_second_zone_flags_late_uncoached_at_exit():
+    """Braking correctly for zone 1 but sailing past zone 2's mark is still a late-brake miss —
+    silence live, owned by exit grading (#522)."""
+    obs = RealtimeObserver([_esses_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs.observe({"spline": 0.449, "speed": 110.0, "brake": 0.7})  # brakes for zone 1
+    obs.observe({"spline": 0.470, "speed": 95.0, "brake": 0.0})
+    out = obs.observe({"spline": 0.505, "speed": 95.0, "brake": 0.0})  # past mark 2, no brake
+    assert [a for a in out if a.kind == "late_brake"] == []  # silent past the mark
+    obs.observe({"spline": 0.52, "speed": 60.0, "brake": 0.0})  # slow apex
+    exit_out = obs.observe({"spline": 0.63, "speed": 90.0, "brake": 0.0})
+    deficits = [a for a in exit_out if a.kind == "apex_deficit"]
+    assert deficits and deficits[0].detail["braked_late_uncoached"] is True
+
+
+def test_multi_zone_marks_flow_from_reference_archive():
+    """build_observer_from_reference -> build_references -> add_corpus_lap must give the
+    observer every zone's mark (the #522 Magione back-half coverage path)."""
+    ref_lap = lap_trace_from_archive(_corner_archive())
+    refs = build_references(ref_lap)
+    add_corpus_lap(refs, ref_lap)
+    assert all(r.brake_marks for r in refs)
+    assert all(r.best_brake_point_spline == r.brake_marks[0] for r in refs)
+
+
+def test_wrapped_lead_first_corner_fires_once_per_approach():
+    """Regression (#522 follow-through): a first-corner mark near spline 0 wraps its lead window
+    over start/finish. The pre-wrap re-arm must be ONE-SHOT — without it the re-arm check reads
+    the approach's own heads-up as stale state and re-fires the cue every frame to the line —
+    and the armed pass must CARRY across the wrap so the cue does not fire a second time after
+    start/finish."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.06,
+        spline_lo=0.02,
+        spline_hi=0.10,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.03,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)  # default 3.2 s lead
+    fired = []
+    # two full laps sampled densely through the wrap zone and the corner
+    lap_points = [0.90, 0.93, 0.95, 0.96, 0.97, 0.98, 0.99, 0.005, 0.015, 0.025]
+    for lap_n in (1, 2):
+        for s in lap_points:
+            fired.extend(obs.observe({"spline": s, "speed": 180.0, "brake": 0.0, "lap": lap_n}))
+        fired.extend(obs.observe({"spline": 0.04, "speed": 90.0, "brake": 0.8, "lap": lap_n}))
+        fired.extend(obs.observe({"spline": 0.12, "speed": 120.0, "brake": 0.0, "lap": lap_n}))
+        fired.extend(obs.observe({"spline": 0.50, "speed": 180.0, "brake": 0.0, "lap": lap_n}))
+    cues = [a for a in fired if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert len(cues) == 2, (
+        f"exactly ONE heads-up per approach over two laps, got {len(cues)}: "
+        f"{[(c.spline, c.detail.get('lead_s')) for c in cues]}"
+    )
+
+
+# ---- issue #522 part 2: per-driver brake-mark calibration ------------------------------------
+
+
+def _driver_trace(
+    onset: float, *, end: float, window: tuple[float, float] = (0.0, 1.0), n: int = 400
+):
+    """A flat 40 m/s LapTrace braking 0.8 over [onset, end] (sustained, gate-grade)."""
+    from tools.ai_sidecar.lap_dynamics import LapTrace
+
+    spline = [i / (n - 1) for i in range(n)]
+    brake = [0.8 if onset <= s <= end else 0.0 for s in spline]
+    return LapTrace(
+        spline=spline,
+        t_s=[0.05 * i for i in range(n)],
+        v_ms=[40.0] * n,
+        brake=brake,
+        throttle=[0.0] * n,
+        steer=[0.0] * n,
+        gear=[4] * n,
+        x=[1.0 * i for i in range(n)],
+        z=[0.0] * n,
+    )
+
+
+def test_calibration_moves_the_mark_to_the_drivers_demonstrated_point():
+    """#522 part 2: after the driver's own lap shows a sustained brake onset near the synthetic
+    mark, the cue anchors on the DRIVER's point with honest provenance."""
+    ref = _i522_ref()  # synthetic mark at 0.45
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    updated = obs.calibrate_from_driver_lap(_driver_trace(0.46, end=0.49))
+    assert updated == 1
+    out = obs.observe({"spline": 0.4505, "speed": 110.0, "brake": 0.0})
+    cues = [a for a in out if a.kind == "late_brake"]
+    assert cues, "heads-up must fire in the calibrated mark's lead window"
+    assert cues[0].detail["mark_source"] == "driver_calibrated"
+    assert cues[0].spline == pytest.approx(0.46, abs=0.005)
+
+
+def test_calibration_ema_converges_over_laps():
+    ref = _i522_ref()
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs.calibrate_from_driver_lap(_driver_trace(0.455, end=0.49))
+    obs.calibrate_from_driver_lap(_driver_trace(0.465, end=0.49))
+    # EMA(0.4): 0.455 + 0.4*(0.465-0.455) = 0.459
+    marks = obs._effective_marks(ref)
+    assert marks[0][1] == "driver_calibrated"
+    assert marks[0][0] == pytest.approx(0.459, abs=0.003)
+
+
+def test_calibration_ignores_distant_onsets_and_wrong_track():
+    ref = _i522_ref()  # mark 0.45
+    obs = RealtimeObserver(
+        [ref], track_length_m=2500.0, brake_prepare_lead_s=1.0, track_id="magione"
+    )
+    # onset 0.55 is ~0.10 spline from the mark — a different zone/line, never calibrates
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.55, end=0.58)) == 0
+    # right onset, wrong track: refused outright
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.46, end=0.49), track_id="imola") == 0
+    marks = obs._effective_marks(ref)
+    assert marks[0] == (0.45, "corpus_best")
+
+
+def test_calibration_survives_lap_wrap_reset():
+    ref = _i522_ref()
+    obs = RealtimeObserver([ref], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs.calibrate_from_driver_lap(_driver_trace(0.46, end=0.49))
+    obs.reset()  # lap wrap clears PASS state, not driver knowledge
+    marks = obs._effective_marks(ref)
+    assert marks[0][1] == "driver_calibrated"
+
+
+def test_calibration_matches_wrapped_first_corner_onset():
+    """PR #525 review: for a mark near spline 0, the driver's onset sits at the END of the
+    completed lap trace (the archive finalizes before the S/F frame) — the scan must cross
+    the wrap, not clamp at 0."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.05,
+        spline_lo=0.005,
+        spline_hi=0.09,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.01,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # driver onset at ~0.992 — ~0.018 spline before the 0.01 mark, across start/finish
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.992, end=1.0)) == 1
+    marks = obs._effective_marks(ref)
+    assert marks[0][1] == "driver_calibrated"
+    assert marks[0][0] == pytest.approx(0.992, abs=0.005)
+
+
+def test_one_driver_onset_calibrates_at_most_one_zone():
+    """PR #525 review: marks closer than twice the tolerance must not both snap to a single
+    brake application — matching is one-to-one, nearest first."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.52,
+        spline_lo=0.42,
+        spline_hi=0.62,
+        optimal_apex_kmh=90.0,
+        best_observed_apex_kmh=90.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+        brake_marks=[0.45, 0.475],  # 0.025 apart < 2 x 0.02 tolerance
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # ONE sustained application between the marks: nearest zone wins, the other stays reference
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.462, end=0.50)) == 1
+    sources = [src for _m, src in obs._effective_marks(ref)]
+    assert sources.count("driver_calibrated") == 1
+
+
+def test_external_reset_clears_prewrap_armed_state():
+    """PR #525 review: reset() without the wrap carry (producer disconnect / teleport) must
+    clear a pre-wrap-armed pass — stale zone_cued state would suppress the fresh first-corner
+    heads-up of the NEW stream."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.06,
+        spline_lo=0.02,
+        spline_hi=0.10,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.03,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # pre-wrap approach: heads-up fires, pass is armed
+    fired = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0})
+    assert [a for a in fired if a.kind == "late_brake"]
+    obs.reset()  # EXTERNAL reset (no carry): a new producer/stream takes over
+    # new stream starts just after S/F, still ahead of the mark: heads-up must fire again
+    fired2 = obs.observe({"spline": 0.005, "speed": 180.0, "brake": 0.0})
+    assert [a for a in fired2 if a.kind == "late_brake"], (
+        "stale pre-wrap state must not survive an external reset"
+    )
+
+
 def test_trail_braking_previous_corner_does_not_latch_next_corner():
     """#523 review (Codex P2): with the 3.2 s lead, closely spaced corners overlap — braking
     far out in the lead window (trail-braking the previous turn) must not consume the next
@@ -533,3 +766,242 @@ def test_trail_braking_previous_corner_does_not_latch_next_corner():
     obs2.observe({"spline": 0.440, "speed": 110.0, "brake": 0.6})  # tta ~0.8 s
     out2 = obs2.observe({"spline": 0.444, "speed": 110.0, "brake": 0.0})
     assert [a for a in out2 if a.kind == "late_brake"] == []
+
+
+def test_unconfirmed_wrap_carry_reverts_on_pit_return():
+    """PR #525 review (qodo bug + codex P2): a wrap-SHAPED jump with a known, un-advanced lap
+    counter may be a pit return — a pre-wrap-armed pass carried across it must be reverted
+    when the car drives on without the counter advancing, so the next lap-end approach still
+    gets its heads-up."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.06,
+        spline_lo=0.02,
+        spline_hi=0.10,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.03,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    obs.observe({"spline": 0.90, "speed": 180.0, "brake": 0.0, "lap": 1})
+    fired = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0, "lap": 1})
+    assert [a for a in fired if a.kind == "late_brake"]  # pre-wrap heads-up, pass armed
+    # wrap-shaped jump, counter KNOWN and not advanced -> ambiguous, carry deferred
+    obs.observe({"spline": 0.01, "speed": 60.0, "brake": 0.0, "lap": 1})
+    # car drives on past the wrap zone with the counter still at 1 -> it was a pit return
+    obs.observe({"spline": 0.40, "speed": 120.0, "brake": 0.0, "lap": 1})
+    # next lap-end approach: the reverted pass must arm + cue again
+    fired2 = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0, "lap": 1})
+    assert [a for a in fired2 if a.kind == "late_brake"], (
+        "carried pre-wrap state must be reverted when the jump turns out to be a pit return"
+    )
+
+
+def test_confirmed_wrap_keeps_carry_no_duplicate_cue():
+    """Counterpart: when the lagging counter DOES advance a frame after the wrap-shaped drop,
+    the carried pass is legitimate — the first-corner cue must not fire a second time."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.06,
+        spline_lo=0.02,
+        spline_hi=0.10,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.03,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    obs.observe({"spline": 0.90, "speed": 180.0, "brake": 0.0, "lap": 1})
+    fired = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0, "lap": 1})
+    assert [a for a in fired if a.kind == "late_brake"]
+    out = obs.observe({"spline": 0.005, "speed": 180.0, "brake": 0.0, "lap": 1})  # counter lags
+    out += obs.observe({"spline": 0.012, "speed": 180.0, "brake": 0.0, "lap": 2})  # advances
+    assert [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"] == [], (
+        "a confirmed wrap keeps the carried pass — no duplicate first-corner cue"
+    )
+
+
+def test_calibration_follows_learned_mark_across_laps():
+    """PR #525 review: after a zone has drifted toward the driver's habit, later laps near the
+    LEARNED mark (but outside the original synthetic mark's tolerance) must keep adapting."""
+    ref = _i522_ref()  # synthetic mark 0.45
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.465, end=0.49)) == 1  # within 0.02
+    # 0.474 is 0.024 from the SYNTHETIC mark (outside tol) but 0.009 from the learned 0.465
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.474, end=0.50)) == 1
+    marks = obs._effective_marks(ref)
+    # EMA: 0.465 + 0.4*(0.474-0.465) = 0.4686
+    assert marks[0][0] == pytest.approx(0.4686, abs=0.003)
+
+
+def test_calibration_never_crosses_neighbouring_zone_marks():
+    """PR #525 review: an update that would move a zone past its neighbour's mark is skipped —
+    crossed marks would corrupt the per-zone segment arcs."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.52,
+        spline_lo=0.42,
+        spline_hi=0.62,
+        optimal_apex_kmh=90.0,
+        best_observed_apex_kmh=90.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+        brake_marks=[0.45, 0.47],
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # two applications: one at 0.468 (zone1's neighbourhood), one at 0.485. Greedy matching
+    # pairs 0.468->zone1 (dist .002) and 0.485->zone... 0.485 is 0.035 from 0.45: no match.
+    # Then zone0's nearest remaining onset 0.468 would land AT/PAST zone1's mark region — but
+    # one-to-one matching already consumed it. Now try to drag zone0 past zone1 directly:
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.468, end=0.478)) == 1
+    marks = obs._effective_marks(ref)
+    assert marks[1][0] == pytest.approx(0.469, abs=0.002)  # zone1 calibrated
+    assert marks[0] == (0.45, "corpus_best")  # zone0 NOT dragged onto zone1's mark
+
+
+def test_pit_return_resuming_before_the_mark_still_gets_the_heads_up():
+    """PR #525 review round 3: a wrap-shaped pit return whose resume point is BEFORE the
+    first-corner mark must not keep the carried zone_cued — the deferral is bounded by
+    frames (a true wrap's counter advances within ~1 frame), so the revert lands before
+    the car reaches the mark."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.06,
+        spline_lo=0.02,
+        spline_hi=0.10,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.03,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    obs.observe({"spline": 0.90, "speed": 180.0, "brake": 0.0, "lap": 1})
+    fired = obs.observe({"spline": 0.97, "speed": 180.0, "brake": 0.0, "lap": 1})
+    assert [a for a in fired if a.kind == "late_brake"]  # pre-wrap heads-up spoken
+    # wrap-shaped jump to just after S/F, counter KNOWN and never advancing (pit return);
+    # the car creeps toward the mark WITHOUT ever passing the 0.25 drive-on discard point.
+    out = []
+    out += obs.observe({"spline": 0.004, "speed": 60.0, "brake": 0.0, "lap": 1})
+    out += obs.observe({"spline": 0.006, "speed": 60.0, "brake": 0.0, "lap": 1})
+    out += obs.observe({"spline": 0.008, "speed": 60.0, "brake": 0.0, "lap": 1})
+    out += obs.observe({"spline": 0.010, "speed": 60.0, "brake": 0.0, "lap": 1})
+    out += obs.observe({"spline": 0.014, "speed": 60.0, "brake": 0.0, "lap": 1})
+    cues = [a for a in out if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert cues, "after the frame-bounded revert the fresh approach must be cued"
+
+
+def test_tail_calibrated_first_corner_mark_survives_the_wrap():
+    """PR #525 review round 3: a driver-calibrated first-corner mark can sit just BEFORE
+    start/finish (~0.99 for a corner at ~0.03+). Braking at that mark pre-wrap must carry
+    across a genuine wrap — no duplicate cue, and no false 'brake earlier next lap'."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.05,
+        spline_lo=0.005,
+        spline_hi=0.09,
+        optimal_apex_kmh=80.0,
+        best_observed_apex_kmh=80.0,
+        best_brake_point_spline=0.01,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.992, end=1.0)) == 1  # mark -> ~0.992
+    fired = []
+    fired += obs.observe({"spline": 0.90, "speed": 180.0, "brake": 0.0, "lap": 1})
+    fired += obs.observe({"spline": 0.95, "speed": 180.0, "brake": 0.0, "lap": 1})  # heads-up
+    fired += obs.observe(
+        {"spline": 0.993, "speed": 150.0, "brake": 0.8, "lap": 1}
+    )  # brakes AT mark
+    fired += obs.observe({"spline": 0.005, "speed": 90.0, "brake": 0.0, "lap": 1})  # wrap, lag
+    fired += obs.observe({"spline": 0.02, "speed": 85.0, "brake": 0.0, "lap": 2})  # confirm
+    fired += obs.observe({"spline": 0.05, "speed": 80.0, "brake": 0.0, "lap": 2})  # apex at target
+    exit_out = obs.observe({"spline": 0.10, "speed": 90.0, "brake": 0.0, "lap": 2})
+    cues = [a for a in fired if a.kind == "late_brake" and a.urgency == "prepare"]
+    assert len(cues) == 1, "exactly one heads-up for the pass straddling start/finish"
+    late_info = [a for a in [*fired, *exit_out] if a.detail.get("braked_late_uncoached")]
+    assert late_info == [], "braking at the learned pre-line mark is NOT a late brake"
+
+
+def test_calibration_tolerance_is_metric_not_normalized():
+    """PR #525 review: the same-zone match window is 50 m, not a fixed spline fraction — on a
+    20 km track an onset ~300 m from the mark must NOT calibrate, while ~30 m still does."""
+    ref = _i522_ref()  # mark 0.45
+    long_track = RealtimeObserver([ref], track_length_m=20000.0)
+    # 0.465 spline = 300 m from the mark on a 20 km track: a different feature, rejected
+    # (n=4000 so the fixture matches a real trace density on a track this long)
+    assert long_track.calibrate_from_driver_lap(_driver_trace(0.465, end=0.49, n=4000)) == 0
+    # ~0.4505 spline = ~10 m: same zone, accepted
+    assert long_track.calibrate_from_driver_lap(_driver_trace(0.4505, end=0.49, n=4000)) == 1
+
+
+def test_two_zones_inside_one_lead_emit_on_consecutive_frames_not_one_batch():
+    """PR #525 review: marks closer than the lead open both arcs on the same tick; a same-batch
+    pair would make the voice scheduler drop one. The observer emits at most one heads-up per
+    corner per frame — the second zone follows on the next frame."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.52,
+        spline_lo=0.42,
+        spline_hi=0.62,
+        optimal_apex_kmh=90.0,
+        best_observed_apex_kmh=90.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+        brake_marks=[0.45, 0.475],  # both arcs open inside the default 3.2 s lead
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    first = obs.observe({"spline": 0.440, "speed": 110.0, "brake": 0.0})
+    second = obs.observe({"spline": 0.4405, "speed": 110.0, "brake": 0.0})
+    c1 = [a for a in first if a.kind == "late_brake"]
+    c2 = [a for a in second if a.kind == "late_brake"]
+    assert len(c1) == 1 and c1[0].detail["zone"] == 0, "imminent zone speaks first, alone"
+    assert len(c2) == 1 and c2[0].detail["zone"] == 1, "the second zone follows next frame"
+
+
+def test_calibration_rejects_wrong_layout_accepts_missing_layout():
+    """PR #525 review: multi-layout track ids share normalized splines that point at unrelated
+    features — a lap from another LAYOUT never calibrates; a lap without layout metadata falls
+    back to the id-only guard (older archives)."""
+    ref = _i522_ref()
+    obs = RealtimeObserver(
+        [ref], track_length_m=2500.0, track_id="ks_nordschleife", track_layout="endurance"
+    )
+    assert (
+        obs.calibrate_from_driver_lap(
+            _driver_trace(0.46, end=0.49), track_id="ks_nordschleife", track_layout="tourist"
+        )
+        == 0
+    )
+    assert (
+        obs.calibrate_from_driver_lap(
+            _driver_trace(0.46, end=0.49), track_id="ks_nordschleife", track_layout=None
+        )
+        == 1
+    )
+
+
+def test_calibration_keeps_following_a_mark_that_drifted_out_of_the_window():
+    """PR #525 review: onset scanning anchors on the marks IN FORCE — a learned mark that
+    drifted upstream of the reference window keeps adapting instead of snapping back."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.44,  # tight window: reference scan would start at 0.42
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.445,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # walk the EMA upstream over laps: 0.430 (d=0.015), then 0.418 near the learned 0.436
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.430, end=0.47)) == 1
+    marks = obs._effective_marks(ref)
+    assert marks[0][0] == pytest.approx(0.430, abs=0.003)
+    # 0.418 is 0.027 below the ORIGINAL window scan floor (0.42) — but only 0.012 from the
+    # learned mark: it must still fold.
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.418, end=0.47)) == 1
+    marks = obs._effective_marks(ref)
+    # EMA: 0.430 + 0.4*(0.418-0.430) ~= 0.425
+    assert marks[0][0] == pytest.approx(0.4255, abs=0.004)

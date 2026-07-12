@@ -86,6 +86,9 @@ class Scheduler:
         self._last_spoke_key: dict[str, float] = {}
         # last time (clock) a given kind actually spoke — drives the per-kind cooldown.
         self._last_spoke_kind: dict[str, float] = {}
+        # last dedup_key spoken per kind — a DIFFERENT brake zone of a merged corner (#522)
+        # must not be swallowed by the same-kind cooldown as if it repeated the previous cue.
+        self._last_spoke_kind_key: dict[str, str] = {}
 
     # ---- submission (any thread) -------------------------------------------------------------
 
@@ -157,10 +160,17 @@ class Scheduler:
                 _log.debug("voice: dedup-suppress %s (key=%s)", utt.clip_id, utt.dedup_key)
                 return None
         # Cooldown: minimum gap between same-kind cues. ACT is exempt (never delayed/dropped).
+        # A late_brake cue for a DIFFERENT (corner, zone) than the kind's last spoken cue is
+        # also exempt: two brake zones of a merged esses corner (#522) can sit closer than the
+        # kind cooldown, and the second mark's heads-up is distinct coaching, not a nag —
+        # playback-busy arbitration still prevents talk-over (PR #525 review).
         if not is_act:
             last_kind = self._last_spoke_kind.get(utt.kind)
             cooldown = self._config.cooldown_for(utt.kind)
-            if last_kind is not None and (now - last_kind) < cooldown:
+            distinct_zone_brake = utt.kind == "late_brake" and self._last_spoke_kind_key.get(
+                utt.kind
+            ) not in (None, utt.dedup_key)
+            if last_kind is not None and (now - last_kind) < cooldown and not distinct_zone_brake:
                 _log.debug("voice: cooldown-suppress %s (kind=%s)", utt.clip_id, utt.kind)
                 return None
         return utt
@@ -224,6 +234,7 @@ class Scheduler:
                 )
         self._last_spoke_key[winner.dedup_key] = now
         self._last_spoke_kind[winner.kind] = now
+        self._last_spoke_kind_key[winner.kind] = winner.dedup_key
         return winner
 
     # ---- production worker thread ------------------------------------------------------------
