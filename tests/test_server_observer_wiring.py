@@ -481,8 +481,6 @@ def test_unresolvable_frame_does_not_reserve_the_calibration_key(tmp_path, monke
     # archive-backed re-send of the same physical lap -> calibrates
     path = _write_lap_archive(tmp_path, _corner_archive())
     asyncio.run(
-        server._calibrate_brake_marks_from_lap(
-            {"lap": 3, "lapTimeMs": 133498, "archivePath": path}
-        )
+        server._calibrate_brake_marks_from_lap({"lap": 3, "lapTimeMs": 133498, "archivePath": path})
     )
     assert obs._driver_marks, "the archive-backed re-send must not be starved by the empty frame"
