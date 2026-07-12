@@ -26,7 +26,19 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus:** Awaiting next focus selection (see RESUME block in `Next Session Handoff.md`). EPIC
+**Active focus (2026-07-12):** Tablet voice hardware verification for
+[#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) /
+[#511](https://github.com/agorokh/ac-copilot-trainer/issues/511) Part D. PR
+[#519](https://github.com/agorokh/ac-copilot-trainer/pull/519) **MERGED**
+([`fb54b9d`](https://github.com/agorokh/ac-copilot-trainer/commit/fb54b9d)) — `coaching.voice`
+dispatch broadcast, sidecar-served tablet WebAudio page (USB `adb reverse`, no WiFi),
+`voice.echo`/`voice.demo`, and the `audible_latency` chirp/matched-filter harness. Live smoke
+green on the real stack. **Blocked only on the tablet's physical "Allow USB debugging" tap**;
+then: burst measurement → autonomous drive (Magione + 911 GT3 R) → per-cue timeliness evidence
+on #381 → operator A/B listen via tablet earpiece. Detail:
+[[issue-511-partd-tablet-voice-endpoint-2026-07-11]].
+
+**Prior state:** Awaiting next focus selection (see RESUME block in `Next Session Handoff.md`). EPIC
 [#154](https://github.com/agorokh/ac-copilot-trainer/issues/154) (autonomous self-test harness) is now
 **CLOSED** (2026-07-11) — Closure Criterion met. EPIC
 [#488](https://github.com/agorokh/ac-copilot-trainer/issues/488) (telemetry capture completeness for ML)

@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-12T02:10:00Z
+last_updated: 2026-07-12T04:40:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-511-partd-tablet-voice-endpoint-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/issue-515-lap-archives-race-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/issue-512-false-green-kpi-2026-07-11.md
   - AcCopilotTrainer/03_Investigations/csp-telemetry-and-acd-grounding-2026-07-04.md
@@ -76,7 +77,32 @@ relates_to:
 
 # Next session handoff
 
-## RESUME HERE — Next focus
+## RESUME HERE — tablet voice hardware verification (one tap away)
+
+`/autonomous-deliver 381` (2026-07-11, ultracode) shipped **PR
+[#519](https://github.com/agorokh/ac-copilot-trainer/pull/519) MERGED (`fb54b9d`)** — the 7"
+tablet is now the coaching-audio endpoint over USB and the #381 audible-timeliness harness
+exists (below). The ONLY blocker for the live hardware proof is the **adb "Allow USB
+debugging" tap on the tablet** (dialog is up; this PC's new adb key needs one physical
+Allow). When tapped, run in order (all staged, sidecar can run from `main`):
+
+1. `adb reverse tcp:8765 tcp:8765` (adb: winget `Google.PlatformTools`).
+2. Sidecar with voice env (bank `coach-bank-kokoro-fenrir-v3-intensity3-20260702`, reference
+   `.scratch/coach-demo/reference.json` = Magione + 911 GT3 R).
+3. Tablet Chrome/Fully Kiosk → `http://127.0.0.1:8765/tablet/voice` → tap ARM (tablet
+   speaker for measurement; earpiece for the operator run).
+4. Bench: `python -m tools.ai_sidecar.voice.audible_latency run --bank <bank> --out-dir
+   .scratch/audible-latency --burst 12 --scrcpy <scrcpy.exe>` (scrcpy: winget
+   `Genymobile.scrcpy`, bundles its own adb — don't fight the two adb servers).
+5. Drive: `auto_drive --car ks_porsche_911_gt3_r_2016 --track magione` + a parallel
+   `audible_latency run --observe-seconds 300`.
+6. Post per-cue latency table + P50/P95/max on #381; the operator A/B listen goes through
+   the tablet earpiece. Node: [[issue-511-partd-tablet-voice-endpoint-2026-07-11]].
+
+`pyproject.toml` changed in #519 (package-data for the tablet page) — re-run
+`pip install -e '.[dev]'` on a fresh env; the editable rig venv is unaffected.
+
+## Previous focus options (EPIC #154 closed)
 
 **EPIC #154 (autonomous self-test harness) is CLOSED** (2026-07-11) — Closure Criterion met: children
 #277/#278/#305 + #459 + #244 all CLOSED, determinism-lock shipped (#460), and the Part-G false-green
@@ -87,6 +113,21 @@ and closed. Resume cold by picking the next major focus. Open backlog options:
 - **EPIC #86 (Rig screen)** final on-device smoke artifact + A4 font outputs.
 - **EPIC #408 (SuperLap)** Part C Track Titan ingester (requires real TT reference laps).
 - **EPIC #401 (ROADMAP)** product plan & gap-closure across verticals — the live umbrella.
+
+## Delivered (2026-07-12 UTC) — PR #519 MERGED (`fb54b9d`): #511 Part D tablet voice endpoint + #381 audible-latency harness
+
+Operator-directed (2026-07-11): test the realistic voice component and **how timely** it is,
+with no PC mic — the 7" tablet is the room mic (scrcpy over USB) and the earpiece endpoint.
+Shipped: `coaching.voice` post-scheduler dispatch broadcast (dispatch tap, clocks pre-play),
+sidecar-served tablet WebAudio page + manifest/clip routes (allow-listed, token-gated for
+non-loopback), `voice.echo`/`voice.demo` protocol, and
+`tools.ai_sidecar.voice.audible_latency` (chirp clock-sync + matched-filter onsets +
+honest assertions). Council-reviewed design (3/3), 3 bot review rounds + an 18-agent
+adversarial workflow (11 confirmed findings fixed — incl. three measurement-validity HIGHs
+in the harness itself). Live smoke on the real stack: routes green, `voice.demo` → real
+rtmixer dispatch → broadcast → echo rtt 0.9 ms. **Hardware half staged, blocked only on the
+tablet's Allow-USB-debugging tap** (see RESUME). Detail:
+[[issue-511-partd-tablet-voice-endpoint-2026-07-11]].
 
 ## Delivered (2026-07-12 UTC) — PR #516 MERGED (`49af0a7`): #515 lap-archive evidence fix (live-verified)
 
