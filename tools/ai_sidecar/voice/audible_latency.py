@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import statistics
@@ -521,6 +522,31 @@ def render_markdown(report: AudibleLatencyReport) -> str:
 # --------------------------------------------------------------------------------------------
 
 
+def filter_dispatches_to_window(
+    dispatches: list[dict[str, Any]],
+    chirps: list[ChirpMark],
+    *,
+    margin_ms: float = 250.0,
+) -> list[dict[str, Any]]:
+    """Keep only dispatches whose stamp lies inside this run's chirp-bounded window."""
+    if not chirps:
+        return dispatches
+    start = min(c.anchor_wall_ms() for c in chirps) - margin_ms
+    end = max(c.anchor_wall_ms() for c in chirps) + margin_ms
+    kept: list[dict[str, Any]] = []
+    for d in dispatches:
+        t = d.get("t_wall_ms")
+        if isinstance(t, int | float) and start <= float(t) <= end:
+            kept.append(d)
+    dropped = len(dispatches) - len(kept)
+    if dropped:
+        _log.info(
+            "ignoring %d dispatch(es) outside this capture window (earlier sidecar activity)",
+            dropped,
+        )
+    return kept
+
+
 def _http_get_json(url: str, timeout: float = 10.0) -> dict[str, Any]:
     if not url.startswith(("http://127.0.0.1", "http://localhost")):
         raise ValueError(f"refusing non-loopback sidecar URL: {url}")
@@ -632,12 +658,25 @@ def run(args: argparse.Namespace) -> int:
             proc.wait(timeout=10)
     finally:
         if proc.poll() is None:
+            # Failure path: wait after terminate (kill on timeout) so a dying scrcpy cannot
+            # keep writing the WAV or hold the log handle into the next run (PR #519 review).
             proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=5)
         scrcpy_log.close()
 
     http_base = args.http_url.rstrip("/")
     dispatches = _http_get_json(f"{http_base}/voice/dispatches").get("dispatches", [])
     echoes = _http_get_json(f"{http_base}/voice/echoes").get("echoes", [])
+    # The ring buffers span the whole sidecar process, not this run. Keep only cues
+    # dispatched between the two sync chirps — anything earlier/later is outside the
+    # recording and would be reported UNMATCHED, failing a perfectly good run (PR #519
+    # review). The chirps bound the capture by construction.
+    dispatches = filter_dispatches_to_window(dispatches, chirps)
     (out_dir / "dispatches.json").write_text(json.dumps(dispatches, indent=2), encoding="utf-8")
     (out_dir / "echoes.json").write_text(json.dumps(echoes, indent=2), encoding="utf-8")
     (out_dir / "chirps.json").write_text(

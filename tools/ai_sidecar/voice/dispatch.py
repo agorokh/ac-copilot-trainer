@@ -88,6 +88,18 @@ class DispatchTapPlayback:
     def play(self, utterance: Utterance) -> None:
         # Play FIRST: if the backend raises, no dispatch happened and no event is emitted.
         self._inner.play(utterance)
+        duration_ms = self._duration(utterance.clip_id)
+        if self._duration_lookup is not None and duration_ms is None:
+            # The bank-backed backends degrade per-clip: a missing/sha-bad/undecodable clip
+            # is SKIPPED by play() (logged no-op), and the same bank drives this duration
+            # lookup — so no duration means no audio actually sounded. Never broadcast a
+            # dispatch for silence (PR #519 review): the tablet would speak a clip the
+            # in-ear coach never played.
+            _log.warning(
+                "voice: suppressing dispatch event for %s — clip absent from the loaded bank",
+                utterance.clip_id,
+            )
+            return
         dispatch = VoiceDispatch(
             seq=next(self._seq),
             clip_id=utterance.clip_id,
@@ -96,7 +108,7 @@ class DispatchTapPlayback:
             register=utterance.register,
             corner=utterance.corner,
             text=utterance.text,
-            duration_ms=self._duration(utterance.clip_id),
+            duration_ms=duration_ms,
             t_wall_ms=self._wall_clock() * 1000.0,
             t_mono_ms=self._mono_clock() * 1000.0,
         )

@@ -162,6 +162,22 @@ def test_dispatch_tap_listener_fault_never_breaks_audio() -> None:
     assert len(inner.played) == 1  # audio path wins
 
 
+def test_dispatch_tap_suppresses_event_for_bank_skipped_clip() -> None:
+    """A bank-backed backend silently skips a missing/sha-bad clip; the tap must not
+    broadcast a dispatch for audio that never sounded (PR #519 review). A tap WITHOUT a
+    duration lookup (injected test double) keeps emitting — it has no bank to consult."""
+    inner = RecordingPlayback()
+    events: list[VoiceDispatch] = []
+    tap = DispatchTapPlayback(inner, events.append, duration_lookup=lambda _cid: None)
+    tap.play(_utterance())
+    assert len(inner.played) == 1  # playback path untouched (backend logs its own skip)
+    assert events == []  # but nothing is broadcast for silence
+
+    bare = DispatchTapPlayback(RecordingPlayback(), events.append)
+    bare.play(_utterance())
+    assert len(events) == 1  # no lookup -> no bank knowledge -> emit as before
+
+
 def test_dispatch_tap_no_event_when_backend_raises() -> None:
     class _Boom:
         current = None

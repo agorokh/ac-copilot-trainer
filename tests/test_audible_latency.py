@@ -169,6 +169,26 @@ def test_unmatched_cue_fails_assertions_not_silently(tmp_path: Path) -> None:
     assert not report.assertions["act_cues_within_budget"]
 
 
+def test_filter_dispatches_to_window() -> None:
+    """Only cues dispatched inside THIS run's chirp-bounded window are analyzed — the ring
+    buffer spans the whole sidecar process (PR #519 review)."""
+    chirps = [
+        al.ChirpMark("start", 10_000.0, 10_000.0, 5.0),
+        al.ChirpMark("end", 40_000.0, 40_000.0, 5.0),
+    ]
+    dispatches = [
+        {"seq": 1, "t_wall_ms": 5_000.0},  # earlier sidecar activity — dropped
+        {"seq": 2, "t_wall_ms": 10_100.0},  # in window — kept
+        {"seq": 3, "t_wall_ms": 39_900.0},  # in window — kept
+        {"seq": 4, "t_wall_ms": 55_000.0},  # after the capture — dropped
+        {"seq": 5},  # no stamp — dropped
+    ]
+    kept = al.filter_dispatches_to_window(dispatches, chirps)
+    assert [d["seq"] for d in kept] == [2, 3]
+    # No chirps (analysis-only edge) -> passthrough rather than dropping everything.
+    assert al.filter_dispatches_to_window(dispatches, []) == dispatches
+
+
 def test_analyze_cmd_round_trip(tmp_path: Path) -> None:
     """The CLI analyze path parses the run artifacts it writes (shape contract)."""
     bake_bank(tmp_path, ToneBackend())
