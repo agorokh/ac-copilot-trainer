@@ -784,9 +784,10 @@ def validate_inbound(frame: dict[str, Any]) -> str | None:
             err = _validate_number(frame, key, min_value=0)
             if err is not None:
                 return err
-        err = _validate_optional_number(frame, "t_play_ms", min_value=0)
-        if err is not None:
-            return err
+        for key in ("t_play_ms", "t_dispatch_mono_ms"):
+            err = _validate_optional_number(frame, key, min_value=0)
+            if err is not None:
+                return err
         buffer_state = frame.get("buffer_state")
         if buffer_state is not None and (
             not isinstance(buffer_state, str) or buffer_state not in VOICE_ECHO_BUFFER_STATES

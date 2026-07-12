@@ -68,40 +68,36 @@ def test_brake_cue_calm_when_on_pace_anticipatory() -> None:
     assert a.detail["lead_s"] > 0.0  # emitted before the mark (issue #368 AC a)
 
 
-def test_brake_cue_critical_when_arriving_far_too_hot() -> None:
-    # Deep past the brake point, still coasting, carrying far more than the apex target → alarm.
+def test_past_point_hot_coast_is_silent_and_flagged() -> None:
+    # #522: deep past the brake point a spoken imperative is after-the-fact noise — the
+    # observer stays SILENT (no live "Brake!" alarm exists) and flags the pass so
+    # corner-exit grading owns the feedback.
     ref = _ref(optimal_apex_kmh=100.0, best_observed_apex_kmh=100.0)
     obs = RealtimeObserver([ref], lap_length_m=2500.0)
     out = obs.observe({"spline": 0.49, "speed": 180.0, "brake": 0.0, "throttle": 0.0})
-    brake = [a for a in out if a.kind == "late_brake"]
-    assert brake
-    a = brake[0]
-    assert a.register == "critical"
-    assert a.urgency == "act"
-    assert a.intensity > 0.66
+    assert [a for a in out if a.kind == "late_brake"] == []
+    assert obs._passes[ref.index].late_uncoached is True
 
 
-def test_brake_cue_escalates_calm_to_critical_across_frames() -> None:
-    # codex review #371: a calm anticipatory lead-in must NOT lock out the later critical alarm.
+def test_calm_prepare_is_the_only_live_cue_across_frames() -> None:
+    # #522 (supersedes the #371 escalation ladder): the calm anticipatory heads-up is the
+    # ONLY live brake cue. Arriving hot past the point speaks nothing — the miss is owned
+    # by exit grading, never by a live alarm that would always land after the fact.
     ref = _ref(optimal_apex_kmh=120.0, best_observed_apex_kmh=120.0)
     obs = RealtimeObserver([ref], lap_length_m=2500.0)
-    cues = []
-    # frame 1: on pace in the lead window → calm/prepare heads-up
-    cues += [
+    first = [
         a
         for a in obs.observe({"spline": 0.443, "speed": 122.0, "brake": 0.0, "throttle": 0.0})
         if a.kind == "late_brake"
     ]
-    # frame 2: arriving far too hot, still coasting past the point → critical alarm (escalation)
-    cues += [
+    assert [(a.urgency, a.register) for a in first] == [("prepare", "calm")]
+    second = [
         a
         for a in obs.observe({"spline": 0.49, "speed": 190.0, "brake": 0.0, "throttle": 0.0})
         if a.kind == "late_brake"
     ]
-    regs = [c.register for c in cues]
-    assert "calm" in regs and "critical" in regs  # both lead-in AND the escalated alarm fired
-    rank = {"calm": 0, "alert": 1, "urgent": 2, "critical": 3}
-    assert [rank[r] for r in regs] == sorted(rank[r] for r in regs)  # strictly escalating
+    assert second == []
+    assert obs._passes[ref.index].late_uncoached is True
 
 
 def test_brake_cue_suppressed_once_braking() -> None:
@@ -179,7 +175,8 @@ def test_wrapped_first_corner_lead_resets_previous_lap_cue_state() -> None:
         best_brake_point_spline=0.01,
     )
     obs = RealtimeObserver([ref], track_length_m=2500.0)
-    first = obs.observe({"spline": 0.012, "speed": 180.0, "brake": 0.0, "throttle": 0.0})
+    # inside the (wrapped) lead window, BEFORE the bp — the #522 heads-up fires here
+    first = obs.observe({"spline": 0.005, "speed": 180.0, "brake": 0.0, "throttle": 0.0})
     assert [a for a in first if a.kind == "late_brake"]
 
     wrapped_lead = obs.observe({"spline": 0.995, "speed": 180.0, "brake": 0.0, "throttle": 0.0})

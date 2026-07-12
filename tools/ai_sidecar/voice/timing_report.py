@@ -36,7 +36,9 @@ from pathlib import Path
 from typing import Any
 
 from tools.ai_sidecar.realtime_observer import (
+    _BRAKE_PREPARE_LEAD_S,
     _DEFAULT_TRACK_LENGTH_M,
+    _MAX_LEAD_SPLINE,
     Advisory,
     CornerReference,
     RealtimeObserver,
@@ -54,9 +56,8 @@ _log = logging.getLogger("ai_sidecar.voice.timing_report")
 _FRAME_HZ = 20.0
 #: assumed clip length (ms) when no baked bank is supplied, for channel-completion modeling.
 _DEFAULT_CLIP_MS = 400.0
-_MAX_LEAD_SPLINE = 0.05
-_DEFAULT_BRAKE_PREPARE_LEAD_S = 0.8
-_CRITICAL_BRAKE_CLIP_ID = "late_brake.act.critical.generic"
+# lead constants are imported from the observer (single source of truth — #522 raised them).
+_DEFAULT_BRAKE_PREPARE_LEAD_S = _BRAKE_PREPARE_LEAD_S
 
 
 @dataclass
@@ -292,26 +293,26 @@ def build_timing_report(
     # AC c: the TIME-CRITICAL brake alarm (the late_brake act cue) must be ≤450 ms. A 2-syllable
     # correction like "Release." sits ~540 ms — the honest floor of an intelligible 2-syllable word,
     # not padding — so it is reported but not gated here.
-    brake_alarm_over_budget = [
-        c
-        for c in spoken
-        if c.kind == "late_brake" and c.urgency == "act" and (c.clip_duration_ms or 0) > 450.0
+    act_over_budget = [
+        c for c in spoken if c.urgency == "act" and (c.clip_duration_ms or 0) > 450.0
     ]
-    critical_brake_alarm_spoken = any(c.clip_id == _CRITICAL_BRAKE_CLIP_ID for c in spoken)
+    live_brake_imperatives = [c for c in spoken if c.kind == "late_brake" and c.urgency == "act"]
     report.assertions = {
         "covered_corners_at_least_one": report.covered_corners >= 1,
         # AC a: an anticipatory cue actually fired, and EVERY anticipatory cue's onset led its mark.
-        # (Reactive cues — over-braking release, past-the-point alarm, apex verdict — are exempt;
-        # they correctly fire at/after the mark.)
+        # (Reactive cues — over-braking release, apex verdict — are exempt; they correctly fire
+        # at/after the mark.)
         "anticipatory_cue_fired": len(spoken_anticipatory) >= 1,
         "anticipatory_onset_before_mark": all(c.onset_before_mark for c in spoken_anticipatory),
         "no_info_spoken_in_low_verbosity": (
             config.verbosity != Verbosity.LOW or "info" not in spoken_urgencies
         ),
-        "brake_alarm_within_450ms": (bank_dir is None or not brake_alarm_over_budget),
-        "critical_brake_alarm_spoken": (
-            config.verbosity == Verbosity.OFF or critical_brake_alarm_spoken
-        ),
+        "brake_alarm_within_450ms": (bank_dir is None or not act_over_budget),
+        # Issue #522: there is deliberately NO live brake-fault imperative — a spoken "Brake!"
+        # at/past the mark is after-the-fact noise (0/8 actionable on the instrumented lap).
+        # The anticipatory heads-up + corner-exit grading own the feedback; a late_brake act
+        # cue speaking AT ALL is a regression.
+        "no_live_brake_imperatives": not live_brake_imperatives,
         # A non-vacuous proof must actually dispatch a cue — unless verbosity is OFF (muted).
         # A resolver/bank gap that silently suppresses everything must FAIL the report, not pass it
         # because the structural assertions held (codex review #371). This is a BOOL so main()'s

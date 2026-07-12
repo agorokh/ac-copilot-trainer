@@ -260,6 +260,9 @@
       var echo = { v: 1, type: "voice.echo", seq: p.seq, clip_id: p.clip_id,
         t_dispatch_ms: p.t_wall_ms || 0, t_receive_ms: tReceive,
         buffer_state: played.buffer_state, audio_armed: state.armed };
+      // Echo the server's MONOTONIC dispatch stamp so the sidecar can compute RTT immune
+      // to wall-clock steps (PR #523 review).
+      if (typeof p.t_mono_ms === "number") echo.t_dispatch_mono_ms = p.t_mono_ms;
       if (played.t_play_ms !== null) echo.t_play_ms = played.t_play_ms;
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(echo));
     };

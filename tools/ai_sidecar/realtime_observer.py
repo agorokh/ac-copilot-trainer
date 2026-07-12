@@ -61,17 +61,31 @@ _CLOSING_REF_KMH = 35.0
 _DEFICIT_REF_KMH = 18.0
 #: brake fraction past the apex that flags over-braking (the ``brake_release`` cue).
 _RELEASE_BRAKE_MIN = 0.45
-#: seconds of anticipatory lead — a cue fires this far (in time, converted to spline) BEFORE its
-#: mark so the audio ONSET lands before/at the control point, not after (issue #368 AC a).
-_LEAD_S = 0.8
+#: seconds of anticipatory lead — the full AUDIBILITY BUDGET, not just an onset head start.
+#: A cue is coaching only if it FINISHES SOUNDING early enough for a human to act before the
+#: mark (issue #522: with the old 0.8 s lead, 0/8 brake cues in an instrumented lap were
+#: actionable — every one finished after the brake point). Budget: prepare-clip duration
+#: (~1.3 s) + audio-path latency (0.1 s PC / 0.45 s tablet) + auditory comprehension-and-
+#: reaction (~1.2 s) + margin ≈ 3.2 s before the mark.
+_LEAD_S = 3.2
 #: default track length (m) for the lead-time → spline conversion when a track length is not
 #: supplied.
 _DEFAULT_TRACK_LENGTH_M = 2500.0
 #: public constructor default for the configurable brake lead.
 _BRAKE_PREPARE_LEAD_S = _LEAD_S
 #: cap on the anticipatory lead in spline units, so a very fast straight cannot fire a corner cue
-#: half a lap early.
-_MAX_LEAD_SPLINE = 0.05
+#: half a lap early. 0.09 ≈ 220 m on a 2.5 km track — covers the 3.2 s budget up to ~250 km/h
+#: while still firmly local to the corner (issue #522 raised it with the lead).
+_MAX_LEAD_SPLINE = 0.09
+#: #522 design note: there is deliberately NO live brake-fault imperative. A driver braking
+#: exactly at the mark is indistinguishable from one about to miss it until the mark itself,
+#: so a spoken correction is either a false alarm or after-the-fact noise. The live cue is
+#: the calm anticipatory heads-up above; a missed brake point is owned by corner-exit
+#: grading ("brake earlier next lap") where feedback is actionable for the NEXT pass.
+#: Braking observed within this many seconds of the brake point counts as braking FOR that
+#: corner (suppresses its heads-up); farther out it is likely trail-braking the previous
+#: corner inside an overlapping #522 lead window and must not latch (PR #523 review).
+_LEAD_LATCH_TTA_S = 1.5
 #: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
 #: sits below the rising edge so a severity hovering near a boundary does not flicker tone
 #: frame-to-frame.
@@ -166,6 +180,9 @@ class _CornerPass:
     #: rank of the highest brake-release register emitted this pass. A barely-over-threshold
     #: release warning can still escalate to urgent if the driver stays hard on the brake.
     release_cue_rank: int = -1
+    #: the driver ran too deep past the brake point for a spoken imperative to be actionable
+    #: (issue #522) — the pass stayed silent and the miss is surfaced in exit grading instead.
+    late_uncoached: bool = False
     exit_emitted: bool = False
     #: last tone register spoken for this corner pass — feeds register hysteresis (issue #368).
     last_register: str = "calm"
@@ -402,93 +419,79 @@ class RealtimeObserver:
                     out.append(a)
         return out
 
-    def _brake_severity(self, ref: CornerReference, spline: float, speed: float) -> float:
-        """Severity ``s ∈ [0,1]`` for a brake cue — how urgent the "brake" should sound (issue
-        #368).
-
-        Two grounded terms: how far through the braking zone the car is without braking (proximity /
-        lateness, 0 at the brake point → 1 at the apex; clamped to 0 before the point during the
-        anticipatory lead) and the closing speed above the corner's apex target (a car arriving much
-        faster than the reference apex needs a firmer cue). Both come from real telemetry + the
-        reference envelope — no fabricated ceiling.
-        """
-        bp = ref.best_brake_point_spline
-        if bp is None:
-            return 0.0
-        zone = max(ref.apex_spline - bp, 1e-6)
-        progress = _clamp01((spline - bp) / zone)  # 0 at/before bp, 1 at apex
-        closing = _clamp01((speed - ref.target_apex_kmh) / _CLOSING_REF_KMH)
-        return _clamp01(0.45 * progress + 0.55 * closing)
-
     def _brake_cue(
         self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
     ) -> Advisory | None:
-        """Fire an anticipatory brake cue whose TONE register reflects the situation (#368).
+        """Fire ONE calm anticipatory heads-up per corner pass — the only live brake cue.
 
-        Fires when the car is within the actionable brake window (from the anticipatory lead before
-        the brake point through the apex) and is not yet braking. The register
-        (calm|alert|urgent|critical) comes from :meth:`_brake_severity`, so a car arriving on pace
-        gets a calm anticipatory
-        "brake point" while a car carrying far too much speed — or coasting past the point — gets a
-        alert/urgent/critical "Brake." / "Brake!".
+        Issue #522 (supersedes the #368/#371 escalation ladder): the cue fires when the lead
+        window opens (default ~3.2 s of audibility budget before the brake point) so the
+        clip FINISHES with human reaction time to spare. It is always ``prepare``/``calm``
+        and never re-fires within a pass — there is deliberately no second-stage live
+        imperative and no register escalation: a driver braking exactly at the mark is
+        indistinguishable from one about to miss it until the mark itself, so a spoken
+        correction is either a false alarm or after-the-fact noise (measured on the #522
+        instrumented lap: every past-point "Brake!" completed with the mark already behind
+        the car). AT/PAST the mark the pass is flagged (``late_uncoached``) and corner-exit
+        grading owns the feedback.
 
-        **Escalation (codex review #371):** the cue re-fires within one pass only when severity
-        rises to a *strictly higher* register (calm→alert→urgent→critical), so a calm lead-in never
-        suppresses the later urgent alarm; the scheduler's register-keyed dedup + act barge-in
-        deliver the escalation. A same- or lower-tier repeat is dropped.
-
-        Suppressed once the driver has braked anywhere in this pass (``has_braked``): braking early
-        and trailing off before the apex — normal trail-brake / rotation — is not a fault and must
-        not draw a cue (codex #294).
+        Suppressed once the driver has braked anywhere in this pass (``has_braked``):
+        braking early and trailing off before the apex — normal trail-braking — is not a
+        fault and must not draw a cue (codex #294).
         """
         bp = ref.best_brake_point_spline
         if bp is None or st.has_braked:
             return None
         if brake >= self._brake_on:
-            # Braking inside the anticipatory lead (before the brake point) IS braking this pass —
-            # record it so a later release-and-coast does not draw a false late-brake alarm
-            # (codex review #371). Mirrors the in-window has_braked latch.
-            st.has_braked = True
+            # Braking near the mark IS braking this pass (codex review #371) — but with the
+            # #522 lead the window can overlap the PREVIOUS corner on closely spaced turns,
+            # and trail-braking that corner must not latch has_braked for this one (PR #523
+            # review). Discriminator: only braking within the last _LEAD_LATCH_TTA_S of the
+            # approach counts as braking FOR this corner; farther out we just stay quiet on
+            # this frame and let the heads-up fire once the driver is off the brakes.
+            delta = _forward_spline_delta(spline, bp)
+            tta_now = delta * self._track_length_m / max(speed / 3.6, 0.1)
+            if not (0.0 < delta <= _LAP_WRAP_DROP) or tta_now <= _LEAD_LATCH_TTA_S:
+                st.has_braked = True
             return None
-        s = self._brake_severity(ref, spline, speed)
         # "anticipatory" = the car has not yet reached the brake point — robust to a lead window
         # wraps over start/finish (a first corner with bp≈0): the forward distance to bp is a small
         # positive value (≤ lead), not a negative linear delta (codex review #371).
         anticipatory = 0.0 < _forward_spline_delta(spline, bp) <= _LAP_WRAP_DROP
-        # BEFORE the brake point it is a calm anticipatory heads-up regardless of closing speed (the
-        # driver hasn't missed anything yet — main's `brake_prepare` contract). Severity-based
-        # escalation (alert/urgent/critical) applies only AT/PAST the point, where coasting on is a
-        # real fault (#368 escalation; preserves the merged main brake_prepare semantics).
-        register = "calm" if anticipatory else _register_for(s, st.last_register, cap="critical")
-        rank = REGISTER_RANK[register]
-        if rank <= st.brake_cue_rank:
-            return None  # not an escalation — already cued this tier (or higher) this pass
-        st.brake_cue_rank = rank
-        urgency = _URGENCY_FOR_REGISTER[register]
-        st.last_register = register
-        lead_s = (
-            _forward_spline_delta(spline, bp) * self._track_length_m / max(speed / 3.6, 0.1)
-            if anticipatory
-            else 0.0
-        )
+        if not anticipatory:
+            # Issue #522: an imperative spoken AT/PAST the mark cannot complete before it —
+            # measured on the instrumented lap, every past-point "Brake!" was heard with the
+            # mark already behind the car. The moment has passed: stay silent, lock out
+            # further imperatives this pass, and flag it so corner-exit grading owns the
+            # feedback ("brake earlier next lap") where it is actionable.
+            st.brake_cue_rank = REGISTER_RANK["critical"]
+            st.late_uncoached = True
+            return None
+        # One calm anticipatory heads-up per pass — the ONLY live brake cue (#522). A live
+        # fault imperative is unfixable in principle: a driver braking exactly at the mark is
+        # indistinguishable from one about to miss it until the mark itself, so a spoken
+        # correction is either a false alarm (on-pace driver) or after-the-fact (late one).
+        # Real coaching splits the roles: anticipatory mark before, debrief after.
+        tta_s = _forward_spline_delta(spline, bp) * self._track_length_m / max(speed / 3.6, 0.1)
+        closing = _clamp01((speed - ref.target_apex_kmh) / _CLOSING_REF_KMH)
+        if st.brake_cue_rank >= 0:
+            return None  # already gave this pass its heads-up
+        st.brake_cue_rank = REGISTER_RANK["calm"]
+        st.last_register = "calm"
         return Advisory(
             kind="late_brake",
             corner=ref.index,
-            spline=round(bp if anticipatory else spline, 4),
-            urgency=urgency,
-            intensity=round(s, 3),
-            register=register,
+            spline=round(bp, 4),
+            urgency="prepare",
+            intensity=round(_clamp01(0.3 * closing), 3),
+            register="calm",
             # +1: CornerReference.index is 0-based; user-facing turn labels are 1-based (T1..)
-            message=(
-                f"Brake point for T{ref.index + 1} coming up — brake."
-                if anticipatory
-                else f"Past your brake point for T{ref.index + 1} and still coasting — brake."
-            ),
+            message=f"Brake point for T{ref.index + 1} coming up — brake.",
             detail={
                 "brake_point_spline": round(bp, 4),
-                "lead_s": round(lead_s, 2),
+                "lead_s": round(tta_s, 2),
                 "current_kmh": round(speed, 1),
-                "anticipatory": anticipatory,
+                "anticipatory": True,
                 "source": _target_source(ref),
             },
         )
@@ -539,6 +542,25 @@ class RealtimeObserver:
         target = ref.target_apex_kmh
         deficit = round(target - st.min_speed_kmh, 1)
         if deficit < self._deficit_margin:
+            if st.late_uncoached:
+                # #522 review (cursor HIGH): the deferred late-brake feedback must not depend
+                # on an apex deficit existing — a driver who braked late yet still carried
+                # target apex speed needs the "brake earlier" verdict too, or the suppressed
+                # live imperative's feedback is silently lost. Voice has no late_brake info
+                # clip (deliberately unspoken); the HUD / coaching.cue surfaces deliver it.
+                return Advisory(
+                    kind="late_brake",
+                    corner=ref.index,
+                    spline=round(ref.apex_spline, 4),
+                    urgency="info",
+                    intensity=0.3,
+                    register="calm",
+                    message=(
+                        f"T{ref.index + 1}: you ran deep past your brake point — "
+                        "brake earlier next lap."
+                    ),
+                    detail={"braked_late_uncoached": True, "source": _target_source(ref)},
+                )
             return None
         source = _target_source(ref)
         # be honest about what the target IS: a demonstrated corpus best vs a GGV theoretical
@@ -560,12 +582,20 @@ class RealtimeObserver:
             message=(
                 f"T{ref.index + 1}: carried {deficit:.0f} km/h under {target_label} "
                 f"({st.min_speed_kmh:.0f} vs {target:.0f}) — more entry speed if grip allows."
+                + (
+                    " You also ran deep past your brake point — brake earlier next lap."
+                    if st.late_uncoached
+                    else ""
+                )
             ),
             detail={
                 "min_speed_kmh": round(st.min_speed_kmh, 1),
                 "target_apex_kmh": round(target, 1),
                 "deficit_kmh": deficit,
                 "source": source,
+                # Issue #522: the mid-corner imperative was suppressed (after-the-fact); the
+                # miss is owned here, at exit, where feedback is actionable for NEXT lap.
+                "braked_late_uncoached": st.late_uncoached,
             },
         )
 
@@ -583,7 +613,9 @@ def _frames_from_lap_trace(lap: LapTrace) -> list[dict[str, Any]]:
     ]
 
 
-def build_observer_from_reference(reference_archive: dict) -> RealtimeObserver | None:
+def build_observer_from_reference(
+    reference_archive: dict, *, brake_prepare_lead_s: float | None = None
+) -> RealtimeObserver | None:
     """Build an observer whose target envelope is the corpus best of a (faster) reference lap.
 
     The reference lap is treated as the corpus best — the realistic, demonstrated target — NOT a
@@ -606,4 +638,10 @@ def build_observer_from_reference(reference_archive: dict) -> RealtimeObserver |
     add_corpus_lap(refs, ref_lap)  # the reference lap IS the corpus best
     track_obj = reference_archive.get("track")
     track = track_obj if isinstance(track_obj, dict) else {}
-    return RealtimeObserver(refs, track_length_m=_positive_track_length_m(track.get("lengthM")))
+    return RealtimeObserver(
+        refs,
+        track_length_m=_positive_track_length_m(track.get("lengthM")),
+        brake_prepare_lead_s=(
+            brake_prepare_lead_s if brake_prepare_lead_s is not None else _BRAKE_PREPARE_LEAD_S
+        ),
+    )
