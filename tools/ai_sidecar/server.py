@@ -825,8 +825,11 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
         return
     track_obj = archive.get("track")
     track_id = track_obj.get("id") if isinstance(track_obj, dict) else None
+    track_layout = track_obj.get("layout") if isinstance(track_obj, dict) else None
     updated = observer.calibrate_from_driver_lap(
-        trace, track_id=track_id if isinstance(track_id, str) else None
+        trace,
+        track_id=track_id if isinstance(track_id, str) else None,
+        track_layout=track_layout if isinstance(track_layout, str) else None,
     )
     if updated:
         logger.info("brake marks calibrated from the driver's lap: %d zone(s) updated", updated)

@@ -596,11 +596,12 @@ def test_wrapped_lead_first_corner_fires_once_per_approach():
 # ---- issue #522 part 2: per-driver brake-mark calibration ------------------------------------
 
 
-def _driver_trace(onset: float, *, end: float, window: tuple[float, float] = (0.0, 1.0)):
+def _driver_trace(
+    onset: float, *, end: float, window: tuple[float, float] = (0.0, 1.0), n: int = 400
+):
     """A flat 40 m/s LapTrace braking 0.8 over [onset, end] (sustained, gate-grade)."""
     from tools.ai_sidecar.lap_dynamics import LapTrace
 
-    n = 400
     spline = [i / (n - 1) for i in range(n)]
     brake = [0.8 if onset <= s <= end else 0.0 for s in spline]
     return LapTrace(
@@ -928,9 +929,10 @@ def test_calibration_tolerance_is_metric_not_normalized():
     ref = _i522_ref()  # mark 0.45
     long_track = RealtimeObserver([ref], track_length_m=20000.0)
     # 0.465 spline = 300 m from the mark on a 20 km track: a different feature, rejected
-    assert long_track.calibrate_from_driver_lap(_driver_trace(0.465, end=0.49)) == 0
-    # ~0.4511 spline = ~22 m: same zone, accepted
-    assert long_track.calibrate_from_driver_lap(_driver_trace(0.4505, end=0.49)) == 1
+    # (n=4000 so the fixture matches a real trace density on a track this long)
+    assert long_track.calibrate_from_driver_lap(_driver_trace(0.465, end=0.49, n=4000)) == 0
+    # ~0.4505 spline = ~10 m: same zone, accepted
+    assert long_track.calibrate_from_driver_lap(_driver_trace(0.4505, end=0.49, n=4000)) == 1
 
 
 def test_two_zones_inside_one_lead_emit_on_consecutive_frames_not_one_batch():
@@ -955,3 +957,51 @@ def test_two_zones_inside_one_lead_emit_on_consecutive_frames_not_one_batch():
     c2 = [a for a in second if a.kind == "late_brake"]
     assert len(c1) == 1 and c1[0].detail["zone"] == 0, "imminent zone speaks first, alone"
     assert len(c2) == 1 and c2[0].detail["zone"] == 1, "the second zone follows next frame"
+
+
+def test_calibration_rejects_wrong_layout_accepts_missing_layout():
+    """PR #525 review: multi-layout track ids share normalized splines that point at unrelated
+    features — a lap from another LAYOUT never calibrates; a lap without layout metadata falls
+    back to the id-only guard (older archives)."""
+    ref = _i522_ref()
+    obs = RealtimeObserver(
+        [ref], track_length_m=2500.0, track_id="ks_nordschleife", track_layout="endurance"
+    )
+    assert (
+        obs.calibrate_from_driver_lap(
+            _driver_trace(0.46, end=0.49), track_id="ks_nordschleife", track_layout="tourist"
+        )
+        == 0
+    )
+    assert (
+        obs.calibrate_from_driver_lap(
+            _driver_trace(0.46, end=0.49), track_id="ks_nordschleife", track_layout=None
+        )
+        == 1
+    )
+
+
+def test_calibration_keeps_following_a_mark_that_drifted_out_of_the_window():
+    """PR #525 review: onset scanning anchors on the marks IN FORCE — a learned mark that
+    drifted upstream of the reference window keeps adapting instead of snapping back."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.50,
+        spline_lo=0.44,  # tight window: reference scan would start at 0.42
+        spline_hi=0.60,
+        optimal_apex_kmh=100.0,
+        best_observed_apex_kmh=100.0,
+        best_brake_point_spline=0.445,
+        n_corpus=1,
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    # walk the EMA upstream over laps: 0.430 (d=0.015), then 0.418 near the learned 0.436
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.430, end=0.47)) == 1
+    marks = obs._effective_marks(ref)
+    assert marks[0][0] == pytest.approx(0.430, abs=0.003)
+    # 0.418 is 0.027 below the ORIGINAL window scan floor (0.42) — but only 0.012 from the
+    # learned mark: it must still fold.
+    assert obs.calibrate_from_driver_lap(_driver_trace(0.418, end=0.47)) == 1
+    marks = obs._effective_marks(ref)
+    # EMA: 0.430 + 0.4*(0.418-0.430) ~= 0.425
+    assert marks[0][0] == pytest.approx(0.4255, abs=0.004)

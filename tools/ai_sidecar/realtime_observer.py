@@ -329,6 +329,7 @@ class RealtimeObserver:
         brake_prepare_lead_s: float = _BRAKE_PREPARE_LEAD_S,
         lap_length_m: float | None = None,
         track_id: str | None = None,
+        track_layout: str | None = None,
     ) -> None:
         # sorted by entry so the in/out-of-window scan is stable
         self._refs = sorted(references, key=lambda r: r.spline_lo)
@@ -345,7 +346,10 @@ class RealtimeObserver:
         # ordinal) -> (EMA of the driver's demonstrated onset spline, laps folded in). Survives
         # lap wraps and reset() — it is knowledge about the driver, not pass state.
         self._driver_marks: dict[tuple[int, int], tuple[float, int]] = {}
-        self._track_id = track_id  # when known, guards calibration against a wrong-track lap
+        # when known, guard calibration against a wrong-track (or wrong-LAYOUT — normalized
+        # splines of different layouts point at unrelated features) lap.
+        self._track_id = track_id
+        self._track_layout = track_layout
         self._passes: dict[int, _CornerPass] = {r.index: self._new_pass(r) for r in self._refs}
         self._last_spline: float | None = None
         self._last_lap: float | None = None  # monotonic lap counter (when the stream supplies it)
@@ -382,18 +386,27 @@ class RealtimeObserver:
                 out.append((mark, _target_source(ref)))
         return out
 
-    def calibrate_from_driver_lap(self, lap: LapTrace, *, track_id: str | None = None) -> int:
+    def calibrate_from_driver_lap(
+        self,
+        lap: LapTrace,
+        *,
+        track_id: str | None = None,
+        track_layout: str | None = None,
+    ) -> int:
         """Fold one of the driver's own completed laps into the per-zone brake-mark EMA.
 
-        For each corner zone, the driver's sustained brake onset nearest the current reference
-        mark (within ``_CAL_MATCH_TOL_M`` meters — the same zone, not a different line) updates
+        For each corner zone, the driver's sustained brake onset nearest the mark currently IN
+        FORCE (within ``_CAL_MATCH_TOL_M`` meters — the same zone, not a different line) updates
         that zone's EMA. Matching is one-to-one (greedy nearest-first): a single brake
         application between two closely spaced marks calibrates ONE zone, never both — else the
         per-zone distinction #522 adds would collapse (PR #525 review). Returns the number of
-        zones updated. A lap from a different track (when both track ids are known) never
-        calibrates.
+        zones updated. A lap from a different track — or a different LAYOUT of the same track,
+        when both sides carry one (multi-layout ids share normalized splines that point at
+        unrelated features) — never calibrates.
         """
         if track_id and self._track_id and track_id != self._track_id:
+            return 0
+        if track_layout and self._track_layout and track_layout != self._track_layout:
             return 0
         tol = _CAL_MATCH_TOL_M / self._track_length_m  # metric tolerance in spline units
         updated = 0
@@ -401,30 +414,44 @@ class RealtimeObserver:
             ref_marks = self._reference_marks(ref)
             if not ref_marks:
                 continue
-            # scan slightly upstream of the window too — a slower driver brakes EARLIER than the
-            # reference lap's deceleration onset that defined the window entry. A first-corner
-            # window whose upstream margin crosses start/finish also scans the trace TAIL: the
-            # archive finalizes the lap before the S/F frame, so the driver's onset for a mark
-            # near spline 0 can sit at ~0.99 (PR #525 review).
-            lo = ref.spline_lo - tol
-            onsets = sustained_brake_onsets(lap, max(0.0, lo), ref.spline_hi)
-            if lo < 0.0:
-                onsets += sustained_brake_onsets(lap, lo % 1.0, 1.0)
-            if not onsets:
-                continue
             # Anchor matching on the marks currently IN FORCE (learned EMA when a zone has one,
             # else the reference): once a zone has drifted toward the driver's habit, later laps
             # near the LEARNED mark must keep adapting even when they sit outside the synthetic
             # mark's tolerance (PR #525 review — "recent laps dominate" must not stall).
             anchors = [m for m, _src in self._effective_marks(ref)]
+            # Onsets are collected from each ANCHOR's ±tol neighbourhood (wrap-aware) — exactly
+            # the region matching can accept — so a learned mark that drifted upstream of the
+            # reference window, or one sitting just before start/finish (the archive finalizes
+            # the lap before the S/F frame), keeps adapting (PR #525 review).
+            onsets: list[float] = []
+            seen_onsets: set[float] = set()
+            for anchor in anchors:
+                # +tol of body allowance past the acceptance bound: an onset just inside the
+                # match window needs room for its ``min_run`` samples, or the window edge would
+                # truncate the zone below detection. Acceptance stays bounded by ``tol``.
+                lo_a, hi_a = anchor - tol, anchor + 2.0 * tol
+                if lo_a < 0.0:
+                    windows = [(lo_a % 1.0, 1.0), (0.0, hi_a)]
+                elif hi_a > 1.0:
+                    windows = [(lo_a, 1.0), (0.0, hi_a % 1.0)]
+                else:
+                    windows = [(lo_a, hi_a)]
+                for w_lo, w_hi in windows:
+                    for onset in sustained_brake_onsets(lap, w_lo, w_hi):
+                        if onset not in seen_onsets:
+                            seen_onsets.add(onset)
+                            onsets.append(onset)
+            if not onsets:
+                continue
             pairs = sorted(
                 (abs(_signed_spline_delta(onset, anchor)), zi, onset)
                 for zi, anchor in enumerate(anchors)
                 for onset in onsets
             )
-            # forward positions from just upstream of the window, so "in lap order" is
-            # well-defined even when the window (or a learned mark) crosses start/finish.
-            origin = (ref.spline_lo - tol) % 1.0
+            # forward positions from just upstream of the first mark, so "in lap order" is
+            # well-defined even when a mark crosses start/finish or drifts upstream of the
+            # reference window.
+            origin = (anchors[0] - 2.0 * tol) % 1.0
             matched_zones: set[int] = set()
             consumed_onsets: set[float] = set()
             for dist, zi, onset in pairs:
@@ -894,6 +921,7 @@ def build_observer_from_reference(
     track_obj = reference_archive.get("track")
     track = track_obj if isinstance(track_obj, dict) else {}
     track_id = track.get("id")
+    track_layout = track.get("layout")
     return RealtimeObserver(
         refs,
         track_length_m=_positive_track_length_m(track.get("lengthM")),
@@ -901,4 +929,5 @@ def build_observer_from_reference(
             brake_prepare_lead_s if brake_prepare_lead_s is not None else _BRAKE_PREPARE_LEAD_S
         ),
         track_id=track_id if isinstance(track_id, str) and track_id else None,
+        track_layout=track_layout if isinstance(track_layout, str) and track_layout else None,
     )
