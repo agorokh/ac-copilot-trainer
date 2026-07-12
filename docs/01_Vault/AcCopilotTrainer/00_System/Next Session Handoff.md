@@ -75,6 +75,8 @@ relates_to:
   - AcCopilotTrainer/03_Investigations/curated-setup-hash-bridge-2026-06-28.md
   - AcCopilotTrainer/03_Investigations/pr-399-coach-v2-review-loop-2026-06-30.md
   - AcCopilotTrainer/03_Investigations/porsche-911-gt3r-magione-balanced-setup-2026-06-28.md
+  - AcCopilotTrainer/10_Rig/audio-5.1-positional-engine-2026-07-12.md
+  - AcCopilotTrainer/10_Rig/wheel-per-car-rotation-ffb-2026-07-12.md
 ---
 
 # Next session handoff
@@ -106,6 +108,24 @@ Resume with:
    .scratch/coach-bank-kokoro-fenrir-v3-intensity3-20260702`). Taps + reports in
    `.scratch/pr525-tap*.jsonl` / `pr525-tap*-report.json`.
 
+
+## Delivered (2026-07-12) — rig 5.1 positional audio + per-car wheel (PR: vault/rig-audio-wheel)
+
+Operator rig-config session (screen-driven), **live-verified**; intel in
+[[audio-5.1-positional-engine-2026-07-12]] and [[wheel-per-car-rotation-ffb-2026-07-12]].
+
+- **5.1 engine audio FIXED**: USB C-Media CM6206 was stuck in **Stereo** (endpoint 2ch/`0x3`) →
+  set Windows to **5.1 Surround** (6ch/`0x60F`). AC/FMOD inherits the OS layout (no in-AC toggle);
+  only the front jack was fed before. Verified in-sim via `auto_drive` + a WASAPI-loopback
+  per-channel probe: rear-engine **911 GT3 R** surround/front **0.959** vs front-engine **M3 GT2**
+  **0.803** → layout-dependent localization (realistic ~1.5 dB), all 6 channels distinct.
+- **Wheel per-car rotation FIXED**: MOZA R3 base **900→1080°**, AC `controls.ini [STEER] LOCK=1080`,
+  "auto-adjust scale to match car's steer lock" **ON** (web-grounded = realistic per-car rotation).
+- **Per-car FFB**: already built-in via `cfg/user_ff.ini` (per-car `VALUE`, partially hand-tuned);
+  feel is automatic from physics. **NOT done**: systematic per-car gain calibration.
+- **Next**: (a) harness-driven `finalFF` clipping calibration → `user_ff.ini` per car; (b) the
+  by-car enrichment registry (wind/pedal + SimHub class publish); (c) optional "more rear-engine drama".
+- Loopback probe (PyAudioWPatch) is in session scratch — candidate `tools/ac_harness/audio_probe.py`.
 
 ## Previous RESUME (2026-07-12 early) — tablet voice hardware verification (DONE — see #511/#381 comments)
 
