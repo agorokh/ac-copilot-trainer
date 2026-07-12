@@ -8,8 +8,8 @@ user_ff.ini`` (``[car_id] VALUE=x.xxx``); this tool never touches the AC/CSP ins
 
 The ``finalFF`` byte offset (308) is validated against the live signal before any write: a wrong
 offset yields out-of-range or all-zero samples, which :func:`offset_looks_valid` rejects, forcing
-a report-only pass. Run ``--dry-run`` (or ``--observe-only``) first to confirm the signal, then a
-real pass to write the gains.
+a report-only pass. Writing is opt-in: the tool only reports the recommendation unless you pass
+``--write`` (FFB strength is operator-subjective — confirm the signal first, then apply by feel).
 
 Pure helpers (``summarize`` / ``recommend_gain`` / ``update_user_ff_value``) are unit-tested; the
 launch + sample loop is rig-only (``# pragma: no cover``).
@@ -166,6 +166,12 @@ def update_user_ff_value(text: str, car_id: str, value: float) -> str:
     for line in lines:
         m = _SECTION_RE.match(line)
         if m is not None:
+            # Leaving a section header. If we were inside the target section and never found a
+            # VALUE to overwrite, insert one before this next section — updating in place rather
+            # than appending a duplicate [car_id] block (an existing section with no VALUE key).
+            if in_section and not replaced:
+                out.append(f"VALUE={rendered}")
+                replaced = True
             in_section = m.group("car").strip() == car_id
             out.append(line)
             continue
@@ -175,6 +181,10 @@ def update_user_ff_value(text: str, car_id: str, value: float) -> str:
             in_section = False
             continue
         out.append(line)
+    # Target section was the file's last section and had no VALUE line — insert it at EOF.
+    if in_section and not replaced:
+        out.append(f"VALUE={rendered}")
+        replaced = True
     body = "\n".join(out)
     if not replaced:
         prefix = body.rstrip("\n")
@@ -280,7 +290,9 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         current, stats.p99, target_peak=args.target_level, floor=args.floor, ceiling=args.ceiling
     )
 
-    will_write = valid and not args.dry_run and not args.observe_only
+    # Report-only by default; writing user_ff.ini requires an explicit --write (FFB strength is
+    # operator-subjective — never mutate the wheel feel without opt-in). --dry-run forces no write.
+    will_write = valid and args.write and not args.dry_run and not args.observe_only
     print("\n=== FFB calibration ===")
     print(f"car             : {car}")
     print(f"samples         : {stats.n}")
@@ -312,6 +324,8 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     elif not valid:
         print(f"[ffb-calibrate] NOT writing: {reason}", file=sys.stderr)
         return 3
+    elif not args.observe_only and not args.write:
+        print("[ffb-calibrate] report-only; re-run with --write to apply the recommended gain")
     return 0
 
 
@@ -392,10 +406,16 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:  # pragma: no
         help="Do not launch auto_drive; the operator drives while this samples.",
     )
     p.add_argument(
+        "--write",
+        dest="write",
+        action="store_true",
+        help="Apply the recommended gain to user_ff.ini. Default is report-only (no write).",
+    )
+    p.add_argument(
         "--dry-run",
         dest="dry_run",
         action="store_true",
-        help="Report peak/clip% and recommendation without writing user_ff.ini.",
+        help="Explicitly force report-only (already the default); overrides --write.",
     )
     p.add_argument(
         "--ac-user-dir",

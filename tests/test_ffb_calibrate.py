@@ -160,3 +160,21 @@ def test_update_only_replaces_first_value_in_section():
     out = update_user_ff_value(_SAMPLE, "abarth500", 0.7)
     assert read_user_ff_value(out, "abarth500") == pytest.approx(0.7)
     assert read_user_ff_value(out, "ks_porsche_911_rsr_2017") == pytest.approx(1.053)
+
+
+def test_update_inserts_value_into_existing_section_missing_value():
+    # A section exists but has no VALUE line: insert VALUE in place, do NOT append a duplicate
+    # [car] section at EOF (daemon MEDIUM finding).
+    text = "[abarth500]\nVALUE=1.000\n[bmw_m3_gt2]\n[ks_bmw_m4]\nVALUE=1.000\n"
+    out = update_user_ff_value(text, "bmw_m3_gt2", 0.9)
+    assert read_user_ff_value(out, "bmw_m3_gt2") == pytest.approx(0.9)
+    assert out.count("[bmw_m3_gt2]") == 1  # no duplicate section
+    assert read_user_ff_value(out, "abarth500") == pytest.approx(1.0)
+    assert read_user_ff_value(out, "ks_bmw_m4") == pytest.approx(1.0)
+
+
+def test_update_inserts_value_into_last_section_missing_value():
+    # Target is the file's final section and has no VALUE line — insert at EOF, no duplicate.
+    out = update_user_ff_value("[abarth500]\nVALUE=1.000\n[bmw_m3_gt2]\n", "bmw_m3_gt2", 0.8)
+    assert read_user_ff_value(out, "bmw_m3_gt2") == pytest.approx(0.8)
+    assert out.count("[bmw_m3_gt2]") == 1
