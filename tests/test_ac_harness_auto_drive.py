@@ -426,6 +426,20 @@ def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
     # max(180, 100) + 8 = 188 — outlives the tap's lap deadline, not merely drive_seconds+grace.
     assert captured["drive_seconds"] == 188.0
 
+    # grace=0 with wait_lap must STILL align to the tap deadline (else the drive stops early and the
+    # tap hangs the full lap_timeout on a stopped car): max(180, 50) + 0 = 180 (#516 daemon review).
+    captured.clear()
+    asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, drive_seconds=50.0, lap_finalize_grace_s=0.0),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_capture_drive,
+            tap=_tap_returning([*CONTINUOUS, _timed_lap()]),
+        )
+    )
+    assert captured["drive_seconds"] == 180.0
+
     captured.clear()
     asyncio.run(
         run_auto_drive(

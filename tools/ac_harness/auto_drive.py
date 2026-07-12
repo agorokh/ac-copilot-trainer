@@ -478,7 +478,11 @@ async def run_auto_drive(
     # tap timeout and the drive budget so they cannot diverge.
     lap_deadline = max(180.0, config.drive_seconds)
     drive_config = config
-    if config.wait_lap and config.lap_finalize_grace_s > 0:
+    if config.wait_lap:
+        # Whenever we wait for a lap, the drive thread must outlive the tap's lap deadline (+ grace)
+        # or it stops+brakes the car while the tap is still waiting — the tap then hangs the full
+        # lap_timeout on a stopped car (drive_seconds=50 < 180: stops at 50s, tap waits to 180s).
+        # Align the budget to lap_deadline unconditionally; grace adds 0 when disabled (#516).
         drive_config = replace(config, drive_seconds=lap_deadline + config.lap_finalize_grace_s)
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
     stats = DriveStats(reason="drive did not run")
