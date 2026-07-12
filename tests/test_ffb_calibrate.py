@@ -8,12 +8,15 @@ from coverage there.
 
 from __future__ import annotations
 
+import argparse
 import math
 
 import pytest
 
 from tools.ac_harness.ffb_calibrate import (
     FfbStats,
+    _nonneg_float,
+    _pos_float,
     offset_looks_valid,
     read_user_ff_value,
     recommend_gain,
@@ -35,6 +38,13 @@ def test_summarize_ignores_nan():
     stats = summarize([0.4, float("nan"), -0.4])
     assert stats.n == 2
     assert stats.peak == pytest.approx(0.4)
+
+
+def test_summarize_drops_non_finite():
+    # A wrong offset can read +/-inf; dropping it keeps report JSON valid and stats un-poisoned.
+    stats = summarize([0.5, float("inf"), -0.5, float("-inf"), float("nan")])
+    assert stats.n == 2
+    assert stats.peak == pytest.approx(0.5)
 
 
 def test_summarize_empty_is_zeroed():
@@ -134,6 +144,31 @@ def test_read_user_ff_value_present():
 
 def test_read_user_ff_value_absent_is_none():
     assert read_user_ff_value(_SAMPLE, "ks_bmw_m4") is None
+
+
+def test_read_user_ff_value_strips_inline_comment():
+    text = "[abarth500]\nVALUE=1.010 ; hand-tuned 2026-07-12\n"
+    assert read_user_ff_value(text, "abarth500") == pytest.approx(1.010)
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "inf", "nan", "-inf"])
+def test_pos_float_rejects_nonpositive_and_nonfinite(bad):
+    with pytest.raises(argparse.ArgumentTypeError):
+        _pos_float(bad)
+
+
+def test_pos_float_accepts_positive():
+    assert _pos_float("0.5") == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("bad", ["-1", "inf", "nan"])
+def test_nonneg_float_rejects_negative_and_nonfinite(bad):
+    with pytest.raises(argparse.ArgumentTypeError):
+        _nonneg_float(bad)
+
+
+def test_nonneg_float_accepts_zero():
+    assert _nonneg_float("0") == pytest.approx(0.0)
 
 
 def test_update_existing_value_preserves_other_cars():

@@ -46,6 +46,22 @@ OFFSET_MIN_PEAK = 0.02
 OFFSET_MIN_SAMPLES = 200
 
 
+def _pos_float(value: str) -> float:
+    """argparse type: a strictly-positive, FINITE float (rejects 0, negatives, inf, nan)."""
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number > 0, got {value!r}")
+    return parsed
+
+
+def _nonneg_float(value: str) -> float:
+    """argparse type: a non-negative, FINITE float (0 allowed; rejects negatives, inf, nan)."""
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {value!r}")
+    return parsed
+
+
 @dataclass(frozen=True)
 class FfbStats:
     """Summary of a finalFF sample window."""
@@ -78,9 +94,11 @@ def summarize(samples: Sequence[float], *, clip_threshold: float = CLIP_THRESHOL
 
     ``clip_fraction`` is the share of samples whose magnitude reaches ``clip_threshold`` — the
     fraction of the lap where the wheel is pinned at full force and detail is lost. The p95/p99/
-    p999 magnitudes drive calibration (a high percentile, not the kerb-spike max). NaN ignored.
+    p999 magnitudes drive calibration (a high percentile, not the kerb-spike max). Non-finite
+    samples (NaN / ±inf — e.g. a wrong offset reading garbage) are dropped so reports stay valid
+    JSON and the stats are never poisoned.
     """
-    vals = [float(s) for s in samples if not math.isnan(float(s))]
+    vals = [float(s) for s in samples if math.isfinite(float(s))]
     if not vals:
         return FfbStats(n=0, peak=0.0, rms=0.0, clip_fraction=0.0, clip_threshold=clip_threshold)
     mags = sorted(abs(v) for v in vals)
@@ -144,8 +162,10 @@ def read_user_ff_value(text: str, car_id: str) -> float | None:
             in_section = m.group("car").strip() == car_id
             continue
         if in_section and _VALUE_RE.match(line):
+            # Strip an inline ``;`` comment before parsing (AC ini permits ``VALUE=1.0 ; note``).
+            raw = line.split("=", 1)[1].split(";", 1)[0].strip()
             try:
-                return float(line.split("=", 1)[1].strip())
+                return float(raw)
             except ValueError:
                 return None
     return None
@@ -249,20 +269,40 @@ def _write_user_ff(path: Path, car_id: str, value: float) -> None:  # pragma: no
 def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-only CLI/orchestration
     args = _parse_args(argv)
 
+    from tools.ac_harness.auto_drive import validate_ac_id
+
+    try:  # car/track ids become log/report path segments — reject separators / traversal.
+        validate_ac_id("car", args.car)
+        validate_ac_id("track", args.track)
+    except ValueError as exc:
+        print(f"[ffb-calibrate] {exc}", file=sys.stderr)
+        return 2
+
     user_ff = _user_ff_path(args.ac_user_dir)
     car = args.car
 
     drive_proc = None
-    log_path = None
     try:
         if not args.observe_only:
-            drive_proc, log_path = _launch_drive(car, args.track, args.driver, args.evidence_dir)
+            # Keep the controller driving across ramp + the whole sample window (+margin).
+            # auto_drive's default tap stops the drive thread mid-sample, which would sample a
+            # stationary/braking car and write a bad gain.
+            drive_seconds = args.ramp_seconds + args.sample_seconds + 20.0
+            drive_proc, log_path = _launch_drive(
+                car,
+                args.track,
+                args.driver,
+                args.evidence_dir,
+                tap_seconds=drive_seconds,
+                ac_user_dir=args.ac_user_dir,
+            )
             print(
                 f"[ffb-calibrate] launched drive for {car} @ {args.track}; waiting for hijack ..."
             )
-            if not _wait_for_hijack(log_path, timeout_s=args.launch_timeout):
+            if not _wait_for_hijack(log_path, proc=drive_proc, timeout_s=args.launch_timeout):
                 print(
-                    "[ffb-calibrate] drive did not reach hijack in time; aborting", file=sys.stderr
+                    "[ffb-calibrate] drive did not reach hijack (or exited early); aborting",
+                    file=sys.stderr,
                 )
                 return 2
             print("[ffb-calibrate] hijack landed; ramping ...")
@@ -305,6 +345,19 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     print(f"recommended     : {recommended:.3f}  (P99 {stats.p99:.3f} -> {args.target_level:.2f})")
     print(f"action          : {'WRITE user_ff.ini' if will_write else 'report only (no write)'}")
 
+    # Write BEFORE emitting the report so "wrote" reflects reality: a failed/locked write must not
+    # leave the evidence bundle claiming the gain changed (Codex finding).
+    wrote = False
+    write_error: str | None = None
+    if will_write:
+        try:
+            _write_user_ff(user_ff, car, recommended)
+            wrote = True
+            print(f"[ffb-calibrate] wrote VALUE={recommended:.3f} for [{car}] -> {user_ff}")
+        except OSError as exc:
+            write_error = str(exc)
+            print(f"[ffb-calibrate] write FAILED: {exc}", file=sys.stderr)
+
     report = {
         "car": car,
         "track": args.track,
@@ -313,49 +366,58 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         "offset_reason": reason,
         "current_gain": current,
         "recommended_gain": recommended,
-        "wrote": will_write,
+        "wrote": wrote,
+        "write_error": write_error,
         "user_ff_path": str(user_ff),
     }
     _write_report(args.evidence_dir, car, args.track, report)
 
-    if will_write:
-        _write_user_ff(user_ff, car, recommended)
-        print(f"[ffb-calibrate] wrote VALUE={recommended:.3f} for [{car}] -> {user_ff}")
-    elif not valid:
+    if not valid:
         print(f"[ffb-calibrate] NOT writing: {reason}", file=sys.stderr)
         return 3
-    elif not args.observe_only and not args.write:
+    if will_write and not wrote:
+        return 4
+    if not args.observe_only and not args.write:
         print("[ffb-calibrate] report-only; re-run with --write to apply the recommended gain")
     return 0
 
 
 def _launch_drive(  # pragma: no cover - rig-only
-    car: str, track: str, driver: str, evidence_dir: Path
+    car: str,
+    track: str,
+    driver: str,
+    evidence_dir: Path,
+    *,
+    tap_seconds: float,
+    ac_user_dir: Path | None = None,
 ) -> tuple[object, Path]:
     import subprocess
 
     evidence_dir.mkdir(parents=True, exist_ok=True)
     log_path = evidence_dir / f"drive_{car}_{track}.log"
     log = log_path.open("w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "tools.ac_harness.auto_drive",
-            "--car",
-            car,
-            "--track",
-            track,
-            "--driver",
-            driver,
-        ],
-        stdout=log,
-        stderr=subprocess.STDOUT,
-    )
+    cmd = [
+        sys.executable,
+        "-m",
+        "tools.ac_harness.auto_drive",
+        "--car",
+        car,
+        "--track",
+        track,
+        "--driver",
+        driver,
+        "--tap-seconds",
+        str(tap_seconds),
+    ]
+    if ac_user_dir is not None:
+        cmd += ["--ac-user-dir", str(ac_user_dir)]
+    proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
     return proc, log_path
 
 
-def _wait_for_hijack(log_path: Path, *, timeout_s: float) -> bool:  # pragma: no cover - rig-only
+def _wait_for_hijack(  # pragma: no cover - rig-only
+    log_path: Path, *, proc: object, timeout_s: float
+) -> bool:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
@@ -363,6 +425,10 @@ def _wait_for_hijack(log_path: Path, *, timeout_s: float) -> bool:  # pragma: no
                 return True
         except OSError:
             pass
+        # If auto_drive already exited (preflight/content/sidecar failure) without landing the
+        # hijack, stop waiting immediately instead of burning the full launch-timeout.
+        if getattr(proc, "poll", lambda: None)() is not None:
+            return False
         time.sleep(2.0)
     return False
 
@@ -382,23 +448,23 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:  # pragma: no
     p.add_argument("--track", default="spa", help="Track id (default: spa)")
     p.add_argument("--driver", default="ggv", help="auto_drive driver profile (default: ggv)")
     p.add_argument(
-        "--sample-seconds", dest="sample_seconds", type=float, default=DEFAULT_SAMPLE_SECONDS
+        "--sample-seconds", dest="sample_seconds", type=_pos_float, default=DEFAULT_SAMPLE_SECONDS
     )
     p.add_argument(
-        "--hz", type=float, default=DEFAULT_HZ, help="finalFF sample rate (default: 100)"
+        "--hz", type=_pos_float, default=DEFAULT_HZ, help="finalFF sample rate (default: 100)"
     )
     p.add_argument(
         "--target-level",
         dest="target_level",
-        type=float,
+        type=_pos_float,
         default=TARGET_LEVEL,
         help=f"Aim the {CALIB_PERCENTILE:.0f}th percentile of |finalFF| at this level "
         f"(default: {TARGET_LEVEL}).",
     )
-    p.add_argument("--floor", type=float, default=GAIN_FLOOR)
-    p.add_argument("--ceiling", type=float, default=GAIN_CEILING)
-    p.add_argument("--ramp-seconds", dest="ramp_seconds", type=float, default=10.0)
-    p.add_argument("--launch-timeout", dest="launch_timeout", type=float, default=180.0)
+    p.add_argument("--floor", type=_nonneg_float, default=GAIN_FLOOR)
+    p.add_argument("--ceiling", type=_pos_float, default=GAIN_CEILING)
+    p.add_argument("--ramp-seconds", dest="ramp_seconds", type=_nonneg_float, default=10.0)
+    p.add_argument("--launch-timeout", dest="launch_timeout", type=_pos_float, default=180.0)
     p.add_argument(
         "--observe-only",
         dest="observe_only",
