@@ -484,3 +484,17 @@ def test_no_live_imperative_even_on_hot_arrival():
     assert late and late[0].urgency == "prepare" and late[0].register == "calm"
     out = obs.observe({"spline": 0.458, "speed": 195.0, "brake": 0.0})  # hot, past the mark
     assert [a for a in out if a.kind == "late_brake"] == []
+
+
+def test_late_brake_feedback_survives_without_apex_deficit():
+    """#523 review (cursor HIGH): a driver who braked late but still carried target apex
+    speed must STILL get the 'brake earlier' verdict at exit — the deferred feedback cannot
+    depend on an apex deficit existing."""
+    obs = RealtimeObserver([_i522_ref()], track_length_m=2500.0, brake_prepare_lead_s=1.0)
+    obs.observe({"spline": 0.48, "speed": 140.0, "brake": 0.0})  # deep past bp -> silent+flag
+    obs.observe({"spline": 0.50, "speed": 100.0, "brake": 0.0})  # apex AT target: no deficit
+    exit_out = obs.observe({"spline": 0.61, "speed": 110.0, "brake": 0.0})
+    assert [a for a in exit_out if a.kind == "apex_deficit"] == []
+    late_info = [a for a in exit_out if a.kind == "late_brake" and a.urgency == "info"]
+    assert late_info and late_info[0].detail["braked_late_uncoached"] is True
+    assert "brake earlier next lap" in late_info[0].message

@@ -694,8 +694,9 @@ def run(args: argparse.Namespace) -> int:
     ]
     _log.info("starting capture: %s", " ".join(scrcpy_cmd))
     scrcpy_log = (out_dir / "scrcpy.log").open("w", encoding="utf-8")
-    proc = subprocess.Popen(scrcpy_cmd, stdout=scrcpy_log, stderr=subprocess.STDOUT)
+    proc = None
     try:
+        proc = subprocess.Popen(scrcpy_cmd, stdout=scrcpy_log, stderr=subprocess.STDOUT)
         time.sleep(args.lead_in)  # let the capture stream settle before the first anchor
         if proc.poll() is not None:
             _log.error("scrcpy exited early (rc=%s) — see %s", proc.returncode, scrcpy_log.name)
@@ -725,7 +726,7 @@ def run(args: argparse.Namespace) -> int:
             proc.terminate()
             proc.wait(timeout=10)
     finally:
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             # Failure path: wait after terminate (kill on timeout) so a dying scrcpy cannot
             # keep writing the WAV or hold the log handle into the next run (PR #519 review).
             proc.terminate()

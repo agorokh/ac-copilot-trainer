@@ -418,21 +418,22 @@ class RealtimeObserver:
     def _brake_cue(
         self, ref: CornerReference, st: _CornerPass, spline: float, speed: float, brake: float
     ) -> Advisory | None:
-        """Fire a brake cue only while a human can still ACT on it (issues #368 + #522).
+        """Fire ONE calm anticipatory heads-up per corner pass — the only live brake cue.
 
-        Two-stage, all BEFORE the mark: a calm anticipatory heads-up when the lead window
-        opens (default ~3.2 s of audibility budget before the brake point), then — only if
-        the driver is still off the brakes inside the last :data:`_ACT_ALARM_TTA_S` seconds —
-        an escalation imperative ("Brake now") whose register blends imminence with closing
-        speed. AT/PAST the brake point the observer never speaks an imperative (measured on
-        the #522 instrumented lap: every past-point "Brake!" completed with the mark already
-        behind the car); the pass is flagged and corner-exit grading owns the feedback.
+        Issue #522 (supersedes the #368/#371 escalation ladder): the cue fires when the lead
+        window opens (default ~3.2 s of audibility budget before the brake point) so the
+        clip FINISHES with human reaction time to spare. It is always ``prepare``/``calm``
+        and never re-fires within a pass — there is deliberately no second-stage live
+        imperative and no register escalation: a driver braking exactly at the mark is
+        indistinguishable from one about to miss it until the mark itself, so a spoken
+        correction is either a false alarm or after-the-fact noise (measured on the #522
+        instrumented lap: every past-point "Brake!" completed with the mark already behind
+        the car). AT/PAST the mark the pass is flagged (``late_uncoached``) and corner-exit
+        grading owns the feedback.
 
-        **Escalation (codex review #371):** the cue re-fires within one pass only when the
-        tone register rises strictly (calm→alert→urgent→critical); the scheduler's
-        register-keyed dedup + act barge-in deliver it. Suppressed once the driver has braked
-        anywhere in this pass (``has_braked``): braking early and trailing off before the
-        apex — normal trail-braking — is not a fault and must not draw a cue (codex #294).
+        Suppressed once the driver has braked anywhere in this pass (``has_braked``):
+        braking early and trailing off before the apex — normal trail-braking — is not a
+        fault and must not draw a cue (codex #294).
         """
         bp = ref.best_brake_point_spline
         if bp is None or st.has_braked:
@@ -531,6 +532,25 @@ class RealtimeObserver:
         target = ref.target_apex_kmh
         deficit = round(target - st.min_speed_kmh, 1)
         if deficit < self._deficit_margin:
+            if st.late_uncoached:
+                # #522 review (cursor HIGH): the deferred late-brake feedback must not depend
+                # on an apex deficit existing — a driver who braked late yet still carried
+                # target apex speed needs the "brake earlier" verdict too, or the suppressed
+                # live imperative's feedback is silently lost. Voice has no late_brake info
+                # clip (deliberately unspoken); the HUD / coaching.cue surfaces deliver it.
+                return Advisory(
+                    kind="late_brake",
+                    corner=ref.index,
+                    spline=round(ref.apex_spline, 4),
+                    urgency="info",
+                    intensity=0.3,
+                    register="calm",
+                    message=(
+                        f"T{ref.index + 1}: you ran deep past your brake point — "
+                        "brake earlier next lap."
+                    ),
+                    detail={"braked_late_uncoached": True, "source": _target_source(ref)},
+                )
             return None
         source = _target_source(ref)
         # be honest about what the target IS: a demonstrated corpus best vs a GGV theoretical

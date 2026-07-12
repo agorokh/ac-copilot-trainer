@@ -93,8 +93,9 @@ def _load_tap(path: Path) -> tuple[list, list, list]:
             elif r.get("k") == "coaching.voice":
                 p = r["payload"]
                 dispatches.append((float(p.get("t_wall_ms", r["t"])), p))
-    ticks.sort()
-    return ticks, advisories, sorted(dispatches)
+    ticks.sort(key=lambda x: x[0])
+    # key= is load-bearing: tuples ending in dicts raise TypeError on timestamp ties.
+    return ticks, advisories, sorted(dispatches, key=lambda x: x[0])
 
 
 def _interp_state(ticks: list, times: list, t_ms: float) -> tuple[float, float, float] | None:

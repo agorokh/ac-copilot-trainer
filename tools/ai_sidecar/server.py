@@ -1867,21 +1867,29 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             "seq": data.get("seq"),
             "clip_id": data.get("clip_id"),
             "t_dispatch_ms": data.get("t_dispatch_ms"),
+            "t_dispatch_mono_ms": data.get("t_dispatch_mono_ms"),
             "t_receive_ms": data.get("t_receive_ms"),
             "t_play_ms": data.get("t_play_ms"),
             "buffer_state": data.get("buffer_state"),
             "audio_armed": data.get("audio_armed"),
             "t_server_ms": time.time() * 1000.0,
+            "t_server_mono_ms": time.monotonic() * 1000.0,
         }
         _voice_echo_log.append(record)
-        # rtt_ms is dispatch→echo-receipt on the SERVER clock (valid interval); js_ms is
-        # receive→play on the TABLET clock (valid interval). t_receive - t_dispatch would mix
-        # the two clocks, so it is never logged as a latency.
+        # rtt_ms is dispatch→echo-receipt on the SERVER clock — MONOTONIC pair when the
+        # endpoint echoed t_dispatch_mono_ms (immune to wall steps; PR #523 review), wall
+        # pair otherwise. js_ms is receive→play on the TABLET clock (valid interval).
+        # t_receive - t_dispatch would mix the two hosts' clocks, so it is never logged.
+        rtt = (
+            _echo_interval(record, "t_dispatch_mono_ms", "t_server_mono_ms")
+            if isinstance(record.get("t_dispatch_mono_ms"), int | float)
+            else _echo_interval(record, "t_dispatch_ms", "t_server_ms")
+        )
         logger.info(
             "CUE-ECHO seq=%s clip=%s rtt_ms=%s js_ms=%s",
             record["seq"],
             record["clip_id"],
-            _echo_interval(record, "t_dispatch_ms", "t_server_ms"),
+            rtt,
             _echo_interval(record, "t_receive_ms", "t_play_ms"),
         )
         return
