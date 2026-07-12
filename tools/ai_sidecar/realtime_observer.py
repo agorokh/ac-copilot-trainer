@@ -345,6 +345,10 @@ class RealtimeObserver:
         # a frame (delta.lua defers); confirmed on a later counter advance, discarded on drive-on.
         self._pending_wrap: list[Advisory] = []
         self._pending_pre_lap: float | None = None
+        # corners whose pre-wrap-armed pass was carried across an UNCONFIRMED wrap (known lap
+        # counter, not yet advanced): legitimized when the counter advances, reverted to fresh
+        # state when the jump turns out to be a pit/teleport (PR #525 review).
+        self._pending_carried: list[int] = []
 
     @staticmethod
     def _reference_marks(ref: CornerReference) -> list[float]:
@@ -398,11 +402,19 @@ class RealtimeObserver:
                 onsets += sustained_brake_onsets(lap, lo % 1.0, 1.0)
             if not onsets:
                 continue
+            # Anchor matching on the marks currently IN FORCE (learned EMA when a zone has one,
+            # else the reference): once a zone has drifted toward the driver's habit, later laps
+            # near the LEARNED mark must keep adapting even when they sit outside the synthetic
+            # mark's tolerance (PR #525 review — "recent laps dominate" must not stall).
+            anchors = [m for m, _src in self._effective_marks(ref)]
             pairs = sorted(
-                (abs(_signed_spline_delta(onset, mark)), zi, onset)
-                for zi, mark in enumerate(ref_marks)
+                (abs(_signed_spline_delta(onset, anchor)), zi, onset)
+                for zi, anchor in enumerate(anchors)
                 for onset in onsets
             )
+            # forward positions from just upstream of the window, so "in lap order" is
+            # well-defined even when the window (or a learned mark) crosses start/finish.
+            origin = (ref.spline_lo - _CAL_MATCH_TOL_SPLINE) % 1.0
             matched_zones: set[int] = set()
             consumed_onsets: set[float] = set()
             for dist, zi, onset in pairs:
@@ -410,42 +422,60 @@ class RealtimeObserver:
                     break  # sorted ascending: everything after is farther
                 if zi in matched_zones or onset in consumed_onsets:
                     continue
-                matched_zones.add(zi)
-                consumed_onsets.add(onset)
+                # Order preservation: an update that would move a zone AT or PAST a neighbour's
+                # mark is ambiguous (which zone did the driver brake for?) and is skipped —
+                # crossed marks would corrupt the per-zone segment arcs downstream (PR #525
+                # review).
                 cur = self._driver_marks.get((ref.index, zi))
                 if cur is None:
-                    self._driver_marks[(ref.index, zi)] = (onset % 1.0, 1)
+                    candidate = onset % 1.0
                 else:
                     ema, n = cur
-                    step = _CAL_EMA_ALPHA * _signed_spline_delta(onset, ema)
-                    self._driver_marks[(ref.index, zi)] = ((ema + step) % 1.0, n + 1)
+                    candidate = (ema + _CAL_EMA_ALPHA * _signed_spline_delta(onset, ema)) % 1.0
+                pos = _forward_spline_delta(origin, candidate)
+                if zi > 0 and pos <= _forward_spline_delta(origin, anchors[zi - 1]):
+                    continue
+                if zi + 1 < len(anchors) and pos >= _forward_spline_delta(origin, anchors[zi + 1]):
+                    continue
+                matched_zones.add(zi)
+                consumed_onsets.add(onset)
+                self._driver_marks[(ref.index, zi)] = (
+                    candidate,
+                    1 if cur is None else cur[1] + 1,
+                )
                 updated += 1
         return updated
 
-    def reset(self, *, carry_prewrap: bool = False) -> None:
+    def reset(self, *, carry_prewrap: bool = False) -> list[int]:
         """Clear per-corner pass state (start of a fresh lap). The lap counter — and the
         per-driver brake-mark calibration, which is knowledge about the driver — persist.
 
-        With ``carry_prewrap`` (the true start/finish-wrap path only), a pass re-armed
-        pre-wrap (a first-corner lead window that opened before start/finish) already belongs
-        to the lap that begins at this wrap: it carries across — heads-up and near-mark braking
-        observed before the line stay valid — with its one-shot flag cleared so the NEXT lap's
-        pre-wrap approach can re-arm it again. External resets (producer disconnect) and
-        same-lap rewinds (pit/teleport) must NOT carry: the stream is discontinuous, and stale
+        With ``carry_prewrap`` (the start/finish-wrap path only), a pass re-armed pre-wrap (a
+        first-corner lead window that opened before start/finish) already belongs to the lap
+        that begins at this wrap: it carries across — heads-up and near-mark braking observed
+        before the line stay valid — with its one-shot flag cleared so the NEXT lap's pre-wrap
+        approach can re-arm it again. External resets (producer disconnect) and same-lap
+        rewinds (pit/teleport) must NOT carry: the stream is discontinuous, and stale
         ``zone_cued`` state would suppress a fresh first-corner heads-up (PR #525 review).
+        Returns the carried corner indices so an UNCONFIRMED wrap (known lap counter that has
+        not advanced yet) can revert them if the jump turns out to be a pit return.
         """
-        carried: dict[int, _CornerPass] = {}
+        carried_ids: list[int] = []
+        passes: dict[int, _CornerPass] = {}
         for r in self._refs:
             p = self._passes.get(r.index)
             if carry_prewrap and p is not None and p.armed_prewrap:
                 p.armed_prewrap = False
-                carried[r.index] = p
+                passes[r.index] = p
+                carried_ids.append(r.index)
             else:
-                carried[r.index] = self._new_pass(r)
-        self._passes = carried
+                passes[r.index] = self._new_pass(r)
+        self._passes = passes
         self._last_spline = None
         self._pending_wrap = []
         self._pending_pre_lap = None
+        self._pending_carried = []
+        return carried_ids
 
     def observe(self, frame: dict[str, Any]) -> list[Advisory]:
         """Process one live frame; return the advisories it triggers (possibly empty)."""
@@ -466,9 +496,18 @@ class RealtimeObserver:
                 out.extend(self._pending_wrap)
                 self._pending_wrap = []
                 self._pending_pre_lap = None
+                self._pending_carried = []  # wrap confirmed → the carried passes are legit
             elif spline > _WRAP_CUR_MAX:
                 self._pending_wrap = []
                 self._pending_pre_lap = None
+                # That backward jump was a pit/teleport, not a wrap: revert any pre-wrap-armed
+                # pass carried across it — its stale zone_cued must not suppress the next
+                # legitimate first-corner heads-up of the resumed stream (PR #525 review).
+                for ci in self._pending_carried:
+                    ref_c = next((r for r in self._refs if r.index == ci), None)
+                    if ref_c is not None:
+                        self._passes[ci] = self._new_pass(ref_c)
+                self._pending_carried = []
         # A backward spline jump is either a true start/finish wrap or a same-lap rewind
         # (pit/teleport/replay). Shape alone is ambiguous — a return-to-pits also lands near the
         # line — so grade end-of-lap ONLY on real lap-completion evidence: an authoritative
@@ -489,12 +528,15 @@ class RealtimeObserver:
             pre_lap = self._last_lap
             # A pre-wrap-armed first-corner pass carries only through a genuine start/finish
             # crossing; a same-lap rewind (pit/teleport) clears everything (PR #525 review).
-            self.reset(carry_prewrap=lap_advanced or wrap_shaped)
+            carried = self.reset(carry_prewrap=lap_advanced or wrap_shaped)
             if lap_advanced or (wrap_shaped and not lap_known):
                 out.extend(graded)  # definite lap completion → grade now
             elif wrap_shaped and lap_known:
                 self._pending_wrap = graded  # ambiguous → defer until the counter advances
                 self._pending_pre_lap = pre_lap
+                # ...and the carry is equally unconfirmed: reverted if this turns out to be a
+                # pit return (resolved in the pending block above, same as the grading).
+                self._pending_carried = carried
         self._last_spline = spline
         if lap is not None:
             self._last_lap = lap
@@ -531,12 +573,16 @@ class RealtimeObserver:
                 # A zone's braking segment runs from its mark to the next zone's mark (last
                 # zone: to the apex, or the window end for a mark past the apex) — braking
                 # there is braking FOR this zone, so a later release isn't "late to brake".
-                seg_end = (
-                    marks[zi + 1][0]
-                    if zi + 1 < len(marks)
-                    else (ref.apex_spline if bp <= ref.apex_spline else ref.spline_hi)
-                )
-                if bp <= spline <= seg_end and brake >= self._brake_on:
+                # Arc-based (wrap-aware): a driver-calibrated first-corner mark can sit just
+                # BEFORE start/finish (e.g. 0.99 for a corner at 0.03), where linear compares
+                # would never latch (PR #525 review).
+                if zi + 1 < len(marks):
+                    seg_end = marks[zi + 1][0]
+                elif _in_arc(ref.apex_spline, bp, ref.spline_hi) or bp <= ref.apex_spline:
+                    seg_end = ref.apex_spline
+                else:
+                    seg_end = ref.spline_hi
+                if _in_arc(spline, bp, seg_end) and brake >= self._brake_on:
                     st.zone_braked[zi] = True
                 # The actionable window runs from the anticipatory lead (which can wrap over
                 # start/finish for a first corner with bp≈0) through the zone's segment end

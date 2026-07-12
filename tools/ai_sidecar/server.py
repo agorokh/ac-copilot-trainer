@@ -765,7 +765,15 @@ async def _calibrate_brake_marks_from_lap(inbound: dict[str, Any]) -> None:
     observer = _observer
     if observer is None:
         return
-    key = str(inbound.get("archivePath") or "") or f"lap:{inbound.get('lap')}"
+    # One key per PHYSICAL lap across its resend forms: the plain lap_complete (which may carry
+    # an inline trace) and the archive-backed brainOnly re-send both carry the same
+    # lap + lapTimeMs identity, while their archivePath presence differs — keying on the path
+    # alone would fold the same lap twice (PR #525 review).
+    lap_n, lap_ms = inbound.get("lap"), inbound.get("lapTimeMs")
+    if lap_n is not None and lap_ms is not None:
+        key = f"lap:{lap_n}:{lap_ms}"
+    else:
+        key = str(inbound.get("archivePath") or "") or f"lap:{lap_n}"
     if key == _last_brake_cal_key:
         return
     # Reserve the key BEFORE the awaited loads (we are on the event loop here, so the
