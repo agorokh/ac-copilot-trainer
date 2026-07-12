@@ -605,7 +605,6 @@ class HandshakeController:
         pulse_count: int = 4,
         pulse_speed_range_kmh: tuple[float, float] = (25.0, 75.0),
         sweep_min_straight_m: float = 220.0,
-        sweep_entry_kmh: float = 50.0,
         coast_seconds: float = 2.2,
         coast_min_kmh: float = 45.0,
         row_interval_s: float = 0.25,
@@ -622,7 +621,6 @@ class HandshakeController:
         self.pulse_gap_seconds = pulse_gap_seconds
         self.pulse_count = pulse_count
         self.pulse_speed_range_kmh = pulse_speed_range_kmh
-        self.sweep_entry_kmh = sweep_entry_kmh
         self.coast_seconds = coast_seconds
         self.coast_min_kmh = coast_min_kmh
         self.row_interval_s = row_interval_s
@@ -638,6 +636,13 @@ class HandshakeController:
         # offers enough remaining room and re-queue if interrupted, so short-straight tracks
         # spread them across several passes.
         self._pending: list[str] = ["accel_sweep", "steer_pulse", "coast"]
+        # Per-probe attempt cap: a probe that keeps aborting (straight too short, prep timeout,
+        # unusable pull) must not loop forever and starve the completion gate. After the cap it is
+        # DROPPED from the schedule; its fit then fails with an interpretable "probe did not
+        # complete" detail (#532 rig-found on Spa: the sweep re-queued forever, held the car in
+        # 2nd, and the handshake never finished).
+        self._probe_attempts: dict[str, int] = {}
+        self._max_probe_attempts = 5
         self._active: dict | None = None
         self._pulse_records: list[dict] = []
         self._next_pulse_sign = 1.0
@@ -656,6 +661,7 @@ class HandshakeController:
         self._speed_hist: list[tuple[float, float]] = []  # (t, v_mps) for smoothed accel
         self.finished = False
         self.result: HandshakeResult | None = None
+        self.result_diagnostics: dict = {}
 
     # -- driver contract ----------------------------------------------------
     def on_recovery(self) -> None:
@@ -743,17 +749,30 @@ class HandshakeController:
         if self._active is None:
             return
         kind = self._active["kind"]
-        # Re-queue at the FRONT so an interrupted probe retries at the next opportunity —
-        # except the sweep, which needs the longest straight and goes to the back.
-        if kind == "steer_pulse" and len(self._pulse_records) >= self.pulse_count:
-            pass  # already have enough pulses; nothing to re-queue
-        elif kind in self._pending:
-            pass
-        elif kind == "accel_sweep":
-            self._pending.append(kind)
-        else:
-            self._pending.insert(0, kind)
         self._active = None
+        if kind == "steer_pulse" and len(self._pulse_records) >= self.pulse_count:
+            return  # already have enough pulses; nothing to re-queue
+        # sweep needs the longest straight -> back of the queue; others retry ASAP -> front.
+        self._requeue(kind, front=kind != "accel_sweep", failed=True)
+
+    def _requeue(self, kind: str, *, front: bool, failed: bool) -> None:
+        """Re-queue a probe unless it is already pending or has exhausted its FAILURE cap.
+
+        ``failed`` counts against the cap; a normal continuation (a pulse that got its record and
+        needs another) passes ``failed=False`` so it is not penalized. The cap is the anti-hang:
+        a probe a track can't satisfy (no long-enough straight, physics channel absent) is dropped
+        after ``_max_probe_attempts`` failures so the schedule completes and the fit reports an
+        interpretable "probe did not complete" detail, instead of looping forever (#532)."""
+        if failed:
+            self._probe_attempts[kind] = self._probe_attempts.get(kind, 0) + 1
+        if kind in self._pending:
+            return
+        if self._probe_attempts.get(kind, 0) >= self._max_probe_attempts:
+            return  # dropped: its fit reports "probe did not complete"
+        if front:
+            self._pending.insert(0, kind)
+        else:
+            self._pending.append(kind)
 
     def _read_phys(self):
         if self._phys_read == "auto":  # pragma: no cover - rig-only lazy binding
@@ -924,7 +943,7 @@ class HandshakeController:
         if now - st["t_stage"] >= self.pulse_gap_seconds:
             self._active = None
             if len(self._pulse_records) < self.pulse_count:
-                self._pending.insert(0, "steer_pulse")
+                self._requeue("steer_pulse", front=True, failed=False)
         return base
 
     def _step_sweep(
@@ -939,29 +958,20 @@ class HandshakeController:
     ) -> DriveFrame:
         st = self._active
         d = st["data"]
-        # Always leave braking room: end/abort the sweep while the base profile can still slow
-        # the car for the corner at a comfortable ~0.65 g plus margin.
+        # Leave braking room: end the pull while the base profile can still slow for the corner at
+        # a comfortable ~0.65 g plus margin.
         brake_margin_m = v_mps * v_mps / (2.0 * 6.5) + 25.0
         if st["stage"] == "prep":
-            if remaining < 120.0 or now - st["t_stage"] > 10.0:
-                self._abort_active("sweep prep timeout / straight too short")
+            # NO forced downshift / brake-to-entry (that trapped the car in 2nd on Spa, #532): a
+            # WOT pull from the CURRENT gear through its natural upshifts gives adjacent-gear
+            # coverage for the crossover fit. Start flooring it immediately on a long-enough
+            # straight; the gear-ratio miner separately covers low gears.
+            if remaining < brake_margin_m + 40.0:
+                self._abort_active("sweep straight too short for a WOT pull")
                 return base
-            if speed_kmh > self.sweep_entry_kmh:
-                return self._override(base, gas=0.0, brake=0.35, gear_up=False, gear_dn=False)
-            st["stage"] = "gear"
-            st["t_stage"] = now
-        if st["stage"] == "gear":
-            if now - st["t_stage"] > 5.0:
-                self._abort_active("sweep downshift timeout")
-                return base
-            if gear > _FIRST_FORWARD_GEAR + 1:  # get to 1st/2nd for coverage
-                pulse = now - d.get("last_shift", -1.0) > 0.3
-                if pulse:
-                    d["last_shift"] = now
-                return self._override(base, gas=0.1, brake=0.0, gear_up=False, gear_dn=pulse)
             st["stage"] = "wot"
             st["t_stage"] = now
-            d.update({"rpm_hist": [], "gear_entered": now, "last_shift": now, "no_gear_change": 0})
+            d.update({"rpm_hist": [], "last_shift": now, "start_gear": gear})
         # WOT pull
         if remaining < brake_margin_m:
             self._end_sweep(now)
@@ -971,13 +981,7 @@ class HandshakeController:
         accel = self._smoothed_accel()
         if _finite(rpm, speed_kmh, accel) and gear >= _FIRST_FORWARD_GEAR:
             self._sweep_samples.append(
-                {
-                    "t": now,
-                    "gear": gear,
-                    "rpm": rpm,
-                    "speed_kmh": speed_kmh,
-                    "accel_mps2": accel,
-                }
+                {"t": now, "gear": gear, "rpm": rpm, "speed_kmh": speed_kmh, "accel_mps2": accel}
             )
         gear_up = False
         same_gear = [(t, r) for (t, r, g) in d["rpm_hist"] if g == gear]
@@ -994,11 +998,11 @@ class HandshakeController:
                 d["upshift_gear"] = gear
                 d["upshift_t"] = now
             else:
-                self._end_sweep(now)
+                self._end_sweep(now)  # already in top gear -> pull is done
                 return base
         if (
             d.get("upshift_t") is not None
-            and now - d["upshift_t"] > 1.2
+            and now - d["upshift_t"] > 1.5
             and gear == d.get("upshift_gear")
         ):
             # commanded an upshift but the gear never changed -> out of gears; end the pull
@@ -1018,9 +1022,9 @@ class HandshakeController:
         gears = {s["gear"] for s in self._sweep_samples}
         self._active = None
         if len(gears) < 2:
-            # not a usable pull; retry on the next long straight (back of the queue so the
-            # other probes get their chance first)
-            self._pending.append("accel_sweep")
+            # not a usable pull; retry on the next long straight (bounded by the failure cap so a
+            # track that never yields a multi-gear pull drops the sweep instead of looping forever)
+            self._requeue("accel_sweep", front=False, failed=True)
 
     def _step_coast(
         self, base: DriveFrame, speed_kmh: float, v_mps: float, remaining: float, now: float
@@ -1065,10 +1069,34 @@ class HandshakeController:
             duration_s=now - (self._t_start if self._t_start is not None else now),
             measurements=measurements,
         )
+        # Record which probes never completed within the budget, so a partial finalize (drive
+        # ended) is diagnosable — how many pulses/sweep-gears/coast-samples/corner-rows landed.
+        self.result_diagnostics = {
+            "pulses": len(self._pulse_records),
+            "corner_rows": len(self._rows),
+            "sweep_samples": len(self._sweep_samples),
+            "sweep_gears": sorted({s["gear"] - 1 for s in self._sweep_samples}),
+            "coast_samples": len(self._coast_samples),
+            "gear_ratio_gears": sorted(self._ratio_samples),
+            "probe_attempts": dict(self._probe_attempts),
+            "pending_at_finish": list(self._pending),
+        }
         self._sink["ok"] = self.result.ok
         self._sink["result"] = self.result.to_dict()
         self._sink["constants"] = self.result.constants()
+        self._sink["diagnostics"] = self.result_diagnostics
         self.finished = True
+
+    def finalize(self, now: float | None = None) -> None:
+        """Force finalization when the drive ends before the schedule self-completes.
+
+        Without this, a run whose drive budget expires mid-schedule leaves ``sink`` empty and the
+        report reads a bare "no result" — hiding which constants WERE measured. Finalizing runs the
+        fits over whatever was captured; incomplete probes fail their gates with interpretable
+        details (#532 rig-found on Spa)."""
+        if self.finished:
+            return
+        self._finish(now if now is not None else (self._prev_now or 0.0))
 
 
 def _auto_phys_reader():  # pragma: no cover - rig-only
@@ -1183,11 +1211,17 @@ def apply_handshake_outcome(report, sink: dict) -> None:
         return
     if not sink.get("ok"):
         failed = [m for m in result.get("measurements", []) if not m.get("passed")]
+        passed = [m.get("name") for m in result.get("measurements", []) if m.get("passed")]
         names = ", ".join(m.get("name", "?") for m in failed) or "unknown"
         details = "; ".join(f"{m.get('name')}: {m.get('detail')}" for m in failed)
+        diag = sink.get("diagnostics", {})
         report.ok = False
         report.stage = "handshake"
-        report.error = f"handshake probe(s) failed: {names} — {details}"
+        report.error = (
+            f"handshake probe(s) failed: {names} — {details}"
+            + (f" | measured: {', '.join(passed)}" if passed else "")
+            + (f" | diagnostics: {diag}" if diag else "")
+        )
         return
     constants = sink.get("constants", {})
     report.notes.append(

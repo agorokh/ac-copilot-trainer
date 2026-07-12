@@ -2015,6 +2015,14 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.laps += 1
             time.sleep(0.012)
     finally:
+        # #532: if the handshake driver did not self-complete within the drive budget, finalize it
+        # so the run still produces a result (which constants WERE measured), not "no result".
+        finalize = getattr(driver, "finalize", None)
+        if finalize is not None and not getattr(driver, "finished", True):
+            try:
+                finalize(time.monotonic() - t0)
+            except Exception:  # noqa: BLE001 - finalization must not mask the drive outcome
+                pass
         if phys_reader is not None:
             phys_reader.close()
         for _ in range(20):

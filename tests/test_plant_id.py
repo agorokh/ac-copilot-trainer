@@ -234,6 +234,51 @@ def test_handshake_within_lap_budget(handshake_outcome):
     assert ctrl.result.laps_used <= 2
 
 
+def test_handshake_finalize_on_drive_end_produces_partial_result():
+    # #532: a drive that ends before the schedule self-completes must still yield a result naming
+    # which constants were measured — not a bare "no result".
+    line = _stadium_line()
+    sim = PlantSim(line)
+    sink: dict = {}
+    ctrl = HandshakeController(
+        line, _profile_for(line), car_id="c", track_id="t", sink=sink, phys_read=sim.phys
+    )
+    # Drive only briefly, then force finalize (simulates the rig drive budget expiring).
+    now = 0.0
+    while now < 25.0 and not ctrl.finished:
+        pos, look, speed, rpm, gear = sim.observe()
+        ctrl.step(pos, look, speed, rpm, gear, now)
+        sim.apply(ctrl._base.step(pos, look, speed, rpm, gear, now), 1 / 60)
+        now += 1 / 60
+    if not ctrl.finished:
+        ctrl.finalize(now)
+    assert ctrl.finished
+    assert sink.get("result") is not None
+    assert "diagnostics" in sink
+    # finalize is idempotent
+    prev = sink["result"]
+    ctrl.finalize(now + 1)
+    assert sink["result"] is prev
+
+
+def test_probe_failure_cap_drops_probe_and_completes():
+    # A probe that can never satisfy its straight requirement must DROP after the cap so the
+    # schedule can complete, rather than looping forever (#532 Spa sweep hang).
+    line = _stadium_line()
+    sink: dict = {}
+    ctrl = HandshakeController(
+        line, _profile_for(line), car_id="c", track_id="t", sink=sink, phys_read=lambda: None
+    )
+    ctrl._max_probe_attempts = 3
+    # Simulate the abort/re-queue cycle: the probe is consumed (not pending), fails, re-queues.
+    for _ in range(10):
+        if "accel_sweep" in ctrl._pending:
+            ctrl._pending.remove("accel_sweep")
+        ctrl._requeue("accel_sweep", front=False, failed=True)
+    assert ctrl._probe_attempts["accel_sweep"] >= 3
+    assert "accel_sweep" not in ctrl._pending  # dropped after the cap, never re-added
+
+
 def test_handshake_without_physics_fails_r_eff_interpretably():
     line = _stadium_line()
     sim = PlantSim(line)
