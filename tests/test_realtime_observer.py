@@ -920,3 +920,38 @@ def test_tail_calibrated_first_corner_mark_survives_the_wrap():
     assert len(cues) == 1, "exactly one heads-up for the pass straddling start/finish"
     late_info = [a for a in [*fired, *exit_out] if a.detail.get("braked_late_uncoached")]
     assert late_info == [], "braking at the learned pre-line mark is NOT a late brake"
+
+
+def test_calibration_tolerance_is_metric_not_normalized():
+    """PR #525 review: the same-zone match window is 50 m, not a fixed spline fraction — on a
+    20 km track an onset ~300 m from the mark must NOT calibrate, while ~30 m still does."""
+    ref = _i522_ref()  # mark 0.45
+    long_track = RealtimeObserver([ref], track_length_m=20000.0)
+    # 0.465 spline = 300 m from the mark on a 20 km track: a different feature, rejected
+    assert long_track.calibrate_from_driver_lap(_driver_trace(0.465, end=0.49)) == 0
+    # ~0.4511 spline = ~22 m: same zone, accepted
+    assert long_track.calibrate_from_driver_lap(_driver_trace(0.4505, end=0.49)) == 1
+
+
+def test_two_zones_inside_one_lead_emit_on_consecutive_frames_not_one_batch():
+    """PR #525 review: marks closer than the lead open both arcs on the same tick; a same-batch
+    pair would make the voice scheduler drop one. The observer emits at most one heads-up per
+    corner per frame — the second zone follows on the next frame."""
+    ref = CornerReference(
+        index=0,
+        apex_spline=0.52,
+        spline_lo=0.42,
+        spline_hi=0.62,
+        optimal_apex_kmh=90.0,
+        best_observed_apex_kmh=90.0,
+        best_brake_point_spline=0.45,
+        n_corpus=1,
+        brake_marks=[0.45, 0.475],  # both arcs open inside the default 3.2 s lead
+    )
+    obs = RealtimeObserver([ref], track_length_m=2500.0)
+    first = obs.observe({"spline": 0.440, "speed": 110.0, "brake": 0.0})
+    second = obs.observe({"spline": 0.4405, "speed": 110.0, "brake": 0.0})
+    c1 = [a for a in first if a.kind == "late_brake"]
+    c2 = [a for a in second if a.kind == "late_brake"]
+    assert len(c1) == 1 and c1[0].detail["zone"] == 0, "imminent zone speaks first, alone"
+    assert len(c2) == 1 and c2[0].detail["zone"] == 1, "the second zone follows next frame"

@@ -102,9 +102,11 @@ _LEAD_LATCH_TTA_S = 1.5
 # on the driver's demonstrated point instead of the synthetic one. Provenance rides on the
 # advisory (``mark_source: driver_calibrated``) — a calibrated mark is never passed off as the
 # reference's.
-#: a driver onset within this normalized-spline distance of a reference mark is the SAME zone
-#: (~50 m on a 2.5 km track); farther away it is a different line/zone and does not calibrate.
-_CAL_MATCH_TOL_SPLINE = 0.02
+#: a driver onset within this many METERS of a mark is the SAME zone; farther away it is a
+#: different line/zone and does not calibrate. Metric, not normalized: a fixed spline fraction
+#: would accept ~400 m on a Nordschleife-length track (PR #525 review). Converted per observer
+#: via its track length (0.02 spline on the verified 2.5 km case).
+_CAL_MATCH_TOL_M = 50.0
 #: weight of the newest lap in the per-zone EMA (recent laps dominate, old habits decay).
 _CAL_EMA_ALPHA = 0.4
 #: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
@@ -384,7 +386,7 @@ class RealtimeObserver:
         """Fold one of the driver's own completed laps into the per-zone brake-mark EMA.
 
         For each corner zone, the driver's sustained brake onset nearest the current reference
-        mark (within ``_CAL_MATCH_TOL_SPLINE`` — the same zone, not a different line) updates
+        mark (within ``_CAL_MATCH_TOL_M`` meters — the same zone, not a different line) updates
         that zone's EMA. Matching is one-to-one (greedy nearest-first): a single brake
         application between two closely spaced marks calibrates ONE zone, never both — else the
         per-zone distinction #522 adds would collapse (PR #525 review). Returns the number of
@@ -393,6 +395,7 @@ class RealtimeObserver:
         """
         if track_id and self._track_id and track_id != self._track_id:
             return 0
+        tol = _CAL_MATCH_TOL_M / self._track_length_m  # metric tolerance in spline units
         updated = 0
         for ref in self._refs:
             ref_marks = self._reference_marks(ref)
@@ -403,7 +406,7 @@ class RealtimeObserver:
             # window whose upstream margin crosses start/finish also scans the trace TAIL: the
             # archive finalizes the lap before the S/F frame, so the driver's onset for a mark
             # near spline 0 can sit at ~0.99 (PR #525 review).
-            lo = ref.spline_lo - _CAL_MATCH_TOL_SPLINE
+            lo = ref.spline_lo - tol
             onsets = sustained_brake_onsets(lap, max(0.0, lo), ref.spline_hi)
             if lo < 0.0:
                 onsets += sustained_brake_onsets(lap, lo % 1.0, 1.0)
@@ -421,11 +424,11 @@ class RealtimeObserver:
             )
             # forward positions from just upstream of the window, so "in lap order" is
             # well-defined even when the window (or a learned mark) crosses start/finish.
-            origin = (ref.spline_lo - _CAL_MATCH_TOL_SPLINE) % 1.0
+            origin = (ref.spline_lo - tol) % 1.0
             matched_zones: set[int] = set()
             consumed_onsets: set[float] = set()
             for dist, zi, onset in pairs:
-                if dist > _CAL_MATCH_TOL_SPLINE:
+                if dist > tol:
                     break  # sorted ascending: everything after is farther
                 if zi in matched_zones or onset in consumed_onsets:
                     continue
@@ -563,6 +566,7 @@ class RealtimeObserver:
             # lateral-g corner window, so a driver coasting past the real brake point is cued
             # there, not only once the window starts (codex #294 @176).
             marks = self._effective_marks(ref)
+            corner_cued_this_frame = False
             for zi, (bp, mark_source) in enumerate(marks):
                 lead = _lead_spline_fraction(
                     speed, self._track_length_m, self._brake_prepare_lead_s
@@ -606,10 +610,24 @@ class RealtimeObserver:
                     st.zone_braked[zi] = True
                 # The actionable window runs from the anticipatory lead (which can wrap over
                 # start/finish for a first corner with bp≈0) through the zone's segment end
-                # (codex review #371).
+                # (codex review #371). At most ONE heads-up per corner per FRAME: marks closer
+                # than the lead open both arcs on the same tick, and a same-batch pair would
+                # make the voice scheduler pick one and drop the imminent other — a deferred
+                # zone re-fires on the next frame instead (~50 ms at 20 Hz; PR #525 review).
                 if _in_arc(spline, lead_start, seg_end):
-                    a = self._brake_cue(ref, st, zi, bp, mark_source, spline, speed, brake)
+                    a = self._brake_cue(
+                        ref,
+                        st,
+                        zi,
+                        bp,
+                        mark_source,
+                        spline,
+                        speed,
+                        brake,
+                        allow_cue=not corner_cued_this_frame,
+                    )
                     if a is not None:
+                        corner_cued_this_frame = True
                         out.append(a)
             # Over-braking past the apex while still off-throttle → "release / ease" (#368). Needs
             # only the apex/window + brake/throttle, NOT a brake point — so it fires for GGV-only
@@ -646,6 +664,8 @@ class RealtimeObserver:
         spline: float,
         speed: float,
         brake: float,
+        *,
+        allow_cue: bool = True,
     ) -> Advisory | None:
         """Fire ONE calm anticipatory heads-up per brake zone per pass — the only live brake cue.
 
@@ -694,6 +714,11 @@ class RealtimeObserver:
             return None
         if st.zone_cued[zi]:
             return None  # already gave this zone its heads-up
+        if not allow_cue:
+            # another zone of this corner already cued on THIS frame: leave this zone's state
+            # untouched so it emits on the next frame (PR #525 review — a same-batch pair would
+            # make the voice scheduler drop one of the two).
+            return None
         # One calm anticipatory heads-up per zone per pass — the ONLY live brake cue (#522). A
         # live fault imperative is unfixable in principle: a driver braking exactly at the mark
         # is indistinguishable from one about to miss it until the mark itself, so a spoken

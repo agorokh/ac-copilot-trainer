@@ -437,7 +437,9 @@ def _real_observer():
 def test_calibrate_brake_marks_from_lap_updates_observer(tmp_path, monkeypatch):
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
-    monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    monkeypatch.setattr(
+        server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
+    )
     # calibration is core telemetry learning, deliberately INDEPENDENT of the optional LLM
     # debrief pipeline: it must fold with the debrief feature disabled (PR #525 review).
     monkeypatch.delenv("AC_COPILOT_OLLAMA_ENABLE", raising=False)
@@ -453,7 +455,9 @@ def test_calibrate_brake_marks_from_lap_updates_observer(tmp_path, monkeypatch):
 def test_calibration_skips_explicitly_invalid_lap(tmp_path, monkeypatch):
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
-    monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    monkeypatch.setattr(
+        server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
+    )
     archive = _corner_archive()
     archive["lap"]["is_valid"] = False  # a cut lap's brake points are not calibration data
     path = _write_lap_archive(tmp_path, archive)
@@ -473,10 +477,12 @@ def test_unresolvable_frame_does_not_reserve_the_calibration_key(tmp_path, monke
     reserve the dedup key — the archive-backed re-send of the SAME lap must still calibrate."""
     obs = _real_observer()
     monkeypatch.setattr(server, "_observer", obs)
-    monkeypatch.setattr(server, "_last_brake_cal_key", None)
+    monkeypatch.setattr(
+        server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
+    )
     # plain frame: same lap identity, nothing loadable -> returns without reserving
     asyncio.run(server._calibrate_brake_marks_from_lap({"lap": 3, "lapTimeMs": 133498}))
-    assert server._last_brake_cal_key is None
+    assert len(server._recent_brake_cal_keys) == 0
     assert obs._driver_marks == {}
     # archive-backed re-send of the same physical lap -> calibrates
     path = _write_lap_archive(tmp_path, _corner_archive())
@@ -484,3 +490,47 @@ def test_unresolvable_frame_does_not_reserve_the_calibration_key(tmp_path, monke
         server._calibrate_brake_marks_from_lap({"lap": 3, "lapTimeMs": 133498, "archivePath": path})
     )
     assert obs._driver_marks, "the archive-backed re-send must not be starved by the empty frame"
+
+
+def test_late_resend_after_a_newer_lap_is_still_deduped(tmp_path, monkeypatch):
+    """PR #525 review: the dedup memory is a bounded set of recent lap identities, not a single
+    slot — a brainOnly re-send of lap N arriving AFTER lap N+1 folded must not refold lap N."""
+    obs = _real_observer()
+    monkeypatch.setattr(server, "_observer", obs)
+    monkeypatch.setattr(
+        server, "_recent_brake_cal_keys", server._recent_brake_cal_keys.__class__(maxlen=8)
+    )
+    path_n = _write_lap_archive(tmp_path, _corner_archive(), name="lap_0003.json")
+    path_n1 = _write_lap_archive(tmp_path, _corner_archive(), name="lap_0004.json")
+    asyncio.run(
+        server._calibrate_brake_marks_from_lap(
+            {"lap": 3, "lapTimeMs": 133498, "archivePath": path_n}
+        )
+    )
+    laps_folded = next(iter(obs._driver_marks.values()))[1]
+    asyncio.run(
+        server._calibrate_brake_marks_from_lap(
+            {"lap": 4, "lapTimeMs": 132513, "archivePath": path_n1}
+        )
+    )
+    after_lap4 = next(iter(obs._driver_marks.values()))[1]
+    # the LATE re-send of lap 3 (same identity) must be a no-op
+    asyncio.run(
+        server._calibrate_brake_marks_from_lap(
+            {"lap": 3, "lapTimeMs": 133498, "archivePath": path_n}
+        )
+    )
+    assert next(iter(obs._driver_marks.values()))[1] == after_lap4
+    assert after_lap4 == laps_folded + 1
+
+
+def test_calibration_inactive_when_coach_v2_owns_the_cue_path(monkeypatch):
+    """PR #525 review: with coach v2 routing live telemetry, folding laps into the LEGACY
+    observer would log 'calibrated' with zero effect on the spoken cues — the task must not
+    be scheduled at all."""
+    monkeypatch.setattr(server, "_observer", _real_observer())
+    monkeypatch.setattr(server, "_coach_runtime", object())
+    monkeypatch.delenv("AC_COPILOT_BRAKE_CAL", raising=False)
+    assert server._brake_calibration_active() is False
+    monkeypatch.setattr(server, "_coach_runtime", None)
+    assert server._brake_calibration_active() is True
