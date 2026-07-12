@@ -135,8 +135,20 @@ def test_report_path_propagates_healthy_verdict():
 def test_corpus_expected_labels_and_oracles_are_valid():
     for sc in build_corpus():
         assert sc.expected in ("GREEN", "RED")
-        assert sc.oracle in ("sequence", "schema", "sim_death", "render", "report_path")
+        assert sc.oracle in ("sequence", "schema", "sim_death", "render", "report_path", "drive")
         assert callable(sc.run)
+
+
+def test_weakening_the_drive_oracle_leaks_the_528_stall_shapes(monkeypatch):
+    # Defang the drive-leg verdict (patch the symbol build_corpus resolves at call time): a
+    # recovery-capped pit-start stall and a never-landed hijack now read as a successful drive, so
+    # both #528 broken scenarios leak. Proves the drive oracle has teeth without a test-only knob.
+    monkeypatch.setattr(false_green_kpi, "drive_leg_succeeded", lambda stats: True)
+    weak = run_kpi()
+    assert weak.broken_false_green >= 2  # spawn_stall_recovery_capped + hijack_never_landed leak
+    assert "broken_spawn_stall_recovery_capped" in weak.false_greens
+    assert "broken_hijack_never_landed" in weak.false_greens
+    assert weak.ok is False
 
 
 # ------------------------------------------------------------------- extracted sim-death oracle
