@@ -424,11 +424,11 @@ def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
             tap=_tap_returning([*CONTINUOUS, _snap("session"), _snap("lap")]),
         )
     )
-    # max(180, 100) + 8 = 188 — outlives the tap's lap deadline, not merely drive_seconds+grace.
-    assert captured["drive_seconds"] == 188.0
+    # settle(120) + max(180, 100) + grace(8) = 308 — outlives the full tap window + grace
+    assert captured["drive_seconds"] == 308.0
 
-    # grace=0 with wait_lap must STILL align to the tap deadline (else the drive stops early and the
-    # tap hangs the full lap_timeout on a stopped car): max(180, 50) + 0 = 180 (#516 daemon review).
+    # grace=0 with wait_lap must STILL align to the full tap window (else the drive stops early and
+    # the tap hangs on a stopped car): 120 + max(180, 50) + 0 = 300 (#516 daemon review).
     captured.clear()
     asyncio.run(
         run_auto_drive(
@@ -439,7 +439,7 @@ def test_wait_lap_extends_drive_budget_for_grace_headroom(monkeypatch):
             tap=_tap_returning([*CONTINUOUS, _timed_lap()]),
         )
     )
-    assert captured["drive_seconds"] == 180.0
+    assert captured["drive_seconds"] == 300.0
 
     captured.clear()
     asyncio.run(

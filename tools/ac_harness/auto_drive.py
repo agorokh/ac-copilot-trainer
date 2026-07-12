@@ -476,14 +476,19 @@ async def run_auto_drive(
     # the LATEST lap the tap accepts PLUS the grace — not merely drive_seconds (which can be < the
     # tap deadline, breaking headroom for a late lap; #515/#516). One `lap_deadline` feeds both the
     # tap timeout and the drive budget so they cannot diverge.
+    # tap_frames waits in TWO phases: up to `tap_settle_s` for the car-on-track (any continuous
+    # topic), THEN up to lap_deadline for the lap. So the tap can accept a lap as late as
+    # tap_settle_s + lap_deadline, and the drive thread must outlive that whole window + grace (it
+    # brakes on budget exit; a premature stop leaves the tap hanging on a stopped car, #515/#516).
+    # One tap_settle_s + lap_deadline feeds BOTH the tap and the budget so they cannot diverge.
+    tap_settle_s = 120.0  # matches tap_frames' default settle_timeout
     lap_deadline = max(180.0, config.drive_seconds)
     drive_config = config
     if config.wait_lap:
-        # Whenever we wait for a lap, the drive thread must outlive the tap's lap deadline (+ grace)
-        # or it stops+brakes the car while the tap is still waiting — the tap then hangs the full
-        # lap_timeout on a stopped car (drive_seconds=50 < 180: stops at 50s, tap waits to 180s).
-        # Align the budget to lap_deadline unconditionally; grace adds 0 when disabled (#516).
-        drive_config = replace(config, drive_seconds=lap_deadline + config.lap_finalize_grace_s)
+        drive_config = replace(
+            config,
+            drive_seconds=tap_settle_s + lap_deadline + config.lap_finalize_grace_s,
+        )
     drive_task = asyncio.create_task(asyncio.to_thread(drive, controller, drive_config, stop))
     stats = DriveStats(reason="drive did not run")
     seq_ok: bool | None = None
@@ -499,9 +504,10 @@ async def run_auto_drive(
     try:
         tap_kwargs: dict[str, Any] = dict(seconds=config.tap_seconds, wait_for_lap=config.wait_lap)
         if config.wait_lap:
-            # Wait as long as the drive leg is allowed to run (a full lap at harness pace can exceed
-            # the 180 s tap default, Spa ~7 km) — the SAME `lap_deadline` the drive budget is sized
-            # to, so the tap never gives up on a lap the drive thread can still complete (#459 F).
+            # The SAME settle + lap deadline the drive budget is sized to (above), so the tap never
+            # waits past what the drive thread can still drive (a full lap at pace can exceed
+            # the 180 s default, Spa ~7 km); #459 F / #516.
+            tap_kwargs["settle_timeout"] = tap_settle_s
             tap_kwargs["lap_timeout"] = lap_deadline
         frames = await tap(config.sidecar_url, **tap_kwargs)
         result = evaluate_sequence(
@@ -1242,6 +1248,10 @@ def collect_lap_archives(
     each scan** via ``resolve()`` (which returns ALL candidate dirs) — so a fresh-profile dir the
     writer creates mid-poll is found at its actual path, and a stale default dir cannot shadow a
     renamed-install dir (every candidate is scanned; mtime filters stale files; #516 review).
+
+    A single ``journal_dir`` is for **tests / a known-good dir only**. Production MUST pass
+    ``journal_dir=None`` + a ``resolve`` returning every candidate (`candidate_journal_laps_dirs`);
+    passing one resolved dir would bypass the multi-dir scan and re-open the stale-shadowing bug.
     ``_clock``/``_sleep`` are injectable so the poll is deterministic in off-sim tests.
     """
 
