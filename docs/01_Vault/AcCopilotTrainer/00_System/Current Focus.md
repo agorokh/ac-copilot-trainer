@@ -26,7 +26,18 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-07-12):** Tablet voice hardware verification for
+**Active focus (2026-07-12, later):** Coaching QUALITY —
+[#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) remaining parts. PR
+[#523](https://github.com/agorokh/ac-copilot-trainer/pull/523) **MERGED**
+([`56dd3a4`](https://github.com/agorokh/ac-copilot-trainer/commit/56dd3a4)) — operator verdict
+("Brake arrives 4 s late — useless") measured (0/8 actionable), root-caused (0.8 s lead vs a
+3.2 s audibility budget; reactive act tier unfixable in principle; synthetic 77.8 s reference),
+and fixed: one calm heads-up per pass, silence past the mark, exit debrief, `semantic_timeliness`
+gate. Live-proven junk 8 → 0 on identical laps. Remaining: corner-coverage extraction (5/9
+zones), per-driver brake-point calibration. Detail:
+[[issue-522-actionable-coaching-2026-07-12]].
+
+**Prior focus (2026-07-12, earlier):** Tablet voice hardware verification for
 [#381](https://github.com/agorokh/ac-copilot-trainer/issues/381) /
 [#511](https://github.com/agorokh/ac-copilot-trainer/issues/511) Part D. PR
 [#519](https://github.com/agorokh/ac-copilot-trainer/pull/519) **MERGED**
