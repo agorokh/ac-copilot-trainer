@@ -2222,7 +2222,11 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
         wait_for_first=report.lap_grace_applied,
     )
-    journal_dir = discover_journal_laps_dir(user_dir)  # for the report path (post-poll)
+    # Report the dir the archive was actually found in (correct even for a renamed install), so the
+    # metadata matches the multi-dir scan, not the canonical-preferring discover (#516 review).
+    journal_dir = (
+        Path(lap_archives[0]).parent if lap_archives else discover_journal_laps_dir(user_dir)
+    )
     extras = {
         "run": {
             "started_epoch": run_started_epoch,
