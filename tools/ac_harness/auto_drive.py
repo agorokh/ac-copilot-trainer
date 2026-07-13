@@ -1746,6 +1746,11 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             track_id=config.track_id,
             sink=config.handshake_sink,
             phys_read="auto",
+            # Moderate cornering pace (fixed, not the flat-out ggv pace) so more corners exceed the
+            # steer-FF lateral-g floor (0.3 g) -> the fit reaches its 80-row budget within a lap,
+            # while staying conservative enough to drive clean. Live-found on Spa (#532): at pace
+            # 0.65 only ~4 rows/3 km qualified; 0.8 loads the corners ~50% more (v^2).
+            pace=0.8,
         )
     raise ValueError(
         f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
