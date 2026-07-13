@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.ac_harness.auto_drive import AutoDriveConfig, _build_driver, generic_gt3_ggv
-from tools.ac_harness.ggv_profile import GGVModel
+from tools.ac_harness.ggv_profile import GGVModel, with_binned_uncertainty
 from tools.ac_harness.lap_driver import PHASE_LAP, DriveFrame
 from tools.ac_harness.plant_id import (
     PLANT_SCHEMA_VERSION,
@@ -30,6 +30,7 @@ from tools.ac_harness.plant_id import (
     plant_artifact_path,
     plant_driver_kwargs,
     plant_ggv_model,
+    refine_ggv_from_lap_archives,
     save_plant_artifact,
 )
 
@@ -798,7 +799,7 @@ def test_handshake_no_ggv_block_without_prior(handshake_outcome):
     assert ctrl.result_diagnostics["friction_rows"] == 0
 
 
-def test_handshake_emits_safe_ggv_block_with_prior():
+def test_handshake_emits_provisional_ggv_until_thermal_archive_arrives():
     line = _stadium_line()
     sim = PlantSim(line)
     prior = generic_gt3_ggv()
@@ -815,9 +816,10 @@ def test_handshake_emits_safe_ggv_block_with_prior():
     _run_handshake(ctrl, sim)
     assert ctrl.finished
     ggv = ctrl.result.ggv
-    assert ggv is not None and ggv["ok"], ggv
+    assert ggv is not None and ggv["ok"] is False, ggv
     assert ctrl.result_diagnostics["friction_rows"] >= ctrl.min_friction_rows
-    model = GGVModel.from_dict(ggv["model"])
+    assert ggv["reason"] == "awaiting thermally tagged lap archive"
+    model = GGVModel.from_dict(ggv["provisional_model"])
     # Safe-envelope guarantees: lateral pinned to the prior (a conservative drive under-measures the
     # limit, so it never lowers/regresses), aero-lateral stays 0, caps kept.
     assert model.k_aero_lat == 0.0
@@ -828,19 +830,59 @@ def test_handshake_emits_safe_ggv_block_with_prior():
     # Provenance labels each curve measured-vs-prior.
     assert set(model.provenance["blend_source"]) == {"lateral", "brake", "drive", "ellipse_n"}
     # The ggv block is ADVISORY — it never gates the core-constant ok.
-    assert sink["result"]["ggv"]["ok"] is True
+    assert sink["result"]["ggv"]["ok"] is False
+
+
+def _uncertain_prior() -> GGVModel:
+    prior = generic_gt3_ggv()
+    rows = []
+    for speed in range(50, 151, 10):
+        for _ in range(50):
+            rows.append(
+                {
+                    "speed_kmh": float(speed),
+                    "accg_lat": 1.2,
+                    "accg_lon": -1.2,
+                    "source": "brake_probe",
+                }
+            )
+    return with_binned_uncertainty(prior, rows, prior)
 
 
 def test_plant_ggv_model_resolves_valid_rejects_invalid():
     prior = generic_gt3_ggv()
-    good = {"ggv": {"ok": True, "model": prior.to_dict()}}
+    good = {"ggv": {"ok": True, "model": _uncertain_prior().to_dict()}}
     assert plant_ggv_model(good) is not None
+    assert plant_ggv_model({"ggv": {"ok": True, "model": prior.to_dict()}}) is None
     # ok=False block -> None (consumer keeps generic)
     assert plant_ggv_model({"ggv": {"ok": False, "model": None}}) is None
     # non-finite serialized model -> rejected (never act on a nan grip curve)
     assert plant_ggv_model({"ggv": {"ok": True, "model": {"mu_lat_g": float("nan")}}}) is None
     # v1 / Part-A artifact with no ggv block -> None
     assert plant_ggv_model({"constants": {"ff_sign": 1.0}}) is None
+
+
+def test_refine_ggv_without_thermal_archive_stays_non_runtime():
+    result = _result_dict()
+    block = refine_ggv_from_lap_archives(result, [], generic_gt3_ggv())
+    assert block["ok"] is False
+    assert block["model"] is None
+    assert "no thermally consistent" in block["reason"]
+    assert plant_ggv_model({"ggv": block}) is None
+
+
+def test_refine_ggv_rejects_stale_other_combo_archive():
+    result = _result_dict()
+    stale = {
+        "car": {"id": "other_car"},
+        "track": {"id": "test_oval", "layout": None},
+        "lap_uuid": "stale",
+    }
+    block = refine_ggv_from_lap_archives(result, [stale], generic_gt3_ggv())
+    assert block["ok"] is False
+    assert block["lap_archives_seen"] == 1
+    assert block["lap_archives_loaded"] == 0
+    assert any("identity mismatch" in error for error in block["load_errors"])
 
 
 def test_artifact_v1_still_loads_without_ggv(tmp_path):
@@ -859,10 +901,33 @@ def test_artifact_v1_still_loads_without_ggv(tmp_path):
     assert plant_ggv_model(loaded) is None  # no ggv block -> generic plant
 
 
+def test_artifact_v2_constants_load_but_point_ggv_falls_back_to_generic(tmp_path):
+    import json as _json
+
+    result = _result_dict()
+    result["ggv"] = {"ok": True, "model": generic_gt3_ggv().to_dict()}
+    payload = {"schema_version": 2, "created_utc": "2026-07-12T00:00:00Z", **result}
+    path = plant_artifact_path(tmp_path, "test_car", "test_oval")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(payload), encoding="utf-8")
+    loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert loaded is not None
+    assert loaded["schema_version"] == 2
+    assert loaded["constants"]["rpm_up"] == 7600.0
+    assert plant_ggv_model(loaded) is None
+
+
+def test_schema_v3_artifact_refuses_point_estimate_ggv(tmp_path):
+    result = _result_dict()
+    result["ggv"] = {"ok": True, "model": generic_gt3_ggv().to_dict()}
+    with pytest.raises(ValueError, match="without uncertainty bins"):
+        save_plant_artifact(tmp_path, result)
+
+
 def test_ggv_block_round_trips_through_artifact(tmp_path):
     prior = generic_gt3_ggv()
     result = _result_dict()
-    result["ggv"] = {"ok": True, "friction_rows": 1234, "model": prior.to_dict()}
+    result["ggv"] = {"ok": True, "friction_rows": 1234, "model": _uncertain_prior().to_dict()}
     save_plant_artifact(tmp_path, result)
     loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
     assert loaded is not None
@@ -870,6 +935,7 @@ def test_ggv_block_round_trips_through_artifact(tmp_path):
     model = plant_ggv_model(loaded)
     assert model is not None
     assert abs(model.mu_lat_g - prior.mu_lat_g) < 1e-9
+    assert model.uncertainty_aware
 
 
 def test_artifact_load_rejects_nan_constants(tmp_path):

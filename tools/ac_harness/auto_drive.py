@@ -2731,11 +2731,22 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # stage/error when the drive actually reached the handshake — a pre-drive failure
         # (stage=launch/hijack/setup, e.g. the track/car guard) is the authoritative root cause
         # and must NOT be clobbered with "handshake produced no result" (Codex + Qodo review).
-        from tools.ac_harness.plant_id import apply_handshake_outcome, save_plant_artifact
+        from tools.ac_harness.plant_id import (
+            apply_handshake_outcome,
+            refine_ggv_from_lap_archives,
+            save_plant_artifact,
+        )
 
         # The handshake result flows out via DriveStats.payload (report.drive.payload), not a
         # config side-channel (daemon review).
         sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
+        if sink.get("ok") and isinstance(sink.get("result"), dict):
+            # #543: live physics rows alone have no tyre state. Refine only from the immutable
+            # #488 lap archives collected by the same run; no archive/thermal cohort means the ggv
+            # block remains visibly unavailable and --use-plant safely keeps the generic plant.
+            refine_ggv_from_lap_archives(
+                sink["result"], lap_archives, generic_gt3_ggv(), prior_name="generic_gt3_ggv"
+            )
         extras["handshake"] = sink
         # Fold the handshake outcome ONLY when the run otherwise fully SUCCEEDED (`report.ok`).
         # report.ok already vetoes on a pipeline check failure (`seq_ok is False`) or a drive-leg

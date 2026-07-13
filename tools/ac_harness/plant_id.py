@@ -49,6 +49,7 @@ from tools.ac_harness.ggv_profile import (
     GGVModel,
     blend_ggv_safe,
     fit_steer_feedforward,
+    ggv_from_lap_archives,
     ggv_from_telemetry,
     seg_lengths,
     signed_curvature_profile,
@@ -57,11 +58,11 @@ from tools.ac_harness.lap_driver import PHASE_LAP, DriveFrame
 from tools.ac_harness.racing_driver import RacingDriver
 
 G = 9.81
-# Schema v2 (#532 Part B) adds the optional ``ggv`` block (per-combo friction plant) alongside the
-# v1 ``constants``. v1 artifacts (Part A: shift points + steering only, no ggv block) still load —
-# their ggv consumption falls back to the generic plant — so Part A artifacts are not invalidated.
-PLANT_SCHEMA_VERSION = 2
-SUPPORTED_PLANT_SCHEMA_VERSIONS = (1, 2)
+# Schema v3 (#543) makes the optional ``ggv`` block uncertainty- and thermal-state-aware. Schema-v1
+# and schema-v2 constants still load, but their absent/point-estimate GGV blocks fall back to the
+# generic runtime plant until a new thermally tagged handshake produces a schema-v3 uncertainty map.
+PLANT_SCHEMA_VERSION = 3
+SUPPORTED_PLANT_SCHEMA_VERSIONS = (1, 2, 3)
 # Constants a persisted plant artifact MUST carry (a fully-passed handshake produces all of them);
 # a partial artifact is rejected on load so `--use-plant full` never silently degrades.
 REQUIRED_PLANT_CONSTANTS = ("ff_sign", "ff_c1", "ff_c2", "rpm_up", "rpm_dn", "r_eff_m")
@@ -1338,17 +1339,13 @@ class HandshakeController:
         self.finished = True
 
     def _build_ggv_block(self) -> dict | None:
-        """Fit the per-combo friction plant from captured rows and safe-envelope-blend the prior.
+        """Build a provisional point fit pending the thermally tagged lap archive (#543).
 
-        Returns ``None`` when no prior was injected (no trusted basis for a safe blend — the ggv
-        driver keeps its generic plant). Otherwise returns a block recording the outcome:
-
-        * ``ok=True`` with a blended ``model`` (a :class:`~tools.ac_harness.ggv_profile.GGVModel`
-          serialized via ``to_dict``) when enough friction rows were captured AND the fit succeeded;
-        * ``ok=False`` with a ``reason`` and ``model=None`` otherwise — a VISIBLE degrade in
-          the artifact + diagnostics, so the consumer falls back to the generic plant without a
-          silent swallow (the ggv block is ADVISORY; unlike the 5 core constants it never gates
-          ``HandshakeResult.ok``).
+        Live physics rows do not contain the canonical #488 tyre channels, so even a successful
+        point fit is diagnostics-only. The block remains ``ok=False`` until
+        :func:`refine_ggv_from_lap_archives` observes the immutable archive and builds the thermal,
+        per-speed-bin uncertainty map. This is advisory and never gates the core handshake
+        constants.
         """
         if self._prior_ggv is None:
             return None
@@ -1371,9 +1368,10 @@ class HandshakeController:
             logger.exception("friction-ID fit failed; ggv block degrades to the generic plant")
             block["reason"] = f"friction fit error: {type(exc).__name__}: {exc}"
             return block
-        block["ok"] = True
-        block["model"] = blended.to_dict()
-        block["reason"] = "ok"
+        # The live rows have no tyre-state channels. Keep the point fit for diagnostics only;
+        # refine_ggv_from_lap_archives replaces it after the immutable #488 archive is observed.
+        block["provisional_model"] = blended.to_dict()
+        block["reason"] = "awaiting thermally tagged lap archive"
         return block
 
     def finalize(self, now: float | None = None) -> None:
@@ -1391,6 +1389,79 @@ class HandshakeController:
 # ---------------------------------------------------------------------------
 # Per-combo plant artifact (durable — NEVER .scratch; see module docstring)
 # ---------------------------------------------------------------------------
+def refine_ggv_from_lap_archives(
+    result: dict,
+    archives: list[str | Path | dict],
+    prior: GGVModel,
+    *,
+    prior_name: str = "generic_gt3_ggv",
+) -> dict:
+    """Replace a handshake's provisional GGV with a thermally gated schema-v3 model.
+
+    ``archives`` may contain paths from ``auto_drive.collect_lap_archives`` or already-loaded dicts
+    for hermetic tests. The result is mutated and returned so evidence and persistence consume the
+    same final block.
+    """
+    loaded: list[dict] = []
+    load_errors: list[str] = []
+    for item in archives:
+        if isinstance(item, dict):
+            loaded.append(item)
+            continue
+        try:
+            payload = json.loads(Path(item).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            load_errors.append(f"{item}: {type(exc).__name__}")
+            continue
+        if isinstance(payload, dict):
+            loaded.append(payload)
+        else:
+            load_errors.append(f"{item}: archive root is not an object")
+    expected_car = str(result.get("car_id") or "")
+    expected_track = str(result.get("track_id") or "")
+    expected_layout = result.get("layout") or None
+    matching: list[dict] = []
+    for payload in loaded:
+        car = payload.get("car") if isinstance(payload.get("car"), dict) else {}
+        track = payload.get("track") if isinstance(payload.get("track"), dict) else {}
+        actual_car = str(car.get("id") or "")
+        actual_track = str(track.get("id") or "")
+        actual_layout = track.get("layout") or None
+        if (
+            actual_car != expected_car
+            or actual_track != expected_track
+            or actual_layout != expected_layout
+        ):
+            load_errors.append(
+                "archive identity mismatch: "
+                f"expected {expected_car}/{expected_track}/{expected_layout or '-'}, "
+                f"got {actual_car}/{actual_track}/{actual_layout or '-'}"
+            )
+            continue
+        matching.append(payload)
+    block: dict = {
+        "ok": False,
+        "model": None,
+        "prior": prior_name,
+        "lap_archives_seen": len(archives),
+        "lap_archives_loaded": len(matching),
+        "load_errors": load_errors,
+    }
+    try:
+        model, summary = ggv_from_lap_archives(matching, prior, prior_name=prior_name)
+    except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
+        logger.exception("thermal uncertainty fit failed; ggv block degrades to the generic plant")
+        block["reason"] = f"thermal uncertainty fit error: {type(exc).__name__}: {exc}"
+        result["ggv"] = block
+        return block
+    block.update(summary)
+    block["ok"] = True
+    block["model"] = model.to_dict()
+    block["reason"] = "ok"
+    result["ggv"] = block
+    return block
+
+
 def _setup_stem(setup: str | None) -> str | None:
     """The setup basename without ``.ini`` (or None), for a path-free identity sanity-check."""
     if not setup:
@@ -1467,6 +1538,14 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     """
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
+    ggv = result.get("ggv")
+    if isinstance(ggv, dict) and ggv.get("ok"):
+        model_data = ggv.get("model")
+        model = GGVModel.from_dict(model_data) if isinstance(model_data, dict) else None
+        if model is None or not model.uncertainty_aware:
+            raise ValueError(
+                "refusing to persist an ok schema-v3 ggv block without uncertainty bins"
+            )
     car_id = str(result.get("car_id") or "")
     track_id = str(result.get("track_id") or "")
     if not car_id or not track_id:
@@ -1586,7 +1665,11 @@ def plant_ggv_model(artifact: dict) -> GGVModel | None:
     if not isinstance(model, dict):
         return None
     try:
-        return GGVModel.from_dict(model)
+        restored = GGVModel.from_dict(model)
+        # Schema-v1/v2 point estimates remain readable for provenance and their measured constants,
+        # but #543 requires runtime friction to carry epistemic uncertainty. Until re-identified,
+        # the caller keeps the generic plant rather than acting on false precision.
+        return restored if restored.uncertainty_aware else None
     except (ValueError, TypeError):
         logger.warning(
             "plant artifact ggv block present but its model is invalid; using the generic plant"
