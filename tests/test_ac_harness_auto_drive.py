@@ -713,14 +713,13 @@ def test_track_ids_match_rules():
 
 def test_run_auto_drive_fails_fast_on_track_mismatch():
     # #532: CM launched a cached session (spa) instead of the requested track (magione). The
-    # harness must FAIL at stage="launch", not drive the requested line on the wrong track.
-    ctrl = FakeController()
-
+    # harness must FAIL at stage="launch" WITHOUT hijacking — the identity gateway rejects the
+    # wrong session before the hijack (#537), so the wrong line is never driven.
     report = asyncio.run(
         run_auto_drive(
             _cfg(track_id="magione", skip_launch=True),
             launch=_ok_launch,
-            hijack=lambda c: ctrl,
+            hijack=lambda c: pytest.fail("must not hijack a wrong session"),
             drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
             tap=_tap_returning(CONTINUOUS),
             verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),
@@ -729,7 +728,6 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert report.ok is False
     assert report.stage == "launch"
     assert "spa" in report.error and "magione" in report.error
-    assert ctrl.closed is True  # controller released before bailing
 
 
 def test_handshake_outcome_gate_preserves_any_prior_failure():
@@ -761,13 +759,13 @@ def test_handshake_outcome_gate_preserves_any_prior_failure():
 
 def test_run_auto_drive_fails_fast_on_car_mismatch():
     # Same track, different CAR served by a cached CM session -> must not persist a mislabeled
-    # plant artifact under the requested car (#532 Codex review).
-    ctrl = FakeController()
+    # plant artifact under the requested car (#532 Codex review). The identity gateway rejects it
+    # before the hijack (#537).
     report = asyncio.run(
         run_auto_drive(
             _cfg(track_id="spa", car_id="ks_porsche_911_gt3_r_2016", skip_launch=True),
             launch=_ok_launch,
-            hijack=lambda c: ctrl,
+            hijack=lambda c: pytest.fail("must not hijack a wrong session"),
             drive=lambda controller, config, stop: pytest.fail("must not drive the wrong car"),
             tap=_tap_returning(CONTINUOUS),
             verify_track=lambda c: ("spa", "ks_audi_r8_lms"),
@@ -796,23 +794,26 @@ def test_run_auto_drive_track_match_proceeds():
 
 def test_run_auto_drive_relaunches_on_track_mismatch_then_drives():
     # #537: CM served its cached session (spa) on the first launch; the harness must RELAUNCH
-    # (bounded) rather than fail — the second launch loads the requested magione and drives it.
+    # (bounded) rather than fail — the second launch loads the requested magione and drives it. The
+    # identity gateway rejects the cached session BEFORE the hijack, so no controller is taken.
     record: dict = {}
     launches: list[int] = []
-    c_bad = FakeController()
-    c_good = FakeController()
-    controllers: list[FakeController] = [c_bad, c_good]
+    hijacks: list[int] = []
     loaded_tracks = ["spa", "magione"]  # cached (wrong) first, requested second
 
     def _launch(config):  # noqa: ANN001
         launches.append(1)
         return True, "live"
 
+    def _hijack(config):  # noqa: ANN001
+        hijacks.append(1)
+        return FakeController()
+
     report = asyncio.run(
         run_auto_drive(
             _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=3),
             launch=_launch,
-            hijack=lambda c: controllers.pop(0),
+            hijack=_hijack,
             drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
             tap=_tap_returning(CONTINUOUS),
             verify_track=lambda c: (loaded_tracks.pop(0), "ks_porsche_911_gt3_r_2016"),
@@ -822,24 +823,23 @@ def test_run_auto_drive_relaunches_on_track_mismatch_then_drives():
     assert report.ok is True
     assert report.stage != "launch"  # did not fail-fast on the first (mismatched) launch
     assert len(launches) == 2  # relaunched exactly once
-    assert c_bad.closed is True  # the mismatched controller was released before relaunch
-    assert record["controller"] is c_good  # drove on the correct-track session
+    assert len(hijacks) == 1  # hijacked only the correct session, never the cached one
+    assert record["controller"] is not None  # drove on the correct-track session
 
 
 def test_run_auto_drive_track_mismatch_fails_fast_after_exhausting_relaunches():
-    # #537 bound: a PERSISTENT cached-session mismatch must not loop forever or ever drive the
-    # wrong line — it FAILs at stage="launch" once the launch budget is spent (#535 honest guard).
+    # #537 bound: a PERSISTENT cached-session mismatch must not loop forever or ever hijack/drive
+    # the wrong line — it FAILs at stage="launch" once the launch budget is spent (#535 guard).
     launches: list[int] = []
-    controllers: list[FakeController] = []
+    hijacks: list[int] = []
 
     def _launch(config):  # noqa: ANN001
         launches.append(1)
         return True, "live"
 
     def _hijack(config):  # noqa: ANN001
-        ctrl = FakeController()
-        controllers.append(ctrl)
-        return ctrl
+        hijacks.append(1)
+        return FakeController()
 
     report = asyncio.run(
         run_auto_drive(
@@ -856,7 +856,7 @@ def test_run_auto_drive_track_mismatch_fails_fast_after_exhausting_relaunches():
     assert report.stage == "launch"
     assert "spa" in report.error and "magione" in report.error
     assert len(launches) == 2  # bounded by max_launches — no infinite relaunch
-    assert all(c.closed for c in controllers)  # every mismatched controller released
+    assert hijacks == []  # never hijacked a wrong session (identity gateway is pre-hijack)
 
 
 def test_loaded_combo_mismatch_rules():
@@ -873,16 +873,12 @@ def test_loaded_combo_mismatch_rules():
 
 
 def test_setup_run_relaunches_on_cached_session_then_verifies():
-    # #537 (Codex P2): a --setup run whose first CM launch serves a cached wrong session fails setup
-    # fuel verification. The harness must RELAUNCH (bounded) rather than abort at stage="setup" on
-    # the first cached session, so setup A/B runs get the same #537 retry; attempt 2 loads the
-    # requested magione and the setup verifies.
-    acks = [
-        {"ok": False, "error": "fuel 60.0 != 45.0"},  # cached spa session — wrong fuel
-        {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"},  # correct magione
-    ]
-    loaded_tracks = ["spa", "magione"]
+    # #537 (Codex P2): on a --setup run, a cached wrong session is rejected by the identity gateway
+    # BEFORE the setup verify runs, so the harness relaunches (bounded); the setup is applied
+    # ONLY on the correct magione session the relaunch loads — never wasted on the cached one.
+    loaded_tracks = ["spa", "magione"]  # cached (wrong) first, requested second
     launches: list[int] = []
+    applies: list[int] = []
     record: dict = {}
 
     def _launch(config):  # noqa: ANN001
@@ -890,7 +886,8 @@ def test_setup_run_relaunches_on_cached_session_then_verifies():
         return True, "live"
 
     async def _apply(config):  # noqa: ANN001
-        return acks.pop(0)
+        applies.append(1)
+        return {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"}
 
     report = asyncio.run(
         run_auto_drive(
@@ -909,22 +906,26 @@ def test_setup_run_relaunches_on_cached_session_then_verifies():
         )
     )
     assert report.ok is True
-    assert report.stage != "setup"  # did not abort on the first cached session
+    assert report.stage != "setup"  # never aborted at setup on the cached session
     assert len(launches) == 2  # relaunched once for the cached session
+    assert len(applies) == 1  # setup applied ONLY on the correct session, not the cached one
     assert report.setup_applied is True
     assert record["controller"] is not None  # drove on the correct-combo session
 
 
-def test_setup_run_cached_session_fails_setup_stage_after_budget():
-    # Bound: a PERSISTENT cached wrong session on a --setup run still FAILs (bounded), and the error
-    # names the cached-session cause so the evidence bundle isn't misread as a plain setup bug.
+def test_setup_run_cached_session_fails_launch_stage_after_budget():
+    # #537: a PERSISTENT cached wrong session on a --setup run FAILs (bounded) at stage="launch"
+    # (the identity-gateway root cause), NOT stage="setup", and never runs the setup verify on the
+    # wrong session — so the evidence bundle points at CM, not at a phantom setup bug.
     launches: list[int] = []
+    applies: list[int] = []
 
     def _launch(config):  # noqa: ANN001
         launches.append(1)
         return True, "live"
 
     async def _apply(config):  # noqa: ANN001
+        applies.append(1)
         return {"ok": False, "error": "fuel 60.0 != 45.0"}
 
     report = asyncio.run(
@@ -944,15 +945,16 @@ def test_setup_run_cached_session_fails_setup_stage_after_budget():
         )
     )
     assert report.ok is False
-    assert report.stage == "setup"
+    assert report.stage == "launch"  # identity-gateway root cause, not a phantom setup failure
     assert len(launches) == 2  # bounded — no infinite relaunch
-    assert "cached session" in (report.error or "")  # names the real cause, not a plain setup bug
+    assert applies == []  # setup verify never ran on the wrong session
+    assert "spa" in report.error and "magione" in report.error
 
 
 def test_run_auto_drive_mismatch_then_launch_failure_reports_stage_launch():
-    # #537 (Codex P2): attempt 1 hits a cached-session mismatch (relaunch); attempt 2's launch never
-    # reaches LIVE. The report must read stage="launch" (the real terminal cause), not a misleading
-    # stage="hijack" that points the evidence bundle at the wrong subsystem.
+    # #537 (Codex P2): attempt 1 hits a cached-session mismatch (relaunch, pre-hijack); attempt 2's
+    # launch never reaches LIVE. The report must read stage="launch" (the real terminal cause), not
+    # a misleading stage="hijack" that points the evidence bundle at the wrong subsystem.
     launch_outcomes = [(True, "live"), (False, "sim never reached LIVE")]
 
     def _launch(config):  # noqa: ANN001
@@ -962,7 +964,9 @@ def test_run_auto_drive_mismatch_then_launch_failure_reports_stage_launch():
         run_auto_drive(
             _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=2),
             launch=_launch,
-            hijack=lambda c: FakeController(),  # only attempt 1 reaches hijack
+            hijack=lambda c: pytest.fail(
+                "must not hijack — attempt 1 mismatched, attempt 2 no LIVE"
+            ),
             drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
             tap=_tap_returning(CONTINUOUS),
             verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),  # attempt-1 mismatch
