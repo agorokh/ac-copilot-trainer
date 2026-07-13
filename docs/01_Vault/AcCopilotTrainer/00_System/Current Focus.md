@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-12T02:10:00Z
+last_updated: 2026-07-13T01:20:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
@@ -26,7 +26,20 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-07-12, latest):** Coaching QUALITY —
+**Active focus (2026-07-13, latest):** Coaching QUALITY —
+[#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) V2 remains the only open scope.
+PR [#538](https://github.com/agorokh/ac-copilot-trainer/pull/538) **MERGED**
+([`20f68cb`](https://github.com/agorokh/ac-copilot-trainer/commit/20f68cb)) closed
+[#527](https://github.com/agorokh/ac-copilot-trainer/issues/527): the `semantic_timeliness`
+coverage gate now counts only **coachable** brake zones (onsets within 50 m of a reference mark;
+off-zone correction dabs excluded, repeat dabs collapsed), an occurrence is coached iff it drew an
+ACTIONABLE cue, with deterministic `corner+1` dispatch binding + time-local onset binding
+(rejects stale cross-lap). Verified on the real #525 rig taps: metric stabilised from noisy
+78/75/89% (raw) to clean 4/4, 3/4, 4/4 (coachable zones). The residual main-tap3 3/4 is a genuine
+dropped-heads-up pass = **#522-V2** phase-slot scheduler scope. Detail:
+[[issue-527-coachable-brake-coverage-2026-07-12]].
+
+**Prior focus (2026-07-12, latest):** Coaching QUALITY —
 [#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) V2 (the only remaining
 scope). PR [#525](https://github.com/agorokh/ac-copilot-trainer/pull/525) **MERGED**
 ([`56048ae`](https://github.com/agorokh/ac-copilot-trainer/commit/56048ae)) closed parts 1-2:
