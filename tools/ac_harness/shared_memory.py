@@ -99,7 +99,12 @@ SHM_STATIC = "acpmf_static"
 # How many bytes of each section to map. The real sections are multiple KB; mapping a small
 # safe prefix avoids over-mapping while covering every field we read.
 GRAPHICS_MAP_BYTES = 256
-PHYSICS_MAP_BYTES = 64
+# One consistent physics-page map size that covers EVERY field any reader unpacks from
+# ``acpmf_physics``. ``shared_memory.parse_physics`` here only needs ``packet_id@0`` (4 bytes), but
+# ``racing_telemetry.parse_physics`` unpacks through ``wheelAngularSpeed[4]@104`` (120 bytes); a
+# single page mapped 160 wide keeps the two same-named parsers from disagreeing on buffer size
+# (cross-file trap flagged in review) at negligible cost — it is one mmap view of the same page.
+PHYSICS_MAP_BYTES = 160
 # acpmf_static: wide-char (UTF-16LE) strings; ``carModel`` is a 33-char field at byte offset 68 and
 # ``track`` a 33-char field at byte offset 134 (live-verified against a running session:
 # smVersion@0, carModel@68, track@134). Mapping 260 bytes covers both with headroom.
