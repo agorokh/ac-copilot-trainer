@@ -829,6 +829,10 @@ def test_handshake_emits_provisional_ggv_until_thermal_archive_arrives():
     assert model.ax_brake_cap_g == prior.ax_brake_cap_g
     # Provenance labels each curve measured-vs-prior.
     assert set(model.provenance["blend_source"]) == {"lateral", "brake", "drive", "ellipse_n"}
+    assert ggv["provisional_probe_rows"]
+    assert all(
+        row["source"] in {"brake_probe", "accel_sweep"} for row in ggv["provisional_probe_rows"]
+    )
     # The ggv block is ADVISORY — it never gates the core-constant ok.
     assert sink["result"]["ggv"]["ok"] is False
 
@@ -883,6 +887,21 @@ def test_refine_ggv_rejects_stale_other_combo_archive():
     assert block["lap_archives_seen"] == 1
     assert block["lap_archives_loaded"] == 0
     assert any("identity mismatch" in error for error in block["load_errors"])
+
+
+def test_refine_ggv_accepts_current_run_archive_when_writer_omits_layout():
+    result = _result_dict()
+    result["layout"] = "gp"
+    archive = {
+        "car": {"id": "test_car"},
+        "track": {"id": "test_oval"},
+        "lap_uuid": "fresh-layout-run",
+    }
+    block = refine_ggv_from_lap_archives(result, [archive], generic_gt3_ggv())
+    assert block["ok"] is False  # no thermal trace, but identity was accepted
+    assert block["lap_archives_loaded"] == 1
+    assert block["load_errors"] == []
+    assert any("omitted layout" in note for note in block["identity_notes"])
 
 
 def test_artifact_v1_still_loads_without_ggv(tmp_path):

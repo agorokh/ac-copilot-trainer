@@ -353,6 +353,7 @@ def ggv_from_telemetry(
     min_corner_lat_g: float = 0.9,
     min_samples: int = 40,
     min_probe_samples: int = 8,
+    allow_passive_longitudinal: bool = True,
 ) -> GGVModel:
     """Fit a :class:`GGVModel` from telemetry rows (dicts w/ speed_kmh, accg_lat, accg_lon).
 
@@ -381,11 +382,11 @@ def ggv_from_telemetry(
         source = r.get("source")
         if ao < 0 and source == "brake_probe":
             brk_probe_b.setdefault(b, []).append(abs(ao))
-        elif ao < 0:
+        elif ao < 0 and allow_passive_longitudinal:
             brk_passive_b.setdefault(b, []).append(abs(ao))
         elif ao >= 0 and source == "accel_sweep":
             acc_probe_b.setdefault(b, []).append(abs(ao))
-        else:
+        elif allow_passive_longitudinal:
             acc_passive_b.setdefault(b, []).append(abs(ao))
         if al > 0.2 or abs(ao) > 0.2:
             hull.append((al, abs(ao)))
@@ -569,8 +570,6 @@ def with_binned_uncertainty(
             low,
             {
                 "lateral": [],
-                "brake": [],
-                "drive": [],
                 "brake_probe": [],
                 "drive_probe": [],
             },
@@ -578,11 +577,9 @@ def with_binned_uncertainty(
         bucket["lateral"].append(lateral)
         source = row.get("source")
         if longitudinal < 0.0:
-            bucket["brake"].append(abs(longitudinal))
             if source == "brake_probe":
                 bucket["brake_probe"].append(abs(longitudinal))
         else:
-            bucket["drive"].append(longitudinal)
             if source == "accel_sweep":
                 bucket["drive_probe"].append(longitudinal)
 
@@ -628,16 +625,18 @@ def with_binned_uncertainty(
         mid_ms = (lo + hi) * 0.5 / 3.6
         bucket = raw.get(int(lo), {})
         lateral = list(bucket.get("lateral", []))
-        brake_all = list(bucket.get("brake", []))
         brake_probe = list(bucket.get("brake_probe", []))
-        drive_all = list(bucket.get("drive", []))
         drive_probe = list(bucket.get("drive_probe", []))
 
         lateral_observed = len(lateral) >= min_samples and _pct(lateral, 0.95) >= 0.9
-        brake_values = brake_probe if len(brake_probe) >= min_probe_samples else brake_all
-        brake_observed = len(brake_probe) >= min_probe_samples or len(brake_all) >= min_samples
-        drive_values = drive_probe if len(drive_probe) >= min_probe_samples else drive_all
-        drive_observed = len(drive_probe) >= min_probe_samples or len(drive_all) >= min_samples
+        # Longitudinal caps require an explicit limit-reaching probe. Ordinary driving can provide
+        # thousands of near-zero coast/maintenance-throttle samples without saying anything about
+        # the available brake or drive envelope; treating their count as evidence can immobilize
+        # the runtime plant. Lateral remains passively observable in actual cornering.
+        brake_values = brake_probe
+        brake_observed = len(brake_probe) >= min_probe_samples
+        drive_values = drive_probe
+        drive_observed = len(drive_probe) >= min_probe_samples
         bins.append(
             {
                 "speed_min_kmh": float(lo),
@@ -852,6 +851,7 @@ def ggv_from_lap_archives(
     *,
     prior_name: str = "injected_prior",
     min_friction_rows: int = 200,
+    probe_rows: list[dict] | None = None,
 ) -> tuple[GGVModel, dict]:
     """Fit an uncertainty-aware GGV using only a thermally consistent lap cohort (#543)."""
     states = [observe_lap_tyre_state(archive) for archive in archives]
@@ -927,11 +927,33 @@ def ggv_from_lap_archives(
         raise ValueError(
             f"insufficient thermally consistent friction rows: {len(rows)} < {min_friction_rows}"
         )
-    measured = ggv_from_telemetry(rows)
+    # The immutable archive proves the thermal state and supplies passive cornering. Only the
+    # handshake's explicitly tagged straight-line probes from a SELECTED thermal lap may identify
+    # longitudinal limits. Controller lap_index is zero-based; the archive's completed lap_n is
+    # one-based at the crossing.
+    selected_lap_numbers = {
+        int(archive["lap"]["lap_n"])
+        for archive, _ in selected
+        if isinstance(archive.get("lap"), dict)
+        and isinstance(archive["lap"].get("lap_n"), int)
+        and not isinstance(archive["lap"].get("lap_n"), bool)
+    }
+    thermal_probe_rows = [
+        dict(row)
+        for row in (probe_rows or [])
+        if isinstance(row, dict)
+        and isinstance(row.get("lap_index"), int)
+        and not isinstance(row.get("lap_index"), bool)
+        and int(row["lap_index"]) + 1 in selected_lap_numbers
+    ]
+    combined_rows = rows + thermal_probe_rows
+    measured = ggv_from_telemetry(combined_rows, allow_passive_longitudinal=False)
     point_model = blend_ggv_safe(measured, prior, prior_name=prior_name)
-    model = with_binned_uncertainty(point_model, rows, prior)
+    model = with_binned_uncertainty(point_model, combined_rows, prior)
     summary = {
         "friction_rows": len(rows),
+        "probe_rows_seen": len(probe_rows or []),
+        "probe_rows": len(thermal_probe_rows),
         "tyre_states": states,
         "selected_lap_uuids": [state.get("lap_uuid") for _, state in selected],
         "thermal_cohort": {
@@ -1279,6 +1301,11 @@ def _validate_uncertainty_bins(bins: tuple[Mapping, ...]) -> None:
                 or source not in {"measured", "prior"}
             ):
                 raise ValueError(f"uncertainty_bins[{index}].{kind} is invalid")
+    if bins and (
+        not math.isclose(float(bins[0]["speed_min_kmh"]), 0.0)
+        or not math.isclose(float(bins[-1]["speed_max_kmh"]), DEFAULT_UNCERTAINTY_MAX_KMH)
+    ):
+        raise ValueError("uncertainty_bins must cover the complete 0-300 km/h runtime range")
 
 
 def _validate_supported_longitudinal(

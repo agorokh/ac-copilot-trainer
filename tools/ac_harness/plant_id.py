@@ -1005,6 +1005,9 @@ class HandshakeController:
                     "accg_lat": float(ay),
                     "accg_lon": float(ao),
                     "source": source,
+                    # The archive writes state.lapsCompleted at the crossing, so samples gathered
+                    # during this zero-based controller lap map to archive lap_n = lap_index + 1.
+                    "lap_index": self._laps,
                 }
             )
 
@@ -1371,6 +1374,12 @@ class HandshakeController:
         # The live rows have no tyre-state channels. Keep the point fit for diagnostics only;
         # refine_ggv_from_lap_archives replaces it after the immutable #488 archive is observed.
         block["provisional_model"] = blended.to_dict()
+        # Ephemeral handoff only: refinement consumes these explicitly tagged live probe rows and
+        # replaces the whole block before evidence/persistence. The lap archive proves the thermal
+        # state; these tags prove which longitudinal samples were actually limit-reaching probes.
+        block["provisional_probe_rows"] = [
+            dict(row) for row in self._friction_rows if row.get("source") != "passive"
+        ]
         block["reason"] = "awaiting thermally tagged lap archive"
         return block
 
@@ -1421,6 +1430,7 @@ def refine_ggv_from_lap_archives(
     expected_track = str(result.get("track_id") or "")
     expected_layout = result.get("layout") or None
     matching: list[dict] = []
+    identity_notes: list[str] = []
     for payload in loaded:
         car = payload.get("car") if isinstance(payload.get("car"), dict) else {}
         track = payload.get("track") if isinstance(payload.get("track"), dict) else {}
@@ -1430,7 +1440,7 @@ def refine_ggv_from_lap_archives(
         if (
             actual_car != expected_car
             or actual_track != expected_track
-            or actual_layout != expected_layout
+            or (actual_layout is not None and actual_layout != expected_layout)
         ):
             load_errors.append(
                 "archive identity mismatch: "
@@ -1438,7 +1448,19 @@ def refine_ggv_from_lap_archives(
                 f"got {actual_car}/{actual_track}/{actual_layout or '-'}"
             )
             continue
+        if expected_layout is not None and actual_layout is None:
+            # The current in-game archive schema does not serialize layout. These paths are
+            # restricted to archives written after this run started, while car+track still match;
+            # preserve the missing-layout fact rather than rejecting every multi-layout handshake.
+            identity_notes.append(
+                f"archive {payload.get('lap_uuid') or '?'} omitted layout; "
+                f"accepted current-run {expected_layout!r} context"
+            )
         matching.append(payload)
+    previous_ggv = result.get("ggv") if isinstance(result.get("ggv"), dict) else {}
+    probe_rows = previous_ggv.get("provisional_probe_rows", [])
+    if not isinstance(probe_rows, list):
+        probe_rows = []
     block: dict = {
         "ok": False,
         "model": None,
@@ -1446,9 +1468,12 @@ def refine_ggv_from_lap_archives(
         "lap_archives_seen": len(archives),
         "lap_archives_loaded": len(matching),
         "load_errors": load_errors,
+        "identity_notes": identity_notes,
     }
     try:
-        model, summary = ggv_from_lap_archives(matching, prior, prior_name=prior_name)
+        model, summary = ggv_from_lap_archives(
+            matching, prior, prior_name=prior_name, probe_rows=probe_rows
+        )
     except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
         logger.exception("thermal uncertainty fit failed; ggv block degrades to the generic plant")
         block["reason"] = f"thermal uncertainty fit error: {type(exc).__name__}: {exc}"

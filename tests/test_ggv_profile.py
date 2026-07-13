@@ -468,6 +468,7 @@ def _uncertainty_rows() -> list[dict]:
                     "accg_lat": 1.2,
                     "accg_lon": -1.25,
                     "source": "brake_probe",
+                    "lap_index": 1,
                 }
             )
             rows.append(
@@ -476,6 +477,7 @@ def _uncertainty_rows() -> list[dict]:
                     "accg_lat": 1.2,
                     "accg_lon": 0.75,
                     "source": "accel_sweep",
+                    "lap_index": 1,
                 }
             )
     return rows
@@ -518,6 +520,10 @@ def test_uncertainty_map_roundtrip_is_validated_and_read_only():
     )
     with pytest.raises(ValueError, match="uncertainty_bins"):
         GGVModel.from_dict(corrupt)
+    truncated = model.to_dict()
+    truncated["uncertainty_bins"] = truncated["uncertainty_bins"][5:6]
+    with pytest.raises(ValueError, match="complete 0-300"):
+        GGVModel.from_dict(truncated)
     with pytest.raises(ValueError, match="uncertainty_bins"):
         GGVModel.from_dict({**prior.to_dict(), "uncertainty_bins": None})
 
@@ -594,6 +600,28 @@ def test_lap_archive_fit_excludes_thermally_inconsistent_laps():
     assert states["cold"]["fit_eligible"] is False
     # The excluded 1.7 g cold lap cannot lift the posterior mean.
     assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.3
+
+
+def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
+    prior = _prior()
+    warm = _thermal_archive("warm", core_c=90.0)
+    passive, passive_summary = ggv_from_lap_archives([warm], prior)
+    assert passive_summary["probe_rows"] == 0
+    assert passive_summary["probe_rows_seen"] == 0
+    assert passive.uncertainty_bins[6]["brake"]["source"] == "prior"
+    assert passive.uncertainty_bins[6]["drive"]["source"] == "prior"
+
+    wrong_lap_rows = [{**row, "lap_index": 0} for row in _uncertainty_rows()]
+    wrong_lap, wrong_lap_summary = ggv_from_lap_archives([warm], prior, probe_rows=wrong_lap_rows)
+    assert wrong_lap_summary["probe_rows_seen"] > 0
+    assert wrong_lap_summary["probe_rows"] == 0
+    assert wrong_lap.uncertainty_bins[6]["drive"]["source"] == "prior"
+
+    probed, probed_summary = ggv_from_lap_archives([warm], prior, probe_rows=_uncertainty_rows())
+    assert probed_summary["probe_rows"] > 0
+    assert probed_summary["probe_rows_seen"] == probed_summary["probe_rows"]
+    assert probed.uncertainty_bins[6]["brake"]["source"] == "measured"
+    assert probed.uncertainty_bins[6]["drive"]["source"] == "measured"
 
 
 def test_lap_archive_fit_never_mixes_compound_or_setup_cohorts():
