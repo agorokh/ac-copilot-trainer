@@ -160,6 +160,12 @@ def test_read_user_ff_value_strips_hash_comment():
     )
 
 
+@pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+def test_read_user_ff_value_rejects_non_finite(bad):
+    # A corrupt VALUE=nan/inf is unusable; treated as absent so the caller falls back to 1.0.
+    assert read_user_ff_value(f"[x]\nVALUE={bad}\n", "x") is None
+
+
 def test_auto_drive_passthrough_forwards_only_set_overrides():
     ns = argparse.Namespace(
         track_layout="tourist",

@@ -171,9 +171,12 @@ def read_user_ff_value(text: str, car_id: str) -> float | None:
             # Strip an inline ``;`` or ``#`` comment before parsing (``VALUE=1.0 ; note``).
             raw = line.split("=", 1)[1].split(";", 1)[0].split("#", 1)[0].strip()
             try:
-                return float(raw)
+                parsed = float(raw)
             except ValueError:
                 return None
+            # A corrupt/hand-edited ``VALUE=nan``/``inf`` is unusable — treat it as absent so the
+            # caller falls back to gain 1.0 instead of propagating a non-finite gain / report.
+            return parsed if math.isfinite(parsed) else None
     return None
 
 
