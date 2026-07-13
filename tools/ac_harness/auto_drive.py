@@ -667,8 +667,11 @@ async def run_auto_drive(
     finally:
         # A handshake drive (#532) self-terminates (`driver.finished` breaks the rig loop) and
         # must OUTLIVE the tap: stopping at the tap boundary would kill the probe schedule
-        # mid-maneuver. Its honest cap is drive_seconds. A tap/eval failure still stops it.
-        if config.driver != "handshake" or error is not None:
+        # mid-maneuver. Its honest cap is drive_seconds. But a tap/eval EXCEPTION *or* a pipeline
+        # check that already FAILED (`seq_ok is False` — e.g. missing continuous topics) still
+        # stops it, so the run doesn't burn the whole budget on a pipeline that already failed
+        # (Codex review).
+        if config.driver != "handshake" or error is not None or seq_ok is False:
             stop.set()
         # Always await the drive AND release the controller — even if the drive thread raised, the
         # control mmap (the carcsw hijack) must be released, or it leaks and keeps holding the car.
@@ -1896,33 +1899,6 @@ def rig_drive(  # pragma: no cover - rig-only
     driver = _build_driver(config, line, speed_profile)
     stats = DriveStats()
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
-
-    # #532: the handshake needs per-wheel angular speed (r_eff probe) from acpmf_physics. The
-    # HARNESS owns that mmap (opened here, closed in finally) and injects a reader — the controller
-    # never touches OS memory itself (daemon review: controller-layering + no leaked map).
-    hs_phys = None
-    if hasattr(driver, "set_phys_read"):
-        from tools.ac_harness.racing_telemetry import parse_physics
-        from tools.ac_harness.shared_memory import (
-            PHYSICS_MAP_BYTES,
-            SHM_PHYSICS,
-            SharedMemoryUnavailable,
-            open_shared_memory,
-        )
-
-        try:
-            hs_phys = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
-        except SharedMemoryUnavailable:
-            hs_phys = None
-        if hs_phys is not None:
-
-            def _read_hs_phys():
-                try:
-                    return parse_physics(hs_phys.read(PHYSICS_MAP_BYTES))
-                except (ValueError, SharedMemoryUnavailable):
-                    return None
-
-            driver.set_phys_read(_read_hs_phys)
     line_teleport_works: bool | None = None
     # Whether the car is currently OFF the racing line — set at an off-line spawn (pit box / offset
     # grid slot) AND whenever a recovery teleports it back to the pits (itself off-line). Recovery
@@ -1995,6 +1971,25 @@ def rig_drive(  # pragma: no cover - rig-only
         phys_reader = SharedMemoryReader()
     except SharedMemoryUnavailable:
         phys_reader = None
+
+    # #532: the handshake needs per-wheel angular speed (r_eff probe) from acpmf_physics. Reuse the
+    # SAME harness-owned physics map (phys_reader) rather than opening a second identical view — the
+    # controller never touches OS memory itself, and there is no redundant map (daemon review).
+    if hasattr(driver, "set_phys_read"):
+        from tools.ac_harness.racing_telemetry import parse_physics as _parse_phys
+        from tools.ac_harness.shared_memory import PHYSICS_MAP_BYTES
+
+        def _read_hs_phys():
+            reader = phys_reader  # late-bound: follows _main_packet_id's reopen/close
+            if reader is None:
+                return None
+            try:
+                buf = reader.read_physics_bytes(PHYSICS_MAP_BYTES)
+                return _parse_phys(buf) if buf is not None else None
+            except (ValueError, SharedMemoryUnavailable):
+                return None
+
+        driver.set_phys_read(_read_hs_phys)
 
     def _main_packet_id() -> int | None:
         nonlocal phys_reader
@@ -2092,8 +2087,6 @@ def rig_drive(  # pragma: no cover - rig-only
             stats.payload = dict(driver_sink)
         if phys_reader is not None:
             phys_reader.close()
-        if hs_phys is not None:  # release the harness-owned handshake physics map (#532)
-            hs_phys.close()
         for _ in range(20):
             try:
                 controller.write_controls(0.0, 0.6, 0.0)
@@ -2409,6 +2402,18 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         return 2
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
 
+    # Resolve the setup .ini ONCE here (best-effort) so BOTH the ggv plant-load key and the
+    # handshake artifact save share the same content-hashed identity — no asymmetric resolution
+    # between drivers (daemon review). The authoritative confirm + print stays below; this only
+    # populates config.setup_ini early enough for the plant-load key.
+    if config.setup and config.setup_ini is None:
+        try:
+            config.setup_ini = resolve_setup_ini(
+                user_dir, config.car_id, config.track_id, config.setup, layout=config.track_layout
+            )
+        except (FileNotFoundError, ValueError):
+            config.setup_ini = None  # unresolved -> basename-only key (best effort)
+
     # #532: resolve the combo's identified plant for the ggv path. `auto` silently falls back to
     # the generic plant when no artifact exists; `full` REQUIRES one (measured steering must never
     # silently degrade to hand constants — that is the failure mode the handshake exists to end).
@@ -2421,22 +2426,10 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         )
 
         # Key by setup + its CONTENT (#532 Codex review): a plant measured on one setup must not be
-        # reused for a different setup, and two files sharing a basename must not collide. Resolve
-        # the setup .ini here (before the later run-time resolution) so the load key matches the
-        # content-hashed key the handshake stored.
+        # reused for a different setup, and two files sharing a basename must not collide. Uses the
+        # single shared config.setup_ini resolved above (same identity the handshake save uses).
         setup_key = Path(config.setup).stem if config.setup else None
-        setup_ini_key = None
-        if config.setup:
-            try:
-                setup_ini_key = resolve_setup_ini(
-                    user_dir,
-                    config.car_id,
-                    config.track_id,
-                    config.setup,
-                    layout=config.track_layout,
-                )
-            except (FileNotFoundError, ValueError):
-                setup_ini_key = None  # unresolved -> basename-only key (best effort)
+        setup_ini_key = config.setup_ini
         artifact = load_plant_artifact(
             user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
         )
@@ -2489,13 +2482,14 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         return 0
 
     if config.setup:
-        config.setup_ini = resolve_setup_ini(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            config.setup,
-            layout=config.track_layout,
-        )
+        if config.setup_ini is None:  # not resolved by the early best-effort pass above
+            config.setup_ini = resolve_setup_ini(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                config.setup,
+                layout=config.track_layout,
+            )
         print(f"auto-drive: setup resolved -> {config.setup_ini}")
 
     sidecar_ok, sidecar_detail, sidecar_proc = ensure_sidecar(
@@ -2578,8 +2572,12 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # config side-channel (daemon review).
         sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
         extras["handshake"] = sink
-        reached_handshake = report.stage not in ("launch", "hijack", "setup")
-        if reached_handshake:
+        # Fold the handshake outcome ONLY when the run otherwise SUCCEEDED (no prior error). ANY
+        # earlier failure — launch/hijack/setup, a pipeline/tap crash, or an early drive abort —
+        # is the authoritative root cause and must NOT be masked by "handshake produced no result"
+        # (daemon HIGH + Codex). When error is None, apply_handshake_outcome sets the honest
+        # handshake verdict (incl. an empty-sink "no result" if the probes genuinely produced none).
+        if report.error is None:
             apply_handshake_outcome(report, sink)
         if sink.get("ok"):
             artifact_path = save_plant_artifact(user_dir, sink["result"])

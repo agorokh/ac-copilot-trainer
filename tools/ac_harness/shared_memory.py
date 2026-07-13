@@ -435,6 +435,16 @@ class SharedMemoryReader:  # pragma: no cover - Windows/rig-only; validated via 
             return None
         return parse_physics(self._physics.read(PHYSICS_MIN_BYTES))
 
+    def read_physics_bytes(self, nbytes: int) -> bytes | None:
+        """Raw ``acpmf_physics`` prefix (up to ``nbytes``), or ``None`` when physics is unmapped.
+
+        Lets another consumer (e.g. the #532 handshake's ``wheelAngularSpeed`` reader) decode
+        further fields off this SAME mapped page instead of opening a second identical view of
+        ``acpmf_physics`` (daemon review: no redundant OS map)."""
+        if self._physics is None:
+            return None
+        return self._physics.read(nbytes)
+
     def close(self) -> None:
         for section in (self._graphics, self._physics):
             if section is not None:

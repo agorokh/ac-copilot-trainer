@@ -271,6 +271,17 @@ def test_apply_handshake_outcome_success_only_when_reached():
     assert report.ok is False and report.stage == "handshake"
 
 
+def test_aborted_sweep_attempt_samples_discarded():
+    # #532 Codex: a mid-WOT abort (recovery/jump/stuck) must also discard the current attempt's
+    # samples, or a later retry fits shift points from non-contiguous pulls.
+    line = _stadium_line()
+    ctrl = HandshakeController(line, _profile_for(line), sink={})
+    ctrl._sweep_samples = [{"gear": 2, "rpm": 5000, "speed_kmh": 100, "accel_mps2": 6.0}]
+    ctrl._active = {"kind": "accel_sweep", "data": {"samples_start": 0}}
+    ctrl._abort_active("driver stuck mid-WOT")
+    assert ctrl._sweep_samples == []  # aborted attempt's samples discarded
+
+
 def test_failed_sweep_attempt_samples_discarded():
     # Two disjoint single-gear pulls must NOT combine into a fake multi-gear sweep. Simulate by
     # driving the controller and asserting fit uses only same-attempt gears — here we unit-check

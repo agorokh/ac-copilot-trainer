@@ -732,21 +732,25 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert ctrl.closed is True  # controller released before bailing
 
 
-def test_handshake_outcome_gate_preserves_pre_drive_failure():
-    # #532 Codex/Qodo: a pre-drive failure (stage=launch/hijack/setup) must stay authoritative;
-    # apply_handshake_outcome must NOT overwrite it with "handshake produced no result" when the
-    # sink is empty. This mirrors the _main gate (reached_handshake = stage not in pre-drive set).
+def test_handshake_outcome_gate_preserves_any_prior_failure():
+    # #532 daemon HIGH + Codex/Qodo: ANY prior failure — launch/hijack/setup AND pipeline/drive —
+    # must stay authoritative. The _main gate is `if report.error is None`, so a report carrying an
+    # error is never overwritten with "handshake produced no result".
     from types import SimpleNamespace
 
     from tools.ac_harness.plant_id import apply_handshake_outcome
 
-    for pre in ("launch", "hijack", "setup"):
-        report = SimpleNamespace(ok=False, stage=pre, error=f"{pre} failed", notes=[])
-        reached_handshake = report.stage not in ("launch", "hijack", "setup")
-        if reached_handshake:
+    for stage in ("launch", "hijack", "setup", "pipeline", "drive"):
+        report = SimpleNamespace(ok=False, stage=stage, error=f"{stage} failed", notes=[])
+        if report.error is None:  # the _main gate
             apply_handshake_outcome(report, {})
-        assert report.stage == pre  # unchanged — root cause preserved
-        assert report.error == f"{pre} failed"
+        assert report.stage == stage  # unchanged — root cause preserved
+        assert report.error == f"{stage} failed"
+    # A clean run (error None) with an empty sink DOES get the honest "no result" verdict.
+    ok_report = SimpleNamespace(ok=True, stage="done", error=None, notes=[])
+    if ok_report.error is None:
+        apply_handshake_outcome(ok_report, {})
+    assert ok_report.stage == "handshake" and ok_report.ok is False
 
 
 def test_run_auto_drive_fails_fast_on_car_mismatch():
@@ -798,12 +802,31 @@ def test_run_auto_drive_handshake_drive_outlives_the_tap():
         seen["stop_was_set"] = stop.is_set()
         return DriveStats(drove=True, laps=0, max_speed_kmh=90.0, total_distance_m=500.0)
 
-    async def tap(url, **kw):
-        return [
-            {"topic": "connection"},
-            {"topic": "tire_temps"},
-            {"topic": "coaching.snapshot"},
-        ]
+    # A PASSING pipeline (CONTINUOUS -> seq_ok True) must NOT stop the handshake drive early.
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(driver="handshake", skip_launch=True),
+            launch=lambda c: (True, "ok"),
+            hijack=lambda c: FakeController(),
+            drive=drive,
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert seen["stop_was_set"] is False
+    assert report.drive is not None and report.drive.drove is True
+
+
+def test_run_auto_drive_handshake_stops_on_pipeline_failure():
+    # #532 Codex: a FAILED pipeline (seq_ok False — e.g. missing continuous topics) must stop the
+    # handshake drive instead of burning the whole drive_seconds budget.
+    seen: dict = {}
+
+    def drive(controller, config, stop):
+        import time
+
+        time.sleep(0.15)
+        seen["stop_was_set"] = stop.is_set()
+        return DriveStats(drove=True)
 
     report = asyncio.run(
         run_auto_drive(
@@ -811,11 +834,11 @@ def test_run_auto_drive_handshake_drive_outlives_the_tap():
             launch=lambda c: (True, "ok"),
             hijack=lambda c: FakeController(),
             drive=drive,
-            tap=tap,
+            tap=_tap_returning([_snap("connection")]),  # missing tire_temps/coaching -> seq fails
         )
     )
-    assert seen["stop_was_set"] is False
-    assert report.drive is not None and report.drive.drove is True
+    assert report.sequence_ok is False
+    assert seen["stop_was_set"] is True
 
 
 def test_racing_driver_step_upshifts_at_high_rpm():

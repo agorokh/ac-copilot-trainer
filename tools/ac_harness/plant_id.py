@@ -797,6 +797,13 @@ class HandshakeController:
         if self._active is None:
             return
         kind = self._active["kind"]
+        # A mid-WOT abort (recovery / position jump / driver-stuck) is a SECOND sweep-failure path
+        # besides _end_sweep: discard this attempt's partial samples too, or a later retry could
+        # fit shift points from non-contiguous pulls (Codex review).
+        if kind == "accel_sweep":
+            start = self._active.get("data", {}).get("samples_start")
+            if start is not None:
+                del self._sweep_samples[start:]
         self._active = None
         if kind == "steer_pulse" and len(self._pulse_records) >= self.pulse_count:
             return  # already have enough pulses; nothing to re-queue
