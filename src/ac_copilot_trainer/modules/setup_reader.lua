@@ -246,8 +246,24 @@ end
 ---@param sim ac.StateSim|nil
 ---@return string|nil
 function M.activeSetupIniPath(car, sim)
+  -- Deliberately SINGLE-valued: correlation callers (and their Lua tail-returns) treat the
+  -- path as the whole result. Broadcast callers that also need the confirmed-no-setup flag
+  -- use `activeSetupState` below.
   local path = guessSetupIniPath(car, sim)
   return path
+end
+
+--- Path + confirmed-no-setup flag for callers that BROADCAST the active setup (#531 /
+--- PR #547): a cleared `setup.active` may be published only on a CONFIRMED race.ini
+--- no-setup — a transient miss (race.ini locked / unresolvable) must publish nothing,
+--- or a valid name would be wrongly wiped.
+---@param car ac.StateCar|nil
+---@param sim ac.StateSim|nil
+---@return string|nil path
+---@return boolean noSetupConfirmed
+function M.activeSetupState(car, sim)
+  local path, noSetupConfirmed = guessSetupIniPath(car, sim)
+  return path, noSetupConfirmed == true
 end
 
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.

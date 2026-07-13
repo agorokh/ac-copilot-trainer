@@ -203,6 +203,33 @@ def test_missing_ext_setup_reports_no_setup(tmp_path):
     assert out == "nil||true", out
 
 
+def test_active_setup_ini_path_surfaces_confirmed_no_setup(tmp_path):
+    """#531 / PR #547: `activeSetupIniPath` second return is True only for a CONFIRMED
+    race.ini no-setup — the connect-edge `setup.active` broadcaster publishes a CLEARED
+    state on that flag, never on a transient miss."""
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    (ac_root / "cfg" / "race.ini").write_text("[CAR_0]\nSETUP=\n", encoding="utf-8")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    out = rt.execute(
+        'local sr = require("setup_reader"); '
+        "local p, no_setup = sr.activeSetupState({}, nil); "
+        'return tostring(p) .. "|" .. tostring(no_setup)'
+    )
+    assert out == "nil|true", out
+
+
+def test_active_setup_ini_path_resolved_setup_is_not_no_setup(tmp_path):
+    setup_ini = _write_setup_combo(tmp_path, "{setup_ini}")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    out = rt.execute(
+        'local sr = require("setup_reader"); '
+        "local p, no_setup = sr.activeSetupState({}, nil); "
+        'return tostring(p) .. "|" .. tostring(no_setup)'
+    )
+    assert out == f"{setup_ini}|false", out
+
+
 def test_confirmed_no_race_ini_setup_blocks_legacy_folder_guess(tmp_path):
     """A confirmed race.ini no-setup should not hallucinate ``setups/unknown/unknown/race.ini``."""
     ac_root = tmp_path / "Assetto Corsa"

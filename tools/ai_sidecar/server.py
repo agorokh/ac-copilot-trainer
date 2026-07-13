@@ -157,6 +157,9 @@ _setup_exchange_endpoint: str | None = None
 _setup_exchange_user_setups_root: Path | None = None
 _external_peer_classes: dict[Any, str] = {}
 _sidecar_state_cache: dict[str, dict[str, Any]] = {}
+# #531 Part B: which peer produced each cached IDENTITY_REPLAY_TOPICS snapshot — the cache
+# entry is dropped when that peer disconnects (its identity dies with it).
+_identity_cache_producers: dict[str, Any] = {}
 # M0 (#341): the live RealtimeObserver built from a FASTER reference lap. Set once at startup
 # (--reference-archive / AC_COPILOT_REFERENCE_ARCHIVE); fed each telemetry_tick frame; emits
 # advisories on the coaching.cue topic for the voice client. None = no live coaching this run.
@@ -443,6 +446,7 @@ def _reset_external_state() -> None:
     _external_peers.clear()
     _external_peer_classes.clear()
     _sidecar_state_cache.clear()
+    _identity_cache_producers.clear()
     _peripheral_rate_limiter.reset()
     _voice_dispatch_log.clear()
     _voice_echo_log.clear()
@@ -2136,8 +2140,12 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # `state.snapshot`, which are also forwarded back through this same path.
     topic = data.get("topic")
     if t == TYPE_STATE_SNAPSHOT and isinstance(topic, str) and topic in IDENTITY_REPLAY_TOPICS:
-        # #531 Part B: remember the latest identity snapshot for late-subscriber replay.
+        # #531 Part B: remember the latest identity snapshot for late-subscriber replay,
+        # tied to the producing peer — its disconnect invalidates the cached identity
+        # (Codex on PR #547: a tablet opening after the trainer exits must not inherit
+        # the dead session's car/setup).
         _sidecar_state_cache[topic] = data
+        _identity_cache_producers[topic] = websocket
     logger.info(
         "relay peer=%s type=%s%s peers=%d",
         peer,
@@ -2359,6 +2367,13 @@ async def _handler(websocket: Any, reply_coaching: bool) -> None:
     finally:
         _external_peers.discard(websocket)
         _external_peer_classes.pop(websocket, None)
+        # Identity snapshots cached for late-subscriber replay die with their producer:
+        # replaying a disconnected trainer's setup/session to a fresh tablet would render
+        # a dead session as current (Codex on PR #547).
+        for cached_topic, producer in list(_identity_cache_producers.items()):
+            if producer is websocket:
+                _identity_cache_producers.pop(cached_topic, None)
+                _sidecar_state_cache.pop(cached_topic, None)
         _release_observer_feed(websocket)
         for t in list(pending_followups):
             if not t.done():

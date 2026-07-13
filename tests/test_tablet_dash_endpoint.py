@@ -304,6 +304,42 @@ def test_ws_identity_snapshot_replayed_to_late_subscriber() -> None:
     assert frame["payload"]["name"] == "enduro-long-run"
 
 
+def test_ws_identity_cache_dies_with_its_producer() -> None:
+    """Codex on PR #547: a cached identity snapshot must not survive its producing peer —
+    a tablet opening after the trainer exits must not inherit the dead session's setup."""
+
+    async def _t() -> bool:
+        async with _running_sidecar() as port:
+            url = f"ws://127.0.0.1:{port}"
+            async with ws_connect(url) as lua:
+                await _hello(lua, "trainer-lua", "lua")
+                await lua.send(
+                    json.dumps(
+                        {
+                            "v": 1,
+                            "type": "state.snapshot",
+                            "topic": "setup.active",
+                            "payload": {"name": "dead-session-setup", "path": "x.ini"},
+                        }
+                    )
+                )
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)  # teardown completes, cache entry dropped
+            async with ws_connect(url) as dash:
+                await _hello(dash, "tablet-dash", "browser")
+                await dash.send(
+                    json.dumps({"v": 1, "type": "state.subscribe", "topics": ["setup.active"]})
+                )
+                try:
+                    frame = json.loads(await asyncio.wait_for(dash.recv(), timeout=0.8))
+                except TimeoutError:
+                    return False  # nothing replayed — the cache died with the producer
+                # An error frame ("no loopback Lua peer") is fine; a setup.active replay is not.
+                return frame.get("topic") == "setup.active"
+
+    assert asyncio.run(_t()) is False
+
+
 def test_identity_replay_topics_exclude_continuous_streams() -> None:
     assert "setup.active" in ep.IDENTITY_REPLAY_TOPICS
     assert "session" in ep.IDENTITY_REPLAY_TOPICS

@@ -2392,7 +2392,7 @@ function script.update(dt)
       -- when nothing resolves we publish nothing (the header's "NO SETUP LOADED" is honest).
       if wsBridge.publishTopic then
         pcall(function()
-          local activePath = setupReader.activeSetupIniPath(car, sim)
+          local activePath, noSetupConfirmed = setupReader.activeSetupState(car, sim)
           if type(activePath) == "string" and activePath ~= "" then
             local base = activePath:match("([^/\\]+)$")
             local activeName = base and base:gsub("%.[iI][nN][iI]$", "") or nil
@@ -2400,6 +2400,13 @@ function script.update(dt)
             wsBridge.publishTopic("setup.active", {
               name = activeName,
               path = activePath,
+              changed_at = (os and os.time and os.time()) or 0,
+            })
+          elseif noSetupConfirmed then
+            -- CONFIRMED no setup: publish a CLEARED state so the sidecar's identity
+            -- cache never replays a previous session's setup name (self-hosted reviewer
+            -- MEDIUM on PR #547). A transient race.ini miss publishes nothing.
+            wsBridge.publishTopic("setup.active", {
               changed_at = (os and os.time and os.time()) or 0,
             })
           end

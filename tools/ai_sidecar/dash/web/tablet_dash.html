@@ -305,7 +305,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     wsOpen: false,
     tick: null, tickAt: 0,          // latest telemetry_tick payload + receive time
     delta: null, deltaAt: 0,        // {delta_s, spline}
-    tires: null,                    // {fl,fr,rl,rr} core degC
+    tires: null, tiresAt: 0,        // {fl,fr,rl,rr} core degC + receive time
     lap: null,                      // {lap,last_lap_ms,best_lap_ms,laps_completed,valid}
     coach: null, coachAt: 0,        // coaching.snapshot payload
     setupName: null,                // setup.active .name
@@ -517,10 +517,13 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     return { bg: "rgba(242,59,44,.16)", fg: "var(--brake)" };
   }
   function renderTyres() {
+    // Same freshness contract as delta/coach: a stopped stream must not keep painting the
+    // last temps as if live (Codex on PR #547).
+    var fresh = S.tires !== null && (Date.now() - S.tiresAt) < STALE_MS;
     var corners = ["fl", "fr", "rl", "rr"];
     for (var i = 0; i < corners.length; i++) {
       var c = corners[i];
-      var t = S.tires ? fin(S.tires[c]) : null;
+      var t = fresh ? fin(S.tires[c]) : null;
       var cell = $("ty-" + c);
       var col = tyreColor(t);
       if (cell._bg !== col.bg) { cell.style.background = col.bg; cell._bg = col.bg; }
@@ -777,6 +780,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   // ---- websocket -----------------------------------------------------------------------------
   var reconnectDelay = 1000;
   var setupPollTimer = null;
+  var wsOpenAt = 0; // set per-connection; gates cache-echo vs mid-connection re-emits
   function requestSetupData(ws) {
     if (ws.readyState !== WebSocket.OPEN) return;
     ws.send(JSON.stringify({ v: 1, type: "setup.spinner.list" }));
@@ -786,6 +790,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var ws = new WebSocket(WS_URL);
     ws.onopen = function () {
       S.wsOpen = true;
+      wsOpenAt = Date.now();
       reconnectDelay = 1000;
       ws.send(JSON.stringify({ v: 1, type: "hello", client: "tablet-dash", client_class: "browser" }));
       // Fan-out is class/broadcast based server-side; the subscribe declares intent and is
@@ -817,7 +822,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         var p = frame.payload || {};
         switch (frame.topic) {
           case "delta": S.delta = p; S.deltaAt = Date.now(); break;
-          case "tire_temps": S.tires = p; break;
+          case "tire_temps": S.tires = p; S.tiresAt = Date.now(); break;
           case "lap": onLapFrame(p); break;
           case "coaching.snapshot": S.coach = p; S.coachAt = Date.now(); break;
           case "coaching.cue": S.lastCue = p; break;
@@ -835,11 +840,24 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               var carChanged = S.sessionIdent === null
                 || ident.split("|")[0] !== S.sessionIdent.split("|")[0];
               S.sessionIdent = ident;
+              S.lap = null; // prior identity's Last/Best are wrong now
+              S.fuelAtLap = null;
               if (carChanged) {
+                S.burns = []; // burn is per-car
                 S.spinners = null; // car changed: old ranges are wrong, wait for fresh ones
                 renderElectronics();
               }
               requestSetupData(ws);
+            } else if (Date.now() - wsOpenAt > STALE_MS) {
+              // Same identity re-emitted MID-connection = the trainer's stint-reset /
+              // reconnect re-arm (lifecycle rearmSession) — clear per-stint state so
+              // Last/Best and fuel-to-flag never show the previous stint (Codex on PR
+              // #547). The identity-replay frame that arrives right after OUR OWN
+              // (re)connect is excluded by the wsOpenAt window: it is a cache echo, not
+              // a reset, and must not wipe live state.
+              S.lap = null;
+              S.fuelAtLap = null;
+              requestSetupData(ws); // pit work may have changed the setup during the reset
             }
             break;
           }
