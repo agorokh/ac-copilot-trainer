@@ -500,31 +500,6 @@ def _has_timed_lap(frames: list[dict]) -> bool:
     return False
 
 
-def _relaunch_after_cached_session(
-    restart_launcher: RestartLauncherFn | None,
-    config: AutoDriveConfig,
-    why: str,
-    attempt_idx: int,
-    attempts: int,
-) -> None:
-    """Log a cached-session relaunch and, when wired, RESTART the launcher first (#558).
-
-    A plain relaunch only re-issues the ``acmanager://`` URL to the already-running (stale) CM,
-    which keeps serving its cached session. Restarting Content Manager makes the next ``launch``
-    cold-start a fresh instance that honors the preset (live-proven recovery, AG_PC 2026-07-13).
-    A restart-seam failure is swallowed — the plain relaunch still runs and the terminal attempt
-    FAILs honestly — so recovery is best-effort, never a new crash path.
-    """
-    restarted = ""
-    if restart_launcher is not None:
-        try:
-            restart_launcher(config)
-            restarted = "; restarted Content Manager (fresh cold-start next)"
-        except Exception as exc:  # noqa: BLE001 - see docstring: never crash the run on a restart
-            restarted = f"; Content Manager restart failed ({type(exc).__name__}: {exc})"
-    _log(f"{why} — relaunching (attempt {attempt_idx + 2}/{attempts}){restarted}")
-
-
 async def run_auto_drive(
     config: AutoDriveConfig,
     *,
@@ -559,8 +534,28 @@ async def run_auto_drive(
     launch_config = replace(config, max_launches=1)
     launched_once = config.skip_launch
     last_launch_error = ""
+    # #558: cold-start a FRESH Content Manager before a relaunch when the previous attempt signalled
+    # a stale CM. A stale CM keeps serving its cached session / stalling the pre-drive overlay no
+    # matter how often the acmanager:// URL is re-issued, so the only real recovery is a CM restart.
+    restart_cm_next = False
     for attempt_idx in range(attempts):
         if not config.skip_launch:
+            # Restart CM before relaunching when the last attempt hit a cached-session mismatch
+            # (``restart_cm_next`` — a clear staleness signal) OR plain relaunches have already
+            # failed twice (``attempt_idx >= 2`` — persistent degradation). A transient pre-drive
+            # overlay race still gets ONE plain relaunch first. Best-effort: a restart failure still
+            # relaunches, and the terminal attempt FAILs honestly.
+            if (
+                attempt_idx > 0
+                and restart_launcher is not None
+                and (restart_cm_next or attempt_idx >= 2)
+            ):
+                try:
+                    restart_launcher(config)
+                    _log("relaunch: restarted Content Manager for a fresh cold-start")
+                except Exception as exc:  # noqa: BLE001 - never crash the run on a restart failure
+                    _log(f"relaunch: Content Manager restart failed ({type(exc).__name__}: {exc})")
+            restart_cm_next = False
             ok, reason = launch(launch_config)
             if not ok:
                 last_launch_error = reason
@@ -623,12 +618,10 @@ async def run_auto_drive(
                     last_launch_error = (
                         f"setup verify failed on a cached session ({combo_mismatch}): {detail}"
                     )
-                    _relaunch_after_cached_session(
-                        restart_launcher,
-                        config,
-                        f"setup guard: {combo_mismatch} (CM cached session — setup fuel mismatch)",
-                        attempt_idx,
-                        attempts,
+                    restart_cm_next = True  # #558: cached session => cold-start a fresh CM next
+                    _log(
+                        f"setup guard: {combo_mismatch} (CM cached session — setup fuel mismatch) "
+                        f"— relaunching (attempt {attempt_idx + 2}/{attempts})"
                     )
                     continue
                 return AutoDriveReport(
@@ -674,12 +667,10 @@ async def run_auto_drive(
                 controller = None
                 last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
                 if attempt_idx < attempts - 1 and not config.skip_launch:
-                    _relaunch_after_cached_session(
-                        restart_launcher,
-                        config,
-                        f"track/car guard: {mismatch} (CM cached session)",
-                        attempt_idx,
-                        attempts,
+                    restart_cm_next = True  # #558: cached session => cold-start a fresh CM next
+                    _log(
+                        f"track/car guard: {mismatch} (CM cached session) — relaunching "
+                        f"(attempt {attempt_idx + 2}/{attempts})"
                     )
                     continue
                 return AutoDriveReport(

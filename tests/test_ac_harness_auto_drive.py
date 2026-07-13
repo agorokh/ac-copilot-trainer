@@ -855,6 +855,32 @@ def test_run_auto_drive_restart_launcher_failure_does_not_crash_recovery():
     assert report.ok is True  # the run recovered despite the restart seam raising
 
 
+def test_run_auto_drive_restarts_cm_after_persistent_hijack_stall():
+    # #558: a PERSISTENT pre-drive overlay stall (hijack never lands) is severe CM degradation. A
+    # TRANSIENT stall gets one plain relaunch; a persistent one escalates to a CM restart (fresh
+    # cold-start) before the next attempt — not a restart per relaunch. hijack: stall, stall, land.
+    restarts: list[int] = []
+    record: dict = {}
+    hijacks: list = [None, None, FakeController()]
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=4),
+            launch=lambda c: (True, "live"),
+            hijack=lambda c: hijacks.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("magione", "ks_porsche_911_gt3_r_2016"),  # correct combo
+            restart_launcher=lambda c: restarts.append(1),
+        )
+    )
+
+    assert report.ok is True
+    # idx0 stall (no restart); idx1 plain relaunch (transient, no restart); idx2 (>=2) restarts CM
+    # once, then the hijack lands and drives.
+    assert len(restarts) == 1
+
+
 def test_run_auto_drive_track_mismatch_fails_fast_after_exhausting_relaunches():
     # #537 bound: a PERSISTENT cached-session mismatch must not loop forever or ever drive the
     # wrong line — it FAILs at stage="launch" once the launch budget is spent (#535 honest guard).
