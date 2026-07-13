@@ -535,49 +535,10 @@ async def run_auto_drive(
             # relaunch that reaches LIVE but fails to hijack must read as stage="hijack", while one
             # that never reaches LIVE (or re-serves a cached session) reads as stage="launch".
             last_launch_error = ""
-        # Session-identity gateway (#532/#537). CM sometimes serves its cached last session instead
-        # of the requested preset. verify_track reads the loaded (track, car) from acpmf_static — a
-        # STATIC page AC populates at session load — so it needs neither the setup verify nor the
-        # hijack. Check it ONCE here, before both, so the "when" is deterministic (a single source
-        # of truth for session validity, not contingent on whether a cached session's fuel
-        # coincidentally matches the requested setup) and neither the setup verify nor the hijack
-        # ever runs against a wrong session. On a positive mismatch, RELAUNCH (bounded): the next
-        # launch kills acs.exe and re-issues the acmanager:// Quick-Drive URL to the now-running CM,
-        # which processes it via single-instance IPC without the cold-start auto-resume race that
-        # served the stale combo. Only the terminal attempt — or skip_launch, which has no launch
-        # leg to relaunch — FAILs fast at stage="launch", preserving the #535/#532 honest guard so
-        # the harness never drives a mismatched combo or persists a mislabeled plant. A missing/
-        # unreadable identity is "cannot confirm" (loaded_combo_mismatch returns None) → proceed.
-        mismatch = loaded_combo_mismatch(
-            config, verify_track(config) if verify_track is not None else None
-        )
-        if mismatch is not None:
-            last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
-            if attempt_idx < attempts - 1 and not config.skip_launch:
-                _log(
-                    f"track/car guard: {mismatch} (CM cached session) — relaunching "
-                    f"(attempt {attempt_idx + 2}/{attempts})"
-                )
-                continue
-            return AutoDriveReport(
-                ok=False,
-                stage="launch",
-                launched=not config.skip_launch,
-                setup_requested=setup_requested,
-                setup_applied=setup_applied,
-                error=(
-                    f"loaded {mismatch} — Content Manager launched a cached session; "
-                    f"still mismatched after {attempts} launch attempt(s) (the harness "
-                    "will not drive the requested line on a different combo or persist a "
-                    "mislabeled plant)"
-                ),
-                **identity,
-            )
         # The setup is BAKED at launch (AC only applies setups at spawn; the WS load is gated shut
         # for an autonomous car). Verify it BEFORE the hijack — the fuel read needs no hijack, and
         # a wrong setup must fail the run before it drives (#459 Part A). On a relaunch the launch
-        # leg re-bakes, so this re-verifies each attempt. The identity gateway above has already
-        # confirmed the correct session, so a setup failure here is a genuine setup problem.
+        # leg re-bakes, so this re-verifies each attempt.
         if config.setup:
             if apply_setup is None:
                 return AutoDriveReport(
@@ -604,6 +565,33 @@ async def run_auto_drive(
             ok_setup, detail = verify_setup_ack(setup_ack, setup_requested)
             setup_applied = ok_setup
             if not ok_setup:
+                # #537: a cached wrong session (CM served its last session) ALSO fails setup
+                # verification — its fuel won't match the requested setup. Setup is verified before
+                # the post-hijack track guard, so without this a --setup run would abort at
+                # stage="setup" on the very first cached session and never consume the retry budget.
+                # This is a BEST-EFFORT, FAIL-SAFE early-out — NOT the authoritative guard. It reads
+                # acpmf_static before the hijack, where the static page may not yet be populated; on
+                # "cannot confirm" it does NOT drive — it falls through to the setup-stage return
+                # below (safe), and the authoritative post-hijack guard remains the single
+                # source of truth for a session that DOES reach the drive leg. Only a POSITIVE early
+                # mismatch relaunches (bounded); a genuine setup failure on the CORRECT combo still
+                # fails fast at stage="setup" (combo_mismatch is None → skip).
+                combo_mismatch = loaded_combo_mismatch(
+                    config, verify_track(config) if verify_track is not None else None
+                )
+                if (
+                    combo_mismatch is not None
+                    and attempt_idx < attempts - 1
+                    and not config.skip_launch
+                ):
+                    last_launch_error = (
+                        f"setup verify failed on a cached session ({combo_mismatch}): {detail}"
+                    )
+                    _log(
+                        f"setup guard: {combo_mismatch} (CM cached session — setup fuel mismatch) "
+                        f"— relaunching (attempt {attempt_idx + 2}/{attempts})"
+                    )
+                    continue
                 return AutoDriveReport(
                     ok=False,
                     stage="setup",
@@ -611,11 +599,63 @@ async def run_auto_drive(
                     setup_requested=setup_requested,
                     setup_applied=False,
                     setup_ack=setup_ack,
-                    error=f"setup not applied: {detail}",
+                    error=(
+                        f"setup not applied: {detail}"
+                        + (
+                            f" (Content Manager served a cached session: {combo_mismatch}; still "
+                            f"mismatched after {attempts} launch attempt(s))"
+                            if combo_mismatch is not None
+                            else ""
+                        )
+                    ),
                     **identity,
                 )
         controller = hijack(config)
         if controller is not None:
+            # AUTHORITATIVE identity guard (#532/#535). CM sometimes launches its cached last
+            # session instead of the requested preset; driving the requested line on a different
+            # track — or persisting a plant artifact under the requested car when a DIFFERENT car
+            # is loaded — is a guaranteed corruption. This runs POST-hijack on purpose: a landed
+            # hijack means CSP created Car0, a STRONGER "session fully initialised" signal than
+            # _wait_live's LIVE + advancing-physics, so acpmf_static is reliably populated here
+            # (#535 rig-proven). This is the single source of truth — every drivable session passes
+            # through it — a not-yet-populated static page can never slip a mismatch to the drive.
+            mismatch = loaded_combo_mismatch(
+                config, verify_track(config) if verify_track is not None else None
+            )
+            if mismatch is not None:
+                # #537: CM served its cached last session. RELAUNCH (bounded) rather than drive
+                # the wrong line — the next launch kills acs.exe and re-issues the acmanager://
+                # Quick-Drive URL to the now-running CM, which processes it via single-instance
+                # IPC without the cold-start auto-resume race that served the stale combo. Only
+                # the terminal attempt — or skip_launch, which has no launch leg to relaunch —
+                # FAILs fast at stage="launch", preserving the #535/#532 honest-failure guard so
+                # the harness never drives a mismatched combo or persists a mislabeled plant.
+                controller.close()
+                controller = None
+                last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
+                if attempt_idx < attempts - 1 and not config.skip_launch:
+                    _log(
+                        f"track/car guard: {mismatch} (CM cached session) — relaunching "
+                        f"(attempt {attempt_idx + 2}/{attempts})"
+                    )
+                    continue
+                return AutoDriveReport(
+                    ok=False,
+                    stage="launch",
+                    launched=not config.skip_launch,
+                    hijacked=True,
+                    setup_requested=setup_requested,
+                    setup_applied=setup_applied,
+                    setup_ack=setup_ack,
+                    error=(
+                        f"loaded {mismatch} — Content Manager launched a cached session; "
+                        f"still mismatched after {attempts} launch attempt(s) (the harness "
+                        "will not drive the requested line on a different combo or persist a "
+                        "mislabeled plant)"
+                    ),
+                    **identity,
+                )
             break
         if config.skip_launch:
             break
