@@ -512,6 +512,53 @@ def test_artifact_load_rejects_wrong_combo(tmp_path):
     assert load_plant_artifact(tmp_path, "test_car", "other_track") is None
 
 
+def test_artifact_load_rejects_partial_constants(tmp_path):
+    # A persisted artifact with a MISSING required constant must be rejected (Codex review): else
+    # --use-plant full silently drives on generic steering.
+    result = _result_dict()
+    del result["constants"]["ff_c1"]
+    path = save_plant_artifact(tmp_path, result)
+    assert path.exists()
+    assert load_plant_artifact(tmp_path, "test_car", "test_oval") is None
+
+
+def test_plant_driver_kwargs_full_raises_on_missing_steering():
+    from tools.ac_harness.plant_id import plant_driver_kwargs
+
+    artifact = {"constants": {"rpm_up": 7600.0, "rpm_dn": 5100.0}}  # no ff_* keys
+    with pytest.raises(ValueError, match="steering constants"):
+        plant_driver_kwargs(artifact, steer=True)
+    # auto mode tolerates missing steering (shift points only)
+    assert plant_driver_kwargs(artifact, steer=False) == {"rpm_up": 7600.0, "rpm_dn": 5100.0}
+
+
+def test_fit_shift_points_requires_adjacent_gears():
+    # Only non-adjacent gears (AC 2 and 4, i.e. 1st and 3rd) observed -> no real shift step.
+    samples = []
+    for gear, ratio in ((2, 110.0), (4, 62.0)):
+        for rpm in range(3000, 8001, 100):
+            samples.append(
+                {"gear": gear, "rpm": float(rpm), "accel_mps2": 6.0, "speed_kmh": rpm / ratio}
+            )
+    m = fit_shift_points(samples, {2: 110.0, 4: 62.0})
+    assert not m.passed
+    assert "ADJACENT" in m.detail or "adjacent" in m.detail
+
+
+def test_fit_shift_points_fails_when_sweep_never_revs_out():
+    # Two adjacent gears but the pull only reached low rpm (tall gear / early abort) -> must FAIL,
+    # not persist a low rpm_up from the limiter fallback (Codex review).
+    samples = []
+    for gear, ratio in ((2, 110.0), (3, 82.0)):
+        for rpm in range(1500, 4001, 100):  # never past ~4k
+            samples.append(
+                {"gear": gear, "rpm": float(rpm), "accel_mps2": 6.0, "speed_kmh": rpm / ratio}
+            )
+    m = fit_shift_points(samples, {2: 110.0, 3: 82.0})
+    assert not m.passed
+    assert "revved out" in m.detail
+
+
 def test_artifact_load_rejects_nan_constants(tmp_path):
     result = _result_dict()
     result["constants"]["rpm_up"] = float("nan")

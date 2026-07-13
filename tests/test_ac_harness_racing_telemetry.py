@@ -77,6 +77,15 @@ def test_parse_static_track_rejects_short_buffer():
         parse_static_track(b"\x00" * 100)
 
 
+def test_parse_static_car_decodes_utf16():
+    from tools.ac_harness.shared_memory import STATIC_CAR_OFFSET, parse_static_car
+
+    b = bytearray(260)
+    car = "ks_porsche_911_gt3_r_2016"
+    b[STATIC_CAR_OFFSET : STATIC_CAR_OFFSET + 2 * len(car) + 2] = (car + "\x00").encode("utf-16-le")
+    assert parse_static_car(bytes(b)) == car
+
+
 def test_parse_graphics_reads_lap_and_position():
     g = parse_graphics(_gfx_buf())
     assert g.packet_id == 11

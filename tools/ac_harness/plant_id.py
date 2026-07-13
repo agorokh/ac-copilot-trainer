@@ -52,6 +52,9 @@ from tools.ac_harness.racing_driver import RacingDriver
 
 G = 9.81
 PLANT_SCHEMA_VERSION = 1
+# Constants a persisted plant artifact MUST carry (a fully-passed handshake produces all of them);
+# a partial artifact is rejected on load so `--use-plant full` never silently degrades.
+REQUIRED_PLANT_CONSTANTS = ("ff_sign", "ff_c1", "ff_c2", "rpm_up", "rpm_dn", "r_eff_m")
 
 # AC gear encoding (live-verified, see custom_ai.py): 0=Reverse, 1=Neutral, 2=1st, 3=2nd, ...
 _FIRST_FORWARD_GEAR = 2
@@ -325,6 +328,7 @@ def fit_shift_points(
     downshift_margin: float = 0.9,
     crossover_rpm_frac: float = 0.6,
     min_crossover_advantage: float = 0.02,
+    min_sweep_top_rpm: float = 6000.0,
 ) -> ProbeMeasurement:
     """``rpm_up``/``rpm_dn`` from the WOT sweep's per-gear accel curves.
 
@@ -396,24 +400,41 @@ def fit_shift_points(
         method = "accel-crossover"
         quality["crossovers"] = [round(c, 0) for c in crossovers]
     else:
+        # Limiter-margin fallback is only trustworthy if the sweep actually revved the engine out.
+        # A tall-gear / early-aborted pull that only reached low rpm would otherwise persist a
+        # spuriously low rpm_up and make later GGV runs short-shift (Codex review).
+        if rpm_max < min_sweep_top_rpm:
+            return ProbeMeasurement(
+                "shift_points",
+                False,
+                {},
+                quality,
+                "limiter-margin",
+                f"sweep never revved out (max rpm {rpm_max:.0f} < {min_sweep_top_rpm:.0f}); no "
+                "accel-crossover found either — an incomplete pull cannot set a shift point",
+            )
         rpm_up = rpm_max * fallback_limiter_frac
         method = "limiter-margin"
         quality["fallback"] = f"{fallback_limiter_frac} * observed max rpm {rpm_max:.0f}"
-    steps = [
+    # rpm_dn needs an ADJACENT-gear ratio step (b == a+1). A non-adjacent jump (e.g. gears 2 and 4
+    # when 3 was missed) is a skipped-gear ratio, not a real shift step (Codex review).
+    adj_steps = [
         ratios[b] / ratios[a]
         for a, b in zip(sorted(ratios), sorted(ratios)[1:], strict=False)
-        if a in ratios and b in ratios
+        if b == a + 1
     ]
-    if not steps or not _finite(rpm_up) or not 3000.0 <= rpm_up <= 12000.0:
+    quality["adjacent_ratio_steps"] = [round(s, 3) for s in adj_steps]
+    if not adj_steps or not _finite(rpm_up) or not 3000.0 <= rpm_up <= 12000.0:
         return ProbeMeasurement(
             "shift_points",
             False,
             {},
             quality,
             method,
-            f"implausible rpm_up={rpm_up:.0f} (expect 3000..12000) or no ratio steps "
-            f"(steps={steps})",
+            f"implausible rpm_up={rpm_up:.0f} (expect 3000..12000) or no ADJACENT gear ratio step "
+            f"(observed gears {[g - 1 for g in gears]})",
         )
+    steps = adj_steps
     rpm_dn = rpm_up * _median(steps) * downshift_margin
     if not _finite(rpm_dn) or rpm_dn >= rpm_up * 0.85 or rpm_dn < 1500.0:
         return ProbeMeasurement(
@@ -1182,9 +1203,13 @@ def load_plant_artifact(user_dir: Path, car_id: str, track_id: str) -> dict | No
     constants = payload.get("constants")
     if not isinstance(constants, dict) or not constants:
         return None
-    for key in ("ff_sign", "ff_c1", "ff_c2", "rpm_up", "rpm_dn", "r_eff_m"):
+    # A persisted artifact only exists when the handshake FULLY passed, so every consumed constant
+    # MUST be present and finite. A partial artifact (missing e.g. ff_c1) would otherwise be
+    # accepted and let `--use-plant full` silently drive on generic steering (Codex review) — the
+    # exact hand-constant fallback the handshake exists to end. Reject it, don't degrade.
+    for key in REQUIRED_PLANT_CONSTANTS:
         val = constants.get(key)
-        if val is not None and not _finite(val):
+        if val is None or not _finite(val):
             return None
     return payload
 
@@ -1201,9 +1226,16 @@ def plant_driver_kwargs(artifact: dict, *, steer: bool) -> dict:
     if _finite(constants.get("rpm_up", float("nan")), constants.get("rpm_dn", float("nan"))):
         kwargs["rpm_up"] = float(constants["rpm_up"])
         kwargs["rpm_dn"] = float(constants["rpm_dn"])
-    if steer and all(
-        _finite(constants.get(k, float("nan"))) for k in ("ff_sign", "ff_c1", "ff_c2")
-    ):
+    if steer:
+        # `--use-plant full` is a HARD requirement for measured steering: if the steering
+        # constants are absent/non-finite, RAISE rather than silently return without them (which
+        # would let the ggv driver fall back to generic steering — the exact degrade `full`
+        # forbids). `load_plant_artifact` already guarantees these for a valid artifact.
+        if not all(_finite(constants.get(k, float("nan"))) for k in ("ff_sign", "ff_c1", "ff_c2")):
+            raise ValueError(
+                "plant artifact missing measured steering constants (ff_sign/ff_c1/ff_c2); "
+                "--use-plant full requires a complete artifact — re-run --driver handshake"
+            )
         kwargs["steering_mode"] = "curvature_ff"
         kwargs["ff_sign"] = float(constants["ff_sign"])
         kwargs["ff_c1"] = float(constants["ff_c1"])

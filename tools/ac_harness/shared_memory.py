@@ -100,21 +100,30 @@ SHM_STATIC = "acpmf_static"
 # safe prefix avoids over-mapping while covering every field we read.
 GRAPHICS_MAP_BYTES = 256
 PHYSICS_MAP_BYTES = 64
-# acpmf_static: wide-char (UTF-16LE) strings; ``track`` is a 33-char field at byte offset 134
-# (live-verified against a running session: smVersion@0, carModel@68, track@134). Mapping 260
-# bytes covers it with headroom.
+# acpmf_static: wide-char (UTF-16LE) strings; ``carModel`` is a 33-char field at byte offset 68 and
+# ``track`` a 33-char field at byte offset 134 (live-verified against a running session:
+# smVersion@0, carModel@68, track@134). Mapping 260 bytes covers both with headroom.
 STATIC_MAP_BYTES = 260
+STATIC_CAR_OFFSET = 68
 STATIC_TRACK_OFFSET = 134
-STATIC_TRACK_CHARS = 33
+STATIC_STR_CHARS = 33
+
+
+def _decode_static_str(buf: bytes, offset: int, field: str) -> str:
+    end = offset + STATIC_STR_CHARS * 2
+    if len(buf) < end:
+        raise ValueError(f"static buffer too short for {field}: {len(buf)} < {end}")
+    return buf[offset:end].decode("utf-16-le", "replace").split("\x00", 1)[0].strip()
 
 
 def parse_static_track(buf: bytes) -> str:
     """Decode the ``track`` id from an ``acpmf_static`` buffer (pure, UTF-16LE, NUL-terminated)."""
-    end = STATIC_TRACK_OFFSET + STATIC_TRACK_CHARS * 2
-    if len(buf) < end:
-        raise ValueError(f"static buffer too short for track: {len(buf)} < {end}")
-    raw = buf[STATIC_TRACK_OFFSET:end].decode("utf-16-le", "replace")
-    return raw.split("\x00", 1)[0].strip()
+    return _decode_static_str(buf, STATIC_TRACK_OFFSET, "track")
+
+
+def parse_static_car(buf: bytes) -> str:
+    """Decode the ``carModel`` id from an ``acpmf_static`` buffer (pure, UTF-16LE)."""
+    return _decode_static_str(buf, STATIC_CAR_OFFSET, "carModel")
 
 
 class AcGameStatus(IntEnum):

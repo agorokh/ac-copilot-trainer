@@ -724,7 +724,7 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
             hijack=lambda c: ctrl,
             drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
             tap=_tap_returning(CONTINUOUS),
-            verify_track=lambda c: "spa",
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),
         )
     )
     assert report.ok is False
@@ -733,16 +733,35 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert ctrl.closed is True  # controller released before bailing
 
 
+def test_run_auto_drive_fails_fast_on_car_mismatch():
+    # Same track, different CAR served by a cached CM session -> must not persist a mislabeled
+    # plant artifact under the requested car (#532 Codex review).
+    ctrl = FakeController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="spa", car_id="ks_porsche_911_gt3_r_2016", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong car"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_audi_r8_lms"),
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "launch"
+    assert "ks_audi_r8_lms" in report.error and "car" in report.error
+
+
 def test_run_auto_drive_track_match_proceeds():
     record: dict = {}
     report = asyncio.run(
         run_auto_drive(
-            _cfg(track_id="magione", skip_launch=True),
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", skip_launch=True),
             launch=_ok_launch,
             hijack=lambda c: FakeController(),
             drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
             tap=_tap_returning(CONTINUOUS),
-            verify_track=lambda c: "magione",
+            verify_track=lambda c: ("magione", "ks_porsche_911_gt3_r_2016"),
         )
     )
     assert report.stage != "launch"

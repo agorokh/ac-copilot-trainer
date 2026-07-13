@@ -330,29 +330,33 @@ HijackFn = Callable[[AutoDriveConfig], "Controller | None"]
 ApplySetupFn = Callable[[AutoDriveConfig], Awaitable[dict]]
 DriveFn = Callable[[Controller, AutoDriveConfig, threading.Event], DriveStats]
 TapFn = Callable[..., Awaitable[list[dict]]]
-VerifyTrackFn = Callable[[AutoDriveConfig], "str | None"]
+# Returns the loaded (track, car) identity from the live sim, or None when it cannot be read.
+VerifyTrackFn = Callable[[AutoDriveConfig], "tuple[str | None, str | None] | None"]
 
 
-def rig_verify_track(config: AutoDriveConfig) -> str | None:  # pragma: no cover - rig-only
-    """Read the loaded track id from ``acpmf_static``; ``None`` when it cannot be read.
+def rig_verify_track(
+    config: AutoDriveConfig,
+) -> tuple[str | None, str | None] | None:  # pragma: no cover - rig-only
+    """Read the loaded ``(track, car)`` identity from ``acpmf_static``; ``None`` when unreadable.
 
-    Returning ``None`` (static page absent/short) makes the track guard skip rather than block —
-    a missing read must never fail a run; only a POSITIVE mismatch does.
+    Returning ``None`` (static page absent/short) makes the guard skip rather than block — a
+    missing read must never fail a run; only a POSITIVE mismatch does.
     """
     from tools.ac_harness.shared_memory import (
         SHM_STATIC,
         STATIC_MAP_BYTES,
+        open_shared_memory,
+        parse_static_car,
         parse_static_track,
     )
 
     try:
-        from tools.ac_harness.shared_memory import open_shared_memory
-
         section = open_shared_memory(SHM_STATIC, STATIC_MAP_BYTES)
     except Exception:  # noqa: BLE001 - unavailable/platform error → cannot confirm, skip guard
         return None
     try:
-        return parse_static_track(section.read(STATIC_MAP_BYTES))
+        buf = section.read(STATIC_MAP_BYTES)
+        return parse_static_track(buf), parse_static_car(buf)
     except Exception:  # noqa: BLE001 - short/garbled read → cannot confirm, skip guard
         return None
     finally:
@@ -545,26 +549,34 @@ async def run_auto_drive(
         controller = hijack(config)
         if controller is not None:
             # Guard: CM sometimes launches its cached last session instead of the requested
-            # preset (#532 rig-found). Driving the requested line on a different track is a
-            # guaranteed false failure, so verify the loaded track and FAIL fast at launch.
+            # preset (#532 rig-found). Driving the requested line on a different track — or
+            # persisting a plant artifact under the requested car when a DIFFERENT car is loaded —
+            # is a guaranteed corruption, so verify the loaded (track, car) and FAIL fast at launch.
             loaded = verify_track(config) if verify_track is not None else None
-            if loaded is not None and not track_ids_match(config.track_id, loaded):
-                controller.close()
-                return AutoDriveReport(
-                    ok=False,
-                    stage="launch",
-                    launched=not config.skip_launch,
-                    hijacked=True,
-                    setup_requested=setup_requested,
-                    setup_applied=setup_applied,
-                    setup_ack=setup_ack,
-                    error=(
-                        f"loaded track {loaded!r} != requested {config.track_id!r} — Content "
-                        "Manager launched a cached session; relaunch with the correct preset "
-                        "(the harness will not drive the requested line on a different track)"
-                    ),
-                    **identity,
-                )
+            if loaded is not None:
+                loaded_track, loaded_car = loaded
+                mismatch = None
+                if not track_ids_match(config.track_id, loaded_track):
+                    mismatch = f"track {loaded_track!r} != requested {config.track_id!r}"
+                elif config.car_id and not track_ids_match(config.car_id, loaded_car):
+                    mismatch = f"car {loaded_car!r} != requested {config.car_id!r}"
+                if mismatch is not None:
+                    controller.close()
+                    return AutoDriveReport(
+                        ok=False,
+                        stage="launch",
+                        launched=not config.skip_launch,
+                        hijacked=True,
+                        setup_requested=setup_requested,
+                        setup_applied=setup_applied,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"loaded {mismatch} — Content Manager launched a cached session; "
+                            "relaunch with the correct preset (the harness will not drive the "
+                            "requested line on a different combo or persist a mislabeled plant)"
+                        ),
+                        **identity,
+                    )
             break
         if config.skip_launch:
             break
