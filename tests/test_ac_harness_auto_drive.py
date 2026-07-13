@@ -1375,8 +1375,12 @@ def test_should_try_line_teleport_on_recovery_off_line_always_retries():
     # line teleport is known good. car_off_line covers BOTH an off-line spawn AND a car a prior
     # recovery teleported into the pits (a mid-lap spin recovered to pits — the self-hosted
     # reviewer's case): teleport_to_pits leaves it off-line and would otherwise loop at 0 m.
-    assert should_try_line_teleport_on_recovery(car_off_line=True, line_teleport_known_good=False)
-    assert should_try_line_teleport_on_recovery(car_off_line=True, line_teleport_known_good=True)
+    assert should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=True, line_teleport_known_good=False
+    )
+    assert should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=True, line_teleport_known_good=True
+    )
 
 
 def test_should_try_line_teleport_on_recovery_on_line_uses_pits():
@@ -1385,9 +1389,20 @@ def test_should_try_line_teleport_on_recovery_on_line_uses_pits():
     # that pit teleport leaves the car off-line, _recover flips off_line True and the next recovery
     # takes the branch above — closing the mid-lap-into-pits loop the reviewer flagged.
     assert not should_try_line_teleport_on_recovery(
-        car_off_line=False, line_teleport_known_good=False
+        spawn_to_line_enabled=True, car_off_line=False, line_teleport_known_good=False
     )
-    assert should_try_line_teleport_on_recovery(car_off_line=False, line_teleport_known_good=True)
+    assert should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=False, line_teleport_known_good=True
+    )
+
+
+def test_should_try_line_teleport_on_recovery_honors_no_spawn_line():
+    # --no-spawn-line (spawn_to_line_enabled=False) opts out of racing-line teleports entirely: even
+    # an off-line car with a known-good line teleport must fall back to the pit exit, not the line,
+    # on every recovery (codex on #539).
+    assert not should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=False, car_off_line=True, line_teleport_known_good=True
+    )
 
 
 def test_drive_leg_succeeded_true_only_for_a_real_clean_drive():
