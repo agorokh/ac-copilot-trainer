@@ -431,6 +431,11 @@ def test_ggv_model_roundtrip_and_rejects_nan():
         GGVModel.from_dict({**m.to_dict(), "mu_lat_g": float("nan")})
     with pytest.raises(ValueError):
         GGVModel.from_dict({k: v for k, v in m.to_dict().items() if k != "brake_b0_g"})
+    # Positivity/range gates (Codex P2): a non-positive ellipse_n would crash the ggv path (divide),
+    # a non-positive lateral grip/cap would zero the envelope -> reject, don't construct.
+    for bad in ({"ellipse_n": 0.0}, {"ellipse_n": -1.5}, {"ellipse_n": 99.0}, {"mu_lat_g": 0.0}):
+        with pytest.raises(ValueError):
+            GGVModel.from_dict({**m.to_dict(), **bad})
 
 
 def test_blend_never_raises_lateral_above_prior():
@@ -495,11 +500,15 @@ def test_blend_sparse_bins_fall_back_to_prior():
     }
 
 
-def test_blend_ellipse_reverts_when_hull_thin():
+def test_blend_pins_ellipse_to_prior():
+    # The ellipse boundary exponent needs limit-reaching data; a conservative hull is interior
+    # points, so it is pinned to the prior regardless of how rich the hull is.
     prior = _prior()
-    thin = _measured(1.2, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=5, ellipse_n=1.1)
-    b = blend_ggv_safe(thin, prior)
-    assert b.ellipse_n == prior.ellipse_n  # not enough hull -> keep the prior coupling
+    rich = _measured(
+        1.2, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=5000, ellipse_n=1.1
+    )
+    b = blend_ggv_safe(rich, prior)
+    assert b.ellipse_n == prior.ellipse_n
     assert b.provenance["blend_source"]["ellipse_n"] == "prior"
 
 

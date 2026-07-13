@@ -142,6 +142,19 @@ class GGVModel:
             v = data.get(f)
             if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
                 vals[f] = float(v)
+        # Positivity/range gates (Codex P2): the friction-ellipse math divides by ``ellipse_n``
+        # (``**(1/n)``), so a non-positive exponent would CRASH the ggv path instead of falling back
+        # to the generic plant; a non-positive lateral grip / cap would zero the envelope. Reject
+        # both — never construct a model the driver cannot safely evaluate.
+        if not (0.0 < vals["ellipse_n"] <= 8.0):
+            raise ValueError(
+                f"GGVModel.from_dict: ellipse_n out of range (0, 8]: {vals['ellipse_n']!r}"
+            )
+        if vals["mu_lat_g"] <= 0.0:
+            raise ValueError(f"GGVModel.from_dict: mu_lat_g must be positive: {vals['mu_lat_g']!r}")
+        for f in ("ay_cap_g", "ax_brake_cap_g"):
+            if f in vals and vals[f] <= 0.0:
+                raise ValueError(f"GGVModel.from_dict: {f} must be positive: {vals[f]!r}")
         prov = data.get("provenance")
         return cls(**vals, provenance=prov if isinstance(prov, dict) else {})
 
@@ -295,7 +308,6 @@ def blend_ggv_safe(
     *,
     min_brake_bins: int = 2,
     min_accel_bins: int = 2,
-    min_hull_points: int = 20,
 ) -> GGVModel:
     """Safe-envelope blend of a per-combo MEASURED GGVModel with a trusted PRIOR (#532 Part B).
 
@@ -315,8 +327,11 @@ def blend_ggv_safe(
       accel). Adopt the measured curve ONLY where it CONFIDENTLY EXCEEDS the prior across the
       covered speeds (evidence of MORE capability); otherwise the prior — a diluted
       under-measurement must never LOWER braking/accel and regress. The prior's hard caps are kept.
-    * **The ellipse exponent reverts to the prior** unless the ``(lat, lon)`` hull is rich enough to
-      fit it — a wrong lat/long coupling is the biggest silent-spin risk (Council 2026-07-13).
+    * **The ellipse exponent is pinned to the prior.** The friction-ellipse boundary exponent
+      requires limit-reaching (boundary) data; a conservative handshake's ``(lat, lon)`` hull is
+      interior points, so a fit from it is unreliable — like the lateral limit, honest per-combo
+      identification of it needs a limit-reaching probe (deferred). A wrong lat/long coupling is the
+      biggest silent-spin risk (Council 2026-07-13), and the prior's exponent is live-verified.
 
     Net: the reference car (and any conservatively-driven combo) reproduces the prior — no
     regression, no spin — while a car that DEMONSTRABLY brakes / accelerates harder than the prior
@@ -332,6 +347,11 @@ def blend_ggv_safe(
     # Lateral: the prior is ceiling AND floor (see docstring) — a non-limit measurement is only a
     # lower bound, so it never lowers the operating plant and never regresses the reference car.
     mu_lat, lat_src = prior.mu_lat_g, "prior"
+
+    # Ellipse exponent: pinned to the prior — its boundary needs limit-reaching data the
+    # conservative handshake does not produce (the hull is interior points). Recorded hull_points
+    # feeds a future limit-reaching pass. See docstring.
+    ellipse_n, ell_src = prior.ellipse_n, "prior"
 
     # Braking: adopt measured ONLY where it CONFIDENTLY EXCEEDS the prior across the covered speeds.
     brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
@@ -361,12 +381,6 @@ def blend_ggv_safe(
             measured.drive_min_g,
             "measured(>prior)",
         )
-
-    # Ellipse exponent: revert to prior unless the hull is rich enough to fit it confidently.
-    if hull_points >= min_hull_points and _finite_ggv(measured.ellipse_n):
-        ellipse_n, ell_src = measured.ellipse_n, "measured"
-    else:
-        ellipse_n, ell_src = prior.ellipse_n, "prior"
 
     blend_prov = {
         "blend_source": {
