@@ -602,7 +602,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     S.lap = p;
     var fuelNow = S.tick ? fin(S.tick.fuel_l) : null;
     if (fuelNow !== null) {
-      if (S.fuelAtLap !== null) {
+      // Only a VALID lap contributes a burn sample — a cut/teleported lap's fuel delta
+      // would contaminate the median (Codex on PR #547). The baseline still refreshes so
+      // the next valid lap measures a clean single-lap delta.
+      if (S.fuelAtLap !== null && p.valid !== false) {
         var burn = S.fuelAtLap - fuelNow;
         if (burn > 0.05 && burn < 30) {
           S.burns.push(burn);
@@ -787,8 +790,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   var reconnectDelay = 1000;
   var setupPollTimer = null;
   var wsOpenAt = 0; // set per-connection; gates cache-echo vs mid-connection re-emits
+  var setupReqAt = 0, setupAnsAt = 0; // lost-request detection (Codex on PR #547)
   function requestSetupData(ws) {
     if (ws.readyState !== WebSocket.OPEN) return;
+    setupReqAt = Date.now();
     ws.send(JSON.stringify({ v: 1, type: "setup.spinner.list" }));
     ws.send(JSON.stringify({ v: 1, type: "setup.list" }));
   }
@@ -811,8 +816,12 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       // keep polling slowly so a mid-session car/setup change is never missed.
       if (setupPollTimer) clearInterval(setupPollTimer);
       setupPollTimer = setInterval(function () {
-        // null = no reply yet; an accepted EMPTY list stops the poll (real data).
-        if (S.spinners === null) requestSetupData(ws);
+        // Re-request when nothing has ever been answered (null) OR when the latest
+        // request went unanswered for 5 s (e.g. a setup.active-triggered refresh raced a
+        // race.ini transition and errored — Codex on PR #547). An answered request stops
+        // the poll; the board keeps the last rows meanwhile (no flicker on spinner edits).
+        var unanswered = setupReqAt > setupAnsAt && Date.now() - setupReqAt > 5000;
+        if (S.spinners === null || unanswered) requestSetupData(ws);
       }, 5000);
     };
     ws.onmessage = function (event) {
@@ -885,6 +894,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         // accept it so the board renders NOT FITTED states instead of waiting forever
         // (Codex P2 on PR #547).
         if (frame.ok && Array.isArray(frame.spinners)) {
+          setupAnsAt = Date.now();
           var rows = frame.spinners;
           if (frame.source !== "csp") {
             // INI-fallback results carry hardcoded default ranges (e.g. an assumed /12) —
