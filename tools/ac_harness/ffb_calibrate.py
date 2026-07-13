@@ -172,6 +172,16 @@ def should_write(offset_valid: bool, write: bool, dry_run: bool) -> bool:
     return offset_valid and write and not dry_run
 
 
+def car_mismatch(expected: str, live: str | None) -> bool:
+    """True when a KNOWN live carModel differs from the requested ``--car`` (case-insensitive).
+
+    Used to guard ``--observe-only --write``: the operator drives manually, so verify the sampled
+    car is the one whose gain we'd write. An unread/empty ``live`` (static page unavailable) is NOT
+    a mismatch — we don't block a write on a page we couldn't read.
+    """
+    return bool(live) and live.lower() != expected.lower()
+
+
 _SECTION_RE = re.compile(r"^\s*\[(?P<car>[^\]]+)\]\s*$")
 _VALUE_RE = re.compile(r"^\s*VALUE\s*=", re.IGNORECASE)
 
@@ -252,6 +262,27 @@ def _user_ff_path(ac_user_dir: Path | None) -> Path:  # pragma: no cover - path 
     return resolve_ac_user_dir(ac_user_dir) / "cfg" / "user_ff.ini"
 
 
+def _live_car() -> str | None:  # pragma: no cover - rig-only shared-memory read
+    """Read the live ``carModel`` from AC's ``acpmf_static`` page, or None if unavailable."""
+    from tools.ac_harness.shared_memory import (
+        SHM_STATIC,
+        STATIC_MAP_BYTES,
+        open_shared_memory,
+        parse_static_car,
+    )
+
+    try:
+        section = open_shared_memory(SHM_STATIC, STATIC_MAP_BYTES)
+    except Exception:
+        return None
+    try:
+        return parse_static_car(section.read(STATIC_MAP_BYTES))
+    except Exception:
+        return None
+    finally:
+        section.close()
+
+
 def sample_final_ff(  # pragma: no cover - rig-only shared-memory loop
     *,
     duration_s: float,
@@ -330,6 +361,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     drive_proc = None
     drive_exited_early = False
+    live_car: str | None = None
     try:
         if not args.observe_only:
             # Keep the controller driving across ramp + the whole sample window (+margin).
@@ -369,6 +401,9 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         drive_exited_early = (
             drive_proc is not None and drive_proc.poll() is not None and not args.observe_only
         )
+        # In observe-only the operator drives manually, so confirm the sampled car is the one whose
+        # gain we'd write. (Not needed in the launch path — auto_drive spawned --car itself.)
+        live_car = _live_car() if args.observe_only else None
     finally:
         if drive_proc is not None:
             _shutdown_drive(drive_proc)
@@ -380,6 +415,8 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     valid, reason = offset_looks_valid(stats, min_samples=min_samples)
     if valid and drive_exited_early:
         valid, reason = False, "auto_drive exited during the sample window (truncated/stationary)"
+    if valid and car_mismatch(car, live_car):
+        valid, reason = False, f"live car {live_car!r} != --car {car!r} (observe-only mismatch)"
 
     current = 1.0
     if user_ff.exists():
@@ -429,6 +466,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         "recommended_gain": recommended,
         "wrote": wrote,
         "write_error": write_error,
+        "live_car": live_car,
         "user_ff_path": str(user_ff),
     }
     _write_report(args.evidence_dir, key, report)
@@ -596,9 +634,10 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:  # pragma: no
     p.add_argument("--floor", type=_nonneg_float, default=GAIN_FLOOR)
     p.add_argument("--ceiling", type=_pos_float, default=GAIN_CEILING)
     p.add_argument("--ramp-seconds", dest="ramp_seconds", type=_nonneg_float, default=10.0)
-    # 360s covers auto_drive's own relaunch budget (~5 attempts x ~75s) so a slow CM race that
-    # needs a 3rd attempt isn't killed mid-recovery.
-    p.add_argument("--launch-timeout", dest="launch_timeout", type=_pos_float, default=360.0)
+    # 480s clears auto_drive's FULL relaunch budget (max_launches=5 x ~90s LIVE-wait+probes) so a
+    # slow CM race isn't killed mid-recovery; the hijack wait also breaks early when the child
+    # exits, so a higher cap only affects the (rare) still-retrying case, not the success path.
+    p.add_argument("--launch-timeout", dest="launch_timeout", type=_pos_float, default=480.0)
     p.add_argument(
         "--observe-only",
         dest="observe_only",

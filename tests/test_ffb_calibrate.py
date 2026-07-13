@@ -20,6 +20,7 @@ from tools.ac_harness.ffb_calibrate import (
     _evidence_key,
     _nonneg_float,
     _pos_float,
+    car_mismatch,
     offset_looks_valid,
     read_user_ff_value,
     recommend_gain,
@@ -107,6 +108,19 @@ def test_recommend_gain_rejects_floor_above_ceiling():
 )
 def test_should_write(valid, write, dry_run, expected):
     assert should_write(valid, write, dry_run) is expected
+
+
+@pytest.mark.parametrize(
+    ("expected", "live", "mismatch"),
+    [
+        ("ks_bmw_m4", "ks_porsche_911_gt3_r_2016", True),  # wrong car being driven
+        ("ks_bmw_m4", "KS_BMW_M4", False),  # same car, case-insensitive
+        ("ks_bmw_m4", None, False),  # static page unreadable -> not a mismatch (don't block)
+        ("ks_bmw_m4", "", False),  # empty -> not a mismatch
+    ],
+)
+def test_car_mismatch(expected, live, mismatch):
+    assert car_mismatch(expected, live) is mismatch
 
 
 # --------------------------------------------------------------------------- offset gate
