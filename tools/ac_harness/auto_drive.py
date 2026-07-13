@@ -1760,8 +1760,11 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             car_id=config.car_id or "",
             track_id=config.track_id,
             setup=(Path(config.setup).stem if config.setup else None),
+            setup_ini=(str(config.setup_ini) if config.setup_ini else None),
             sink=config.handshake_sink,
-            phys_read="auto",
+            # The controller does NOT open OS memory itself (daemon review): rig_drive injects a
+            # harness-owned physics reader via set_phys_read and owns its close.
+            phys_read=None,
             # Moderate cornering pace (fixed, not the flat-out ggv pace) so more corners exceed the
             # steer-FF lateral-g floor (0.3 g) -> the fit reaches its 80-row budget within a lap,
             # while staying conservative enough to drive clean. Live-found on Spa (#532): at pace
@@ -1888,6 +1891,33 @@ def rig_drive(  # pragma: no cover - rig-only
     driver = _build_driver(config, line, speed_profile)
     stats = DriveStats()
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
+
+    # #532: the handshake needs per-wheel angular speed (r_eff probe) from acpmf_physics. The
+    # HARNESS owns that mmap (opened here, closed in finally) and injects a reader — the controller
+    # never touches OS memory itself (daemon review: controller-layering + no leaked map).
+    hs_phys = None
+    if hasattr(driver, "set_phys_read"):
+        from tools.ac_harness.racing_telemetry import parse_physics
+        from tools.ac_harness.shared_memory import (
+            PHYSICS_MAP_BYTES,
+            SHM_PHYSICS,
+            SharedMemoryUnavailable,
+            open_shared_memory,
+        )
+
+        try:
+            hs_phys = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
+        except SharedMemoryUnavailable:
+            hs_phys = None
+        if hs_phys is not None:
+
+            def _read_hs_phys():
+                try:
+                    return parse_physics(hs_phys.read(PHYSICS_MAP_BYTES))
+                except (ValueError, SharedMemoryUnavailable):
+                    return None
+
+            driver.set_phys_read(_read_hs_phys)
     line_teleport_works: bool | None = None
     # Whether the car is currently OFF the racing line — set at an off-line spawn (pit box / offset
     # grid slot) AND whenever a recovery teleports it back to the pits (itself off-line). Recovery
@@ -2052,6 +2082,8 @@ def rig_drive(  # pragma: no cover - rig-only
                 )
         if phys_reader is not None:
             phys_reader.close()
+        if hs_phys is not None:  # release the harness-owned handshake physics map (#532)
+            hs_phys.close()
         for _ in range(20):
             try:
                 controller.write_controls(0.0, 0.6, 0.0)
@@ -2378,15 +2410,32 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             plant_driver_kwargs,
         )
 
-        # Key by setup too (#532 Codex review): a plant measured on the default setup must not be
-        # reused for a different-setup run. config.setup is the requested setup name (available
-        # from args before setup_ini is resolved), which is exactly the key the handshake stored.
+        # Key by setup + its CONTENT (#532 Codex review): a plant measured on one setup must not be
+        # reused for a different setup, and two files sharing a basename must not collide. Resolve
+        # the setup .ini here (before the later run-time resolution) so the load key matches the
+        # content-hashed key the handshake stored.
         setup_key = Path(config.setup).stem if config.setup else None
-        artifact = load_plant_artifact(user_dir, config.car_id, config.track_id, setup_key)
+        setup_ini_key = None
+        if config.setup:
+            try:
+                setup_ini_key = resolve_setup_ini(
+                    user_dir,
+                    config.car_id,
+                    config.track_id,
+                    config.setup,
+                    layout=config.track_layout,
+                )
+            except (FileNotFoundError, ValueError):
+                setup_ini_key = None  # unresolved -> basename-only key (best effort)
+        artifact = load_plant_artifact(
+            user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
+        )
         if artifact is not None:
             config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
             plant_artifact_used = str(
-                plant_artifact_path(user_dir, config.car_id, config.track_id, setup_key)
+                plant_artifact_path(
+                    user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
+                )
             )
             print(
                 f"auto-drive: plant artifact loaded ({args.use_plant}: "

@@ -563,6 +563,34 @@ def test_artifact_keyed_by_setup(tmp_path):
     assert load_plant_artifact(tmp_path, "test_car", "test_oval", "Aggressive") is None
 
 
+def test_setup_key_content_hash_distinguishes_same_basename(tmp_path):
+    from tools.ac_harness.plant_id import _setup_key
+
+    a = tmp_path / "a" / "Foo.ini"
+    b = tmp_path / "b" / "Foo.ini"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_text("[GEARS]\nFINAL=3.9\n")
+    b.write_text("[GEARS]\nFINAL=4.4\n")  # same basename, different content
+    ka = _setup_key("Foo", a)
+    kb = _setup_key("Foo", b)
+    assert ka != kb  # content hash disambiguates
+    assert ka.startswith("__setup-Foo-") and kb.startswith("__setup-Foo-")
+    # no ini -> basename-only key (best effort)
+    assert _setup_key("Foo") == "__setup-Foo"
+
+
+def test_handshake_set_phys_read_injection():
+    # The controller does not open OS memory; the harness injects the reader (daemon review).
+    line = _stadium_line()
+    ctrl = HandshakeController(line, _profile_for(line), sink={}, phys_read=None)
+    assert ctrl._read_phys() is None  # no reader -> None
+    from types import SimpleNamespace
+
+    ctrl.set_phys_read(lambda: SimpleNamespace(wheel_omega=(1.0, 1.0, 1.0, 1.0)))
+    assert ctrl._read_phys().wheel_omega == (1.0, 1.0, 1.0, 1.0)
+
+
 def test_plant_driver_kwargs_full_raises_on_missing_steering():
     from tools.ac_harness.plant_id import plant_driver_kwargs
 

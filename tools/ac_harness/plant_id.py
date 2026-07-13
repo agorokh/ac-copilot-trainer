@@ -35,6 +35,7 @@ pitfall list).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -95,6 +96,7 @@ class HandshakeResult:
     duration_s: float
     measurements: tuple[ProbeMeasurement, ...]
     setup: str | None = None  # the setup the plant was measured under (None = default)
+    setup_ini: str | None = None  # resolved setup .ini path (for the content-hash key)
 
     def failed(self) -> list[ProbeMeasurement]:
         return [m for m in self.measurements if not m.passed]
@@ -113,6 +115,7 @@ class HandshakeResult:
             "car_id": self.car_id,
             "track_id": self.track_id,
             "setup": self.setup,
+            "setup_ini": self.setup_ini,
             "laps_used": self.laps_used,
             "duration_s": round(self.duration_s, 1),
             "constants": self.constants(),
@@ -631,6 +634,7 @@ class HandshakeController:
         car_id: str = "",
         track_id: str = "",
         setup: str | None = None,
+        setup_ini: str | None = None,
         sink: dict | None = None,
         phys_read=None,  # Callable[[], PhysFrame | None] | "auto" | None
         pace: float = 0.65,
@@ -655,6 +659,7 @@ class HandshakeController:
         self.car_id = car_id
         self.track_id = track_id
         self.setup = setup
+        self.setup_ini = setup_ini
         self._sink = sink if sink is not None else {}
         self._phys_read = phys_read
         self.max_laps = max_laps
@@ -816,9 +821,16 @@ class HandshakeController:
         else:
             self._pending.append(kind)
 
+    def set_phys_read(self, fn) -> None:
+        """Inject the physics-frame reader the harness owns (must expose ``wheel_omega``).
+
+        The controller does NOT open OS shared memory itself — that would break controller purity
+        and leak the mmap with no lifecycle to close it (daemon review). The rig loop, which
+        already maps ``acpmf_physics`` and owns its close, provides this callable; off-rig tests
+        pass a fake (or ``None`` to exercise the missing-channel path)."""
+        self._phys_read = fn
+
     def _read_phys(self):
-        if self._phys_read == "auto":  # pragma: no cover - rig-only lazy binding
-            self._phys_read = _auto_phys_reader()
         if self._phys_read is None:
             return None
         try:
@@ -1124,6 +1136,7 @@ class HandshakeController:
             car_id=self.car_id,
             track_id=self.track_id,
             setup=self.setup,
+            setup_ini=str(self.setup_ini) if self.setup_ini else None,
             laps_used=self._laps,
             duration_s=now - (self._t_start if self._t_start is not None else now),
             measurements=measurements,
@@ -1158,54 +1171,46 @@ class HandshakeController:
         self._finish(now if now is not None else (self._prev_now or 0.0))
 
 
-def _auto_phys_reader():  # pragma: no cover - rig-only
-    """Lazy ``acpmf_physics`` reader for the live handshake (returns ``None``-safe callable)."""
-    from tools.ac_harness.racing_telemetry import parse_physics
-    from tools.ac_harness.shared_memory import (
-        PHYSICS_MAP_BYTES,
-        SHM_PHYSICS,
-        SharedMemoryUnavailable,
-        open_shared_memory,
-    )
-
-    # Map+read the single unified physics-page size (shared_memory.PHYSICS_MAP_BYTES=160), which
-    # covers every field parse_physics unpacks — do NOT reintroduce a second buffer-size constant
-    # (daemon review: honor the cross-file map-size invariant).
-    try:
-        shm = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
-    except SharedMemoryUnavailable:
-        return None
-
-    def read():
-        try:
-            return parse_physics(shm.read(PHYSICS_MAP_BYTES))
-        except (ValueError, SharedMemoryUnavailable):
-            return None
-
-    return read
-
-
 # ---------------------------------------------------------------------------
 # Per-combo plant artifact (durable — NEVER .scratch; see module docstring)
 # ---------------------------------------------------------------------------
-def _setup_key(setup: str | None) -> str:
+def _setup_content_hash(setup_ini: str | Path | None) -> str:
+    """First 8 hex of the SHA-256 of the setup INI content, or "" when unreadable."""
+    if not setup_ini:
+        return ""
+    try:
+        return hashlib.sha256(Path(setup_ini).read_bytes()).hexdigest()[:8]
+    except OSError:
+        return ""
+
+
+def _setup_key(setup: str | None, setup_ini: str | Path | None = None) -> str:
     """Filename-safe suffix identifying the setup a plant was measured under (empty = default).
 
     A car SETUP changes gear ratios / final drive / response, so a plant measured on the default
-    setup must NOT be reused for a different-setup run (Codex review). The setup is part of the
-    combo identity: ``<car>__<track>`` (default) vs ``<car>__<track>__setup-<stem>``.
+    setup must NOT be reused for a different-setup run (Codex review). Keyed by the setup basename
+    PLUS a content hash of the resolved ``.ini`` when available, so two different files sharing a
+    basename (``spa/Foo.ini`` vs ``generic/Foo.ini``, or an edited ``Foo.ini``) never collide:
+    ``<car>__<track>`` (default) vs ``<car>__<track>__setup-<stem>[-<sha8>]``.
     """
     if not setup:
         return ""
     stem = re.sub(r"\.ini$", "", str(setup).replace("\\", "/").rsplit("/", 1)[-1])
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", stem)
-    return f"__setup-{safe}" if safe else ""
+    if not safe:
+        return ""
+    digest = _setup_content_hash(setup_ini)
+    return f"__setup-{safe}-{digest}" if digest else f"__setup-{safe}"
 
 
 def plant_artifact_path(
-    user_dir: Path, car_id: str, track_id: str, setup: str | None = None
+    user_dir: Path,
+    car_id: str,
+    track_id: str,
+    setup: str | None = None,
+    setup_ini: str | Path | None = None,
 ) -> Path:
-    return Path(user_dir) / "plant_id" / f"{car_id}__{track_id}{_setup_key(setup)}.json"
+    return Path(user_dir) / "plant_id" / f"{car_id}__{track_id}{_setup_key(setup, setup_ini)}.json"
 
 
 def save_plant_artifact(user_dir: Path, result: dict) -> Path:
@@ -1221,6 +1226,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     if not car_id or not track_id:
         raise ValueError(f"plant artifact needs car_id and track_id (got {car_id!r}/{track_id!r})")
     setup = result.get("setup")
+    setup_ini = result.get("setup_ini")
     from datetime import UTC, datetime
 
     payload = {
@@ -1228,7 +1234,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **result,
     }
-    path = plant_artifact_path(user_dir, car_id, track_id, setup)
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1237,15 +1243,19 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
 
 
 def load_plant_artifact(
-    user_dir: Path, car_id: str, track_id: str, setup: str | None = None
+    user_dir: Path,
+    car_id: str,
+    track_id: str,
+    setup: str | None = None,
+    setup_ini: str | Path | None = None,
 ) -> dict | None:
     """Load + validate the combo's plant artifact; ``None`` when absent or invalid.
 
-    ``setup`` is part of the combo identity — a request with ``--setup X`` only loads a plant
-    measured under setup X (not the default-setup plant), so setup-changed gear ratios / FF can't
-    be silently reused (Codex review).
+    ``setup`` (+ the resolved ``setup_ini`` content hash) is part of the combo identity — a request
+    with ``--setup X`` only loads a plant measured under that exact setup file, so setup-changed
+    gear ratios / FF can't be silently reused (Codex review).
     """
-    path = plant_artifact_path(user_dir, car_id, track_id, setup)
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
@@ -1254,7 +1264,7 @@ def load_plant_artifact(
         return None
     if payload.get("car_id") != car_id or payload.get("track_id") != track_id:
         return None
-    if _setup_key(payload.get("setup")) != _setup_key(setup):
+    if _setup_key(payload.get("setup"), payload.get("setup_ini")) != _setup_key(setup, setup_ini):
         return None
     constants = payload.get("constants")
     if not isinstance(constants, dict) or not constants:
