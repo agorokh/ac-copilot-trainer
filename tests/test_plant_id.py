@@ -15,6 +15,7 @@ import pytest
 
 from tools.ac_harness.auto_drive import AutoDriveConfig, _build_driver, generic_gt3_ggv
 from tools.ac_harness.ggv_profile import GGVModel
+from tools.ac_harness.lap_driver import PHASE_LAP, DriveFrame
 from tools.ac_harness.plant_id import (
     PLANT_SCHEMA_VERSION,
     HandshakeController,
@@ -757,6 +758,36 @@ def test_brake_probe_queued_only_with_prior():
     assert with_prior.brake_probe_seconds == 2.5
     assert with_prior.brake_min_entry_kmh == 110.0
     assert with_prior.friction_row_interval_s == 0.01
+
+
+def test_friction_sampler_deduplicates_physics_packets():
+    line = _stadium_line()
+    phys = SimpleNamespace(packet_id=7, speed_kmh=80.0, accg_lat=0.2, accg_lon=-1.0)
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        sink={},
+        prior_ggv=generic_gt3_ggv(),
+        phys_read=lambda: phys,
+    )
+    ctrl._mine_friction(0.0)
+    ctrl._mine_friction(0.02)
+    assert len(ctrl._friction_rows) == 1
+    phys.packet_id = 8
+    ctrl._mine_friction(0.04)
+    assert len(ctrl._friction_rows) == 2
+
+
+def test_brake_probe_requires_speed_dependent_stopping_room():
+    line = _stadium_line()
+    ctrl = HandshakeController(line, _profile_for(line), sink={}, prior_ggv=generic_gt3_ggv())
+    assert ctrl._brake_probe_required_m(110.0) > 100.0
+    ctrl._pending.remove("brake_probe")
+    ctrl._active = {"kind": "brake_probe", "stage": "prep", "t_stage": 0.0, "data": {}}
+    base = DriveFrame(0.5, 0.0, 0.0, False, False, PHASE_LAP, False, False)
+    assert ctrl._step_brake(base, 110.0, 100.0, 0.0) is base
+    assert ctrl._active is None
+    assert "brake_probe" in ctrl._pending
 
 
 def test_handshake_no_ggv_block_without_prior(handshake_outcome):

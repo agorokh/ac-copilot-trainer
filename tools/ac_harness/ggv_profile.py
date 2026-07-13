@@ -48,6 +48,8 @@ G = 9.81
 MIN_LONGITUDINAL_SUPPORT_KMH = 40.0
 MAX_LONGITUDINAL_SUPPORT_KMH = 300.0
 MAX_DRIVE_SUPPORT_G = 2.0
+MAX_PERSISTED_AY_CAP_G = 1.8
+MAX_PERSISTED_BRAKE_CAP_G = 3.4
 
 
 # ---------------------------------------------------------------------------
@@ -113,11 +115,12 @@ class GGVModel:
     def _supported_longitudinal_g(
         self, kind: str, v_ms: float, prior_g: float, *, floor_g: float
     ) -> float:
-        """Apply a measured gain only inside its observed speed support.
+        """Apply a measured longitudinal envelope only inside its observed speed support.
 
         ``blend_ggv_safe`` deliberately keeps the trusted prior in the model's top-level
         coefficients.  A measured longitudinal curve is stored as an additive, provenance-backed
-        override and tapers to the prior at both edges of the observed range.  Consequently an old
+        override and tapers to the prior at both edges of the observed range. Braking evidence may
+        safely raise or lower the envelope; drive evidence only raises it. Consequently an old
         consumer that ignores provenance remains conservative, while this consumer can learn where
         the handshake actually measured without extrapolating a low-speed fit to 240 km/h.
 
@@ -144,7 +147,7 @@ class GGVModel:
         if speed_kmh <= lo_kmh or speed_kmh >= hi_kmh:
             return prior_g
         measured_g = max(measured_floor_g, b0_g + b1 * v_ms)
-        if measured_g <= prior_g:
+        if kind != "brake" and measured_g <= prior_g:
             return prior_g
         taper_kmh = min(taper_kmh, (hi_kmh - lo_kmh) / 2.0)
         weight = min(
@@ -241,9 +244,13 @@ class GGVModel:
             raise ValueError(
                 f"GGVModel.from_dict: drive_min_g must be non-negative: {vals['drive_min_g']!r}"
             )
-        for f in ("ay_cap_g", "ax_brake_cap_g"):
-            if f in vals and vals[f] <= 0.0:
-                raise ValueError(f"GGVModel.from_dict: {f} must be positive: {vals[f]!r}")
+        cap_limits = {
+            "ay_cap_g": MAX_PERSISTED_AY_CAP_G,
+            "ax_brake_cap_g": MAX_PERSISTED_BRAKE_CAP_G,
+        }
+        for f, limit in cap_limits.items():
+            if f in vals and not (0.0 < vals[f] <= limit):
+                raise ValueError(f"GGVModel.from_dict: {f} must be in (0, {limit}]: {vals[f]!r}")
         prov = data.get("provenance")
         supported = data.get("supported_longitudinal", {})
         return cls(
@@ -499,9 +506,11 @@ def blend_ggv_safe(
       probe — deferred (unsafe to push a GT3 to its lateral limit unattended). So lateral == prior.
     * **Braking / drive accel** CAN be probed to their limits safely (straight-line braking, WOT
       accel). Apply the measured curve ONLY inside an observed span of at least
-      ``min_longitudinal_span_kmh`` where it CONFIDENTLY EXCEEDS the prior (evidence of MORE
-      capability). It tapers to the prior at both support edges and the prior is used everywhere
-      outside, so a low-speed fit is never extrapolated to an unmeasured high-speed braking point.
+      ``min_longitudinal_span_kmh``. Braking accepts a curve that is consistently above OR below
+      the prior: a weaker measured brake envelope must make the combo brake earlier. Drive accepts
+      only a confident gain because conservative acceleration under-measurement is not hazardous.
+      The measured curve tapers to the prior at both support edges and the prior is used everywhere
+      outside, so a low-speed fit is never extrapolated to an unmeasured high-speed point.
       The prior remains in the top-level coefficients as a fail-safe for older consumers, and its
       hard caps are kept.
     * **The ellipse exponent is pinned to the prior.** The friction-ellipse boundary exponent
@@ -547,16 +556,17 @@ def blend_ggv_safe(
     # feeds a future limit-reaching pass. See docstring.
     ellipse_n, ell_src = prior.ellipse_n, "prior"
 
-    # Braking: the top-level curve remains the prior. A measured gain is activated only over a
-    # sufficiently broad OBSERVED span and tapers back to the prior at both edges. This prevents a
-    # narrow 50-90 km/h fit from changing a later 200 km/h braking point.
+    # Braking: the top-level curve remains the prior. A consistently stronger OR weaker measured
+    # envelope is activated only over a sufficiently broad OBSERVED span and tapers back to the
+    # prior at both edges. This prevents a narrow 50-90 km/h fit from changing a later 200 km/h
+    # braking point.
     brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
     if (
         brake_bins >= min_brake_bins
         and prov.get("brake_fit_valid") is True
         and coverage_ok(brake_range)
         and _finite_ggv(measured.brake_b0_g, measured.brake_b1)
-        and _curve_exceeds(
+        and _brake_curve_is_supported(
             measured.brake_b0_g,
             measured.brake_b1,
             prior.brake_b0_g,
@@ -640,11 +650,12 @@ def blend_ggv_safe(
             "support_taper_kmh": support_taper_kmh,
         },
         "prior": prior_name,
-        # A conservative handshake under-measures the true limit; a measured value below the prior
-        # is a lower bound, not a weaker-car signal. Recorded for a future slip-saturation pass.
+        # A conservative handshake under-measures the lateral limit, so lateral values below the
+        # prior remain lower bounds. Straight-line braking, however, is limit-reaching evidence.
         "note": (
             "lateral pinned to prior (conservative drive under-measures the lateral limit); "
-            "braking/drive gains applied only inside measured speed support; prior outside"
+            "braking evidence and drive gains applied only inside measured speed support; "
+            "prior outside"
         ),
     }
     return GGVModel(
@@ -683,6 +694,24 @@ def _curve_exceeds(
     return (m0 + m1 * v_lo) >= (p0 + p1 * v_lo) + margin and (m0 + m1 * v_hi) >= (
         p0 + p1 * v_hi
     ) + margin
+
+
+def _brake_curve_is_supported(
+    m0: float,
+    m1: float,
+    p0: float,
+    p1: float,
+    *,
+    v_lo: float,
+    v_hi: float,
+    margin: float = 0.03,
+) -> bool:
+    """True when a brake curve is consistently stronger OR weaker over measured support."""
+    exceeds = _curve_exceeds(m0, m1, p0, p1, v_lo=v_lo, v_hi=v_hi, margin=margin)
+    below = (m0 + m1 * v_lo) <= (p0 + p1 * v_lo) - margin and (m0 + m1 * v_hi) <= (
+        p0 + p1 * v_hi
+    ) - margin
+    return exceeds or below
 
 
 def _finite_ggv(*values: float) -> bool:
@@ -747,8 +776,10 @@ def _validate_supported_longitudinal(
         if kind == "brake":
             if floor_g != 0.5 or b1 < 0.0:
                 raise ValueError("supported brake override requires floor_g=0.5 and b1>=0")
-            if not _curve_exceeds(b0_g, b1, brake_b0_g, brake_b1, v_lo=v_lo, v_hi=v_hi):
-                raise ValueError("supported brake override no longer exceeds its trusted prior")
+            if not _brake_curve_is_supported(b0_g, b1, brake_b0_g, brake_b1, v_lo=v_lo, v_hi=v_hi):
+                raise ValueError(
+                    "supported brake override is not consistently above/below its trusted prior"
+                )
             if max(b0_g + b1 * v_lo, b0_g + b1 * v_hi) > ax_brake_cap_g:
                 raise ValueError("supported brake override exceeds the trusted brake cap")
         else:

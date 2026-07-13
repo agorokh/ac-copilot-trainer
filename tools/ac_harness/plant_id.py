@@ -754,6 +754,7 @@ class HandshakeController:
         # probe => braking envelope). Fed to ggv_from_telemetry at finish.
         self._friction_rows: list[dict] = []
         self._friction_t: float | None = None
+        self._friction_packet_id: int | None = None
         self._ratio_samples: dict[int, list[float]] = {}
         self._laps = 0
         self._t_start: float | None = None
@@ -979,6 +980,14 @@ class HandshakeController:
             return
         if not _finite(speed, ay, ao) or speed < 15.0:
             return
+        # The controller can run faster than AC's physics mmap refresh. Do not count one mmap
+        # packet several times merely because the harness clock advanced: duplicated frames would
+        # fabricate the per-bin support that makes a fitted friction envelope runtime-bearing.
+        packet_id = getattr(phys, "packet_id", None)
+        if isinstance(packet_id, int) and not isinstance(packet_id, bool):
+            if packet_id == self._friction_packet_id:
+                return
+            self._friction_packet_id = packet_id
         self._friction_t = now
         if len(self._friction_rows) < 60000:
             source = "passive"
@@ -1249,8 +1258,10 @@ class HandshakeController:
         assert st is not None
         if st["stage"] == "prep":
             # Wait until fast enough to trace the HIGH-speed braking envelope; let the base driver
-            # keep accelerating. Bail (probe re-queues) if the straight runs out or prep drags.
-            if now - st["t_stage"] > 8.0 or remaining < 60.0:
+            # keep accelerating. Reserve enough distance to brake from the eventual entry speed to
+            # the safety floor at a conservative 0.5 g, plus 30 m to settle before the corner.
+            entry_kmh = max(speed_kmh, self.brake_min_entry_kmh)
+            if now - st["t_stage"] > 8.0 or remaining < self._brake_probe_required_m(entry_kmh):
                 self._abort_active(
                     "brake-probe prep: straight too short or entry speed not reached"
                 )
@@ -1272,6 +1283,13 @@ class HandshakeController:
             self._active = None
             return base
         return self._override(base, gas=0.0, brake=self.brake_level, gear_up=False, gear_dn=False)
+
+    def _brake_probe_required_m(self, entry_kmh: float) -> float:
+        """Conservative stopping distance from probe entry to the configured safety floor."""
+        entry_mps = max(0.0, entry_kmh) / 3.6
+        exit_mps = max(0.0, self.brake_min_exit_kmh) / 3.6
+        braking_m = max(0.0, entry_mps * entry_mps - exit_mps * exit_mps) / (2.0 * 0.5 * G)
+        return braking_m + 30.0
 
     def _finish(self, now: float) -> None:
         m_sign = fit_ff_sign(self._pulse_records)

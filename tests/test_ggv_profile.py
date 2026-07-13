@@ -447,6 +447,8 @@ def test_ggv_model_roundtrip_and_rejects_nan():
         {"k_aero_lat": -0.0001},
         {"k_aero_lat": 0.0001},
         {"drive_min_g": -0.1},
+        {"ay_cap_g": 50.0},
+        {"ax_brake_cap_g": 50.0},
     ):
         with pytest.raises(ValueError):
             GGVModel.from_dict({**m.to_dict(), **bad})
@@ -539,6 +541,26 @@ def test_supported_brake_gain_tapers_to_prior_and_never_extrapolates():
     assert b.ax_brake_max(180.0 / 3.6) == prior.ax_brake_max(180.0 / 3.6)
     restored = GGVModel.from_dict(b.to_dict())
     assert restored.ax_brake_max(75.0 / 3.6) == b.ax_brake_max(75.0 / 3.6)
+
+
+def test_supported_weaker_brake_envelope_lowers_only_measured_speed_range():
+    prior = _prior()
+    measured = _measured(
+        1.2,
+        corner_bins=0,
+        brake_bins=5,
+        accel_bins=0,
+        hull_points=100,
+        brake_b0=0.7,
+        brake_b1=0.01,
+        brake_range=(50.0, 100.0),
+    )
+    blended = blend_ggv_safe(measured, prior)
+    assert blended.ax_brake_max(75.0 / 3.6) < prior.ax_brake_max(75.0 / 3.6)
+    assert blended.ax_brake_max(50.0 / 3.6) == prior.ax_brake_max(50.0 / 3.6)
+    assert blended.ax_brake_max(100.0 / 3.6) == prior.ax_brake_max(100.0 / 3.6)
+    assert blended.ax_brake_max(180.0 / 3.6) == prior.ax_brake_max(180.0 / 3.6)
+    assert blended.provenance["blend_source"]["brake"] == "measured(supported)"
 
 
 def test_supported_taper_is_capped_to_half_the_observed_span():
