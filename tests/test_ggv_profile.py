@@ -502,6 +502,32 @@ def test_uncertainty_map_derates_unmeasured_bins_and_drives_runtime_qss():
     assert model.ay_max(350.0 / 3.6) / 9.81 <= model.uncertainty_bins[-1]["lateral"]["safe_g"]
 
 
+def test_uncertainty_builder_rejects_partial_runtime_domain():
+    import pytest
+
+    prior = _prior()
+    with pytest.raises(ValueError, match="complete 0-300"):
+        with_binned_uncertainty(prior, _uncertainty_rows(), prior, max_speed_kmh=200.0)
+
+
+def test_small_probe_posterior_drops_one_possible_peak_spike():
+    prior = _prior()
+    rows = [
+        {
+            "speed_kmh": 65.0,
+            "accg_lat": 0.0,
+            "accg_lon": -(8.0 if index == 7 else 1.1),
+            "source": "brake_probe",
+        }
+        for index in range(8)
+    ]
+    model = with_binned_uncertainty(prior, rows, prior)
+    channel = model.uncertainty_bins[6]["brake"]
+    assert channel["source"] == "measured"
+    assert channel["n"] == 8
+    assert channel["mean_g"] < 2.0
+
+
 def test_uncertainty_map_roundtrip_is_validated_and_read_only():
     import pytest
 
@@ -610,6 +636,10 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     assert passive_summary["probe_rows_seen"] == 0
     assert passive.uncertainty_bins[6]["brake"]["source"] == "prior"
     assert passive.uncertainty_bins[6]["drive"]["source"] == "prior"
+    # The blended runtime exponent is prior-pinned, and the diagnostics hull also excludes passive
+    # longitudinal rows when this path disables passive cap identification.
+    assert passive.ellipse_n == prior.ellipse_n
+    assert passive.provenance["measured"]["hull_points"] == 0
 
     wrong_lap_rows = [{**row, "lap_index": 0} for row in _uncertainty_rows()]
     wrong_lap, wrong_lap_summary = ggv_from_lap_archives([warm], prior, probe_rows=wrong_lap_rows)

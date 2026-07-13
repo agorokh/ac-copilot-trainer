@@ -388,7 +388,8 @@ def ggv_from_telemetry(
             acc_probe_b.setdefault(b, []).append(abs(ao))
         elif allow_passive_longitudinal:
             acc_passive_b.setdefault(b, []).append(abs(ao))
-        if al > 0.2 or abs(ao) > 0.2:
+        probe_source = source in {"brake_probe", "accel_sweep"}
+        if (allow_passive_longitudinal or probe_source) and (al > 0.2 or abs(ao) > 0.2):
             hull.append((al, abs(ao)))
 
     # Lateral grip: ONLY bins where the car DEMONSTRABLY cornered hard count (p95 lateral high).
@@ -541,14 +542,13 @@ def with_binned_uncertainty(
         raise ValueError("uncertainty parameters must be finite")
     if (
         bin_kmh <= 0.0
-        or max_speed_kmh <= 0.0
-        or max_speed_kmh > DEFAULT_UNCERTAINTY_MAX_KMH
+        or not math.isclose(max_speed_kmh, DEFAULT_UNCERTAINTY_MAX_KMH)
         or prior_relative_std <= 0.0
         or lcb_z <= 0.0
         or min_samples <= 0
         or min_probe_samples <= 0
     ):
-        raise ValueError("uncertainty parameters are outside safe ranges")
+        raise ValueError("uncertainty parameters require the complete 0-300 km/h runtime range")
     if not math.isclose(bin_kmh, round(bin_kmh)):
         raise ValueError("bin_kmh must be a whole number of km/h")
     count = max_speed_kmh / bin_kmh
@@ -589,6 +589,7 @@ def with_binned_uncertainty(
         *,
         floor_g: float,
         observed: bool,
+        probe_qualified: bool = False,
     ) -> dict:
         prior_std = max(0.03, abs(prior_mean) * prior_relative_std)
         if not observed:
@@ -598,7 +599,9 @@ def with_binned_uncertainty(
             n = 0
         else:
             n = len(values)
-            envelope = _pct(values, 0.95)
+            # At the eight-sample controlled-probe gate, ordinary p95 is the maximum. Reuse the
+            # telemetry fitter's small-N rule so one spike cannot lift a runtime-bearing posterior.
+            envelope = _probe_pct(values, 0.95) if probe_qualified else _pct(values, 0.95)
             median = _pct(values, 0.50)
             robust_scale = max(0.03, (envelope - median) / 1.645)
             effective_n = min(50.0, max(1.0, float(n)))
@@ -652,12 +655,14 @@ def with_binned_uncertainty(
                     prior.ax_brake_max(mid_ms) / G,
                     floor_g=0.5,
                     observed=brake_observed,
+                    probe_qualified=True,
                 ),
                 "drive": posterior(
                     drive_values,
                     prior.ax_drive_max(mid_ms) / G,
                     floor_g=0.10,
                     observed=drive_observed,
+                    probe_qualified=True,
                 ),
             }
         )
