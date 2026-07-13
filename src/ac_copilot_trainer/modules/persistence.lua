@@ -38,10 +38,18 @@ local function tryCarFromCar(car)
   return nil
 end
 
---- Lap archive / filenames: same field order as `sessionKey` fallbacks, then sanitize.
+--- Lap archive / filenames: prefer the stable content id from ``ac.getCarID(0)``. Some CSP
+--- ``StateCar`` builds expose ``car.id`` as a callable accessor; stringifying that value produces
+--- an address-shaped ``function_0x...`` id, which cannot match the harness combo and makes a real
+--- thermal lap unusable for plant identification. Only fall back to StateCar labels when the
+--- global content-id API is unavailable.
 ---@param car ac.StateCar|nil
 ---@return string|nil
 function M.archiveCarIdFromCar(car)
+  local globalId = ch.safeCarIdRaw()
+  if type(globalId) == "string" and globalId ~= "" then
+    return ch.sanitizeId(globalId, "unknown")
+  end
   local raw = tryCarFromCar(car)
   if not raw then
     return nil

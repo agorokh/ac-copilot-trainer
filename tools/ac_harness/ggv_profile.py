@@ -58,6 +58,8 @@ DEFAULT_UNCERTAINTY_LCB_Z = 1.96
 DEFAULT_PRIOR_RELATIVE_STD = 0.15
 DEFAULT_THERMAL_WINDOW_HALF_WIDTH_C = 10.0
 DEFAULT_THERMAL_RESIDENCE_FRACTION = 0.80
+DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C = 5.0
+DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C = 15.0
 _WHEELS = ("fl", "fr", "rl", "rr")
 
 
@@ -689,13 +691,17 @@ def observe_lap_tyre_state(
     *,
     thermal_window_half_width_c: float = DEFAULT_THERMAL_WINDOW_HALF_WIDTH_C,
     min_residence_fraction: float = DEFAULT_THERMAL_RESIDENCE_FRACTION,
+    stability_half_width_c: float = DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C,
+    max_wheel_spread_c: float = DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
 ) -> dict:
     """Tag one lap archive's tyre thermal/pressure/grip state (#543).
 
     The observer reads the canonical #488 archive channels. ``fit_eligible`` is deliberately strict:
-    a valid lap, all four core-temperature and hot-pressure channels, a car-true optimum, and at
-    least 80% thermal-window residence. Surface temperatures and CSP ``dy`` peak-mu are reported
-    when present; they do not fabricate eligibility when core/pressure evidence is missing.
+    a valid lap, all four core-temperature and hot-pressure channels, a car-true optimum, and a
+    stable within-lap per-wheel thermal state. ``tag`` still reports cold/optimal/hot relative to
+    the car's optimum; a stable cold lap is usable as a conservative, explicitly tagged cohort.
+    Surface temperatures and CSP ``dy`` peak-mu are reported when present; they do not fabricate
+    eligibility when core/pressure evidence is missing.
     """
     trace = archive.get("trace") if isinstance(archive, dict) else None
     fields = trace.get("fields") if isinstance(trace, dict) else None
@@ -718,7 +724,10 @@ def observe_lap_tyre_state(
         "compound_name": None,
         "setup_hash": None,
         "thermal_residence_fraction": 0.0,
+        "thermal_stability_fraction": 0.0,
         "sample_coverage_fraction": 0.0,
+        "wheel_core_temp_c": None,
+        "wheel_spread_c": None,
     }
     if not isinstance(fields, list) or not isinstance(samples, list) or not samples:
         return base
@@ -774,6 +783,7 @@ def observe_lap_tyre_state(
         return out
 
     core_means: list[float] = []
+    core_rows: list[list[float]] = []
     pressure_means: list[float] = []
     surface_means: list[float] = []
     grip_mu: list[float] = []
@@ -793,6 +803,7 @@ def observe_lap_tyre_state(
         if len(core) == len(_WHEELS) and len(pressure) == len(_WHEELS):
             core_mean = statistics.fmean(core)
             core_means.append(core_mean)
+            core_rows.append(core)
             pressure_means.append(statistics.fmean(pressure))
             if all(abs(value - optimal) <= thermal_window_half_width_c for value in core):
                 in_window += 1
@@ -805,6 +816,24 @@ def observe_lap_tyre_state(
 
     coverage = len(core_means) / len(samples)
     residence = in_window / len(core_means) if core_means else 0.0
+    wheel_centers = (
+        [statistics.median(row[i] for row in core_rows) for i in range(len(_WHEELS))]
+        if core_rows
+        else []
+    )
+    stable_rows = (
+        sum(
+            all(
+                abs(row[i] - wheel_centers[i]) <= stability_half_width_c
+                for i in range(len(_WHEELS))
+            )
+            for row in core_rows
+        )
+        if wheel_centers
+        else 0
+    )
+    stability = stable_rows / len(core_rows) if core_rows else 0.0
+    wheel_spread = max(wheel_centers) - min(wheel_centers) if wheel_centers else None
     mean_core = statistics.fmean(core_means) if core_means else None
     mean_pressure = statistics.fmean(pressure_means) if pressure_means else None
     tag = "unknown"
@@ -820,8 +849,10 @@ def observe_lap_tyre_state(
         is_valid
         and (compound_index is not None or compound_name is not None)
         and coverage >= min_residence_fraction
-        and residence >= min_residence_fraction
-        and tag == "optimal"
+        and stability >= min_residence_fraction
+        and wheel_spread is not None
+        and wheel_spread <= max_wheel_spread_c
+        and tag != "unknown"
     )
     grip_multiplier = None
     if grip_mu:
@@ -842,7 +873,7 @@ def observe_lap_tyre_state(
             else (
                 "missing tyre compound identity"
                 if compound_index is None and compound_name is None
-                else "outside thermal/validity gate"
+                else "outside thermal stability/validity gate"
             )
         ),
         "optimal_temp_c": round(optimal, 3),
@@ -855,7 +886,14 @@ def observe_lap_tyre_state(
         "compound_name": compound_name,
         "setup_hash": setup_hash,
         "thermal_residence_fraction": round(residence, 6),
+        "thermal_stability_fraction": round(stability, 6),
         "sample_coverage_fraction": round(coverage, 6),
+        "wheel_core_temp_c": (
+            {wheel: round(value, 3) for wheel, value in zip(_WHEELS, wheel_centers, strict=True)}
+            if wheel_centers
+            else None
+        ),
+        "wheel_spread_c": round(wheel_spread, 3) if wheel_spread is not None else None,
     }
 
 
@@ -879,12 +917,12 @@ def ggv_from_lap_archives(
 
     # A plant is per combo, which includes tyre compound and setup. A stale archive from the same
     # car/track session must not contaminate the posterior merely because its temperatures match.
-    cohort_groups: dict[tuple[object, object], list[tuple[dict, dict]]] = {}
+    cohort_groups: dict[tuple[object, object, object], list[tuple[dict, dict]]] = {}
     for archive, state in eligible:
         compound = state.get("compound_index")
         if compound is None:
             compound = state.get("compound_name")
-        key = (compound, state.get("setup_hash"))
+        key = (compound, state.get("setup_hash"), state.get("tag"))
         cohort_groups.setdefault(key, []).append((archive, state))
     cohort_key, eligible = sorted(
         cohort_groups.items(), key=lambda item: (-len(item[1]), repr(item[0]))
@@ -977,6 +1015,7 @@ def ggv_from_lap_archives(
             "pressure_tolerance_psi": 2.0,
             "compound": cohort_key[0],
             "setup_hash": cohort_key[1],
+            "thermal_tag": cohort_key[2],
         },
     }
     return model, summary

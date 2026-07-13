@@ -1214,9 +1214,10 @@ state = {
   -- any mid-track clock seed (app load/reload mid-lap, post-reset re-arm) — Cursor + codex on #185.
   -- Defaults true: no delta until the first clean lap is started (an out-lap clock is mid-track).
   deltaRefStale = true,
-  -- One-frame confirmation for wrap-shaped same-lap spline jumps on CSP builds without
-  -- resetCounter: if lapCount does not catch up on the next frame, reset rolling state (#188).
+  -- Bounded confirmation for wrap-shaped same-lap spline jumps on CSP builds without
+  -- resetCounter: allow CSP's multi-frame lapCount lag, then reset rolling state (#188/#543).
   pendingWrapResetLapCount = nil,
+  pendingWrapResetFrames = 0,
   bestLapTrace = {},
   -- Local in-game PB/reference snapshot. When an imported reference is active,
   -- realtime code still reads `bestLapTrace`, but persistence saves these local fields.
@@ -1553,6 +1554,7 @@ local function resetRuntimeAfterLeavingTrack()
   state.lastResetCounter = nil  -- re-prime teleport detection on next track entry
   state.deltaRefStale = true  -- re-entry: no boundary-aligned clock yet, delta silent until first lap
   state.pendingWrapResetLapCount = nil
+  state.pendingWrapResetFrames = 0
   state.bestLapTrace = {}
   state.localBestLapTrace = {}
   state.localBestBrakePoints = {}
@@ -1669,6 +1671,7 @@ local function resetRollingDrivingState()
   telemetryPublisher.reset()  -- #180: reset delta/tire_temps rate-limiters
   state.deltaRefStale = true  -- #180/#185: clock reset; delta silent until the next clean lap boundary
   state.pendingWrapResetLapCount = nil
+  state.pendingWrapResetFrames = 0
   tel = newTelemetry()
   brakes = newBrakes()
   td:resetLapAggregates()
@@ -2519,6 +2522,12 @@ function script.update(dt)
         wsBridge = wsBridge,
       })
     end
+  end)
+
+  -- Keep the always-on tyre/tick streams independent from the optional reference-delta path
+  -- above. A malformed or stale reference trace must never abort this block before tyre state is
+  -- published: the harness, rig screen and thermal plant-ID gate all rely on these live samples.
+  pcall(function()
     local currentTireTemps = tires:currentTemps(car)
     telemetryPublisher.publishTireTempsIfDue({
       dt = dt,
@@ -2942,6 +2951,7 @@ function script.update(dt)
 
   local resetDecision = delta.rollingResetDecision({
     pendingWrapLapCount = state.pendingWrapResetLapCount,
+    pendingWrapFrames = state.pendingWrapResetFrames,
     lastLapCount = state.lastLapCount,
     lapCount = lc,
     prevSpline = state.lastSplinePos,
@@ -2949,6 +2959,7 @@ function script.update(dt)
     teleported = teleported,
   })
   state.pendingWrapResetLapCount = resetDecision.pendingWrapLapCount
+  state.pendingWrapResetFrames = resetDecision.pendingWrapFrames or 0
   if resetDecision.reset then
     -- Teleport/resetCounter, lap rollback, non-wrap same-lap spline rewind, or a deferred
     -- wrap-shaped same-lap jump whose lapCount did not catch up on the following frame (#188).

@@ -758,6 +758,8 @@ class HandshakeController:
         self._friction_packet_id: int | None = None
         self._ratio_samples: dict[int, list[float]] = {}
         self._laps = 0
+        self._completed_laps_baseline: int | None = None
+        self._uses_completed_laps = False
         self._t_start: float | None = None
         self._prev_heading: tuple[float, float] | None = None
         self._prev_now: float | None = None
@@ -817,7 +819,11 @@ class HandshakeController:
             self._speed_hist.pop(0)
 
         self._mine_gear_ratio(now, rpm, gear, speed_kmh)
-        if base.lap_completed:
+        # Pure/off-sim fallback. On the rig, _mine_friction observes AC's authoritative
+        # acpmf_graphics.completedLaps and takes ownership of this counter below; the line-based
+        # driver's wrap heuristic can fire early when a probe rejoins near S/F and must not end a
+        # two-lap thermal handshake after only one real AC lap.
+        if base.lap_completed and not self._uses_completed_laps:
             self._laps += 1
 
         if base.needs_recovery:
@@ -843,7 +849,16 @@ class HandshakeController:
 
         if not self.finished:
             done_probing = not self._pending and self._active is None
-            if (done_probing and len(self._rows) >= self.min_corner_rows) or (
+            # The uncertainty fit is intentionally archive-backed: live physics has the designed
+            # probe rows but not the canonical per-wheel thermal channels. When a GGV prior is
+            # enabled, do not self-terminate merely because the scalar probes finished before the
+            # first S/F crossing. That first crossing only closes the PARTIAL lap containing the
+            # probes and can legitimately yield a sparse/refused archive; continue for the clean
+            # post-probe lap and finish at the existing two-lap cap. Without this gate a fresh rig
+            # run persisted either a prior-only artifact (laps_used=0) or a one-row probe-tail
+            # archive, making the #543 thermal observer impossible to exercise end to end.
+            thermal_lap_ready = self._prior_ggv is None or self._laps >= self.max_laps
+            if (done_probing and len(self._rows) >= self.min_corner_rows and thermal_lap_ready) or (
                 self._laps >= self.max_laps
             ):
                 self._finish(now)
@@ -974,6 +989,16 @@ class HandshakeController:
         phys = self._read_phys()
         if phys is None:
             return
+        completed_laps = getattr(phys, "completed_laps", None)
+        if (
+            isinstance(completed_laps, int)
+            and not isinstance(completed_laps, bool)
+            and completed_laps >= 0
+        ):
+            if self._completed_laps_baseline is None:
+                self._completed_laps_baseline = completed_laps
+            self._uses_completed_laps = True
+            self._laps = max(0, completed_laps - self._completed_laps_baseline)
         speed = getattr(phys, "speed_kmh", None)
         ay = getattr(phys, "accg_lat", None)
         ao = getattr(phys, "accg_lon", None)
@@ -999,7 +1024,6 @@ class HandshakeController:
                     source = "brake_probe"
                 elif kind == "accel_sweep" and stage == "wot":
                     source = "accel_sweep"
-            completed_laps = getattr(phys, "completed_laps", None)
             lap_number = None
             if (
                 isinstance(completed_laps, int)

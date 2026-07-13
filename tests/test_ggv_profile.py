@@ -611,6 +611,7 @@ def test_tyre_state_observer_tags_core_surface_pressure_and_grip():
     assert state["tag"] == "optimal"
     assert state["fit_eligible"] is True
     assert state["thermal_residence_fraction"] == 1.0
+    assert state["thermal_stability_fraction"] == 1.0
     assert state["core_temp_c"] == 90.0
     assert state["surface_temp_c"] == 90.0
     assert state["pressure_psi"] == 27.0
@@ -619,10 +620,12 @@ def test_tyre_state_observer_tags_core_surface_pressure_and_grip():
     assert state["setup_hash"] == "setup-a"
     cold = observe_lap_tyre_state(_thermal_archive("cold", core_c=55.0))
     assert cold["tag"] == "cold"
-    assert cold["fit_eligible"] is False
+    assert cold["fit_eligible"] is True
+    assert cold["thermal_residence_fraction"] == 0.0
+    assert cold["thermal_stability_fraction"] == 1.0
 
 
-def test_tyre_state_requires_every_wheel_in_window_and_known_compound():
+def test_tyre_state_requires_coherent_per_wheel_state_and_known_compound():
     split = _thermal_archive("split", core_c=90.0)
     fields = split["trace"]["fields"]
     index = {name: i for i, name in enumerate(fields)}
@@ -634,6 +637,7 @@ def test_tyre_state_requires_every_wheel_in_window_and_known_compound():
     state = observe_lap_tyre_state(split)
     assert state["core_temp_c"] == 90.0
     assert state["thermal_residence_fraction"] == 0.0
+    assert state["wheel_spread_c"] == 40.0
     assert state["fit_eligible"] is False
 
     unknown = _thermal_archive("unknown", core_c=90.0)
@@ -648,12 +652,19 @@ def test_lap_archive_fit_excludes_thermally_inconsistent_laps():
     prior = _prior()
     warm = _thermal_archive("warm", core_c=90.0, lateral_g=1.1)
     cold = _thermal_archive("cold", core_c=55.0, lateral_g=1.7)
+    cold_fields = cold["trace"]["fields"]
+    cold_index = {name: i for i, name in enumerate(cold_fields)}
+    for row_i, sample in enumerate(cold["trace"]["samples"]):
+        offset = -20.0 if row_i < 300 else 20.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[cold_index[f"tyreCoreTemp_{wheel}"]] += offset
     model, summary = ggv_from_lap_archives([warm, cold], prior)
     assert model.uncertainty_aware
     assert summary["selected_lap_uuids"] == ["warm"]
     states = {state["lap_uuid"]: state for state in summary["tyre_states"]}
     assert states["warm"]["fit_eligible"] is True
     assert states["cold"]["fit_eligible"] is False
+    assert states["cold"]["thermal_stability_fraction"] == 0.0
     # The excluded 1.7 g cold lap cannot lift the posterior mean.
     assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.3
 

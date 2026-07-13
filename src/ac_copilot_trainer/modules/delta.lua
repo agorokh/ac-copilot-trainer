@@ -149,39 +149,59 @@ function M.isBackwardSplineReset(prevSpline, spline)
   return not isLikelyLapWrap(prevSpline, spline)
 end
 
+-- CSP can expose the start/finish spline wrap several render frames before StateCar.lapCount
+-- advances. One-frame confirmation was too short on the live harness and reset the telemetry
+-- buffer immediately before the real lap boundary, producing an empty archive. Half a second at
+-- 60 Hz is still a short, bounded delay for the resetCounter-less return-to-pits fallback while
+-- comfortably covering the observed counter lag.
+local WRAP_CONFIRM_FRAMES = 30
+
 --- Decide whether the end-of-update rolling state should reset.
 ---
 --- Wrap-shaped same-lap jumps are ambiguous on CSP builds without `car.resetCounter`: they might
---- be a real lap wrap exposed one frame before `lapCount`, or a return-to-pits teleport landing
---- near the start line. Defer exactly one frame; if `lapCount` advances, it was a lap wrap; if it
---- does not, clear rolling state for the abandoned stint (#188).
+--- be a real lap wrap exposed before `lapCount`, or a return-to-pits teleport landing near the
+--- start line. Defer for a bounded confirmation window; if `lapCount` advances, it was a lap wrap;
+--- if it does not, clear rolling state for the abandoned stint (#188/#543).
 ---@param opts table
----@return table { reset: boolean, pendingWrapLapCount: number|nil }
+---@return table { reset: boolean, pendingWrapLapCount: number|nil, pendingWrapFrames: number }
 function M.rollingResetDecision(opts)
   opts = opts or {}
   local pendingWrapLapCount = opts.pendingWrapLapCount
+  local pendingWrapFrames = math.max(0, math.floor(tonumber(opts.pendingWrapFrames) or 0))
   local lastLapCount = opts.lastLapCount
   local lapCount = opts.lapCount
 
   if opts.teleported then
-    return { reset = true, pendingWrapLapCount = nil }
+    return { reset = true, pendingWrapLapCount = nil, pendingWrapFrames = 0 }
   end
 
   if type(lastLapCount) == "number"
       and type(lapCount) == "number"
       and lastLapCount >= 0
       and lapCount < lastLapCount then
-    return { reset = true, pendingWrapLapCount = nil }
+    return { reset = true, pendingWrapLapCount = nil, pendingWrapFrames = 0 }
   end
 
   if pendingWrapLapCount ~= nil then
     if type(lapCount) ~= "number" then
-      return { reset = false, pendingWrapLapCount = pendingWrapLapCount }
+      return {
+        reset = false,
+        pendingWrapLapCount = pendingWrapLapCount,
+        pendingWrapFrames = pendingWrapFrames,
+      }
     end
     if lapCount > pendingWrapLapCount then
-      return { reset = false, pendingWrapLapCount = nil }
+      return { reset = false, pendingWrapLapCount = nil, pendingWrapFrames = 0 }
     end
-    return { reset = true, pendingWrapLapCount = nil }
+    pendingWrapFrames = pendingWrapFrames + 1
+    if pendingWrapFrames >= WRAP_CONFIRM_FRAMES then
+      return { reset = true, pendingWrapLapCount = nil, pendingWrapFrames = 0 }
+    end
+    return {
+      reset = false,
+      pendingWrapLapCount = pendingWrapLapCount,
+      pendingWrapFrames = pendingWrapFrames,
+    }
   end
 
   if type(lastLapCount) == "number"
@@ -190,14 +210,14 @@ function M.rollingResetDecision(opts)
       and lapCount == lastLapCount
       and opts.prevSpline ~= nil then
     if M.isBackwardSplineReset(opts.prevSpline, opts.spline) then
-      return { reset = true, pendingWrapLapCount = nil }
+      return { reset = true, pendingWrapLapCount = nil, pendingWrapFrames = 0 }
     end
     if M.isWrapShapedBackwardSplineJump(opts.prevSpline, opts.spline) then
-      return { reset = false, pendingWrapLapCount = lapCount }
+      return { reset = false, pendingWrapLapCount = lapCount, pendingWrapFrames = 1 }
     end
   end
 
-  return { reset = false, pendingWrapLapCount = nil }
+  return { reset = false, pendingWrapLapCount = nil, pendingWrapFrames = 0 }
 end
 
 --- Sector durations (ms) for three spline thirds: [0,1/3), [1/3,2/3), [2/3,1).

@@ -837,6 +837,64 @@ def test_handshake_emits_provisional_ggv_until_thermal_archive_arrives():
     assert sink["result"]["ggv"]["ok"] is False
 
 
+def test_uncertainty_handshake_waits_for_clean_post_probe_thermal_lap():
+    line = _stadium_line()
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        prior_ggv=generic_gt3_ggv(),
+        min_corner_rows=0,
+    )
+    ctrl._pending.clear()
+
+    def frame(*, lap_completed: bool) -> DriveFrame:
+        return DriveFrame(0.2, 0.0, 0.0, False, False, PHASE_LAP, lap_completed, False)
+
+    ctrl._base.step = lambda *args: frame(lap_completed=False)
+    ctrl.step((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 0.0)
+    assert ctrl.finished is False
+    assert ctrl._laps == 0
+
+    ctrl._base.step = lambda *args: frame(lap_completed=True)
+    ctrl.step((1.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 1.0)
+    assert ctrl.finished is False
+    assert ctrl._laps == 1
+
+    ctrl.step((2.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 2.0)
+    assert ctrl.finished is True
+    assert ctrl.result is not None and ctrl.result.laps_used == 2
+
+
+def test_uncertainty_handshake_uses_ac_completed_laps_over_false_line_wraps():
+    line = _stadium_line()
+    completed = {"value": 0}
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        prior_ggv=generic_gt3_ggv(),
+        min_corner_rows=0,
+        phys_read=lambda: SimpleNamespace(completed_laps=completed["value"]),
+    )
+    ctrl._pending.clear()
+    ctrl._base.step = lambda *args: DriveFrame(0.2, 0.0, 0.0, False, False, PHASE_LAP, True, False)
+
+    for now in (0.0, 1.0, 2.0):
+        ctrl.step((now, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, now)
+    assert ctrl.finished is False
+    assert ctrl._uses_completed_laps is True
+    assert ctrl._laps == 0
+
+    completed["value"] = 1
+    ctrl.step((3.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 3.0)
+    assert ctrl.finished is False
+    assert ctrl._laps == 1
+
+    completed["value"] = 2
+    ctrl.step((4.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 4.0)
+    assert ctrl.finished is True
+    assert ctrl.result is not None and ctrl.result.laps_used == 2
+
+
 def test_handshake_preserves_probe_rows_before_overall_friction_row_gate():
     line = _stadium_line()
     ctrl = HandshakeController(line, _profile_for(line), prior_ggv=generic_gt3_ggv())

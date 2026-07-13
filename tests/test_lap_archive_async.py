@@ -64,6 +64,23 @@ def _step(rt: lupa.LuaRuntime, rows: int) -> dict[str, Any]:
     return _lua_to_py(result)
 
 
+def test_archive_car_identity_prefers_stable_global_over_callable_state_field(
+    tmp_path: pathlib.Path,
+) -> None:
+    rt = _runtime(tmp_path)
+    resolved = rt.execute(
+        """
+        ac.getCarID = function(index)
+          assert(index == 0)
+          return "ks_porsche_911_gt3_r_2016"
+        end
+        local persistence = require("persistence")
+        return persistence.archiveCarIdFromCar({ id = function() return "wrong" end })
+        """
+    )
+    assert resolved == "ks_porsche_911_gt3_r_2016"
+
+
 def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.Path) -> None:
     rt = _runtime(tmp_path)
     rt.execute(
