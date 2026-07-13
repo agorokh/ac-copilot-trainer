@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from tools.ac_harness.entry_launcher import (
     classify_entry_phase,
     make_actuator,
     normalize_race_ini_spawn_set,
+    running_process_ids,
 )
 from tools.ac_harness.shared_memory import (
     AcGameStatus,
@@ -323,6 +326,42 @@ def test_cold_restart_normalize_kills_even_without_race_ini(monkeypatch, tmp_pat
     assert event is not None
     assert event.detail == "killed acs.exe"
     assert calls == [["taskkill", "/IM", "acs.exe", "/F", "/T"]]
+
+
+def test_running_process_ids_parses_all_matching_acs_rows(monkeypatch):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    calls: list[list[str]] = []
+
+    def runner(cmd, **kwargs):  # noqa: ANN001
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout='"acs.exe","101","Console","1","1,024 K"\n'
+            '"ACS.EXE","202","Console","1","1,024 K"\n',
+            stderr="",
+        )
+
+    assert running_process_ids("acs.exe", runner) == frozenset({101, 202})
+    assert calls == [["tasklist", "/FI", "IMAGENAME eq acs.exe", "/FO", "CSV", "/NH"]]
+
+
+def test_running_process_ids_treats_no_match_and_tasklist_failure_as_empty(monkeypatch):
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+
+    def no_match(cmd, **kwargs):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 0, stdout="INFO: No tasks are running", stderr="")
+
+    def failed(cmd, **kwargs):  # noqa: ANN001
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="access denied")
+
+    assert running_process_ids("acs.exe", no_match) == frozenset()
+    assert running_process_ids("acs.exe", failed) == frozenset()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp32 is Windows-only")
+def test_running_process_ids_native_snapshot_finds_current_python():
+    assert os.getpid() in running_process_ids(Path(sys.executable).name)
 
 
 def test_cold_restart_relaunch_reapplies_race_ini_normalization(monkeypatch, tmp_path: Path):

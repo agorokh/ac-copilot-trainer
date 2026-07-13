@@ -66,6 +66,7 @@ BROKEN_CLASSES: tuple[str, ...] = (
     "sim_death_physics_gone",  # #460 — physics mmap gone; None must not reset the timer
     "spawn_stall_recovery_capped",  # #528 — pit-start stall: car never escapes, recovery cap at 0 m
     "hijack_never_landed",  # #528 — carcsw hijack never landed; no drive leg ran at all
+    "session_replaced",  # #555 — another worktree launched a different acs.exe mid-drive
     "hud_blank",  # black HUD frame
     "hud_uniform",  # frozen/uniform HUD frame (almost no distinct values)
     "report_path_swallow",  # oracle FAIL must reach SelfTestReport.ok (no swallowing)
@@ -462,6 +463,27 @@ def build_corpus() -> list[Scenario]:
             "RED",
             "drive",
             lambda: drive(None),
+        ),
+        Scenario(
+            # #555 cross-worktree collision: the car had already driven far enough to satisfy the
+            # distance/speed floor when another CM request replaced its acs.exe. The explicit
+            # session_replaced veto is therefore load-bearing.
+            "broken_session_replaced",
+            "session_replaced",
+            "#555",
+            "RED",
+            "drive",
+            lambda: drive(
+                DriveStats(
+                    drove=True,
+                    total_distance_m=510.0,
+                    max_speed_kmh=132.0,
+                    sim_pid=101,
+                    unexpected_sim_pids=[202],
+                    session_replaced=True,
+                    reason="unexpected acs.exe PID takeover",
+                )
+            ),
         ),
         Scenario(
             "broken_render_black", "hud_blank", "-", "RED", "render", lambda: render(black_bgra)

@@ -18,6 +18,7 @@ from tools.ac_harness.auto_drive import (
     AutoDriveReport,
     DriveStats,
     ProgressWatchdog,
+    SimProcessIdentityMonitor,
     _build_arg_parser,
     _build_driver,
     _config_from_args,
@@ -1107,6 +1108,8 @@ def test_cli_args_map_to_config():
             "40",
             "--tap-seconds",
             "15",
+            "--rig-lock-timeout",
+            "12",
         ]
     )
     cfg = _config_from_args(args)
@@ -1119,6 +1122,7 @@ def test_cli_args_map_to_config():
     assert cfg.target_speed_kmh == 70
     assert cfg.min_corner_speed_kmh == 40
     assert cfg.tap_seconds == 15
+    assert args.rig_lock_timeout == 12
     # --ac-root omitted -> default factory used.
     assert cfg.ac_root == default_ac_root()
 
@@ -1139,6 +1143,24 @@ def test_report_summary_renders_all_sections():
     assert "drove=True" in text
     assert "coaching.snapshot=300" in text
     assert "delta: not in window" in text
+
+
+def test_report_summary_distinguishes_session_takeover_from_sim_death():
+    report = AutoDriveReport(
+        ok=False,
+        stage="done",
+        drive=DriveStats(
+            drove=True,
+            sim_pid=101,
+            unexpected_sim_pids=[202],
+            session_replaced=True,
+            reason="unexpected acs.exe PID takeover",
+        ),
+    )
+    text = report.summary()
+    assert "session_replaced=True" in text
+    assert "sim_dead=False" in text
+    assert "unexpected_sim_pids=[202]" in text
 
 
 # ---------------------------------------------------------------------------
@@ -1838,10 +1860,87 @@ def test_drive_leg_succeeded_vetoes_every_528_failure_shape():
     assert drive_leg_succeeded(None) is False
     assert drive_leg_succeeded(DriveStats(drove=False, total_distance_m=0.0)) is False
     assert drive_leg_succeeded(DriveStats(drove=True, sim_dead=True)) is False
+    assert drive_leg_succeeded(DriveStats(drove=True, session_replaced=True)) is False
     assert (
         drive_leg_succeeded(DriveStats(drove=True, total_distance_m=560.0, recovery_capped=True))
         is False
     )
+
+
+def test_sim_process_identity_monitor_adopts_one_pid_and_detects_takeover():
+    monitor = SimProcessIdentityMonitor()
+    assert monitor.observe(set()) == ()
+    assert monitor.observe({101}) == ()
+    assert monitor.expected_pid == 101
+    assert monitor.observe({101}) == ()
+    assert monitor.observe(set()) == ()  # expected process can disappear before stall attribution
+    assert monitor.observe({202}) == (202,)
+    assert monitor.observe({101, 303}) == (303,)
+
+
+def test_sim_process_identity_monitor_rejects_multiple_initial_acs_processes():
+    monitor = SimProcessIdentityMonitor({303, 101})
+    assert monitor.expected_pid is None
+    assert monitor.observe({101, 303}) == (101, 303)
+    assert monitor.observe({101}) == (101,)
+    assert monitor.observe(set()) == (101, 303)
+    assert monitor.expected_pid is None
+
+
+def test_main_releases_registered_rig_cleanup_on_exception(monkeypatch):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    released: list[bool] = []
+
+    def fail_after_lock(_argv, cleanup):
+        cleanup.callback(released.append, True)
+        raise RuntimeError("evidence capture failed")
+
+    monkeypatch.setattr(auto_drive_module, "_main_impl", fail_after_lock)
+    with pytest.raises(RuntimeError, match="evidence capture failed"):
+        auto_drive_module._main([])
+    assert released == [True]
+
+
+def test_rig_drive_synchronously_checks_pid_before_clean_stop(monkeypatch):
+    import tools.ac_harness.ai_line as ai_line_module
+    import tools.ac_harness.auto_drive as auto_drive_module
+    import tools.ac_harness.entry_launcher as entry_launcher_module
+
+    class NoopThread:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, **_kwargs) -> None:
+            pass
+
+    class Driver:
+        pass
+
+    observations = iter(({101}, {202}, {202}))
+    monkeypatch.setattr(ai_line_module, "load_ai_line", lambda _path: _LINE)
+    monkeypatch.setattr(
+        auto_drive_module, "resolve_fast_lane", lambda *_args: pathlib.Path("fast_lane.ai")
+    )
+    monkeypatch.setattr(auto_drive_module, "_build_driver", lambda *_args: Driver())
+    monkeypatch.setattr(auto_drive_module.threading, "Thread", NoopThread)
+    monkeypatch.setattr(
+        entry_launcher_module, "running_process_ids", lambda _name: frozenset(next(observations))
+    )
+    stop = threading.Event()
+    stop.set()
+
+    stats = auto_drive_module.rig_drive(
+        FakeController(), _cfg(driver="lap", drive_seconds=1.0, spawn_to_line=False), stop
+    )
+
+    assert stats.session_replaced is True
+    assert stats.sim_pid == 101
+    assert stats.unexpected_sim_pids == [202]
+    assert "expected_sim_pid=101" in stats.reason
 
 
 def test_progress_watchdog_rejects_nonpositive_params():
