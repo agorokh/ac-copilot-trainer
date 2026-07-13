@@ -794,6 +794,71 @@ def test_run_auto_drive_track_match_proceeds():
     assert record["controller"] is not None  # the drive leg ran
 
 
+def test_run_auto_drive_relaunches_on_track_mismatch_then_drives():
+    # #537: CM served its cached session (spa) on the first launch; the harness must RELAUNCH
+    # (bounded) rather than fail — the second launch loads the requested magione and drives it.
+    record: dict = {}
+    launches: list[int] = []
+    c_bad = FakeController()
+    c_good = FakeController()
+    controllers: list[FakeController] = [c_bad, c_good]
+    loaded_tracks = ["spa", "magione"]  # cached (wrong) first, requested second
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=3),
+            launch=_launch,
+            hijack=lambda c: controllers.pop(0),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: (loaded_tracks.pop(0), "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+
+    assert report.ok is True
+    assert report.stage != "launch"  # did not fail-fast on the first (mismatched) launch
+    assert len(launches) == 2  # relaunched exactly once
+    assert c_bad.closed is True  # the mismatched controller was released before relaunch
+    assert record["controller"] is c_good  # drove on the correct-track session
+
+
+def test_run_auto_drive_track_mismatch_fails_fast_after_exhausting_relaunches():
+    # #537 bound: a PERSISTENT cached-session mismatch must not loop forever or ever drive the
+    # wrong line — it FAILs at stage="launch" once the launch budget is spent (#535 honest guard).
+    launches: list[int] = []
+    controllers: list[FakeController] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    def _hijack(config):  # noqa: ANN001
+        ctrl = FakeController()
+        controllers.append(ctrl)
+        return ctrl
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=2),
+            launch=_launch,
+            hijack=_hijack,
+            drive=lambda controller, config, stop: pytest.fail("must never drive the wrong track"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),  # always wrong
+        )
+    )
+
+    assert report.ok is False
+    assert report.stage == "launch"
+    assert "spa" in report.error and "magione" in report.error
+    assert len(launches) == 2  # bounded by max_launches — no infinite relaunch
+    assert all(c.closed for c in controllers)  # every mismatched controller released
+
+
 def test_run_auto_drive_handshake_drive_outlives_the_tap():
     # #532: the handshake self-terminates (driver.finished); the orchestrator must NOT stop it at
     # the tap boundary or the probe schedule dies mid-maneuver.

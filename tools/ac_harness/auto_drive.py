@@ -503,7 +503,7 @@ async def run_auto_drive(
     launch_config = replace(config, max_launches=1)
     launched_once = config.skip_launch
     last_launch_error = ""
-    for _ in range(attempts):
+    for attempt_idx in range(attempts):
         if not config.skip_launch:
             ok, reason = launch(launch_config)
             if not ok:
@@ -555,7 +555,7 @@ async def run_auto_drive(
             # Guard: CM sometimes launches its cached last session instead of the requested
             # preset (#532 rig-found). Driving the requested line on a different track — or
             # persisting a plant artifact under the requested car when a DIFFERENT car is loaded —
-            # is a guaranteed corruption, so verify the loaded (track, car) and FAIL fast at launch.
+            # is a guaranteed corruption, so verify the loaded (track, car) before driving.
             loaded = verify_track(config) if verify_track is not None else None
             if loaded is not None:
                 loaded_track, loaded_car = loaded
@@ -565,7 +565,24 @@ async def run_auto_drive(
                 elif config.car_id and not track_ids_match(config.car_id, loaded_car):
                     mismatch = f"car {loaded_car!r} != requested {config.car_id!r}"
                 if mismatch is not None:
+                    # #537: CM served its cached last session. RELAUNCH (bounded) rather than drive
+                    # the wrong line — the next launch kills acs.exe and re-issues the acmanager://
+                    # Quick-Drive URL to the now-running CM, which processes it via single-instance
+                    # IPC without the cold-start auto-resume race that served the stale combo. Only
+                    # the terminal attempt — or skip_launch, which has no launch leg to relaunch —
+                    # FAILs fast at stage="launch", preserving the #535/#532 honest-failure guard so
+                    # the harness never drives a mismatched combo or persists a mislabeled plant.
                     controller.close()
+                    controller = None
+                    last_launch_error = (
+                        f"loaded {mismatch} — Content Manager launched a cached session"
+                    )
+                    if attempt_idx < attempts - 1 and not config.skip_launch:
+                        _log(
+                            f"track/car guard: {mismatch} (CM cached session) — relaunching "
+                            f"(attempt {attempt_idx + 2}/{attempts})"
+                        )
+                        continue
                     return AutoDriveReport(
                         ok=False,
                         stage="launch",
@@ -576,8 +593,9 @@ async def run_auto_drive(
                         setup_ack=setup_ack,
                         error=(
                             f"loaded {mismatch} — Content Manager launched a cached session; "
-                            "relaunch with the correct preset (the harness will not drive the "
-                            "requested line on a different combo or persist a mislabeled plant)"
+                            f"still mismatched after {attempts} launch attempt(s) (the harness "
+                            "will not drive the requested line on a different combo or persist a "
+                            "mislabeled plant)"
                         ),
                         **identity,
                     )
