@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T03:30:00Z
+last_updated: 2026-07-13T09:03:26Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-527-coachable-brake-coverage-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-parts12-coverage-calibration-2026-07-12.md
@@ -81,6 +81,34 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-13) — #552 layout-safe plant identity + #532 Part B core (PR #551 MERGED `155aac6`)
+
+**PR [#551](https://github.com/agorokh/ac-copilot-trainer/pull/551) MERGED** (squash
+[`155aac6`](https://github.com/agorokh/ac-copilot-trainer/commit/155aac6ec24611212fbbb6b8bfb9cf7adf498a8a),
+2026-07-13), automatically closing
+[#552](https://github.com/agorokh/ac-copilot-trainer/issues/552). Plant artifacts are now keyed by
+`car + track + layout + setup`: `HandshakeController` / `HandshakeResult` carry the layout,
+`_build_driver` propagates `config.track_layout`, and the CLI loads the same layout-qualified key.
+`layout=None` deliberately retains the exact legacy filename, while a request for layout B can
+never load layout A. The same PR delivered the #532 Part-B core: per-combo friction telemetry,
+controlled brake probe, safe-envelope `GGVModel` fitting/persistence, validated measured support,
+and GGV-driver consumption with generic-prior fallback.
+
+**Operator-grade proof on merged `main`** (`155aac6`): exercised `save_plant_artifact`,
+`plant_artifact_path`, and `load_plant_artifact` against a real temporary filesystem. Observed three
+distinct files — `proof_car__proof_track.json`, `proof_car__proof_track__layout-gp.json`, and
+`proof_car__proof_track__layout-short.json`. Before the short artifact existed, the short lookup was
+`None` even though GP existed; after both saves, GP loaded `{layout: gp, rpm_up: 8100}` and short
+loaded `{layout: short, rpm_up: 7200}`. Full parity at the reviewed head: **2,687 passed, 76 skipped,
+86.61% coverage, `ci-fast: OK`**; GitHub build/docs/conformance green, 19/19 review threads resolved,
+Qodo 0 bugs, Gemini/Codex current-head clean.
+
+**Split truth / what remains:** [#532](https://github.com/agorokh/ac-copilot-trainer/issues/532)
+stays **OPEN**. Its Part-B code and #552 identity fix are merged, but the parent issue's final
+rig-only acceptance criterion is still pending: run an identified-plant full autonomous lap on
+Magione, confirm AC-valid, and record lap time versus the generic-plant baseline within tolerance.
+Do not treat #552 closure or off-sim filesystem proof as that separate live A/B result.
 
 ## RESUME — #537 CM cached-track: AC #2 delivered (PR #544 MERGED); AC #1 live rig-verify PENDING (rig SSH blocked)
 

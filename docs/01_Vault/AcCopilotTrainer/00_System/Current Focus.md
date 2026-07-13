@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T01:20:00Z
+last_updated: 2026-07-13T09:03:26Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
@@ -25,6 +25,16 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-13, latest):** PR
+[#551](https://github.com/agorokh/ac-copilot-trainer/pull/551) **MERGED**
+([`155aac6`](https://github.com/agorokh/ac-copilot-trainer/commit/155aac6ec24611212fbbb6b8bfb9cf7adf498a8a)),
+closing [#552](https://github.com/agorokh/ac-copilot-trainer/issues/552). Plant identity now includes
+track layout end-to-end (artifact path/save/load, handshake result, driver construction, CLI lookup),
+with exact legacy naming for `layout=None` and hard A/B isolation. Merged-main filesystem proof
+observed separate legacy/GP/short artifacts and a `None` short lookup while only GP existed. PR #551
+also landed the #532 Part-B per-combo friction-ID core and review hardening. **#532 remains OPEN** for
+its distinct rig-only full-lap identified-vs-generic A/B criterion; code merge is not live-lap proof.
 
 **Active focus (2026-07-13, latest):** Harness reliability —
 [#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) CM cached-session wrong-track. PR
