@@ -843,16 +843,22 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
               + "|" + String(p.session_index === undefined ? "" : p.session_index);
             if (ident !== S.sessionIdent) {
-              var carChanged = S.sessionIdent === null
+              var hadIdentity = S.sessionIdent !== null;
+              var carChanged = !hadIdentity
                 || ident.split("|")[0] !== S.sessionIdent.split("|")[0];
               S.sessionIdent = ident;
               S.lap = null; // prior identity's Last/Best are wrong now
               S.fuelAtLap = null;
               S.burns = []; // burn is per car AND per track length (Codex on PR #547)
-              // The setup that applies is a per-session fact: show the honest unknown until
-              // the trainer's follow-up setup.active names the new one (Codex on PR #547).
-              S.setupName = null;
-              renderHeader();
+              // A REAL identity switch invalidates the setup name (per-session fact; the
+              // trainer's follow-up setup.active names the new one — Codex on PR #547).
+              // The FIRST session frame after a page load must not: the identity-replay
+              // cache delivers setup.active BEFORE session, and wiping here would clear the
+              // just-replayed name (caught live on the P7 soak).
+              if (hadIdentity) {
+                S.setupName = null;
+                renderHeader();
+              }
               if (carChanged) {
                 S.spinners = null; // car changed: old ranges are wrong, wait for fresh ones
                 renderElectronics();
