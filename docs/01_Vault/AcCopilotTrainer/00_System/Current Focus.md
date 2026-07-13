@@ -3,7 +3,7 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T11:05:00Z
+last_updated: 2026-07-13T16:43:53Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
@@ -28,7 +28,18 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-13, latest):** PR
+**Delivered (2026-07-13, latest):**
+[#532](https://github.com/agorokh/ac-copilot-trainer/issues/532) **CLOSED** after live-state
+reconciliation. Part A shipped in PR [#535](https://github.com/agorokh/ac-copilot-trainer/pull/535)
+(`b023c92`); Part B shipped in PR [#551](https://github.com/agorokh/ac-copilot-trainer/pull/551)
+(`155aac6`). The final Magione closed-loop acceptance pass is complete: generic plant
+**108.447 s** versus identified plant **107.781 s**, both AC-valid. The stale Content Manager
+failure found during verification was fixed in PR
+[#559](https://github.com/agorokh/ac-copilot-trainer/pull/559) (`2cfd662`). Fresh focused
+verification on current `origin/main`: **217 passed** across the plant-ID, GGV-profile, and
+auto-drive suites. Detail: [[issue-532-partb-friction-id-2026-07-13]].
+
+**Delivered (2026-07-13, earlier):** PR
 [#547](https://github.com/agorokh/ac-copilot-trainer/pull/547) **MERGED**
 ([`9265521`](https://github.com/agorokh/ac-copilot-trainer/commit/92655217a0278214569abb3be5520258616d2398))
 — **#531 Phase 1**: the tablet GT dashboard is LIVE on the real PRITOM P7 in Fully Kiosk
@@ -46,8 +57,8 @@ closing [#552](https://github.com/agorokh/ac-copilot-trainer/issues/552). Plant 
 track layout end-to-end (artifact path/save/load, handshake result, driver construction, CLI lookup),
 with exact legacy naming for `layout=None` and hard A/B isolation. Merged-main filesystem proof
 observed separate legacy/GP/short artifacts and a `None` short lookup while only GP existed. PR #551
-also landed the #532 Part-B per-combo friction-ID core and review hardening. **#532 remains OPEN** for
-its distinct rig-only full-lap identified-vs-generic A/B criterion; code merge is not live-lap proof.
+also landed the #532 Part-B per-combo friction-ID core and review hardening. The distinct rig-only
+full-lap A/B criterion was subsequently verified and #532 is now closed (see the latest entry).
 
 **Delivered (2026-07-13, rig session):** Harness reliability —
 [#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) **CLOSED**. AC #2 = PR

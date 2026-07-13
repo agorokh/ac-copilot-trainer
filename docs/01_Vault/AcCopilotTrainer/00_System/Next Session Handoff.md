@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T11:05:00Z
+last_updated: 2026-07-13T16:43:53Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
@@ -84,6 +84,18 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-13) - #532 CLOSED after live-state reconciliation
+
+[#532](https://github.com/agorokh/ac-copilot-trainer/issues/532) is **CLOSED**. Part A remains
+merged via PR [#535](https://github.com/agorokh/ac-copilot-trainer/pull/535) (`b023c92`), and
+Part B via PR [#551](https://github.com/agorokh/ac-copilot-trainer/pull/551) (`155aac6`). The final
+Magione A/B criterion is satisfied: generic `--use-plant off` **108.447 s** versus identified
+`--use-plant auto` **107.781 s**, both AC-valid. PR
+[#559](https://github.com/agorokh/ac-copilot-trainer/pull/559) (`2cfd662`) fixed the stale Content
+Manager recovery gap uncovered during that verification. Fresh closeout verification on current
+`origin/main`: **217 passed** across `test_plant_id.py`, `test_ggv_profile.py`, and
+`test_ac_harness_auto_drive.py`. Durable detail: [[issue-532-partb-friction-id-2026-07-13]].
+
 ## Delivered (2026-07-13) — #531 Phase 1: tablet GT dashboard LIVE on the P7 (PR #547 MERGED `9265521`)
 
 **PR [#547](https://github.com/agorokh/ac-copilot-trainer/pull/547) MERGED** (squash
@@ -135,11 +147,9 @@ loaded `{layout: short, rpm_up: 7200}`. Full parity at the reviewed head: **2,68
 86.61% coverage, `ci-fast: OK`**; GitHub build/docs/conformance green, 19/19 review threads resolved,
 Qodo 0 bugs, Gemini/Codex current-head clean.
 
-**Split truth / what remains:** [#532](https://github.com/agorokh/ac-copilot-trainer/issues/532)
-stays **OPEN**. Its Part-B code and #552 identity fix are merged, but the parent issue's final
-rig-only acceptance criterion is still pending: run an identified-plant full autonomous lap on
-Magione, confirm AC-valid, and record lap time versus the generic-plant baseline within tolerance.
-Do not treat #552 closure or off-sim filesystem proof as that separate live A/B result.
+**Historical split at PR #551 merge:** the Part-B code and #552 identity fix were merged before
+the parent issue's final rig-only A/B criterion ran. That criterion subsequently passed (results
+below), and #532 is now closed.
 
 **Live model-level verification done (2026-07-13, merged `155aac6`)** — durable node:
 [[issue-532-partb-friction-id-2026-07-13]]. The merged-code handshake fit a valid ggv block from
