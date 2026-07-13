@@ -148,11 +148,16 @@ lap-time-bearing curve (`blend_source={lateral:prior, brake:prior, drive:prior}`
 by construction**; probes passed (persistence vetoed only by an `acs.exe` `sim_dead` crash). This
 verified the *model*, and live-caught + fixed a real regression (a pace-0.8 drive under-measures
 `mu_lat` to ~1.17 g vs the car's true ~1.5 g; the old blend trusted it → would have regressed).
-**Still rig-gated:** the closed-loop full-lap A/B — the rig degraded after ~7 launch cycles into
-#466 overlay stalls, #537 CM-cached-Spa, and `sim_dead` crashes (last drive `FAIL(stage=hijack)`);
-needs a fresh rig session / reboot, then two `--driver ggv` laps (`--use-plant auto` vs `off`).
-(2026-07-13 later rig session: those `sim_dead` crashes are very likely the CM crash-respawn hazard
-now filed as [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555) — see below.)
+**Closed-loop A/B now COMPLETE (2026-07-13, after the operator restarted CM):** generic
+`--use-plant off` **108.447 s** vs identified `--use-plant auto` **107.781 s** → **no regression**
+(both AC-valid; the merged identified plant == prior on every curve). AC2-B3 satisfied; posted to
+[#532#issuecomment-4957006398](https://github.com/agorokh/ac-copilot-trainer/issues/532#issuecomment-4957006398).
+**The "rig degraded / needs reboot" note was WRONG:** the flakiness was a **stale Content Manager
+instance** (re-issuing the `acmanager://` URL reaches the same stale CM), root-caused + fixed in
+**[#558] / PR #559** (`2cfd662`) — the harness now restarts CM on a cached-session / persistent-stall
+mismatch so the next launch cold-starts fresh (5 consecutive clean drives post-restart). Durable
+node: [[issue-558-cm-restart-launch-reliability-2026-07-13]]. (The `sim_dead` crashes are the
+separate CM crash-respawn hazard [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555).)
 
 ## Delivered (2026-07-13, rig session) — #537 CLOSED: AC #1 two-track live proof PASS; CM respawn hazard → #555
 
