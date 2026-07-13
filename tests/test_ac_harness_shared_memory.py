@@ -20,6 +20,8 @@ from tools.ac_harness.shared_memory import (
     GRAPHICS_MIN_BYTES,
     GRAPHICS_PACKET_ID_OFFSET,
     GRAPHICS_STATUS_OFFSET,
+    PHYSICS_FINAL_FF_MIN_BYTES,
+    PHYSICS_FINAL_FF_OFFSET,
     PHYSICS_MIN_BYTES,
     PHYSICS_PACKET_ID_OFFSET,
     AcGameStatus,
@@ -46,6 +48,14 @@ def _graphics_bytes(*, packet_id: int, status: int, is_in_pit: bool) -> bytes:
 def _physics_bytes(packet_id: int) -> bytes:
     buf = bytearray(PHYSICS_MIN_BYTES)
     struct.pack_into("<i", buf, PHYSICS_PACKET_ID_OFFSET, packet_id)
+    return bytes(buf)
+
+
+def _physics_bytes_with_ff(packet_id: int, final_ff: float) -> bytes:
+    """acpmf_physics buffer long enough to carry finalFF at its documented offset (308)."""
+    buf = bytearray(PHYSICS_FINAL_FF_MIN_BYTES)
+    struct.pack_into("<i", buf, PHYSICS_PACKET_ID_OFFSET, packet_id)
+    struct.pack_into("<f", buf, PHYSICS_FINAL_FF_OFFSET, final_ff)
     return bytes(buf)
 
 
@@ -103,6 +113,18 @@ def test_parse_physics_decodes_packet_id():
 def test_parse_physics_rejects_short_buffer():
     with pytest.raises(ValueError, match="acpmf_physics buffer too short"):
         parse_physics(b"\x00" * (PHYSICS_MIN_BYTES - 1))
+
+
+def test_parse_physics_final_ff_none_for_packetid_only_buffer():
+    # The 4-byte packetId prefix carries no finalFF; the field is None (backward-compatible so
+    # the detector's packetId-only reads are unaffected).
+    assert parse_physics(_physics_bytes(5)).final_ff is None
+
+
+def test_parse_physics_decodes_final_ff_at_offset_308():
+    snap = parse_physics(_physics_bytes_with_ff(9, -0.375))
+    assert snap.packet_id == 9
+    assert snap.final_ff == pytest.approx(-0.375)
 
 
 # --------------------------------------------------------------------------- detector
