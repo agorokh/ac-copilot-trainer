@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T16:43:53Z
+last_updated: 2026-07-13T18:02:56Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-527-coachable-brake-coverage-2026-07-12.md
@@ -83,6 +84,29 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-13) — #555 cross-worktree rig ownership CLOSED (PR #563 MERGED `a195b38`)
+
+**PR [#563](https://github.com/agorokh/ac-copilot-trainer/pull/563) MERGED** (squash
+[`a195b38`](https://github.com/agorokh/ac-copilot-trainer/commit/a195b3826dcaffa058fbd55f133ea03974ee758a)),
+closing [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555). Root-cause correction:
+CM's own logs prove the supposed 02:25/02:32 crash-respawns were explicit Quick Drive URL requests
+from a concurrent #532 worktree. AC/CM are machine-global; worktrees previously had no shared owner.
+
+Shipped: machine-global LocalAppData OS lock with owner metadata; ownership held through evidence;
+exception-safe release; native stable-`acs.exe` PID monitoring off the control loop; structured
+`session_replaced` distinct from `sim_dead`; sticky initial ambiguity with current PID diagnostics;
+synchronous stop/missing-telemetry/final observations; non-contention OS errors preserved.
+
+Proof on AG_PC: a competing full harness invocation was rejected with `RIG BUSY` while its owner's
+run passed. R8/Magione passed 3/3 consecutive pre-merge runs (each one lap, 2637–2664 m,
+191.5–191.9 km/h) and 1/1 from synced merged `main` (one lap, 2665.5 m, 191.8 km/h, stable PID
+12004, `sim_dead=false`, `session_replaced=false`). Merged HUD visually inspected with the R8 live
+on Magione and coaching rendered; evidence:
+`.scratch/harness-evidence/issue555-postmerge-r8/`. Final GitHub build/docs/conformance green;
+GraphQL threads resolved; resolve ledger clean; current-SHA primary review clean. No post-merge
+migration/env/dependency/workflow flags. Durable detail:
+[[issue-555-cross-worktree-rig-ownership-2026-07-13]].
 
 ## Delivered (2026-07-13) - #532 CLOSED after live-state reconciliation
 
@@ -166,10 +190,10 @@ verified the *model*, and live-caught + fixed a real regression (a pace-0.8 driv
 instance** (re-issuing the `acmanager://` URL reaches the same stale CM), root-caused + fixed in
 **[#558] / PR #559** (`2cfd662`) — the harness now restarts CM on a cached-session / persistent-stall
 mismatch so the next launch cold-starts fresh (5 consecutive clean drives post-restart). Durable
-node: [[issue-558-cm-restart-launch-reliability-2026-07-13]]. (The `sim_dead` crashes are the
-separate CM crash-respawn hazard [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555).)
+node: [[issue-558-cm-restart-launch-reliability-2026-07-13]]. (The later `sim_dead` events were
+cross-worktree session replacements, corrected and closed by #555/#563.)
 
-## Delivered (2026-07-13, rig session) — #537 CLOSED: AC #1 two-track live proof PASS; CM respawn hazard → #555
+## Delivered (2026-07-13, rig session) — #537 CLOSED: AC #1 two-track live proof PASS; collision → #555
 
 **[#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) CLOSED** (2026-07-13). The
 session ran **on the rig itself** (`AG_PC`), dissolving the prior macOS→rig SSH blocker. Clean
@@ -181,11 +205,11 @@ passed → drive ran); HUD tiles **MAGIONE**/**SPA** inspected. Evidence:
 + `.scratch/harness-evidence/20260713T093706Z_*` / `20260713T094023Z_*`. Detail:
 [[issue-537-ac1-rig-verify-2026-07-13]].
 
-**Found en route → [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555) filed:** CM
-**crash-respawns `acs.exe`** (as its child) after the harness's hard kills; the delayed respawn can
-kill a live drive mid-run (two R8 runs died ~90 s in; one Spa run at 0 m post-hijack; respawns
-observed 02:25:04 / 02:32:46). One CM `Stop-Process` + harness cold-start → 4 consecutive PASSes.
-Alternate hypothesis kept open: R8-at-Magione content crash (R8 0/2, 911 4/4). **Rig ops notes:**
+**Found en route → [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555), now closed:**
+the initial CM crash-respawn interpretation was wrong. CM logs proved concurrent-worktree Quick
+Drive requests replaced the live session at 02:25:04 / 02:32:46. PR #563 ships the machine-global
+rig lock + PID attribution; four clean R8/Magione runs refute the content-crash hypothesis.
+**Rig ops notes:**
 rig rebooted 00:28 mid-session; `pyserial` missing from `.venv` (sidecar COM6 serial retries
 forever — operator to `pip install pyserial` or re-sync deps); an orphaned auto-started sidecar can
 be adopted by the next run then die mid-run (dedicated `tools.ai_sidecar` on :8765 avoided it);

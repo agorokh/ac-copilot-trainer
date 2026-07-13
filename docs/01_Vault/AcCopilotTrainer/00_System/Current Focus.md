@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T16:43:53Z
+last_updated: 2026-07-13T18:02:56Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
@@ -27,6 +28,17 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Delivered (2026-07-13, latest):** [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555)
+**CLOSED** by PR [#563](https://github.com/agorokh/ac-copilot-trainer/pull/563)
+([`a195b38`](https://github.com/agorokh/ac-copilot-trainer/commit/a195b3826dcaffa058fbd55f133ea03974ee758a)).
+CM logs disproved the earlier “crash-respawn” diagnosis: concurrent worktree Quick Drive requests
+were replacing the live machine-global AC session. A LocalAppData OS lock now serializes every
+worktree, while stable `acs.exe` PID monitoring distinguishes `session_replaced` from `sim_dead` and
+closes stop/missing-telemetry sampling races. Live proof: competing harness rejected without
+disturbing the owner; R8/Magione 3/3 pre-merge plus 1/1 merged-main PASS. The merged run completed
+one lap / 2665.5 m / 191.8 km/h with stable PID 12004 and both failure flags false. Detail:
+[[issue-555-cross-worktree-rig-ownership-2026-07-13]].
 
 **Delivered (2026-07-13, latest):**
 [#532](https://github.com/agorokh/ac-copilot-trainer/issues/532) **CLOSED** after live-state
@@ -69,9 +81,9 @@ macOS→rig SSH blocker was moot): clean consecutive hands-off pair, 911 GT3 R, 
 spa PASS**, the relaunch loop absorbing 2+1 pre-drive overlay stalls, `acpmf_static.track` matched
 per leg (#535 guard), HUD tiles MAGIONE/SPA inspected. Evidence:
 [#537#issuecomment-4956636834](https://github.com/agorokh/ac-copilot-trainer/issues/537#issuecomment-4956636834).
-Found en route → [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555): CM
-crash-respawns `acs.exe` after harness kills; a delayed respawn can kill a live drive mid-run (R8
-0/2 vs 911 4/4 — R8-content alternate hypothesis kept open there).
+Found en route → [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555), now closed by
+#563: CM logs showed concurrent-worktree Quick Drive launches, not crash-respawn; the R8 content
+hypothesis was refuted by four clean R8/Magione runs.
 [[issue-537-ac1-rig-verify-2026-07-13]] · [[issue-537-cm-cached-track-relaunch-2026-07-13]].
 
 **Prior focus (2026-07-13):** Coaching QUALITY —
