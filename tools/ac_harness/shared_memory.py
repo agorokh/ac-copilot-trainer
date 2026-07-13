@@ -371,6 +371,13 @@ class _MappedSection:  # pragma: no cover - Windows ctypes view; validated on th
         self._length = length
 
     def read(self, n: int) -> bytes:
+        """Return the first ``n`` bytes of the mapped section.
+
+        STATELESS: ``ctypes.string_at`` reads ``n`` bytes from the FIXED ``MapViewOfFile`` base
+        address (``self._address``) on every call — there is no file pointer/position to advance
+        and no seek, so repeated ``read(n)`` calls in the poll loop always return the same prefix
+        (no offset drift). This is a raw ctypes view, not an ``mmap.mmap``.
+        """
         import ctypes
 
         if n > self._length:
