@@ -462,7 +462,7 @@ def _shutdown_drive(proc: object, *, grace_s: float = 60.0) -> None:  # pragma: 
 
 
 def _tree_kill(proc: object) -> None:  # pragma: no cover - rig-only
-    """Fallback hard kill of the auto_drive child AND its descendants (e.g. an auto-started sidecar).
+    """Fallback hard kill of the auto_drive child AND its descendants (e.g. its sidecar).
 
     On Windows ``taskkill /T`` takes the whole tree so a sidecar can't orphan and squat the port;
     elsewhere fall back to ``terminate()``. Used only when :func:`_shutdown_drive`'s graceful wait
