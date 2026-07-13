@@ -155,6 +155,16 @@ def offset_looks_valid(stats: FfbStats) -> tuple[bool, str]:
     return True, "ok"
 
 
+def should_write(offset_valid: bool, write: bool, dry_run: bool) -> bool:
+    """Whether to write user_ff.ini: only on an explicit ``--write``, a valid offset, and not
+    ``--dry-run`` (pure decision, so the report-only-by-default contract is unit-tested).
+
+    ``--observe-only`` is deliberately NOT a veto here — an operator who drives manually and passes
+    ``--write`` has explicitly opted in.
+    """
+    return offset_valid and write and not dry_run
+
+
 _SECTION_RE = re.compile(r"^\s*\[(?P<car>[^\]]+)\]\s*$")
 _VALUE_RE = re.compile(r"^\s*VALUE\s*=", re.IGNORECASE)
 
@@ -372,7 +382,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     # Report-only by default; writing user_ff.ini requires an explicit --write (FFB strength is
     # operator-subjective — never mutate the wheel feel without opt-in). --dry-run forces no write.
     # --observe-only --write IS honored: the operator drove manually and explicitly opted in.
-    will_write = valid and args.write and not args.dry_run
+    will_write = should_write(valid, args.write, args.dry_run)
     print("\n=== FFB calibration ===")
     print(f"car             : {car}")
     print(f"samples         : {stats.n}")

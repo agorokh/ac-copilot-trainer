@@ -23,6 +23,7 @@ from tools.ac_harness.ffb_calibrate import (
     offset_looks_valid,
     read_user_ff_value,
     recommend_gain,
+    should_write,
     summarize,
     update_user_ff_value,
 )
@@ -93,6 +94,19 @@ def test_recommend_gain_rounds_to_three_decimals():
 def test_recommend_gain_rejects_floor_above_ceiling():
     with pytest.raises(ValueError, match="floor .* must be <= ceiling"):
         recommend_gain(1.0, 0.5, floor=2.0, ceiling=1.0)
+
+
+@pytest.mark.parametrize(
+    ("valid", "write", "dry_run", "expected"),
+    [
+        (True, True, False, True),  # explicit --write, valid offset, not dry-run -> write
+        (True, False, False, False),  # no --write -> report-only (the default)
+        (True, True, True, False),  # --dry-run vetoes --write
+        (False, True, False, False),  # invalid offset -> never write
+    ],
+)
+def test_should_write(valid, write, dry_run, expected):
+    assert should_write(valid, write, dry_run) is expected
 
 
 # --------------------------------------------------------------------------- offset gate
