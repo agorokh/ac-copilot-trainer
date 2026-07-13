@@ -41,17 +41,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+# An onset within this many metres of a reference/calibrated brake mark is *coachable* — a brake
+# point exists there to cue against. Farther out there is nothing to coach (a mid-straight
+# correction dab, or trail-braking where no corpus brake point sits), so counting it in the
+# coverage denominator penalises the coach for events it cannot address (issue #527). This IS the
+# observer's zone-match tolerance — imported, not re-declared, so analyzer and observer share one
+# source of truth and can never silently drift (Qodo rule 263211). The observer is stdlib-pure, so
+# the ``analyze`` path stays stdlib-only.
+from tools.ai_sidecar.realtime_observer import _CAL_MATCH_TOL_M as COACHABLE_TOL_M
+
 ACTIONABLE_MIN_S = 0.8
 ACTIONABLE_MAX_S = 6.0
 #: how far before a real brake onset a brake cue counts as having coached that event.
 COVERAGE_WINDOW_S = 6.0
-#: an onset within this many metres of a reference/calibrated brake mark is *coachable* — a brake
-#: point exists there to cue against. Farther out there is nothing to coach (a mid-straight
-#: correction dab, or trail-braking where no corpus brake point sits), so counting it in the
-#: coverage denominator penalises the coach for events it cannot address (issue #527). Mirrors the
-#: 50 m zone-match tolerance in ``realtime_observer._CAL_MATCH_TOL_M`` — kept in sync by value
-#: because the ``analyze`` path is deliberately stdlib-pure and does not import the observer.
-COACHABLE_TOL_M = 50.0
 DEFAULT_AUDIO_LATENCY_S = 0.10  # PC rtmixer path; tablet WebAudio measured ~0.45 (#511)
 
 
@@ -62,8 +64,11 @@ class CueVerdict:
     kind: str
     urgency: str
     register: str
-    #: 0-based corner index the cue belongs to (issue #511 Part D dispatch payload); ties the cue
-    #: to a brake zone for the #527 coverage metric. None on taps that predate the field.
+    #: the SPOKEN 1-based corner number the cue belongs to (``corner+1``), as ``coaching.voice``
+    #: carries it (issue #511 Part D dispatch payload → ``Utterance.corner``, voice/resolver.py) —
+    #: NOT the 0-based ``coaching.cue`` corner. Reported for readability only; the #527 coverage
+    #: metric binds cues to marks by timestamp, never by comparing this against a 0-based corner.
+    #: None on taps that predate the field.
     corner: int | None
     heard_at_spline: float | None
     speed_kmh: float | None
