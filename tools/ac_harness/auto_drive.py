@@ -193,6 +193,52 @@ class DriveStats:
     reason: str = ""
 
 
+def drive_leg_succeeded(stats: DriveStats | None) -> bool:
+    """Pure verdict on the drive leg — the motion half of :func:`run_auto_drive`'s success gate.
+
+    True only when the car really drove and no veto fired. Each False case is a real #528-class
+    failure that MUST stay caught (never leaked into a green report):
+
+    * ``stats is None`` — the hijack never landed, so no drive leg ran at all.
+    * ``not stats.drove`` — the car never cleared the distance/speed floor (a pit-start stall that
+      never moves reads ``drove=False`` at 0 m).
+    * ``stats.sim_dead`` — ``acs.exe`` died mid-run; the totals are stale (#459/#460).
+    * ``stats.recovery_capped`` — the car kept stalling until the recovery cap; it never sustained
+      progress whatever the totals say (the pit-start recovery-cap stall, #528).
+
+    :func:`run_auto_drive` composes this with the pipeline verdict and error state; the false-green
+    KPI corpus (`false_green_kpi.py`) exercises it directly, so dropping a veto here surfaces as a
+    leaked broken scenario rather than a silent false green.
+    """
+    return bool(stats) and stats.drove and not stats.sim_dead and not stats.recovery_capped
+
+
+def should_try_line_teleport_on_recovery(
+    *, spawn_to_line_enabled: bool, car_off_line: bool, line_teleport_known_good: bool
+) -> bool:
+    """Whether a no-progress recovery should attempt the racing-line teleport before falling back
+    to ``teleport_to_pits``.
+
+    ``spawn_to_line_enabled`` is ``config.spawn_to_line``: ``--no-spawn-line`` opts out of
+    racing-line teleports entirely (use the OUT-phase pit exit), so recovery must NEVER teleport
+    onto the line when it is false — regardless of off-line state (codex on #539).
+
+    Otherwise: a car that is OFF the racing line is stuck *because* it is off the line —
+    ``teleport_to_pits`` returns it to (or leaves it in) the pit box, so every recovery is spent
+    at 0 m and the run caps out honestly but needlessly (the pit-start stall, #528).
+    ``car_off_line`` is true at an off-line spawn (pit box / offset grid slot) AND after any
+    recovery that teleported the car back to the pits — itself off-line, so a mid-lap spin
+    recovered to the pits would otherwise re-enter the same loop. Attempt the line teleport
+    whenever the car is off-line — even if an earlier attempt missed the 25 m read-back, because
+    :func:`_teleport_onto_line` re-reads position and retargets each call so a later one can
+    land — or whenever a prior line teleport is known to have landed. Only when the car is on the
+    line and no line teleport is known good is ``teleport_to_pits`` the correct reset.
+    """
+    if not spawn_to_line_enabled:
+        return False
+    return line_teleport_known_good or car_off_line
+
+
 @dataclass
 class AutoDriveReport:
     """Structured result of one composed autonomous self-test run."""
@@ -545,16 +591,10 @@ async def run_auto_drive(
         finally:
             controller.close()
 
-    # Success needs a clean pipeline AND a real drive that did not die mid-run: sim_dead can be set
-    # after the car already passed the distance/speed thresholds (drove=True), so veto on it too.
-    # A recovery-capped run also vetoes: the car never sustained progress, whatever the totals say.
-    ok = (
-        bool(seq_ok)
-        and stats.drove
-        and not stats.sim_dead
-        and not stats.recovery_capped
-        and error is None
-    )
+    # Success needs a clean pipeline AND a real drive that did not die mid-run or stall out. The
+    # drive-leg vetoes (drove / sim_dead / recovery_capped) live in drive_leg_succeeded so this gate
+    # and the false-green KPI corpus that exercises them cannot drift apart (#528).
+    ok = bool(seq_ok) and drive_leg_succeeded(stats) and error is None
     return AutoDriveReport(
         ok=ok,
         stage=stage,
@@ -1713,9 +1753,12 @@ def rig_drive(  # pragma: no cover - rig-only
     * **recovery cap** — a car that keeps stalling stops with an honest FAIL naming the stall
       distance instead of teleport-looping until the clock runs out.
     * **spawn-to-line** — an off-line spawn (pit box) starts behind geometry the controllers are
-      blind to; a verified custom teleport
-      onto the line skips the trap. Falls back to the classic OUT-phase pit exit when the teleport
-      does not land (offsets are VERIFY LIVE).
+      blind to; a verified custom teleport onto the line skips the trap. Recovery RETRIES the line
+      teleport whenever the car is off the line — at an off-line spawn OR after a prior recovery
+      teleported it into the pits — instead of looping teleport-to-pits (which leaves the car
+      off-line and burns every recovery at 0 m, incl. a mid-lap spin recovered to pits — the
+      pit-start stall, #528); teleport-to-pits is the fallback when the line teleport cannot land
+      (offsets are VERIFY LIVE).
     """
     from tools.ac_harness.ai_line import _horizontal, load_ai_line
 
@@ -1730,6 +1773,10 @@ def rig_drive(  # pragma: no cover - rig-only
     stats = DriveStats()
     watchdog = ProgressWatchdog(stall_seconds=config.progress_stall_seconds)
     line_teleport_works: bool | None = None
+    # Whether the car is currently OFF the racing line — set at an off-line spawn (pit box / offset
+    # grid slot) AND whenever a recovery teleports it back to the pits (itself off-line). Recovery
+    # reads this to retry the line teleport vs. loop in the pits (#528).
+    off_line = False
 
     if config.spawn_to_line:
         from tools.ac_harness.ai_line import PurePursuit
@@ -1742,13 +1789,17 @@ def rig_drive(  # pragma: no cover - rig-only
             car0 = _horizontal(cd0["position"])
             off_line_m = ((p0[0] - car0[0]) ** 2 + (p0[1] - car0[1]) ** 2) ** 0.5
             if off_line_m > 12.0:  # pit box / off-line spawn
+                off_line = True
                 line_teleport_works = _teleport_onto_line(controller, line)
+                if line_teleport_works:
+                    off_line = False  # spawn teleport landed → back on the racing line
                 stats.spawn_teleport = "ok" if line_teleport_works else "failed"
             else:
                 stats.spawn_teleport = "skipped (on line)"
 
     def _recover(now: float) -> bool:
         """Shared recovery for driver-flagged stuck AND watchdog stalls. False = cap exceeded."""
+        nonlocal line_teleport_works, off_line
         stats.recoveries += 1
         if stats.recoveries > config.max_recoveries:
             stats.recovery_capped = True
@@ -1757,13 +1808,26 @@ def rig_drive(  # pragma: no cover - rig-only
             )
             return False
         recovered_to_line = False
-        if line_teleport_works:
+        # Retry the racing-line teleport whenever the car is off the line — an off-line spawn OR a
+        # prior recovery that teleported it into the pits — or a prior line teleport is known good.
+        # teleport_to_pits itself PLACES the car off-line, so latching only the spawn state and
+        # looping to pits burns every recovery at 0 m (#528, incl. a mid-lap spin recovered to
+        # pits). _teleport_onto_line re-reads position + retargets each call, so a later one lands.
+        if should_try_line_teleport_on_recovery(
+            spawn_to_line_enabled=config.spawn_to_line,
+            car_off_line=off_line,
+            line_teleport_known_good=bool(line_teleport_works),
+        ):
             recovered_to_line = _teleport_onto_line(controller, line)
+            if recovered_to_line:
+                line_teleport_works = True
+                off_line = False  # back on the racing line
         if not recovered_to_line:
             for _ in range(5):
                 controller.teleport_to_pits()
                 time.sleep(0.1)
             time.sleep(0.8)
+            off_line = True  # teleport_to_pits leaves the car off-line (in the pits)
         driver.on_recovery()
         watchdog.reset(time.monotonic() - t0, stats.total_distance_m)
         return True

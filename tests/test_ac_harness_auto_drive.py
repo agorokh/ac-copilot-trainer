@@ -28,6 +28,7 @@ from tools.ac_harness.auto_drive import (
     collect_lap_archives,
     custom_ai_enabled,
     default_ac_root,
+    drive_leg_succeeded,
     fuel_matches,
     generic_gt3_ggv,
     known_journal_laps_dir,
@@ -40,6 +41,7 @@ from tools.ac_harness.auto_drive import (
     rig_hijack,
     rig_launch,
     run_auto_drive,
+    should_try_line_teleport_on_recovery,
     verify_setup_ack,
     write_evidence,
     write_setup_baked_race_ini,
@@ -1366,6 +1368,57 @@ def test_progress_watchdog_reset_reanchors_after_recovery():
     dog.reset(6.0, 100.1)
     assert dog.update(100.2, 10.0) is False  # window restarted at reset
     assert dog.update(100.2, 11.2) is True
+
+
+def test_should_try_line_teleport_on_recovery_off_line_always_retries():
+    # #528: a car OFF the racing line must RETRY the line teleport on recovery even when no prior
+    # line teleport is known good. car_off_line covers BOTH an off-line spawn AND a car a prior
+    # recovery teleported into the pits (a mid-lap spin recovered to pits — the self-hosted
+    # reviewer's case): teleport_to_pits leaves it off-line and would otherwise loop at 0 m.
+    assert should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=True, line_teleport_known_good=False
+    )
+    assert should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=True, line_teleport_known_good=True
+    )
+
+
+def test_should_try_line_teleport_on_recovery_on_line_uses_pits():
+    # A car ON the line (never teleported off) that spins: teleport_to_pits is the correct first
+    # reset, so the line teleport is not attempted unless a prior line teleport is known good. Once
+    # that pit teleport leaves the car off-line, _recover flips off_line True and the next recovery
+    # takes the branch above — closing the mid-lap-into-pits loop the reviewer flagged.
+    assert not should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=False, line_teleport_known_good=False
+    )
+    assert should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=True, car_off_line=False, line_teleport_known_good=True
+    )
+
+
+def test_should_try_line_teleport_on_recovery_honors_no_spawn_line():
+    # --no-spawn-line (spawn_to_line_enabled=False) opts out of racing-line teleports entirely: even
+    # an off-line car with a known-good line teleport must fall back to the pit exit, not the line,
+    # on every recovery (codex on #539).
+    assert not should_try_line_teleport_on_recovery(
+        spawn_to_line_enabled=False, car_off_line=True, line_teleport_known_good=True
+    )
+
+
+def test_drive_leg_succeeded_true_only_for_a_real_clean_drive():
+    assert drive_leg_succeeded(DriveStats(drove=True, total_distance_m=3200.0)) is True
+
+
+def test_drive_leg_succeeded_vetoes_every_528_failure_shape():
+    # None (hijack never landed), a never-moved stall, sim-death, and a recovery-capped stall must
+    # each read as NOT a successful drive (#528). recovery_capped vetoes even with drove=True.
+    assert drive_leg_succeeded(None) is False
+    assert drive_leg_succeeded(DriveStats(drove=False, total_distance_m=0.0)) is False
+    assert drive_leg_succeeded(DriveStats(drove=True, sim_dead=True)) is False
+    assert (
+        drive_leg_succeeded(DriveStats(drove=True, total_distance_m=560.0, recovery_capped=True))
+        is False
+    )
 
 
 def test_progress_watchdog_rejects_nonpositive_params():

@@ -18,6 +18,9 @@ reimplemented):
 * stream presence + ``session→lap`` ordering — `sequence_probe.evaluate_sequence`
 * out-of-schema field read (mock-fallacy / L0 schema gate) — `trace_replay.load_schema`
 * sim-death / frozen telemetry — `auto_drive.PhysicsStallDetector`
+* drive-leg outcome — a pit-start stall the car never escapes (recovery cap at 0 m) or a hijack
+  that never landed must NOT be reported as a successful drive — `auto_drive.drive_leg_succeeded`
+  (#528)
 * HUD render-liveness (black/uniform frame) — `hud_capture.liveness_score`
 * **report-path integrity** — `self_test.run_self_test` driven end-to-end with injected
   transports, so an oracle FAIL is proven to propagate to ``SelfTestReport.ok`` (catches the
@@ -40,7 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tools.ac_harness.auto_drive import PhysicsStallDetector
+from tools.ac_harness.auto_drive import DriveStats, PhysicsStallDetector, drive_leg_succeeded
 from tools.ac_harness.hud_capture import liveness_score
 from tools.ac_harness.self_test import SelfTestConfig, run_self_test
 from tools.ac_harness.sequence_probe import evaluate_sequence
@@ -61,6 +64,8 @@ BROKEN_CLASSES: tuple[str, ...] = (
     "out_of_schema_field",  # mock-fallacy — reading a field not in ac_schema.json
     "sim_death_frozen",  # acpmf_physics packet_id frozen (acs.exe died)
     "sim_death_physics_gone",  # #460 — physics mmap gone; None must not reset the timer
+    "spawn_stall_recovery_capped",  # #528 — pit-start stall: car never escapes, recovery cap at 0 m
+    "hijack_never_landed",  # #528 — carcsw hijack never landed; no drive leg ran at all
     "hud_blank",  # black HUD frame
     "hud_uniform",  # frozen/uniform HUD frame (almost no distinct values)
     "report_path_swallow",  # oracle FAIL must reach SelfTestReport.ok (no swallowing)
@@ -245,6 +250,9 @@ def build_corpus() -> list[Scenario]:
     def report_path(frames: list[dict]) -> bool:
         return _report_path_ok(frames)
 
+    def drive(stats: DriveStats | None) -> bool:
+        return drive_leg_succeeded(stats)
+
     # advancing packet ids (alive) vs frozen / gone (dead)
     advancing = [(i * 0.1, i + 1) for i in range(25)]
     frozen = [(0.0, 5), (0.5, 5), (1.6, 5)]
@@ -316,6 +324,16 @@ def build_corpus() -> list[Scenario]:
             "GREEN",
             "report_path",
             lambda: report_path(_healthy_stream()),
+        ),
+        Scenario(
+            "healthy_clean_drive",
+            "healthy",
+            "#528",
+            "GREEN",
+            "drive",
+            lambda: drive(
+                DriveStats(drove=True, laps=1, total_distance_m=3200.0, max_speed_kmh=210.0)
+            ),
         ),
         # ---- BROKEN (must be CAUGHT; a pass here is a FALSE GREEN) ----
         Scenario(
@@ -412,6 +430,38 @@ def build_corpus() -> list[Scenario]:
             "RED",
             "sim_death",
             lambda: sim(physics_gone),
+        ),
+        Scenario(
+            # #528 pit-start stall: the car kept stalling until the recovery cap. drove=True here
+            # (it limped 560 m across recoveries) makes the recovery_capped veto load-bearing — the
+            # drove/speed floor alone would pass this, so only the veto catches it. The live repro
+            # was worse (0 m, drove=False); a defanged recovery_capped veto must not leak this.
+            "broken_spawn_stall_recovery_capped",
+            "spawn_stall_recovery_capped",
+            "#528",
+            "RED",
+            "drive",
+            lambda: drive(
+                DriveStats(
+                    drove=True,
+                    total_distance_m=560.0,
+                    max_speed_kmh=48.0,
+                    recoveries=7,
+                    recovery_capped=True,
+                    spawn_teleport="failed",
+                    reason="recovery cap (6) exceeded at 560m",
+                )
+            ),
+        ),
+        Scenario(
+            # #528 hijack-probe exhaustion: the carcsw hijack never landed, so no drive leg ran at
+            # all (run_auto_drive returns stage=hijack, no DriveStats). A None drive is never green.
+            "broken_hijack_never_landed",
+            "hijack_never_landed",
+            "#528",
+            "RED",
+            "drive",
+            lambda: drive(None),
         ),
         Scenario(
             "broken_render_black", "hud_blank", "-", "RED", "render", lambda: render(black_bgra)
