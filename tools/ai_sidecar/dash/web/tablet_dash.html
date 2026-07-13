@@ -27,7 +27,12 @@
 -->
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Fixed-instrument viewport: the design is an exact 1024x600 panel. width=device-width on
+     the P7 (186 dpi -> ~1.16 devicePixelRatio) yields only ~516 CSS px of height and clips
+     the bottom board (observed on-device). Pinning width=1024 makes the WebView scale the
+     layout so 1024 CSS px span the physical width - a 1:1 physical mapping on the 1024x600
+     panel, and proportional scaling on the 1920x1200 P7 variant. -->
+<meta name="viewport" content="width=1024, user-scalable=no">
 <title>AC Copilot — GT Dashboard</title>
 <style>
 @font-face{font-family:"Saira Semi Condensed";src:url("/dash/fonts/SairaSemiCondensed-SemiBold.ttf") format("truetype");font-weight:600;font-style:normal}
