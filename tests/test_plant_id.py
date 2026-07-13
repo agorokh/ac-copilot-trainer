@@ -574,6 +574,30 @@ def test_artifact_keyed_by_setup(tmp_path):
     assert load_plant_artifact(tmp_path, "test_car", "test_oval", "Aggressive") is None
 
 
+def test_artifact_load_portable_when_creator_setup_ini_unreadable(tmp_path):
+    # Daemon HIGH: the load must NOT re-hash the STORED creator absolute setup_ini path (unreadable
+    # on another machine). Save with an ini, then load with a DIFFERENT-path ini of the same
+    # content -> must still load (content-hashed filename is the identity, not the stored path).
+    creator = tmp_path / "creatorhome" / "Foo.ini"
+    creator.parent.mkdir(parents=True)
+    creator.write_text("[GEARS]\nFINAL=3.9\n")
+    result = _result_dict()
+    result["setup"] = "Foo"
+    result["setup_ini"] = str(creator)
+    save_plant_artifact(tmp_path, result)
+    # Simulate another machine: the creator path is gone, same setup content lives elsewhere.
+    creator.unlink()
+    loader = tmp_path / "loaderhome" / "Foo.ini"
+    loader.parent.mkdir(parents=True)
+    loader.write_text("[GEARS]\nFINAL=3.9\n")  # identical content -> identical hash
+    loaded = load_plant_artifact(tmp_path, "test_car", "test_oval", "Foo", str(loader))
+    assert loaded is not None  # portable: found by content-hashed filename, not the stored path
+    assert loaded["constants"]["rpm_up"] == 7600.0
+    # different content -> different hash -> not loaded
+    loader.write_text("[GEARS]\nFINAL=4.4\n")
+    assert load_plant_artifact(tmp_path, "test_car", "test_oval", "Foo", str(loader)) is None
+
+
 def test_setup_key_content_hash_distinguishes_same_basename(tmp_path):
     from tools.ac_harness.plant_id import _setup_key
 

@@ -1182,6 +1182,13 @@ class HandshakeController:
 # ---------------------------------------------------------------------------
 # Per-combo plant artifact (durable — NEVER .scratch; see module docstring)
 # ---------------------------------------------------------------------------
+def _setup_stem(setup: str | None) -> str | None:
+    """The setup basename without ``.ini`` (or None), for a path-free identity sanity-check."""
+    if not setup:
+        return None
+    return re.sub(r"\.ini$", "", str(setup).replace("\\", "/").rsplit("/", 1)[-1])
+
+
 def _setup_content_hash(setup_ini: str | Path | None) -> str:
     """First 8 hex of the SHA-256 of the setup INI content, or "" when unreadable."""
     if not setup_ini:
@@ -1272,7 +1279,13 @@ def load_plant_artifact(
         return None
     if payload.get("car_id") != car_id or payload.get("track_id") != track_id:
         return None
-    if _setup_key(payload.get("setup"), payload.get("setup_ini")) != _setup_key(setup, setup_ini):
+    # Setup identity (name + content hash) is ALREADY enforced by the filename we opened
+    # (`plant_artifact_path(..., setup, setup_ini)` built from the REQUEST's readable setup_ini).
+    # Do NOT re-derive it from the stored payload's absolute setup_ini path — that path is the
+    # creator's and is unreadable on another machine, which would reject a content-matched artifact
+    # and break portability (daemon HIGH). A cheap stem sanity-check guards a corrupted/renamed
+    # file without re-reading any path.
+    if _setup_stem(payload.get("setup")) != _setup_stem(setup):
         return None
     constants = payload.get("constants")
     if not isinstance(constants, dict) or not constants:
