@@ -227,18 +227,19 @@ def _taskkill(
 
 def running_process_ids(
     process_name: str,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
 ) -> frozenset[int]:
     """Return PIDs for a Windows image name without adding a runtime dependency.
 
-    ``auto_drive`` samples this at a low cadence during the drive leg so a second CM launch from
-    another worktree is reported as a session takeover, not a generic frozen-physics ``sim_dead``.
-    ``tasklist /FO CSV`` is stable across whitespace/localized column headings; the no-match INFO
-    line is intentionally ignored because it is not a CSV row for ``process_name``.
+    Production uses Toolhelp32 directly so the real-time drive loop does not spawn ``tasklist`` and
+    incur a control-latency spike every second. Tests can inject ``runner`` to exercise the stable
+    CSV fallback/parser without relying on the host process table.
     """
 
     if sys.platform != "win32":
         return frozenset()
+    if runner is None:
+        return _toolhelp_process_ids(process_name)
     result = runner(
         ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/FO", "CSV", "/NH"],
         check=False,
@@ -255,6 +256,53 @@ def running_process_ids(
             found.add(int(row[1]))
         except ValueError:
             continue
+    return frozenset(found)
+
+
+def _toolhelp_process_ids(process_name: str) -> frozenset[int]:
+    """Enumerate Windows processes in-process via ``CreateToolhelp32Snapshot``."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Process32FirstW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W))
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry32W))
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if snapshot == wintypes.HANDLE(-1).value:
+        return frozenset()
+    found: set[int] = set()
+    try:
+        entry = ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(entry)
+        ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            if entry.szExeFile.casefold() == process_name.casefold():
+                found.add(int(entry.th32ProcessID))
+            ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
     return frozenset(found)
 
 

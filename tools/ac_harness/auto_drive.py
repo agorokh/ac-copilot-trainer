@@ -2202,7 +2202,26 @@ def rig_drive(  # pragma: no cover - rig-only
     # surfaces later as frozen physics and the report misleadingly says generic ``sim_dead``.
     process_monitor = SimProcessIdentityMonitor(running_process_ids("acs.exe"))
     stats.sim_pid = process_monitor.expected_pid
-    next_process_probe = 0.0
+    process_probe_stop = threading.Event()
+    process_probe_lock = threading.Lock()
+    process_takeover: tuple[int, ...] = ()
+
+    def _watch_sim_process() -> None:
+        # Process enumeration takes ~20 ms on a busy rig. Keep it off the real-time control loop;
+        # one-second attribution latency is tiny beside the 4 s sim-death threshold.
+        nonlocal process_takeover
+        while not process_probe_stop.is_set():
+            unexpected = process_monitor.observe(running_process_ids("acs.exe"))
+            if unexpected:
+                with process_probe_lock:
+                    process_takeover = unexpected
+                return
+            process_probe_stop.wait(1.0)
+
+    process_probe_thread = threading.Thread(
+        target=_watch_sim_process, name="acs-process-identity", daemon=True
+    )
+    process_probe_thread.start()
     prev_plane: tuple[float, float] | None = None
     t0 = time.monotonic()
     # Anchor the sim-death timer at the loop start (not the first packet sample) so a sim that is
@@ -2214,19 +2233,17 @@ def rig_drive(  # pragma: no cover - rig-only
             if not cd:
                 time.sleep(0.02)
                 continue
-            wall_now = time.monotonic()
-            if wall_now >= next_process_probe:
-                unexpected = process_monitor.observe(running_process_ids("acs.exe"))
+            with process_probe_lock:
+                unexpected = process_takeover
+            if unexpected:
                 stats.sim_pid = process_monitor.expected_pid
-                next_process_probe = wall_now + 1.0
-                if unexpected:
-                    stats.session_replaced = True
-                    stats.unexpected_sim_pids = list(unexpected)
-                    stats.reason = (
-                        "unexpected acs.exe PID takeover during live drive "
-                        f"(harness_pid={stats.sim_pid}, observed={list(unexpected)})"
-                    )
-                    break
+                stats.session_replaced = True
+                stats.unexpected_sim_pids = list(unexpected)
+                stats.reason = (
+                    "unexpected acs.exe PID takeover during live drive "
+                    f"(harness_pid={stats.sim_pid}, observed={list(unexpected)})"
+                )
+                break
             # Sim-death: the main acpmf_physics packet_id stagnant for sim_dead_seconds means
             # acs.exe died. A None (physics mmap gone) does NOT reset the timer (#460 review) —
             # sustained None or a frozen packet both trip. Rule owned by PhysicsStallDetector.
@@ -2276,6 +2293,9 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.laps += 1
             time.sleep(0.012)
     finally:
+        process_probe_stop.set()
+        process_probe_thread.join(timeout=3.0)
+        stats.sim_pid = process_monitor.expected_pid
         # #532: if the handshake driver did not self-complete within the drive budget, finalize it
         # so the run still produces a result (which constants WERE measured), not "no result".
         finalize = getattr(driver, "finalize", None)

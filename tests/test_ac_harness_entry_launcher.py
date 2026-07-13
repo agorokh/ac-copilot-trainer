@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -355,6 +357,11 @@ def test_running_process_ids_treats_no_match_and_tasklist_failure_as_empty(monke
 
     assert running_process_ids("acs.exe", no_match) == frozenset()
     assert running_process_ids("acs.exe", failed) == frozenset()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Toolhelp32 is Windows-only")
+def test_running_process_ids_native_snapshot_finds_current_python():
+    assert os.getpid() in running_process_ids(Path(sys.executable).name)
 
 
 def test_cold_restart_relaunch_reapplies_race_ini_normalization(monkeypatch, tmp_path: Path):
