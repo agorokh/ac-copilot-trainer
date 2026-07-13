@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-12T21:00:00Z
+last_updated: 2026-07-13T01:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-527-coachable-brake-coverage-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-parts12-coverage-calibration-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-actionable-coaching-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-511-partd-tablet-voice-endpoint-2026-07-11.md
@@ -80,6 +81,27 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-13) — #527 coachable-brake-coverage gate (PR #538 MERGED `20f68cb`)
+
+`/autonomous-deliver 527`. **PR [#538](https://github.com/agorokh/ac-copilot-trainer/pull/538)
+MERGED (`20f68cb`, 2026-07-13)** — closed [#527](https://github.com/agorokh/ac-copilot-trainer/issues/527)
+(split from #522). `tools/ai_sidecar/voice/semantic_timeliness.py` `analyze()` no longer divides
+`brake_events_coached` by ALL gate-grade onsets. **Occurrence-based coverage**: each `late_brake`
+advisory is a brake-mark pass; an onset is *coachable* only within 50 m
+(`realtime_observer.CAL_MATCH_TOL_M`, now public + imported — one source of truth) of a mark,
+repeat dabs collapse, off-zone dabs excluded; an occurrence is **coached iff it drew an ACTIONABLE
+cue**. Dispatch↔advisory bound by the deterministic `occ.corner+1 == voice.corner` relation
+(cue 0-based, voice spoken 1-based), onset↔advisory bound **time-local** (rejects stale cross-lap
+so a later dropped-heads-up pass can't be masked). Reports raw + coachable ratios + a
+zones-cued/crossed line (the #522 guarantee, stated directly).
+
+**Operator-grade verification** (ran on the REAL #525 rig taps `.scratch/pr525-*.jsonl`): metric
+stabilised from noisy raw 78/75/89% to clean coachable **4/4, 3/4, 4/4**; from-main control fails
+`evidence_present`. The one residual 3/4 (main-tap3) is a genuine dropped-heads-up pass = **#522-V2**
+scheduler scope, surfaced cleanly not as noise. 4 review rounds (codex 4×P1, self-hosted cursor
+daemon HIGH+MEDIUM, qodo) all addressed. Detail: [[issue-527-coachable-brake-coverage-2026-07-12]].
+
 
 ## RESUME HERE — #522 V2 (the only remaining #522 scope) + operator listen
 
