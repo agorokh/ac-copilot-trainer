@@ -25,11 +25,14 @@ here is plain arithmetic so CI verifies it with synthetic lines + synthetic tele
 
 from __future__ import annotations
 
+import copy
 import csv
 import math
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from tools.ac_harness.ai_line import StanleySteering, _horizontal
 
@@ -42,6 +45,11 @@ _AI_EXTRA_STRIDE_BYTES = 72
 _AI_EXTRA_SIDELEFT_OFFSET_BYTES = 20
 
 G = 9.81
+MIN_LONGITUDINAL_SUPPORT_KMH = 40.0
+MAX_LONGITUDINAL_SUPPORT_KMH = 300.0
+MAX_DRIVE_SUPPORT_G = 2.0
+MAX_PERSISTED_AY_CAP_G = 1.8
+MAX_PERSISTED_BRAKE_CAP_G = 3.4
 
 
 # ---------------------------------------------------------------------------
@@ -67,15 +75,87 @@ class GGVModel:
     ay_cap_g: float = 1.8  # hard sanity cap on extrapolated lateral grip
     ax_brake_cap_g: float = 3.4
     provenance: dict = field(default_factory=dict)
+    # Runtime-bearing measured overrides are deliberately separate from free-form provenance and
+    # validated on every construction/load. Top-level coefficients remain the trusted prior.
+    supported_longitudinal: Mapping = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _validate_supported_longitudinal(
+            self.supported_longitudinal,
+            brake_b0_g=self.brake_b0_g,
+            brake_b1=self.brake_b1,
+            drive_b0_g=self.drive_b0_g,
+            drive_b1=self.drive_b1,
+            ax_brake_cap_g=self.ax_brake_cap_g,
+        )
+        # ``frozen=True`` does not freeze nested dicts. Detach observability provenance from its
+        # caller and make the runtime-bearing support schema recursively read-only after validation.
+        object.__setattr__(self, "provenance", copy.deepcopy(self.provenance))
+        object.__setattr__(
+            self,
+            "supported_longitudinal",
+            _freeze_supported_longitudinal(self.supported_longitudinal),
+        )
 
     def ay_max(self, v_ms: float) -> float:
         return min(self.ay_cap_g, self.mu_lat_g + self.k_aero_lat * v_ms * v_ms) * G
 
     def ax_brake_max(self, v_ms: float) -> float:
-        return min(self.ax_brake_cap_g, max(0.5, self.brake_b0_g + self.brake_b1 * v_ms)) * G
+        prior_g = max(0.5, self.brake_b0_g + self.brake_b1 * v_ms)
+        supported_g = self._supported_longitudinal_g("brake", v_ms, prior_g, floor_g=0.5)
+        return min(self.ax_brake_cap_g, supported_g) * G
 
     def ax_drive_max(self, v_ms: float) -> float:
-        return max(self.drive_min_g, self.drive_b0_g + self.drive_b1 * v_ms) * G
+        prior_g = max(self.drive_min_g, self.drive_b0_g + self.drive_b1 * v_ms)
+        supported_g = self._supported_longitudinal_g(
+            "drive", v_ms, prior_g, floor_g=self.drive_min_g
+        )
+        return supported_g * G
+
+    def _supported_longitudinal_g(
+        self, kind: str, v_ms: float, prior_g: float, *, floor_g: float
+    ) -> float:
+        """Apply a measured longitudinal envelope only inside its observed speed support.
+
+        ``blend_ggv_safe`` deliberately keeps the trusted prior in the model's top-level
+        coefficients.  A measured longitudinal curve is stored as an additive, provenance-backed
+        override and tapers to the prior at both edges of the observed range. Braking evidence may
+        safely raise or lower the envelope; drive evidence only raises it. Consequently an old
+        consumer that ignores provenance remains conservative, while this consumer can learn where
+        the handshake actually measured without extrapolating a low-speed fit to 240 km/h.
+
+        Persisted provenance is untrusted input.  Any malformed/non-finite override is ignored and
+        the prior is returned, matching the artifact loader's fail-safe contract.
+        """
+        override = self.supported_longitudinal.get(kind)
+        if not isinstance(override, Mapping):
+            return prior_g
+        try:
+            lo_kmh = float(override["speed_min_kmh"])
+            hi_kmh = float(override["speed_max_kmh"])
+            b0_g = float(override["b0_g"])
+            b1 = float(override["b1"])
+            measured_floor_g = float(override.get("floor_g", floor_g))
+            taper_kmh = float(override.get("taper_kmh", 10.0))
+        except (KeyError, TypeError, ValueError):
+            return prior_g
+        if not _finite_ggv(lo_kmh, hi_kmh, b0_g, b1, measured_floor_g, taper_kmh):
+            return prior_g
+        if lo_kmh < 0.0 or hi_kmh <= lo_kmh or measured_floor_g < 0.0 or taper_kmh <= 0.0:
+            return prior_g
+        speed_kmh = v_ms * 3.6
+        if speed_kmh <= lo_kmh or speed_kmh >= hi_kmh:
+            return prior_g
+        measured_g = max(measured_floor_g, b0_g + b1 * v_ms)
+        if kind != "brake" and measured_g <= prior_g:
+            return prior_g
+        taper_kmh = min(taper_kmh, (hi_kmh - lo_kmh) / 2.0)
+        weight = min(
+            1.0,
+            (speed_kmh - lo_kmh) / taper_kmh,
+            (hi_kmh - speed_kmh) / taper_kmh,
+        )
+        return prior_g + weight * (measured_g - prior_g)
 
     def ax_brake_avail(self, ay_used: float, v_ms: float) -> float:
         """Braking g still available given lateral g already used (friction ellipse)."""
@@ -96,12 +176,105 @@ class GGVModel:
             1.0 / self.ellipse_n
         )
 
+    def to_dict(self) -> dict:
+        """Serialize the model + provenance for a plant artifact (JSON-safe; #532 Part B)."""
+        return {
+            "mu_lat_g": self.mu_lat_g,
+            "k_aero_lat": self.k_aero_lat,
+            "brake_b0_g": self.brake_b0_g,
+            "brake_b1": self.brake_b1,
+            "drive_b0_g": self.drive_b0_g,
+            "drive_b1": self.drive_b1,
+            "drive_min_g": self.drive_min_g,
+            "ellipse_n": self.ellipse_n,
+            "ay_cap_g": self.ay_cap_g,
+            "ax_brake_cap_g": self.ax_brake_cap_g,
+            "provenance": copy.deepcopy(self.provenance),
+            "supported_longitudinal": {
+                kind: dict(override) for kind, override in self.supported_longitudinal.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> GGVModel:
+        """Rebuild a model from :meth:`to_dict` output.
+
+        Raises ``ValueError`` on a missing / non-finite CORE field so a corrupt plant artifact can
+        never silently construct a ``nan`` grip curve that the driver would then act on (#532
+        input-validation pitfall). Optional caps default to the dataclass defaults when absent.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f"GGVModel.from_dict expects a dict, got {type(data).__name__}")
+        core = (
+            "mu_lat_g",
+            "k_aero_lat",
+            "brake_b0_g",
+            "brake_b1",
+            "drive_b0_g",
+            "drive_b1",
+            "drive_min_g",
+            "ellipse_n",
+        )
+        vals: dict = {}
+        for f in core:
+            v = data.get(f)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+                raise ValueError(f"GGVModel.from_dict: field {f!r} missing or non-finite: {v!r}")
+            vals[f] = float(v)
+        for f in ("ay_cap_g", "ax_brake_cap_g"):
+            v = data.get(f)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+                vals[f] = float(v)
+        # Positivity/range gates (Codex P2): the friction-ellipse math divides by ``ellipse_n``
+        # (``**(1/n)``), so a non-positive exponent would CRASH the ggv path instead of falling back
+        # to the generic plant; a non-positive lateral grip / cap would zero the envelope. Reject
+        # both — never construct a model the driver cannot safely evaluate.
+        if not (0.0 < vals["ellipse_n"] <= 8.0):
+            raise ValueError(
+                f"GGVModel.from_dict: ellipse_n out of range (0, 8]: {vals['ellipse_n']!r}"
+            )
+        if vals["mu_lat_g"] <= 0.0:
+            raise ValueError(f"GGVModel.from_dict: mu_lat_g must be positive: {vals['mu_lat_g']!r}")
+        if vals["k_aero_lat"] != 0.0:
+            raise ValueError(
+                "GGVModel.from_dict: persisted plant k_aero_lat must be zero: "
+                f"{vals['k_aero_lat']!r}"
+            )
+        if vals["drive_min_g"] < 0.0:
+            raise ValueError(
+                f"GGVModel.from_dict: drive_min_g must be non-negative: {vals['drive_min_g']!r}"
+            )
+        cap_limits = {
+            "ay_cap_g": MAX_PERSISTED_AY_CAP_G,
+            "ax_brake_cap_g": MAX_PERSISTED_BRAKE_CAP_G,
+        }
+        for f, limit in cap_limits.items():
+            if f in vals and not (0.0 < vals[f] <= limit):
+                raise ValueError(f"GGVModel.from_dict: {f} must be in (0, {limit}]: {vals[f]!r}")
+        prov = data.get("provenance")
+        supported = data.get("supported_longitudinal", {})
+        return cls(
+            **vals,
+            provenance=copy.deepcopy(prov) if isinstance(prov, dict) else {},
+            supported_longitudinal=copy.deepcopy(supported),
+        )
+
 
 def _pct(xs: list[float], q: float) -> float:
     if not xs:
         return 0.0
     s = sorted(xs)
     return s[min(len(s) - 1, int(q * len(s)))]
+
+
+def _probe_pct(xs: list[float], q: float) -> float:
+    """Small-N probe quantile that always excludes one possible peak glitch."""
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    if len(s) == 1:
+        return s[0]
+    return s[min(len(s) - 2, int(q * len(s)))]
 
 
 def _linfit(xs: list[float], ys: list[float], ws: list[float] | None = None) -> tuple[float, float]:
@@ -126,17 +299,22 @@ def ggv_from_telemetry(
     pct: float = 0.95,
     min_corner_lat_g: float = 0.9,
     min_samples: int = 40,
+    min_probe_samples: int = 8,
 ) -> GGVModel:
     """Fit a :class:`GGVModel` from telemetry rows (dicts w/ speed_kmh, accg_lat, accg_lon).
 
     Per speed bin: 95th-pct |lat|, braking (-lon) and accel (+lon) g, with sample count and lateral
     spread. ``ay_max(v)=mu*g+k*v^2`` is fitted ONLY on bins with real cornering coverage (lat spread
-    >= ``min_lat_spread_g`` and >= ``min_samples``); braking/accel fitted linearly. Ellipse exponent
-    from the radial hull of ``(lat, lon)``.
+    >= ``min_lat_spread_g`` and >= ``min_samples``); braking/accel fitted linearly.  Passive
+    longitudinal bins keep that same threshold.  Rows explicitly tagged ``brake_probe`` or
+    ``accel_sweep`` come from bounded, controlled maneuvers and may qualify their matching bin at
+    ``min_probe_samples``. Ellipse exponent comes from the radial hull of ``(lat, lon)``.
     """
     lat_b: dict[int, list[float]] = {}
-    brk_b: dict[int, list[float]] = {}
-    acc_b: dict[int, list[float]] = {}
+    brk_passive_b: dict[int, list[float]] = {}
+    acc_passive_b: dict[int, list[float]] = {}
+    brk_probe_b: dict[int, list[float]] = {}
+    acc_probe_b: dict[int, list[float]] = {}
     hull: list[tuple[float, float]] = []  # (|lat|, |lon|) in g
     for r in rows:
         try:
@@ -147,7 +325,15 @@ def ggv_from_telemetry(
             continue
         b = int(v // bin_kmh) * int(bin_kmh)
         lat_b.setdefault(b, []).append(al)
-        (brk_b if ao < 0 else acc_b).setdefault(b, []).append(abs(ao))
+        source = r.get("source")
+        if ao < 0 and source == "brake_probe":
+            brk_probe_b.setdefault(b, []).append(abs(ao))
+        elif ao < 0:
+            brk_passive_b.setdefault(b, []).append(abs(ao))
+        elif ao >= 0 and source == "accel_sweep":
+            acc_probe_b.setdefault(b, []).append(abs(ao))
+        else:
+            acc_passive_b.setdefault(b, []).append(abs(ao))
         if al > 0.2 or abs(ao) > 0.2:
             hull.append((al, abs(ao)))
 
@@ -173,30 +359,89 @@ def ggv_from_telemetry(
     k_aero = 0.0
     n_corner_bins = len(corner_p95)
 
+    def trusted_longitudinal_value(
+        vals: list[float], probe_vals: list[float]
+    ) -> tuple[float, float] | None:
+        """Return (p95, weight) from the evidence that qualified this speed bin.
+
+        A controlled probe must not merely unlock a bin whose percentile is then diluted by a much
+        larger passive sample set. Prefer its own percentile when it is the stronger demonstrated
+        envelope; otherwise retain the independently qualified passive percentile.
+        """
+        passive_ok = len(vals) >= min_samples
+        probe_ok = len(probe_vals) >= min_probe_samples
+        if not passive_ok and not probe_ok:
+            return None
+        passive_p95 = _pct(vals, pct) if passive_ok else float("-inf")
+        probe_p95 = _probe_pct(probe_vals, pct) if probe_ok else float("-inf")
+        if probe_p95 > passive_p95:
+            return (probe_p95, float(len(probe_vals)))
+        return (passive_p95, float(len(vals)))
+
     # braking fit (linear in v) on bins with samples
     xs_b, ys_b, ws_b = [], [], []
-    for b, vals in sorted(brk_b.items()):
-        if len(vals) >= min_samples and b >= 30:
+    trusted_brake_bins: list[int] = []
+    for b in sorted(set(brk_passive_b) | set(brk_probe_b)):
+        trusted = trusted_longitudinal_value(brk_passive_b.get(b, []), brk_probe_b.get(b, []))
+        if trusted is not None and b >= 30:
             xs_b.append((b + bin_kmh / 2) / 3.6)
-            ys_b.append(_pct(vals, pct))
-            ws_b.append(float(len(vals)))
-    brake_b0, brake_b1 = _linfit(xs_b, ys_b, ws_b) if len(xs_b) >= 2 else (1.0, 0.0)
+            ys_b.append(trusted[0])
+            ws_b.append(trusted[1])
+            trusted_brake_bins.append(b)
+    if len(xs_b) >= 2:
+        fitted_brake_b0, fitted_brake_b1 = _linfit(xs_b, ys_b, ws_b)
+        brake_fit_valid = fitted_brake_b1 >= 0.0
+        brake_b0, brake_b1 = (fitted_brake_b0, fitted_brake_b1) if brake_fit_valid else (1.0, 0.0)
+    else:
+        brake_b0, brake_b1 = (1.0, 0.0)
+        brake_fit_valid = False
 
     # accel fit (linear) - weakly identified (human under-drove), kept conservative
     xs_a, ys_a, ws_a = [], [], []
-    for b, vals in sorted(acc_b.items()):
-        if len(vals) >= min_samples and b >= 30:
+    trusted_accel_bins: list[int] = []
+    for b in sorted(set(acc_passive_b) | set(acc_probe_b)):
+        trusted = trusted_longitudinal_value(acc_passive_b.get(b, []), acc_probe_b.get(b, []))
+        if trusted is not None and b >= 30:
             xs_a.append((b + bin_kmh / 2) / 3.6)
-            ys_a.append(_pct(vals, pct))
-            ws_a.append(float(len(vals)))
+            ys_a.append(trusted[0])
+            ws_a.append(trusted[1])
+            trusted_accel_bins.append(b)
     drive_b0, drive_b1 = _linfit(xs_a, ys_a, ws_a) if len(xs_a) >= 2 else (0.8, 0.0)
 
     # ellipse exponent from radial hull edge: near the boundary (lat/aymax)^n + (lon/axmax)^n ~ 1.
     n_fit = _fit_ellipse_n(hull, mu_lat, k_aero, brake_b0, brake_b1)
 
+    def covered_range(bins: list[int]) -> list[float] | None:
+        if not bins:
+            return None
+        ordered = sorted(bins)
+        if any(
+            not math.isclose(b - a, bin_kmh) for a, b in zip(ordered, ordered[1:], strict=False)
+        ):
+            return None
+        return [float(ordered[0]), float(ordered[-1]) + bin_kmh]
+
     prov = {
         "bins": cov,
         "lat_corner_bins": n_corner_bins,
+        # Fitted-bin counts + hull size — the confidence signals the #532 Part B safe-envelope blend
+        # reads to decide, per curve, whether to trust the measurement or fall back to the prior.
+        "brake_bins": len(xs_b),
+        "accel_bins": len(xs_a),
+        "brake_fit_valid": brake_fit_valid,
+        "brake_bins_contiguous": covered_range(trusted_brake_bins) is not None,
+        "accel_bins_contiguous": covered_range(trusted_accel_bins) is not None,
+        "brake_probe_bins": sum(
+            1 for b in trusted_brake_bins if len(brk_probe_b.get(b, [])) >= min_probe_samples
+        ),
+        "accel_probe_bins": sum(
+            1 for b in trusted_accel_bins if len(acc_probe_b.get(b, [])) >= min_probe_samples
+        ),
+        "brake_speed_range_kmh": covered_range(trusted_brake_bins),
+        "accel_speed_range_kmh": covered_range(trusted_accel_bins),
+        "passive_min_samples_per_bin": min_samples,
+        "probe_min_samples_per_bin": min_probe_samples,
+        "hull_points": len(hull),
         "lat_model": f"ay_max(v)={mu_lat:.3f}+{k_aero:.5f}*v_ms^2 g [mech peak; no aero-lat]",
         "brake_model": f"ax_brake(v)={brake_b0:.3f}+{brake_b1:.5f}*v_ms (g)",
         "accel_model": f"ax_drive(v)={drive_b0:.3f}+{drive_b1:.5f}*v_ms (g)",
@@ -206,7 +451,7 @@ def ggv_from_telemetry(
         mu_lat_g=mu_lat,
         k_aero_lat=max(0.0, k_aero),
         brake_b0_g=brake_b0,
-        brake_b1=max(0.0, brake_b1),
+        brake_b1=brake_b1,
         drive_b0_g=drive_b0,
         drive_b1=drive_b1,
         drive_min_g=0.35,
@@ -233,6 +478,317 @@ def _fit_ellipse_n(hull: list[tuple[float, float]], mu_lat, k_aero, brake_b0, br
             best_err, best_n = err, n
         n += 0.05
     return best_n
+
+
+def blend_ggv_safe(
+    measured: GGVModel,
+    prior: GGVModel,
+    *,
+    prior_name: str = "injected_prior",
+    min_brake_bins: int = 2,
+    min_accel_bins: int = 2,
+    min_longitudinal_span_kmh: float = MIN_LONGITUDINAL_SUPPORT_KMH,
+    support_taper_kmh: float = 10.0,
+) -> GGVModel:
+    """Safe-envelope blend of a per-combo MEASURED GGVModel with a trusted PRIOR (#532 Part B).
+
+    The measured model comes from :func:`ggv_from_telemetry` over probe-lap rows; the prior is the
+    live-verified generic plant. The blend is the deterministic guard that keeps the operating plant
+    from ever being MORE optimistic than warranted, while never regressing the reference combo:
+
+    * **Lateral grip: the prior is BOTH ceiling and floor.** Ceiling — never extrapolate up (an
+      aero-lateral term spins the GT3 out, live-disproven #259/#244; ``k_aero_lat`` stays 0, the cap
+      stays the prior's). Floor — a conservative, AC-valid handshake never reaches the LATERAL grip
+      limit (it drives clean at moderate pace by design), so a measured lateral BELOW the prior is a
+      *lower bound*, not evidence of a weaker car; lowering the plant to it would regress the very
+      car the prior nails, for no safety gain (the live slip limiter already guards over-drive).
+      Genuine per-combo lateral lowering needs slip-saturation evidence / a limit-reaching lateral
+      probe — deferred (unsafe to push a GT3 to its lateral limit unattended). So lateral == prior.
+    * **Braking / drive accel** CAN be probed to their limits safely (straight-line braking, WOT
+      accel). Apply the measured curve ONLY inside an observed span of at least
+      ``min_longitudinal_span_kmh``. Braking accepts a curve that is consistently above OR below
+      the prior: a weaker measured brake envelope must make the combo brake earlier. Drive accepts
+      only a confident gain because conservative acceleration under-measurement is not hazardous.
+      The measured curve tapers to the prior at both support edges and the prior is used everywhere
+      outside, so a low-speed fit is never extrapolated to an unmeasured high-speed point.
+      The prior remains in the top-level coefficients as a fail-safe for older consumers, and its
+      hard caps are kept.
+    * **The ellipse exponent is pinned to the prior.** The friction-ellipse boundary exponent
+      requires limit-reaching (boundary) data; a conservative handshake's ``(lat, lon)`` hull is
+      interior points, so a fit from it is unreliable — like the lateral limit, honest per-combo
+      identification of it needs a limit-reaching probe (deferred). A wrong lat/long coupling is the
+      biggest silent-spin risk (Council 2026-07-13), and the prior's exponent is live-verified.
+
+    Net: the reference car (and any conservatively-driven combo) reproduces the prior — no
+    regression, no spin — while a car that DEMONSTRABLY brakes / accelerates harder than the prior
+    gets that measured improvement only over the speed range that proved it. The measured
+    lower-bound envelope is recorded in provenance for a future slip-saturation pass. Provenance
+    labels each curve ``measured(supported)`` vs ``prior``.
+    """
+    prov = dict(measured.provenance or {})
+    corner_bins = int(prov.get("lat_corner_bins", 0) or 0)
+    brake_bins = int(prov.get("brake_bins", 0) or 0)
+    accel_bins = int(prov.get("accel_bins", 0) or 0)
+    hull_points = int(prov.get("hull_points", 0) or 0)
+
+    def observed_range(key: str) -> tuple[float, float] | None:
+        value = prov.get(key)
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            return None
+        lo, hi = value
+        if not _finite_ggv(lo, hi) or float(lo) < 0.0 or float(hi) <= float(lo):
+            return None
+        return (float(lo), float(hi))
+
+    def coverage_ok(value: tuple[float, float] | None) -> bool:
+        return value is not None and value[1] - value[0] >= min_longitudinal_span_kmh
+
+    brake_range = observed_range("brake_speed_range_kmh")
+    accel_range = observed_range("accel_speed_range_kmh")
+    supported_longitudinal: dict[str, dict] = {}
+
+    # Lateral: the prior is ceiling AND floor (see docstring) — a non-limit measurement is only a
+    # lower bound, so it never lowers the operating plant and never regresses the reference car.
+    mu_lat, lat_src = prior.mu_lat_g, "prior"
+
+    # Ellipse exponent: pinned to the prior — its boundary needs limit-reaching data the
+    # conservative handshake does not produce (the hull is interior points). Recorded hull_points
+    # feeds a future limit-reaching pass. See docstring.
+    ellipse_n, ell_src = prior.ellipse_n, "prior"
+
+    # Braking: the top-level curve remains the prior. A consistently stronger OR weaker measured
+    # envelope is activated only over a sufficiently broad OBSERVED span and tapers back to the
+    # prior at both edges. This prevents a narrow 50-90 km/h fit from changing a later 200 km/h
+    # braking point.
+    brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
+    if (
+        brake_bins >= min_brake_bins
+        and prov.get("brake_fit_valid") is True
+        and coverage_ok(brake_range)
+        and _finite_ggv(measured.brake_b0_g, measured.brake_b1)
+        and _brake_curve_is_supported(
+            measured.brake_b0_g,
+            measured.brake_b1,
+            prior.brake_b0_g,
+            prior.brake_b1,
+            v_lo=brake_range[0] / 3.6,
+            v_hi=brake_range[1] / 3.6,
+        )
+    ):
+        supported_longitudinal["brake"] = {
+            "speed_min_kmh": brake_range[0],
+            "speed_max_kmh": brake_range[1],
+            "b0_g": measured.brake_b0_g,
+            "b1": measured.brake_b1,
+            "floor_g": 0.5,
+            "taper_kmh": min(support_taper_kmh, (brake_range[1] - brake_range[0]) / 2.0),
+        }
+        brake_src = "measured(supported)"
+
+    # Drive accel: same rule (the WOT sweep reaches full throttle; aggressive accel is TC-off-safe
+    # live via the slip limiter). Measured only where it confidently exceeds the prior, else prior.
+    drive_b0, drive_b1, drive_min, drive_src = (
+        prior.drive_b0_g,
+        prior.drive_b1,
+        prior.drive_min_g,
+        "prior",
+    )
+    if (
+        accel_bins >= min_accel_bins
+        and coverage_ok(accel_range)
+        and _finite_ggv(measured.drive_b0_g, measured.drive_b1, measured.drive_min_g)
+        and _curve_exceeds(
+            measured.drive_b0_g,
+            measured.drive_b1,
+            prior.drive_b0_g,
+            prior.drive_b1,
+            v_lo=accel_range[0] / 3.6,
+            v_hi=accel_range[1] / 3.6,
+        )
+    ):
+        supported_longitudinal["drive"] = {
+            "speed_min_kmh": accel_range[0],
+            "speed_max_kmh": accel_range[1],
+            "b0_g": measured.drive_b0_g,
+            "b1": measured.drive_b1,
+            "floor_g": measured.drive_min_g,
+            "taper_kmh": min(support_taper_kmh, (accel_range[1] - accel_range[0]) / 2.0),
+        }
+        drive_src = "measured(supported)"
+
+    blend_prov = {
+        "blend_source": {
+            "lateral": lat_src,
+            "brake": brake_src,
+            "drive": drive_src,
+            "ellipse_n": ell_src,
+        },
+        "measured": {
+            "mu_lat_g": round(measured.mu_lat_g, 4),
+            "brake_b0_g": round(measured.brake_b0_g, 4),
+            "brake_b1": round(measured.brake_b1, 5),
+            "drive_b0_g": round(measured.drive_b0_g, 4),
+            "drive_b1": round(measured.drive_b1, 5),
+            "ellipse_n": round(measured.ellipse_n, 3),
+            "lat_corner_bins": corner_bins,
+            "brake_bins": brake_bins,
+            "accel_bins": accel_bins,
+            "brake_probe_bins": int(prov.get("brake_probe_bins", 0) or 0),
+            "accel_probe_bins": int(prov.get("accel_probe_bins", 0) or 0),
+            "brake_speed_range_kmh": list(brake_range) if brake_range else None,
+            "accel_speed_range_kmh": list(accel_range) if accel_range else None,
+            "passive_min_samples_per_bin": prov.get("passive_min_samples_per_bin"),
+            "probe_min_samples_per_bin": prov.get("probe_min_samples_per_bin"),
+            "hull_points": hull_points,
+            "bins": prov.get("bins", {}),
+        },
+        "blend_gate": {
+            "min_longitudinal_span_kmh": min_longitudinal_span_kmh,
+            "brake_coverage_ok": coverage_ok(brake_range),
+            "accel_coverage_ok": coverage_ok(accel_range),
+            "outside_observed_range": "prior",
+            "support_taper_kmh": support_taper_kmh,
+        },
+        "prior": prior_name,
+        # A conservative handshake under-measures the lateral limit, so lateral values below the
+        # prior remain lower bounds. Straight-line braking, however, is limit-reaching evidence.
+        "note": (
+            "lateral pinned to prior (conservative drive under-measures the lateral limit); "
+            "braking evidence and drive gains applied only inside measured speed support; "
+            "prior outside"
+        ),
+    }
+    return GGVModel(
+        mu_lat_g=mu_lat,
+        k_aero_lat=0.0,  # ALWAYS 0 — an aero-lateral term spins the GT3 out (live-disproven #259)
+        brake_b0_g=brake_b0,
+        brake_b1=brake_b1,
+        drive_b0_g=drive_b0,
+        drive_b1=drive_b1,
+        drive_min_g=drive_min,
+        ellipse_n=ellipse_n,
+        ay_cap_g=prior.ay_cap_g,  # never raise the lateral cap above the prior
+        ax_brake_cap_g=prior.ax_brake_cap_g,
+        provenance=blend_prov,
+        supported_longitudinal=supported_longitudinal,
+    )
+
+
+def _curve_exceeds(
+    m0: float,
+    m1: float,
+    p0: float,
+    p1: float,
+    *,
+    v_lo: float = 11.0,
+    v_hi: float = 50.0,
+    margin: float = 0.03,
+) -> bool:
+    """True iff the linear curve ``m0+m1*v`` exceeds ``p0+p1*v`` (by ``margin`` g) at BOTH speeds.
+
+    For two lines, exceeding at both endpoints of ``[v_lo, v_hi]`` (m/s; ~40..180 km/h) means the
+    measured curve dominates the prior across the whole covered range — the only case where a
+    measured braking/accel envelope is confidently BETTER than the prior and safe to adopt (a
+    diluted under-measurement fails this, so it never lowers the plant).
+    """
+    return (m0 + m1 * v_lo) >= (p0 + p1 * v_lo) + margin and (m0 + m1 * v_hi) >= (
+        p0 + p1 * v_hi
+    ) + margin
+
+
+def _brake_curve_is_supported(
+    m0: float,
+    m1: float,
+    p0: float,
+    p1: float,
+    *,
+    v_lo: float,
+    v_hi: float,
+    margin: float = 0.03,
+) -> bool:
+    """True when a brake curve is consistently stronger OR weaker over measured support."""
+    exceeds = _curve_exceeds(m0, m1, p0, p1, v_lo=v_lo, v_hi=v_hi, margin=margin)
+    below = (m0 + m1 * v_lo) <= (p0 + p1 * v_lo) - margin and (m0 + m1 * v_hi) <= (
+        p0 + p1 * v_hi
+    ) - margin
+    return exceeds or below
+
+
+def _finite_ggv(*values: float) -> bool:
+    return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
+
+
+def _freeze_supported_longitudinal(supported: Mapping) -> MappingProxyType:
+    """Return a detached, recursively read-only copy of the two-level support mapping."""
+    return MappingProxyType(
+        {kind: MappingProxyType(dict(override)) for kind, override in supported.items()}
+    )
+
+
+def _validate_supported_longitudinal(
+    supported: Mapping,
+    *,
+    brake_b0_g: float,
+    brake_b1: float,
+    drive_b0_g: float,
+    drive_b1: float,
+    ax_brake_cap_g: float,
+) -> None:
+    """Validate every runtime-bearing measured override against the trusted prior.
+
+    The artifact's free-form ``provenance`` is observability only. Supported curves have their own
+    schema and are accepted only when the same deterministic safety gates used by
+    :func:`blend_ggv_safe` still hold after deserialization.
+    """
+    if not isinstance(supported, Mapping):
+        raise ValueError("supported_longitudinal must be a dict")
+    unknown = set(supported) - {"brake", "drive"}
+    if unknown:
+        raise ValueError(f"unsupported longitudinal override keys: {sorted(unknown)!r}")
+    for kind, override in supported.items():
+        if not isinstance(override, Mapping):
+            raise ValueError(f"supported_longitudinal.{kind} must be a dict")
+        required = {"speed_min_kmh", "speed_max_kmh", "b0_g", "b1", "floor_g", "taper_kmh"}
+        if set(override) != required:
+            raise ValueError(
+                f"supported_longitudinal.{kind} fields must be exactly {sorted(required)!r}"
+            )
+        raw = [override[name] for name in sorted(required)]
+        if any(isinstance(value, bool) for value in raw) or not _finite_ggv(*raw):
+            raise ValueError(f"supported_longitudinal.{kind} contains non-finite fields")
+        lo_kmh = float(override["speed_min_kmh"])
+        hi_kmh = float(override["speed_max_kmh"])
+        b0_g = float(override["b0_g"])
+        b1 = float(override["b1"])
+        floor_g = float(override["floor_g"])
+        taper_kmh = float(override["taper_kmh"])
+        span_kmh = hi_kmh - lo_kmh
+        if (
+            lo_kmh < 0.0
+            or hi_kmh > MAX_LONGITUDINAL_SUPPORT_KMH
+            or span_kmh < MIN_LONGITUDINAL_SUPPORT_KMH
+            or taper_kmh <= 0.0
+            or taper_kmh > span_kmh / 2.0
+            or floor_g < 0.0
+        ):
+            raise ValueError(f"supported_longitudinal.{kind} has an unsafe range/taper/floor")
+        v_lo, v_hi = lo_kmh / 3.6, hi_kmh / 3.6
+        if kind == "brake":
+            if floor_g != 0.5 or b1 < 0.0:
+                raise ValueError("supported brake override requires floor_g=0.5 and b1>=0")
+            if not _brake_curve_is_supported(b0_g, b1, brake_b0_g, brake_b1, v_lo=v_lo, v_hi=v_hi):
+                raise ValueError(
+                    "supported brake override is not consistently above/below its trusted prior"
+                )
+            if max(b0_g + b1 * v_lo, b0_g + b1 * v_hi) > ax_brake_cap_g:
+                raise ValueError("supported brake override exceeds the trusted brake cap")
+        else:
+            if floor_g > MAX_DRIVE_SUPPORT_G:
+                raise ValueError("supported drive floor exceeds the physical safety cap")
+            if not _curve_exceeds(b0_g, b1, drive_b0_g, drive_b1, v_lo=v_lo, v_hi=v_hi):
+                raise ValueError("supported drive override no longer exceeds its trusted prior")
+            if max(floor_g, b0_g + b1 * v_lo, b0_g + b1 * v_hi) > MAX_DRIVE_SUPPORT_G:
+                raise ValueError("supported drive override exceeds the physical safety cap")
 
 
 # ---------------------------------------------------------------------------

@@ -28,15 +28,16 @@ to the same ``step()``/``on_recovery()`` contract as :class:`RacingDriver`, so t
 ``auto_drive.rig_drive`` loop executes it (one rig loop, no drift), driving a synthetic plant in
 tests. The only rig-only piece is the lazy ``acpmf_physics`` reader (``phys_read="auto"``).
 
-Artifacts persist per-combo under ``<AC user dir>/plant_id/`` — a **durable** Documents path,
-never ``.scratch`` (the original ``model_id.py`` was lost to exactly that; see issue #532's
-pitfall list).
+Artifacts persist per-combo (car + track + optional layout + setup-content identity) under
+``<AC user dir>/plant_id/`` — a **durable** Documents path, never ``.scratch`` (the original
+``model_id.py`` was lost to exactly that; see issue #532's pitfall list).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 from dataclasses import asdict, dataclass
@@ -45,7 +46,10 @@ from pathlib import Path
 
 from tools.ac_harness.ai_line import _horizontal
 from tools.ac_harness.ggv_profile import (
+    GGVModel,
+    blend_ggv_safe,
     fit_steer_feedforward,
+    ggv_from_telemetry,
     seg_lengths,
     signed_curvature_profile,
 )
@@ -53,13 +57,19 @@ from tools.ac_harness.lap_driver import PHASE_LAP, DriveFrame
 from tools.ac_harness.racing_driver import RacingDriver
 
 G = 9.81
-PLANT_SCHEMA_VERSION = 1
+# Schema v2 (#532 Part B) adds the optional ``ggv`` block (per-combo friction plant) alongside the
+# v1 ``constants``. v1 artifacts (Part A: shift points + steering only, no ggv block) still load —
+# their ggv consumption falls back to the generic plant — so Part A artifacts are not invalidated.
+PLANT_SCHEMA_VERSION = 2
+SUPPORTED_PLANT_SCHEMA_VERSIONS = (1, 2)
 # Constants a persisted plant artifact MUST carry (a fully-passed handshake produces all of them);
 # a partial artifact is rejected on load so `--use-plant full` never silently degrades.
 REQUIRED_PLANT_CONSTANTS = ("ff_sign", "ff_c1", "ff_c2", "rpm_up", "rpm_dn", "r_eff_m")
 
 # AC gear encoding (live-verified, see custom_ai.py): 0=Reverse, 1=Neutral, 2=1st, 3=2nd, ...
 _FIRST_FORWARD_GEAR = 2
+
+logger = logging.getLogger(__name__)
 
 
 def _finite(*values: float) -> bool:
@@ -95,8 +105,14 @@ class HandshakeResult:
     laps_used: int
     duration_s: float
     measurements: tuple[ProbeMeasurement, ...]
+    layout: str | None = None  # multi-layout track identity (None keeps the legacy artifact key)
     setup: str | None = None  # the setup the plant was measured under (None = default)
     setup_ini: str | None = None  # resolved setup .ini path (for the content-hash key)
+    # #532 Part B: the per-combo friction plant (safe-envelope-blended GGVModel + fit provenance),
+    # or None when no prior was injected / no friction rows were captured. Additive and ADVISORY —
+    # a missing/failed ggv block never gates ``ok`` (consumption falls back to the generic plant),
+    # unlike the 5 core constants which hard-abort.
+    ggv: dict | None = None
 
     def failed(self) -> list[ProbeMeasurement]:
         return [m for m in self.measurements if not m.passed]
@@ -114,12 +130,14 @@ class HandshakeResult:
             "ok": self.ok,
             "car_id": self.car_id,
             "track_id": self.track_id,
+            "layout": self.layout,
             "setup": self.setup,
             "setup_ini": self.setup_ini,
             "laps_used": self.laps_used,
             "duration_s": round(self.duration_s, 1),
             "constants": self.constants(),
             "measurements": [asdict(m) for m in self.measurements],
+            "ggv": self.ggv,
         }
 
 
@@ -634,6 +652,7 @@ class HandshakeController:
         *,
         car_id: str = "",
         track_id: str = "",
+        layout: str | None = None,
         setup: str | None = None,
         setup_ini: str | None = None,
         sink: dict | None = None,
@@ -655,10 +674,30 @@ class HandshakeController:
         coast_min_kmh: float = 45.0,
         row_interval_s: float = 0.25,
         min_corner_rows: int = 120,
+        # #532 Part B — friction ID. ``prior_ggv`` is the trusted generic plant the measured
+        # friction envelope is safe-envelope-blended against (injected by the harness so the
+        # controller stays import-clean of auto_drive). None => no ggv block is emitted.
+        prior_ggv: GGVModel | None = None,
+        prior_ggv_name: str = "injected_prior",
+        # Active brake-at-speed probe: firm STRAIGHT-LINE braking (never a lateral push — the GT3
+        # spins at the lateral limit, live-disproven #259) to trace the high-speed braking envelope.
+        brake_level: float = 0.85,
+        brake_probe_seconds: float = 2.5,
+        brake_min_entry_kmh: float = 110.0,
+        brake_min_exit_kmh: float = 45.0,
+        brake_min_straight_m: float = 180.0,
+        # Passive friction-row capture (speed/accg_lat/accg_lon from the physics accG channel) for
+        # the GGV fit — throttled so ~1.5 laps yield a rich, bounded envelope sample.
+        # The rig loop updates near 60 Hz. Capture each fresh frame during the bounded controlled
+        # probes so a 2.5 s brake pull can populate multiple 10 km/h bins without extending the
+        # braking maneuver. Passive rows still face ggv_from_telemetry's stricter 40-row/bin gate.
+        friction_row_interval_s: float = 0.01,
+        min_friction_rows: int = 200,
     ) -> None:
         self._base = RacingDriver(fast_line, speed_profile, pace=pace, max_speed_kmh=max_speed_kmh)
         self.car_id = car_id
         self.track_id = track_id
+        self.layout = layout
         self.setup = setup
         self.setup_ini = setup_ini
         self.sink = sink if sink is not None else {}
@@ -673,6 +712,15 @@ class HandshakeController:
         self.coast_min_kmh = coast_min_kmh
         self.row_interval_s = row_interval_s
         self.min_corner_rows = min_corner_rows
+        self._prior_ggv = prior_ggv
+        self._prior_ggv_name = prior_ggv_name or "injected_prior"
+        self.brake_level = brake_level
+        self.brake_probe_seconds = brake_probe_seconds
+        self.brake_min_entry_kmh = brake_min_entry_kmh
+        self.brake_min_exit_kmh = brake_min_exit_kmh
+        self.brake_min_straight_m = brake_min_straight_m
+        self.friction_row_interval_s = friction_row_interval_s
+        self.min_friction_rows = min_friction_rows
 
         plane = [(p[0], p[2]) for p in fast_line]
         self._seg = seg_lengths(plane)
@@ -682,8 +730,12 @@ class HandshakeController:
         self._sid, self._dist_to_end = _straight_membership(self._straights, self._seg, len(plane))
         # Probe queue. The sweep needs the longest straight; pulses/coast run wherever a straight
         # offers enough remaining room and re-queue if interrupted, so short-straight tracks
-        # spread them across several passes.
+        # spread them across several passes. The active brake-at-speed probe (#532 Part B) is only
+        # queued when a prior GGV is present to blend against — otherwise no ggv block is emitted
+        # and the probe would burn a straight for nothing.
         self._pending: list[str] = ["accel_sweep", "steer_pulse", "coast"]
+        if prior_ggv is not None:
+            self._pending.append("brake_probe")
         # Per-probe attempt cap: a probe that keeps aborting (straight too short, prep timeout,
         # unusable pull) must not loop forever and starve the completion gate. After the cap it is
         # DROPPED from the schedule; its fit then fails with an interpretable "probe did not
@@ -697,6 +749,12 @@ class HandshakeController:
         self._sweep_samples: list[dict] = []
         self._coast_samples: list[dict] = []
         self._rows: list[dict] = []
+        # #532 Part B friction rows: (speed_kmh, accg_lat, accg_lon) sampled from the physics accG
+        # channel across the whole drive (corner sequence => lateral, WOT sweep => accel, brake
+        # probe => braking envelope). Fed to ggv_from_telemetry at finish.
+        self._friction_rows: list[dict] = []
+        self._friction_t: float | None = None
+        self._friction_packet_id: int | None = None
         self._ratio_samples: dict[int, list[float]] = {}
         self._laps = 0
         self._t_start: float | None = None
@@ -766,6 +824,11 @@ class HandshakeController:
             # half-captured maneuver never contaminates a fit.
             self._abort_active("driver stuck")
             return base
+
+        # #532 Part B: sample the friction envelope from the physics accG channel every driving
+        # frame (throttled). Runs across all phases — the corner sequence supplies lateral rows, the
+        # WOT sweep accel rows, and the brake probe the braking envelope.
+        self._mine_friction(now)
 
         frame = base
         if self._active is not None:
@@ -894,6 +957,56 @@ class HandshakeController:
             self._rows.append(row)
         self._row_acc = {"dpsi": 0.0, "dt": 0.0, "v": 0.0, "steer": 0.0, "n": 0, "t0": None}
 
+    def _mine_friction(self, now: float) -> None:
+        """Sample one friction row (speed_kmh, accg_lat, accg_lon) from the physics accG channel.
+
+        Throttled to ``friction_row_interval_s``. Reads the harness-owned physics frame (the same
+        reader the r_eff coast probe uses) — the accG channel carries the REAL measured lateral and
+        longitudinal accelerations that :func:`ggv_from_telemetry` de-contaminates and fits. A
+        missing physics reader (off-rig with no fake) simply yields no rows -> no ggv block, which
+        the consumer treats as "no per-combo plant" and falls back to the generic plant.
+        """
+        if self._prior_ggv is None:
+            return  # no prior to blend against => no ggv block => nothing to capture
+        if self._friction_t is not None and now - self._friction_t < self.friction_row_interval_s:
+            return
+        phys = self._read_phys()
+        if phys is None:
+            return
+        speed = getattr(phys, "speed_kmh", None)
+        ay = getattr(phys, "accg_lat", None)
+        ao = getattr(phys, "accg_lon", None)
+        if speed is None or ay is None or ao is None:
+            return
+        if not _finite(speed, ay, ao) or speed < 15.0:
+            return
+        # The controller can run faster than AC's physics mmap refresh. Do not count one mmap
+        # packet several times merely because the harness clock advanced: duplicated frames would
+        # fabricate the per-bin support that makes a fitted friction envelope runtime-bearing.
+        packet_id = getattr(phys, "packet_id", None)
+        if isinstance(packet_id, int) and not isinstance(packet_id, bool):
+            if packet_id == self._friction_packet_id:
+                return
+            self._friction_packet_id = packet_id
+        self._friction_t = now
+        if len(self._friction_rows) < 60000:
+            source = "passive"
+            if self._active is not None:
+                kind = self._active.get("kind")
+                stage = self._active.get("stage")
+                if kind == "brake_probe" and stage == "brake":
+                    source = "brake_probe"
+                elif kind == "accel_sweep" and stage == "wot":
+                    source = "accel_sweep"
+            self._friction_rows.append(
+                {
+                    "speed_kmh": float(speed),
+                    "accg_lat": float(ay),
+                    "accg_lon": float(ao),
+                    "source": source,
+                }
+            )
+
     def _remaining_on_straight(self, car: tuple[float, float]) -> float:
         idx = self._base.pursuit.nearest_index(car)
         if self._sid[idx] < 0:
@@ -911,12 +1024,14 @@ class HandshakeController:
                 "accel_sweep": max(self._min_sweep_m(), 1.0),
                 "steer_pulse": 70.0,
                 "coast": max(self.coast_seconds * max(speed_kmh, 40.0) / 3.6 + 25.0, 60.0),
+                "brake_probe": self.brake_min_straight_m,
             }[kind]
             if remaining < need:
                 continue
-            if kind == "coast" and self._read_phys() is None:
-                # No physics channel => r_eff can never fit; fail it now with an interpretable
-                # message instead of burning straights retrying (the fit reports the cause).
+            if kind in ("coast", "brake_probe") and self._read_phys() is None:
+                # No physics channel => the coast r_eff fit / the brake-probe friction rows can
+                # never land; drop the probe now (its fit / the ggv block simply reports the cause)
+                # instead of burning straights retrying it.
                 self._pending.remove(kind)
                 continue
             self._pending.remove(kind)
@@ -948,6 +1063,8 @@ class HandshakeController:
             return self._step_pulse(base, speed_kmh, dpsi, dt, remaining, now)
         if kind == "accel_sweep":
             return self._step_sweep(base, speed_kmh, rpm, gear, v_mps, remaining, now)
+        if kind == "brake_probe":
+            return self._step_brake(base, speed_kmh, remaining, now)
         return self._step_coast(base, speed_kmh, v_mps, remaining, now)
 
     @staticmethod
@@ -1126,6 +1243,54 @@ class HandshakeController:
             self._active = None
         return self._override(base, gas=0.0, brake=0.0, gear_up=False, gear_dn=False)
 
+    def _step_brake(
+        self, base: DriveFrame, speed_kmh: float, remaining: float, now: float
+    ) -> DriveFrame:
+        """Active brake-at-speed probe: firm STRAIGHT-LINE braking to trace the braking envelope.
+
+        Straight-line only — steering follows the base line, never a lateral push (pushing to the
+        lateral limit spins the GT3, live-disproven #259). The friction-row sampler captures the
+        resulting high ``-accg_lon`` across the pull; this probe only COMMANDS the braking. Bounded
+        by a time window, a speed floor, and the straight's remaining length so the car is always
+        slowed and settled before the corner (never brakes into a turn).
+        """
+        st = self._active
+        assert st is not None
+        if st["stage"] == "prep":
+            # Wait until fast enough to trace the HIGH-speed braking envelope; let the base driver
+            # keep accelerating. Reserve enough distance to brake from the eventual entry speed to
+            # the safety floor at a conservative 0.5 g, plus 30 m to settle before the corner.
+            entry_kmh = max(speed_kmh, self.brake_min_entry_kmh)
+            if now - st["t_stage"] > 8.0 or remaining < self._brake_probe_required_m(entry_kmh):
+                self._abort_active(
+                    "brake-probe prep: straight too short or entry speed not reached"
+                )
+                return base
+            if speed_kmh < self.brake_min_entry_kmh:
+                return base  # base accelerates toward the entry speed
+            st["stage"] = "brake"
+            st["t_stage"] = now
+            st["data"]["entry_kmh"] = round(speed_kmh, 1)
+        # Braking phase: stop when the window elapses, speed reaches the floor, or the straight is
+        # running out (leave room to settle before the corner). Ending sets active=None; the base
+        # driver resumes on the next step.
+        if (
+            now - st["t_stage"] >= self.brake_probe_seconds
+            or speed_kmh <= self.brake_min_exit_kmh
+            or remaining < 30.0
+        ):
+            st["data"]["exit_kmh"] = round(speed_kmh, 1)
+            self._active = None
+            return base
+        return self._override(base, gas=0.0, brake=self.brake_level, gear_up=False, gear_dn=False)
+
+    def _brake_probe_required_m(self, entry_kmh: float) -> float:
+        """Conservative stopping distance from probe entry to the configured safety floor."""
+        entry_mps = max(0.0, entry_kmh) / 3.6
+        exit_mps = max(0.0, self.brake_min_exit_kmh) / 3.6
+        braking_m = max(0.0, entry_mps * entry_mps - exit_mps * exit_mps) / (2.0 * 0.5 * G)
+        return braking_m + 30.0
+
     def _finish(self, now: float) -> None:
         m_sign = fit_ff_sign(self._pulse_records)
         ff_sign = m_sign.value.get("ff_sign") if m_sign.passed else None
@@ -1139,15 +1304,18 @@ class HandshakeController:
         m_shift = fit_shift_points(self._sweep_samples, ratios)
         m_reff = fit_r_eff(self._coast_samples)
         measurements = (m_sign, m_ff, m_ratios, m_shift, m_reff)
+        ggv_block = self._build_ggv_block()
         self.result = HandshakeResult(
             ok=all(m.passed for m in measurements),
             car_id=self.car_id,
             track_id=self.track_id,
+            layout=self.layout,
             setup=self.setup,
             setup_ini=str(self.setup_ini) if self.setup_ini else None,
             laps_used=self._laps,
             duration_s=now - (self._t_start if self._t_start is not None else now),
             measurements=measurements,
+            ggv=ggv_block,
         )
         # Record which probes never completed within the budget, so a partial finalize (drive
         # ended) is diagnosable — how many pulses/sweep-gears/coast-samples/corner-rows landed.
@@ -1158,6 +1326,8 @@ class HandshakeController:
             "sweep_gears": sorted({s["gear"] - 1 for s in self._sweep_samples}),
             "coast_samples": len(self._coast_samples),
             "gear_ratio_gears": sorted(self._ratio_samples),
+            "friction_rows": len(self._friction_rows),
+            "ggv_ok": bool(ggv_block and ggv_block.get("ok")),
             "probe_attempts": dict(self._probe_attempts),
             "pending_at_finish": list(self._pending),
         }
@@ -1166,6 +1336,45 @@ class HandshakeController:
         self.sink["constants"] = self.result.constants()
         self.sink["diagnostics"] = self.result_diagnostics
         self.finished = True
+
+    def _build_ggv_block(self) -> dict | None:
+        """Fit the per-combo friction plant from captured rows and safe-envelope-blend the prior.
+
+        Returns ``None`` when no prior was injected (no trusted basis for a safe blend — the ggv
+        driver keeps its generic plant). Otherwise returns a block recording the outcome:
+
+        * ``ok=True`` with a blended ``model`` (a :class:`~tools.ac_harness.ggv_profile.GGVModel`
+          serialized via ``to_dict``) when enough friction rows were captured AND the fit succeeded;
+        * ``ok=False`` with a ``reason`` and ``model=None`` otherwise — a VISIBLE degrade in
+          the artifact + diagnostics, so the consumer falls back to the generic plant without a
+          silent swallow (the ggv block is ADVISORY; unlike the 5 core constants it never gates
+          ``HandshakeResult.ok``).
+        """
+        if self._prior_ggv is None:
+            return None
+        n = len(self._friction_rows)
+        block: dict = {
+            "ok": False,
+            "friction_rows": n,
+            "model": None,
+            "prior": self._prior_ggv_name,
+        }
+        if n < self.min_friction_rows:
+            block["reason"] = f"insufficient friction rows: {n} < {self.min_friction_rows}"
+            return block
+        try:
+            measured = ggv_from_telemetry(self._friction_rows)
+            blended = blend_ggv_safe(measured, self._prior_ggv, prior_name=self._prior_ggv_name)
+        except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
+            # Narrow catch + log (never a broad catch-and-default). The failure is ADVISORY: the
+            # consumer falls back to the generic plant, but the reason is recorded, not swallowed.
+            logger.exception("friction-ID fit failed; ggv block degrades to the generic plant")
+            block["reason"] = f"friction fit error: {type(exc).__name__}: {exc}"
+            return block
+        block["ok"] = True
+        block["model"] = blended.to_dict()
+        block["reason"] = "ok"
+        return block
 
     def finalize(self, now: float | None = None) -> None:
         """Force finalization when the drive ends before the schedule self-completes.
@@ -1218,21 +1427,43 @@ def _setup_key(setup: str | None, setup_ini: str | Path | None = None) -> str:
     return f"__setup-{safe}-{digest}" if digest else f"__setup-{safe}"
 
 
+def _layout_key(layout: str | None) -> str:
+    """Filename-safe layout suffix (empty only for the legacy single-layout identity).
+
+    Layout ids are AC folder basenames. Reject path-shaped values rather than normalizing them into
+    a collision (for example ``gp/short`` and ``gp_short``); CLI callers already apply the same
+    plain-id rule through ``validate_ac_id``.
+    """
+    if layout is None:
+        return ""
+    if (
+        not isinstance(layout, str)
+        or not layout
+        or ".." in layout
+        or re.fullmatch(r"[A-Za-z0-9._-]+", layout) is None
+    ):
+        raise ValueError(f"unsafe track layout id {layout!r} (allowed: letters/digits/._-)")
+    return f"__layout-{layout}"
+
+
 def plant_artifact_path(
     user_dir: Path,
     car_id: str,
     track_id: str,
     setup: str | None = None,
     setup_ini: str | Path | None = None,
+    *,
+    layout: str | None = None,
 ) -> Path:
-    return Path(user_dir) / "plant_id" / f"{car_id}__{track_id}{_setup_key(setup, setup_ini)}.json"
+    filename = f"{car_id}__{track_id}{_layout_key(layout)}{_setup_key(setup, setup_ini)}.json"
+    return Path(user_dir) / "plant_id" / filename
 
 
 def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
 
-    The artifact is keyed by car+track+setup (``result['setup']`` — the stem, or None for the
-    default setup), so a default-setup plant is never silently reused for a different setup.
+    The artifact is keyed by car+track+layout+setup. ``layout=None`` keeps the exact legacy
+    car+track+setup filename so existing single-layout artifacts remain loadable.
     """
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
@@ -1242,6 +1473,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
         raise ValueError(f"plant artifact needs car_id and track_id (got {car_id!r}/{track_id!r})")
     setup = result.get("setup")
     setup_ini = result.get("setup_ini")
+    layout = result.get("layout")
     from datetime import UTC, datetime
 
     payload = {
@@ -1249,7 +1481,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **result,
     }
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini)
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1263,21 +1495,30 @@ def load_plant_artifact(
     track_id: str,
     setup: str | None = None,
     setup_ini: str | Path | None = None,
+    *,
+    layout: str | None = None,
 ) -> dict | None:
     """Load + validate the combo's plant artifact; ``None`` when absent or invalid.
 
-    ``setup`` (+ the resolved ``setup_ini`` content hash) is part of the combo identity — a request
-    with ``--setup X`` only loads a plant measured under that exact setup file, so setup-changed
-    gear ratios / FF can't be silently reused (Codex review).
+    ``layout`` and ``setup`` (+ the resolved ``setup_ini`` content hash) are part of the combo
+    identity. A request for one layout can never reuse a plant measured on another layout.
     """
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini)
     try:
+        path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return None
-    if not isinstance(payload, dict) or payload.get("schema_version") != PLANT_SCHEMA_VERSION:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") not in SUPPORTED_PLANT_SCHEMA_VERSIONS
+    ):
         return None
     if payload.get("car_id") != car_id or payload.get("track_id") != track_id:
+        return None
+    # The filename prevents normal cross-layout lookup; the payload check also rejects a copied or
+    # renamed artifact whose stored physical-course identity does not match the requested layout.
+    # Missing layout in v1/v2 artifacts is equivalent to None, preserving single-layout back-compat.
+    if payload.get("layout") != layout:
         return None
     # Setup identity (name + content hash) is ALREADY enforced by the filename we opened
     # (`plant_artifact_path(..., setup, setup_ini)` built from the REQUEST's readable setup_ini).
@@ -1328,6 +1569,29 @@ def plant_driver_kwargs(artifact: dict, *, steer: bool) -> dict:
         kwargs["ff_c1"] = float(constants["ff_c1"])
         kwargs["ff_c2"] = float(constants["ff_c2"])
     return kwargs
+
+
+def plant_ggv_model(artifact: dict) -> GGVModel | None:
+    """The per-combo friction plant (a :class:`GGVModel`) from an artifact's ggv block, or ``None``.
+
+    Returns ``None`` when the artifact carries no usable ggv block — a v1 / Part-A artifact, or a
+    run where the friction fit degraded (``ok=False``) — so the caller keeps the generic plant. A
+    malformed / non-finite serialized model is rejected (``GGVModel.from_dict`` raises), so the
+    ggv driver never builds a speed profile from a ``nan`` grip curve (#532 Part B input check).
+    """
+    ggv = artifact.get("ggv")
+    if not isinstance(ggv, dict) or not ggv.get("ok"):
+        return None
+    model = ggv.get("model")
+    if not isinstance(model, dict):
+        return None
+    try:
+        return GGVModel.from_dict(model)
+    except (ValueError, TypeError):
+        logger.warning(
+            "plant artifact ggv block present but its model is invalid; using the generic plant"
+        )
+        return None
 
 
 def apply_handshake_outcome(report, sink: dict) -> None:
