@@ -1487,6 +1487,7 @@ def collect_lap_archives(
     *,
     resolve: Callable[[], list[Path]] | None = None,
     wait_for_first: bool = False,
+    min_count: int = 1,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
     _clock: Callable[[], float] = time.monotonic,
@@ -1500,9 +1501,11 @@ def collect_lap_archives(
     exist yet (only a mid-stream temp file, which the ``lap_*.json`` glob correctly ignores) — a
     naive single scan then reports an empty list even though a lap was produced (#515).
 
-    With ``wait_for_first`` (set when the run produced a lap) this polls up to ``timeout_s`` for the
-    first archive to appear instead of racing the writer; it returns as soon as one exists, and
-    returns immediately with no wait when ``wait_for_first`` is false (a run that produced no lap).
+    With ``wait_for_first`` (set when the run produced a lap) this polls up to ``timeout_s`` for
+    ``min_count`` archives instead of racing the writer. A handshake passes its completed-lap count
+    so refinement cannot consume lap 1 while the thermally relevant lap 2 is still being finalized.
+    It returns immediately with no wait when ``wait_for_first`` is false (a run that produced no
+    lap).
 
     When ``journal_dir`` is ``None`` and ``resolve`` is given, the candidate dirs are **re-resolved
     each scan** via ``resolve()`` (which returns ALL candidate dirs) — so a fresh-profile dir the
@@ -1520,14 +1523,16 @@ def collect_lap_archives(
             return [journal_dir]
         return resolve() if resolve else []
 
+    if isinstance(min_count, bool) or not isinstance(min_count, int) or min_count < 1:
+        raise ValueError("min_count must be a positive integer")
     found = _scan_lap_archives(_current(), since_epoch)
-    if found or not wait_for_first:
+    if len(found) >= min_count or not wait_for_first:
         return found
     deadline = _clock() + max(0.0, timeout_s)
     while _clock() < deadline:
         _sleep(max(0.0, poll_s))
         found = _scan_lap_archives(_current(), since_epoch)
-        if found:
+        if len(found) >= min_count:
             return found
     return found
 
@@ -2699,11 +2704,21 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     # CSP leaves stale default state dirs on rename, so preferring one dir lets a stale leftover
     # shadow the active renamed dir (#516 review). The fresh archive is found wherever the active
     # writer put it; stale files are excluded by the since_epoch gate.
+    handshake_laps_used = 0
+    if config.driver == "handshake" and report.drive and isinstance(report.drive.payload, dict):
+        pending_result = report.drive.payload.get("result")
+        if isinstance(pending_result, dict):
+            value = pending_result.get("laps_used")
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                handshake_laps_used = value
+    wait_for_archives = report.lap_grace_applied or handshake_laps_used > 0
     lap_archives = collect_lap_archives(
         None,
         run_started_epoch,
         resolve=lambda: candidate_journal_laps_dirs(user_dir),
-        wait_for_first=report.lap_grace_applied,
+        wait_for_first=wait_for_archives,
+        min_count=max(1, handshake_laps_used),
+        timeout_s=20.0 if handshake_laps_used > 0 else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the
     # metadata matches the multi-dir scan, not the canonical-preferring discover (#516 review).
@@ -2740,7 +2755,23 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # The handshake result flows out via DriveStats.payload (report.drive.payload), not a
         # config side-channel (daemon review).
         sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
-        if sink.get("ok") and isinstance(sink.get("result"), dict):
+        if (
+            sink.get("ok")
+            and isinstance(sink.get("result"), dict)
+            and handshake_laps_used > 0
+            and len(lap_archives) < handshake_laps_used
+        ):
+            # The bounded writer wait expired with a partial lap set. Do not promote a model from
+            # lap 1 while the thermal/probe-relevant lap 2 is absent; constants may still persist.
+            sink["result"]["ggv"] = {
+                "ok": False,
+                "model": None,
+                "reason": (
+                    "incomplete handshake lap archive set: "
+                    f"{len(lap_archives)} < {handshake_laps_used}"
+                ),
+            }
+        elif sink.get("ok") and isinstance(sink.get("result"), dict):
             # #543: live physics rows alone have no tyre state. Refine only from the immutable
             # #488 lap archives collected by the same run; no archive/thermal cohort means the ggv
             # block remains visibly unavailable and --use-plant safely keeps the generic plant.

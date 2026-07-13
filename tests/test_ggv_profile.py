@@ -468,7 +468,7 @@ def _uncertainty_rows() -> list[dict]:
                     "accg_lat": 1.2,
                     "accg_lon": -1.25,
                     "source": "brake_probe",
-                    "lap_index": 1,
+                    "lap_index": 0,
                 }
             )
             rows.append(
@@ -477,7 +477,7 @@ def _uncertainty_rows() -> list[dict]:
                     "accg_lat": 1.2,
                     "accg_lon": 0.75,
                     "source": "accel_sweep",
-                    "lap_index": 1,
+                    "lap_index": 0,
                 }
             )
     return rows
@@ -561,6 +561,7 @@ def _thermal_archive(
     lateral_g: float = 1.2,
     compound_index: int = 1,
     setup_hash: str = "setup-a",
+    lap_n: int = 1,
 ) -> dict:
     fields = list(TRACE_FIELDS)
     samples = []
@@ -591,7 +592,7 @@ def _thermal_archive(
         "schema_version": 1,
         "source": "in_game",
         "lap_uuid": lap_uuid,
-        "lap": {"lap_n": 2, "lap_ms": 90000, "is_valid": True},
+        "lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": True},
         "setup": {"hash": setup_hash},
         "tyres": {"compoundIndex": compound_index, "name": "M", "optimalTempC": 90.0},
         "trace": {"fields": fields, "samples": samples, "samples_count": len(samples)},
@@ -641,7 +642,7 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     assert passive.ellipse_n == prior.ellipse_n
     assert passive.provenance["measured"]["hull_points"] == 0
 
-    wrong_lap_rows = [{**row, "lap_index": 0} for row in _uncertainty_rows()]
+    wrong_lap_rows = [{**row, "lap_index": 1} for row in _uncertainty_rows()]
     wrong_lap, wrong_lap_summary = ggv_from_lap_archives([warm], prior, probe_rows=wrong_lap_rows)
     assert wrong_lap_summary["probe_rows_seen"] > 0
     assert wrong_lap_summary["probe_rows"] == 0
@@ -652,6 +653,14 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     assert probed_summary["probe_rows_seen"] == probed_summary["probe_rows"]
     assert probed.uncertainty_bins[6]["brake"]["source"] == "measured"
     assert probed.uncertainty_bins[6]["drive"]["source"] == "measured"
+
+    resumed_session = _thermal_archive("resumed", core_c=90.0, lap_n=41)
+    resumed, resumed_summary = ggv_from_lap_archives(
+        [resumed_session], prior, probe_rows=_uncertainty_rows()
+    )
+    assert resumed_summary["lap_number_offset"] == 40
+    assert resumed_summary["probe_rows"] > 0
+    assert resumed.uncertainty_bins[6]["brake"]["source"] == "measured"
 
 
 def test_lap_archive_fit_never_mixes_compound_or_setup_cohorts():

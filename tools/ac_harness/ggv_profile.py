@@ -936,6 +936,14 @@ def ggv_from_lap_archives(
     # handshake's explicitly tagged straight-line probes from a SELECTED thermal lap may identify
     # longitudinal limits. Controller lap_index is zero-based; the archive's completed lap_n is
     # one-based at the crossing.
+    fresh_lap_numbers = {
+        int(archive["lap"]["lap_n"])
+        for archive in archives
+        if isinstance(archive.get("lap"), dict)
+        and isinstance(archive["lap"].get("lap_n"), int)
+        and not isinstance(archive["lap"].get("lap_n"), bool)
+    }
+    lap_number_offset = min(fresh_lap_numbers) - 1 if fresh_lap_numbers else 0
     selected_lap_numbers = {
         int(archive["lap"]["lap_n"])
         for archive, _ in selected
@@ -949,7 +957,7 @@ def ggv_from_lap_archives(
         if isinstance(row, dict)
         and isinstance(row.get("lap_index"), int)
         and not isinstance(row.get("lap_index"), bool)
-        and int(row["lap_index"]) + 1 in selected_lap_numbers
+        and int(row["lap_index"]) + lap_number_offset + 1 in selected_lap_numbers
     ]
     combined_rows = rows + thermal_probe_rows
     measured = ggv_from_telemetry(combined_rows, allow_passive_longitudinal=False)
@@ -959,6 +967,7 @@ def ggv_from_lap_archives(
         "friction_rows": len(rows),
         "probe_rows_seen": len(probe_rows or []),
         "probe_rows": len(thermal_probe_rows),
+        "lap_number_offset": lap_number_offset,
         "tyre_states": states,
         "selected_lap_uuids": [state.get("lap_uuid") for _, state in selected],
         "thermal_cohort": {

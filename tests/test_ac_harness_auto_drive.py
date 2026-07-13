@@ -2191,6 +2191,45 @@ def test_collect_lap_archives_waits_for_async_archive(tmp_path):
     assert got == [str(lap)]
 
 
+def test_collect_lap_archives_waits_for_expected_handshake_count(tmp_path):
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    first = laps / "lap_1.json"
+    second = laps / "lap_2.json"
+    first.write_text("{}")
+    os.utime(first, (2_000_000, 2_000_000))
+    clock = {"t": 0.0}
+
+    def _clock() -> float:
+        return clock["t"]
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not second.exists():
+            second.write_text("{}")
+            os.utime(second, (2_000_001, 2_000_001))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        min_count=2,
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=_clock,
+        _sleep=_sleep,
+    )
+    assert got == [str(second), str(first)]
+    assert clock["t"] >= 1.0
+
+
+def test_collect_lap_archives_rejects_invalid_required_count(tmp_path):
+    with pytest.raises(ValueError, match="min_count"):
+        collect_lap_archives(tmp_path, since_epoch=0, min_count=0)
+
+
 def test_collect_lap_archives_wait_times_out_bounded(tmp_path):
     # If the archive never appears, the poll is bounded and returns [] rather than hanging.
     laps = tmp_path / "laps"

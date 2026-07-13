@@ -837,6 +837,25 @@ def test_handshake_emits_provisional_ggv_until_thermal_archive_arrives():
     assert sink["result"]["ggv"]["ok"] is False
 
 
+def test_handshake_preserves_probe_rows_before_overall_friction_row_gate():
+    line = _stadium_line()
+    ctrl = HandshakeController(line, _profile_for(line), prior_ggv=generic_gt3_ggv())
+    ctrl._friction_rows = [
+        {
+            "speed_kmh": 60.0,
+            "accg_lat": 0.0,
+            "accg_lon": -1.1,
+            "source": "brake_probe",
+            "lap_index": 0,
+        }
+        for _ in range(8)
+    ]
+    block = ctrl._build_ggv_block()
+    assert block is not None
+    assert "insufficient friction rows" in block["reason"]
+    assert len(block["provisional_probe_rows"]) == 8
+
+
 def _uncertain_prior() -> GGVModel:
     prior = generic_gt3_ggv()
     rows = []
@@ -868,6 +887,7 @@ def test_plant_ggv_model_resolves_valid_rejects_invalid():
 
 def test_refine_ggv_without_thermal_archive_stays_non_runtime():
     result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
     block = refine_ggv_from_lap_archives(result, [], generic_gt3_ggv())
     assert block["ok"] is False
     assert block["model"] is None
@@ -875,8 +895,17 @@ def test_refine_ggv_without_thermal_archive_stays_non_runtime():
     assert plant_ggv_model({"ggv": block}) is None
 
 
+def test_refine_ggv_respects_explicit_friction_id_opt_out():
+    result = _result_dict()
+    block = refine_ggv_from_lap_archives(result, [], generic_gt3_ggv())
+    assert block["skipped"] is True
+    assert "not requested" in block["reason"]
+    assert "ggv" not in result
+
+
 def test_refine_ggv_rejects_stale_other_combo_archive():
     result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
     stale = {
         "car": {"id": "other_car"},
         "track": {"id": "test_oval", "layout": None},
@@ -891,6 +920,7 @@ def test_refine_ggv_rejects_stale_other_combo_archive():
 
 def test_refine_ggv_accepts_current_run_archive_when_writer_omits_layout():
     result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
     result["layout"] = "gp"
     archive = {
         "car": {"id": "test_car"},

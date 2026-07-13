@@ -1358,6 +1358,12 @@ class HandshakeController:
             "friction_rows": n,
             "model": None,
             "prior": self._prior_ggv_name,
+            # Preserve explicit probe evidence before the overall point-fit gate. A fresh thermal
+            # archive can supply the passive row volume while these rows retain the only trustworthy
+            # brake/WOT limit tags.
+            "provisional_probe_rows": [
+                dict(row) for row in self._friction_rows if row.get("source") != "passive"
+            ],
         }
         if n < self.min_friction_rows:
             block["reason"] = f"insufficient friction rows: {n} < {self.min_friction_rows}"
@@ -1377,9 +1383,6 @@ class HandshakeController:
         # Ephemeral handoff only: refinement consumes these explicitly tagged live probe rows and
         # replaces the whole block before evidence/persistence. The lap archive proves the thermal
         # state; these tags prove which longitudinal samples were actually limit-reaching probes.
-        block["provisional_probe_rows"] = [
-            dict(row) for row in self._friction_rows if row.get("source") != "passive"
-        ]
         block["reason"] = "awaiting thermally tagged lap archive"
         return block
 
@@ -1411,6 +1414,14 @@ def refine_ggv_from_lap_archives(
     for hermetic tests. The result is mutated and returned so evidence and persistence consume the
     same final block.
     """
+    if "ggv" not in result or not isinstance(result.get("ggv"), dict):
+        # No prior was injected into HandshakeController, so friction ID was explicitly disabled.
+        # Thermal archives must not resurrect an unrequested GGV block.
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "friction identification was not requested",
+        }
     loaded: list[dict] = []
     load_errors: list[str] = []
     for item in archives:
@@ -1469,6 +1480,7 @@ def refine_ggv_from_lap_archives(
         "lap_archives_loaded": len(matching),
         "load_errors": load_errors,
         "identity_notes": identity_notes,
+        "provisional_reason": previous_ggv.get("reason"),
     }
     try:
         model, summary = ggv_from_lap_archives(
