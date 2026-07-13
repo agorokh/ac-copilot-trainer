@@ -415,6 +415,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       var filled = 0;
       if (value !== null) {
         filled = Math.max(0, Math.min(steps, Math.round((value - (fin(sp.min) || 0)) / (fin(sp.step) || 1))));
+        // Endpoint-inclusive ranges (0..11 = 12 positions): a value AT the exposed max must
+        // read as a full bar, not steps-1 (Codex on PR #547). The printed value stays raw —
+        // AC's own MFD shows 0-indexed levels, and the tablet must match the sim's numbers.
+        if (fin(sp.max) !== null && value >= sp.max) filled = steps;
       }
       var lseg = document.createElement("div"); lseg.className = "lseg";
       for (var k = 0; k < steps; k++) {
@@ -716,7 +720,9 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     $("mapDelta").style.color = d === null ? "var(--dim)" : (d <= 0 ? "var(--clear)" : "var(--brake)");
     var spl = live ? fin(t.spline) : null;
     setText("mapSpline", spl !== null ? (spl * 100).toFixed(1) + "%" : "—");
-    var snap = S.coach;
+    // Same freshness gate as the RACE lane: MAP must not keep advertising a corner whose
+    // producer stopped (Codex on PR #547).
+    var snap = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS ? S.coach : null;
     setText("mapNext", snap && snap.corner_label ? String(snap.corner_label) : "—");
     setText("mapNextSub", snap && fin(snap.target_speed_kmh) !== null ? "min " + Math.round(snap.target_speed_kmh) : "");
     setText("dbLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
