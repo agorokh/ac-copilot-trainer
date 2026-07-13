@@ -82,21 +82,36 @@ relates_to:
 
 # Next session handoff
 
-## RESUME — merge PR #536 (#533 FFB calibration; resolve-pr converged, NOT yet merged)
+## RESUME — #537 CM cached-track: AC #2 delivered (PR #544 MERGED); AC #1 live rig-verify PENDING (rig SSH blocked)
 
-**PR [#536](https://github.com/agorokh/ac-copilot-trainer/pull/536)** (issue
-[#533](https://github.com/agorokh/ac-copilot-trainer/issues/533)) is **merge-ready**: CI green, **0
-unresolved threads**, self-hosted daemon rated it clean, **MERGEABLE**. It is deliberately **not
-merged** (operator's call). **First action next session: merge it.**
+**PR [#544](https://github.com/agorokh/ac-copilot-trainer/pull/544) MERGED** (squash `41f4d53`,
+2026-07-13) for [#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) — **#537 stays OPEN**.
+`auto_drive` now RELAUNCHES (bounded) when CM serves its cached last session instead of the requested
+preset, rather than aborting on the first track/car mismatch (AC #2). Two-tier guard (authoritative
+post-hijack #535 + best-effort fail-safe setup-path early-out), verdict DRY via `loaded_combo_mismatch`;
+post-loop `stage` keyed on `last_launch_error`. **Review learning:** a mid-PR commit unified the checks
+into ONE *pre-hijack* gateway and the cursor daemon flagged a **HIGH** (a pre-hijack `acpmf_static` read
+can be unpopulated → a mismatch could reach the drive leg) — correct; reverted, restored the post-hijack
+guard. *Do not relocate rig-proven behavior on an off-rig assumption.* Detail:
+[[issue-537-cm-cached-track-relaunch-2026-07-13]].
 
-New **`tools/ac_harness/ffb_calibrate.py`** auto-calibrates AC's per-car FFB gain (`cfg/user_ff.ini`)
-from `acpmf_physics.finalFF` — exposed via `shared_memory.py` at **offset 308** (`PHYSICS_MAP_BYTES`
-bumped to 512; kept alongside PR #535's `acpmf_static` parsing on rebase). It drives via `auto_drive`,
-computes P99/clip%, and writes a floor/ceiling-clamped gain targeting **P99→0.95** atomically (+`.backup`)
-only on `--write`, behind an offset-sanity gate. **Live-verified on the rig** (offset 308 confirmed;
-recommendation 1.073 on a clean 911 lap). ~77 unit tests. Hardened over **9 review rounds** (P1
-stationary-sampling, graceful auto_drive shutdown, launch-timeout ≥ retry budget, duration-aware stall
-gate, observe-only live-car verify, non-finite/BOM/`#` INI handling, report-only-by-default `--write`).
+**FIRST ACTION next session (only if on the rig): finish AC #1.** AC #1 (live two-track proof) is
+rig-gated and was BLOCKED this session — the #537 delivery ran on macOS (`epam-m5pro`) and
+`ssh arsen@100.75.251.87` now returns `Permission denied (publickey)` even though the documented
+`mac-to-ag-pc` key was authorized as of the 2026-06-29 handoff (rig `authorized_keys` evidently reset
+since). **Unblocker:** operator re-authorizes the key (add the `mac-to-ag-pc` pubkey to the rig's
+`administrators_authorized_keys`), OR on the rig directly run
+`python -m tools.ac_harness.auto_drive --car ks_audi_r8_lms --track magione` then `--track spa`
+back-to-back (non-extended car on stock surfaces per #277), confirming `acpmf_static.track` reads the
+requested base id each time with **no manual CM interaction**. Then comment the evidence on #537 and
+close it.
+
+**#536 (#533 FFB calibration) — MERGED** (`a1e30916`, 2026-07-13; #533 CLOSED). The prior "merge #536"
+resume is DONE — merged during the #537 session. `tools/ac_harness/ffb_calibrate.py` auto-calibrates
+AC's per-car FFB gain (`cfg/user_ff.ini`) from `acpmf_physics.finalFF` (`shared_memory.py` offset 308,
+`PHYSICS_MAP_BYTES`=512); drives via `auto_drive`, targets **P99→0.95**, writes only on `--write` behind
+an offset-sanity gate. Live-verified on the rig (recommendation 1.073 on a clean 911 lap); ~77 tests,
+9 review rounds.
 
 Also earlier this session: **PR #530 MERGED** — rig **5.1 positional engine audio** fixed (USB CM6206
 stereo→5.1; 911 rear vs M3 GT2 front, live-verified) + **per-car wheel rotation** (MOZA base 1080 + AC
