@@ -187,6 +187,10 @@ def test_validate_telemetry_tick_accepts_rpm_max_and_rejects_bad() -> None:
     assert ep.validate_inbound(_tick_frame()) is None  # optional: absent stays valid
     err = ep.validate_inbound(_tick_frame(rpm_max=-1))
     assert err is not None and "rpm_max" in err
+    # 0 means "unknown" and the producer contract OMITS the key — a present 0 is a
+    # contract violation, not a real redline (Qodo on PR #547).
+    err = ep.validate_inbound(_tick_frame(rpm_max=0))
+    assert err is not None and "rpm_max" in err
     err = ep.validate_inbound(_tick_frame(rpm_max="high"))
     assert err is not None and "rpm_max" in err
 

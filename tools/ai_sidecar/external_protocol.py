@@ -524,8 +524,10 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
             return err
     optional_ranges = {
         # #531 Part C-min: the tablet dashboard's shift ribbon bands from the car's real
-        # redline; hardcoding one is the exact bug the design forbids.
-        "rpm_max": (0, None),
+        # redline; hardcoding one is the exact bug the design forbids. The producer contract
+        # treats 0 as "unknown -> omit the key", so a present rpm_max must be POSITIVE —
+        # accepting 0 here would let a buggy producer render "N / 0" (Qodo on PR #547).
+        "rpm_max": (1, None),
         "fuel_l": (0, None),
         "fuel_capacity_l": (0, None),
         "fuel_per_lap_l": (0, None),

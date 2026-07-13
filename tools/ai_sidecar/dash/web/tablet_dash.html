@@ -351,7 +351,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
   }
   function renderRibbon(tick) {
     var rpm = tick ? fin(tick.rpm) : null;
+    // rpm_max <= 0 means "unknown" per the producer contract — render the explicit unknown,
+    // never a "N / 0" tag (Qodo on PR #547).
     var rpmMax = tick ? fin(tick.rpm_max) : null;
+    if (rpmMax !== null && rpmMax <= 0) rpmMax = null;
     var lit = 0;
     if (rpm !== null && rpmMax !== null && rpmMax > 0) {
       lit = Math.min(RIBBON_CELLS, Math.round((rpm / rpmMax) * RIBBON_CELLS));
@@ -717,8 +720,16 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     setText("dbBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
     setText("dbLaps", S.lap && fin(S.lap.laps_completed) !== null ? String(S.lap.laps_completed) : "—");
     if (S.lastCue) {
-      setText("dbHead", String(S.lastCue.text || S.lastCue.kind || "—").toUpperCase());
-      setText("dbBody", S.lastCue.detail ? String(S.lastCue.detail) : "Latest coaching cue.");
+      // coaching.cue contract: `message` is the human-readable line (kind/corner/urgency/
+      // message/spline/detail per make_coaching_cue); `detail` is a structured object —
+      // never stringify it at the UI (Qodo on PR #547).
+      setText("dbHead", String(S.lastCue.message || S.lastCue.kind || "—").toUpperCase());
+      var cueMeta = [];
+      if (S.lastCue.corner !== undefined && S.lastCue.corner !== null) {
+        cueMeta.push("T" + S.lastCue.corner);
+      }
+      if (S.lastCue.urgency) cueMeta.push(String(S.lastCue.urgency));
+      setText("dbBody", cueMeta.length ? cueMeta.join(" · ") : "Latest coaching cue.");
     }
   }
   setInterval(render, RENDER_MIN_MS);
