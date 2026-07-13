@@ -110,6 +110,17 @@ rig-only acceptance criterion is still pending: run an identified-plant full aut
 Magione, confirm AC-valid, and record lap time versus the generic-plant baseline within tolerance.
 Do not treat #552 closure or off-sim filesystem proof as that separate live A/B result.
 
+**Live model-level verification done (2026-07-13, merged `155aac6`)** — durable node:
+[[issue-532-partb-friction-id-2026-07-13]]. The merged-code handshake fit a valid ggv block from
+**5968 real Magione friction rows** and the safe-envelope blend pinned it to the prior on every
+lap-time-bearing curve (`blend_source={lateral:prior, brake:prior, drive:prior}`) → **no regression
+by construction**; probes passed (persistence vetoed only by an `acs.exe` `sim_dead` crash). This
+verified the *model*, and live-caught + fixed a real regression (a pace-0.8 drive under-measures
+`mu_lat` to ~1.17 g vs the car's true ~1.5 g; the old blend trusted it → would have regressed).
+**Still rig-gated:** the closed-loop full-lap A/B — the rig degraded after ~7 launch cycles into
+#466 overlay stalls, #537 CM-cached-Spa, and `sim_dead` crashes (last drive `FAIL(stage=hijack)`);
+needs a fresh rig session / reboot, then two `--driver ggv` laps (`--use-plant auto` vs `off`).
+
 ## RESUME — #537 CM cached-track: AC #2 delivered (PR #544 MERGED); AC #1 live rig-verify PENDING (rig SSH blocked)
 
 **PR [#544](https://github.com/agorokh/ac-copilot-trainer/pull/544) MERGED** (squash `41f4d53`,
