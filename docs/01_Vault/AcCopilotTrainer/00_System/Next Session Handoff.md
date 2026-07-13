@@ -82,12 +82,25 @@ relates_to:
 
 # Next session handoff
 
-## RESUME — merge PR #536 (#533 FFB calibration; resolve-pr converged, NOT yet merged)
+## Delivered (2026-07-13) — #533 FFB calibration: PR #536 MERGED (`a1e3091`), issue CLOSED
 
 **PR [#536](https://github.com/agorokh/ac-copilot-trainer/pull/536)** (issue
-[#533](https://github.com/agorokh/ac-copilot-trainer/issues/533)) is **merge-ready**: CI green, **0
-unresolved threads**, self-hosted daemon rated it clean, **MERGEABLE**. It is deliberately **not
-merged** (operator's call). **First action next session: merge it.**
+[#533](https://github.com/agorokh/ac-copilot-trainer/issues/533)) **MERGED**
+([`a1e3091`](https://github.com/agorokh/ac-copilot-trainer/commit/a1e3091), 2026-07-13T05:42Z) —
+**#533 CLOSED**. CI green, 0 unresolved threads, self-hosted daemon clean.
+
+**Reconciliation (`/autonomous-deliver 533`, later 2026-07-13):** a parallel autonomous session cut a
+branch from a `main` **3 commits behind** `origin/main` — its start-of-run `gh issue view 533`
+returned a stale `OPEN` — and re-implemented #533 as **PR
+[#548](https://github.com/agorokh/ac-copilot-trainer/pull/548), now CLOSED as a duplicate** (branch
+deleted). #536 is superior where they differed (P99 percentile peak vs raw-max; `OFFSET_SANE_PEAK=5.0`
+vs a buggy `|finalFF|>1.001` guard that would refuse to write on normal kerb spikes;
+report-only-by-default). That session **independently re-verified #536 live** on a fresh **911 GT3 R @
+Spa** ggv drive (auto_drive PASS, 949 m @ 209.8 km/h, **4761 clean `finalFF` samples, torn=0**, values
+>1 on kerbs) — re-confirming **offset 308** is a real force signal (matches the "kerb strikes ~2
+live-observed" design). **No remaining work on #533; no follow-up filed.** Lesson for next session:
+`git fetch origin main` + `gh pr list --search <issue>` **before** implementing when local `main` is
+behind — the SessionStart "behind origin/main" warning is the tell.
 
 New **`tools/ac_harness/ffb_calibrate.py`** auto-calibrates AC's per-car FFB gain (`cfg/user_ff.ini`)
 from `acpmf_physics.finalFF` — exposed via `shared_memory.py` at **offset 308** (`PHYSICS_MAP_BYTES`
