@@ -541,6 +541,22 @@ def test_supported_brake_gain_tapers_to_prior_and_never_extrapolates():
     assert restored.ax_brake_max(75.0 / 3.6) == b.ax_brake_max(75.0 / 3.6)
 
 
+def test_supported_taper_is_capped_to_half_the_observed_span():
+    prior = _prior()
+    measured = _measured(
+        1.2,
+        corner_bins=0,
+        brake_bins=5,
+        accel_bins=0,
+        hull_points=100,
+        brake_b0=1.3,
+        brake_b1=0.03,
+        brake_range=(50.0, 100.0),
+    )
+    blended = blend_ggv_safe(measured, prior, support_taper_kmh=999.0)
+    assert blended.supported_longitudinal["brake"]["taper_kmh"] == 25.0
+
+
 def test_supported_override_is_revalidated_on_load_and_not_read_from_provenance():
     prior = _prior()
     measured = _measured(
@@ -553,8 +569,11 @@ def test_supported_override_is_revalidated_on_load_and_not_read_from_provenance(
         brake_b1=0.03,
         brake_range=(50.0, 100.0),
     )
-    payload = blend_ggv_safe(measured, prior).to_dict()
+    blended = blend_ggv_safe(measured, prior)
+    payload = blended.to_dict()
     payload["supported_longitudinal"]["brake"]["b0_g"] = 99.0
+    # Serialized output is detached; mutating it cannot bypass the already-validated frozen model.
+    assert blended.supported_longitudinal["brake"]["b0_g"] == 1.3
     import pytest
 
     with pytest.raises(ValueError, match="brake cap"):
@@ -565,7 +584,34 @@ def test_supported_override_is_revalidated_on_load_and_not_read_from_provenance(
     clean = prior.to_dict()
     clean["provenance"] = {"supported_longitudinal": {"brake": {"b0_g": 99.0}}}
     restored = GGVModel.from_dict(clean)
+    clean["provenance"]["supported_longitudinal"]["brake"]["b0_g"] = 123.0
+    assert restored.provenance["supported_longitudinal"]["brake"]["b0_g"] == 99.0
+    serialized = restored.to_dict()
+    serialized["provenance"]["supported_longitudinal"]["brake"]["b0_g"] = 456.0
+    assert restored.provenance["supported_longitudinal"]["brake"]["b0_g"] == 99.0
     assert restored.ax_brake_max(75.0 / 3.6) == prior.ax_brake_max(75.0 / 3.6)
+
+
+def test_supported_override_input_is_detached_and_runtime_mapping_is_read_only():
+    prior = _prior()
+    measured = _measured(
+        1.2,
+        corner_bins=0,
+        brake_bins=5,
+        accel_bins=0,
+        hull_points=100,
+        brake_b0=1.3,
+        brake_b1=0.03,
+        brake_range=(50.0, 100.0),
+    )
+    payload = blend_ggv_safe(measured, prior).to_dict()
+    restored = GGVModel.from_dict(payload)
+    payload["supported_longitudinal"]["brake"]["b0_g"] = 99.0
+    assert restored.supported_longitudinal["brake"]["b0_g"] == 1.3
+    import pytest
+
+    with pytest.raises(TypeError):
+        restored.supported_longitudinal["brake"]["b0_g"] = 99.0
 
 
 def test_blend_sparse_bins_fall_back_to_prior():
@@ -656,6 +702,22 @@ def test_controlled_probe_percentile_is_not_diluted_by_passive_rows():
     assert m.provenance["brake_probe_bins"] == 2
     assert m.brake_b0_g > 1.3
     assert m.brake_b0_g < 2.0  # the single 99 g frame is excluded, not treated as p95
+
+
+def test_probe_rows_never_satisfy_or_weight_the_passive_gate():
+    rows = []
+    for speed in (60.0, 70.0):
+        rows.extend(
+            {"speed_kmh": speed, "accg_lat": 0.0, "accg_lon": -2.0, "source": "passive"}
+            for _ in range(32)
+        )
+        rows.extend(
+            {"speed_kmh": speed, "accg_lat": 0.0, "accg_lon": -1.4, "source": "brake_probe"}
+            for _ in range(8)
+        )
+    m = ggv_from_telemetry(rows)
+    assert m.provenance["brake_probe_bins"] == 2
+    assert 1.3 < m.brake_b0_g < 1.5
 
 
 def test_negative_slope_brake_fit_is_rejected_instead_of_clamped():

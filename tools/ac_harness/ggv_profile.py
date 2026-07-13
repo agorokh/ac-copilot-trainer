@@ -25,11 +25,14 @@ here is plain arithmetic so CI verifies it with synthetic lines + synthetic tele
 
 from __future__ import annotations
 
+import copy
 import csv
 import math
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import MappingProxyType
 
 from tools.ac_harness.ai_line import StanleySteering, _horizontal
 
@@ -72,7 +75,7 @@ class GGVModel:
     provenance: dict = field(default_factory=dict)
     # Runtime-bearing measured overrides are deliberately separate from free-form provenance and
     # validated on every construction/load. Top-level coefficients remain the trusted prior.
-    supported_longitudinal: dict = field(default_factory=dict)
+    supported_longitudinal: Mapping = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _validate_supported_longitudinal(
@@ -82,6 +85,14 @@ class GGVModel:
             drive_b0_g=self.drive_b0_g,
             drive_b1=self.drive_b1,
             ax_brake_cap_g=self.ax_brake_cap_g,
+        )
+        # ``frozen=True`` does not freeze nested dicts. Detach observability provenance from its
+        # caller and make the runtime-bearing support schema recursively read-only after validation.
+        object.__setattr__(self, "provenance", copy.deepcopy(self.provenance))
+        object.__setattr__(
+            self,
+            "supported_longitudinal",
+            _freeze_supported_longitudinal(self.supported_longitudinal),
         )
 
     def ay_max(self, v_ms: float) -> float:
@@ -114,7 +125,7 @@ class GGVModel:
         the prior is returned, matching the artifact loader's fail-safe contract.
         """
         override = self.supported_longitudinal.get(kind)
-        if not isinstance(override, dict):
+        if not isinstance(override, Mapping):
             return prior_g
         try:
             lo_kmh = float(override["speed_min_kmh"])
@@ -175,8 +186,10 @@ class GGVModel:
             "ellipse_n": self.ellipse_n,
             "ay_cap_g": self.ay_cap_g,
             "ax_brake_cap_g": self.ax_brake_cap_g,
-            "provenance": self.provenance,
-            "supported_longitudinal": self.supported_longitudinal,
+            "provenance": copy.deepcopy(self.provenance),
+            "supported_longitudinal": {
+                kind: dict(override) for kind, override in self.supported_longitudinal.items()
+            },
         }
 
     @classmethod
@@ -235,8 +248,8 @@ class GGVModel:
         supported = data.get("supported_longitudinal", {})
         return cls(
             **vals,
-            provenance=prov if isinstance(prov, dict) else {},
-            supported_longitudinal=supported,
+            provenance=copy.deepcopy(prov) if isinstance(prov, dict) else {},
+            supported_longitudinal=copy.deepcopy(supported),
         )
 
 
@@ -291,8 +304,8 @@ def ggv_from_telemetry(
     ``min_probe_samples``. Ellipse exponent comes from the radial hull of ``(lat, lon)``.
     """
     lat_b: dict[int, list[float]] = {}
-    brk_b: dict[int, list[float]] = {}
-    acc_b: dict[int, list[float]] = {}
+    brk_passive_b: dict[int, list[float]] = {}
+    acc_passive_b: dict[int, list[float]] = {}
     brk_probe_b: dict[int, list[float]] = {}
     acc_probe_b: dict[int, list[float]] = {}
     hull: list[tuple[float, float]] = []  # (|lat|, |lon|) in g
@@ -305,12 +318,15 @@ def ggv_from_telemetry(
             continue
         b = int(v // bin_kmh) * int(bin_kmh)
         lat_b.setdefault(b, []).append(al)
-        (brk_b if ao < 0 else acc_b).setdefault(b, []).append(abs(ao))
         source = r.get("source")
         if ao < 0 and source == "brake_probe":
             brk_probe_b.setdefault(b, []).append(abs(ao))
+        elif ao < 0:
+            brk_passive_b.setdefault(b, []).append(abs(ao))
         elif ao >= 0 and source == "accel_sweep":
             acc_probe_b.setdefault(b, []).append(abs(ao))
+        else:
+            acc_passive_b.setdefault(b, []).append(abs(ao))
         if al > 0.2 or abs(ao) > 0.2:
             hull.append((al, abs(ao)))
 
@@ -358,8 +374,8 @@ def ggv_from_telemetry(
     # braking fit (linear in v) on bins with samples
     xs_b, ys_b, ws_b = [], [], []
     trusted_brake_bins: list[int] = []
-    for b, vals in sorted(brk_b.items()):
-        trusted = trusted_longitudinal_value(vals, brk_probe_b.get(b, []))
+    for b in sorted(set(brk_passive_b) | set(brk_probe_b)):
+        trusted = trusted_longitudinal_value(brk_passive_b.get(b, []), brk_probe_b.get(b, []))
         if trusted is not None and b >= 30:
             xs_b.append((b + bin_kmh / 2) / 3.6)
             ys_b.append(trusted[0])
@@ -376,8 +392,8 @@ def ggv_from_telemetry(
     # accel fit (linear) - weakly identified (human under-drove), kept conservative
     xs_a, ys_a, ws_a = [], [], []
     trusted_accel_bins: list[int] = []
-    for b, vals in sorted(acc_b.items()):
-        trusted = trusted_longitudinal_value(vals, acc_probe_b.get(b, []))
+    for b in sorted(set(acc_passive_b) | set(acc_probe_b)):
+        trusted = trusted_longitudinal_value(acc_passive_b.get(b, []), acc_probe_b.get(b, []))
         if trusted is not None and b >= 30:
             xs_a.append((b + bin_kmh / 2) / 3.6)
             ys_a.append(trusted[0])
@@ -555,7 +571,7 @@ def blend_ggv_safe(
             "b0_g": measured.brake_b0_g,
             "b1": measured.brake_b1,
             "floor_g": 0.5,
-            "taper_kmh": support_taper_kmh,
+            "taper_kmh": min(support_taper_kmh, (brake_range[1] - brake_range[0]) / 2.0),
         }
         brake_src = "measured(supported)"
 
@@ -586,7 +602,7 @@ def blend_ggv_safe(
             "b0_g": measured.drive_b0_g,
             "b1": measured.drive_b1,
             "floor_g": measured.drive_min_g,
-            "taper_kmh": support_taper_kmh,
+            "taper_kmh": min(support_taper_kmh, (accel_range[1] - accel_range[0]) / 2.0),
         }
         drive_src = "measured(supported)"
 
@@ -673,8 +689,15 @@ def _finite_ggv(*values: float) -> bool:
     return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
 
 
+def _freeze_supported_longitudinal(supported: Mapping) -> MappingProxyType:
+    """Return a detached, recursively read-only copy of the two-level support mapping."""
+    return MappingProxyType(
+        {kind: MappingProxyType(dict(override)) for kind, override in supported.items()}
+    )
+
+
 def _validate_supported_longitudinal(
-    supported: dict,
+    supported: Mapping,
     *,
     brake_b0_g: float,
     brake_b1: float,
@@ -688,13 +711,13 @@ def _validate_supported_longitudinal(
     schema and are accepted only when the same deterministic safety gates used by
     :func:`blend_ggv_safe` still hold after deserialization.
     """
-    if not isinstance(supported, dict):
+    if not isinstance(supported, Mapping):
         raise ValueError("supported_longitudinal must be a dict")
     unknown = set(supported) - {"brake", "drive"}
     if unknown:
         raise ValueError(f"unsupported longitudinal override keys: {sorted(unknown)!r}")
     for kind, override in supported.items():
-        if not isinstance(override, dict):
+        if not isinstance(override, Mapping):
             raise ValueError(f"supported_longitudinal.{kind} must be a dict")
         required = {"speed_min_kmh", "speed_max_kmh", "b0_g", "b1", "floor_g", "taper_kmh"}
         if set(override) != required:
