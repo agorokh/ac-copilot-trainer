@@ -17,6 +17,7 @@ import pytest
 from tools.ac_harness.ffb_calibrate import (
     FfbStats,
     _auto_drive_passthrough,
+    _evidence_key,
     _nonneg_float,
     _pos_float,
     offset_looks_valid,
@@ -180,6 +181,12 @@ def test_auto_drive_passthrough_empty_when_all_default():
         track_layout=None, ac_user_dir=None, ac_root=None, cm_exe=None, sidecar_url=None
     )
     assert _auto_drive_passthrough(ns) == []
+
+
+def test_evidence_key_includes_layout():
+    # Two layouts of the same base track must not collide in the evidence bundle.
+    assert _evidence_key("ks_x", "spa", None) == "ks_x_spa"
+    assert _evidence_key("ks_x", "nords", "tourist") == "ks_x_nords_tourist"
 
 
 @pytest.mark.parametrize("bad", ["0", "-1", "inf", "nan", "-inf"])

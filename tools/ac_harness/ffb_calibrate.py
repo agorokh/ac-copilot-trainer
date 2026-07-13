@@ -62,6 +62,12 @@ def _nonneg_float(value: str) -> float:
     return parsed
 
 
+def _evidence_key(car: str, track: str, layout: str | None) -> str:
+    """Evidence-bundle filename stem — includes the layout so two layouts of the same base track
+    don't overwrite each other's log/report (``car_track`` or ``car_track_layout``)."""
+    return f"{car}_{track}_{layout}" if layout else f"{car}_{track}"
+
+
 @dataclass(frozen=True)
 class FfbStats:
     """Summary of a finalFF sample window."""
@@ -292,6 +298,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     user_ff = _user_ff_path(args.ac_user_dir)
     car = args.car
+    key = _evidence_key(car, args.track, args.track_layout)
     passthrough = _auto_drive_passthrough(args)
 
     drive_proc = None
@@ -308,6 +315,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 args.evidence_dir,
                 tap_seconds=drive_seconds,
                 extra_args=passthrough,
+                key=key,
             )
             print(
                 f"[ffb-calibrate] launched drive for {car} @ {args.track}; waiting for hijack ..."
@@ -330,7 +338,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         samples = sample_final_ff(duration_s=args.sample_seconds, hz=args.hz, proc=drive_proc)
     finally:
         if drive_proc is not None:
-            drive_proc.terminate()
+            _terminate_tree(drive_proc)
 
     stats = summarize(samples)
     valid, reason = offset_looks_valid(stats)
@@ -374,6 +382,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     report = {
         "car": car,
         "track": args.track,
+        "track_layout": args.track_layout,
         "stats": asdict(stats),
         "offset_valid": valid,
         "offset_reason": reason,
@@ -383,7 +392,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         "write_error": write_error,
         "user_ff_path": str(user_ff),
     }
-    _write_report(args.evidence_dir, car, args.track, report)
+    _write_report(args.evidence_dir, key, report)
 
     if not valid:
         print(f"[ffb-calibrate] NOT writing: {reason}", file=sys.stderr)
@@ -393,6 +402,24 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     if not args.observe_only and not args.write:
         print("[ffb-calibrate] report-only; re-run with --write to apply the recommended gain")
     return 0
+
+
+def _terminate_tree(proc: object) -> None:  # pragma: no cover - rig-only
+    """Kill the auto_drive child AND its descendants (e.g. an auto-started sidecar).
+
+    A bare ``terminate()`` hard-kills only auto_drive, so its own ``finally`` never runs and an
+    auto-started sidecar orphans and squats the port. On Windows ``taskkill /T`` takes the whole
+    tree; elsewhere fall back to ``terminate()``.
+    """
+    pid = getattr(proc, "pid", None)
+    if pid is None:
+        return
+    if sys.platform == "win32":
+        import subprocess
+
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True, check=False)
+    else:
+        proc.terminate()  # type: ignore[attr-defined]
 
 
 def _auto_drive_passthrough(args: argparse.Namespace) -> list[str]:
@@ -422,12 +449,13 @@ def _launch_drive(  # pragma: no cover - rig-only
     evidence_dir: Path,
     *,
     tap_seconds: float,
+    key: str,
     extra_args: Sequence[str] = (),
 ) -> tuple[object, Path]:
     import subprocess
 
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    log_path = evidence_dir / f"drive_{car}_{track}.log"
+    log_path = evidence_dir / f"drive_{key}.log"
     log = log_path.open("w", encoding="utf-8")
     cmd = [
         sys.executable,
@@ -471,10 +499,10 @@ def _wait_for_hijack(  # pragma: no cover - rig-only
 
 
 def _write_report(  # pragma: no cover - rig-only
-    evidence_dir: Path, car: str, track: str, report: dict[str, object]
+    evidence_dir: Path, key: str, report: dict[str, object]
 ) -> None:
     evidence_dir.mkdir(parents=True, exist_ok=True)
-    out = evidence_dir / f"ffb_{car}_{track}.json"
+    out = evidence_dir / f"ffb_{key}.json"
     out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[ffb-calibrate] report -> {out}")
 
