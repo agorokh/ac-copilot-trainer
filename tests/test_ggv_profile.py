@@ -400,6 +400,8 @@ def _measured(
     brake_b1=0.02,
     drive_b0=0.7,  # below the prior (1.1) by default
     drive_b1=-0.01,
+    brake_range=(40.0, 180.0),
+    accel_range=(40.0, 180.0),
 ) -> GGVModel:
     return GGVModel(
         mu_lat_g=mu,
@@ -414,6 +416,8 @@ def _measured(
             "lat_corner_bins": corner_bins,
             "brake_bins": brake_bins,
             "accel_bins": accel_bins,
+            "brake_speed_range_kmh": list(brake_range) if brake_range else None,
+            "accel_speed_range_kmh": list(accel_range) if accel_range else None,
             "hull_points": hull_points,
             "bins": {},
         },
@@ -439,6 +443,7 @@ def test_ggv_model_roundtrip_and_rejects_nan():
         {"ellipse_n": -1.5},
         {"ellipse_n": 99.0},
         {"mu_lat_g": 0.0},
+        {"k_aero_lat": -0.0001},
         {"drive_min_g": -0.1},
     ):
         with pytest.raises(ValueError):
@@ -484,10 +489,54 @@ def test_blend_raises_braking_when_measured_confidently_exceeds_prior():
         brake_b1=0.03,  # > prior (0.955 + 0.0214 v) at both 40 and 180 km/h
     )
     b = blend_ggv_safe(strong, prior)
-    assert (b.brake_b0_g, b.brake_b1) == (1.3, 0.03)
-    assert b.provenance["blend_source"]["brake"] == "measured(>prior)"
+    # The persisted top-level line stays the prior (safe for older consumers), while this model
+    # applies the measured gain only inside its observed support.
+    assert (b.brake_b0_g, b.brake_b1) == (prior.brake_b0_g, prior.brake_b1)
+    assert b.ax_brake_max(100.0 / 3.6) > prior.ax_brake_max(100.0 / 3.6)
+    assert b.ax_brake_max(20.0 / 3.6) == prior.ax_brake_max(20.0 / 3.6)
+    assert b.ax_brake_max(200.0 / 3.6) == prior.ax_brake_max(200.0 / 3.6)
+    assert b.provenance["blend_source"]["brake"] == "measured(supported)"
     assert b.ax_brake_cap_g == prior.ax_brake_cap_g  # hard cap still kept
     assert b.mu_lat_g == prior.mu_lat_g  # lateral untouched
+
+
+def test_blend_rejects_narrow_longitudinal_support():
+    prior = _prior()
+    narrow = _measured(
+        1.2,
+        corner_bins=0,
+        brake_bins=2,
+        accel_bins=0,
+        hull_points=20,
+        brake_b0=1.3,
+        brake_b1=0.03,
+        brake_range=(50.0, 70.0),
+    )
+    b = blend_ggv_safe(narrow, prior)
+    assert b.provenance["blend_gate"]["brake_coverage_ok"] is False
+    assert b.provenance["supported_longitudinal"] == {}
+    assert b.ax_brake_max(60.0 / 3.6) == prior.ax_brake_max(60.0 / 3.6)
+
+
+def test_supported_brake_gain_tapers_to_prior_and_never_extrapolates():
+    prior = _prior()
+    measured = _measured(
+        1.2,
+        corner_bins=0,
+        brake_bins=5,
+        accel_bins=0,
+        hull_points=100,
+        brake_b0=1.3,
+        brake_b1=0.03,
+        brake_range=(50.0, 100.0),
+    )
+    b = blend_ggv_safe(measured, prior)
+    assert b.ax_brake_max(75.0 / 3.6) > prior.ax_brake_max(75.0 / 3.6)
+    assert b.ax_brake_max(50.0 / 3.6) == prior.ax_brake_max(50.0 / 3.6)
+    assert b.ax_brake_max(100.0 / 3.6) == prior.ax_brake_max(100.0 / 3.6)
+    assert b.ax_brake_max(180.0 / 3.6) == prior.ax_brake_max(180.0 / 3.6)
+    restored = GGVModel.from_dict(b.to_dict())
+    assert restored.ax_brake_max(75.0 / 3.6) == b.ax_brake_max(75.0 / 3.6)
 
 
 def test_blend_sparse_bins_fall_back_to_prior():
@@ -530,4 +579,45 @@ def test_ggv_from_telemetry_records_bin_counts():
     m = ggv_from_telemetry(rows)
     assert m.provenance["brake_bins"] >= 2
     assert m.provenance["accel_bins"] >= 2
+    assert m.provenance["brake_speed_range_kmh"] == [60.0, 150.0]
+    assert m.provenance["accel_speed_range_kmh"] == [60.0, 150.0]
     assert m.provenance["hull_points"] > 0
+
+
+def test_controlled_brake_probe_can_populate_multiple_trusted_bins():
+    # A 2.5 s, frame-rate probe from 110 km/h to the 45 km/h safety floor contributes multiple
+    # bins even though no individual bin has the 40 passive samples. Only explicitly tagged probe
+    # rows receive the controlled-maneuver threshold.
+    rows = []
+    frames = 132
+    for i in range(frames):
+        speed = 110.0 - (64.0 * i / (frames - 1))
+        rows.append(
+            {
+                "speed_kmh": speed,
+                "accg_lat": 0.0,
+                "accg_lon": -1.25,
+                "source": "brake_probe",
+            }
+        )
+    m = ggv_from_telemetry(rows)
+    assert m.provenance["brake_bins"] >= 4
+    assert m.provenance["brake_probe_bins"] == m.provenance["brake_bins"]
+    lo, hi = m.provenance["brake_speed_range_kmh"]
+    assert hi - lo >= 40.0
+
+
+def test_controlled_probe_percentile_is_not_diluted_by_passive_rows():
+    rows = []
+    for speed in (60.0, 70.0):
+        rows.extend(
+            {"speed_kmh": speed, "accg_lat": 0.0, "accg_lon": -0.2, "source": "passive"}
+            for _ in range(200)
+        )
+        rows.extend(
+            {"speed_kmh": speed, "accg_lat": 0.0, "accg_lon": -1.4, "source": "brake_probe"}
+            for _ in range(8)
+        )
+    m = ggv_from_telemetry(rows)
+    assert m.provenance["brake_probe_bins"] == 2
+    assert m.brake_b0_g > 1.3

@@ -747,6 +747,9 @@ def test_brake_probe_queued_only_with_prior():
     assert "brake_probe" not in without._pending
     with_prior = HandshakeController(line, _profile_for(line), sink={}, prior_ggv=generic_gt3_ggv())
     assert "brake_probe" in with_prior._pending
+    assert with_prior.brake_probe_seconds == 2.5
+    assert with_prior.brake_min_entry_kmh == 110.0
+    assert with_prior.friction_row_interval_s == 0.01
 
 
 def test_handshake_no_ggv_block_without_prior(handshake_outcome):

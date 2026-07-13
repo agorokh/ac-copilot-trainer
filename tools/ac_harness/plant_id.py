@@ -682,13 +682,16 @@ class HandshakeController:
         # Active brake-at-speed probe: firm STRAIGHT-LINE braking (never a lateral push — the GT3
         # spins at the lateral limit, live-disproven #259) to trace the high-speed braking envelope.
         brake_level: float = 0.85,
-        brake_probe_seconds: float = 2.0,
-        brake_min_entry_kmh: float = 90.0,
+        brake_probe_seconds: float = 2.5,
+        brake_min_entry_kmh: float = 110.0,
         brake_min_exit_kmh: float = 45.0,
         brake_min_straight_m: float = 180.0,
         # Passive friction-row capture (speed/accg_lat/accg_lon from the physics accG channel) for
         # the GGV fit — throttled so ~1.5 laps yield a rich, bounded envelope sample.
-        friction_row_interval_s: float = 0.05,
+        # The rig loop updates near 60 Hz. Capture each fresh frame during the bounded controlled
+        # probes so a 2.5 s brake pull can populate multiple 10 km/h bins without extending the
+        # braking maneuver. Passive rows still face ggv_from_telemetry's stricter 40-row/bin gate.
+        friction_row_interval_s: float = 0.01,
         min_friction_rows: int = 200,
     ) -> None:
         self._base = RacingDriver(fast_line, speed_profile, pace=pace, max_speed_kmh=max_speed_kmh)
@@ -978,8 +981,21 @@ class HandshakeController:
             return
         self._friction_t = now
         if len(self._friction_rows) < 60000:
+            source = "passive"
+            if self._active is not None:
+                kind = self._active.get("kind")
+                stage = self._active.get("stage")
+                if kind == "brake_probe" and stage == "brake":
+                    source = "brake_probe"
+                elif kind == "accel_sweep" and stage == "wot":
+                    source = "accel_sweep"
             self._friction_rows.append(
-                {"speed_kmh": float(speed), "accg_lat": float(ay), "accg_lon": float(ao)}
+                {
+                    "speed_kmh": float(speed),
+                    "accg_lat": float(ay),
+                    "accg_lon": float(ao),
+                    "source": source,
+                }
             )
 
     def _remaining_on_straight(self, car: tuple[float, float]) -> float:
