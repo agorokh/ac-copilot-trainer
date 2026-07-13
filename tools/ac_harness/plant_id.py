@@ -1485,8 +1485,8 @@ def load_plant_artifact(
     ``layout`` and ``setup`` (+ the resolved ``setup_ini`` content hash) are part of the combo
     identity. A request for one layout can never reuse a plant measured on another layout.
     """
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
     try:
+        path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return None

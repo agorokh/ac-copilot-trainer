@@ -624,6 +624,9 @@ def test_artifact_keyed_by_layout_with_legacy_none_back_compat(tmp_path):
 def test_artifact_layout_rejects_path_shaped_id(tmp_path):
     with pytest.raises(ValueError, match="unsafe track layout"):
         plant_artifact_path(tmp_path, "test_car", "test_oval", layout="../gp")
+    # The path builder is strict for writers, while the tolerant loader degrades an invalid lookup
+    # to a cache miss so CLI consumers keep the generic plant.
+    assert load_plant_artifact(tmp_path, "test_car", "test_oval", layout="../gp") is None
 
 
 def test_artifact_load_portable_when_creator_setup_ini_unreadable(tmp_path):
@@ -693,12 +696,16 @@ def test_handshake_layout_flows_through_controller_result_and_build_driver():
             car_id="test_car",
             track_id="test_oval",
             track_layout="short",
+            # A previously loaded optimized plant is deliberately ignored by the handshake branch;
+            # its measurement prior is always the generic safety baseline (daemon rebuttal).
+            plant_ggv=GGVModel(9.0, 0.5, 3.0, 0.1, 2.0, 0.0, 0.5, 1.5),
         ),
         line,
         profile,
     )
     assert isinstance(built, HandshakeController)
     assert built.layout == "short"
+    assert built._prior_ggv == generic_gt3_ggv()
 
 
 def test_plant_driver_kwargs_full_raises_on_missing_steering():

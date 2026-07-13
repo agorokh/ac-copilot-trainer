@@ -42,6 +42,9 @@ _AI_EXTRA_STRIDE_BYTES = 72
 _AI_EXTRA_SIDELEFT_OFFSET_BYTES = 20
 
 G = 9.81
+MIN_LONGITUDINAL_SUPPORT_KMH = 40.0
+MAX_LONGITUDINAL_SUPPORT_KMH = 300.0
+MAX_DRIVE_SUPPORT_G = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +70,19 @@ class GGVModel:
     ay_cap_g: float = 1.8  # hard sanity cap on extrapolated lateral grip
     ax_brake_cap_g: float = 3.4
     provenance: dict = field(default_factory=dict)
+    # Runtime-bearing measured overrides are deliberately separate from free-form provenance and
+    # validated on every construction/load. Top-level coefficients remain the trusted prior.
+    supported_longitudinal: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _validate_supported_longitudinal(
+            self.supported_longitudinal,
+            brake_b0_g=self.brake_b0_g,
+            brake_b1=self.brake_b1,
+            drive_b0_g=self.drive_b0_g,
+            drive_b1=self.drive_b1,
+            ax_brake_cap_g=self.ax_brake_cap_g,
+        )
 
     def ay_max(self, v_ms: float) -> float:
         return min(self.ay_cap_g, self.mu_lat_g + self.k_aero_lat * v_ms * v_ms) * G
@@ -97,12 +113,7 @@ class GGVModel:
         Persisted provenance is untrusted input.  Any malformed/non-finite override is ignored and
         the prior is returned, matching the artifact loader's fail-safe contract.
         """
-        if not isinstance(self.provenance, dict):
-            return prior_g
-        supported = self.provenance.get("supported_longitudinal")
-        if not isinstance(supported, dict):
-            return prior_g
-        override = supported.get(kind)
+        override = self.supported_longitudinal.get(kind)
         if not isinstance(override, dict):
             return prior_g
         try:
@@ -165,6 +176,7 @@ class GGVModel:
             "ay_cap_g": self.ay_cap_g,
             "ax_brake_cap_g": self.ax_brake_cap_g,
             "provenance": self.provenance,
+            "supported_longitudinal": self.supported_longitudinal,
         }
 
     @classmethod
@@ -207,9 +219,10 @@ class GGVModel:
             )
         if vals["mu_lat_g"] <= 0.0:
             raise ValueError(f"GGVModel.from_dict: mu_lat_g must be positive: {vals['mu_lat_g']!r}")
-        if vals["k_aero_lat"] < 0.0:
+        if vals["k_aero_lat"] != 0.0:
             raise ValueError(
-                f"GGVModel.from_dict: k_aero_lat must be non-negative: {vals['k_aero_lat']!r}"
+                "GGVModel.from_dict: persisted plant k_aero_lat must be zero: "
+                f"{vals['k_aero_lat']!r}"
             )
         if vals["drive_min_g"] < 0.0:
             raise ValueError(
@@ -219,7 +232,12 @@ class GGVModel:
             if f in vals and vals[f] <= 0.0:
                 raise ValueError(f"GGVModel.from_dict: {f} must be positive: {vals[f]!r}")
         prov = data.get("provenance")
-        return cls(**vals, provenance=prov if isinstance(prov, dict) else {})
+        supported = data.get("supported_longitudinal", {})
+        return cls(
+            **vals,
+            provenance=prov if isinstance(prov, dict) else {},
+            supported_longitudinal=supported,
+        )
 
 
 def _pct(xs: list[float], q: float) -> float:
@@ -227,6 +245,16 @@ def _pct(xs: list[float], q: float) -> float:
         return 0.0
     s = sorted(xs)
     return s[min(len(s) - 1, int(q * len(s)))]
+
+
+def _probe_pct(xs: list[float], q: float) -> float:
+    """Small-N probe quantile that always excludes one possible peak glitch."""
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    if len(s) == 1:
+        return s[0]
+    return s[min(len(s) - 2, int(q * len(s)))]
 
 
 def _linfit(xs: list[float], ys: list[float], ws: list[float] | None = None) -> tuple[float, float]:
@@ -322,7 +350,7 @@ def ggv_from_telemetry(
         if not passive_ok and not probe_ok:
             return None
         passive_p95 = _pct(vals, pct) if passive_ok else float("-inf")
-        probe_p95 = _pct(probe_vals, pct) if probe_ok else float("-inf")
+        probe_p95 = _probe_pct(probe_vals, pct) if probe_ok else float("-inf")
         if probe_p95 > passive_p95:
             return (probe_p95, float(len(probe_vals)))
         return (passive_p95, float(len(vals)))
@@ -337,7 +365,13 @@ def ggv_from_telemetry(
             ys_b.append(trusted[0])
             ws_b.append(trusted[1])
             trusted_brake_bins.append(b)
-    brake_b0, brake_b1 = _linfit(xs_b, ys_b, ws_b) if len(xs_b) >= 2 else (1.0, 0.0)
+    if len(xs_b) >= 2:
+        fitted_brake_b0, fitted_brake_b1 = _linfit(xs_b, ys_b, ws_b)
+        brake_fit_valid = fitted_brake_b1 >= 0.0
+        brake_b0, brake_b1 = (fitted_brake_b0, fitted_brake_b1) if brake_fit_valid else (1.0, 0.0)
+    else:
+        brake_b0, brake_b1 = (1.0, 0.0)
+        brake_fit_valid = False
 
     # accel fit (linear) - weakly identified (human under-drove), kept conservative
     xs_a, ys_a, ws_a = [], [], []
@@ -357,7 +391,12 @@ def ggv_from_telemetry(
     def covered_range(bins: list[int]) -> list[float] | None:
         if not bins:
             return None
-        return [float(min(bins)), float(max(bins)) + bin_kmh]
+        ordered = sorted(bins)
+        if any(
+            not math.isclose(b - a, bin_kmh) for a, b in zip(ordered, ordered[1:], strict=False)
+        ):
+            return None
+        return [float(ordered[0]), float(ordered[-1]) + bin_kmh]
 
     prov = {
         "bins": cov,
@@ -366,6 +405,9 @@ def ggv_from_telemetry(
         # reads to decide, per curve, whether to trust the measurement or fall back to the prior.
         "brake_bins": len(xs_b),
         "accel_bins": len(xs_a),
+        "brake_fit_valid": brake_fit_valid,
+        "brake_bins_contiguous": covered_range(trusted_brake_bins) is not None,
+        "accel_bins_contiguous": covered_range(trusted_accel_bins) is not None,
         "brake_probe_bins": sum(
             1 for b in trusted_brake_bins if len(brk_probe_b.get(b, [])) >= min_probe_samples
         ),
@@ -386,7 +428,7 @@ def ggv_from_telemetry(
         mu_lat_g=mu_lat,
         k_aero_lat=max(0.0, k_aero),
         brake_b0_g=brake_b0,
-        brake_b1=max(0.0, brake_b1),
+        brake_b1=brake_b1,
         drive_b0_g=drive_b0,
         drive_b1=drive_b1,
         drive_min_g=0.35,
@@ -422,7 +464,7 @@ def blend_ggv_safe(
     prior_name: str = "injected_prior",
     min_brake_bins: int = 2,
     min_accel_bins: int = 2,
-    min_longitudinal_span_kmh: float = 40.0,
+    min_longitudinal_span_kmh: float = MIN_LONGITUDINAL_SUPPORT_KMH,
     support_taper_kmh: float = 10.0,
 ) -> GGVModel:
     """Safe-envelope blend of a per-combo MEASURED GGVModel with a trusted PRIOR (#532 Part B).
@@ -495,6 +537,7 @@ def blend_ggv_safe(
     brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
     if (
         brake_bins >= min_brake_bins
+        and prov.get("brake_fit_valid") is True
         and coverage_ok(brake_range)
         and _finite_ggv(measured.brake_b0_g, measured.brake_b1)
         and _curve_exceeds(
@@ -580,7 +623,6 @@ def blend_ggv_safe(
             "outside_observed_range": "prior",
             "support_taper_kmh": support_taper_kmh,
         },
-        "supported_longitudinal": supported_longitudinal,
         "prior": prior_name,
         # A conservative handshake under-measures the true limit; a measured value below the prior
         # is a lower bound, not a weaker-car signal. Recorded for a future slip-saturation pass.
@@ -601,6 +643,7 @@ def blend_ggv_safe(
         ay_cap_g=prior.ay_cap_g,  # never raise the lateral cap above the prior
         ax_brake_cap_g=prior.ax_brake_cap_g,
         provenance=blend_prov,
+        supported_longitudinal=supported_longitudinal,
     )
 
 
@@ -628,6 +671,70 @@ def _curve_exceeds(
 
 def _finite_ggv(*values: float) -> bool:
     return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
+
+
+def _validate_supported_longitudinal(
+    supported: dict,
+    *,
+    brake_b0_g: float,
+    brake_b1: float,
+    drive_b0_g: float,
+    drive_b1: float,
+    ax_brake_cap_g: float,
+) -> None:
+    """Validate every runtime-bearing measured override against the trusted prior.
+
+    The artifact's free-form ``provenance`` is observability only. Supported curves have their own
+    schema and are accepted only when the same deterministic safety gates used by
+    :func:`blend_ggv_safe` still hold after deserialization.
+    """
+    if not isinstance(supported, dict):
+        raise ValueError("supported_longitudinal must be a dict")
+    unknown = set(supported) - {"brake", "drive"}
+    if unknown:
+        raise ValueError(f"unsupported longitudinal override keys: {sorted(unknown)!r}")
+    for kind, override in supported.items():
+        if not isinstance(override, dict):
+            raise ValueError(f"supported_longitudinal.{kind} must be a dict")
+        required = {"speed_min_kmh", "speed_max_kmh", "b0_g", "b1", "floor_g", "taper_kmh"}
+        if set(override) != required:
+            raise ValueError(
+                f"supported_longitudinal.{kind} fields must be exactly {sorted(required)!r}"
+            )
+        raw = [override[name] for name in sorted(required)]
+        if any(isinstance(value, bool) for value in raw) or not _finite_ggv(*raw):
+            raise ValueError(f"supported_longitudinal.{kind} contains non-finite fields")
+        lo_kmh = float(override["speed_min_kmh"])
+        hi_kmh = float(override["speed_max_kmh"])
+        b0_g = float(override["b0_g"])
+        b1 = float(override["b1"])
+        floor_g = float(override["floor_g"])
+        taper_kmh = float(override["taper_kmh"])
+        span_kmh = hi_kmh - lo_kmh
+        if (
+            lo_kmh < 0.0
+            or hi_kmh > MAX_LONGITUDINAL_SUPPORT_KMH
+            or span_kmh < MIN_LONGITUDINAL_SUPPORT_KMH
+            or taper_kmh <= 0.0
+            or taper_kmh > span_kmh / 2.0
+            or floor_g < 0.0
+        ):
+            raise ValueError(f"supported_longitudinal.{kind} has an unsafe range/taper/floor")
+        v_lo, v_hi = lo_kmh / 3.6, hi_kmh / 3.6
+        if kind == "brake":
+            if floor_g != 0.5 or b1 < 0.0:
+                raise ValueError("supported brake override requires floor_g=0.5 and b1>=0")
+            if not _curve_exceeds(b0_g, b1, brake_b0_g, brake_b1, v_lo=v_lo, v_hi=v_hi):
+                raise ValueError("supported brake override no longer exceeds its trusted prior")
+            if max(b0_g + b1 * v_lo, b0_g + b1 * v_hi) > ax_brake_cap_g:
+                raise ValueError("supported brake override exceeds the trusted brake cap")
+        else:
+            if floor_g > MAX_DRIVE_SUPPORT_G:
+                raise ValueError("supported drive floor exceeds the physical safety cap")
+            if not _curve_exceeds(b0_g, b1, drive_b0_g, drive_b1, v_lo=v_lo, v_hi=v_hi):
+                raise ValueError("supported drive override no longer exceeds its trusted prior")
+            if max(floor_g, b0_g + b1 * v_lo, b0_g + b1 * v_hi) > MAX_DRIVE_SUPPORT_G:
+                raise ValueError("supported drive override exceeds the physical safety cap")
 
 
 # ---------------------------------------------------------------------------
