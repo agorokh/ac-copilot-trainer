@@ -26,6 +26,7 @@ def _phys_buf(**kw: Any) -> bytes:
     struct.pack_into("<2f", b, 24, kw.get("steer", -0.25), kw.get("speed", 142.5))
     struct.pack_into("<3f", b, 44, kw.get("accg_lat", 1.3), 0.1, kw.get("accg_lon", -0.9))
     struct.pack_into("<4f", b, 56, *kw.get("slip", (0.2, 0.21, 0.05, 0.06)))
+    struct.pack_into("<4f", b, 104, *kw.get("omega", (85.0, 85.1, 86.0, 86.2)))
     return bytes(b)
 
 
@@ -50,6 +51,39 @@ def test_parse_physics_reads_inputs_and_dynamics():
     assert p.accg_lat == pytest.approx(1.3)
     assert p.accg_lon == pytest.approx(-0.9)
     assert p.slip == pytest.approx((0.2, 0.21, 0.05, 0.06))
+    # wheelAngularSpeed[4]@104 (#532 handshake r_eff channel)
+    assert p.wheel_omega == pytest.approx((85.0, 85.1, 86.0, 86.2))
+
+
+def test_parse_physics_rejects_non_finite_wheel_omega():
+    bad = bytearray(_phys_buf())
+    struct.pack_into("<f", bad, 104, float("nan"))
+    with pytest.raises(ValueError, match="omega_fl"):
+        parse_physics(bytes(bad))
+
+
+def test_parse_static_track_decodes_utf16():
+    from tools.ac_harness.shared_memory import STATIC_TRACK_OFFSET, parse_static_track
+
+    b = bytearray(260)
+    b[STATIC_TRACK_OFFSET : STATIC_TRACK_OFFSET + 2 * 4] = "spa\x00".encode("utf-16-le")
+    assert parse_static_track(bytes(b)) == "spa"
+
+
+def test_parse_static_track_rejects_short_buffer():
+    from tools.ac_harness.shared_memory import parse_static_track
+
+    with pytest.raises(ValueError, match="too short"):
+        parse_static_track(b"\x00" * 100)
+
+
+def test_parse_static_car_decodes_utf16():
+    from tools.ac_harness.shared_memory import STATIC_CAR_OFFSET, parse_static_car
+
+    b = bytearray(260)
+    car = "ks_porsche_911_gt3_r_2016"
+    b[STATIC_CAR_OFFSET : STATIC_CAR_OFFSET + 2 * len(car) + 2] = (car + "\x00").encode("utf-16-le")
+    assert parse_static_car(bytes(b)) == car
 
 
 def test_parse_graphics_reads_lap_and_position():

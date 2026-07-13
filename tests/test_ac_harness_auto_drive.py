@@ -658,6 +658,195 @@ def test_build_driver_rejects_unknown_driver():
         _build_driver(_cfg(driver="bogus"), _LINE, _PROFILE)
 
 
+def test_build_driver_ggv_consumes_plant_kwargs():
+    # #532: measured plant constants flow into the GGV driver (shift points + measured steering).
+    d = _build_driver(
+        _cfg(
+            driver="ggv",
+            racing_max_speed_kmh=200.0,
+            plant_kwargs={
+                "rpm_up": 7600.0,
+                "rpm_dn": 5100.0,
+                "steering_mode": "curvature_ff",
+                "ff_sign": 1.0,
+                "ff_c1": 6.0,
+                "ff_c2": 0.015,
+            },
+        ),
+        _LINE,
+        None,
+    )
+    assert d.rpm_up == 7600.0
+    assert d.rpm_dn == 5100.0
+    assert d.steering_mode == "curvature_ff"
+    assert d.cff is not None
+    assert d.cff.ff_sign == 1.0
+    assert d.cff.c1 == 6.0
+
+
+def test_build_driver_handshake_builds_controller_with_own_sink():
+    from tools.ac_harness.plant_id import HandshakeController
+
+    cfg = _cfg(driver="handshake", car_id="test_car")
+    d = _build_driver(cfg, _LINE, _PROFILE)
+    assert isinstance(d, HandshakeController)
+    assert isinstance(d.sink, dict)  # controller owns its sink (no config side-channel)
+    assert d.car_id == "test_car"
+    assert d.finished is False
+
+
+def test_build_driver_handshake_requires_speed_profile():
+    with pytest.raises(ValueError, match="speed_profile"):
+        _build_driver(_cfg(driver="handshake"), _LINE, None)
+
+
+def test_track_ids_match_rules():
+    from tools.ac_harness.auto_drive import track_ids_match
+
+    assert track_ids_match("magione", "magione")
+    assert track_ids_match("Magione", "magione")  # case-insensitive
+    assert not track_ids_match("magione", "spa")
+    # empty/unknown loaded id => cannot confirm => match (never block on a missing read)
+    assert track_ids_match("magione", "")
+    assert track_ids_match("", "spa")
+
+
+def test_run_auto_drive_fails_fast_on_track_mismatch():
+    # #532: CM launched a cached session (spa) instead of the requested track (magione). The
+    # harness must FAIL at stage="launch", not drive the requested line on the wrong track.
+    ctrl = FakeController()
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "launch"
+    assert "spa" in report.error and "magione" in report.error
+    assert ctrl.closed is True  # controller released before bailing
+
+
+def test_handshake_outcome_gate_preserves_any_prior_failure():
+    # #532 daemon HIGH + Codex: ANY run-level failure stays authoritative. The _main gate is
+    # `if report.ok`, so a NOT-ok report — a raised error OR an error-less veto (seq_ok False /
+    # sim_dead / recovery_capped, which keep error=None but set ok=False) — is never overwritten
+    # with "handshake produced no result".
+    from types import SimpleNamespace
+
+    from tools.ac_harness.plant_id import apply_handshake_outcome
+
+    # error-carrying failures AND error-less vetoes (ok=False, error=None) must both be preserved
+    cases = [
+        {"stage": "launch", "error": "launch failed"},
+        {"stage": "pipeline", "error": "tap crashed"},
+        {"stage": "done", "error": None},  # error-less drive/pipeline veto (ok=False)
+    ]
+    for c in cases:
+        report = SimpleNamespace(ok=False, stage=c["stage"], error=c["error"], notes=[])
+        if report.ok:  # the _main gate
+            apply_handshake_outcome(report, {})
+        assert report.stage == c["stage"] and report.error == c["error"]  # preserved
+    # A clean run (ok True) with an empty sink DOES get the honest "no result" verdict.
+    ok_report = SimpleNamespace(ok=True, stage="done", error=None, notes=[])
+    if ok_report.ok:
+        apply_handshake_outcome(ok_report, {})
+    assert ok_report.stage == "handshake" and ok_report.ok is False
+
+
+def test_run_auto_drive_fails_fast_on_car_mismatch():
+    # Same track, different CAR served by a cached CM session -> must not persist a mislabeled
+    # plant artifact under the requested car (#532 Codex review).
+    ctrl = FakeController()
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="spa", car_id="ks_porsche_911_gt3_r_2016", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: ctrl,
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong car"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_audi_r8_lms"),
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "launch"
+    assert "ks_audi_r8_lms" in report.error and "car" in report.error
+
+
+def test_run_auto_drive_track_match_proceeds():
+    record: dict = {}
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", skip_launch=True),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("magione", "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+    assert report.stage != "launch"
+    assert record["controller"] is not None  # the drive leg ran
+
+
+def test_run_auto_drive_handshake_drive_outlives_the_tap():
+    # #532: the handshake self-terminates (driver.finished); the orchestrator must NOT stop it at
+    # the tap boundary or the probe schedule dies mid-maneuver.
+    import time
+
+    from tools.ac_harness.auto_drive import DriveStats, run_auto_drive
+
+    seen: dict = {}
+
+    def drive(controller, config, stop):
+        time.sleep(0.15)  # tap below returns immediately; a premature stop would be set by now
+        seen["stop_was_set"] = stop.is_set()
+        return DriveStats(drove=True, laps=0, max_speed_kmh=90.0, total_distance_m=500.0)
+
+    # A PASSING pipeline (CONTINUOUS -> seq_ok True) must NOT stop the handshake drive early.
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(driver="handshake", skip_launch=True),
+            launch=lambda c: (True, "ok"),
+            hijack=lambda c: FakeController(),
+            drive=drive,
+            tap=_tap_returning(CONTINUOUS),
+        )
+    )
+    assert seen["stop_was_set"] is False
+    assert report.drive is not None and report.drive.drove is True
+
+
+def test_run_auto_drive_handshake_stops_on_pipeline_failure():
+    # #532 Codex: a FAILED pipeline (seq_ok False — e.g. missing continuous topics) must stop the
+    # handshake drive instead of burning the whole drive_seconds budget.
+    seen: dict = {}
+
+    def drive(controller, config, stop):
+        import time
+
+        time.sleep(0.15)
+        seen["stop_was_set"] = stop.is_set()
+        return DriveStats(drove=True)
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(driver="handshake", skip_launch=True),
+            launch=lambda c: (True, "ok"),
+            hijack=lambda c: FakeController(),
+            drive=drive,
+            tap=_tap_returning([_snap("connection")]),  # missing tire_temps/coaching -> seq fails
+        )
+    )
+    assert report.sequence_ok is False
+    assert seen["stop_was_set"] is True
+
+
 def test_racing_driver_step_upshifts_at_high_rpm():
     # Direct evidence the racing controller commands an upshift out of 1st when revving + moving.
     racing = _build_driver(_cfg(pace=1.0, racing_max_speed_kmh=240.0), _LINE, _PROFILE)

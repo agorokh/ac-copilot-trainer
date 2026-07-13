@@ -56,6 +56,7 @@ import argparse
 import asyncio
 import configparser
 import json
+import logging
 import math
 import re
 import threading
@@ -129,8 +130,15 @@ class AutoDriveConfig:
     # braking points + gear shifting (RacingDriver) — the car actually races (shifts through gears,
     # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
     # (LapDriver) for a guaranteed-clean slow lap when pace is not the point.
+    # ``driver="handshake"`` runs the #532 plant-ID handshake instead of a plain drive: guided
+    # probes measure ff_sign / steer-FF / shift points / r_eff. The result flows OUT via
+    # ``DriveStats.payload`` (rig_drive copies the controller's sink there), not a config
+    # side-channel (daemon review) — config stays input-only.
     driver: str = "racing"
     drive_seconds: float = 300.0
+    # Plant-artifact consumption (#532): RacingDriver kwargs derived from the combo's identified
+    # plant (see plant_id.plant_driver_kwargs), applied on the ggv path. None => generic plant.
+    plant_kwargs: dict | None = None
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
     racing_max_speed_kmh: float = (
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
@@ -191,6 +199,9 @@ class DriveStats:
     recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
     reason: str = ""
+    # Driver-specific result payload flowing OUT through the normal return value (not a config
+    # side-channel): the #532 handshake result (ok/result/constants/diagnostics) lands here.
+    payload: dict = field(default_factory=dict)
 
 
 def drive_leg_succeeded(stats: DriveStats | None) -> bool:
@@ -323,6 +334,55 @@ HijackFn = Callable[[AutoDriveConfig], "Controller | None"]
 ApplySetupFn = Callable[[AutoDriveConfig], Awaitable[dict]]
 DriveFn = Callable[[Controller, AutoDriveConfig, threading.Event], DriveStats]
 TapFn = Callable[..., Awaitable[list[dict]]]
+# Returns the loaded (track, car) identity from the live sim, or None when it cannot be read.
+VerifyTrackFn = Callable[[AutoDriveConfig], "tuple[str | None, str | None] | None"]
+
+
+def rig_verify_track(
+    config: AutoDriveConfig,
+) -> tuple[str | None, str | None] | None:  # pragma: no cover - rig-only
+    """Read the loaded ``(track, car)`` identity from ``acpmf_static``; ``None`` when unreadable.
+
+    Returning ``None`` (static page absent/short) makes the guard skip rather than block — a
+    missing read must never fail a run; only a POSITIVE mismatch does.
+    """
+    from tools.ac_harness.shared_memory import (
+        SHM_STATIC,
+        STATIC_MAP_BYTES,
+        open_shared_memory,
+        parse_static_car,
+        parse_static_track,
+    )
+
+    try:
+        section = open_shared_memory(SHM_STATIC, STATIC_MAP_BYTES)
+    except Exception:  # noqa: BLE001 - unavailable/platform error → cannot confirm, skip guard
+        return None
+    try:
+        buf = section.read(STATIC_MAP_BYTES)
+        return parse_static_track(buf), parse_static_car(buf)
+    except Exception:  # noqa: BLE001 - short/garbled read → cannot confirm, skip guard
+        return None
+    finally:
+        section.close()
+
+
+def track_ids_match(requested: str, loaded: str) -> bool:
+    """Whether a loaded AC track id satisfies the requested one (pure, case-insensitive).
+
+    AC track ids are plain folder names (``magione``, ``spa``); ``acpmf_static.track`` reports the
+    **base** id only — the layout is NOT exposed via shared memory — so this compares base ids.
+    That catches the observed failure (CM launched a cached session on a different *base* track,
+    #532). A same-base-but-different-layout cached session is a narrower residual not verifiable
+    from ``acpmf_static``; it is tracked with the CM-cached-session root cause in #537. An empty
+    loaded id (static page not yet published) is "cannot confirm" -> match, so the guard never
+    blocks on a missing read; only a POSITIVE, different base id fails.
+    """
+    want = (requested or "").strip().lower()
+    got = (loaded or "").strip().lower()
+    if not want or not got:
+        return True
+    return want == got
 
 
 def verify_setup_ack(ack: dict | None, requested: str) -> tuple[bool, str]:
@@ -418,6 +478,7 @@ async def run_auto_drive(
     drive: DriveFn,
     tap: TapFn = tap_frames,
     apply_setup: ApplySetupFn | None = None,
+    verify_track: VerifyTrackFn | None = None,
 ) -> AutoDriveReport:
     """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
@@ -491,6 +552,35 @@ async def run_auto_drive(
                 )
         controller = hijack(config)
         if controller is not None:
+            # Guard: CM sometimes launches its cached last session instead of the requested
+            # preset (#532 rig-found). Driving the requested line on a different track — or
+            # persisting a plant artifact under the requested car when a DIFFERENT car is loaded —
+            # is a guaranteed corruption, so verify the loaded (track, car) and FAIL fast at launch.
+            loaded = verify_track(config) if verify_track is not None else None
+            if loaded is not None:
+                loaded_track, loaded_car = loaded
+                mismatch = None
+                if not track_ids_match(config.track_id, loaded_track):
+                    mismatch = f"track {loaded_track!r} != requested {config.track_id!r}"
+                elif config.car_id and not track_ids_match(config.car_id, loaded_car):
+                    mismatch = f"car {loaded_car!r} != requested {config.car_id!r}"
+                if mismatch is not None:
+                    controller.close()
+                    return AutoDriveReport(
+                        ok=False,
+                        stage="launch",
+                        launched=not config.skip_launch,
+                        hijacked=True,
+                        setup_requested=setup_requested,
+                        setup_applied=setup_applied,
+                        setup_ack=setup_ack,
+                        error=(
+                            f"loaded {mismatch} — Content Manager launched a cached session; "
+                            "relaunch with the correct preset (the harness will not drive the "
+                            "requested line on a different combo or persist a mislabeled plant)"
+                        ),
+                        **identity,
+                    )
             break
         if config.skip_launch:
             break
@@ -575,8 +665,15 @@ async def run_auto_drive(
     except Exception as exc:  # noqa: BLE001 - surface any tap/eval failure as a FAIL report
         stage, error = "pipeline", f"{type(exc).__name__}: {exc}"
     finally:
-        stop.set()
-        # Always stop the drive AND release the controller — even if the drive thread raised, the
+        # A handshake drive (#532) self-terminates (`driver.finished` breaks the rig loop) and
+        # must OUTLIVE the tap: stopping at the tap boundary would kill the probe schedule
+        # mid-maneuver. Its honest cap is drive_seconds. But a tap/eval EXCEPTION *or* a pipeline
+        # check that already FAILED (`seq_ok is False` — e.g. missing continuous topics) still
+        # stops it, so the run doesn't burn the whole budget on a pipeline that already failed
+        # (Codex review).
+        if config.driver != "handshake" or error is not None or seq_ok is False:
+            stop.set()
+        # Always await the drive AND release the controller — even if the drive thread raised, the
         # control mmap (the carcsw hijack) must be released, or it leaks and keeps holding the car.
         try:
             stats = await drive_task
@@ -1653,8 +1750,38 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             fast_line, generic_gt3_ggv(), v_top_kmh=config.racing_max_speed_kmh
         )
         v_target = [v * config.ggv_scale for v in v_target]
-        return RacingDriver.from_ggv_profile(fast_line, v_target)
-    raise ValueError(f"unknown driver {config.driver!r} (expected 'ggv', 'racing', or 'cruise')")
+        # #532: consume the combo's machine-measured plant constants when the CLI resolved an
+        # artifact (shift points always; measured curvature-FF steering with --use-plant full).
+        return RacingDriver.from_ggv_profile(fast_line, v_target, **(config.plant_kwargs or {}))
+    if config.driver == "handshake":
+        from tools.ac_harness.plant_id import HandshakeController
+
+        if speed_profile is None:
+            raise ValueError(
+                "handshake driver requires a speed_profile from the track's fast_lane.ai"
+            )
+        return HandshakeController(
+            fast_line,
+            speed_profile,
+            car_id=config.car_id or "",
+            track_id=config.track_id,
+            setup=(Path(config.setup).stem if config.setup else None),
+            setup_ini=(str(config.setup_ini) if config.setup_ini else None),
+            # Fresh sink owned by the controller; rig_drive copies it into DriveStats.payload so
+            # the result returns normally (no config side-channel — daemon review).
+            sink={},
+            # The controller does NOT open OS memory itself (daemon review): rig_drive injects a
+            # harness-owned physics reader via set_phys_read and owns its close.
+            phys_read=None,
+            # Moderate cornering pace (fixed, not the flat-out ggv pace) so more corners exceed the
+            # steer-FF lateral-g floor (0.3 g) -> the fit reaches its 80-row budget within a lap,
+            # while staying conservative enough to drive clean. Live-found on Spa (#532): at pace
+            # 0.65 only ~4 rows/3 km qualified; 0.8 loads the corners ~50% more (v^2).
+            pace=0.8,
+        )
+    raise ValueError(
+        f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
+    )
 
 
 def _teleport_onto_line(  # pragma: no cover - rig-only
@@ -1765,7 +1892,7 @@ def rig_drive(  # pragma: no cover - rig-only
     fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
     line = load_ai_line(fast_path)
     speed_profile = None
-    if config.driver == "racing":
+    if config.driver in ("racing", "handshake"):
         from tools.ac_harness.racing_driver import load_speed_profile
 
         speed_profile = load_speed_profile(fast_path)
@@ -1845,6 +1972,25 @@ def rig_drive(  # pragma: no cover - rig-only
     except SharedMemoryUnavailable:
         phys_reader = None
 
+    # #532: the handshake needs per-wheel angular speed (r_eff probe) from acpmf_physics. Reuse the
+    # SAME harness-owned physics map (phys_reader) rather than opening a second identical view — the
+    # controller never touches OS memory itself, and there is no redundant map (daemon review).
+    if hasattr(driver, "set_phys_read"):
+        from tools.ac_harness.racing_telemetry import parse_physics as _parse_phys
+        from tools.ac_harness.shared_memory import PHYSICS_MAP_BYTES
+
+        def _read_hs_phys():
+            reader = phys_reader  # late-bound: follows _main_packet_id's reopen/close
+            if reader is None:
+                return None
+            try:
+                buf = reader.read_physics_bytes(PHYSICS_MAP_BYTES)
+                return _parse_phys(buf) if buf is not None else None
+            except (ValueError, SharedMemoryUnavailable):
+                return None
+
+        driver.set_phys_read(_read_hs_phys)
+
     def _main_packet_id() -> int | None:
         nonlocal phys_reader
         if phys_reader is None:
@@ -1887,6 +2033,11 @@ def rig_drive(  # pragma: no cover - rig-only
                 cd["gear"],
                 now,
             )
+            if getattr(driver, "finished", False):
+                # A self-terminating driver (the #532 handshake) reports completion; stop the
+                # loop instead of burning the remaining drive budget (teardown brakes the car).
+                stats.reason = stats.reason or "driver finished"
+                break
             stalled = watchdog.update(stats.total_distance_m, now)
             if frame.needs_recovery or stalled:
                 if not _recover(now):
@@ -1915,6 +2066,25 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.laps += 1
             time.sleep(0.012)
     finally:
+        # #532: if the handshake driver did not self-complete within the drive budget, finalize it
+        # so the run still produces a result (which constants WERE measured), not "no result".
+        finalize = getattr(driver, "finalize", None)
+        if finalize is not None and not getattr(driver, "finished", True):
+            try:
+                finalize(time.monotonic() - t0)
+            except Exception as exc:  # noqa: BLE001 - must not mask the drive outcome, but be LOUD
+                # Do not re-raise (that would mask the drive result), but the failure MUST be
+                # observable: log the traceback AND annotate the outcome so a crashed finalize
+                # never silently becomes an opaque "handshake produced no result" (Qodo review).
+                logging.getLogger(__name__).exception("handshake finalize() crashed")
+                stats.reason = (stats.reason + "; " if stats.reason else "") + (
+                    f"handshake finalize crashed: {type(exc).__name__}: {exc}"
+                )
+        # Route the handshake result OUT via DriveStats.payload (normal return value), so _main
+        # never reaches into a config-embedded mutable sink (daemon review).
+        driver_sink = getattr(driver, "sink", None)
+        if isinstance(driver_sink, dict) and driver_sink:
+            stats.payload = dict(driver_sink)
         if phys_reader is not None:
             phys_reader.close()
         for _ in range(20):
@@ -2080,10 +2250,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
     p.add_argument(
         "--driver",
-        choices=("ggv", "racing", "cruise"),
+        choices=("ggv", "racing", "cruise", "handshake"),
         default="racing",
         help="ggv = flat-out min-time (top gears, 200+); racing = AI-line pace (default); "
-        "cruise = slow 1st-gear lane-keeper",
+        "cruise = slow 1st-gear lane-keeper; handshake = #532 plant-ID probes (measures "
+        "ff_sign/steer-FF/shift points/r_eff in <=2 laps, persists a per-combo plant artifact)",
+    )
+    p.add_argument(
+        "--use-plant",
+        choices=("off", "auto", "full"),
+        default="auto",
+        help="consume the combo's identified plant artifact on the ggv path: auto = measured "
+        "shift points when an artifact exists (default); full = also the measured "
+        "curvature-feedforward steering (ff_sign/ff_c1/ff_c2); off = generic plant only",
     )
     p.add_argument("--pace", type=float, default=0.9, help="racing: fraction of AI-line speed")
     p.add_argument("--ggv-scale", type=float, default=0.9, help="ggv: safety margin on min-time")
@@ -2209,7 +2388,70 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     except ValueError as exc:
         print(f"auto-drive: {exc}")
         return 2
+    # Plant artifacts are keyed by car+track (#532). A preset-only run (``--cm-preset`` without
+    # ``--car``) has no car id, so BOTH the handshake (which persists an artifact) and
+    # ``--use-plant full`` (which must load one) need ``--car`` explicitly — otherwise the
+    # handshake would run the whole rig drive and then crash in ``save_plant_artifact`` with an
+    # empty car id (Codex review), and ``--use-plant full`` would silently skip its own hard
+    # requirement and drive on generic constants.
+    if config.driver == "handshake" and not config.car_id:
+        print("auto-drive: --driver handshake requires --car (the plant artifact is keyed by car)")
+        return 2
+    if config.driver == "ggv" and args.use_plant == "full" and not config.car_id:
+        print("auto-drive: --use-plant full requires --car (plant lookup is keyed by car+track)")
+        return 2
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
+
+    # Resolve the setup .ini ONCE here (best-effort) so BOTH the ggv plant-load key and the
+    # handshake artifact save share the same content-hashed identity — no asymmetric resolution
+    # between drivers (daemon review). The authoritative confirm + print stays below; this only
+    # populates config.setup_ini early enough for the plant-load key.
+    if config.setup and config.setup_ini is None:
+        try:
+            config.setup_ini = resolve_setup_ini(
+                user_dir, config.car_id, config.track_id, config.setup, layout=config.track_layout
+            )
+        except (FileNotFoundError, ValueError):
+            config.setup_ini = None  # unresolved -> basename-only key (best effort)
+
+    # #532: resolve the combo's identified plant for the ggv path. `auto` silently falls back to
+    # the generic plant when no artifact exists; `full` REQUIRES one (measured steering must never
+    # silently degrade to hand constants — that is the failure mode the handshake exists to end).
+    plant_artifact_used: str | None = None
+    if config.driver == "ggv" and args.use_plant != "off" and config.car_id:
+        from tools.ac_harness.plant_id import (
+            load_plant_artifact,
+            plant_artifact_path,
+            plant_driver_kwargs,
+        )
+
+        # Key by setup + its CONTENT (#532 Codex review): a plant measured on one setup must not be
+        # reused for a different setup, and two files sharing a basename must not collide. Uses the
+        # single shared config.setup_ini resolved above (same identity the handshake save uses).
+        setup_key = Path(config.setup).stem if config.setup else None
+        setup_ini_key = config.setup_ini
+        artifact = load_plant_artifact(
+            user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
+        )
+        if artifact is not None:
+            config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
+            plant_artifact_used = str(
+                plant_artifact_path(
+                    user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
+                )
+            )
+            print(
+                f"auto-drive: plant artifact loaded ({args.use_plant}: "
+                f"{sorted(config.plant_kwargs)}) <- {plant_artifact_used}"
+            )
+        elif args.use_plant == "full":
+            print(
+                "auto-drive: --use-plant full requires a plant artifact for this combo; "
+                "run --driver handshake first"
+            )
+            return 2
+        else:
+            print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
 
     car_tag = config.car_id or "car"
     evidence_dir = args.evidence_dir or (
@@ -2240,13 +2482,14 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         return 0
 
     if config.setup:
-        config.setup_ini = resolve_setup_ini(
-            user_dir,
-            config.car_id,
-            config.track_id,
-            config.setup,
-            layout=config.track_layout,
-        )
+        if config.setup_ini is None:  # not resolved by the early best-effort pass above
+            config.setup_ini = resolve_setup_ini(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                config.setup,
+                layout=config.track_layout,
+            )
         print(f"auto-drive: setup resolved -> {config.setup_ini}")
 
     sidecar_ok, sidecar_detail, sidecar_proc = ensure_sidecar(
@@ -2266,6 +2509,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
                 drive=rig_drive,
                 tap=tap_frames,
                 apply_setup=rig_apply_setup,
+                verify_track=rig_verify_track,
             )
         )
     finally:
@@ -2308,12 +2552,47 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             "cm_preset": str(config.cm_preset),
             "setup_ini": str(config.setup_ini) if config.setup_ini else None,
             "driver": config.driver,
+            "use_plant": args.use_plant,
+            "plant_artifact": plant_artifact_used,
             "sidecar": sidecar_detail,
         },
         "hud": hud,
         "lap_archives": lap_archives,
         "journal_dir": str(journal_dir) if journal_dir else None,
     }
+    if config.driver == "handshake":
+        # #532: fold the handshake outcome into the report and persist a PASSED result as the
+        # combo's plant artifact. Diagnostics ALWAYS go to extras. But only OVERWRITE the report
+        # stage/error when the drive actually reached the handshake — a pre-drive failure
+        # (stage=launch/hijack/setup, e.g. the track/car guard) is the authoritative root cause
+        # and must NOT be clobbered with "handshake produced no result" (Codex + Qodo review).
+        from tools.ac_harness.plant_id import apply_handshake_outcome, save_plant_artifact
+
+        # The handshake result flows out via DriveStats.payload (report.drive.payload), not a
+        # config side-channel (daemon review).
+        sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
+        extras["handshake"] = sink
+        # Fold the handshake outcome ONLY when the run otherwise fully SUCCEEDED (`report.ok`).
+        # report.ok already vetoes on a pipeline check failure (`seq_ok is False`) or a drive-leg
+        # veto (`sim_dead` / `recovery_capped`) — none of which raise, so gating on `error is None`
+        # alone would still mask them. Any such run-level failure is the authoritative root cause
+        # and must NOT be replaced with "handshake produced no result" or probe-failure details
+        # caused by the earlier stop/veto (daemon HIGH + Codex). On a clean run,
+        # apply_handshake_outcome sets the honest handshake verdict (incl. empty-sink "no result").
+        if report.ok:
+            apply_handshake_outcome(report, sink)
+        # Persist the plant ONLY from a fully clean run (report.ok): a drive-leg veto (sim_dead /
+        # recovery_capped) can leave sink["ok"]=True from samples collected before the veto, but
+        # constants from a compromised/stale drive must NOT be promoted into the reusable artifact
+        # for later --use-plant runs (Codex review). report.ok already vetoes on those flags.
+        if sink.get("ok") and report.ok:
+            artifact_path = save_plant_artifact(user_dir, sink["result"])
+            extras["plant_artifact_saved"] = str(artifact_path)
+            print(f"auto-drive: plant artifact saved -> {artifact_path}")
+        elif sink.get("ok") and not report.ok:
+            note = "handshake probes passed but the drive was vetoed — plant NOT persisted"
+            report.notes.append(note)
+            print(f"auto-drive: {note}")
     report_path = write_evidence(evidence_dir, report, extras=extras)
 
     print(report.summary())

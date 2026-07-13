@@ -94,11 +94,41 @@ PHYSICS_MIN_BYTES = PHYSICS_PACKET_ID_OFFSET + 4  # 4
 # same logon session, so the opener tries the bare name first then the explicit prefix.
 SHM_GRAPHICS = "acpmf_graphics"
 SHM_PHYSICS = "acpmf_physics"
+SHM_STATIC = "acpmf_static"
 
 # How many bytes of each section to map. The real sections are multiple KB; mapping a small
 # safe prefix avoids over-mapping while covering every field we read.
 GRAPHICS_MAP_BYTES = 256
-PHYSICS_MAP_BYTES = 64
+# One consistent physics-page map size that covers EVERY field any reader unpacks from
+# ``acpmf_physics``. ``shared_memory.parse_physics`` here only needs ``packet_id@0`` (4 bytes), but
+# ``racing_telemetry.parse_physics`` unpacks through ``wheelAngularSpeed[4]@104`` (120 bytes); a
+# single page mapped 160 wide keeps the two same-named parsers from disagreeing on buffer size
+# (cross-file trap flagged in review) at negligible cost — it is one mmap view of the same page.
+PHYSICS_MAP_BYTES = 160
+# acpmf_static: wide-char (UTF-16LE) strings; ``carModel`` is a 33-char field at byte offset 68 and
+# ``track`` a 33-char field at byte offset 134 (live-verified against a running session:
+# smVersion@0, carModel@68, track@134). Mapping 260 bytes covers both with headroom.
+STATIC_MAP_BYTES = 260
+STATIC_CAR_OFFSET = 68
+STATIC_TRACK_OFFSET = 134
+STATIC_STR_CHARS = 33
+
+
+def _decode_static_str(buf: bytes, offset: int, field: str) -> str:
+    end = offset + STATIC_STR_CHARS * 2
+    if len(buf) < end:
+        raise ValueError(f"static buffer too short for {field}: {len(buf)} < {end}")
+    return buf[offset:end].decode("utf-16-le", "replace").split("\x00", 1)[0].strip()
+
+
+def parse_static_track(buf: bytes) -> str:
+    """Decode the ``track`` id from an ``acpmf_static`` buffer (pure, UTF-16LE, NUL-terminated)."""
+    return _decode_static_str(buf, STATIC_TRACK_OFFSET, "track")
+
+
+def parse_static_car(buf: bytes) -> str:
+    """Decode the ``carModel`` id from an ``acpmf_static`` buffer (pure, UTF-16LE)."""
+    return _decode_static_str(buf, STATIC_CAR_OFFSET, "carModel")
 
 
 class AcGameStatus(IntEnum):
@@ -404,6 +434,16 @@ class SharedMemoryReader:  # pragma: no cover - Windows/rig-only; validated via 
         if self._physics is None:
             return None
         return parse_physics(self._physics.read(PHYSICS_MIN_BYTES))
+
+    def read_physics_bytes(self, nbytes: int) -> bytes | None:
+        """Raw ``acpmf_physics`` prefix (up to ``nbytes``), or ``None`` when physics is unmapped.
+
+        Lets another consumer (e.g. the #532 handshake's ``wheelAngularSpeed`` reader) decode
+        further fields off this SAME mapped page instead of opening a second identical view of
+        ``acpmf_physics`` (daemon review: no redundant OS map)."""
+        if self._physics is None:
+            return None
+        return self._physics.read(nbytes)
 
     def close(self) -> None:
         for section in (self._graphics, self._physics):
