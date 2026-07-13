@@ -767,7 +767,7 @@ local function normalizeCspSpinner(raw)
   end
   local unit = safeField(raw, "unit")
   if type(unit) ~= "string" then unit = def.unit or "" end
-  return {
+  local row = {
     name = name,
     section = name,
     label = label,
@@ -777,6 +777,25 @@ local function normalizeCspSpinner(raw)
     step = step,
     unit = unit,
   }
+  -- #531 Part B: forward item NAMES when CSP exposes them (engine-map spinners name their
+  -- positions, e.g. "QUALI") so a consumer can render `MAP 3/8 · QUALI` instead of the
+  -- semantically overloaded bare level. Only a clean array of strings is forwarded — any
+  -- other shape stays omitted rather than shipping cdata/holes over the wire.
+  local rawItems = safeField(raw, "items")
+  if type(rawItems) == "table" then
+    local names = {}
+    for i = 1, #rawItems do
+      if type(rawItems[i]) ~= "string" then
+        names = nil
+        break
+      end
+      names[i] = rawItems[i]
+    end
+    if names and #names > 0 then
+      row.items = names
+    end
+  end
+  return row
 end
 
 local function cspSpinnerList()

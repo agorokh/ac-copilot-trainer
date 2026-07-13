@@ -42,8 +42,9 @@ from tools.ai_sidecar.external_protocol import (
     ENVELOPE_KEY,
     ENVELOPE_VERSION,
     HAPTIC_CLIENT_CLASSES,
-    PHYSICAL_CLIENT_CLASSES,
+    IDENTITY_REPLAY_TOPICS,
     SIDECAR_PRODUCED_TOPICS,
+    TELEMETRY_TICK_CLIENT_CLASSES,
     TOPIC_SESSION_REVIEW,
     TYPE_ACTION,
     TYPE_ACTION_ACK,
@@ -981,6 +982,36 @@ def _tablet_voice_page() -> str | None:
     return _tablet_page_cache
 
 
+# Issue #531 Part A — tablet GT dashboard, served at /tablet/dash on the same port as the WS
+# (USB `adb reverse tcp:8765` deployment, same as /tablet/voice). Fonts are vendored inside the
+# package (offline kiosk: no CDN) and served only by EXACT name from this allow-list — the
+# same no-traversal-surface discipline as the voice clip routes.
+_TABLET_DASH_PAGE_PATH = Path(__file__).resolve().parent / "dash" / "web" / "tablet_dash.html"
+_TABLET_DASH_FONTS_DIR = Path(__file__).resolve().parent / "dash" / "web" / "fonts"
+_TABLET_DASH_FONT_FILES: frozenset[str] = frozenset(
+    {
+        "SairaSemiCondensed-SemiBold.ttf",
+        "SairaSemiCondensed-Bold.ttf",
+        "SairaSemiCondensed-ExtraBold.ttf",
+        "Saira-Bold.ttf",
+        "SplineSansMono-Medium.ttf",
+    }
+)
+_tablet_dash_page_cache: str | None = None
+
+
+def _tablet_dash_page() -> str | None:
+    """Read (and cache) the self-contained tablet dashboard page shipped with the package."""
+    global _tablet_dash_page_cache
+    if _tablet_dash_page_cache is None:
+        try:
+            _tablet_dash_page_cache = _TABLET_DASH_PAGE_PATH.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("dash: tablet page missing at %s", _TABLET_DASH_PAGE_PATH)
+            return None
+    return _tablet_dash_page_cache
+
+
 def _http_response(connection: Any, status: HTTPStatus, body: str, content_type: str) -> Any:
     """Build a plain HTTP response on the WS connection with a SINGLE, correct
     Content-Type.
@@ -1060,7 +1091,11 @@ def make_process_request(token: str | None):
         # loopback (the USB `adb reverse` deployment) passes untokened; a LAN client needs
         # the X-AC-Copilot-Token header (PR #519 review). Clip serving stays exact-match
         # against the manifest allow-list — no traversal surface.
-        if path == "/tablet/voice" or path.startswith("/voice/"):
+        if (
+            path in ("/tablet/voice", "/tablet/dash")
+            or path.startswith("/voice/")
+            or path.startswith("/dash/")
+        ):
             if token and not _is_loopback_peer(connection):
                 supplied = request.headers.get(AUTH_HEADER)
                 if supplied is None or not secrets.compare_digest(supplied, token):
@@ -1077,6 +1112,29 @@ def make_process_request(token: str | None):
                     connection, HTTPStatus.NOT_FOUND, "tablet page unavailable\n", "text/plain"
                 )
             return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
+        # Issue #531 Part A — the tablet GT dashboard page + its vendored fonts.
+        if path == "/tablet/dash":
+            page = _tablet_dash_page()
+            if page is None:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "dash page unavailable\n", "text/plain"
+                )
+            return _http_response(connection, HTTPStatus.OK, page, "text/html; charset=utf-8")
+        if path.startswith("/dash/fonts/"):
+            # Exact-match against the vendored-font allow-list (names never contain
+            # separators), so a decoded "../x" simply isn't in the set — no traversal.
+            name = urllib.parse.unquote(path[len("/dash/fonts/") :])
+            if name not in _TABLET_DASH_FONT_FILES:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "unknown font\n", "text/plain"
+                )
+            try:
+                data = (_TABLET_DASH_FONTS_DIR / name).read_bytes()
+            except OSError:
+                return _http_response(
+                    connection, HTTPStatus.NOT_FOUND, "font unavailable\n", "text/plain"
+                )
+            return _http_response_bytes(connection, HTTPStatus.OK, data, "font/ttf")
         if path == "/voice/manifest.json":
             bank_dir = _voice_bank_dir
             if bank_dir is None:
@@ -2013,10 +2071,12 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
         await _safe_send(websocket, make_error(f"unsupported type: {t!r}", ref_type=t))
         return
     if t == TYPE_TELEMETRY_TICK:
+        # #531 Part B: browser-class peers (the tablet GT dashboard) receive the live tick
+        # alongside the physical peripherals; haptic derivation below stays physical-only.
         await _route_peripheral_frame(
             data,
             exclude=websocket,
-            classes=PHYSICAL_CLIENT_CLASSES,
+            classes=TELEMETRY_TICK_CLIENT_CLASSES,
             rate_key=(TYPE_TELEMETRY_TICK,),
             max_hz=TELEMETRY_TICK_MAX_HZ,
         )
@@ -2044,6 +2104,15 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             max_hz=HAPTIC_EVENT_MAX_HZ,
         )
         return
+    if t == TYPE_STATE_SUBSCRIBE:
+        # Replay any cached snapshot for the requested topics (sidecar-produced results and
+        # the #531 Part B identity topics) so a late-joining subscriber renders current
+        # identity instead of waiting for the next change event. Runs for BOTH the
+        # sidecar-only fast path below and the relayed mixed-topic subscribe.
+        for topic in data.get("topics") or []:
+            cached = _sidecar_state_cache.get(str(topic))
+            if cached is not None:
+                await _safe_send(websocket, cached)
     if t in (TYPE_STATE_SUBSCRIBE, TYPE_STATE_UNSUBSCRIBE) and topics_are_sidecar_only(
         data.get("topics")
     ):
@@ -2053,11 +2122,6 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
             peer,
             data.get("topics"),
         )
-        if t == TYPE_STATE_SUBSCRIBE:
-            for topic in data.get("topics") or []:
-                cached = _sidecar_state_cache.get(str(topic))
-                if cached is not None:
-                    await _safe_send(websocket, cached)
         return
     if (
         t in CLIENT_TO_SERVER_TYPES
@@ -2071,6 +2135,9 @@ async def _handle_external_frame(websocket: Any, data: dict[str, Any]) -> None:
     # responds with `config.value` / `config.ack` / `action.ack` /
     # `state.snapshot`, which are also forwarded back through this same path.
     topic = data.get("topic")
+    if t == TYPE_STATE_SNAPSHOT and isinstance(topic, str) and topic in IDENTITY_REPLAY_TOPICS:
+        # #531 Part B: remember the latest identity snapshot for late-subscriber replay.
+        _sidecar_state_cache[topic] = data
     logger.info(
         "relay peer=%s type=%s%s peers=%d",
         peer,

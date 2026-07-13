@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AC Copilot — GT dashboard v3 (car-adaptive, setup-aware)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;600;700;800&family=Saira:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--carbon:#0B0C0D;--graphite:#141618;--slab:#191C1F;--raise:#20242A;--edge:#2A2F35;--line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.16);--chalk:#EEF1F3;--mute:#9BA1A8;--dim:#79808A;--faint:#4A4E55;--brass:#C8983E;--brake:#F23B2C;--lift:#F4A52C;--clear:#2FBE6E;--data:#49B6C9;--fd:"Saira Semi Condensed","Arial Narrow",system-ui,sans-serif;--fr:"Saira",system-ui,sans-serif;--fm:"Spline Sans Mono",ui-monospace,Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#000;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;font-family:var(--fr)}
+.device{width:1024px;height:600px;background:var(--carbon);border:2px solid var(--edge);border-radius:14px;padding:8px 12px;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 0 0 10px #08090a}
+.lbl{font-family:var(--fd);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.mono{font-family:var(--fm)}
+.panel{background:var(--graphite);border:1px solid var(--edge);position:relative}
+.bk{position:absolute;width:11px;height:11px;border:2px solid var(--brass)}
+.bk.tl{top:-1px;left:-1px;border-right:0;border-bottom:0}.bk.tr{top:-1px;right:-1px;border-left:0;border-bottom:0}
+.bk.bl{bottom:-1px;left:-1px;border-right:0;border-top:0}.bk.br{bottom:-1px;right:-1px;border-left:0;border-top:0}
+/* A header */
+.hdr{height:34px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto}
+.hl{display:flex;align-items:center;gap:10px}
+.sm{width:6px;height:20px;background:var(--brass)}
+.sname{font-family:var(--fd);font-weight:700;font-size:19px;letter-spacing:.05em;text-transform:uppercase;color:var(--chalk)}
+.cartrk{font-family:var(--fd);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);border-left:1px solid var(--line2);padding-left:10px}
+.hr{display:flex;align-items:center;gap:14px}
+.sf{font-family:var(--fd);font-weight:700;font-size:12px;letter-spacing:.1em;color:var(--data);border:1px solid var(--data);padding:2px 8px}
+.temp{font-family:var(--fm);font-size:12px;color:var(--mute)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--clear)}
+.dots{display:flex;gap:5px}
+.pd{width:7px;height:7px;border-radius:50%;background:var(--raise);cursor:pointer}
+.pd.on{background:var(--brass)}
+/* B shift ribbon */
+.ribbon{height:34px;margin-top:6px;position:relative;flex:0 0 auto;display:flex;align-items:center}
+.led{display:flex;gap:3px;height:26px;width:100%}
+.led span{flex:1;background:var(--raise)}
+.rpmtag{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-family:var(--fm);font-size:15px;color:var(--chalk);background:rgba(11,12,13,.72);padding:1px 6px;font-variant-numeric:tabular-nums}
+/* pages */
+.page{margin-top:6px;flex:1 1 auto;min-height:0;display:none;flex-direction:column}
+.page.on{display:flex}
+/* C body */
+.body{height:300px;display:flex;gap:14px;flex:0 0 auto}
+.cLeft{width:210px;display:flex;flex-direction:column;overflow:hidden}
+.cCenter{width:552px;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:6px 0;overflow:hidden}
+.cRight{width:210px;display:flex;flex-direction:column;overflow:hidden}
+.pad{padding:12px 14px}
+.mh{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+.vrow{display:flex;align-items:baseline;justify-content:space-between;padding:5px 0}
+.vrow .k{font-family:var(--fd);font-weight:600;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.vrow .v{font-family:var(--fr);font-weight:700;font-size:20px;color:var(--mute);font-variant-numeric:tabular-nums}
+.vrow .v.hot{color:var(--lift)}
+.fuel{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
+.fuel .big{font-family:var(--fr);font-weight:700;font-size:36px;color:var(--chalk);font-variant-numeric:tabular-nums;line-height:.9}
+.spd{display:flex;align-items:baseline;gap:8px}
+.spd .n{font-family:var(--fr);font-weight:700;font-size:52px;color:var(--chalk);font-variant-numeric:tabular-nums;line-height:1}
+.spd .u{font-family:var(--fd);font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.gear{font-family:var(--fr);font-weight:700;font-size:156px;line-height:.8;color:var(--chalk)}
+.dwrap{width:92%}
+.dhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.dhead .k{font-family:var(--fd);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.drow{display:flex;align-items:center;gap:14px}
+.dbar{flex:1;position:relative;height:26px;background:var(--raise)}
+.dtick{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--mute)}
+.dfill{position:absolute;top:0;bottom:0;background:var(--clear)}
+.dnum{font-family:var(--fr);font-weight:700;font-size:46px;line-height:.85;color:var(--clear);font-variant-numeric:tabular-nums;min-width:150px;text-align:right}
+.trow{display:flex;align-items:baseline;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)}
+.trow .k{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.trow .t{font-family:var(--fr);font-weight:700;font-size:19px;color:var(--chalk);font-variant-numeric:tabular-nums}
+.pos{font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk);margin-bottom:6px}
+.stint{margin-top:auto;border-top:1px solid var(--line);padding-top:9px}
+.stint .m{font-family:var(--fr);font-weight:700;font-size:21px;color:var(--clear);font-variant-numeric:tabular-nums}
+/* D coach lane */
+.coach{height:56px;margin-top:6px;flex:0 0 auto;display:flex;align-items:center;gap:16px;padding:0 16px;overflow:hidden}
+.cv{font-family:var(--fd);font-weight:800;font-size:38px;letter-spacing:.02em;text-transform:uppercase;color:var(--brake);line-height:.9}
+.next{font-family:var(--fd);font-weight:700;font-size:17px;letter-spacing:.04em;text-transform:uppercase;color:var(--chalk)}
+.nsub{font-family:var(--fm);font-size:12px;color:var(--dim)}
+.micro{font-family:var(--fd);font-weight:700;font-size:22px;letter-spacing:.03em;text-transform:uppercase}
+.queue{font-family:var(--fd);font-weight:600;font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute)}
+.bseg{display:flex;gap:2px;height:22px;width:220px}
+.bseg span{flex:1;background:var(--raise)}
+.pip{width:9px;height:9px;border-radius:50%;display:inline-block}
+/* E electronics + tyres */
+.board{height:120px;margin-top:6px;flex:0 0 auto;display:flex;gap:14px;overflow:hidden}
+.elec{width:600px;overflow:hidden}
+.etiles{display:flex;gap:10px;height:82px}
+.et{flex:1;border:1px solid var(--edge);padding:9px 11px;display:flex;flex-direction:column;justify-content:space-between}
+.et.absent{opacity:.5}
+.et .el{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.et .ev{font-family:var(--fr);font-weight:700;font-size:30px;color:var(--chalk);font-variant-numeric:tabular-nums;line-height:.9}
+.et .ev .mx{font-family:var(--fm);font-size:13px;color:var(--mute);margin-left:1px}
+.et .bar{height:12px;display:flex;align-items:center}
+.lseg{display:flex;gap:2px;width:100%;height:8px}
+.lseg span{flex:1;background:var(--raise)}
+.lseg span.f{background:var(--brass)}
+.biasrow{display:flex;align-items:center;gap:7px;width:100%}
+.fr{font-family:var(--fd);font-weight:600;font-size:9px;letter-spacing:.04em;color:var(--dim)}
+.biasbar{flex:1;position:relative;height:8px;background:var(--raise)}
+.biasfill{position:absolute;top:0;bottom:0;background:var(--brass);opacity:.45}
+.biasctr{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--dim)}
+.biasmk{position:absolute;top:-3px;width:3px;height:14px;background:var(--brass)}
+.tyres{width:386px;overflow:hidden}
+.tgrid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:8px;height:82px}
+.tc{border:1px solid var(--edge);display:flex;align-items:baseline;gap:8px;padding:0 12px}
+.tc .tid{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;color:var(--dim)}
+.tc .tt{font-family:var(--fr);font-weight:700;font-size:22px;font-variant-numeric:tabular-nums}
+.tc .tp{font-family:var(--fm);font-size:13px;color:var(--chalk);margin-left:auto}
+/* other pages */
+.sketch{flex:1;display:flex;gap:14px}
+.mapmain{flex:1;position:relative;padding:8px}
+.mside{width:300px;display:flex;flex-direction:column;padding:14px 16px}
+.crow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)}
+.cbadge{font-family:var(--fd);font-weight:700;font-size:12px;color:var(--brass);border:1px solid var(--edge);padding:1px 6px}
+.cnm{font-family:var(--fd);font-weight:600;font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
+.cg{font-family:var(--fm);font-size:11px;color:var(--dim)}
+.phase{display:flex;align-items:center;gap:10px;padding:9px 0}
+.phase .pl{font-family:var(--fd);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);width:64px}
+.pbar{flex:1;height:16px;background:var(--raise);position:relative}
+.pbf{position:absolute;top:0;bottom:0;left:50%}
+.pv{font-family:var(--fr);font-weight:700;font-size:16px;font-variant-numeric:tabular-nums;width:70px;text-align:right}
+/* controls */
+.ctrls{display:flex;align-items:center;gap:18px;flex-wrap:wrap;justify-content:center;max-width:1024px}
+.grp{display:flex;align-items:center;gap:7px}
+.gl{font-family:var(--fd);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6b7077}
+.tb{font-family:var(--fd);font-weight:600;font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute);background:#111316;border:1px solid var(--edge);padding:6px 12px;cursor:pointer}
+.tb.on{color:#0B0C0D;background:var(--brass);border-color:var(--brass)}
+.cap{font-family:var(--fm);font-size:12px;color:#6b7077;text-align:center;max-width:1000px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="device">
+  <div class="hdr">
+    <div class="hl"><span class="sm"></span><span class="sname" id="sname">ENDURO · LONG-RUN</span><span class="cartrk" id="cartrk">911 GT3 R — MAGIONE</span></div>
+    <div class="hr"><span class="sf">DRY</span><span class="temp">26 / 45°</span><span class="dot"></span><span class="lbl" style="font-size:11px;color:var(--clear)">live</span>
+      <span class="dots" id="dots"><span class="pd" data-p="stint"></span><span class="pd on" data-p="race"></span><span class="pd" data-p="coach"></span><span class="pd" data-p="map"></span></span></div>
+  </div>
+  <div class="ribbon"><div class="led" id="led"></div><span class="rpmtag" id="rpmtag">6789 / 8500</span></div>
+
+  <!-- RACE -->
+  <div class="page on" id="p-race">
+    <div class="body">
+      <div class="cLeft panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Engine</div>
+        <div class="vrow"><span class="k">oil temp</span><span class="v" id="oilT">108°</span></div>
+        <div class="vrow"><span class="k">oil press</span><span class="v" id="oilP">5.8</span></div>
+        <div class="vrow"><span class="k">water temp</span><span class="v" id="watT">84°</span></div>
+        <div class="vrow"><span class="k">water press</span><span class="v" id="watP">1.8</span></div>
+        <div class="fuel"><div class="mh" style="margin-bottom:4px">Fuel</div>
+          <div style="display:flex;align-items:baseline;gap:8px"><span class="big" id="fuelLaps">18.4</span><span class="lbl" style="font-size:11px">laps left</span></div>
+          <div class="mono" style="font-size:12px;color:var(--dim);margin-top:3px">48.2 L · 2.61 L/lap</div></div>
+      </div>
+      <div class="cCenter panel"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="spd"><span class="n" id="spd">187</span><span class="u">km/h</span></div>
+        <div class="gear" id="gear">4</div>
+        <div class="dwrap"><div class="dhead"><span class="k">Δ vs session best</span><span class="k" style="color:var(--clear)">on line</span></div>
+          <div class="drow"><div class="dbar"><span class="dtick"></span><span class="dfill" style="left:38%;width:12%"></span></div><span class="dnum">−0.125</span></div></div>
+      </div>
+      <div class="cRight panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="pos">P3 · L6/28</div>
+        <div class="trow"><span class="k">current</span><span class="t">1:02.41</span></div>
+        <div class="trow"><span class="k">last</span><span class="t">1:04.83</span></div>
+        <div class="trow"><span class="k">best</span><span class="t" style="color:var(--clear)">1:00.32</span></div>
+        <div class="trow"><span class="k">predicted</span><span class="t" style="color:var(--clear)">1:00.9</span></div>
+        <div class="stint"><div class="mh" style="margin-bottom:4px">Stint · fuel to flag</div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between"><span class="m">+1.4<span class="lbl" style="font-size:10px;margin-left:4px">lap</span></span><span class="mono" style="font-size:12px;color:var(--dim)">gap +1.2 / −0.8</span></div></div>
+      </div>
+    </div>
+
+    <div class="coach panel" id="coach"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span></div>
+
+    <div class="board">
+      <div class="elec panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh" style="margin-bottom:6px">Setup · Electronics</div>
+        <div class="etiles" id="etiles"></div>
+      </div>
+      <div class="tyres panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh" style="margin-bottom:6px">Tyres · core temp / pressure</div>
+        <div class="tgrid">
+          <div class="tc" style="background:rgba(47,190,110,.14)"><span class="tid">FL</span><span class="tt" style="color:var(--clear)">84°</span><span class="tp">27.6</span></div>
+          <div class="tc" style="background:rgba(47,190,110,.14)"><span class="tid">FR</span><span class="tt" style="color:var(--clear)">86°</span><span class="tp">27.7</span></div>
+          <div class="tc" style="background:rgba(47,190,110,.14)"><span class="tid">RL</span><span class="tt" style="color:var(--clear)">88°</span><span class="tp">27.9</span></div>
+          <div class="tc" style="background:rgba(244,165,44,.16)"><span class="tid">RR</span><span class="tt" style="color:var(--lift)">92°</span><span class="tp">28.4</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COACH -->
+  <div class="page" id="p-coach">
+    <div class="sketch">
+      <div class="panel pad" style="flex:1"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Debrief · lap 6 vs best (1:00.32)</div>
+        <div style="font-family:var(--fd);font-weight:800;font-size:26px;text-transform:uppercase;color:var(--chalk);margin:6px 0 4px">Biggest gain · T4 Ascari</div>
+        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.6;margin-bottom:12px">You lose 0.31 s braking 15 m early and rolling too little entry speed. Brake later, carry 6 km/h more to the apex.</div>
+        <div class="phase"><span class="pl">brake</span><div class="pbar"><span class="pbf" style="width:14%;background:var(--brake)"></span></div><span class="pv" style="color:var(--brake)">+0.18</span></div>
+        <div class="phase"><span class="pl">entry</span><div class="pbar"><span class="pbf" style="width:9%;background:var(--brake)"></span></div><span class="pv" style="color:var(--brake)">+0.11</span></div>
+        <div class="phase"><span class="pl">apex</span><div class="pbar"><span class="pbf" style="width:3%;background:var(--lift)"></span></div><span class="pv" style="color:var(--lift)">+0.02</span></div>
+        <div class="phase"><span class="pl">exit</span><div class="pbar"><span class="pbf" style="right:50%;width:5%;background:var(--clear)"></span></div><span class="pv" style="color:var(--clear)">−0.04</span></div>
+      </div>
+      <div class="panel pad" style="width:320px"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Priorities · time lost</div>
+        <div class="crow"><span class="cnm" style="color:var(--chalk)">T4 · brake later</span><span class="cg" style="color:var(--brake)">0.31</span></div>
+        <div class="crow"><span class="cnm">T7 · earlier throttle</span><span class="cg" style="color:var(--brake)">0.19</span></div>
+        <div class="crow"><span class="cnm">T1 · tighter line</span><span class="cg" style="color:var(--lift)">0.12</span></div>
+        <div class="crow" style="border-bottom:0"><span class="cnm">T5 · trail brake</span><span class="cg" style="color:var(--lift)">0.08</span></div>
+        <div class="mh" style="margin-top:14px">Brake marks · calibrated to you</div>
+        <div class="mono" style="font-size:12px;color:var(--dim);line-height:1.7;margin-top:4px">T4 board 100 → your 84 m<br>T7 board 60 → your 55 m</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div class="page" id="p-map">
+    <div class="sketch">
+      <div class="panel mapmain"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <svg viewBox="0 0 620 380" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+          <path d="M80,300 C60,190 150,110 260,112 C340,113 360,158 430,158 C520,158 545,215 500,275 C470,315 520,338 495,372" fill="none" stroke="#20242A" stroke-width="15" stroke-linejoin="round"/>
+          <path d="M80,300 C60,190 150,110 260,112 C340,113 360,158 430,158 C520,158 545,215 500,275 C470,315 520,338 495,372 C470,405 300,398 235,384 C150,366 92,372 80,300 Z" fill="none" stroke="#20242A" stroke-width="15" stroke-linejoin="round"/>
+          <path d="M80,300 C60,190 150,110 260,112 C340,113 360,158 430,158 C520,158 545,215 500,275 C470,315 520,338 495,372 C470,405 300,398 235,384 C150,366 92,372 80,300 Z" fill="none" stroke="#49B6C9" stroke-width="3" stroke-linejoin="round"/>
+          <path d="M260,112 C340,113 360,158 430,158" fill="none" stroke="#C8983E" stroke-width="5"/>
+          <circle cx="430" cy="158" r="10" fill="#F23B2C"/><circle cx="430" cy="158" r="10" fill="none" stroke="#0B0C0D" stroke-width="2"/>
+          <rect x="76" y="286" width="9" height="26" fill="#EEF1F3"/>
+        </svg>
+      </div>
+      <div class="panel mside"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="lbl" style="font-size:11px">lap 6 · S2</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk)">1:02.41</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;border-bottom:1px solid var(--line);padding-bottom:12px"><span class="lbl" style="font-size:11px">delta</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--clear)">−0.125</span></div>
+        <div class="mh" style="margin-top:12px">Ahead</div>
+        <div class="crow"><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">T5</span><span class="cnm">LESMO 2</span></span><span class="cg">3rd · 118</span></div>
+        <div class="crow"><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">T6</span><span class="cnm">CURVONE</span></span><span class="cg">6th · flat</span></div>
+        <div class="crow" style="border-bottom:0"><span style="display:flex;gap:9px;align-items:center"><span class="cbadge">T7</span><span class="cnm">CHICANE</span></span><span class="cg">2nd · 96</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STINT -->
+  <div class="page" id="p-stint">
+    <div class="sketch">
+      <div class="panel pad" style="flex:1"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Tyres · inner / mid / outer + wear</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px">
+          <div style="border:1px solid var(--edge);padding:10px"><div class="lbl" style="font-size:10px">FL · med</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px">82 · 84 · 88°</div><div class="mono" style="font-size:12px;color:var(--dim)">27.6 psi · 4% wear</div></div>
+          <div style="border:1px solid var(--edge);padding:10px"><div class="lbl" style="font-size:10px">FR · med</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px">83 · 86 · 90°</div><div class="mono" style="font-size:12px;color:var(--dim)">27.7 psi · 5% wear</div></div>
+          <div style="border:1px solid var(--edge);padding:10px"><div class="lbl" style="font-size:10px">RL · med</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px">85 · 88 · 91°</div><div class="mono" style="font-size:12px;color:var(--dim)">27.9 psi · 7% wear</div></div>
+          <div style="border:1px solid var(--edge);padding:10px"><div class="lbl" style="font-size:10px">RR · med</div><div class="mono" style="font-size:16px;color:var(--lift)">88 · 92 · 96°</div><div class="mono" style="font-size:12px;color:var(--dim)">28.4 psi · 9% wear</div></div>
+        </div>
+      </div>
+      <div class="panel pad" style="width:320px"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Fuel plan · 28 lap race</div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span style="font-family:var(--fr);font-weight:700;font-size:34px;color:var(--clear)">+1.4</span><span class="lbl" style="font-size:11px">lap margin to flag</span></div>
+        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.8;margin-top:10px">onboard 48.2 L<br>burn 2.61 L / lap<br>to flag 22 laps · need 57.4 L<br>save 0.3 L/lap → safe</div>
+        <div class="mh" style="margin-top:14px">Pit window</div>
+        <div class="mono" style="font-size:13px;color:var(--chalk);margin-top:4px">lap 14 – 17</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ctrls">
+  <div class="grp"><span class="gl">Car</span><button class="tb on" data-car="p911">911 GT3 R</button><button class="tb" data-car="m3gt2">M3 GT2</button></div>
+  <div class="grp"><span class="gl">Coach lane</span><button class="tb on" data-coach="cruise">Cruise</button><button class="tb" data-coach="braking">Braking zone</button></div>
+  <div class="grp"><span class="gl">Page</span><button class="tb" data-p="stint">Stint</button><button class="tb on" data-p="race">Race</button><button class="tb" data-p="coach">Coach</button><button class="tb" data-p="map">Map</button></div>
+</div>
+<div class="cap">Illustrative mock · Racing Atelier · v3 "glance spine + stable boards". Electronics ranges + presence read live from each car's setup spinners (ac.getSetupSpinners) — switch Car to see the board adapt: the M3 GT2 has no ABS (greyed) and a different TC range. Turbo cars additionally get MAP + boost tiles. Water/oil temp is data-gated in base AC.</div>
+
+<script>
+(function(){
+  var CARS={
+    p911:{sname:'ENDURO · LONG-RUN',car:'911 GT3 R',redline:8500,rpm:6789,gear:'4',spd:'187',ledFill:.82,
+      eng:{oilT:108,oilP:'5.8',watT:84,watP:'1.8',oilHot:true},
+      elec:[{k:'BRAKE BIAS',type:'bias',v:54.5,min:50,max:70},{k:'TC',v:6,max:12},{k:'TC CUT',v:4,max:12},{k:'ABS',v:3,max:12}]},
+    m3gt2:{sname:'SPRINT · LOW-FUEL',car:'M3 GT2',redline:8300,rpm:7180,gear:'4',spd:'176',ledFill:.9,
+      eng:{oilT:113,oilP:'5.6',watT:89,watP:'1.9',oilHot:true},
+      elec:[{k:'BRAKE BIAS',type:'bias',v:56,min:48,max:72},{k:'TC',v:3,max:8},{k:'ABS',absent:true}]}
+  };
+  var led=document.getElementById('led');
+  function buildLed(fill){led.innerHTML='';var N=20,lit=Math.round(fill*N);for(var i=0;i<N;i++){var s=document.createElement('span'),bg='var(--raise)';if(i<lit){if(i>=N-2)bg='var(--data)';else if(i>=N-5)bg='var(--brake)';else if(i>=N-9)bg='var(--lift)';else bg='var(--clear)';}s.style.background=bg;led.appendChild(s);}}
+  function segRow(v,max){var h='<div class="bar"><div class="lseg">';for(var i=0;i<max;i++){h+='<span class="'+(i<v?'f':'')+'"></span>';}return h+'</div></div>';}
+  function buildElec(car){
+    var el=document.getElementById('etiles');el.innerHTML='';
+    car.elec.forEach(function(t){
+      var d=document.createElement('div');d.className='et'+(t.absent?' absent':'');
+      if(t.absent){d.innerHTML='<div class="el">'+t.k+'</div><div class="ev" style="color:var(--dim)">—</div><div class="bar"><span class="lbl" style="font-size:9px">not fitted</span></div>';}
+      else if(t.type==='bias'){var lean=t.v-50,mk=Math.max(6,Math.min(94,50-lean/20*50)),fl=Math.min(mk,50),fw=Math.abs(50-mk);
+        d.innerHTML='<div class="el">'+t.k+'</div><div class="ev">'+t.v.toFixed(1)+'<span class="mx">%</span></div><div class="bar"><div class="biasrow"><span class="fr">F</span><div class="biasbar"><span class="biasctr"></span><span class="biasfill" style="left:'+fl.toFixed(0)+'%;width:'+fw.toFixed(0)+'%"></span><span class="biasmk" style="left:'+mk.toFixed(0)+'%"></span></div><span class="fr">R</span></div></div>';}
+      else{d.innerHTML='<div class="el">'+t.k+'</div><div class="ev">'+t.v+'<span class="mx">/'+t.max+'</span></div>'+segRow(t.v,t.max);}
+      el.appendChild(d);
+    });
+  }
+  var curCarId='p911',curCoach='cruise';
+  function setCar(id){curCarId=id;var c=CARS[id];document.getElementById('sname').textContent=c.sname;document.getElementById('cartrk').textContent=c.car+' — MAGIONE';
+    document.getElementById('rpmtag').textContent=c.rpm+' / '+c.redline;document.getElementById('gear').textContent=c.gear;document.getElementById('spd').textContent=c.spd;
+    var e=c.eng;document.getElementById('oilT').textContent=e.oilT+'°';document.getElementById('oilT').style.color=e.oilHot?'var(--lift)':'var(--mute)';document.getElementById('oilP').textContent=e.oilP;document.getElementById('watT').textContent=e.watT+'°';document.getElementById('watP').textContent=e.watP;
+    buildLed(c.ledFill);buildElec(c);setCoach(curCoach);
+    document.querySelectorAll('[data-car]').forEach(function(b){b.classList.toggle('on',b.dataset.car===id)});}
+  function hasABS(){return CARS[curCarId].elec.some(function(e){return e.k==='ABS'&&!e.absent;});}
+  function coachHTML(m){
+    if(m==='cruise')return '<span class="next">NEXT ▸ LESMO 2 · T5</span><span class="nsub">3rd · min 118 km/h</span><span class="micro" style="color:var(--lift);margin-left:auto">BRAKE 5 M LATER · T4</span><span class="queue" style="margin-left:16px">T6 CURVONE · T7 CHICANE</span>';
+    var absPip=hasABS()?'ABS <span class="pip" style="background:var(--raise)"></span>':'<span class="fr" style="font-size:11px;color:var(--faint)">no ABS</span>';
+    return '<span class="cv">BRAKE ▸</span><div class="bseg" id="bseg"></div><span class="nsub" style="color:var(--chalk);font-size:15px">42 m</span><span class="queue" style="margin-left:auto">prev T3 · <span style="color:var(--brake)">LATE</span></span><span class="nsub" style="margin-left:6px">TC <span class="pip" style="background:var(--brake)"></span> '+absPip+'</span>';
+  }
+  function setCoach(m){curCoach=m;var c=document.getElementById('coach');c.innerHTML=coachHTML(m);
+    if(m==='braking'){var bs=document.getElementById('bseg');var N=10,lit=6;for(var i=0;i<N;i++){var s=document.createElement('span');s.style.background=i>=N-lit?(i>=N-2?'var(--brake)':'var(--lift)'):'var(--raise)';bs.appendChild(s);}}
+    document.querySelectorAll('[data-coach]').forEach(function(b){b.classList.toggle('on',b.dataset.coach===m)});}
+  function setPage(p){document.querySelectorAll('.page').forEach(function(s){s.classList.toggle('on',s.id==='p-'+p)});
+    document.querySelectorAll('[data-p]').forEach(function(b){b.classList.toggle('on',b.dataset.p===p)});}
+  document.querySelectorAll('[data-car]').forEach(function(b){b.onclick=function(){setCar(b.dataset.car)}});
+  document.querySelectorAll('[data-coach]').forEach(function(b){b.onclick=function(){setCoach(b.dataset.coach)}});
+  document.querySelectorAll('[data-p]').forEach(function(b){b.onclick=function(){setPage(b.dataset.p)}});
+  setCar('p911');setCoach('cruise');setPage('race');
+})();
+</script>
+</body>
+</html>
