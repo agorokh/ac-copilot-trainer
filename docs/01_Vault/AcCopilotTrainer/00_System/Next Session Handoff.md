@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T09:03:26Z
+last_updated: 2026-07-13T11:05:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-527-coachable-brake-coverage-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-parts12-coverage-calibration-2026-07-12.md
@@ -82,6 +83,35 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-13) — #531 Phase 1: tablet GT dashboard LIVE on the P7 (PR #547 MERGED `9265521`)
+
+**PR [#547](https://github.com/agorokh/ac-copilot-trainer/pull/547) MERGED** (squash
+[`9265521`](https://github.com/agorokh/ac-copilot-trainer/commit/92655217a0278214569abb3be5520258616d2398),
+2026-07-13). The 7" PRITOM P7 renders the modal Racing-Atelier GT dashboard at
+`/tablet/dash` over USB `adb reverse tcp:8765`, built against the frozen
+`docs/10_Development/design/tablet-dashboard/` artifacts (landed on main with the PR).
+Parts A (5-band RACE + COACH/MAP/STINT sweep, vendored fonts, A133-safe CSS, <=15 Hz
+setInterval renderer, LIVE/STALE/WAITING), B (browser-class `telemetry_tick` routing;
+producer-scoped identity-snapshot cache + replay; `setup.active` broadcast on
+connect/session edges with cleared/retry semantics; spinner `items` passthrough), C-min
+(`rpm_max` + `lap_time_ms` in the tick).
+
+**Operator-grade proof on the real P7 in Fully Kiosk fullscreen** (screencaps on the PR):
+all 5 bands edge-to-edge; car-adaptive electronics from the REAL 911 schema (BIAS 63.0%,
+TC 3/12, ABS 7/12, no TC-CUT/MAP tile); BRAKE-takeover coach lane with countdown; MAP
+sweep; STALE `— / —` honesty on producer stop; client-measured fuel burn (18.4 laps left).
+Fully Kiosk Start URL persisted to `http://127.0.0.1:8765/tablet/dash`. Review: 6 rounds,
+21 findings fixed, daemon CRITICAL + HIGH replied-invalid with pasted evidence. Durable
+node: [[issue-531-phase1-tablet-dash-2026-07-13]] (P7 viewport DPR trap, rAF-freeze trap,
+replay-ordering trap, Fully-on-Android-Go recipe, `dash_feeder.py` harness).
+
+**What remains on [#531](https://github.com/agorokh/ac-copilot-trainer/issues/531)
+(OPEN, Phase 2+):** Parts D–I per the issue body; the live in-sim acceptance pass (car
+swap on the rig, real `rpm_max` from CSP) rides on the next rig session — the AC app
+junction serves the primary checkout, which was parked on
+`feat/issue-479-simhub-launch-toggle` with `main` pinned by the
+`codex-issue-381-voice-bank-timing` worktree; put the primary on merged main first.
 
 ## Delivered (2026-07-13) — #552 layout-safe plant identity + #532 Part B core (PR #551 MERGED `155aac6`)
 
