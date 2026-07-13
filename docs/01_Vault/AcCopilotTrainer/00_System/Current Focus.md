@@ -38,6 +38,20 @@ pre-merge: `--assert-coaching` exit 0 twice, coverage 80%/89% (was red 78%), jun
 `corner_advice` between-lap point + coach-v2-runtime calibration. Detail:
 [[issue-522-parts12-coverage-calibration-2026-07-12]].
 
+**Delivered (2026-07-12):** PR [#539](https://github.com/agorokh/ac-copilot-trainer/pull/539)
+**MERGED** ([`e0b5eef`](https://github.com/agorokh/ac-copilot-trainer/commit/e0b5eef)) — **#528
+CLOSED** (the standing "autonomous driver stalls near pit start" flake). `auto_drive` FAILed ~1/3
+of pit-start launches via a recovery-to-pit-trap loop (`spawn_teleport=failed`, recovery cap at
+0 m): a car OFF the racing line was recovered only by `teleport_to_pits` — the same trap. Fix:
+`rig_drive` tracks a mutable `off_line` state (set at an off-line spawn AND after any
+`teleport_to_pits`; cleared on a successful line teleport) and RETRIES the racing-line teleport on
+recovery whenever off-line — closing the mid-lap-spin-into-pits re-entry too. Pure
+`should_try_line_teleport_on_recovery` (honors `--no-spawn-line`) + `drive_leg_succeeded`; both
+failure shapes now labeled false-green-KPI regression scenarios (15 broken / 9 healthy / 0 leaks).
+Hardened over 3 review rounds (self-hosted cursor HIGH+MEDIUM, codex P2). **Live rig verification
+PENDING** — rig saturated by 5+ concurrent sessions at merge; run repeated `auto_drive` launches
+when free. Detail: [[issue-528-pit-start-stall-recovery-2026-07-12]].
+
 **Prior focus (2026-07-12, later):** Coaching QUALITY —
 [#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) remaining parts. PR
 [#523](https://github.com/agorokh/ac-copilot-trainer/pull/523) **MERGED**
