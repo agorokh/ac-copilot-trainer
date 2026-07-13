@@ -396,6 +396,28 @@ def test_content_manager_launch_spawns_cm_with_url(monkeypatch, tmp_path: Path):
     assert event.detail == actuator.quick_drive_url()
 
 
+def test_content_manager_restart_kills_cm_process(monkeypatch, tmp_path: Path):
+    # #558: restart_content_manager kills the CM process (tree) so the next launch cold-starts a
+    # FRESH CM — the recovery a plain URL re-issue to a stale CM cannot perform.
+    monkeypatch.setattr(entry_launcher.sys, "platform", "win32")
+    cm_exe = tmp_path / "Content Manager.exe"
+    cm_exe.write_text("", encoding="utf-8")
+    preset = tmp_path / "drive.cmpreset"
+    preset.write_text("{}", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def runner(cmd, **kwargs):  # noqa: ANN001
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    actuator = ContentManagerActuator(preset=preset, cm_exe=cm_exe, runner=runner)
+    event = actuator.restart_content_manager()
+
+    assert event.action == "restart_cm"
+    assert calls == [["taskkill", "/IM", "Content Manager.exe", "/F", "/T"]]
+    assert "killed Content Manager.exe" in event.detail
+
+
 def test_content_manager_launch_requires_windows(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(entry_launcher.sys, "platform", "linux")
     actuator = ContentManagerActuator(preset=tmp_path / "x.cmpreset", cm_exe=tmp_path / "cm.exe")
