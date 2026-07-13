@@ -105,8 +105,11 @@ _LEAD_LATCH_TTA_S = 1.5
 #: a driver onset within this many METERS of a mark is the SAME zone; farther away it is a
 #: different line/zone and does not calibrate. Metric, not normalized: a fixed spline fraction
 #: would accept ~400 m on a Nordschleife-length track (PR #525 review). Converted per observer
-#: via its track length (0.02 spline on the verified 2.5 km case).
-_CAL_MATCH_TOL_M = 50.0
+#: via its track length (0.02 spline on the verified 2.5 km case). Public: the semantic-timeliness
+#: analyzer imports this as its coachable-onset tolerance so the two share one source of truth.
+CAL_MATCH_TOL_M = 50.0
+#: back-compat alias for the pre-#527 private name (kept so any external importer does not break).
+_CAL_MATCH_TOL_M = CAL_MATCH_TOL_M
 #: weight of the newest lap in the per-zone EMA (recent laps dominate, old habits decay).
 _CAL_EMA_ALPHA = 0.4
 #: Schmitt-trigger thresholds for register quantization (rising / falling) — the falling edge
@@ -396,7 +399,7 @@ class RealtimeObserver:
         """Fold one of the driver's own completed laps into the per-zone brake-mark EMA.
 
         For each corner zone, the driver's sustained brake onset nearest the mark currently IN
-        FORCE (within ``_CAL_MATCH_TOL_M`` meters — the same zone, not a different line) updates
+        FORCE (within ``CAL_MATCH_TOL_M`` meters — the same zone, not a different line) updates
         that zone's EMA. Matching is one-to-one (greedy nearest-first): a single brake
         application between two closely spaced marks calibrates ONE zone, never both — else the
         per-zone distinction #522 adds would collapse (PR #525 review). Returns the number of
@@ -408,7 +411,7 @@ class RealtimeObserver:
             return 0
         if track_layout and self._track_layout and track_layout != self._track_layout:
             return 0
-        tol = _CAL_MATCH_TOL_M / self._track_length_m  # metric tolerance in spline units
+        tol = CAL_MATCH_TOL_M / self._track_length_m  # metric tolerance in spline units
         updated = 0
         for ref in self._refs:
             ref_marks = self._reference_marks(ref)
