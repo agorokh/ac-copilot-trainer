@@ -110,7 +110,14 @@ def test_empty_tap_fails_evidence_assertion(tmp_path):
 
 
 def _brake_mark_cue(t, mark, corner=None, urgency="prepare"):
-    """A ``coaching.cue`` (advisory) + matching ``coaching.voice`` (dispatch) pair for a mark."""
+    """A ``coaching.cue`` (advisory) + matching ``coaching.voice`` (dispatch) pair for a mark.
+
+    Mirrors the real wire convention: the advisory ``coaching.cue`` carries the observer's 0-based
+    ``corner``; the dispatch ``coaching.voice`` carries the SPOKEN 1-based corner (``corner + 1``),
+    which is also the ``t0N`` clip label — so the analyzer's deterministic ``corner + 1`` binding is
+    exercised the way production emits it.
+    """
+    spoken = None if corner is None else corner + 1
     cue = {
         "t": t,
         "k": "coaching.cue",
@@ -121,7 +128,7 @@ def _brake_mark_cue(t, mark, corner=None, urgency="prepare"):
         "k": "coaching.voice",
         "payload": {
             "seq": int(t) % 100000,
-            "clip_id": f"late_brake.{urgency}.calm.t{corner or 0}",
+            "clip_id": f"late_brake.{urgency}.calm.t{spoken or 0:02d}",
             "kind": "late_brake",
             "urgency": urgency,
             "register": "calm",
@@ -131,7 +138,7 @@ def _brake_mark_cue(t, mark, corner=None, urgency="prepare"):
     }
     if corner is not None:
         cue["payload"]["corner"] = corner
-        voice["payload"]["corner"] = corner
+        voice["payload"]["corner"] = spoken
     return cue, voice
 
 
@@ -206,6 +213,33 @@ def test_cue_for_one_zone_does_not_cover_another(tmp_path):
     assert report.coachable_brake_zones == 2  # both zones braked in
     assert report.coachable_brake_zones_coached == 1  # only A drew a cue; B not covered by A's cue
     assert report.zones_crossed == 2 and report.zones_cued == 1
+    assert report.assertions["brake_events_coached"] is False
+
+
+def test_later_lap_dropped_cue_not_masked_by_earlier_lap(tmp_path):
+    """#527 codex P1: a later-lap pass whose advisory was dropped must NOT bind to the earlier
+    lap's coached occurrence just because the spline matches. The two passes are a lap-time apart,
+    so the stale earlier occurrence is rejected and the uncoached later pass is counted."""
+    t0 = 8_000_000.0
+    rows = []
+    # Two passes at the SAME brake mark (~0.45), ~30 s apart (i.e. different laps).
+    for base in (0.0, 30_000.0):
+        n = 80
+        for i in range(n + 1):
+            t = t0 + base + i / n * 4_000.0  # 4 s sweep, 20 Hz
+            spline = 0.40 + i / n * 0.10  # 0.40 -> 0.50 past the 0.45 mark
+            brake = 0.8 if 0.44 <= spline <= 0.47 else 0.0
+            rows.append({"t": t, "k": "tick", "spline": spline, "speed": 90.0, "brake": brake})
+    # Lap 1 (base 0): advisory + actionable voice ~3 s before the onset. Lap 2: NOTHING (dropped).
+    onset1_t = t0 + (0.44 - 0.40) / 0.10 * 4_000.0
+    cue, voice = _brake_mark_cue(onset1_t - 3_000.0, 0.45, corner=3)
+    rows.extend([cue, voice])
+    tap = tmp_path / "tap.jsonl"
+    _write_tap(tap, rows)
+    report = analyze(tap, track_length_m=2500.0, audio_latency_s=0.1)
+    assert report.brake_events == 2  # one onset per lap
+    assert report.coachable_brake_zones == 2  # two distinct passes, not collapsed
+    assert report.coachable_brake_zones_coached == 1  # only lap 1 drew a cue
     assert report.assertions["brake_events_coached"] is False
 
 

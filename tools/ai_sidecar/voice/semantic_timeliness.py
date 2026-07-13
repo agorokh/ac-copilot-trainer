@@ -45,15 +45,22 @@ from typing import Any
 # point exists there to cue against. Farther out there is nothing to coach (a mid-straight
 # correction dab, or trail-braking where no corpus brake point sits), so counting it in the
 # coverage denominator penalises the coach for events it cannot address (issue #527). This IS the
-# observer's zone-match tolerance — imported, not re-declared, so analyzer and observer share one
-# source of truth and can never silently drift (Qodo rule 263211). The observer is stdlib-pure, so
-# the ``analyze`` path stays stdlib-only.
-from tools.ai_sidecar.realtime_observer import _CAL_MATCH_TOL_M as COACHABLE_TOL_M
+# observer's public zone-match tolerance — imported, not re-declared, so analyzer and observer
+# share one source of truth and can never silently drift (Qodo rule 263211 / daemon #538 MEDIUM).
+# The observer is stdlib-pure, so the ``analyze`` path stays stdlib-only.
+from tools.ai_sidecar.realtime_observer import CAL_MATCH_TOL_M as COACHABLE_TOL_M
 
 ACTIONABLE_MIN_S = 0.8
 ACTIONABLE_MAX_S = 6.0
 #: how far before a real brake onset a brake cue counts as having coached that event.
 COVERAGE_WINDOW_S = 6.0
+#: how long (ms) BEFORE a brake onset the anticipatory advisory for that pass may have fired — the
+#: observer's lead budget (~3.2 s) plus approach travel and recorder skew. An advisory older than
+#: this is a DIFFERENT pass (a re-crossing on a later lap is a lap-time away), so an onset only
+#: binds to an advisory inside this window; a coachable onset with none is a dropped-advisory pass
+#: (uncoached), never a stale earlier-lap occurrence (codex #538 P1). Comfortably below any real
+#: lap time, comfortably above the max lead→onset gap.
+ONSET_CUE_LEAD_MAX_MS = 10_000.0
 DEFAULT_AUDIO_LATENCY_S = 0.10  # PC rtmixer path; tablet WebAudio measured ~0.45 (#511)
 
 
@@ -245,11 +252,9 @@ def analyze(
 
     # Reference brake-mark OCCURRENCES the observer flagged. Each anticipatory ``late_brake``
     # advisory (urgency prepare/act — the "ran deep" debrief is urgency=info at the apex, not a
-    # brake point) is one distinct pass at a brake mark: two advisories for the SAME corner at
-    # different times are different passes (a later lap) or different sub-zones of a merged corner
-    # (the observer splits them via ``detail.zone``), and must stay distinct so one coached
-    # occurrence never masks an uncued one (codex #538 P1). The occurrence identity is the advisory
-    # index; ``t`` (recorder clock) separates passes, ``corner``/``spline`` locate it.
+    # brake point) is one pass at a brake mark. The observer emits ONE such advisory per corner
+    # pass (deduped, reset on lap wrap), so an advisory maps 1:1 to a physical brake-zone pass; its
+    # occurrence identity is the advisory index, and ``t`` (recorder clock) places it in a lap.
     brake_mark_occ = [
         {"i": i, "spline": float(p["spline"]), "corner": p.get("corner"), "t": t}
         for i, (t, p) in enumerate(advisories)
@@ -258,66 +263,81 @@ def analyze(
         and p.get("urgency") != "info"
     ]
 
-    def _onset_occ(t_onset: float, spline: float) -> int | None:
-        """Index of the brake-mark occurrence this onset belongs to, or None when off-zone.
+    def _onset_occ(t_onset: float, spline: float) -> Any | None:
+        """Occurrence key of the brake pass an onset belongs to, or None when off-zone.
 
-        Nearest mark within COACHABLE_TOL_M (metric), tie-broken by time so repeat dabs at one mark
-        AND the correct pass of a re-crossed corner both resolve to a single occurrence. None means
-        no reference brake point sits within tolerance — nothing to coach against.
+        Off-zone = no reference mark within COACHABLE_TOL_M (nothing to coach). Otherwise bind to a
+        TIME-LOCAL advisory of THIS pass — one whose anticipatory cue could have led this onset
+        (fired within ``ONSET_CUE_LEAD_MAX_MS`` before it); a re-crossing on a later lap is a
+        lap-time away and is rejected as stale (codex #538 P1). A coachable onset with no local
+        advisory is a dropped-advisory pass → a distinct ``("gap", …)`` key that is never coached,
+        keyed so repeat dabs on this pass collapse yet other laps stay separate.
         """
-        best: tuple[tuple[float, float], int] | None = None
-        for occ in brake_mark_occ:
-            d = abs(_signed_gap_m(occ["spline"], spline, track_length_m))
-            if d <= COACHABLE_TOL_M:
-                score = (d, abs(occ["t"] - t_onset))  # nearest in space, then same pass in time
-                if best is None or score < best[0]:
-                    best = (score, occ["i"])
-        return best[1] if best else None
+        near = [
+            occ
+            for occ in brake_mark_occ
+            if abs(_signed_gap_m(occ["spline"], spline, track_length_m)) <= COACHABLE_TOL_M
+        ]
+        if not near:
+            return None
+        local = [occ for occ in near if -2000.0 <= (t_onset - occ["t"]) <= ONSET_CUE_LEAD_MAX_MS]
+        if local:
+            best = min(
+                local,
+                key=lambda o: (
+                    abs(_signed_gap_m(o["spline"], spline, track_length_m)),
+                    abs(o["t"] - t_onset),
+                ),
+            )
+            return ("occ", best["i"])
+        nearest = min(near, key=lambda o: abs(_signed_gap_m(o["spline"], spline, track_length_m)))
+        return ("gap", round(nearest["spline"], 3), int(t_onset // ONSET_CUE_LEAD_MAX_MS))
 
-    def _dispatch_occ(t_disp: float) -> int | None:
-        """Index of the brake-mark occurrence a dispatched cue belongs to: the advisory occurrence
-        NEAREST IN TIME within the ±2.5 s window. A cue and the advisory that spawned it share a
-        recorder timestamp to ~1 ms, while different occurrences (other corners, other sub-zones or
-        passes) are seconds apart, so nearest-time uniquely and correctly binds the pair — a cue
-        never credits a different mark or pass (codex #538 P1: T1's heads-up must not cover T2's
-        onset). Time, not ``corner``: the two topics use different corner bases by design —
-        ``coaching.cue`` is 0-based; ``coaching.voice`` carries the SPOKEN 1-based corner
-        (``corner+1``, voice/resolver.py) to match the ``t0N`` clip — so a corner-equality match
-        across them is unsafe.
+    def _dispatch_occ(t_disp: float, dispatch_corner: Any) -> Any | None:
+        """Occurrence key a dispatched cue belongs to, bound by the DETERMINISTIC corner relation
+        (advisory 0-based, dispatch spoken 1-based ⇒ ``occ.corner + 1 == dispatch.corner``),
+        tie-broken by nearest recorder time to pick the sub-zone/pass within that corner. Corner is
+        the deterministic key; time only disambiguates (daemon #538 HIGH — not a fuzzy time-only
+        match). Falls back to nearest-time when either corner is absent (older taps).
         """
         best: tuple[float, int] | None = None
         for occ in brake_mark_occ:
+            if (
+                dispatch_corner is not None
+                and occ["corner"] is not None
+                and occ["corner"] + 1 != dispatch_corner
+            ):
+                continue
             dt = abs(occ["t"] - t_disp)
             if dt <= 2500.0 and (best is None or dt < best[0]):
                 best = (dt, occ["i"])
-        return best[1] if best else None
+        return ("occ", best[1]) if best else None
 
     # Occurrences that drew an ACTIONABLE brake cue — the #522 guarantee ("a brake cue in its
     # actionable window") and the issue's "zones cued" signal. Grading on the per-cue ACTIONABLE
     # verdict (not sub-window onset timing) is what removes the noise #527 targets: a driver who
     # brakes a hair before hearing an otherwise-actionable cue must not flip the occurrence red;
     # TOO_LATE / AFTER_FACT brake cues stay caught globally by their own gates. ``cues`` is built
-    # one-per-dispatch in order, so it zips with ``dispatches`` for the dispatch clock.
-    coached_occ: set[int] = set()
-    # ``cues`` is built one-per-dispatch, in order, so it zips 1:1 with ``dispatches``.
+    # one-per-dispatch, in order, so it zips 1:1 with ``dispatches`` for the dispatch clock/corner.
+    coached_occ: set[Any] = set()
     for c, (t_disp, _p) in zip(cues, dispatches, strict=True):
         if c.kind == "late_brake" and c.verdict == "ACTIONABLE":
-            occ_i = _dispatch_occ(t_disp)
-            if occ_i is not None:
-                coached_occ.add(occ_i)
+            key = _dispatch_occ(t_disp, c.corner)
+            if key is not None:
+                coached_occ.add(key)
 
-    # Partition onsets: coachable occurrences (repeat dabs at one mark collapse to that occurrence)
-    # vs off-zone. Raw per-onset ratio kept for context; the gate divides on coachable occurrences.
-    coachable_occ: set[int] = set()
+    # Partition onsets: coachable passes (repeat dabs at one mark collapse to that occurrence) vs
+    # off-zone. Raw per-onset ratio kept for context; the gate divides on coachable passes.
+    coachable_occ: set[Any] = set()
     off_zone_brake_onsets = 0
     coached_raw = 0
     for t_ms, spline in onsets:
-        occ_i = _onset_occ(t_ms, spline)
-        if occ_i is None:
+        key = _onset_occ(t_ms, spline)
+        if key is None:
             off_zone_brake_onsets += 1
         else:
-            coachable_occ.add(occ_i)
-            if occ_i in coached_occ:
+            coachable_occ.add(key)
+            if key in coached_occ:
                 coached_raw += 1
 
     coachable_count = len(coachable_occ)
