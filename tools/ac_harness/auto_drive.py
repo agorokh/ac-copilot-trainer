@@ -2136,7 +2136,11 @@ def rig_drive(  # pragma: no cover - rig-only
                 return None
             try:
                 buf = reader.read_physics_bytes(PHYSICS_MAP_BYTES)
-                return _parse_phys(buf) if buf is not None else None
+                if buf is None:
+                    return None
+                physics = _parse_phys(buf)
+                graphics = reader.read_graphics()
+                return replace(physics, completed_laps=graphics.completed_laps)
             except (ValueError, SharedMemoryUnavailable):
                 return None
 

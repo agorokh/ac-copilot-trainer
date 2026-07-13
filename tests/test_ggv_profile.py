@@ -468,7 +468,7 @@ def _uncertainty_rows() -> list[dict]:
                     "accg_lat": 1.2,
                     "accg_lon": -1.25,
                     "source": "brake_probe",
-                    "lap_index": 0,
+                    "lap_number": 1,
                 }
             )
             rows.append(
@@ -477,7 +477,7 @@ def _uncertainty_rows() -> list[dict]:
                     "accg_lat": 1.2,
                     "accg_lon": 0.75,
                     "source": "accel_sweep",
-                    "lap_index": 0,
+                    "lap_number": 1,
                 }
             )
     return rows
@@ -506,8 +506,10 @@ def test_uncertainty_builder_rejects_partial_runtime_domain():
     import pytest
 
     prior = _prior()
-    with pytest.raises(ValueError, match="complete 0-300"):
+    with pytest.raises(ValueError, match="30x10"):
         with_binned_uncertainty(prior, _uncertainty_rows(), prior, max_speed_kmh=200.0)
+    with pytest.raises(ValueError, match="30x10"):
+        with_binned_uncertainty(prior, _uncertainty_rows(), prior, bin_kmh=20.0)
 
 
 def test_small_probe_posterior_drops_one_possible_peak_spike():
@@ -548,8 +550,13 @@ def test_uncertainty_map_roundtrip_is_validated_and_read_only():
         GGVModel.from_dict(corrupt)
     truncated = model.to_dict()
     truncated["uncertainty_bins"] = truncated["uncertainty_bins"][5:6]
-    with pytest.raises(ValueError, match="complete 0-300"):
+    with pytest.raises(ValueError, match="30x10"):
         GGVModel.from_dict(truncated)
+    giant = model.to_dict()
+    giant["uncertainty_bins"] = [giant["uncertainty_bins"][0]]
+    giant["uncertainty_bins"][0]["speed_max_kmh"] = 300.0
+    with pytest.raises(ValueError, match="30x10"):
+        GGVModel.from_dict(giant)
     with pytest.raises(ValueError, match="uncertainty_bins"):
         GGVModel.from_dict({**prior.to_dict(), "uncertainty_bins": None})
 
@@ -615,6 +622,28 @@ def test_tyre_state_observer_tags_core_surface_pressure_and_grip():
     assert cold["fit_eligible"] is False
 
 
+def test_tyre_state_requires_every_wheel_in_window_and_known_compound():
+    split = _thermal_archive("split", core_c=90.0)
+    fields = split["trace"]["fields"]
+    index = {name: i for i, name in enumerate(fields)}
+    for sample in split["trace"]["samples"]:
+        for wheel in ("fl", "fr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 70.0
+        for wheel in ("rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 110.0
+    state = observe_lap_tyre_state(split)
+    assert state["core_temp_c"] == 90.0
+    assert state["thermal_residence_fraction"] == 0.0
+    assert state["fit_eligible"] is False
+
+    unknown = _thermal_archive("unknown", core_c=90.0)
+    unknown["tyres"].pop("compoundIndex")
+    unknown["tyres"].pop("name")
+    state = observe_lap_tyre_state(unknown)
+    assert state["fit_eligible"] is False
+    assert state["reason"] == "missing tyre compound identity"
+
+
 def test_lap_archive_fit_excludes_thermally_inconsistent_laps():
     prior = _prior()
     warm = _thermal_archive("warm", core_c=90.0, lateral_g=1.1)
@@ -642,7 +671,7 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     assert passive.ellipse_n == prior.ellipse_n
     assert passive.provenance["measured"]["hull_points"] == 0
 
-    wrong_lap_rows = [{**row, "lap_index": 1} for row in _uncertainty_rows()]
+    wrong_lap_rows = [{**row, "lap_number": 2} for row in _uncertainty_rows()]
     wrong_lap, wrong_lap_summary = ggv_from_lap_archives([warm], prior, probe_rows=wrong_lap_rows)
     assert wrong_lap_summary["probe_rows_seen"] > 0
     assert wrong_lap_summary["probe_rows"] == 0
@@ -655,10 +684,10 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     assert probed.uncertainty_bins[6]["drive"]["source"] == "measured"
 
     resumed_session = _thermal_archive("resumed", core_c=90.0, lap_n=41)
+    resumed_rows = [{**row, "lap_number": 41} for row in _uncertainty_rows()]
     resumed, resumed_summary = ggv_from_lap_archives(
-        [resumed_session], prior, probe_rows=_uncertainty_rows()
+        [resumed_session], prior, probe_rows=resumed_rows
     )
-    assert resumed_summary["lap_number_offset"] == 40
     assert resumed_summary["probe_rows"] > 0
     assert resumed.uncertainty_bins[6]["brake"]["source"] == "measured"
 

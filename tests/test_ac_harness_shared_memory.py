@@ -16,6 +16,7 @@ import sys
 import pytest
 
 from tools.ac_harness.shared_memory import (
+    GRAPHICS_COMPLETED_LAPS_OFFSET,
     GRAPHICS_IS_IN_PIT_OFFSET,
     GRAPHICS_MIN_BYTES,
     GRAPHICS_PACKET_ID_OFFSET,
@@ -36,12 +37,15 @@ from tools.ac_harness.shared_memory import (
 
 
 # --------------------------------------------------------------------------- helpers
-def _graphics_bytes(*, packet_id: int, status: int, is_in_pit: bool) -> bytes:
+def _graphics_bytes(
+    *, packet_id: int, status: int, is_in_pit: bool, completed_laps: int = 0
+) -> bytes:
     """Build an acpmf_graphics buffer with the three decoded fields at their real offsets."""
     buf = bytearray(GRAPHICS_MIN_BYTES)
     struct.pack_into("<i", buf, GRAPHICS_PACKET_ID_OFFSET, packet_id)
     struct.pack_into("<i", buf, GRAPHICS_STATUS_OFFSET, status)
     struct.pack_into("<i", buf, GRAPHICS_IS_IN_PIT_OFFSET, 1 if is_in_pit else 0)
+    struct.pack_into("<i", buf, GRAPHICS_COMPLETED_LAPS_OFFSET, completed_laps)
     return bytes(buf)
 
 
@@ -65,11 +69,14 @@ def _g(status: AcGameStatus, *, in_pit: bool = False, packet_id: int = 0) -> Gra
 
 # --------------------------------------------------------------------------- parsers
 def test_parse_graphics_decodes_fields_at_documented_offsets():
-    snap = parse_graphics(_graphics_bytes(packet_id=4242, status=2, is_in_pit=False))
+    snap = parse_graphics(
+        _graphics_bytes(packet_id=4242, status=2, is_in_pit=False, completed_laps=37)
+    )
     assert snap.packet_id == 4242
     assert snap.status is AcGameStatus.LIVE
     assert snap.is_in_pit is False
     assert snap.is_live is True
+    assert snap.completed_laps == 37
 
 
 def test_parse_graphics_decodes_in_pit_true():

@@ -846,7 +846,7 @@ def test_handshake_preserves_probe_rows_before_overall_friction_row_gate():
             "accg_lat": 0.0,
             "accg_lon": -1.1,
             "source": "brake_probe",
-            "lap_index": 0,
+            "lap_number": 1,
         }
         for _ in range(8)
     ]

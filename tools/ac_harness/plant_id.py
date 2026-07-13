@@ -999,15 +999,23 @@ class HandshakeController:
                     source = "brake_probe"
                 elif kind == "accel_sweep" and stage == "wot":
                     source = "accel_sweep"
+            completed_laps = getattr(phys, "completed_laps", None)
+            lap_number = None
+            if (
+                isinstance(completed_laps, int)
+                and not isinstance(completed_laps, bool)
+                and completed_laps >= 0
+            ):
+                # Rows gathered before the crossing belong to the lap that the archive will write
+                # as completedLaps + 1. This is absolute AC session state, not a guessed offset.
+                lap_number = completed_laps + 1
             self._friction_rows.append(
                 {
                     "speed_kmh": float(speed),
                     "accg_lat": float(ay),
                     "accg_lon": float(ao),
                     "source": source,
-                    # The archive writes state.lapsCompleted at the crossing, so samples gathered
-                    # during this zero-based controller lap map to archive lap_n = lap_index + 1.
-                    "lap_index": self._laps,
+                    "lap_number": lap_number,
                 }
             )
 

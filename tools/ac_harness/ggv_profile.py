@@ -541,14 +541,14 @@ def with_binned_uncertainty(
     if not _finite_ggv(bin_kmh, max_speed_kmh, prior_relative_std, lcb_z):
         raise ValueError("uncertainty parameters must be finite")
     if (
-        bin_kmh <= 0.0
+        not math.isclose(bin_kmh, DEFAULT_UNCERTAINTY_BIN_KMH)
         or not math.isclose(max_speed_kmh, DEFAULT_UNCERTAINTY_MAX_KMH)
         or prior_relative_std <= 0.0
         or lcb_z <= 0.0
         or min_samples <= 0
         or min_probe_samples <= 0
     ):
-        raise ValueError("uncertainty parameters require the complete 0-300 km/h runtime range")
+        raise ValueError("uncertainty parameters require the complete 30x10 km/h runtime grid")
     if not math.isclose(bin_kmh, round(bin_kmh)):
         raise ValueError("bin_kmh must be a whole number of km/h")
     count = max_speed_kmh / bin_kmh
@@ -794,7 +794,7 @@ def observe_lap_tyre_state(
             core_mean = statistics.fmean(core)
             core_means.append(core_mean)
             pressure_means.append(statistics.fmean(pressure))
-            if abs(core_mean - optimal) <= thermal_window_half_width_c:
+            if all(abs(value - optimal) <= thermal_window_half_width_c for value in core):
                 in_window += 1
         surface = row_values(row, surface_names)
         if surface:
@@ -818,6 +818,7 @@ def observe_lap_tyre_state(
     is_valid = isinstance(lap, dict) and lap.get("is_valid") is True
     eligible = (
         is_valid
+        and (compound_index is not None or compound_name is not None)
         and coverage >= min_residence_fraction
         and residence >= min_residence_fraction
         and tag == "optimal"
@@ -835,7 +836,15 @@ def observe_lap_tyre_state(
         "lap_uuid": base["lap_uuid"],
         "tag": tag,
         "fit_eligible": eligible,
-        "reason": "thermally consistent" if eligible else "outside thermal/validity gate",
+        "reason": (
+            "thermally consistent"
+            if eligible
+            else (
+                "missing tyre compound identity"
+                if compound_index is None and compound_name is None
+                else "outside thermal/validity gate"
+            )
+        ),
         "optimal_temp_c": round(optimal, 3),
         "core_temp_c": round(mean_core, 3) if mean_core is not None else None,
         "surface_temp_c": (round(statistics.fmean(surface_means), 3) if surface_means else None),
@@ -934,16 +943,8 @@ def ggv_from_lap_archives(
         )
     # The immutable archive proves the thermal state and supplies passive cornering. Only the
     # handshake's explicitly tagged straight-line probes from a SELECTED thermal lap may identify
-    # longitudinal limits. Controller lap_index is zero-based; the archive's completed lap_n is
-    # one-based at the crossing.
-    fresh_lap_numbers = {
-        int(archive["lap"]["lap_n"])
-        for archive in archives
-        if isinstance(archive.get("lap"), dict)
-        and isinstance(archive["lap"].get("lap_n"), int)
-        and not isinstance(archive["lap"].get("lap_n"), bool)
-    }
-    lap_number_offset = min(fresh_lap_numbers) - 1 if fresh_lap_numbers else 0
+    # longitudinal limits. Both sides carry AC's absolute completed-lap number; never infer an
+    # offset from directory contents because a resumed LIVE session may include earlier manual laps.
     selected_lap_numbers = {
         int(archive["lap"]["lap_n"])
         for archive, _ in selected
@@ -955,9 +956,9 @@ def ggv_from_lap_archives(
         dict(row)
         for row in (probe_rows or [])
         if isinstance(row, dict)
-        and isinstance(row.get("lap_index"), int)
-        and not isinstance(row.get("lap_index"), bool)
-        and int(row["lap_index"]) + lap_number_offset + 1 in selected_lap_numbers
+        and isinstance(row.get("lap_number"), int)
+        and not isinstance(row.get("lap_number"), bool)
+        and int(row["lap_number"]) in selected_lap_numbers
     ]
     combined_rows = rows + thermal_probe_rows
     measured = ggv_from_telemetry(combined_rows, allow_passive_longitudinal=False)
@@ -967,7 +968,6 @@ def ggv_from_lap_archives(
         "friction_rows": len(rows),
         "probe_rows_seen": len(probe_rows or []),
         "probe_rows": len(thermal_probe_rows),
-        "lap_number_offset": lap_number_offset,
         "tyre_states": states,
         "selected_lap_uuids": [state.get("lap_uuid") for _, state in selected],
         "thermal_cohort": {
@@ -1318,8 +1318,16 @@ def _validate_uncertainty_bins(bins: tuple[Mapping, ...]) -> None:
     if bins and (
         not math.isclose(float(bins[0]["speed_min_kmh"]), 0.0)
         or not math.isclose(float(bins[-1]["speed_max_kmh"]), DEFAULT_UNCERTAINTY_MAX_KMH)
+        or len(bins) != int(DEFAULT_UNCERTAINTY_MAX_KMH / DEFAULT_UNCERTAINTY_BIN_KMH)
+        or any(
+            not math.isclose(
+                float(speed_bin["speed_max_kmh"]) - float(speed_bin["speed_min_kmh"]),
+                DEFAULT_UNCERTAINTY_BIN_KMH,
+            )
+            for speed_bin in bins
+        )
     ):
-        raise ValueError("uncertainty_bins must cover the complete 0-300 km/h runtime range")
+        raise ValueError("uncertainty_bins must cover the complete 30x10 km/h runtime grid")
 
 
 def _validate_supported_longitudinal(

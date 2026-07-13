@@ -57,6 +57,8 @@ class PhysFrame:
     # wheelAngularSpeed[4]@104 (rad/s, FL FR RL RR) — the r_eff / slip-ratio channel (#532 P1
     # handshake). Defaulted so pre-existing positional constructions stay valid.
     wheel_omega: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    # Absolute acpmf_graphics completedLaps injected by the rig reader for probe/archive matching.
+    completed_laps: int | None = None
 
 
 @dataclass(frozen=True)
