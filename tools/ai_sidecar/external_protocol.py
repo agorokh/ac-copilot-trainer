@@ -50,6 +50,12 @@ PHYSICAL_CLIENT_CLASSES: frozenset[str] = frozenset(
     {CLIENT_CLASS_SCREEN, CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL}
 )
 HAPTIC_CLIENT_CLASSES: frozenset[str] = frozenset({CLIENT_CLASS_HAPTICS, CLIENT_CLASS_PHYSICAL})
+# Issue #531 Part B: the tablet GT dashboard is a `browser`-class peer whose RACE page renders
+# the live `telemetry_tick` stream (rpm/gear/speed/fuel/…). Ticks are routed by client class,
+# not by `state.subscribe` — `telemetry_tick` is a peripheral frame type, not a state topic —
+# so browser peers join the physical classes for tick fan-out only. `haptic_event` routing is
+# deliberately unchanged (HAPTIC_CLIENT_CLASSES): a browser has no actuators.
+TELEMETRY_TICK_CLIENT_CLASSES: frozenset[str] = PHYSICAL_CLIENT_CLASSES | {CLIENT_CLASS_BROWSER}
 MAX_SETUP_SNAPSHOT_KEYS = 512
 MAX_SETUP_SNAPSHOT_BYTES = 64_000
 MAX_SETUP_ADVICE_COMPLAINT_LEN = 240
@@ -253,6 +259,13 @@ KNOWN_TOPICS: frozenset[str] = frozenset(
         TOPIC_SESSION_REVIEW,
     }
 )
+
+# Issue #531 Part B: low-rate Lua-produced IDENTITY topics whose latest snapshot the sidecar
+# caches and replays to a late subscriber. These are event-driven (published on load/change,
+# not on a cadence), so a tablet that connects after the event would otherwise render
+# "NO SETUP LOADED" until the next change. Continuous streams (delta/tire_temps/coaching.*)
+# are deliberately excluded — replaying a stale sample would masquerade as live data.
+IDENTITY_REPLAY_TOPICS: frozenset[str] = frozenset({"setup.active", "session", "connection"})
 
 # Header used on the WS upgrade for shared-secret auth.
 AUTH_HEADER = "X-AC-Copilot-Token"
@@ -510,6 +523,11 @@ def _validate_telemetry_tick(frame: dict[str, Any]) -> str | None:
         if err is not None:
             return err
     optional_ranges = {
+        # #531 Part C-min: the tablet dashboard's shift ribbon bands from the car's real
+        # redline; hardcoding one is the exact bug the design forbids. The producer contract
+        # treats 0 as "unknown -> omit the key", so a present rpm_max must be POSITIVE —
+        # accepting 0 here would let a buggy producer render "N / 0" (Qodo on PR #547).
+        "rpm_max": (1, None),
         "fuel_l": (0, None),
         "fuel_capacity_l": (0, None),
         "fuel_per_lap_l": (0, None),

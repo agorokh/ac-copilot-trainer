@@ -227,6 +227,17 @@ function M.publishTelemetryTickIfDue(opts)
     spline = _clamp(_field(car, "splinePosition") or 0, 0, 1),
     lap = math.max(0, math.floor(tonumber(_field(car, "lapCount")) or 0)),
   }
+  -- #531 Part C-min: the tablet dashboard's shift ribbon is rpm-banded from the car's real
+  -- redline (never hardcoded), and its lap clock needs the running lap time. Both are optional
+  -- in the validator contract; a CSP build that lacks the field (pcall in `_field`) omits it.
+  local rpmMax = _finite(_field(car, "rpmLimiter"))
+  if rpmMax ~= nil and rpmMax > 0 then
+    payload.rpm_max = rpmMax
+  end
+  local lapTimeMs = _finite(_field(car, "lapTimeMs"))
+  if lapTimeMs ~= nil and lapTimeMs >= 0 then
+    payload.lap_time_ms = lapTimeMs
+  end
   local fuel = _finite(_field(car, "fuel"))
   if fuel ~= nil then
     payload.fuel_l = math.max(0, fuel)

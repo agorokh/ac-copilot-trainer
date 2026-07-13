@@ -192,6 +192,47 @@ def test_spinner_list_prefers_csp_api(lua) -> None:
     assert result["spinners"][2]["section"] == "ABS"
 
 
+def test_spinner_list_forwards_item_names_when_clean(lua) -> None:
+    """#531 Part B: engine-map spinners name their positions (e.g. "QUALI") — a clean array
+    of strings is forwarded as `items` so the dashboard renders `MAP 3/8 · QUALI`; any other
+    shape (mixed types, empty) stays omitted rather than shipping cdata/holes over the wire."""
+    lua.execute(
+        """
+        ac = {
+          getSetupSpinners = function()
+            return {
+              { name = "ENGINE_MAP", value = 2, min = 0, max = 7, step = 1,
+                items = { "RACE", "QUALI", "WET" } },
+              { name = "ABS", value = 7, min = 0, max = 11, step = 1,
+                items = { "RACE", 42, "WET" } },
+              { name = "FRONT_BIAS", value = 66, min = 40, max = 80, step = 1 },
+            }
+          end,
+        }
+        """
+    )
+
+    result = lua.execute(
+        """
+        local setupLibrary = require("setup_library")
+        return setupLibrary.listSpinners({})
+        """
+    )
+
+    assert result["ok"] is True
+    by_section = {}
+    i = 1
+    while result["spinners"][i] is not None:
+        row = result["spinners"][i]
+        by_section[row["section"]] = row
+        i += 1
+    engine_map = by_section["ENGINE_MAP"]
+    assert engine_map["items"] is not None
+    assert [engine_map["items"][j] for j in (1, 2, 3)] == ["RACE", "QUALI", "WET"]
+    assert by_section["ABS"]["items"] is None  # mixed types -> omitted
+    assert by_section["FRONT_BIAS"]["items"] is None  # no items exposed -> omitted
+
+
 def test_spinner_set_rewrites_active_setup_and_applies(lua, tmp_path: pathlib.Path) -> None:
     root = tmp_path / "setups"
     setup_path = root / "ks_porsche_911_gt3_r_2016" / "monza" / "race.ini"

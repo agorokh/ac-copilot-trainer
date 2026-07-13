@@ -384,6 +384,54 @@ def test_telemetry_tick_carries_fuel_and_tyre_temps_when_available():
     assert (out["fl"], out["rr"]) == (85, 84)
 
 
+def test_telemetry_tick_carries_rpm_max_and_lap_time_when_available():
+    """#531 Part C-min: the tablet dashboard's shift ribbon bands from the car's REAL
+    redline (`car.rpmLimiter`) and the lap clock reads `car.lapTimeMs` — both optional
+    (a CSP build lacking the field omits the key), never hardcoded."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2,
+            rpmLimiter = 8500, lapTimeMs = 62410,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          local p = ws._calls[1] and ws._calls[1].send.payload
+          return { rpm_max = p and p.rpm_max, lap_time_ms = p and p.lap_time_ms }
+        end)()
+        """
+    )
+    assert out["rpm_max"] == 8500
+    assert out["lap_time_ms"] == 62410
+
+
+def test_telemetry_tick_omits_rpm_max_when_missing_or_zero():
+    """A zero/absent limiter means "unknown", not a real redline — the key must be
+    omitted so the dashboard renders an explicit unknown instead of a fake band."""
+    rt = _runtime()
+    out = rt.eval(
+        r"""
+        (function()
+          local M = require("telemetry_publisher"); M.reset()
+          local ws = make_ws()
+          local car = {
+            speedKmh = 120, rpm = 6000, gas = 0.5, brake = 0.0, steer = 0.1,
+            gear = 3, splinePosition = 0.42, lapCount = 2, rpmLimiter = 0,
+          }
+          M.publishTelemetryTickIfDue({ dt = 0.06, car = car, wsBridge = ws })
+          local p = ws._calls[1] and ws._calls[1].send.payload
+          return { has_rpm_max = p.rpm_max ~= nil, has_lap_time = p.lap_time_ms ~= nil }
+        end)()
+        """
+    )
+    assert out["has_rpm_max"] is False
+    assert out["has_lap_time"] is False
+
+
 def test_telemetry_tick_seq_resets_on_module_reset():
     rt = _runtime()
     out = rt.eval(

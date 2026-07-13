@@ -1,0 +1,938 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Tablet GT dashboard (issue #531 Phase 1 — Parts A/B/C-min).
+
+  Served by the sidecar at /tablet/dash on the same port as the WebSocket (default 8765).
+  Deployment (USB, no WiFi): on the rig PC run `adb reverse tcp:8765 tcp:8765`, then open
+  http://127.0.0.1:8765/tablet/dash in the tablet browser / Fully Kiosk.
+
+  Ground truth: docs/10_Development/design/tablet-dashboard/reference_mock.html +
+  DESIGN_SPEC.md (v3 "glance spine + stable boards"). This file is the live port of the
+  frozen RACE/COACH/MAP/STINT mock, bound to the sidecar WS topics.
+
+  Design constraints (PRITOM P7 — Allwinner A133, Android 13 Go, 1024x600, WebView Chrome 149):
+  DOM/CSS only; no frameworks, no WebGL, no backdrop-filter/blur, no box-shadow, no CSS
+  filter, no mix-blend-mode; DOM writes throttled to <=15 Hz; fonts vendored (/dash/fonts/*,
+  no CDN); every band overflow:hidden and fixed-height so no region ever resizes.
+
+  Data plane (all real, never placeholdered — absent data renders an explicit unknown):
+    hello {client:"tablet-dash", client_class:"browser"} -> state.subscribe
+    telemetry_tick  rpm/rpm_max/gear/speed/fuel/lap_time_ms (browser-class routing, Part B)
+    delta           {delta_s, spline} 10 Hz            tire_temps {fl,fr,rl,rr} core degC
+    lap             {lap,last_lap_ms,best_lap_ms}      session    {car_id,track_id}
+    coaching.snapshot  corner/kind/target/dist/progress (coach lane, kind=="brake" takeover)
+    setup.active    {name,path}                        setup.list.result  car/track identity
+    setup.spinner.list.result  per-car electronics ranges (the "/max" fix, DESIGN_SPEC section 5)
+-->
+<head>
+<meta charset="utf-8">
+<!-- Fixed-instrument viewport: the design is an exact 1024x600 panel. width=device-width on
+     the P7 (186 dpi -> ~1.16 devicePixelRatio) yields only ~516 CSS px of height and clips
+     the bottom board (observed on-device). Pinning width=1024 makes the WebView scale the
+     layout so 1024 CSS px span the physical width - a 1:1 physical mapping on the 1024x600
+     panel, and proportional scaling on the 1920x1200 P7 variant. -->
+<meta name="viewport" content="width=1024, user-scalable=no">
+<title>AC Copilot — GT Dashboard</title>
+<style>
+@font-face{font-family:"Saira Semi Condensed";src:url("/dash/fonts/SairaSemiCondensed-SemiBold.ttf") format("truetype");font-weight:600;font-style:normal}
+@font-face{font-family:"Saira Semi Condensed";src:url("/dash/fonts/SairaSemiCondensed-Bold.ttf") format("truetype");font-weight:700;font-style:normal}
+@font-face{font-family:"Saira Semi Condensed";src:url("/dash/fonts/SairaSemiCondensed-ExtraBold.ttf") format("truetype");font-weight:800 900;font-style:normal}
+@font-face{font-family:"Saira";src:url("/dash/fonts/Saira-Bold.ttf") format("truetype");font-weight:400 700;font-style:normal}
+@font-face{font-family:"Spline Sans Mono";src:url("/dash/fonts/SplineSansMono-Medium.ttf") format("truetype");font-weight:400 500;font-style:normal}
+:root{--carbon:#0B0C0D;--graphite:#141618;--slab:#191C1F;--raise:#20242A;--edge:#2A2F35;--line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.16);--chalk:#EEF1F3;--mute:#9BA1A8;--dim:#79808A;--faint:#4A4E55;--brass:#C8983E;--brake:#F23B2C;--lift:#F4A52C;--clear:#2FBE6E;--data:#49B6C9;--fd:"Saira Semi Condensed","Arial Narrow",system-ui,sans-serif;--fr:"Saira",system-ui,sans-serif;--fm:"Spline Sans Mono",ui-monospace,Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:#000;overflow:hidden}
+body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
+.device{width:100%;height:100%;background:var(--carbon);border:2px solid var(--edge);padding:8px 12px;display:flex;flex-direction:column;overflow:hidden}
+.lbl{font-family:var(--fd);font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.mono{font-family:var(--fm)}
+.panel{background:var(--graphite);border:1px solid var(--edge);position:relative}
+.bk{position:absolute;width:11px;height:11px;border:2px solid var(--brass)}
+.bk.tl{top:-1px;left:-1px;border-right:0;border-bottom:0}.bk.tr{top:-1px;right:-1px;border-left:0;border-bottom:0}
+.bk.bl{bottom:-1px;left:-1px;border-right:0;border-top:0}.bk.br{bottom:-1px;right:-1px;border-left:0;border-top:0}
+/* A header */
+.hdr{height:34px;display:flex;align-items:center;justify-content:space-between;flex:0 0 auto}
+.hl{display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden}
+.sm{width:6px;height:20px;background:var(--brass);flex:0 0 auto}
+.sname{font-family:var(--fd);font-weight:700;font-size:19px;letter-spacing:.05em;text-transform:uppercase;color:var(--chalk);white-space:nowrap}
+.cartrk{font-family:var(--fd);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);border-left:1px solid var(--line2);padding-left:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hr{display:flex;align-items:center;gap:14px;flex:0 0 auto}
+.sf{font-family:var(--fd);font-weight:700;font-size:12px;letter-spacing:.1em;color:var(--data);border:1px solid var(--data);padding:2px 8px}
+.temp{font-family:var(--fm);font-size:12px;color:var(--mute)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--brake)}
+.dot.live{background:var(--clear)}
+.dot.stale{background:var(--lift)}
+.linkw{font-family:var(--fd);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--brake)}
+.linkw.live{color:var(--clear)}
+.linkw.stale{color:var(--lift)}
+.dots{display:flex;gap:0}
+.pd{padding:12px 5px;cursor:pointer}
+.pd i{display:block;width:7px;height:7px;border-radius:50%;background:var(--raise)}
+.pd.on i{background:var(--brass)}
+/* B shift ribbon */
+.ribbon{height:34px;margin-top:6px;position:relative;flex:0 0 auto;display:flex;align-items:center}
+.led{display:flex;gap:3px;height:26px;width:100%}
+.led span{flex:1;background:var(--raise)}
+.led.flash span{background:var(--brake)}
+.rpmtag{position:absolute;right:6px;top:50%;transform:translateY(-50%);font-family:var(--fm);font-size:15px;color:var(--chalk);background:rgba(11,12,13,.72);padding:1px 6px;font-variant-numeric:tabular-nums}
+/* pages */
+.page{margin-top:6px;flex:1 1 auto;min-height:0;display:none;flex-direction:column}
+.page.on{display:flex}
+/* C body */
+.body{height:300px;display:flex;gap:14px;flex:0 0 auto}
+.cLeft{width:210px;display:flex;flex-direction:column;overflow:hidden}
+.cCenter{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:6px 0;overflow:hidden}
+.cRight{width:210px;display:flex;flex-direction:column;overflow:hidden}
+.pad{padding:12px 14px}
+.mh{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+.vrow{display:flex;align-items:baseline;justify-content:space-between;padding:5px 0}
+.vrow .k{font-family:var(--fd);font-weight:600;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.vrow .v{font-family:var(--fr);font-weight:700;font-size:20px;color:var(--mute);font-variant-numeric:tabular-nums}
+.vrow .v.hot{color:var(--lift)}
+.fuel{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
+.fuel .big{font-family:var(--fr);font-weight:700;font-size:36px;color:var(--chalk);font-variant-numeric:tabular-nums;line-height:.9}
+.spd{display:flex;align-items:baseline;gap:8px}
+.spd .n{font-family:var(--fr);font-weight:700;font-size:52px;color:var(--chalk);font-variant-numeric:tabular-nums;line-height:1}
+.spd .u{font-family:var(--fd);font-weight:600;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.gear{font-family:var(--fr);font-weight:700;font-size:156px;line-height:.8;color:var(--chalk)}
+.dwrap{width:92%}
+.dhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.dhead .k{font-family:var(--fd);font-weight:600;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.drow{display:flex;align-items:center;gap:14px}
+.dbar{flex:1;position:relative;height:26px;background:var(--raise)}
+.dtick{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--mute)}
+.dfill{position:absolute;top:0;bottom:0;background:var(--clear)}
+.dnum{font-family:var(--fr);font-weight:700;font-size:46px;line-height:.85;color:var(--dim);font-variant-numeric:tabular-nums;min-width:150px;text-align:right}
+.trow{display:flex;align-items:baseline;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line)}
+.trow .k{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.trow .t{font-family:var(--fr);font-weight:700;font-size:19px;color:var(--chalk);font-variant-numeric:tabular-nums}
+.pos{font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk);margin-bottom:6px}
+.stint{margin-top:auto;border-top:1px solid var(--line);padding-top:9px}
+.stint .m{font-family:var(--fr);font-weight:700;font-size:21px;color:var(--mute);font-variant-numeric:tabular-nums}
+/* D coach lane */
+.coach{height:56px;margin-top:6px;flex:0 0 auto;position:relative;overflow:hidden}
+.lane{position:absolute;inset:0;display:none;align-items:center;gap:16px;padding:0 16px}
+.lane.on{display:flex}
+.cv{font-family:var(--fd);font-weight:800;font-size:38px;letter-spacing:.02em;text-transform:uppercase;color:var(--brake);line-height:.9;white-space:nowrap}
+.next{font-family:var(--fd);font-weight:700;font-size:17px;letter-spacing:.04em;text-transform:uppercase;color:var(--chalk);white-space:nowrap}
+.nsub{font-family:var(--fm);font-size:12px;color:var(--dim);white-space:nowrap}
+.micro{font-family:var(--fd);font-weight:700;font-size:22px;letter-spacing:.03em;text-transform:uppercase;color:var(--lift);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.queue{font-family:var(--fd);font-weight:600;font-size:13px;letter-spacing:.05em;text-transform:uppercase;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bseg{display:flex;gap:2px;height:22px;width:220px;flex:0 0 auto}
+.bseg span{flex:1;background:var(--raise)}
+.bdist{font-family:var(--fm);font-size:15px;color:var(--chalk);white-space:nowrap}
+.pip{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--raise);vertical-align:baseline}
+.pip.hit{background:var(--brake)}
+/* E electronics + tyres */
+.board{height:120px;margin-top:6px;flex:0 0 auto;display:flex;gap:14px;overflow:hidden}
+.elec{flex:1;overflow:hidden}
+.etiles{display:flex;gap:10px;height:82px}
+.ewait{font-family:var(--fd);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);align-self:center;margin:auto}
+.et{flex:1;border:1px solid var(--edge);padding:9px 11px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
+.et.absent{opacity:.5}
+.et .el{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.et .ev{font-family:var(--fr);font-weight:700;font-size:30px;color:var(--chalk);font-variant-numeric:tabular-nums;line-height:.9;white-space:nowrap}
+.et .ev .mx{font-family:var(--fm);font-size:13px;color:var(--mute);margin-left:1px}
+.et .bar{height:12px;display:flex;align-items:center}
+.lseg{display:flex;gap:2px;width:100%;height:8px}
+.lseg span{flex:1;background:var(--raise)}
+.lseg span.f{background:var(--brass)}
+.lseg span.sig{background:var(--brake)}
+.biasrow{display:flex;align-items:center;gap:7px;width:100%}
+.fr{font-family:var(--fd);font-weight:600;font-size:9px;letter-spacing:.04em;color:var(--dim)}
+.biasbar{flex:1;position:relative;height:8px;background:var(--raise)}
+.biasfill{position:absolute;top:0;bottom:0;background:var(--brass);opacity:.45}
+.biasctr{position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--dim)}
+.biasmk{position:absolute;top:-3px;width:3px;height:14px;background:var(--brass)}
+.tyres{width:386px;flex:0 0 auto;overflow:hidden}
+.tgrid{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:8px;height:82px}
+.tc{border:1px solid var(--edge);display:flex;align-items:baseline;gap:8px;padding:0 12px}
+.tc .tid{font-family:var(--fd);font-weight:600;font-size:10px;letter-spacing:.06em;color:var(--dim)}
+.tc .tt{font-family:var(--fr);font-weight:700;font-size:22px;font-variant-numeric:tabular-nums;color:var(--dim)}
+.tc .tp{font-family:var(--fm);font-size:13px;color:var(--dim);margin-left:auto}
+/* other pages */
+.sketch{flex:1;display:flex;gap:14px;min-height:0}
+.mapmain{flex:1;position:relative;padding:8px;display:flex;align-items:center;justify-content:center}
+.mside{width:300px;display:flex;flex-direction:column;padding:14px 16px}
+.crow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--line)}
+.cnm{font-family:var(--fd);font-weight:600;font-size:14px;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
+.cg{font-family:var(--fm);font-size:11px;color:var(--dim)}
+.nodata{font-family:var(--fd);font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:center;line-height:1.8}
+.tcell{border:1px solid var(--edge);padding:10px}
+</style>
+</head>
+<body>
+<div class="device">
+  <div class="hdr">
+    <div class="hl"><span class="sm"></span><span class="sname" id="sname">NO SETUP LOADED</span><span class="cartrk" id="cartrk">&mdash;</span></div>
+    <div class="hr"><span class="sf" id="wx" style="display:none">DRY</span><span class="temp" id="temps" style="display:none"></span><span class="dot" id="linkdot"></span><span class="linkw" id="linktxt">offline</span>
+      <span class="dots" id="dots"><span class="pd" data-p="stint"><i></i></span><span class="pd on" data-p="race"><i></i></span><span class="pd" data-p="coach"><i></i></span><span class="pd" data-p="map"><i></i></span></span></div>
+  </div>
+  <div class="ribbon"><div class="led" id="led"></div><span class="rpmtag" id="rpmtag">&mdash; / &mdash;</span></div>
+
+  <!-- RACE -->
+  <div class="page on" id="p-race">
+    <div class="body">
+      <div class="cLeft panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Engine</div>
+        <!-- Water/oil temp is absent from base-AC shared memory (DESIGN_SPEC section 6):
+             explicit unknowns until a CSP extended-physics source lands. Never placeholder. -->
+        <div class="vrow"><span class="k">oil temp</span><span class="v" id="oilT">&mdash;</span></div>
+        <div class="vrow"><span class="k">water temp</span><span class="v" id="watT">&mdash;</span></div>
+        <div class="vrow"><span class="k">throttle</span><span class="v" id="thr">&mdash;</span></div>
+        <div class="vrow"><span class="k">brake</span><span class="v" id="brk">&mdash;</span></div>
+        <div class="fuel"><div class="mh" style="margin-bottom:4px">Fuel</div>
+          <div style="display:flex;align-items:baseline;gap:8px"><span class="big" id="fuelBig">&mdash;</span><span class="lbl" style="font-size:11px" id="fuelUnit">litres</span></div>
+          <div class="mono" style="font-size:12px;color:var(--dim);margin-top:3px" id="fuelSub">burn &mdash;</div></div>
+      </div>
+      <div class="cCenter panel"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="spd"><span class="n" id="spd">&mdash;</span><span class="u">km/h</span></div>
+        <div class="gear" id="gear">&mdash;</div>
+        <div class="dwrap"><div class="dhead"><span class="k">&Delta; vs reference</span><span class="k" id="dstate" style="color:var(--dim)">waiting</span></div>
+          <div class="drow"><div class="dbar"><span class="dtick"></span><span class="dfill" id="dfill" style="left:50%;width:0%"></span></div><span class="dnum" id="dnum">&mdash;</span></div></div>
+      </div>
+      <div class="cRight panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="pos" id="lapline">L&mdash;</div>
+        <div class="trow"><span class="k">current</span><span class="t" id="tCur">&mdash;</span></div>
+        <div class="trow"><span class="k">last</span><span class="t" id="tLast">&mdash;</span></div>
+        <div class="trow"><span class="k">best</span><span class="t" id="tBest" style="color:var(--clear)">&mdash;</span></div>
+        <div class="stint"><div class="mh" style="margin-bottom:4px">Stint &middot; fuel to flag</div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between"><span class="m" id="stintM">&mdash;</span><span class="mono" style="font-size:12px;color:var(--dim)" id="stintSub"></span></div></div>
+      </div>
+    </div>
+
+    <div class="coach panel" id="coach"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+      <div class="lane on" id="lane-cruise">
+        <span class="next" id="cNext">COACHING &mdash; WAITING</span>
+        <span class="nsub" id="cSub"></span>
+        <span class="micro" id="cMicro" style="margin-left:auto"></span>
+      </div>
+      <div class="lane" id="lane-brake">
+        <span class="cv">BRAKE &#9656;</span>
+        <div class="bseg" id="bseg"></div>
+        <span class="bdist" id="bDist"></span>
+        <span class="queue" id="bPrev" style="margin-left:auto"></span>
+        <span class="nsub" id="bPips"></span>
+      </div>
+    </div>
+
+    <div class="board">
+      <div class="elec panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh" style="margin-bottom:6px">Setup &middot; Electronics</div>
+        <div class="etiles" id="etiles"><span class="ewait" id="ewait">SETUP DATA &mdash; WAITING</span></div>
+      </div>
+      <div class="tyres panel pad"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh" style="margin-bottom:6px">Tyres &middot; core temp / pressure</div>
+        <div class="tgrid">
+          <div class="tc" id="ty-fl"><span class="tid">FL</span><span class="tt">&mdash;</span><span class="tp">&mdash;</span></div>
+          <div class="tc" id="ty-fr"><span class="tid">FR</span><span class="tt">&mdash;</span><span class="tp">&mdash;</span></div>
+          <div class="tc" id="ty-rl"><span class="tid">RL</span><span class="tt">&mdash;</span><span class="tp">&mdash;</span></div>
+          <div class="tc" id="ty-rr"><span class="tid">RR</span><span class="tt">&mdash;</span><span class="tp">&mdash;</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COACH (post-lap debrief; full reference-vs-you split lands with #531 Part F) -->
+  <div class="page" id="p-coach">
+    <div class="sketch">
+      <div class="panel pad" style="flex:1;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Debrief</div>
+        <div style="font-family:var(--fd);font-weight:800;font-size:26px;text-transform:uppercase;color:var(--chalk);margin:6px 0 4px" id="dbHead">&mdash;</div>
+        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.6;margin-bottom:12px" id="dbBody">Live coaching lines appear here as they arrive.</div>
+        <div class="nodata" style="margin:auto">PER-PHASE DELTA SPLIT &mdash; PHASE 2 (#531 PART F)</div>
+      </div>
+      <div class="panel pad" style="width:320px;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Laps</div>
+        <div class="crow"><span class="cnm">Last</span><span class="cg" id="dbLast" style="font-size:14px;color:var(--chalk)">&mdash;</span></div>
+        <div class="crow"><span class="cnm">Best</span><span class="cg" id="dbBest" style="font-size:14px;color:var(--clear)">&mdash;</span></div>
+        <div class="crow" style="border-bottom:0"><span class="cnm">Laps done</span><span class="cg" id="dbLaps" style="font-size:14px;color:var(--chalk)">&mdash;</span></div>
+        <div class="nodata" style="margin:auto">PRIORITIES BY TIME LOST &mdash; PHASE 2</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAP (track map + pace notes land with #531 Part F) -->
+  <div class="page" id="p-map">
+    <div class="sketch">
+      <div class="panel mapmain"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="nodata">TRACK MAP &mdash; PHASE 2 (#531 PART F)<br><span class="mono" style="font-size:12px;color:var(--faint);text-transform:none">spline position <span id="mapSpline">&mdash;</span></span></div>
+      </div>
+      <div class="panel mside"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="lbl" style="font-size:11px" id="mapLap">lap &mdash;</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--chalk)" id="mapCur">&mdash;</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;border-bottom:1px solid var(--line);padding-bottom:12px"><span class="lbl" style="font-size:11px">delta</span><span style="font-family:var(--fr);font-weight:700;font-size:24px;color:var(--dim)" id="mapDelta">&mdash;</span></div>
+        <div class="mh" style="margin-top:12px">Ahead</div>
+        <div class="crow" style="border-bottom:0"><span class="cnm" id="mapNext">&mdash;</span><span class="cg" id="mapNextSub"></span></div>
+        <div class="nodata" style="margin:auto">PACE-NOTE QUEUE &mdash; PHASE 2</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STINT (I/M/O spread, wear + pit window land with #531 Parts D/F) -->
+  <div class="page" id="p-stint">
+    <div class="sketch">
+      <div class="panel pad" style="flex:1"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Tyres &middot; core temp (inner/mid/outer &mdash; Phase 2)</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px">
+          <div class="tcell"><div class="lbl" style="font-size:10px">FL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">FR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-fr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">RL</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-rl">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
+          <div class="tcell"><div class="lbl" style="font-size:10px">RR</div><div class="mono" style="font-size:16px;color:var(--chalk);margin-top:4px" id="st-rr">&mdash;</div><div class="mono" style="font-size:12px;color:var(--dim)">pressure &mdash; &middot; wear &mdash;</div></div>
+        </div>
+      </div>
+      <div class="panel pad" style="width:320px;display:flex;flex-direction:column"><span class="bk tl"></span><span class="bk tr"></span><span class="bk bl"></span><span class="bk br"></span>
+        <div class="mh">Fuel</div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span style="font-family:var(--fr);font-weight:700;font-size:34px;color:var(--chalk)" id="stFuel">&mdash;</span><span class="lbl" style="font-size:11px">litres onboard</span></div>
+        <div class="mono" style="font-size:13px;color:var(--mute);line-height:1.8;margin-top:10px" id="stFuelSub">burn &mdash;</div>
+        <div class="nodata" style="margin:auto">PIT WINDOW &mdash; PHASE 2</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function () {
+  var WS_URL = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/";
+  var $ = function (id) { return document.getElementById(id); };
+  var RIBBON_CELLS = 20;
+  var STALE_MS = 3000;
+  var RENDER_MIN_MS = 66; // <=15 Hz DOM writes (A133 budget)
+
+  // ---- live state (written by WS handlers, read by the render loop) ----------------------
+  var S = {
+    wsOpen: false,
+    tick: null, tickAt: 0,          // latest telemetry_tick payload + receive time
+    delta: null, deltaAt: 0,        // {delta_s, spline}
+    tires: null, tiresAt: 0,        // {fl,fr,rl,rr} core degC + receive time
+    lap: null,                      // {lap,last_lap_ms,best_lap_ms,laps_completed,valid}
+    coach: null, coachAt: 0,        // coaching.snapshot payload
+    setupName: null,                // setup.active .name
+    carName: null, trackName: null, // setup.list.result identity
+    sessionIdent: null,             // "car|track|session" key (re-request setup data on change)
+    spinners: null,                 // setup.spinner.list.result .spinners
+    fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
+    lastCue: null,                  // latest coaching.cue text for the debrief page
+  };
+
+  // ---- helpers ---------------------------------------------------------------------------
+  function fin(v) { return typeof v === "number" && isFinite(v) ? v : null; }
+  function fmtLap(ms) {
+    ms = fin(ms);
+    if (ms === null || ms <= 0) return "—";
+    var t = Math.floor(ms);
+    var m = Math.floor(t / 60000);
+    var s = Math.floor((t % 60000) / 1000);
+    var h = Math.floor((t % 1000) / 10);
+    return m + ":" + (s < 10 ? "0" : "") + s + "." + (h < 10 ? "0" : "") + h;
+  }
+  function setText(id, txt) {
+    var el = $(id);
+    if (el && el.textContent !== txt) el.textContent = txt;
+  }
+
+  // ---- shift ribbon (prebuilt cells, class-swapped per frame) ------------------------------
+  var ledCells = [];
+  (function buildLed() {
+    var led = $("led");
+    for (var i = 0; i < RIBBON_CELLS; i++) {
+      var s = document.createElement("span");
+      led.appendChild(s);
+      ledCells.push(s);
+    }
+  })();
+  function cellColor(i, lit) {
+    if (i >= lit) return "var(--raise)";
+    if (i >= RIBBON_CELLS - 2) return "var(--data)";
+    if (i >= RIBBON_CELLS - 5) return "var(--brake)";
+    if (i >= RIBBON_CELLS - 9) return "var(--lift)";
+    return "var(--clear)";
+  }
+  function renderRibbon(tick) {
+    var rpm = tick ? fin(tick.rpm) : null;
+    // rpm_max <= 0 means "unknown" per the producer contract — render the explicit unknown,
+    // never a "N / 0" tag (Qodo on PR #547).
+    var rpmMax = tick ? fin(tick.rpm_max) : null;
+    if (rpmMax !== null && rpmMax <= 0) rpmMax = null;
+    var lit = 0;
+    if (rpm !== null && rpmMax !== null && rpmMax > 0) {
+      lit = Math.min(RIBBON_CELLS, Math.round((rpm / rpmMax) * RIBBON_CELLS));
+    }
+    for (var i = 0; i < RIBBON_CELLS; i++) {
+      var c = cellColor(i, lit);
+      if (ledCells[i]._c !== c) { ledCells[i].style.background = c; ledCells[i]._c = c; }
+    }
+    $("led").className = "led" + (rpm !== null && rpmMax !== null && rpmMax > 0 && rpm >= rpmMax ? " flash" : "");
+    setText("rpmtag",
+      (rpm !== null ? Math.round(rpm) : "—") + " / " + (rpmMax !== null ? Math.round(rpmMax) : "—"));
+  }
+
+  // ---- electronics board (DESIGN_SPEC section 5; rebuilt only when spinners change) --------
+  function findSpinner(spinners, names) {
+    for (var i = 0; i < spinners.length; i++) {
+      var sec = String(spinners[i].section || spinners[i].name || "").toUpperCase();
+      for (var j = 0; j < names.length; j++) if (sec === names[j]) return spinners[i];
+    }
+    return null;
+  }
+  function stepsOf(sp) {
+    var mn = fin(sp.min), mx = fin(sp.max), st = fin(sp.step);
+    if (mn === null || mx === null || st === null || st <= 0 || mx <= mn) return null;
+    return Math.round((mx - mn) / st) + 1; // denominator: ((max-min)/step)+1
+  }
+  function discreteTile(label, sp, opts) {
+    // opts.absentGrey: render a greyed "NOT FITTED" tile when sp is null (TC/ABS/BIAS);
+    // otherwise absent -> no tile at all (TC CUT / MAP / BOOST).
+    var d = document.createElement("div");
+    if (!sp) {
+      d.className = "et absent";
+      d.innerHTML = '<div class="el"></div><div class="ev" style="color:var(--dim)">—</div><div class="bar"><span class="lbl" style="font-size:9px">not fitted</span></div>';
+      d.firstChild.textContent = label;
+      return d;
+    }
+    d.className = "et";
+    var steps = stepsOf(sp);
+    var value = fin(sp.value);
+    var el = document.createElement("div"); el.className = "el"; el.textContent = label;
+    var ev = document.createElement("div"); ev.className = "ev";
+    var bar = document.createElement("div"); bar.className = "bar";
+    if (steps === null || steps <= 1) {
+      // No real range exposed: value + mono "?", no bar. Never invent a range.
+      ev.textContent = value !== null ? String(value) : "—";
+      var q = document.createElement("span"); q.className = "mx"; q.textContent = " ?";
+      ev.appendChild(q);
+    } else if (value !== null && value <= (fin(sp.min) || 0) && String(label) !== "MAP") {
+      // Value at range floor on an on/off-style electronic reads OFF, never "0/12" ambiguity.
+      ev.textContent = "OFF";
+      var lseg0 = document.createElement("div"); lseg0.className = "lseg";
+      for (var k0 = 0; k0 < steps; k0++) lseg0.appendChild(document.createElement("span"));
+      bar.appendChild(lseg0);
+    } else {
+      ev.textContent = value !== null ? String(Math.round(value)) : "—";
+      var mx = document.createElement("span"); mx.className = "mx"; mx.textContent = "/" + steps;
+      ev.appendChild(mx);
+      var filled = 0;
+      if (value !== null) {
+        filled = Math.max(0, Math.min(steps, Math.round((value - (fin(sp.min) || 0)) / (fin(sp.step) || 1))));
+        // Endpoint-inclusive ranges (0..11 = 12 positions): a value AT the exposed max must
+        // read as a full bar, not steps-1 (Codex on PR #547). The printed value stays raw —
+        // AC's own MFD shows 0-indexed levels, and the tablet must match the sim's numbers.
+        if (fin(sp.max) !== null && value >= sp.max) filled = steps;
+      }
+      var lseg = document.createElement("div"); lseg.className = "lseg";
+      for (var k = 0; k < steps; k++) {
+        var cell = document.createElement("span");
+        if (k < filled) cell.className = "f";
+        lseg.appendChild(cell);
+      }
+      bar.appendChild(lseg);
+      d._lseg = lseg; d._filled = filled; // for the abs_active intervention flash
+    }
+    d.appendChild(el); d.appendChild(ev); d.appendChild(bar);
+    return d;
+  }
+  function biasTile(sp) {
+    var d = document.createElement("div");
+    if (!sp) {
+      d.className = "et absent";
+      d.innerHTML = '<div class="el">BRAKE BIAS</div><div class="ev" style="color:var(--dim)">—</div><div class="bar"><span class="lbl" style="font-size:9px">not fitted</span></div>';
+      return d;
+    }
+    d.className = "et";
+    var v = fin(sp.value);
+    var lean = (v !== null ? v : 50) - 50;
+    var mk = Math.max(6, Math.min(94, 50 - (lean / 20) * 50)); // front lean -> left toward F
+    var fl = Math.min(mk, 50), fw = Math.abs(50 - mk);
+    d.innerHTML = '<div class="el">BRAKE BIAS</div>'
+      + '<div class="ev">' + (v !== null ? v.toFixed(1) : "—") + '<span class="mx">%</span></div>'
+      + '<div class="bar"><div class="biasrow"><span class="fr">F</span><div class="biasbar">'
+      + '<span class="biasctr"></span>'
+      + '<span class="biasfill" style="left:' + fl.toFixed(0) + '%;width:' + fw.toFixed(0) + '%"></span>'
+      + '<span class="biasmk" style="left:' + mk.toFixed(0) + '%"></span>'
+      + '</div><span class="fr">R</span></div></div>';
+    return d;
+  }
+  var absTileRef = null;
+  function renderElectronics() {
+    var host = $("etiles");
+    host.innerHTML = "";
+    absTileRef = null;
+    // null = never answered (WAITING). An EMPTY list is real setup data — a car/setup with
+    // no exposed spinner controls — and renders the greyed NOT FITTED core tiles instead
+    // (Codex P2 on PR #547).
+    if (S.spinners === null) {
+      var w = document.createElement("span");
+      w.className = "ewait";
+      w.textContent = "SETUP DATA — WAITING";
+      host.appendChild(w);
+      return;
+    }
+    var sp = S.spinners;
+    var bias = findSpinner(sp, ["FRONT_BIAS", "BRAKE_BIAS"]);
+    var tc = findSpinner(sp, ["TRACTION_CONTROL", "TC"]);
+    var tcCut = findSpinner(sp, ["TRACTION_CONTROL_2", "TC2", "TRACTION_CONTROL_CUT"]);
+    var abs = findSpinner(sp, ["ABS"]);
+    var map = findSpinner(sp, ["ENGINE_MAP", "ECU_MAP", "ENGINE_MODE", "MAP"]);
+    var boost = findSpinner(sp, ["TURBO", "BOOST", "TURBO_ADJUSTMENT"]);
+    host.appendChild(biasTile(bias));               // greyed when absent (core electronics)
+    host.appendChild(discreteTile("TC", tc, {}));   // greyed when absent
+    if (tcCut) host.appendChild(discreteTile("TC CUT", tcCut, {})); // omitted when absent
+    absTileRef = discreteTile("ABS", abs, {});      // greyed when absent (GT2/GTE case)
+    host.appendChild(absTileRef);
+    if (map) {                                       // omitted when the car has no map spinner
+      var t = discreteTile("MAP", map, {});
+      // MAP resolves its NAME when CSP exposes item labels ("MAP 3/8 . QUALI").
+      if (map.items && map.items.length) {
+        var idx = Math.round(fin(map.value) || 0) - Math.round(fin(map.min) || 0);
+        if (idx >= 0 && idx < map.items.length) {
+          var nm = document.createElement("span");
+          nm.className = "mx";
+          nm.textContent = " · " + String(map.items[idx]).toUpperCase();
+          t.children[1].appendChild(nm);
+        }
+      }
+      host.appendChild(t);
+    }
+    if (boost) host.appendChild(discreteTile("BOOST", boost, {})); // no turbo -> no tile
+  }
+  function carHasAbs() {
+    return !!(S.spinners && findSpinner(S.spinners, ["ABS"]));
+  }
+  function flashAbs(active) {
+    // Live-intervention flash (degrades to steady brass when the producer doesn't send
+    // abs_active yet): repaint the LIT segments signal-red while ABS modulates.
+    if (!absTileRef || !absTileRef._lseg) return;
+    var cells = absTileRef._lseg.children;
+    for (var i = 0; i < absTileRef._filled; i++) {
+      var want = active ? "sig" : "f";
+      if (cells[i].className !== want) cells[i].className = want;
+    }
+  }
+
+  // ---- tyres ------------------------------------------------------------------------------
+  // Core-temp colour field: conservative GT slick window. Colour is a glance hint only —
+  // the printed value is always the real measurement (per-compound windows land with Part D).
+  function tyreColor(t) {
+    if (t === null) return { bg: "", fg: "var(--dim)" };
+    if (t < 70) return { bg: "rgba(73,182,201,.12)", fg: "var(--data)" };
+    if (t < 95) return { bg: "rgba(47,190,110,.14)", fg: "var(--clear)" };
+    if (t < 108) return { bg: "rgba(244,165,44,.16)", fg: "var(--lift)" };
+    return { bg: "rgba(242,59,44,.16)", fg: "var(--brake)" };
+  }
+  function renderTyres() {
+    // Same freshness contract as delta/coach: a stopped stream must not keep painting the
+    // last temps as if live (Codex on PR #547).
+    var fresh = S.tires !== null && (Date.now() - S.tiresAt) < STALE_MS;
+    var corners = ["fl", "fr", "rl", "rr"];
+    for (var i = 0; i < corners.length; i++) {
+      var c = corners[i];
+      var t = fresh ? fin(S.tires[c]) : null;
+      var cell = $("ty-" + c);
+      var col = tyreColor(t);
+      if (cell._bg !== col.bg) { cell.style.background = col.bg; cell._bg = col.bg; }
+      var tt = cell.children[1];
+      var txt = t !== null ? Math.round(t) + "°" : "—";
+      if (tt.textContent !== txt) tt.textContent = txt;
+      if (tt._fg !== col.fg) { tt.style.color = col.fg; tt._fg = col.fg; }
+      setText("st-" + c, t !== null ? Math.round(t) + "° core" : "—");
+    }
+  }
+
+  // ---- coach lane (in-place repaint, never resizes) ----------------------------------------
+  var bsegCells = [];
+  (function buildBseg() {
+    var b = $("bseg");
+    for (var i = 0; i < 10; i++) {
+      var s = document.createElement("span");
+      b.appendChild(s);
+      bsegCells.push(s);
+    }
+  })();
+  function renderCoach() {
+    // Expire stale snapshots: a BRAKE takeover must never outlive its producer (Codex P2 on
+    // PR #547) — beyond the freshness window, fall back to the quiet waiting lane.
+    var fresh = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS;
+    var snap = fresh ? S.coach : null;
+    var braking = !!(snap && snap.kind === "brake");
+    $("lane-cruise").className = "lane" + (braking ? "" : " on");
+    $("lane-brake").className = "lane" + (braking ? " on" : "");
+    if (!snap) {
+      setText("cNext", "COACHING — WAITING");
+      setText("cSub", "");
+      setText("cMicro", "");
+      return;
+    }
+    if (braking) {
+      var pct = fin(snap.progress_pct) || 0; // 0..100 toward the brake marker
+      var lit = Math.max(0, Math.min(10, Math.round(pct / 10)));
+      for (var i = 0; i < 10; i++) {
+        var on = i < lit;
+        var c = on ? (i >= 8 ? "var(--brake)" : "var(--lift)") : "var(--raise)";
+        if (bsegCells[i]._c !== c) { bsegCells[i].style.background = c; bsegCells[i]._c = c; }
+      }
+      var dist = fin(snap.dist_to_brake_m);
+      setText("bDist", dist !== null ? Math.round(dist) + " m" : "");
+      setText("bPrev", snap.corner_label ? String(snap.corner_label) : "");
+      // TC/ABS pips: the ABS pip is suppressed on cars without the system.
+      $("bPips").innerHTML = carHasAbs()
+        ? 'ABS <span class="pip"></span>'
+        : '<span class="fr" style="font-size:11px;color:var(--faint)">no ABS</span>';
+    } else {
+      var head = "COACHING — WAITING";
+      var sub = "";
+      var micro = "";
+      if (snap.kind === "placeholder") {
+        head = String(snap.primary_line || "DRIVE A LAP");
+        sub = String(snap.secondary_line || "");
+      } else {
+        head = snap.corner_label ? "NEXT ▸ " + String(snap.corner_label) : String(snap.primary_line || "");
+        var tgt = fin(snap.target_speed_kmh);
+        sub = tgt !== null ? "min " + Math.round(tgt) + " km/h" : String(snap.secondary_line || "");
+        micro = snap.corner_label && snap.primary_line ? String(snap.primary_line) : "";
+      }
+      setText("cNext", head);
+      setText("cSub", sub);
+      setText("cMicro", micro);
+    }
+  }
+
+  // ---- fuel-as-a-decision (client-side burn from lap boundaries) ----------------------------
+  function onLapFrame(p) {
+    S.lap = p;
+    var fuelNow = S.tick ? fin(S.tick.fuel_l) : null;
+    if (fuelNow !== null) {
+      // Only a VALID lap contributes a burn sample — a cut/teleported lap's fuel delta
+      // would contaminate the median (Codex on PR #547). The baseline still refreshes so
+      // the next valid lap measures a clean single-lap delta.
+      if (S.fuelAtLap !== null && p.valid !== false) {
+        var burn = S.fuelAtLap - fuelNow;
+        if (burn > 0.05 && burn < 30) {
+          S.burns.push(burn);
+          if (S.burns.length > 3) S.burns.shift();
+        }
+      }
+      S.fuelAtLap = fuelNow;
+    }
+  }
+  function medianBurn() {
+    if (!S.burns.length) return null;
+    var a = S.burns.slice().sort(function (x, y) { return x - y; });
+    return a[Math.floor(a.length / 2)];
+  }
+
+  // ---- main render loop (setInterval, <=15 Hz) ------------------------------------------------
+  // Deliberately NOT requestAnimationFrame: rAF stops entirely while the WebView reports the
+  // page hidden (screen blank, kiosk overlay), which would freeze the dash on stale values at
+  // wake. A timer keeps state flowing; the browser throttles it in background where nothing is
+  // visible anyway. DOM writes stay change-gated so the ~15 Hz tick is cheap on the A133.
+  function render() {
+    var t = S.tick;
+    var live = t !== null && (Date.now() - S.tickAt) < STALE_MS;
+
+    // link state
+    var linkCls, linkTxt;
+    if (!S.wsOpen) { linkCls = ""; linkTxt = "offline"; }
+    else if (t === null) { linkCls = " stale"; linkTxt = "waiting"; }
+    else if (!live) { linkCls = " stale"; linkTxt = "stale"; }
+    else { linkCls = " live"; linkTxt = "live"; }
+    $("linkdot").className = "dot" + linkCls;
+    var lt = $("linktxt");
+    if (lt.textContent !== linkTxt) { lt.textContent = linkTxt; lt.className = "linkw" + linkCls; }
+
+    renderRibbon(live ? t : null);
+
+    // centre spine
+    setText("spd", live && fin(t.speed_kmh) !== null ? String(Math.round(t.speed_kmh)) : "—");
+    var g = live ? fin(t.gear) : null;
+    // producer clamps car.gear at >=0, so 0 covers both neutral and reverse
+    setText("gear", g === null ? "—" : (g === 0 ? "N" : String(g)));
+    setText("thr", live && fin(t.throttle) !== null ? Math.round(t.throttle * 100) + "%" : "—");
+    setText("brk", live && fin(t.brake) !== null ? Math.round(t.brake * 100) + "%" : "—");
+
+    // delta (10 Hz topic; stale with the tick)
+    var d = S.delta && (Date.now() - S.deltaAt) < STALE_MS ? fin(S.delta.delta_s) : null;
+    var dnum = $("dnum"), dfill = $("dfill");
+    if (d === null) {
+      setText("dnum", "—");
+      if (dnum._fg !== "var(--dim)") { dnum.style.color = "var(--dim)"; dnum._fg = "var(--dim)"; }
+      dfill.style.width = "0%";
+      setText("dstate", S.wsOpen ? "no reference" : "waiting");
+      $("dstate").style.color = "var(--dim)";
+    } else {
+      var ahead = d <= 0;
+      var col = ahead ? "var(--clear)" : "var(--brake)";
+      setText("dnum", (d > 0 ? "+" : "−") + Math.abs(d).toFixed(3));
+      if (dnum._fg !== col) { dnum.style.color = col; dnum._fg = col; }
+      var mag = Math.min(1, Math.abs(d) / 2.0); // full bar at 2 s
+      var w = (mag * 50).toFixed(1);
+      if (ahead) { dfill.style.left = (50 - mag * 50).toFixed(1) + "%"; dfill.style.width = w + "%"; }
+      else { dfill.style.left = "50%"; dfill.style.width = w + "%"; }
+      if (dfill._bg !== col) { dfill.style.background = col; dfill._bg = col; }
+      setText("dstate", ahead ? "on line" : "behind");
+      $("dstate").style.color = col;
+    }
+
+    // timing
+    var lapN = live ? fin(t.lap) : null;
+    setText("lapline", "L" + (lapN !== null ? String(lapN + 1) : "—"));
+    setText("tCur", live ? fmtLap(fin(t.lap_time_ms)) : "—");
+    setText("tLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
+    setText("tBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
+
+    // fuel
+    var fuel = live ? fin(t.fuel_l) : null;
+    var cap = live ? fin(t.fuel_capacity_l) : null;
+    var burn = medianBurn();
+    if (fuel !== null && burn !== null) {
+      setText("fuelBig", (fuel / burn).toFixed(1));
+      setText("fuelUnit", "laps left");
+      setText("fuelSub", fuel.toFixed(1) + " L · " + burn.toFixed(2) + " L/lap");
+      setText("stintM", "+" + (fuel / burn).toFixed(1));
+      setText("stintSub", "laps of fuel");
+    } else {
+      setText("fuelBig", fuel !== null ? fuel.toFixed(1) : "—");
+      setText("fuelUnit", "litres");
+      setText("fuelSub", (cap !== null ? "cap " + cap.toFixed(0) + " L · " : "") + "burn —");
+      setText("stintM", "—");
+      setText("stintSub", "burn unknown");
+    }
+    setText("stFuel", fuel !== null ? fuel.toFixed(1) : "—");
+    setText("stFuelSub", burn !== null ? "burn " + burn.toFixed(2) + " L/lap" : "burn — (complete a lap)");
+
+    // header weather/temps: render only when the producer actually sends them
+    var wx = live && typeof t.weather_type === "string" && t.weather_type ? t.weather_type : null;
+    $("wx").style.display = wx ? "" : "none";
+    if (wx) setText("wx", wx.toUpperCase());
+    var at = live ? fin(t.ambient_temp_c) : null;
+    var tt = live ? fin(t.track_temp_c) : null;
+    var showTemps = at !== null || tt !== null;
+    $("temps").style.display = showTemps ? "" : "none";
+    if (showTemps) {
+      setText("temps", (at !== null ? Math.round(at) : "—") + " / " + (tt !== null ? Math.round(tt) : "—") + "°");
+    }
+
+    renderTyres();
+    renderCoach();
+    flashAbs(live && t.abs_active === true);
+
+    // secondary pages (cheap text writes; hidden pages cost nothing to lay out)
+    setText("mapCur", live ? fmtLap(fin(t.lap_time_ms)) : "—");
+    setText("mapLap", "lap " + (lapN !== null ? String(lapN + 1) : "—"));
+    setText("mapDelta", d !== null ? (d > 0 ? "+" : "−") + Math.abs(d).toFixed(3) : "—");
+    $("mapDelta").style.color = d === null ? "var(--dim)" : (d <= 0 ? "var(--clear)" : "var(--brake)");
+    var spl = live ? fin(t.spline) : null;
+    setText("mapSpline", spl !== null ? (spl * 100).toFixed(1) + "%" : "—");
+    // Same freshness gate as the RACE lane: MAP must not keep advertising a corner whose
+    // producer stopped (Codex on PR #547).
+    var snap = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS ? S.coach : null;
+    setText("mapNext", snap && snap.corner_label ? String(snap.corner_label) : "—");
+    setText("mapNextSub", snap && fin(snap.target_speed_kmh) !== null ? "min " + Math.round(snap.target_speed_kmh) : "");
+    setText("dbLast", S.lap ? fmtLap(fin(S.lap.last_lap_ms)) : "—");
+    setText("dbBest", S.lap ? fmtLap(fin(S.lap.best_lap_ms)) : "—");
+    setText("dbLaps", S.lap && fin(S.lap.laps_completed) !== null ? String(S.lap.laps_completed) : "—");
+    if (S.lastCue) {
+      // coaching.cue contract: `message` is the human-readable line (kind/corner/urgency/
+      // message/spline/detail per make_coaching_cue); `detail` is a structured object —
+      // never stringify it at the UI (Qodo on PR #547).
+      setText("dbHead", String(S.lastCue.message || S.lastCue.kind || "—").toUpperCase());
+      var cueMeta = [];
+      if (S.lastCue.corner !== undefined && S.lastCue.corner !== null) {
+        cueMeta.push("T" + S.lastCue.corner);
+      }
+      if (S.lastCue.urgency) cueMeta.push(String(S.lastCue.urgency));
+      setText("dbBody", cueMeta.length ? cueMeta.join(" · ") : "Latest coaching cue.");
+    }
+  }
+  setInterval(render, RENDER_MIN_MS);
+
+  // ---- page switching (tap dots or horizontal swipe) ----------------------------------------
+  var PAGES = ["stint", "race", "coach", "map"];
+  var curPage = "race";
+  function setPage(p) {
+    curPage = p;
+    var pages = document.querySelectorAll(".page");
+    for (var i = 0; i < pages.length; i++) pages[i].className = "page" + (pages[i].id === "p-" + p ? " on" : "");
+    var dots = document.querySelectorAll(".pd");
+    for (var j = 0; j < dots.length; j++) dots[j].className = "pd" + (dots[j].getAttribute("data-p") === p ? " on" : "");
+  }
+  (function wirePages() {
+    var dots = document.querySelectorAll(".pd");
+    for (var i = 0; i < dots.length; i++) {
+      (function (el) {
+        el.addEventListener("click", function () { setPage(el.getAttribute("data-p")); });
+      })(dots[i]);
+    }
+    var x0 = null;
+    document.addEventListener("touchstart", function (e) {
+      x0 = e.touches && e.touches.length === 1 ? e.touches[0].clientX : null;
+    }, { passive: true });
+    document.addEventListener("touchend", function (e) {
+      if (x0 === null || !e.changedTouches || !e.changedTouches.length) return;
+      var dx = e.changedTouches[0].clientX - x0;
+      x0 = null;
+      if (Math.abs(dx) < 60) return;
+      var idx = PAGES.indexOf(curPage);
+      idx = dx < 0 ? Math.min(PAGES.length - 1, idx + 1) : Math.max(0, idx - 1);
+      setPage(PAGES[idx]);
+    }, { passive: true });
+  })();
+
+  // ---- header (rebuilt on setup/identity change, not per frame) -----------------------------
+  function renderHeader() {
+    setText("sname", S.setupName ? String(S.setupName).toUpperCase() : "NO SETUP LOADED");
+    var car = S.carName || "—";
+    var trk = S.trackName ? " — " + S.trackName : "";
+    setText("cartrk", (car + trk).toUpperCase());
+  }
+
+  // ---- websocket -----------------------------------------------------------------------------
+  var reconnectDelay = 1000;
+  var setupPollTimer = null;
+  var wsOpenAt = 0; // set per-connection; gates cache-echo vs mid-connection re-emits
+  var setupReqAt = 0, setupAnsAt = 0; // lost-request detection (Codex on PR #547)
+  function requestSetupData(ws) {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    setupReqAt = Date.now();
+    ws.send(JSON.stringify({ v: 1, type: "setup.spinner.list" }));
+    ws.send(JSON.stringify({ v: 1, type: "setup.list" }));
+  }
+  function connect() {
+    var ws = new WebSocket(WS_URL);
+    ws.onopen = function () {
+      S.wsOpen = true;
+      wsOpenAt = Date.now();
+      reconnectDelay = 1000;
+      ws.send(JSON.stringify({ v: 1, type: "hello", client: "tablet-dash", client_class: "browser" }));
+      // Fan-out is class/broadcast based server-side; the subscribe declares intent and is
+      // retried implicitly by the setup poll below (a missing Lua peer errors harmlessly).
+      ws.send(JSON.stringify({
+        v: 1, type: "state.subscribe",
+        topics: ["coaching.snapshot", "coaching.cue", "coaching.voice", "delta", "tire_temps",
+                 "setup.active", "session", "lap", "connection"],
+      }));
+      requestSetupData(ws);
+      // Re-request per-car ranges until they arrive (AC may connect after the tablet), then
+      // keep polling slowly so a mid-session car/setup change is never missed.
+      if (setupPollTimer) clearInterval(setupPollTimer);
+      setupPollTimer = setInterval(function () {
+        // Re-request when nothing has ever been answered (null) OR when the latest
+        // request went unanswered for 5 s (e.g. a setup.active-triggered refresh raced a
+        // race.ini transition and errored — Codex on PR #547). An answered request stops
+        // the poll; the board keeps the last rows meanwhile (no flicker on spinner edits).
+        var unanswered = setupReqAt > setupAnsAt && Date.now() - setupReqAt > 5000;
+        if (S.spinners === null || unanswered) requestSetupData(ws);
+      }, 5000);
+    };
+    ws.onmessage = function (event) {
+      var frame;
+      try { frame = JSON.parse(event.data); } catch (e) { return; }
+      var t = frame.type;
+      if (t === "telemetry_tick" && frame.payload) {
+        S.tick = frame.payload;
+        S.tickAt = Date.now();
+        return;
+      }
+      if (t === "state.snapshot") {
+        var p = frame.payload || {};
+        switch (frame.topic) {
+          case "delta": S.delta = p; S.deltaAt = Date.now(); break;
+          case "tire_temps": S.tires = p; S.tiresAt = Date.now(); break;
+          case "lap": onLapFrame(p); break;
+          case "coaching.snapshot": S.coach = p; S.coachAt = Date.now(); break;
+          case "coaching.cue": S.lastCue = p; break;
+          case "setup.active":
+            S.setupName = p.name || null;
+            renderHeader();
+            requestSetupData(ws); // ranges/values follow the newly loaded setup
+            break;
+          case "session": {
+            // Full identity key: a new track or session with the SAME car must also
+            // re-request setup data (Codex P2 on PR #547), not just a car swap.
+            var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
+              + "|" + String(p.session_index === undefined ? "" : p.session_index);
+            if (ident !== S.sessionIdent) {
+              var hadIdentity = S.sessionIdent !== null;
+              S.sessionIdent = ident;
+              S.lap = null; // prior identity's Last/Best are wrong now
+              S.fuelAtLap = null;
+              S.burns = []; // burn is per car AND per track length (Codex on PR #547)
+              // A REAL identity switch invalidates the setup name (per-session fact; the
+              // trainer's follow-up setup.active names the new one — Codex on PR #547).
+              // The FIRST session frame after a page load must not: the identity-replay
+              // cache delivers setup.active BEFORE session, and wiping here would clear the
+              // just-replayed name (caught live on the P7 soak).
+              if (hadIdentity) {
+                S.setupName = null;
+                renderHeader();
+                // Values/ranges are a per-session fact even with the SAME car (pit work,
+                // different baked setup) — drop them so the 5 s poll re-arms and retries
+                // until the new session's result lands (Codex on PR #547: the one-shot
+                // request below can be lost when no Lua peer is connected at this instant).
+                S.spinners = null;
+                renderElectronics();
+              }
+              requestSetupData(ws);
+            } else if (Date.now() - wsOpenAt > STALE_MS) {
+              // Same identity re-emitted MID-connection = the trainer's stint-reset /
+              // reconnect re-arm (lifecycle rearmSession) — clear per-stint state so
+              // Last/Best and fuel-to-flag never show the previous stint (Codex on PR
+              // #547). The identity-replay frame that arrives right after OUR OWN
+              // (re)connect is excluded by the wsOpenAt window: it is a cache echo, not
+              // a reset, and must not wipe live state.
+              S.lap = null;
+              S.fuelAtLap = null;
+              requestSetupData(ws); // pit work may have changed the setup during the reset
+            }
+            break;
+          }
+        }
+        return;
+      }
+      if (t === "setup.spinner.list.result") {
+        // An ok reply with an EMPTY array is real data (car exposes no spinner controls) —
+        // accept it so the board renders NOT FITTED states instead of waiting forever
+        // (Codex P2 on PR #547).
+        if (frame.ok && Array.isArray(frame.spinners)) {
+          setupAnsAt = Date.now();
+          var rows = frame.spinners;
+          if (frame.source !== "csp") {
+            // INI-fallback results carry hardcoded default ranges (e.g. an assumed /12) —
+            // exactly the invented range the design forbids (Codex on PR #547). Keep the
+            // real VALUES, drop min/max/step/items so tiles render value + "?" (no bar).
+            rows = rows.map(function (r) {
+              return { name: r.name, section: r.section, label: r.label,
+                       value: r.value, unit: r.unit };
+            });
+          }
+          S.spinners = rows;
+          renderElectronics();
+        }
+        return;
+      }
+      if (t === "setup.list.result") {
+        if (frame.ok) {
+          S.carName = frame.car_name || frame.car_id || null;
+          S.trackName = frame.track_name || frame.track_id || null;
+          renderHeader();
+        }
+        return;
+      }
+    };
+    ws.onclose = function () {
+      S.wsOpen = false;
+      if (setupPollTimer) { clearInterval(setupPollTimer); setupPollTimer = null; }
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 10000);
+    };
+    ws.onerror = function () { ws.close(); };
+  }
+
+  renderHeader();
+  renderElectronics();
+  setPage("race");
+  connect();
+})();
+</script>
+</body>
+</html>
