@@ -133,6 +133,8 @@ include = ["ac_copilot_trainer*", "tools*"]
 "tools.ai_sidecar" = ["*.ps1"]
 # Ship the tablet voice endpoint page so /tablet/voice works in wheel/non-editable installs (#511 Part D).
 "tools.ai_sidecar.voice" = ["web/*.html"]
+# Ship the tablet GT dashboard page + vendored fonts so /tablet/dash works in wheel installs (#531).
+"tools.ai_sidecar.dash" = ["web/*.html", "web/fonts/*.ttf"]
 
 [tool.ruff]
 line-length = 100

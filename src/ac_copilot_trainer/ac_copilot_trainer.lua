@@ -2385,6 +2385,26 @@ function script.update(dt)
       and wsEpoch ~= state._wsPrevOpenEpoch
     if wsConn and (not state._wsPrevConnected or wsEpochChanged) then
       lifecyclePublisher.rearmSession()
+      -- #531 Part B (Codex P2 on PR #547): on the same (re)connect edge, publish the
+      -- CURRENTLY applied setup so a dashboard peer renders the setup name without waiting
+      -- for the next setup.load event. The sidecar caches this identity snapshot and replays
+      -- it to late subscribers. Resolution reuses the race.ini/_EXT_SETUP_FILENAME ladder;
+      -- when nothing resolves we publish nothing (the header's "NO SETUP LOADED" is honest).
+      if wsBridge.publishTopic then
+        pcall(function()
+          local activePath = setupReader.activeSetupIniPath(car, sim)
+          if type(activePath) == "string" and activePath ~= "" then
+            local base = activePath:match("([^/\\]+)$")
+            local activeName = base and base:gsub("%.[iI][nN][iI]$", "") or nil
+            if activeName == "" then activeName = nil end
+            wsBridge.publishTopic("setup.active", {
+              name = activeName,
+              path = activePath,
+              changed_at = (os and os.time and os.time()) or 0,
+            })
+          end
+        end)
+      end
     end
     state._wsPrevConnected = wsConn
     if wsEpoch ~= nil then

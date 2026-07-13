@@ -305,7 +305,7 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     coach: null, coachAt: 0,        // coaching.snapshot payload
     setupName: null,                // setup.active .name
     carName: null, trackName: null, // setup.list.result identity
-    carId: null,                    // session car_id (re-request ranges on change)
+    sessionIdent: null,             // "car|track|session" key (re-request setup data on change)
     spinners: null,                 // setup.spinner.list.result .spinners
     fuelAtLap: null, burns: [],     // client-side fuel-per-lap (median of last 3 lap diffs)
     lastCue: null,                  // latest coaching.cue text for the debrief page
@@ -446,7 +446,10 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     var host = $("etiles");
     host.innerHTML = "";
     absTileRef = null;
-    if (!S.spinners || !S.spinners.length) {
+    // null = never answered (WAITING). An EMPTY list is real setup data — a car/setup with
+    // no exposed spinner controls — and renders the greyed NOT FITTED core tiles instead
+    // (Codex P2 on PR #547).
+    if (S.spinners === null) {
       var w = document.createElement("span");
       w.className = "ewait";
       w.textContent = "SETUP DATA — WAITING";
@@ -532,11 +535,19 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
     }
   })();
   function renderCoach() {
-    var snap = S.coach;
+    // Expire stale snapshots: a BRAKE takeover must never outlive its producer (Codex P2 on
+    // PR #547) — beyond the freshness window, fall back to the quiet waiting lane.
+    var fresh = S.coach !== null && (Date.now() - S.coachAt) < STALE_MS;
+    var snap = fresh ? S.coach : null;
     var braking = !!(snap && snap.kind === "brake");
     $("lane-cruise").className = "lane" + (braking ? "" : " on");
     $("lane-brake").className = "lane" + (braking ? " on" : "");
-    if (!snap) return;
+    if (!snap) {
+      setText("cNext", "COACHING — WAITING");
+      setText("cSub", "");
+      setText("cMicro", "");
+      return;
+    }
     if (braking) {
       var pct = fin(snap.progress_pct) || 0; // 0..100 toward the brake marker
       var lit = Math.max(0, Math.min(10, Math.round(pct / 10)));
@@ -773,7 +784,8 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
       // keep polling slowly so a mid-session car/setup change is never missed.
       if (setupPollTimer) clearInterval(setupPollTimer);
       setupPollTimer = setInterval(function () {
-        if (!S.spinners || !S.spinners.length) requestSetupData(ws);
+        // null = no reply yet; an accepted EMPTY list stops the poll (real data).
+        if (S.spinners === null) requestSetupData(ws);
       }, 5000);
     };
     ws.onmessage = function (event) {
@@ -798,19 +810,31 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
             renderHeader();
             requestSetupData(ws); // ranges/values follow the newly loaded setup
             break;
-          case "session":
-            if (p.car_id && p.car_id !== S.carId) {
-              S.carId = p.car_id;
-              S.spinners = null; // car changed: old ranges are wrong, wait for fresh ones
-              renderElectronics();
+          case "session": {
+            // Full identity key: a new track or session with the SAME car must also
+            // re-request setup data (Codex P2 on PR #547), not just a car swap.
+            var ident = String(p.car_id || "") + "|" + String(p.track_id || "")
+              + "|" + String(p.session_index === undefined ? "" : p.session_index);
+            if (ident !== S.sessionIdent) {
+              var carChanged = S.sessionIdent === null
+                || ident.split("|")[0] !== S.sessionIdent.split("|")[0];
+              S.sessionIdent = ident;
+              if (carChanged) {
+                S.spinners = null; // car changed: old ranges are wrong, wait for fresh ones
+                renderElectronics();
+              }
               requestSetupData(ws);
             }
             break;
+          }
         }
         return;
       }
       if (t === "setup.spinner.list.result") {
-        if (frame.ok && frame.spinners && frame.spinners.length) {
+        // An ok reply with an EMPTY array is real data (car exposes no spinner controls) —
+        // accept it so the board renders NOT FITTED states instead of waiting forever
+        // (Codex P2 on PR #547).
+        if (frame.ok && Array.isArray(frame.spinners)) {
           S.spinners = frame.spinners;
           renderElectronics();
         }
