@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T01:20:00Z
+last_updated: 2026-07-13T03:30:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-527-coachable-brake-coverage-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-parts12-coverage-calibration-2026-07-12.md
@@ -81,6 +81,33 @@ relates_to:
 ---
 
 # Next session handoff
+
+## RESUME — merge PR #536 (#533 FFB calibration; resolve-pr converged, NOT yet merged)
+
+**PR [#536](https://github.com/agorokh/ac-copilot-trainer/pull/536)** (issue
+[#533](https://github.com/agorokh/ac-copilot-trainer/issues/533)) is **merge-ready**: CI green, **0
+unresolved threads**, self-hosted daemon rated it clean, **MERGEABLE**. It is deliberately **not
+merged** (operator's call). **First action next session: merge it.**
+
+New **`tools/ac_harness/ffb_calibrate.py`** auto-calibrates AC's per-car FFB gain (`cfg/user_ff.ini`)
+from `acpmf_physics.finalFF` — exposed via `shared_memory.py` at **offset 308** (`PHYSICS_MAP_BYTES`
+bumped to 512; kept alongside PR #535's `acpmf_static` parsing on rebase). It drives via `auto_drive`,
+computes P99/clip%, and writes a floor/ceiling-clamped gain targeting **P99→0.95** atomically (+`.backup`)
+only on `--write`, behind an offset-sanity gate. **Live-verified on the rig** (offset 308 confirmed;
+recommendation 1.073 on a clean 911 lap). ~77 unit tests. Hardened over **9 review rounds** (P1
+stationary-sampling, graceful auto_drive shutdown, launch-timeout ≥ retry budget, duration-aware stall
+gate, observe-only live-car verify, non-finite/BOM/`#` INI handling, report-only-by-default `--write`).
+
+Also earlier this session: **PR #530 MERGED** — rig **5.1 positional engine audio** fixed (USB CM6206
+stereo→5.1; 911 rear vs M3 GT2 front, live-verified) + **per-car wheel rotation** (MOZA base 1080 + AC
+`LOCK=1080` + auto-adjust). See `10_Rig/audio-5.1-positional-engine-2026-07-12.md` /
+`wheel-per-car-rotation-ffb-2026-07-12.md`.
+
+**Then — new scope (issue [#534](https://github.com/agorokh/ac-copilot-trainer/issues/534) epic):** Part A
+= car-class resolver (the by-car enrichment brain, buildable); Part B = publish class to SimHub; Parts
+C/D (wind / pedal haptics) `status:blocked-on-rig` (Arduino not built, Epic #59); Part E = "more
+rear-engine audio drama" investigation. Follow-up also possible: promote the FFB tool's rig path once
+more cars are calibrated.
 
 ## Delivered (2026-07-13) — #532 P1 Part A: auto-handshake plant ID, G0 PASS (PR #535 MERGED `b023c92`)
 
