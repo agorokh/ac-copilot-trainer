@@ -1370,21 +1370,24 @@ def test_progress_watchdog_reset_reanchors_after_recovery():
     assert dog.update(100.2, 11.2) is True
 
 
-def test_should_try_line_teleport_on_recovery_off_line_spawn_always_retries():
-    # The #528 fix: a car that spawned off the racing line must RETRY the line teleport on recovery
-    # even when the first spawn attempt missed the read-back (line_teleport_known_good False) —
-    # teleport_to_pits returns it to the same off-line trap and burns every recovery at 0 m.
-    assert should_try_line_teleport_on_recovery(spawn_off_line=True, line_teleport_known_good=False)
-    assert should_try_line_teleport_on_recovery(spawn_off_line=True, line_teleport_known_good=True)
+def test_should_try_line_teleport_on_recovery_off_line_always_retries():
+    # #528: a car OFF the racing line must RETRY the line teleport on recovery even when no prior
+    # line teleport is known good. car_off_line covers BOTH an off-line spawn AND a car a prior
+    # recovery teleported into the pits (a mid-lap spin recovered to pits — the self-hosted
+    # reviewer's case): teleport_to_pits leaves it off-line and would otherwise loop at 0 m.
+    assert should_try_line_teleport_on_recovery(car_off_line=True, line_teleport_known_good=False)
+    assert should_try_line_teleport_on_recovery(car_off_line=True, line_teleport_known_good=True)
 
 
-def test_should_try_line_teleport_on_recovery_on_line_spawn_uses_pits():
-    # An on-line spawn (never teleported) that spins mid-lap: teleport_to_pits is the correct reset,
-    # so the line teleport is not attempted unless a prior line teleport is known good.
+def test_should_try_line_teleport_on_recovery_on_line_uses_pits():
+    # A car ON the line (never teleported off) that spins: teleport_to_pits is the correct first
+    # reset, so the line teleport is not attempted unless a prior line teleport is known good. Once
+    # that pit teleport leaves the car off-line, _recover flips off_line True and the next recovery
+    # takes the branch above — closing the mid-lap-into-pits loop the reviewer flagged.
     assert not should_try_line_teleport_on_recovery(
-        spawn_off_line=False, line_teleport_known_good=False
+        car_off_line=False, line_teleport_known_good=False
     )
-    assert should_try_line_teleport_on_recovery(spawn_off_line=False, line_teleport_known_good=True)
+    assert should_try_line_teleport_on_recovery(car_off_line=False, line_teleport_known_good=True)
 
 
 def test_drive_leg_succeeded_true_only_for_a_real_clean_drive():
