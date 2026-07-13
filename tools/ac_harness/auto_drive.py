@@ -2579,10 +2579,18 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # handshake verdict (incl. an empty-sink "no result" if the probes genuinely produced none).
         if report.error is None:
             apply_handshake_outcome(report, sink)
-        if sink.get("ok"):
+        # Persist the plant ONLY from a fully clean run (report.ok): a drive-leg veto (sim_dead /
+        # recovery_capped) can leave sink["ok"]=True from samples collected before the veto, but
+        # constants from a compromised/stale drive must NOT be promoted into the reusable artifact
+        # for later --use-plant runs (Codex review). report.ok already vetoes on those flags.
+        if sink.get("ok") and report.ok:
             artifact_path = save_plant_artifact(user_dir, sink["result"])
             extras["plant_artifact_saved"] = str(artifact_path)
             print(f"auto-drive: plant artifact saved -> {artifact_path}")
+        elif sink.get("ok") and not report.ok:
+            note = "handshake probes passed but the drive was vetoed — plant NOT persisted"
+            report.notes.append(note)
+            print(f"auto-drive: {note}")
     report_path = write_evidence(evidence_dir, report, extras=extras)
 
     print(report.summary())
