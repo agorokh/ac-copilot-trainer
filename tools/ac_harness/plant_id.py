@@ -28,9 +28,9 @@ to the same ``step()``/``on_recovery()`` contract as :class:`RacingDriver`, so t
 ``auto_drive.rig_drive`` loop executes it (one rig loop, no drift), driving a synthetic plant in
 tests. The only rig-only piece is the lazy ``acpmf_physics`` reader (``phys_read="auto"``).
 
-Artifacts persist per-combo under ``<AC user dir>/plant_id/`` — a **durable** Documents path,
-never ``.scratch`` (the original ``model_id.py`` was lost to exactly that; see issue #532's
-pitfall list).
+Artifacts persist per-combo (car + track + optional layout + setup-content identity) under
+``<AC user dir>/plant_id/`` — a **durable** Documents path, never ``.scratch`` (the original
+``model_id.py`` was lost to exactly that; see issue #532's pitfall list).
 """
 
 from __future__ import annotations
@@ -105,6 +105,7 @@ class HandshakeResult:
     laps_used: int
     duration_s: float
     measurements: tuple[ProbeMeasurement, ...]
+    layout: str | None = None  # multi-layout track identity (None keeps the legacy artifact key)
     setup: str | None = None  # the setup the plant was measured under (None = default)
     setup_ini: str | None = None  # resolved setup .ini path (for the content-hash key)
     # #532 Part B: the per-combo friction plant (safe-envelope-blended GGVModel + fit provenance),
@@ -129,6 +130,7 @@ class HandshakeResult:
             "ok": self.ok,
             "car_id": self.car_id,
             "track_id": self.track_id,
+            "layout": self.layout,
             "setup": self.setup,
             "setup_ini": self.setup_ini,
             "laps_used": self.laps_used,
@@ -650,6 +652,7 @@ class HandshakeController:
         *,
         car_id: str = "",
         track_id: str = "",
+        layout: str | None = None,
         setup: str | None = None,
         setup_ini: str | None = None,
         sink: dict | None = None,
@@ -675,6 +678,7 @@ class HandshakeController:
         # friction envelope is safe-envelope-blended against (injected by the harness so the
         # controller stays import-clean of auto_drive). None => no ggv block is emitted.
         prior_ggv: GGVModel | None = None,
+        prior_ggv_name: str = "injected_prior",
         # Active brake-at-speed probe: firm STRAIGHT-LINE braking (never a lateral push — the GT3
         # spins at the lateral limit, live-disproven #259) to trace the high-speed braking envelope.
         brake_level: float = 0.85,
@@ -690,6 +694,7 @@ class HandshakeController:
         self._base = RacingDriver(fast_line, speed_profile, pace=pace, max_speed_kmh=max_speed_kmh)
         self.car_id = car_id
         self.track_id = track_id
+        self.layout = layout
         self.setup = setup
         self.setup_ini = setup_ini
         self.sink = sink if sink is not None else {}
@@ -705,6 +710,7 @@ class HandshakeController:
         self.row_interval_s = row_interval_s
         self.min_corner_rows = min_corner_rows
         self._prior_ggv = prior_ggv
+        self._prior_ggv_name = prior_ggv_name or "injected_prior"
         self.brake_level = brake_level
         self.brake_probe_seconds = brake_probe_seconds
         self.brake_min_entry_kmh = brake_min_entry_kmh
@@ -1269,6 +1275,7 @@ class HandshakeController:
             ok=all(m.passed for m in measurements),
             car_id=self.car_id,
             track_id=self.track_id,
+            layout=self.layout,
             setup=self.setup,
             setup_ini=str(self.setup_ini) if self.setup_ini else None,
             laps_used=self._laps,
@@ -1312,13 +1319,18 @@ class HandshakeController:
         if self._prior_ggv is None:
             return None
         n = len(self._friction_rows)
-        block: dict = {"ok": False, "friction_rows": n, "model": None, "prior": "generic_gt3_ggv"}
+        block: dict = {
+            "ok": False,
+            "friction_rows": n,
+            "model": None,
+            "prior": self._prior_ggv_name,
+        }
         if n < self.min_friction_rows:
             block["reason"] = f"insufficient friction rows: {n} < {self.min_friction_rows}"
             return block
         try:
             measured = ggv_from_telemetry(self._friction_rows)
-            blended = blend_ggv_safe(measured, self._prior_ggv)
+            blended = blend_ggv_safe(measured, self._prior_ggv, prior_name=self._prior_ggv_name)
         except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
             # Narrow catch + log (never a broad catch-and-default). The failure is ADVISORY: the
             # consumer falls back to the generic plant, but the reason is recorded, not swallowed.
@@ -1381,21 +1393,43 @@ def _setup_key(setup: str | None, setup_ini: str | Path | None = None) -> str:
     return f"__setup-{safe}-{digest}" if digest else f"__setup-{safe}"
 
 
+def _layout_key(layout: str | None) -> str:
+    """Filename-safe layout suffix (empty only for the legacy single-layout identity).
+
+    Layout ids are AC folder basenames. Reject path-shaped values rather than normalizing them into
+    a collision (for example ``gp/short`` and ``gp_short``); CLI callers already apply the same
+    plain-id rule through ``validate_ac_id``.
+    """
+    if layout is None:
+        return ""
+    if (
+        not isinstance(layout, str)
+        or not layout
+        or ".." in layout
+        or re.fullmatch(r"[A-Za-z0-9._-]+", layout) is None
+    ):
+        raise ValueError(f"unsafe track layout id {layout!r} (allowed: letters/digits/._-)")
+    return f"__layout-{layout}"
+
+
 def plant_artifact_path(
     user_dir: Path,
     car_id: str,
     track_id: str,
     setup: str | None = None,
     setup_ini: str | Path | None = None,
+    *,
+    layout: str | None = None,
 ) -> Path:
-    return Path(user_dir) / "plant_id" / f"{car_id}__{track_id}{_setup_key(setup, setup_ini)}.json"
+    filename = f"{car_id}__{track_id}{_layout_key(layout)}{_setup_key(setup, setup_ini)}.json"
+    return Path(user_dir) / "plant_id" / filename
 
 
 def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
 
-    The artifact is keyed by car+track+setup (``result['setup']`` — the stem, or None for the
-    default setup), so a default-setup plant is never silently reused for a different setup.
+    The artifact is keyed by car+track+layout+setup. ``layout=None`` keeps the exact legacy
+    car+track+setup filename so existing single-layout artifacts remain loadable.
     """
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
@@ -1405,6 +1439,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
         raise ValueError(f"plant artifact needs car_id and track_id (got {car_id!r}/{track_id!r})")
     setup = result.get("setup")
     setup_ini = result.get("setup_ini")
+    layout = result.get("layout")
     from datetime import UTC, datetime
 
     payload = {
@@ -1412,7 +1447,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **result,
     }
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini)
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1426,14 +1461,15 @@ def load_plant_artifact(
     track_id: str,
     setup: str | None = None,
     setup_ini: str | Path | None = None,
+    *,
+    layout: str | None = None,
 ) -> dict | None:
     """Load + validate the combo's plant artifact; ``None`` when absent or invalid.
 
-    ``setup`` (+ the resolved ``setup_ini`` content hash) is part of the combo identity — a request
-    with ``--setup X`` only loads a plant measured under that exact setup file, so setup-changed
-    gear ratios / FF can't be silently reused (Codex review).
+    ``layout`` and ``setup`` (+ the resolved ``setup_ini`` content hash) are part of the combo
+    identity. A request for one layout can never reuse a plant measured on another layout.
     """
-    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini)
+    path = plant_artifact_path(user_dir, car_id, track_id, setup, setup_ini, layout=layout)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
@@ -1444,6 +1480,11 @@ def load_plant_artifact(
     ):
         return None
     if payload.get("car_id") != car_id or payload.get("track_id") != track_id:
+        return None
+    # The filename prevents normal cross-layout lookup; the payload check also rejects a copied or
+    # renamed artifact whose stored physical-course identity does not match the requested layout.
+    # Missing layout in v1/v2 artifacts is equivalent to None, preserving single-layout back-compat.
+    if payload.get("layout") != layout:
         return None
     # Setup identity (name + content hash) is ALREADY enforced by the filename we opened
     # (`plant_artifact_path(..., setup, setup_ini)` built from the REQUEST's readable setup_ini).

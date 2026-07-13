@@ -432,8 +432,15 @@ def test_ggv_model_roundtrip_and_rejects_nan():
     with pytest.raises(ValueError):
         GGVModel.from_dict({k: v for k, v in m.to_dict().items() if k != "brake_b0_g"})
     # Positivity/range gates (Codex P2): a non-positive ellipse_n would crash the ggv path (divide),
-    # a non-positive lateral grip/cap would zero the envelope -> reject, don't construct.
-    for bad in ({"ellipse_n": 0.0}, {"ellipse_n": -1.5}, {"ellipse_n": 99.0}, {"mu_lat_g": 0.0}):
+    # a non-positive lateral grip/cap would zero the envelope, and a negative drive floor can make
+    # the forward speed-profile pass take sqrt of a negative radicand -> reject, don't construct.
+    for bad in (
+        {"ellipse_n": 0.0},
+        {"ellipse_n": -1.5},
+        {"ellipse_n": 99.0},
+        {"mu_lat_g": 0.0},
+        {"drive_min_g": -0.1},
+    ):
         with pytest.raises(ValueError):
             GGVModel.from_dict({**m.to_dict(), **bad})
 
@@ -442,11 +449,12 @@ def test_blend_never_raises_lateral_above_prior():
     prior = _prior()
     # A measured HIGHER lateral must NOT lift the plant (aero-lateral spins the GT3, #259).
     grippier = _measured(1.9, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=200)
-    b = blend_ggv_safe(grippier, prior)
+    b = blend_ggv_safe(grippier, prior, prior_name="custom_prior")
     assert b.mu_lat_g == prior.mu_lat_g
     assert b.k_aero_lat == 0.0
     assert b.ay_cap_g == prior.ay_cap_g
     assert b.provenance["blend_source"]["lateral"] == "prior"
+    assert b.provenance["prior"] == "custom_prior"
 
 
 def test_blend_pins_lateral_to_prior_even_when_measured_lower():

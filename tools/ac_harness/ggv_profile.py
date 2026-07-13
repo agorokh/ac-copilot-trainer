@@ -152,6 +152,10 @@ class GGVModel:
             )
         if vals["mu_lat_g"] <= 0.0:
             raise ValueError(f"GGVModel.from_dict: mu_lat_g must be positive: {vals['mu_lat_g']!r}")
+        if vals["drive_min_g"] < 0.0:
+            raise ValueError(
+                f"GGVModel.from_dict: drive_min_g must be non-negative: {vals['drive_min_g']!r}"
+            )
         for f in ("ay_cap_g", "ax_brake_cap_g"):
             if f in vals and vals[f] <= 0.0:
                 raise ValueError(f"GGVModel.from_dict: {f} must be positive: {vals[f]!r}")
@@ -306,6 +310,7 @@ def blend_ggv_safe(
     measured: GGVModel,
     prior: GGVModel,
     *,
+    prior_name: str = "injected_prior",
     min_brake_bins: int = 2,
     min_accel_bins: int = 2,
 ) -> GGVModel:
@@ -402,7 +407,7 @@ def blend_ggv_safe(
             "hull_points": hull_points,
             "bins": prov.get("bins", {}),
         },
-        "prior": "generic_gt3_ggv",
+        "prior": prior_name,
         # A conservative handshake under-measures the true limit; a measured value below the prior
         # is a lower bound, not a weaker-car signal. Recorded for a future slip-saturation pass.
         "note": (

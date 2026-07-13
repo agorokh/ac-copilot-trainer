@@ -1775,6 +1775,7 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             speed_profile,
             car_id=config.car_id or "",
             track_id=config.track_id,
+            layout=config.track_layout,
             setup=(Path(config.setup).stem if config.setup else None),
             setup_ini=(str(config.setup_ini) if config.setup_ini else None),
             # Fresh sink owned by the controller; rig_drive copies it into DriveStats.payload so
@@ -1792,6 +1793,7 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             # safe-envelope-blended against (enables the ggv artifact block + the brake-at-speed
             # probe). The harness owns the prior so the controller stays import-clean of auto_drive.
             prior_ggv=generic_gt3_ggv(),
+            prior_ggv_name="generic_gt3_ggv",
         )
     raise ValueError(
         f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
@@ -2402,9 +2404,9 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     except ValueError as exc:
         print(f"auto-drive: {exc}")
         return 2
-    # Plant artifacts are keyed by car+track (#532). A preset-only run (``--cm-preset`` without
-    # ``--car``) has no car id, so BOTH the handshake (which persists an artifact) and
-    # ``--use-plant full`` (which must load one) need ``--car`` explicitly — otherwise the
+    # Plant artifacts are keyed by car+track+layout+setup (#532/#552). A preset-only run
+    # (``--cm-preset`` without ``--car``) has no car id, so BOTH the handshake (which persists one)
+    # and ``--use-plant full`` (which must load one) need ``--car`` explicitly — otherwise the
     # handshake would run the whole rig drive and then crash in ``save_plant_artifact`` with an
     # empty car id (Codex review), and ``--use-plant full`` would silently skip its own hard
     # requirement and drive on generic constants.
@@ -2440,13 +2442,18 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             plant_ggv_model,
         )
 
-        # Key by setup + its CONTENT (#532 Codex review): a plant measured on one setup must not be
-        # reused for a different setup, and two files sharing a basename must not collide. Uses the
-        # single shared config.setup_ini resolved above (same identity the handshake save uses).
+        # Key by layout plus setup CONTENT (#532/#552): neither another physical course nor another
+        # setup may reuse this plant. Uses the same track_layout + config.setup_ini identity that
+        # the handshake result carries into save_plant_artifact.
         setup_key = Path(config.setup).stem if config.setup else None
         setup_ini_key = config.setup_ini
         artifact = load_plant_artifact(
-            user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            setup_ini_key,
+            layout=config.track_layout,
         )
         if artifact is not None:
             config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
@@ -2456,7 +2463,12 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             config.plant_ggv = plant_ggv_model(artifact)
             plant_artifact_used = str(
                 plant_artifact_path(
-                    user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
+                    user_dir,
+                    config.car_id,
+                    config.track_id,
+                    setup_key,
+                    setup_ini_key,
+                    layout=config.track_layout,
                 )
             )
             ggv_note = (

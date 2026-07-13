@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tools.ac_harness.auto_drive import generic_gt3_ggv
+from tools.ac_harness.auto_drive import AutoDriveConfig, _build_driver, generic_gt3_ggv
 from tools.ac_harness.ggv_profile import GGVModel
 from tools.ac_harness.plant_id import (
     PLANT_SCHEMA_VERSION,
@@ -590,6 +590,42 @@ def test_artifact_keyed_by_setup(tmp_path):
     assert load_plant_artifact(tmp_path, "test_car", "test_oval", "Aggressive") is None
 
 
+def test_artifact_keyed_by_layout_with_legacy_none_back_compat(tmp_path):
+    legacy = plant_artifact_path(tmp_path, "test_car", "test_oval")
+    assert legacy.name == "test_car__test_oval.json"
+
+    layout_a = _result_dict()
+    layout_a["layout"] = "gp"
+    layout_a["constants"]["rpm_up"] = 8100.0
+    path_a = save_plant_artifact(tmp_path, layout_a)
+    assert path_a.name == "test_car__test_oval__layout-gp.json"
+    assert (
+        plant_artifact_path(tmp_path, "test_car", "test_oval", "Foo", layout="gp").name
+        == "test_car__test_oval__layout-gp__setup-Foo.json"
+    )
+    loaded_a = load_plant_artifact(tmp_path, "test_car", "test_oval", layout="gp")
+    assert loaded_a is not None and loaded_a["constants"]["rpm_up"] == 8100.0
+
+    # A missing B artifact never falls back to A. Even if an A file is copied/renamed to B's key,
+    # the stored layout identity rejects it rather than driving on the wrong physical course.
+    assert load_plant_artifact(tmp_path, "test_car", "test_oval", layout="short") is None
+    path_b = plant_artifact_path(tmp_path, "test_car", "test_oval", layout="short")
+    path_b.write_bytes(path_a.read_bytes())
+    assert load_plant_artifact(tmp_path, "test_car", "test_oval", layout="short") is None
+
+    layout_b = _result_dict()
+    layout_b["layout"] = "short"
+    layout_b["constants"]["rpm_up"] = 7200.0
+    save_plant_artifact(tmp_path, layout_b)
+    loaded_b = load_plant_artifact(tmp_path, "test_car", "test_oval", layout="short")
+    assert loaded_b is not None and loaded_b["constants"]["rpm_up"] == 7200.0
+
+
+def test_artifact_layout_rejects_path_shaped_id(tmp_path):
+    with pytest.raises(ValueError, match="unsafe track layout"):
+        plant_artifact_path(tmp_path, "test_car", "test_oval", layout="../gp")
+
+
 def test_artifact_load_portable_when_creator_setup_ini_unreadable(tmp_path):
     # Daemon HIGH: the load must NOT re-hash the STORED creator absolute setup_ini path (unreadable
     # on another machine). Save with an ini, then load with a DIFFERENT-path ini of the same
@@ -640,6 +676,29 @@ def test_handshake_set_phys_read_injection():
 
     ctrl.set_phys_read(lambda: SimpleNamespace(wheel_omega=(1.0, 1.0, 1.0, 1.0)))
     assert ctrl._read_phys().wheel_omega == (1.0, 1.0, 1.0, 1.0)
+
+
+def test_handshake_layout_flows_through_controller_result_and_build_driver():
+    line = _stadium_line()
+    profile = _profile_for(line)
+    ctrl = HandshakeController(line, profile, track_id="test_oval", layout="gp", sink={})
+    ctrl.finalize(now=0.0)
+    assert ctrl.layout == "gp"
+    assert ctrl.result is not None and ctrl.result.layout == "gp"
+    assert ctrl.sink["result"]["layout"] == "gp"
+
+    built = _build_driver(
+        AutoDriveConfig(
+            driver="handshake",
+            car_id="test_car",
+            track_id="test_oval",
+            track_layout="short",
+        ),
+        line,
+        profile,
+    )
+    assert isinstance(built, HandshakeController)
+    assert built.layout == "short"
 
 
 def test_plant_driver_kwargs_full_raises_on_missing_steering():
