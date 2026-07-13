@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T09:55:00Z
+last_updated: 2026-07-13T11:05:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
@@ -28,6 +29,17 @@ relates_to:
 **Repo:** ac-copilot-trainer.
 
 **Delivered (2026-07-13, latest):** PR
+[#547](https://github.com/agorokh/ac-copilot-trainer/pull/547) **MERGED**
+([`9265521`](https://github.com/agorokh/ac-copilot-trainer/commit/92655217a0278214569abb3be5520258616d2398))
+— **#531 Phase 1**: the tablet GT dashboard is LIVE on the real PRITOM P7 in Fully Kiosk
+fullscreen at `/tablet/dash` (USB `adb reverse tcp:8765`) — car-adaptive electronics from real
+per-car spinner ranges, woven coaching (BRAKE-takeover lane), honest LIVE/STALE/WAITING states.
+Design artifacts landed on main with it.
+[#531](https://github.com/agorokh/ac-copilot-trainer/issues/531) stays OPEN for Phase 2+
+(Parts D–I) and the live in-sim acceptance pass. Node:
+[[issue-531-phase1-tablet-dash-2026-07-13]].
+
+**Delivered (2026-07-13, earlier):** PR
 [#551](https://github.com/agorokh/ac-copilot-trainer/pull/551) **MERGED**
 ([`155aac6`](https://github.com/agorokh/ac-copilot-trainer/commit/155aac6ec24611212fbbb6b8bfb9cf7adf498a8a)),
 closing [#552](https://github.com/agorokh/ac-copilot-trainer/issues/552). Plant identity now includes
