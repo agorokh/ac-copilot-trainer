@@ -406,7 +406,12 @@ def _launch_drive(  # pragma: no cover - rig-only
         track,
         "--driver",
         driver,
+        # Cover BOTH auto_drive budgets: the drive thread self-terminates on --drive-seconds
+        # (default 300s) and the tap on --tap-seconds, so a long --sample-seconds needs both
+        # raised or the car brakes mid-sample.
         "--tap-seconds",
+        str(tap_seconds),
+        "--drive-seconds",
         str(tap_seconds),
     ]
     if ac_user_dir is not None:
