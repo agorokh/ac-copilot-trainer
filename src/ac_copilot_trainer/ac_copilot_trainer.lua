@@ -2409,17 +2409,20 @@ function script.update(dt)
           local base = activePath:match("([^/\\]+)$")
           local activeName = base and base:gsub("%.[iI][nN][iI]$", "") or nil
           if activeName == "" then activeName = nil end
-          wsBridge.publishTopic("setup.active", {
+          -- Settled requires the SEND to have succeeded too: publishTopic returns false
+          -- until the v1 handshake completes, and a dropped broadcast must keep the retry
+          -- armed (Qodo on PR #547).
+          local sent = wsBridge.publishTopic("setup.active", {
             name = activeName,
             path = activePath,
             changed_at = (os and os.time and os.time()) or 0,
           })
-          settled = true
+          settled = sent == true
         elseif noSetupConfirmed or clearOnUnresolved then
-          wsBridge.publishTopic("setup.active", {
+          local sent = wsBridge.publishTopic("setup.active", {
             changed_at = (os and os.time and os.time()) or 0,
           })
-          settled = noSetupConfirmed == true
+          settled = noSetupConfirmed == true and sent == true
         end
       end)
       return settled
