@@ -718,9 +718,11 @@ def test_handshake_emits_safe_ggv_block_with_prior():
     assert ggv is not None and ggv["ok"], ggv
     assert ctrl.result_diagnostics["friction_rows"] >= ctrl.min_friction_rows
     model = GGVModel.from_dict(ggv["model"])
-    # Safe-envelope guarantees: never above the prior laterally, aero-lateral stays 0, caps kept.
+    # Safe-envelope guarantees: lateral pinned to the prior (a conservative drive under-measures the
+    # limit, so it never lowers/regresses), aero-lateral stays 0, caps kept.
     assert model.k_aero_lat == 0.0
-    assert model.mu_lat_g <= prior.mu_lat_g + 1e-9
+    assert model.mu_lat_g == prior.mu_lat_g
+    assert model.provenance["blend_source"]["lateral"] == "prior"
     assert model.ay_cap_g == prior.ay_cap_g
     assert model.ax_brake_cap_g == prior.ax_brake_cap_g
     # Provenance labels each curve measured-vs-prior.

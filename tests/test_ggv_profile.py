@@ -388,14 +388,26 @@ def _prior() -> GGVModel:
     return GGVModel(1.5, 0.0, 0.955, 0.0214, 1.1, -0.0117, 0.35, 1.55, ay_cap_g=1.8)
 
 
-def _measured(mu, *, corner_bins, brake_bins, accel_bins, hull_points, ellipse_n=1.3) -> GGVModel:
+def _measured(
+    mu,
+    *,
+    corner_bins,
+    brake_bins,
+    accel_bins,
+    hull_points,
+    ellipse_n=1.3,
+    brake_b0=0.6,  # below the prior (0.955) by default -> does NOT trigger the raise branch
+    brake_b1=0.02,
+    drive_b0=0.7,  # below the prior (1.1) by default
+    drive_b1=-0.01,
+) -> GGVModel:
     return GGVModel(
         mu_lat_g=mu,
         k_aero_lat=0.0,
-        brake_b0_g=1.2,
-        brake_b1=0.03,
-        drive_b0_g=1.3,
-        drive_b1=-0.01,
+        brake_b0_g=brake_b0,
+        brake_b1=brake_b1,
+        drive_b0_g=drive_b0,
+        drive_b1=drive_b1,
         drive_min_g=0.4,
         ellipse_n=ellipse_n,
         provenance={
@@ -423,7 +435,7 @@ def test_ggv_model_roundtrip_and_rejects_nan():
 
 def test_blend_never_raises_lateral_above_prior():
     prior = _prior()
-    # A confidently-measured HIGHER lateral must NOT lift the plant (aero-lateral spins the GT3).
+    # A measured HIGHER lateral must NOT lift the plant (aero-lateral spins the GT3, #259).
     grippier = _measured(1.9, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=200)
     b = blend_ggv_safe(grippier, prior)
     assert b.mu_lat_g == prior.mu_lat_g
@@ -432,13 +444,37 @@ def test_blend_never_raises_lateral_above_prior():
     assert b.provenance["blend_source"]["lateral"] == "prior"
 
 
-def test_blend_lowers_lateral_for_confident_weaker_car():
+def test_blend_pins_lateral_to_prior_even_when_measured_lower():
+    # A conservative handshake under-measures the lateral limit, so a measured value BELOW the prior
+    # is a lower bound, not a weaker car — it must NOT lower the plant (that would regress the
+    # reference car). Lateral is pinned to the prior regardless of the measured value.
     prior = _prior()
-    weaker = _measured(1.15, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=200)
-    b = blend_ggv_safe(weaker, prior)
-    assert abs(b.mu_lat_g - 1.15) < 1e-9  # weaker car correctly identified
-    assert b.provenance["blend_source"]["lateral"] == "measured(<prior)"
-    assert b.provenance["blend_source"]["brake"] == "measured"
+    lower = _measured(1.15, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=200)
+    b = blend_ggv_safe(lower, prior)
+    assert b.mu_lat_g == prior.mu_lat_g  # NOT lowered to 1.15
+    assert b.provenance["blend_source"]["lateral"] == "prior"
+    # The measured lower bound is still recorded (for a future slip-saturation pass).
+    assert b.provenance["measured"]["mu_lat_g"] == 1.15
+
+
+def test_blend_raises_braking_when_measured_confidently_exceeds_prior():
+    # Braking is safely limit-reachable (straight-line): a measured brake curve that dominates the
+    # prior across the covered speeds IS adopted (real evidence of more braking capability).
+    prior = _prior()
+    strong = _measured(
+        1.2,
+        corner_bins=6,
+        brake_bins=6,
+        accel_bins=6,
+        hull_points=200,
+        brake_b0=1.3,
+        brake_b1=0.03,  # > prior (0.955 + 0.0214 v) at both 40 and 180 km/h
+    )
+    b = blend_ggv_safe(strong, prior)
+    assert (b.brake_b0_g, b.brake_b1) == (1.3, 0.03)
+    assert b.provenance["blend_source"]["brake"] == "measured(>prior)"
+    assert b.ax_brake_cap_g == prior.ax_brake_cap_g  # hard cap still kept
+    assert b.mu_lat_g == prior.mu_lat_g  # lateral untouched
 
 
 def test_blend_sparse_bins_fall_back_to_prior():

@@ -293,7 +293,6 @@ def blend_ggv_safe(
     measured: GGVModel,
     prior: GGVModel,
     *,
-    min_corner_bins: int = 2,
     min_brake_bins: int = 2,
     min_accel_bins: int = 2,
     min_hull_points: int = 20,
@@ -301,22 +300,28 @@ def blend_ggv_safe(
     """Safe-envelope blend of a per-combo MEASURED GGVModel with a trusted PRIOR (#532 Part B).
 
     The measured model comes from :func:`ggv_from_telemetry` over probe-lap rows; the prior is the
-    live-verified generic plant. The blend is the deterministic guard that turns a possibly-sparse
-    measurement into a plant that is never *more* optimistic than warranted:
+    live-verified generic plant. The blend is the deterministic guard that keeps the operating plant
+    from ever being MORE optimistic than warranted, while never regressing the reference combo:
 
-    * **Lateral grip is never extrapolated upward above the prior.** An aero-lateral term spins the
-      GT3 out (live-disproven, #259/#244), so ``k_aero_lat`` stays 0 and the lateral cap stays the
-      prior's. A confidently-cornered measurement may only *lower* lateral grip (a genuinely weaker
-      car); a thin/absent lateral measurement keeps the prior. So the reference car the prior nails
-      cannot regress, while a weaker car is still identified as weaker.
-    * **Braking / drive accel** use the measured curve only where the probe confidently covered the
-      envelope (``>= min_*_bins`` fitted speed bins); otherwise the prior curve. The prior's hard
-      caps (``ay_cap_g`` / ``ax_brake_cap_g``) are always kept.
-    * **The ellipse exponent reverts to the prior** unless the ``(lat, lon)`` hull was rich enough
-      to fit it — a wrong lat/long coupling is the biggest silent-spin risk (Council 2026-07-13).
+    * **Lateral grip: the prior is BOTH ceiling and floor.** Ceiling — never extrapolate up (an
+      aero-lateral term spins the GT3 out, live-disproven #259/#244; ``k_aero_lat`` stays 0, the cap
+      stays the prior's). Floor — a conservative, AC-valid handshake never reaches the LATERAL grip
+      limit (it drives clean at moderate pace by design), so a measured lateral BELOW the prior is a
+      *lower bound*, not evidence of a weaker car; lowering the plant to it would regress the very
+      car the prior nails, for no safety gain (the live slip limiter already guards over-drive).
+      Genuine per-combo lateral lowering needs slip-saturation evidence / a limit-reaching lateral
+      probe — deferred (unsafe to push a GT3 to its lateral limit unattended). So lateral == prior.
+    * **Braking / drive accel** CAN be probed to their limits safely (straight-line braking, WOT
+      accel). Adopt the measured curve ONLY where it CONFIDENTLY EXCEEDS the prior across the
+      covered speeds (evidence of MORE capability); otherwise the prior — a diluted
+      under-measurement must never LOWER braking/accel and regress. The prior's hard caps are kept.
+    * **The ellipse exponent reverts to the prior** unless the ``(lat, lon)`` hull is rich enough to
+      fit it — a wrong lat/long coupling is the biggest silent-spin risk (Council 2026-07-13).
 
-    Provenance records, per curve, whether the blended value is ``measured`` or ``prior``, plus the
-    measured per-bin coverage — so the artifact labels measured-vs-prior bins.
+    Net: the reference car (and any conservatively-driven combo) reproduces the prior — no
+    regression, no spin — while a car that DEMONSTRABLY brakes / accelerates harder than the prior
+    gets that measured improvement. The measured lower-bound envelope is recorded in provenance for
+    a future slip-saturation pass. Provenance labels each curve ``measured`` vs ``prior``.
     """
     prov = dict(measured.provenance or {})
     corner_bins = int(prov.get("lat_corner_bins", 0) or 0)
@@ -324,38 +329,37 @@ def blend_ggv_safe(
     accel_bins = int(prov.get("accel_bins", 0) or 0)
     hull_points = int(prov.get("hull_points", 0) or 0)
 
-    # Lateral: cap at the prior; a confident measurement may only LOWER it (weaker car), not raise.
+    # Lateral: the prior is ceiling AND floor (see docstring) — a non-limit measurement is only a
+    # lower bound, so it never lowers the operating plant and never regresses the reference car.
+    mu_lat, lat_src = prior.mu_lat_g, "prior"
+
+    # Braking: adopt measured ONLY where it CONFIDENTLY EXCEEDS the prior across the covered speeds.
+    brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
     if (
-        corner_bins >= min_corner_bins
-        and math.isfinite(measured.mu_lat_g)
-        and measured.mu_lat_g < prior.mu_lat_g
+        brake_bins >= min_brake_bins
+        and _finite_ggv(measured.brake_b0_g, measured.brake_b1)
+        and _curve_exceeds(measured.brake_b0_g, measured.brake_b1, prior.brake_b0_g, prior.brake_b1)
     ):
-        mu_lat, lat_src = measured.mu_lat_g, "measured(<prior)"
-    else:
-        mu_lat, lat_src = prior.mu_lat_g, "prior"
+        brake_b0, brake_b1, brake_src = measured.brake_b0_g, measured.brake_b1, "measured(>prior)"
 
-    # Braking: measured where confidently covered (kept under the prior's hard cap), else prior.
-    if brake_bins >= min_brake_bins and _finite_ggv(measured.brake_b0_g, measured.brake_b1):
-        brake_b0, brake_b1, brake_src = measured.brake_b0_g, measured.brake_b1, "measured"
-    else:
-        brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
-
-    # Drive accel: measured where the WOT sweep covered it, else prior (kept TC-off-safe live).
-    if accel_bins >= min_accel_bins and _finite_ggv(
-        measured.drive_b0_g, measured.drive_b1, measured.drive_min_g
+    # Drive accel: same rule (the WOT sweep reaches full throttle; aggressive accel is TC-off-safe
+    # live via the slip limiter). Measured only where it confidently exceeds the prior, else prior.
+    drive_b0, drive_b1, drive_min, drive_src = (
+        prior.drive_b0_g,
+        prior.drive_b1,
+        prior.drive_min_g,
+        "prior",
+    )
+    if (
+        accel_bins >= min_accel_bins
+        and _finite_ggv(measured.drive_b0_g, measured.drive_b1, measured.drive_min_g)
+        and _curve_exceeds(measured.drive_b0_g, measured.drive_b1, prior.drive_b0_g, prior.drive_b1)
     ):
         drive_b0, drive_b1, drive_min, drive_src = (
             measured.drive_b0_g,
             measured.drive_b1,
             measured.drive_min_g,
-            "measured",
-        )
-    else:
-        drive_b0, drive_b1, drive_min, drive_src = (
-            prior.drive_b0_g,
-            prior.drive_b1,
-            prior.drive_min_g,
-            "prior",
+            "measured(>prior)",
         )
 
     # Ellipse exponent: revert to prior unless the hull is rich enough to fit it confidently.
@@ -385,6 +389,12 @@ def blend_ggv_safe(
             "bins": prov.get("bins", {}),
         },
         "prior": "generic_gt3_ggv",
+        # A conservative handshake under-measures the true limit; a measured value below the prior
+        # is a lower bound, not a weaker-car signal. Recorded for a future slip-saturation pass.
+        "note": (
+            "lateral pinned to prior (conservative drive under-measures the lateral limit); "
+            "braking/drive adopted only where measured>prior"
+        ),
     }
     return GGVModel(
         mu_lat_g=mu_lat,
@@ -399,6 +409,28 @@ def blend_ggv_safe(
         ax_brake_cap_g=prior.ax_brake_cap_g,
         provenance=blend_prov,
     )
+
+
+def _curve_exceeds(
+    m0: float,
+    m1: float,
+    p0: float,
+    p1: float,
+    *,
+    v_lo: float = 11.0,
+    v_hi: float = 50.0,
+    margin: float = 0.03,
+) -> bool:
+    """True iff the linear curve ``m0+m1*v`` exceeds ``p0+p1*v`` (by ``margin`` g) at BOTH speeds.
+
+    For two lines, exceeding at both endpoints of ``[v_lo, v_hi]`` (m/s; ~40..180 km/h) means the
+    measured curve dominates the prior across the whole covered range — the only case where a
+    measured braking/accel envelope is confidently BETTER than the prior and safe to adopt (a
+    diluted under-measurement fails this, so it never lowers the plant).
+    """
+    return (m0 + m1 * v_lo) >= (p0 + p1 * v_lo) + margin and (m0 + m1 * v_hi) >= (
+        p0 + p1 * v_hi
+    ) + margin
 
 
 def _finite_ggv(*values: float) -> bool:
