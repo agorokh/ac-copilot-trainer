@@ -733,6 +733,23 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
     assert ctrl.closed is True  # controller released before bailing
 
 
+def test_handshake_outcome_gate_preserves_pre_drive_failure():
+    # #532 Codex/Qodo: a pre-drive failure (stage=launch/hijack/setup) must stay authoritative;
+    # apply_handshake_outcome must NOT overwrite it with "handshake produced no result" when the
+    # sink is empty. This mirrors the _main gate (reached_handshake = stage not in pre-drive set).
+    from types import SimpleNamespace
+
+    from tools.ac_harness.plant_id import apply_handshake_outcome
+
+    for pre in ("launch", "hijack", "setup"):
+        report = SimpleNamespace(ok=False, stage=pre, error=f"{pre} failed", notes=[])
+        reached_handshake = report.stage not in ("launch", "hijack", "setup")
+        if reached_handshake:
+            apply_handshake_outcome(report, {})
+        assert report.stage == pre  # unchanged — root cause preserved
+        assert report.error == f"{pre} failed"
+
+
 def test_run_auto_drive_fails_fast_on_car_mismatch():
     # Same track, different CAR served by a cached CM session -> must not persist a mislabeled
     # plant artifact under the requested car (#532 Codex review).

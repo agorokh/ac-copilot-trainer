@@ -56,6 +56,7 @@ import argparse
 import asyncio
 import configparser
 import json
+import logging
 import math
 import re
 import threading
@@ -1758,6 +1759,7 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             speed_profile,
             car_id=config.car_id or "",
             track_id=config.track_id,
+            setup=(Path(config.setup).stem if config.setup else None),
             sink=config.handshake_sink,
             phys_read="auto",
             # Moderate cornering pace (fixed, not the flat-out ggv pace) so more corners exceed the
@@ -2040,8 +2042,14 @@ def rig_drive(  # pragma: no cover - rig-only
         if finalize is not None and not getattr(driver, "finished", True):
             try:
                 finalize(time.monotonic() - t0)
-            except Exception:  # noqa: BLE001 - finalization must not mask the drive outcome
-                pass
+            except Exception as exc:  # noqa: BLE001 - must not mask the drive outcome, but be LOUD
+                # Do not re-raise (that would mask the drive result), but the failure MUST be
+                # observable: log the traceback AND annotate the outcome so a crashed finalize
+                # never silently becomes an opaque "handshake produced no result" (Qodo review).
+                logging.getLogger(__name__).exception("handshake finalize() crashed")
+                stats.reason = (stats.reason + "; " if stats.reason else "") + (
+                    f"handshake finalize crashed: {type(exc).__name__}: {exc}"
+                )
         if phys_reader is not None:
             phys_reader.close()
         for _ in range(20):
@@ -2370,10 +2378,16 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             plant_driver_kwargs,
         )
 
-        artifact = load_plant_artifact(user_dir, config.car_id, config.track_id)
+        # Key by setup too (#532 Codex review): a plant measured on the default setup must not be
+        # reused for a different-setup run. config.setup is the requested setup name (available
+        # from args before setup_ini is resolved), which is exactly the key the handshake stored.
+        setup_key = Path(config.setup).stem if config.setup else None
+        artifact = load_plant_artifact(user_dir, config.car_id, config.track_id, setup_key)
         if artifact is not None:
             config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
-            plant_artifact_used = str(plant_artifact_path(user_dir, config.car_id, config.track_id))
+            plant_artifact_used = str(
+                plant_artifact_path(user_dir, config.car_id, config.track_id, setup_key)
+            )
             print(
                 f"auto-drive: plant artifact loaded ({args.use_plant}: "
                 f"{sorted(config.plant_kwargs)}) <- {plant_artifact_used}"
@@ -2494,12 +2508,17 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         "journal_dir": str(journal_dir) if journal_dir else None,
     }
     if config.driver == "handshake":
-        # #532: fold the handshake outcome into the report (FAIL at stage="handshake" when a
-        # probe missed its gate) and persist a PASSED result as the combo's plant artifact.
+        # #532: fold the handshake outcome into the report and persist a PASSED result as the
+        # combo's plant artifact. Diagnostics ALWAYS go to extras. But only OVERWRITE the report
+        # stage/error when the drive actually reached the handshake — a pre-drive failure
+        # (stage=launch/hijack/setup, e.g. the track/car guard) is the authoritative root cause
+        # and must NOT be clobbered with "handshake produced no result" (Codex + Qodo review).
         from tools.ac_harness.plant_id import apply_handshake_outcome, save_plant_artifact
 
-        apply_handshake_outcome(report, config.handshake_sink)
         extras["handshake"] = dict(config.handshake_sink)
+        reached_handshake = report.stage not in ("launch", "hijack", "setup")
+        if reached_handshake:
+            apply_handshake_outcome(report, config.handshake_sink)
         if config.handshake_sink.get("ok"):
             artifact_path = save_plant_artifact(user_dir, config.handshake_sink["result"])
             extras["plant_artifact_saved"] = str(artifact_path)

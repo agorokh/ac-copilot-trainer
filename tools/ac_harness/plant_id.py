@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dc_replace
 from pathlib import Path
@@ -93,6 +94,7 @@ class HandshakeResult:
     laps_used: int
     duration_s: float
     measurements: tuple[ProbeMeasurement, ...]
+    setup: str | None = None  # the setup the plant was measured under (None = default)
 
     def failed(self) -> list[ProbeMeasurement]:
         return [m for m in self.measurements if not m.passed]
@@ -110,6 +112,7 @@ class HandshakeResult:
             "ok": self.ok,
             "car_id": self.car_id,
             "track_id": self.track_id,
+            "setup": self.setup,
             "laps_used": self.laps_used,
             "duration_s": round(self.duration_s, 1),
             "constants": self.constants(),
@@ -627,6 +630,7 @@ class HandshakeController:
         *,
         car_id: str = "",
         track_id: str = "",
+        setup: str | None = None,
         sink: dict | None = None,
         phys_read=None,  # Callable[[], PhysFrame | None] | "auto" | None
         pace: float = 0.65,
@@ -650,6 +654,7 @@ class HandshakeController:
         self._base = RacingDriver(fast_line, speed_profile, pace=pace, max_speed_kmh=max_speed_kmh)
         self.car_id = car_id
         self.track_id = track_id
+        self.setup = setup
         self._sink = sink if sink is not None else {}
         self._phys_read = phys_read
         self.max_laps = max_laps
@@ -1008,7 +1013,17 @@ class HandshakeController:
                 return base
             st["stage"] = "wot"
             st["t_stage"] = now
-            d.update({"rpm_hist": [], "last_shift": now, "start_gear": gear})
+            # Remember where THIS attempt's samples begin, so a failed pull (<2 gears) can discard
+            # exactly its own samples and not let two disjoint single-gear pulls masquerade as one
+            # continuous multi-gear sweep (Codex review).
+            d.update(
+                {
+                    "rpm_hist": [],
+                    "last_shift": now,
+                    "start_gear": gear,
+                    "samples_start": len(self._sweep_samples),
+                }
+            )
         # WOT pull
         if remaining < brake_margin_m:
             self._end_sweep(now)
@@ -1056,11 +1071,17 @@ class HandshakeController:
         return (v1 - v0) / (t1 - t0)
 
     def _end_sweep(self, now: float) -> None:
-        gears = {s["gear"] for s in self._sweep_samples}
+        # Judge THIS attempt only (from where its samples began), not the cumulative set: two
+        # disjoint single-gear pulls must not combine into a fake multi-gear sweep (Codex review).
+        start = (self._active or {}).get("data", {}).get("samples_start", 0)
+        attempt = self._sweep_samples[start:]
+        gears = {s["gear"] for s in attempt}
         self._active = None
         if len(gears) < 2:
-            # not a usable pull; retry on the next long straight (bounded by the failure cap so a
-            # track that never yields a multi-gear pull drops the sweep instead of looping forever)
+            # Not a usable pull: DISCARD this attempt's samples so they can't pollute a later one,
+            # then retry on the next long straight (bounded by the failure cap so a track that
+            # never yields a multi-gear pull drops the sweep instead of looping forever).
+            del self._sweep_samples[start:]
             self._requeue("accel_sweep", front=False, failed=True)
 
     def _step_coast(
@@ -1102,6 +1123,7 @@ class HandshakeController:
             ok=all(m.passed for m in measurements),
             car_id=self.car_id,
             track_id=self.track_id,
+            setup=self.setup,
             laps_used=self._laps,
             duration_s=now - (self._t_start if self._t_start is not None else now),
             measurements=measurements,
@@ -1138,21 +1160,25 @@ class HandshakeController:
 
 def _auto_phys_reader():  # pragma: no cover - rig-only
     """Lazy ``acpmf_physics`` reader for the live handshake (returns ``None``-safe callable)."""
-    from tools.ac_harness.racing_telemetry import PHYS_BYTES, parse_physics
+    from tools.ac_harness.racing_telemetry import parse_physics
     from tools.ac_harness.shared_memory import (
+        PHYSICS_MAP_BYTES,
         SHM_PHYSICS,
         SharedMemoryUnavailable,
         open_shared_memory,
     )
 
+    # Map+read the single unified physics-page size (shared_memory.PHYSICS_MAP_BYTES=160), which
+    # covers every field parse_physics unpacks — do NOT reintroduce a second buffer-size constant
+    # (daemon review: honor the cross-file map-size invariant).
     try:
-        shm = open_shared_memory(SHM_PHYSICS, PHYS_BYTES)
+        shm = open_shared_memory(SHM_PHYSICS, PHYSICS_MAP_BYTES)
     except SharedMemoryUnavailable:
         return None
 
     def read():
         try:
-            return parse_physics(shm.read(PHYS_BYTES))
+            return parse_physics(shm.read(PHYSICS_MAP_BYTES))
         except (ValueError, SharedMemoryUnavailable):
             return None
 
@@ -1162,18 +1188,39 @@ def _auto_phys_reader():  # pragma: no cover - rig-only
 # ---------------------------------------------------------------------------
 # Per-combo plant artifact (durable — NEVER .scratch; see module docstring)
 # ---------------------------------------------------------------------------
-def plant_artifact_path(user_dir: Path, car_id: str, track_id: str) -> Path:
-    return Path(user_dir) / "plant_id" / f"{car_id}__{track_id}.json"
+def _setup_key(setup: str | None) -> str:
+    """Filename-safe suffix identifying the setup a plant was measured under (empty = default).
+
+    A car SETUP changes gear ratios / final drive / response, so a plant measured on the default
+    setup must NOT be reused for a different-setup run (Codex review). The setup is part of the
+    combo identity: ``<car>__<track>`` (default) vs ``<car>__<track>__setup-<stem>``.
+    """
+    if not setup:
+        return ""
+    stem = re.sub(r"\.ini$", "", str(setup).replace("\\", "/").rsplit("/", 1)[-1])
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", stem)
+    return f"__setup-{safe}" if safe else ""
+
+
+def plant_artifact_path(
+    user_dir: Path, car_id: str, track_id: str, setup: str | None = None
+) -> Path:
+    return Path(user_dir) / "plant_id" / f"{car_id}__{track_id}{_setup_key(setup)}.json"
 
 
 def save_plant_artifact(user_dir: Path, result: dict) -> Path:
-    """Persist a PASSED handshake result as the combo's plant artifact (atomic write)."""
+    """Persist a PASSED handshake result as the combo's plant artifact (atomic write).
+
+    The artifact is keyed by car+track+setup (``result['setup']`` — the stem, or None for the
+    default setup), so a default-setup plant is never silently reused for a different setup.
+    """
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
     car_id = str(result.get("car_id") or "")
     track_id = str(result.get("track_id") or "")
     if not car_id or not track_id:
         raise ValueError(f"plant artifact needs car_id and track_id (got {car_id!r}/{track_id!r})")
+    setup = result.get("setup")
     from datetime import UTC, datetime
 
     payload = {
@@ -1181,7 +1228,7 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
         "created_utc": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         **result,
     }
-    path = plant_artifact_path(user_dir, car_id, track_id)
+    path = plant_artifact_path(user_dir, car_id, track_id, setup)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1189,9 +1236,16 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     return path
 
 
-def load_plant_artifact(user_dir: Path, car_id: str, track_id: str) -> dict | None:
-    """Load + validate the combo's plant artifact; ``None`` when absent or invalid."""
-    path = plant_artifact_path(user_dir, car_id, track_id)
+def load_plant_artifact(
+    user_dir: Path, car_id: str, track_id: str, setup: str | None = None
+) -> dict | None:
+    """Load + validate the combo's plant artifact; ``None`` when absent or invalid.
+
+    ``setup`` is part of the combo identity — a request with ``--setup X`` only loads a plant
+    measured under setup X (not the default-setup plant), so setup-changed gear ratios / FF can't
+    be silently reused (Codex review).
+    """
+    path = plant_artifact_path(user_dir, car_id, track_id, setup)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
@@ -1199,6 +1253,8 @@ def load_plant_artifact(user_dir: Path, car_id: str, track_id: str) -> dict | No
     if not isinstance(payload, dict) or payload.get("schema_version") != PLANT_SCHEMA_VERSION:
         return None
     if payload.get("car_id") != car_id or payload.get("track_id") != track_id:
+        return None
+    if _setup_key(payload.get("setup")) != _setup_key(setup):
         return None
     constants = payload.get("constants")
     if not isinstance(constants, dict) or not constants:

@@ -261,6 +261,29 @@ def test_handshake_finalize_on_drive_end_produces_partial_result():
     assert sink["result"] is prev
 
 
+def test_apply_handshake_outcome_success_only_when_reached():
+    # The clobber guard lives in auto_drive._main, but apply_handshake_outcome itself must still
+    # produce a "no result" outcome for an EMPTY sink (used only when the drive reached handshake).
+    from types import SimpleNamespace
+
+    report = SimpleNamespace(ok=True, stage="done", error=None, notes=[])
+    apply_handshake_outcome(report, {})
+    assert report.ok is False and report.stage == "handshake"
+
+
+def test_failed_sweep_attempt_samples_discarded():
+    # Two disjoint single-gear pulls must NOT combine into a fake multi-gear sweep. Simulate by
+    # driving the controller and asserting fit uses only same-attempt gears — here we unit-check
+    # the discard directly on the controller's sweep bookkeeping.
+    line = _stadium_line()
+    ctrl = HandshakeController(line, _profile_for(line), sink={})
+    # First failed attempt: one gear worth of samples, samples_start=0
+    ctrl._active = {"kind": "accel_sweep", "data": {"samples_start": 0}}
+    ctrl._sweep_samples = [{"gear": 2, "rpm": 5000, "speed_kmh": 100, "accel_mps2": 6.0}]
+    ctrl._end_sweep(1.0)
+    assert ctrl._sweep_samples == []  # single-gear attempt discarded
+
+
 def test_probe_failure_cap_drops_probe_and_completes():
     # A probe that can never satisfy its straight requirement must DROP after the cap so the
     # schedule can complete, rather than looping forever (#532 Spa sweep hang).
@@ -520,6 +543,24 @@ def test_artifact_load_rejects_partial_constants(tmp_path):
     path = save_plant_artifact(tmp_path, result)
     assert path.exists()
     assert load_plant_artifact(tmp_path, "test_car", "test_oval") is None
+
+
+def test_artifact_keyed_by_setup(tmp_path):
+    # A plant measured on the default setup must NOT be loaded for a --setup run, and vice versa.
+    default = _result_dict()
+    save_plant_artifact(tmp_path, default)
+    tuned = _result_dict()
+    tuned["setup"] = "Realistic_BB_v3"
+    tuned["constants"]["rpm_up"] = 8888.0
+    save_plant_artifact(tmp_path, tuned)
+    # default-key load gets the default plant, not the tuned one
+    d = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert d is not None and d["constants"]["rpm_up"] == 7600.0
+    # setup-key load gets the tuned plant
+    t = load_plant_artifact(tmp_path, "test_car", "test_oval", "Realistic_BB_v3")
+    assert t is not None and t["constants"]["rpm_up"] == 8888.0
+    # a setup with no matching artifact loads nothing (no silent default reuse)
+    assert load_plant_artifact(tmp_path, "test_car", "test_oval", "Aggressive") is None
 
 
 def test_plant_driver_kwargs_full_raises_on_missing_steering():
