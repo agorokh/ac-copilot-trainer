@@ -859,6 +859,120 @@ def test_run_auto_drive_track_mismatch_fails_fast_after_exhausting_relaunches():
     assert all(c.closed for c in controllers)  # every mismatched controller released
 
 
+def test_loaded_combo_mismatch_rules():
+    from tools.ac_harness.auto_drive import loaded_combo_mismatch
+
+    c = _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016")
+    assert loaded_combo_mismatch(c, None) is None  # unreadable → cannot confirm → no block
+    assert loaded_combo_mismatch(c, ("magione", "ks_porsche_911_gt3_r_2016")) is None  # match
+    assert "track" in (loaded_combo_mismatch(c, ("spa", "ks_porsche_911_gt3_r_2016")) or "")
+    assert "car" in (loaded_combo_mismatch(c, ("magione", "ks_audi_r8_lms")) or "")
+    assert loaded_combo_mismatch(c, ("", "")) is None  # empty loaded id → cannot confirm
+    c2 = _cfg(track_id="magione")  # no car requested → car not checked
+    assert loaded_combo_mismatch(c2, ("magione", "anything")) is None
+
+
+def test_setup_run_relaunches_on_cached_session_then_verifies():
+    # #537 (Codex P2): a --setup run whose first CM launch serves a cached wrong session fails setup
+    # fuel verification. The harness must RELAUNCH (bounded) rather than abort at stage="setup" on
+    # the first cached session, so setup A/B runs get the same #537 retry; attempt 2 loads the
+    # requested magione and the setup verifies.
+    acks = [
+        {"ok": False, "error": "fuel 60.0 != 45.0"},  # cached spa session — wrong fuel
+        {"ok": True, "name": "Realistic_BB_v3", "path": "x/Realistic_BB_v3.ini"},  # correct magione
+    ]
+    loaded_tracks = ["spa", "magione"]
+    launches: list[int] = []
+    record: dict = {}
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        return acks.pop(0)
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(
+                setup="Realistic_BB_v3",
+                track_id="magione",
+                car_id="ks_porsche_911_gt3_r_2016",
+                max_launches=3,
+            ),
+            launch=_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, total_distance_m=900.0), record),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=lambda c: (loaded_tracks.pop(0), "ks_porsche_911_gt3_r_2016"),
+        )
+    )
+    assert report.ok is True
+    assert report.stage != "setup"  # did not abort on the first cached session
+    assert len(launches) == 2  # relaunched once for the cached session
+    assert report.setup_applied is True
+    assert record["controller"] is not None  # drove on the correct-combo session
+
+
+def test_setup_run_cached_session_fails_setup_stage_after_budget():
+    # Bound: a PERSISTENT cached wrong session on a --setup run still FAILs (bounded), and the error
+    # names the cached-session cause so the evidence bundle isn't misread as a plain setup bug.
+    launches: list[int] = []
+
+    def _launch(config):  # noqa: ANN001
+        launches.append(1)
+        return True, "live"
+
+    async def _apply(config):  # noqa: ANN001
+        return {"ok": False, "error": "fuel 60.0 != 45.0"}
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(
+                setup="Realistic_BB_v3",
+                track_id="magione",
+                car_id="ks_porsche_911_gt3_r_2016",
+                max_launches=2,
+            ),
+            launch=_launch,
+            hijack=lambda c: pytest.fail("must not hijack the wrong session"),
+            drive=lambda *a: pytest.fail("must not drive"),
+            tap=_tap_returning(CONTINUOUS),
+            apply_setup=_apply,
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),  # always cached spa
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "setup"
+    assert len(launches) == 2  # bounded — no infinite relaunch
+    assert "cached session" in (report.error or "")  # names the real cause, not a plain setup bug
+
+
+def test_run_auto_drive_mismatch_then_launch_failure_reports_stage_launch():
+    # #537 (Codex P2): attempt 1 hits a cached-session mismatch (relaunch); attempt 2's launch never
+    # reaches LIVE. The report must read stage="launch" (the real terminal cause), not a misleading
+    # stage="hijack" that points the evidence bundle at the wrong subsystem.
+    launch_outcomes = [(True, "live"), (False, "sim never reached LIVE")]
+
+    def _launch(config):  # noqa: ANN001
+        return launch_outcomes.pop(0)
+
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(track_id="magione", car_id="ks_porsche_911_gt3_r_2016", max_launches=2),
+            launch=_launch,
+            hijack=lambda c: FakeController(),  # only attempt 1 reaches hijack
+            drive=lambda controller, config, stop: pytest.fail("must not drive the wrong track"),
+            tap=_tap_returning(CONTINUOUS),
+            verify_track=lambda c: ("spa", "ks_porsche_911_gt3_r_2016"),  # attempt-1 mismatch
+        )
+    )
+    assert report.ok is False
+    assert report.stage == "launch"  # not "hijack" — the terminal cause was the failed relaunch
+    assert "sim never reached LIVE" in (report.error or "")
+
+
 def test_run_auto_drive_handshake_drive_outlives_the_tap():
     # #532: the handshake self-terminates (driver.finished); the orchestrator must NOT stop it at
     # the tap boundary or the probe schedule dies mid-maneuver.
