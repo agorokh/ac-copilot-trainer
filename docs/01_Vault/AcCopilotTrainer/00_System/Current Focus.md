@@ -3,9 +3,10 @@
 ## type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-13T09:03:26Z
+last_updated: 2026-07-13T09:55:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-b-tyre-identity-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-488-part-a-tier2-csp-2026-07-04.md
   - AcCopilotTrainer/03_Investigations/issue-466-partb-setup-resolution-hardening-2026-07-04.md
@@ -36,18 +37,19 @@ observed separate legacy/GP/short artifacts and a `None` short lookup while only
 also landed the #532 Part-B per-combo friction-ID core and review hardening. **#532 remains OPEN** for
 its distinct rig-only full-lap identified-vs-generic A/B criterion; code merge is not live-lap proof.
 
-**Active focus (2026-07-13, latest):** Harness reliability —
-[#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) CM cached-session wrong-track. PR
-[#544](https://github.com/agorokh/ac-copilot-trainer/pull/544) **MERGED**
-([`41f4d53`](https://github.com/agorokh/ac-copilot-trainer/commit/41f4d53)) delivered **AC #2**:
-`auto_drive` relaunches (bounded) on a track/car mismatch instead of aborting on the first cached
-session — two-tier guard (authoritative post-hijack #535 + best-effort fail-safe setup-path early-out),
-verdict DRY via `loaded_combo_mismatch`. The cursor daemon caught a HIGH on a mid-PR pre-hijack
-unification (reverted; restored the post-hijack guard). **#537 STAYS OPEN**: **AC #1** (live two-track
-proof: `acpmf_static.track` reads the requested track for magione→spa back-to-back, no manual CM) is
-rig-gated and BLOCKED — rig SSH (`arsen@100.75.251.87`) now `Permission denied (publickey)`
-(`authorized_keys` reset since the 2026-06-29 handoff); unblocker in the handoff.
-[[issue-537-cm-cached-track-relaunch-2026-07-13]].
+**Delivered (2026-07-13, rig session):** Harness reliability —
+[#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) **CLOSED**. AC #2 = PR
+[#544](https://github.com/agorokh/ac-copilot-trainer/pull/544)
+([`41f4d53`](https://github.com/agorokh/ac-copilot-trainer/commit/41f4d53)) bounded relaunch on
+cached-session mismatch; **AC #1 live-verified on the rig** (`AG_PC`, session ran there — the
+macOS→rig SSH blocker was moot): clean consecutive hands-off pair, 911 GT3 R, **magione PASS then
+spa PASS**, the relaunch loop absorbing 2+1 pre-drive overlay stalls, `acpmf_static.track` matched
+per leg (#535 guard), HUD tiles MAGIONE/SPA inspected. Evidence:
+[#537#issuecomment-4956636834](https://github.com/agorokh/ac-copilot-trainer/issues/537#issuecomment-4956636834).
+Found en route → [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555): CM
+crash-respawns `acs.exe` after harness kills; a delayed respawn can kill a live drive mid-run (R8
+0/2 vs 911 4/4 — R8-content alternate hypothesis kept open there).
+[[issue-537-ac1-rig-verify-2026-07-13]] · [[issue-537-cm-cached-track-relaunch-2026-07-13]].
 
 **Prior focus (2026-07-13):** Coaching QUALITY —
 [#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) V2 remains the only open scope.

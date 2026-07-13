@@ -4,6 +4,7 @@ status: active
 memory_tier: canonical
 last_updated: 2026-07-13T09:03:26Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-537-ac1-rig-verify-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-527-coachable-brake-coverage-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-parts12-coverage-calibration-2026-07-12.md
   - AcCopilotTrainer/03_Investigations/issue-522-actionable-coaching-2026-07-12.md
@@ -120,30 +121,30 @@ verified the *model*, and live-caught + fixed a real regression (a pace-0.8 driv
 **Still rig-gated:** the closed-loop full-lap A/B — the rig degraded after ~7 launch cycles into
 #466 overlay stalls, #537 CM-cached-Spa, and `sim_dead` crashes (last drive `FAIL(stage=hijack)`);
 needs a fresh rig session / reboot, then two `--driver ggv` laps (`--use-plant auto` vs `off`).
+(2026-07-13 later rig session: those `sim_dead` crashes are very likely the CM crash-respawn hazard
+now filed as [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555) — see below.)
 
-## RESUME — #537 CM cached-track: AC #2 delivered (PR #544 MERGED); AC #1 live rig-verify PENDING (rig SSH blocked)
+## Delivered (2026-07-13, rig session) — #537 CLOSED: AC #1 two-track live proof PASS; CM respawn hazard → #555
 
-**PR [#544](https://github.com/agorokh/ac-copilot-trainer/pull/544) MERGED** (squash `41f4d53`,
-2026-07-13) for [#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) — **#537 stays OPEN**.
-`auto_drive` now RELAUNCHES (bounded) when CM serves its cached last session instead of the requested
-preset, rather than aborting on the first track/car mismatch (AC #2). Two-tier guard (authoritative
-post-hijack #535 + best-effort fail-safe setup-path early-out), verdict DRY via `loaded_combo_mismatch`;
-post-loop `stage` keyed on `last_launch_error`. **Review learning:** a mid-PR commit unified the checks
-into ONE *pre-hijack* gateway and the cursor daemon flagged a **HIGH** (a pre-hijack `acpmf_static` read
-can be unpopulated → a mismatch could reach the drive leg) — correct; reverted, restored the post-hijack
-guard. *Do not relocate rig-proven behavior on an off-rig assumption.* Detail:
-[[issue-537-cm-cached-track-relaunch-2026-07-13]].
+**[#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) CLOSED** (2026-07-13). The
+session ran **on the rig itself** (`AG_PC`), dissolving the prior macOS→rig SSH blocker. Clean
+consecutive hands-off pair with `ks_porsche_911_gt3_r_2016` on merged #544 code: **magione PASS
+(02:37) then spa PASS (02:40)**, zero manual CM interaction; the #544 bounded relaunch absorbed
+2+1 pre-drive overlay stalls live. `acpmf_static.track` matched per leg (#535 post-hijack guard
+passed → drive ran); HUD tiles **MAGIONE**/**SPA** inspected. Evidence:
+[#537#issuecomment-4956636834](https://github.com/agorokh/ac-copilot-trainer/issues/537#issuecomment-4956636834)
++ `.scratch/harness-evidence/20260713T093706Z_*` / `20260713T094023Z_*`. Detail:
+[[issue-537-ac1-rig-verify-2026-07-13]].
 
-**FIRST ACTION next session (only if on the rig): finish AC #1.** AC #1 (live two-track proof) is
-rig-gated and was BLOCKED this session — the #537 delivery ran on macOS (`epam-m5pro`) and
-`ssh arsen@100.75.251.87` now returns `Permission denied (publickey)` even though the documented
-`mac-to-ag-pc` key was authorized as of the 2026-06-29 handoff (rig `authorized_keys` evidently reset
-since). **Unblocker:** operator re-authorizes the key (add the `mac-to-ag-pc` pubkey to the rig's
-`administrators_authorized_keys`), OR on the rig directly run
-`python -m tools.ac_harness.auto_drive --car ks_audi_r8_lms --track magione` then `--track spa`
-back-to-back (non-extended car on stock surfaces per #277), confirming `acpmf_static.track` reads the
-requested base id each time with **no manual CM interaction**. Then comment the evidence on #537 and
-close it.
+**Found en route → [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555) filed:** CM
+**crash-respawns `acs.exe`** (as its child) after the harness's hard kills; the delayed respawn can
+kill a live drive mid-run (two R8 runs died ~90 s in; one Spa run at 0 m post-hijack; respawns
+observed 02:25:04 / 02:32:46). One CM `Stop-Process` + harness cold-start → 4 consecutive PASSes.
+Alternate hypothesis kept open: R8-at-Magione content crash (R8 0/2, 911 4/4). **Rig ops notes:**
+rig rebooted 00:28 mid-session; `pyserial` missing from `.venv` (sidecar COM6 serial retries
+forever — operator to `pip install pyserial` or re-sync deps); an orphaned auto-started sidecar can
+be adopted by the next run then die mid-run (dedicated `tools.ai_sidecar` on :8765 avoided it);
+primary checkout still on `feat/issue-479-simhub-launch-toggle` (40+ behind main) — left untouched.
 
 **#536 (#533 FFB calibration) — MERGED** (`a1e30916`, 2026-07-13; #533 CLOSED). The prior "merge #536"
 resume is DONE — merged during the #537 session. `tools/ac_harness/ffb_calibrate.py` auto-calibrates
