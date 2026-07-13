@@ -2392,10 +2392,17 @@ function script.update(dt)
     -- files (never the legacy folder guess) and distinguishes CONFIRMED no-setup (publish a
     -- CLEARED state so a stale cache never survives) from a transient race.ini miss
     -- (publish nothing — clearing would wrongly wipe a valid name).
-    local function publishActiveSetupSnapshot()
+    -- Returns true once the broadcast SETTLED (a resolved setup or a confirmed no-setup was
+    -- published); false on a transient/unresolved read. `clearOnUnresolved` publishes a
+    -- CLEARED frame even on a transient — used on the SESSION-CHANGE edge, where the
+    -- previous session's name is definitely invalid, so the sidecar cache must never
+    -- replay it (Qodo + Codex on PR #547); the reconnect edge keeps transient = silent
+    -- (same session — clearing would wipe a valid name).
+    local function publishActiveSetupSnapshot(clearOnUnresolved)
       if not wsBridge.publishTopic then
-        return
+        return true
       end
+      local settled = false
       pcall(function()
         local activePath, noSetupConfirmed = setupReader.activeSetupState(car, sim)
         if type(activePath) == "string" and activePath ~= "" then
@@ -2407,16 +2414,31 @@ function script.update(dt)
             path = activePath,
             changed_at = (os and os.time and os.time()) or 0,
           })
-        elseif noSetupConfirmed then
+          settled = true
+        elseif noSetupConfirmed or clearOnUnresolved then
           wsBridge.publishTopic("setup.active", {
             changed_at = (os and os.time and os.time()) or 0,
           })
+          settled = noSetupConfirmed == true
         end
       end)
+      return settled
+    end
+    -- Drain a pending unresolved broadcast: a transient race.ini miss at an edge retries
+    -- (bounded) until the real name settles — the cleared frame published at the edge keeps
+    -- the cache honest meanwhile.
+    if (state._setupBroadcastRetryFrames or 0) > 0 then
+      if publishActiveSetupSnapshot(false) then
+        state._setupBroadcastRetryFrames = 0
+      else
+        state._setupBroadcastRetryFrames = state._setupBroadcastRetryFrames - 1
+      end
     end
     if wsConn and (not state._wsPrevConnected or wsEpochChanged) then
       lifecyclePublisher.rearmSession()
-      publishActiveSetupSnapshot()
+      if not publishActiveSetupSnapshot(false) then
+        state._setupBroadcastRetryFrames = 100
+      end
     end
     state._wsPrevConnected = wsConn
     if wsEpoch ~= nil then
@@ -2438,8 +2460,12 @@ function script.update(dt)
     if lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge }) then
       -- A re-emitted `session` means the car/track/session identity changed: follow with a
       -- fresh setup.active so the dashboard header never carries the previous session's
-      -- setup name into the new identity (Codex on PR #547).
-      publishActiveSetupSnapshot()
+      -- setup name into the new identity (Codex on PR #547). Unresolved here publishes a
+      -- CLEARED frame immediately (the old name is invalid for the new identity) and arms
+      -- the bounded retry to settle the real name.
+      if not publishActiveSetupSnapshot(true) then
+        state._setupBroadcastRetryFrames = 100
+      end
     end
   end)
 

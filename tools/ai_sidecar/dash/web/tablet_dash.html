@@ -844,8 +844,6 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               + "|" + String(p.session_index === undefined ? "" : p.session_index);
             if (ident !== S.sessionIdent) {
               var hadIdentity = S.sessionIdent !== null;
-              var carChanged = !hadIdentity
-                || ident.split("|")[0] !== S.sessionIdent.split("|")[0];
               S.sessionIdent = ident;
               S.lap = null; // prior identity's Last/Best are wrong now
               S.fuelAtLap = null;
@@ -858,9 +856,11 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               if (hadIdentity) {
                 S.setupName = null;
                 renderHeader();
-              }
-              if (carChanged) {
-                S.spinners = null; // car changed: old ranges are wrong, wait for fresh ones
+                // Values/ranges are a per-session fact even with the SAME car (pit work,
+                // different baked setup) — drop them so the 5 s poll re-arms and retries
+                // until the new session's result lands (Codex on PR #547: the one-shot
+                // request below can be lost when no Lua peer is connected at this instant).
+                S.spinners = null;
                 renderElectronics();
               }
               requestSetupData(ws);
@@ -885,7 +885,17 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
         // accept it so the board renders NOT FITTED states instead of waiting forever
         // (Codex P2 on PR #547).
         if (frame.ok && Array.isArray(frame.spinners)) {
-          S.spinners = frame.spinners;
+          var rows = frame.spinners;
+          if (frame.source !== "csp") {
+            // INI-fallback results carry hardcoded default ranges (e.g. an assumed /12) —
+            // exactly the invented range the design forbids (Codex on PR #547). Keep the
+            // real VALUES, drop min/max/step/items so tiles render value + "?" (no bar).
+            rows = rows.map(function (r) {
+              return { name: r.name, section: r.section, label: r.label,
+                       value: r.value, unit: r.unit };
+            });
+          }
+          S.spinners = rows;
           renderElectronics();
         }
         return;
