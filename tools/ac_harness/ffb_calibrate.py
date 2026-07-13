@@ -162,8 +162,8 @@ def read_user_ff_value(text: str, car_id: str) -> float | None:
             in_section = m.group("car").strip() == car_id
             continue
         if in_section and _VALUE_RE.match(line):
-            # Strip an inline ``;`` comment before parsing (AC ini permits ``VALUE=1.0 ; note``).
-            raw = line.split("=", 1)[1].split(";", 1)[0].strip()
+            # Strip an inline ``;`` or ``#`` comment before parsing (``VALUE=1.0 ; note``).
+            raw = line.split("=", 1)[1].split(";", 1)[0].split("#", 1)[0].strip()
             try:
                 return float(raw)
             except ValueError:
@@ -230,11 +230,17 @@ def sample_final_ff(  # pragma: no cover - rig-only shared-memory loop
     *,
     duration_s: float,
     hz: float,
+    proc: object | None = None,
     reader_factory: Callable[[], object] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
 ) -> list[float]:
-    """Sample ``finalFF`` from AC shared memory for ``duration_s`` at ~``hz`` (live frames only)."""
+    """Sample ``finalFF`` from AC shared memory for ``duration_s`` at ~``hz`` (live frames only).
+
+    If ``proc`` (the auto_drive child) exits mid-window — e.g. its sidecar tap fails after the
+    hijack, which releases/brakes the controller — sampling stops so a stationary tail cannot
+    poison the stats.
+    """
     from tools.ac_harness.shared_memory import SharedMemoryReader
 
     factory = reader_factory or (lambda: SharedMemoryReader(with_physics=True))
@@ -245,6 +251,8 @@ def sample_final_ff(  # pragma: no cover - rig-only shared-memory loop
         deadline = now() + duration_s
         last_packet: int | None = None
         while now() < deadline:
+            if proc is not None and getattr(proc, "poll", lambda: None)() is not None:
+                break  # drive exited (controller released) — do not sample a stationary car
             snap = reader.read_physics()
             if snap is not None and snap.final_ff is not None and snap.packet_id != last_packet:
                 samples.append(float(snap.final_ff))
@@ -257,7 +265,9 @@ def sample_final_ff(  # pragma: no cover - rig-only shared-memory loop
 
 def _write_user_ff(path: Path, car_id: str, value: float) -> None:  # pragma: no cover - rig-only
     """Atomically set ``car_id``'s gain in ``user_ff.ini``, backing up the original first."""
-    original = path.read_text(encoding="utf-8") if path.exists() else ""
+    # utf-8-sig tolerates a UTF-8 BOM (AC/CM INIs are BOM-prone) so a leading ﻿ cannot hide
+    # the first section from the parser; the write below emits plain utf-8 (no BOM).
+    original = path.read_text(encoding="utf-8-sig") if path.exists() else ""
     if path.exists():
         path.with_suffix(path.suffix + ".backup").write_text(original, encoding="utf-8")
     updated = update_user_ff_value(original, car_id, value)
@@ -271,15 +281,18 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     from tools.ac_harness.auto_drive import validate_ac_id
 
-    try:  # car/track ids become log/report path segments — reject separators / traversal.
+    try:  # car/track/layout ids become log/report path segments — reject separators / traversal.
         validate_ac_id("car", args.car)
         validate_ac_id("track", args.track)
+        if args.track_layout:
+            validate_ac_id("track-layout", args.track_layout)
     except ValueError as exc:
         print(f"[ffb-calibrate] {exc}", file=sys.stderr)
         return 2
 
     user_ff = _user_ff_path(args.ac_user_dir)
     car = args.car
+    passthrough = _auto_drive_passthrough(args)
 
     drive_proc = None
     try:
@@ -294,7 +307,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
                 args.driver,
                 args.evidence_dir,
                 tap_seconds=drive_seconds,
-                ac_user_dir=args.ac_user_dir,
+                extra_args=passthrough,
             )
             print(
                 f"[ffb-calibrate] launched drive for {car} @ {args.track}; waiting for hijack ..."
@@ -314,7 +327,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
             )
 
         print(f"[ffb-calibrate] sampling finalFF for {args.sample_seconds:.0f}s ...")
-        samples = sample_final_ff(duration_s=args.sample_seconds, hz=args.hz)
+        samples = sample_final_ff(duration_s=args.sample_seconds, hz=args.hz, proc=drive_proc)
     finally:
         if drive_proc is not None:
             drive_proc.terminate()
@@ -324,7 +337,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     current = 1.0
     if user_ff.exists():
-        found = read_user_ff_value(user_ff.read_text(encoding="utf-8"), car)
+        found = read_user_ff_value(user_ff.read_text(encoding="utf-8-sig"), car)
         current = found if found is not None else 1.0
     recommended = recommend_gain(
         current, stats.p99, target_peak=args.target_level, floor=args.floor, ceiling=args.ceiling
@@ -382,6 +395,26 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     return 0
 
 
+def _auto_drive_passthrough(args: argparse.Namespace) -> list[str]:
+    """Build the auto_drive flags that must match on the child (layout + launch-path overrides).
+
+    Without these the drive subprocess launches/preflights the wrong layout or profile (default
+    Steam/CM/sidecar) while the calibrator reads/writes ``user_ff.ini`` in the override.
+    """
+    extra: list[str] = []
+    if args.track_layout:
+        extra += ["--track-layout", args.track_layout]
+    if args.ac_user_dir is not None:
+        extra += ["--ac-user-dir", str(args.ac_user_dir)]
+    if args.ac_root is not None:
+        extra += ["--ac-root", str(args.ac_root)]
+    if args.cm_exe is not None:
+        extra += ["--cm-exe", str(args.cm_exe)]
+    if args.sidecar_url:
+        extra += ["--sidecar-url", args.sidecar_url]
+    return extra
+
+
 def _launch_drive(  # pragma: no cover - rig-only
     car: str,
     track: str,
@@ -389,7 +422,7 @@ def _launch_drive(  # pragma: no cover - rig-only
     evidence_dir: Path,
     *,
     tap_seconds: float,
-    ac_user_dir: Path | None = None,
+    extra_args: Sequence[str] = (),
 ) -> tuple[object, Path]:
     import subprocess
 
@@ -413,9 +446,8 @@ def _launch_drive(  # pragma: no cover - rig-only
         str(tap_seconds),
         "--drive-seconds",
         str(tap_seconds),
+        *extra_args,
     ]
-    if ac_user_dir is not None:
-        cmd += ["--ac-user-dir", str(ac_user_dir)]
     proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
     return proc, log_path
 
@@ -451,7 +483,17 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:  # pragma: no
     p = argparse.ArgumentParser(description="Per-car FFB gain auto-calibration from finalFF.")
     p.add_argument("--car", required=True, help="AC car id (e.g. ks_porsche_911_gt3_r_2016)")
     p.add_argument("--track", default="spa", help="Track id (default: spa)")
+    p.add_argument(
+        "--track-layout",
+        dest="track_layout",
+        default=None,
+        help="Layout for multi-layout tracks (forwarded to auto_drive for the right line).",
+    )
     p.add_argument("--driver", default="ggv", help="auto_drive driver profile (default: ggv)")
+    # Launch-path overrides forwarded to the auto_drive child for non-default rigs.
+    p.add_argument("--ac-root", dest="ac_root", type=Path, default=None, help="AC content root")
+    p.add_argument("--cm-exe", dest="cm_exe", type=Path, default=None, help="Content Manager.exe")
+    p.add_argument("--sidecar-url", dest="sidecar_url", default=None, help="auto_drive sidecar URL")
     p.add_argument(
         "--sample-seconds", dest="sample_seconds", type=_pos_float, default=DEFAULT_SAMPLE_SECONDS
     )

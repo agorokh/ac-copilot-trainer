@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import argparse
 import math
+from pathlib import Path
 
 import pytest
 
 from tools.ac_harness.ffb_calibrate import (
     FfbStats,
+    _auto_drive_passthrough,
     _nonneg_float,
     _pos_float,
     offset_looks_valid,
@@ -149,6 +151,35 @@ def test_read_user_ff_value_absent_is_none():
 def test_read_user_ff_value_strips_inline_comment():
     text = "[abarth500]\nVALUE=1.010 ; hand-tuned 2026-07-12\n"
     assert read_user_ff_value(text, "abarth500") == pytest.approx(1.010)
+
+
+def test_read_user_ff_value_strips_hash_comment():
+    assert read_user_ff_value("[abarth500]\nVALUE=0.750 # tuned\n", "abarth500") == pytest.approx(
+        0.750
+    )
+
+
+def test_auto_drive_passthrough_forwards_only_set_overrides():
+    ns = argparse.Namespace(
+        track_layout="tourist",
+        ac_user_dir=Path("D:/AC"),
+        ac_root=None,
+        cm_exe=None,
+        sidecar_url=None,
+    )
+    assert _auto_drive_passthrough(ns) == [
+        "--track-layout",
+        "tourist",
+        "--ac-user-dir",
+        str(Path("D:/AC")),
+    ]
+
+
+def test_auto_drive_passthrough_empty_when_all_default():
+    ns = argparse.Namespace(
+        track_layout=None, ac_user_dir=None, ac_root=None, cm_exe=None, sidecar_url=None
+    )
+    assert _auto_drive_passthrough(ns) == []
 
 
 @pytest.mark.parametrize("bad", ["0", "-1", "inf", "nan", "-inf"])
