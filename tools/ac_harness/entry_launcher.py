@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import csv
+import io
 import subprocess
 import sys
 import time
@@ -221,6 +223,39 @@ def _taskkill(
     detail = (result.stderr or result.stdout or "").strip()
     suffix = f": {detail}" if detail else " (process may not have been running)"
     return f"taskkill {process_name} exited {result.returncode}{suffix}"
+
+
+def running_process_ids(
+    process_name: str,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> frozenset[int]:
+    """Return PIDs for a Windows image name without adding a runtime dependency.
+
+    ``auto_drive`` samples this at a low cadence during the drive leg so a second CM launch from
+    another worktree is reported as a session takeover, not a generic frozen-physics ``sim_dead``.
+    ``tasklist /FO CSV`` is stable across whitespace/localized column headings; the no-match INFO
+    line is intentionally ignored because it is not a CSV row for ``process_name``.
+    """
+
+    if sys.platform != "win32":
+        return frozenset()
+    result = runner(
+        ["tasklist", "/FI", f"IMAGENAME eq {process_name}", "/FO", "CSV", "/NH"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return frozenset()
+    found: set[int] = set()
+    for row in csv.reader(io.StringIO(result.stdout or "")):
+        if len(row) < 2 or row[0].casefold() != process_name.casefold():
+            continue
+        try:
+            found.add(int(row[1]))
+        except ValueError:
+            continue
+    return frozenset(found)
 
 
 class ColdRestartActuator:

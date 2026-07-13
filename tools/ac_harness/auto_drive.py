@@ -58,6 +58,7 @@ import configparser
 import json
 import logging
 import math
+import os
 import re
 import threading
 import time
@@ -202,6 +203,11 @@ class DriveStats:
     total_distance_m: float = 0.0
     samples: int = 0
     sim_dead: bool = False
+    # #555: process identity observed after hijack. A different acs.exe PID means another
+    # harness/CM launch replaced this session; that is distinct from a generic sim death.
+    sim_pid: int | None = None
+    unexpected_sim_pids: list[int] = field(default_factory=list)
+    session_replaced: bool = False
     recoveries: int = 0  # stuck/no-progress recoveries taken (capped by max_recoveries)
     recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
@@ -221,6 +227,7 @@ def drive_leg_succeeded(stats: DriveStats | None) -> bool:
     * ``not stats.drove`` — the car never cleared the distance/speed floor (a pit-start stall that
       never moves reads ``drove=False`` at 0 m).
     * ``stats.sim_dead`` — ``acs.exe`` died mid-run; the totals are stale (#459/#460).
+    * ``stats.session_replaced`` — another harness/CM launch replaced the session (#555).
     * ``stats.recovery_capped`` — the car kept stalling until the recovery cap; it never sustained
       progress whatever the totals say (the pit-start recovery-cap stall, #528).
 
@@ -228,7 +235,13 @@ def drive_leg_succeeded(stats: DriveStats | None) -> bool:
     KPI corpus (`false_green_kpi.py`) exercises it directly, so dropping a veto here surfaces as a
     leaked broken scenario rather than a silent false green.
     """
-    return bool(stats) and stats.drove and not stats.sim_dead and not stats.recovery_capped
+    return (
+        bool(stats)
+        and stats.drove
+        and not stats.sim_dead
+        and not stats.session_replaced
+        and not stats.recovery_capped
+    )
 
 
 def should_try_line_teleport_on_recovery(
@@ -306,7 +319,10 @@ class AutoDriveReport:
             lines.append(
                 f"  drive: drove={d.drove} laps={d.laps} max_speed={d.max_speed_kmh:.1f}km/h "
                 f"top_gear={max(d.max_gear_used - 1, 0)} dist={d.total_distance_m:.0f}m "
-                f"recoveries={d.recoveries} sim_dead={d.sim_dead}"
+                f"recoveries={d.recoveries} sim_dead={d.sim_dead} "
+                f"session_replaced={d.session_replaced}"
+                + (f" sim_pid={d.sim_pid}" if d.sim_pid is not None else "")
+                + (f" unexpected_sim_pids={d.unexpected_sim_pids}" if d.unexpected_sim_pids else "")
                 + (f" spawn_teleport={d.spawn_teleport}" if d.spawn_teleport else "")
                 + (f" reason={d.reason}" if d.reason else "")
             )
@@ -1973,6 +1989,34 @@ def _teleport_onto_line(  # pragma: no cover - rig-only
     return landed <= 25.0
 
 
+class SimProcessIdentityMonitor:
+    """Track the one ``acs.exe`` process that owns a hijacked drive session (#555).
+
+    An empty first observation is tolerated (``tasklist`` can race process startup); the first
+    singleton observation becomes the expected process. Multiple processes are immediately unsafe,
+    and any later PID outside the expected singleton is a session takeover.
+    """
+
+    def __init__(self, initial_pids: frozenset[int] | set[int] = frozenset()) -> None:
+        self.expected_pid: int | None = None
+        self._initial_conflict: tuple[int, ...] = ()
+        self.observe(initial_pids)
+
+    def observe(self, current_pids: frozenset[int] | set[int]) -> tuple[int, ...]:
+        """Return unexpected PIDs, or ``()`` while the original session still owns the rig."""
+
+        current = {int(pid) for pid in current_pids if int(pid) > 0}
+        if self.expected_pid is None:
+            if len(current) == 1:
+                self.expected_pid = next(iter(current))
+                return ()
+            if len(current) > 1:
+                self._initial_conflict = tuple(sorted(current))
+                return self._initial_conflict
+            return self._initial_conflict
+        return tuple(sorted(current - {self.expected_pid}))
+
+
 class PhysicsStallDetector:
     """Sim-death detector: the main ``acpmf_physics`` packet_id stagnant for
     ``sim_dead_seconds`` means ``acs.exe`` died (#459/#460).
@@ -2110,6 +2154,7 @@ def rig_drive(  # pragma: no cover - rig-only
     # car is stationary — so watching Car0 falsely declared "acs.exe died" 4 s into a start-line
     # spawn, before the driver could even shift out of neutral. The main physics packet advances
     # every frame while the sim runs and freezes only when acs actually dies (#459 review).
+    from tools.ac_harness.entry_launcher import running_process_ids
     from tools.ac_harness.shared_memory import SharedMemoryReader, SharedMemoryUnavailable
 
     phys_reader: SharedMemoryReader | None = None
@@ -2152,6 +2197,12 @@ def rig_drive(  # pragma: no cover - rig-only
             return None
         return p.packet_id if p is not None else None
 
+    # Capture the process that owns the already-hijacked session. CM requests are machine-global;
+    # without this identity, a concurrent worktree that starts another Quick Drive session only
+    # surfaces later as frozen physics and the report misleadingly says generic ``sim_dead``.
+    process_monitor = SimProcessIdentityMonitor(running_process_ids("acs.exe"))
+    stats.sim_pid = process_monitor.expected_pid
+    next_process_probe = 0.0
     prev_plane: tuple[float, float] | None = None
     t0 = time.monotonic()
     # Anchor the sim-death timer at the loop start (not the first packet sample) so a sim that is
@@ -2163,6 +2214,19 @@ def rig_drive(  # pragma: no cover - rig-only
             if not cd:
                 time.sleep(0.02)
                 continue
+            wall_now = time.monotonic()
+            if wall_now >= next_process_probe:
+                unexpected = process_monitor.observe(running_process_ids("acs.exe"))
+                stats.sim_pid = process_monitor.expected_pid
+                next_process_probe = wall_now + 1.0
+                if unexpected:
+                    stats.session_replaced = True
+                    stats.unexpected_sim_pids = list(unexpected)
+                    stats.reason = (
+                        "unexpected acs.exe PID takeover during live drive "
+                        f"(harness_pid={stats.sim_pid}, observed={list(unexpected)})"
+                    )
+                    break
             # Sim-death: the main acpmf_physics packet_id stagnant for sim_dead_seconds means
             # acs.exe died. A None (physics mmap gone) does NOT reset the timer (#460 review) —
             # sustained None or a frozen packet both trip. Rule owned by PhysicsStallDetector.
@@ -2475,6 +2539,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="leave a harness-auto-started sidecar running after the run",
     )
     p.add_argument(
+        "--rig-lock-timeout",
+        type=_nonneg_float,
+        default=0.0,
+        help="seconds to wait for another auto-drive process to release the single-rig lock; "
+        "0 fails immediately and reports the owner (#555)",
+    )
+    p.add_argument(
         "--preflight-only",
         action="store_true",
         help="run the preflight asserts and exit (0 = ready to launch)",
@@ -2656,15 +2727,45 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             )
         print(f"auto-drive: setup resolved -> {config.setup_ini}")
 
-    sidecar_ok, sidecar_detail, sidecar_proc = ensure_sidecar(
-        config.sidecar_url, autostart=not args.no_sidecar_autostart
+    # #555: AC + Content Manager are one machine-global rig. A repo-local lock cannot serialize
+    # different worktrees, so own the shared LocalAppData lock from before sidecar/launch through
+    # drive teardown. A peer fails/waits here BEFORE either process can kill or relaunch its AC.
+    from tools.ac_harness.rig_lock import (
+        RigSessionBusy,
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
     )
-    print(f"auto-drive: {sidecar_detail}")
-    if not sidecar_ok:
-        return 2
 
-    run_started_epoch = time.time()
+    rig_lock = RigSessionLock(
+        default_rig_session_lock_path(),
+        owner=RigSessionOwner(
+            pid=os.getpid(),
+            cwd=str(Path.cwd()),
+            car=config.car_id,
+            track=config.track_id,
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        ),
+        timeout=args.rig_lock_timeout,
+    )
     try:
+        rig_lock.acquire()
+    except RigSessionBusy as exc:
+        print(f"auto-drive: RIG BUSY — {exc}")
+        return 3
+    print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
+
+    sidecar_proc = None
+    try:
+        sidecar_ok, sidecar_detail, sidecar_proc = ensure_sidecar(
+            config.sidecar_url, autostart=not args.no_sidecar_autostart
+        )
+        print(f"auto-drive: {sidecar_detail}")
+        if not sidecar_ok:
+            rig_lock.release()
+            return 2
+
+        run_started_epoch = time.time()
         report = asyncio.run(
             run_auto_drive(
                 config,
@@ -2681,6 +2782,8 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         if sidecar_proc is not None and not args.keep_sidecar:
             sidecar_proc.terminate()
 
+    # Keep the rig owned through HUD/archive/report capture: otherwise a waiting worktree can
+    # relaunch AC in the narrow gap after drive teardown and corrupt this run's evidence bundle.
     hud = _capture_hud_evidence(evidence_dir, args.hud_region)
     # Gate the wait on the WS `lap` frame the tap actually saw (report.counts["lap"]) — the SAME
     # signal run_auto_drive's grace uses — not rig_drive's separate lap counter, so the two never
@@ -2769,7 +2872,9 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     if lap_archives:
         print(f"  lap archives ({len(lap_archives)}): {lap_archives[0]}")
     print(f"  evidence: {report_path}")
-    return 0 if report.ok else 1
+    exit_code = 0 if report.ok else 1
+    rig_lock.release()
+    return exit_code
 
 
 if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring

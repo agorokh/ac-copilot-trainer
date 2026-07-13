@@ -18,6 +18,7 @@ from tools.ac_harness.auto_drive import (
     AutoDriveReport,
     DriveStats,
     ProgressWatchdog,
+    SimProcessIdentityMonitor,
     _build_arg_parser,
     _build_driver,
     _config_from_args,
@@ -1107,6 +1108,8 @@ def test_cli_args_map_to_config():
             "40",
             "--tap-seconds",
             "15",
+            "--rig-lock-timeout",
+            "12",
         ]
     )
     cfg = _config_from_args(args)
@@ -1119,6 +1122,7 @@ def test_cli_args_map_to_config():
     assert cfg.target_speed_kmh == 70
     assert cfg.min_corner_speed_kmh == 40
     assert cfg.tap_seconds == 15
+    assert args.rig_lock_timeout == 12
     # --ac-root omitted -> default factory used.
     assert cfg.ac_root == default_ac_root()
 
@@ -1139,6 +1143,24 @@ def test_report_summary_renders_all_sections():
     assert "drove=True" in text
     assert "coaching.snapshot=300" in text
     assert "delta: not in window" in text
+
+
+def test_report_summary_distinguishes_session_takeover_from_sim_death():
+    report = AutoDriveReport(
+        ok=False,
+        stage="done",
+        drive=DriveStats(
+            drove=True,
+            sim_pid=101,
+            unexpected_sim_pids=[202],
+            session_replaced=True,
+            reason="unexpected acs.exe PID takeover",
+        ),
+    )
+    text = report.summary()
+    assert "session_replaced=True" in text
+    assert "sim_dead=False" in text
+    assert "unexpected_sim_pids=[202]" in text
 
 
 # ---------------------------------------------------------------------------
@@ -1838,10 +1860,28 @@ def test_drive_leg_succeeded_vetoes_every_528_failure_shape():
     assert drive_leg_succeeded(None) is False
     assert drive_leg_succeeded(DriveStats(drove=False, total_distance_m=0.0)) is False
     assert drive_leg_succeeded(DriveStats(drove=True, sim_dead=True)) is False
+    assert drive_leg_succeeded(DriveStats(drove=True, session_replaced=True)) is False
     assert (
         drive_leg_succeeded(DriveStats(drove=True, total_distance_m=560.0, recovery_capped=True))
         is False
     )
+
+
+def test_sim_process_identity_monitor_adopts_one_pid_and_detects_takeover():
+    monitor = SimProcessIdentityMonitor()
+    assert monitor.observe(set()) == ()
+    assert monitor.observe({101}) == ()
+    assert monitor.expected_pid == 101
+    assert monitor.observe({101}) == ()
+    assert monitor.observe(set()) == ()  # expected process can disappear before stall attribution
+    assert monitor.observe({202}) == (202,)
+    assert monitor.observe({101, 303}) == (303,)
+
+
+def test_sim_process_identity_monitor_rejects_multiple_initial_acs_processes():
+    monitor = SimProcessIdentityMonitor({303, 101})
+    assert monitor.expected_pid is None
+    assert monitor.observe({101, 303}) == (101, 303)
 
 
 def test_progress_watchdog_rejects_nonpositive_params():
