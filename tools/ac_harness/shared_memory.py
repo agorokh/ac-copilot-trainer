@@ -41,6 +41,7 @@ offset can be confirmed on this CSP build (see :data:`GRAPHICS_IS_IN_PIT_OFFSET`
 from __future__ import annotations
 
 import argparse
+import math
 import struct
 import sys
 import time
@@ -81,13 +82,27 @@ GRAPHICS_IS_IN_PIT_OFFSET = 160
 # Minimum bytes that must be readable to decode every field above (isInPit + its 4 bytes).
 GRAPHICS_MIN_BYTES = GRAPHICS_IS_IN_PIT_OFFSET + 4  # 164
 
-# acpmf_physics (SPageFilePhysics): the only field used here is the leading packetId,
-# whose stagnation distinguishes a genuinely-live frame from a paused/menu frame that AC
-# left flagged LIVE (AcSharedMemory.cs documents that AC "sometimes doesn't bother setting
-# Status to Pause" and derives pause from packetId stagnation instead).
-#   int packetId @ 0
+# acpmf_physics (SPageFilePhysics): the leading packetId gates liveness — its stagnation
+# distinguishes a genuinely-live frame from a paused/menu frame AC left flagged LIVE
+# (AcSharedMemory.cs documents that AC "sometimes doesn't bother setting Status to Pause" and
+# derives pause from packetId stagnation instead). ``finalFF`` @ 308 is the exact normalized
+# force AC sends to the wheel this frame (−1..1); |finalFF| → 1.0 is FFB clipping (issue #533).
+#
+# finalFF @ 308 follows the standard SPageFilePhysics layout (Kunos SharedFileOut.h, Pack=4):
+#   packetId@0, gas@4, brake@8, fuel@12, gear@16, rpms@20, steerAngle@24, speedKmh@28,
+#   velocity[3]@32, accG[3]@44, wheelSlip[4]@56, wheelLoad[4]@72, wheelsPressure[4]@88,
+#   wheelAngularSpeed[4]@104, tyreWear[4]@120, tyreDirtyLevel[4]@136, tyreCoreTemperature[4]@152,
+#   camberRAD[4]@168, suspensionTravel[4]@184, drs@200, tc@204, heading@208, pitch@212, roll@216,
+#   cgHeight@220, carDamage[5]@224, numberOfTyresOut@244, pitLimiterOn@248, abs@252, kersCharge@256,
+#   kersInput@260, autoShifterOn@264, rideHeight[2]@268, turboBoost@276, ballast@280,
+#   airDensity@284, airTemp@288, roadTemp@292, localAngularVel[3]@296, finalFF@308.
+# The prefix through wheelAngularSpeed[4]@104 is cross-confirmed by racing_telemetry.parse_physics
+# in this repo; the tail to finalFF@308 follows the same struct. The offset is asserted empirically
+# on the rig (|finalFF| ≤ 1 while driving) — see the #533 PR evidence and :func:`parse_final_ff`.
 PHYSICS_PACKET_ID_OFFSET = 0
 PHYSICS_MIN_BYTES = PHYSICS_PACKET_ID_OFFSET + 4  # 4
+PHYSICS_FINAL_FF_OFFSET = 308
+PHYSICS_FINAL_FF_MIN_BYTES = PHYSICS_FINAL_FF_OFFSET + 4  # 312
 
 # Windows named shared-memory objects created by acs.exe. AC creates them in the session
 # namespace as ``Local\<name>``; a bare name resolves to ``Local\`` for processes in the
@@ -100,11 +115,12 @@ SHM_STATIC = "acpmf_static"
 # safe prefix avoids over-mapping while covering every field we read.
 GRAPHICS_MAP_BYTES = 256
 # One consistent physics-page map size that covers EVERY field any reader unpacks from
-# ``acpmf_physics``. ``shared_memory.parse_physics`` here only needs ``packet_id@0`` (4 bytes), but
-# ``racing_telemetry.parse_physics`` unpacks through ``wheelAngularSpeed[4]@104`` (120 bytes); a
-# single page mapped 160 wide keeps the two same-named parsers from disagreeing on buffer size
-# (cross-file trap flagged in review) at negligible cost — it is one mmap view of the same page.
-PHYSICS_MAP_BYTES = 160
+# ``acpmf_physics``. ``parse_physics`` here needs only ``packet_id@0`` (4 bytes),
+# ``racing_telemetry.parse_physics`` unpacks through ``wheelAngularSpeed[4]@104`` (120 bytes), and
+# ``parse_final_ff`` reads ``finalFF@308`` (issue #533). Mapping 320 wide (≥
+# ``PHYSICS_FINAL_FF_MIN_BYTES`` = 312) covers all three off one mmap view of the same page at
+# negligible cost — the real section is multiple KB, so the wider map never over-reads.
+PHYSICS_MAP_BYTES = 320
 # acpmf_static: wide-char (UTF-16LE) strings; ``carModel`` is a 33-char field at byte offset 68 and
 # ``track`` a 33-char field at byte offset 134 (live-verified against a running session:
 # smVersion@0, carModel@68, track@134). Mapping 260 bytes covers both with headroom.
@@ -204,6 +220,33 @@ def parse_physics(buf: bytes) -> PhysicsSnapshot:
         raise ValueError(f"acpmf_physics buffer too short: {len(buf)} < {PHYSICS_MIN_BYTES} bytes")
     packet_id = struct.unpack_from("<i", buf, PHYSICS_PACKET_ID_OFFSET)[0]
     return PhysicsSnapshot(packet_id=packet_id)
+
+
+def parse_final_ff(buf: bytes) -> float:
+    """Decode ``finalFF`` (normalized FFB force, −1..1) from an ``acpmf_physics`` buffer (pure).
+
+    ``finalFF`` is the exact normalized force AC sends to the wheel this frame; a magnitude
+    approaching 1.0 is FFB clipping (the force the physics wants exceeds what the −1..1 channel can
+    carry). ``buf`` must be at least :data:`PHYSICS_FINAL_FF_MIN_BYTES`. Raises :class:`ValueError`
+    on a short buffer or a non-finite value — a NaN/Inf is a torn read or the wrong offset and must
+    surface rather than be silently averaged into a calibration.
+
+    The physical range is [−1, 1]; the decode does **not** clamp. A magnitude comfortably above 1 is
+    evidence the offset is wrong on this build, so callers (and the #533 rig live-probe) can assert
+    ``abs(value) <= 1`` to validate :data:`PHYSICS_FINAL_FF_OFFSET` empirically.
+    """
+    if len(buf) < PHYSICS_FINAL_FF_MIN_BYTES:
+        raise ValueError(
+            f"acpmf_physics buffer too short for finalFF: "
+            f"{len(buf)} < {PHYSICS_FINAL_FF_MIN_BYTES} bytes"
+        )
+    value = struct.unpack_from("<f", buf, PHYSICS_FINAL_FF_OFFSET)[0]
+    if not math.isfinite(value):
+        raise ValueError(
+            f"finalFF is non-finite ({value!r}); offset {PHYSICS_FINAL_FF_OFFSET} suspect "
+            f"(torn read or wrong CSP build)"
+        )
+    return value
 
 
 class DrivingEntryDetector:
@@ -444,6 +487,16 @@ class SharedMemoryReader:  # pragma: no cover - Windows/rig-only; validated via 
         if self._physics is None:
             return None
         return self._physics.read(nbytes)
+
+    def read_final_ff(self) -> float | None:
+        """Read ``finalFF`` (−1..1) off the mapped physics page, or ``None`` if physics is unmapped.
+
+        Reuses the SAME ``acpmf_physics`` view as :meth:`read_physics` (no second OS map): the page
+        is mapped :data:`PHYSICS_MAP_BYTES` wide, which covers :data:`PHYSICS_FINAL_FF_MIN_BYTES`.
+        """
+        if self._physics is None:
+            return None
+        return parse_final_ff(self._physics.read(PHYSICS_FINAL_FF_MIN_BYTES))
 
     def close(self) -> None:
         for section in (self._graphics, self._physics):

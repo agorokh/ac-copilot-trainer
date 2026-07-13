@@ -20,6 +20,9 @@ from tools.ac_harness.shared_memory import (
     GRAPHICS_MIN_BYTES,
     GRAPHICS_PACKET_ID_OFFSET,
     GRAPHICS_STATUS_OFFSET,
+    PHYSICS_FINAL_FF_MIN_BYTES,
+    PHYSICS_FINAL_FF_OFFSET,
+    PHYSICS_MAP_BYTES,
     PHYSICS_MIN_BYTES,
     PHYSICS_PACKET_ID_OFFSET,
     AcGameStatus,
@@ -28,6 +31,7 @@ from tools.ac_harness.shared_memory import (
     PhysicsSnapshot,
     SharedMemoryUnavailable,
     open_shared_memory,
+    parse_final_ff,
     parse_graphics,
     parse_physics,
 )
@@ -278,3 +282,40 @@ def test_detector_validates_constructor_args(kwargs: dict, match: str):
 def test_open_shared_memory_raises_off_windows():
     with pytest.raises(SharedMemoryUnavailable, match="Windows-only"):
         open_shared_memory("acpmf_graphics", 256)
+
+
+# --------------------------------------------------------------------------- finalFF decode (#533)
+def _physics_ff_bytes(final_ff: float, *, size: int = PHYSICS_FINAL_FF_MIN_BYTES) -> bytes:
+    """Build an acpmf_physics buffer carrying finalFF at its documented offset (308)."""
+    buf = bytearray(size)
+    struct.pack_into("<f", buf, PHYSICS_FINAL_FF_OFFSET, final_ff)
+    return bytes(buf)
+
+
+def test_final_ff_constants_are_consistent():
+    # finalFF is the last field the harness decodes; the mapped page must cover it.
+    assert PHYSICS_FINAL_FF_OFFSET == 308
+    assert PHYSICS_FINAL_FF_MIN_BYTES == PHYSICS_FINAL_FF_OFFSET + 4
+    assert PHYSICS_MAP_BYTES >= PHYSICS_FINAL_FF_MIN_BYTES
+
+
+@pytest.mark.parametrize("value", [0.0, 0.25, -0.5, 0.9, 1.0, -1.0])
+def test_parse_final_ff_decodes_at_offset_308(value: float):
+    decoded = parse_final_ff(_physics_ff_bytes(value))
+    assert decoded == pytest.approx(value, abs=1e-6)
+
+
+def test_parse_final_ff_rejects_short_buffer():
+    with pytest.raises(ValueError, match="too short for finalFF"):
+        parse_final_ff(bytes(PHYSICS_FINAL_FF_MIN_BYTES - 1))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_parse_final_ff_rejects_non_finite(bad: float):
+    with pytest.raises(ValueError, match="non-finite"):
+        parse_final_ff(_physics_ff_bytes(bad))
+
+
+def test_parse_final_ff_does_not_clamp_out_of_range():
+    # A magnitude >1 must be surfaced (evidence the offset is wrong), not silently clamped.
+    assert parse_final_ff(_physics_ff_bytes(2.5)) == pytest.approx(2.5, abs=1e-6)
