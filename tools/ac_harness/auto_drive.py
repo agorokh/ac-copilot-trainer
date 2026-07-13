@@ -2008,7 +2008,9 @@ class SimProcessIdentityMonitor:
         current = {int(pid) for pid in current_pids if int(pid) > 0}
         if self.expected_pid is None:
             if self._initial_conflict:
-                return self._initial_conflict
+                # Ownership stays unsafe after an ambiguous start, but diagnostics should name the
+                # PIDs that are live now rather than replaying a stale historical set forever.
+                return tuple(sorted(current)) or self._initial_conflict
             if len(current) == 1:
                 self.expected_pid = next(iter(current))
                 return ()
@@ -2208,15 +2210,41 @@ def rig_drive(  # pragma: no cover - rig-only
     process_probe_lock = threading.Lock()
     process_takeover: tuple[int, ...] = ()
 
+    def _sample_sim_process() -> tuple[int, ...]:
+        """Synchronously sample ownership and latch any unsafe process identity."""
+
+        nonlocal process_takeover
+        current = running_process_ids("acs.exe")
+        with process_probe_lock:
+            unexpected = process_monitor.observe(current)
+            if unexpected:
+                process_takeover = unexpected
+            return process_takeover
+
+    def _record_process_takeover(*, synchronous: bool) -> bool:
+        """Copy a latched/fresh takeover into the structured drive verdict."""
+
+        if synchronous:
+            unexpected = _sample_sim_process()
+        else:
+            with process_probe_lock:
+                unexpected = process_takeover
+        if not unexpected:
+            return False
+        stats.sim_pid = process_monitor.expected_pid
+        stats.session_replaced = True
+        stats.unexpected_sim_pids = list(unexpected)
+        stats.reason = (
+            "unexpected acs.exe PID takeover during live drive "
+            f"(expected_sim_pid={stats.sim_pid}, observed={list(unexpected)})"
+        )
+        return True
+
     def _watch_sim_process() -> None:
         # Process enumeration takes ~20 ms on a busy rig. Keep it off the real-time control loop;
         # one-second attribution latency is tiny beside the 4 s sim-death threshold.
-        nonlocal process_takeover
         while not process_probe_stop.is_set():
-            unexpected = process_monitor.observe(running_process_ids("acs.exe"))
-            if unexpected:
-                with process_probe_lock:
-                    process_takeover = unexpected
+            if _sample_sim_process():
                 return
             process_probe_stop.wait(1.0)
 
@@ -2230,20 +2258,20 @@ def rig_drive(  # pragma: no cover - rig-only
     # already dead trips once stale car data appears, even on a short/ending run (codex on #513).
     stall = PhysicsStallDetector(config.sim_dead_seconds, now=t0)
     try:
-        while not stop.is_set() and time.monotonic() - t0 < config.drive_seconds:
-            with process_probe_lock:
-                unexpected = process_takeover
-            if unexpected:
-                stats.sim_pid = process_monitor.expected_pid
-                stats.session_replaced = True
-                stats.unexpected_sim_pids = list(unexpected)
-                stats.reason = (
-                    "unexpected acs.exe PID takeover during live drive "
-                    f"(expected_sim_pid={stats.sim_pid}, observed={list(unexpected)})"
-                )
+        while time.monotonic() - t0 < config.drive_seconds:
+            # The sidecar tap can stop the drive between one-second watcher polls. Refresh ownership
+            # synchronously before accepting that stop as clean (#555 review).
+            if stop.is_set():
+                _record_process_takeover(synchronous=True)
+                break
+            if _record_process_takeover(synchronous=False):
                 break
             cd = controller.read_car_data()
             if not cd:
+                # A replacement can tear down Car0 before the background watcher runs. Sample now,
+                # before missing telemetry continues past the only attribution opportunity.
+                if _record_process_takeover(synchronous=True):
+                    break
                 time.sleep(0.02)
                 continue
             # Sim-death: the main acpmf_physics packet_id stagnant for sim_dead_seconds means
@@ -2295,6 +2323,9 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.laps += 1
             time.sleep(0.012)
     finally:
+        # Close the final sub-second race at timeout/driver completion too; rig teardown has not
+        # begun yet, so a different PID here is always a session replacement rather than expected.
+        _record_process_takeover(synchronous=True)
         process_probe_stop.set()
         process_probe_thread.join(timeout=3.0)
         stats.sim_pid = process_monitor.expected_pid

@@ -1882,7 +1882,8 @@ def test_sim_process_identity_monitor_rejects_multiple_initial_acs_processes():
     monitor = SimProcessIdentityMonitor({303, 101})
     assert monitor.expected_pid is None
     assert monitor.observe({101, 303}) == (101, 303)
-    assert monitor.observe({101}) == (101, 303)
+    assert monitor.observe({101}) == (101,)
+    assert monitor.observe(set()) == (101, 303)
     assert monitor.expected_pid is None
 
 
@@ -1899,6 +1900,47 @@ def test_main_releases_registered_rig_cleanup_on_exception(monkeypatch):
     with pytest.raises(RuntimeError, match="evidence capture failed"):
         auto_drive_module._main([])
     assert released == [True]
+
+
+def test_rig_drive_synchronously_checks_pid_before_clean_stop(monkeypatch):
+    import tools.ac_harness.ai_line as ai_line_module
+    import tools.ac_harness.auto_drive as auto_drive_module
+    import tools.ac_harness.entry_launcher as entry_launcher_module
+
+    class NoopThread:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def join(self, **_kwargs) -> None:
+            pass
+
+    class Driver:
+        pass
+
+    observations = iter(({101}, {202}, {202}))
+    monkeypatch.setattr(ai_line_module, "load_ai_line", lambda _path: _LINE)
+    monkeypatch.setattr(
+        auto_drive_module, "resolve_fast_lane", lambda *_args: pathlib.Path("fast_lane.ai")
+    )
+    monkeypatch.setattr(auto_drive_module, "_build_driver", lambda *_args: Driver())
+    monkeypatch.setattr(auto_drive_module.threading, "Thread", NoopThread)
+    monkeypatch.setattr(
+        entry_launcher_module, "running_process_ids", lambda _name: frozenset(next(observations))
+    )
+    stop = threading.Event()
+    stop.set()
+
+    stats = auto_drive_module.rig_drive(
+        FakeController(), _cfg(driver="lap", drive_seconds=1.0, spawn_to_line=False), stop
+    )
+
+    assert stats.session_replaced is True
+    assert stats.sim_pid == 101
+    assert stats.unexpected_sim_pids == [202]
+    assert "expected_sim_pid=101" in stats.reason
 
 
 def test_progress_watchdog_rejects_nonpositive_params():
