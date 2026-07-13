@@ -45,9 +45,25 @@ Every recovery was spent at 0 m; the `recovery_capped` veto then FAILed honestly
 pure predicates + drive-oracle anti-vacuity + the `--no-spawn-line` opt-out. Rig-only teleport/drive
 paths stay `pragma: no cover`.
 
-**Live rig verification — PENDING (rig busy).** At merge the rig was saturated by 5+ concurrent
-agent sessions (cycling `acs.exe`), so an ambiguous live session must not be hijacked. When the rig
-is free, run several `python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016
---track magione --driver racing --drive-seconds 300 --wait-lap` launches to (a) confirm clean drives
-still PASS (no regression) and (b) ideally observe an off-line-spawn stall now escape via the
-recovery line-teleport (was: cap at 0 m). Fold any observed live stall into the false-green corpus.
+**Live rig VERIFIED (2026-07-12, operator-directed, AG_PC, Magione + 911 GT3 R, ~20 launches):**
+Evidence bundles under `.scratch/verify528/`. **0 caps at 0 m across all runs — the #528 failure
+never reproduced.**
+
+- **No regression:** 6 on-line START spawns drove clean full laps (`drove=True laps=1 ~2731 m
+  187 km/h top_gear=6 rec=0`), live coaching (`coaching.snapshot≈1243 lap=1`), HUD rendering
+  (screenshots inspected).
+- **Off-line spawn (the #528 trigger), forced via a PIT-spawn preset:** 5/5 that reached the drive
+  escaped — `spawn_teleport=failed` → `drove=True laps=1 2750 m`, **0 caps** (vs the original
+  evidence's cap at 0 m). Proves `_teleport_onto_line` (the mechanism recovery retries) moves an
+  off-line car onto a drivable line on this rig (the "VERIFY LIVE" offsets).
+- **Recovery path, forced via ggv over-drive (spins):** 5/5 recovered and kept driving
+  (`recoveries` 1–2, `drove=True`, **0 caps**). The `recoveries=2` cases necessarily exercised the
+  fix's line-teleport-retry branch (recovery 1 = `teleport_to_pits` flips `off_line=True`; recovery
+  2 takes the line-teleport branch) — the exact reviewer-flagged mid-lap-into-pits escape, live.
+- **Shape 2 (overlay stall / `stage=hijack`):** observed ~4/20 launches; handled honestly
+  (relaunch-recover or FAIL `stage=hijack`, no false green). NOT this PR's scope — documented CSP/CM
+  limit (see #466); CM-relaunch reliability is being worked separately (`fix/issue-537`). Regression
+  guard already in the corpus (`hijack_never_landed`). Not a regression from #539.
+
+Bottom line: the #528 shape-1 fix works in reality — off-line spawns and induced spins both escape
+instead of capping at 0 m. Residual harness flakiness is shape-2 overlay-stall, tracked elsewhere.
