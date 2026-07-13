@@ -12,6 +12,7 @@ import math
 from tools.ac_harness.ggv_profile import (
     CurvatureFeedforwardSteering,
     GGVModel,
+    blend_ggv_safe,
     build_ggv_speed_profile,
     curvature_profile,
     fit_steer_feedforward,
@@ -380,3 +381,100 @@ def test_ggv_speed_profile_from_model_and_aero_raises_apex():
     assert len(v_flat) == len(line)
     assert max(v_aero) >= max(v_flat)  # aero grip lets the constant-radius apex carry more speed
     assert s_aero["qss_laptime_s"] <= s_flat["qss_laptime_s"]  # ...so the lap is no slower
+
+
+# --- #532 Part B: serialization + safe-envelope blend -----------------------
+def _prior() -> GGVModel:
+    return GGVModel(1.5, 0.0, 0.955, 0.0214, 1.1, -0.0117, 0.35, 1.55, ay_cap_g=1.8)
+
+
+def _measured(mu, *, corner_bins, brake_bins, accel_bins, hull_points, ellipse_n=1.3) -> GGVModel:
+    return GGVModel(
+        mu_lat_g=mu,
+        k_aero_lat=0.0,
+        brake_b0_g=1.2,
+        brake_b1=0.03,
+        drive_b0_g=1.3,
+        drive_b1=-0.01,
+        drive_min_g=0.4,
+        ellipse_n=ellipse_n,
+        provenance={
+            "lat_corner_bins": corner_bins,
+            "brake_bins": brake_bins,
+            "accel_bins": accel_bins,
+            "hull_points": hull_points,
+            "bins": {},
+        },
+    )
+
+
+def test_ggv_model_roundtrip_and_rejects_nan():
+    m = _prior()
+    back = GGVModel.from_dict(m.to_dict())
+    for f in ("mu_lat_g", "k_aero_lat", "brake_b0_g", "brake_b1", "ellipse_n", "ay_cap_g"):
+        assert getattr(back, f) == getattr(m, f)
+    import pytest
+
+    with pytest.raises(ValueError):
+        GGVModel.from_dict({**m.to_dict(), "mu_lat_g": float("nan")})
+    with pytest.raises(ValueError):
+        GGVModel.from_dict({k: v for k, v in m.to_dict().items() if k != "brake_b0_g"})
+
+
+def test_blend_never_raises_lateral_above_prior():
+    prior = _prior()
+    # A confidently-measured HIGHER lateral must NOT lift the plant (aero-lateral spins the GT3).
+    grippier = _measured(1.9, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=200)
+    b = blend_ggv_safe(grippier, prior)
+    assert b.mu_lat_g == prior.mu_lat_g
+    assert b.k_aero_lat == 0.0
+    assert b.ay_cap_g == prior.ay_cap_g
+    assert b.provenance["blend_source"]["lateral"] == "prior"
+
+
+def test_blend_lowers_lateral_for_confident_weaker_car():
+    prior = _prior()
+    weaker = _measured(1.15, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=200)
+    b = blend_ggv_safe(weaker, prior)
+    assert abs(b.mu_lat_g - 1.15) < 1e-9  # weaker car correctly identified
+    assert b.provenance["blend_source"]["lateral"] == "measured(<prior)"
+    assert b.provenance["blend_source"]["brake"] == "measured"
+
+
+def test_blend_sparse_bins_fall_back_to_prior():
+    prior = _prior()
+    # Under-covered: too few cornered/brake/accel bins, thin hull -> every curve reverts to prior.
+    sparse = _measured(1.0, corner_bins=0, brake_bins=0, accel_bins=0, hull_points=3)
+    b = blend_ggv_safe(sparse, prior)
+    assert b.mu_lat_g == prior.mu_lat_g
+    assert (b.brake_b0_g, b.brake_b1) == (prior.brake_b0_g, prior.brake_b1)
+    assert (b.drive_b0_g, b.drive_b1) == (prior.drive_b0_g, prior.drive_b1)
+    assert b.ellipse_n == prior.ellipse_n
+    src = b.provenance["blend_source"]
+    assert src == {
+        "lateral": "prior",
+        "brake": "prior",
+        "drive": "prior",
+        "ellipse_n": "prior",
+    }
+
+
+def test_blend_ellipse_reverts_when_hull_thin():
+    prior = _prior()
+    thin = _measured(1.2, corner_bins=6, brake_bins=6, accel_bins=6, hull_points=5, ellipse_n=1.1)
+    b = blend_ggv_safe(thin, prior)
+    assert b.ellipse_n == prior.ellipse_n  # not enough hull -> keep the prior coupling
+    assert b.provenance["blend_source"]["ellipse_n"] == "prior"
+
+
+def test_ggv_from_telemetry_records_bin_counts():
+    rows = []
+    for kmh in range(60, 141, 10):
+        for _ in range(60):
+            rows.append({"speed_kmh": float(kmh), "accg_lat": 1.1, "accg_lon": 0.0})
+            rows.append({"speed_kmh": float(kmh), "accg_lat": 0.0, "accg_lon": -1.0})
+            rows.append({"speed_kmh": float(kmh), "accg_lat": 0.05, "accg_lon": 0.7})
+    m = ggv_from_telemetry(rows)
+    assert m.provenance["brake_bins"] >= 2
+    assert m.provenance["accel_bins"] >= 2
+    assert m.provenance["hull_points"] > 0

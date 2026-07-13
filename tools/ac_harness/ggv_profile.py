@@ -96,6 +96,55 @@ class GGVModel:
             1.0 / self.ellipse_n
         )
 
+    def to_dict(self) -> dict:
+        """Serialize the model + provenance for a plant artifact (JSON-safe; #532 Part B)."""
+        return {
+            "mu_lat_g": self.mu_lat_g,
+            "k_aero_lat": self.k_aero_lat,
+            "brake_b0_g": self.brake_b0_g,
+            "brake_b1": self.brake_b1,
+            "drive_b0_g": self.drive_b0_g,
+            "drive_b1": self.drive_b1,
+            "drive_min_g": self.drive_min_g,
+            "ellipse_n": self.ellipse_n,
+            "ay_cap_g": self.ay_cap_g,
+            "ax_brake_cap_g": self.ax_brake_cap_g,
+            "provenance": self.provenance,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> GGVModel:
+        """Rebuild a model from :meth:`to_dict` output.
+
+        Raises ``ValueError`` on a missing / non-finite CORE field so a corrupt plant artifact can
+        never silently construct a ``nan`` grip curve that the driver would then act on (#532
+        input-validation pitfall). Optional caps default to the dataclass defaults when absent.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f"GGVModel.from_dict expects a dict, got {type(data).__name__}")
+        core = (
+            "mu_lat_g",
+            "k_aero_lat",
+            "brake_b0_g",
+            "brake_b1",
+            "drive_b0_g",
+            "drive_b1",
+            "drive_min_g",
+            "ellipse_n",
+        )
+        vals: dict = {}
+        for f in core:
+            v = data.get(f)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+                raise ValueError(f"GGVModel.from_dict: field {f!r} missing or non-finite: {v!r}")
+            vals[f] = float(v)
+        for f in ("ay_cap_g", "ax_brake_cap_g"):
+            v = data.get(f)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+                vals[f] = float(v)
+        prov = data.get("provenance")
+        return cls(**vals, provenance=prov if isinstance(prov, dict) else {})
+
 
 def _pct(xs: list[float], q: float) -> float:
     if not xs:
@@ -197,6 +246,11 @@ def ggv_from_telemetry(
     prov = {
         "bins": cov,
         "lat_corner_bins": n_corner_bins,
+        # Fitted-bin counts + hull size — the confidence signals the #532 Part B safe-envelope blend
+        # reads to decide, per curve, whether to trust the measurement or fall back to the prior.
+        "brake_bins": len(xs_b),
+        "accel_bins": len(xs_a),
+        "hull_points": len(hull),
         "lat_model": f"ay_max(v)={mu_lat:.3f}+{k_aero:.5f}*v_ms^2 g [mech peak; no aero-lat]",
         "brake_model": f"ax_brake(v)={brake_b0:.3f}+{brake_b1:.5f}*v_ms (g)",
         "accel_model": f"ax_drive(v)={drive_b0:.3f}+{drive_b1:.5f}*v_ms (g)",
@@ -233,6 +287,122 @@ def _fit_ellipse_n(hull: list[tuple[float, float]], mu_lat, k_aero, brake_b0, br
             best_err, best_n = err, n
         n += 0.05
     return best_n
+
+
+def blend_ggv_safe(
+    measured: GGVModel,
+    prior: GGVModel,
+    *,
+    min_corner_bins: int = 2,
+    min_brake_bins: int = 2,
+    min_accel_bins: int = 2,
+    min_hull_points: int = 20,
+) -> GGVModel:
+    """Safe-envelope blend of a per-combo MEASURED GGVModel with a trusted PRIOR (#532 Part B).
+
+    The measured model comes from :func:`ggv_from_telemetry` over probe-lap rows; the prior is the
+    live-verified generic plant. The blend is the deterministic guard that turns a possibly-sparse
+    measurement into a plant that is never *more* optimistic than warranted:
+
+    * **Lateral grip is never extrapolated upward above the prior.** An aero-lateral term spins the
+      GT3 out (live-disproven, #259/#244), so ``k_aero_lat`` stays 0 and the lateral cap stays the
+      prior's. A confidently-cornered measurement may only *lower* lateral grip (a genuinely weaker
+      car); a thin/absent lateral measurement keeps the prior. So the reference car the prior nails
+      cannot regress, while a weaker car is still identified as weaker.
+    * **Braking / drive accel** use the measured curve only where the probe confidently covered the
+      envelope (``>= min_*_bins`` fitted speed bins); otherwise the prior curve. The prior's hard
+      caps (``ay_cap_g`` / ``ax_brake_cap_g``) are always kept.
+    * **The ellipse exponent reverts to the prior** unless the ``(lat, lon)`` hull was rich enough
+      to fit it — a wrong lat/long coupling is the biggest silent-spin risk (Council 2026-07-13).
+
+    Provenance records, per curve, whether the blended value is ``measured`` or ``prior``, plus the
+    measured per-bin coverage — so the artifact labels measured-vs-prior bins.
+    """
+    prov = dict(measured.provenance or {})
+    corner_bins = int(prov.get("lat_corner_bins", 0) or 0)
+    brake_bins = int(prov.get("brake_bins", 0) or 0)
+    accel_bins = int(prov.get("accel_bins", 0) or 0)
+    hull_points = int(prov.get("hull_points", 0) or 0)
+
+    # Lateral: cap at the prior; a confident measurement may only LOWER it (weaker car), not raise.
+    if (
+        corner_bins >= min_corner_bins
+        and math.isfinite(measured.mu_lat_g)
+        and measured.mu_lat_g < prior.mu_lat_g
+    ):
+        mu_lat, lat_src = measured.mu_lat_g, "measured(<prior)"
+    else:
+        mu_lat, lat_src = prior.mu_lat_g, "prior"
+
+    # Braking: measured where confidently covered (kept under the prior's hard cap), else prior.
+    if brake_bins >= min_brake_bins and _finite_ggv(measured.brake_b0_g, measured.brake_b1):
+        brake_b0, brake_b1, brake_src = measured.brake_b0_g, measured.brake_b1, "measured"
+    else:
+        brake_b0, brake_b1, brake_src = prior.brake_b0_g, prior.brake_b1, "prior"
+
+    # Drive accel: measured where the WOT sweep covered it, else prior (kept TC-off-safe live).
+    if accel_bins >= min_accel_bins and _finite_ggv(
+        measured.drive_b0_g, measured.drive_b1, measured.drive_min_g
+    ):
+        drive_b0, drive_b1, drive_min, drive_src = (
+            measured.drive_b0_g,
+            measured.drive_b1,
+            measured.drive_min_g,
+            "measured",
+        )
+    else:
+        drive_b0, drive_b1, drive_min, drive_src = (
+            prior.drive_b0_g,
+            prior.drive_b1,
+            prior.drive_min_g,
+            "prior",
+        )
+
+    # Ellipse exponent: revert to prior unless the hull is rich enough to fit it confidently.
+    if hull_points >= min_hull_points and _finite_ggv(measured.ellipse_n):
+        ellipse_n, ell_src = measured.ellipse_n, "measured"
+    else:
+        ellipse_n, ell_src = prior.ellipse_n, "prior"
+
+    blend_prov = {
+        "blend_source": {
+            "lateral": lat_src,
+            "brake": brake_src,
+            "drive": drive_src,
+            "ellipse_n": ell_src,
+        },
+        "measured": {
+            "mu_lat_g": round(measured.mu_lat_g, 4),
+            "brake_b0_g": round(measured.brake_b0_g, 4),
+            "brake_b1": round(measured.brake_b1, 5),
+            "drive_b0_g": round(measured.drive_b0_g, 4),
+            "drive_b1": round(measured.drive_b1, 5),
+            "ellipse_n": round(measured.ellipse_n, 3),
+            "lat_corner_bins": corner_bins,
+            "brake_bins": brake_bins,
+            "accel_bins": accel_bins,
+            "hull_points": hull_points,
+            "bins": prov.get("bins", {}),
+        },
+        "prior": "generic_gt3_ggv",
+    }
+    return GGVModel(
+        mu_lat_g=mu_lat,
+        k_aero_lat=0.0,  # ALWAYS 0 — an aero-lateral term spins the GT3 out (live-disproven #259)
+        brake_b0_g=brake_b0,
+        brake_b1=brake_b1,
+        drive_b0_g=drive_b0,
+        drive_b1=drive_b1,
+        drive_min_g=drive_min,
+        ellipse_n=ellipse_n,
+        ay_cap_g=prior.ay_cap_g,  # never raise the lateral cap above the prior
+        ax_brake_cap_g=prior.ax_brake_cap_g,
+        provenance=blend_prov,
+    )
+
+
+def _finite_ggv(*values: float) -> bool:
+    return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
 
 
 # ---------------------------------------------------------------------------

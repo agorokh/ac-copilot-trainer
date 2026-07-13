@@ -66,9 +66,12 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from tools.ac_harness.sequence_probe import evaluate_sequence, tap_frames
+
+if TYPE_CHECKING:
+    from tools.ac_harness.ggv_profile import GGVModel
 
 
 def default_ac_root() -> Path:
@@ -139,6 +142,10 @@ class AutoDriveConfig:
     # Plant-artifact consumption (#532): RacingDriver kwargs derived from the combo's identified
     # plant (see plant_id.plant_driver_kwargs), applied on the ggv path. None => generic plant.
     plant_kwargs: dict | None = None
+    # #532 Part B: the combo's identified friction plant (a ggv_profile.GGVModel), consumed on the
+    # ggv path INSTEAD of generic_gt3_ggv() when the loaded artifact carries a fitted ggv block.
+    # None => generic plant.
+    plant_ggv: GGVModel | None = None
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
     racing_max_speed_kmh: float = (
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
@@ -1746,8 +1753,11 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
         from tools.ac_harness.ggv_profile import ggv_speed_profile_from_model
         from tools.ac_harness.racing_driver import RacingDriver
 
+        # #532 Part B: drive the combo's identified friction plant (safe-envelope-blended GGVModel)
+        # when the CLI resolved one from the artifact; otherwise the generic GT3 plant.
+        plant = config.plant_ggv if config.plant_ggv is not None else generic_gt3_ggv()
         v_target, _summ = ggv_speed_profile_from_model(
-            fast_line, generic_gt3_ggv(), v_top_kmh=config.racing_max_speed_kmh
+            fast_line, plant, v_top_kmh=config.racing_max_speed_kmh
         )
         v_target = [v * config.ggv_scale for v in v_target]
         # #532: consume the combo's machine-measured plant constants when the CLI resolved an
@@ -1778,6 +1788,10 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             # while staying conservative enough to drive clean. Live-found on Spa (#532): at pace
             # 0.65 only ~4 rows/3 km qualified; 0.8 loads the corners ~50% more (v^2).
             pace=0.8,
+            # #532 Part B: the trusted generic plant the measured friction envelope is
+            # safe-envelope-blended against (enables the ggv artifact block + the brake-at-speed
+            # probe). The harness owns the prior so the controller stays import-clean of auto_drive.
+            prior_ggv=generic_gt3_ggv(),
         )
     raise ValueError(
         f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
@@ -2423,6 +2437,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             load_plant_artifact,
             plant_artifact_path,
             plant_driver_kwargs,
+            plant_ggv_model,
         )
 
         # Key by setup + its CONTENT (#532 Codex review): a plant measured on one setup must not be
@@ -2435,14 +2450,21 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         )
         if artifact is not None:
             config.plant_kwargs = plant_driver_kwargs(artifact, steer=args.use_plant == "full")
+            # #532 Part B: also consume the identified friction plant (GGVModel) when the artifact
+            # carries a fitted ggv block. Applies on `auto` and `full` alike — the friction plant
+            # shapes the SPEED profile, orthogonal to the steering mode. None => generic plant.
+            config.plant_ggv = plant_ggv_model(artifact)
             plant_artifact_used = str(
                 plant_artifact_path(
                     user_dir, config.car_id, config.track_id, setup_key, setup_ini_key
                 )
             )
+            ggv_note = (
+                "identified friction plant" if config.plant_ggv is not None else "generic plant"
+            )
             print(
                 f"auto-drive: plant artifact loaded ({args.use_plant}: "
-                f"{sorted(config.plant_kwargs)}) <- {plant_artifact_used}"
+                f"{sorted(config.plant_kwargs)}; {ggv_note}) <- {plant_artifact_used}"
             )
         elif args.use_plant == "full":
             print(

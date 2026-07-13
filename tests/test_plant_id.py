@@ -13,7 +13,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from tools.ac_harness.auto_drive import generic_gt3_ggv
+from tools.ac_harness.ggv_profile import GGVModel
 from tools.ac_harness.plant_id import (
+    PLANT_SCHEMA_VERSION,
     HandshakeController,
     apply_handshake_outcome,
     find_straights,
@@ -25,6 +28,7 @@ from tools.ac_harness.plant_id import (
     load_plant_artifact,
     plant_artifact_path,
     plant_driver_kwargs,
+    plant_ggv_model,
     save_plant_artifact,
 )
 
@@ -104,6 +108,8 @@ class PlantSim:
         self.heading = [(x1 - x0) / norm, (z1 - z0) / norm]
         self.v = 0.0
         self.gear = 1  # AC encoding: neutral
+        self._accel = 0.0  # last longitudinal accel (m/s^2) — for the #532 Part B friction phys
+        self._kappa = 0.0  # last path curvature (1/m)
 
     @property
     def speed_kmh(self) -> float:
@@ -125,7 +131,15 @@ class PlantSim:
 
     def phys(self):
         base = self.v / self.r_eff
-        return SimpleNamespace(wheel_omega=(base, base, base, base))
+        # #532 Part B: also expose the accG channel (real lateral / longitudinal g) + speed so the
+        # controller's friction-row sampler can build the GGV envelope. accg_lon < 0 under braking,
+        # matching ggv_from_telemetry's brake = -lon convention.
+        return SimpleNamespace(
+            wheel_omega=(base, base, base, base),
+            speed_kmh=self.speed_kmh,
+            accg_lat=self.v * self.v * self._kappa / 9.81,
+            accg_lon=self._accel / 9.81,
+        )
 
     def apply(self, frame, dt: float) -> None:
         if frame.gear_up:
@@ -139,6 +153,8 @@ class PlantSim:
         accel = drive - 0.004 * self.v * self.v - 0.15 - 9.0 * frame.brake
         self.v = max(0.0, self.v + accel * dt)
         kappa = frame.steer / (self.c1 + self.c2 * self.v * self.v)
+        self._accel = accel
+        self._kappa = kappa
         dpsi = kappa * self.v * dt
         c, s = math.cos(dpsi), math.sin(dpsi)
         hx, hz = self.heading
@@ -532,7 +548,7 @@ def test_artifact_round_trip(tmp_path):
     loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
     assert loaded is not None
     assert loaded["constants"]["rpm_up"] == 7600.0
-    assert loaded["schema_version"] == 1
+    assert loaded["schema_version"] == PLANT_SCHEMA_VERSION
 
 
 def test_artifact_refuses_failed_result(tmp_path):
@@ -661,6 +677,97 @@ def test_fit_shift_points_fails_when_sweep_never_revs_out():
     m = fit_shift_points(samples, {2: 110.0, 3: 82.0})
     assert not m.passed
     assert "revved out" in m.detail
+
+
+# ---------------------------------------------------------------------------
+# #532 Part B — per-combo friction plant (GGV block)
+# ---------------------------------------------------------------------------
+def test_brake_probe_queued_only_with_prior():
+    line = _stadium_line()
+    without = HandshakeController(line, _profile_for(line), sink={})
+    assert "brake_probe" not in without._pending
+    with_prior = HandshakeController(line, _profile_for(line), sink={}, prior_ggv=generic_gt3_ggv())
+    assert "brake_probe" in with_prior._pending
+
+
+def test_handshake_no_ggv_block_without_prior(handshake_outcome):
+    # The module fixture runs WITHOUT a prior -> no ggv block, and it never captured friction rows.
+    ctrl, sink = handshake_outcome
+    assert ctrl.result.ggv is None
+    assert sink["result"]["ggv"] is None
+    assert ctrl.result_diagnostics["friction_rows"] == 0
+
+
+def test_handshake_emits_safe_ggv_block_with_prior():
+    line = _stadium_line()
+    sim = PlantSim(line)
+    prior = generic_gt3_ggv()
+    sink: dict = {}
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        car_id="test_car",
+        track_id="test_oval",
+        sink=sink,
+        phys_read=sim.phys,
+        prior_ggv=prior,
+    )
+    _run_handshake(ctrl, sim)
+    assert ctrl.finished
+    ggv = ctrl.result.ggv
+    assert ggv is not None and ggv["ok"], ggv
+    assert ctrl.result_diagnostics["friction_rows"] >= ctrl.min_friction_rows
+    model = GGVModel.from_dict(ggv["model"])
+    # Safe-envelope guarantees: never above the prior laterally, aero-lateral stays 0, caps kept.
+    assert model.k_aero_lat == 0.0
+    assert model.mu_lat_g <= prior.mu_lat_g + 1e-9
+    assert model.ay_cap_g == prior.ay_cap_g
+    assert model.ax_brake_cap_g == prior.ax_brake_cap_g
+    # Provenance labels each curve measured-vs-prior.
+    assert set(model.provenance["blend_source"]) == {"lateral", "brake", "drive", "ellipse_n"}
+    # The ggv block is ADVISORY — it never gates the core-constant ok.
+    assert sink["result"]["ggv"]["ok"] is True
+
+
+def test_plant_ggv_model_resolves_valid_rejects_invalid():
+    prior = generic_gt3_ggv()
+    good = {"ggv": {"ok": True, "model": prior.to_dict()}}
+    assert plant_ggv_model(good) is not None
+    # ok=False block -> None (consumer keeps generic)
+    assert plant_ggv_model({"ggv": {"ok": False, "model": None}}) is None
+    # non-finite serialized model -> rejected (never act on a nan grip curve)
+    assert plant_ggv_model({"ggv": {"ok": True, "model": {"mu_lat_g": float("nan")}}}) is None
+    # v1 / Part-A artifact with no ggv block -> None
+    assert plant_ggv_model({"constants": {"ff_sign": 1.0}}) is None
+
+
+def test_artifact_v1_still_loads_without_ggv(tmp_path):
+    # A v1 Part-A artifact (schema_version=1, no ggv block) must still load after the v2 bump so
+    # existing shift-point / steering consumption is not invalidated (back-compat).
+    import json as _json
+
+    result = _result_dict()
+    payload = {"schema_version": 1, "created_utc": "2026-07-12T00:00:00Z", **result}
+    path = plant_artifact_path(tmp_path, "test_car", "test_oval")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(payload), encoding="utf-8")
+    loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert loaded is not None
+    assert loaded["schema_version"] == 1
+    assert plant_ggv_model(loaded) is None  # no ggv block -> generic plant
+
+
+def test_ggv_block_round_trips_through_artifact(tmp_path):
+    prior = generic_gt3_ggv()
+    result = _result_dict()
+    result["ggv"] = {"ok": True, "friction_rows": 1234, "model": prior.to_dict()}
+    save_plant_artifact(tmp_path, result)
+    loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert loaded is not None
+    assert loaded["schema_version"] == PLANT_SCHEMA_VERSION
+    model = plant_ggv_model(loaded)
+    assert model is not None
+    assert abs(model.mu_lat_g - prior.mu_lat_g) < 1e-9
 
 
 def test_artifact_load_rejects_nan_constants(tmp_path):
