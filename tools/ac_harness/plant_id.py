@@ -323,6 +323,8 @@ def fit_shift_points(
     rpm_bin: float = 200.0,
     fallback_limiter_frac: float = 0.97,
     downshift_margin: float = 0.9,
+    crossover_rpm_frac: float = 0.6,
+    min_crossover_advantage: float = 0.02,
 ) -> ProbeMeasurement:
     """``rpm_up``/``rpm_dn`` from the WOT sweep's per-gear accel curves.
 
@@ -358,6 +360,13 @@ def fit_shift_points(
     def curve(gear: int) -> dict[int, float]:
         return {b: _median(v) for b, v in by_gear[gear].items() if v}
 
+    # A valid crossover sits in the upper part of the observed pull: at least ``crossover_rpm_frac``
+    # of the way from the lowest sampled rpm to the observed max. Below that, an equal/near-equal
+    # accel overlap is pre-limiter noise, not the shift point (Codex review).
+    rpm_min_seen = min((b * rpm_bin for gd in by_gear.values() for b in gd), default=0.0)
+    min_crossover_rpm = rpm_min_seen + crossover_rpm_frac * max(0.0, rpm_max - rpm_min_seen)
+    quality["min_crossover_rpm"] = round(min_crossover_rpm, 0)
+
     crossovers: list[float] = []
     for g, g_next in zip(gears, gears[1:], strict=False):
         if g_next != g + 1 or g not in ratios or g_next not in ratios:
@@ -371,8 +380,15 @@ def fit_shift_points(
             if b <= peak_bin:
                 continue
             rpm_here = (b + 0.5) * rpm_bin
+            # Reject low-rpm false crossovers (Codex review): a flat/noisy pre-limiter pull can
+            # produce an equal/near-equal overlap at low rpm and be mistaken for the shift point,
+            # making later GGV runs upshift thousands of rpm early. Require (a) the crossover sits
+            # in the upper part of the observed pull (past ~60% of the pull's rpm span from its
+            # peak to the limiter), and (b) the next gear holds a REAL accel advantage, not noise.
+            if rpm_here < min_crossover_rpm:
+                continue
             nb = int((rpm_here * step) // rpm_bin)
-            if nb in nxt and cur[b] <= nxt[nb]:
+            if nb in nxt and nxt[nb] >= cur[b] * (1.0 + min_crossover_advantage):
                 crossovers.append(rpm_here)
                 break
     if crossovers:

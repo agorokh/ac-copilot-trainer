@@ -393,6 +393,35 @@ def test_fit_shift_points_needs_two_gears():
     assert "1 gear" in m.detail
 
 
+def test_fit_shift_points_rejects_low_rpm_false_crossover():
+    # A flat/noisy low-rpm pull where the next gear marginally out-accelerates early must NOT be
+    # taken as the shift point (Codex review): it should fall back to the limiter margin, not
+    # emit a low rpm_up. Two gears, next gear's accel a hair higher at LOW rpm, both flat.
+    samples = []
+    for rpm in range(3000, 8001, 100):
+        samples.append({"gear": 2, "rpm": float(rpm), "accel_mps2": 6.0})
+        samples.append({"gear": 3, "rpm": float(rpm), "accel_mps2": 6.05})  # tiny, flat advantage
+    m = fit_shift_points(samples, {2: 110.0, 3: 82.0})
+    assert m.passed
+    # Must NOT pick a low-rpm crossover; a real shift point is high in the pull (limiter fallback).
+    assert m.value["rpm_up"] > 7000.0
+    assert m.method == "limiter-margin"
+
+
+def test_fit_shift_points_accepts_high_rpm_real_crossover():
+    # A genuine crossover: gear 2 falls off near the top while gear 3 stays strong -> accepted.
+    samples = []
+    for rpm in range(3000, 8001, 100):
+        a2 = 8.0 if rpm < 6500 else 3.0  # gear 2 falls off past 6500
+        a3 = 6.5  # gear 3 steady
+        samples.append({"gear": 2, "rpm": float(rpm), "accel_mps2": a2})
+        samples.append({"gear": 3, "rpm": float(rpm * 82.0 / 110.0), "accel_mps2": a3})
+    m = fit_shift_points(samples, {2: 110.0, 3: 82.0})
+    assert m.passed
+    assert m.method == "accel-crossover"
+    assert m.value["rpm_up"] >= 6000.0  # high in the pull, not a low-rpm artifact
+
+
 def test_fit_shift_points_limiter_fallback():
     samples = []
     for gear, ratio in ((2, 110.0), (3, 82.0)):

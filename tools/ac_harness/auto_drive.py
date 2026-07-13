@@ -362,11 +362,13 @@ def rig_verify_track(config: AutoDriveConfig) -> str | None:  # pragma: no cover
 def track_ids_match(requested: str, loaded: str) -> bool:
     """Whether a loaded AC track id satisfies the requested one (pure, case-insensitive).
 
-    AC track ids are plain folder names (``magione``, ``spa``); a multi-layout track reports the
-    base id in ``acpmf_static.track`` (the layout lives in a separate field), so an exact,
-    case-insensitive base-id comparison is correct. An empty loaded id (static page not yet
-    published) is treated as "cannot confirm" -> match, so the guard never blocks on a missing
-    read; only a POSITIVE, different id fails.
+    AC track ids are plain folder names (``magione``, ``spa``); ``acpmf_static.track`` reports the
+    **base** id only — the layout is NOT exposed via shared memory — so this compares base ids.
+    That catches the observed failure (CM launched a cached session on a different *base* track,
+    #532). A same-base-but-different-layout cached session is a narrower residual not verifiable
+    from ``acpmf_static``; it is tracked with the CM-cached-session root cause in #537. An empty
+    loaded id (static page not yet published) is "cannot confirm" -> match, so the guard never
+    blocks on a missing read; only a POSITIVE, different base id fails.
     """
     want = (requested or "").strip().lower()
     got = (loaded or "").strip().lower()
@@ -2330,6 +2332,18 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             validate_ac_id("layout", config.track_layout)
     except ValueError as exc:
         print(f"auto-drive: {exc}")
+        return 2
+    # Plant artifacts are keyed by car+track (#532). A preset-only run (``--cm-preset`` without
+    # ``--car``) has no car id, so BOTH the handshake (which persists an artifact) and
+    # ``--use-plant full`` (which must load one) need ``--car`` explicitly — otherwise the
+    # handshake would run the whole rig drive and then crash in ``save_plant_artifact`` with an
+    # empty car id (Codex review), and ``--use-plant full`` would silently skip its own hard
+    # requirement and drive on generic constants.
+    if config.driver == "handshake" and not config.car_id:
+        print("auto-drive: --driver handshake requires --car (the plant artifact is keyed by car)")
+        return 2
+    if config.driver == "ggv" and args.use_plant == "full" and not config.car_id:
+        print("auto-drive: --use-plant full requires --car (plant lookup is keyed by car+track)")
         return 2
     user_dir = resolve_ac_user_dir(config.ac_user_dir)
 
