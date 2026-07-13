@@ -82,6 +82,33 @@ relates_to:
 
 # Next session handoff
 
+## Delivered (2026-07-13) — #532 P1 Part A: auto-handshake plant ID, G0 PASS (PR #535 MERGED `b023c92`)
+
+`/autonomous-deliver 529`. **PR [#535](https://github.com/agorokh/ac-copilot-trainer/pull/535)
+MERGED (`b023c92`, 2026-07-13)** — Part A of [#532](https://github.com/agorokh/ac-copilot-trainer/issues/532)
+(epic [#529](https://github.com/agorokh/ac-copilot-trainer/issues/529) P1, gate **G0**).
+New **`tools/ac_harness/plant_id.py`**: `HandshakeController` machine-measures the frontier
+controller's constants (`ff_sign`, steer-FF `ff_c1/ff_c2`, per-gear ratios, shift points, `r_eff`)
+from designed in-sim probes through the **unchanged `rig_drive` loop**, with quality gates +
+provenance, and persists a durable, portable, car+track+setup(content-hash)-keyed plant artifact
+that `--driver ggv --use-plant auto/full` consumes. Zero hand-tuned constants on the pipeline.
+
+**G0 PASS — live-verified on the rig** (Spa + 911 GT3 R, clean ~1.5-lap drive, 0 recoveries): all 5
+constants measured with physically-correct values — `ff_sign=+1` (4 pulses agree), `ff_c1=5.25`/
+`ff_c2=0.0011` (rms 6.5% over 81 corner rows), 4 gear ratios, `rpm_up=8300` (accel-crossover),
+`r_eff=0.349m` (real GT3 tyre); artifact round-trips through the consumption path. HUD screenshot
+inspected. Evidence: `.scratch/harness-evidence/handshake-spa-911-3/`. Rig-found + fixed en route:
+`acpmf_static` track/car guard (CM cached-session → #537), bounded probe retries + finalize-on-end,
+WOT-sweep-from-current-gear (2nd-gear trap), shift-point + artifact integrity gates, harness-owned
+physics-reader lifecycle, result via `DriveStats.payload`. 8 review rounds (Codex/Qodo/self-hosted
+Gemini daemon) all addressed. Detail: [[issue-532-plant-id-handshake-2026-07-12]].
+
+**Remaining on #532 → Part B** (epic #529 P1 continuation): progressive-envelope friction ID →
+per-combo **uncertainty-carrying `GGVModel`** (GP friction map + tyre-state observer on the #488
+channels) replacing the single hardcoded `generic_gt3_ggv()`. Also filed **#537** (CM launches a
+cached session instead of the requested `--track`/`--car` — the new guard makes it fail honestly).
+`#528` (pit-start stall) was CLOSED by #539 and is now on main (rebased in).
+
 ## Delivered (2026-07-13) — #527 coachable-brake-coverage gate (PR #538 MERGED `20f68cb`)
 
 `/autonomous-deliver 527`. **PR [#538](https://github.com/agorokh/ac-copilot-trainer/pull/538)
