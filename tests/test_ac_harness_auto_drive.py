@@ -733,22 +733,28 @@ def test_run_auto_drive_fails_fast_on_track_mismatch():
 
 
 def test_handshake_outcome_gate_preserves_any_prior_failure():
-    # #532 daemon HIGH + Codex/Qodo: ANY prior failure — launch/hijack/setup AND pipeline/drive —
-    # must stay authoritative. The _main gate is `if report.error is None`, so a report carrying an
-    # error is never overwritten with "handshake produced no result".
+    # #532 daemon HIGH + Codex: ANY run-level failure stays authoritative. The _main gate is
+    # `if report.ok`, so a NOT-ok report — a raised error OR an error-less veto (seq_ok False /
+    # sim_dead / recovery_capped, which keep error=None but set ok=False) — is never overwritten
+    # with "handshake produced no result".
     from types import SimpleNamespace
 
     from tools.ac_harness.plant_id import apply_handshake_outcome
 
-    for stage in ("launch", "hijack", "setup", "pipeline", "drive"):
-        report = SimpleNamespace(ok=False, stage=stage, error=f"{stage} failed", notes=[])
-        if report.error is None:  # the _main gate
+    # error-carrying failures AND error-less vetoes (ok=False, error=None) must both be preserved
+    cases = [
+        {"stage": "launch", "error": "launch failed"},
+        {"stage": "pipeline", "error": "tap crashed"},
+        {"stage": "done", "error": None},  # error-less drive/pipeline veto (ok=False)
+    ]
+    for c in cases:
+        report = SimpleNamespace(ok=False, stage=c["stage"], error=c["error"], notes=[])
+        if report.ok:  # the _main gate
             apply_handshake_outcome(report, {})
-        assert report.stage == stage  # unchanged — root cause preserved
-        assert report.error == f"{stage} failed"
-    # A clean run (error None) with an empty sink DOES get the honest "no result" verdict.
+        assert report.stage == c["stage"] and report.error == c["error"]  # preserved
+    # A clean run (ok True) with an empty sink DOES get the honest "no result" verdict.
     ok_report = SimpleNamespace(ok=True, stage="done", error=None, notes=[])
-    if ok_report.error is None:
+    if ok_report.ok:
         apply_handshake_outcome(ok_report, {})
     assert ok_report.stage == "handshake" and ok_report.ok is False
 

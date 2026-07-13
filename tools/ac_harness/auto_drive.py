@@ -2572,12 +2572,14 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # config side-channel (daemon review).
         sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
         extras["handshake"] = sink
-        # Fold the handshake outcome ONLY when the run otherwise SUCCEEDED (no prior error). ANY
-        # earlier failure — launch/hijack/setup, a pipeline/tap crash, or an early drive abort —
-        # is the authoritative root cause and must NOT be masked by "handshake produced no result"
-        # (daemon HIGH + Codex). When error is None, apply_handshake_outcome sets the honest
-        # handshake verdict (incl. an empty-sink "no result" if the probes genuinely produced none).
-        if report.error is None:
+        # Fold the handshake outcome ONLY when the run otherwise fully SUCCEEDED (`report.ok`).
+        # report.ok already vetoes on a pipeline check failure (`seq_ok is False`) or a drive-leg
+        # veto (`sim_dead` / `recovery_capped`) — none of which raise, so gating on `error is None`
+        # alone would still mask them. Any such run-level failure is the authoritative root cause
+        # and must NOT be replaced with "handshake produced no result" or probe-failure details
+        # caused by the earlier stop/veto (daemon HIGH + Codex). On a clean run,
+        # apply_handshake_outcome sets the honest handshake verdict (incl. empty-sink "no result").
+        if report.ok:
             apply_handshake_outcome(report, sink)
         # Persist the plant ONLY from a fully clean run (report.ok): a drive-leg veto (sim_dead /
         # recovery_capped) can leave sink["ok"]=True from samples collected before the veto, but
