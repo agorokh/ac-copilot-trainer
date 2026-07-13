@@ -2383,35 +2383,40 @@ function script.update(dt)
     local wsEpochChanged = wsEpoch ~= nil
       and state._wsPrevOpenEpoch ~= nil
       and wsEpoch ~= state._wsPrevOpenEpoch
+    -- #531 Part B (Codex P2 on PR #547): broadcast the CURRENTLY applied setup so a
+    -- dashboard peer renders the setup name without waiting for the next setup.load event.
+    -- Fired on the WS (re)connect edge AND whenever `session` re-emits (car/track/session
+    -- change — the setup that applies is a per-session fact). The sidecar caches this
+    -- identity snapshot and replays it to late subscribers. Resolution reuses the
+    -- race.ini/_EXT_SETUP_FILENAME ladder; `activeSetupState` only reports READABLE setup
+    -- files (never the legacy folder guess) and distinguishes CONFIRMED no-setup (publish a
+    -- CLEARED state so a stale cache never survives) from a transient race.ini miss
+    -- (publish nothing — clearing would wrongly wipe a valid name).
+    local function publishActiveSetupSnapshot()
+      if not wsBridge.publishTopic then
+        return
+      end
+      pcall(function()
+        local activePath, noSetupConfirmed = setupReader.activeSetupState(car, sim)
+        if type(activePath) == "string" and activePath ~= "" then
+          local base = activePath:match("([^/\\]+)$")
+          local activeName = base and base:gsub("%.[iI][nN][iI]$", "") or nil
+          if activeName == "" then activeName = nil end
+          wsBridge.publishTopic("setup.active", {
+            name = activeName,
+            path = activePath,
+            changed_at = (os and os.time and os.time()) or 0,
+          })
+        elseif noSetupConfirmed then
+          wsBridge.publishTopic("setup.active", {
+            changed_at = (os and os.time and os.time()) or 0,
+          })
+        end
+      end)
+    end
     if wsConn and (not state._wsPrevConnected or wsEpochChanged) then
       lifecyclePublisher.rearmSession()
-      -- #531 Part B (Codex P2 on PR #547): on the same (re)connect edge, publish the
-      -- CURRENTLY applied setup so a dashboard peer renders the setup name without waiting
-      -- for the next setup.load event. The sidecar caches this identity snapshot and replays
-      -- it to late subscribers. Resolution reuses the race.ini/_EXT_SETUP_FILENAME ladder;
-      -- when nothing resolves we publish nothing (the header's "NO SETUP LOADED" is honest).
-      if wsBridge.publishTopic then
-        pcall(function()
-          local activePath, noSetupConfirmed = setupReader.activeSetupState(car, sim)
-          if type(activePath) == "string" and activePath ~= "" then
-            local base = activePath:match("([^/\\]+)$")
-            local activeName = base and base:gsub("%.[iI][nN][iI]$", "") or nil
-            if activeName == "" then activeName = nil end
-            wsBridge.publishTopic("setup.active", {
-              name = activeName,
-              path = activePath,
-              changed_at = (os and os.time and os.time()) or 0,
-            })
-          elseif noSetupConfirmed then
-            -- CONFIRMED no setup: publish a CLEARED state so the sidecar's identity
-            -- cache never replays a previous session's setup name (self-hosted reviewer
-            -- MEDIUM on PR #547). A transient race.ini miss publishes nothing.
-            wsBridge.publishTopic("setup.active", {
-              changed_at = (os and os.time and os.time()) or 0,
-            })
-          end
-        end)
-      end
+      publishActiveSetupSnapshot()
     end
     state._wsPrevConnected = wsConn
     if wsEpoch ~= nil then
@@ -2430,7 +2435,12 @@ function script.update(dt)
       wsBridge = wsBridge,
       appVersion = APP_VERSION_UI,
     })
-    lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge })
+    if lifecyclePublisher.publishSessionIfChanged({ car = car, sim = sim, wsBridge = wsBridge }) then
+      -- A re-emitted `session` means the car/track/session identity changed: follow with a
+      -- fresh setup.active so the dashboard header never carries the previous session's
+      -- setup name into the new identity (Codex on PR #547).
+      publishActiveSetupSnapshot()
+    end
   end)
 
   -- Issue #180 Part D step 2: telemetry topics (continuous streams, no ordering contract).

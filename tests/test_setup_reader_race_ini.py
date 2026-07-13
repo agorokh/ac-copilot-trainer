@@ -219,6 +219,24 @@ def test_active_setup_ini_path_surfaces_confirmed_no_setup(tmp_path):
     assert out == "nil|true", out
 
 
+def test_active_setup_state_never_reports_unreadable_guess(tmp_path):
+    """Codex on PR #547: a vanilla race.ini (SETUP= name, no _EXT pointer) can fall through
+    to a synthesized folder-guess path that names a file which was never readable — the
+    broadcaster must see 'unresolved' (nil, False), never a phantom setup and never a
+    confirmed no-setup (clearing on it would wipe a valid name)."""
+    ac_root = tmp_path / "Assetto Corsa"
+    (ac_root / "cfg").mkdir(parents=True)
+    # Vanilla shape: SETUP names a file that does not exist anywhere on disk.
+    (ac_root / "cfg" / "race.ini").write_text("[CAR_0]\nSETUP=GhostSetup.ini\n", encoding="utf-8")
+    rt = _runtime(str(tmp_path).replace("\\", "/"))
+    out = rt.execute(
+        'local sr = require("setup_reader"); '
+        "local p, no_setup = sr.activeSetupState({}, nil); "
+        'return tostring(p) .. "|" .. tostring(no_setup)'
+    )
+    assert out == "nil|false", out
+
+
 def test_active_setup_ini_path_resolved_setup_is_not_no_setup(tmp_path):
     setup_ini = _write_setup_combo(tmp_path, "{setup_ini}")
     rt = _runtime(str(tmp_path).replace("\\", "/"))

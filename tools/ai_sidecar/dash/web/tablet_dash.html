@@ -848,8 +848,12 @@ body{font-family:var(--fr);-webkit-user-select:none;user-select:none}
               S.sessionIdent = ident;
               S.lap = null; // prior identity's Last/Best are wrong now
               S.fuelAtLap = null;
+              S.burns = []; // burn is per car AND per track length (Codex on PR #547)
+              // The setup that applies is a per-session fact: show the honest unknown until
+              // the trainer's follow-up setup.active names the new one (Codex on PR #547).
+              S.setupName = null;
+              renderHeader();
               if (carChanged) {
-                S.burns = []; // burn is per-car
                 S.spinners = null; // car changed: old ranges are wrong, wait for fresh ones
                 renderElectronics();
               }

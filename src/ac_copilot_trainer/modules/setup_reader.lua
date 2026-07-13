@@ -263,7 +263,20 @@ end
 ---@return boolean noSetupConfirmed
 function M.activeSetupState(car, sim)
   local path, noSetupConfirmed = guessSetupIniPath(car, sim)
-  return path, noSetupConfirmed == true
+  if noSetupConfirmed == true then
+    return nil, true
+  end
+  if type(path) ~= "string" or path == "" then
+    return nil, false
+  end
+  -- The vanilla-race.ini fallthrough can synthesize a legacy folder GUESS that names a file
+  -- which was never readable; broadcasting it would headline a phantom setup (Codex on PR
+  -- #547). Only a READABLE setup file is broadcastable — an unreadable guess reports
+  -- "unresolved", never "no setup" (clearing on it would wipe a valid name).
+  if M.readIniSnapshot(path) == nil then
+    return nil, false
+  end
+  return path, false
 end
 
 --- Naive INI key harvest (no full parser): [SECTION] and key=value lines.
