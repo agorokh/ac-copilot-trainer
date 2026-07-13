@@ -26,7 +26,20 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Active focus (2026-07-13, latest):** Coaching QUALITY —
+**Active focus (2026-07-13, latest):** Harness reliability —
+[#537](https://github.com/agorokh/ac-copilot-trainer/issues/537) CM cached-session wrong-track. PR
+[#544](https://github.com/agorokh/ac-copilot-trainer/pull/544) **MERGED**
+([`41f4d53`](https://github.com/agorokh/ac-copilot-trainer/commit/41f4d53)) delivered **AC #2**:
+`auto_drive` relaunches (bounded) on a track/car mismatch instead of aborting on the first cached
+session — two-tier guard (authoritative post-hijack #535 + best-effort fail-safe setup-path early-out),
+verdict DRY via `loaded_combo_mismatch`. The cursor daemon caught a HIGH on a mid-PR pre-hijack
+unification (reverted; restored the post-hijack guard). **#537 STAYS OPEN**: **AC #1** (live two-track
+proof: `acpmf_static.track` reads the requested track for magione→spa back-to-back, no manual CM) is
+rig-gated and BLOCKED — rig SSH (`arsen@100.75.251.87`) now `Permission denied (publickey)`
+(`authorized_keys` reset since the 2026-06-29 handoff); unblocker in the handoff.
+[[issue-537-cm-cached-track-relaunch-2026-07-13]].
+
+**Prior focus (2026-07-13):** Coaching QUALITY —
 [#522](https://github.com/agorokh/ac-copilot-trainer/issues/522) V2 remains the only open scope.
 PR [#538](https://github.com/agorokh/ac-copilot-trainer/pull/538) **MERGED**
 ([`20f68cb`](https://github.com/agorokh/ac-copilot-trainer/commit/20f68cb)) closed
