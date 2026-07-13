@@ -144,10 +144,17 @@ def recommend_gain(
     return round(min(max(scaled, floor), ceiling), 3)
 
 
-def offset_looks_valid(stats: FfbStats) -> tuple[bool, str]:
-    """Sanity-check that the sampled finalFF is a real force signal, not a wrong-offset read."""
-    if stats.n < OFFSET_MIN_SAMPLES:
-        return False, f"only {stats.n} samples (< {OFFSET_MIN_SAMPLES}); car not driven long enough"
+def offset_looks_valid(
+    stats: FfbStats, *, min_samples: int = OFFSET_MIN_SAMPLES
+) -> tuple[bool, str]:
+    """Sanity-check that the sampled finalFF is a real force signal, not a wrong-offset read.
+
+    ``min_samples`` defaults to :data:`OFFSET_MIN_SAMPLES` but ``_run`` passes a duration-aware
+    floor so a mid-sample stall (packetId froze, only a short live slice collected) is rejected —
+    a 2 s slice at 100 Hz already clears the fixed 200 minimum.
+    """
+    if stats.n < min_samples:
+        return False, f"only {stats.n} samples (< {min_samples}); car not driven enough / stalled"
     if stats.peak > OFFSET_SANE_PEAK:
         return False, f"peak {stats.peak:.3f} > {OFFSET_SANE_PEAK} — finalFF offset likely wrong"
     if stats.peak < OFFSET_MIN_PEAK:
@@ -364,10 +371,13 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         )
     finally:
         if drive_proc is not None:
-            _terminate_tree(drive_proc)
+            _shutdown_drive(drive_proc)
 
     stats = summarize(samples)
-    valid, reason = offset_looks_valid(stats)
+    # Duration-aware floor: a full window yields ~sample_seconds*hz new-packet samples; requiring
+    # >= 30% rejects a mid-sample stall (frozen packetId), not merely a too-short drive.
+    min_samples = max(OFFSET_MIN_SAMPLES, int(args.sample_seconds * args.hz * 0.3))
+    valid, reason = offset_looks_valid(stats, min_samples=min_samples)
     if valid and drive_exited_early:
         valid, reason = False, "auto_drive exited during the sample window (truncated/stationary)"
 
@@ -433,12 +443,30 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
     return 0
 
 
-def _terminate_tree(proc: object) -> None:  # pragma: no cover - rig-only
-    """Kill the auto_drive child AND its descendants (e.g. an auto-started sidecar).
+def _shutdown_drive(proc: object, *, grace_s: float = 60.0) -> None:  # pragma: no cover - rig-only
+    """Stop the auto_drive child cleanly.
 
-    A bare ``terminate()`` hard-kills only auto_drive, so its own ``finally`` never runs and an
-    auto-started sidecar orphans and squats the port. On Windows ``taskkill /T`` takes the whole
-    tree; elsewhere fall back to ``terminate()``.
+    Sampling ends while auto_drive still has ~20 s of its drive budget left, so first give it
+    ``grace_s`` to **self-terminate** — its own ``finally`` brakes the car, closes the wheel
+    controller, and stops any sidecar it auto-started. Only if it overruns (hang) do we hard
+    ``taskkill /T`` the tree as a fallback (which would skip that cleanup).
+    """
+    waited = getattr(proc, "wait", None)
+    if waited is not None:
+        try:
+            waited(timeout=grace_s)
+            return
+        except Exception:
+            pass  # timeout / hang → fall through to the hard tree-kill
+    _tree_kill(proc)
+
+
+def _tree_kill(proc: object) -> None:  # pragma: no cover - rig-only
+    """Fallback hard kill of the auto_drive child AND its descendants (e.g. an auto-started sidecar).
+
+    On Windows ``taskkill /T`` takes the whole tree so a sidecar can't orphan and squat the port;
+    elsewhere fall back to ``terminate()``. Used only when :func:`_shutdown_drive`'s graceful wait
+    overruns — the clean path is auto_drive's own teardown.
     """
     pid = getattr(proc, "pid", None)
     if pid is None:
@@ -568,7 +596,9 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:  # pragma: no
     p.add_argument("--floor", type=_nonneg_float, default=GAIN_FLOOR)
     p.add_argument("--ceiling", type=_pos_float, default=GAIN_CEILING)
     p.add_argument("--ramp-seconds", dest="ramp_seconds", type=_nonneg_float, default=10.0)
-    p.add_argument("--launch-timeout", dest="launch_timeout", type=_pos_float, default=180.0)
+    # 360s covers auto_drive's own relaunch budget (~5 attempts x ~75s) so a slow CM race that
+    # needs a 3rd attempt isn't killed mid-recovery.
+    p.add_argument("--launch-timeout", dest="launch_timeout", type=_pos_float, default=360.0)
     p.add_argument(
         "--observe-only",
         dest="observe_only",

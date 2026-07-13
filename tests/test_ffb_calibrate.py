@@ -134,6 +134,17 @@ def test_offset_looks_valid_rejects_too_few_samples():
     assert "samples" in reason
 
 
+def test_offset_looks_valid_duration_aware_min_rejects_stalled_window():
+    # 300 samples clears the fixed 200 floor, but a duration-aware floor (what _run passes for a
+    # long window) rejects a mid-sample stall that only produced a short live slice.
+    ok, reason = offset_looks_valid(
+        FfbStats(n=300, peak=0.8, rms=0.4, clip_fraction=0.0, clip_threshold=0.99),
+        min_samples=1000,
+    )
+    assert ok is False
+    assert "samples" in reason
+
+
 def test_offset_looks_valid_rejects_out_of_range_peak():
     # A wrong byte offset reads garbage floats far outside [-1, 1].
     ok, reason = offset_looks_valid(
