@@ -684,14 +684,13 @@ def test_build_driver_ggv_consumes_plant_kwargs():
     assert d.cff.c1 == 6.0
 
 
-def test_build_driver_handshake_builds_controller_wired_to_sink():
+def test_build_driver_handshake_builds_controller_with_own_sink():
     from tools.ac_harness.plant_id import HandshakeController
 
-    sink: dict = {}
-    cfg = _cfg(driver="handshake", car_id="test_car", handshake_sink=sink)
+    cfg = _cfg(driver="handshake", car_id="test_car")
     d = _build_driver(cfg, _LINE, _PROFILE)
     assert isinstance(d, HandshakeController)
-    assert d._sink is sink
+    assert isinstance(d.sink, dict)  # controller owns its sink (no config side-channel)
     assert d.car_id == "test_car"
     assert d.finished is False
 

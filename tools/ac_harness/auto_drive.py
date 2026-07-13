@@ -131,14 +131,14 @@ class AutoDriveConfig:
     # carries pace). ``driver="cruise"`` is the conservative ~50 km/h, 1st-gear lane-keeper
     # (LapDriver) for a guaranteed-clean slow lap when pace is not the point.
     # ``driver="handshake"`` runs the #532 plant-ID handshake instead of a plain drive: guided
-    # probes measure ff_sign / steer-FF / shift points / r_eff and the result lands in
-    # ``handshake_sink`` (shared dict — survives dataclasses.replace) for the CLI to persist.
+    # probes measure ff_sign / steer-FF / shift points / r_eff. The result flows OUT via
+    # ``DriveStats.payload`` (rig_drive copies the controller's sink there), not a config
+    # side-channel (daemon review) — config stays input-only.
     driver: str = "racing"
     drive_seconds: float = 300.0
     # Plant-artifact consumption (#532): RacingDriver kwargs derived from the combo's identified
     # plant (see plant_id.plant_driver_kwargs), applied on the ggv path. None => generic plant.
     plant_kwargs: dict | None = None
-    handshake_sink: dict = field(default_factory=dict)
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
     racing_max_speed_kmh: float = (
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
@@ -199,6 +199,9 @@ class DriveStats:
     recovery_capped: bool = False  # True when max_recoveries was exhausted (vetoes success)
     spawn_teleport: str = ""  # "" (not attempted) | "ok" | "failed" | "skipped (on line)"
     reason: str = ""
+    # Driver-specific result payload flowing OUT through the normal return value (not a config
+    # side-channel): the #532 handshake result (ok/result/constants/diagnostics) lands here.
+    payload: dict = field(default_factory=dict)
 
 
 def drive_leg_succeeded(stats: DriveStats | None) -> bool:
@@ -1761,7 +1764,9 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             track_id=config.track_id,
             setup=(Path(config.setup).stem if config.setup else None),
             setup_ini=(str(config.setup_ini) if config.setup_ini else None),
-            sink=config.handshake_sink,
+            # Fresh sink owned by the controller; rig_drive copies it into DriveStats.payload so
+            # the result returns normally (no config side-channel — daemon review).
+            sink={},
             # The controller does NOT open OS memory itself (daemon review): rig_drive injects a
             # harness-owned physics reader via set_phys_read and owns its close.
             phys_read=None,
@@ -2080,6 +2085,11 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.reason = (stats.reason + "; " if stats.reason else "") + (
                     f"handshake finalize crashed: {type(exc).__name__}: {exc}"
                 )
+        # Route the handshake result OUT via DriveStats.payload (normal return value), so _main
+        # never reaches into a config-embedded mutable sink (daemon review).
+        driver_sink = getattr(driver, "sink", None)
+        if isinstance(driver_sink, dict) and driver_sink:
+            stats.payload = dict(driver_sink)
         if phys_reader is not None:
             phys_reader.close()
         if hs_phys is not None:  # release the harness-owned handshake physics map (#532)
@@ -2564,12 +2574,15 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         # and must NOT be clobbered with "handshake produced no result" (Codex + Qodo review).
         from tools.ac_harness.plant_id import apply_handshake_outcome, save_plant_artifact
 
-        extras["handshake"] = dict(config.handshake_sink)
+        # The handshake result flows out via DriveStats.payload (report.drive.payload), not a
+        # config side-channel (daemon review).
+        sink = dict(report.drive.payload) if report.drive and report.drive.payload else {}
+        extras["handshake"] = sink
         reached_handshake = report.stage not in ("launch", "hijack", "setup")
         if reached_handshake:
-            apply_handshake_outcome(report, config.handshake_sink)
-        if config.handshake_sink.get("ok"):
-            artifact_path = save_plant_artifact(user_dir, config.handshake_sink["result"])
+            apply_handshake_outcome(report, sink)
+        if sink.get("ok"):
+            artifact_path = save_plant_artifact(user_dir, sink["result"])
             extras["plant_artifact_saved"] = str(artifact_path)
             print(f"auto-drive: plant artifact saved -> {artifact_path}")
     report_path = write_evidence(evidence_dir, report, extras=extras)

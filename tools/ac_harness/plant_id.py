@@ -622,8 +622,9 @@ class HandshakeController:
 
     Conforms to the ``step()``/``on_recovery()`` driver contract of :class:`RacingDriver`, plus
     a ``finished`` flag the rig loop honors, so **the existing** ``rig_drive`` executes it. On
-    completion the result lands in ``sink`` (a mutable dict shared with the CLI): keys ``ok``,
-    ``result`` (full dict), ``constants``.
+    completion the result lands in the public ``sink`` dict (keys ``ok``, ``result``,
+    ``constants``, ``diagnostics``); ``rig_drive`` copies it into ``DriveStats.payload`` so the
+    result flows out through the normal return value, not a config side-channel.
     """
 
     def __init__(
@@ -660,7 +661,7 @@ class HandshakeController:
         self.track_id = track_id
         self.setup = setup
         self.setup_ini = setup_ini
-        self._sink = sink if sink is not None else {}
+        self.sink = sink if sink is not None else {}
         self._phys_read = phys_read
         self.max_laps = max_laps
         self.pulse_steer = pulse_steer
@@ -1153,10 +1154,10 @@ class HandshakeController:
             "probe_attempts": dict(self._probe_attempts),
             "pending_at_finish": list(self._pending),
         }
-        self._sink["ok"] = self.result.ok
-        self._sink["result"] = self.result.to_dict()
-        self._sink["constants"] = self.result.constants()
-        self._sink["diagnostics"] = self.result_diagnostics
+        self.sink["ok"] = self.result.ok
+        self.sink["result"] = self.result.to_dict()
+        self.sink["constants"] = self.result.constants()
+        self.sink["diagnostics"] = self.result_diagnostics
         self.finished = True
 
     def finalize(self, now: float | None = None) -> None:
