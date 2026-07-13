@@ -299,12 +299,20 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         print(f"[ffb-calibrate] {exc}", file=sys.stderr)
         return 2
 
+    if args.floor > args.ceiling:  # fail fast, before launching auto_drive / driving the rig
+        print(
+            f"[ffb-calibrate] --floor {args.floor} must be <= --ceiling {args.ceiling}",
+            file=sys.stderr,
+        )
+        return 2
+
     user_ff = _user_ff_path(args.ac_user_dir)
     car = args.car
     key = _evidence_key(car, args.track, args.track_layout)
     passthrough = _auto_drive_passthrough(args)
 
     drive_proc = None
+    drive_exited_early = False
     try:
         if not args.observe_only:
             # Keep the controller driving across ramp + the whole sample window (+margin).
@@ -339,12 +347,19 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
         print(f"[ffb-calibrate] sampling finalFF for {args.sample_seconds:.0f}s ...")
         samples = sample_final_ff(duration_s=args.sample_seconds, hz=args.hz, proc=drive_proc)
+        # Captured BEFORE the finally kills it: if the child exited on its own during the window,
+        # the controller was released and the tail is stationary/truncated — the sample is suspect.
+        drive_exited_early = (
+            drive_proc is not None and drive_proc.poll() is not None and not args.observe_only
+        )
     finally:
         if drive_proc is not None:
             _terminate_tree(drive_proc)
 
     stats = summarize(samples)
     valid, reason = offset_looks_valid(stats)
+    if valid and drive_exited_early:
+        valid, reason = False, "auto_drive exited during the sample window (truncated/stationary)"
 
     current = 1.0
     if user_ff.exists():
@@ -356,7 +371,8 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
 
     # Report-only by default; writing user_ff.ini requires an explicit --write (FFB strength is
     # operator-subjective — never mutate the wheel feel without opt-in). --dry-run forces no write.
-    will_write = valid and args.write and not args.dry_run and not args.observe_only
+    # --observe-only --write IS honored: the operator drove manually and explicitly opted in.
+    will_write = valid and args.write and not args.dry_run
     print("\n=== FFB calibration ===")
     print(f"car             : {car}")
     print(f"samples         : {stats.n}")
@@ -402,7 +418,7 @@ def _run(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - rig-on
         return 3
     if will_write and not wrote:
         return 4
-    if not args.observe_only and not args.write:
+    if not args.write:
         print("[ffb-calibrate] report-only; re-run with --write to apply the recommended gain")
     return 0
 
