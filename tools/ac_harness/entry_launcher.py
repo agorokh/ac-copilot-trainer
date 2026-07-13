@@ -348,6 +348,20 @@ class ContentManagerActuator:
             return ActuatorEvent("relaunch", launch.detail)
         return ActuatorEvent("relaunch", f"{normalized.detail}; {launch.detail}")
 
+    def restart_content_manager(self) -> ActuatorEvent:
+        """Kill the Content Manager process (tree) so the NEXT launch cold-starts a FRESH CM.
+
+        The ``acmanager://`` URL is handed to the already-running CM via single-instance IPC. A CM
+        instance that has gone stale — no longer honoring the ``presetFile`` and re-running its
+        cached last session (#537 / #558) — keeps serving that cached session no matter how often
+        the URL is re-sent (a plain :meth:`relaunch` only kills ``acs.exe``). Killing the CM
+        process makes the next :meth:`launch` cold-start a fresh instance that processes the preset
+        URL — exactly the recovery a MANUAL Content Manager restart performs (live-proven on AG_PC
+        2026-07-13: after the restart the next launch hijacked on probe 1 and drove a clean lap).
+        ``/T`` also takes down CM's ``acs.exe`` child in the same call.
+        """
+        return ActuatorEvent("restart_cm", _taskkill(self.cm_exe.name, self._runner))
+
 
 LAUNCH_MODES = ("cm", "acs")
 

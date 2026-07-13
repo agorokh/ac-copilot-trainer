@@ -343,6 +343,9 @@ DriveFn = Callable[[Controller, AutoDriveConfig, threading.Event], DriveStats]
 TapFn = Callable[..., Awaitable[list[dict]]]
 # Returns the loaded (track, car) identity from the live sim, or None when it cannot be read.
 VerifyTrackFn = Callable[[AutoDriveConfig], "tuple[str | None, str | None] | None"]
+# #558: called on a cached-session mismatch to RESTART the launcher (kill Content Manager) so the
+# next launch cold-starts a fresh CM — the recovery a plain URL re-issue cannot perform.
+RestartLauncherFn = Callable[[AutoDriveConfig], None]
 
 
 def rig_verify_track(
@@ -497,6 +500,31 @@ def _has_timed_lap(frames: list[dict]) -> bool:
     return False
 
 
+def _relaunch_after_cached_session(
+    restart_launcher: RestartLauncherFn | None,
+    config: AutoDriveConfig,
+    why: str,
+    attempt_idx: int,
+    attempts: int,
+) -> None:
+    """Log a cached-session relaunch and, when wired, RESTART the launcher first (#558).
+
+    A plain relaunch only re-issues the ``acmanager://`` URL to the already-running (stale) CM,
+    which keeps serving its cached session. Restarting Content Manager makes the next ``launch``
+    cold-start a fresh instance that honors the preset (live-proven recovery, AG_PC 2026-07-13).
+    A restart-seam failure is swallowed — the plain relaunch still runs and the terminal attempt
+    FAILs honestly — so recovery is best-effort, never a new crash path.
+    """
+    restarted = ""
+    if restart_launcher is not None:
+        try:
+            restart_launcher(config)
+            restarted = "; restarted Content Manager (fresh cold-start next)"
+        except Exception as exc:  # noqa: BLE001 - see docstring: never crash the run on a restart
+            restarted = f"; Content Manager restart failed ({type(exc).__name__}: {exc})"
+    _log(f"{why} — relaunching (attempt {attempt_idx + 2}/{attempts}){restarted}")
+
+
 async def run_auto_drive(
     config: AutoDriveConfig,
     *,
@@ -506,6 +534,7 @@ async def run_auto_drive(
     tap: TapFn = tap_frames,
     apply_setup: ApplySetupFn | None = None,
     verify_track: VerifyTrackFn | None = None,
+    restart_launcher: RestartLauncherFn | None = None,
 ) -> AutoDriveReport:
     """Compose launch → setup → hijack → (background drive) → WS assert → teardown into one report.
 
@@ -594,9 +623,12 @@ async def run_auto_drive(
                     last_launch_error = (
                         f"setup verify failed on a cached session ({combo_mismatch}): {detail}"
                     )
-                    _log(
-                        f"setup guard: {combo_mismatch} (CM cached session — setup fuel mismatch) "
-                        f"— relaunching (attempt {attempt_idx + 2}/{attempts})"
+                    _relaunch_after_cached_session(
+                        restart_launcher,
+                        config,
+                        f"setup guard: {combo_mismatch} (CM cached session — setup fuel mismatch)",
+                        attempt_idx,
+                        attempts,
                     )
                     continue
                 return AutoDriveReport(
@@ -642,9 +674,12 @@ async def run_auto_drive(
                 controller = None
                 last_launch_error = f"loaded {mismatch} — Content Manager launched a cached session"
                 if attempt_idx < attempts - 1 and not config.skip_launch:
-                    _log(
-                        f"track/car guard: {mismatch} (CM cached session) — relaunching "
-                        f"(attempt {attempt_idx + 2}/{attempts})"
+                    _relaunch_after_cached_session(
+                        restart_launcher,
+                        config,
+                        f"track/car guard: {mismatch} (CM cached session)",
+                        attempt_idx,
+                        attempts,
                     )
                     continue
                 return AutoDriveReport(
@@ -1602,6 +1637,20 @@ def rig_launch(config: AutoDriveConfig) -> tuple[bool, str]:  # pragma: no cover
             time.sleep(config.settle_seconds)  # let CSP arm Custom-AI before the hijack
             return True, f"LIVE after {attempt} launch attempt(s)"
     return False, f"sim never reached LIVE after {config.max_launches} attempt(s)"
+
+
+def rig_restart_launcher(config: AutoDriveConfig) -> None:  # pragma: no cover - rig-only
+    """Restart Content Manager so the next :func:`rig_launch` cold-starts a FRESH CM (#558).
+
+    Invoked by :func:`run_auto_drive` on a cached-session mismatch: a stale CM keeps serving its
+    cached last session no matter how often the ``acmanager://`` URL is re-sent, so the harness
+    must kill CM and let the next launch cold-start a fresh instance that honors the preset.
+    """
+    from tools.ac_harness.entry_launcher import ContentManagerActuator
+
+    actuator = ContentManagerActuator(preset=config.cm_preset, cm_exe=config.cm_exe)
+    event = actuator.restart_content_manager()
+    _log(f"restart Content Manager (cached-session recovery): {event.detail}")
 
 
 def _wait_live(timeout: float) -> bool:  # pragma: no cover - rig-only
@@ -2634,6 +2683,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
                 tap=tap_frames,
                 apply_setup=rig_apply_setup,
                 verify_track=rig_verify_track,
+                restart_launcher=rig_restart_launcher,
             )
         )
     finally:
