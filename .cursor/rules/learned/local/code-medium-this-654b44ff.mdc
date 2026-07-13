@@ -1,0 +1,43 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 654b44ff97493beb
+mined_from: 9 review comments across 7 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Code Medium This (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+If `subprocess.Popen` raises an exception (e.g., `FileNotFoundError` if `scrcpy` is missing), the `try` block is never entered, ...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+Guard the `proc.poll()` check to prevent a `NameError` if `subprocess.Popen` failed to initialize `proc`.
+
+```python
+    finally...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+If `support_taper_kmh` is greater than half of the span (`span_kmh / 2.0`), `_validate_supported_longitudinal` will raise a `Val...
+- ![medium](https://www.gstatic.com/codereviewagent/medium-priority.svg)
+
+If `support_taper_kmh` is greater than half of the span (`span_kmh / 2.0`), `_validate_supported_longitudinal` will raise a `Val...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

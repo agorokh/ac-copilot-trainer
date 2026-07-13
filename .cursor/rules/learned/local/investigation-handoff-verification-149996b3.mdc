@@ -1,0 +1,56 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 149996b30a8586f8
+mined_from: 5 review comments across 5 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: guideline
+---
+
+# Investigation Handoff Verification (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): handoff + investigation node for #488 Part A (PR #497)
+
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-content/up...
+- <h3>PR Summary by Qodo</h3>
+
+Vault: post-merge handoff + investigation node for EPIC #488 Part B (PR #500)
+
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo...
+- <h3>PR Summary by Qodo</h3>
+
+Vault handoff notes for #544 merge and #537 follow-ups (AC #1 pending)
+
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-content...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): add #532 Part B live verification handoff + investigation node
+
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo.a...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

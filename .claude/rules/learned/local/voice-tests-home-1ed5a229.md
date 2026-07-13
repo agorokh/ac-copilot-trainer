@@ -1,0 +1,52 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 1ed5a229c63e7391
+mined_from: 4 review comments across 4 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: automation
+---
+
+# Voice Tests Home (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+Add degradation/lap-feature grains and Parquet ML surface to coaching lake
+
+<code>✨ Enhancement</code> <code>🧪 Tests</code> <code>📝 Documentation</code> <code>🕐 40+ Minute...
+- <h3>PR Summary by Qodo</h3>
+
+Fix governance shim HOME resolution crashes in minimal container/CI environments
+
+<code>🐞 Bug fix</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-con...
+- <h3>PR Summary by Qodo</h3>
+
+Fix harness lap archive race by polling for async writer completion
+
+<code>🐞 Bug fix</code> <code>🧪 Tests</code> <code>🕐 20-40 Minutes</code>
+
+<img src="https://www.qodo.a...
+- <h3>PR Summary by Qodo</h3>
+
+feat(voice): tablet coaching-audio endpoint + audible-latency harness
+
+<code>✨ Enhancement</code> <code>🧪 Tests</code> <code>📝 Documentation</code> <code>🕐 40+ Minutes</co...
+
+## Suggested enforcement
+
+- Prefer lint/format or CI checks over manual review for this class of issue.

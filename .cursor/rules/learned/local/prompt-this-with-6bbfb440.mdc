@@ -1,0 +1,44 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 6bbfb440837ed501
+mined_from: 5 review comments across 3 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: test
+---
+
+# Prompt This With (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+4\. Coverage ignores heard time <code>🐞 Bug</code> <code>≡ Correctness</code>
+
+<p...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. Prewrap carried on rewinds <code>🐞 Bug</code> <code>≡ Correctness</code>
+
+<pr...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+2\. Defaults miss lap and 0.90 <code>📎 Requirement gap</code> <code>≡ Correctness...
+- <img src="https://img.shields.io/badge/Action_required-634FD1?style=flat-square" height="20px" alt="Action required">
+
+1\. <b><i>recommend_gain</i></b> uses <b><i>stats.p99</i></b> <code>📎 Requirement...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

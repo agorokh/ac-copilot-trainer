@@ -1,0 +1,49 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 019283cfcc1eba30
+mined_from: 3 review comments across 3 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: reliability
+preventability: guideline
+---
+
+# Handoff Delivered Investigation (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- <h3>PR Summary by Qodo</h3>
+
+Vault: add #515 lap-archives investigation and PR #516 post-merge handoff
+
+<code>📝 Documentation</code> <code>🕐 10-20 Minutes</code>
+
+<img src="https://www.qodo.ai/wp-cont...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): add post-merge handoff notes for #535 / #532 P1 Part A
+
+<code>📝 Documentation</code> <code>🕐 Less than 5 minutes</code>
+
+<img src="https://www.qodo.ai/wp-cont...
+- <h3>PR Summary by Qodo</h3>
+
+docs(vault): record PR #551 delivery and refresh handoff status
+
+<code>📝 Documentation</code> <code>🕐 Less than 10 minutes</code>
+
+<img src="https://www.qodo.ai/wp-content...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

@@ -1,0 +1,40 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 31da0e9e57f8d7ed
+mined_from: 25 review comments across 23 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: nit
+preventability: architecture
+---
+
+# Code Epic Findings (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- _The architecture cleanly extends the data platform with new ML grains and Parquet export, properly establishing a single source of truth for stint boundaries and guarding the raw corpus from overwrit...
+- _No architectural issues found in the diff._
+
+No findings at or above **medium** severity. ✅
+
+<sub>model `Gemini 3.1 Pro (Low)` · 0 raw finding(s) · 38.3s · EPIC #818 Phase 1</sub>
+- _The diff cleanly extends the telemetry data platform with derived ML grains and Parquet serialization, maintaining correct boundaries, preserving immutability constraints, and comprehensively updatin...
+- _No architectural issues found; the diff correctly updates state-tracking files to reflect the completion of EPIC #488._
+
+No findings at or above **medium** severity. ✅
+
+<sub>model `Gemini 3.1 Pro (Lo...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

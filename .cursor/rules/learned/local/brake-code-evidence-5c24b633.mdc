@@ -1,0 +1,35 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+globs:
+  - "tools/**/*"
+source: process-miner
+rule_fingerprint: 5c24b6337bad3635
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: bug
+preventability: guideline
+---
+
+# Brake Code Evidence (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Require brake evidence in semantic gate**
+
+Fresh evidence in this revision is that `evidence_present` only requi...
+- **<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  Do not pass coverage when no brake marks were observed**
+
+If a recording has brake onsets but no `late_brake` ad...
+- Fixed in a323591. `brake_events_coached` now returns **False** when there are brake onsets but **zero** `late_brake` marks (a coaching pipeline emitting no brake marks is not evidence of coverage — no...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.

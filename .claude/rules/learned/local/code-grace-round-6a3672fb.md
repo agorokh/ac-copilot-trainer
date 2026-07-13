@@ -1,0 +1,31 @@
+---
+description: "Learned via process-miner — verify before relying on it."
+paths:
+  - "**/*"
+source: process-miner
+rule_fingerprint: 6a3672fbbe5c2f62
+mined_from: 3 review comments across 2 PRs
+last_updated: 2026-07-13
+repository: agorokh/ac-copilot-trainer
+scope: S3
+domain_tag: ""
+frequency_across_repos: 1
+source_repos:
+  - "agorokh/ac-copilot-trainer"
+severity: maintainability
+preventability: test
+---
+
+# Code Grace Round (learned)
+
+Reviewers repeatedly raised similar feedback in this area. Treat as a heuristic, not a hard rule.
+
+## Representative themes
+
+- Round 3 (head \`2d7d0ed\`): addressed the self-hosted reviewer (EPIC #818) MEDIUM — **test-only instrumentation in the production API**. Removed the `weaken` parameter from `build_corpus`/`run_kpi` an...
+- Round-4 (head \`d27f3e5\`) — addressed the self-hosted reviewer MEDIUM "detached polling timeout": the archive poll is now bound to the grace — `wait_for_first = produced_lap and grace > 0` (so `--lap...
+- Round-7 (head \`1f5e490\`) — addressed the self-hosted reviewer **HIGH** (grace-headroom invariant) and **MEDIUM** (poll-timeout layering): one `lap_deadline = max(180, drive_seconds)` now sizes BOTH ...
+
+## Suggested enforcement
+
+- Document the preferred pattern in AGENTS.md or a scoped rule.
