@@ -8,6 +8,7 @@ folder and uses an OS file lock that is released automatically when the owner pr
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -106,7 +107,10 @@ class RigSessionLock:
             try:
                 self._lock_byte(lock_file)
                 break
-            except OSError:
+            except OSError as exc:
+                if not self._is_lock_contention(exc):
+                    lock_file.close()
+                    raise
                 if time.monotonic() >= deadline:
                     owner = self._read_owner(lock_file)
                     lock_file.close()
@@ -132,6 +136,23 @@ class RigSessionLock:
             self._unlock_byte(lock_file)
         finally:
             lock_file.close()
+
+    @staticmethod
+    def _is_lock_contention(exc: OSError) -> bool:
+        """Return whether an OS lock failure means another process owns the byte."""
+
+        if sys.platform == "win32":
+            # msvcrt.locking reports LK_NBLCK contention as EACCES on CPython; native callers may
+            # preserve ERROR_LOCK_VIOLATION (33). File-open permission failures happen earlier and
+            # unexpected lock API errors must retain their real diagnosis.
+            return exc.errno in {errno.EACCES, errno.EAGAIN} or getattr(exc, "winerror", None) in {
+                33
+            }
+        return isinstance(exc, BlockingIOError) or exc.errno in {
+            errno.EACCES,
+            errno.EAGAIN,
+            errno.EWOULDBLOCK,
+        }
 
     @staticmethod
     def _read_owner(lock_file: BinaryIO) -> dict[str, Any] | None:

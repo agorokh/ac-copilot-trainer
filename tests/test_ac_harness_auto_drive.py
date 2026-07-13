@@ -1882,6 +1882,23 @@ def test_sim_process_identity_monitor_rejects_multiple_initial_acs_processes():
     monitor = SimProcessIdentityMonitor({303, 101})
     assert monitor.expected_pid is None
     assert monitor.observe({101, 303}) == (101, 303)
+    assert monitor.observe({101}) == (101, 303)
+    assert monitor.expected_pid is None
+
+
+def test_main_releases_registered_rig_cleanup_on_exception(monkeypatch):
+    import tools.ac_harness.auto_drive as auto_drive_module
+
+    released: list[bool] = []
+
+    def fail_after_lock(_argv, cleanup):
+        cleanup.callback(released.append, True)
+        raise RuntimeError("evidence capture failed")
+
+    monkeypatch.setattr(auto_drive_module, "_main_impl", fail_after_lock)
+    with pytest.raises(RuntimeError, match="evidence capture failed"):
+        auto_drive_module._main([])
+    assert released == [True]
 
 
 def test_progress_watchdog_rejects_nonpositive_params():

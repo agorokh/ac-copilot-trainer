@@ -63,7 +63,7 @@ import re
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC
 from pathlib import Path
@@ -2007,6 +2007,8 @@ class SimProcessIdentityMonitor:
 
         current = {int(pid) for pid in current_pids if int(pid) > 0}
         if self.expected_pid is None:
+            if self._initial_conflict:
+                return self._initial_conflict
             if len(current) == 1:
                 self.expected_pid = next(iter(current))
                 return ()
@@ -2229,10 +2231,6 @@ def rig_drive(  # pragma: no cover - rig-only
     stall = PhysicsStallDetector(config.sim_dead_seconds, now=t0)
     try:
         while not stop.is_set() and time.monotonic() - t0 < config.drive_seconds:
-            cd = controller.read_car_data()
-            if not cd:
-                time.sleep(0.02)
-                continue
             with process_probe_lock:
                 unexpected = process_takeover
             if unexpected:
@@ -2241,9 +2239,13 @@ def rig_drive(  # pragma: no cover - rig-only
                 stats.unexpected_sim_pids = list(unexpected)
                 stats.reason = (
                     "unexpected acs.exe PID takeover during live drive "
-                    f"(harness_pid={stats.sim_pid}, observed={list(unexpected)})"
+                    f"(expected_sim_pid={stats.sim_pid}, observed={list(unexpected)})"
                 )
                 break
+            cd = controller.read_car_data()
+            if not cd:
+                time.sleep(0.02)
+                continue
             # Sim-death: the main acpmf_physics packet_id stagnant for sim_dead_seconds means
             # acs.exe died. A None (physics mmap gone) does NOT reset the timer (#460 review) —
             # sustained None or a frozen packet both trip. Rule owned by PhysicsStallDetector.
@@ -2607,7 +2609,9 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
     return AutoDriveConfig(**kwargs)
 
 
-def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only CLI wiring
+def _main_impl(
+    argv: list[str] | None, cleanup: ExitStack
+) -> int:  # pragma: no cover - rig-only CLI wiring
     args = _build_arg_parser().parse_args(argv)
     if args.cm_preset is None and not args.car:
         print("auto-drive: pass --car (preset is generated) or --cm-preset (hand-authored)")
@@ -2773,6 +2777,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
     except RigSessionBusy as exc:
         print(f"auto-drive: RIG BUSY — {exc}")
         return 3
+    cleanup.callback(rig_lock.release)
     print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
 
     sidecar_proc = None
@@ -2782,7 +2787,6 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         )
         print(f"auto-drive: {sidecar_detail}")
         if not sidecar_ok:
-            rig_lock.release()
             return 2
 
         run_started_epoch = time.time()
@@ -2893,8 +2897,14 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         print(f"  lap archives ({len(lap_archives)}): {lap_archives[0]}")
     print(f"  evidence: {report_path}")
     exit_code = 0 if report.ok else 1
-    rig_lock.release()
     return exit_code
+
+
+def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only CLI wiring
+    # ExitStack makes the machine-global rig lock exception-safe for both the CLI and programmatic
+    # callers, including failures during HUD/archive/report capture after the drive has stopped.
+    with ExitStack() as cleanup:
+        return _main_impl(argv, cleanup)
 
 
 if __name__ == "__main__":  # pragma: no cover - rig-only CLI wiring

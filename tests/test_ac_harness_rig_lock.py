@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -90,3 +91,17 @@ def test_lock_validates_timing(tmp_path: Path) -> None:
         RigSessionLock(tmp_path / "lock", owner=_owner(1), timeout=-1)
     with pytest.raises(ValueError, match="poll interval"):
         RigSessionLock(tmp_path / "lock", owner=_owner(1), poll_interval=0)
+
+
+def test_unexpected_lock_os_error_is_not_reported_as_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock = RigSessionLock(tmp_path / "lock", owner=_owner(1))
+
+    def fail_lock(_lock_file) -> None:
+        raise OSError(errno.EIO, "device failure")
+
+    monkeypatch.setattr(lock, "_lock_byte", fail_lock)
+    with pytest.raises(OSError, match="device failure") as exc_info:
+        lock.acquire()
+    assert exc_info.value.errno == errno.EIO
