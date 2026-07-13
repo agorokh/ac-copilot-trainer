@@ -135,6 +135,80 @@ def _brake_mark_cue(t, mark, corner=None, urgency="prepare"):
     return cue, voice
 
 
+def _brake_onset(rows, t0, mark, span=(0.20, 0.80), seconds=24.0):
+    """Set a sustained brake onset on the tick whose spline first reaches ``mark``."""
+    onset_t = (mark - span[0]) / (span[1] - span[0]) * seconds
+    for r in rows:
+        rel = (r["t"] - t0) / 1000.0
+        if onset_t <= rel <= onset_t + 0.8:
+            r["brake"] = 0.8
+    return t0 + (onset_t - 3.0) * 1000.0  # a plausible ~3 s-ahead cue time for this mark
+
+
+def test_no_brake_marks_but_onsets_fails_gate(tmp_path):
+    """#527 codex P1: brake onsets with NO late_brake advisory marks must NOT pass vacuously —
+    that is a coaching pipeline emitting zero brake marks, not evidence of coverage."""
+    t0 = 6_000_000.0
+    rows = _ticks(t0, 24.0, 0.20, 0.80, 90.0)
+    _brake_onset(rows, t0, 0.35)
+    _brake_onset(rows, t0, 0.55)
+    # only a non-brake cue is present, so evidence_present is satisfied but there are no marks.
+    rows.append(
+        {
+            "t": t0 + 2000.0,
+            "k": "coaching.cue",
+            "payload": {"kind": "apex_deficit", "urgency": "info", "spline": 0.4},
+        }
+    )
+    rows.append(
+        {
+            "t": t0 + 2000.0,
+            "k": "coaching.voice",
+            "payload": {
+                "seq": 1,
+                "clip_id": "apex_deficit.info.calm.t01",
+                "kind": "apex_deficit",
+                "urgency": "info",
+                "register": "calm",
+                "duration_ms": 900,
+                "t_wall_ms": t0,
+            },
+        }
+    )
+    tap = tmp_path / "tap.jsonl"
+    _write_tap(tap, rows)
+    report = analyze(tap, track_length_m=2500.0)
+    assert report.brake_events >= 2 and report.zones_crossed == 0
+    assert report.assertions["brake_events_coached"] is False
+
+
+def test_cue_for_one_zone_does_not_cover_another(tmp_path):
+    """#527 codex P1: a cue must credit only its own mark/pass. Zone A cued+braked (coached);
+    zone B braked but its heads-up was dropped — A's cue must NOT make B look coached."""
+    t0 = 7_000_000.0
+    rows = _ticks(t0, 24.0, 0.20, 0.80, 90.0)
+    # Zone A: mark 0.35, braked, WITH an actionable cue (advisory + voice).
+    a_cue_t = _brake_onset(rows, t0, 0.35)
+    cue_a, voice_a = _brake_mark_cue(a_cue_t, 0.35, corner=1)
+    rows.extend([cue_a, voice_a])
+    # Zone B: mark 0.55, braked, advisory ONLY (dropped dispatch — no voice).
+    b_cue_t = _brake_onset(rows, t0, 0.55)
+    rows.append(
+        {
+            "t": b_cue_t,
+            "k": "coaching.cue",
+            "payload": {"kind": "late_brake", "urgency": "prepare", "spline": 0.55, "corner": 2},
+        }
+    )
+    tap = tmp_path / "tap.jsonl"
+    _write_tap(tap, rows)
+    report = analyze(tap, track_length_m=2500.0, audio_latency_s=0.1)
+    assert report.coachable_brake_zones == 2  # both zones braked in
+    assert report.coachable_brake_zones_coached == 1  # only A drew a cue; B not covered by A's cue
+    assert report.zones_crossed == 2 and report.zones_cued == 1
+    assert report.assertions["brake_events_coached"] is False
+
+
 def test_off_zone_onset_excluded_from_gate(tmp_path):
     """#527: a brake onset with no reference mark within 50 m is off-zone — it must NOT drag the
     coverage gate red. Two zones cued & braked in-window (coached) + one far-off correction dab."""
