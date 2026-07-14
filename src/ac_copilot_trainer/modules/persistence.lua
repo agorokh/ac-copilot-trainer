@@ -31,7 +31,8 @@ local function tryCarFromCar(car)
     local ok, v = pcall(function()
       return car[key]
     end)
-    if ok and type(v) == "function" then
+    local wasCallable = ok and type(v) == "function"
+    if wasCallable then
       local called, resolved = pcall(v)
       if not called then
         called, resolved = pcall(v, car)
@@ -44,6 +45,15 @@ local function tryCarFromCar(car)
     end
     if ok and type(v) == "string" and v ~= "" then
       return v
+    end
+    -- Direct CSP scalar/userdata fields historically stringify to useful content identifiers.
+    -- Keep that compatibility, but never stringify a callable result: accessors must resolve to a
+    -- real string so function/table address text cannot masquerade as stable archive identity.
+    if ok and not wasCallable and (type(v) == "number" or type(v) == "userdata") then
+      local rendered = tostring(v)
+      if rendered ~= "" then
+        return rendered
+      end
     end
   end
   return nil
