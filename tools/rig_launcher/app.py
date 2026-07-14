@@ -104,6 +104,8 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         simhub_exe=config.simhub_exe,
         start_simhub=args.start_simhub or config.start_simhub,
         manage_tablet_tunnel=config.manage_tablet_tunnel,
+        adb_path=config.adb_path,
+        adb_serial=config.adb_serial,
         paths=paths,
     )
 

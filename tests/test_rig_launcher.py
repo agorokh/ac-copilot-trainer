@@ -1562,6 +1562,19 @@ def test_config_from_args_propagates_manage_tablet_tunnel(tmp_path: Path, monkey
     assert cfg.manage_tablet_tunnel is True
 
 
+def test_config_from_args_propagates_adb_overrides(tmp_path: Path, monkeypatch) -> None:
+    """HIGH regression (#568 review): config_from_args must thread adb_path/adb_serial through,
+    or env overrides are silently dropped in the CLI/packaged path."""
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    monkeypatch.setenv("AC_COPILOT_ADB", "/opt/adb")
+    monkeypatch.setenv("AC_COPILOT_ADB_SERIAL", "SER9")
+    cfg = config_from_args(build_arg_parser().parse_args(["--log-dir", str(tmp_path)]))
+    assert cfg.adb_path == "/opt/adb"
+    assert cfg.adb_serial == "SER9"
+
+
 def test_self_test_sends_token_header_for_authenticated_bind(tmp_path: Path) -> None:
     """P2 (#568 review): a concrete non-loopback bind + token gates /tablet/* — the probe must
     carry X-AC-Copilot-Token or it 401s and misreports stale_build."""
