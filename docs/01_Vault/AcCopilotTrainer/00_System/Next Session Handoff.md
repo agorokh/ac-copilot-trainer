@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T20:55:36Z
+last_updated: 2026-07-14T21:48:01Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -88,19 +88,22 @@ relates_to:
 
 # Next session handoff
 
-## Review resolution resumed (2026-07-14) — PR #579 at `eb3da0b`
+## Review resolution resumed (2026-07-14) — PR #579 at `ed94df0`
 
 PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
 [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open and non-draft. Its
 resolution branch now includes current `main` (`8f1297d`) and code fix
-[`eb3da0b`](https://github.com/agorokh/ac-copilot-trainer/commit/eb3da0b). The earlier resolution
+[`ed94df0`](https://github.com/agorokh/ac-copilot-trainer/commit/ed94df0). The earlier resolution
 round at `5b6d68c` fixed handshake combo counting and made plant persistence/revert peer-safe and
 fail-closed. The resumed round fixes the optional `rig_lock_timeout=None` path before persistence
 and moves the implicit `--laps N` time-budget policy into `auto_drive`, so direct CLI and composed
 alien runs both receive `180 + 240*N` seconds unless the operator passes an explicit budget.
-Regression coverage proves the zero-second lock fallback, direct multi-lap scaling, explicit
-override precedence, and the legacy 300-second non-lap default. Local parity is green:
-**2,863 passed, 77 skipped, 86.69% coverage, `ci-fast: OK`**.
+The latest advisory-hardening round rejects non-finite/non-positive explicit budgets and makes
+self-play persistence write the already-resolved content-hashed driven path after stable identity
+validation, avoiding a second `setup.ini` read that could fork or skip the artifact. Regression
+coverage proves both failure boundaries and the stable path under a disappearing setup file.
+Canonical-venv local parity is green: **2,864 passed, 77 skipped, 86.68% coverage,
+`ci-fast: OK`**.
 
 **Next:** do not merge until the current-head push completes its full 10-minute cooldown, all
 required checks are green, the complete GraphQL thread ledger is resolved, resolve-gate is clean,
