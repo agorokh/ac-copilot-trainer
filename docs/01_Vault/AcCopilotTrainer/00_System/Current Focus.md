@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T07:31:18Z
+last_updated: 2026-07-14T20:40:00Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -30,6 +30,15 @@ relates_to:
 # Current focus
 
 **Repo:** ac-copilot-trainer.
+
+**Active (2026-07-14, latest):** PR
+[#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is review-resolved at
+[`5b6d68c`](https://github.com/agorokh/ac-copilot-trainer/commit/5b6d68cc004cca235ad6195e71b9b9abf846b415):
+required checks green, 0/18 unresolved threads, resolve-gate clean after the full cooldown. The
+resolution round fixed handshake combo counting and made self-play plant persistence/revert
+peer-safe and fail-closed. Awaiting merge; then `/post-merge 579`. #577 keeps its separate L3
+per-corner refinement scope open.
 
 **Delivered (2026-07-14, latest):** [#572](https://github.com/agorokh/ac-copilot-trainer/issues/572)
 **CLOSED** by PR [#573](https://github.com/agorokh/ac-copilot-trainer/pull/573)

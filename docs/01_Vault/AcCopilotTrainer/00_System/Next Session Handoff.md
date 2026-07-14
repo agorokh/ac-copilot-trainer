@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T10:20:00Z
+last_updated: 2026-07-14T20:40:00Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
@@ -86,6 +86,25 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Review-resolved (2026-07-14) — PR #579 at `5b6d68c`, awaiting merge
+
+PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open, non-draft, mergeable,
+and review-resolved at [`5b6d68c`](https://github.com/agorokh/ac-copilot-trainer/commit/5b6d68cc004cca235ad6195e71b9b9abf846b415).
+The final resolution round fixed the keyword-only combo-predicate crash in handshake archive
+counting, moved self-play identity/persist/revert operations behind `plant_id.py` under the
+machine-global rig lock, and made rollback failure fail the composed pipeline instead of returning
+green with a falsified plant. Regression coverage includes caller-resolved setup identity,
+peer-safe conditional persistence/revert, and a forced rollback I/O failure. Local parity:
+**2,863 passed, 77 skipped, 86.69% coverage, `ci-fast: OK`**. Post-push proof after the full
+10-minute cooldown: required checks green, 0/18 unresolved GraphQL threads, resolve-gate clean.
+The current-head daemon HIGH claiming a missing exact-combo plant could still refine was
+replied-invalid with control-flow evidence: `load_plant_artifact` reads that exact path only, so an
+absent path never reaches persist; a peer-created path fails the locked byte comparison.
+
+**Next:** merge PR #579 when desired, then run `/post-merge 579`. Issue #577 remains open for the
+explicitly out-of-scope L3 corridor-constrained per-corner refinement.
 
 ## Delivered (2026-07-14) — #572 one-button alien pipeline CLOSED (PR #573 MERGED `dfd4b7e`) — EPIC #529 P2
 
