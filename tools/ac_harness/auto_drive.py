@@ -839,7 +839,16 @@ async def run_auto_drive(
             from tools.ac_harness.sequence_probe import timed_lap_times_ms
 
             lap_times_ms = timed_lap_times_ms(frames)
-            if config.target_laps > 0 and len(lap_times_ms) < config.target_laps:
+            if config.target_laps > 0 and not lap_times_ms:
+                # --laps N contracts for TIMED laps. require_lap alone is satisfiable by an
+                # untimed out-lap/teleport boundary, which would exit 0 with an empty
+                # trajectory — a false green for the requested window (#579 Codex P2).
+                seq_ok = False
+                notes.append(
+                    f"laps: requested {config.target_laps} timed, observed ZERO — "
+                    "the window produced no timed lap (untimed boundaries do not count)"
+                )
+            elif config.target_laps > 0 and len(lap_times_ms) < config.target_laps:
                 notes.append(
                     f"laps: requested {config.target_laps}, observed "
                     f"{len(lap_times_ms)} timed within the drive budget"
@@ -1560,6 +1569,7 @@ def collect_lap_archives(
     wait_for_first: bool = False,
     min_count: int = 1,
     min_valid_count: int | None = None,
+    min_matching_count: int | None = None,
     valid_archive_predicate: Callable[[dict], bool] | None = None,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
@@ -1605,11 +1615,29 @@ def collect_lap_archives(
         or min_valid_count < 1
     ):
         raise ValueError("min_valid_count must be a positive integer or None")
+    if min_matching_count is not None and (
+        isinstance(min_matching_count, bool)
+        or not isinstance(min_matching_count, int)
+        or min_matching_count < 1
+    ):
+        raise ValueError("min_matching_count must be a positive integer or None")
 
     def _enough(paths: list[str]) -> bool:
-        return len(paths) >= min_count and (
-            min_valid_count is None
-            or _count_valid_lap_archives(paths, valid_archive_predicate) >= min_valid_count
+        # ``min_matching_count`` gates on the predicate ALONE (validity-agnostic): a #577
+        # flying-lap batch must wait for THIS combo's archives — the multi-dir resolver can see
+        # another app/combo's fresh files — but must not gate on validity (an AC-invalid lap's
+        # archive is falsification evidence that never turns valid; #579 Qodo + Codex).
+        return (
+            len(paths) >= min_count
+            and (
+                min_valid_count is None
+                or _count_valid_lap_archives(paths, valid_archive_predicate) >= min_valid_count
+            )
+            and (
+                min_matching_count is None
+                or _count_matching_lap_archives(paths, valid_archive_predicate)
+                >= min_matching_count
+            )
         )
 
     found = _scan_lap_archives(_current(), since_epoch)
@@ -1640,6 +1668,26 @@ def _count_valid_lap_archives(
             and lap.get("is_valid") is True
             and (predicate is None or predicate(payload))
         ):
+            count += 1
+    return count
+
+
+def _count_matching_lap_archives(
+    paths: list[str], predicate: Callable[[dict], bool] | None = None
+) -> int:
+    """Count finalized archive files matching ``predicate``, regardless of lap validity.
+
+    The #577 flying-lap batch gate: an AC-INVALID lap's archive still counts (it is the
+    falsification evidence the self-play verdict needs), but a foreign app/combo's archive
+    must not satisfy the batch (#579 Codex).
+    """
+    count = 0
+    for item in paths:
+        try:
+            payload = json.loads(Path(item).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if isinstance(payload, dict) and (predicate is None or predicate(payload)):
             count += 1
     return count
 
@@ -3281,10 +3329,17 @@ def _main_impl(
             value = pending_result.get("laps_used")
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 handshake_laps_used = value
-    wait_for_archives = report.lap_grace_applied or handshake_laps_used > 0
     # #577 flying-lap window: every timed lap the tap observed should have an archive — the
     # trainer archives each timed boundary, and the self-play refine consumes the full batch.
-    # The poll waits for that count (bounded), not merely the first archive.
+    # The poll waits for that count (bounded), not merely the first archive. Batch semantics key
+    # on INTENT (--laps requested / handshake), not on the observed count — a requested 1-lap
+    # batch still gets the strict combo-matched validation its archives_same_run=True provenance
+    # depends on (#579 daemon MEDIUM).
+    batch_mode = config.target_laps > 0 or handshake_laps_used > 0
+    # A batch run must also WAIT for its archives even when the grace didn't fire (e.g.
+    # --lap-finalize-grace-s 0): grace-or-handshake alone would skip the poll and falsely
+    # falsify the iteration on missing evidence (#579 daemon HIGH).
+    wait_for_archives = report.lap_grace_applied or batch_mode
     timed_laps_observed = len(report.lap_times_ms)
     expected_archives = max(handshake_laps_used, timed_laps_observed)
 
@@ -3296,11 +3351,6 @@ def _main_impl(
             layout=config.track_layout,
         )
 
-    # Legacy --wait-lap runs (no --laps) keep their exact pre-#577 poll (any first archive,
-    # short constant timeout). Batch semantics key on INTENT (--laps requested / handshake), not
-    # on the observed count — a requested 1-lap batch still gets the strict combo-matched
-    # validation its archives_same_run=True provenance depends on (#579 daemon MEDIUM).
-    batch_mode = config.target_laps > 0 or handshake_laps_used > 0
     lap_archives = collect_lap_archives(
         None,
         run_started_epoch,
@@ -3311,8 +3361,12 @@ def _main_impl(
         # set). A flying-lap batch must not gate on validity: an AC-invalid lap still writes its
         # archive, that archive IS the falsification evidence the self-play verdict needs
         # promptly, and no amount of waiting turns it valid — gating on it would stall the poll
-        # to full timeout on every falsified batch (#579 Qodo).
+        # to full timeout on every falsified batch (#579 Qodo). The batch DOES gate on the
+        # combo-matched count (validity-agnostic): the multi-dir resolver can see another
+        # app/combo's fresh archives, which must not satisfy the batch before this combo's own
+        # writer finishes (#579 Codex P2).
         min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
+        min_matching_count=expected_archives if batch_mode and expected_archives > 0 else None,
         valid_archive_predicate=archive_matches_combo,
         timeout_s=20.0 if batch_mode else 8.0,
     )

@@ -2807,3 +2807,80 @@ def test_one_lap_batch_requires_a_timed_lap_window():
     assert report.ok is True
     assert record["lap_count"] == 1
     assert report.lap_times_ms == [97000]
+
+
+def test_lap_window_with_zero_timed_laps_fails_honestly():
+    # #579 Codex P2: --laps N + only an untimed boundary must FAIL the run, not exit 0 with an
+    # empty trajectory (require_lap alone is satisfiable by the untimed frame).
+    record: dict = {}
+    frames = [*CONTINUOUS, _snap("session"), _timed_lap_snap(None)]
+    report = asyncio.run(
+        run_auto_drive(
+            _cfg(wait_lap=True, target_laps=1),
+            launch=_ok_launch,
+            hijack=lambda c: FakeController(),
+            drive=_drive_returning(DriveStats(drove=True, laps=0), record),
+            tap=_tap_returning(frames, record),
+        )
+    )
+    assert report.ok is False
+    assert report.lap_times_ms == []
+    assert any("observed ZERO" in n for n in report.notes)
+
+
+def test_collect_lap_archives_matching_count_is_validity_agnostic(tmp_path):
+    # #579 Qodo + Codex: the batch gate waits for THIS combo's archives (a foreign app/combo's
+    # file must not satisfy it) but never gates on validity (an AC-invalid archive is
+    # falsification evidence that can never turn valid by waiting).
+    import json as _json
+
+    journal = tmp_path / "journal"
+    journal.mkdir()
+
+    def _write(name, car, valid):
+        (journal / name).write_text(
+            _json.dumps(
+                {
+                    "car": {"id": car},
+                    "track": {"id": "imola", "layout": None},
+                    "lap": {"lap_n": 1, "lap_ms": 90000, "is_valid": valid},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    _write("lap_own_invalid.json", "car_a", False)
+    _write("lap_foreign_valid.json", "other_car", True)
+
+    def predicate(payload: dict) -> bool:
+        return str(payload.get("car", {}).get("id")) == "car_a"
+
+    clock = _Clock()
+    # One own-combo (AC-invalid) archive satisfies min_matching_count=1 immediately — validity
+    # never gates the batch poll.
+    found = collect_lap_archives(
+        journal,
+        0.0,
+        wait_for_first=True,
+        min_count=1,
+        min_matching_count=1,
+        valid_archive_predicate=predicate,
+        timeout_s=5.0,
+        _clock=clock.monotonic,
+        _sleep=clock.sleep,
+    )
+    assert len(found) == 2 and clock.now == 0.0  # returned on the first scan, no waiting
+    # A foreign valid archive alone can NOT satisfy the matching gate: the poll runs to its
+    # bounded timeout and returns what exists (honest shortfall, no hang).
+    found = collect_lap_archives(
+        journal,
+        0.0,
+        wait_for_first=True,
+        min_count=1,
+        min_matching_count=2,
+        valid_archive_predicate=predicate,
+        timeout_s=5.0,
+        _clock=clock.monotonic,
+        _sleep=clock.sleep,
+    )
+    assert len(found) == 2 and clock.now >= 5.0  # waited the bounded budget, then honest return

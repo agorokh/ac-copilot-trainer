@@ -37,6 +37,7 @@ from pathlib import Path
 
 from tools.ac_harness.auto_drive import (
     ALIEN_MAX_OVERSPEED_SCALE,
+    _archive_matches_combo,
     resolve_ac_user_dir,
     resolve_setup_ini,
     validate_ac_id,
@@ -186,6 +187,22 @@ def load_archive_payloads(paths: list[str]) -> tuple[list[dict], list[str]]:
     return payloads, errors
 
 
+def combo_filter_payloads(
+    payloads: list[dict], *, car_id: str, track_id: str, layout: str | None
+) -> tuple[list[dict], int]:
+    """Keep only this combo's archive payloads; returns ``(kept, dropped_count)``.
+
+    The multi-dir archive scan can surface another app/combo's fresh files; those must never
+    count as this batch's evidence for the oracle or the refit (#579 Codex P2).
+    """
+    kept = [
+        p
+        for p in payloads
+        if _archive_matches_combo(p, car_id=car_id, track_id=track_id, layout=layout)
+    ]
+    return kept, len(payloads) - len(kept)
+
+
 def evaluate_selfplay_iteration(
     exit_code: int, outcome: dict | None, archive_payloads: list[dict]
 ) -> tuple[bool, str]:
@@ -212,19 +229,29 @@ def evaluate_selfplay_iteration(
         return False, "no timed lap completed within the drive budget"
     if not archive_payloads:
         return False, "no lap archives collected (cannot verify lap validity or refine)"
-    if len(archive_payloads) < len(lap_times):
+    # Fail closed on verifiability (#579 Qodo): only a payload carrying an explicit lap-validity
+    # verdict counts as evidence — a malformed/partial object must not satisfy the batch.
+    verifiable = 0
+    for payload in archive_payloads:
+        lap = payload.get("lap") if isinstance(payload.get("lap"), dict) else {}
+        validity = lap.get("is_valid")
+        if validity is False:
+            lap_n = lap.get("lap_n")
+            return False, f"AC-invalid lap in the batch (lap_n={lap_n})"
+        if validity is not True:
+            return False, (
+                "archive payload without a lap-validity verdict "
+                "(malformed/partial lap archive — fail closed)"
+            )
+        verifiable += 1
+    if verifiable < len(lap_times):
         # Every counted lap must be verifiable: a partial archive set (writer flake / poll
         # timeout) leaves timed laps whose validity cannot be proven, and refining from it
         # would under-represent the batch (#579 Codex P2).
         return False, (
-            f"archive count {len(archive_payloads)} < {len(lap_times)} timed laps "
+            f"archive count {verifiable} < {len(lap_times)} timed laps "
             "(cannot verify every counted lap)"
         )
-    for payload in archive_payloads:
-        lap = payload.get("lap") if isinstance(payload.get("lap"), dict) else {}
-        if lap.get("is_valid") is False:
-            lap_n = lap.get("lap_n")
-            return False, f"AC-invalid lap in the batch (lap_n={lap_n})"
     return True, (f"{len(lap_times)} timed lap(s), all archived laps AC-valid, zero recoveries")
 
 
@@ -273,15 +300,22 @@ def run_selfplay(
     }
     base_laps = stage_lap_times_ms(base_outcome)
     selfplay["lap_trajectory_ms"].append(base_laps)
-    best: int | None = min(base_laps) if base_laps else None
     # The base drive must pass the SAME oracle before its archives may seed refinement: exit 0
     # does not preclude recoveries or AC-invalid archived laps, and refining from that evidence
     # would promote a plant the falsification oracle would reject (#579 Codex P1). An invalid
     # base still allows the ladder to run — each iteration changes the envelope via scale and is
     # itself falsification-gated — it just refines from nothing until a valid batch exists.
     base_payloads, _base_load_errors = load_archive_payloads(stage_lap_archives(base_outcome))
+    base_payloads, base_foreign = combo_filter_payloads(
+        base_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
+    )
     base_valid, base_reason = evaluate_selfplay_iteration(0, base_outcome, base_payloads)
     selfplay["base"] = {"valid": base_valid, "reason": base_reason, "lap_times_ms": base_laps}
+    if base_foreign:
+        selfplay["base"]["foreign_archives_dropped"] = base_foreign
+    # An oracle-invalid base's laps are marked unusable by this very report — they must not seed
+    # the performance summary either (#579 Codex P2).
+    best: int | None = min(base_laps) if (base_laps and base_valid) else None
     prev_archives = stage_lap_archives(base_outcome) if base_valid else []
     if not base_valid:
         print(
@@ -316,6 +350,12 @@ def run_selfplay(
                 }
             else:
                 archive_payloads, load_errors = load_archive_payloads(prev_archives)
+                archive_payloads, foreign = combo_filter_payloads(
+                    archive_payloads,
+                    car_id=args.car,
+                    track_id=args.track,
+                    layout=args.track_layout,
+                )
                 result, block = selfplay_refine_result(
                     artifact, archive_payloads, generic_gt3_ggv(), prior_name="generic_gt3_ggv"
                 )
@@ -324,6 +364,8 @@ def run_selfplay(
                 }
                 if load_errors:
                     entry["refine"]["archive_load_errors"] = load_errors
+                if foreign:
+                    entry["refine"]["foreign_archives_dropped"] = foreign
                 merge_stats = block.get("selfplay_merge", {}) if result is not None else {}
                 merge_changed = bool(
                     merge_stats.get("lateral_bins_adopted")
@@ -355,10 +397,21 @@ def run_selfplay(
                             f"{entry['refine']['save_skipped']}"
                         )
                     else:
+                        # Re-key the save with the CALLER-resolved setup identity: a portable/
+                        # moved artifact keeps its creator's absolute setup_ini path, and saving
+                        # under that stale key would write a DIFFERENT plant filename than the
+                        # one this pipeline loads and drives (#579 Codex P2).
+                        result["setup_ini"] = str(setup_ini) if setup_ini else None
                         last_valid_bytes = pre_refine_bytes
                         saved = save_plant_artifact(user_dir, result)
                         candidate_bytes = Path(saved).read_bytes()
                         refined = True
+                        if Path(saved) != Path(plant_path):
+                            entry["refine"]["save_path_mismatch"] = str(saved)
+                            print(
+                                f"auto-alien: WARNING — refined plant saved to {saved}, "
+                                f"expected {plant_path} (setup identity drift?)"
+                            )
                         print(
                             f"auto-alien: iteration {index} plant refined "
                             f"(lateral bins adopted={merge_stats.get('lateral_bins_adopted')} "
@@ -396,8 +449,13 @@ def run_selfplay(
         outcome = load_stage_outcome(stage_dir)
         archives = stage_lap_archives(outcome)
         archive_payloads, load_errors = load_archive_payloads(archives)
+        archive_payloads, foreign = combo_filter_payloads(
+            archive_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
+        )
         if load_errors:
             entry["archive_load_errors"] = load_errors
+        if foreign:
+            entry["foreign_archives_dropped"] = foreign
         lap_times = stage_lap_times_ms(outcome)
         entry["lap_times_ms"] = lap_times
         selfplay["lap_trajectory_ms"].append(lap_times)

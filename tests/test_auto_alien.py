@@ -298,8 +298,12 @@ def _stage_outcome(lap_times, *, recoveries=0, archives=(), stage="done", error=
     }
 
 
-def _archive_payload(lap_n=1, valid=True):
-    return {"lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": valid}}
+def _archive_payload(lap_n=1, valid=True, car="car_a", track="trk"):
+    return {
+        "car": {"id": car},
+        "track": {"id": track, "layout": None},
+        "lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": valid},
+    }
 
 
 def test_evaluate_selfplay_iteration_falsification_branches():
@@ -329,6 +333,11 @@ def test_evaluate_selfplay_iteration_falsification_branches():
     bad = [_archive_payload(1), _archive_payload(2, valid=False)]
     valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 96000]), bad)
     assert not valid and "AC-invalid lap" in reason and "lap_n=2" in reason
+
+    # A payload with no explicit lap-validity verdict fails CLOSED (#579 Qodo).
+    malformed = [_archive_payload(1), {"car": {"id": "car_a"}, "trace": {}}]
+    valid, reason = evaluate_selfplay_iteration(0, _stage_outcome([95000, 96000]), malformed)
+    assert not valid and "without a lap-validity verdict" in reason
 
     # A partial archive set leaves counted laps unverifiable -> falsified (#579 Codex P2).
     valid, reason = evaluate_selfplay_iteration(
@@ -436,10 +445,7 @@ class _SelfplayHarness:
             paths = []
             for n, valid in enumerate(archive_valids, start=1):
                 p = stage_dir / f"lap_{n}.json"
-                p.write_text(
-                    _json.dumps({"lap": {"lap_n": n, "lap_ms": 90000, "is_valid": valid}}),
-                    encoding="utf-8",
-                )
+                p.write_text(_json.dumps(_archive_payload(n, valid)), encoding="utf-8")
                 paths.append(str(p))
             payload = {
                 "report": {
@@ -636,3 +642,15 @@ def test_selfplay_refine_save_skipped_when_peer_updates_plant(monkeypatch, tmp_p
     assert harness.saves == 0
     # The peer's newer artifact survived untouched.
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "peer"}'
+
+
+def test_selfplay_oracle_ignores_foreign_combo_archives(monkeypatch, tmp_path):
+    # #579 Codex P2: another app/combo's archive must neither satisfy nor poison the batch.
+    from tools.ac_harness.auto_alien import combo_filter_payloads
+
+    own = _archive_payload(1)
+    foreign = _archive_payload(1, car="other_car", track="other_trk")
+    kept, dropped = combo_filter_payloads(
+        [own, foreign], car_id="car_a", track_id="trk", layout=None
+    )
+    assert kept == [own] and dropped == 1
