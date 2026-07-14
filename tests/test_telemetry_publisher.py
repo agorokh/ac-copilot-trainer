@@ -551,3 +551,20 @@ def test_mon_current_temps_nil_car_is_all_nil():
     assert out["has_fr"] is False
     assert out["has_rl"] is False
     assert out["has_rr"] is False
+
+
+def test_entry_isolates_tire_stream_from_optional_delta_failures():
+    """A reference/delta exception must not suppress the always-on tyre stream."""
+    entry = (REPO / "src" / "ac_copilot_trainer" / "ac_copilot_trainer.lua").read_text(
+        encoding="utf-8"
+    )
+    delta_start = entry.index("-- Issue #180 Part D step 2: telemetry topics")
+    tyre_start = entry.index("-- Keep the always-on tyre/tick streams", delta_start)
+    next_section = entry.index("-- Round 10: drain any corner_advice", tyre_start)
+
+    delta_block = entry[delta_start:tyre_start]
+    tyre_block = entry[tyre_start:next_section]
+    assert "publishDeltaIfDue" in delta_block
+    assert "publishTireTempsIfDue" not in delta_block
+    assert "pcall(function()" in tyre_block
+    assert "publishTireTempsIfDue" in tyre_block

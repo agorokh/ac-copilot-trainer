@@ -31,17 +31,46 @@ local function tryCarFromCar(car)
     local ok, v = pcall(function()
       return car[key]
     end)
-    if ok and v ~= nil and tostring(v) ~= "" then
-      return tostring(v)
+    local wasCallable = ok and type(v) == "function"
+    if wasCallable then
+      local called, resolved = pcall(v)
+      if not called then
+        called, resolved = pcall(v, car)
+      end
+      if called then
+        v = resolved
+      else
+        v = nil
+      end
+    end
+    if ok and type(v) == "string" and v ~= "" then
+      return v
+    end
+    -- Direct CSP scalar/userdata fields historically stringify to useful content identifiers.
+    -- Keep that compatibility, but never stringify a callable result: accessors must resolve to a
+    -- real string so function/table address text cannot masquerade as stable archive identity.
+    if ok and not wasCallable and (type(v) == "number" or type(v) == "userdata") then
+      local rendered = tostring(v)
+      if rendered ~= "" then
+        return rendered
+      end
     end
   end
   return nil
 end
 
---- Lap archive / filenames: same field order as `sessionKey` fallbacks, then sanitize.
+--- Lap archive / filenames: prefer the stable content id from ``ac.getCarID(0)``. Some CSP
+--- ``StateCar`` builds expose ``car.id`` as a callable accessor; stringifying that value produces
+--- an address-shaped ``function_0x...`` id, which cannot match the harness combo and makes a real
+--- thermal lap unusable for plant identification. Only fall back to StateCar labels when the
+--- global content-id API is unavailable.
 ---@param car ac.StateCar|nil
 ---@return string|nil
 function M.archiveCarIdFromCar(car)
+  local globalId = ch.safeCarIdRaw()
+  if type(globalId) == "string" and globalId ~= "" then
+    return ch.sanitizeId(globalId, "unknown")
+  end
   local raw = tryCarFromCar(car)
   if not raw then
     return nil

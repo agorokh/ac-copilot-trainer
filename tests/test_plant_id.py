@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from tools.ac_harness.auto_drive import AutoDriveConfig, _build_driver, generic_gt3_ggv
-from tools.ac_harness.ggv_profile import GGVModel
+from tools.ac_harness.ggv_profile import GGVModel, with_binned_uncertainty
 from tools.ac_harness.lap_driver import PHASE_LAP, DriveFrame
 from tools.ac_harness.plant_id import (
     PLANT_SCHEMA_VERSION,
@@ -30,6 +30,7 @@ from tools.ac_harness.plant_id import (
     plant_artifact_path,
     plant_driver_kwargs,
     plant_ggv_model,
+    refine_ggv_from_lap_archives,
     save_plant_artifact,
 )
 
@@ -798,7 +799,7 @@ def test_handshake_no_ggv_block_without_prior(handshake_outcome):
     assert ctrl.result_diagnostics["friction_rows"] == 0
 
 
-def test_handshake_emits_safe_ggv_block_with_prior():
+def test_handshake_emits_provisional_ggv_until_thermal_archive_arrives():
     line = _stadium_line()
     sim = PlantSim(line)
     prior = generic_gt3_ggv()
@@ -815,9 +816,10 @@ def test_handshake_emits_safe_ggv_block_with_prior():
     _run_handshake(ctrl, sim)
     assert ctrl.finished
     ggv = ctrl.result.ggv
-    assert ggv is not None and ggv["ok"], ggv
+    assert ggv is not None and ggv["ok"] is False, ggv
     assert ctrl.result_diagnostics["friction_rows"] >= ctrl.min_friction_rows
-    model = GGVModel.from_dict(ggv["model"])
+    assert ggv["reason"] == "awaiting thermally tagged lap archive"
+    model = GGVModel.from_dict(ggv["provisional_model"])
     # Safe-envelope guarantees: lateral pinned to the prior (a conservative drive under-measures the
     # limit, so it never lowers/regresses), aero-lateral stays 0, caps kept.
     assert model.k_aero_lat == 0.0
@@ -827,20 +829,215 @@ def test_handshake_emits_safe_ggv_block_with_prior():
     assert model.ax_brake_cap_g == prior.ax_brake_cap_g
     # Provenance labels each curve measured-vs-prior.
     assert set(model.provenance["blend_source"]) == {"lateral", "brake", "drive", "ellipse_n"}
+    assert ggv["provisional_probe_rows"]
+    assert all(
+        row["source"] in {"brake_probe", "accel_sweep"} for row in ggv["provisional_probe_rows"]
+    )
     # The ggv block is ADVISORY — it never gates the core-constant ok.
-    assert sink["result"]["ggv"]["ok"] is True
+    assert sink["result"]["ggv"]["ok"] is False
+
+
+def test_uncertainty_handshake_waits_for_clean_post_probe_thermal_lap():
+    line = _stadium_line()
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        prior_ggv=generic_gt3_ggv(),
+        min_corner_rows=0,
+    )
+    ctrl._pending.clear()
+
+    def frame(*, lap_completed: bool) -> DriveFrame:
+        return DriveFrame(0.2, 0.0, 0.0, False, False, PHASE_LAP, lap_completed, False)
+
+    ctrl._base.step = lambda *args: frame(lap_completed=False)
+    ctrl.step((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 0.0)
+    assert ctrl.finished is False
+    assert ctrl._laps == 0
+
+    ctrl._base.step = lambda *args: frame(lap_completed=True)
+    ctrl.step((1.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 1.0)
+    assert ctrl.finished is False
+    assert ctrl._laps == 1
+
+    ctrl.step((2.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 2.0)
+    assert ctrl.finished is True
+    assert ctrl.result is not None and ctrl.result.laps_used == 2
+
+
+def test_uncertainty_handshake_uses_ac_completed_laps_over_false_line_wraps():
+    line = _stadium_line()
+    completed = {"value": 0}
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        prior_ggv=generic_gt3_ggv(),
+        min_corner_rows=0,
+        phys_read=lambda: SimpleNamespace(completed_laps=completed["value"]),
+    )
+    ctrl._pending.clear()
+    ctrl._base.step = lambda *args: DriveFrame(0.2, 0.0, 0.0, False, False, PHASE_LAP, True, False)
+
+    for now in (0.0, 1.0, 2.0):
+        ctrl.step((now, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, now)
+    assert ctrl.finished is False
+    assert ctrl._uses_completed_laps is True
+    assert ctrl._laps == 0
+
+    completed["value"] = 1
+    ctrl.step((3.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 3.0)
+    assert ctrl.finished is False
+    assert ctrl._laps == 1
+
+    completed["value"] = 2
+    ctrl.step((4.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 4.0)
+    assert ctrl.finished is True
+    assert ctrl.result is not None and ctrl.result.laps_used == 2
+
+
+def test_uncertainty_handshake_late_graphics_counter_preserves_fallback_laps():
+    line = _stadium_line()
+    physics = {"frame": SimpleNamespace(completed_laps=None)}
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        prior_ggv=generic_gt3_ggv(),
+        min_corner_rows=0,
+        phys_read=lambda: physics["frame"],
+    )
+    ctrl._pending.clear()
+    ctrl._base.step = lambda *args: DriveFrame(0.2, 0.0, 0.0, False, False, PHASE_LAP, True, False)
+
+    ctrl.step((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 0.0)
+    assert ctrl._laps == 1
+    physics["frame"] = SimpleNamespace(completed_laps=7)
+    ctrl.step((1.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 1.0)
+    assert ctrl._uses_completed_laps is True
+    assert ctrl._laps == 1
+    physics["frame"] = SimpleNamespace(completed_laps=8)
+    ctrl.step((2.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 2.0)
+    assert ctrl._laps == 2
+
+
+def test_handshake_preserves_probe_rows_before_overall_friction_row_gate():
+    line = _stadium_line()
+    ctrl = HandshakeController(line, _profile_for(line), prior_ggv=generic_gt3_ggv())
+    ctrl._friction_rows = [
+        {
+            "speed_kmh": 60.0,
+            "accg_lat": 0.0,
+            "accg_lon": -1.1,
+            "source": "brake_probe",
+            "lap_number": 1,
+        }
+        for _ in range(8)
+    ]
+    block = ctrl._build_ggv_block()
+    assert block is not None
+    assert "insufficient friction rows" in block["reason"]
+    assert len(block["provisional_probe_rows"]) == 8
+
+
+def _uncertain_prior() -> GGVModel:
+    prior = generic_gt3_ggv()
+    rows = []
+    for speed in range(50, 151, 10):
+        for _ in range(50):
+            rows.append(
+                {
+                    "speed_kmh": float(speed),
+                    "accg_lat": 1.2,
+                    "accg_lon": -1.2,
+                    "source": "brake_probe",
+                }
+            )
+    return with_binned_uncertainty(prior, rows, prior)
 
 
 def test_plant_ggv_model_resolves_valid_rejects_invalid():
     prior = generic_gt3_ggv()
-    good = {"ggv": {"ok": True, "model": prior.to_dict()}}
+    good = {"ggv": {"ok": True, "model": _uncertain_prior().to_dict()}}
     assert plant_ggv_model(good) is not None
+    assert plant_ggv_model({"ggv": {"ok": True, "model": prior.to_dict()}}) is None
     # ok=False block -> None (consumer keeps generic)
     assert plant_ggv_model({"ggv": {"ok": False, "model": None}}) is None
     # non-finite serialized model -> rejected (never act on a nan grip curve)
     assert plant_ggv_model({"ggv": {"ok": True, "model": {"mu_lat_g": float("nan")}}}) is None
     # v1 / Part-A artifact with no ggv block -> None
     assert plant_ggv_model({"constants": {"ff_sign": 1.0}}) is None
+
+
+def test_refine_ggv_without_thermal_archive_stays_non_runtime():
+    result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    block = refine_ggv_from_lap_archives(result, [], generic_gt3_ggv())
+    assert block["ok"] is False
+    assert block["model"] is None
+    assert "no thermally consistent" in block["reason"]
+    assert plant_ggv_model({"ggv": block}) is None
+
+
+def test_refine_ggv_respects_explicit_friction_id_opt_out():
+    result = _result_dict()
+    block = refine_ggv_from_lap_archives(result, [], generic_gt3_ggv())
+    assert block["skipped"] is True
+    assert "not requested" in block["reason"]
+    assert "ggv" not in result
+
+
+def test_refine_ggv_rejects_stale_other_combo_archive():
+    result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    stale = {
+        "car": {"id": "other_car"},
+        "track": {"id": "test_oval", "layout": None},
+        "lap_uuid": "stale",
+    }
+    block = refine_ggv_from_lap_archives(result, [stale], generic_gt3_ggv())
+    assert block["ok"] is False
+    assert block["lap_archives_seen"] == 1
+    assert block["lap_archives_loaded"] == 0
+    assert any("identity mismatch" in error for error in block["load_errors"])
+
+
+def test_refine_ggv_accepts_current_run_archive_when_writer_omits_layout():
+    result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    result["layout"] = "gp"
+    archive = {
+        "car": {"id": "test_car"},
+        "track": {"id": "test_oval"},
+        "lap_uuid": "fresh-layout-run",
+    }
+    block = refine_ggv_from_lap_archives(
+        result, [archive], generic_gt3_ggv(), archives_same_run=True
+    )
+    assert block["ok"] is False  # no thermal trace, but identity was accepted
+    assert block["lap_archives_loaded"] == 1
+    assert block["load_errors"] == []
+    assert any("omitted layout" in note for note in block["identity_notes"])
+
+    result = _result_dict()
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    result["layout"] = "gp"
+    block = refine_ggv_from_lap_archives(result, [archive], generic_gt3_ggv())
+    assert block["lap_archives_loaded"] == 0
+    assert any("outside current-run scope" in error for error in block["load_errors"])
+
+
+def test_refine_ggv_offline_rejects_wrong_or_unidentified_setup_archive():
+    result = _result_dict()
+    result["setup"] = "requested.ini"
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    wrong = {
+        "car": {"id": "test_car"},
+        "track": {"id": "test_oval"},
+        "setup": {"path": "other.ini", "hash": "abc", "snapshot": {"path": "other.ini"}},
+        "lap_uuid": "wrong-setup",
+    }
+    block = refine_ggv_from_lap_archives(result, [wrong], generic_gt3_ggv())
+    assert block["lap_archives_loaded"] == 0
+    assert any("setup mismatch" in error for error in block["load_errors"])
 
 
 def test_artifact_v1_still_loads_without_ggv(tmp_path):
@@ -859,10 +1056,33 @@ def test_artifact_v1_still_loads_without_ggv(tmp_path):
     assert plant_ggv_model(loaded) is None  # no ggv block -> generic plant
 
 
+def test_artifact_v2_constants_load_but_point_ggv_falls_back_to_generic(tmp_path):
+    import json as _json
+
+    result = _result_dict()
+    result["ggv"] = {"ok": True, "model": generic_gt3_ggv().to_dict()}
+    payload = {"schema_version": 2, "created_utc": "2026-07-12T00:00:00Z", **result}
+    path = plant_artifact_path(tmp_path, "test_car", "test_oval")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(payload), encoding="utf-8")
+    loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
+    assert loaded is not None
+    assert loaded["schema_version"] == 2
+    assert loaded["constants"]["rpm_up"] == 7600.0
+    assert plant_ggv_model(loaded) is None
+
+
+def test_schema_v3_artifact_refuses_point_estimate_ggv(tmp_path):
+    result = _result_dict()
+    result["ggv"] = {"ok": True, "model": generic_gt3_ggv().to_dict()}
+    with pytest.raises(ValueError, match="without uncertainty bins"):
+        save_plant_artifact(tmp_path, result)
+
+
 def test_ggv_block_round_trips_through_artifact(tmp_path):
     prior = generic_gt3_ggv()
     result = _result_dict()
-    result["ggv"] = {"ok": True, "friction_rows": 1234, "model": prior.to_dict()}
+    result["ggv"] = {"ok": True, "friction_rows": 1234, "model": _uncertain_prior().to_dict()}
     save_plant_artifact(tmp_path, result)
     loaded = load_plant_artifact(tmp_path, "test_car", "test_oval")
     assert loaded is not None
@@ -870,6 +1090,7 @@ def test_ggv_block_round_trips_through_artifact(tmp_path):
     model = plant_ggv_model(loaded)
     assert model is not None
     assert abs(model.mu_lat_g - prior.mu_lat_g) < 1e-9
+    assert model.uncertainty_aware
 
 
 def test_artifact_load_rejects_nan_constants(tmp_path):

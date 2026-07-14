@@ -78,6 +78,7 @@ from enum import IntEnum
 GRAPHICS_PACKET_ID_OFFSET = 0
 GRAPHICS_STATUS_OFFSET = 4
 GRAPHICS_IS_IN_PIT_OFFSET = 160
+GRAPHICS_COMPLETED_LAPS_OFFSET = 132
 # Minimum bytes that must be readable to decode every field above (isInPit + its 4 bytes).
 GRAPHICS_MIN_BYTES = GRAPHICS_IS_IN_PIT_OFFSET + 4  # 164
 
@@ -168,6 +169,7 @@ class GraphicsSnapshot:
     packet_id: int
     status: AcGameStatus | int
     is_in_pit: bool
+    completed_laps: int | None = None
 
     @property
     def is_live(self) -> bool:
@@ -205,10 +207,12 @@ def parse_graphics(buf: bytes) -> GraphicsSnapshot:
     packet_id = struct.unpack_from("<i", buf, GRAPHICS_PACKET_ID_OFFSET)[0]
     status_raw = struct.unpack_from("<i", buf, GRAPHICS_STATUS_OFFSET)[0]
     is_in_pit_raw = struct.unpack_from("<i", buf, GRAPHICS_IS_IN_PIT_OFFSET)[0]
+    completed_laps = struct.unpack_from("<i", buf, GRAPHICS_COMPLETED_LAPS_OFFSET)[0]
     return GraphicsSnapshot(
         packet_id=packet_id,
         status=AcGameStatus.from_int(status_raw),
         is_in_pit=is_in_pit_raw != 0,
+        completed_laps=completed_laps,
     )
 
 

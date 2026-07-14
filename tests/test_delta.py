@@ -2,8 +2,9 @@
 
 `delta.isBackwardSplineJump(prevSpline, spline)` is the liberal skip guard for the live `delta`
 producer; `delta.isBackwardSplineReset(prevSpline, spline)` is the conservative immediate reset
-predicate for rolling state. The one-frame `rollingResetDecision` covers #188's ambiguous
-wrap-shaped same-lap jump on CSP builds where `car.resetCounter` is unavailable.
+predicate for rolling state. The bounded `rollingResetDecision` confirmation window covers #188's
+ambiguous wrap-shaped same-lap jump on CSP builds where `car.resetCounter` is unavailable while
+tolerating CSP's observed multi-frame lag before `lapCount` advances.
 
 A *lap wrap* (prev spline near 1.0, now near 0.0) is forward lap completion, NOT a reset, and must
 return False. The backward threshold is strict (`d < -0.2`).
@@ -47,6 +48,7 @@ def _is_wrap_jump(prev: str, cur: str):
 def _decision(
     *,
     pending: str = "nil",
+    pending_frames: str = "0",
     last_lap: str = "5",
     lap: str = "5",
     prev: str = "0.40",
@@ -56,12 +58,14 @@ def _decision(
     return _eval(
         "local r = D.rollingResetDecision({"
         f"pendingWrapLapCount = {pending}, "
+        f"pendingWrapFrames = {pending_frames}, "
         f"lastLapCount = {last_lap}, "
         f"lapCount = {lap}, "
         f"prevSpline = {prev}, "
         f"spline = {cur}, "
         f"teleported = {teleported}"
-        "}) return { reset = r.reset, pending = r.pendingWrapLapCount }"
+        "}) return { reset = r.reset, pending = r.pendingWrapLapCount, "
+        "frames = r.pendingWrapFrames }"
     )
 
 
@@ -131,24 +135,42 @@ def test_rolling_reset_decision_defer_wrap_shaped_same_lap_jump():
     out = _decision(prev="0.95", cur="0.05", last_lap="5", lap="5")
     assert out["reset"] is False
     assert out["pending"] == 5
+    assert out["frames"] == 1
 
 
 def test_rolling_reset_decision_clears_deferred_wrap_when_lap_count_catches_up():
     out = _decision(pending="5", prev="0.05", cur="0.08", last_lap="5", lap="6")
     assert out["reset"] is False
     assert out["pending"] is None
+    assert out["frames"] == 0
 
 
-def test_rolling_reset_decision_resets_deferred_wrap_when_lap_count_stays_same():
+def test_rolling_reset_decision_keeps_deferred_wrap_during_confirmation_window():
     out = _decision(pending="5", prev="0.05", cur="0.08", last_lap="5", lap="5")
+    assert out["reset"] is False
+    assert out["pending"] == 5
+    assert out["frames"] == 1
+
+
+def test_rolling_reset_decision_resets_when_confirmation_window_expires():
+    out = _decision(
+        pending="5",
+        pending_frames="29",
+        prev="0.20",
+        cur="0.21",
+        last_lap="5",
+        lap="5",
+    )
     assert out["reset"] is True
     assert out["pending"] is None
+    assert out["frames"] == 0
 
 
 def test_rolling_reset_decision_keeps_deferred_wrap_when_lap_count_unavailable():
     out = _decision(pending="5", prev="0.05", cur="0.08", last_lap="5", lap="nil")
     assert out["reset"] is False
     assert out["pending"] == 5
+    assert out["frames"] == 0
 
 
 def test_rolling_reset_decision_immediate_for_non_wrap_same_lap_rewind():

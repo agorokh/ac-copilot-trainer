@@ -40,6 +40,7 @@ import json
 import logging
 import math
 import re
+import uuid
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dc_replace
 from pathlib import Path
@@ -49,6 +50,7 @@ from tools.ac_harness.ggv_profile import (
     GGVModel,
     blend_ggv_safe,
     fit_steer_feedforward,
+    ggv_from_lap_archives,
     ggv_from_telemetry,
     seg_lengths,
     signed_curvature_profile,
@@ -57,11 +59,11 @@ from tools.ac_harness.lap_driver import PHASE_LAP, DriveFrame
 from tools.ac_harness.racing_driver import RacingDriver
 
 G = 9.81
-# Schema v2 (#532 Part B) adds the optional ``ggv`` block (per-combo friction plant) alongside the
-# v1 ``constants``. v1 artifacts (Part A: shift points + steering only, no ggv block) still load —
-# their ggv consumption falls back to the generic plant — so Part A artifacts are not invalidated.
-PLANT_SCHEMA_VERSION = 2
-SUPPORTED_PLANT_SCHEMA_VERSIONS = (1, 2)
+# Schema v3 (#543) makes the optional ``ggv`` block uncertainty- and thermal-state-aware. Schema-v1
+# and schema-v2 constants still load, but their absent/point-estimate GGV blocks fall back to the
+# generic runtime plant until a new thermally tagged handshake produces a schema-v3 uncertainty map.
+PLANT_SCHEMA_VERSION = 3
+SUPPORTED_PLANT_SCHEMA_VERSIONS = (1, 2, 3)
 # Constants a persisted plant artifact MUST carry (a fully-passed handshake produces all of them);
 # a partial artifact is rejected on load so `--use-plant full` never silently degrades.
 REQUIRED_PLANT_CONSTANTS = ("ff_sign", "ff_c1", "ff_c2", "rpm_up", "rpm_dn", "r_eff_m")
@@ -757,6 +759,9 @@ class HandshakeController:
         self._friction_packet_id: int | None = None
         self._ratio_samples: dict[int, list[float]] = {}
         self._laps = 0
+        self._completed_laps_baseline: int | None = None
+        self._uses_completed_laps = False
+        self._probe_run_id = uuid.uuid4().hex
         self._t_start: float | None = None
         self._prev_heading: tuple[float, float] | None = None
         self._prev_now: float | None = None
@@ -816,9 +821,6 @@ class HandshakeController:
             self._speed_hist.pop(0)
 
         self._mine_gear_ratio(now, rpm, gear, speed_kmh)
-        if base.lap_completed:
-            self._laps += 1
-
         if base.needs_recovery:
             # rig loop answers with a teleport + on_recovery(); abort the active probe here so a
             # half-captured maneuver never contaminates a fit.
@@ -829,6 +831,12 @@ class HandshakeController:
         # frame (throttled). Runs across all phases — the corner sequence supplies lateral rows, the
         # WOT sweep accel rows, and the brake probe the braking envelope.
         self._mine_friction(now)
+
+        # Pure/off-sim fallback. Observe the optional authoritative graphics counter first so an
+        # already-available counter suppresses a false geometric wrap. If graphics appears late,
+        # _mine_friction bridges its baseline without reducing laps already counted here.
+        if base.lap_completed and not self._uses_completed_laps:
+            self._laps += 1
 
         frame = base
         if self._active is not None:
@@ -842,7 +850,16 @@ class HandshakeController:
 
         if not self.finished:
             done_probing = not self._pending and self._active is None
-            if (done_probing and len(self._rows) >= self.min_corner_rows) or (
+            # The uncertainty fit is intentionally archive-backed: live physics has the designed
+            # probe rows but not the canonical per-wheel thermal channels. When a GGV prior is
+            # enabled, do not self-terminate merely because the scalar probes finished before the
+            # first S/F crossing. That first crossing only closes the PARTIAL lap containing the
+            # probes and can legitimately yield a sparse/refused archive; continue for the clean
+            # post-probe lap and finish at the existing two-lap cap. Without this gate a fresh rig
+            # run persisted either a prior-only artifact (laps_used=0) or a one-row probe-tail
+            # archive, making the #543 thermal observer impossible to exercise end to end.
+            thermal_lap_ready = self._prior_ggv is None or self._laps >= self.max_laps
+            if (done_probing and len(self._rows) >= self.min_corner_rows and thermal_lap_ready) or (
                 self._laps >= self.max_laps
             ):
                 self._finish(now)
@@ -973,6 +990,19 @@ class HandshakeController:
         phys = self._read_phys()
         if phys is None:
             return
+        completed_laps = getattr(phys, "completed_laps", None)
+        if (
+            isinstance(completed_laps, int)
+            and not isinstance(completed_laps, bool)
+            and completed_laps >= 0
+        ):
+            if self._completed_laps_baseline is None:
+                # Preserve laps already observed through the geometry fallback if graphics became
+                # available late. A negative internal baseline is valid here: it is an affine
+                # bridge between two counters, not an AC lap number.
+                self._completed_laps_baseline = completed_laps - self._laps
+            self._uses_completed_laps = True
+            self._laps = max(0, completed_laps - self._completed_laps_baseline)
         speed = getattr(phys, "speed_kmh", None)
         ay = getattr(phys, "accg_lat", None)
         ao = getattr(phys, "accg_lon", None)
@@ -1004,6 +1034,10 @@ class HandshakeController:
                     "accg_lat": float(ay),
                     "accg_lon": float(ao),
                     "source": source,
+                    # ``completedLaps`` counts only AC-valid laps while the app archive counter also
+                    # advances across invalid boundaries. Attribute live probes with an invocation
+                    # nonce instead; auto_drive only trusts it beside archives filtered to this run.
+                    "probe_run_id": self._probe_run_id,
                 }
             )
 
@@ -1338,17 +1372,13 @@ class HandshakeController:
         self.finished = True
 
     def _build_ggv_block(self) -> dict | None:
-        """Fit the per-combo friction plant from captured rows and safe-envelope-blend the prior.
+        """Build a provisional point fit pending the thermally tagged lap archive (#543).
 
-        Returns ``None`` when no prior was injected (no trusted basis for a safe blend — the ggv
-        driver keeps its generic plant). Otherwise returns a block recording the outcome:
-
-        * ``ok=True`` with a blended ``model`` (a :class:`~tools.ac_harness.ggv_profile.GGVModel`
-          serialized via ``to_dict``) when enough friction rows were captured AND the fit succeeded;
-        * ``ok=False`` with a ``reason`` and ``model=None`` otherwise — a VISIBLE degrade in
-          the artifact + diagnostics, so the consumer falls back to the generic plant without a
-          silent swallow (the ggv block is ADVISORY; unlike the 5 core constants it never gates
-          ``HandshakeResult.ok``).
+        Live physics rows do not contain the canonical #488 tyre channels, so even a successful
+        point fit is diagnostics-only. The block remains ``ok=False`` until
+        :func:`refine_ggv_from_lap_archives` observes the immutable archive and builds the thermal,
+        per-speed-bin uncertainty map. This is advisory and never gates the core handshake
+        constants.
         """
         if self._prior_ggv is None:
             return None
@@ -1358,6 +1388,13 @@ class HandshakeController:
             "friction_rows": n,
             "model": None,
             "prior": self._prior_ggv_name,
+            "probe_run_id": self._probe_run_id,
+            # Preserve explicit probe evidence before the overall point-fit gate. A fresh thermal
+            # archive can supply the passive row volume while these rows retain the only trustworthy
+            # brake/WOT limit tags.
+            "provisional_probe_rows": [
+                dict(row) for row in self._friction_rows if row.get("source") != "passive"
+            ],
         }
         if n < self.min_friction_rows:
             block["reason"] = f"insufficient friction rows: {n} < {self.min_friction_rows}"
@@ -1371,9 +1408,13 @@ class HandshakeController:
             logger.exception("friction-ID fit failed; ggv block degrades to the generic plant")
             block["reason"] = f"friction fit error: {type(exc).__name__}: {exc}"
             return block
-        block["ok"] = True
-        block["model"] = blended.to_dict()
-        block["reason"] = "ok"
+        # The live rows have no tyre-state channels. Keep the point fit for diagnostics only;
+        # refine_ggv_from_lap_archives replaces it after the immutable #488 archive is observed.
+        block["provisional_model"] = blended.to_dict()
+        # Ephemeral handoff only: refinement consumes these explicitly tagged live probe rows and
+        # replaces the whole block before evidence/persistence. The lap archive proves the thermal
+        # state; these tags prove which longitudinal samples were actually limit-reaching probes.
+        block["reason"] = "awaiting thermally tagged lap archive"
         return block
 
     def finalize(self, now: float | None = None) -> None:
@@ -1391,6 +1432,134 @@ class HandshakeController:
 # ---------------------------------------------------------------------------
 # Per-combo plant artifact (durable — NEVER .scratch; see module docstring)
 # ---------------------------------------------------------------------------
+def refine_ggv_from_lap_archives(
+    result: dict,
+    archives: list[str | Path | dict],
+    prior: GGVModel,
+    *,
+    prior_name: str = "generic_gt3_ggv",
+    archives_same_run: bool = False,
+) -> dict:
+    """Replace a handshake's provisional GGV with a thermally gated schema-v3 model.
+
+    ``archives`` may contain paths from ``auto_drive.collect_lap_archives`` or already-loaded dicts
+    for hermetic tests. The result is mutated and returned so evidence and persistence consume the
+    same final block.
+    """
+    if "ggv" not in result or not isinstance(result.get("ggv"), dict):
+        # No prior was injected into HandshakeController, so friction ID was explicitly disabled.
+        # Thermal archives must not resurrect an unrequested GGV block.
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "friction identification was not requested",
+        }
+    loaded: list[dict] = []
+    load_errors: list[str] = []
+    for item in archives:
+        if isinstance(item, dict):
+            loaded.append(item)
+            continue
+        try:
+            payload = json.loads(Path(item).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            load_errors.append(f"{item}: {type(exc).__name__}")
+            continue
+        if isinstance(payload, dict):
+            loaded.append(payload)
+        else:
+            load_errors.append(f"{item}: archive root is not an object")
+    expected_car = str(result.get("car_id") or "")
+    expected_track = str(result.get("track_id") or "")
+    expected_layout = result.get("layout") or None
+    expected_setup = _setup_stem(result.get("setup"))
+    matching: list[dict] = []
+    identity_notes: list[str] = []
+    for payload in loaded:
+        car = payload.get("car") if isinstance(payload.get("car"), dict) else {}
+        track = payload.get("track") if isinstance(payload.get("track"), dict) else {}
+        actual_car = str(car.get("id") or "")
+        actual_track = str(track.get("id") or "")
+        actual_layout = track.get("layout") or None
+        archive_setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
+        snapshot = archive_setup.get("snapshot")
+        snapshot_path = snapshot.get("path") if isinstance(snapshot, dict) else None
+        actual_setup = _setup_stem(archive_setup.get("path") or snapshot_path)
+        if (
+            actual_car != expected_car
+            or actual_track != expected_track
+            or (actual_layout is not None and actual_layout != expected_layout)
+        ):
+            load_errors.append(
+                "archive identity mismatch: "
+                f"expected {expected_car}/{expected_track}/{expected_layout or '-'}, "
+                f"got {actual_car}/{actual_track}/{actual_layout or '-'}"
+            )
+            continue
+        if not archives_same_run:
+            setup_proven = actual_setup == expected_setup
+            if expected_setup is None and actual_setup is None:
+                # A default setup is provable only when the archive carries no setup content. A
+                # nonempty hash/snapshot with no path is an unidentified custom setup.
+                archive_hash = archive_setup.get("hash")
+                setup_proven = not archive_hash and snapshot in (None, {}, [])
+            if not setup_proven:
+                load_errors.append(
+                    f"archive {payload.get('lap_uuid') or '?'} setup mismatch: "
+                    f"expected {expected_setup or 'default'}, got {actual_setup or 'unidentified'}"
+                )
+                continue
+        if expected_layout is not None and actual_layout is None:
+            if not archives_same_run:
+                load_errors.append(
+                    f"archive {payload.get('lap_uuid') or '?'} omitted layout outside "
+                    "current-run scope"
+                )
+                continue
+            # The current in-game archive schema does not serialize layout. These paths are
+            # restricted to archives written after this run started, while car+track still match;
+            # preserve the missing-layout fact rather than rejecting every multi-layout handshake.
+            identity_notes.append(
+                f"archive {payload.get('lap_uuid') or '?'} omitted layout; "
+                f"accepted current-run {expected_layout!r} context"
+            )
+        matching.append(payload)
+    previous_ggv = result.get("ggv") if isinstance(result.get("ggv"), dict) else {}
+    probe_rows = previous_ggv.get("provisional_probe_rows", [])
+    if not isinstance(probe_rows, list):
+        probe_rows = []
+    probe_run_id = previous_ggv.get("probe_run_id") if archives_same_run else None
+    block: dict = {
+        "ok": False,
+        "model": None,
+        "prior": prior_name,
+        "lap_archives_seen": len(archives),
+        "lap_archives_loaded": len(matching),
+        "load_errors": load_errors,
+        "identity_notes": identity_notes,
+        "provisional_reason": previous_ggv.get("reason"),
+    }
+    try:
+        model, summary = ggv_from_lap_archives(
+            matching,
+            prior,
+            prior_name=prior_name,
+            probe_rows=probe_rows,
+            probe_run_id=probe_run_id if isinstance(probe_run_id, str) else None,
+        )
+    except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
+        logger.exception("thermal uncertainty fit failed; ggv block degrades to the generic plant")
+        block["reason"] = f"thermal uncertainty fit error: {type(exc).__name__}: {exc}"
+        result["ggv"] = block
+        return block
+    block.update(summary)
+    block["ok"] = True
+    block["model"] = model.to_dict()
+    block["reason"] = "ok"
+    result["ggv"] = block
+    return block
+
+
 def _setup_stem(setup: str | None) -> str | None:
     """The setup basename without ``.ini`` (or None), for a path-free identity sanity-check."""
     if not setup:
@@ -1467,6 +1636,14 @@ def save_plant_artifact(user_dir: Path, result: dict) -> Path:
     """
     if not result.get("ok"):
         raise ValueError("refusing to persist a failed handshake as a plant artifact")
+    ggv = result.get("ggv")
+    if isinstance(ggv, dict) and ggv.get("ok"):
+        model_data = ggv.get("model")
+        model = GGVModel.from_dict(model_data) if isinstance(model_data, dict) else None
+        if model is None or not model.uncertainty_aware:
+            raise ValueError(
+                "refusing to persist an ok schema-v3 ggv block without uncertainty bins"
+            )
     car_id = str(result.get("car_id") or "")
     track_id = str(result.get("track_id") or "")
     if not car_id or not track_id:
@@ -1586,7 +1763,11 @@ def plant_ggv_model(artifact: dict) -> GGVModel | None:
     if not isinstance(model, dict):
         return None
     try:
-        return GGVModel.from_dict(model)
+        restored = GGVModel.from_dict(model)
+        # Schema-v1/v2 point estimates remain readable for provenance and their measured constants,
+        # but #543 requires runtime friction to carry epistemic uncertainty. Until re-identified,
+        # the caller keeps the generic plant rather than acting on false precision.
+        return restored if restored.uncertainty_aware else None
     except (ValueError, TypeError):
         logger.warning(
             "plant artifact ggv block present but its model is invalid; using the generic plant"

@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
+import json
 import math
+import statistics
 import struct
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -50,6 +53,17 @@ MAX_LONGITUDINAL_SUPPORT_KMH = 300.0
 MAX_DRIVE_SUPPORT_G = 2.0
 MAX_PERSISTED_AY_CAP_G = 1.8
 MAX_PERSISTED_BRAKE_CAP_G = 3.4
+UNCERTAINTY_CHANNELS = ("lateral", "brake", "drive")
+DEFAULT_UNCERTAINTY_BIN_KMH = 10.0
+DEFAULT_UNCERTAINTY_MAX_KMH = 300.0
+DEFAULT_UNCERTAINTY_LCB_Z = 1.96
+DEFAULT_PRIOR_RELATIVE_STD = 0.15
+DEFAULT_THERMAL_WINDOW_HALF_WIDTH_C = 10.0
+DEFAULT_THERMAL_COVERAGE_FRACTION = 0.80
+DEFAULT_THERMAL_STABILITY_FRACTION = 0.80
+DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C = 5.0
+DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C = 15.0
+_WHEELS = ("fl", "fr", "rl", "rr")
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +92,10 @@ class GGVModel:
     # Runtime-bearing measured overrides are deliberately separate from free-form provenance and
     # validated on every construction/load. Top-level coefficients remain the trusted prior.
     supported_longitudinal: Mapping = field(default_factory=dict)
+    # Schema-v3 (#543): validated, runtime-bearing per-speed-bin posterior summaries. Each
+    # channel carries mean, epistemic standard deviation, lower-confidence safe value, sample
+    # count, and measured-vs-prior provenance. Empty means a legacy point-estimate model.
+    uncertainty_bins: tuple[Mapping, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _validate_supported_longitudinal(
@@ -88,6 +106,7 @@ class GGVModel:
             drive_b1=self.drive_b1,
             ax_brake_cap_g=self.ax_brake_cap_g,
         )
+        _validate_uncertainty_bins(self.uncertainty_bins)
         # ``frozen=True`` does not freeze nested dicts. Detach observability provenance from its
         # caller and make the runtime-bearing support schema recursively read-only after validation.
         object.__setattr__(self, "provenance", copy.deepcopy(self.provenance))
@@ -96,21 +115,48 @@ class GGVModel:
             "supported_longitudinal",
             _freeze_supported_longitudinal(self.supported_longitudinal),
         )
+        object.__setattr__(
+            self, "uncertainty_bins", _freeze_uncertainty_bins(self.uncertainty_bins)
+        )
 
     def ay_max(self, v_ms: float) -> float:
-        return min(self.ay_cap_g, self.mu_lat_g + self.k_aero_lat * v_ms * v_ms) * G
+        point_g = min(self.ay_cap_g, self.mu_lat_g + self.k_aero_lat * v_ms * v_ms)
+        return self._uncertainty_safe_g("lateral", v_ms, point_g) * G
 
     def ax_brake_max(self, v_ms: float) -> float:
         prior_g = max(0.5, self.brake_b0_g + self.brake_b1 * v_ms)
         supported_g = self._supported_longitudinal_g("brake", v_ms, prior_g, floor_g=0.5)
-        return min(self.ax_brake_cap_g, supported_g) * G
+        point_g = min(self.ax_brake_cap_g, supported_g)
+        return self._uncertainty_safe_g("brake", v_ms, point_g) * G
 
     def ax_drive_max(self, v_ms: float) -> float:
         prior_g = max(self.drive_min_g, self.drive_b0_g + self.drive_b1 * v_ms)
         supported_g = self._supported_longitudinal_g(
             "drive", v_ms, prior_g, floor_g=self.drive_min_g
         )
-        return supported_g * G
+        return self._uncertainty_safe_g("drive", v_ms, supported_g) * G
+
+    @property
+    def uncertainty_aware(self) -> bool:
+        """Whether this model carries the schema-v3 runtime uncertainty map."""
+        return bool(self.uncertainty_bins)
+
+    def _uncertainty_safe_g(self, kind: str, v_ms: float, point_g: float) -> float:
+        """Return the lower-confidence grip for ``kind`` at speed, never above the point model.
+
+        The point model remains the upper operating envelope. The uncertainty layer can only derate
+        it. A missing or non-covering map is a legacy model and preserves the pre-v3 behavior.
+        """
+        speed_kmh = max(0.0, float(v_ms) * 3.6)
+        for speed_bin in self.uncertainty_bins:
+            if float(speed_bin["speed_min_kmh"]) <= speed_kmh < float(speed_bin["speed_max_kmh"]):
+                channel = speed_bin[kind]
+                return min(point_g, float(channel["safe_g"]))
+        if self.uncertainty_bins and speed_kmh >= float(self.uncertainty_bins[-1]["speed_max_kmh"]):
+            # Never fall back to the optimistic point model above the map. Carry the last safe
+            # bound flat; that is conservative extrapolation, not an upward grip claim.
+            return min(point_g, float(self.uncertainty_bins[-1][kind]["safe_g"]))
+        return point_g
 
     def _supported_longitudinal_g(
         self, kind: str, v_ms: float, prior_g: float, *, floor_g: float
@@ -193,6 +239,14 @@ class GGVModel:
             "supported_longitudinal": {
                 kind: dict(override) for kind, override in self.supported_longitudinal.items()
             },
+            "uncertainty_bins": [
+                {
+                    "speed_min_kmh": float(speed_bin["speed_min_kmh"]),
+                    "speed_max_kmh": float(speed_bin["speed_max_kmh"]),
+                    **{kind: dict(speed_bin[kind]) for kind in UNCERTAINTY_CHANNELS},
+                }
+                for speed_bin in self.uncertainty_bins
+            ],
         }
 
     @classmethod
@@ -253,10 +307,14 @@ class GGVModel:
                 raise ValueError(f"GGVModel.from_dict: {f} must be in (0, {limit}]: {vals[f]!r}")
         prov = data.get("provenance")
         supported = data.get("supported_longitudinal", {})
+        uncertainty_bins = data.get("uncertainty_bins", ())
+        if uncertainty_bins is None:
+            raise ValueError("GGVModel.from_dict: uncertainty_bins must be a list or tuple")
         return cls(
             **vals,
             provenance=copy.deepcopy(prov) if isinstance(prov, dict) else {},
             supported_longitudinal=copy.deepcopy(supported),
+            uncertainty_bins=tuple(copy.deepcopy(uncertainty_bins)),
         )
 
 
@@ -300,6 +358,7 @@ def ggv_from_telemetry(
     min_corner_lat_g: float = 0.9,
     min_samples: int = 40,
     min_probe_samples: int = 8,
+    allow_passive_longitudinal: bool = True,
 ) -> GGVModel:
     """Fit a :class:`GGVModel` from telemetry rows (dicts w/ speed_kmh, accg_lat, accg_lon).
 
@@ -328,13 +387,16 @@ def ggv_from_telemetry(
         source = r.get("source")
         if ao < 0 and source == "brake_probe":
             brk_probe_b.setdefault(b, []).append(abs(ao))
-        elif ao < 0:
+        elif ao < 0 and allow_passive_longitudinal:
             brk_passive_b.setdefault(b, []).append(abs(ao))
         elif ao >= 0 and source == "accel_sweep":
             acc_probe_b.setdefault(b, []).append(abs(ao))
-        else:
+        elif allow_passive_longitudinal:
             acc_passive_b.setdefault(b, []).append(abs(ao))
-        if al > 0.2 or abs(ao) > 0.2:
+        # ``source`` comes from persisted/transported telemetry and can be malformed. Equality is
+        # intentionally non-hashing so one list/dict value cannot abort the whole defensive fit.
+        probe_source = source == "brake_probe" or source == "accel_sweep"
+        if (allow_passive_longitudinal or probe_source) and (al > 0.2 or abs(ao) > 0.2):
             hull.append((al, abs(ao)))
 
     # Lateral grip: ONLY bins where the car DEMONSTRABLY cornered hard count (p95 lateral high).
@@ -458,6 +520,556 @@ def ggv_from_telemetry(
         ellipse_n=n_fit,
         provenance=prov,
     )
+
+
+def with_binned_uncertainty(
+    point_model: GGVModel,
+    rows: list[dict],
+    prior: GGVModel,
+    *,
+    bin_kmh: float = DEFAULT_UNCERTAINTY_BIN_KMH,
+    max_speed_kmh: float = DEFAULT_UNCERTAINTY_MAX_KMH,
+    prior_relative_std: float = DEFAULT_PRIOR_RELATIVE_STD,
+    lcb_z: float = DEFAULT_UNCERTAINTY_LCB_Z,
+    min_samples: int = 40,
+    min_probe_samples: int = 8,
+) -> GGVModel:
+    """Attach a deterministic binned-Bayesian lower-confidence map (#543).
+
+    Each speed/channel bin starts from the generic plant as a normal prior. Directly observed
+    95th-percentile envelope evidence updates that prior with a normal likelihood. The persisted
+    posterior mean is useful for inspection, but the QSS consumes ``mean - z * epistemic_std``.
+    Unmeasured bins therefore stay explicitly high-uncertainty and run below the optimistic prior;
+    evidence never leaks into neighbouring speed bins.
+
+    Samples at 100+ Hz are correlated, so the likelihood uses a capped effective sample size. This
+    prevents a single two-second probe from claiming thousands of independent observations.
+    """
+    if not _finite_ggv(bin_kmh, max_speed_kmh, prior_relative_std, lcb_z):
+        raise ValueError("uncertainty parameters must be finite")
+    if (
+        not math.isclose(bin_kmh, DEFAULT_UNCERTAINTY_BIN_KMH)
+        or not math.isclose(max_speed_kmh, DEFAULT_UNCERTAINTY_MAX_KMH)
+        or prior_relative_std <= 0.0
+        or lcb_z <= 0.0
+        or min_samples <= 0
+        or min_probe_samples <= 0
+    ):
+        raise ValueError("uncertainty parameters require the complete 30x10 km/h runtime grid")
+    if not math.isclose(bin_kmh, round(bin_kmh)):
+        raise ValueError("bin_kmh must be a whole number of km/h")
+    count = max_speed_kmh / bin_kmh
+    if not math.isclose(count, round(count)):
+        raise ValueError("max_speed_kmh must be an exact multiple of bin_kmh")
+
+    raw: dict[int, dict[str, list[float]]] = {}
+    for row in rows:
+        try:
+            speed = float(row["speed_kmh"])
+            lateral = abs(float(row["accg_lat"]))
+            longitudinal = float(row["accg_lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not _finite_ggv(speed, lateral, longitudinal) or not (0.0 <= speed < max_speed_kmh):
+            continue
+        low = int(speed // bin_kmh) * int(bin_kmh)
+        bucket = raw.setdefault(
+            low,
+            {
+                "lateral": [],
+                "brake_probe": [],
+                "drive_probe": [],
+            },
+        )
+        bucket["lateral"].append(lateral)
+        source = row.get("source")
+        if longitudinal < 0.0:
+            if source == "brake_probe":
+                bucket["brake_probe"].append(abs(longitudinal))
+        else:
+            if source == "accel_sweep":
+                bucket["drive_probe"].append(longitudinal)
+
+    def posterior(
+        values: list[float],
+        prior_mean: float,
+        *,
+        floor_g: float,
+        observed: bool,
+        probe_qualified: bool = False,
+    ) -> dict:
+        prior_std = max(0.03, abs(prior_mean) * prior_relative_std)
+        if not observed:
+            mean = prior_mean
+            std = prior_std
+            source = "prior"
+            n = 0
+        else:
+            n = len(values)
+            # At the eight-sample controlled-probe gate, ordinary p95 is the maximum. Reuse the
+            # telemetry fitter's small-N rule so one spike cannot lift a runtime-bearing posterior.
+            envelope = _probe_pct(values, 0.95) if probe_qualified else _pct(values, 0.95)
+            median = _pct(values, 0.50)
+            robust_scale = max(0.03, (envelope - median) / 1.645)
+            effective_n = min(50.0, max(1.0, float(n)))
+            likelihood_std = max(0.03, robust_scale / math.sqrt(effective_n))
+            prior_precision = 1.0 / (prior_std * prior_std)
+            likelihood_precision = 1.0 / (likelihood_std * likelihood_std)
+            variance = 1.0 / (prior_precision + likelihood_precision)
+            mean = variance * (prior_mean * prior_precision + envelope * likelihood_precision)
+            std = math.sqrt(variance)
+            source = "measured"
+        safe = max(floor_g, mean - lcb_z * std)
+        return {
+            "mean_g": round(mean, 6),
+            "epistemic_std_g": round(std, 6),
+            "safe_g": round(min(mean, safe), 6),
+            "n": int(n),
+            "source": source,
+        }
+
+    bins: list[dict] = []
+    for index in range(int(round(count))):
+        lo = index * bin_kmh
+        hi = lo + bin_kmh
+        mid_ms = (lo + hi) * 0.5 / 3.6
+        bucket = raw.get(int(lo), {})
+        lateral = list(bucket.get("lateral", []))
+        brake_probe = list(bucket.get("brake_probe", []))
+        drive_probe = list(bucket.get("drive_probe", []))
+
+        lateral_observed = len(lateral) >= min_samples and _pct(lateral, 0.95) >= 0.9
+        # Longitudinal caps require an explicit limit-reaching probe. Ordinary driving can provide
+        # thousands of near-zero coast/maintenance-throttle samples without saying anything about
+        # the available brake or drive envelope; treating their count as evidence can immobilize
+        # the runtime plant. Lateral remains passively observable in actual cornering.
+        brake_values = brake_probe
+        brake_observed = len(brake_probe) >= min_probe_samples
+        drive_values = drive_probe
+        drive_observed = len(drive_probe) >= min_probe_samples
+        bins.append(
+            {
+                "speed_min_kmh": float(lo),
+                "speed_max_kmh": float(hi),
+                "lateral": posterior(
+                    lateral,
+                    prior.ay_max(mid_ms) / G,
+                    floor_g=0.5,
+                    observed=lateral_observed,
+                ),
+                "brake": posterior(
+                    brake_values,
+                    prior.ax_brake_max(mid_ms) / G,
+                    floor_g=0.5,
+                    observed=brake_observed,
+                    probe_qualified=True,
+                ),
+                "drive": posterior(
+                    drive_values,
+                    prior.ax_drive_max(mid_ms) / G,
+                    floor_g=0.10,
+                    observed=drive_observed,
+                    probe_qualified=True,
+                ),
+            }
+        )
+
+    provenance = copy.deepcopy(point_model.provenance)
+    provenance["uncertainty"] = {
+        "method": "binned_normal_posterior_lcb",
+        "bin_kmh": bin_kmh,
+        "max_speed_kmh": max_speed_kmh,
+        "prior_relative_std": prior_relative_std,
+        "lcb_z": lcb_z,
+        "runtime_uses": "min(point_estimate, lower_confidence_bound)",
+        "unmeasured": "lower-confidence generic prior; no neighbouring-bin extrapolation",
+        "measured_bins": {
+            kind: sum(1 for speed_bin in bins if speed_bin[kind]["source"] == "measured")
+            for kind in UNCERTAINTY_CHANNELS
+        },
+    }
+    return replace(point_model, provenance=provenance, uncertainty_bins=tuple(bins))
+
+
+def observe_lap_tyre_state(
+    archive: dict,
+    *,
+    thermal_window_half_width_c: float = DEFAULT_THERMAL_WINDOW_HALF_WIDTH_C,
+    min_coverage_fraction: float = DEFAULT_THERMAL_COVERAGE_FRACTION,
+    min_stability_fraction: float = DEFAULT_THERMAL_STABILITY_FRACTION,
+    stability_half_width_c: float = DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C,
+    max_wheel_spread_c: float = DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
+) -> dict:
+    """Tag one lap archive's tyre thermal/pressure/grip state (#543).
+
+    The observer reads the canonical #488 archive channels. ``fit_eligible`` is deliberately strict:
+    a valid lap, all four core-temperature and hot-pressure channels, a car-true optimum, and a
+    stable within-lap per-wheel thermal state. ``tag`` still reports cold/optimal/hot relative to
+    the car's optimum; a stable cold lap is usable as a conservative, explicitly tagged cohort.
+    Surface temperatures and CSP ``dy`` peak-mu are reported when present; they do not fabricate
+    eligibility when core/pressure evidence is missing.
+    """
+    trace = archive.get("trace") if isinstance(archive, dict) else None
+    fields = trace.get("fields") if isinstance(trace, dict) else None
+    samples = trace.get("samples") if isinstance(trace, dict) else None
+    lap = archive.get("lap") if isinstance(archive, dict) else None
+    tyres = archive.get("tyres") if isinstance(archive, dict) else None
+    setup = archive.get("setup") if isinstance(archive, dict) else None
+    lap_uuid = archive.get("lap_uuid") if isinstance(archive, dict) else None
+    base = {
+        "lap_uuid": lap_uuid if isinstance(lap_uuid, str) else None,
+        "tag": "unknown",
+        "fit_eligible": False,
+        "reason": "missing trace",
+        "optimal_temp_c": None,
+        "core_temp_c": None,
+        "surface_temp_c": None,
+        "pressure_psi": None,
+        "grip_multiplier": None,
+        "compound_index": None,
+        "compound_name": None,
+        "setup_hash": None,
+        "thermal_residence_fraction": 0.0,
+        "thermal_stability_fraction": 0.0,
+        "sample_coverage_fraction": 0.0,
+        "wheel_core_temp_c": None,
+        "wheel_spread_c": None,
+    }
+    if not isinstance(fields, list) or not isinstance(samples, list) or not samples:
+        return base
+    if not isinstance(tyres, dict):
+        tyres = {}
+    if not isinstance(setup, dict):
+        setup = {}
+    compound_index = tyres.get("compoundIndex")
+    if isinstance(compound_index, bool) or not isinstance(compound_index, (int, float)):
+        compound_index = None
+    elif not math.isfinite(float(compound_index)):
+        compound_index = None
+    else:
+        compound_index = int(compound_index)
+    compound_name = tyres.get("name")
+    if not isinstance(compound_name, str) or not compound_name.strip():
+        compound_name = None
+    setup_hash = setup.get("hash")
+    if not isinstance(setup_hash, str) or not setup_hash.strip():
+        setup_snapshot = setup.get("snapshot")
+        if isinstance(setup_snapshot, (dict, list)):
+            # CSP serializes the default/no-file setup as an empty snapshot and an empty hash. It is
+            # still a concrete setup cohort: derive a stable identity from the persisted snapshot so
+            # default laps group together without being conflated with genuinely missing metadata.
+            canonical_snapshot = json.dumps(
+                setup_snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            setup_hash = (
+                "snapshot-sha256:" + hashlib.sha256(canonical_snapshot.encode("utf-8")).hexdigest()
+            )
+        else:
+            setup_hash = None
+    base.update(
+        {
+            "compound_index": compound_index,
+            "compound_name": compound_name,
+            "setup_hash": setup_hash,
+        }
+    )
+    try:
+        optimal = float(tyres.get("optimalTempC"))
+    except (TypeError, ValueError):
+        optimal = float("nan")
+    if not math.isfinite(optimal):
+        base["reason"] = "missing car-true optimalTempC"
+        return base
+
+    index = {name: i for i, name in enumerate(fields)}
+    core_names = [f"tyreCoreTemp_{wheel}" for wheel in _WHEELS]
+    pressure_names = [f"wheelsPressure_{wheel}" for wheel in _WHEELS]
+    if any(name not in index for name in core_names + pressure_names):
+        base["optimal_temp_c"] = optimal
+        base["reason"] = "missing per-wheel core-temperature or pressure channels"
+        return base
+
+    def row_values(row, names: list[str]) -> list[float]:
+        out = []
+        for name in names:
+            try:
+                value = float(row[index[name]])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if math.isfinite(value) and value != 0.0:
+                out.append(value)
+        return out
+
+    core_means: list[float] = []
+    core_rows: list[list[float]] = []
+    pressure_means: list[float] = []
+    surface_means: list[float] = []
+    grip_mu: list[float] = []
+    in_window = 0
+    surface_names = [
+        f"tyreTemp{band}_{wheel}"
+        for band in ("Inner", "Mid", "Outer")
+        for wheel in _WHEELS
+        if f"tyreTemp{band}_{wheel}" in index
+    ]
+    dy_names = [f"dy_{wheel}" for wheel in _WHEELS if f"dy_{wheel}" in index]
+    for row in samples:
+        if not isinstance(row, (list, tuple)):
+            continue
+        core = row_values(row, core_names)
+        pressure = row_values(row, pressure_names)
+        if len(core) == len(_WHEELS) and len(pressure) == len(_WHEELS):
+            core_mean = statistics.fmean(core)
+            core_means.append(core_mean)
+            core_rows.append(core)
+            pressure_means.append(statistics.fmean(pressure))
+            if all(abs(value - optimal) <= thermal_window_half_width_c for value in core):
+                in_window += 1
+        surface = row_values(row, surface_names)
+        if surface:
+            surface_means.append(statistics.fmean(surface))
+        dy = row_values(row, dy_names)
+        if dy:
+            grip_mu.append(statistics.fmean(dy))
+
+    coverage = len(core_means) / len(samples)
+    residence = in_window / len(core_means) if core_means else 0.0
+    wheel_centers = (
+        [statistics.median(row[i] for row in core_rows) for i in range(len(_WHEELS))]
+        if core_rows
+        else []
+    )
+    stable_rows = (
+        sum(
+            all(
+                abs(row[i] - wheel_centers[i]) <= stability_half_width_c
+                for i in range(len(_WHEELS))
+            )
+            for row in core_rows
+        )
+        if wheel_centers
+        else 0
+    )
+    stability = stable_rows / len(core_rows) if core_rows else 0.0
+    wheel_spread = max(wheel_centers) - min(wheel_centers) if wheel_centers else None
+    mean_core = statistics.fmean(core_means) if core_means else None
+    mean_pressure = statistics.fmean(pressure_means) if pressure_means else None
+    tag = "unknown"
+    if mean_core is not None:
+        if mean_core < optimal - thermal_window_half_width_c:
+            tag = "cold"
+        elif mean_core > optimal + thermal_window_half_width_c:
+            tag = "hot"
+        else:
+            tag = "optimal"
+    is_valid = isinstance(lap, dict) and lap.get("is_valid") is True
+    eligible = (
+        is_valid
+        and (compound_index is not None or compound_name is not None)
+        and setup_hash is not None
+        and coverage >= min_coverage_fraction
+        and stability >= min_stability_fraction
+        and wheel_spread is not None
+        and wheel_spread <= max_wheel_spread_c
+        and tag != "unknown"
+    )
+    grip_multiplier = None
+    if grip_mu:
+        peak = _pct(grip_mu, 0.95)
+        if peak > 0.0:
+            grip_multiplier = min(1.0, max(0.0, statistics.median(grip_mu) / peak))
+    elif eligible:
+        # No CSP dy channel: eligibility proves the thermal state, but not an absolute tyre-model
+        # multiplier. One is neutral and explicitly provenance-labelled by the missing dy input.
+        grip_multiplier = 1.0
+    return {
+        "lap_uuid": base["lap_uuid"],
+        "tag": tag,
+        "fit_eligible": eligible,
+        "reason": (
+            "thermally consistent"
+            if eligible
+            else (
+                "missing tyre compound identity"
+                if compound_index is None and compound_name is None
+                else (
+                    "missing setup identity"
+                    if setup_hash is None
+                    else "outside thermal stability/validity gate"
+                )
+            )
+        ),
+        "optimal_temp_c": round(optimal, 3),
+        "core_temp_c": round(mean_core, 3) if mean_core is not None else None,
+        "surface_temp_c": (round(statistics.fmean(surface_means), 3) if surface_means else None),
+        "pressure_psi": round(mean_pressure, 3) if mean_pressure is not None else None,
+        "grip_multiplier": (round(grip_multiplier, 5) if grip_multiplier is not None else None),
+        "grip_multiplier_source": "dy_within_lap" if grip_mu else "thermal_neutral",
+        "compound_index": compound_index,
+        "compound_name": compound_name,
+        "setup_hash": setup_hash,
+        "thermal_residence_fraction": round(residence, 6),
+        "thermal_stability_fraction": round(stability, 6),
+        "sample_coverage_fraction": round(coverage, 6),
+        "wheel_core_temp_c": (
+            {wheel: round(value, 3) for wheel, value in zip(_WHEELS, wheel_centers, strict=True)}
+            if wheel_centers
+            else None
+        ),
+        "wheel_spread_c": round(wheel_spread, 3) if wheel_spread is not None else None,
+    }
+
+
+def ggv_from_lap_archives(
+    archives: list[dict],
+    prior: GGVModel,
+    *,
+    prior_name: str = "injected_prior",
+    min_friction_rows: int = 200,
+    probe_rows: list[dict] | None = None,
+    probe_run_id: str | None = None,
+) -> tuple[GGVModel, dict]:
+    """Fit an uncertainty-aware GGV using only a thermally consistent lap cohort (#543)."""
+    states = [observe_lap_tyre_state(archive) for archive in archives]
+    eligible = [
+        (archive, state)
+        for archive, state in zip(archives, states, strict=True)
+        if state.get("fit_eligible")
+    ]
+    if not eligible:
+        raise ValueError("no thermally consistent valid lap archives")
+
+    # A plant is per combo, which includes tyre compound and setup. A stale archive from the same
+    # car/track session must not contaminate the posterior merely because its temperatures match.
+    cohort_groups: dict[tuple[object, object, object], list[tuple[dict, dict]]] = {}
+    cohort_first_index: dict[tuple[object, object, object], int] = {}
+    for archive_index, (archive, state) in enumerate(eligible):
+        compound = state.get("compound_index")
+        if compound is None:
+            compound = state.get("compound_name")
+        key = (compound, state.get("setup_hash"), state.get("tag"))
+        cohort_groups.setdefault(key, []).append((archive, state))
+        cohort_first_index.setdefault(key, archive_index)
+    cohort_key, eligible = sorted(
+        cohort_groups.items(),
+        key=lambda item: (
+            -len(item[1]),
+            0 if item[0][2] == "optimal" else 1,
+            cohort_first_index[item[0]],
+        ),
+    )[0]
+    core_center = statistics.median(float(state["core_temp_c"]) for _, state in eligible)
+    pressure_center = statistics.median(float(state["pressure_psi"]) for _, state in eligible)
+    for state in states:
+        state["cohort_consistent"] = False
+    selected: list[tuple[dict, dict]] = []
+    for archive, state in eligible:
+        cohort_ok = (
+            abs(float(state["core_temp_c"]) - core_center) <= 5.0
+            and abs(float(state["pressure_psi"]) - pressure_center) <= 2.0
+        )
+        state["cohort_consistent"] = cohort_ok
+        if cohort_ok:
+            selected.append((archive, state))
+    if not selected:
+        raise ValueError("thermally eligible laps do not form a consistent temp/pressure cohort")
+
+    rows: list[dict] = []
+    for archive, state in selected:
+        trace = archive["trace"]
+        fields = trace["fields"]
+        index = {name: i for i, name in enumerate(fields)}
+        required = ("speed", "accG_lat", "accG_long", "brake", "throttle")
+        if any(name not in index for name in required):
+            continue
+        for sample in trace["samples"]:
+            try:
+                speed = float(sample[index["speed"]])
+                lateral = float(sample[index["accG_lat"]])
+                longitudinal = float(sample[index["accG_long"]])
+                brake = float(sample[index["brake"]])
+                throttle = float(sample[index["throttle"]])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if not _finite_ggv(speed, lateral, longitudinal, brake, throttle):
+                continue
+            rows.append(
+                {
+                    "speed_kmh": speed,
+                    "accg_lat": lateral,
+                    "accg_lon": longitudinal,
+                    # The lap schema does not persist the controller's active-probe state. Do not
+                    # infer it from brake/throttle alone (normal driving can look identical) and
+                    # accidentally unlock the lower 8-sample probe gate; archive rows use the
+                    # stricter passive threshold.
+                    "source": "passive",
+                    "thermal_lap_uuid": state.get("lap_uuid"),
+                }
+            )
+    if len(rows) < min_friction_rows:
+        raise ValueError(
+            f"insufficient thermally consistent friction rows: {len(rows)} < {min_friction_rows}"
+        )
+    # The immutable archive proves the thermal state and supplies passive cornering. In the live
+    # harness, archives are filtered to files written after this exact run began and the controller
+    # gives every probe a nonce. That run scope is authoritative even after an invalid AC lap,
+    # because graphics.completedLaps (valid laps) and the app archive counter (all boundaries) are
+    # deliberately different clocks. Direct/offline callers without a nonce retain exact lap-number
+    # matching and therefore cannot silently mix arbitrary probes into an archive cohort.
+    selected_lap_numbers = {
+        int(archive["lap"]["lap_n"])
+        for archive, _ in selected
+        if isinstance(archive.get("lap"), dict)
+        and isinstance(archive["lap"].get("lap_n"), int)
+        and not isinstance(archive["lap"].get("lap_n"), bool)
+    }
+    valid_probe_run_id = isinstance(probe_run_id, str) and bool(probe_run_id.strip())
+    complete_run_cohort = len(selected) == len(archives)
+    if valid_probe_run_id and complete_run_cohort:
+        thermal_probe_rows = [
+            dict(row)
+            for row in (probe_rows or [])
+            if isinstance(row, dict) and row.get("probe_run_id") == probe_run_id
+        ]
+        probe_attribution = "current-run nonce (complete thermal cohort)"
+    elif valid_probe_run_id:
+        # The nonce proves invocation identity, not tyre state. If any current-run archive is
+        # invalid, thermally ineligible, or belongs to another cohort, conservatively keep every
+        # longitudinal bin on the prior rather than assigning a probe to the wrong tyre regime.
+        thermal_probe_rows = []
+        probe_attribution = "current-run nonce rejected (incomplete thermal cohort)"
+    else:
+        thermal_probe_rows = [
+            dict(row)
+            for row in (probe_rows or [])
+            if isinstance(row, dict)
+            and isinstance(row.get("lap_number"), int)
+            and not isinstance(row.get("lap_number"), bool)
+            and int(row["lap_number"]) in selected_lap_numbers
+        ]
+        probe_attribution = "archive lap number"
+    combined_rows = rows + thermal_probe_rows
+    measured = ggv_from_telemetry(combined_rows, allow_passive_longitudinal=False)
+    point_model = blend_ggv_safe(measured, prior, prior_name=prior_name)
+    model = with_binned_uncertainty(point_model, combined_rows, prior)
+    summary = {
+        "friction_rows": len(rows),
+        "probe_rows_seen": len(probe_rows or []),
+        "probe_rows": len(thermal_probe_rows),
+        "probe_attribution": probe_attribution,
+        "tyre_states": states,
+        "selected_lap_uuids": [state.get("lap_uuid") for _, state in selected],
+        "thermal_cohort": {
+            "core_temp_c": round(core_center, 3),
+            "pressure_psi": round(pressure_center, 3),
+            "core_tolerance_c": 5.0,
+            "pressure_tolerance_psi": 2.0,
+            "compound": cohort_key[0],
+            "setup_hash": cohort_key[1],
+            "thermal_tag": cohort_key[2],
+        },
+    }
+    return model, summary
 
 
 def _fit_ellipse_n(hull: list[tuple[float, float]], mu_lat, k_aero, brake_b0, brake_b1) -> float:
@@ -723,6 +1335,89 @@ def _freeze_supported_longitudinal(supported: Mapping) -> MappingProxyType:
     return MappingProxyType(
         {kind: MappingProxyType(dict(override)) for kind, override in supported.items()}
     )
+
+
+def _freeze_uncertainty_bins(bins: tuple[Mapping, ...]) -> tuple[MappingProxyType, ...]:
+    """Return a detached, recursively read-only uncertainty map."""
+    return tuple(
+        MappingProxyType(
+            {
+                "speed_min_kmh": float(speed_bin["speed_min_kmh"]),
+                "speed_max_kmh": float(speed_bin["speed_max_kmh"]),
+                **{kind: MappingProxyType(dict(speed_bin[kind])) for kind in UNCERTAINTY_CHANNELS},
+            }
+        )
+        for speed_bin in bins
+    )
+
+
+def _validate_uncertainty_bins(bins: tuple[Mapping, ...]) -> None:
+    """Validate schema-v3 runtime uncertainty data before the QSS can consume it."""
+    if not isinstance(bins, (tuple, list)):
+        raise ValueError("uncertainty_bins must be a list or tuple")
+    previous_hi = None
+    for index, speed_bin in enumerate(bins):
+        if not isinstance(speed_bin, Mapping):
+            raise ValueError(f"uncertainty_bins[{index}] must be a dict")
+        expected = {"speed_min_kmh", "speed_max_kmh", *UNCERTAINTY_CHANNELS}
+        if set(speed_bin) != expected:
+            raise ValueError(
+                f"uncertainty_bins[{index}] fields must be exactly {sorted(expected)!r}"
+            )
+        lo = speed_bin["speed_min_kmh"]
+        hi = speed_bin["speed_max_kmh"]
+        if (
+            isinstance(lo, bool)
+            or isinstance(hi, bool)
+            or not _finite_ggv(lo, hi)
+            or float(lo) < 0.0
+            or float(hi) <= float(lo)
+            or float(hi) > DEFAULT_UNCERTAINTY_MAX_KMH
+        ):
+            raise ValueError(f"uncertainty_bins[{index}] has an unsafe speed range")
+        if previous_hi is not None and not math.isclose(float(lo), previous_hi):
+            raise ValueError("uncertainty_bins must be contiguous and sorted")
+        previous_hi = float(hi)
+        for kind in UNCERTAINTY_CHANNELS:
+            channel = speed_bin[kind]
+            if not isinstance(channel, Mapping):
+                raise ValueError(f"uncertainty_bins[{index}].{kind} must be a dict")
+            required = {"mean_g", "epistemic_std_g", "safe_g", "n", "source"}
+            if set(channel) != required:
+                raise ValueError(
+                    f"uncertainty_bins[{index}].{kind} fields must be exactly {sorted(required)!r}"
+                )
+            mean = channel["mean_g"]
+            std = channel["epistemic_std_g"]
+            safe = channel["safe_g"]
+            n = channel["n"]
+            source = channel["source"]
+            if (
+                any(isinstance(value, bool) for value in (mean, std, safe, n))
+                or not _finite_ggv(mean, std)
+                or not _finite_ggv(safe)
+                or float(mean) <= 0.0
+                or float(std) < 0.0
+                or float(safe) <= 0.0
+                or float(safe) > float(mean) + 1e-9
+                or not isinstance(n, int)
+                or n < 0
+                or source not in {"measured", "prior"}
+            ):
+                raise ValueError(f"uncertainty_bins[{index}].{kind} is invalid")
+    if bins and (
+        not math.isclose(float(bins[0]["speed_min_kmh"]), 0.0)
+        or not math.isclose(float(bins[-1]["speed_max_kmh"]), DEFAULT_UNCERTAINTY_MAX_KMH)
+        or len(bins) != int(DEFAULT_UNCERTAINTY_MAX_KMH / DEFAULT_UNCERTAINTY_BIN_KMH)
+        or any(
+            not math.isclose(
+                float(speed_bin["speed_max_kmh"]) - float(speed_bin["speed_min_kmh"]),
+                DEFAULT_UNCERTAINTY_BIN_KMH,
+            )
+            for speed_bin in bins
+        )
+    ):
+        raise ValueError("uncertainty_bins must cover the complete 30x10 km/h runtime grid")
 
 
 def _validate_supported_longitudinal(

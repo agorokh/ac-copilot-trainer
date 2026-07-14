@@ -17,11 +17,15 @@ from tools.ac_harness.ggv_profile import (
     curvature_profile,
     fit_steer_feedforward,
     forward_backward_profile,
+    ggv_from_lap_archives,
     ggv_from_telemetry,
     menger_curvature,
+    observe_lap_tyre_state,
     seg_lengths,
     signed_curvature_profile,
+    with_binned_uncertainty,
 )
+from tools.ac_harness.reference_lap import TRACE_FIELDS
 
 G = 9.81
 
@@ -452,6 +456,338 @@ def test_ggv_model_roundtrip_and_rejects_nan():
     ):
         with pytest.raises(ValueError):
             GGVModel.from_dict({**m.to_dict(), **bad})
+
+
+def _uncertainty_rows() -> list[dict]:
+    rows = []
+    for speed in range(50, 151, 10):
+        for _ in range(50):
+            rows.append(
+                {
+                    "speed_kmh": float(speed),
+                    "accg_lat": 1.2,
+                    "accg_lon": -1.25,
+                    "source": "brake_probe",
+                    "lap_number": 1,
+                }
+            )
+            rows.append(
+                {
+                    "speed_kmh": float(speed),
+                    "accg_lat": 1.2,
+                    "accg_lon": 0.75,
+                    "source": "accel_sweep",
+                    "lap_number": 1,
+                }
+            )
+    return rows
+
+
+def test_uncertainty_map_derates_unmeasured_bins_and_drives_runtime_qss():
+    prior = _prior()
+    rows = _uncertainty_rows()
+    point = blend_ggv_safe(ggv_from_telemetry(rows), prior)
+    model = with_binned_uncertainty(point, rows, prior)
+    assert model.uncertainty_aware
+    measured = model.uncertainty_bins[6]  # 60-70 km/h
+    unmeasured = model.uncertainty_bins[20]  # 200-210 km/h
+    assert measured["lateral"]["source"] == "measured"
+    assert unmeasured["lateral"]["source"] == "prior"
+    assert unmeasured["lateral"]["epistemic_std_g"] > measured["lateral"]["epistemic_std_g"]
+    speed = 205.0 / 3.6
+    assert model.ay_max(speed) < point.ay_max(speed)
+    assert model.ax_brake_max(speed) < point.ax_brake_max(speed)
+    # Above the finite identification map, retain the final conservative bound instead of
+    # reverting to an optimistic point curve or extrapolating a neighbouring measured mean.
+    assert model.ay_max(350.0 / 3.6) / 9.81 <= model.uncertainty_bins[-1]["lateral"]["safe_g"]
+
+
+def test_uncertainty_builder_rejects_partial_runtime_domain():
+    import pytest
+
+    prior = _prior()
+    with pytest.raises(ValueError, match="30x10"):
+        with_binned_uncertainty(prior, _uncertainty_rows(), prior, max_speed_kmh=200.0)
+    with pytest.raises(ValueError, match="30x10"):
+        with_binned_uncertainty(prior, _uncertainty_rows(), prior, bin_kmh=20.0)
+
+
+def test_small_probe_posterior_drops_one_possible_peak_spike():
+    prior = _prior()
+    rows = [
+        {
+            "speed_kmh": 65.0,
+            "accg_lat": 0.0,
+            "accg_lon": -(8.0 if index == 7 else 1.1),
+            "source": "brake_probe",
+        }
+        for index in range(8)
+    ]
+    model = with_binned_uncertainty(prior, rows, prior)
+    channel = model.uncertainty_bins[6]["brake"]
+    assert channel["source"] == "measured"
+    assert channel["n"] == 8
+    assert channel["mean_g"] < 2.0
+
+
+def test_uncertainty_map_roundtrip_is_validated_and_read_only():
+    import pytest
+
+    prior = _prior()
+    model = with_binned_uncertainty(prior, _uncertainty_rows(), prior)
+    payload = model.to_dict()
+    restored = GGVModel.from_dict(payload)
+    assert restored.uncertainty_aware
+    payload["uncertainty_bins"][0]["lateral"]["safe_g"] = 99.0
+    assert restored.uncertainty_bins[0]["lateral"]["safe_g"] != 99.0
+    with pytest.raises(TypeError):
+        restored.uncertainty_bins[0]["lateral"]["safe_g"] = 99.0
+    corrupt = model.to_dict()
+    corrupt["uncertainty_bins"][0]["lateral"]["safe_g"] = (
+        corrupt["uncertainty_bins"][0]["lateral"]["mean_g"] + 0.1
+    )
+    with pytest.raises(ValueError, match="uncertainty_bins"):
+        GGVModel.from_dict(corrupt)
+    truncated = model.to_dict()
+    truncated["uncertainty_bins"] = truncated["uncertainty_bins"][5:6]
+    with pytest.raises(ValueError, match="30x10"):
+        GGVModel.from_dict(truncated)
+    giant = model.to_dict()
+    giant["uncertainty_bins"] = [giant["uncertainty_bins"][0]]
+    giant["uncertainty_bins"][0]["speed_max_kmh"] = 300.0
+    with pytest.raises(ValueError, match="30x10"):
+        GGVModel.from_dict(giant)
+    with pytest.raises(ValueError, match="uncertainty_bins"):
+        GGVModel.from_dict({**prior.to_dict(), "uncertainty_bins": None})
+
+
+def _thermal_archive(
+    lap_uuid: str,
+    *,
+    core_c: float,
+    lateral_g: float = 1.2,
+    compound_index: int = 1,
+    setup_hash: str = "setup-a",
+    lap_n: int = 1,
+) -> dict:
+    fields = list(TRACE_FIELDS)
+    samples = []
+    for i in range(600):
+        values = dict.fromkeys(fields, 0.0)
+        speed = 50.0 + float((i // 50) % 11) * 10.0
+        braking = i % 2 == 0
+        values.update(
+            {
+                "spline": i / 600.0,
+                "speed": speed,
+                "eMs": i * 10.0,
+                "brake": 0.8 if braking else 0.0,
+                "throttle": 0.0 if braking else 1.0,
+                "accG_lat": lateral_g,
+                "accG_long": -1.25 if braking else 0.75,
+            }
+        )
+        for wheel in ("fl", "fr", "rl", "rr"):
+            values[f"tyreCoreTemp_{wheel}"] = core_c
+            values[f"tyreTempInner_{wheel}"] = core_c + 2.0
+            values[f"tyreTempMid_{wheel}"] = core_c
+            values[f"tyreTempOuter_{wheel}"] = core_c - 2.0
+            values[f"wheelsPressure_{wheel}"] = 27.0
+            values[f"dy_{wheel}"] = 1.5
+        samples.append([values[field] for field in fields])
+    return {
+        "schema_version": 1,
+        "source": "in_game",
+        "lap_uuid": lap_uuid,
+        "lap": {"lap_n": lap_n, "lap_ms": 90000, "is_valid": True},
+        "setup": {"hash": setup_hash},
+        "tyres": {"compoundIndex": compound_index, "name": "M", "optimalTempC": 90.0},
+        "trace": {"fields": fields, "samples": samples, "samples_count": len(samples)},
+    }
+
+
+def test_tyre_state_observer_tags_core_surface_pressure_and_grip():
+    state = observe_lap_tyre_state(_thermal_archive("warm", core_c=90.0))
+    assert state["tag"] == "optimal"
+    assert state["fit_eligible"] is True
+    assert state["thermal_residence_fraction"] == 1.0
+    assert state["thermal_stability_fraction"] == 1.0
+    assert state["core_temp_c"] == 90.0
+    assert state["surface_temp_c"] == 90.0
+    assert state["pressure_psi"] == 27.0
+    assert state["grip_multiplier"] == 1.0
+    assert state["compound_index"] == 1
+    assert state["setup_hash"] == "setup-a"
+    cold = observe_lap_tyre_state(_thermal_archive("cold", core_c=55.0))
+    assert cold["tag"] == "cold"
+    assert cold["fit_eligible"] is True
+    assert cold["thermal_residence_fraction"] == 0.0
+    assert cold["thermal_stability_fraction"] == 1.0
+
+
+def test_tyre_state_uses_independent_coverage_and_stability_thresholds():
+    coverage_lap = _thermal_archive("coverage", core_c=90.0)
+    fields = coverage_lap["trace"]["fields"]
+    index = {name: i for i, name in enumerate(fields)}
+    for sample in coverage_lap["trace"]["samples"][:150]:
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 0.0
+    assert observe_lap_tyre_state(coverage_lap)["fit_eligible"] is False
+    assert observe_lap_tyre_state(coverage_lap, min_coverage_fraction=0.70)["fit_eligible"] is True
+
+    stability_lap = _thermal_archive("stability", core_c=90.0)
+    for sample in stability_lap["trace"]["samples"][:150]:
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 70.0
+    assert observe_lap_tyre_state(stability_lap)["fit_eligible"] is False
+    assert (
+        observe_lap_tyre_state(stability_lap, min_stability_fraction=0.70)["fit_eligible"] is True
+    )
+
+
+def test_tyre_state_requires_coherent_per_wheel_state_and_known_compound():
+    split = _thermal_archive("split", core_c=90.0)
+    fields = split["trace"]["fields"]
+    index = {name: i for i, name in enumerate(fields)}
+    for sample in split["trace"]["samples"]:
+        for wheel in ("fl", "fr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 70.0
+        for wheel in ("rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 110.0
+    state = observe_lap_tyre_state(split)
+    assert state["core_temp_c"] == 90.0
+    assert state["thermal_residence_fraction"] == 0.0
+    assert state["wheel_spread_c"] == 40.0
+    assert state["fit_eligible"] is False
+
+    unknown = _thermal_archive("unknown", core_c=90.0)
+    unknown["tyres"].pop("compoundIndex")
+    unknown["tyres"].pop("name")
+    state = observe_lap_tyre_state(unknown)
+    assert state["fit_eligible"] is False
+    assert state["reason"] == "missing tyre compound identity"
+
+    unknown_setup = _thermal_archive("unknown-setup", core_c=90.0)
+    unknown_setup["setup"].pop("hash")
+    state = observe_lap_tyre_state(unknown_setup)
+    assert state["fit_eligible"] is False
+    assert state["reason"] == "missing setup identity"
+
+    default_setup = _thermal_archive("default-setup", core_c=90.0)
+    default_setup["setup"] = {"hash": "", "snapshot": []}
+    state = observe_lap_tyre_state(default_setup)
+    assert state["fit_eligible"] is True
+    assert state["setup_hash"].startswith("snapshot-sha256:")
+
+
+def test_lap_archive_fit_excludes_thermally_inconsistent_laps():
+    prior = _prior()
+    warm = _thermal_archive("warm", core_c=90.0, lateral_g=1.1)
+    cold = _thermal_archive("cold", core_c=55.0, lateral_g=1.7)
+    cold_fields = cold["trace"]["fields"]
+    cold_index = {name: i for i, name in enumerate(cold_fields)}
+    for row_i, sample in enumerate(cold["trace"]["samples"]):
+        offset = -20.0 if row_i < 300 else 20.0
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[cold_index[f"tyreCoreTemp_{wheel}"]] += offset
+    model, summary = ggv_from_lap_archives([warm, cold], prior)
+    assert model.uncertainty_aware
+    assert summary["selected_lap_uuids"] == ["warm"]
+    states = {state["lap_uuid"]: state for state in summary["tyre_states"]}
+    assert states["warm"]["fit_eligible"] is True
+    assert states["cold"]["fit_eligible"] is False
+    assert states["cold"]["thermal_stability_fraction"] == 0.0
+    # The excluded 1.7 g cold lap cannot lift the posterior mean.
+    assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.3
+
+
+def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
+    prior = _prior()
+    warm = _thermal_archive("warm", core_c=90.0)
+    passive, passive_summary = ggv_from_lap_archives([warm], prior)
+    assert passive_summary["probe_rows"] == 0
+    assert passive_summary["probe_rows_seen"] == 0
+    assert passive.uncertainty_bins[6]["brake"]["source"] == "prior"
+    assert passive.uncertainty_bins[6]["drive"]["source"] == "prior"
+    # The blended runtime exponent is prior-pinned, and the diagnostics hull also excludes passive
+    # longitudinal rows when this path disables passive cap identification.
+    assert passive.ellipse_n == prior.ellipse_n
+    assert passive.provenance["measured"]["hull_points"] == 0
+
+    wrong_lap_rows = [{**row, "lap_number": 2} for row in _uncertainty_rows()]
+    wrong_lap, wrong_lap_summary = ggv_from_lap_archives([warm], prior, probe_rows=wrong_lap_rows)
+    assert wrong_lap_summary["probe_rows_seen"] > 0
+    assert wrong_lap_summary["probe_rows"] == 0
+    assert wrong_lap.uncertainty_bins[6]["drive"]["source"] == "prior"
+
+    probed, probed_summary = ggv_from_lap_archives([warm], prior, probe_rows=_uncertainty_rows())
+    assert probed_summary["probe_rows"] > 0
+    assert probed_summary["probe_rows_seen"] == probed_summary["probe_rows"]
+    assert probed.uncertainty_bins[6]["brake"]["source"] == "measured"
+    assert probed.uncertainty_bins[6]["drive"]["source"] == "measured"
+
+    resumed_session = _thermal_archive("resumed", core_c=90.0, lap_n=41)
+    resumed_rows = [{**row, "lap_number": 41} for row in _uncertainty_rows()]
+    resumed, resumed_summary = ggv_from_lap_archives(
+        [resumed_session], prior, probe_rows=resumed_rows
+    )
+    assert resumed_summary["probe_rows"] > 0
+    assert resumed.uncertainty_bins[6]["brake"]["source"] == "measured"
+
+    # Live attribution uses a run nonce, not completedLaps: the graphics counter excludes invalid
+    # laps while the app's archive counter includes those boundaries.
+    nonce_rows = [
+        {**row, "lap_number": 999, "probe_run_id": "run-543"} for row in _uncertainty_rows()
+    ]
+    nonce_model, nonce_summary = ggv_from_lap_archives(
+        [resumed_session], prior, probe_rows=nonce_rows, probe_run_id="run-543"
+    )
+    assert nonce_summary["probe_attribution"] == "current-run nonce (complete thermal cohort)"
+    assert nonce_summary["probe_rows"] == len(nonce_rows)
+    assert nonce_model.uncertainty_bins[6]["brake"]["source"] == "measured"
+
+    wrong_nonce, wrong_nonce_summary = ggv_from_lap_archives(
+        [resumed_session], prior, probe_rows=nonce_rows, probe_run_id="other-run"
+    )
+    assert wrong_nonce_summary["probe_rows"] == 0
+    assert wrong_nonce.uncertainty_bins[6]["brake"]["source"] == "prior"
+
+    invalid = _thermal_archive("invalid", core_c=55.0, lap_n=40)
+    invalid["lap"]["is_valid"] = False
+    gated, gated_summary = ggv_from_lap_archives(
+        [invalid, resumed_session], prior, probe_rows=nonce_rows, probe_run_id="run-543"
+    )
+    assert gated_summary["probe_attribution"] == (
+        "current-run nonce rejected (incomplete thermal cohort)"
+    )
+    assert gated_summary["probe_rows"] == 0
+    assert gated.uncertainty_bins[6]["brake"]["source"] == "prior"
+
+
+def test_lap_archive_fit_never_mixes_compound_or_setup_cohorts():
+    prior = _prior()
+    baseline = _thermal_archive("baseline", core_c=90.0, lateral_g=1.1)
+    other_compound = _thermal_archive(
+        "other-compound", core_c=90.0, lateral_g=1.8, compound_index=2
+    )
+    other_setup = _thermal_archive("other-setup", core_c=90.0, lateral_g=1.8, setup_hash="setup-b")
+    model, summary = ggv_from_lap_archives([baseline, other_compound, other_setup], prior)
+    assert summary["selected_lap_uuids"] == ["baseline"]
+    assert summary["thermal_cohort"]["compound"] == 1
+    assert summary["thermal_cohort"]["setup_hash"] == "setup-a"
+    assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.3
+
+
+def test_lap_archive_cohort_tie_prefers_optimal_then_newest():
+    prior = _prior()
+    cold = _thermal_archive("cold-tie", core_c=55.0)
+    optimal = _thermal_archive("optimal-tie", core_c=90.0)
+    _, summary = ggv_from_lap_archives([cold, optimal], prior)
+    assert summary["selected_lap_uuids"] == ["optimal-tie"]
+
+    hot = _thermal_archive("hot-newest", core_c=115.0)
+    _, summary = ggv_from_lap_archives([hot, cold], prior)
+    assert summary["selected_lap_uuids"] == ["hot-newest"]
 
 
 def test_blend_never_raises_lateral_above_prior():

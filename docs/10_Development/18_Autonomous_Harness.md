@@ -72,7 +72,7 @@ Bundles live under `.scratch/` — **session ephemera**. A consuming task promot
 keep (reference archives, curated comparisons) to a durable location; never treat the bundle as
 long-term storage (scratch-dir disposability pitfall).
 
-## Plant-ID handshake (#529 P1 / #532 — measure the controller constants, then consume them)
+## Plant-ID handshake (#529 P1 / #532 / #543 — measure constants and uncertainty)
 
 The GGV driver's constants (`ff_sign`, `ff_c1/ff_c2`, shift points, `r_eff`) used to be
 hand-tuned per combo. The **handshake** measures them from designed in-sim probes in ≤2 laps
@@ -96,6 +96,32 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
 - `--use-plant auto` (default) applies measured shift points when an artifact exists;
   `full` also enables the measured curvature-feedforward steering; `off` forces the generic
   GT3 plant. `full` without an artifact fails fast — run the handshake first.
+- Schema v3 promotes the GGV fit only after the run's immutable lap archive supplies all four
+  tyre-core temperatures, all four hot pressures, the car-true optimum, a setup identity, at least 80%
+  channel coverage, and at least 80% per-wheel stability within ±5 °C of each wheel's median. The
+  four wheel medians must remain within 15 °C of one another. Stable `cold`, `optimal`, and `hot`
+  laps are explicit, separate cohorts; residence within ±10 °C of the optimum is recorded but is not
+  an eligibility gate. This permits conservative identification on tyres that stabilize below the
+  declared optimum without mixing thermal regimes. When CSP writes the default setup as an empty
+  snapshot/hash, the harness derives its deterministic identity from that snapshot. Only valid laps
+  in one compound/setup/tag cohort
+  and within ±5 °C / ±2 psi of that cohort are fitted. The per-lap tag and selected UUIDs remain in
+  `report.json` under `extras.handshake.ggv.tyre_states`.
+- The promoted model carries 10 km/h bins from 0–300 km/h. Each lateral/brake/drive bin records a
+  Bayesian posterior mean, epistemic standard deviation, lower confidence bound, sample count, and
+  `measured`/`prior` provenance. The QSS always consumes `min(point estimate, lower bound)`.
+  Unmeasured bins use the lower bound of the generic prior; there is no neighbour or upward
+  extrapolation, and speeds above the map retain the last conservative bound.
+- Schema-v1/v2 constants remain backward-compatible. Their missing or point-estimate-only GGV data
+  is deliberately ignored at runtime until a fresh schema-v3 handshake establishes uncertainty.
+
+The uncertainty policy follows friction-adaptive stochastic control work that propagates Bayesian
+friction uncertainty into safe control, while the thermal gate follows measured tyre evidence that
+core/surface temperature changes lateral behaviour and pressure tracks temperature:
+[friction-adaptive SNMPC](https://arxiv.org/abs/2305.03798),
+[peak-friction estimation under sparse/noisy excitation](https://arxiv.org/abs/2603.09073),
+[SAE tyre core/surface temperature study](https://saemobilus.sae.org/articles/influence-tire-core-surface-temperature-lateral-tire-characteristics-2014-01-0074), and
+[SAE tyre temperature/pressure study](https://saemobilus.sae.org/papers/estimating-tire-pressure-based-different-tire-temperature-measurement-points-2024-01-5002).
 
 ## Composing downstream tasks (don't reinvent)
 
