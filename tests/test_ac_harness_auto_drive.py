@@ -2263,6 +2263,43 @@ def test_collect_lap_archives_waits_for_expected_valid_handshake_count(tmp_path)
     assert clock["t"] >= 1.0
 
 
+def test_collect_lap_archives_valid_count_applies_combo_predicate(tmp_path):
+    import os
+
+    laps = tmp_path / "laps"
+    laps.mkdir()
+    wrong = laps / "lap_wrong.json"
+    right = laps / "lap_right.json"
+    wrong.write_text('{"car":{"id":"other"},"track":{"id":"magione"},"lap":{"is_valid":true}}')
+    right.write_text('{"car":{"id":"car"},"track":{"id":"magione"},"lap":{"is_valid":true}}')
+    os.utime(wrong, (2_000_000, 2_000_000))
+    os.utime(right, (2_000_001, 2_000_001))
+    clock = {"t": 0.0}
+    final = laps / "lap_final.json"
+
+    def _sleep(dt: float) -> None:
+        clock["t"] += dt
+        if clock["t"] >= 1.0 and not final.exists():
+            final.write_text(
+                '{"car":{"id":"car"},"track":{"id":"magione"},"lap":{"is_valid":true}}'
+            )
+            os.utime(final, (2_000_002, 2_000_002))
+
+    got = collect_lap_archives(
+        laps,
+        since_epoch=1_500_000,
+        wait_for_first=True,
+        min_valid_count=2,
+        valid_archive_predicate=lambda payload: payload.get("car", {}).get("id") == "car",
+        timeout_s=8.0,
+        poll_s=0.5,
+        _clock=lambda: clock["t"],
+        _sleep=_sleep,
+    )
+    assert got[0] == str(final)
+    assert clock["t"] >= 1.0
+
+
 def test_collect_lap_archives_rejects_invalid_required_count(tmp_path):
     with pytest.raises(ValueError, match="min_count"):
         collect_lap_archives(tmp_path, since_epoch=0, min_count=0)

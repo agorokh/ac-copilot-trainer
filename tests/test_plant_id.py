@@ -1025,6 +1025,21 @@ def test_refine_ggv_accepts_current_run_archive_when_writer_omits_layout():
     assert any("outside current-run scope" in error for error in block["load_errors"])
 
 
+def test_refine_ggv_offline_rejects_wrong_or_unidentified_setup_archive():
+    result = _result_dict()
+    result["setup"] = "requested.ini"
+    result["ggv"] = {"ok": False, "reason": "awaiting thermally tagged lap archive"}
+    wrong = {
+        "car": {"id": "test_car"},
+        "track": {"id": "test_oval"},
+        "setup": {"path": "other.ini", "hash": "abc", "snapshot": {"path": "other.ini"}},
+        "lap_uuid": "wrong-setup",
+    }
+    block = refine_ggv_from_lap_archives(result, [wrong], generic_gt3_ggv())
+    assert block["lap_archives_loaded"] == 0
+    assert any("setup mismatch" in error for error in block["load_errors"])
+
+
 def test_artifact_v1_still_loads_without_ggv(tmp_path):
     # A v1 Part-A artifact (schema_version=1, no ggv block) must still load after the v2 bump so
     # existing shift-point / steering consumption is not invalidated (back-compat).

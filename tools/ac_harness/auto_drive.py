@@ -1489,6 +1489,7 @@ def collect_lap_archives(
     wait_for_first: bool = False,
     min_count: int = 1,
     min_valid_count: int | None = None,
+    valid_archive_predicate: Callable[[dict], bool] | None = None,
     timeout_s: float = 8.0,
     poll_s: float = 0.5,
     _clock: Callable[[], float] = time.monotonic,
@@ -1536,7 +1537,8 @@ def collect_lap_archives(
 
     def _enough(paths: list[str]) -> bool:
         return len(paths) >= min_count and (
-            min_valid_count is None or _count_valid_lap_archives(paths) >= min_valid_count
+            min_valid_count is None
+            or _count_valid_lap_archives(paths, valid_archive_predicate) >= min_valid_count
         )
 
     found = _scan_lap_archives(_current(), since_epoch)
@@ -1551,7 +1553,9 @@ def collect_lap_archives(
     return found
 
 
-def _count_valid_lap_archives(paths: list[str]) -> int:
+def _count_valid_lap_archives(
+    paths: list[str], predicate: Callable[[dict], bool] | None = None
+) -> int:
     """Count finalized archive files whose canonical lap validity is explicitly true."""
     count = 0
     for item in paths:
@@ -1560,9 +1564,26 @@ def _count_valid_lap_archives(paths: list[str]) -> int:
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             continue
         lap = payload.get("lap") if isinstance(payload, dict) else None
-        if isinstance(lap, dict) and lap.get("is_valid") is True:
+        if (
+            isinstance(lap, dict)
+            and lap.get("is_valid") is True
+            and (predicate is None or predicate(payload))
+        ):
             count += 1
     return count
+
+
+def _archive_matches_combo(
+    payload: dict, *, car_id: str, track_id: str, layout: str | None
+) -> bool:
+    """Return whether a current-run archive can belong to the requested combo."""
+    car = payload.get("car") if isinstance(payload.get("car"), dict) else {}
+    track = payload.get("track") if isinstance(payload.get("track"), dict) else {}
+    if str(car.get("id") or "") != car_id or str(track.get("id") or "") != track_id:
+        return False
+    actual_layout = track.get("layout") or None
+    # The current Lua schema can omit layout; current-run scoping proves the requested launch.
+    return actual_layout is None or actual_layout == layout
 
 
 # ---------------------------------------------------------------------------
@@ -2750,6 +2771,15 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             if isinstance(value, int) and not isinstance(value, bool) and value > 0:
                 handshake_laps_used = value
     wait_for_archives = report.lap_grace_applied or handshake_laps_used > 0
+
+    def archive_matches_combo(payload: dict) -> bool:
+        return _archive_matches_combo(
+            payload,
+            car_id=config.car_id,
+            track_id=config.track_id,
+            layout=config.track_layout,
+        )
+
     lap_archives = collect_lap_archives(
         None,
         run_started_epoch,
@@ -2757,6 +2787,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
         wait_for_first=wait_for_archives,
         min_count=max(1, handshake_laps_used),
         min_valid_count=handshake_laps_used if handshake_laps_used > 0 else None,
+        valid_archive_predicate=archive_matches_combo,
         timeout_s=20.0 if handshake_laps_used > 0 else 8.0,
     )
     # Report the dir the archive was actually found in (correct even for a renamed install), so the
@@ -2798,7 +2829,7 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             sink.get("ok")
             and isinstance(sink.get("result"), dict)
             and handshake_laps_used > 0
-            and _count_valid_lap_archives(lap_archives) < handshake_laps_used
+            and _count_valid_lap_archives(lap_archives, archive_matches_combo) < handshake_laps_used
         ):
             # The bounded writer wait expired with a partial lap set. Do not promote a model from
             # lap 1 while the thermal/probe-relevant lap 2 is absent; constants may still persist.
@@ -2807,7 +2838,8 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
                 "model": None,
                 "reason": (
                     "incomplete handshake lap archive set: "
-                    f"{_count_valid_lap_archives(lap_archives)} valid < {handshake_laps_used}"
+                    f"{_count_valid_lap_archives(lap_archives, archive_matches_combo)} "
+                    f"matching valid < {handshake_laps_used}"
                 ),
             }
         elif sink.get("ok") and isinstance(sink.get("result"), dict):

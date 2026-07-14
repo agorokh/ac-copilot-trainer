@@ -942,14 +942,21 @@ def ggv_from_lap_archives(
     # A plant is per combo, which includes tyre compound and setup. A stale archive from the same
     # car/track session must not contaminate the posterior merely because its temperatures match.
     cohort_groups: dict[tuple[object, object, object], list[tuple[dict, dict]]] = {}
-    for archive, state in eligible:
+    cohort_first_index: dict[tuple[object, object, object], int] = {}
+    for archive_index, (archive, state) in enumerate(eligible):
         compound = state.get("compound_index")
         if compound is None:
             compound = state.get("compound_name")
         key = (compound, state.get("setup_hash"), state.get("tag"))
         cohort_groups.setdefault(key, []).append((archive, state))
+        cohort_first_index.setdefault(key, archive_index)
     cohort_key, eligible = sorted(
-        cohort_groups.items(), key=lambda item: (-len(item[1]), repr(item[0]))
+        cohort_groups.items(),
+        key=lambda item: (
+            -len(item[1]),
+            0 if item[0][2] == "optimal" else 1,
+            cohort_first_index[item[0]],
+        ),
     )[0]
     core_center = statistics.median(float(state["core_temp_c"]) for _, state in eligible)
     pressure_center = statistics.median(float(state["pressure_psi"]) for _, state in eligible)

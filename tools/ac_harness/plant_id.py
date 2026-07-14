@@ -1472,6 +1472,7 @@ def refine_ggv_from_lap_archives(
     expected_car = str(result.get("car_id") or "")
     expected_track = str(result.get("track_id") or "")
     expected_layout = result.get("layout") or None
+    expected_setup = _setup_stem(result.get("setup"))
     matching: list[dict] = []
     identity_notes: list[str] = []
     for payload in loaded:
@@ -1480,6 +1481,10 @@ def refine_ggv_from_lap_archives(
         actual_car = str(car.get("id") or "")
         actual_track = str(track.get("id") or "")
         actual_layout = track.get("layout") or None
+        archive_setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
+        snapshot = archive_setup.get("snapshot")
+        snapshot_path = snapshot.get("path") if isinstance(snapshot, dict) else None
+        actual_setup = _setup_stem(archive_setup.get("path") or snapshot_path)
         if (
             actual_car != expected_car
             or actual_track != expected_track
@@ -1491,6 +1496,19 @@ def refine_ggv_from_lap_archives(
                 f"got {actual_car}/{actual_track}/{actual_layout or '-'}"
             )
             continue
+        if not archives_same_run:
+            setup_proven = actual_setup == expected_setup
+            if expected_setup is None and actual_setup is None:
+                # A default setup is provable only when the archive carries no setup content. A
+                # nonempty hash/snapshot with no path is an unidentified custom setup.
+                archive_hash = archive_setup.get("hash")
+                setup_proven = not archive_hash and snapshot in (None, {}, [])
+            if not setup_proven:
+                load_errors.append(
+                    f"archive {payload.get('lap_uuid') or '?'} setup mismatch: "
+                    f"expected {expected_setup or 'default'}, got {actual_setup or 'unidentified'}"
+                )
+                continue
         if expected_layout is not None and actual_layout is None:
             if not archives_same_run:
                 load_errors.append(

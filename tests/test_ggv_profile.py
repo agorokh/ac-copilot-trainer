@@ -778,6 +778,18 @@ def test_lap_archive_fit_never_mixes_compound_or_setup_cohorts():
     assert model.uncertainty_bins[6]["lateral"]["mean_g"] < 1.3
 
 
+def test_lap_archive_cohort_tie_prefers_optimal_then_newest():
+    prior = _prior()
+    cold = _thermal_archive("cold-tie", core_c=55.0)
+    optimal = _thermal_archive("optimal-tie", core_c=90.0)
+    _, summary = ggv_from_lap_archives([cold, optimal], prior)
+    assert summary["selected_lap_uuids"] == ["optimal-tie"]
+
+    hot = _thermal_archive("hot-newest", core_c=115.0)
+    _, summary = ggv_from_lap_archives([hot, cold], prior)
+    assert summary["selected_lap_uuids"] == ["hot-newest"]
+
+
 def test_blend_never_raises_lateral_above_prior():
     prior = _prior()
     # A measured HIGHER lateral must NOT lift the plant (aero-lateral spins the GT3, #259).
