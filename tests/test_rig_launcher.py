@@ -1790,3 +1790,63 @@ def test_supervisor_handle_access_is_thread_safe(tmp_path: Path) -> None:
     # Final state is coherent (stopped after the last cycle's stop).
     assert sup._sidecar_process_status().state in {"stopped", "running", "exited"}
     sup.close()
+
+
+def test_probe_tablet_ground_truth_probe_when_endpoints_absent(tmp_path: Path) -> None:
+    """P2 (#568 review): a sidecar predating the /health `endpoints` field but still serving
+    /tablet/dash (200) must NOT be flagged stale — confirm against reality, not the field."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok"})  # 200 for the /tablet/dash ground-truth probe
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=urlopen, run=fake_run
+    )
+    # health payload with NO endpoints field (older sidecar), but dash actually serves 200
+    tablet = sup.probe_tablet({"browser_peers": 0})
+    assert tablet.state == "tunnel-up"
+    assert tablet.ok is True
+
+
+def test_probe_tablet_ground_truth_probe_catches_pre531_stale(tmp_path: Path) -> None:
+    """The original stale-EXE case: no endpoints field AND /tablet/dash 426s → stale-sidecar."""
+    import urllib.error
+
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        args = cmd[2:] if len(cmd) > 2 and cmd[1] == "-s" else cmd[1:]
+        if args and args[0] == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\nSER\tdevice\n", ""
+            )
+        if "reverse" in cmd and "--list" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        raise urllib.error.HTTPError(url, 426, "Upgrade Required", {}, None)
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=urlopen, run=fake_run
+    )
+    tablet = sup.probe_tablet({"browser_peers": 0})  # no endpoints field
+    assert tablet.state == "stale-sidecar"
+    assert tablet.ok is False

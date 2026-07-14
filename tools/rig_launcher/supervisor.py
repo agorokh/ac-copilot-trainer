@@ -488,24 +488,31 @@ class GamePointSupervisor:
         from tools.rig_launcher.tablet_tunnel import ensure_tablet_reverse
 
         result = ensure_tablet_reverse(self._run, self.config.port, env=self._environ)
-        if result.state == "tunnel-up" and isinstance(health_payload, Mapping):
+        if result.state == "tunnel-up":
             # A stale sidecar adopted from a previous launcher run may not serve /tablet/dash —
-            # the tunnel is up but the page still 426s. Reject it here (using the endpoint set
-            # /health now advertises) so the GUI doesn't read READY while the dash is broken;
-            # the operator must rebuild the launcher (#568 review). Only gate when the payload
-            # actually carries `endpoints` (older sidecars omit it → don't false-fail).
-            endpoints = health_payload.get("endpoints")
-            if isinstance(endpoints, list) and "/tablet/dash" not in endpoints:
+            # the tunnel is up but the page still 426s, so the GUI must not read READY (#568).
+            # Fast path: trust the endpoint set /health advertises when it's present. But a
+            # sidecar predating that field (the ORIGINAL stale-EXE case) omits `endpoints`
+            # entirely while ALSO 426ing the dash — so when the advertisement is absent or
+            # doesn't list the route, confirm against reality with a direct (loopback,
+            # token-aware) probe rather than assuming healthy.
+            endpoints = (
+                health_payload.get("endpoints") if isinstance(health_payload, Mapping) else None
+            )
+            advertises_dash = isinstance(endpoints, list) and "/tablet/dash" in endpoints
+            if not advertises_dash and self._probe_endpoint_status("/tablet/dash") != 200:
                 return ProbeResult(
                     "tablet",
                     False,
                     "stale-sidecar",
                     "adopted sidecar does not serve /tablet/dash — rebuild the launcher",
                 )
-            try:
-                browser_peers = int(health_payload.get("browser_peers") or 0)
-            except (TypeError, ValueError):
-                browser_peers = 0
+            browser_peers = 0
+            if isinstance(health_payload, Mapping):
+                try:
+                    browser_peers = int(health_payload.get("browser_peers") or 0)
+                except (TypeError, ValueError):
+                    browser_peers = 0
             if browser_peers > 0:
                 return ProbeResult(
                     "tablet", True, "dash-connected", f"browser_peers={browser_peers}"

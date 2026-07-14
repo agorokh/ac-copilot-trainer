@@ -299,12 +299,20 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         _poll_busy["v"] = True
         threading.Thread(target=_poll_worker, daemon=True).start()
 
+    def _launch_simhub_and_report() -> None:
+        # Explicit one-shot SimHub launch (not on the read-only ticks). The next refresh is
+        # read-only and would only show `available`, hiding a start failure — so surface a
+        # failed explicit launch directly to the operator here (#568 review).
+        res = supervisor.probe_simhub(start=True)
+        if not res.ok:
+            from tkinter import messagebox
+
+            messagebox.showwarning("SimHub", res.detail or "SimHub failed to start", parent=root)
+
     def start() -> None:
         supervisor.start_sidecar()
-        # START is the explicit "bring the rig up" action — launch SimHub once here (not on the
-        # read-only status ticks) if the operator opted into auto-start.
         if supervisor.config.start_simhub:
-            supervisor.probe_simhub(start=True)
+            _launch_simhub_and_report()
         refresh()
 
     def open_logs() -> None:
@@ -344,7 +352,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         # ticks never (re)start it. SimHub is never a blocking status row.
         supervisor.set_start_simhub(enabled)
         if enabled:
-            supervisor.probe_simhub(start=True)
+            _launch_simhub_and_report()
         refresh()
 
     view = build_launcher_view(

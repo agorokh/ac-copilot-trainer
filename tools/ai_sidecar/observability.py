@@ -25,7 +25,7 @@ import os
 import subprocess
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from tools.ai_sidecar.external_protocol import SERVER_VERSION
@@ -36,21 +36,6 @@ PROM_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 HEALTH_CONTENT_TYPE = "application/json"
 # A screen counts as "connected" if its client header was seen this recently.
 SCREEN_RECENCY_SECONDS = 120.0
-
-# HTTP routes THIS build serves through server.make_process_request. Surfaced on
-# /health so a stale packaged binary that predates an endpoint is detectable from
-# the payload alone (issue #567): an old build's compiled-in list simply omits the
-# route, and a client (or the launcher self-test) can see /tablet/dash is absent
-# instead of discovering it 426s only after the tablet fails to connect. Keep this
-# in lockstep with the path handlers in server.make_process_request.
-SERVED_ENDPOINTS: tuple[str, ...] = (
-    "/health",
-    "/metrics",
-    "/tablet/dash",
-    "/tablet/voice",
-    "/dash/fonts/",
-    "/voice/manifest.json",
-)
 
 _lock = threading.Lock()
 _build_commit_cache: str | None = None
@@ -135,6 +120,7 @@ def build_health_json(
     *,
     screen_peers: int = 0,
     browser_peers: int = 0,
+    endpoints: Sequence[str] = (),
     voice: Mapping[str, object] | None = None,
 ) -> str:
     """Instant health body: the endpoint answering IS liveness.
@@ -142,7 +128,10 @@ def build_health_json(
     Carries ``build_commit`` + the served ``endpoints`` set (issue #567) so a
     stale packaged binary is identifiable from the payload, and ``browser_peers``
     so the launcher can tell a tablet dashboard is actually connected (not just
-    that the tunnel is up).
+    that the tunnel is up). ``endpoints`` is the **caller's** canonical route
+    list — the single source of truth lives next to the handlers in
+    ``server.make_process_request`` (``server.SERVED_ENDPOINTS``), not here — so a
+    new route can't be served yet silently omitted from ``/health`` (#568 review).
     """
     payload: dict[str, object] = {
         "status": "ok",
@@ -150,7 +139,7 @@ def build_health_json(
         "screen_peers": screen_peers,
         "browser_peers": browser_peers,
         "build_commit": build_commit(),
-        "endpoints": list(SERVED_ENDPOINTS),
+        "endpoints": list(endpoints),
     }
     if voice is not None:
         payload["voice"] = dict(voice)

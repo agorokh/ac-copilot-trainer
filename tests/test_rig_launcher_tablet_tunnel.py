@@ -201,3 +201,27 @@ def test_multiple_devices_with_serial_override_selects_it() -> None:
     assert status.state == "tunnel-up"
     reverse_calls = [c for c in fake.calls if "reverse" in c]
     assert all(c[1:3] == ["-s", "SER2"] for c in reverse_calls)
+
+
+def test_unusable_device_blocks_even_with_another_authorized() -> None:
+    # An authorized emulator + the tablet unauthorized must NOT reverse onto the emulator.
+    fake = _FakeAdb(
+        {"devices": _completed("List of devices attached\nEMU\tdevice\nTABLET\tunauthorized\n")}
+    )
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={})
+    assert status.state == "unauthorized"
+    assert status.ok is False
+    assert not _reverse_asserted(fake.calls)
+
+
+def test_serial_override_bypasses_unusable_sibling() -> None:
+    fake = _FakeAdb(
+        {
+            "devices": _completed("List of devices attached\nTABLET\tdevice\nOTHER\toffline\n"),
+            "reverse --list": _completed("UsbFfs tcp:8765 tcp:8765\n"),
+        }
+    )
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB, env={"AC_COPILOT_ADB_SERIAL": "TABLET"})
+    assert status.state == "tunnel-up"
+    reverse_calls = [c for c in fake.calls if "reverse" in c]
+    assert all(c[1:3] == ["-s", "TABLET"] for c in reverse_calls)

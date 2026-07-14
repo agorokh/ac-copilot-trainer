@@ -1056,6 +1056,21 @@ def _http_response_bytes(
     return response
 
 
+# Canonical set of HTTP routes served by ``_process_request`` below — the single source of
+# truth for the sidecar's served-endpoint surface. Passed into ``build_health_json`` so
+# ``/health`` advertises exactly what THIS build serves (issue #567/#568): a stale binary's
+# compiled-in list omits a route it can't serve, and the launcher self-test / drift guard
+# key off this. Keep it in lockstep with the ``path == …`` / ``path.startswith(…)`` handlers.
+SERVED_ENDPOINTS: tuple[str, ...] = (
+    "/health",
+    "/metrics",
+    "/tablet/dash",
+    "/tablet/voice",
+    "/dash/fonts/",
+    "/voice/manifest.json",
+)
+
+
 def make_process_request(token: str | None):
     """Build the websockets ``process_request`` hook.
 
@@ -1079,6 +1094,7 @@ def make_process_request(token: str | None):
                     connected_peers,
                     screen_peers=screen_peers,
                     browser_peers=_browser_peer_count(),
+                    endpoints=SERVED_ENDPOINTS,
                     voice=public_voice_runtime_status(),
                 ),
                 observability.HEALTH_CONTENT_TYPE,

@@ -25,6 +25,7 @@ from websockets.asyncio.server import serve as ws_serve  # noqa: E402
 from tools.ai_sidecar import external_protocol as ep  # noqa: E402
 from tools.ai_sidecar import observability as obs  # noqa: E402
 from tools.ai_sidecar.server import (  # noqa: E402
+    SERVED_ENDPOINTS,
     _external_peer_classes,
     _external_peers,
     _handler,
@@ -110,7 +111,7 @@ def test_served_endpoints_are_actually_routed() -> None:
     async def _run() -> dict[str, int]:
         async with _running_sidecar() as port:
             codes: dict[str, int] = {}
-            for path in obs.SERVED_ENDPOINTS:
+            for path in SERVED_ENDPOINTS:
 
                 def _get(p: str = path) -> int:
                     try:

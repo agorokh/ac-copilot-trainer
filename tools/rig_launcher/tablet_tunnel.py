@@ -96,17 +96,25 @@ def _run_adb(
         return None
 
 
-def _device_state(devices_stdout: str) -> str:
-    """Classify ``adb devices`` → ``device`` / ``unauthorized`` / ``offline`` / ``none``.
+@dataclass(frozen=True)
+class _DeviceInventory:
+    """The full ``adb devices`` picture — the whole list, not just the first row.
 
-    A single connected+authorized device wins. ``unauthorized`` (the "Allow USB debugging?"
-    prompt not yet accepted) and ``offline`` (a present-but-unusable tablet — asleep, wedged,
-    or ``bootloader``/``recovery``; adb's own ``get-state`` documents ``offline | bootloader |
-    device``) are each reported distinctly so a plugged-in-but-broken tablet surfaces an
-    actionable reconnect/reset state instead of masquerading as ``none`` ("no tablet").
+    Classifying on the first authorized row hides a present-but-unusable tablet: with an
+    authorized emulator + the real tablet ``unauthorized``/``offline``, a first-row scan would
+    reverse onto the emulator and read ``tunnel-up`` while the tablet still can't connect
+    (#568 review). Carrying every state lets the keeper block on unusable rows.
     """
-    saw_unauthorized = False
-    saw_present_unusable = False
+
+    authorized: list[str]  # serials in `device` state
+    unauthorized: bool  # any row in `unauthorized` (USB-debug prompt not accepted)
+    offline: bool  # any row present but unusable (offline / bootloader / recovery / …)
+
+
+def _device_inventory(devices_stdout: str) -> _DeviceInventory:
+    authorized: list[str] = []
+    unauthorized = False
+    offline = False
     for line in devices_stdout.splitlines():
         line = line.strip()
         if not line or line.lower().startswith("list of devices"):
@@ -114,33 +122,14 @@ def _device_state(devices_stdout: str) -> str:
         parts = line.split()
         if len(parts) < 2:
             continue
-        state = parts[1].lower()
+        serial, state = parts[0], parts[1].lower()
         if state == "device":
-            return "device"
-        if state == "unauthorized":
-            saw_unauthorized = True
+            authorized.append(serial)
+        elif state == "unauthorized":
+            unauthorized = True
         else:
-            # offline / bootloader / recovery / sideload / host / no permissions — a device
-            # line exists but is not a usable target. Present-but-unusable, not absent.
-            saw_present_unusable = True
-    if saw_unauthorized:
-        return "unauthorized"
-    if saw_present_unusable:
-        return "offline"
-    return "none"
-
-
-def _authorized_serials(devices_stdout: str) -> list[str]:
-    """Serials of every authorized (``device``-state) transport in ``adb devices`` output."""
-    serials: list[str] = []
-    for line in devices_stdout.splitlines():
-        line = line.strip()
-        if not line or line.lower().startswith("list of devices"):
-            continue
-        parts = line.split()
-        if len(parts) >= 2 and parts[1].lower() == "device":
-            serials.append(parts[0])
-    return serials
+            offline = True  # offline / bootloader / recovery / sideload / host / no permissions
+    return _DeviceInventory(authorized=authorized, unauthorized=unauthorized, offline=offline)
 
 
 def _reverse_present(reverse_list_stdout: str, port: int) -> bool:
@@ -191,45 +180,46 @@ def ensure_tablet_reverse(
     devices = _run_adb(run, adb, ["devices"])
     if devices is None or devices.returncode != 0:
         return TunnelStatus(False, "adb-missing", "adb present but not responding to `devices`")
-    state = _device_state(devices.stdout or "")
-    if state == "none":
-        return TunnelStatus(True, "no-device", "no tablet connected over USB")
-    if state == "unauthorized":
-        return TunnelStatus(
-            False,
-            "unauthorized",
-            "tablet USB debugging not authorized — accept the prompt on the tablet",
-        )
-    if state == "offline":
-        return TunnelStatus(
-            False,
-            "device-offline",
-            "tablet present but offline/unusable — wake it or re-seat the USB cable",
-        )
-    # Pick the transport explicitly: with more than one authorized device/emulator, a bare
-    # `adb reverse` errors "more than one device/emulator" and the tunnel would read
-    # tunnel-down even though the tablet is fine. Use the sole serial, or an operator-chosen
-    # AC_COPILOT_ADB_SERIAL; refuse to guess among several (#568 review).
-    serials = _authorized_serials(devices.stdout or "")
+    inv = _device_inventory(devices.stdout or "")
     env_map = env if env is not None else os.environ
     chosen = (env_map.get("AC_COPILOT_ADB_SERIAL") or "").strip()
+    # An explicit serial that names a known-good authorized device wins outright — the operator
+    # has disambiguated, so other unusable/extra devices don't matter.
     if chosen:
-        if chosen not in serials:
+        if chosen not in inv.authorized:
             return TunnelStatus(
                 False,
                 "no-device",
-                f"AC_COPILOT_ADB_SERIAL={chosen} not among connected devices {serials}",
+                f"AC_COPILOT_ADB_SERIAL={chosen} not among authorized devices {inv.authorized}",
             )
         serial = chosen
-    elif len(serials) == 1:
-        serial = serials[0]
     else:
-        return TunnelStatus(
-            False,
-            "multiple-devices",
-            f"{len(serials)} authorized devices {serials} — "
-            "set AC_COPILOT_ADB_SERIAL to the tablet's serial",
-        )
+        # No explicit selection: a present-but-unusable device blocks BEFORE auto-selecting an
+        # authorized one, because the unusable row may BE the tablet (with an authorized
+        # emulator alongside). Reversing onto the wrong transport would read tunnel-up while
+        # the tablet can't connect (#568 review). Operator can override via AC_COPILOT_ADB_SERIAL.
+        if inv.unauthorized:
+            return TunnelStatus(
+                False,
+                "unauthorized",
+                "tablet USB debugging not authorized — accept the prompt on the tablet",
+            )
+        if inv.offline:
+            return TunnelStatus(
+                False,
+                "device-offline",
+                "tablet present but offline/unusable — wake it or re-seat the USB cable",
+            )
+        if not inv.authorized:
+            return TunnelStatus(True, "no-device", "no tablet connected over USB")
+        if len(inv.authorized) > 1:
+            return TunnelStatus(
+                False,
+                "multiple-devices",
+                f"{len(inv.authorized)} authorized devices {inv.authorized} — "
+                "set AC_COPILOT_ADB_SERIAL to the tablet's serial",
+            )
+        serial = inv.authorized[0]
     sel = ["-s", serial]
     spec = f"tcp:{port}"
     listing = _run_adb(run, adb, [*sel, "reverse", "--list"])
