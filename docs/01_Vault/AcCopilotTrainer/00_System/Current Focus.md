@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T01:28:00Z
+last_updated: 2026-07-14T07:31:18Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
@@ -30,14 +30,22 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-13, latest):** [#543](https://github.com/agorokh/ac-copilot-trainer/issues/543)
+**Delivered (2026-07-14, latest):** [#567](https://github.com/agorokh/ac-copilot-trainer/issues/567)
+**CLOSED** by PR [#568](https://github.com/agorokh/ac-copilot-trainer/pull/568)
+([`ae54ce9`](https://github.com/agorokh/ac-copilot-trainer/commit/ae54ce9)). Tablet GT dashboard
+"not connecting" root-caused live (stale packaged EXE that 426'd `/tablet/dash` + no self-healing
+`adb reverse` tunnel) and fixed: stale-build detection (`/health` `build_commit`/`endpoints`,
+`--self-test` ground-truth `GET /tablet/dash==200`), a self-healing `adb reverse` keeper
+(`tools/rig_launcher/tablet_tunnel.py`, opt-in `AC_COPILOT_MANAGE_TABLET_TUNNEL`), thread-safe
+supervisor, and read-only off-thread GUI polling. 13 review rounds (two real gating HIGHs fixed);
+`make ci-fast` green. Rig-pending: rebuild the EXE + `--self-test` + one managed launch to confirm
+plug-in-and-connect. Follow-ups #569/#570. Detail:
+[[tablet-dash-connection-hardening-2026-07-14]].
+
+**Delivered (2026-07-13):** [#543](https://github.com/agorokh/ac-copilot-trainer/issues/543)
 **CLOSED** by PR [#564](https://github.com/agorokh/ac-copilot-trainer/pull/564)
-([`3193e1b`](https://github.com/agorokh/ac-copilot-trainer/commit/3193e1b)). The automated harness
-now performs the complete uncertainty-aware plant-identification experiment with current-run nonce,
-thermal-cohort, combo/layout, and setup-snapshot provenance. Real AC proof: strict PASS, two laps,
-4,984 m, 431/431 attributed probes, 4,000 friction rows, 30 uncertainty bins, zero recoveries. A
-second harness run loaded the artifact and completed a 122.990 s lap at 199.8 km/h. No
-computer-control driving was used. Detail: [[issue-543-uncertainty-aware-plant-id-2026-07-13]].
+([`3193e1b`](https://github.com/agorokh/ac-copilot-trainer/commit/3193e1b)) — uncertainty-aware
+plant identification (strict AC PASS). Detail: [[issue-543-uncertainty-aware-plant-id-2026-07-13]].
 
 **Delivered (2026-07-13, latest):** [#555](https://github.com/agorokh/ac-copilot-trainer/issues/555)
 **CLOSED** by PR [#563](https://github.com/agorokh/ac-copilot-trainer/pull/563)
