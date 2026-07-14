@@ -278,6 +278,91 @@ def test_ensure_builds_then_caches_then_invalidates(tmp_path, lane):
     assert src4 == "built"
 
 
+def test_pinch_points_counted_and_clearance_never_reduced(tmp_path):
+    pts = _circle_line()
+    path = tmp_path / "fast_lane.ai"
+    # Left side inside the default margin on a stretch of points: a wall-hugging stock line.
+    sl = [0.5 if i < 20 else 6.0 for i in range(_N)]
+    _write_fast_lane(path, pts, sl, [6.0] * _N)
+    art = build_alien_line_artifact(
+        pts,
+        path,
+        generic_gt3_ggv(),
+        _plant_artifact(),
+        car_id="c",
+        track_id="t",
+        margin_m=1.2,
+        iters=200,
+    )
+    assert art["corridor"]["pinch_points"] == 20
+    # At pinched points the line may only hold or improve the stock clearance toward that edge:
+    # the signed offset toward the pinched (left) side must be <= 0 within tolerance.
+    base = [(p[0], p[2]) for p in pts]
+    from tools.ac_harness.ggv_profile import _unit_normals
+
+    normals = _unit_normals(base)
+    for i in range(20):
+        dx = art["line"][i][0] - base[i][0]
+        dz = art["line"][i][2] - base[i][1]
+        alpha = dx * normals[i][0] + dz * normals[i][1]
+        assert alpha <= 1e-6  # never toward the pinched left edge
+
+
+def test_cache_content_revalidated_on_hit(tmp_path, lane):
+    path, _pts = lane
+    plant = generic_gt3_ggv()
+    plant_art = _plant_artifact()
+    kw = dict(car_id="car_a", track_id="trk", iters=200)
+    _art, src = ensure_alien_line_artifact(tmp_path, path, plant, plant_art, **kw)
+    assert src == "built"
+
+    # Tamper the cached profile: inflate every v_target 2x. Identity/provenance hashes still
+    # match (they gate the INPUTS, not the artifact content) — revalidation must catch it.
+    cache_path = alien_line_path(tmp_path, "car_a", "trk")
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["v_target_mps"] = [v * 2.0 for v in payload["v_target_mps"]]
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+    _art2, src2 = ensure_alien_line_artifact(tmp_path, path, plant, plant_art, **kw)
+    assert src2 == "built"  # rejected + rebuilt, never driven
+
+    # Tamper the geometry: shove one point far off the corridor.
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["line"][10][0] += 25.0
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+    _art3, src3 = ensure_alien_line_artifact(tmp_path, path, plant, plant_art, **kw)
+    assert src3 == "built"
+
+    # Untampered cache still hits.
+    _art4, src4 = ensure_alien_line_artifact(tmp_path, path, plant, plant_art, **kw)
+    assert src4 == "cache"
+
+
+def test_verify_alien_line_artifact_reasons(lane):
+    from tools.ac_harness.alien_line import verify_alien_line_artifact
+
+    path, pts = lane
+    plant = generic_gt3_ggv()
+    art = build_alien_line_artifact(
+        pts, path, plant, _plant_artifact(), car_id="c", track_id="t", iters=200
+    )
+    sl = [6.0] * _N
+    sr = [6.0] * _N
+    ok_payload = {"line": art["line"], "v_target_mps": art["v_target_mps"]}
+    assert verify_alien_line_artifact(ok_payload, pts, sl, sr, plant, margin_m=1.2) is None
+
+    short = {"line": art["line"][:-1], "v_target_mps": art["v_target_mps"][:-1]}
+    assert "points" in verify_alien_line_artifact(short, pts, sl, sr, plant, margin_m=1.2)
+
+    bad_geo = {"line": list(art["line"]), "v_target_mps": art["v_target_mps"]}
+    bad_geo["line"][5] = (art["line"][5][0] + 25.0, art["line"][5][1], art["line"][5][2] + 25.0)
+    assert "not a lateral offset" in verify_alien_line_artifact(
+        bad_geo, pts, sl, sr, plant, margin_m=1.2
+    )
+
+    hot = {"line": art["line"], "v_target_mps": [v * 2.0 for v in art["v_target_mps"]]}
+    assert "envelope" in verify_alien_line_artifact(hot, pts, sl, sr, plant, margin_m=1.2)
+
+
 def test_envelope_verification_rejects_overspeed(lane):
     from tools.ac_harness.alien_line import _verify_lateral_envelope
 

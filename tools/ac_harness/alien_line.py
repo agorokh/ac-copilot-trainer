@@ -29,6 +29,7 @@ from pathlib import Path
 
 from tools.ac_harness.ggv_profile import (
     GGVModel,
+    _unit_normals,
     curvature_profile,
     ggv_speed_profile_from_model,
     load_track_widths,
@@ -169,6 +170,24 @@ def build_alien_line_artifact(
     opt_plane, alpha = min_curvature_line(
         plane, side_left, side_right, margin_m=margin_m, iters=iters
     )
+    # Defensive post-QP bound check: the optimizer must never have moved a point closer to an
+    # edge than min(stock clearance, margin). At a pinch point (a side already inside the margin
+    # on the STOCK line — e.g. a wall-hugging chicane) the bound toward that edge collapses to 0,
+    # so the line can only hold or IMPROVE the stock clearance there — AC's own drivable
+    # fast_lane is the ground-truth floor. Pinch points are counted in the corridor stats rather
+    # than rejected (rejecting would brick every track whose stock line touches a wall once)
+    # (#572 Codex review).
+    pinch_points = 0
+    for i, a in enumerate(alpha):
+        lo = min(0.0, -(side_right[i] - margin_m))
+        hi = max(0.0, side_left[i] - margin_m)
+        if not lo - 1e-9 <= a <= hi + 1e-9:
+            raise ValueError(
+                f"optimizer offset out of corridor bounds at point {i}: "
+                f"alpha={a:.3f} not in [{lo:.3f}, {hi:.3f}]"
+            )
+        if side_left[i] < margin_m or side_right[i] < margin_m:
+            pinch_points += 1
     optimized = [(opt_plane[i][0], fast_line[i][1], opt_plane[i][1]) for i in range(len(fast_line))]
     v_target, summ = ggv_speed_profile_from_model(optimized, plant, v_top_kmh=v_top_kmh)
     worst_ay = _verify_lateral_envelope(opt_plane, v_target, plant)
@@ -192,6 +211,10 @@ def build_alien_line_artifact(
                 min(sl + sr for sl, sr in zip(side_left, side_right, strict=True)), 2
             ),
             "max_ay_utilisation": round(worst_ay, 4),
+            # Points where the STOCK line itself sits inside the margin of an edge: the bound
+            # toward that edge is 0, so the optimized line holds or improves stock clearance —
+            # never worse than AC's own drivable line.
+            "pinch_points": pinch_points,
         },
     }
 
@@ -284,6 +307,53 @@ def load_alien_line_artifact(
     return payload
 
 
+def verify_alien_line_artifact(
+    payload: dict,
+    fast_line: list[tuple[float, float, float]],
+    side_left: list[float],
+    side_right: list[float],
+    plant: GGVModel,
+    *,
+    margin_m: float,
+) -> str | None:
+    """Re-verify a cached artifact against the CURRENT corridor and plant; reason or ``None``.
+
+    Matching identity/provenance hashes prove the inputs did not change — not that the cached
+    geometry/profile is sound (an edited or corrupted durable JSON, or one written by a buggy
+    earlier build, keeps its hashes). Re-run the same safety checks the build path applies before
+    the cache is ever driven (#572 Codex review): every cached point must be a purely-lateral,
+    in-bounds offset of the current stock line, and the cached profile must respect the current
+    plant's lateral envelope.
+    """
+    line = payload.get("line") or []
+    v_target = payload.get("v_target_mps") or []
+    if len(line) != len(fast_line):
+        return f"cached line has {len(line)} points but fast_lane has {len(fast_line)}"
+    base = [(p[0], p[2]) for p in fast_line]
+    normals = _unit_normals(base)
+    cached_plane = [(p[0], p[2]) for p in line]
+    for i, (bx, bz) in enumerate(base):
+        dx = cached_plane[i][0] - bx
+        dz = cached_plane[i][1] - bz
+        nx, nz = normals[i]
+        alpha = dx * nx + dz * nz
+        residual = math.hypot(dx - alpha * nx, dz - alpha * nz)
+        if residual > 0.5:
+            return f"cached point {i} is not a lateral offset of the stock line ({residual:.2f} m)"
+        lo = min(0.0, -(side_right[i] - margin_m))
+        hi = max(0.0, side_left[i] - margin_m)
+        if not lo - 1e-6 <= alpha <= hi + 1e-6:
+            return (
+                f"cached point {i} outside the corridor bounds: alpha={alpha:.3f} "
+                f"not in [{lo:.3f}, {hi:.3f}]"
+            )
+    try:
+        _verify_lateral_envelope(cached_plane, v_target, plant)
+    except ValueError as exc:
+        return f"cached profile fails the current plant envelope: {exc}"
+    return None
+
+
 def ensure_alien_line_artifact(
     user_dir: Path,
     fast_lane_path: str | Path,
@@ -304,9 +374,12 @@ def ensure_alien_line_artifact(
 
     ``source`` is ``"cache"`` or ``"built"`` so callers can log the provenance of what they drive.
     """
+    from tools.ac_harness.ai_line import load_ai_line
+
     prov = plant_provenance(plant_artifact)
     lane_sha = fast_lane_sha12(fast_lane_path)
     params = {"margin_m": margin_m, "iters": iters, "v_top_kmh": v_top_kmh}
+    fast_line = load_ai_line(fast_lane_path)
     if not rebuild:
         cached = load_alien_line_artifact(
             user_dir,
@@ -320,10 +393,17 @@ def ensure_alien_line_artifact(
             params=params,
         )
         if cached is not None:
-            return cached, "cache"
-    from tools.ac_harness.ai_line import load_ai_line
-
-    fast_line = load_ai_line(fast_lane_path)
+            # Hashes prove the inputs match; re-verify the cached CONTENT against the current
+            # corridor + plant before it is ever driven (an edited/corrupted durable JSON keeps
+            # its hashes). A failed verification falls through to an honest rebuild.
+            side_left, side_right = load_track_widths(fast_lane_path)
+            validate_corridor(side_left, side_right, len(fast_line))
+            reason = verify_alien_line_artifact(
+                cached, fast_line, side_left, side_right, plant, margin_m=margin_m
+            )
+            if reason is None:
+                return cached, "cache"
+            logger.warning("alien line cache failed revalidation (%s); rebuilding", reason)
     artifact = build_alien_line_artifact(
         fast_line,
         fast_lane_path,

@@ -2750,6 +2750,54 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
     return AutoDriveConfig(**kwargs)
 
 
+def _alien_prerequisites_error(config: AutoDriveConfig, user_dir: Path) -> str | None:
+    """Read-only alien readiness check for ``--preflight-only``; message or ``None`` when ready.
+
+    Validates what the post-lock resolution will require — a loadable plant artifact with the
+    uncertainty-aware friction fit + measured steering constants, and a resolvable ``fast_lane.ai``
+    — WITHOUT building or persisting the line cache (preflight must never write state).
+    """
+    from tools.ac_harness.plant_id import (
+        load_plant_artifact,
+        plant_artifact_path,
+        plant_driver_kwargs,
+        plant_ggv_model,
+    )
+
+    setup_key = Path(config.setup).stem if config.setup else None
+    artifact = load_plant_artifact(
+        user_dir,
+        config.car_id,
+        config.track_id,
+        setup_key,
+        config.setup_ini,
+        layout=config.track_layout,
+    )
+    if artifact is None:
+        expected = plant_artifact_path(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            config.setup_ini,
+            layout=config.track_layout,
+        )
+        return f"no plant artifact for this combo ({expected}); run --driver handshake first"
+    if plant_ggv_model(artifact) is None:
+        return (
+            "plant artifact has no uncertainty-aware friction fit; re-run --driver handshake (#543)"
+        )
+    try:
+        plant_driver_kwargs(artifact, steer=True)
+    except ValueError as exc:
+        return str(exc)
+    try:
+        resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
+    except FileNotFoundError as exc:
+        return str(exc)
+    return None
+
+
 def _resolve_alien_assets(
     config: AutoDriveConfig, user_dir: Path, *, rebuild: bool
 ) -> tuple[str | None, str | None, dict | None]:
@@ -2953,6 +3001,15 @@ def _main_impl(
         return 2
     print("auto-drive: preflight ok")
     if args.preflight_only:
+        # #572: an alien readiness gate must include the alien prerequisites, or preflight-only
+        # reports a false green for a drive that would exit at resolution (Codex review). Read-only
+        # — validates the plant artifact + fast_lane without building or writing the line cache.
+        if config.driver == "alien":
+            alien_issue = _alien_prerequisites_error(config, user_dir)
+            if alien_issue is not None:
+                print(f"auto-drive: ALIEN PREFLIGHT FAILED — {alien_issue}")
+                return 2
+            print("auto-drive: alien prerequisites ok (plant artifact + fast_lane)")
         return 0
 
     if config.setup:
