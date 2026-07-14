@@ -97,13 +97,16 @@ def _run_adb(
 
 
 def _device_state(devices_stdout: str) -> str:
-    """Classify ``adb devices`` output → ``"device"`` / ``"unauthorized"`` / ``"none"``.
+    """Classify ``adb devices`` → ``device`` / ``unauthorized`` / ``offline`` / ``none``.
 
     A single connected+authorized device wins. ``unauthorized`` (the "Allow USB debugging?"
-    prompt not yet accepted) is reported distinctly so the operator gets an actionable state
-    rather than a generic failure.
+    prompt not yet accepted) and ``offline`` (a present-but-unusable tablet — asleep, wedged,
+    or ``bootloader``/``recovery``; adb's own ``get-state`` documents ``offline | bootloader |
+    device``) are each reported distinctly so a plugged-in-but-broken tablet surfaces an
+    actionable reconnect/reset state instead of masquerading as ``none`` ("no tablet").
     """
     saw_unauthorized = False
+    saw_present_unusable = False
     for line in devices_stdout.splitlines():
         line = line.strip()
         if not line or line.lower().startswith("list of devices"):
@@ -116,7 +119,15 @@ def _device_state(devices_stdout: str) -> str:
             return "device"
         if state == "unauthorized":
             saw_unauthorized = True
-    return "unauthorized" if saw_unauthorized else "none"
+        else:
+            # offline / bootloader / recovery / sideload / host / no permissions — a device
+            # line exists but is not a usable target. Present-but-unusable, not absent.
+            saw_present_unusable = True
+    if saw_unauthorized:
+        return "unauthorized"
+    if saw_present_unusable:
+        return "offline"
+    return "none"
 
 
 def _reverse_present(reverse_list_stdout: str, port: int) -> bool:
@@ -171,6 +182,12 @@ def ensure_tablet_reverse(
             False,
             "unauthorized",
             "tablet USB debugging not authorized — accept the prompt on the tablet",
+        )
+    if state == "offline":
+        return TunnelStatus(
+            False,
+            "device-offline",
+            "tablet present but offline/unusable — wake it or re-seat the USB cable",
         )
     spec = f"tcp:{port}"
     listing = _run_adb(run, adb, ["reverse", "--list"])

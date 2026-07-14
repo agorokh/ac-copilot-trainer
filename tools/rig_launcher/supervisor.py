@@ -507,8 +507,15 @@ class GamePointSupervisor:
 
     def _probe_endpoint_status(self, path: str) -> int | None:
         url = f"http://{_url_host(self._health_host())}:{self.config.port}{path}"
+        # server.make_process_request token-gates /tablet/* for NON-loopback peers, so on a
+        # concrete-IP external bind + token the bare probe would 401 and misreport `stale_build`.
+        # Carry the token when configured (the sidecar ignores it for loopback peers). The header
+        # name mirrors external_protocol.AUTH_HEADER; kept literal so the launcher stays decoupled.
+        target: str | urllib.request.Request = url
+        if self.config.token:
+            target = urllib.request.Request(url, headers={"X-AC-Copilot-Token": self.config.token})
         try:
-            with self._urlopen(url, timeout=2.0) as response:
+            with self._urlopen(target, timeout=2.0) as response:
                 code = getattr(response, "status", None)
                 if code is None:
                     code = getattr(response, "code", 200)

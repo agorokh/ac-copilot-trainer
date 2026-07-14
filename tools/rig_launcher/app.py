@@ -22,6 +22,10 @@ from tools.rig_launcher.supervisor import (
     render_status_lines,
 )
 
+#: GUI auto-refresh cadence (ms). Drives the periodic re-poll so the tablet tunnel keeper
+#: and every status probe self-heal while the launcher window is open (issue #567).
+_GUI_POLL_INTERVAL_MS = 5000
+
 
 def _open_path(path: Path) -> None:
     if os.name == "nt":
@@ -98,6 +102,7 @@ def config_from_args(args: argparse.Namespace) -> GamePointConfig:
         setup_store=config.setup_store,
         simhub_exe=config.simhub_exe,
         start_simhub=args.start_simhub or config.start_simhub,
+        manage_tablet_tunnel=config.manage_tablet_tunnel,
         paths=paths,
     )
 
@@ -315,7 +320,22 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
         simhub_autostart=supervisor.config.start_simhub,
         on_toggle_simhub=toggle_simhub,
     )
+
+    def poll_tick() -> None:
+        # Continuous re-poll so the tablet tunnel keeper (and every other probe) self-heals
+        # while the launcher is open — an unplug / tablet sleep / `adb kill-server` after
+        # launch is otherwise only noticed on a manual REFRESH (issue #567 review). Guard on
+        # window existence so a pending callback after close is a no-op, not a TclError.
+        try:
+            if not root.winfo_exists():
+                return
+            refresh()
+            root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
+        except tk.TclError:
+            return
+
     refresh()
+    root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
     root.mainloop()
     status = last_status["status"]
     return 0 if status is None or status.ok else 1

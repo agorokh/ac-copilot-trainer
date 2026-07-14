@@ -29,6 +29,7 @@ _ROWS: tuple[tuple[str, str], ...] = (
     ("Screen", "screen"),
     ("Voice", "voice"),
     ("SimHub", "simhub"),
+    ("Tablet", "tablet"),
 )
 
 #: (label, action key, is-primary) for each footer button. Labels are uppercase

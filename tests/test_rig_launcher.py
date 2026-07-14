@@ -1543,3 +1543,62 @@ def test_self_test_endpoints_passes_when_routes_serve(tmp_path: Path) -> None:
     results = sup.self_test_endpoints(wait_timeout=1.0)
     assert results
     assert all(row.state == "serving" and row.ok for row in results)
+
+
+def test_config_from_args_propagates_manage_tablet_tunnel(tmp_path: Path, monkeypatch) -> None:
+    """P1 regression (#568 review): the CLI/packaged config must carry the flag through, or
+    the keeper never runs even with AC_COPILOT_MANAGE_TABLET_TUNNEL=1."""
+    from tools.rig_launcher.app import build_arg_parser, config_from_args
+
+    monkeypatch.setenv("AC_COPILOT_MANAGE_TABLET_TUNNEL", "1")
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    args = build_arg_parser().parse_args(["--log-dir", str(tmp_path)])
+    cfg = config_from_args(args)
+    assert cfg.manage_tablet_tunnel is True
+
+
+def test_self_test_sends_token_header_for_authenticated_bind(tmp_path: Path) -> None:
+    """P2 (#568 review): a concrete non-loopback bind + token gates /tablet/* — the probe must
+    carry X-AC-Copilot-Token or it 401s and misreports stale_build."""
+    import urllib.request
+
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    def urlopen(target: object, timeout: float) -> _Response:
+        del timeout
+        if isinstance(target, urllib.request.Request):
+            seen.append((target.full_url, dict(target.headers)))
+        else:
+            seen.append((str(target), {}))
+        return _Response({"status": "ok"})
+
+    cfg = GamePointConfig(
+        external_bind="192.168.1.50", token="secret", paths=LauncherPaths(tmp_path)
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen)
+    results = sup.self_test_endpoints(wait_timeout=1.0)
+    assert all(row.state == "serving" for row in results)
+    dash = [headers for (url, headers) in seen if url.endswith("/tablet/dash")]
+    assert dash
+    assert any(any(key.lower() == "x-ac-copilot-token" for key in headers) for headers in dash)
+
+
+def test_summary_caption_surfaces_failing_tablet(tmp_path: Path) -> None:
+    """P2 (#568 review): a managed-tablet failure must reach the GUI summary caption, not just
+    flip overall red with a generic message."""
+    from tools.rig_launcher import theme
+
+    status = GamePointStatus(
+        generated_at=0.0,
+        sidecar=ProbeResult("sidecar", True, "healthy"),
+        screen=ProbeResult("screen", True, "connected"),
+        voice=ProbeResult("voice", True, "skipped"),
+        simhub=ProbeResult("simhub", True, "absent"),
+        tablet=ProbeResult("tablet", False, "unauthorized", "accept the prompt on the tablet"),
+        log_path="x",
+        status_path="y",
+    )
+    assert status.ok is False
+    text, _tone, caption = theme.summary_for(status)
+    assert text == "PRESS START"
+    assert "accept the prompt" in caption

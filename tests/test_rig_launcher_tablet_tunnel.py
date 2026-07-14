@@ -81,6 +81,14 @@ def test_unauthorized_device_fails_loud() -> None:
     assert status.ok is False
 
 
+def test_offline_device_fails_loud() -> None:
+    # A plugged-in but asleep/wedged tablet reports `offline` — must NOT read as `no-device`.
+    fake = _FakeAdb({"devices": _completed("List of devices attached\n1c00abcd\toffline\n")})
+    status = ensure_tablet_reverse(fake, 8765, adb=_ADB)
+    assert status.state == "device-offline"
+    assert status.ok is False
+
+
 def test_existing_tunnel_is_reported_without_reasserting() -> None:
     fake = _FakeAdb(
         {
