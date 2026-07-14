@@ -123,6 +123,37 @@ core/surface temperature changes lateral behaviour and pressure tracks temperatu
 [SAE tyre core/surface temperature study](https://saemobilus.sae.org/articles/influence-tire-core-surface-temperature-lateral-tire-characteristics-2014-01-0074), and
 [SAE tyre temperature/pressure study](https://saemobilus.sae.org/papers/estimating-tire-pressure-based-different-tire-temperature-measurement-points-2024-01-5002).
 
+## One-button alien pipeline (#529 P2 / #572 — plant-ID → optimized line → QSS → drive)
+
+`auto_alien` composes the handshake and the drive into one command: it ensures the combo's
+identified plant (running the handshake+ID session first when the artifact is missing, forced,
+or lacks the uncertainty-aware friction fit), then drives the **min-curvature optimized line**
+with the QSS min-time profile computed against that plant:
+
+```bash
+# Nothing pre-existing needed — identifies the plant if absent, then drives the optimized line:
+python -m tools.ac_harness.auto_alien --car ks_porsche_911_gt3_r_2016 --track magione
+
+# The drive stage alone (requires the plant artifact; builds/reuses the line cache):
+python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track magione \
+    --driver alien --wait-lap
+```
+
+- The optimized line + profile persist as a per-combo artifact under
+  `<AC user data>/alien_line/<car>__<track>[__layout-…][__setup-…].json` — the **same identity
+  stem as the plant artifact** (car+track+layout+setup content hash), plus two provenance gates:
+  the exact plant-fit content hash and the `fast_lane.ai` content hash. A re-identified plant, a
+  re-baked AI line, or changed build params rejects the cache and rebuilds; a stale line is never
+  silently driven.
+- The corridor (`sideLeft`/`sideRight` from the AiPointExtra block) is validated before the QP —
+  a drifted binary layout fails loudly instead of producing an off-track "optimized" line — and
+  the built profile is re-verified against the plant's lateral envelope.
+- Stage failures abort the pipeline honestly (`alien_report.json` names the failed stage and its
+  evidence bundle). There is no fallback to the stock line or the generic plant anywhere in the
+  alien path; `--driver alien` without a usable plant exits with instructions, it never degrades.
+- `--force-identify` re-runs identification; `--rebuild-line` (or `--alien-rebuild-line` on
+  `auto_drive`) rebuilds the line cache from the current plant.
+
 ## Composing downstream tasks (don't reinvent)
 
 - **Setup A/B**: run twice with different `--setup` names; compare the runs' lap archives with

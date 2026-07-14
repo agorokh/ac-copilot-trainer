@@ -147,6 +147,13 @@ class AutoDriveConfig:
     # ggv path INSTEAD of generic_gt3_ggv() when the loaded artifact carries a fitted ggv block.
     # None => generic plant.
     plant_ggv: GGVModel | None = None
+    # #572 alien pipeline: the combo's optimized line + QSS profile resolved by the CLI from the
+    # alien-line artifact (built/cached against the identified plant). ``driver="alien"`` REQUIRES
+    # both — there is no silent fallback to the stock fast_lane geometry (a degrade the alien
+    # pipeline exists to end). Points are (x, y, z) in the fast_lane frame; v_target is m/s per
+    # point (unscaled physics optimum; ggv_scale applies at driver construction).
+    alien_line: list | None = None
+    alien_v_target: list | None = None
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
     racing_max_speed_kmh: float = (
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
@@ -1963,6 +1970,31 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
         # #532: consume the combo's machine-measured plant constants when the CLI resolved an
         # artifact (shift points always; measured curvature-FF steering with --use-plant full).
         return RacingDriver.from_ggv_profile(fast_line, v_target, **(config.plant_kwargs or {}))
+    if config.driver == "alien":
+        from tools.ac_harness.racing_driver import RacingDriver
+
+        # #572: drive the combo's optimized line + identified-plant QSS profile. Both come from
+        # the alien-line artifact the CLI resolved (built/cached with identity + provenance
+        # gates); missing state here is a wiring bug, not a degrade point — fail loud.
+        if not config.alien_line or not config.alien_v_target:
+            raise ValueError(
+                "alien driver requires the optimized line + v_target from the alien-line "
+                "artifact (CLI resolution missing)"
+            )
+        if not config.plant_kwargs:
+            raise ValueError(
+                "alien driver requires the combo's measured plant constants "
+                "(ff_sign/ff_c1/ff_c2 + shift points) — run --driver handshake first"
+            )
+        # The stored v_target is envelope-verified at build time; scaling above 1 would push
+        # corner speeds past the verified plant envelope AFTER that check (#572 Codex review).
+        if not 0.0 < config.ggv_scale <= 1.0:
+            raise ValueError(
+                f"alien driver requires 0 < ggv_scale <= 1 (got {config.ggv_scale}); the scale "
+                "is a safety margin under the envelope-verified profile"
+            )
+        v_target = [v * config.ggv_scale for v in config.alien_v_target]
+        return RacingDriver.from_ggv_profile(config.alien_line, v_target, **config.plant_kwargs)
     if config.driver == "handshake":
         from tools.ac_harness.plant_id import HandshakeController
 
@@ -1996,7 +2028,8 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             prior_ggv_name="generic_gt3_ggv",
         )
     raise ValueError(
-        f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
+        f"unknown driver {config.driver!r} "
+        "(expected 'ggv', 'racing', 'cruise', 'handshake', or 'alien')"
     )
 
 
@@ -2139,6 +2172,11 @@ def rig_drive(  # pragma: no cover - rig-only
 
     fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
     line = load_ai_line(fast_path)
+    # #572 alien: spawn/teleport/recovery target the OPTIMIZED geometry the controller tracks,
+    # not the stock centre line — a recovery teleport onto the stock line would drop the car up
+    # to the full corridor width off its own racing line.
+    if config.driver == "alien" and config.alien_line:
+        line = config.alien_line
     speed_profile = None
     if config.driver in ("racing", "handshake"):
         from tools.ac_harness.racing_driver import load_speed_profile
@@ -2577,11 +2615,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
     p.add_argument(
         "--driver",
-        choices=("ggv", "racing", "cruise", "handshake"),
+        choices=("ggv", "racing", "cruise", "handshake", "alien"),
         default="racing",
         help="ggv = flat-out min-time (top gears, 200+); racing = AI-line pace (default); "
         "cruise = slow 1st-gear lane-keeper; handshake = #532 plant-ID probes (measures "
-        "ff_sign/steer-FF/shift points/r_eff in <=2 laps, persists a per-combo plant artifact)",
+        "ff_sign/steer-FF/shift points/r_eff in <=2 laps, persists a per-combo plant artifact); "
+        "alien = #572 optimized min-curvature line + identified-plant QSS profile (requires the "
+        "combo's plant artifact incl. uncertainty-aware friction fit; builds/caches the line "
+        "artifact under Documents/Assetto Corsa/alien_line/)",
+    )
+    p.add_argument(
+        "--alien-rebuild-line",
+        action="store_true",
+        help="alien: ignore the cached line artifact and rebuild it from the current plant",
     )
     p.add_argument(
         "--use-plant",
@@ -2704,6 +2750,164 @@ def _config_from_args(args: argparse.Namespace) -> AutoDriveConfig:
     return AutoDriveConfig(**kwargs)
 
 
+def _alien_prerequisites_error(config: AutoDriveConfig, user_dir: Path) -> str | None:
+    """Read-only alien readiness check for ``--preflight-only``; message or ``None`` when ready.
+
+    Validates what the post-lock resolution will require — a plant artifact passing the shared
+    readiness gate (:func:`~tools.ac_harness.plant_id.plant_ready_for_full_consumption`), a
+    resolvable ``fast_lane.ai``, and a sane parsed corridor — WITHOUT building or persisting the
+    line cache (preflight must never write state).
+    """
+    from tools.ac_harness.alien_line import validate_corridor
+    from tools.ac_harness.ggv_profile import load_track_widths
+    from tools.ac_harness.plant_id import (
+        load_plant_artifact,
+        plant_artifact_path,
+        plant_ready_for_full_consumption,
+    )
+
+    setup_key = Path(config.setup).stem if config.setup else None
+    artifact = load_plant_artifact(
+        user_dir,
+        config.car_id,
+        config.track_id,
+        setup_key,
+        config.setup_ini,
+        layout=config.track_layout,
+    )
+    reason = plant_ready_for_full_consumption(artifact, require_friction_fit=True)
+    if reason is not None:
+        if artifact is None:
+            expected = plant_artifact_path(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                setup_key,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+            reason = f"{reason} ({expected}); run --driver handshake first"
+        return reason
+    try:
+        from tools.ac_harness.ai_line import load_ai_line
+
+        fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
+        line = load_ai_line(fast_path)
+        side_left, side_right = load_track_widths(fast_path)
+        validate_corridor(side_left, side_right, len(line), source=str(fast_path))
+    except (FileNotFoundError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
+def _resolve_alien_assets(
+    config: AutoDriveConfig, user_dir: Path, *, rebuild: bool
+) -> tuple[str | None, str | None, dict | None]:
+    """Resolve the alien drive's plant + optimized-line artifacts from current on-disk state.
+
+    Returns ``(error, plant_artifact_used, alien_line_used)`` — ``error`` is a printable message
+    (caller exits 2) or ``None`` on success, in which case ``config.plant_kwargs`` /
+    ``config.plant_ggv`` / ``config.alien_line`` / ``config.alien_v_target`` are populated.
+
+    MUST be called **after the machine-global rig lock is held** (#572 Codex review): a peer
+    worktree waiting on the lock may re-identify the same combo; resolving before the lock could
+    drive an in-memory plant/line that a newer on-disk plant artifact has already superseded,
+    bypassing the cache/provenance gates.
+    """
+    from tools.ac_harness.alien_line import alien_line_path, ensure_alien_line_artifact
+    from tools.ac_harness.plant_id import (
+        load_plant_artifact,
+        plant_artifact_path,
+        plant_driver_kwargs,
+        plant_ggv_model,
+        plant_ready_for_full_consumption,
+    )
+
+    setup_key = Path(config.setup).stem if config.setup else None
+    artifact = load_plant_artifact(
+        user_dir,
+        config.car_id,
+        config.track_id,
+        setup_key,
+        config.setup_ini,
+        layout=config.track_layout,
+    )
+    # Alien implies the full measured plant: the #543 uncertainty-aware friction fit + the
+    # measured curvature-FF steering and shift points. One shared readiness gate — the same one
+    # auto_alien.needs_identification and the alien preflight consult (#572 daemon review).
+    reason = plant_ready_for_full_consumption(artifact, require_friction_fit=True)
+    if reason is not None:
+        if artifact is None:
+            expected = plant_artifact_path(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                setup_key,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+            reason = (
+                f"--driver alien requires this combo's plant artifact ({expected}); "
+                "run --driver handshake first (or python -m tools.ac_harness.auto_alien for "
+                "the one-button pipeline)"
+            )
+        return (reason, None, None)
+    config.plant_kwargs = plant_driver_kwargs(artifact, steer=True)
+    plant = plant_ggv_model(artifact)
+    config.plant_ggv = plant
+    plant_artifact_used = str(
+        plant_artifact_path(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            config.setup_ini,
+            layout=config.track_layout,
+        )
+    )
+    try:
+        fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
+        line_artifact, line_source = ensure_alien_line_artifact(
+            user_dir,
+            fast_path,
+            plant,
+            artifact,
+            car_id=config.car_id,
+            track_id=config.track_id,
+            layout=config.track_layout,
+            setup=setup_key,
+            setup_ini=config.setup_ini,
+            v_top_kmh=config.racing_max_speed_kmh,
+            rebuild=rebuild,
+        )
+    except (OSError, ValueError) as exc:
+        return (f"alien line build failed — {exc}", plant_artifact_used, None)
+    config.alien_line = line_artifact["line"]
+    config.alien_v_target = line_artifact["v_target_mps"]
+    alien_path = alien_line_path(
+        user_dir,
+        config.car_id,
+        config.track_id,
+        setup_key,
+        config.setup_ini,
+        layout=config.track_layout,
+    )
+    alien_line_used = {
+        "path": str(alien_path),
+        "source": line_source,
+        "plant_provenance": line_artifact.get("plant_provenance"),
+        "qss": line_artifact.get("qss"),
+        "corridor": line_artifact.get("corridor"),
+    }
+    qss = line_artifact.get("qss") or {}
+    print(
+        f"auto-drive: alien line {line_source} "
+        f"(QSS {qss.get('qss_laptime_s')}s, vmax {qss.get('vmax_kmh')} km/h, "
+        f"plant fit {line_artifact.get('plant_provenance', {}).get('sha12')}) <- {alien_path}"
+    )
+    return (None, plant_artifact_used, alien_line_used)
+
+
 def _main_impl(
     argv: list[str] | None, cleanup: ExitStack
 ) -> int:  # pragma: no cover - rig-only CLI wiring
@@ -2730,8 +2934,11 @@ def _main_impl(
     # handshake would run the whole rig drive and then crash in ``save_plant_artifact`` with an
     # empty car id (Codex review), and ``--use-plant full`` would silently skip its own hard
     # requirement and drive on generic constants.
-    if config.driver == "handshake" and not config.car_id:
-        print("auto-drive: --driver handshake requires --car (the plant artifact is keyed by car)")
+    if config.driver in ("handshake", "alien") and not config.car_id:
+        print(
+            f"auto-drive: --driver {config.driver} requires --car "
+            "(the plant artifact is keyed by car)"
+        )
         return 2
     if config.driver == "ggv" and args.use_plant == "full" and not config.car_id:
         print("auto-drive: --use-plant full requires --car (plant lookup is keyed by car+track)")
@@ -2750,11 +2957,132 @@ def _main_impl(
         except (FileNotFoundError, ValueError):
             config.setup_ini = None  # unresolved -> basename-only key (best effort)
 
-    # #532: resolve the combo's identified plant for the ggv path. `auto` silently falls back to
-    # the generic plant when no artifact exists; `full` REQUIRES one (measured steering must never
-    # silently degrade to hand constants — that is the failure mode the handshake exists to end).
     plant_artifact_used: str | None = None
+
+    # #572: reject an overspeed scale on the alien path BEFORE any launch work. The alien QSS
+    # profile is envelope-verified at build time; a scale above 1 would multiply corner speeds
+    # past the verified plant envelope after that check (Codex review).
+    alien_line_used: dict | None = None
+    if config.driver == "alien" and not 0.0 < config.ggv_scale <= 1.0:
+        print(
+            f"auto-drive: --driver alien requires 0 < --ggv-scale <= 1 (got {config.ggv_scale}); "
+            "the scale is a safety margin under the envelope-verified profile, never above it"
+        )
+        return 2
+
+    car_tag = config.car_id or "car"
+    evidence_dir = args.evidence_dir or (
+        Path(".scratch") / "harness-evidence" / f"{_utc_stamp()}_{car_tag}_{config.track_id}"
+    )
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    if config.cm_preset is None:
+        # Deterministic practice preset (#154 Part-G determinism lock), START spawn. A setup run
+        # keeps race.ini re-baked during the CM launch window so the setup applies at spawn.
+        preset_path = evidence_dir / "generated.cmpreset"
+        preset_path.write_text(
+            build_practice_preset(
+                config.car_id, config.track_id, start_type="START", layout=config.track_layout
+            ),
+            encoding="utf-8",
+        )
+        config.cm_preset = preset_path
+
+    issues = preflight(config)
+    if issues:
+        print("auto-drive: PREFLIGHT FAILED")
+        for issue in issues:
+            print(f"  [{issue.check}] {issue.message}")
+        return 2
+    print("auto-drive: preflight ok")
+    if args.preflight_only:
+        # #572: an alien readiness gate must include the alien prerequisites, or preflight-only
+        # reports a false green for a drive that would exit at resolution (Codex review). Read-only
+        # — validates the plant artifact + fast_lane without building or writing the line cache.
+        if config.driver == "alien":
+            alien_issue = _alien_prerequisites_error(config, user_dir)
+            if alien_issue is not None:
+                print(f"auto-drive: ALIEN PREFLIGHT FAILED — {alien_issue}")
+                return 2
+            print("auto-drive: alien prerequisites ok (plant artifact + fast_lane corridor)")
+        elif config.driver == "ggv" and args.use_plant == "full":
+            # #572: --use-plant full is a hard plant requirement — a preflight-only readiness
+            # gate must not report green for a run that would exit at post-lock resolution.
+            from tools.ac_harness.plant_id import (
+                load_plant_artifact,
+                plant_ready_for_full_consumption,
+            )
+
+            full_artifact = load_plant_artifact(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                Path(config.setup).stem if config.setup else None,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+            full_reason = plant_ready_for_full_consumption(
+                full_artifact, require_friction_fit=False
+            )
+            if full_reason is not None:
+                print(
+                    f"auto-drive: PREFLIGHT FAILED — --use-plant full: {full_reason}; "
+                    "run --driver handshake first"
+                )
+                return 2
+            print("auto-drive: --use-plant full prerequisites ok (plant artifact)")
+        return 0
+
+    if config.setup:
+        if config.setup_ini is None:  # not resolved by the early best-effort pass above
+            config.setup_ini = resolve_setup_ini(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                config.setup,
+                layout=config.track_layout,
+            )
+        print(f"auto-drive: setup resolved -> {config.setup_ini}")
+
+    # #555: AC + Content Manager are one machine-global rig. A repo-local lock cannot serialize
+    # different worktrees, so own the shared LocalAppData lock from before sidecar/launch through
+    # drive teardown. A peer fails/waits here BEFORE either process can kill or relaunch its AC.
+    from tools.ac_harness.rig_lock import (
+        RigSessionBusy,
+        RigSessionLock,
+        RigSessionOwner,
+        default_rig_session_lock_path,
+    )
+
+    rig_lock = RigSessionLock(
+        default_rig_session_lock_path(),
+        owner=RigSessionOwner(
+            pid=os.getpid(),
+            cwd=str(Path.cwd()),
+            car=config.car_id,
+            track=config.track_id,
+            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        ),
+        timeout=args.rig_lock_timeout,
+    )
+    try:
+        rig_lock.acquire()
+    except RigSessionBusy as exc:
+        print(f"auto-drive: RIG BUSY — {exc}")
+        return 3
+    cleanup.callback(rig_lock.release)
+    print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
+
+    # Plant/line artifact resolution happens AFTER preflight (actionable content errors, and
+    # --preflight-only never writes state) and AFTER the machine-global rig lock, for EVERY
+    # consumer of the plant artifact: a peer worktree may have re-identified this combo while we
+    # waited on the lock, and resolving pre-lock would drive a stale in-memory plant that the
+    # on-disk artifact has already superseded (#572 Codex + daemon review — same rule for the
+    # ggv path, not just alien).
     if config.driver == "ggv" and args.use_plant != "off" and config.car_id:
+        # #532: `auto` silently falls back to the generic plant when no artifact exists; `full`
+        # REQUIRES one (measured steering must never silently degrade to hand constants — that is
+        # the failure mode the handshake exists to end).
         from tools.ac_harness.plant_id import (
             load_plant_artifact,
             plant_artifact_path,
@@ -2807,73 +3135,15 @@ def _main_impl(
         else:
             print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
 
-    car_tag = config.car_id or "car"
-    evidence_dir = args.evidence_dir or (
-        Path(".scratch") / "harness-evidence" / f"{_utc_stamp()}_{car_tag}_{config.track_id}"
-    )
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-
-    if config.cm_preset is None:
-        # Deterministic practice preset (#154 Part-G determinism lock), START spawn. A setup run
-        # keeps race.ini re-baked during the CM launch window so the setup applies at spawn.
-        preset_path = evidence_dir / "generated.cmpreset"
-        preset_path.write_text(
-            build_practice_preset(
-                config.car_id, config.track_id, start_type="START", layout=config.track_layout
-            ),
-            encoding="utf-8",
+    # #572 alien pipeline: resolve the identified plant (mandatory, full-steering semantics) and
+    # the optimized line + QSS profile artifact (cache-or-build, identity + provenance gated).
+    if config.driver == "alien":
+        alien_error, plant_artifact_used, alien_line_used = _resolve_alien_assets(
+            config, user_dir, rebuild=args.alien_rebuild_line
         )
-        config.cm_preset = preset_path
-
-    issues = preflight(config)
-    if issues:
-        print("auto-drive: PREFLIGHT FAILED")
-        for issue in issues:
-            print(f"  [{issue.check}] {issue.message}")
-        return 2
-    print("auto-drive: preflight ok")
-    if args.preflight_only:
-        return 0
-
-    if config.setup:
-        if config.setup_ini is None:  # not resolved by the early best-effort pass above
-            config.setup_ini = resolve_setup_ini(
-                user_dir,
-                config.car_id,
-                config.track_id,
-                config.setup,
-                layout=config.track_layout,
-            )
-        print(f"auto-drive: setup resolved -> {config.setup_ini}")
-
-    # #555: AC + Content Manager are one machine-global rig. A repo-local lock cannot serialize
-    # different worktrees, so own the shared LocalAppData lock from before sidecar/launch through
-    # drive teardown. A peer fails/waits here BEFORE either process can kill or relaunch its AC.
-    from tools.ac_harness.rig_lock import (
-        RigSessionBusy,
-        RigSessionLock,
-        RigSessionOwner,
-        default_rig_session_lock_path,
-    )
-
-    rig_lock = RigSessionLock(
-        default_rig_session_lock_path(),
-        owner=RigSessionOwner(
-            pid=os.getpid(),
-            cwd=str(Path.cwd()),
-            car=config.car_id,
-            track=config.track_id,
-            started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        ),
-        timeout=args.rig_lock_timeout,
-    )
-    try:
-        rig_lock.acquire()
-    except RigSessionBusy as exc:
-        print(f"auto-drive: RIG BUSY — {exc}")
-        return 3
-    cleanup.callback(rig_lock.release)
-    print(f"auto-drive: rig lock acquired -> {rig_lock.path}")
+        if alien_error is not None:
+            print(f"auto-drive: {alien_error}")
+            return 2
 
     sidecar_proc = None
     try:
@@ -2962,6 +3232,7 @@ def _main_impl(
             "driver": config.driver,
             "use_plant": args.use_plant,
             "plant_artifact": plant_artifact_used,
+            "alien_line": alien_line_used,
             "sidecar": sidecar_detail,
         },
         "hud": hud,

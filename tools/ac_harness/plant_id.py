@@ -1615,6 +1615,22 @@ def _layout_key(layout: str | None) -> str:
     return f"__layout-{layout}"
 
 
+def combo_artifact_stem(
+    car_id: str,
+    track_id: str,
+    setup: str | None = None,
+    setup_ini: str | Path | None = None,
+    *,
+    layout: str | None = None,
+) -> str:
+    """Filename-safe identity stem shared by every per-combo artifact (plant, alien line).
+
+    Derived artifacts (e.g. the #572 alien line cache) MUST key their files with this exact stem so
+    their identity can never drift from the plant artifact they were computed from.
+    """
+    return f"{car_id}__{track_id}{_layout_key(layout)}{_setup_key(setup, setup_ini)}"
+
+
 def plant_artifact_path(
     user_dir: Path,
     car_id: str,
@@ -1624,8 +1640,8 @@ def plant_artifact_path(
     *,
     layout: str | None = None,
 ) -> Path:
-    filename = f"{car_id}__{track_id}{_layout_key(layout)}{_setup_key(setup, setup_ini)}.json"
-    return Path(user_dir) / "plant_id" / filename
+    stem = combo_artifact_stem(car_id, track_id, setup, setup_ini, layout=layout)
+    return Path(user_dir) / "plant_id" / f"{stem}.json"
 
 
 def save_plant_artifact(user_dir: Path, result: dict) -> Path:
@@ -1773,6 +1789,28 @@ def plant_ggv_model(artifact: dict) -> GGVModel | None:
             "plant artifact ggv block present but its model is invalid; using the generic plant"
         )
         return None
+
+
+def plant_ready_for_full_consumption(
+    artifact: dict | None, *, require_friction_fit: bool
+) -> str | None:
+    """Single source of truth for "can this plant drive a measured-steering run" (#572 daemon).
+
+    Returns ``None`` when ready, else the human-readable reason. Used by the alien resolution,
+    the alien preflight, and ``auto_alien.needs_identification`` so the three sites can never
+    drift apart. ``require_friction_fit=True`` (the alien path) additionally demands the #543
+    uncertainty-aware friction fit; the ggv ``--use-plant full`` path only needs the measured
+    steering constants (its speed profile may legitimately use the generic plant).
+    """
+    if artifact is None:
+        return "no plant artifact for this combo"
+    if require_friction_fit and plant_ggv_model(artifact) is None:
+        return "plant artifact has no uncertainty-aware friction fit (#543)"
+    try:
+        plant_driver_kwargs(artifact, steer=True)
+    except ValueError as exc:
+        return str(exc)
+    return None
 
 
 def apply_handshake_outcome(report, sink: dict) -> None:
