@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T21:48:01Z
+last_updated: 2026-07-14T22:01:03Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -88,12 +88,12 @@ relates_to:
 
 # Next session handoff
 
-## Review resolution resumed (2026-07-14) — PR #579 at `ed94df0`
+## Review resolution resumed (2026-07-14) — PR #579 at `28ef8a7`
 
 PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
 [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open and non-draft. Its
 resolution branch now includes current `main` (`8f1297d`) and code fix
-[`ed94df0`](https://github.com/agorokh/ac-copilot-trainer/commit/ed94df0). The earlier resolution
+[`28ef8a7`](https://github.com/agorokh/ac-copilot-trainer/commit/28ef8a7). The earlier resolution
 round at `5b6d68c` fixed handshake combo counting and made plant persistence/revert peer-safe and
 fail-closed. The resumed round fixes the optional `rig_lock_timeout=None` path before persistence
 and moves the implicit `--laps N` time-budget policy into `auto_drive`, so direct CLI and composed
@@ -101,8 +101,10 @@ alien runs both receive `180 + 240*N` seconds unless the operator passes an expl
 The latest advisory-hardening round rejects non-finite/non-positive explicit budgets and makes
 self-play persistence write the already-resolved content-hashed driven path after stable identity
 validation, avoiding a second `setup.ini` read that could fork or skip the artifact. Regression
-coverage proves both failure boundaries and the stable path under a disappearing setup file.
-Canonical-venv local parity is green: **2,864 passed, 77 skipped, 86.68% coverage,
+coverage proves both failure boundaries and the stable path under a disappearing setup file. The
+final Codex P2 round makes any refine-persistence I/O exception set `selfplay.ok=false`, including a
+failure after the candidate write, so the composed pipeline cannot expose an unverified plant with
+exit 0. Canonical-venv local parity is green: **2,865 passed, 77 skipped, 86.68% coverage,
 `ci-fast: OK`**.
 
 **Next:** do not merge until the current-head push completes its full 10-minute cooldown, all
