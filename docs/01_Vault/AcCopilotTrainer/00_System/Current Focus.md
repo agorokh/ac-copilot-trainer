@@ -5,6 +5,7 @@ memory_tier: canonical
 last_updated: 2026-07-14T07:31:18Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
+  - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
@@ -30,7 +31,15 @@ relates_to:
 
 **Repo:** ac-copilot-trainer.
 
-**Delivered (2026-07-14, latest):** [#567](https://github.com/agorokh/ac-copilot-trainer/issues/567)
+**Delivered (2026-07-14, latest):** [#572](https://github.com/agorokh/ac-copilot-trainer/issues/572)
+**CLOSED** by PR [#573](https://github.com/agorokh/ac-copilot-trainer/pull/573)
+([`dfd4b7e`](https://github.com/agorokh/ac-copilot-trainer/commit/dfd4b7e)) — **EPIC #529 P2**:
+one-button alien pipeline (`python -m tools.ac_harness.auto_alien`), plant-ID → optimized
+min-curvature line → QSS → drive with per-combo, provenance-gated line cache. Live-proven on the
+rig (AC-valid lap, zero recoveries). Active EPIC #529 focus moves to G1 on unseen combos, then P3.
+Detail: [[issue-572-alien-pipeline-2026-07-14]].
+
+**Delivered (2026-07-14, prior):** [#567](https://github.com/agorokh/ac-copilot-trainer/issues/567)
 **CLOSED** by PR [#568](https://github.com/agorokh/ac-copilot-trainer/pull/568)
 ([`ae54ce9`](https://github.com/agorokh/ac-copilot-trainer/commit/ae54ce9)). Tablet GT dashboard
 "not connecting" root-caused live (stale packaged EXE that 426'd `/tablet/dash` + no self-healing

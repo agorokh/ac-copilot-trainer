@@ -2,8 +2,9 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T07:31:18Z
+last_updated: 2026-07-14T10:20:00Z
 relates_to:
+  - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-543-uncertainty-aware-plant-id-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-555-cross-worktree-rig-ownership-2026-07-13.md
   - AcCopilotTrainer/03_Investigations/issue-531-phase1-tablet-dash-2026-07-13.md
@@ -85,6 +86,29 @@ relates_to:
 ---
 
 # Next session handoff
+
+## Delivered (2026-07-14) — #572 one-button alien pipeline CLOSED (PR #573 MERGED `dfd4b7e`) — EPIC #529 P2
+
+**PR [#573](https://github.com/agorokh/ac-copilot-trainer/pull/573) MERGED** (squash
+[`dfd4b7e`](https://github.com/agorokh/ac-copilot-trainer/commit/dfd4b7e)), closing
+[#572](https://github.com/agorokh/ac-copilot-trainer/issues/572).
+`python -m tools.ac_harness.auto_alien --car <car> --track <track>` now takes any combo from
+nothing to an autonomous drive on its own optimized line: shared plant-readiness gate
+(`plant_ready_for_full_consumption`) decides whether the #532/#543 handshake+ID session runs
+first; `tools/ac_harness/alien_line.py` builds/caches the min-curvature line + QSS profile
+against the identified uncertainty-aware plant (identity stem + plant-fit + fast_lane content
+hashes, content-revalidated on every cache hit); `auto_drive --driver alien` drives it with the
+full measured plant. **Live rig proof (unmodified path):** identification skipped correctly,
+cached line (fit `0e16c52b5b5a`), PASS — AC-valid lap, 200.2 km/h, zero recoveries; line stage
+reconciled −1.76 s QSS vs stock (91.39 vs 93.15 s, Magione stock line near-optimal per #259).
+4 review rounds, 12 findings all fixed (incl. daemon HIGH → the shared gate). `make ci-fast`
+green; classification: no flags. Detail: [[issue-572-alien-pipeline-2026-07-14]].
+
+**Resume (EPIC #529):** next is **G1 on unseen combos** — run `auto_alien` on 2–3 combos with no
+plant artifact (full handshake→ID→line→drive in one command), then P3 (corner BVP + stint layer,
+attack the 82.7 s Magione floor). Note: the composed run stops shortly after the first asserted
+lap (`--wait-lap` semantics), so a flying-lap pace proof needs a longer tap window — consider a
+`--laps N` budget when P3 starts.
 
 ## Delivered (2026-07-14) — #567 tablet dash connection hardening CLOSED (PR #568 MERGED `ae54ce9`)
 
