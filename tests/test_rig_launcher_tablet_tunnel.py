@@ -55,16 +55,17 @@ def test_resolve_adb_missing_returns_none() -> None:
     assert resolve_adb({}, which=lambda _n: None) is None
 
 
-def test_adb_missing_is_non_fatal(monkeypatch) -> None:
-    # Force the resolver to miss regardless of whether this host actually has adb.
+def test_adb_missing_fails_loud_when_managed(monkeypatch) -> None:
+    # ensure_tablet_reverse is only reached when management is opted in, so a missing adb is a
+    # real failure the operator must act on — not a benign "unmanaged" (#568 review).
     monkeypatch.setattr("tools.rig_launcher.tablet_tunnel.resolve_adb", lambda *_a, **_k: None)
 
     def _boom(_cmd: list[str], **_k: object) -> subprocess.CompletedProcess[str]:
         raise AssertionError("adb must not be invoked when it cannot be resolved")
 
     status = ensure_tablet_reverse(_boom, 8765, env={})
-    assert status == TunnelStatus(True, "adb-missing", status.detail)
-    assert status.ok is True
+    assert status.state == "adb-missing"
+    assert status.ok is False
 
 
 def test_no_device_is_non_fatal() -> None:
@@ -142,11 +143,11 @@ def test_reverse_list_pair_match_is_not_substring_fooled() -> None:
     assert status.state == "tunnel-down"
 
 
-def test_adb_devices_spawn_failure_degrades_to_adb_missing() -> None:
+def test_adb_devices_spawn_failure_fails_loud() -> None:
     fake = _FakeAdb({"devices": FileNotFoundError("adb vanished")})
     status = ensure_tablet_reverse(fake, 8765, adb=_ADB)
     assert status.state == "adb-missing"
-    assert status.ok is True
+    assert status.ok is False
 
 
 _KEEPER: Callable[..., TunnelStatus] = ensure_tablet_reverse  # module-symbol smoke

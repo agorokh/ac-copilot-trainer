@@ -1602,3 +1602,54 @@ def test_summary_caption_surfaces_failing_tablet(tmp_path: Path) -> None:
     text, _tone, caption = theme.summary_for(status)
     assert text == "PRESS START"
     assert "accept the prompt" in caption
+
+
+def test_probe_tablet_rejects_concrete_external_bind(tmp_path: Path) -> None:
+    """P2 (#568 review): adb reverse targets PC loopback, so a concrete non-loopback bind
+    cannot serve the tablet — fail loud instead of a false tunnel-up, and never call adb."""
+
+    def _boom_run(*_a: Any, **_k: Any) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("adb must not run when the bind is unreachable")
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True,
+        external_bind="192.168.1.50",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen, run=_boom_run)
+    tablet = sup.probe_tablet()
+    assert tablet.state == "bind-unreachable"
+    assert tablet.ok is False
+
+
+def test_probe_tablet_wildcard_bind_is_allowed(tmp_path: Path) -> None:
+    """0.0.0.0 includes loopback, so the managed tunnel is fine — no bind-unreachable."""
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+
+    def fake_run(cmd: list[str], **_k: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[1] == "devices":
+            return subprocess.CompletedProcess(cmd, 0, "List of devices attached\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(
+        manage_tablet_tunnel=True,
+        external_bind="0.0.0.0",
+        paths=LauncherPaths(tmp_path),
+    )
+    sup = GamePointSupervisor(
+        cfg, environ={"AC_COPILOT_ADB": str(adb)}, urlopen=_refused_urlopen, run=fake_run
+    )
+    tablet = sup.probe_tablet()
+    assert tablet.state == "no-device"  # reached the keeper; no tablet plugged in
+    assert tablet.ok is True
+
+
+def test_probe_tablet_managed_adb_missing_fails(tmp_path: Path, monkeypatch) -> None:
+    """P2 (#568 review): once management is opted in, a missing adb is a failing status."""
+    monkeypatch.setattr("tools.rig_launcher.tablet_tunnel.resolve_adb", lambda *_a, **_k: None)
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen)
+    tablet = sup.probe_tablet()
+    assert tablet.state == "adb-missing"
+    assert tablet.ok is False

@@ -153,27 +153,31 @@ def ensure_tablet_reverse(
 ) -> TunnelStatus:
     """Assert (and self-heal) the ``adb reverse tcp:<port> tcp:<port>`` tablet tunnel.
 
-    Idempotent — call it on every status poll. Returns a :class:`TunnelStatus`:
+    Called **only when tablet management is opted in** (the caller gates on
+    ``manage_tablet_tunnel``), so a missing/unresponsive adb here is a real, actionable
+    failure — the operator asked for the tunnel and it cannot be created. Idempotent —
+    call it on every status poll. Returns a :class:`TunnelStatus`:
 
-    * ``adb-missing``  — adb not installed; tunnel unmanaged (ok, non-fatal).
-    * ``no-device``    — no tablet over USB (ok, non-fatal).
-    * ``unauthorized`` — tablet present but USB debugging not authorized (fail-loud).
-    * ``tunnel-up``    — the reverse mapping exists (asserting it first if needed).
-    * ``tunnel-down``  — a device is present but the reverse assertion did not stick.
+    * ``adb-missing``    — adb not installed / not responding; managed tunnel impossible (fail).
+    * ``no-device``      — no tablet over USB yet (ok, non-fatal — nothing to connect).
+    * ``unauthorized``   — tablet present but USB debugging not authorized (fail-loud).
+    * ``device-offline`` — tablet present but offline/unusable (fail-loud).
+    * ``tunnel-up``      — the reverse mapping exists (asserting it first if needed).
+    * ``tunnel-down``    — a device is present but the reverse assertion did not stick.
     """
     adb = adb or resolve_adb(env)
     if adb is None:
         return TunnelStatus(
-            True,
+            False,
             "adb-missing",
-            "adb not found — install Google.PlatformTools to auto-manage the tablet tunnel",
+            "adb not found — install Google.PlatformTools to manage the tablet tunnel",
         )
     # start-server is best-effort: a stale/absent daemon otherwise makes the first
     # `devices` call flaky. Ignore its result; `devices` below is the real probe.
     _run_adb(run, adb, ["start-server"])
     devices = _run_adb(run, adb, ["devices"])
     if devices is None or devices.returncode != 0:
-        return TunnelStatus(True, "adb-missing", "adb present but not responding to `devices`")
+        return TunnelStatus(False, "adb-missing", "adb present but not responding to `devices`")
     state = _device_state(devices.stdout or "")
     if state == "none":
         return TunnelStatus(True, "no-device", "no tablet connected over USB")

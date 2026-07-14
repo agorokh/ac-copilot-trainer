@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -258,6 +259,7 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     root.minsize(620, 400)
 
     last_status: dict[str, GamePointStatus | None] = {"status": None}
+    _poll_busy: dict[str, bool] = {"v": False}
 
     def refresh() -> None:
         status = supervisor.poll_status()
@@ -324,14 +326,38 @@ def run_gui(supervisor: GamePointSupervisor) -> int:
     def poll_tick() -> None:
         # Continuous re-poll so the tablet tunnel keeper (and every other probe) self-heals
         # while the launcher is open — an unplug / tablet sleep / `adb kill-server` after
-        # launch is otherwise only noticed on a manual REFRESH (issue #567 review). Guard on
-        # window existence so a pending callback after close is a no-op, not a TclError.
+        # launch is otherwise only noticed on a manual REFRESH (issue #567 review).
+        #
+        # poll_status() may block on adb subprocesses, so run it on a WORKER thread and marshal
+        # the repaint back onto the Tk loop via root.after — a wedged ADB/USB stack must never
+        # freeze the driver-facing UI (#568 review). A tick is skipped while one is in flight.
         try:
             if not root.winfo_exists():
                 return
-            refresh()
+            if not _poll_busy["v"]:
+                _poll_busy["v"] = True
+                threading.Thread(target=_poll_worker, daemon=True).start()
             root.after(_GUI_POLL_INTERVAL_MS, poll_tick)
         except tk.TclError:
+            return
+
+    def _poll_worker() -> None:
+        try:
+            status = supervisor.poll_status()
+        finally:
+            _poll_busy["v"] = False
+
+        def apply() -> None:
+            try:
+                if root.winfo_exists():
+                    last_status["status"] = status
+                    view.update(status)
+            except tk.TclError:
+                return
+
+        try:
+            root.after(0, apply)
+        except (tk.TclError, RuntimeError):
             return
 
     refresh()

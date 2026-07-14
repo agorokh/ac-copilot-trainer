@@ -453,6 +453,20 @@ class GamePointSupervisor:
                 "unmanaged",
                 "adb tunnel keeper off (set AC_COPILOT_MANAGE_TABLET_TUNNEL=1)",
             )
+        # `adb reverse` forwards the tablet's localhost:<port> to the PC's LOOPBACK:<port>
+        # (Android's documented contract). A concrete non-loopback external bind (e.g.
+        # 192.168.x.x) leaves nothing on PC loopback, so the tunnel would read `tunnel-up`
+        # yet the dashboard can't connect. Loopback and wildcard (0.0.0.0/::, which includes
+        # loopback) are fine; a concrete IP is a misconfiguration — fail loud (#568 review).
+        bind = self.config.external_bind
+        if bind and bind not in {DEFAULT_EXTERNAL_BIND, "0.0.0.0", "::"} and not _is_loopback(bind):
+            return ProbeResult(
+                "tablet",
+                False,
+                "bind-unreachable",
+                f"sidecar bound to {bind}, but adb reverse targets PC loopback — "
+                "bind to 127.0.0.1 or 0.0.0.0 for the managed tablet tunnel",
+            )
         from tools.rig_launcher.tablet_tunnel import ensure_tablet_reverse
 
         result = ensure_tablet_reverse(self._run, self.config.port, env=self._environ)
