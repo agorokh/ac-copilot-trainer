@@ -46,6 +46,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Print status or setup output as JSON where supported.",
     )
     parser.add_argument("--no-gui", action="store_true", help="Do not open the Tk status window.")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Start the sidecar, assert it serves /tablet/dash and /tablet/voice (200), "
+        "then exit non-zero if a stale build 426s them. Release gate for issue #567.",
+    )
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--external-bind", default=None)
     parser.add_argument("--log-dir", default=None)
@@ -204,6 +210,17 @@ def main(argv: list[str] | None = None) -> int:
 
     supervisor = GamePointSupervisor(config_from_args(args))
     try:
+        if args.self_test:
+            supervisor.start_sidecar()
+            results = supervisor.self_test_endpoints()
+            ok = all(row.ok for row in results)
+            if args.json:
+                print(json.dumps([row.to_dict() for row in results], indent=2, sort_keys=True))
+            else:
+                for row in results:
+                    detail = f" - {row.detail}" if row.detail else ""
+                    print(f"{row.name}: {row.state}{detail}")
+            return 0 if ok else 1
         if args.start:
             supervisor.start_sidecar()
         if args.once or args.no_gui:

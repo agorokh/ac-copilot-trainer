@@ -35,6 +35,7 @@ from tools.ai_sidecar import observability
 from tools.ai_sidecar.coaching.llm_coach import debrief_feature_enabled
 from tools.ai_sidecar.external_protocol import (
     AUTH_HEADER,
+    CLIENT_CLASS_BROWSER,
     CLIENT_CLASS_EXTERNAL,
     CLIENT_CLASS_KEY,
     CLIENT_CLASS_SCREEN,
@@ -1077,6 +1078,7 @@ def make_process_request(token: str | None):
                 observability.build_health_json(
                     connected_peers,
                     screen_peers=screen_peers,
+                    browser_peers=_browser_peer_count(),
                     voice=public_voice_runtime_status(),
                 ),
                 observability.HEALTH_CONTENT_TYPE,
@@ -1262,6 +1264,11 @@ def _peer_class(peer: Any) -> str:
 def _peer_counts() -> tuple[int, int]:
     screen_peers = sum(1 for peer in _external_peers if _peer_class(peer) == CLIENT_CLASS_SCREEN)
     return len(_external_peers), screen_peers
+
+
+def _browser_peer_count() -> int:
+    """Connected browser-class peers — i.e. tablet GT dashboards (#531, #567)."""
+    return sum(1 for peer in _external_peers if _peer_class(peer) == CLIENT_CLASS_BROWSER)
 
 
 def _client_class_from_hello(data: dict[str, Any]) -> str:

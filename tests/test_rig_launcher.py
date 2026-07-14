@@ -1460,3 +1460,86 @@ def test_simhub_started_does_not_block_overall_status(tmp_path: Path) -> None:
     assert status.simhub.state == "started"
     assert status.simhub.ok is True
     assert status.ok is True
+
+
+# -- Tablet adb reverse tunnel keeper + endpoint self-test (issue #567) --------
+
+
+def test_probe_tablet_unmanaged_by_default(tmp_path: Path) -> None:
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=_refused_urlopen)
+    tablet = sup.probe_tablet()
+    assert tablet.state == "unmanaged"
+    assert tablet.ok is True
+
+
+def test_config_reads_manage_tablet_tunnel_from_env(tmp_path: Path) -> None:
+    cfg = GamePointConfig.from_env(
+        {"AC_COPILOT_MANAGE_TABLET_TUNNEL": "1"},
+        paths=LauncherPaths(tmp_path),
+    )
+    assert cfg.manage_tablet_tunnel is True
+
+
+def test_probe_tablet_managed_asserts_reverse_and_reports_dash(tmp_path: Path) -> None:
+    adb = tmp_path / "adb.exe"
+    adb.write_text("", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        sub = cmd[1]
+        if sub == "devices":
+            return subprocess.CompletedProcess(
+                cmd, 0, "List of devices attached\n1c00\tdevice\n", ""
+            )
+        if sub == "reverse" and len(cmd) >= 3 and cmd[2] == "--list":
+            return subprocess.CompletedProcess(cmd, 0, "UsbFfs tcp:8765 tcp:8765\n", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    cfg = GamePointConfig(manage_tablet_tunnel=True, paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(
+        cfg,
+        environ={"AC_COPILOT_ADB": str(adb)},
+        urlopen=_refused_urlopen,
+        run=fake_run,
+    )
+    tablet = sup.probe_tablet({"browser_peers": 0})
+    assert tablet.state == "tunnel-up"
+    assert tablet.ok is True
+
+    tablet2 = sup.probe_tablet({"browser_peers": 1})
+    assert tablet2.state == "dash-connected"
+    assert "browser_peers=1" in tablet2.detail
+    assert any(cmd[1] == "devices" for cmd in calls)
+
+
+def test_self_test_endpoints_flags_stale_build(tmp_path: Path) -> None:
+    import urllib.error
+
+    ok_health = {"status": "ok", "connected_peers": 0, "screen_peers": 0}
+
+    def urlopen(url: str, timeout: float) -> _Response:
+        del timeout
+        if url.endswith("/health"):
+            return _Response(ok_health)
+        raise urllib.error.HTTPError(url, 426, "Upgrade Required", {}, None)
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen)
+    results = sup.self_test_endpoints(wait_timeout=1.0)
+    assert results
+    assert all(row.state == "stale_build" and not row.ok for row in results)
+    assert any("/tablet/dash" in row.name for row in results)
+
+
+def test_self_test_endpoints_passes_when_routes_serve(tmp_path: Path) -> None:
+    def urlopen(_url: str, timeout: float) -> _Response:
+        del timeout
+        return _Response({"status": "ok"})  # 200 for /health and both tablet routes
+
+    cfg = GamePointConfig(paths=LauncherPaths(tmp_path))
+    sup = GamePointSupervisor(cfg, environ={}, urlopen=urlopen)
+    results = sup.self_test_endpoints(wait_timeout=1.0)
+    assert results
+    assert all(row.state == "serving" and row.ok for row in results)

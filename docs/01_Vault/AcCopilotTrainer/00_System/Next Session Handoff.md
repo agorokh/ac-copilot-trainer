@@ -86,6 +86,27 @@ relates_to:
 
 # Next session handoff
 
+## In flight (2026-07-14) — #567 tablet dash connection hardening (PR open, draft)
+
+Live rig diagnosis found the tablet GT dashboard (#531) "not connecting" was **two** faults
+the Game Point EXE never healed: (1) the packaged `dist\AC-Copilot-Game-Point.exe --sidecar-child`
+was a **stale build** that 426'd `/tablet/dash` AND `/tablet/voice` (predates both endpoints); and
+(2) **no `adb reverse` tunnel** existed and nothing re-asserted it (empty `reverse --list` with the
+P7 plugged in + authorized). Brought the dash up live non-destructively (source sidecar on 8770 +
+`adb reverse tcp:8765 tcp:8770`; log confirmed `hello accepted client=tablet-dash class=browser`).
+
+PR [#567](https://github.com/agorokh/ac-copilot-trainer/issues/567) (branch
+`fix/issue-567-tablet-connection-hardening`): **Part A** — `/health` now carries `build_commit` +
+served-endpoint set + `browser_peers`; `GamePointSupervisor.self_test_endpoints()` (wired to
+`--self-test`) fails non-zero if the build 426s the tablet routes. **Part B** — new
+`tools/rig_launcher/tablet_tunnel.py` keeper + a `tablet` ProbeResult; opt-in via
+`AC_COPILOT_MANAGE_TABLET_TUNNEL` (off → no adb calls, CI/non-rig safe), upgrades to
+`dash-connected` when `/health` shows a browser peer. Follow-ups on #567: **H3** persist USB auth /
+stay-awake (ops), **H4** USB-RNDIS vs LAN+token transport spike. Detail:
+[[tablet-dash-connection-hardening-2026-07-14]]. **Resume:** drive `/resolve-pr` to green CI + bot
+threads; on a rig, `--self-test` against a fresh EXE build + one `AC_COPILOT_MANAGE_TABLET_TUNNEL=1`
+launch to confirm plug-in-and-connect end to end.
+
 ## Delivered (2026-07-13) — #543 uncertainty-aware plant ID CLOSED (PR #564 MERGED `3193e1b`)
 
 **PR [#564](https://github.com/agorokh/ac-copilot-trainer/pull/564) MERGED**, closing

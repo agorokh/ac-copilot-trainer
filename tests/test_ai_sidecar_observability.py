@@ -83,6 +83,39 @@ def test_health_endpoint_on_ws_port() -> None:
     assert payload["voice"]["enabled"] is False
 
 
+def test_health_endpoint_advertises_build_commit_and_served_endpoints() -> None:
+    """Issue #567: /health carries build_commit + the served endpoint set + browser_peers,
+    so a stale packaged binary that omits /tablet/dash is detectable from the payload."""
+
+    async def _run() -> tuple[int, list[str], str]:
+        async with _running_sidecar() as port:
+            return await asyncio.to_thread(_http_get, port, "/health")
+
+    status, _content_types, body = asyncio.run(_run())
+    assert status == 200
+    payload = json.loads(body)
+    assert payload["browser_peers"] == 0
+    assert isinstance(payload["build_commit"], str) and payload["build_commit"]
+    assert "/tablet/dash" in payload["endpoints"]
+    assert "/tablet/voice" in payload["endpoints"]
+
+
+def test_build_health_json_reflects_browser_peers() -> None:
+    payload = json.loads(obs.build_health_json(3, screen_peers=1, browser_peers=2))
+    assert payload["connected_peers"] == 3
+    assert payload["screen_peers"] == 1
+    assert payload["browser_peers"] == 2
+
+
+def test_build_commit_prefers_baked_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(obs, "_build_commit_cache", None)
+    monkeypatch.setenv("AC_COPILOT_BUILD_COMMIT", "deadbee")
+    assert obs.build_commit() == "deadbee"
+    # cached: a later env change does not re-resolve within the process
+    monkeypatch.setenv("AC_COPILOT_BUILD_COMMIT", "feedfac")
+    assert obs.build_commit() == "deadbee"
+
+
 def test_health_endpoint_sanitizes_voice_disabled_paths() -> None:
     async def _run() -> tuple[int, list[str], str]:
         async with _running_sidecar() as port:

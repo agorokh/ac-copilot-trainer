@@ -143,6 +143,10 @@ class GamePointConfig:
     setup_store: str | None = None
     simhub_exe: str | None = None
     start_simhub: bool = False
+    #: Manage the tablet dashboard's ``adb reverse`` USB tunnel (issue #567). Opt-in
+    #: (house pattern, cf. ``start_simhub``): off by default so CI / non-rig hosts never
+    #: shell out to adb; the rig sets ``AC_COPILOT_MANAGE_TABLET_TUNNEL=1``.
+    manage_tablet_tunnel: bool = False
     paths: LauncherPaths | None = None
 
     @classmethod
@@ -172,6 +176,10 @@ class GamePointConfig:
             env_map.get("AC_COPILOT_START_SIMHUB"),
             default=bool(settings.start_simhub),
         )
+        manage_tablet_tunnel = _env_bool_or(
+            env_map.get("AC_COPILOT_MANAGE_TABLET_TUNNEL"),
+            default=False,
+        )
         return cls(
             port=port,
             external_bind=external_bind,
@@ -189,6 +197,7 @@ class GamePointConfig:
             ),
             simhub_exe=_configured_text(env_map.get("AC_COPILOT_SIMHUB_EXE"), settings.simhub_exe),
             start_simhub=start_simhub,
+            manage_tablet_tunnel=manage_tablet_tunnel,
             paths=resolved_paths,
         )
 
@@ -204,11 +213,14 @@ class GamePointStatus:
     simhub: ProbeResult
     log_path: str
     status_path: str
+    #: Tablet dashboard ``adb reverse`` USB tunnel keeper (issue #567). Defaulted so
+    #: direct constructions (and pre-#567 callers) stay valid; ``poll_status`` fills it.
+    tablet: ProbeResult = field(default_factory=lambda: ProbeResult("tablet", True, "unmanaged"))
     checks: tuple[ProbeResult, ...] = field(default_factory=tuple)
 
     @property
     def ok(self) -> bool:
-        rows = (self.sidecar, self.screen, self.voice, self.simhub, *self.checks)
+        rows = (self.sidecar, self.screen, self.voice, self.simhub, self.tablet, *self.checks)
         return all(row.ok for row in rows if row.state not in {"skipped", "absent"})
 
     def to_dict(self) -> dict[str, object]:
@@ -219,6 +231,7 @@ class GamePointStatus:
             "screen": self.screen.to_dict(),
             "voice": self.voice.to_dict(),
             "simhub": self.simhub.to_dict(),
+            "tablet": self.tablet.to_dict(),
             "log_path": self.log_path,
             "status_path": self.status_path,
             "checks": [check.to_dict() for check in self.checks],
@@ -417,12 +430,93 @@ class GamePointSupervisor:
             screen=screen,
             voice=self.probe_voice(health_payload),
             simhub=self.probe_simhub(start=self.config.start_simhub),
+            tablet=self.probe_tablet(health_payload),
             log_path=str(self.paths.sidecar_log_path),
             status_path=str(self.paths.status_path),
             checks=checks,
         )
         self.write_status(status)
         return status
+
+    def probe_tablet(self, health_payload: Mapping[str, object] | None = None) -> ProbeResult:
+        """Keep the tablet dashboard's ``adb reverse`` USB tunnel alive (issue #567).
+
+        Opt-in via ``manage_tablet_tunnel`` (off → ``unmanaged``, no adb calls, so CI and
+        non-rig hosts are untouched). When on, (re)asserts the tunnel idempotently and, once
+        it is up, upgrades the row to ``dash-connected`` if the sidecar's ``/health`` reports
+        a browser peer — i.e. a real dashboard, not just a live pipe.
+        """
+        if not self.config.manage_tablet_tunnel:
+            return ProbeResult(
+                "tablet",
+                True,
+                "unmanaged",
+                "adb tunnel keeper off (set AC_COPILOT_MANAGE_TABLET_TUNNEL=1)",
+            )
+        from tools.rig_launcher.tablet_tunnel import ensure_tablet_reverse
+
+        result = ensure_tablet_reverse(self._run, self.config.port, env=self._environ)
+        if result.state == "tunnel-up" and isinstance(health_payload, Mapping):
+            try:
+                browser_peers = int(health_payload.get("browser_peers") or 0)
+            except (TypeError, ValueError):
+                browser_peers = 0
+            if browser_peers > 0:
+                return ProbeResult(
+                    "tablet", True, "dash-connected", f"browser_peers={browser_peers}"
+                )
+        return ProbeResult("tablet", result.ok, result.state, result.detail)
+
+    def self_test_endpoints(self, *, wait_timeout: float = 10.0) -> tuple[ProbeResult, ...]:
+        """Release-gate smoke: the running build MUST serve the tablet routes with 200.
+
+        A packaged binary that predates ``/tablet/dash`` or ``/tablet/voice`` answers those
+        paths with ``426 Upgrade Required`` (the bare WS handler), so a stale ``dist/`` EXE
+        ships the dashboard broken. This probe turns that silent failure into a non-zero
+        launcher self-test (issue #567). Waits up to ``wait_timeout`` for ``/health`` first
+        so it can gate a freshly started sidecar.
+        """
+        self._wait_for_health(timeout=wait_timeout)
+        results: list[ProbeResult] = []
+        for path in ("/tablet/dash", "/tablet/voice"):
+            code = self._probe_endpoint_status(path)
+            name = f"endpoint {path}"
+            if code == 200:
+                results.append(ProbeResult(name, True, "serving"))
+            elif code is None:
+                results.append(ProbeResult(name, False, "unreachable", "sidecar did not answer"))
+            else:
+                results.append(
+                    ProbeResult(
+                        name,
+                        False,
+                        "stale_build",
+                        f"HTTP {code} — this build predates the route (expected 200)",
+                    )
+                )
+        return tuple(results)
+
+    def _wait_for_health(self, *, timeout: float) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if self._read_health().ok:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def _probe_endpoint_status(self, path: str) -> int | None:
+        url = f"http://{_url_host(self._health_host())}:{self.config.port}{path}"
+        try:
+            with self._urlopen(url, timeout=2.0) as response:
+                code = getattr(response, "status", None)
+                if code is None:
+                    code = getattr(response, "code", 200)
+                return int(code)
+        except urllib.error.HTTPError as exc:
+            return int(exc.code)
+        except (OSError, urllib.error.URLError, TimeoutError):
+            return None
 
     def write_status(self, status: GamePointStatus) -> None:
         self.paths.root.mkdir(parents=True, exist_ok=True)
@@ -802,6 +896,7 @@ def render_status_lines(status: GamePointStatus) -> list[str]:
         status.screen,
         status.voice,
         status.simhub,
+        status.tablet,
         *status.checks,
     ]
     return [f"{row.name}: {row.state}{(' - ' + row.detail) if row.detail else ''}" for row in rows]
