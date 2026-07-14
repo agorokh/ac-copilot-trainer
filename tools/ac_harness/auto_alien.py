@@ -305,12 +305,16 @@ def run_selfplay(
     # would promote a plant the falsification oracle would reject (#579 Codex P1). An invalid
     # base still allows the ladder to run — each iteration changes the envelope via scale and is
     # itself falsification-gated — it just refines from nothing until a valid batch exists.
-    base_payloads, _base_load_errors = load_archive_payloads(stage_lap_archives(base_outcome))
+    base_payloads, base_load_errors = load_archive_payloads(stage_lap_archives(base_outcome))
     base_payloads, base_foreign = combo_filter_payloads(
         base_payloads, car_id=args.car, track_id=args.track, layout=args.track_layout
     )
     base_valid, base_reason = evaluate_selfplay_iteration(0, base_outcome, base_payloads)
     selfplay["base"] = {"valid": base_valid, "reason": base_reason, "lap_times_ms": base_laps}
+    if base_load_errors:
+        # Unreadable/corrupt archives must be DISCLOSED, not hidden behind the generic validity
+        # reason (#579 Qodo observability; same class as the repo's no-silent-swallowing pitfall).
+        selfplay["base"]["archive_load_errors"] = base_load_errors
     if base_foreign:
         selfplay["base"]["foreign_archives_dropped"] = base_foreign
     # An oracle-invalid base's laps are marked unusable by this very report — they must not seed
