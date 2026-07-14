@@ -2,7 +2,7 @@
 type: handoff
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T20:40:00Z
+last_updated: 2026-07-14T20:55:36Z
 relates_to:
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
   - AcCopilotTrainer/03_Investigations/issue-572-alien-pipeline-2026-07-14.md
@@ -88,24 +88,25 @@ relates_to:
 
 # Next session handoff
 
-## Review-resolved (2026-07-14) — PR #579 at `5b6d68c`, awaiting merge
+## Review resolution resumed (2026-07-14) — PR #579 at `eb3da0b`
 
 PR [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
-[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open, non-draft, mergeable,
-and review-resolved at [`5b6d68c`](https://github.com/agorokh/ac-copilot-trainer/commit/5b6d68cc004cca235ad6195e71b9b9abf846b415).
-The final resolution round fixed the keyword-only combo-predicate crash in handshake archive
-counting, moved self-play identity/persist/revert operations behind `plant_id.py` under the
-machine-global rig lock, and made rollback failure fail the composed pipeline instead of returning
-green with a falsified plant. Regression coverage includes caller-resolved setup identity,
-peer-safe conditional persistence/revert, and a forced rollback I/O failure. Local parity:
-**2,863 passed, 77 skipped, 86.69% coverage, `ci-fast: OK`**. Post-push proof after the full
-10-minute cooldown: required checks green, 0/18 unresolved GraphQL threads, resolve-gate clean.
-The current-head daemon HIGH claiming a missing exact-combo plant could still refine was
-replied-invalid with control-flow evidence: `load_plant_artifact` reads that exact path only, so an
-absent path never reaches persist; a peer-created path fails the locked byte comparison.
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is open and non-draft. Its
+resolution branch now includes current `main` (`8f1297d`) and code fix
+[`eb3da0b`](https://github.com/agorokh/ac-copilot-trainer/commit/eb3da0b). The earlier resolution
+round at `5b6d68c` fixed handshake combo counting and made plant persistence/revert peer-safe and
+fail-closed. The resumed round fixes the optional `rig_lock_timeout=None` path before persistence
+and moves the implicit `--laps N` time-budget policy into `auto_drive`, so direct CLI and composed
+alien runs both receive `180 + 240*N` seconds unless the operator passes an explicit budget.
+Regression coverage proves the zero-second lock fallback, direct multi-lap scaling, explicit
+override precedence, and the legacy 300-second non-lap default. Local parity is green:
+**2,863 passed, 77 skipped, 86.69% coverage, `ci-fast: OK`**.
 
-**Next:** merge PR #579 when desired, then run `/post-merge 579`. Issue #577 remains open for the
-explicitly out-of-scope L3 corridor-constrained per-corner refinement.
+**Next:** do not merge until the current-head push completes its full 10-minute cooldown, all
+required checks are green, the complete GraphQL thread ledger is resolved, resolve-gate is clean,
+and the current-SHA daemon body has no unaddressed HIGH finding. Then merge PR #579 when desired
+and run `/post-merge 579`. Issue #577 remains open for the explicitly out-of-scope L3
+corridor-constrained per-corner refinement.
 
 ## Delivery context (2026-07-14 evening) — #577 self-play live proof
 

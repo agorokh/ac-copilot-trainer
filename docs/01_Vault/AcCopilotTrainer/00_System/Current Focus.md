@@ -2,7 +2,7 @@
 type: current-focus
 status: active
 memory_tier: canonical
-last_updated: 2026-07-14T20:40:00Z
+last_updated: 2026-07-14T20:55:36Z
 relates_to:
   - AcCopilotTrainer/00_System/Next Session Handoff.md
   - AcCopilotTrainer/03_Investigations/issue-577-alien-selfplay-2026-07-14.md
@@ -34,12 +34,14 @@ relates_to:
 
 **Active (2026-07-14, latest):** PR
 [#579](https://github.com/agorokh/ac-copilot-trainer/pull/579) for
-[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) is review-resolved at
-[`5b6d68c`](https://github.com/agorokh/ac-copilot-trainer/commit/5b6d68cc004cca235ad6195e71b9b9abf846b415):
-required checks green, 0/18 unresolved threads, resolve-gate clean after the full cooldown. The
-resolution round fixed handshake combo counting and made self-play plant persistence/revert
-peer-safe and fail-closed. Awaiting merge; then `/post-merge 579`. #577 keeps its separate L3
-per-corner refinement scope open.
+[#577](https://github.com/agorokh/ac-copilot-trainer/issues/577) has its review-resolution branch
+merged with current `main` at `8f1297d`; the latest code fix is
+[`eb3da0b`](https://github.com/agorokh/ac-copilot-trainer/commit/eb3da0b). In addition to the
+peer-safe plant persistence/revert work at `5b6d68c`, direct `auto_drive --laps N` now owns the
+scaled flying-lap time budget and self-play normalizes the optional rig-lock timeout before
+persistence. Local parity is green (**2,863 passed, 77 skipped, 86.69% coverage**). Merge only
+after the current-head post-push cooldown, GraphQL thread audit, resolve-gate, and daemon review
+all converge; then `/post-merge 579`. #577 keeps its separate L3 per-corner refinement scope open.
 
 **Live delivery basis (2026-07-14 evening):** [#577](https://github.com/agorokh/ac-copilot-trainer/issues/577)
 (**EPIC #529 P3** — flying-lap windows + progressive-envelope self-play) implemented and
