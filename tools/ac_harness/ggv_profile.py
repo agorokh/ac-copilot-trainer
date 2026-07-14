@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
+import json
 import math
 import statistics
 import struct
@@ -57,7 +59,8 @@ DEFAULT_UNCERTAINTY_MAX_KMH = 300.0
 DEFAULT_UNCERTAINTY_LCB_Z = 1.96
 DEFAULT_PRIOR_RELATIVE_STD = 0.15
 DEFAULT_THERMAL_WINDOW_HALF_WIDTH_C = 10.0
-DEFAULT_THERMAL_RESIDENCE_FRACTION = 0.80
+DEFAULT_THERMAL_COVERAGE_FRACTION = 0.80
+DEFAULT_THERMAL_STABILITY_FRACTION = 0.80
 DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C = 5.0
 DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C = 15.0
 _WHEELS = ("fl", "fr", "rl", "rr")
@@ -390,7 +393,9 @@ def ggv_from_telemetry(
             acc_probe_b.setdefault(b, []).append(abs(ao))
         elif allow_passive_longitudinal:
             acc_passive_b.setdefault(b, []).append(abs(ao))
-        probe_source = source in {"brake_probe", "accel_sweep"}
+        # ``source`` comes from persisted/transported telemetry and can be malformed. Equality is
+        # intentionally non-hashing so one list/dict value cannot abort the whole defensive fit.
+        probe_source = source == "brake_probe" or source == "accel_sweep"
         if (allow_passive_longitudinal or probe_source) and (al > 0.2 or abs(ao) > 0.2):
             hull.append((al, abs(ao)))
 
@@ -690,7 +695,8 @@ def observe_lap_tyre_state(
     archive: dict,
     *,
     thermal_window_half_width_c: float = DEFAULT_THERMAL_WINDOW_HALF_WIDTH_C,
-    min_residence_fraction: float = DEFAULT_THERMAL_RESIDENCE_FRACTION,
+    min_coverage_fraction: float = DEFAULT_THERMAL_COVERAGE_FRACTION,
+    min_stability_fraction: float = DEFAULT_THERMAL_STABILITY_FRACTION,
     stability_half_width_c: float = DEFAULT_THERMAL_STABILITY_HALF_WIDTH_C,
     max_wheel_spread_c: float = DEFAULT_THERMAL_MAX_WHEEL_SPREAD_C,
 ) -> dict:
@@ -747,7 +753,19 @@ def observe_lap_tyre_state(
         compound_name = None
     setup_hash = setup.get("hash")
     if not isinstance(setup_hash, str) or not setup_hash.strip():
-        setup_hash = None
+        setup_snapshot = setup.get("snapshot")
+        if isinstance(setup_snapshot, (dict, list)):
+            # CSP serializes the default/no-file setup as an empty snapshot and an empty hash. It is
+            # still a concrete setup cohort: derive a stable identity from the persisted snapshot so
+            # default laps group together without being conflated with genuinely missing metadata.
+            canonical_snapshot = json.dumps(
+                setup_snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            setup_hash = (
+                "snapshot-sha256:" + hashlib.sha256(canonical_snapshot.encode("utf-8")).hexdigest()
+            )
+        else:
+            setup_hash = None
     base.update(
         {
             "compound_index": compound_index,
@@ -848,8 +866,9 @@ def observe_lap_tyre_state(
     eligible = (
         is_valid
         and (compound_index is not None or compound_name is not None)
-        and coverage >= min_residence_fraction
-        and stability >= min_residence_fraction
+        and setup_hash is not None
+        and coverage >= min_coverage_fraction
+        and stability >= min_stability_fraction
         and wheel_spread is not None
         and wheel_spread <= max_wheel_spread_c
         and tag != "unknown"
@@ -873,7 +892,11 @@ def observe_lap_tyre_state(
             else (
                 "missing tyre compound identity"
                 if compound_index is None and compound_name is None
-                else "outside thermal stability/validity gate"
+                else (
+                    "missing setup identity"
+                    if setup_hash is None
+                    else "outside thermal stability/validity gate"
+                )
             )
         ),
         "optimal_temp_c": round(optimal, 3),
@@ -904,6 +927,7 @@ def ggv_from_lap_archives(
     prior_name: str = "injected_prior",
     min_friction_rows: int = 200,
     probe_rows: list[dict] | None = None,
+    probe_run_id: str | None = None,
 ) -> tuple[GGVModel, dict]:
     """Fit an uncertainty-aware GGV using only a thermally consistent lap cohort (#543)."""
     states = [observe_lap_tyre_state(archive) for archive in archives]
@@ -979,10 +1003,12 @@ def ggv_from_lap_archives(
         raise ValueError(
             f"insufficient thermally consistent friction rows: {len(rows)} < {min_friction_rows}"
         )
-    # The immutable archive proves the thermal state and supplies passive cornering. Only the
-    # handshake's explicitly tagged straight-line probes from a SELECTED thermal lap may identify
-    # longitudinal limits. Both sides carry AC's absolute completed-lap number; never infer an
-    # offset from directory contents because a resumed LIVE session may include earlier manual laps.
+    # The immutable archive proves the thermal state and supplies passive cornering. In the live
+    # harness, archives are filtered to files written after this exact run began and the controller
+    # gives every probe a nonce. That run scope is authoritative even after an invalid AC lap,
+    # because graphics.completedLaps (valid laps) and the app archive counter (all boundaries) are
+    # deliberately different clocks. Direct/offline callers without a nonce retain exact lap-number
+    # matching and therefore cannot silently mix arbitrary probes into an archive cohort.
     selected_lap_numbers = {
         int(archive["lap"]["lap_n"])
         for archive, _ in selected
@@ -990,14 +1016,24 @@ def ggv_from_lap_archives(
         and isinstance(archive["lap"].get("lap_n"), int)
         and not isinstance(archive["lap"].get("lap_n"), bool)
     }
-    thermal_probe_rows = [
-        dict(row)
-        for row in (probe_rows or [])
-        if isinstance(row, dict)
-        and isinstance(row.get("lap_number"), int)
-        and not isinstance(row.get("lap_number"), bool)
-        and int(row["lap_number"]) in selected_lap_numbers
-    ]
+    valid_probe_run_id = isinstance(probe_run_id, str) and bool(probe_run_id.strip())
+    if valid_probe_run_id:
+        thermal_probe_rows = [
+            dict(row)
+            for row in (probe_rows or [])
+            if isinstance(row, dict) and row.get("probe_run_id") == probe_run_id
+        ]
+        probe_attribution = "current-run nonce"
+    else:
+        thermal_probe_rows = [
+            dict(row)
+            for row in (probe_rows or [])
+            if isinstance(row, dict)
+            and isinstance(row.get("lap_number"), int)
+            and not isinstance(row.get("lap_number"), bool)
+            and int(row["lap_number"]) in selected_lap_numbers
+        ]
+        probe_attribution = "archive lap number"
     combined_rows = rows + thermal_probe_rows
     measured = ggv_from_telemetry(combined_rows, allow_passive_longitudinal=False)
     point_model = blend_ggv_safe(measured, prior, prior_name=prior_name)
@@ -1006,6 +1042,7 @@ def ggv_from_lap_archives(
         "friction_rows": len(rows),
         "probe_rows_seen": len(probe_rows or []),
         "probe_rows": len(thermal_probe_rows),
+        "probe_attribution": probe_attribution,
         "tyre_states": states,
         "selected_lap_uuids": [state.get("lap_uuid") for _, state in selected],
         "thermal_cohort": {

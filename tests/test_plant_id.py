@@ -895,6 +895,30 @@ def test_uncertainty_handshake_uses_ac_completed_laps_over_false_line_wraps():
     assert ctrl.result is not None and ctrl.result.laps_used == 2
 
 
+def test_uncertainty_handshake_late_graphics_counter_preserves_fallback_laps():
+    line = _stadium_line()
+    physics = {"frame": SimpleNamespace(completed_laps=None)}
+    ctrl = HandshakeController(
+        line,
+        _profile_for(line),
+        prior_ggv=generic_gt3_ggv(),
+        min_corner_rows=0,
+        phys_read=lambda: physics["frame"],
+    )
+    ctrl._pending.clear()
+    ctrl._base.step = lambda *args: DriveFrame(0.2, 0.0, 0.0, False, False, PHASE_LAP, True, False)
+
+    ctrl.step((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 0.0)
+    assert ctrl._laps == 1
+    physics["frame"] = SimpleNamespace(completed_laps=7)
+    ctrl.step((1.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 1.0)
+    assert ctrl._uses_completed_laps is True
+    assert ctrl._laps == 1
+    physics["frame"] = SimpleNamespace(completed_laps=8)
+    ctrl.step((2.0, 0.0, 0.0), (1.0, 0.0, 0.0), 60.0, 5000.0, 3, 2.0)
+    assert ctrl._laps == 2
+
+
 def test_handshake_preserves_probe_rows_before_overall_friction_row_gate():
     line = _stadium_line()
     ctrl = HandshakeController(line, _profile_for(line), prior_ggv=generic_gt3_ggv())

@@ -625,6 +625,26 @@ def test_tyre_state_observer_tags_core_surface_pressure_and_grip():
     assert cold["thermal_stability_fraction"] == 1.0
 
 
+def test_tyre_state_uses_independent_coverage_and_stability_thresholds():
+    coverage_lap = _thermal_archive("coverage", core_c=90.0)
+    fields = coverage_lap["trace"]["fields"]
+    index = {name: i for i, name in enumerate(fields)}
+    for sample in coverage_lap["trace"]["samples"][:150]:
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 0.0
+    assert observe_lap_tyre_state(coverage_lap)["fit_eligible"] is False
+    assert observe_lap_tyre_state(coverage_lap, min_coverage_fraction=0.70)["fit_eligible"] is True
+
+    stability_lap = _thermal_archive("stability", core_c=90.0)
+    for sample in stability_lap["trace"]["samples"][:150]:
+        for wheel in ("fl", "fr", "rl", "rr"):
+            sample[index[f"tyreCoreTemp_{wheel}"]] = 70.0
+    assert observe_lap_tyre_state(stability_lap)["fit_eligible"] is False
+    assert (
+        observe_lap_tyre_state(stability_lap, min_stability_fraction=0.70)["fit_eligible"] is True
+    )
+
+
 def test_tyre_state_requires_coherent_per_wheel_state_and_known_compound():
     split = _thermal_archive("split", core_c=90.0)
     fields = split["trace"]["fields"]
@@ -646,6 +666,18 @@ def test_tyre_state_requires_coherent_per_wheel_state_and_known_compound():
     state = observe_lap_tyre_state(unknown)
     assert state["fit_eligible"] is False
     assert state["reason"] == "missing tyre compound identity"
+
+    unknown_setup = _thermal_archive("unknown-setup", core_c=90.0)
+    unknown_setup["setup"].pop("hash")
+    state = observe_lap_tyre_state(unknown_setup)
+    assert state["fit_eligible"] is False
+    assert state["reason"] == "missing setup identity"
+
+    default_setup = _thermal_archive("default-setup", core_c=90.0)
+    default_setup["setup"] = {"hash": "", "snapshot": []}
+    state = observe_lap_tyre_state(default_setup)
+    assert state["fit_eligible"] is True
+    assert state["setup_hash"].startswith("snapshot-sha256:")
 
 
 def test_lap_archive_fit_excludes_thermally_inconsistent_laps():
@@ -701,6 +733,24 @@ def test_lap_archive_passive_longitudinal_is_prior_until_probe_rows_exist():
     )
     assert resumed_summary["probe_rows"] > 0
     assert resumed.uncertainty_bins[6]["brake"]["source"] == "measured"
+
+    # Live attribution uses a run nonce, not completedLaps: the graphics counter excludes invalid
+    # laps while the app's archive counter includes those boundaries.
+    nonce_rows = [
+        {**row, "lap_number": 999, "probe_run_id": "run-543"} for row in _uncertainty_rows()
+    ]
+    nonce_model, nonce_summary = ggv_from_lap_archives(
+        [resumed_session], prior, probe_rows=nonce_rows, probe_run_id="run-543"
+    )
+    assert nonce_summary["probe_attribution"] == "current-run nonce"
+    assert nonce_summary["probe_rows"] == len(nonce_rows)
+    assert nonce_model.uncertainty_bins[6]["brake"]["source"] == "measured"
+
+    wrong_nonce, wrong_nonce_summary = ggv_from_lap_archives(
+        [resumed_session], prior, probe_rows=nonce_rows, probe_run_id="other-run"
+    )
+    assert wrong_nonce_summary["probe_rows"] == 0
+    assert wrong_nonce.uncertainty_bins[6]["brake"]["source"] == "prior"
 
 
 def test_lap_archive_fit_never_mixes_compound_or_setup_cohorts():

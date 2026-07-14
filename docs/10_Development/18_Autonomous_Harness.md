@@ -97,9 +97,15 @@ python -m tools.ac_harness.auto_drive --car ks_porsche_911_gt3_r_2016 --track ma
   `full` also enables the measured curvature-feedforward steering; `off` forces the generic
   GT3 plant. `full` without an artifact fails fast — run the handshake first.
 - Schema v3 promotes the GGV fit only after the run's immutable lap archive supplies all four
-  tyre-core temperatures, all four hot pressures, the car-true optimum, and at least 80% sample
-  coverage/residence within ±10 °C. Only valid laps in one compound/setup cohort and within
-  ±5 °C / ±2 psi of that cohort are fitted. The per-lap tag and selected UUIDs remain in
+  tyre-core temperatures, all four hot pressures, the car-true optimum, a setup identity, at least 80%
+  channel coverage, and at least 80% per-wheel stability within ±5 °C of each wheel's median. The
+  four wheel medians must remain within 15 °C of one another. Stable `cold`, `optimal`, and `hot`
+  laps are explicit, separate cohorts; residence within ±10 °C of the optimum is recorded but is not
+  an eligibility gate. This permits conservative identification on tyres that stabilize below the
+  declared optimum without mixing thermal regimes. When CSP writes the default setup as an empty
+  snapshot/hash, the harness derives its deterministic identity from that snapshot. Only valid laps
+  in one compound/setup/tag cohort
+  and within ±5 °C / ±2 psi of that cohort are fitted. The per-lap tag and selected UUIDs remain in
   `report.json` under `extras.handshake.ggv.tyre_states`.
 - The promoted model carries 10 km/h bins from 0–300 km/h. Each lateral/brake/drive bin records a
   Bayesian posterior mean, epistemic standard deviation, lower confidence bound, sample count, and

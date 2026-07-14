@@ -81,6 +81,21 @@ def test_archive_car_identity_prefers_stable_global_over_callable_state_field(
     assert resolved == "ks_porsche_911_gt3_r_2016"
 
 
+def test_archive_car_identity_only_accepts_callable_string_result(tmp_path: pathlib.Path) -> None:
+    rt = _runtime(tmp_path)
+    resolved = rt.execute(
+        """
+        local persistence = require("persistence")
+        local good = persistence.archiveCarIdFromCar({ id = function() return "callable_car" end })
+        local bad = persistence.archiveCarIdFromCar({ id = function() return {} end })
+        return { good = good, bad = bad }
+        """
+    )
+    payload = _lua_to_py(resolved)
+    assert payload["good"] == "callable_car"
+    assert payload.get("bad") is None
+
+
 def test_archive_write_job_streams_trace_over_multiple_steps(tmp_path: pathlib.Path) -> None:
     rt = _runtime(tmp_path)
     rt.execute(

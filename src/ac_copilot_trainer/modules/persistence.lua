@@ -31,8 +31,19 @@ local function tryCarFromCar(car)
     local ok, v = pcall(function()
       return car[key]
     end)
-    if ok and v ~= nil and tostring(v) ~= "" then
-      return tostring(v)
+    if ok and type(v) == "function" then
+      local called, resolved = pcall(v)
+      if not called then
+        called, resolved = pcall(v, car)
+      end
+      if called then
+        v = resolved
+      else
+        v = nil
+      end
+    end
+    if ok and type(v) == "string" and v ~= "" then
+      return v
     end
   end
   return nil

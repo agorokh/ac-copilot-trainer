@@ -2139,10 +2139,16 @@ def rig_drive(  # pragma: no cover - rig-only
                 if buf is None:
                     return None
                 physics = _parse_phys(buf)
-                graphics = reader.read_graphics()
-                return replace(physics, completed_laps=graphics.completed_laps)
             except (ValueError, SharedMemoryUnavailable):
                 return None
+            try:
+                graphics = reader.read_graphics()
+                completed_laps = graphics.completed_laps
+            except (ValueError, SharedMemoryUnavailable):
+                # Graphics is optional provenance/completion state. Never discard a valid physics
+                # frame (including wheel speed and accG probes) because this secondary map failed.
+                completed_laps = None
+            return replace(physics, completed_laps=completed_laps)
 
         driver.set_phys_read(_read_hs_phys)
 
@@ -2780,7 +2786,11 @@ def _main(argv: list[str] | None = None) -> int:  # pragma: no cover - rig-only 
             # #488 lap archives collected by the same run; no archive/thermal cohort means the ggv
             # block remains visibly unavailable and --use-plant safely keeps the generic plant.
             refine_ggv_from_lap_archives(
-                sink["result"], lap_archives, generic_gt3_ggv(), prior_name="generic_gt3_ggv"
+                sink["result"],
+                lap_archives,
+                generic_gt3_ggv(),
+                prior_name="generic_gt3_ggv",
+                archives_same_run=True,
             )
         extras["handshake"] = sink
         # Fold the handshake outcome ONLY when the run otherwise fully SUCCEEDED (`report.ok`).

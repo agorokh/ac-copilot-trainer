@@ -40,6 +40,7 @@ import json
 import logging
 import math
 import re
+import uuid
 from dataclasses import asdict, dataclass
 from dataclasses import replace as dc_replace
 from pathlib import Path
@@ -760,6 +761,7 @@ class HandshakeController:
         self._laps = 0
         self._completed_laps_baseline: int | None = None
         self._uses_completed_laps = False
+        self._probe_run_id = uuid.uuid4().hex
         self._t_start: float | None = None
         self._prev_heading: tuple[float, float] | None = None
         self._prev_now: float | None = None
@@ -819,13 +821,6 @@ class HandshakeController:
             self._speed_hist.pop(0)
 
         self._mine_gear_ratio(now, rpm, gear, speed_kmh)
-        # Pure/off-sim fallback. On the rig, _mine_friction observes AC's authoritative
-        # acpmf_graphics.completedLaps and takes ownership of this counter below; the line-based
-        # driver's wrap heuristic can fire early when a probe rejoins near S/F and must not end a
-        # two-lap thermal handshake after only one real AC lap.
-        if base.lap_completed and not self._uses_completed_laps:
-            self._laps += 1
-
         if base.needs_recovery:
             # rig loop answers with a teleport + on_recovery(); abort the active probe here so a
             # half-captured maneuver never contaminates a fit.
@@ -836,6 +831,12 @@ class HandshakeController:
         # frame (throttled). Runs across all phases — the corner sequence supplies lateral rows, the
         # WOT sweep accel rows, and the brake probe the braking envelope.
         self._mine_friction(now)
+
+        # Pure/off-sim fallback. Observe the optional authoritative graphics counter first so an
+        # already-available counter suppresses a false geometric wrap. If graphics appears late,
+        # _mine_friction bridges its baseline without reducing laps already counted here.
+        if base.lap_completed and not self._uses_completed_laps:
+            self._laps += 1
 
         frame = base
         if self._active is not None:
@@ -996,7 +997,10 @@ class HandshakeController:
             and completed_laps >= 0
         ):
             if self._completed_laps_baseline is None:
-                self._completed_laps_baseline = completed_laps
+                # Preserve laps already observed through the geometry fallback if graphics became
+                # available late. A negative internal baseline is valid here: it is an affine
+                # bridge between two counters, not an AC lap number.
+                self._completed_laps_baseline = completed_laps - self._laps
             self._uses_completed_laps = True
             self._laps = max(0, completed_laps - self._completed_laps_baseline)
         speed = getattr(phys, "speed_kmh", None)
@@ -1024,22 +1028,16 @@ class HandshakeController:
                     source = "brake_probe"
                 elif kind == "accel_sweep" and stage == "wot":
                     source = "accel_sweep"
-            lap_number = None
-            if (
-                isinstance(completed_laps, int)
-                and not isinstance(completed_laps, bool)
-                and completed_laps >= 0
-            ):
-                # Rows gathered before the crossing belong to the lap that the archive will write
-                # as completedLaps + 1. This is absolute AC session state, not a guessed offset.
-                lap_number = completed_laps + 1
             self._friction_rows.append(
                 {
                     "speed_kmh": float(speed),
                     "accg_lat": float(ay),
                     "accg_lon": float(ao),
                     "source": source,
-                    "lap_number": lap_number,
+                    # ``completedLaps`` counts only AC-valid laps while the app archive counter also
+                    # advances across invalid boundaries. Attribute live probes with an invocation
+                    # nonce instead; auto_drive only trusts it beside archives filtered to this run.
+                    "probe_run_id": self._probe_run_id,
                 }
             )
 
@@ -1390,6 +1388,7 @@ class HandshakeController:
             "friction_rows": n,
             "model": None,
             "prior": self._prior_ggv_name,
+            "probe_run_id": self._probe_run_id,
             # Preserve explicit probe evidence before the overall point-fit gate. A fresh thermal
             # archive can supply the passive row volume while these rows retain the only trustworthy
             # brake/WOT limit tags.
@@ -1439,6 +1438,7 @@ def refine_ggv_from_lap_archives(
     prior: GGVModel,
     *,
     prior_name: str = "generic_gt3_ggv",
+    archives_same_run: bool = False,
 ) -> dict:
     """Replace a handshake's provisional GGV with a thermally gated schema-v3 model.
 
@@ -1504,6 +1504,7 @@ def refine_ggv_from_lap_archives(
     probe_rows = previous_ggv.get("provisional_probe_rows", [])
     if not isinstance(probe_rows, list):
         probe_rows = []
+    probe_run_id = previous_ggv.get("probe_run_id") if archives_same_run else None
     block: dict = {
         "ok": False,
         "model": None,
@@ -1516,7 +1517,11 @@ def refine_ggv_from_lap_archives(
     }
     try:
         model, summary = ggv_from_lap_archives(
-            matching, prior, prior_name=prior_name, probe_rows=probe_rows
+            matching,
+            prior,
+            prior_name=prior_name,
+            probe_rows=probe_rows,
+            probe_run_id=probe_run_id if isinstance(probe_run_id, str) else None,
         )
     except (ValueError, ZeroDivisionError, KeyError, TypeError) as exc:
         logger.exception("thermal uncertainty fit failed; ggv block degrades to the generic plant")
