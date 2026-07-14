@@ -401,6 +401,7 @@ class _SelfplayHarness:
         refine_ok=True,
         merge_stats=None,
         mutate_plant_during_refine=False,
+        persist_error_after_write=False,
     ):
         self.tmp_path = tmp_path
         self.stage_specs = list(stage_specs)  # per drive call: (exit, lap_times, archive_valids)
@@ -412,6 +413,7 @@ class _SelfplayHarness:
             "mu_lat_g_after": 1.5,
         }
         self.mutate_plant_during_refine = mutate_plant_during_refine
+        self.persist_error_after_write = persist_error_after_write
         self.refine_calls: list[list[dict]] = []
         self.persist_lock_timeouts: list[float] = []
         self.plant_path = tmp_path / "plant_id" / "car_a__trk.json"
@@ -445,6 +447,8 @@ class _SelfplayHarness:
                 return None, None, "plant artifact changed between load and save (test peer)"
             self.saves += 1
             self.plant_path.write_text(_json.dumps({"v": f"iter{self.saves}"}), encoding="utf-8")
+            if self.persist_error_after_write:
+                raise OSError("late candidate read failed")
             return self.plant_path, self.plant_path.read_bytes(), None
 
         def fake_revert(
@@ -741,7 +745,28 @@ def test_selfplay_filesystem_error_stops_with_named_reason(monkeypatch, tmp_path
         tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "2"
     )
     code, report = run_pipeline(args, run_stage=harness.runner())
-    assert code == 0  # the base pipeline passed; the ladder stopped honestly
+    assert code == 1 and report["ok"] is False
     selfplay = report["selfplay"]
+    assert selfplay["ok"] is False
     assert "filesystem error at iteration 1" in selfplay["stopped"]
     assert "disk on fire" in selfplay["iterations"][0]["refine"]["reason"]
+
+
+def test_selfplay_late_persist_error_cannot_return_green(monkeypatch, tmp_path):
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[(0, [95000], [True])],
+        persist_error_after_write=True,
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+
+    code, report = run_pipeline(args, run_stage=harness.runner())
+
+    assert code == 1 and report["ok"] is False
+    assert report["selfplay"]["ok"] is False
+    assert "late candidate read failed" in report["error"]
+    # The candidate may already be on disk, so returning success would expose an unverified plant.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "iter1"}'

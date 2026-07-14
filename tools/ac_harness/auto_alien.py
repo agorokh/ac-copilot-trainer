@@ -443,6 +443,7 @@ def run_selfplay(
             # once artifact I/O errors, so the ladder stops with the named reason.
             entry.setdefault("refine", {})["ok"] = False
             entry["refine"]["reason"] = f"filesystem error during refine persist: {exc}"
+            selfplay["ok"] = False
             selfplay["stopped"] = (
                 f"filesystem error at iteration {index} ({exc}) — self-play stopped "
                 "(keep-last-valid integrity cannot be guaranteed past an I/O failure)"
