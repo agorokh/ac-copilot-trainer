@@ -147,6 +147,13 @@ class AutoDriveConfig:
     # ggv path INSTEAD of generic_gt3_ggv() when the loaded artifact carries a fitted ggv block.
     # None => generic plant.
     plant_ggv: GGVModel | None = None
+    # #572 alien pipeline: the combo's optimized line + QSS profile resolved by the CLI from the
+    # alien-line artifact (built/cached against the identified plant). ``driver="alien"`` REQUIRES
+    # both — there is no silent fallback to the stock fast_lane geometry (a degrade the alien
+    # pipeline exists to end). Points are (x, y, z) in the fast_lane frame; v_target is m/s per
+    # point (unscaled physics optimum; ggv_scale applies at driver construction).
+    alien_line: list | None = None
+    alien_v_target: list | None = None
     pace: float = 0.9  # racing: fraction of the AI line's speed profile to target
     racing_max_speed_kmh: float = (
         240.0  # racing/ggv: cap (above any GT speed; lets it use top gears)
@@ -1963,6 +1970,24 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
         # #532: consume the combo's machine-measured plant constants when the CLI resolved an
         # artifact (shift points always; measured curvature-FF steering with --use-plant full).
         return RacingDriver.from_ggv_profile(fast_line, v_target, **(config.plant_kwargs or {}))
+    if config.driver == "alien":
+        from tools.ac_harness.racing_driver import RacingDriver
+
+        # #572: drive the combo's optimized line + identified-plant QSS profile. Both come from
+        # the alien-line artifact the CLI resolved (built/cached with identity + provenance
+        # gates); missing state here is a wiring bug, not a degrade point — fail loud.
+        if not config.alien_line or not config.alien_v_target:
+            raise ValueError(
+                "alien driver requires the optimized line + v_target from the alien-line "
+                "artifact (CLI resolution missing)"
+            )
+        if not config.plant_kwargs:
+            raise ValueError(
+                "alien driver requires the combo's measured plant constants "
+                "(ff_sign/ff_c1/ff_c2 + shift points) — run --driver handshake first"
+            )
+        v_target = [v * config.ggv_scale for v in config.alien_v_target]
+        return RacingDriver.from_ggv_profile(config.alien_line, v_target, **config.plant_kwargs)
     if config.driver == "handshake":
         from tools.ac_harness.plant_id import HandshakeController
 
@@ -1996,7 +2021,8 @@ def _build_driver(config: AutoDriveConfig, fast_line: list, speed_profile: list 
             prior_ggv_name="generic_gt3_ggv",
         )
     raise ValueError(
-        f"unknown driver {config.driver!r} (expected 'ggv', 'racing', 'cruise', or 'handshake')"
+        f"unknown driver {config.driver!r} "
+        "(expected 'ggv', 'racing', 'cruise', 'handshake', or 'alien')"
     )
 
 
@@ -2139,6 +2165,11 @@ def rig_drive(  # pragma: no cover - rig-only
 
     fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
     line = load_ai_line(fast_path)
+    # #572 alien: spawn/teleport/recovery target the OPTIMIZED geometry the controller tracks,
+    # not the stock centre line — a recovery teleport onto the stock line would drop the car up
+    # to the full corridor width off its own racing line.
+    if config.driver == "alien" and config.alien_line:
+        line = config.alien_line
     speed_profile = None
     if config.driver in ("racing", "handshake"):
         from tools.ac_harness.racing_driver import load_speed_profile
@@ -2577,11 +2608,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--sidecar-url", default="ws://127.0.0.1:8765")
     p.add_argument(
         "--driver",
-        choices=("ggv", "racing", "cruise", "handshake"),
+        choices=("ggv", "racing", "cruise", "handshake", "alien"),
         default="racing",
         help="ggv = flat-out min-time (top gears, 200+); racing = AI-line pace (default); "
         "cruise = slow 1st-gear lane-keeper; handshake = #532 plant-ID probes (measures "
-        "ff_sign/steer-FF/shift points/r_eff in <=2 laps, persists a per-combo plant artifact)",
+        "ff_sign/steer-FF/shift points/r_eff in <=2 laps, persists a per-combo plant artifact); "
+        "alien = #572 optimized min-curvature line + identified-plant QSS profile (requires the "
+        "combo's plant artifact incl. uncertainty-aware friction fit; builds/caches the line "
+        "artifact under Documents/Assetto Corsa/alien_line/)",
+    )
+    p.add_argument(
+        "--alien-rebuild-line",
+        action="store_true",
+        help="alien: ignore the cached line artifact and rebuild it from the current plant",
     )
     p.add_argument(
         "--use-plant",
@@ -2730,8 +2769,11 @@ def _main_impl(
     # handshake would run the whole rig drive and then crash in ``save_plant_artifact`` with an
     # empty car id (Codex review), and ``--use-plant full`` would silently skip its own hard
     # requirement and drive on generic constants.
-    if config.driver == "handshake" and not config.car_id:
-        print("auto-drive: --driver handshake requires --car (the plant artifact is keyed by car)")
+    if config.driver in ("handshake", "alien") and not config.car_id:
+        print(
+            f"auto-drive: --driver {config.driver} requires --car "
+            "(the plant artifact is keyed by car)"
+        )
         return 2
     if config.driver == "ggv" and args.use_plant == "full" and not config.car_id:
         print("auto-drive: --use-plant full requires --car (plant lookup is keyed by car+track)")
@@ -2806,6 +2848,102 @@ def _main_impl(
             return 2
         else:
             print("auto-drive: no plant artifact for this combo; using the generic GT3 plant")
+
+    # #572 alien pipeline: resolve the identified plant (mandatory, full-steering semantics) and
+    # the optimized line + QSS profile artifact (cache-or-build, identity + provenance gated).
+    alien_line_used: dict | None = None
+    if config.driver == "alien":
+        from tools.ac_harness.alien_line import alien_line_path, ensure_alien_line_artifact
+        from tools.ac_harness.plant_id import (
+            load_plant_artifact,
+            plant_artifact_path,
+            plant_driver_kwargs,
+            plant_ggv_model,
+        )
+
+        setup_key = Path(config.setup).stem if config.setup else None
+        artifact = load_plant_artifact(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            config.setup_ini,
+            layout=config.track_layout,
+        )
+        if artifact is None:
+            print(
+                "auto-drive: --driver alien requires this combo's plant artifact "
+                f"({plant_artifact_path(user_dir, config.car_id, config.track_id, setup_key, config.setup_ini, layout=config.track_layout)}); "
+                "run --driver handshake first (or python -m tools.ac_harness.auto_alien for the "
+                "one-button pipeline)"
+            )
+            return 2
+        plant = plant_ggv_model(artifact)
+        if plant is None:
+            print(
+                "auto-drive: this combo's plant artifact has no uncertainty-aware friction fit; "
+                "re-run --driver handshake (#543) before the alien drive"
+            )
+            return 2
+        # Alien implies the full measured plant: curvature-FF steering + shift points. A missing
+        # steering constant raises inside plant_driver_kwargs — surface it as a CLI error.
+        try:
+            config.plant_kwargs = plant_driver_kwargs(artifact, steer=True)
+        except ValueError as exc:
+            print(f"auto-drive: {exc}")
+            return 2
+        config.plant_ggv = plant
+        plant_artifact_used = str(
+            plant_artifact_path(
+                user_dir,
+                config.car_id,
+                config.track_id,
+                setup_key,
+                config.setup_ini,
+                layout=config.track_layout,
+            )
+        )
+        fast_path = resolve_fast_lane(config.ac_root, config.track_id, config.track_layout)
+        try:
+            line_artifact, line_source = ensure_alien_line_artifact(
+                user_dir,
+                fast_path,
+                plant,
+                artifact,
+                car_id=config.car_id,
+                track_id=config.track_id,
+                layout=config.track_layout,
+                setup=setup_key,
+                setup_ini=config.setup_ini,
+                v_top_kmh=config.racing_max_speed_kmh,
+                rebuild=args.alien_rebuild_line,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"auto-drive: alien line build failed — {exc}")
+            return 2
+        config.alien_line = line_artifact["line"]
+        config.alien_v_target = line_artifact["v_target_mps"]
+        alien_path = alien_line_path(
+            user_dir,
+            config.car_id,
+            config.track_id,
+            setup_key,
+            config.setup_ini,
+            layout=config.track_layout,
+        )
+        alien_line_used = {
+            "path": str(alien_path),
+            "source": line_source,
+            "plant_provenance": line_artifact.get("plant_provenance"),
+            "qss": line_artifact.get("qss"),
+            "corridor": line_artifact.get("corridor"),
+        }
+        qss = line_artifact.get("qss") or {}
+        print(
+            f"auto-drive: alien line {line_source} "
+            f"(QSS {qss.get('qss_laptime_s')}s, vmax {qss.get('vmax_kmh')} km/h, "
+            f"plant fit {line_artifact.get('plant_provenance', {}).get('sha12')}) <- {alien_path}"
+        )
 
     car_tag = config.car_id or "car"
     evidence_dir = args.evidence_dir or (
@@ -2962,6 +3100,7 @@ def _main_impl(
             "driver": config.driver,
             "use_plant": args.use_plant,
             "plant_artifact": plant_artifact_used,
+            "alien_line": alien_line_used,
             "sidecar": sidecar_detail,
         },
         "hud": hud,

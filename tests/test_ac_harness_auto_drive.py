@@ -644,6 +644,41 @@ def test_build_driver_ggv_builds_min_time_racingdriver():
     assert d.max_gear >= 6  # top gears available for flat-out straights
 
 
+_ALIEN_PLANT_KWARGS = {
+    "steering_mode": "curvature_ff",
+    "ff_sign": -1.0,
+    "ff_c1": -5.1,
+    "ff_c2": -0.0033,
+    "rpm_up": 8500.0,
+    "rpm_dn": 6200.0,
+}
+
+
+def test_build_driver_alien_tracks_resolved_line_and_profile():
+    from tools.ac_harness.racing_driver import RacingDriver
+
+    cfg = _cfg(
+        driver="alien",
+        alien_line=_LINE,
+        alien_v_target=[50.0, 40.0, 45.0, 40.0],
+        plant_kwargs=dict(_ALIEN_PLANT_KWARGS),
+        ggv_scale=0.9,
+    )
+    d = _build_driver(cfg, _LINE, None)
+    assert isinstance(d, RacingDriver)
+    # ggv_scale applies at construction: the profile the driver tracks is the scaled optimum.
+    assert max(d.profile) == pytest.approx(50.0 * 0.9)
+
+
+def test_build_driver_alien_requires_line_and_plant():
+    with pytest.raises(ValueError, match="alien-line artifact"):
+        _build_driver(_cfg(driver="alien", plant_kwargs=dict(_ALIEN_PLANT_KWARGS)), _LINE, None)
+    with pytest.raises(ValueError, match="measured plant constants"):
+        _build_driver(
+            _cfg(driver="alien", alien_line=_LINE, alien_v_target=[40.0] * 4), _LINE, None
+        )
+
+
 def test_generic_gt3_ggv_is_realistic():
     from tools.ac_harness.ggv_profile import GGVModel
 

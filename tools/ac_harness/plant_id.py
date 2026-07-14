@@ -1615,6 +1615,22 @@ def _layout_key(layout: str | None) -> str:
     return f"__layout-{layout}"
 
 
+def combo_artifact_stem(
+    car_id: str,
+    track_id: str,
+    setup: str | None = None,
+    setup_ini: str | Path | None = None,
+    *,
+    layout: str | None = None,
+) -> str:
+    """Filename-safe identity stem shared by every per-combo artifact (plant, alien line).
+
+    Derived artifacts (e.g. the #572 alien line cache) MUST key their files with this exact stem so
+    their identity can never drift from the plant artifact they were computed from.
+    """
+    return f"{car_id}__{track_id}{_layout_key(layout)}{_setup_key(setup, setup_ini)}"
+
+
 def plant_artifact_path(
     user_dir: Path,
     car_id: str,
@@ -1624,8 +1640,8 @@ def plant_artifact_path(
     *,
     layout: str | None = None,
 ) -> Path:
-    filename = f"{car_id}__{track_id}{_layout_key(layout)}{_setup_key(setup, setup_ini)}.json"
-    return Path(user_dir) / "plant_id" / filename
+    stem = combo_artifact_stem(car_id, track_id, setup, setup_ini, layout=layout)
+    return Path(user_dir) / "plant_id" / f"{stem}.json"
 
 
 def save_plant_artifact(user_dir: Path, result: dict) -> Path:
