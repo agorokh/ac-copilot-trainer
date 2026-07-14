@@ -274,7 +274,20 @@ def run_selfplay(
     base_laps = stage_lap_times_ms(base_outcome)
     selfplay["lap_trajectory_ms"].append(base_laps)
     best: int | None = min(base_laps) if base_laps else None
-    prev_archives = stage_lap_archives(base_outcome)
+    # The base drive must pass the SAME oracle before its archives may seed refinement: exit 0
+    # does not preclude recoveries or AC-invalid archived laps, and refining from that evidence
+    # would promote a plant the falsification oracle would reject (#579 Codex P1). An invalid
+    # base still allows the ladder to run — each iteration changes the envelope via scale and is
+    # itself falsification-gated — it just refines from nothing until a valid batch exists.
+    base_payloads, _base_load_errors = load_archive_payloads(stage_lap_archives(base_outcome))
+    base_valid, base_reason = evaluate_selfplay_iteration(0, base_outcome, base_payloads)
+    selfplay["base"] = {"valid": base_valid, "reason": base_reason, "lap_times_ms": base_laps}
+    prev_archives = stage_lap_archives(base_outcome) if base_valid else []
+    if not base_valid:
+        print(
+            f"auto-alien: base drive not usable as refinement evidence ({base_reason}) — "
+            "the ladder starts without a refit batch"
+        )
     prev_scale = args.ggv_scale
     for index in range(1, args.iterations + 1):
         scale = iteration_scale(args.ggv_scale, args.scale_step, index, args.max_scale)
@@ -288,6 +301,11 @@ def run_selfplay(
         if not prev_archives:
             entry["refine"] = {"ok": False, "reason": "no lap archives from the previous drive"}
         else:
+            # Snapshot the artifact bytes BEFORE loading: the refine-save runs outside the drive
+            # stage's machine-global rig lock, so a peer worktree may refresh the same plant
+            # between our load and our save — persisting a refinement of stale bytes would
+            # silently clobber the peer's newer fit (#579 Codex P2).
+            pre_refine_bytes = plant_path.read_bytes() if plant_path.exists() else None
             artifact = load_plant_artifact(
                 user_dir, args.car, args.track, setup_key, setup_ini, layout=args.track_layout
             )
@@ -306,17 +324,46 @@ def run_selfplay(
                 }
                 if load_errors:
                     entry["refine"]["archive_load_errors"] = load_errors
-                if result is not None:
-                    last_valid_bytes = plant_path.read_bytes()
-                    saved = save_plant_artifact(user_dir, result)
-                    candidate_bytes = Path(saved).read_bytes()
-                    refined = True
-                    merge_stats = block.get("selfplay_merge", {})
-                    print(
-                        f"auto-alien: iteration {index} plant refined "
-                        f"(lateral bins adopted={merge_stats.get('lateral_bins_adopted')} "
-                        f"raised={merge_stats.get('lateral_bins_raised')}) -> {saved}"
+                merge_stats = block.get("selfplay_merge", {}) if result is not None else {}
+                merge_changed = bool(
+                    merge_stats.get("lateral_bins_adopted")
+                    or merge_stats.get("lateral_bins_raised")
+                    or (
+                        merge_stats.get("mu_lat_g_after", 0.0)
+                        > merge_stats.get("mu_lat_g_before", 0.0)
                     )
+                )
+                if result is not None and not merge_changed:
+                    # A refit that changed nothing (no bin adopted/raised, ceiling unchanged) is
+                    # a no-op: persisting it would only churn provenance (a pointless identical
+                    # line rebuild) while the PHYSICAL envelope stays the same — which must not
+                    # count as "the envelope changed" for the retry guard (#579 Codex P2).
+                    entry["refine"]["no_op"] = True
+                    print(
+                        f"auto-alien: iteration {index} refit was a no-op (no envelope change) "
+                        "— plant left as-is"
+                    )
+                elif result is not None:
+                    current_bytes = plant_path.read_bytes() if plant_path.exists() else None
+                    if current_bytes != pre_refine_bytes:
+                        entry["refine"]["save_skipped"] = (
+                            "plant artifact changed between load and save (peer "
+                            "re-identification?) — refinement of stale bytes not persisted"
+                        )
+                        print(
+                            f"auto-alien: iteration {index} refine save SKIPPED — "
+                            f"{entry['refine']['save_skipped']}"
+                        )
+                    else:
+                        last_valid_bytes = pre_refine_bytes
+                        saved = save_plant_artifact(user_dir, result)
+                        candidate_bytes = Path(saved).read_bytes()
+                        refined = True
+                        print(
+                            f"auto-alien: iteration {index} plant refined "
+                            f"(lateral bins adopted={merge_stats.get('lateral_bins_adopted')} "
+                            f"raised={merge_stats.get('lateral_bins_raised')}) -> {saved}"
+                        )
                 else:
                     print(
                         f"auto-alien: iteration {index} refine FAILED — keeping the last-valid "

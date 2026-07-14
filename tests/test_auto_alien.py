@@ -378,10 +378,25 @@ def test_pipeline_rejects_bad_selfplay_flags(monkeypatch, tmp_path):
 class _SelfplayHarness:
     """Fakes the drive stages + plant persistence for the iterate-loop orchestration tests."""
 
-    def __init__(self, monkeypatch, tmp_path, stage_specs, refine_ok=True):
+    def __init__(
+        self,
+        monkeypatch,
+        tmp_path,
+        stage_specs,
+        refine_ok=True,
+        merge_stats=None,
+        mutate_plant_during_refine=False,
+    ):
         self.tmp_path = tmp_path
         self.stage_specs = list(stage_specs)  # per drive call: (exit, lap_times, archive_valids)
         self.refine_ok = refine_ok
+        self.merge_stats = merge_stats or {
+            "lateral_bins_adopted": 0,
+            "lateral_bins_raised": 1,
+            "mu_lat_g_before": 1.5,
+            "mu_lat_g_after": 1.5,
+        }
+        self.mutate_plant_during_refine = mutate_plant_during_refine
         self.refine_calls: list[list[dict]] = []
         self.plant_path = tmp_path / "plant_id" / "car_a__trk.json"
         self.plant_path.parent.mkdir(parents=True, exist_ok=True)
@@ -394,9 +409,11 @@ class _SelfplayHarness:
 
         def fake_refine(artifact, payloads, prior, **kw):
             self.refine_calls.append(list(payloads))
+            if self.mutate_plant_during_refine:
+                self.plant_path.write_text('{"v": "peer"}', encoding="utf-8")
             if not self.refine_ok:
                 return None, {"ok": False, "reason": "batch refit degraded (test)"}
-            return {"ok": True}, {"ok": True, "selfplay_merge": {"lateral_bins_raised": 1}}
+            return {"ok": True}, {"ok": True, "selfplay_merge": dict(self.merge_stats)}
 
         def fake_save(user_dir, result):
             self.saves += 1
@@ -536,3 +553,86 @@ def test_selfplay_refuses_identical_envelope_retry(monkeypatch, tmp_path):
     assert selfplay["iterations"][0]["refine"]["ok"] is False
     # The plant was never touched.
     assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_base_drive_must_pass_the_oracle_to_seed_refinement(monkeypatch, tmp_path):
+    # #579 Codex P1: exit 0 with an AC-invalid archived lap must NOT seed iteration 1's refit.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [False]),  # base drive: exit 0 but the archived lap is AC-invalid
+            (0, [93000], [True]),  # iteration 1 drives (scale stepped), no refit batch
+        ],
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert selfplay["base"]["valid"] is False
+    assert "AC-invalid lap" in selfplay["base"]["reason"]
+    assert harness.refine_calls == []  # tainted base evidence never reached the refit
+    entry = selfplay["iterations"][0]
+    assert entry["refine"]["reason"] == "no lap archives from the previous drive"
+    assert entry["valid"] is True  # the ladder itself still ran (scale changed the envelope)
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_noop_refit_at_scale_cap_stops_instead_of_retrying(monkeypatch, tmp_path):
+    # #579 Codex P2: a refit that changes nothing + a capped scale = the identical physical
+    # envelope; the ladder must stop, and the no-op fit must not even be persisted.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[(0, [95000], [True])],
+        merge_stats={
+            "lateral_bins_adopted": 0,
+            "lateral_bins_raised": 0,
+            "mu_lat_g_before": 1.5,
+            "mu_lat_g_after": 1.5,
+        },
+    )
+    args = _args(
+        tmp_path,
+        "--evidence-dir",
+        str(tmp_path / "ev"),
+        "--laps",
+        "1",
+        "--iterations",
+        "2",
+        "--max-scale",
+        "0.9",
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    selfplay = report["selfplay"]
+    assert "envelope unchanged" in selfplay["stopped"]
+    assert selfplay["iterations"][0]["refine"]["no_op"] is True
+    assert harness.saves == 0  # the no-op fit was never persisted (no provenance churn)
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "original"}'
+
+
+def test_selfplay_refine_save_skipped_when_peer_updates_plant(monkeypatch, tmp_path):
+    # #579 Codex P2: a peer refresh between load and save must not be clobbered by a refinement
+    # computed from the stale bytes.
+    harness = _SelfplayHarness(
+        monkeypatch,
+        tmp_path,
+        stage_specs=[
+            (0, [95000], [True]),  # base drive
+            (0, [93000], [True]),  # iteration 1
+        ],
+        mutate_plant_during_refine=True,
+    )
+    args = _args(
+        tmp_path, "--evidence-dir", str(tmp_path / "ev"), "--laps", "1", "--iterations", "1"
+    )
+    code, report = run_pipeline(args, run_stage=harness.runner())
+    assert code == 0
+    entry = report["selfplay"]["iterations"][0]
+    assert "save_skipped" in entry["refine"]
+    assert harness.saves == 0
+    # The peer's newer artifact survived untouched.
+    assert harness.plant_path.read_text(encoding="utf-8") == '{"v": "peer"}'
