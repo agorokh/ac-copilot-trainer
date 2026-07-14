@@ -524,6 +524,12 @@ def test_l3_build_refines_corners_and_records_report(stadium_lane):
     refined = [c for c in report["corners"] if c["status"] == "refined"]
     assert refined and all(c["gain_ms"] > 0 for c in refined)
     assert report["predicted_gain_ms"] == sum(c["gain_ms"] for c in refined)
+    # The l3 report carries the DRIVEN profile's utilisation honestly: within the stability
+    # barrier, deliberately beyond the safe envelope inside refined corners (#583 Codex P2) —
+    # while corridor.max_ay_utilisation remains the QSS-vs-safe metric.
+    assert report["max_ay_utilisation_vs_barrier"] <= 1.0 + 1e-4
+    assert report["max_ay_utilisation_vs_safe"] > 1.0
+    assert art["corridor"]["max_ay_utilisation"] <= 1.0 + 1e-6
     # The refined profile is never slower than QSS anywhere, and strictly faster somewhere.
     assert all(
         v >= q - 1e-9 for v, q in zip(art["v_target_mps"], art["v_target_qss_mps"], strict=True)

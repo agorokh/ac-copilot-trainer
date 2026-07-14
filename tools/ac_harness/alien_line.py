@@ -27,7 +27,12 @@ import math
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.ac_harness.corner_refine import L3Params, refine_profile, verify_refined_profile
+from tools.ac_harness.corner_refine import (
+    L3Params,
+    barrier_ggv,
+    refine_profile,
+    verify_refined_profile,
+)
 from tools.ac_harness.ggv_profile import (
     GGVModel,
     _unit_normals,
@@ -224,6 +229,20 @@ def build_alien_line_artifact(
         reason = verify_refined_profile(opt_plane, kappa, v_target, plant, l3_params)
         if reason is not None:
             raise ValueError(f"L3-refined profile failed its own barrier verification: {reason}")
+        # corridor.max_ay_utilisation stays the QSS-vs-safe-envelope metric (pinned at <= 1 by
+        # construction). The DRIVEN profile is the refined one, so the l3 report carries its own
+        # utilisation honestly: vs the stability barrier (the refined profile's actual contract,
+        # <= 1) and vs the safe envelope (deliberately > 1 inside refined corners — the whole
+        # point of L3, and the number the run evidence must not under-report; #583 Codex P2).
+        barrier = barrier_ggv(plant, l3_params.max_rel_std)
+        l3_block["max_ay_utilisation_vs_barrier"] = round(
+            max((v * v * abs(kappa[i])) / barrier.ay_max(v) for i, v in enumerate(v_target)),
+            4,
+        )
+        l3_block["max_ay_utilisation_vs_safe"] = round(
+            max((v * v * abs(kappa[i])) / plant.ay_max(v) for i, v in enumerate(v_target)),
+            4,
+        )
         params["l3"] = l3_params.to_dict()
     artifact = {
         "schema_version": ALIEN_LINE_SCHEMA_VERSION,
