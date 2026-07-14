@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+import urllib.error
 import urllib.request
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -98,6 +99,33 @@ def test_health_endpoint_advertises_build_commit_and_served_endpoints() -> None:
     assert isinstance(payload["build_commit"], str) and payload["build_commit"]
     assert "/tablet/dash" in payload["endpoints"]
     assert "/tablet/voice" in payload["endpoints"]
+
+
+def test_served_endpoints_are_actually_routed() -> None:
+    """Issue #567 / #568 review: guard against SERVED_ENDPOINTS drifting from the real
+    server routes. Every advertised path must be handled by make_process_request (i.e. NOT
+    fall through to the bare WS upgrade → 426). 404 is fine — it still means the HTTP handler
+    owns the path. A bogus advertised endpoint (or one the server stopped serving) 426s here."""
+
+    async def _run() -> dict[str, int]:
+        async with _running_sidecar() as port:
+            codes: dict[str, int] = {}
+            for path in obs.SERVED_ENDPOINTS:
+
+                def _get(p: str = path) -> int:
+                    try:
+                        return _http_get(port, p)[0]
+                    except urllib.error.HTTPError as exc:
+                        return exc.code
+
+                codes[path] = await asyncio.to_thread(_get)
+            return codes
+
+    codes = asyncio.run(_run())
+    assert codes, "no endpoints advertised"
+    assert all(code != 426 for code in codes.values()), (
+        f"advertised endpoint not routed by the server (426 = fell through to WS): {codes}"
+    )
 
 
 def test_build_health_json_reflects_browser_peers() -> None:

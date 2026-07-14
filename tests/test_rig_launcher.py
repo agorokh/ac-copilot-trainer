@@ -1653,3 +1653,37 @@ def test_probe_tablet_managed_adb_missing_fails(tmp_path: Path, monkeypatch) -> 
     tablet = sup.probe_tablet()
     assert tablet.state == "adb-missing"
     assert tablet.ok is False
+
+
+def test_self_test_cli_stops_sidecar_it_started(tmp_path: Path, monkeypatch) -> None:
+    """HIGH (#568 review): the --self-test path must tear down the sidecar it started, not
+    leave an orphan for the next launch to adopt."""
+    import tools.rig_launcher.app as app
+
+    monkeypatch.setenv("AC_COPILOT_GAME_POINT_DIR", str(tmp_path))
+    made: list[Any] = []
+
+    class _FakeSup:
+        def __init__(self, *_a: Any, **_k: Any) -> None:
+            self.events: list[str] = []
+            made.append(self)
+
+        def start_sidecar(self) -> ProbeResult:
+            self.events.append("start")
+            return ProbeResult("sidecar", True, "starting")
+
+        def self_test_endpoints(self, **_k: Any) -> tuple[ProbeResult, ...]:
+            self.events.append("selftest")
+            return (ProbeResult("endpoint /tablet/dash", True, "serving"),)
+
+        def stop_sidecar(self, **_k: Any) -> ProbeResult:
+            self.events.append("stop")
+            return ProbeResult("sidecar", True, "stopped")
+
+        def close(self) -> None:
+            self.events.append("close")
+
+    monkeypatch.setattr(app, "GamePointSupervisor", _FakeSup)
+    rc = app.main(["--self-test"])
+    assert rc == 0
+    assert made[0].events == ["start", "selftest", "stop", "close"]

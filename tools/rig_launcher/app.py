@@ -217,8 +217,15 @@ def main(argv: list[str] | None = None) -> int:
     supervisor = GamePointSupervisor(config_from_args(args))
     try:
         if args.self_test:
+            # The self-test owns the sidecar it starts: stop it as soon as the checks finish so
+            # a release-gate run never leaves an orphaned sidecar for the next launch to adopt
+            # (#568 review — the outer finally also closes it, but the ownership is explicit here).
+            # stop_sidecar() is a no-op when start_sidecar() adopted an already-running instance.
             supervisor.start_sidecar()
-            results = supervisor.self_test_endpoints()
+            try:
+                results = supervisor.self_test_endpoints()
+            finally:
+                supervisor.stop_sidecar()
             ok = all(row.ok for row in results)
             if args.json:
                 print(json.dumps([row.to_dict() for row in results], indent=2, sort_keys=True))
