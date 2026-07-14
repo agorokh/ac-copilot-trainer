@@ -1140,15 +1140,11 @@ def test_merge_selfplay_lateral_monotonic_and_longitudinal_preserved():
     assert current.uncertainty_bins[20]["lateral"]["source"] == "prior"
     assert merged.uncertainty_bins[20]["lateral"] == dict(batch.uncertainty_bins[20]["lateral"])
     # Global monotonicity: no lateral bin ever drops.
-    for cur_bin, merged_bin in zip(
-        current.uncertainty_bins, merged.uncertainty_bins, strict=True
-    ):
+    for cur_bin, merged_bin in zip(current.uncertainty_bins, merged.uncertainty_bins, strict=True):
         assert merged_bin["lateral"]["safe_g"] >= cur_bin["lateral"]["safe_g"]
     # Longitudinal bins: the batch had no probe rows, so brake/drive stay the current model's
     # verbatim (a batch refit must never regress probe-measured braking to the prior).
-    for cur_bin, merged_bin in zip(
-        current.uncertainty_bins, merged.uncertainty_bins, strict=True
-    ):
+    for cur_bin, merged_bin in zip(current.uncertainty_bins, merged.uncertainty_bins, strict=True):
         assert merged_bin["brake"] == dict(cur_bin["brake"])
         assert merged_bin["drive"] == dict(cur_bin["drive"])
     assert stats["lateral_bins_raised"] >= 1

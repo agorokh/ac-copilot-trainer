@@ -217,9 +217,7 @@ def evaluate_selfplay_iteration(
         if lap.get("is_valid") is False:
             lap_n = lap.get("lap_n")
             return False, f"AC-invalid lap in the batch (lap_n={lap_n})"
-    return True, (
-        f"{len(lap_times)} timed lap(s), all archived laps AC-valid, zero recoveries"
-    )
+    return True, (f"{len(lap_times)} timed lap(s), all archived laps AC-valid, zero recoveries")
 
 
 def iteration_scale(base: float, step: float, index: int, cap: float) -> float:
@@ -596,10 +594,7 @@ def run_pipeline(
 
         if not (_math.isfinite(args.scale_step) and args.scale_step > 0):
             raise ValueError(f"--scale-step must be finite and > 0 (got {args.scale_step})")
-        if not (
-            _math.isfinite(args.max_scale)
-            and 0 < args.max_scale <= ALIEN_MAX_OVERSPEED_SCALE
-        ):
+        if not (_math.isfinite(args.max_scale) and 0 < args.max_scale <= ALIEN_MAX_OVERSPEED_SCALE):
             raise ValueError(
                 f"--max-scale must be in (0, {ALIEN_MAX_OVERSPEED_SCALE}] (got {args.max_scale})"
             )

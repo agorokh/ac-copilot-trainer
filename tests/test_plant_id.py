@@ -1233,9 +1233,7 @@ def test_selfplay_refine_merges_monotonically_and_strips_stale_meta(tmp_path):
     assert "schema_version" not in result and "created_utc" not in result
     merged = _GGV.from_dict(result["ggv"]["model"])
     assert merged.uncertainty_aware
-    for cur_bin, new_bin in zip(
-        current.uncertainty_bins, merged.uncertainty_bins, strict=True
-    ):
+    for cur_bin, new_bin in zip(current.uncertainty_bins, merged.uncertainty_bins, strict=True):
         assert new_bin["lateral"]["safe_g"] >= cur_bin["lateral"]["safe_g"]
         assert dict(new_bin["brake"]) == dict(cur_bin["brake"])
     # The refined result persists through the SAME artifact gate every plant rides.

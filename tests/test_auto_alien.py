@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import json as _json
+from pathlib import Path
+
 import pytest
 
 from tools.ac_harness import auto_alien
 from tools.ac_harness.auto_alien import (
     _build_arg_parser,
     drive_argv,
+    evaluate_selfplay_iteration,
     identify_argv,
+    iteration_scale,
+    load_stage_outcome,
     needs_identification,
+    resolve_drive_seconds,
     run_pipeline,
+    stage_lap_archives,
+    stage_lap_times_ms,
 )
 
 
@@ -249,19 +258,6 @@ def test_stage_argv_builders(tmp_path):
 
 
 # --------------------------------------------------------------------------- #577 self-play
-import json as _json
-from pathlib import Path
-
-from tools.ac_harness.auto_alien import (
-    evaluate_selfplay_iteration,
-    iteration_scale,
-    load_stage_outcome,
-    resolve_drive_seconds,
-    stage_lap_archives,
-    stage_lap_times_ms,
-)
-
-
 def test_resolve_drive_seconds_scales_with_lap_window(tmp_path):
     assert resolve_drive_seconds(_args(tmp_path)) == 300.0
     assert resolve_drive_seconds(_args(tmp_path, "--laps", "3")) == 180.0 + 240.0 * 3
